@@ -377,15 +377,31 @@ export function withSingleConnection(url, warn = console.warn) {
  * the writes they protect get filtered by RLS, the migration is recorded as
  * applied, and nothing errors.
  *
- * Scoped to VERCEL_ENV=production deliberately: CI has no unpooled URL by design
- * and connects directly, and previews are already handled by previewMayMigrate.
+ * TWO CHECKS WITH DIFFERENT SCOPES, and getting that wrong was the first
+ * version's bug. Both were gated on VERCEL_ENV=production, which meant an
+ * isolated preview — PREVIEW_DB_ISOLATED=1, no DATABASE_URL_UNPOOLED, a pooled
+ * DATABASE_URL — sailed straight past the pooler check and ran the whole
+ * statement-by-statement migration through a transaction pooler. A test asserted
+ * that as correct behaviour. previewMayMigrate lets such a preview migrate by
+ * design; it says nothing about HOW the connection is made.
+ *
+ *   - The POOLER check applies wherever migrations run: production, isolated
+ *     previews, and manual disaster-recovery runs alike. Physical session
+ *     continuity is a property of the connection, not of the environment.
+ *   - The MISSING-VARIABLE check stays production-only, because CI connects
+ *     straight to a Postgres container and has no unpooled URL by design.
+ *
+ * The missing-variable case is tested first even though it is the narrower rule:
+ * when production has no unpooled URL AND falls back to a pooled DATABASE_URL,
+ * both apply, and "the variable is not set" is the message that names the cause.
  *
  * Pure and exported. Returns the refusal message, or null when the URL is fine.
+ *
+ * @param {{ vercelEnv?: string, unpooled?: string, resolved?: string }} facts
+ * @returns {string | null}
  */
 export function directMigrationUrlProblem({ vercelEnv, unpooled, resolved }) {
-  if (vercelEnv !== "production") return null;
-
-  if (!unpooled) {
+  if (vercelEnv === "production" && !unpooled) {
     return (
       "\n✖ MIGRATIONS REFUSED — DATABASE_URL_UNPOOLED is not set on production.\n\n" +
       "  Migrations are applied statement by statement and depend on every statement\n" +

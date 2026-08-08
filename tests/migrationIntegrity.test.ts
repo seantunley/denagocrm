@@ -235,28 +235,51 @@ test("withSingleConnection: overriding a deliberate value is reported, not silen
   assert.deepEqual(quiet, [], "already correct — nothing to report");
 });
 
-test("directMigrationUrlProblem: production refuses to migrate through a pooler", () => {
-  // connection_limit=1 bounds this client to one connection; it cannot make an
-  // external transaction pooler keep that connection on one backend.
+test("directMigrationUrlProblem: a pooled URL is refused in EVERY environment", () => {
+  // The first version gated both checks on VERCEL_ENV=production, and a test
+  // here asserted `preview + pooled URL → allowed`. That blessed the exact
+  // hazard: previewMayMigrate lets an isolated preview (PREVIEW_DB_ISOLATED=1)
+  // migrate, and with no DATABASE_URL_UNPOOLED it falls back to a pooled
+  // DATABASE_URL — so the whole statement-by-statement run went through a
+  // transaction pooler, which is what connection_limit=1 cannot fix.
+  //
+  // Session continuity is a property of the CONNECTION, not the environment.
   const pooled = "postgres://user:pass@ep-x-pooler.example.neon.tech/db";
   const direct = "postgres://user:pass@ep-x.example.neon.tech/db";
+  const ciLocal = "postgres://localhost:5432/denagocrm_test";
+  const refused = (o: { vercelEnv?: string; unpooled?: string; resolved?: string }) =>
+    directMigrationUrlProblem(o) ?? "";
 
+  // preview — the case that used to be waved through
   assert.match(
-    directMigrationUrlProblem({ vercelEnv: "production", unpooled: undefined, resolved: pooled }) ?? "",
+    refused({ vercelEnv: "preview", unpooled: undefined, resolved: pooled }),
+    /POOLED endpoint/,
+    "an isolated preview must not migrate through a pooler either",
+  );
+  assert.equal(directMigrationUrlProblem({ vercelEnv: "preview", unpooled: direct, resolved: direct }), null);
+
+  // manual / disaster-recovery runs have no VERCEL_ENV at all
+  assert.match(
+    refused({ vercelEnv: undefined, unpooled: pooled, resolved: pooled }),
+    /POOLED endpoint/,
+    "a hand-run recovery migration is the last place to lose session continuity",
+  );
+
+  // CI connects straight to a Postgres container and has no unpooled variable
+  assert.equal(directMigrationUrlProblem({ vercelEnv: undefined, unpooled: undefined, resolved: ciLocal }), null);
+
+  // production
+  assert.match(
+    refused({ vercelEnv: "production", unpooled: undefined, resolved: pooled }),
     /DATABASE_URL_UNPOOLED is not set/,
-    "production with no direct URL must refuse rather than fall back",
+    "…and when the variable is simply missing, say THAT — it names the cause",
   );
   assert.match(
-    directMigrationUrlProblem({ vercelEnv: "production", unpooled: pooled, resolved: pooled }) ?? "",
+    refused({ vercelEnv: "production", unpooled: pooled, resolved: pooled }),
     /POOLED endpoint/,
     "a direct URL that is actually pooled must refuse too",
   );
   assert.equal(directMigrationUrlProblem({ vercelEnv: "production", unpooled: direct, resolved: direct }), null);
-
-  // CI connects straight to a Postgres container and has no unpooled variable by
-  // design; previews are handled by previewMayMigrate. Neither may be blocked.
-  assert.equal(directMigrationUrlProblem({ vercelEnv: undefined, unpooled: undefined, resolved: "postgres://localhost:5432/denagocrm_test" }), null);
-  assert.equal(directMigrationUrlProblem({ vercelEnv: "preview", unpooled: undefined, resolved: pooled }), null);
 });
 
 test("session GUCs really do span separate statements, in every migration that uses one", () => {
