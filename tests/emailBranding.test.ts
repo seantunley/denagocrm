@@ -31,7 +31,14 @@ const shipped = (rel: string) =>
 
 test("the sender identity is already per-tenant — this phase does not touch it", () => {
   const code = shipped("src/lib/email.ts");
-  assert.match(code, /resolveIntegrationBundle\(tenantId, "smtp"\)/, "SMTP resolves per tenant already");
+  // Renamed on main to resolveIntegrationBundleForTenant, which takes the tenant
+  // from the request scope rather than a parameter. The property is unchanged and
+  // is what this asserts: SMTP credentials are resolved PER TENANT, not globally.
+  assert.match(
+    code,
+    /resolveIntegrationBundleForTenant\(\s*currentTenantScope\(\)\?\.tenantId \?\? null,\s*"smtp"\s*\)/,
+    "SMTP must resolve per tenant",
+  );
   assert.match(code, /currentTenantScope\(\)\?\.tenantId/, "…from the scope the send is inside");
 });
 

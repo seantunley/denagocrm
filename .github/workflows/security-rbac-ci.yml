@@ -132,6 +132,31 @@ jobs:
         # transitions, the atomic OTP gate, and soft-delete on findUnique.
         run: npm run test:integrity
 
+      - name: Signing upgrade test — migrate a database that ALREADY HAS signing data
+        # The migration step above applies to a completely empty PostgreSQL, and
+        # says so in its own comment. That cannot catch a backfill which skips
+        # rows a previous migration already populated, a terminal-status trigger
+        # whose write a later guard refuses, or an approval insert refused the
+        # same way — all three shipped green because there was nothing to skip,
+        # nothing completed and nothing approved.
+        #
+        # This runs against its OWN scratch database so the suites above keep the
+        # schema they were seeded against. It applies the pre-signing migrations,
+        # seeds a request with events and a legacy plaintext token, applies the
+        # signing migrations onto that, and then performs the runtime transitions.
+        # The scratch URL is DERIVED from the job's DATABASE_URL rather than
+        # written out again. Two more literal connection strings — even to a
+        # throwaway container — are two more things the secret scanner has to be
+        # told to ignore, and an allowlist that grows for convenience stops being
+        # a guard. Gitleaks flagged exactly that here.
+        run: |
+          admin="${DATABASE_URL%/*}/postgres"
+          psql "$admin" -c 'DROP DATABASE IF EXISTS signing_upgrade'
+          psql "$admin" -c 'CREATE DATABASE signing_upgrade'
+          export DATABASE_URL="${DATABASE_URL%/*}/signing_upgrade"
+          export DATABASE_URL_UNPOOLED="$DATABASE_URL"
+          npm run test:signing-upgrade
+
       - name: Run tenant-guard integration tests
         # Phase C: the db.ts tenant guard with enforcement enabled — cross-tenant
         # read/update/delete refusal, write stamping, fail-closed on no scope,

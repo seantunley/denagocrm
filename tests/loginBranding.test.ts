@@ -144,7 +144,9 @@ test("no login page renders a built-in customer logo", () => {
   for (const file of [STAFF, PORTAL] as const) {
     const code = shipped(file);
     assert.doesNotMatch(code, /\/branding\/denago/, `${file}: no customer artwork as a fallback`);
-    assert.match(code, /<BrandLogo\n\s+logoUrl=\{brand\.logoUrl\}/, `${file}: goes through the shared component`);
+    // \r?\n, because a Windows checkout has CRLF and this then fails locally
+    // while passing on CI — a false alarm that costs someone an afternoon.
+    assert.match(code, /<BrandLogo\r?\n\s+logoUrl=\{brand\.logoUrl\}/, `${file}: goes through the shared component`);
     assert.match(code, /alt=\{brand\.displayName\}/, `${file}: which sets the NAME when there is no logo`);
     assert.match(code, /\) : null\}/, `${file}: the decorative mark renders nothing rather than someone else's`);
   }

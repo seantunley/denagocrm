@@ -2,11 +2,11 @@
 
 import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
-import { prisma } from "@/lib/db";
+import { prisma, basePrisma } from "@/lib/db";
 import { parseRands } from "@/lib/format";
 import { emitLeadJourneyEvent } from "@/lib/leadJourneyEvents";
 import { recordReferral, markReferralEarned } from "@/lib/referrals";
-import { logAudit, logAuditStrict } from "@/lib/audit";
+import { logAudit, logAuditStrict, GOVERNANCE_TX } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
 import { createLeadRecord } from "@/lib/leadCreate";
 import { triggerSurvey } from "@/lib/surveys";
@@ -124,10 +124,21 @@ export async function createLead(formData: FormData) {
       const existing = matchers.length > 0
         ? await prisma.contact.findFirst({ where: { OR: matchers } })
         : null;
-      // Only reuse a contact whose tenantId is null (same as new leads) or whose
-      // tenantId already matches. A mismatch would violate the composite FK.
-      const canReuse = existing && (existing.tenantId === null);
-      if (canReuse && existing) {
+      // Reuse whatever the lookup found.
+      //
+      // This used to reuse ONLY a contact whose tenantId was null — a workaround
+      // for the composite AuditLog foreign key, since auditing against a
+      // stamped contact under a mismatched tenant failed. The comment said "or
+      // whose tenantId already matches" but the code never checked that, so
+      // every one of the existing (backfilled, stamped) contacts was skipped:
+      // creating a lead for a customer already on file silently made a SECOND
+      // contact for them.
+      //
+      // The audit now takes its tenant from the record it describes, so the
+      // mismatch cannot arise and the workaround is not needed. Cross-tenant
+      // reuse is not a risk here either: the lookup runs on the scoped client,
+      // which under enforcement cannot see another tenant's contacts.
+      if (existing) {
         data.contactId = existing.id;
       } else {
         const [firstName, ...rest] = data.name.split(/\s+/);
@@ -634,19 +645,27 @@ export async function deleteLead(leadId: string, formData: FormData) {
     const user = await requireLeadAccess(leadId, "leads.delete");
     const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
     const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
-    const lead = await softDeleteRecord("lead", leadId, reason, user.name);
-    // Nothing matched — another tenant's id, or already gone. Never audit a
-    // deletion that did not happen.
+    // The delete and the audit that records it commit together. Separately, a
+    // failing audit left the lead deleted while telling the operator it had not
+    // been — and the retry then reported "not found", which is what happened in
+    // production on 2026-08-07.
+    const lead = await basePrisma.$transaction(async (tx) => {
+      const deleted = await softDeleteRecord("lead", leadId, reason, user.name, tx);
+      // Nothing matched — another tenant's id, or already gone. Never audit a
+      // deletion that did not happen.
+      if (!deleted) return null;
+      await logAuditStrict({
+        action: "trash.deleted",
+        summary: `Moved lead “${deleted.title}” to trash — ${reason}`,
+        leadId,
+        contactId: deleted.contactId,
+        user,
+        before,
+        after: { deletedAt: deleted.deletedAt, deleteReason: reason },
+      }, tx);
+      return deleted;
+    }, GOVERNANCE_TX);
     if (!lead) refuse("That lead could not be found.");
-    await logAuditStrict({
-      action: "trash.deleted",
-      summary: `Moved lead “${lead.title}” to trash — ${reason}`,
-      leadId,
-      contactId: lead.contactId,
-      user,
-      before,
-      after: { deletedAt: lead.deletedAt, deleteReason: reason },
-    });
     revalidatePath("/leads");
     revalidatePath("/forecast");
     return { redirectTo: "/leads" };

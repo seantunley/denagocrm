@@ -29,8 +29,13 @@ export const TRASH_MODELS: TrashModel[] = [
 ];
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-function delegate(model: TrashModel): any {
-  return (basePrisma as any)[model];
+/**
+ * `client` lets a caller run the soft delete inside ITS OWN transaction, so the
+ * delete and the audit that records it commit together. Defaults to basePrisma,
+ * which is the standalone behaviour every existing caller had.
+ */
+function delegate(model: TrashModel, client: any = basePrisma): any {
+  return (client as any)[model];
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
@@ -69,14 +74,26 @@ export async function softDeleteRecord(
   model: TrashModel,
   id: string,
   reason: string,
-  userName: string
+  userName: string,
+  /**
+   * Run inside a caller's transaction, so the delete and the audit entry that
+   * records it commit together.
+   *
+   * Without this the delete committed and a failing audit threw afterwards, so
+   * the operator was told the delete failed for a record that was already gone —
+   * and the retry then reported "not found". That happened in production on
+   * 2026-08-07, on the very record a duplicate-lead cleanup was trying to
+   * remove.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  tx?: any,
 ) {
-  const rows = await delegate(model).updateMany({
+  const rows = await delegate(model, tx).updateMany({
     where: { id, ...activeTenantWhere() },
     data: { deletedAt: new Date(), deleteReason: reason, deletedByName: userName },
   });
   if (rows.count === 0) return null;
-  return delegate(model).findFirst({ where: { id, ...activeTenantWhere() } });
+  return delegate(model, tx).findFirst({ where: { id, ...activeTenantWhere() } });
 }
 
 /**

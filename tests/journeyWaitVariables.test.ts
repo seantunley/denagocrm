@@ -58,7 +58,7 @@ const shipped = (rel: string) =>
   src(rel).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 
 /**
- * `wait_for_trigger` and `variables`, after Home Assistant's script syntax.
+ * `wait_for_trigger` and `variables`.
  *
  * Everything that can be is BEHAVIOURAL. `Engine` below is processOneRun's step
  * loop with the database swapped for two arrays and a fake clock — the same
@@ -444,7 +444,7 @@ test("an event of a watched type wakes the run and it continues after the wait",
 });
 
 test("an event that predates the wait does NOT wake it — the watermark is the arm instant", () => {
-  // HA's wait_for_trigger listens from the moment the action is reached. A
+  // A wait listens from the moment the step is reached. A
   // journey that moves a lead's stage and then waits for `stage_entered` must
   // not be woken by its own preceding move — the engine emits that event itself
   // (journeyStepExecutor's move_stage), so this is a real self-wake, not a
@@ -542,7 +542,7 @@ test("continue_on_timeout defaults to true — the sequence carries on", () => {
     steps: [waitStep("hold", { nextStepId: "chase", timeoutMinutes: 5 }), push("chase", { nextStepId: null })],
   });
   engine.drain();
-  assert.deepEqual(engine.sent, ["chase"], "HA's default is to continue past a timeout");
+  assert.deepEqual(engine.sent, ["chase"], "the default is to continue past a timeout");
 });
 
 test("continue_on_timeout false stops the run, and the trace still says why", () => {
@@ -920,9 +920,8 @@ test("wait_for_trigger config is validated at save time", () => {
 });
 
 test("a timeout is REQUIRED and capped — 'wait forever' is not expressible", () => {
-  // HA lets the timeout be omitted because its script is a live object you can
-  // see and cancel. Ours is a database row that would poll on every engine tick
-  // until somebody noticed.
+  // A wait here is not a live object somebody can see and cancel; it is a
+  // database row that would poll on every engine tick until somebody noticed.
   const build = (config: Record<string, unknown>) =>
     parseJourneyDefinition({
       startStepId: "hold",
@@ -943,7 +942,7 @@ test("continueOnTimeout is true unless it is explicitly false", () => {
   assert.equal(parseWaitForTriggerConfig(base).continueOnTimeout, true);
   assert.equal(parseWaitForTriggerConfig({ ...base, continueOnTimeout: false }).continueOnTimeout, false);
   // Anything that is not literally false gets the documented default, so a
-  // config written before the flag existed behaves as HA does.
+  // config written before the flag existed keeps the documented behaviour.
   assert.equal(parseWaitForTriggerConfig({ ...base, continueOnTimeout: "no" }).continueOnTimeout, true);
 });
 

@@ -9,6 +9,7 @@ import DocumentsPanel from "@/components/DocumentsPanel";
 import ActivityPanel from "@/components/ActivityPanel";
 import EmailComposer from "@/components/EmailComposer";
 import LeadTimeline from "@/components/LeadTimeline";
+import { auditDetailFor } from "@/lib/auditDetailQuery";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import WhatsAppPanel from "@/components/WhatsAppPanel";
 import Tabs from "@/components/Tabs";
@@ -616,6 +617,7 @@ export default async function ContactDetailPage({
           contactId={contact.id}
           revalidate={path}
           audit={history}
+          auditDetail={await auditDetailFor(history)}
           communications={comms}
           activities={contact.activities}
           creationNote={

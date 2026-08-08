@@ -101,8 +101,26 @@ test("every customer-facing link builder takes an origin", () => {
   assert.match(shipped("src/lib/signing/approvals.ts"), /export function approvalUrl\(token: string, origin\?: string \| null\)/);
   assert.match(shipped("src/lib/surveys.ts"), /export const surveyUrl = \(token: string, origin\?: string \| null\)/);
   // …and every call site passes one.
-  assert.match(shipped("src/lib/signing/dispatch.ts"), /signUrl\(r\.token, origin\)/);
-  assert.match(shipped("src/lib/signing/approvals.ts"), /approvalUrl\(step\.token, origin\)/);
+  // The call must carry an ORIGIN. It must NOT carry `r.token`: that column is
+  // the stored digest, and a link built from it is hashed again by the public
+  // route and never resolves — accepted by SMTP, recorded as sent, dead on
+  // arrival. The raw capability is recovered from its ciphertext instead. Both
+  // rules matter and this asserts both, rather than pinning one spelling.
+  assert.match(shipped("src/lib/signing/dispatch.ts"), /signUrl\(raw, origin\)/);
+  assert.doesNotMatch(
+    shipped("src/lib/signing/dispatch.ts"),
+    /signUrl\(r\.token/,
+    "a signing link built from the stored digest is unusable",
+  );
+  // Same two rules as the signing link: the origin must be there, and the stored
+  // digest must not be. `step.token` is the digest; the raw capability comes
+  // from its ciphertext.
+  assert.match(shipped("src/lib/signing/approvals.ts"), /approvalUrl\(raw, origin\)/);
+  assert.doesNotMatch(
+    shipped("src/lib/signing/approvals.ts"),
+    /approvalUrl\(step\.token/,
+    "an approval link built from the stored digest is unusable",
+  );
   assert.match(shipped("src/lib/surveys.ts"), /surveyUrl\(response\.token, origin\)/);
   assert.match(shipped("src/lib/surveyDistributionQueue.ts"), /\$\{sender\.origin\}\/s\/\$\{token\}/);
 });

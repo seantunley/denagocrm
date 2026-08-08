@@ -23,6 +23,14 @@ type ActivityItem = {
   dueDate: Date;
   status: string;
   assignedTo: { id: string; name: string };
+  /**
+   * Which customer this activity belongs to. Only set where the panel shows an
+   * AGGREGATE — the fleet page pools the activities of every contact in the
+   * fleet, and "call about the battery" means nothing without knowing whose. On
+   * a single contact's page the owner is the page you are already on, so it is
+   * omitted and nothing renders.
+   */
+  contactLabel?: string | null;
 };
 
 /** UTC-stored due date → datetime-local value in SA time (date-only stays 00:00). */
@@ -41,6 +49,7 @@ export default function ActivityPanel({
   contactId,
   revalidate,
   startOpen = false,
+  hideCreate = false,
 }: {
   activities: ActivityItem[];
   users: { id: string; name: string }[];
@@ -49,6 +58,14 @@ export default function ActivityPanel({
   contactId?: string;
   revalidate: string;
   startOpen?: boolean;
+  /**
+   * Drop the "Schedule activity" form. For AGGREGATE views (the fleet page)
+   * where there is no single record to attach a new activity to: with no
+   * contactId or leadId the form would file an activity against nobody, which
+   * reads as success and lands nowhere useful. Completing and editing the
+   * activities already listed stays available — those carry their own ids.
+   */
+  hideCreate?: boolean;
 }) {
   const planned = activities
     .filter((a) => a.status === "planned")
@@ -63,6 +80,7 @@ export default function ActivityPanel({
         <h2 className="font-semibold">Planned activities</h2>
       </div>
 
+      {!hideCreate && (
       <details className="mb-4 group" open={startOpen}>
         <summary className="btn-secondary btn-sm inline-flex cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
           + Schedule activity
@@ -100,6 +118,7 @@ export default function ActivityPanel({
         <button className="btn-primary">Schedule</button>
         </form>
       </details>
+      )}
 
       {planned.length === 0 ? (
         <p className="text-sm text-slate-500">
@@ -131,6 +150,7 @@ export default function ActivityPanel({
                       {formatDue(a.dueDate)}
                     </span>{" "}
                     · {a.assignedTo.name}
+                    {a.contactLabel && ` · ${a.contactLabel}`}
                     {a.location && (
                       <>
                         {" · "}

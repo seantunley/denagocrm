@@ -1,6 +1,8 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { updateLead } from "@/app/actions/leads";
+import { getAccessibleContactIds, requireLeadAccess } from "@/lib/permissions";
+import { listTenantStaff } from "@/lib/tenantActor";
 import LeadForm from "@/components/LeadForm";
 import { contactName } from "@/lib/format";
 
@@ -10,6 +12,12 @@ export default async function EditLeadPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  // Same shape as the contact edit form: no guard of its own, sitting under
+  // leads/[id]/layout.tsx whose guard is requireLeadReadAccess — a read grant
+  // opened the write form. updateLead already demands leads.edit; this is that
+  // same demand, one segment earlier, so the form is not offered at all.
+  const user = await requireLeadAccess(id, "leads.edit");
+  const accessibleContactIds = await getAccessibleContactIds(user);
   const [lead, products, stages, contacts, users] = await Promise.all([
     prisma.lead.findUnique({ where: { id } }),
     prisma.product.findMany({
@@ -18,8 +26,14 @@ export default async function EditLeadPage({
       orderBy: { name: "asc" },
     }),
     prisma.pipelineStage.findMany({ orderBy: { order: "asc" } }),
-    prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
-    prisma.user.findMany({ orderBy: { name: "asc" } }),
+    // The customer picker. `null` means unrestricted; `[]` means nothing
+    // accessible and must stay an impossible match, not an absent filter.
+    prisma.contact.findMany({
+      where: accessibleContactIds ? { id: { in: accessibleContactIds } } : {},
+      orderBy: { firstName: "asc" },
+      take: 500,
+    }),
+    listTenantStaff(),
   ]);
   if (!lead) notFound();
 

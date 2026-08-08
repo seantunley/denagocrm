@@ -369,7 +369,7 @@ test("repeat count runs exactly count passes and publishes a 1-based index", () 
     }, step("done", { nextStepId: null })],
   });
   assert.deepEqual(run.executed, ["send", "send", "send", "done"]);
-  // 1-based like HA's repeat.index; null once the loop is left.
+  // 1-based; null once the loop is left.
   assert.deepEqual(run.repeatIndexes, [1, 2, 3, null]);
 });
 
@@ -592,7 +592,7 @@ test("stop is RAISED, and unwinds every enclosing sequence", () => {
 });
 
 test("stop with error: true aborts instead of completing", () => {
-  // HA's `stop` takes error: true. Ours must fail the run WITHOUT retrying — an
+  // `error: true` must fail the run WITHOUT retrying — an
   // author-declared stop is deterministic, so three attempts fail three times.
   assert.throws(
     () => stopStepOutcome({ id: "s", type: "stop", config: { error: true, reason: "Bad data" } }),

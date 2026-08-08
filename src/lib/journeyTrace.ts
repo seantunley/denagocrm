@@ -9,8 +9,7 @@ import type { JourneyEnrolmentDecision } from "./journeyEvents";
  * The activity trace for a journey: what fired, what it decided, and what each
  * run actually did.
  *
- * Modelled on Home Assistant's automation traces, and for the same reason. The
- * engine already recorded events, runs and step logs; nothing showed them, so
+ * The engine already recorded events, runs and step logs; nothing showed them, so
  * an automation that never ran was indistinguishable from one that ran and
  * matched nobody. That is not a hypothetical — journeys built on event triggers
  * enrolled nobody for months because `emitJourneyEvent` was never called from
@@ -45,8 +44,8 @@ export type TraceEvent = {
 /**
  * A run's step timeline.
  *
- * `steps` is a FLAT list carrying the hierarchical path, after HA's
- * `"0/sequence/1"`. For a flat journey the path is identical to the step id —
+ * `steps` is a FLAT list carrying the hierarchical path, e.g.
+ * `"triage/choose/1/sequence/0"`. For a flat journey the path is identical to the step id —
  * which is why every trace written before nesting existed still reads
  * correctly. Inside a container it names the branch and the ITERATION, so
  * `blast/repeat/2/sequence/1` and `blast/repeat/0/sequence/1` are

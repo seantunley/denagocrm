@@ -16,6 +16,7 @@ import CommsTimeline from "@/components/CommsTimeline";
 import ActivityPanel from "@/components/ActivityPanel";
 import EmailComposer from "@/components/EmailComposer";
 import LeadTimeline from "@/components/LeadTimeline";
+import { auditDetailFor } from "@/lib/auditDetailQuery";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import MarkLeadViewed from "@/components/MarkLeadViewed";
@@ -492,6 +493,7 @@ export default async function LeadDetailPage({
           leadId={lead.id}
           revalidate={path}
           audit={audit}
+          auditDetail={await auditDetailFor(audit)}
           communications={comms}
           activities={lead.activities}
           creationNote={

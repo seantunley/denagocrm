@@ -197,19 +197,36 @@ function refuseNestedRelationWrite(model: string, data: unknown): void {
  * query, otherwise no rows are returned. bypass_rls='on' is the safe default
  * for any non-tenant context (off, monitor, system scope, rollback).
  */
-async function withRlsScope(client: any, query: () => any): Promise<any> {
+/**
+ * `execRaw` is the client's ORIGINAL `$executeRaw`, captured before Layer 2b
+ * replaces it, and it has to be — this is the one place that cares about the
+ * difference between the two.
+ *
+ * An array transaction requires every element to be a PrismaPromise: Prisma
+ * inspects them and refuses anything else with "All elements of the array need
+ * to be Prisma Client promises". Layer 2b's wrapper returns a plain Promise
+ * (it awaits an interactive transaction internally), so reading `$executeRaw`
+ * off the exported client here made EVERY model operation throw that error.
+ * Which is what it did: unit tests are source assertions and could not see it,
+ * and the restricted-role integration suite caught it on the first CI run.
+ *
+ * It would also have been wrong if it had worked — Layer 2b opens its own
+ * transaction, so the GUC would have been set on a different connection from
+ * the operation it is supposed to scope.
+ */
+async function withRlsScope(client: any, execRaw: any, query: () => any): Promise<any> {
   // Under enforcement with a tenant scope, pin app.current_tenant; otherwise
   // (off/monitor, system scope, or enforce+no-scope — Layer 1 scopeArgs already
   // threw TenantScopeError for any tenant-scoped model before we reach here) bypass.
   const scope = tenantEnforcing() ? currentTenantScope() : null;
   // Batch the GUC write and the operation in ONE array transaction on the SAME
-  // `client` — the documented Prisma RLS-extension pattern. `client.$executeRaw`
-  // (not a model op, so it does not re-enter this extension) sets the GUC first,
-  // then the guarded op runs on the same pinned connection and sees it. The
+  // `client` — the documented Prisma RLS-extension pattern. `execRaw` (not a
+  // model op, so it does not re-enter this extension) sets the GUC first, then
+  // the guarded op runs on the same pinned connection and sees it. The
   // restricted-role (NOSUPERUSER NOBYPASSRLS) proof exercises this under FORCE RLS.
   const setGuc = scope?.tenantId
-    ? client.$executeRaw`SELECT set_config('app.current_tenant', ${scope.tenantId}, TRUE)`
-    : client.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
+    ? execRaw`SELECT set_config('app.current_tenant', ${scope.tenantId}, TRUE)`
+    : execRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
   const [, result] = await client.$transaction([setGuc, query()]);
   return result;
 }
@@ -304,7 +321,11 @@ function buildClient(raw: PrismaClient) {
   // via the holder) rather than `scoped` directly, so TS still infers `scoped`'s
   // real client type (referencing it in its own initializer would collapse it to
   // `any` and cascade through `prisma`). `ref.c` is populated before any query runs.
-  const ref: { c: any } = { c: null };
+  // `execRaw` is the same client's UNWRAPPED $executeRaw, captured below before
+  // Layer 2b replaces it. Layer 2 builds an ARRAY transaction, which accepts only
+  // PrismaPromises; Layer 2b's replacement returns a plain Promise. See
+  // withRlsScope for what happens when this distinction is lost.
+  const ref: { c: any; execRaw: any } = { c: null, execRaw: null };
   const scoped = guarded.$extends({
     query: {
       $allModels: {
@@ -313,12 +334,63 @@ function buildClient(raw: PrismaClient) {
           // Prisma's array $transaction loses AsyncLocalStorage context inside its
           // execution callbacks, so currentTenantScope() is unreachable in Layer 1.
           const scopedArgs = applyScopeArgs(model, operation, args);
-          return withRlsScope(ref.c, () => query(scopedArgs));
+          return withRlsScope(ref.c, ref.execRaw, () => query(scopedArgs));
         },
       },
     },
   });
   ref.c = scoped;
+  // BEFORE the loop below overwrites it. Bound, because it is read off the client
+  // here and called as a bare tagged template later.
+  ref.execRaw = (scoped as any).$executeRaw.bind(scoped);
+
+  // Layer 2b: THE SAME GUC, for RAW queries.
+  //
+  // A Prisma query extension intercepts MODEL operations. `$queryRaw` and friends
+  // are not model operations, so everything above — the tenant scoping AND the
+  // SET LOCAL that makes FORCE RLS permit the row — skipped them entirely. The
+  // fourteen raw reads issued through this client therefore ran with NO GUC set
+  // at all, and worked only because the application role still carries
+  // `rolbypassrls`. Under the restricted role the RLS work is heading for they
+  // would have returned zero rows: the leads board empty, the stock dashboard
+  // blank, timeline pins gone, and a job-card write silently matching nothing.
+  //
+  // src/app/actions/portal.ts already documents this exact trap for its own raw
+  // lookup and side-steps it by using basePrisma. That is the right answer for a
+  // PRE-AUTH lookup with no tenant to scope to. It is the wrong answer for a
+  // user-facing read, which is what these are: basePrisma sets bypass, so
+  // "fixing" them that way would have turned fourteen tenant-scoped reads into
+  // fourteen cross-tenant ones the moment isolation was switched on.
+  //
+  // So the GUC is applied here instead, once, with the same rule withRlsScope
+  // uses: the caller's tenant when enforcing with a scope, bypass otherwise.
+  // Fixing it in the client rather than at the call sites also means the next raw
+  // query somebody writes is correct without them knowing any of this.
+  //
+  // The INTERACTIVE form, not the array form withRlsScope uses. That choice is
+  // load-bearing and the opposite of the model-op case: here the raw method is
+  // invoked ON `tx` itself, so it is by construction on the same pinned
+  // connection as the SET LOCAL. (buildBypassClient does exactly this, for
+  // exactly this reason.) An array transaction cannot express it, because the
+  // raw promise would have to be created from the outer client first.
+  //
+  // DORMANT TODAY, byte-for-byte: with enforcement off this sets
+  // `app.bypass_rls='on'`, which is what the current role does implicitly
+  // anyway, so every one of these queries returns exactly what it returns now.
+  const scopedFull = scoped as any;
+  for (const method of ["$executeRaw", "$queryRaw", "$executeRawUnsafe", "$queryRawUnsafe"] as const) {
+    scopedFull[method] = (sql: any, ...values: any[]) =>
+      raw.$transaction(async (tx: any) => {
+        const scope = tenantEnforcing() ? currentTenantScope() : null;
+        if (scope?.tenantId) {
+          await tx.$executeRaw`SELECT set_config('app.current_tenant', ${scope.tenantId}, TRUE)`;
+        } else {
+          await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
+        }
+        return tx[method](sql, ...values);
+      });
+  }
+
   return scoped;
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */

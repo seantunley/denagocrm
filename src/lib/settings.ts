@@ -268,6 +268,43 @@ export async function putTenantCredential(tenantId: string, key: string, value: 
 }
 
 /**
+ * Writes a WHOLE integration bundle for a tenant in ONE transaction.
+ *
+ * The guided integration setup (src/app/actions/integrationFlow.ts) commits every
+ * field of an integration at once, only after a live connection test passed.
+ * Looping `putTenantCredential` would make that commit non-atomic: a crash
+ * between two keys leaves the tenant with a half-written bundle — precisely the
+ * "incomplete" state `integrationOverrideStatus` exists to warn about — and, far
+ * worse, a bundle that no longer matches the combination that was actually
+ * verified. One transaction means the tenant either has the verified bundle or
+ * the one they had before.
+ *
+ * Encryption goes through the same {@link storedSettingValue} rule as every
+ * other write path, so a credential key cannot end up in clear text here.
+ *
+ * `basePrisma` with an EXPLICIT tenantId on every row, exactly as
+ * {@link putTenantCredential} does: callers pass the tenant from their own
+ * session, never from ambient scope.
+ */
+export async function putTenantCredentialBundle(
+  tenantId: string,
+  entries: Readonly<Record<string, string>>,
+): Promise<void> {
+  const rows = Object.entries(entries).filter(([, value]) => value !== "");
+  if (rows.length === 0) return;
+  await basePrisma.$transaction(
+    rows.map(([key, value]) => {
+      const stored = storedSettingValue(key, value);
+      return basePrisma.tenantIntegrationCredential.upsert({
+        where: { tenantId_key: { tenantId, key } },
+        update: { value: stored },
+        create: { tenantId, key, value: stored },
+      });
+    }),
+  );
+}
+
+/**
  * Existence-only check for a tenant's own override — powers the tenant-facing
  * "Override active" / "Using platform default" status in the per-tenant
  * credential overrides UI. Deliberately never touches or returns the stored
@@ -339,4 +376,47 @@ export async function resolveIntegrationBundle(
   }
 
   return Object.fromEntries(keys.map((k) => [k, overrides.get(k) ?? null]));
+}
+
+/**
+ * The tenant that OWNS the credential {@link resolveTenantCredential} or
+ * {@link resolveIntegrationBundle} just returned for `tenantId` — i.e. the
+ * tenant whose Connected / Reconnect badge a send made with those credentials
+ * is about.
+ *
+ * A NULL `tenantId` does NOT mean "no tenant". Both resolvers fall back to the
+ * global `AppSetting` row on null, and `settingsOwnerTenantId()` owns that row
+ * for the FOUNDING tenant (off-mode and system scope alike) — so the credentials
+ * that came back are the founding tenant's, and its badge is the one that must
+ * move. This is why send-health reporting must never re-read ambient scope: with
+ * enforcement off there IS no request scope (decideStaffTenantScope enters none),
+ * so a second look would find null and drop the report on the floor for exactly
+ * the sends real users make.
+ *
+ * Pure, and never reads ambient scope or a looked-up row: it restates the
+ * fallback rule the two resolvers above already applied to the SAME argument.
+ */
+export function credentialOwnerTenantId(tenantId: string | null): string {
+  return tenantId ?? DEFAULT_TENANT_ID;
+}
+
+/** A resolved bundle together with the tenant it belongs to. */
+export type ResolvedIntegrationBundle = {
+  /** Never null — see {@link credentialOwnerTenantId}. */
+  tenantId: string;
+  values: Record<string, string | null>;
+};
+
+/**
+ * {@link resolveIntegrationBundle}, but carrying the resolved tenant ALONGSIDE
+ * the values so a caller can report send health against it without asking the
+ * ambient scope a second question it cannot answer.
+ */
+export async function resolveIntegrationBundleForTenant(
+  tenantId: string | null,
+  integrationId: string,
+): Promise<ResolvedIntegrationBundle | null> {
+  const values = await resolveIntegrationBundle(tenantId, integrationId);
+  if (!values) return null;
+  return { tenantId: credentialOwnerTenantId(tenantId), values };
 }

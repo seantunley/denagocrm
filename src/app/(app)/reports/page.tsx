@@ -1,6 +1,5 @@
 import {
   addDays,
-  differenceInCalendarDays,
   format,
   startOfMonth,
   startOfQuarter,
@@ -12,6 +11,21 @@ import { TrendingDown, TrendingUp } from "lucide-react";
 import { prisma, basePrisma } from "@/lib/db";
 import { formatZARCompact } from "@/lib/format";
 import { isModuleEnabled } from "@/lib/modules/enabled";
+import {
+  breakdownOf,
+  readStatisticBuckets,
+  seriesOf,
+  statisticsReadyFor,
+  statisticsTenantId,
+  totalOf,
+  type StatisticMetric,
+} from "@/lib/statistics";
+import {
+  periodForRange,
+  periodStarts,
+  sastBucketLabel,
+  type StatisticPeriod,
+} from "@/lib/statisticsTime";
 import { PageHeader } from "@/components/page-header";
 import ReportFilters from "@/components/reports/ReportFilters";
 import {
@@ -63,24 +77,29 @@ function resolveRange(params: Record<string, string | undefined>) {
   return { from, to, prevFrom, prevTo: from };
 }
 
-type Bucket = { start: Date; end: Date; label: string };
+/**
+ * Bucket spans for the LIVE (permission-restricted) path, built from the same
+ * SAST-aligned axis the pre-aggregated path reads, so both produce the same
+ * boundaries and the same labels.
+ *
+ * This replaces `makeBuckets`, which stepped by a literal 30.44 days for ranges
+ * over four months. Those bars were not months — they drifted a little further
+ * out of calendar alignment at every step — and their labels came from a bare
+ * date-fns `format()`, which renders in the SERVER's zone rather than the
+ * business's, so a bar could be named after the wrong day entirely.
+ */
+type Span = { start: Date; end: Date; label: string };
 
-function makeBuckets(from: Date, to: Date): Bucket[] {
-  const days = Math.max(1, differenceInCalendarDays(to, from));
-  const stepDays = days <= 31 ? 1 : days <= 126 ? 7 : 30.44;
-  const fmt = days <= 126 ? "d MMM" : "MMM yy";
-  const buckets: Bucket[] = [];
-  let cursor = from;
-  while (cursor < to) {
-    const end = new Date(Math.min(cursor.getTime() + stepDays * 86400000, to.getTime()));
-    buckets.push({ start: cursor, end, label: format(cursor, fmt) });
-    cursor = end;
-  }
-  return buckets;
+function spansFor(period: StatisticPeriod, axis: Date[], to: Date): Span[] {
+  return axis.map((start, index) => ({
+    start,
+    end: axis[index + 1] ?? to,
+    label: sastBucketLabel(period, start),
+  }));
 }
 
-const countIn = (buckets: Bucket[], dates: Date[]) =>
-  buckets.map((bucket) => dates.filter((date) => date >= bucket.start && date < bucket.end).length);
+const countIn = (spans: Span[], dates: Date[]) =>
+  spans.map((span) => dates.filter((date) => date >= span.start && date < span.end).length);
 
 const SOURCE_COLORS: Record<string, string> = {
   facebook: "var(--chart-2)",
@@ -90,6 +109,8 @@ const SOURCE_COLORS: Record<string, string> = {
   referral: "var(--chart-5)",
   manual: "oklch(0.55 0.01 264)",
 };
+
+const sourceColor = (name: string) => SOURCE_COLORS[name] ?? "var(--chart-5)";
 
 function StatCard({
   label,
@@ -149,6 +170,248 @@ async function accessibleReportUserIds(userId: string, unrestricted: boolean): P
   return rows.map((row) => row.id);
 }
 
+/** Everything the charts need, however it was obtained. */
+type Aggregates = {
+  leads: number;
+  prevLeads: number;
+  won: number;
+  prevWon: number;
+  wonValueCents: number;
+  prevWonValueCents: number;
+  lost: number;
+  prevLost: number;
+  trend: TrendPoint[];
+  team: TeamRow[];
+  service: ServicePoint[];
+  sources: SourceRow[];
+};
+
+/**
+ * THE FAST PATH — every time series read from pre-aggregated buckets.
+ *
+ * What this replaces, on the twelve-month range: five window scans that
+ * materialised rows into Node (a year of leads, a year of leads for the
+ * comparison window, a year of won leads WITH a join to User, a year of won
+ * leads for the comparison window, and a year of completed job cards), then
+ * bucketed them with a nested filter loop that is buckets × rows. Cost grew
+ * with the tenant's whole history and was paid again on every page view.
+ *
+ * What it costs instead: six reads of at most one row per bucket per dimension
+ * — twelve months of buckets, not a year of leads.
+ *
+ * The one query that stays is the source breakdown, and it stays for a reason
+ * worth stating rather than working around. "Of the leads created in this
+ * window, how many are NOW won" is a COHORT measure: its answer for a window in
+ * the past keeps changing as those leads close. A bucket sealed at the end of
+ * its window cannot express that, and a bucket that could would have to be
+ * recomputed over all history forever — which is the scan this feature exists
+ * to remove. It is at least computed DB-side now, as a grouped count, rather
+ * than by shipping every row to Node to be counted there.
+ */
+async function bucketAggregates(options: {
+  from: Date;
+  to: Date;
+  prevFrom: Date;
+  prevTo: Date;
+  period: StatisticPeriod;
+  axis: Date[];
+  prevAxis: Date[];
+  automotiveOn: boolean;
+  userNames: Map<string, string>;
+  /** Resolved ONCE by the caller and threaded through every read below. */
+  tenantId: string;
+}): Promise<Aggregates> {
+  const { from, to, prevFrom, prevTo, period, axis, prevAxis, automotiveOn, userNames, tenantId } =
+    options;
+  const read = (metric: StatisticMetric, rangeFrom: Date, rangeTo: Date) =>
+    readStatisticBuckets({ metric, period, from: rangeFrom, to: rangeTo, tenantId });
+
+  const [leadRows, prevLeadRows, wonRows, prevWonRows, lostRows, prevLostRows, jobRows, sourceRows] =
+    await Promise.all([
+      read("leads_created", from, to),
+      read("leads_created", prevFrom, prevTo),
+      read("deals_won", from, to),
+      read("deals_won", prevFrom, prevTo),
+      read("deals_lost", from, to),
+      read("deals_lost", prevFrom, prevTo),
+      automotiveOn ? read("jobcards_completed", from, to) : Promise.resolve([]),
+      prisma.lead.groupBy({
+        by: ["source", "status"],
+        where: { createdAt: { gte: from, lt: to } },
+        _count: { _all: true },
+      }),
+    ]);
+
+  const leadSeries = seriesOf(leadRows, axis);
+  const prevLeadSeries = seriesOf(prevLeadRows, prevAxis);
+  const wonSeries = seriesOf(wonRows, axis);
+  const jobSeries = seriesOf(jobRows, axis);
+
+  const sourceMap = new Map<string, SourceRow>();
+  for (const row of sourceRows) {
+    const current =
+      sourceMap.get(row.source) ??
+      { name: row.source, leads: 0, won: 0, color: sourceColor(row.source) };
+    current.leads += row._count._all;
+    if (row.status === "won") current.won += row._count._all;
+    sourceMap.set(row.source, current);
+  }
+
+  return {
+    leads: totalOf(leadRows).count,
+    prevLeads: totalOf(prevLeadRows).count,
+    won: totalOf(wonRows).count,
+    prevWon: totalOf(prevWonRows).count,
+    wonValueCents: totalOf(wonRows).sumCents,
+    prevWonValueCents: totalOf(prevWonRows).sumCents,
+    lost: totalOf(lostRows).count,
+    prevLost: totalOf(prevLostRows).count,
+    trend: axis.map((start, index) => ({
+      label: sastBucketLabel(period, start),
+      leads: leadSeries[index].count,
+      won: wonSeries[index].count,
+      wonValue: Math.round(wonSeries[index].sumCents / 100),
+      prevLeads: prevLeadSeries[index]?.count ?? null,
+    })),
+    // The deals_won breakdown IS the team chart — the dimension is the assignee.
+    team: [...breakdownOf(wonRows)]
+      .map(([assigneeId, value]) => ({
+        name: assigneeId === "" ? "Unassigned" : userNames.get(assigneeId) ?? "Unknown",
+        won: value.count,
+        wonValue: Math.round(value.sumCents / 100),
+      }))
+      .sort((a, b) => b.wonValue - a.wonValue),
+    service: axis.map((start, index) => ({
+      label: sastBucketLabel(period, start),
+      services: jobSeries[index].count,
+    })),
+    sources: [...sourceMap.values()].sort((a, b) => b.leads - a.leads),
+  };
+}
+
+/**
+ * THE LIVE PATH — unchanged in what it computes, used when buckets cannot
+ * answer the question.
+ *
+ * Two cases reach it, and both are correctness, not preference:
+ *
+ *  - THE READER IS RESTRICTED, or has filtered by user / product / source.
+ *    Buckets are aggregates over a whole tenant; they cannot be re-filtered by
+ *    an arbitrary list of permitted record ids after the fact. Serving a
+ *    restricted reader from them would show them other people's numbers, which
+ *    is a worse failure than a slow page.
+ *  - THE BUCKETS ARE NOT BUILT YET. Between a deploy and the first cron tick
+ *    the table is empty, and a chart that reads an unbuilt table draws a flat
+ *    zero line — which looks like the business collapsed rather than like a
+ *    cold start.
+ */
+async function liveAggregates(options: {
+  from: Date;
+  to: Date;
+  prevFrom: Date;
+  prevTo: Date;
+  spans: Span[];
+  prevSpans: Span[];
+  leadFilter: Record<string, unknown>;
+  jobScope: Record<string, unknown>;
+  automotiveOn: boolean;
+}): Promise<Aggregates> {
+  const { from, to, prevFrom, prevTo, spans, prevSpans, leadFilter, jobScope, automotiveOn } = options;
+
+  const [leadsInRange, prevLeads, wonInRange, prevWon, lostInRange, prevLost, jobsInRange] =
+    await Promise.all([
+      prisma.lead.findMany({
+        where: { ...leadFilter, createdAt: { gte: from, lt: to } },
+        select: { createdAt: true, source: true, status: true },
+      }),
+      prisma.lead.findMany({
+        where: { ...leadFilter, createdAt: { gte: prevFrom, lt: prevTo } },
+        select: { createdAt: true },
+      }),
+      // `wonAt` / `lostAt`, NOT `updatedAt` — the same immutable lifecycle dates
+      // the buckets are keyed on. This path serves the restricted and filtered
+      // readers, so if it dated a won deal differently the two paths would
+      // report different numbers for the same month to different people, and
+      // adding a note to an old deal would move it into the current month here
+      // while the bucket path kept it where it closed.
+      prisma.lead.findMany({
+        where: { ...leadFilter, status: "won", wonAt: { gte: from, lt: to } },
+        select: {
+          wonAt: true,
+          valueCents: true,
+          assignedTo: { select: { name: true } },
+        },
+      }),
+      prisma.lead.findMany({
+        where: { ...leadFilter, status: "won", wonAt: { gte: prevFrom, lt: prevTo } },
+        select: { valueCents: true },
+      }),
+      prisma.lead.count({
+        where: { ...leadFilter, status: "lost", lostAt: { gte: from, lt: to } },
+      }),
+      prisma.lead.count({
+        where: { ...leadFilter, status: "lost", lostAt: { gte: prevFrom, lt: prevTo } },
+      }),
+      automotiveOn
+        ? prisma.jobCard.findMany({
+            where: { ...jobScope, completedAt: { gte: from, lt: to } },
+            select: { completedAt: true },
+          })
+        : Promise.resolve([]),
+    ]);
+
+  const leadCounts = countIn(spans, leadsInRange.map((lead) => lead.createdAt));
+  const prevCounts = countIn(prevSpans, prevLeads.map((lead) => lead.createdAt));
+
+  const sourceMap = new Map<string, SourceRow>();
+  for (const lead of leadsInRange) {
+    const current =
+      sourceMap.get(lead.source) ??
+      { name: lead.source, leads: 0, won: 0, color: sourceColor(lead.source) };
+    current.leads += 1;
+    if (lead.status === "won") current.won += 1;
+    sourceMap.set(lead.source, current);
+  }
+
+  const teamMap = new Map<string, TeamRow>();
+  for (const won of wonInRange) {
+    const name = won.assignedTo?.name ?? "Unassigned";
+    const current = teamMap.get(name) ?? { name, won: 0, wonValue: 0 };
+    current.won += 1;
+    current.wonValue += Math.round(won.valueCents / 100);
+    teamMap.set(name, current);
+  }
+
+  return {
+    leads: leadsInRange.length,
+    prevLeads: prevLeads.length,
+    won: wonInRange.length,
+    prevWon: prevWon.length,
+    wonValueCents: wonInRange.reduce((sum, won) => sum + won.valueCents, 0),
+    prevWonValueCents: prevWon.reduce((sum, won) => sum + won.valueCents, 0),
+    lost: lostInRange,
+    prevLost,
+    trend: spans.map((span, index) => {
+      const wonHere = wonInRange.filter((won) => won.wonAt! >= span.start && won.wonAt! < span.end);
+      return {
+        label: span.label,
+        leads: leadCounts[index],
+        won: wonHere.length,
+        wonValue: Math.round(wonHere.reduce((sum, won) => sum + won.valueCents, 0) / 100),
+        prevLeads: prevCounts[index] ?? null,
+      };
+    }),
+    team: [...teamMap.values()].sort((a, b) => b.wonValue - a.wonValue),
+    service: spans.map((span) => ({
+      label: span.label,
+      services: jobsInRange.filter(
+        (job) => job.completedAt! >= span.start && job.completedAt! < span.end,
+      ).length,
+    })),
+    sources: [...sourceMap.values()].sort((a, b) => b.leads - a.leads),
+  };
+}
+
 export default async function ReportsPage({
   searchParams,
 }: {
@@ -176,57 +439,36 @@ export default async function ReportsPage({
     ...(params.product ? { productId: params.product } : {}),
     ...(params.source ? { source: params.source } : {}),
   };
+  const filtered = Boolean(requestedUser || params.product || params.source);
 
-  const [
-    leadsInRange,
-    prevLeads,
-    wonInRange,
-    prevWon,
-    lostInRange,
-    prevLost,
-    openLeads,
-    jobsInRange,
-    users,
-    products,
-    allSources,
-  ] = await Promise.all([
-    prisma.lead.findMany({
-      where: { ...leadFilter, createdAt: { gte: from, lt: to } },
-      select: { createdAt: true, source: true, status: true },
-    }),
-    prisma.lead.findMany({
-      where: { ...leadFilter, createdAt: { gte: prevFrom, lt: prevTo } },
-      select: { createdAt: true },
-    }),
-    prisma.lead.findMany({
-      where: { ...leadFilter, status: "won", updatedAt: { gte: from, lt: to } },
-      select: {
-        updatedAt: true,
-        valueCents: true,
-        source: true,
-        assignedTo: { select: { name: true } },
-      },
-    }),
-    prisma.lead.findMany({
-      where: { ...leadFilter, status: "won", updatedAt: { gte: prevFrom, lt: prevTo } },
-      select: { valueCents: true },
-    }),
-    prisma.lead.count({
-      where: { ...leadFilter, status: "lost", updatedAt: { gte: from, lt: to } },
-    }),
-    prisma.lead.count({
-      where: { ...leadFilter, status: "lost", updatedAt: { gte: prevFrom, lt: prevTo } },
-    }),
+  // ONE axis, shared by both paths — so switching between them can never move a
+  // bar. Day buckets below four months, calendar months above, which is the
+  // same threshold the page already used to switch its labels.
+  const period = periodForRange(from, to);
+  const axis = periodStarts(period, from, to);
+  const prevAxis = periodStarts(period, prevFrom, prevTo);
+
+  // The buckets are a whole-tenant aggregate with no per-record permissions in
+  // them, so a restricted or filtered reader must not be served from them. See
+  // liveAggregates.
+  const neededMetrics: StatisticMetric[] = automotiveOn
+    ? ["leads_created", "deals_won", "deals_lost", "jobcards_completed"]
+    : ["leads_created", "deals_won", "deals_lost"];
+  // ONE tenant resolution for the whole render, from the request scope — never
+  // from a bucket row. The readiness check and every bucket read below are given
+  // the SAME value, so the page cannot decide it is ready on one workspace's
+  // cursor and then read another workspace's numbers.
+  const statsTenantId = statisticsTenantId();
+  const useBuckets =
+    unrestricted && !filtered && (await statisticsReadyFor(neededMetrics, statsTenantId));
+
+  const [openLeads, users, products, allSources] = await Promise.all([
     prisma.lead.findMany({
       where: { ...leadFilter, status: "open" },
       select: {
         valueCents: true,
         stage: { select: { id: true, name: true, color: true, order: true } },
       },
-    }),
-    prisma.jobCard.findMany({
-      where: { ...jobScope, completedAt: { gte: from, lt: to } },
-      select: { completedAt: true },
     }),
     prisma.user.findMany({
       where: reportUserIds === null ? {} : { id: { in: reportUserIds } },
@@ -237,20 +479,30 @@ export default async function ReportsPage({
     prisma.lead.groupBy({ by: ["source"], where: leadScope }),
   ]);
 
-  const buckets = makeBuckets(from, to);
-  const prevBuckets = makeBuckets(prevFrom, prevTo);
-  const leadCounts = countIn(buckets, leadsInRange.map((lead) => lead.createdAt));
-  const prevCounts = countIn(prevBuckets, prevLeads.map((lead) => lead.createdAt));
-  const trend: TrendPoint[] = buckets.map((bucket, index) => {
-    const wonHere = wonInRange.filter((won) => won.updatedAt >= bucket.start && won.updatedAt < bucket.end);
-    return {
-      label: bucket.label,
-      leads: leadCounts[index],
-      won: wonHere.length,
-      wonValue: Math.round(wonHere.reduce((sum, won) => sum + won.valueCents, 0) / 100),
-      prevLeads: prevCounts[index] ?? null,
-    };
-  });
+  const aggregates = useBuckets
+    ? await bucketAggregates({
+        from,
+        to,
+        prevFrom,
+        prevTo,
+        period,
+        axis,
+        prevAxis,
+        automotiveOn,
+        userNames: new Map(users.map((u) => [u.id, u.name ?? "Unnamed"])),
+        tenantId: statsTenantId,
+      })
+    : await liveAggregates({
+        from,
+        to,
+        prevFrom,
+        prevTo,
+        spans: spansFor(period, axis, to),
+        prevSpans: spansFor(period, prevAxis, prevTo),
+        leadFilter,
+        jobScope,
+        automotiveOn,
+      });
 
   const stageMap = new Map<string, FunnelRow & { order: number }>();
   for (const lead of openLeads) {
@@ -267,43 +519,11 @@ export default async function ReportsPage({
   }
   const funnel = [...stageMap.values()].sort((a, b) => a.order - b.order);
 
-  const sourceMap = new Map<string, SourceRow>();
-  for (const lead of leadsInRange) {
-    const current = sourceMap.get(lead.source) ?? {
-      name: lead.source,
-      leads: 0,
-      won: 0,
-      color: SOURCE_COLORS[lead.source] ?? "var(--chart-5)",
-    };
-    current.leads += 1;
-    if (lead.status === "won") current.won += 1;
-    sourceMap.set(lead.source, current);
-  }
-  const sources = [...sourceMap.values()].sort((a, b) => b.leads - a.leads);
-
-  const teamMap = new Map<string, TeamRow>();
-  for (const won of wonInRange) {
-    const name = won.assignedTo?.name ?? "Unassigned";
-    const current = teamMap.get(name) ?? { name, won: 0, wonValue: 0 };
-    current.won += 1;
-    current.wonValue += Math.round(won.valueCents / 100);
-    teamMap.set(name, current);
-  }
-  const team = [...teamMap.values()].sort((a, b) => b.wonValue - a.wonValue);
-
-  const service: ServicePoint[] = buckets.map((bucket) => ({
-    label: bucket.label,
-    services: jobsInRange.filter((job) => job.completedAt! >= bucket.start && job.completedAt! < bucket.end).length,
-  }));
-
-  const wonValue = wonInRange.reduce((sum, won) => sum + won.valueCents, 0);
-  const prevWonValue = prevWon.reduce((sum, won) => sum + won.valueCents, 0);
-  const closed = wonInRange.length + lostInRange;
-  const prevClosed = prevWon.length + prevLost;
-  const winRate = closed ? Math.round((wonInRange.length / closed) * 100) : 0;
-  const prevWinRate = prevClosed ? Math.round((prevWon.length / prevClosed) * 100) : 0;
+  const closed = aggregates.won + aggregates.lost;
+  const prevClosed = aggregates.prevWon + aggregates.prevLost;
+  const winRate = closed ? Math.round((aggregates.won / closed) * 100) : 0;
+  const prevWinRate = prevClosed ? Math.round((aggregates.prevWon / prevClosed) * 100) : 0;
   const compare = `${format(prevFrom, "d MMM")} – ${format(prevTo, "d MMM")}`;
-  const filtered = Boolean(requestedUser || params.product || params.source);
 
   return (
     <div className="space-y-4">
@@ -315,14 +535,14 @@ export default async function ReportsPage({
       <ReportFilters options={{ users, products, sources: allSources.map((source) => source.source).sort() }} />
 
       <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <StatCard label="New leads" value={String(leadsInRange.length)} delta={pct(leadsInRange.length, prevLeads.length)} compare={compare} />
-        <StatCard label="Deals won" value={String(wonInRange.length)} delta={pct(wonInRange.length, prevWon.length)} compare={compare} />
-        <StatCard label="Won value" value={formatZARCompact(wonValue)} delta={pct(wonValue, prevWonValue)} compare={compare} />
+        <StatCard label="New leads" value={String(aggregates.leads)} delta={pct(aggregates.leads, aggregates.prevLeads)} compare={compare} />
+        <StatCard label="Deals won" value={String(aggregates.won)} delta={pct(aggregates.won, aggregates.prevWon)} compare={compare} />
+        <StatCard label="Won value" value={formatZARCompact(aggregates.wonValueCents)} delta={pct(aggregates.wonValueCents, aggregates.prevWonValueCents)} compare={compare} />
         <StatCard label="Win rate" value={`${winRate}%`} delta={prevClosed || closed ? winRate - prevWinRate : null} compare={compare} />
       </div>
 
       <ChartCard title="Sales trend" subtitle="New leads (line) and won deal value (bars) — dashed line is the previous period">
-        <TrendChart data={trend} />
+        <TrendChart data={aggregates.trend} />
       </ChartCard>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
@@ -330,17 +550,17 @@ export default async function ReportsPage({
           <FunnelChart data={funnel} />
         </ChartCard>
         <ChartCard title="Lead sources" subtitle="Share of leads in period, with win rate per channel">
-          <SourcesChart data={sources} />
+          <SourcesChart data={aggregates.sources} />
         </ChartCard>
       </div>
 
       <div className={`grid grid-cols-1 gap-4 ${automotiveOn ? "xl:grid-cols-2" : ""}`}>
         <ChartCard title="Team performance" subtitle="Value of accessible deals won in period, per team member">
-          {team.length ? <TeamChart data={team} /> : <p className="py-8 text-center text-xs text-muted-foreground/70">No deals won in this period.</p>}
+          {aggregates.team.length ? <TeamChart data={aggregates.team} /> : <p className="py-8 text-center text-xs text-muted-foreground/70">No deals won in this period.</p>}
         </ChartCard>
         {automotiveOn && (
           <ChartCard title="Workshop" subtitle="Accessible job cards completed per period">
-            <ServiceChart data={service} />
+            <ServiceChart data={aggregates.service} />
           </ChartCard>
         )}
       </div>
