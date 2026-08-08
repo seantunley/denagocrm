@@ -7,6 +7,8 @@ import { createIntakeLead } from "@/lib/leadIntake";
 import { parseLeadFields, metaSource } from "@/lib/metaLead";
 import { recordInboundDm, recordDmEcho, type DmPlatform } from "@/lib/messenger";
 import { runDmFlow } from "@/lib/flowDm";
+import { metaReceipt } from "@/lib/deliveryReceipts";
+import { applyReceipt } from "@/lib/messageReceipts";
 import { withChannelTenantScope, validateInSystemScope } from "@/lib/tenantScopeEntry";
 import { secretEquals } from "@/lib/secretCompare";
 
@@ -87,6 +89,15 @@ export async function POST(req: NextRequest) {
           const attachments = ((ev.message?.attachments ?? []) as any[])
             .map((a) => ({ type: String(a.type ?? "file"), url: String(a.payload?.url ?? "") }))
             .filter((a) => a.url);
+          // Delivery and read receipts. Meta sends these as their own messaging
+          // events with a watermark; they carry no message text, so they must be
+          // handled before the message branches below rather than falling through
+          // them as an empty message.
+          if (ev.delivery || ev.read) {
+            const receipt = metaReceipt(ev, platform);
+            if (receipt) await applyReceipt(receipt);
+            continue;
+          }
           if (ev.message?.is_echo) {
             if (text) await recordDmEcho(platform, String(ev.recipient?.id ?? ""), text);
             continue;

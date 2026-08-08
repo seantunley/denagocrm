@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { whatsappReceipt } from "@/lib/deliveryReceipts";
+import { applyReceipt } from "@/lib/messageReceipts";
 import crypto from "crypto";
 import { getSetting } from "@/lib/settings";
 import { recordInboundWhatsApp, fetchWhatsAppMedia } from "@/lib/whatsapp";
@@ -77,6 +79,14 @@ export async function POST(req: NextRequest) {
       // enforcement → the messages are skipped (fail closed), never run unscoped.
       const phoneNumberId: string | undefined = value?.metadata?.phone_number_id;
       await withChannelTenantScope("whatsapp", phoneNumberId, async () => {
+      // Delivery and read receipts for messages we sent. `statuses` arrives on
+      // the same `messages` change as inbound text, so it is handled in the same
+      // tenant scope, before the inbound loop.
+      for (const status of value.statuses ?? []) {
+        const receipt = whatsappReceipt(status);
+        if (receipt) await applyReceipt(receipt);
+      }
+
       for (const message of value.messages ?? []) {
         const from: string = message.from;
         const profileName: string | null =
