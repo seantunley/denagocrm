@@ -37,7 +37,10 @@ export async function claimInboundBotEvent(
 
   return withTenantWrite(async (tx, tenantId) => {
     const id = crypto.randomUUID();
-    const rows = await tx.$queryRawUnsafe<Array<{ id: string }>>(
+    // `withTenantWrite` still hands back a deliberately broad `any` tx (see the
+    // note on its contract), so the row shape is stated as an annotation rather
+    // than a type argument an untyped call cannot accept.
+    const rows: Array<{ id: string }> = await tx.$queryRawUnsafe(
       `INSERT INTO "BotInboundEvent"
          ("id", "tenantId", "channel", "providerId", "status", "attempts", "leaseUntil", "createdAt", "updatedAt")
        VALUES ($1, $2, $3, $4, 'running', 1, NOW() + INTERVAL '5 minutes', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
