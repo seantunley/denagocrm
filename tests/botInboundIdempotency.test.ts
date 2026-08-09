@@ -62,3 +62,41 @@ test("a first-turn AI node receives the customer's first message", () => {
   assert.match(code, /if \(input\.text\.trim\(\)\) state\.msgs\.push\(\{ role: "user", content: input\.text \}\)/);
   assert.doesNotMatch(code, /if \(existing && !restart\) state\.msgs\.push/);
 });
+
+/* ── a live lease is not the same answer as a finished event ─────────────── */
+
+test("the claim distinguishes a finished event from one another attempt still holds", () => {
+  const helper = src("src/lib/botInboundEvent.ts");
+  // Both mean "do not process", but only one of them may be acked.
+  assert.match(helper, /status: "claimed"/);
+  assert.match(helper, /status: "completed"/);
+  assert.match(helper, /status: "leased"/);
+  assert.match(helper, /status: "unidentified"/);
+  assert.match(helper, /SELECT "status" FROM "BotInboundEvent"/);
+  assert.match(helper, /class InboundBotEventLeasedError/);
+});
+
+test("every webhook acks a finished event and asks for redelivery of a leased one", () => {
+  for (const rel of [
+    "src/app/api/webhooks/whatsapp/route.ts",
+    "src/app/api/webhooks/meta/route.ts",
+    "src/app/api/webhooks/telegram/route.ts",
+  ]) {
+    const code = src(rel);
+    assert.match(code, /outcome\.status === "completed"/);
+    // Throwing is the point: a 2xx retires the provider's redelivery, and nothing
+    // sweeps a lease abandoned by an attempt that died.
+    assert.match(code, /if \(outcome\.status === "leased"\) throw new InboundBotEventLeasedError\(/);
+    assert.match(code, /outcome\.status === "unidentified"/);
+    assert.doesNotMatch(code, /if \(!claim\) (continue|return)/);
+  }
+});
+
+test("a Contact is only created when something durable can match it on retry", () => {
+  const actions = src("src/lib/flowActions.ts");
+  const helper = actions.slice(actions.indexOf("async function ensureContact"));
+  assert.match(helper, /if \(!identity\.length\) return match/);
+  assert.match(helper, /prisma\.contact\.findFirst\(\{ where: \{ OR: identity \} \}\)/);
+  // A bare name is not something the reuse lookup can find, so it must not create.
+  assert.doesNotMatch(helper, /if \(vars\.name \|\| vars\.phone \|\| vars\.email\) \{/);
+});
