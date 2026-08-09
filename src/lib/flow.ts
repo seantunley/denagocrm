@@ -1,8 +1,7 @@
 /**
- * Channel-agnostic chatbot flow engine (Typebot-inspired). A flow is a graph
- * of nodes; the engine walks it, emitting outbound messages and pausing on
- * nodes that wait for the customer (choices, captures, AI). IO (sending,
- * AI, booking, handoff) is provided by the caller via `ctx`.
+ * Channel-agnostic chatbot flow engine. The graph remains deterministic: AI can
+ * answer or classify, but every CRM/Journey side effect is an explicit node
+ * executed through a narrow callback supplied by the channel adapter.
  */
 
 export type FlowOption = { id: string; label: string; description?: string; next?: string };
@@ -23,6 +22,7 @@ export type FlowNode =
   | { id: string; type: "answer"; text?: string; answerSource?: "pricelist" | "colours"; next?: string }
   | { id: string; type: "booking"; text?: string; action?: BookingAction; next?: string }
   | { id: string; type: "slots"; text: string; noneText?: string; action?: SlotAction; next?: string }
+  | { id: string; type: "journey"; journeyId: string; text?: string; next?: string }
   | { id: string; type: "condition"; condition: FlowCondition; trueNext?: string; falseNext?: string }
   | { id: string; type: "ai"; handoffNext?: string }
   | { id: string; type: "handoff"; text?: string }
@@ -44,20 +44,14 @@ export type FlowAiReply = {
   handoffReason?: string;
   handoffSummary?: string;
 };
-
-export type FlowHandoffContext = {
-  confidence?: "high" | "medium" | "low";
-  intent?: string;
-  reason?: string;
-  summary?: string;
-};
+export type FlowHandoffContext = { confidence?: "high" | "medium" | "low"; intent?: string; reason?: string; summary?: string };
 
 export type FlowCtx = {
   aiReply: (vars: Record<string, string>) => Promise<FlowAiReply>;
   dynamicAnswer: (source: "pricelist" | "colours") => Promise<string>;
-  /** nodeId participates in the retry-stable business-effect identity. */
   createBooking: (vars: Record<string, string>, action: BookingCreateAction | undefined, nodeId: string) => Promise<void>;
   manageBooking?: (action: BookingManageAction, vars: Record<string, string>, nodeId: string) => Promise<{ ok: boolean }>;
+  startJourney?: (journeyId: string, vars: Record<string, string>, nodeId: string) => Promise<{ ok: boolean; reason?: string }>;
   handoff: (vars: Record<string, string>, context?: FlowHandoffContext) => Promise<void>;
   availableSlots?: () => Promise<{ id: string; label: string }[]>;
   bookSlot?: (slotId: string, vars: Record<string, string>, nodeId: string) => Promise<{ ok: boolean; label?: string }>;
@@ -77,10 +71,7 @@ function validateCapture(format: CaptureFormat | undefined, text: string): boole
 }
 
 export type FlowResult = { messages: OutMsg[]; session: FlowSession | null; handedOff: boolean };
-
-function interpolate(text: string, vars: Record<string, string>): string {
-  return text.replace(/\{\{\s*(\w+)\s*\}\}/g, (_m, k) => vars[k] ?? "");
-}
+const interpolate = (text: string, vars: Record<string, string>) => text.replace(/\{\{\s*(\w+)\s*\}\}/g, (_m, k) => vars[k] ?? "");
 
 export function evaluateCondition(condition: FlowCondition, vars: Record<string, string>): boolean {
   const actual = (vars[condition.variable] ?? "").trim();
@@ -94,13 +85,7 @@ export function evaluateCondition(condition: FlowCondition, vars: Record<string,
   }
 }
 
-const HANDOFF_KEYS = {
-  confidence: "__handoff_confidence",
-  intent: "__handoff_intent",
-  reason: "__handoff_reason",
-  summary: "__handoff_summary",
-} as const;
-
+const HANDOFF_KEYS = { confidence: "__handoff_confidence", intent: "__handoff_intent", reason: "__handoff_reason", summary: "__handoff_summary" } as const;
 function rememberHandoff(vars: Record<string, string>, ai: FlowAiReply): FlowHandoffContext {
   const context: FlowHandoffContext = { confidence: ai.confidence, intent: ai.intent, reason: ai.handoffReason, summary: ai.handoffSummary };
   if (context.confidence) vars[HANDOFF_KEYS.confidence] = context.confidence;
@@ -109,7 +94,6 @@ function rememberHandoff(vars: Record<string, string>, ai: FlowAiReply): FlowHan
   if (context.summary) vars[HANDOFF_KEYS.summary] = context.summary;
   return context;
 }
-
 function rememberedHandoff(vars: Record<string, string>): FlowHandoffContext | undefined {
   const confidence = vars[HANDOFF_KEYS.confidence];
   const context: FlowHandoffContext = {
@@ -122,7 +106,6 @@ function rememberedHandoff(vars: Record<string, string>): FlowHandoffContext | u
 }
 
 export const choiceId = (nodeId: string, optId: string) => `${nodeId}|${optId}`;
-
 function matchChoice(node: Extract<FlowNode, { type: "choice" }>, input: FlowInput): string | null {
   if (input.choiceId && input.choiceId.startsWith(`${node.id}|`)) {
     const optId = input.choiceId.slice(node.id.length + 1);
@@ -133,20 +116,13 @@ function matchChoice(node: Extract<FlowNode, { type: "choice" }>, input: FlowInp
   if (!Number.isNaN(asNum) && node.options[asNum - 1]) return node.options[asNum - 1].next ?? null;
   return node.options.find((o) => t && o.label.toLowerCase().replace(/[^a-z0-9 ]/g, "").includes(t))?.next ?? null;
 }
-
 async function semanticChoice(node: Extract<FlowNode, { type: "choice" }>, input: FlowInput, vars: Record<string, string>, ctx: FlowCtx) {
   if (!ctx.routeChoice || input.choiceId || !input.text.trim()) return null;
   const optionId = await ctx.routeChoice({ prompt: interpolate(node.text, vars), text: input.text, options: node.options, vars });
-  return optionId ? node.options.find((option) => option.id === optionId)?.next ?? null : null;
+  return optionId ? node.options.find((o) => o.id === optionId)?.next ?? null : null;
 }
 
-async function runSlotSelection(
-  node: Extract<FlowNode, { type: "slots" }>,
-  input: FlowInput,
-  vars: Record<string, string>,
-  ctx: FlowCtx,
-  messages: OutMsg[],
-): Promise<{ nodeId: string | null; wait?: FlowResult }> {
+async function runSlotSelection(node: Extract<FlowNode, { type: "slots" }>, input: FlowInput, vars: Record<string, string>, ctx: FlowCtx, messages: OutMsg[]) {
   if (!input.choiceId?.startsWith(`${node.id}|`)) return { nodeId: node.next ?? null };
   const slotId = input.choiceId.slice(node.id.length + 1);
   const handler = node.action === "reschedule" ? ctx.rescheduleSlot : ctx.bookSlot;
@@ -156,7 +132,7 @@ async function runSlotSelection(
     const opts = ctx.availableSlots ? await ctx.availableSlots() : [];
     if (opts.length) {
       messages.push({ type: "choice", text: "That one just filled up — here are the next open times:", options: opts.map((o) => ({ id: choiceId(node.id, o.id), label: o.label })) });
-      return { nodeId: node.id, wait: { messages, session: { nodeId: node.id, vars }, handedOff: false } };
+      return { nodeId: node.id, wait: { messages, session: { nodeId: node.id, vars }, handedOff: false } as FlowResult };
     }
   } else if (res.label) {
     vars.slot = res.label;
@@ -205,10 +181,7 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
       if (ai.handoff) {
         handoffContext = rememberHandoff(vars, ai);
         nodeId = cur.handoffNext ?? null;
-        if (!nodeId) {
-          await ctx.handoff(vars, handoffContext);
-          return { messages, session: null, handedOff: true };
-        }
+        if (!nodeId) { await ctx.handoff(vars, handoffContext); return { messages, session: null, handedOff: true }; }
       } else return { messages, session: { nodeId: cur.id, vars }, handedOff: false };
     } else nodeId = flow.start;
   } else nodeId = flow.start;
@@ -217,61 +190,41 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
   while (nodeId && guard++ < 50) {
     const node = flow.nodes[nodeId];
     if (!node) break;
-
     if (node.type === "message") {
-      messages.push({ type: "text", text: interpolate(node.text, vars) });
-      nodeId = node.next ?? null;
+      messages.push({ type: "text", text: interpolate(node.text, vars) }); nodeId = node.next ?? null;
     } else if (node.type === "image") {
-      messages.push({ type: "image", url: node.url, caption: node.caption ? interpolate(node.caption, vars) : undefined });
-      nodeId = node.next ?? null;
+      messages.push({ type: "image", url: node.url, caption: node.caption ? interpolate(node.caption, vars) : undefined }); nodeId = node.next ?? null;
     } else if (node.type === "captureFile") {
-      messages.push({ type: "text", text: interpolate(node.text, vars) });
-      return { messages, session: { nodeId: node.id, vars }, handedOff: false };
+      messages.push({ type: "text", text: interpolate(node.text, vars) }); return { messages, session: { nodeId: node.id, vars }, handedOff: false };
     } else if (node.type === "answer") {
-      const text = node.answerSource ? await ctx.dynamicAnswer(node.answerSource) : interpolate(node.text ?? "", vars);
-      if (text) messages.push({ type: "text", text });
-      nodeId = node.next ?? null;
+      const text = node.answerSource ? await ctx.dynamicAnswer(node.answerSource) : interpolate(node.text ?? "", vars); if (text) messages.push({ type: "text", text }); nodeId = node.next ?? null;
     } else if (node.type === "booking") {
-      if (node.action === "lookup" || node.action === "cancel") {
-        if (ctx.manageBooking) await ctx.manageBooking(node.action, vars, node.id);
-      } else await ctx.createBooking(vars, node.action, node.id);
+      if (node.action === "lookup" || node.action === "cancel") { if (ctx.manageBooking) await ctx.manageBooking(node.action, vars, node.id); }
+      else await ctx.createBooking(vars, node.action, node.id);
+      if (node.text) messages.push({ type: "text", text: interpolate(node.text, vars) }); nodeId = node.next ?? null;
+    } else if (node.type === "journey") {
+      const outcome = ctx.startJourney ? await ctx.startJourney(node.journeyId, vars, node.id) : { ok: false, reason: "Journey action unavailable" };
+      if (!vars.journey_started) vars.journey_started = outcome.ok ? "yes" : "no";
+      if (outcome.reason && !vars.journey_reason) vars.journey_reason = outcome.reason;
       if (node.text) messages.push({ type: "text", text: interpolate(node.text, vars) });
       nodeId = node.next ?? null;
     } else if (node.type === "slots") {
       const opts = ctx.availableSlots ? await ctx.availableSlots() : [];
-      if (opts.length === 0) {
-        messages.push({ type: "text", text: node.noneText || "We don't have open slots online right now — leave your details and the team will call you to book. 📞" });
-        nodeId = node.next ?? null;
-      } else {
-        messages.push({ type: "choice", text: interpolate(node.text, vars), options: opts.map((o) => ({ id: choiceId(node.id, o.id), label: o.label })) });
-        return { messages, session: { nodeId: node.id, vars }, handedOff: false };
-      }
+      if (!opts.length) { messages.push({ type: "text", text: node.noneText || "We don't have open slots online right now — leave your details and the team will call you to book. 📞" }); nodeId = node.next ?? null; }
+      else { messages.push({ type: "choice", text: interpolate(node.text, vars), options: opts.map((o) => ({ id: choiceId(node.id, o.id), label: o.label })) }); return { messages, session: { nodeId: node.id, vars }, handedOff: false }; }
     } else if (node.type === "choice") {
-      messages.push({ type: "choice", text: interpolate(node.text, vars), options: node.options.map((o) => ({ id: choiceId(node.id, o.id), label: o.label, description: o.description })) });
-      return { messages, session: { nodeId: node.id, vars }, handedOff: false };
+      messages.push({ type: "choice", text: interpolate(node.text, vars), options: node.options.map((o) => ({ id: choiceId(node.id, o.id), label: o.label, description: o.description })) }); return { messages, session: { nodeId: node.id, vars }, handedOff: false };
     } else if (node.type === "capture") {
-      messages.push({ type: "text", text: interpolate(node.text, vars) });
-      return { messages, session: { nodeId: node.id, vars }, handedOff: false };
+      messages.push({ type: "text", text: interpolate(node.text, vars) }); return { messages, session: { nodeId: node.id, vars }, handedOff: false };
     } else if (node.type === "condition") {
       nodeId = evaluateCondition(node.condition, vars) ? node.trueNext ?? null : node.falseNext ?? null;
     } else if (node.type === "ai") {
-      const ai = await ctx.aiReply(vars);
-      messages.push({ type: "text", text: ai.reply });
-      if (ai.handoff) {
-        handoffContext = rememberHandoff(vars, ai);
-        nodeId = node.handoffNext ?? null;
-        if (!nodeId) {
-          await ctx.handoff(vars, handoffContext);
-          return { messages, session: null, handedOff: true };
-        }
-      } else return { messages, session: { nodeId: node.id, vars }, handedOff: false };
+      const ai = await ctx.aiReply(vars); messages.push({ type: "text", text: ai.reply });
+      if (ai.handoff) { handoffContext = rememberHandoff(vars, ai); nodeId = node.handoffNext ?? null; if (!nodeId) { await ctx.handoff(vars, handoffContext); return { messages, session: null, handedOff: true }; } }
+      else return { messages, session: { nodeId: node.id, vars }, handedOff: false };
     } else if (node.type === "handoff") {
-      if (node.text) messages.push({ type: "text", text: interpolate(node.text, vars) });
-      await ctx.handoff(vars, handoffContext);
-      return { messages, session: null, handedOff: true };
-    } else {
-      return { messages, session: null, handedOff: false };
-    }
+      if (node.text) messages.push({ type: "text", text: interpolate(node.text, vars) }); await ctx.handoff(vars, handoffContext); return { messages, session: null, handedOff: true };
+    } else return { messages, session: null, handedOff: false };
   }
   return { messages, session: null, handedOff: false };
 }
@@ -279,23 +232,13 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
 export const DEFAULT_FLOW: Flow = {
   start: "welcome",
   nodes: {
-    welcome: {
-      id: "welcome", type: "choice", text: "{{greeting}} How can we help today?",
-      options: [
-        { id: "prices", label: "💰 Prices", next: "showPrices" },
-        { id: "book", label: "🔧 Book a service", next: "bookName" },
-        { id: "chat", label: "💬 Chat to us", next: "aiChat" },
-      ],
-    },
+    welcome: { id: "welcome", type: "choice", text: "{{greeting}} How can we help today?", options: [
+      { id: "prices", label: "💰 Prices", next: "showPrices" }, { id: "book", label: "🔧 Book a service", next: "bookName" }, { id: "chat", label: "💬 Chat to us", next: "aiChat" },
+    ] },
     showPrices: { id: "showPrices", type: "answer", answerSource: "pricelist", next: "afterPrices" },
-    afterPrices: {
-      id: "afterPrices", type: "choice", text: "Anything else?",
-      options: [
-        { id: "chat", label: "💬 Ask a question", next: "aiChat" },
-        { id: "menu", label: "🏠 Main menu", next: "welcome" },
-        { id: "done", label: "👍 No thanks", next: "bye" },
-      ],
-    },
+    afterPrices: { id: "afterPrices", type: "choice", text: "Anything else?", options: [
+      { id: "chat", label: "💬 Ask a question", next: "aiChat" }, { id: "menu", label: "🏠 Main menu", next: "welcome" }, { id: "done", label: "👍 No thanks", next: "bye" },
+    ] },
     bookName: { id: "bookName", type: "capture", text: "Sure — let's get you booked in. What's your name?", variable: "name", next: "bookPhone" },
     bookPhone: { id: "bookPhone", type: "capture", text: "Thanks {{name}}! What's the best contact number?", variable: "phone", format: "phone", next: "bookService" },
     bookService: { id: "bookService", type: "capture", text: "What does the cart need? (service, repair, etc.)", variable: "service", next: "chooseSlot" },
