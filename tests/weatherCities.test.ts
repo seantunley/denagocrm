@@ -200,3 +200,30 @@ test("the city search is proxied server-side, not fetched from the browser", () 
   const csp = read("src/lib/csp.ts");
   assert.doesNotMatch(csp, /geocoding-api/, "the policy must not have been widened for this");
 });
+
+test("the city editor is findable from the settings catalogue", () => {
+  /*
+   * The first version bolted this onto the pipeline-stages editor, which is not
+   * where anybody would look for it — and the settings index is a CATALOGUE, so
+   * a section not listed there is effectively unreachable. It was reported as
+   * simply not existing.
+   */
+  const nav = read("src/lib/settings-navigation.ts");
+  assert.match(nav, /key: "clock-weather"/, "it must appear in the settings catalogue");
+  assert.match(nav, /href: "\/settings\/clock-weather"/);
+  // Searchable by the words somebody would actually type.
+  for (const word of ["weather", "clock", "cities", "timezone"]) {
+    assert.match(nav, new RegExp(`"${word}"`), `searchable by "${word}"`);
+  }
+
+  // Exactly one home — not also buried on the index page.
+  const index = read("src/app/(app)/settings/page.tsx");
+  assert.doesNotMatch(index, /WeatherCitiesSettings/, "it must not also live on the index");
+});
+
+test("the settings page is owner-only, like the action behind it", () => {
+  // The action is what actually protects the write; this stops a member being
+  // shown a page whose every control would refuse them.
+  const page = read("src/app/(app)/settings/clock-weather/page.tsx");
+  assert.match(page, /requireOwner\(\)/);
+});
