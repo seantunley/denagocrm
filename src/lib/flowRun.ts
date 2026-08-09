@@ -10,7 +10,10 @@ import { resolveTenantActor } from "./tenantActor";
 import { crmActions } from "./flowActions";
 import { runFlow, type FlowInput, type FlowSession, type FlowCtx } from "./flow";
 import { resolveFlowSnapshot } from "./flowPublishing";
-import { enqueueBotMessages, flushBotOutboxConversation } from "./botOutbox";
+import { flushBotOutboxConversation } from "./botOutbox";
+import { enqueueBotMessagesTx } from "./botOutboxWrite";
+import { withTenantWrite } from "./tenantWrite";
+import { loadBotSession, upsertBotSessionTx, deleteBotSessionTx } from "./botSessionStore";
 
 export const FLOW_MARKER = "🤖 Flow";
 const FLOW_VERSION_VAR = "__flow_version";
@@ -31,12 +34,8 @@ async function loadSession(key: string): Promise<{
   flowVersionId: string | null;
   status: string;
 } | null> {
-  const row = await prisma.botSession.findUnique({ where: { channel_key: { channel: "whatsapp", key } } });
+  const row = await loadBotSession("whatsapp", key);
   if (!row) return null;
-  if (row.expiresAt < new Date()) {
-    await prisma.botSession.delete({ where: { id: row.id } }).catch(() => {});
-    return null;
-  }
   let vars: Record<string, string> = {};
   try {
     vars = JSON.parse(row.vars);
@@ -48,32 +47,11 @@ async function loadSession(key: string): Promise<{
   return { nodeId: row.nodeId, vars, flowVersionId, status: row.status };
 }
 
-async function saveSession(
-  key: string,
-  session: FlowSession,
-  flowVersionId: string | null,
-  status = "active",
-  hours = 24,
-) {
-  const storedVars = {
-    ...session.vars,
+function storedVars(vars: Record<string, string>, flowVersionId: string | null): string {
+  return JSON.stringify({
+    ...vars,
     ...(flowVersionId ? { [FLOW_VERSION_VAR]: flowVersionId } : {}),
-  };
-  const data = {
-    nodeId: session.nodeId,
-    vars: JSON.stringify(storedVars),
-    status,
-    expiresAt: new Date(Date.now() + hours * 3600 * 1000),
-  };
-  await prisma.botSession.upsert({
-    where: { channel_key: { channel: "whatsapp", key } },
-    update: data,
-    create: { channel: "whatsapp", key, ...data },
   });
-}
-
-async function clearSession(key: string) {
-  await prisma.botSession.deleteMany({ where: { channel: "whatsapp", key } });
 }
 
 async function priceList(): Promise<string> {
@@ -163,25 +141,42 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise
   const snapshot = await resolveFlowSnapshot("whatsapp", restart ? null : existing?.flowVersionId ?? null);
   const result = await runFlow(snapshot.flow, session, input, buildCtx(digits, match));
 
-  // First make the outbound intent durable. If this insert fails, no BotSession
-  // state below is committed and the inbound webhook can safely be retried.
-  await enqueueBotMessages({
-    channel: "whatsapp",
-    key: digits,
-    messages: result.messages,
-    contactId: match.contactId,
-    leadId: match.leadId,
-    actorId: actor.id,
+  // The durable outbound batch and new session position are ONE transaction.
+  // Nothing can expose a new conversation position without the messages that
+  // explain it, and a failed session write cannot leave an orphaned duplicate batch.
+  await withTenantWrite(async (tx, tenantId) => {
+    await enqueueBotMessagesTx(tx, tenantId, {
+      channel: "whatsapp",
+      key: digits,
+      messages: result.messages,
+      contactId: match.contactId,
+      leadId: match.leadId,
+      actorId: actor.id,
+    });
+
+    if (result.handedOff) {
+      await upsertBotSessionTx(tx, tenantId, {
+        channel: "whatsapp",
+        key: digits,
+        nodeId: null,
+        vars: storedVars(session.vars, snapshot.versionId),
+        status: "paused",
+        expiresAt: new Date(Date.now() + 6 * 3600 * 1000),
+      });
+    } else if (result.session) {
+      await upsertBotSessionTx(tx, tenantId, {
+        channel: "whatsapp",
+        key: digits,
+        nodeId: result.session.nodeId,
+        vars: storedVars(result.session.vars, snapshot.versionId),
+        status: "active",
+        expiresAt: new Date(Date.now() + 24 * 3600 * 1000),
+      });
+    } else {
+      await deleteBotSessionTx(tx, tenantId, "whatsapp", digits);
+    }
   });
 
-  // Then commit the new conversation position. At this point every message that
-  // explains the position exists durably even if the process dies before send.
-  if (result.handedOff) await saveSession(digits, { nodeId: null, vars: session.vars }, snapshot.versionId, "paused", 6);
-  else if (result.session) await saveSession(digits, result.session, snapshot.versionId);
-  else await clearSession(digits);
-
-  // Finally attempt immediate delivery. Failure is NOT fatal to the flow: the
-  // queued rows remain retryable and the cron will pick them up in order.
   await flushBotOutboxConversation("whatsapp", digits);
   return true;
 }
