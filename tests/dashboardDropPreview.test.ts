@@ -8,6 +8,7 @@ import {
   insertionTargetInSection,
   layoutWithMarker,
   moveCardInView,
+  nearestId,
 } from "../src/lib/dashboard/canvasMove";
 import type { CardConfig, SectionConfig, ViewConfig } from "../src/lib/dashboard/config";
 
@@ -490,4 +491,55 @@ test("no new dependency was added for twelve lines", () => {
   const all = { ...pkg.dependencies, ...pkg.devDependencies };
   assert.ok(!("@dnd-kit/modifiers" in all), "the modifier is written out, not installed");
   assert.ok("@dnd-kit/utilities" in all, "getEventCoordinates comes from a package already here");
+});
+
+/* ── the group has to be a real drop target ───────────────────────── */
+
+test("a group registers as a droppable, it does not merely claim to", () => {
+  /*
+   * Its id was listed in the SortableContext under a comment saying that is what
+   * keeps an emptied group fillable. SortableContext only declares which items
+   * SORT — a droppable exists where useDroppable is called, and it never was. So
+   * the group had no registered rectangle: nothing could collide with it, an
+   * emptied group genuinely could not be refilled, and every "the pointer is
+   * over a group" branch was unreachable.
+   *
+   * The visible symptom was the marker landing nowhere near the pointer, because
+   * a pointer not directly over a card fell through to closestCenter, which
+   * measures from the DRAGGED CARD's rectangle rather than the pointer.
+   */
+  const canvas = code(CANVAS);
+  assert.match(canvas, /useDroppable\(\{ id: section\.id/, "the group must register itself");
+  assert.match(canvas, /ref=\{setSectionRef\}/, "…and attach the ref, or it has no rectangle");
+  assert.match(canvas, /useDroppable,/, "…and import it");
+});
+
+test("a pointer inside nothing still resolves near the pointer", () => {
+  // The gap between two groups, the page margin, the strip past the last column.
+  const canvas = code(CANVAS);
+  const fn = canvas.slice(canvas.indexOf("const collisionDetection"));
+  const body = fn.slice(0, fn.indexOf("[cardIds, view.sections]"));
+  assert.match(body, /nearestId\(/, "the nearest GROUP to the pointer, then the place within it");
+  // closestCenter may only survive as the keyboard path, which has no pointer.
+  const keyboard = body.slice(body.indexOf("if (!pointer)"));
+  assert.match(keyboard, /closestCenter\(args\)/);
+  assert.equal(
+    (body.match(/closestCenter\(args\)/g) ?? []).length,
+    1,
+    "closestCenter must not be reachable when there IS a pointer",
+  );
+});
+
+test("nearest-to-pointer measures from the pointer, and skips the unmeasured", () => {
+  const boxes: Record<string, { top: number; left: number; width: number; height: number }> = {
+    near: { left: 0, top: 0, width: 100, height: 100 },
+    far: { left: 900, top: 900, width: 100, height: 100 },
+  };
+  const rectOf = (id: string) => boxes[id];
+  assert.equal(nearestId(["near", "far"], rectOf, { x: 10, y: 10 }), "near");
+  assert.equal(nearestId(["near", "far"], rectOf, { x: 950, y: 950 }), "far");
+  // An unmeasured droppable is skipped, not treated as a box at the origin.
+  assert.equal(nearestId(["ghost", "far"], rectOf, { x: 950, y: 950 }), "far");
+  assert.equal(nearestId(["ghost"], rectOf, { x: 0, y: 0 }), null);
+  assert.equal(nearestId([], rectOf, { x: 0, y: 0 }), null);
 });

@@ -143,6 +143,31 @@ function isPast(box: Box, x: number, y: number): boolean {
 }
 
 /**
+ * The id whose rectangle is nearest the pointer, or null if none can be measured.
+ *
+ * The last resort, for a pointer that is inside nothing at all — the gap between
+ * two groups, the page margin, the strip beside the last column. dnd-kit's own
+ * fallback measures from the DRAGGED ITEM's rectangle rather than the pointer,
+ * and for a card that spans half the screen those are nowhere near each other:
+ * the marker would appear next to a card the user was not pointing at, in a
+ * group they were not pointing at.
+ */
+export function nearestId(
+  ids: string[],
+  rectOf: (id: string) => Box | undefined,
+  pointer: { x: number; y: number },
+): string | null {
+  let best: { id: string; distance: number } | null = null;
+  for (const id of ids) {
+    const box = rectOf(id);
+    if (!box) continue;
+    const distance = distanceTo(box, pointer.x, pointer.y);
+    if (!best || distance < best.distance) best = { id, distance };
+  }
+  return best?.id ?? null;
+}
+
+/**
  * Which droppable the pointer means when it is over a SECTION but not a card.
  *
  * ── WHY THIS EXISTS ─────────────────────────────────────────────────────────
