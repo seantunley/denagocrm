@@ -29,9 +29,9 @@ export default async function BotAnalyticsPage({
         icon={BarChart3}
         eyebrow="Conversation performance"
         title="Chatbot analytics"
-        description="See how published conversation flows perform by version, channel and waiting node without reconstructing funnels from message text."
+        description="See how published conversation flows perform by immutable version, channel and node, including automatic one-shot runs, CRM actions, handoffs and terminal delivery failures."
         stats={report ? [
-          { label: "Conversations", value: report.allTime.started, icon: MessagesSquare },
+          { label: "Flow runs", value: report.allTime.started, icon: MessagesSquare },
           { label: "Completed", value: pct(report.allTime.completed, report.allTime.started), icon: Radio, tone: "success" },
           { label: "Handed off", value: pct(report.allTime.handedOff, report.allTime.started), icon: UserRound },
           { label: "Published versions", value: report.versions.length, icon: GitBranch },
@@ -73,7 +73,7 @@ export default async function BotAnalyticsPage({
                 {selected.active && <StatusPill tone="success">Live</StatusPill>}
               </div>
               <div className="mt-4 grid grid-cols-2 gap-3">
-                <Metric label="Conversations" value={String(report.latest.started)} />
+                <Metric label="Flow runs" value={String(report.latest.started)} />
                 <Metric label="Completed" value={`${report.latest.completed} · ${pct(report.latest.completed, report.latest.started)}`} />
                 <Metric label="Handed off" value={`${report.latest.handedOff} · ${pct(report.latest.handedOff, report.latest.started)}`} />
                 <Metric label="Delivery failures" value={String(report.latest.deliveryFailures)} />
@@ -85,10 +85,10 @@ export default async function BotAnalyticsPage({
               <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">All published versions · by channel</p>
               <div className="mt-3 space-y-2">
                 {report.channels.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No stateful guided-flow sessions have been recorded yet.</p>
+                  <p className="text-sm text-muted-foreground">No published flow runs have been recorded yet.</p>
                 ) : report.channels.map((channel) => (
                   <div key={channel.channel} className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 rounded-xl border border-border bg-muted/30 px-3 py-2.5">
-                    <div><p className="text-sm font-medium">{channelLabel(channel.channel)}</p><p className="text-[10px] text-muted-foreground">{channel.conversations} conversation{channel.conversations === 1 ? "" : "s"}</p></div>
+                    <div><p className="text-sm font-medium">{channelLabel(channel.channel)}</p><p className="text-[10px] text-muted-foreground">{channel.conversations} run{channel.conversations === 1 ? "" : "s"}</p></div>
                     <div className="text-right"><p className="text-xs font-medium text-emerald-300">{pct(channel.completed, channel.conversations)}</p><p className="text-[10px] text-muted-foreground">complete</p></div>
                     <div className="text-right"><p className="text-xs font-medium text-amber-300">{pct(channel.handedOff, channel.conversations)}</p><p className="text-[10px] text-muted-foreground">handoff</p></div>
                   </div>
@@ -100,15 +100,15 @@ export default async function BotAnalyticsPage({
           <Surface className="overflow-hidden">
             <div className="border-b border-border px-5 py-4">
               <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Latest-version funnel</p>
-              <p className="mt-1 text-sm text-muted-foreground">Reach is unique customer conversations that arrived at a waiting node. Progress/drop-off is shown only for menus, captures and slot selection, where the next inbound action is deterministic.</p>
+              <p className="mt-1 text-sm text-muted-foreground">Reach is a recorded visit to a waiting node. Progress and drop-off apply to menus, captures and slot selection; successful CRM and Journey effects are counted separately.</p>
             </div>
             {report.nodes.length === 0 ? (
-              <div className="p-8 text-center text-sm text-muted-foreground">No node-level sessions have been recorded for this version yet.</div>
+              <div className="p-8 text-center text-sm text-muted-foreground">No node-level activity has been recorded for this version yet.</div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[760px] text-left text-sm">
+                <table className="w-full min-w-[980px] text-left text-sm">
                   <thead className="bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
-                    <tr><th className="px-5 py-3">Node</th><th className="px-3 py-3">Type</th><th className="px-3 py-3 text-right">Reached</th><th className="px-3 py-3 text-right">Progressed</th><th className="px-3 py-3 text-right">Rate</th><th className="px-3 py-3 text-right">Drop-off</th><th className="px-5 py-3 text-right">Handoffs</th></tr>
+                    <tr><th className="px-5 py-3">Node</th><th className="px-3 py-3">Type</th><th className="px-3 py-3 text-right">Reached</th><th className="px-3 py-3 text-right">Progressed</th><th className="px-3 py-3 text-right">Rate</th><th className="px-3 py-3 text-right">Drop-off</th><th className="px-3 py-3 text-right">CRM actions</th><th className="px-3 py-3 text-right">Handoffs</th><th className="px-5 py-3 text-right">Delivery failures</th></tr>
                   </thead>
                   <tbody className="divide-y divide-border">
                     {report.nodes.map((node) => (
@@ -119,7 +119,9 @@ export default async function BotAnalyticsPage({
                         <td className="px-3 py-3 text-right">{node.interacted ?? "—"}</td>
                         <td className="px-3 py-3 text-right">{node.progressionRate == null ? "—" : `${node.progressionRate}%`}</td>
                         <td className="px-3 py-3 text-right">{node.dropOff ?? "—"}</td>
-                        <td className="px-5 py-3 text-right">{node.handoffs}</td>
+                        <td className="px-3 py-3 text-right">{node.crmActions}</td>
+                        <td className="px-3 py-3 text-right">{node.handoffs}</td>
+                        <td className="px-5 py-3 text-right">{node.deliveryFailures}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -129,7 +131,7 @@ export default async function BotAnalyticsPage({
           </Surface>
 
           <p className="text-xs leading-5 text-muted-foreground">
-            Analytics currently measure stateful guided flows. A one-shot graph made entirely of automatic nodes can complete without creating a session and is intentionally not counted until the runtime marker follow-up lands.
+            Run totals include both stateful guided conversations and automatic one-shot graphs. A deliberate restart creates a new flow run. Delivery failures appear only after an outbox message becomes terminally dead.
           </p>
         </>
       )}
