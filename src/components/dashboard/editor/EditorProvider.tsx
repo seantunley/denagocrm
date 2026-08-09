@@ -64,6 +64,10 @@ type EditorState = {
   updateSection: (sectionId: string, change: (section: SectionConfig) => SectionConfig) => void;
   updateCard: (cardId: string, change: (card: CardConfig) => CardConfig) => void;
   removeCard: (cardId: string) => void;
+  /** Step back one change. No-op when there is nothing to step back to. */
+  undo: () => void;
+  /** Whether there is anything to undo, so the control can disable itself. */
+  canUndo: boolean;
   /** Which view is being edited, so dialogs know where to put a new card. */
   activeViewId: string | null;
 };
@@ -82,6 +86,12 @@ export function useEditor(): EditorState {
 /** How long to wait for the user to stop before writing. */
 const SAVE_DEBOUNCE_MS = 600;
 
+/** How many steps back the editor remembers. See the note beside `history`. */
+const UNDO_LIMIT = 25;
+
+/** How many un-echoed saves to remember. See the note beside `ownSeeds`. */
+const OWN_SEED_LIMIT = 8;
+
 export function DashboardEditorProvider({
   slug,
   initialConfig,
@@ -98,6 +108,43 @@ export function DashboardEditorProvider({
 }) {
   const [config, setConfig] = useState<DashboardConfig>(initialConfig);
   const [editing, setEditing] = useState(false);
+  /*
+   * UNDO.
+   *
+   * The editor could drag, resize and delete, and had no way back from any of
+   * them. Saving is immediate and debounced by design — there is no Save button
+   * to not press — so an accidental delete was already written by the time the
+   * user noticed, and rebuilding a card someone spent ten minutes configuring is
+   * how people learn not to experiment with their own dashboard.
+   *
+   * The stack holds CONFIGS, not diffs. A config is small, already immutable by
+   * convention here, and every mutation funnels through `update`, so pushing the
+   * previous one is both cheap and impossible to forget for a new operation.
+   *
+   * Bounded, because a long editing session should not accumulate unboundedly in
+   * memory — and because "undo the last twenty-five things" is well past the
+   * point anyone is still reasoning about what they did.
+   */
+  const history = useRef<DashboardConfig[]>([]);
+  /*
+   * Seeds this editor itself caused.
+   *
+   * Every successful save calls revalidatePath("/"), so the server sends the
+   * config straight back — and the re-seed effect below treats any changed seed
+   * as a foreign config and clears the undo history. That is the correct
+   * response to somebody else's change and completely wrong for the echo of the
+   * edit just made: it wiped the history roughly 600ms after every edit, so undo
+   * only ever covered the window BEFORE the autosave landed.
+   *
+   * Which is the opposite of why undo exists. The whole reason is that saving is
+   * immediate, so an accidental delete is already persisted by the time it is
+   * noticed — precisely the state that had no history left.
+   *
+   * Seeds are matched by VALUE, because the object that comes back from the
+   * server is never the object that was sent.
+   */
+  const ownSeeds = useRef<Set<string>>(new Set());
+  const [undoDepth, setUndoDepth] = useState(0);
   const [saving, setSaving] = useState(false);
   const [, startTransition] = useTransition();
 
@@ -122,6 +169,19 @@ export function DashboardEditorProvider({
     if (seenSeed.current === seed) return;
     seenSeed.current = seed;
     committed.current = initialConfig;
+    /*
+     * A seed this editor produced is the echo of its own save. The arrangement on
+     * screen is already correct and the history behind it is still valid, so it
+     * is kept. A seed from anywhere else replaced the document under us, and
+     * undoing into arrangements from before it would resurrect state the server
+     * has already discarded.
+     */
+    const isOwnEcho = ownSeeds.current.has(seed);
+    ownSeeds.current.delete(seed);
+    if (!isOwnEcho) {
+      history.current = [];
+      setUndoDepth(0);
+    }
     setConfig(initialConfig);
     // initialConfig is folded into `seed` by value.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -154,6 +214,19 @@ export function DashboardEditorProvider({
             const result = await saveDashboardConfig(slug, next);
             if (result?.error) throw new Error(result.error);
             committed.current = next;
+            // The server will echo this back via revalidatePath. Remember it so
+            // the re-seed below recognises it as ours and keeps the history.
+            const seedKey = JSON.stringify(next);
+            ownSeeds.current.add(seedKey);
+            // Bounded. An echo that never arrives — a save that changed nothing
+            // the server re-sends, a navigation before revalidation lands —
+            // would otherwise leave its key here forever. A Set preserves
+            // insertion order, so the oldest goes first.
+            while (ownSeeds.current.size > OWN_SEED_LIMIT) {
+              const oldest = ownSeeds.current.values().next().value;
+              if (oldest === undefined) break;
+              ownSeeds.current.delete(oldest);
+            }
           } catch (error) {
             /*
              * Roll the SCREEN back, not just the record of what is saved.
@@ -192,6 +265,11 @@ export function DashboardEditorProvider({
           toast.error(checked.error);
           return current;
         }
+        // Recorded only once the change is known to be valid. A refused edit
+        // never happened, so undoing past it would step over a state the user
+        // never saw.
+        history.current = [...history.current, current].slice(-UNDO_LIMIT);
+        setUndoDepth(history.current.length);
         persist(checked.config);
         return checked.config;
       });
@@ -233,6 +311,23 @@ export function DashboardEditorProvider({
     [update],
   );
 
+  /**
+   * Step back one change.
+   *
+   * Deliberately does NOT go through `update`: that would record the undo itself
+   * as a change and the stack could never be emptied — the first undo would
+   * become something to undo. It persists directly instead, which is the same
+   * path every other edit takes to the server.
+   */
+  const undo = useCallback(() => {
+    const previous = history.current[history.current.length - 1];
+    if (!previous) return;
+    history.current = history.current.slice(0, -1);
+    setUndoDepth(history.current.length);
+    setConfig(previous);
+    persist(previous);
+  }, [persist]);
+
   return (
     <EditorContext.Provider
       value={{
@@ -245,6 +340,8 @@ export function DashboardEditorProvider({
         updateSection,
         updateCard,
         removeCard,
+        undo,
+        canUndo: undoDepth > 0,
         activeViewId,
       }}
     >
