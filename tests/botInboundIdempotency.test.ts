@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { leaseFence, leaseFenceMatches } from "../src/lib/botLease";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
@@ -90,6 +91,45 @@ test("every webhook acks a finished event and asks for redelivery of a leased on
     assert.match(code, /outcome\.status === "unidentified"/);
     assert.doesNotMatch(code, /if \(!claim\) (continue|return)/);
   }
+});
+
+test("a stalled worker cannot settle a lease another worker reclaimed", () => {
+  // The race, played out against the real rule rather than a regex on the source.
+  // Worker A claims the row (generation 1). A stalls. The five-minute lease
+  // expires and worker B reclaims the SAME row, which increments attempts to 2.
+  // A then wakes up and tries to complete the work it thinks it owns.
+  const rowAfterReclaim = { id: "evt_1", tenantId: "t_1", status: "running", attempts: 2 };
+
+  const staleClaim = leaseFence("evt_1", "t_1", 1);
+  assert.equal(
+    leaseFenceMatches(rowAfterReclaim, staleClaim),
+    false,
+    "worker A's stale generation must match nothing once B has reclaimed the row",
+  );
+
+  const liveClaim = leaseFence("evt_1", "t_1", 2);
+  assert.equal(
+    leaseFenceMatches(rowAfterReclaim, liveClaim),
+    true,
+    "the worker that actually holds the lease must still be able to settle it",
+  );
+
+  // And the reason this test exists: the pre-fence WHERE would have matched, so
+  // A would have marked B's in-flight event completed and B's work would then be
+  // acked to the provider as done.
+  const unfenced = (row: typeof rowAfterReclaim) =>
+    row.id === "evt_1" && row.tenantId === "t_1" && row.status === "running";
+  assert.equal(unfenced(rowAfterReclaim), true, "id + tenant + status alone is not ownership");
+});
+
+test("both terminal lease writes are fenced, and the claim returns the generation", () => {
+  const helper = src("src/lib/botInboundEvent.ts");
+  // Nothing may settle a lease on id + status alone.
+  assert.doesNotMatch(helper, /where: \{ id: [^}]*status: "running" \}/);
+  assert.match(helper, /RETURNING "id", "attempts"/);
+  assert.match(helper, /leaseAttempt: rows\[0\]\.attempts/);
+  const fenced = helper.match(/where: leaseFence\(rowId, tenantId, leaseAttempt\)/g) ?? [];
+  assert.equal(fenced.length, 2, "complete and retry must BOTH carry the fence");
 });
 
 test("a Contact is only created when something durable can match it on retry", () => {

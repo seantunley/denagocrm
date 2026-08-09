@@ -1,7 +1,12 @@
 import crypto from "crypto";
 import { withTenantWrite } from "./tenantWrite";
+import { leaseFence } from "./botLease";
 
-export type InboundBotEventClaim = { rowId: string | null };
+/**
+ * `leaseAttempt` is the generation of the lease this claim owns, not a statistic.
+ * See {@link leaseFence} for why an id alone is not ownership.
+ */
+export type InboundBotEventClaim = { rowId: string | null; leaseAttempt: number | null };
 
 /**
  * Four outcomes rather than a nullable claim. `completed` and `leased` both mean
@@ -34,7 +39,8 @@ export class InboundBotEventLeasedError extends Error {
 
 /**
  * Atomically lease one provider-delivered inbound message/update before it can
- * drive the chatbot or create CRM side effects.
+ * drive the chatbot or create CRM side effects. The claim carries the lease
+ * generation so only THIS attempt can later complete or release it.
  */
 export async function claimInboundBotEvent(
   channel: string,
@@ -57,13 +63,13 @@ export async function claimInboundBotEvent(
              "updatedAt" = NOW()
        WHERE "BotInboundEvent"."status" <> 'completed'
          AND ("BotInboundEvent"."leaseUntil" IS NULL OR "BotInboundEvent"."leaseUntil" < NOW())
-       RETURNING "id"`,
+       RETURNING "id", "attempts"`,
       id,
       tenantId,
       channel,
       stableId,
-    ) as Array<{ id: string }>;
-    if (rows[0]) return { status: "claimed", claim: { rowId: rows[0].id } };
+    ) as Array<{ id: string; attempts: number }>;
+    if (rows[0]) return { status: "claimed", claim: { rowId: rows[0].id, leaseAttempt: rows[0].attempts } };
 
     // No row means one of two opposite things. Ask which, so the caller can ack a
     // finished event but let a live lease be redelivered.
@@ -80,27 +86,31 @@ export async function claimInboundBotEvent(
   });
 }
 
-/** Mark the leased event complete only after all critical webhook work succeeded. */
+/** Mark THIS lease complete only after all critical webhook work succeeded. */
 export async function completeInboundBotEvent(claim: InboundBotEventClaim): Promise<void> {
-  if (!claim.rowId) return;
+  const rowId = claim.rowId;
+  const leaseAttempt = claim.leaseAttempt;
+  if (!rowId || leaseAttempt == null) return;
   await withTenantWrite(async (tx, tenantId) => {
     await tx.botInboundEvent.updateMany({
-      where: { id: claim.rowId, tenantId, status: "running" },
+      where: leaseFence(rowId, tenantId, leaseAttempt),
       data: { status: "completed", completedAt: new Date(), leaseUntil: null, lastError: null },
     });
   });
 }
 
-/** Release a failed event immediately so the provider's retry can reclaim it. */
+/** Release only THIS failed lease so the provider's retry can reclaim it. */
 export async function retryInboundBotEvent(
   claim: InboundBotEventClaim,
   error: unknown,
 ): Promise<void> {
-  if (!claim.rowId) return;
+  const rowId = claim.rowId;
+  const leaseAttempt = claim.leaseAttempt;
+  if (!rowId || leaseAttempt == null) return;
   const message = (error instanceof Error ? error.message : String(error)).slice(0, 1000);
   await withTenantWrite(async (tx, tenantId) => {
     await tx.botInboundEvent.updateMany({
-      where: { id: claim.rowId, tenantId, status: "running" },
+      where: leaseFence(rowId, tenantId, leaseAttempt),
       data: { status: "retry", leaseUntil: null, lastError: message },
     });
   });
