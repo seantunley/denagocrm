@@ -4,6 +4,7 @@ import { runTelegramFlow, tgAnswerCallback } from "@/lib/telegram";
 import { logError } from "@/lib/errorLog";
 import { withSystemScope } from "@/lib/tenantScope";
 import { secretEquals } from "@/lib/secretCompare";
+import { claimInboundBotEvent } from "@/lib/botInboundEvent";
 
 export async function POST(req: NextRequest) {
   // Telegram echoes back the secret we set on the webhook. Fail CLOSED: without
@@ -21,6 +22,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
   let update: {
+    update_id?: number;
     message?: { text?: string; chat?: { id?: number } };
     callback_query?: { id: string; data?: string; message?: { chat?: { id?: number } } };
   };
@@ -32,6 +34,10 @@ export async function POST(req: NextRequest) {
 
   try {
     await withSystemScope(async () => {
+      // Telegram's update_id is stable across retries. Claim it before any bot
+      // transition or CRM action so a provider retry cannot execute twice.
+      if (!(await claimInboundBotEvent("telegram", String(update.update_id ?? "")))) return;
+
       if (update.callback_query) {
         const cq = update.callback_query;
         await tgAnswerCallback(cq.id);
