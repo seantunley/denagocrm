@@ -1,5 +1,5 @@
 import { getSetting } from "./settings";
-import { generateBotReply } from "./botAi";
+import { generateBotReply, routeBotChoice } from "./botAi";
 import { priceList, coloursList } from "./botAnswers";
 import { sendPushToAll } from "./push";
 import { advanceFlow, greetingVars } from "./flowSession";
@@ -29,6 +29,7 @@ export async function runTelegramFlow(chatId: number | string, text: string, cal
     { text, choiceId: callbackData },
     (state) => ({
       dynamicAnswer: (s) => (s === "colours" ? coloursList() : priceList()),
+      routeChoice: ({ prompt, text: freeText, options }) => routeBotChoice({ prompt, text: freeText, options }),
       aiReply: async (vars) => {
         const ai = await generateBotReply({ history: state.msgs, customerName: vars.name ?? null, isCustomer: false });
         return ai ?? { reply: "Let me get a team member to help 👍", handoff: true };
