@@ -37,7 +37,7 @@ export async function claimInboundBotEvent(
 
   return withTenantWrite(async (tx, tenantId) => {
     const id = crypto.randomUUID();
-    const rows = await tx.$queryRawUnsafe<Array<{ id: string }>>(
+    const rows = await tx.$queryRawUnsafe(
       `INSERT INTO "BotInboundEvent"
          ("id", "tenantId", "channel", "providerId", "status", "attempts", "leaseUntil", "createdAt", "updatedAt")
        VALUES ($1, $2, $3, $4, 'running', 1, NOW() + INTERVAL '5 minutes', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
@@ -54,7 +54,7 @@ export async function claimInboundBotEvent(
       tenantId,
       channel,
       stableId,
-    );
+    ) as Array<{ id: string }>;
     return rows[0] ? { rowId: rows[0].id } : null;
   });
 }
