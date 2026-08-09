@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { insertFlowSnippet, type FlowSnippet } from "../src/lib/flowSnippets";
+import { insertFlowSnippet, type FlowSnippet } from "../src/lib/flowSnippetDefinition";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
