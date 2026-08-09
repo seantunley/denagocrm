@@ -6,7 +6,6 @@
  */
 
 export type FlowOption = { id: string; label: string; description?: string; next?: string };
-
 export type CaptureFormat = "text" | "email" | "phone" | "number" | "date";
 
 export type FlowNode =
@@ -23,24 +22,22 @@ export type FlowNode =
   | { id: string; type: "end" };
 
 export type Flow = { start: string; nodes: Record<string, FlowNode> };
-
 export type OutMsg =
   | { type: "text"; text: string }
   | { type: "image"; url: string; caption?: string }
   | { type: "choice"; text: string; options: { id: string; label: string; description?: string }[] };
-
 export type FlowSession = { nodeId: string | null; vars: Record<string, string> };
-
 export type FlowInput = { text: string; choiceId?: string; fileUrl?: string };
 
 export type FlowCtx = {
   aiReply: (vars: Record<string, string>) => Promise<{ reply: string; handoff: boolean }>;
   dynamicAnswer: (source: "pricelist" | "colours") => Promise<string>;
-  createBooking: (vars: Record<string, string>, action?: "service" | "demo" | "lead") => Promise<void>;
+  /** nodeId is part of the stable side-effect idempotency key. */
+  createBooking: (vars: Record<string, string>, action: "service" | "demo" | "lead" | undefined, nodeId: string) => Promise<void>;
   handoff: (vars: Record<string, string>) => Promise<void>;
-  // Real workshop availability (optional; provided by channel adapters)
   availableSlots?: () => Promise<{ id: string; label: string }[]>;
-  bookSlot?: (slotId: string, vars: Record<string, string>) => Promise<{ ok: boolean; label?: string }>;
+  /** nodeId distinguishes two slot-booking nodes reached by the same inbound event. */
+  bookSlot?: (slotId: string, vars: Record<string, string>, nodeId: string) => Promise<{ ok: boolean; label?: string }>;
 };
 
 const FORMAT_RE: Record<string, RegExp> = {
@@ -60,16 +57,13 @@ function interpolate(text: string, vars: Record<string, string>): string {
   return text.replace(/\{\{\s*(\w+)\s*\}\}/g, (_m, k) => vars[k] ?? "");
 }
 
-/** Encode/decode a choice id so an interactive reply tells us node + option. */
 export const choiceId = (nodeId: string, optId: string) => `${nodeId}|${optId}`;
 
 function matchChoice(node: Extract<FlowNode, { type: "choice" }>, input: FlowInput): string | null {
-  // exact interactive reply id
   if (input.choiceId && input.choiceId.startsWith(`${node.id}|`)) {
     const optId = input.choiceId.slice(node.id.length + 1);
     return node.options.find((o) => o.id === optId)?.next ?? null;
   }
-  // free-text fallbacks: number, label contains
   const t = input.text.trim().toLowerCase();
   const asNum = parseInt(t, 10);
   if (!Number.isNaN(asNum) && node.options[asNum - 1]) return node.options[asNum - 1].next ?? null;
@@ -77,15 +71,11 @@ function matchChoice(node: Extract<FlowNode, { type: "choice" }>, input: FlowInp
   return hit?.next ?? null;
 }
 
-/**
- * Advances the flow. If `session.nodeId` is set we're resuming from a waiting
- * node and `input` is the customer's reply; otherwise we start at `flow.start`.
- */
 export async function runFlow(
   flow: Flow,
   session: FlowSession,
   input: FlowInput,
-  ctx: FlowCtx
+  ctx: FlowCtx,
 ): Promise<FlowResult> {
   const messages: OutMsg[] = [];
   const vars = { ...session.vars };
@@ -96,7 +86,6 @@ export async function runFlow(
     if (cur?.type === "choice") {
       nodeId = matchChoice(cur, input);
       if (!nodeId) {
-        // didn't understand — re-send the same choice
         messages.push({ type: "choice", text: cur.text, options: cur.options.map((o) => ({ id: choiceId(cur.id, o.id), label: o.label, description: o.description })) });
         return { messages, session: { nodeId: cur.id, vars }, handedOff: false };
       }
@@ -118,9 +107,8 @@ export async function runFlow(
     } else if (cur?.type === "slots") {
       if (input.choiceId?.startsWith(`${cur.id}|`) && ctx.bookSlot) {
         const slotId = input.choiceId.slice(cur.id.length + 1);
-        const res = await ctx.bookSlot(slotId, vars);
+        const res = await ctx.bookSlot(slotId, vars, cur.id);
         if (!res.ok) {
-          // slot filled — offer fresh ones
           const opts = ctx.availableSlots ? await ctx.availableSlots() : [];
           if (opts.length) {
             messages.push({ type: "choice", text: "That one just filled up — here are the next open times:", options: opts.map((o) => ({ id: choiceId(cur.id, o.id), label: o.label })) });
@@ -171,7 +159,7 @@ export async function runFlow(
       if (text) messages.push({ type: "text", text });
       nodeId = node.next ?? null;
     } else if (node.type === "booking") {
-      await ctx.createBooking(vars, node.action);
+      await ctx.createBooking(vars, node.action, node.id);
       if (node.text) messages.push({ type: "text", text: interpolate(node.text, vars) });
       nodeId = node.next ?? null;
     } else if (node.type === "slots") {
@@ -206,14 +194,12 @@ export async function runFlow(
       await ctx.handoff(vars);
       return { messages, session: null, handedOff: true };
     } else {
-      // end
       return { messages, session: null, handedOff: false };
     }
   }
   return { messages, session: null, handedOff: false };
 }
 
-/** The out-of-the-box flow — used until a custom one is built in the editor. */
 export const DEFAULT_FLOW: Flow = {
   start: "welcome",
   nodes: {
