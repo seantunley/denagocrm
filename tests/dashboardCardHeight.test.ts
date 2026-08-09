@@ -106,15 +106,28 @@ test("row spans are static class names, not built from a variable", () => {
   assert.doesNotMatch(canvas, /row-span-\$\{/);
 });
 
-test("the grid has a base row height, or spanning rows means nothing", () => {
-  // Without auto-rows a row is as tall as its tallest card, so a two-row card is
-  // simply itself and the control appears broken.
-  for (const file of [
-    "src/components/dashboard/cards/shell.tsx",
-    "src/components/dashboard/editor/DashboardCanvas.tsx",
-  ]) {
-    assert.match(code(file), /auto-rows-\[minmax\(/, `${file} must give its grid a base row height`);
-  }
+test("the base row height applies ONLY where something spans rows", () => {
+  /*
+   * Applied unconditionally this forced EVERY row to 11rem, so a row of short
+   * stat tiles reserved 176px and left a large blank gap beneath it — reported
+   * from production as "huge spaces". The base row height exists solely to give
+   * a row span something to span; where nothing spans, the grid must size to its
+   * content exactly as it did before this feature existed.
+   */
+  const canvas = code("src/components/dashboard/editor/DashboardCanvas.tsx");
+  assert.match(canvas, /auto-rows-\[minmax\(/, "spanning still needs a base row height");
+  assert.match(
+    canvas,
+    /section\.cards\.some\(\(entry\) => \(entry\.rows \?\? 1\) > 1\)/,
+    "…but only for a section that actually contains a taller card",
+  );
+
+  const container = code("src/components/dashboard/cards/container.tsx");
+  assert.match(
+    container,
+    /card\.cards\.some\(\(child\) => \(child\.rows \?\? 1\) > 1\) && GRID_ROWS_CLASS/,
+    "nested grids follow the same rule",
+  );
 });
 
 test("the height chain is unbroken from grid cell to visible card", () => {
