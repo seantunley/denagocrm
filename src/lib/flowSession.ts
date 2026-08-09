@@ -2,7 +2,8 @@
  * Shared multi-channel flow runner. Any messaging channel (Messenger,
  * Instagram, Telegram, …) uses this to advance a conversation: it manages the
  * BotSession state + transcript and delegates IO to a per-channel FlowCtx.
- * Each channel adapter just renders the returned OutMsg[] into its own format.
+ * Each channel adapter renders/delivers the returned OutMsg[] through its own
+ * durable outbox.
  */
 import { prisma } from "./db";
 import type { BotMsg } from "./botAi";
@@ -50,8 +51,6 @@ async function loadState(channel: string, key: string): Promise<(SessionState & 
 async function saveState(channel: string, key: string, state: SessionState, status = "active", hours = 12) {
   const data = {
     nodeId: state.nodeId,
-    // Keep the immutable publication pin beside the existing transcript wrapper;
-    // no BotSession schema change is needed and old rows parse with fv = null.
     vars: JSON.stringify({ v: state.vars, m: state.msgs.slice(-20), fv: state.flowVersionId }),
     status,
     expiresAt: new Date(Date.now() + hours * 3600 * 1000),
@@ -77,15 +76,20 @@ function recordBotMsgs(state: SessionState, messages: OutMsg[]) {
 export type ChannelResult = { messages: OutMsg[]; done: boolean; suppressed?: boolean };
 
 /**
- * Advance the flow for one inbound message on a channel. `makeCtx` receives the
- * mutable state (so the AI node can read the running transcript).
+ * Advance the flow for one inbound message on a channel.
+ *
+ * `persistMessages`, when supplied, MUST durably persist the outbound work before
+ * this function commits the new BotSession state. This is the ordering guarantee
+ * that prevents "CRM/session says step 7, customer only saw step 5" when the
+ * provider or serverless invocation fails between deciding and delivering a reply.
  */
 export async function advanceFlow(
   channel: string,
   key: string,
   input: FlowInput,
   makeCtx: (state: SessionState) => FlowCtx,
-  seedVars?: Record<string, string>
+  seedVars?: Record<string, string>,
+  persistMessages?: (messages: OutMsg[]) => Promise<void>,
 ): Promise<ChannelResult> {
   const existing = await loadState(channel, key);
   const restart = !input.choiceId && RESTART.test(input.text);
@@ -103,15 +107,16 @@ export async function advanceFlow(
         flowVersionId: existing.flowVersionId,
       };
 
-  // The current turn belongs in the transcript even when this is the FIRST turn.
   if (input.text.trim()) state.msgs.push({ role: "user", content: input.text });
 
-  // Existing sessions stay on the publication they started with. A restart is a
-  // deliberate new conversation and therefore takes the current publication.
   const snapshot = await resolveFlowSnapshot(channel, restart ? null : state.flowVersionId);
   state.flowVersionId = snapshot.versionId;
   const result = await runFlow(snapshot.flow, { nodeId: state.nodeId, vars: state.vars }, input, makeCtx(state));
   recordBotMsgs(state, result.messages);
+
+  // Persist the send intent BEFORE advancing/clearing/pausing the session. If the
+  // insert fails, the webhook can be retried and the old session remains truthful.
+  if (result.messages.length && persistMessages) await persistMessages(result.messages);
 
   if (result.session) {
     state.nodeId = result.session.nodeId;
