@@ -673,7 +673,7 @@ model Lead {
   lostAt     DateTime?
   lostReason String?
   position   Int     @default(0)
-  externalId String? @unique // e.g. Facebook leadgen_id
+  externalId String? // e.g. Facebook leadgen_id — unique PER TENANT, see @@unique below
   raw        String? // raw intake payload (JSON string)
 
   // Multi-tenancy (Phase B — additive/inert): owning tenant. See Contact.tenantId.
@@ -712,6 +712,7 @@ model Lead {
   referral  Referral?
 
   @@index([tenantId])
+  @@unique([tenantId, externalId]) // a provider id is unique to the provider, not to us
   @@unique([tenantId, id])
 }
 

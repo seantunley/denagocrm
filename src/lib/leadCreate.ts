@@ -77,6 +77,11 @@ async function createInStage(input: NewLead, stageId: string) {
     ...(input.quantity != null ? { quantity: input.quantity } : {}),
     valueCents: input.valueCents ?? 0,
     externalId: input.externalId ?? null,
+    // Never write a tenant-owned Lead tenantless. The db.ts guard only stamps
+    // tenantId under enforcement, which is dormant, so without this the row lands
+    // NULL while existingExternalLead() looks it up by DEFAULT_TENANT_ID — the
+    // retry pre-check could never match the very rows it exists to find.
+    tenantId: writeTenantId() ?? DEFAULT_TENANT_ID,
     raw: input.raw != null ? JSON.stringify(input.raw) : null,
     stageId,
     position,
@@ -109,6 +114,13 @@ async function createInStage(input: NewLead, stageId: string) {
     if (input.externalId && error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       const winner = await existingExternalLead(input.externalId);
       if (winner) return winner;
+      // The constraint is @@unique([tenantId, externalId]) — the same domain this
+      // lookup uses — so a P2002 means the winner is this tenant's and the read
+      // above should have found it. Reaching here means the two have drifted apart
+      // again; say so rather than replaying a bare P2002 for ever.
+      throw new Error(
+        `Lead externalId ${input.externalId} collided within this tenant but no existing row could be read back; the unique constraint and existingExternalLead() no longer agree.`,
+      );
     }
     throw error;
   }

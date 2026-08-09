@@ -98,8 +98,15 @@ export async function reserveSlot(input: {
 
   return basePrisma.$transaction(async (tx) => {
     if (input.dedupeMarker) {
+      // The marker lives in free text with no unique constraint behind it, so this
+      // read is advisory. Lock the marker BEFORE reading it: claimSlotCapacity's
+      // lock only serialises capacity, so without this two concurrent retries of
+      // the same action could both miss the marker and both book — visible
+      // whenever the slot has room for more than one.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`bot-slot:${tenantId ?? "global"}:${input.dedupeMarker}`})::bigint)`;
       const existing = await tx.activity.findFirst({
         where: {
+          category: "workshop",
           note: { contains: input.dedupeMarker },
           ...(tenantId ? { tenantId } : {}),
         },

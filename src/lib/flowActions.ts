@@ -48,8 +48,6 @@ function appendMarker(lines: Array<string | null | undefined>, marker: string | 
 
 async function ensureContact(source: string, vars: Record<string, string>, match: Match): Promise<Match> {
   if (match.contactId) return match;
-  if (!(vars.name || vars.phone || vars.email)) return match;
-
   // The default booking flow captures a phone number. Reuse that identity on a
   // retry (or on a second flow action in the same conversation) rather than
   // creating another Contact before the idempotent Activity/Lead check runs.
@@ -57,7 +55,11 @@ async function ensureContact(source: string, vars: Record<string, string>, match
     vars.phone ? { phone: vars.phone } : null,
     vars.email ? { email: vars.email } : null,
   ].filter(Boolean) as Array<{ phone: string } | { email: string }>;
-  if (identity.length) {
+  // A phone or email is required, not merely preferred: they are the only fields
+  // the lookup can match on, so a bare name left nothing for the next attempt to
+  // find and every retry added another Contact.
+  if (!identity.length) return match;
+  {
     const existing = await prisma.contact.findFirst({ where: { OR: identity } });
     if (existing) return { contactId: existing.id, leadId: match.leadId };
   }

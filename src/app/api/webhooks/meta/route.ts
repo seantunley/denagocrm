@@ -3,6 +3,7 @@ import crypto from "crypto";
 import { basePrisma } from "@/lib/db";
 import { getSetting, resolveTenantCredential } from "@/lib/settings";
 import { currentTenantScope } from "@/lib/tenantScope";
+import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { createIntakeLead } from "@/lib/leadIntake";
 import { parseLeadFields, metaSource } from "@/lib/metaLead";
 import { recordInboundDm, recordDmEcho, type DmPlatform } from "@/lib/messenger";
@@ -14,6 +15,7 @@ import { secretEquals } from "@/lib/secretCompare";
 import {
   claimInboundBotEvent,
   completeInboundBotEvent,
+  InboundBotEventLeasedError,
   retryInboundBotEvent,
   withInboundBotEvent,
 } from "@/lib/botInboundEvent";
@@ -75,8 +77,17 @@ export async function POST(req: NextRequest) {
           }
           if (!ev.message || (!text && attachments.length === 0)) continue;
 
-          const claim = await claimInboundBotEvent(platform, String(ev.message?.mid ?? ""));
-          if (!claim) continue;
+          const outcome = await claimInboundBotEvent(platform, String(ev.message?.mid ?? ""));
+          if (outcome.status === "completed") continue; // genuinely done — ack it.
+          if (outcome.status === "unidentified") {
+            const { logError } = await import("@/lib/errorLog");
+            await logError("meta-dm-webhook", "Inbound message carried no provider mid — skipped, because a redelivery would repeat it unfenced.").catch(() => {});
+            continue;
+          }
+          // Leased: the attempt holding it may have died. Ack would retire the
+          // provider's redelivery and lose the message, so ask to be sent it again.
+          if (outcome.status === "leased") throw new InboundBotEventLeasedError(platform, String(ev.message?.mid ?? ""));
+          const claim = outcome.claim;
           try {
             await withInboundBotEvent(claim, async () => {
               const referral = ev.message.referral ?? ev.referral ?? ev.postback?.referral ?? null;
@@ -109,7 +120,9 @@ export async function POST(req: NextRequest) {
       const pageId = String(change.value?.page_id ?? "");
 
       await withChannelTenantScope("messenger", pageId, async () => {
-        const existing = await basePrisma.lead.findUnique({ where: { externalId: leadgenId }, select: { id: true } });
+        // Scoped to the tenant that owns this Page: a leadgen id is unique to Meta,
+        // not to us, so two tenants may legitimately receive the same one.
+        const existing = await basePrisma.lead.findFirst({ where: { externalId: leadgenId, tenantId: currentTenantScope()?.tenantId ?? DEFAULT_TENANT_ID }, select: { id: true } });
         if (existing) return;
         const accessToken = await resolveTenantCredential(currentTenantScope()?.tenantId ?? null, "META_PAGE_ACCESS_TOKEN");
         try {

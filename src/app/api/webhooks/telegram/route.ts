@@ -7,6 +7,7 @@ import { secretEquals } from "@/lib/secretCompare";
 import {
   claimInboundBotEvent,
   completeInboundBotEvent,
+  InboundBotEventLeasedError,
   retryInboundBotEvent,
   withInboundBotEvent,
 } from "@/lib/botInboundEvent";
@@ -34,8 +35,16 @@ export async function POST(req: NextRequest) {
 
   try {
     await withSystemScope(async () => {
-      const claim = await claimInboundBotEvent("telegram", String(update.update_id ?? ""));
-      if (!claim) return;
+      const outcome = await claimInboundBotEvent("telegram", String(update.update_id ?? ""));
+      if (outcome.status === "completed") return; // genuinely done — ack it.
+      if (outcome.status === "unidentified") {
+        await logError("telegram-webhook", "Inbound update carried no update_id — skipped, because a redelivery would repeat it unfenced.").catch(() => {});
+        return;
+      }
+      // Leased: the attempt holding it may have died. Ack would retire the
+      // provider's redelivery and lose the message, so ask to be sent it again.
+      if (outcome.status === "leased") throw new InboundBotEventLeasedError("telegram", String(update.update_id ?? ""));
+      const claim = outcome.claim;
 
       try {
         await withInboundBotEvent(claim, async () => {
