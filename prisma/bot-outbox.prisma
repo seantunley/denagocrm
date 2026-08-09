@@ -6,6 +6,8 @@ model BotFlowOutbox {
   tenantId    String
   channel     String
   key         String
+  batchId     String
+  sequence    Int
   payload     Json
   contactId   String?
   leadId      String?
@@ -19,6 +21,7 @@ model BotFlowOutbox {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
+  @@unique([tenantId, batchId, sequence])
   @@index([tenantId, status, availableAt])
-  @@index([tenantId, channel, key, createdAt])
+  @@index([tenantId, channel, key, createdAt, sequence])
 }
