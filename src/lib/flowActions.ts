@@ -50,10 +50,19 @@ function appendMarker(lines: Array<string | null | undefined>, marker: string | 
 
 async function ensureContact(source: string, vars: Record<string, string>, match: Match): Promise<Match> {
   if (match.contactId) return match;
-  if (!(vars.name || vars.phone || vars.email)) return match;
-  const identity = [vars.phone ? { phone: vars.phone } : null, vars.email ? { email: vars.email } : null]
-    .filter(Boolean) as Array<{ phone: string } | { email: string }>;
-  if (identity.length) {
+
+  // A provider retry or second action in one flow should reuse the captured
+  // person instead of creating a new Contact before the idempotent effect check.
+  const identity = [
+    vars.phone ? { phone: vars.phone } : null,
+    vars.email ? { email: vars.email } : null,
+  ].filter(Boolean) as Array<{ phone: string } | { email: string }>;
+  // A phone or email is required, not merely preferred: they are the only fields
+  // the reuse lookup can match on. Creating a Contact from a bare name leaves the
+  // next attempt nothing to find, so a redelivery — or the customer restarting the
+  // flow — would add another one every time.
+  if (!identity.length) return match;
+  {
     const existing = await prisma.contact.findFirst({ where: { OR: identity } });
     if (existing) return { contactId: existing.id, leadId: match.leadId };
   }

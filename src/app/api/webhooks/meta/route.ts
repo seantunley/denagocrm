@@ -14,6 +14,7 @@ import { secretEquals } from "@/lib/secretCompare";
 import {
   claimInboundBotEvent,
   completeInboundBotEvent,
+  InboundBotEventLeasedError,
   retryInboundBotEvent,
   withInboundBotEvent,
 } from "@/lib/botInboundEvent";
@@ -85,8 +86,17 @@ export async function POST(req: NextRequest) {
           }
           if (!ev.message || (!text && attachments.length === 0)) continue;
 
-          const claim = await claimInboundBotEvent(platform, String(ev.message?.mid ?? ""));
-          if (!claim) continue;
+          const outcome = await claimInboundBotEvent(platform, String(ev.message?.mid ?? ""));
+          if (outcome.status === "completed") continue; // genuinely done — ack it.
+          if (outcome.status === "unidentified") {
+            const { logError } = await import("@/lib/errorLog");
+            await logError("meta-dm-webhook", "Inbound message carried no provider mid — skipped, because no retry-safe CRM action identity can be derived from it.").catch(() => {});
+            continue;
+          }
+          // Leased: the attempt holding it may have died. Ack would retire Meta's
+          // redelivery and lose the message, so ask to be sent it again instead.
+          if (outcome.status === "leased") throw new InboundBotEventLeasedError(platform, String(ev.message?.mid ?? ""));
+          const claim = outcome.claim;
           try {
             await withInboundBotEvent(claim, async () => {
               const referral = ev.message.referral ?? ev.referral ?? ev.postback?.referral ?? null;
