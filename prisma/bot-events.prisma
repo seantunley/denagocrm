@@ -1,0 +1,16 @@
+/// Provider-delivered inbound chatbot events already accepted for processing.
+///
+/// Meta and Telegram retry webhooks. This ledger is the durable fence that keeps
+/// one provider message/update from advancing a flow or creating CRM side effects
+/// more than once. Provider ids are namespaced by tenant and channel.
+model BotInboundEvent {
+  id         String   @id @default(cuid())
+  tenantId   String
+  channel    String
+  providerId String
+  createdAt  DateTime @default(now())
+
+  @@unique([tenantId, channel, providerId])
+  @@index([tenantId])
+  @@index([createdAt])
+}
