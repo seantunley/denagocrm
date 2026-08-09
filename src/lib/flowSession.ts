@@ -83,13 +83,15 @@ export async function advanceFlow(
   }
 
   const state: SessionState = !existing || restart
-    ? { nodeId: null, vars: { ...(seedVars ?? {}) }, msgs: [], flowVersionId: null }
+    ? { nodeId: null, vars: { channel, ...(seedVars ?? {}) }, msgs: [], flowVersionId: null }
     : {
         nodeId: existing.nodeId,
         vars: existing.vars,
         msgs: existing.msgs,
         flowVersionId: existing.flowVersionId,
       };
+  // Backfill the built-in for sessions created before conditional routing shipped.
+  if (!state.vars.channel) state.vars.channel = channel;
 
   if (input.text.trim()) state.msgs.push({ role: "user", content: input.text });
 
