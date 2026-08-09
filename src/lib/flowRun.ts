@@ -44,6 +44,7 @@ async function loadSession(key: string): Promise<{
   }
   const flowVersionId = vars[FLOW_VERSION_VAR] ?? null;
   delete vars[FLOW_VERSION_VAR];
+  if (!vars.channel) vars.channel = "whatsapp";
   return { nodeId: row.nodeId, vars, flowVersionId, status: row.status };
 }
 
@@ -123,14 +124,15 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise
   if (existing?.status === "paused") return true;
 
   const restart = isRestart(input.text) && !input.choiceId;
-  let seed: Record<string, string> = {};
+  let seed: Record<string, string> = { channel: "whatsapp" };
   if (!existing || restart) {
     const contact = match.contactId ? await prisma.contact.findUnique({ where: { id: match.contactId } }) : null;
-    seed = greetingVars(contact?.firstName ?? null);
+    seed = { channel: "whatsapp", ...greetingVars(contact?.firstName ?? null) };
   }
   const session: FlowSession = !existing || restart
     ? { nodeId: null, vars: seed }
     : { nodeId: existing.nodeId, vars: existing.vars };
+  if (!session.vars.channel) session.vars.channel = "whatsapp";
 
   const actor = await resolveTenantActor();
   if (!actor) {
@@ -141,9 +143,6 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise
   const snapshot = await resolveFlowSnapshot("whatsapp", restart ? null : existing?.flowVersionId ?? null);
   const result = await runFlow(snapshot.flow, session, input, buildCtx(digits, match));
 
-  // The durable outbound batch and new session position are ONE transaction.
-  // Nothing can expose a new conversation position without the messages that
-  // explain it, and a failed session write cannot leave an orphaned duplicate batch.
   await withTenantWrite(async (tx, tenantId) => {
     await enqueueBotMessagesTx(tx, tenantId, {
       channel: "whatsapp",
@@ -181,10 +180,6 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise
   return true;
 }
 
-/**
- * Single WhatsApp entry point. Voice notes and the AI-off case use the
- * conversational/keyword bot; otherwise, when a flow is enabled, run the flow.
- */
 export async function runWhatsAppBot(
   digits: string,
   input: FlowInput,
