@@ -6,13 +6,19 @@ import { priceList, coloursList } from "./botAnswers";
 import { sendPushToAll } from "./push";
 import { advanceFlow, greetingVars } from "./flowSession";
 import { crmActions } from "./flowActions";
-import { choiceId as encodeChoice } from "./flow";
+import { choiceId as encodeChoice, type FlowHandoffContext } from "./flow";
 import { flushBotOutboxConversation } from "./botOutbox";
 import { enqueueBotMessagesTx } from "./botOutboxWrite";
 import type { DmPlatform } from "./messenger";
 
 async function dmBotEnabled(): Promise<boolean> {
   return (await getSetting("BOT_ENABLED")) === "true" && (await getSetting("BOT_DM_ENABLED")) === "true";
+}
+
+function handoffBody(context?: FlowHandoffContext): string {
+  if (context?.summary) return `${context.summary}${context.reason ? ` · ${context.reason}` : ""}`.slice(0, 220);
+  if (context?.reason) return `Handoff: ${context.reason}`.slice(0, 220);
+  return "The assistant handed a chat over.";
 }
 
 /** Run the published Messenger / Instagram flow with durable outbound delivery. */
@@ -44,10 +50,14 @@ export async function runDmFlow(
       routeChoice: ({ prompt, text: freeText, options }) => routeBotChoice({ prompt, text: freeText, options }),
       aiReply: async (vars) => {
         const ai = await generateBotReply({ history: state.msgs, customerName: vars.name ?? null, isCustomer: false });
-        return ai ?? { reply: "Let me get one of our team to help — I'll pass this on now 👍", handoff: true };
+        return ai ?? { reply: "Let me get one of our team to help — I'll pass this on now 👍", handoff: true, confidence: "low", intent: "unknown", handoffReason: "AI unavailable" };
       },
-      handoff: async () => {
-        await sendPushToAll({ title: `${platform === "instagram" ? "Instagram" : "Messenger"} needs you 🙋`, body: "The assistant handed a chat over.", url: "/inbox" }, "bot_handoff").catch(() => {});
+      handoff: async (_vars, context) => {
+        await sendPushToAll({
+          title: `${platform === "instagram" ? "Instagram" : "Messenger"} needs you 🙋`,
+          body: handoffBody(context),
+          url: "/inbox",
+        }, "bot_handoff").catch(() => {});
       },
       ...crmActions(platform, { contactId: contact?.id ?? null, leadId: null }),
     }),
