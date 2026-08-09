@@ -24,6 +24,15 @@ export function greetingVars(firstName: string | null): Record<string, string> {
     : { greeting: "Hi there 👋 Welcome to Denago Cape Town!" };
 }
 
+function runtimeVars(channel: string): Record<string, string> {
+  const now = new Date();
+  return {
+    channel,
+    current_date: new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Johannesburg", year: "numeric", month: "2-digit", day: "2-digit" }).format(now),
+    current_time: new Intl.DateTimeFormat("en-ZA", { timeZone: "Africa/Johannesburg", hour: "2-digit", minute: "2-digit", hour12: false }).format(now),
+  };
+}
+
 export async function getActiveFlowFor(channel: string): Promise<Flow> {
   return (await resolveFlowSnapshot(channel)).flow;
 }
@@ -77,16 +86,17 @@ export async function advanceFlow(
 ): Promise<ChannelResult> {
   const existing = await loadState(channel, key);
   const restart = !input.choiceId && RESTART.test(input.text);
+  const builtins = runtimeVars(channel);
 
   if (existing?.status === "paused" && !restart) {
     return { messages: [], done: true, suppressed: true };
   }
 
   const state: SessionState = !existing || restart
-    ? { nodeId: null, vars: { ...(seedVars ?? {}) }, msgs: [], flowVersionId: null }
+    ? { nodeId: null, vars: { ...builtins, ...(seedVars ?? {}) }, msgs: [], flowVersionId: null }
     : {
         nodeId: existing.nodeId,
-        vars: existing.vars,
+        vars: { ...existing.vars, ...builtins },
         msgs: existing.msgs,
         flowVersionId: existing.flowVersionId,
       };
