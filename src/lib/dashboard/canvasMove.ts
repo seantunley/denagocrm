@@ -123,6 +123,75 @@ export function dropPreview(
   return { sectionId: target.id, index };
 }
 
+/** Enough of a rectangle to place a pointer against it. */
+export type Box = { top: number; left: number; width: number; height: number };
+
+/** Distance from a point to a rectangle. Zero inside it. */
+function distanceTo(box: Box, x: number, y: number): number {
+  const dx = Math.max(box.left - x, 0, x - (box.left + box.width));
+  const dy = Math.max(box.top - y, 0, y - (box.top + box.height));
+  return Math.hypot(dx, dy);
+}
+
+/** Whether the pointer is past this card in reading order. */
+function isPast(box: Box, x: number, y: number): boolean {
+  if (y < box.top) return false;
+  if (y > box.top + box.height) return true;
+  // Level with the card: the horizontal midpoint decides, so crossing halfway
+  // across a card is what moves the marker to its other side.
+  return x > box.left + box.width / 2;
+}
+
+/**
+ * Which droppable the pointer means when it is over a SECTION but not a card.
+ *
+ * ── WHY THIS EXISTS ─────────────────────────────────────────────────────────
+ *
+ * Over a section used to mean one thing: append. That is right for a section
+ * with nothing in it and wrong almost everywhere else, because the pointer is
+ * over the section rather than a card far more often than it sounds — the
+ * section has padding, it holds an "Add a card" button, the grid is
+ * `items-start` so short cards leave empty space beneath them in their own row,
+ * and the section stretches to its tallest column.
+ *
+ * So the marker kept jumping to the bottom of the group while the card being
+ * dragged was near the top: the two were nowhere near each other, and the
+ * marker stopped meaning anything.
+ *
+ * Now the empty space between and around cards resolves to the card the pointer
+ * is nearest, on the side it is nearest to. "Before card X" is X itself.
+ * "After X" is the card that follows it — and after the LAST card is the
+ * section, which is the one case where append was right all along.
+ *
+ * The dragged card is excluded by the caller: it is where the pointer already
+ * is, and offering it as the target means dropping a card onto itself.
+ */
+export function insertionTargetInSection(
+  cardIds: string[],
+  rectOf: (id: string) => Box | undefined,
+  pointer: { x: number; y: number },
+  sectionId: string,
+): string {
+  const measured = cardIds
+    .map((id) => ({ id, box: rectOf(id) }))
+    .filter((entry): entry is { id: string; box: Box } => entry.box !== undefined);
+  if (measured.length === 0) return sectionId;
+
+  let nearest = measured[0];
+  let best = distanceTo(nearest.box, pointer.x, pointer.y);
+  for (const entry of measured.slice(1)) {
+    const distance = distanceTo(entry.box, pointer.x, pointer.y);
+    if (distance < best) {
+      best = distance;
+      nearest = entry;
+    }
+  }
+
+  if (!isPast(nearest.box, pointer.x, pointer.y)) return nearest.id;
+  const next = measured[measured.indexOf(nearest) + 1];
+  return next ? next.id : sectionId;
+}
+
 /** One thing the canvas draws in a section: a card, or the drop marker. */
 export type CanvasSlot = { kind: "card"; id: string } | { kind: "marker" };
 

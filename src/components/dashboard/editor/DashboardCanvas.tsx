@@ -27,6 +27,7 @@ import { Eye, GripVertical, Plus, Settings2, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   dropPreview,
+  insertionTargetInSection,
   layoutWithMarker,
   moveCardInView,
   type DropPreview,
@@ -177,13 +178,44 @@ export default function DashboardCanvas({
       const within = pointerWithin(args);
       const overCard = within.filter((collision) => cardIds.has(String(collision.id)));
       if (overCard.length > 0) return overCard;
+
+      /*
+       * Over a SECTION but not a card, which happens constantly: sections have
+       * padding, they hold an "Add a card" button, the grid is `items-start` so
+       * short cards leave empty space under them in their own row, and a section
+       * stretches to its tallest column.
+       *
+       * Answering "append" for all of that put the marker at the bottom of the
+       * group while the card was being dragged near the top - the two were
+       * nowhere near each other, which is what was reported. The empty space
+       * now resolves to the nearest card, on the side the pointer is nearest to.
+       */
+      const overSection = within.find((collision) => !cardIds.has(String(collision.id)));
+      const pointer = args.pointerCoordinates;
+      if (overSection && pointer) {
+        const section = view.sections.find((entry) => entry.id === String(overSection.id));
+        const activeCardId = String(args.active.id);
+        const siblings = section?.cards.filter((card) => card.id !== activeCardId) ?? [];
+        if (siblings.length > 0) {
+          return [
+            {
+              id: insertionTargetInSection(
+                siblings.map((card) => card.id),
+                (id) => args.droppableRects.get(id),
+                pointer,
+                section!.id,
+              ),
+            },
+          ];
+        }
+      }
       if (within.length > 0) return within;
 
       const closest = closestCenter(args);
       const closestCard = closest.filter((collision) => cardIds.has(String(collision.id)));
       return closestCard.length > 0 ? closestCard : closest;
     },
-    [cardIds],
+    [cardIds, view.sections],
   );
 
   /*
