@@ -5,6 +5,7 @@ import { logError } from "@/lib/errorLog";
 import {
   claimInboundBotEvent,
   completeInboundBotEvent,
+  InboundBotEventLeasedError,
   retryInboundBotEvent,
   withInboundBotEvent,
 } from "@/lib/botInboundEvent";
@@ -32,8 +33,16 @@ export async function POST(req: NextRequest) {
   return withTelegramTenantScope(
     webhookSecret,
     async () => {
-      const claim = await claimInboundBotEvent("telegram", String(update.update_id ?? ""));
-      if (!claim) return NextResponse.json({ ok: true });
+      const outcome = await claimInboundBotEvent("telegram", String(update.update_id ?? ""));
+      if (outcome.status === "completed") return NextResponse.json({ ok: true }); // genuinely done — ack it.
+      if (outcome.status === "unidentified") {
+        await logError("telegram-webhook", "Inbound update carried no update_id — skipped, because no retry-safe CRM action identity can be derived from it.").catch(() => {});
+        return NextResponse.json({ ok: true });
+      }
+      // Leased: the attempt holding it may have died. Ack would retire Telegram's
+      // redelivery and lose the update, so ask to be sent it again instead.
+      if (outcome.status === "leased") throw new InboundBotEventLeasedError("telegram", String(update.update_id ?? ""));
+      const claim = outcome.claim;
       try {
         await withInboundBotEvent(claim, async () => {
           if (update.callback_query) {

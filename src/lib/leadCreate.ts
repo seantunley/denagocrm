@@ -108,6 +108,15 @@ async function createInStage(input: NewLead, stageId: string) {
     if (input.externalId && error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       const winner = await existingExternalLead(input.externalId);
       if (winner) return winner;
+      // `externalId` is unique across the whole table, but the lookup above is
+      // tenant-scoped, so a collision owned by ANOTHER tenant lands here with no
+      // winner to return. Retrying can never clear that, and a bare P2002 reads as
+      // transient — the webhook would release the event and replay it forever. Say
+      // what actually happened instead. (The structural fix is a composite
+      // @@unique([tenantId, externalId]), which needs its own migration.)
+      throw new Error(
+        `Lead externalId ${input.externalId} already belongs to a different tenant — this lead cannot be created here, and retrying will not change that.`,
+      );
     }
     throw error;
   }
