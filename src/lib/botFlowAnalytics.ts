@@ -128,7 +128,7 @@ export async function getBotFlowVersionAnalytics(
   const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
   const summaryRows = await basePrisma.$queryRaw<SummaryRow[]>(Prisma.sql`
     SELECT
-      COUNT(DISTINCT "conversationKey") FILTER (WHERE "eventType" = 'flow_started') AS "started",
+      COUNT(*) FILTER (WHERE "eventType" = 'flow_started') AS "started",
       COUNT(*) FILTER (WHERE "eventType" = 'flow_completed') AS "completed",
       COUNT(*) FILTER (WHERE "eventType" = 'flow_handoff') AS "handedOff",
       COUNT(*) FILTER (WHERE "eventType" = 'delivery_failed') AS "deliveryFailures"
@@ -139,7 +139,7 @@ export async function getBotFlowVersionAnalytics(
   const nodeRows = await basePrisma.$queryRaw<NodeRow[]>(Prisma.sql`
     SELECT
       "nodeId",
-      COUNT(DISTINCT "conversationKey") FILTER (WHERE "eventType" = 'node_waiting') AS "reached",
+      COUNT(*) FILTER (WHERE "eventType" = 'node_waiting') AS "reached",
       COUNT(*) FILTER (WHERE "eventType" IN ('choice_selected', 'capture_submitted', 'slot_selected')) AS "interacted",
       COUNT(*) FILTER (WHERE "eventType" = 'crm_action') AS "crmActions",
       COUNT(*) FILTER (WHERE "eventType" = 'flow_handoff') AS "handoffs",
@@ -149,7 +149,7 @@ export async function getBotFlowVersionAnalytics(
       AND "flowVersionId" IN (${Prisma.join(flowVersionIds)})
       AND "nodeId" IS NOT NULL
     GROUP BY "nodeId"
-    ORDER BY COUNT(DISTINCT "conversationKey") FILTER (WHERE "eventType" = 'node_waiting') DESC
+    ORDER BY COUNT(*) FILTER (WHERE "eventType" = 'node_waiting') DESC
   `);
   const summary = summaryRows[0];
   return {
