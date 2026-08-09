@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { channelVerifiedOwner, markUnverified } from "../src/lib/botBookingIdentity";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
@@ -19,14 +20,46 @@ test("booking lookup is read-only and restricted to the conversation customer", 
   assert.doesNotMatch(lookup, /\.create\(|\.update\(|\.upsert\(/, "a failed booking lookup must not create or mutate CRM records");
 });
 
-test("captured-phone lookup matches only an existing contact or open lead", () => {
+test("a phone number typed into the chat is never an identity", () => {
+  // The attack this replaces: on Telegram the runner passes no contact and no
+  // lead, so whatever the customer typed decided whose booking was returned.
+  // Anyone who knew a customer's number could read back their next booking and
+  // then move or cancel it.
+  const telegramSender = { contactId: null, leadId: null };
+  assert.equal(
+    channelVerifiedOwner(telegramSender),
+    null,
+    "a sender the channel cannot identify has no booking rights, whatever they type",
+  );
+
+  // The claim is not laundered through flow variables either.
+  const vars: Record<string, string> = { phone: "0821234567", booking_id: "act_someone_else" };
+  markUnverified(vars);
+  assert.equal(vars.booking_identity, "unverified");
+  assert.equal(vars.booking_id, undefined, "a booking id from an earlier turn must not survive");
+  assert.equal(vars.booking_slot, undefined);
+  assert.equal(vars.booking_summary, undefined);
+
+  // A sender the provider authenticated and the CRM matched still works.
+  const whatsappMatched = { contactId: "c_1", leadId: null };
+  assert.deepEqual(channelVerifiedOwner(whatsappMatched), whatsappMatched);
+  const leadOnly = { contactId: null, leadId: "l_1" };
+  assert.deepEqual(channelVerifiedOwner(leadOnly), leadOnly);
+});
+
+test("every booking action refuses an unidentified customer before touching the CRM", () => {
   const code = src("src/lib/botBookingSelfService.ts");
-  const resolver = code.slice(code.indexOf("async function resolveBookingOwner"), code.indexOf("function ownerWhere"));
-  assert.match(resolver, /phoneTail\(vars\.phone\)/);
-  assert.match(resolver, /prisma\.contact\.findFirst/);
-  assert.match(resolver, /prisma\.lead\.findFirst/);
-  assert.match(resolver, /status: "open"/);
-  assert.doesNotMatch(resolver, /\.create\(/);
+  // No path may reach cancelWorkshopBooking / rescheduleWorkshopBooking / the
+  // Activity lookup without having resolved a channel-verified owner first.
+  for (const fn of ["findUpcomingBotBooking", "lookupBotBooking", "cancelBotBooking", "rescheduleBotBooking"]) {
+    const start = code.indexOf(`export async function ${fn}`);
+    assert.ok(start > 0, `${fn} must exist`);
+    const body = code.slice(start, code.indexOf("\nexport ", start + 1) === -1 ? undefined : code.indexOf("\nexport ", start + 1));
+    assert.match(body, /channelVerifiedOwner\(match\)/, `${fn} must establish identity from the channel`);
+  }
+  // The typed-phone resolver is gone, not merely bypassed.
+  assert.doesNotMatch(code, /phoneTail|resolveBookingOwner/);
+  assert.doesNotMatch(code, /vars\.phone/, "nothing in this file may read the number the customer typed");
 });
 
 test("cancellation retains history and releases workshop capacity by leaving planned state", () => {
