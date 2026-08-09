@@ -88,22 +88,25 @@ export default function MobileCompanionNav({
       </nav>
 
       <Sheet open={captureOpen} onOpenChange={setCaptureOpen}>
-        <SheetContent side="bottom" className="max-h-[86dvh] overflow-y-auto rounded-t-3xl border-border bg-background p-0 lg:hidden">
-          <SheetHeader className="border-b border-border px-5 pb-4 pt-6 text-left">
+        <SheetContent side="bottom" className="max-h-[86dvh] overflow-y-auto rounded-t-2xl border-border bg-background p-0 lg:hidden">
+          <SheetHeader className="border-b border-border px-4 pb-3 pt-4 text-left">
             <SheetTitle>Quick capture</SheetTitle>
             <SheetDescription>Start the record now. Complete the detail on desktop when needed.</SheetDescription>
           </SheetHeader>
-          <div className="grid gap-2 p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+          <div className="grid gap-2 p-3 pb-[max(.75rem,env(safe-area-inset-bottom))]">
+            <p className="px-1 pt-1 text-[11px] font-medium text-muted-foreground">On-site work</p>
+            {can("activities.manage") && packOn("/test-drives") && <SheetClose asChild><Link href="/test-drives" className="flex items-center gap-3 rounded-xl border border-border bg-card p-3"><span className="grid size-9 place-items-center rounded-lg bg-amber-400/10 text-amber-300"><Route className="size-4" /></span><span><span className="block text-sm font-medium">Book test drive</span><span className="mt-0.5 block text-xs text-muted-foreground">Start a booking or check current drives</span></span></Link></SheetClose>}
+            {can("jobcards.manage") && packOn("/jobcards") && <SheetClose asChild><Link href="/jobcards" className="flex items-center gap-3 rounded-xl border border-border bg-card p-3"><span className="grid size-9 place-items-center rounded-lg bg-violet-400/10 text-violet-300"><Wrench className="size-4" /></span><span><span className="block text-sm font-medium">Job card photos</span><span className="mt-0.5 block text-xs text-muted-foreground">Choose a current job and open the camera</span></span></Link></SheetClose>}
+            {can("deliveries.manage") && packOn("/deliveries") && <SheetClose asChild><Link href="/deliveries" className="flex items-center gap-3 rounded-xl border border-border bg-card p-3"><span className="grid size-9 place-items-center rounded-lg bg-emerald-400/10 text-emerald-300"><Camera className="size-4" /></span><span><span className="block text-sm font-medium">Delivery photos</span><span className="mt-0.5 block text-xs text-muted-foreground">Choose a handover and capture evidence</span></span></Link></SheetClose>}
+            {can("documents.upload") && packOn("/documents") && <SheetClose asChild><Link href="/documents" className="flex items-center gap-3 rounded-xl border border-border bg-card p-3"><span className="grid size-9 place-items-center rounded-lg bg-sky-400/10 text-sky-300"><FileUp className="size-4" /></span><span><span className="block text-sm font-medium">Upload document</span><span className="mt-0.5 block text-xs text-muted-foreground">Photograph, upload and file a document</span></span></Link></SheetClose>}
+
+            {captures.length > 0 && <p className="px-1 pt-2 text-[11px] font-medium text-muted-foreground">Quick records</p>}
             {captures.map(({ label, detail, icon: Icon, kind }) => (
-              <button key={kind} type="button" onClick={() => quickCapture(kind)} className="flex items-center gap-3 rounded-2xl border border-border bg-card p-4 text-left">
-                <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary"><Icon className="size-[18px]" /></span>
-                <span><span className="block text-sm font-semibold">{label}</span><span className="mt-0.5 block text-xs text-muted-foreground">{detail}</span></span>
+              <button key={kind} type="button" onClick={() => quickCapture(kind)} className="flex items-center gap-3 rounded-xl border border-border bg-card p-3 text-left">
+                <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary"><Icon className="size-4" /></span>
+                <span><span className="block text-sm font-medium">{label}</span><span className="mt-0.5 block text-xs text-muted-foreground">{detail}</span></span>
               </button>
             ))}
-            {can("activities.manage") && packOn("/test-drives") && <SheetClose asChild><Link href="/test-drives" className="flex items-center gap-3 rounded-2xl border border-border bg-card p-4"><span className="grid size-10 place-items-center rounded-xl bg-amber-400/10 text-amber-300"><Route className="size-[18px]" /></span><span><span className="block text-sm font-semibold">Test drive</span><span className="mt-0.5 block text-xs text-muted-foreground">Start a booking or check current drives</span></span></Link></SheetClose>}
-            {can("jobcards.manage") && packOn("/jobcards") && <SheetClose asChild><Link href="/jobcards" className="flex items-center gap-3 rounded-2xl border border-border bg-card p-4"><span className="grid size-10 place-items-center rounded-xl bg-violet-400/10 text-violet-300"><Wrench className="size-[18px]" /></span><span><span className="block text-sm font-semibold">Job card photos</span><span className="mt-0.5 block text-xs text-muted-foreground">Photograph vehicle condition</span></span></Link></SheetClose>}
-            {can("deliveries.manage") && packOn("/deliveries") && <SheetClose asChild><Link href="/deliveries" className="flex items-center gap-3 rounded-2xl border border-border bg-card p-4"><span className="grid size-10 place-items-center rounded-xl bg-emerald-400/10 text-emerald-300"><Camera className="size-[18px]" /></span><span><span className="block text-sm font-semibold">Delivery photos</span><span className="mt-0.5 block text-xs text-muted-foreground">Capture handover evidence</span></span></Link></SheetClose>}
-            {can("documents.upload") && packOn("/documents") && <SheetClose asChild><Link href="/documents" className="flex items-center gap-3 rounded-2xl border border-border bg-card p-4"><span className="grid size-10 place-items-center rounded-xl bg-sky-400/10 text-sky-300"><FileUp className="size-[18px]" /></span><span><span className="block text-sm font-semibold">Document</span><span className="mt-0.5 block text-xs text-muted-foreground">Upload and file a document</span></span></Link></SheetClose>}
           </div>
         </SheetContent>
       </Sheet>

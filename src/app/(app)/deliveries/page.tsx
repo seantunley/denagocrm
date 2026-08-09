@@ -2,6 +2,7 @@ import Link from "next/link";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { Truck, FileText, Wallet, CalendarClock, PackageCheck, ArrowRight, Camera } from "lucide-react";
 import PhotoUploadField from "@/components/PhotoUploadField";
+import { MobilePhotoCapture } from "@/components/MobilePhotoCapture";
 import { prisma } from "@/lib/db";
 import {
   markInvoiced,
@@ -150,11 +151,7 @@ export default async function DeliveriesPage() {
                       </div>
                     </div>
                     {canManage && (
-                      <SaveForm action={uploadDeliveryPhotos.bind(null, quote.id)} className="mt-3 rounded-xl border border-primary/20 bg-primary/[0.05] p-2.5">
-                        <label className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-foreground"><Camera className="size-3.5" />Add handover photos</label>
-                        <PhotoUploadField required className="block w-full text-xs text-muted-foreground file:mr-2 file:rounded-lg file:border-0 file:bg-muted file:px-2.5 file:py-1.5 file:text-xs file:text-foreground" />
-                        <SaveButton className="btn-primary btn-sm mt-2 w-full">Take or choose photos</SaveButton>
-                      </SaveForm>
+                      <MobilePhotoCapture action={uploadDeliveryPhotos.bind(null, quote.id)} label="Add handover photos" />
                     )}
                   </article>
                 );

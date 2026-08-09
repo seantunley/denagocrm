@@ -146,8 +146,12 @@ test("every camera field resizes before submitting", () => {
       /<input[^>]*capture="environment"/,
       `${file} still posts unresized camera files`,
     );
-    assert.match(code, /<PhotoUploadField/, `${file} must use the resizing field`);
+    assert.match(code, /<(?:PhotoUploadField|MobilePhotoCapture)/, `${file} must use the resizing field directly or through the mobile capture primitive`);
   }
+
+  const mobileCapture = src("src/components/MobilePhotoCapture.tsx");
+  assert.match(mobileCapture, /<PhotoUploadField/);
+  assert.match(mobileCapture, /<SaveButton[^>]*w-full/);
 });
 
 test("both upload actions enforce the TOTAL payload, not only per-file", () => {
