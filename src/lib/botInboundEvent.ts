@@ -1,15 +1,32 @@
 import crypto from "crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { withTenantWrite } from "./tenantWrite";
 
 export type InboundBotEventClaim = { rowId: string | null };
 
+type InboundBotEventContext = { eventId: string | null };
+const inboundEventContext = new AsyncLocalStorage<InboundBotEventContext>();
+
+/**
+ * Run the event's application work with the durable provider-event row id in
+ * async context. CRM action nodes can use this stable id without plumbing a
+ * provider-specific message id through every channel adapter and flow API.
+ */
+export async function withInboundBotEvent<T>(
+  claim: InboundBotEventClaim,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return inboundEventContext.run({ eventId: claim.rowId }, fn);
+}
+
+/** Stable across provider retries; null for untracked/test/manual flow runs. */
+export function currentInboundBotEventId(): string | null {
+  return inboundEventContext.getStore()?.eventId ?? null;
+}
+
 /**
  * Atomically lease one provider-delivered inbound message/update before it can
  * drive the chatbot or create CRM side effects.
- *
- * `null` means the event is already completed or another invocation currently
- * owns an unexpired lease. `{ rowId: null }` means the provider supplied no stable
- * id; process it without a durable fence rather than dropping a real message.
  */
 export async function claimInboundBotEvent(
   channel: string,
