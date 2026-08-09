@@ -25,6 +25,12 @@ function storedMessages(channel: string, messages: OutMsg[]): OutMsg[] {
   return out;
 }
 
+function jsonPayload(message: OutMsg): Prisma.InputJsonValue {
+  // Flow option objects may contain `description: undefined`; Prisma JSON input
+  // rejects undefined even though normal JSON would simply omit the property.
+  return JSON.parse(JSON.stringify(message)) as Prisma.InputJsonValue;
+}
+
 /** Write one engine result into an EXISTING transaction. */
 export async function enqueueBotMessagesTx(
   tx: TenantWriteTx,
@@ -44,7 +50,7 @@ export async function enqueueBotMessagesTx(
         key: input.key,
         batchId,
         sequence,
-        payload: messages[sequence] as unknown as Prisma.InputJsonValue,
+        payload: jsonPayload(messages[sequence]),
         contactId: input.contactId ?? null,
         leadId: input.leadId ?? null,
         actorId: input.actorId ?? null,
