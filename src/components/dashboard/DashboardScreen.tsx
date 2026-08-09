@@ -4,6 +4,7 @@ import { LayoutGrid } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { dashboardsForViewer, type LoadedDashboard } from "@/lib/dashboard/store";
 import { viewerConditionContext } from "@/lib/dashboard/viewer";
+import { dashboardViewer } from "@/lib/dashboard/data";
 import { renderViewSlots, visibleViews } from "./DashboardView";
 import DashboardEditorRoot from "./editor/DashboardEditorRoot";
 
@@ -50,6 +51,9 @@ export default async function DashboardScreen({
   tab?: string;
 }) {
   const ctx = await viewerConditionContext();
+  // Owners decide what the whole workspace sees. Resolved here rather than
+  // inferred in the client, which has no authoritative view of the role.
+  const { user: viewer } = await dashboardViewer();
   const dashboards = await dashboardsForViewer();
   const views = visibleViews(dashboard.config, ctx);
 
@@ -97,10 +101,19 @@ export default async function DashboardScreen({
         views={views}
         activeViewId={active?.id ?? null}
         slots={slots}
-        // Dashboards are personal today, so anyone who can open one owns it.
-        // Passed explicitly rather than assumed, so the first shared dashboard
-        // does not arrive editable by everyone who can see it.
-        canEdit
+        /*
+         * The first shared dashboard has now arrived, and this is the line the
+         * old comment was holding the door open for.
+         *
+         * A published dashboard belongs to whoever wrote it. Letting a viewer
+         * edit it would mean editing the AUTHOR's copy, for everyone who can see
+         * it — which is not what "view" means, and not something a person would
+         * expect a drag on their own screen to do.
+         */
+        canEdit={!dashboard.shared}
+        shared={dashboard.shared}
+        // Owners decide what the workspace sees; everyone else builds their own.
+        isOwner={viewer.role === "owner"}
         // Plain arrays, not Sets — a Set does not survive the server→client
         // boundary. The picker and builder rebuild Sets from these once,
         // memoised, rather than every consumer doing its own conversion.

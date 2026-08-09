@@ -91,6 +91,7 @@ test("no exported action accepts a user id", () => {
       "renameDashboard",
       "reorderDashboards",
       "saveDashboardConfig",
+      "setDashboardShared",
       "takeControl",
     ],
     "the set of exported dashboard-config actions changed — check the new one too",
@@ -110,11 +111,14 @@ test("no exported action accepts a user id", () => {
 test("every exported action resolves the acting user from the session", () => {
   const actions = src(ACTIONS);
   const bodies = exportBodies(actions);
-  assert.equal(bodies.length, 6, "unexpected number of exported actions");
+  assert.equal(bodies.length, 7, "unexpected number of exported actions");
   for (const body of bodies) {
+    // requireOwner is requireUser plus a role check — it resolves the SAME
+    // session user and then refuses a non-owner. Publishing is owner-only, so it
+    // is the stricter of the two, not a way around this rule.
     assert.match(
       body,
-      /const user = await requireUser\(\);/,
+      /const user = await require(User|Owner)\(\);/,
       `${body.slice(0, body.indexOf("("))} does not resolve the acting user from the session`,
     );
   }
@@ -160,14 +164,28 @@ test("the store's reads are keyed on the session user and take no user id", () =
     !/cache\(async \([^)]*user/i.test(store),
     "no cached read may take a user parameter",
   );
-  // Both reads must resolve the user themselves and filter on that id.
+  /*
+   * THIS RULE CHANGED WHEN SHARING ARRIVED, and it is worth being exact about
+   * how, because the old wording forbade the new feature outright.
+   *
+   * It used to be "every read is filtered by the session user's own id", which
+   * was right while dashboards were personal. A dashboard published to the
+   * workspace is by definition somebody else's, so the read that finds one
+   * cannot be filtered by the viewer's id.
+   *
+   * What must NOT change is that no read is unscoped. So the rule is now: every
+   * read is either the caller's OWN rows, or restricted to PUBLISHED ones. A
+   * query matching neither would return other people's private dashboards, which
+   * is the thing this test exists to prevent.
+   */
   const reads = store.split("prisma.dashboard.").slice(1);
-  assert.equal(reads.length, 2, "expected exactly two database reads in the store");
+  assert.equal(reads.length, 3, "expected three database reads in the store");
   for (const read of reads) {
-    assert.match(
-      read,
-      /where: \{ userId: user\.id/,
-      "every store query must be filtered by the session user's own id",
+    const own = /userId: user\.id/.test(read);
+    const published = /sharedAt: \{ not: null \}/.test(read);
+    assert.ok(
+      own || published,
+      `a store query is scoped to neither the caller nor published rows: ${read.slice(0, 120)}`,
     );
   }
   assert.equal(

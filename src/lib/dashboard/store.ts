@@ -45,10 +45,24 @@ export type DashboardSummary = {
   title: string;
   icon: string | null;
   sortOrder: number;
+  /**
+   * True when this is somebody else's dashboard, published to the tenant.
+   *
+   * The switcher shows it, and the screen renders it READ-ONLY. Carried on the
+   * summary rather than recomputed at the point of use, so the one place that
+   * knows whose row it is decides, and nothing downstream has to ask again.
+   */
+  shared: boolean;
 };
 
 /** A dashboard with its config parsed and whatever had to be dropped named. */
 export type LoadedDashboard = {
+  /**
+   * True when this dashboard belongs to somebody else and was published to the
+   * tenant. The screen renders it READ-ONLY: a viewer editing a shared dashboard
+   * would be editing the author's, for everybody, which is not what "view" means.
+   */
+  shared: boolean;
   /**
    * `null` for the default dashboard.
    *
@@ -90,11 +104,50 @@ export const DEFAULT_DASHBOARD_TITLE = "Home";
  */
 export const dashboardsForViewer = cache(async (): Promise<DashboardSummary[]> => {
   const { user } = await dashboardViewer();
-  return prisma.dashboard.findMany({
-    where: { userId: user.id },
-    select: { id: true, slug: true, title: true, icon: true, sortOrder: true },
+  const rows = await prisma.dashboard.findMany({
+    /*
+     * The viewer's own dashboards, plus any published to the tenant.
+     *
+     * The tenant boundary is the scoped `prisma` client's, exactly as for every
+     * other model here — "shared" means shared with this tenant, never beyond
+     * it, and this query does not get to decide that for itself.
+     */
+    where: { OR: [{ userId: user.id }, { sharedAt: { not: null } }] },
+    select: {
+      id: true,
+      slug: true,
+      title: true,
+      icon: true,
+      sortOrder: true,
+      userId: true,
+      sharedAt: true,
+    },
     orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
   });
+
+  /*
+   * A viewer's OWN dashboard wins over a shared one at the same address.
+   *
+   * Both can legitimately be called "sales", and the switcher would otherwise
+   * show two entries that lead to the same URL — where only one of them can
+   * ever be opened. Own-first is the right precedence: a person's own screen
+   * should not be displaced by something published over it.
+   */
+  const seen = new Set<string>();
+  const summaries: DashboardSummary[] = [];
+  for (const row of [...rows.filter((r) => r.userId === user.id), ...rows.filter((r) => r.userId !== user.id)]) {
+    if (seen.has(row.slug)) continue;
+    seen.add(row.slug);
+    summaries.push({
+      id: row.id,
+      slug: row.slug,
+      title: row.title,
+      icon: row.icon,
+      sortOrder: row.sortOrder,
+      shared: row.userId !== user.id,
+    });
+  }
+  return summaries;
 });
 
 /**
@@ -113,17 +166,41 @@ export const dashboardsForViewer = cache(async (): Promise<DashboardSummary[]> =
  */
 export const dashboardBySlug = cache(async (slug: string): Promise<LoadedDashboard | null> => {
   const { user } = await dashboardViewer();
-  const row = await prisma.dashboard.findFirst({
-    where: { userId: user.id, slug: slugify(slug) },
+  const path = slugify(slug);
+  /*
+   * The viewer's own dashboard at this address, or one published to the tenant.
+   *
+   * OWN FIRST, and that ordering is the whole reason this is two queries rather
+   * than one `OR`. Both can legitimately be called "sales", and a single query
+   * would return whichever row the planner reached first — so a person's own
+   * screen could be displaced by something somebody else published over it,
+   * intermittently, which is the worst possible way for that to behave.
+   */
+  const row =
+    (await prisma.dashboard.findFirst({
+      where: { userId: user.id, slug: path },
     select: {
       id: true,
       slug: true,
       title: true,
       icon: true,
       sortOrder: true,
-      config: true,
-    },
-  });
+        config: true,
+        userId: true,
+      },
+    })) ??
+    (await prisma.dashboard.findFirst({
+      where: { slug: path, sharedAt: { not: null } },
+      select: {
+        id: true,
+        slug: true,
+        title: true,
+        icon: true,
+        sortOrder: true,
+        config: true,
+        userId: true,
+      },
+    }));
   if (!row) return null;
   const { config, dropped } = parseConfig(row.config);
   return {
@@ -132,6 +209,9 @@ export const dashboardBySlug = cache(async (slug: string): Promise<LoadedDashboa
     title: row.title,
     icon: row.icon,
     sortOrder: row.sortOrder,
+    // Somebody else's, published to the tenant. The screen uses this to
+    // render read-only rather than letting a viewer edit the author's copy.
+    shared: row.userId !== user.id,
     config,
     dropped,
   };
@@ -178,6 +258,9 @@ export function defaultDashboard(): LoadedDashboard {
   }));
   return {
     id: null,
+    // A generated default is always the viewer's own - there is nobody else it
+    // could belong to - so it stays editable.
+    shared: false,
     slug: DEFAULT_DASHBOARD_SLUG,
     title: DEFAULT_DASHBOARD_TITLE,
     icon: null,

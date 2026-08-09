@@ -4,7 +4,8 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { requireUser, requireOwner } from "@/lib/auth";
+import { logAudit } from "@/lib/audit";
 import { asActionResult, refuse } from "@/lib/actionResult";
 import type { ActionResult } from "@/lib/actionResultTypes";
 import {
@@ -388,5 +389,60 @@ export async function takeControl(): Promise<ActionResult> {
     }
     revalidateSwitcher();
     return { success: "Dashboard ready to edit." };
+  });
+}
+
+/**
+ * Publish a dashboard to the rest of the tenant, or take it back.
+ *
+ * OWNER ONLY. Everyone can build their own dashboards; deciding what the whole
+ * workspace sees is a different act, and `requireOwner` is the same gate the
+ * other workspace-wide settings use.
+ *
+ * `ownDashboard` still applies, so an owner can only publish something that is
+ * THEIRS. That is deliberate rather than incidental: an owner publishing another
+ * person's private dashboard to the company would be a surprising amount of
+ * power hiding behind a toggle, and nobody asked for it.
+ *
+ * WHAT SHARING DOES NOT DO is grant access to data. A shared dashboard is a
+ * layout, and every card re-runs its own permission and module checks against
+ * whoever is looking — `renderCard` and the loaders in lib/dashboard/cards.tsx
+ * decide that per request. Two people opening the same shared dashboard can
+ * legitimately see different cards, and a card the viewer may not see simply
+ * does not render for them. Publishing a layout can therefore never widen
+ * anybody's access to records.
+ */
+export async function setDashboardShared(
+  slug: unknown,
+  shared: unknown,
+): Promise<ActionResult> {
+  return asActionResult(async () => {
+    const user = await requireOwner();
+    const row = await ownDashboard(user.id, slug);
+    const publish = shared === true;
+
+    await prisma.dashboard.update({
+      where: { id: row.id },
+      // sharedById is KEPT when unpublishing, so the record of who exposed
+      // something to the whole workspace does not vanish with the flag.
+      data: publish
+        ? { sharedAt: new Date(), sharedById: user.id }
+        : { sharedAt: null },
+    });
+
+    await logAudit({
+      action: publish ? "dashboard.shared" : "dashboard.unshared",
+      summary: publish
+        ? `Published dashboard "${row.title}" to the workspace`
+        : `Stopped sharing dashboard "${row.title}"`,
+      user,
+    });
+
+    revalidateSwitcher();
+    return {
+      success: publish
+        ? `"${row.title}" is now visible to everyone in this workspace.`
+        : `"${row.title}" is private again.`,
+    };
   });
 }
