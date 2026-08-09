@@ -1,8 +1,9 @@
 /**
- * CRM-connected flow actions shared by every channel adapter: real workshop
- * availability, atomic slot booking, demo/test-drive creation and lead capture
- * — all writing straight into the CRM (no guessing).
+ * CRM-connected flow actions shared by every channel adapter.
+ * Side effects are keyed by the leased inbound provider event + flow node id so
+ * a retry after partial success can recognize the effect it already committed.
  */
+import crypto from "crypto";
 import { addDays, format } from "date-fns";
 import { prisma } from "./db";
 import { getDayAvailability, reserveSlot } from "./bookingSlots";
@@ -10,10 +11,10 @@ import { createIntakeLead } from "./leadIntake";
 import { createLeadRecordIfPipelineReady } from "./leadCreate";
 import { sendPushToAll } from "./push";
 import { resolveTenantActor } from "./tenantActor";
+import { currentInboundBotEventId } from "./botInboundEvent";
 
 type Match = { contactId: string | null; leadId: string | null };
 
-/** Next open workshop slots (scans the availability engine, real capacity). */
 export async function availableSlots(max = 6): Promise<{ id: string; label: string }[]> {
   const out: { id: string; label: string }[] = [];
   const start = new Date();
@@ -30,42 +31,70 @@ export async function availableSlots(max = 6): Promise<{ id: string; label: stri
   return out;
 }
 
+function actionKey(nodeId: string, kind: string): string | null {
+  const eventId = currentInboundBotEventId();
+  return eventId ? `bot:${eventId}:${nodeId}:${kind}` : null;
+}
+
+function actionMarker(key: string | null, suffix = "effect"): string | null {
+  if (!key) return null;
+  const digest = crypto.createHash("sha256").update(`${key}:${suffix}`).digest("hex").slice(0, 32);
+  return `[bot-action:${digest}]`;
+}
+
+function appendMarker(lines: Array<string | null | undefined>, marker: string | null): string | null {
+  return [...lines, marker].filter(Boolean).join("\n") || null;
+}
+
 async function ensureContact(source: string, vars: Record<string, string>, match: Match): Promise<Match> {
   if (match.contactId) return match;
-  if (vars.name || vars.phone || vars.email) {
-    const [first, ...rest] = (vars.name || "Customer").trim().split(/\s+/);
-    const c = await prisma.contact.create({
-      data: { firstName: first || "Customer", lastName: rest.join(" ") || null, phone: vars.phone || null, email: vars.email || null, source },
-    });
-    return { contactId: c.id, leadId: match.leadId };
+  if (!(vars.name || vars.phone || vars.email)) return match;
+
+  // The default booking flow captures a phone number. Reuse that identity on a
+  // retry (or on a second flow action in the same conversation) rather than
+  // creating another Contact before the idempotent Activity/Lead check runs.
+  const identity = [
+    vars.phone ? { phone: vars.phone } : null,
+    vars.email ? { email: vars.email } : null,
+  ].filter(Boolean) as Array<{ phone: string } | { email: string }>;
+  if (identity.length) {
+    const existing = await prisma.contact.findFirst({ where: { OR: identity } });
+    if (existing) return { contactId: existing.id, leadId: match.leadId };
   }
-  return match;
+
+  const [first, ...rest] = (vars.name || "Customer").trim().split(/\s+/);
+  const c = await prisma.contact.create({
+    data: {
+      firstName: first || "Customer",
+      lastName: rest.join(" ") || null,
+      phone: vars.phone || null,
+      email: vars.email || null,
+      source,
+    },
+  });
+  return { contactId: c.id, leadId: match.leadId };
 }
 
 async function firstUserId(): Promise<string | null> {
-  // Tenant-aware (channel scope established by the webhook chokepoint); dormant →
-  // the oldest active user, unchanged.
   return (await resolveTenantActor())?.id ?? null;
 }
 
-/** Captured file uploads (stored as URLs in variables) → note lines. */
 function fileLines(vars: Record<string, string>): string[] {
   return Object.values(vars).filter((v) => /^https?:\/\//.test(v)).map((v) => `Attachment: ${v}`);
 }
 
-async function createDemo(source: string, vars: Record<string, string>, match: Match) {
+async function activityAlreadyExists(marker: string | null) {
+  if (!marker) return null;
+  return prisma.activity.findFirst({ where: { note: { contains: marker } } });
+}
+
+async function createDemo(source: string, vars: Record<string, string>, match: Match, nodeId: string) {
   const userId = await firstUserId();
   if (!userId) return;
+  const key = actionKey(nodeId, "demo");
+  const marker = actionMarker(key);
   const who = await ensureContact(source, vars, match);
-  // Through the one lead creator. This path created the Lead row itself with no
-  // audit entry, no `position` (so it sorted below every form lead) and no
-  // `lead_created` automations at all — a bot test-drive request never triggered
-  // the follow-up rule the workspace had configured for a new lead.
-  //
-  // The push stays the demo-specific one on the `bot_handoff` toggle rather than
-  // the generic "New lead": it says more, staff already recognise it, and one
-  // request should announce itself once. …IfPipelineReady keeps the old
-  // `if (!stage) return` guard — no pipeline, no lead and no test-drive activity.
+
   const title = `Demo / test drive — ${vars.name || "customer"}`;
   const lead = await createLeadRecordIfPipelineReady({
     title,
@@ -74,6 +103,7 @@ async function createDemo(source: string, vars: Record<string, string>, match: M
     email: vars.email || null,
     source,
     contactId: who.contactId,
+    externalId: key,
     audit: {
       action: "lead.received",
       summary: `Lead “${title}” created from a ${source} demo / test-drive request`,
@@ -82,11 +112,17 @@ async function createDemo(source: string, vars: Record<string, string>, match: M
     push: { title: "Demo / test-drive request 🚗", body: vars.name || "Customer", kind: "bot_handoff" },
   });
   if (!lead) return;
+
+  if (await activityAlreadyExists(marker)) return;
   await prisma.activity.create({
     data: {
       type: "test_drive",
       summary: `Test drive — ${vars.model || "cart"}`,
-      note: [vars.model ? `Model: ${vars.model}` : null, vars.date ? `Preferred: ${vars.date}` : null, ...fileLines(vars)].filter(Boolean).join("\n") || null,
+      note: appendMarker([
+        vars.model ? `Model: ${vars.model}` : null,
+        vars.date ? `Preferred: ${vars.date}` : null,
+        ...fileLines(vars),
+      ], marker),
       location: vars.location || null,
       dueDate: new Date(),
       status: "planned",
@@ -98,14 +134,24 @@ async function createDemo(source: string, vars: Record<string, string>, match: M
   });
 }
 
-/** The CRM-connected parts of a FlowCtx for a given channel. */
 export function crmActions(source: string, match: Match) {
   return {
     availableSlots: () => availableSlots(),
-    bookSlot: async (slotId: string, vars: Record<string, string>): Promise<{ ok: boolean; label?: string }> => {
+
+    bookSlot: async (
+      slotId: string,
+      vars: Record<string, string>,
+      nodeId: string,
+    ): Promise<{ ok: boolean; label?: string }> => {
       const [date, time] = slotId.split("_");
       const userId = await firstUserId();
       if (!userId || !date || !time) return { ok: false };
+      const key = actionKey(nodeId, "slot");
+      const marker = actionMarker(key);
+      const label = format(new Date(`${date}T${time}:00`), "EEE d MMM · HH:mm");
+      const existing = await activityAlreadyExists(marker);
+      if (existing) return { ok: true, label };
+
       const who = await ensureContact(source, vars, match);
       try {
         await reserveSlot({
@@ -116,30 +162,52 @@ export function crmActions(source: string, match: Match) {
           contactId: who.contactId,
           leadId: who.leadId,
           userId,
+          dedupeMarker: marker,
         });
-        const label = format(new Date(`${date}T${time}:00`), "EEE d MMM · HH:mm");
         await sendPushToAll({ title: "New service booking 🔧", body: `${vars.name || "Customer"} — ${label}`, url: who.contactId ? `/contacts/${who.contactId}` : "/workshop-calendar" }, "bot_handoff").catch(() => {});
         return { ok: true, label };
       } catch {
         return { ok: false };
       }
     },
-    createBooking: async (vars: Record<string, string>, action?: "service" | "demo" | "lead") => {
-      if (action === "demo") return createDemo(source, vars, match);
+
+    createBooking: async (
+      vars: Record<string, string>,
+      action: "service" | "demo" | "lead" | undefined,
+      nodeId: string,
+    ) => {
+      if (action === "demo") return createDemo(source, vars, match, nodeId);
+
       if (action === "lead") {
-        await createIntakeLead({ name: vars.name || `${source} enquiry`, email: vars.email || null, phone: vars.phone || null, message: vars.service || vars.message || "Chatbot enquiry", source }).catch(() => {});
+        const key = actionKey(nodeId, "lead");
+        await createIntakeLead({
+          name: vars.name || `${source} enquiry`,
+          email: vars.email || null,
+          phone: vars.phone || null,
+          message: vars.service || vars.message || "Chatbot enquiry",
+          source,
+          externalId: key,
+        });
         return;
       }
-      // service without a booked slot → a workshop request the team confirms
+
       const userId = await firstUserId();
       if (!userId) return;
+      const key = actionKey(nodeId, "service");
+      const marker = actionMarker(key);
+      if (await activityAlreadyExists(marker)) return;
+
       const who = await ensureContact(source, vars, match);
       await prisma.activity.create({
         data: {
           type: "todo",
           category: "workshop",
           summary: `Service request (${source}) — ${vars.name || "customer"}`,
-          note: [vars.service ? `Needs: ${vars.service}` : null, vars.date ? `Preferred: ${vars.date}` : null, ...fileLines(vars)].filter(Boolean).join("\n") || null,
+          note: appendMarker([
+            vars.service ? `Needs: ${vars.service}` : null,
+            vars.date ? `Preferred: ${vars.date}` : null,
+            ...fileLines(vars),
+          ], marker),
           dueDate: new Date(),
           status: "planned",
           contactId: who.contactId,
