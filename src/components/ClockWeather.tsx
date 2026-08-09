@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { flagEmoji, type WeatherCity } from "@/lib/weatherCities";
 
 // WMO weather codes → something a human wants to see
 function describe(code: number): { icon: string; label: string } {
@@ -16,10 +17,13 @@ function describe(code: number): { icon: string; label: string } {
   return { icon: "⛈", label: "Thunderstorm" };
 }
 
-const CITIES = [
-  { flag: "/branding/flag-za.svg", name: "Cape Town", zone: "Africa/Johannesburg", lat: -33.925, lon: 18.48 },
-  { flag: "/branding/flag-ru.svg", name: "Moscow", zone: "Europe/Moscow", lat: 55.751, lon: 37.618 },
-];
+/*
+ * The cities arrive as DATA, from a tenant setting an owner controls.
+ *
+ * They used to be a constant here - Cape Town and Moscow - which is fine for
+ * one business and wrong for a platform: a tenant in Durban has no reason to
+ * watch Moscow and had no way to say so. See lib/weatherCities.ts.
+ */
 
 type Weather = { temp: number; code: number };
 
@@ -27,9 +31,9 @@ const block =
   "flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-1.5 shadow-sm";
 
 /** Compact desk strip: date, then a block per city (time + weather). */
-export default function ClockWeather() {
+export default function ClockWeather({ cities }: { cities: WeatherCity[] }) {
   const [now, setNow] = useState<Date | null>(null);
-  const [weather, setWeather] = useState<(Weather | null)[]>(() => CITIES.map(() => null));
+  const [weather, setWeather] = useState<(Weather | null)[]>(() => cities.map(() => null));
 
   useEffect(() => {
     setNow(new Date());
@@ -38,7 +42,7 @@ export default function ClockWeather() {
 
     const load = () =>
       Promise.all(
-        CITIES.map((c) =>
+        cities.map((c) =>
           fetch(
             `https://api.open-meteo.com/v1/forecast?latitude=${c.lat}&longitude=${c.lon}&current=temperature_2m,weather_code`
           )
@@ -56,7 +60,10 @@ export default function ClockWeather() {
       clearInterval(t);
       clearInterval(w);
     };
-  }, []);
+    // Re-fetch when the tenant changes its cities, not only on mount. Keyed by
+    // coordinates: the same places in a different order need no new request.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cities.map((c) => `${c.lat},${c.lon}`).sort().join("|")]);
 
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -76,12 +83,16 @@ export default function ClockWeather() {
       </div>
 
       {/* One block per city */}
-      {CITIES.map((c, i) => {
+      {cities.map((c, i) => {
         const wx = weather[i] ? describe(weather[i]!.code) : null;
         return (
           <div key={c.name} className={block} title={c.name}>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={c.flag} alt="" className="h-3.5 w-auto rounded-[2px]" />
+            {/* An emoji flag, not an SVG asset: those exist for two countries
+                and a tenant may pick anywhere. A missing code renders nothing,
+                which beats a broken image. */}
+            {flagEmoji(c.country) && (
+              <span aria-hidden className="text-sm leading-none">{flagEmoji(c.country)}</span>
+            )}
             <span className="text-xs text-muted-foreground">{c.name}</span>
             <span className="text-[15px] font-semibold tabular-nums text-foreground">
               {now

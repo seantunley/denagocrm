@@ -14,6 +14,7 @@ import {
 import Nav from "@/components/Nav";
 import SidebarHelpSettings from "@/components/SidebarHelpSettings";
 import ClockWeather from "@/components/ClockWeather";
+import type { WeatherCity } from "@/lib/weatherCities";
 import CommandMenu, { openCommandMenu } from "@/components/CommandMenu";
 import QuickActions from "@/components/QuickActions";
 import QuickCreateDialog from "@/components/QuickCreateDialog";
@@ -143,12 +144,15 @@ export default function AppShell({
   casesWaiting = 0,
   enabledModules,
   brand,
+  weatherCities,
   children,
 }: {
   user: ShellUser;
   inboxWaiting?: number;
   casesWaiting?: number;
   enabledModules?: string[];
+  /** The tenant's clock/weather cities, resolved by the (app) layout. */
+  weatherCities: WeatherCity[];
   /** The workspace brand, resolved from the SESSION's tenant by the (app)
    *  layout. Optional so every existing test render still compiles; undefined
    *  means the built-in assets, which is what an unbranded tenant gets. */
@@ -201,7 +205,7 @@ export default function AppShell({
         <div className="denago-workspace mx-auto max-w-[1800px] p-3 pb-24 pt-15 sm:p-4 sm:pb-24 sm:pt-16 lg:p-5 lg:pt-4">
           {/* Desktop-only furniture — takes real estate on phones */}
           <div className="mb-3 hidden lg:block">
-            <ClockWeather />
+            <ClockWeather cities={weatherCities} />
           </div>
           {children}
         </div>

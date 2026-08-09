@@ -1,5 +1,7 @@
 import { prisma } from "@/lib/db";
+import { WEATHER_CITIES_KEY, parseWeatherCities } from "@/lib/weatherCities";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
+import WeatherCitiesSettings from "@/components/settings/WeatherCitiesSettings";
 import { getActiveTenantId, requireUser } from "@/lib/auth";
 import {
   createStage,
@@ -107,6 +109,10 @@ export default async function SettingsPage({
       return ""; // encrypted value, key unavailable in this environment
     }
   };
+  // The tenant's clock/weather cities, for the owner-only editor below. Read
+  // through the page's own accessor rather than a second round trip - the
+  // settings rows are already loaded, and tenant-scoped by the same query.
+  const weatherCities = parseWeatherCities(setting(WEATHER_CITIES_KEY) || null);
   const isOwner = isAdmin;
   // The System Log is TENANT-SCOPED. `basePrisma` bypasses the tenant guard, so the
   // unfiltered read this replaced handed every tenant owner every other tenant's
@@ -222,6 +228,12 @@ export default async function SettingsPage({
             <input name="name" className="input flex-1" placeholder="New stage name…" required />
             <SaveButton className="btn-primary">Add stage</SaveButton>
           </SaveForm>
+
+          {/* Owner-only, like the rest of this tab. The strip renders in the
+              (app) layout, so this is what the whole workspace sees. */}
+          <div className="mt-6 border-t border-border pt-6">
+            <WeatherCitiesSettings initial={weatherCities} />
+          </div>
         </div>
       )}
 
