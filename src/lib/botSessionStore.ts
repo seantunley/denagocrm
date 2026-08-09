@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import { prisma } from "./db";
-import type { TenantWriteTx } from "./tenantWrite";
+import { DEFAULT_TENANT_ID } from "./tenant";
+import { writeTenantId, type TenantWriteTx } from "./tenantWrite";
 
 export type StoredBotSession = {
   id: string;
@@ -10,22 +11,32 @@ export type StoredBotSession = {
   expiresAt: Date;
 };
 
-/** RLS scopes this read to the active tenant; the DB key includes tenantId. */
+/**
+ * Resolve the exact tenant namespace used by the write helper as well. Dormant /
+ * trusted-system operation belongs to the founding tenant; enforcement with a
+ * real tenant uses that tenant; a lost/null non-system scope fails closed inside
+ * writeTenantId rather than choosing an arbitrary matching participant row.
+ */
+function sessionTenantId(): string {
+  return writeTenantId() ?? DEFAULT_TENANT_ID;
+}
+
+/** Session identity is tenant + channel + participant, on reads and writes. */
 export async function loadBotSession(channel: string, key: string): Promise<StoredBotSession | null> {
-  const row = await prisma.botSession.findFirst({ where: { channel, key } });
+  const tenantId = sessionTenantId();
+  const row = await prisma.botSession.findFirst({ where: { tenantId, channel, key } });
   if (!row) return null;
   if (row.expiresAt < new Date()) {
-    await prisma.botSession.deleteMany({ where: { id: row.id } }).catch(() => {});
+    await prisma.botSession.deleteMany({ where: { id: row.id, tenantId } }).catch(() => {});
     return null;
   }
   return { id: row.id, nodeId: row.nodeId, vars: row.vars, status: row.status, expiresAt: row.expiresAt };
 }
 
 /**
- * Raw upsert because Prisma's generated schema still exposes the historic
- * `(channel,key)` compound selector while the database invariant is now the
- * correct `(tenantId,channel,key)`. Keeping the tenant explicit also makes this
- * safe on the trusted basePrisma transaction used by withTenantWrite().
+ * Raw upsert because the database invariant is `(tenantId,channel,key)` and this
+ * trusted transaction must keep the tenant explicit. This is also the exact key
+ * used by loadBotSession above, so dormant, enforced and system paths agree.
  */
 export async function upsertBotSessionTx(
   tx: TenantWriteTx,
