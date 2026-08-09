@@ -59,13 +59,22 @@ import ContainerContents, { cardLabel } from "./ContainerContents";
  *
  * ── THE DRAG RULES ARE INHERITED, NOT REDISCOVERED ──────────────────────────
  *
- * Four things, all of which were bugs in the first grid and are fixed here by
- * construction: the layout is driven by LOCAL state so a drop moves something
- * immediately; the reorder happens on drag-OVER so the gap you are dropping into
- * is the gap you can see; no sorting strategy is used because the cards are
- * different sizes and transform-based previews send them to visibly wrong
- * places; and droppables are re-measured continuously because the DOM genuinely
- * reorders under the pointer.
+ * Three of these were bugs in the first grid and are fixed here by construction:
+ * the layout is driven by LOCAL state, so a drop moves something immediately; no
+ * sorting strategy and no layout animation, because the cards are different
+ * sizes and transform-based previews send them to visibly wrong places; and
+ * droppables are re-measured continuously, because a card can still resize on
+ * its own as streamed data resolves.
+ *
+ * The fourth was REVERSED, on evidence. It used to read: the reorder happens on
+ * drag-over, so the gap you are dropping into is the gap you can see. The intent
+ * was right and the mechanism crashed the page - two cards can swap forever,
+ * because taking the other one's index puts it back under a pointer that has not
+ * moved. See `dropPreview` in lib/dashboard/canvasMove for the captured stack.
+ *
+ * So a drag moves a MARKER and changes nothing else; the document is edited
+ * once, on the drop. The gap you can see is now drawn rather than reflowed into
+ * existence, which is a clearer answer to the same question.
  */
 
 const NO_TRANSFORM: SortingStrategy = () => null;
