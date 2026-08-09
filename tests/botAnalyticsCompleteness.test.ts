@@ -65,9 +65,35 @@ test("WhatsApp restart can deliberately escape a paused human-handoff session", 
   assert.match(code, /existing\?\.status === "paused" && !restart/);
 });
 
-test("flow-start denominators count explicit runs rather than distinct participant ids", () => {
+test("flow-start and node-reach denominators count explicit events rather than distinct participant ids", () => {
   const aggregate = src("src/lib/botFlowAnalytics.ts");
   const report = src("src/lib/botFlowAnalyticsReport.ts");
   assert.doesNotMatch(aggregate, /COUNT\(DISTINCT "conversationKey"\) FILTER \(WHERE "eventType" = 'flow_started'\)/);
+  assert.doesNotMatch(aggregate, /COUNT\(DISTINCT "conversationKey"\) FILTER \(WHERE "eventType" = 'node_waiting'\)/);
   assert.doesNotMatch(report, /COUNT\(DISTINCT "conversationKey"\) FILTER \(WHERE "eventType" = 'flow_started'\)/);
+  assert.match(aggregate, /COUNT\(\*\) FILTER \(WHERE "eventType" = 'flow_started'\)/);
+  assert.match(aggregate, /COUNT\(\*\) FILTER \(WHERE "eventType" = 'node_waiting'\)/);
+  assert.match(report, /COUNT\(\*\) FILTER \(WHERE "eventType" = 'flow_started'\)/);
+});
+
+test("analytics report surfaces one-shot semantics, CRM actions and terminal delivery failures", () => {
+  const page = src("src/app/(app)/bot-analytics/page.tsx");
+  assert.match(page, /automatic one-shot runs/);
+  assert.match(page, />CRM actions</);
+  assert.match(page, /node\.crmActions/);
+  assert.match(page, /node\.deliveryFailures/);
+  assert.match(page, /Run totals include both stateful guided conversations and automatic one-shot graphs/);
+  assert.doesNotMatch(page, /intentionally not counted/);
+});
+
+test("Journey nodes retain a meaningful immutable analytics label", () => {
+  const report = src("src/lib/botFlowAnalyticsReport.ts");
+  assert.match(report, /node\.type === "journey"/);
+  assert.match(report, /Journey: \$\{node\.journeyId\}/);
+});
+
+test("final stack retains the approved simulator detail shell", () => {
+  const simulatorPage = src("src/app/(app)/bot-builder/[id]/test/page.tsx");
+  assert.match(simulatorPage, /EntityDetailShell/);
+  assert.match(simulatorPage, /backHref=\{`\/bot-builder\/\$\{id\}`\}/);
 });
