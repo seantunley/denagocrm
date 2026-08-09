@@ -1,6 +1,6 @@
 import "server-only";
 import { basePrisma } from "./db";
-import { decryptValue } from "./settings";
+import { decryptValue, getSetting } from "./settings";
 import { secretEquals } from "./secretCompare";
 import { tenantEnforcing } from "./tenantEnforcement";
 import { runInTenantScope } from "./tenantScope";
@@ -45,10 +45,15 @@ export async function withTelegramTenantScope<T, U>(
   fn: () => Promise<T>,
   onUnresolved: () => U | Promise<U>,
 ): Promise<T | U> {
-  // Match the rest of the tenancy rollout: when enforcement is intentionally
-  // dormant, preserve the existing single-tenant path exactly.
-  if (!tenantEnforcing()) return fn();
+  if (!secret) return onUnresolved();
+
   const tenantId = await resolveTelegramTenant(secret);
-  if (!tenantId) return onUnresolved();
-  return runInTenantScope({ tenantId, system: false }, fn);
+  if (tenantId) return runInTenantScope({ tenantId, system: false }, fn);
+
+  if (!tenantEnforcing()) {
+    const expected = await getSetting("TELEGRAM_WEBHOOK_SECRET");
+    if (expected && secretEquals(secret, expected)) return fn();
+  }
+
+  return onUnresolved();
 }
