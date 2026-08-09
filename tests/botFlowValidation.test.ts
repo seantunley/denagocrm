@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { DEFAULT_FLOW, type Flow } from "../src/lib/flow";
-import { flowErrors, validateFlow } from "../src/lib/flowValidation";
+import { flowErrors, flowVariables, validateFlow } from "../src/lib/flowValidation";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
@@ -28,6 +28,39 @@ test("publication rejects missing targets and automatic no-input loops", () => {
     },
   };
   assert.ok(flowErrors(validateFlow(loop)).some((item) => item.code === "graph.automatic_cycle"));
+});
+
+test("conditions participate in graph reachability and automatic-loop safety", () => {
+  const flow: Flow = {
+    start: "gate",
+    nodes: {
+      gate: { id: "gate", type: "condition", condition: { variable: "channel", operator: "equals", value: "whatsapp" }, trueNext: "yes", falseNext: "no" },
+      yes: { id: "yes", type: "message", text: "Yes", next: "end" },
+      no: { id: "no", type: "message", text: "No", next: "end" },
+      end: { id: "end", type: "end" },
+    },
+  };
+  assert.deepEqual(flowErrors(validateFlow(flow)), []);
+
+  flow.nodes.yes = { id: "yes", type: "message", text: "Again", next: "gate" };
+  assert.ok(flowErrors(validateFlow(flow)).some((item) => item.code === "graph.automatic_cycle"));
+});
+
+test("condition variables are checked against built-ins and captured values", () => {
+  const flow: Flow = {
+    start: "capture",
+    nodes: {
+      capture: { id: "capture", type: "capture", text: "Which model?", variable: "model", next: "gate" },
+      gate: { id: "gate", type: "condition", condition: { variable: "model", operator: "contains", value: "Rover" }, trueNext: "end", falseNext: "end" },
+      end: { id: "end", type: "end" },
+    },
+  };
+  assert.ok(flowVariables(flow).includes("model"));
+  assert.ok(flowVariables(flow).includes("channel"));
+  assert.ok(!validateFlow(flow).some((item) => item.code === "condition.unknown_variable"));
+
+  (flow.nodes.gate as Extract<Flow["nodes"][string], { type: "condition" }>).condition.variable = "mystery";
+  assert.ok(validateFlow(flow).some((item) => item.code === "condition.unknown_variable"));
 });
 
 test("unreachable nodes and unknown variables are warnings, not unsafe publication errors", () => {
