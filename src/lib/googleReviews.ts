@@ -1,5 +1,8 @@
 import crypto from "crypto";
 import { basePrisma } from "./db";
+import { activeTenantPredicate } from "./tenantPredicate";
+import { writeTenantId } from "./tenantWrite";
+import { DEFAULT_TENANT_ID } from "./tenant";
 import { getSetting, putSetting, resolveIntegrationBundle } from "./settings";
 import { currentTenantScope } from "./tenantScope";
 import { sendPushToAll } from "./push";
@@ -35,7 +38,10 @@ export async function syncGoogleReviews(): Promise<number> {
 
   // Stamp the owning tenant on each stored review (GoogleReview.tenantId is a
   // nullable Phase-B column; null in off-mode / no scope, as before).
-  const tenantId = currentTenantScope()?.tenantId ?? null;
+  // Never store a tenant-owned review tenantless: the guard only stamps under
+  // enforcement, which is dormant, so a NULL row here becomes invisible the day
+  // RLS is switched on.
+  const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
 
   const res = await fetch(
     `https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}?fields=reviews&key=${encodeURIComponent(apiKey)}`,
@@ -60,7 +66,11 @@ export async function syncGoogleReviews(): Promise<number> {
       .createHash("sha256")
       .update(`${author}|${publishedAt.toISOString()}`)
       .digest("hex");
-    const existing = await basePrisma.googleReview.findUnique({ where: { externalKey } });
+    // Scoped: two tenants may legitimately watch the same Google Place, and a
+    // global dedupe would let whoever synced first suppress the other's copy.
+    const existing = await basePrisma.googleReview.findFirst({
+      where: { externalKey, ...activeTenantPredicate("Google review sync dedupe") },
+    });
     if (existing) continue;
     const review = await basePrisma.googleReview.create({
       data: {

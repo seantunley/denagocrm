@@ -1,5 +1,6 @@
 import { ExternalLink, Inbox, MessageSquare, Star } from "lucide-react";
 import { prisma, basePrisma } from "@/lib/db";
+import { activeTenantPredicate } from "@/lib/tenantPredicate";
 import { requireUser } from "@/lib/auth";
 import { accessibleInboxWhere, hasPermission } from "@/lib/permissions";
 import AutoRefresh from "@/components/AutoRefresh";
@@ -32,7 +33,13 @@ export default async function InboxPage() {
       take: 400,
       include: { contact: true, lead: true },
     }),
-    basePrisma.googleReview.findMany({ orderBy: { publishedAt: "desc" }, take: 10 }),
+    // Reviews are tenant-owned. This read runs on the bypass client, so the
+    // predicate the RLS extension would have added has to be added by hand.
+    basePrisma.googleReview.findMany({
+      where: { ...activeTenantPredicate("inbox Google reviews") },
+      orderBy: { publishedAt: "desc" },
+      take: 10,
+    }),
     getSetting("GOOGLE_PLACE_ID"),
   ]);
 

@@ -1596,13 +1596,14 @@ model OtpChallenge {
 model GoogleReview {
   id          String   @id @default(cuid())
   tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
-  externalKey String   @unique // hash of author + time (Places API has no stable id)
+  externalKey String   // hash of author + time (Places API has no stable id) — unique PER TENANT
   author      String
   rating      Int
   text        String?
   publishedAt DateTime
   raw         String?
   createdAt   DateTime @default(now())
+  @@unique([tenantId, externalKey]) // two tenants may watch the same Place
   @@index([tenantId])
 }
 
