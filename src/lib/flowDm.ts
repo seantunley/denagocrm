@@ -27,6 +27,7 @@ export async function runDmFlow(
   senderId: string,
   text: string,
   payload?: string,
+  fileUrl?: string,
 ): Promise<void> {
   if (!senderId) return;
   if (!(await dmBotEnabled())) return;
@@ -44,7 +45,7 @@ export async function runDmFlow(
   const result = await advanceFlow(
     platform,
     senderId,
-    { text, choiceId: payload },
+    { text, choiceId: payload, fileUrl },
     (state) => ({
       dynamicAnswer: (source) => (source === "colours" ? coloursList() : priceList()),
       routeChoice: ({ prompt, text: freeText, options }) => routeBotChoice({ prompt, text: freeText, options }),
