@@ -251,8 +251,11 @@ test("the drop position is drawn, not implied", () => {
   const canvas = read(CANVAS);
   assert.match(canvas, /function DropMarker\(\)/, "there must be a marker");
   assert.match(canvas, /border-dashed border-primary/);
-  assert.match(canvas, /\{isDragging && \(/, "and the card being moved must be marked as the source");
   assert.match(canvas, /dropAt !== null &&/, "and the receiving group outlined");
+  // The dragged card leaves the flow so the marker can take its cell - what the
+  // user is carrying is drawn by the overlay label, not by the source cell.
+  // tests/dashboardDropPreview.test.ts covers why the cell count must not change.
+  assert.match(canvas, /isDragging && "hidden"/);
 });
 
 test("the pointer decides the target, not the nearest centre", () => {

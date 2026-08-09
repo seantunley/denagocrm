@@ -515,10 +515,19 @@ function SectionBlock({
   /*
    * The cards, with a marker inserted where the dragged one would land.
    *
-   * `dropAt` counts the cards WITHOUT the dragged one, so the dragged card is
-   * skipped when counting while still being drawn in place — it has not moved,
-   * and making it vanish mid-gesture would reflow the grid, which is the thing
-   * this design exists to stop.
+   * ONE CELL LEAVES, ONE CELL ARRIVES. The dragged card is taken out of the
+   * flow (see `hidden` in SortableCard) and the marker takes a cell, so the
+   * count is unchanged for the whole gesture.
+   *
+   * That is not cosmetic. The marker was an EXTRA cell before, so drawing it
+   * pushed every following card along - which re-measured them, which chose a
+   * different target, which moved the marker, which shifted the cards again.
+   * A drag log caught it directly: the first card's top moved 290 -> 158 ->
+   * 108 across three consecutive events while the pointer barely moved. You
+   * were aiming at something that moved because you aimed at it.
+   *
+   * `dropAt` counts the cards WITHOUT the dragged one, which is now also the
+   * list actually occupying cells, so the two agree by construction.
    *
    * A marker past the last slot lands at the end, which is what "dropped in the
    * empty space below the cards" means.
@@ -786,30 +795,25 @@ function SortableCard({
          */
         card.rows && card.rows > 1 ? "sm:h-full sm:self-stretch sm:flex sm:flex-col" : undefined,
         editing && "rounded-xl ring-1 ring-dashed ring-border",
+        /*
+         * OUT OF THE FLOW WHILE IT IS BEING DRAGGED, so the marker can take its
+         * cell and the cell count stays the same for the whole gesture.
+         *
+         * It used to stay in place, dimmed, which meant the marker was an EXTRA
+         * cell: drawing it pushed every following card along, which re-measured
+         * them, which chose a different target, which moved the marker. A drag
+         * log caught it — the first card's top moved 290 -> 158 -> 108 across
+         * three consecutive events while the pointer barely moved.
+         *
+         * `hidden` rather than unmounting: this element holds useSortable's ref,
+         * and pulling it out mid-drag takes the drag's own node with it. Display
+         * none costs it its rectangle, which is fine — it is excluded from the
+         * insertion maths by id anyway, and what the user is carrying is drawn
+         * by the overlay.
+         */
+        isDragging && "hidden",
       )}
     >
-      {/*
-          WHERE IT LANDS, drawn where it lands.
-
-          The order already updates live as the pointer moves, so this cell IS the
-          destination — but the only thing marking it was 30% opacity on a card
-          that otherwise looked exactly like every other card on a dense screen.
-          The report was that dropping is a guess, and it was: the answer was on
-          the page and unreadable.
-
-          An overlay rather than a replacement, so the cell keeps the size the
-          card gave it and nothing reflows while the pointer is moving — a target
-          that resizes as you approach it is worse than no target. The card
-          underneath is dimmed rather than hidden, because which card is being
-          moved is the other half of the question.
-      */}
-      {isDragging && (
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-0 z-10 rounded-xl border-2 border-dashed border-primary/50"
-        />
-      )}
-
       {editing && (
         <div className="absolute -top-2 right-2 z-20 flex items-center gap-1">
           <button
@@ -848,9 +852,6 @@ function SortableCard({
         className={cn(
           editing && "pointer-events-none select-none",
           card.rows && card.rows > 1 && "sm:min-h-0 sm:flex-1",
-          // Faded under the drop marker above, not hidden: the card being moved
-          // is still the thing being pointed at.
-          isDragging && "opacity-40",
         )}
       >
         {node ?? <CardPlaceholder card={card} />}
