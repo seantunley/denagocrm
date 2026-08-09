@@ -91,9 +91,13 @@ test("an emptied section is still a drop target", () => {
   // Its own id goes in the sortable list. Without it, a section you emptied can
   // never be filled again — there is nothing left inside it to drop onto, and
   // the section becomes dead space that only deleting can clear.
+  // The list is memoised now (dnd-kit compares it by identity), so the rule is
+  // checked on what goes INTO it rather than on an inline array literal.
+  const canvas = CANVAS();
+  assert.match(canvas, /items=\{sortableItems\}/);
   assert.match(
-    CANVAS(),
-    /items=\{\[\.\.\.cards\.map\(\(card\) => card\.id\), section\.id\]\}/,
+    canvas,
+    /\[\.\.\.\(JSON\.parse\(cardIdKey\) as string\[\]\), section\.id\]/,
     "the section id must be a droppable, or an empty group cannot be refilled",
   );
 });

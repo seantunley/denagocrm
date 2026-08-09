@@ -146,14 +146,15 @@ test("cards nested in a container are not moved by this", () => {
 
 test("no side effect runs inside a setState updater", () => {
   /*
-   * `update` did its work inside `setConfig(current => …)`, which put a toast, an
-   * undo push, a setUndoDepth and a scheduled save inside a function React
-   * requires to be pure and is free to call more than once. Replays pushed undo
-   * entries and called setUndoDepth during the render phase, which schedules
-   * another render, which replays again — React ends that with a thrown "Too
-   * many re-renders", and the route's error boundary showed an error page.
+   * `update` did its work inside `setConfig(current => ...)`, which put a toast,
+   * an undo push, a setUndoDepth and a scheduled save inside a function React
+   * requires to be PURE and is free to call more than once.
    *
-   * The updater form is what allows it, so the updater form is what is banned.
+   * This was first blamed for the error page. It was not the cause - capturing
+   * the browser error showed dnd-kit layout animation, covered below. It is a
+   * real defect regardless: a replayed updater pushes undo entries that never
+   * happened and schedules saves nobody asked for, and it does so
+   * nondeterministically, which is the worst way for an editor to be wrong.
    */
   const provider = code(PROVIDER);
   assert.doesNotMatch(
@@ -282,4 +283,59 @@ test("the move maths reads one copy of the document", () => {
   const body = handler.slice(0, handler.indexOf("\n  }\n"));
   assert.match(body, /moveCardInView\(current,/);
   assert.doesNotMatch(body, /from\.cards|toSection\.cards/, "no indices from the props");
+});
+
+/* ── the crash the drag actually produced ─────────────────────────── */
+
+test("layout animation is refused, not just the sorting strategy", () => {
+  /*
+   * The strategy was already NO_TRANSFORM, because these cards are different
+   * sizes and transform-based previews send them to visibly wrong places. But
+   * `animateLayoutChanges` is a SEPARATE mechanism and defaulted ON, so half of
+   * "no transforms" never happened.
+   *
+   * On every index change useSortable's `useDerivedTransform` measures the card,
+   * computes a FLIP delta and calls setState from a LAYOUT effect, with a second
+   * effect that immediately sets it back to null — two renders per index change,
+   * from the commit phase. Reordering happens on dragover, so the index changes
+   * as fast as the pointer moves. Enough of those pairs nest in one commit to
+   * pass React's limit, and React throws "Maximum update depth exceeded" during
+   * commit, which the route's error boundary catches as an error page.
+   *
+   * The captured stack named the hook:
+   *     at useDerivedTransform.useIsomorphicLayoutEffect (@dnd-kit/sortable)
+   *     at commitHookLayoutEffects
+   */
+  const canvas = code(CANVAS);
+  assert.match(canvas, /animateLayoutChanges: \(\) => false/, "FLIP animation must be refused");
+  assert.match(canvas, /strategy=\{NO_TRANSFORM\}/, "…and the strategy stays off too");
+});
+
+test("the sortable item list is stable between renders", () => {
+  // dnd-kit compares this array BY IDENTITY to decide whether the list changed —
+  // it gates the layout-animation decision on `previousItems !== items`. A fresh
+  // array each render answered "just changed" continuously for a list that had
+  // not changed at all.
+  const canvas = code(CANVAS);
+  assert.match(canvas, /items=\{sortableItems\}/, "must not build the array inline");
+  assert.match(canvas, /const sortableItems = useMemo\(/);
+  // Keyed on a string, because every edit rebuilds the card objects and an array
+  // of them would be a new dependency on every render.
+  assert.match(canvas, /\[cardIdKey, section\.id\]/);
+});
+
+test("no hook sits below a conditional return", () => {
+  /*
+   * SectionBlock returns null for an empty section outside edit mode. A hook
+   * after that runs a different number of hooks on the render where the
+   * condition flips, and React ends it with "Rendered more hooks than during the
+   * previous render".
+   */
+  const canvas = code(CANVAS);
+  const block = canvas.slice(canvas.indexOf("function SectionBlock"));
+  const body = block.slice(0, block.indexOf("\n  return ("));
+  const returnAt = body.indexOf("return null;");
+  assert.ok(returnAt !== -1, "could not find the early return");
+  const after = body.slice(returnAt);
+  assert.doesNotMatch(after, /\buse[A-Z]\w*\(/, "no hook may follow the early return");
 });
