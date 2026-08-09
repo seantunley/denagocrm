@@ -1,7 +1,7 @@
 import { prisma } from "./db";
 import { resolveTenantActor } from "./tenantActor";
 import { getSetting } from "./settings";
-import { generateBotReply } from "./botAi";
+import { generateBotReply, routeBotChoice } from "./botAi";
 import { priceList, coloursList } from "./botAnswers";
 import { sendPushToAll } from "./push";
 import { advanceFlow, greetingVars } from "./flowSession";
@@ -41,6 +41,7 @@ export async function runDmFlow(
     { text, choiceId: payload },
     (state) => ({
       dynamicAnswer: (source) => (source === "colours" ? coloursList() : priceList()),
+      routeChoice: ({ prompt, text: freeText, options }) => routeBotChoice({ prompt, text: freeText, options }),
       aiReply: async (vars) => {
         const ai = await generateBotReply({ history: state.msgs, customerName: vars.name ?? null, isCustomer: false });
         return ai ?? { reply: "Let me get one of our team to help — I'll pass this on now 👍", handoff: true };
