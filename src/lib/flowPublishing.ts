@@ -27,7 +27,16 @@ function parseFlow(definition: string): Flow | null {
   return null;
 }
 
-/** Resolve the immutable graph a conversation should execute. */
+/**
+ * Resolve the immutable graph a conversation should execute.
+ *
+ * A pinned version ALWAYS wins. If that immutable snapshot is missing or corrupt,
+ * fail closed rather than resuming the customer's old node/variables against a
+ * different live graph. New sessions take the current publication for their
+ * channel (or the WhatsApp publication as the existing cross-channel fallback).
+ * Until every installation has republished once, the old BotFlow.active row
+ * remains a backwards-compatible fallback for NEW, unpinned sessions only.
+ */
 export async function resolveFlowSnapshot(
   channel: string,
   pinnedVersionId?: string | null,
