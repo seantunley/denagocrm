@@ -138,3 +138,32 @@ test("the skeleton reserves height so the grid does not jump", () => {
   assert.match(skeleton, /min-h-/, "a zero-height placeholder reflows the grid when it resolves");
   assert.match(skeleton, /aria-busy/, "…and screen readers should know it is loading");
 });
+
+test("a card that resolves to nothing does not hold a grid cell open", () => {
+  /*
+   * The regression this covers, reported from the preview as "still big spaces".
+   *
+   * Before streaming, a card the server drew nothing for had NO SLOT, so
+   * SortableCard's `node === undefined` guard returned null and it took no
+   * space. Streaming gives every server-decidable card a slot up front — an
+   * element that may resolve to nothing once its query returns — so the guard
+   * stopped firing and the grid reserved a cell for a card drawing nothing.
+   *
+   * The guard cannot know the answer up front, so the collapse has to happen
+   * after it resolves. `:empty` matches an element with no child nodes at all,
+   * which is exactly the state a resolved-to-nothing card leaves behind.
+   */
+  const canvas = code("src/components/dashboard/editor/DashboardCanvas.tsx");
+
+  assert.match(canvas, /!editing && "empty:hidden"/, "an empty card must collapse when not editing");
+
+  // …and the node must be rendered with NO intermediate wrapper outside edit
+  // mode, or the wrapper is never empty and the rule above never matches.
+  const card = canvas.slice(canvas.indexOf("function SortableCard"));
+  assert.match(card, /\{editing \? \(/, "the wrapper div must be edit-mode only");
+  assert.match(card, /\) : \(\s*node\s*\)\}/, "outside edit mode the node renders directly");
+
+  // While editing, an empty card is still something to select — it keeps its
+  // placeholder rather than vanishing out from under the person editing it.
+  assert.match(card, /node \?\? <CardPlaceholder/);
+});

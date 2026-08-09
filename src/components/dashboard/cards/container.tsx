@@ -135,7 +135,10 @@ export async function renderGrid(
             GRID_COLUMNS_CLASS[card.columns],
             // Only when a child actually spans rows - see the note in
             // DashboardCanvas. Unconditionally this padded every row.
-            card.cards.some((child) => (child.rows ?? 1) > 1) && GRID_ROWS_CLASS,
+            // `children`, not `card.cards`: renderChildren has already dropped
+            // anything hidden or disabled, and a tall card that was dropped must
+            // not still set the row height for the ones that survived.
+            children.some(({ card: child }) => (child.rows ?? 1) > 1) && GRID_ROWS_CLASS,
           )}
         >
           {children.map(({ card: child, node }) => (

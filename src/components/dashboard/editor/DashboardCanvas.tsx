@@ -348,7 +348,12 @@ function SectionBlock({
             // it. The base row height exists solely to give a row span something
             // to span; where nothing spans, the grid should size to its content
             // exactly as it did before.
-            section.cards.some((entry) => (entry.rows ?? 1) > 1) &&
+            // `cards`, not `section.cards`: the decision must follow what is
+            // actually DRAWN. A rows:2 card that is hidden or disabled is not in
+            // the grid, but reading the configured list still enabled the 11rem
+            // minimum for every natural-height card beside it - the same blank
+            // gaps, from a card that is not even on screen.
+            cards.some((entry) => (entry.rows ?? 1) > 1) &&
               "sm:auto-rows-[minmax(11rem,auto)]",
             VIEW_COLUMNS[section.columnSpan],
           )}
@@ -416,6 +421,19 @@ function SortableCard({
 
   // Not in edit mode and nothing to draw — the card's own rules hid it, or it
   // had no rows. Either way it takes up no space.
+  /*
+   * Nothing to draw takes up no space.
+   *
+   * `node === undefined` used to be the whole test: a card the server drew
+   * nothing for had no slot at all. Streaming changed that - a card whose
+   * visibility is decidable up front now ALWAYS gets a slot, holding an element
+   * that may resolve to nothing once its query returns. The slot exists, this
+   * guard stops firing, and the grid reserves a cell for a card that draws
+   * nothing: the blank gaps between rows.
+   *
+   * The undefined case still matters (a card with no slot at all). The case that
+   * can only be known AFTER it resolves is handled by `empty:hidden` below.
+   */
   if (!editing && node === undefined) return null;
 
   return (
@@ -423,6 +441,10 @@ function SortableCard({
       ref={setNodeRef}
       className={cn(
         "relative min-w-0",
+        // A card that resolved to nothing must not hold a grid cell open. Only
+        // outside edit mode: while editing, an empty card is still something to
+        // select and configure, so it keeps its placeholder.
+        !editing && "empty:hidden",
         CARD_SPAN[card.span],
         CARD_ROWS[card.rows ?? 1],
         /*
@@ -476,17 +498,26 @@ function SortableCard({
         </div>
       )}
 
-      {/* The middle link in the height chain. min-h-0 because a flex child
-          otherwise refuses to shrink below its content, which would break
-          scrolling inside a card shorter than what it holds. */}
-      <div
-        className={cn(
-          editing && "pointer-events-none select-none",
-          card.rows && card.rows > 1 && "sm:min-h-0 sm:flex-1",
-        )}
-      >
-        {node ?? <CardPlaceholder card={card} />}
-      </div>
+      {/*
+          Outside edit mode the node is rendered DIRECTLY, with no wrapper.
+          `:empty` only matches an element with no child nodes at all, so an
+          intermediate div would keep the wrapper non-empty and defeat the
+          collapse above. The wrapper is only needed while editing, to stop
+          clicks reaching the card underneath the drag chrome. min-h-0 there
+          because a flex child otherwise refuses to shrink below its content.
+      */}
+      {editing ? (
+        <div
+          className={cn(
+            "pointer-events-none select-none",
+            card.rows && card.rows > 1 && "sm:min-h-0 sm:flex-1",
+          )}
+        >
+          {node ?? <CardPlaceholder card={card} />}
+        </div>
+      ) : (
+        node
+      )}
     </div>
   );
 }

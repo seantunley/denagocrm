@@ -106,28 +106,72 @@ test("row spans are static class names, not built from a variable", () => {
   assert.doesNotMatch(canvas, /row-span-\$\{/);
 });
 
-test("the base row height applies ONLY where something spans rows", () => {
+test("the base row height follows what is DRAWN, not what is configured", () => {
   /*
-   * Applied unconditionally this forced EVERY row to 11rem, so a row of short
-   * stat tiles reserved 176px and left a large blank gap beneath it — reported
-   * from production as "huge spaces". The base row height exists solely to give
-   * a row span something to span; where nothing spans, the grid must size to its
-   * content exactly as it did before this feature existed.
+   * Two bugs, one line apart.
+   *
+   * First, applying `auto-rows-[minmax(11rem,auto)]` unconditionally forced
+   * EVERY row to 176px, so a row of short stat tiles left a large blank gap —
+   * reported from production as "huge spaces".
+   *
+   * Then the conditional version read the CONFIGURED cards. A `rows: 2` card
+   * that is hidden by its visibility rule, or disabled, is not in the grid at
+   * all — but it still switched the row minimum on for every natural-height card
+   * beside it. Same gaps, now caused by a card that is not even on screen.
+   *
+   * My own test protected that second bug: it asserted `section.cards.some(...)`
+   * — the buggy expression — so the whole suite stayed green. The rule is the
+   * DRAWN list, which is what the renderer a few lines below actually maps over.
    */
   const canvas = code("src/components/dashboard/editor/DashboardCanvas.tsx");
-  assert.match(canvas, /auto-rows-\[minmax\(/, "spanning still needs a base row height");
+
+  // `cards` is `editing ? section.cards : drawn` — the list the grid renders.
   assert.match(
     canvas,
+    /cards\.some\(\(entry\) => \(entry\.rows \?\? 1\) > 1\)/,
+    "the decision must follow the drawn cards",
+  );
+  assert.doesNotMatch(
+    canvas,
     /section\.cards\.some\(\(entry\) => \(entry\.rows \?\? 1\) > 1\)/,
-    "…but only for a section that actually contains a taller card",
+    "reading the configured list counts cards that were never drawn",
   );
 
   const container = code("src/components/dashboard/cards/container.tsx");
   assert.match(
     container,
-    /card\.cards\.some\(\(child\) => \(child\.rows \?\? 1\) > 1\) && GRID_ROWS_CLASS/,
-    "nested grids follow the same rule",
+    /children\.some\(\(\{ card: child \}\) => \(child\.rows \?\? 1\) > 1\) && GRID_ROWS_CLASS/,
+    "nested grids must read the rendered children",
   );
+  assert.doesNotMatch(
+    container,
+    /card\.cards\.some\(\(child\) => \(child\.rows \?\? 1\) > 1\)/,
+    "renderChildren has already dropped hidden and disabled cards",
+  );
+
+  // And the class still exists — the fix must not have removed spanning outright.
+  assert.match(canvas, /auto-rows-\[minmax\(/);
+});
+
+test("a hidden tall card does not set the row height for its neighbours", () => {
+  /*
+   * The regression case in one shape. `drawn` is the cards with a slot; a card
+   * hidden by its rules has none. So the predicate must be evaluated against a
+   * list that excludes it — this pins the SHAPE of that logic, since the
+   * component itself is a client component and cannot be executed here.
+   */
+  const canvas = code("src/components/dashboard/editor/DashboardCanvas.tsx");
+
+  // The drawn list is derived from the slots, so a card the server drew nothing
+  // for is excluded before any height decision is made.
+  assert.match(canvas, /const drawn = section\.cards\.filter\(\(card\) => slots\[card\.id\] !== undefined\)/);
+  assert.match(canvas, /const cards = editing \? section\.cards : drawn/);
+
+  // The height predicate must sit AFTER that derivation and use its result.
+  const drawnAt = canvas.indexOf("const cards = editing");
+  const decisionAt = canvas.indexOf("cards.some((entry) => (entry.rows ?? 1) > 1)");
+  assert.ok(drawnAt !== -1 && decisionAt !== -1, "both must be present");
+  assert.ok(drawnAt < decisionAt, "the decision must use the already-narrowed list");
 });
 
 test("the height chain is unbroken from grid cell to visible card", () => {
