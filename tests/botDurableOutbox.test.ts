@@ -20,7 +20,6 @@ test("bot sessions are database-unique by tenant, channel and participant", () =
 test("shared channel transitions commit outbox rows and BotSession in one tenant transaction", () => {
   const code = src("src/lib/flowSession.ts");
   assert.match(code, /withTenantWrite\(async \(tx, tenantId\) => \{/);
-  // Outbox rows are now also pinned to the flow version that produced them.
   assert.match(code, /await persistMessages\(result\.messages, tx, tenantId(, snapshot\.versionId)?\)/);
   assert.match(code, /await upsertBotSessionTx\(tx, tenantId/);
   assert.match(code, /await deleteBotSessionTx\(tx, tenantId, channel, key\)/);
@@ -45,7 +44,7 @@ test("DM and Telegram adapters write their outbox rows through the shared sessio
   }
 });
 
-test("outbox preserves order and stops behind a retrying earlier message", () => {
+test("outbox preserves order behind retry and terminal dead-letter barriers", () => {
   const schema = src("prisma/bot-outbox.prisma");
   assert.match(schema, /batchId\s+String/);
   assert.match(schema, /sequence\s+Int/);
@@ -53,7 +52,18 @@ test("outbox preserves order and stops behind a retrying earlier message", () =>
 
   const worker = src("src/lib/botOutbox.ts");
   assert.match(worker, /orderBy: \[\{ createdAt: "asc" \}, \{ sequence: "asc" \}, \{ id: "asc" \}\]/);
-  assert.match(worker, /if \(outcome === "retry"\) break/);
+  assert.match(worker, /status: \{ not: "sent" \}/);
+  assert.match(worker, /row\.status === "dead"/);
+  assert.match(worker, /if \(outcome !== "sent"\) break/);
+  assert.match(worker, /Blocked by earlier failed message/);
+});
+
+test("outbox lease completion is fenced by the claim generation", () => {
+  const code = src("src/lib/botOutbox.ts");
+  assert.match(code, /attempts: row\.attempts,/);
+  assert.match(code, /attempts: row\.attempts \+ 1/);
+  assert.match(code, /where: \{ id: row\.id, status: "running", attempts: row\.attempts \}/);
+  assert.doesNotMatch(code, /return claimed\.count === 1 \? prisma\.botFlowOutbox\.findUnique/);
 });
 
 test("provider success is never resent just because CRM timeline logging failed", () => {
