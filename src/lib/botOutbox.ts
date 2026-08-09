@@ -162,6 +162,11 @@ export async function enqueueStaffMessage(input: {
           actorId: input.actorId,
           createdAt,
           availableAt: createdAt,
+          // Already logged, below, in this same transaction. Without this the
+          // delivery worker sees a sent row with an actorId and no log, and
+          // writes a SECOND Communication stamped with the bot marker — turning
+          // one staff reply into two rows, one of them attributed to the bot.
+          communicationLoggedAt: createdAt,
         },
       });
 

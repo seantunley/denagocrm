@@ -77,3 +77,17 @@ test("the ledger carries the fields a retry policy needs", () => {
   assert.match(migration, /ADD COLUMN IF NOT EXISTS "clientIdempotencyKey"/);
   assert.match(migration, /CREATE UNIQUE INDEX IF NOT EXISTS "BotFlowOutbox_tenantId_clientIdempotencyKey_key"/);
 });
+
+test("a staff reply is logged once, and never as bot output", () => {
+  const outbox = shipped("src/lib/botOutbox.ts");
+  const fn = outbox.slice(outbox.indexOf("export async function enqueueStaffMessage"), outbox.indexOf("function asOutMsg"));
+  // repairCommunicationLog writes a Communication for any SENT row that carries
+  // an actorId and no log, stamping it with the bot marker. A staff row has both,
+  // so without pre-stamping the log time the worker turns one human reply into
+  // two rows — the second attributed to the bot.
+  assert.match(fn, /communicationLoggedAt: createdAt/);
+
+  const repair = outbox.slice(outbox.indexOf("async function repairCommunicationLog"));
+  assert.match(repair.slice(0, 200), /if \(row\.communicationLoggedAt\) return false;/,
+    "the worker must treat an already-logged row as done");
+});
