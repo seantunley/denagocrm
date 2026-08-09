@@ -64,6 +64,10 @@ type EditorState = {
   updateSection: (sectionId: string, change: (section: SectionConfig) => SectionConfig) => void;
   updateCard: (cardId: string, change: (card: CardConfig) => CardConfig) => void;
   removeCard: (cardId: string) => void;
+  /** Step back one change. No-op when there is nothing to step back to. */
+  undo: () => void;
+  /** Whether there is anything to undo, so the control can disable itself. */
+  canUndo: boolean;
   /** Which view is being edited, so dialogs know where to put a new card. */
   activeViewId: string | null;
 };
@@ -82,6 +86,9 @@ export function useEditor(): EditorState {
 /** How long to wait for the user to stop before writing. */
 const SAVE_DEBOUNCE_MS = 600;
 
+/** How many steps back the editor remembers. See the note beside `history`. */
+const UNDO_LIMIT = 25;
+
 export function DashboardEditorProvider({
   slug,
   initialConfig,
@@ -98,6 +105,25 @@ export function DashboardEditorProvider({
 }) {
   const [config, setConfig] = useState<DashboardConfig>(initialConfig);
   const [editing, setEditing] = useState(false);
+  /*
+   * UNDO.
+   *
+   * The editor could drag, resize and delete, and had no way back from any of
+   * them. Saving is immediate and debounced by design — there is no Save button
+   * to not press — so an accidental delete was already written by the time the
+   * user noticed, and rebuilding a card someone spent ten minutes configuring is
+   * how people learn not to experiment with their own dashboard.
+   *
+   * The stack holds CONFIGS, not diffs. A config is small, already immutable by
+   * convention here, and every mutation funnels through `update`, so pushing the
+   * previous one is both cheap and impossible to forget for a new operation.
+   *
+   * Bounded, because a long editing session should not accumulate unboundedly in
+   * memory — and because "undo the last twenty-five things" is well past the
+   * point anyone is still reasoning about what they did.
+   */
+  const history = useRef<DashboardConfig[]>([]);
+  const [undoDepth, setUndoDepth] = useState(0);
   const [saving, setSaving] = useState(false);
   const [, startTransition] = useTransition();
 
@@ -122,6 +148,11 @@ export function DashboardEditorProvider({
     if (seenSeed.current === seed) return;
     seenSeed.current = seed;
     committed.current = initialConfig;
+    // A config that arrived from the server is a new starting point; undoing
+    // into arrangements from before it would resurrect state the server has
+    // already replaced.
+    history.current = [];
+    setUndoDepth(0);
     setConfig(initialConfig);
     // initialConfig is folded into `seed` by value.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -192,6 +223,11 @@ export function DashboardEditorProvider({
           toast.error(checked.error);
           return current;
         }
+        // Recorded only once the change is known to be valid. A refused edit
+        // never happened, so undoing past it would step over a state the user
+        // never saw.
+        history.current = [...history.current, current].slice(-UNDO_LIMIT);
+        setUndoDepth(history.current.length);
         persist(checked.config);
         return checked.config;
       });
@@ -233,6 +269,23 @@ export function DashboardEditorProvider({
     [update],
   );
 
+  /**
+   * Step back one change.
+   *
+   * Deliberately does NOT go through `update`: that would record the undo itself
+   * as a change and the stack could never be emptied — the first undo would
+   * become something to undo. It persists directly instead, which is the same
+   * path every other edit takes to the server.
+   */
+  const undo = useCallback(() => {
+    const previous = history.current[history.current.length - 1];
+    if (!previous) return;
+    history.current = history.current.slice(0, -1);
+    setUndoDepth(history.current.length);
+    setConfig(previous);
+    persist(previous);
+  }, [persist]);
+
   return (
     <EditorContext.Provider
       value={{
@@ -245,6 +298,8 @@ export function DashboardEditorProvider({
         updateSection,
         updateCard,
         removeCard,
+        undo,
+        canUndo: undoDepth > 0,
         activeViewId,
       }}
     >

@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { Check, Loader2, Plus, Settings2, Trash2, Code2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Check, Loader2, Plus, Settings2, Trash2, Code2, Undo2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { CardConfig, DashboardConfig, ViewConfig } from "@/lib/dashboard/config";
 import { LIMITS, slugify } from "@/lib/dashboard/config";
@@ -88,7 +88,31 @@ function Inner({
   canEdit: boolean;
   access: EditorAccess;
 }) {
-  const { config, editing, setEditing, saving, update, updateView } = useEditor();
+  const { config, editing, setEditing, saving, update, updateView, undo, canUndo } = useEditor();
+
+  /*
+   * Ctrl/Cmd+Z while editing.
+   *
+   * Bound only while `editing`, so it cannot swallow the browser's own undo on a
+   * page where there is nothing to undo. Skipped when the event came from a text
+   * field: inside an input, Ctrl+Z means "undo my typing", and hijacking that to
+   * revert the whole card would be worse than not offering it.
+   */
+  useEffect(() => {
+    if (!editing || !canEdit) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "z" && event.key !== "Z") return;
+      if (!event.ctrlKey && !event.metaKey) return;
+      if (event.shiftKey) return; // redo, which does not exist yet
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return;
+      event.preventDefault();
+      undo();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [editing, canEdit, undo]);
   const [localViewId, setLocalViewId] = useState<string | null>(activeViewId);
   const [pickerSection, setPickerSection] = useState<string | null>(null);
   const [builderCardId, setBuilderCardId] = useState<string | null>(null);
@@ -151,6 +175,19 @@ function Inner({
             <Loader2 className="size-3 animate-spin" />
             Saving
           </span>
+        )}
+
+        {canEdit && editing && (
+          <button
+            type="button"
+            onClick={undo}
+            disabled={!canUndo}
+            title="Undo the last change (Ctrl+Z)"
+            className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <Undo2 className="size-3.5" />
+            Undo
+          </button>
         )}
 
         {canEdit && editing && (
