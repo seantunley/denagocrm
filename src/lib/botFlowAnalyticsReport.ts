@@ -57,6 +57,7 @@ function nodeLabel(node: FlowNode | undefined, nodeId: string): string {
   if (node.type === "choice" || node.type === "capture" || node.type === "captureFile" || node.type === "slots") return node.text.trim().slice(0, 70) || nodeId;
   if (node.type === "answer") return node.answerSource ? `Answer: ${node.answerSource}` : node.text?.trim().slice(0, 70) || nodeId;
   if (node.type === "booking") return `CRM action: ${node.action ?? "service"}`;
+  if (node.type === "journey") return `Journey: ${node.journeyId}`;
   if (node.type === "condition") return `Condition: ${node.condition.variable} ${node.condition.operator}`;
   if (node.type === "image") return node.caption?.trim().slice(0, 70) || "Image";
   if (node.type === "ai") return "AI conversation";
@@ -101,14 +102,14 @@ export async function getBotFlowAnalyticsReport(flowId: string): Promise<BotFlow
       ? basePrisma.$queryRaw<ChannelRow[]>(Prisma.sql`
           SELECT
             "channel",
-            COUNT(DISTINCT "conversationKey") FILTER (WHERE "eventType" = 'flow_started') AS "conversations",
+            COUNT(*) FILTER (WHERE "eventType" = 'flow_started') AS "conversations",
             COUNT(*) FILTER (WHERE "eventType" = 'flow_completed') AS "completed",
             COUNT(*) FILTER (WHERE "eventType" = 'flow_handoff') AS "handedOff"
           FROM "BotFlowEvent"
           WHERE "tenantId" = ${tenantId}
             AND "flowVersionId" IN (${Prisma.join(versionIds)})
           GROUP BY "channel"
-          ORDER BY COUNT(DISTINCT "conversationKey") FILTER (WHERE "eventType" = 'flow_started') DESC
+          ORDER BY COUNT(*) FILTER (WHERE "eventType" = 'flow_started') DESC
         `)
       : Promise.resolve([] as ChannelRow[]),
   ]);
