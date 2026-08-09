@@ -89,7 +89,7 @@ test("channel capability checks catch adapter truncation before publish", () => 
   assert.ok(issues.some((item) => item.code === "channel.meta.options"));
 });
 
-test("file capture is blocked only on enabled channels that cannot resume it", () => {
+test("file capture compiles across every connected chatbot channel", () => {
   const flow: Flow = {
     start: "file",
     nodes: {
@@ -97,10 +97,9 @@ test("file capture is blocked only on enabled channels that cannot resume it", (
       end: { id: "end", type: "end" },
     },
   };
-  assert.equal(flowErrors(validateFlow(flow, ["whatsapp"])).length, 0);
-  const crossChannel = flowErrors(validateFlow(flow, ["whatsapp", "instagram", "telegram"]));
-  assert.ok(crossChannel.some((item) => item.code === "channel.file_capture" && item.channel === "instagram"));
-  assert.ok(crossChannel.some((item) => item.code === "channel.file_capture" && item.channel === "telegram"));
+  const issues = flowErrors(validateFlow(flow, ["whatsapp", "messenger", "instagram", "telegram"]));
+  assert.equal(issues.length, 0);
+  assert.ok(!issues.some((item) => item.code === "channel.file_capture"));
 });
 
 test("publish boundary compiles the exact definition before the immutable snapshot transaction", () => {
