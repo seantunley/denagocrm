@@ -13,37 +13,16 @@ export type SimulatorTurnInput = {
   fileUrl?: string;
   simulateAiHandoff?: boolean;
 };
-
-export type SimulatorTurnResult = {
-  ok: boolean;
-  error?: string;
-  messages: OutMsg[];
-  session: FlowSession | null;
-  handedOff: boolean;
-  trace: string[];
-  vars: Record<string, string>;
-};
+export type SimulatorTurnResult = { ok: boolean; error?: string; messages: OutMsg[]; session: FlowSession | null; handedOff: boolean; trace: string[]; vars: Record<string, string> };
 
 function parseFlow(definition: string): Flow | null {
-  try {
-    const parsed = JSON.parse(definition);
-    return parsed?.start && parsed?.nodes?.[parsed.start] ? parsed as Flow : null;
-  } catch {
-    return null;
-  }
+  try { const parsed = JSON.parse(definition); return parsed?.start && parsed?.nodes?.[parsed.start] ? parsed as Flow : null; } catch { return null; }
 }
-
 function simulatedSlotLabel(slotId: string): string {
-  const [date, time] = slotId.split("_");
-  if (date && time) return `${date} · ${time}`;
-  return slotId || "Simulated slot";
+  const [date, time] = slotId.split("_"); return date && time ? `${date} · ${time}` : slotId || "Simulated slot";
 }
 
-/**
- * Execute ONE customer turn against the saved DRAFT using the production graph
- * engine but a non-writing context. No provider sends, leads, activities,
- * bookings, pushes or handoff state are created by this action.
- */
+/** Production graph engine + explicitly non-writing effects. */
 export async function simulateFlowTurn(input: SimulatorTurnInput): Promise<SimulatorTurnResult> {
   await requireOwner();
   const row = await prisma.botFlow.findUnique({ where: { id: input.flowId } });
@@ -51,20 +30,9 @@ export async function simulateFlowTurn(input: SimulatorTurnInput): Promise<Simul
   const flow = parseFlow(row.definition);
   if (!flow) return { ok: false, error: "Flow data is malformed.", messages: [], session: null, handedOff: false, trace: [], vars: {} };
 
-  const session: FlowSession = input.session ?? {
-    nodeId: null,
-    vars: {
-      greeting: "Hi there 👋 Welcome to Denago Cape Town!",
-      first_name: "Test",
-      name: "Test",
-    },
-  };
+  const session: FlowSession = input.session ?? { nodeId: null, vars: { greeting: "Hi there 👋 Welcome to Denago Cape Town!", first_name: "Test", name: "Test" } };
   const trace: string[] = [`Enter: ${session.nodeId ?? flow.start}`];
-  const turn: FlowInput = {
-    text: input.text ?? "",
-    ...(input.choiceId ? { choiceId: input.choiceId } : {}),
-    ...(input.fileUrl ? { fileUrl: input.fileUrl } : {}),
-  };
+  const turn: FlowInput = { text: input.text ?? "", ...(input.choiceId ? { choiceId: input.choiceId } : {}), ...(input.fileUrl ? { fileUrl: input.fileUrl } : {}) };
 
   try {
     const result = await runFlow(flow, session, turn, {
@@ -72,51 +40,51 @@ export async function simulateFlowTurn(input: SimulatorTurnInput): Promise<Simul
       aiReply: async () => {
         const handoff = Boolean(input.simulateAiHandoff);
         trace.push(handoff ? "AI: simulated handoff" : "AI: simulated answer");
-        return {
-          reply: handoff
-            ? "[Simulator] AI would hand this conversation to a person."
-            : "[Simulator] AI response — production uses the configured approved brief, FAQs and live product data.",
-          handoff,
-        };
+        return { reply: handoff ? "[Simulator] AI would hand this conversation to a person." : "[Simulator] AI response — production uses approved knowledge and live CRM product facts.", handoff };
       },
       availableSlots: async () => [
         { id: "2030-01-15_09:00", label: "Tue 15 Jan · 09:00 (simulated)" },
         { id: "2030-01-15_11:00", label: "Tue 15 Jan · 11:00 (simulated)" },
         { id: "2030-01-16_14:00", label: "Wed 16 Jan · 14:00 (simulated)" },
       ],
-      bookSlot: async (slotId) => {
-        trace.push(`CRM: would reserve slot ${slotId}`);
+      bookSlot: async (slotId, _vars, nodeId) => {
+        trace.push(`CRM: node ${nodeId} would reserve slot ${slotId}`);
         return { ok: true, label: simulatedSlotLabel(slotId) };
       },
-      createBooking: async (_vars, action) => {
-        trace.push(`CRM: would create ${action ?? "service"}`);
+      rescheduleSlot: async (slotId, vars, nodeId) => {
+        trace.push(`CRM: node ${nodeId} would move booking ${vars.booking_id || "[missing booking]"} to ${slotId}`);
+        vars.booking_rescheduled = "yes";
+        vars.booking_slot = simulatedSlotLabel(slotId);
+        return { ok: true, label: vars.booking_slot };
       },
-      handoff: async () => {
-        trace.push("Handoff: would pause bot and notify team");
+      manageBooking: async (action, vars, nodeId) => {
+        if (action === "lookup") {
+          trace.push(`CRM: node ${nodeId} would look up this customer's next booking`);
+          vars.booking_found = "yes";
+          vars.booking_id = "simulated-activity-id";
+          vars.booking_slot = "Tue 15 Jan · 09:00 (simulated)";
+          vars.booking_summary = "Simulated service booking";
+          return { ok: true };
+        }
+        trace.push(`CRM: node ${nodeId} would cancel booking ${vars.booking_id || "[missing booking]"}`);
+        vars.booking_cancelled = vars.booking_id ? "yes" : "no";
+        return { ok: Boolean(vars.booking_id) };
       },
+      startJourney: async (journeyId, vars, nodeId) => {
+        trace.push(`Journey: node ${nodeId} would enrol this customer in ${journeyId}`);
+        vars.journey_started = "yes";
+        vars.journey_reason = "simulated enrolment";
+        vars.journey_run_id = "simulated-journey-run";
+        return { ok: true, reason: "simulated enrolment" };
+      },
+      createBooking: async (_vars, action, nodeId) => { trace.push(`CRM: node ${nodeId} would create ${action ?? "service"}`); },
+      handoff: async () => { trace.push("Handoff: would pause bot and notify team"); },
     });
 
-    for (const message of result.messages) {
-      trace.push(message.type === "choice" ? `Output: menu (${message.options.length} options)` : `Output: ${message.type}`);
-    }
+    for (const message of result.messages) trace.push(message.type === "choice" ? `Output: menu (${message.options.length} options)` : `Output: ${message.type}`);
     trace.push(result.handedOff ? "Stop: handed off" : result.session?.nodeId ? `Wait: ${result.session.nodeId}` : "Stop: flow ended");
-    return {
-      ok: true,
-      messages: result.messages,
-      session: result.session,
-      handedOff: result.handedOff,
-      trace,
-      vars: result.session?.vars ?? session.vars,
-    };
+    return { ok: true, messages: result.messages, session: result.session, handedOff: result.handedOff, trace, vars: result.session?.vars ?? session.vars };
   } catch (error) {
-    return {
-      ok: false,
-      error: error instanceof Error ? error.message : "Simulation failed.",
-      messages: [],
-      session,
-      handedOff: false,
-      trace: [...trace, "Error: simulation stopped"],
-      vars: session.vars,
-    };
+    return { ok: false, error: error instanceof Error ? error.message : "Simulation failed.", messages: [], session, handedOff: false, trace: [...trace, "Error: simulation stopped"], vars: session.vars };
   }
 }
