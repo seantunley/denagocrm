@@ -28,7 +28,9 @@ test("the inbound event fence is tenant and channel scoped", () => {
 
   const helper = src("src/lib/botInboundEvent.ts");
   assert.match(helper, /withTenantWrite/);
-  assert.match(helper, /ON CONFLICT \("tenantId", "channel", "providerId"\) DO NOTHING/);
+  assert.match(helper, /ON CONFLICT \("tenantId", "channel", "providerId"\) DO UPDATE/);
+  assert.match(helper, /"BotInboundEvent"\."status" <> 'completed'/);
+  assert.match(helper, /"leaseUntil" IS NULL OR "BotInboundEvent"\."leaseUntil" < NOW\(\)/);
 });
 
 test("WhatsApp AI context is the latest window, restored to chronological order", () => {
