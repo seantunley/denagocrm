@@ -12,7 +12,7 @@ import {
   UserRound,
 } from "lucide-react";
 import { prisma } from "@/lib/db";
-import { contactName, formatDateTime } from "@/lib/format";
+import { contactName, formatDateTime, inputDateTimeValue, inputDateValue } from "@/lib/format";
 import { getAccessibleQuoteIds, hasPermission } from "@/lib/permissions";
 import { requireTestDriveReadAccess } from "@/lib/testDriveAccess";
 import { listTenantStaff } from "@/lib/tenantActor";
@@ -32,8 +32,12 @@ import { Surface } from "@/components/visual-system";
 
 export const dynamic = "force-dynamic";
 
-const inputDate = (date: Date) => format(date, "yyyy-MM-dd'T'HH:mm");
-const inputDay = (date: Date | null) => date ? format(date, "yyyy-MM-dd") : "";
+// Pinned to Africa/Johannesburg, like every other displayed time. date-fns
+// format() uses the SERVER timezone (UTC on Vercel), which showed a 10:00
+// booking as 08:00 in the field under a tile that said 10:00 — and re-saving
+// that form moved the booking two hours earlier. See lib/format.ts.
+const inputDate = inputDateTimeValue;
+const inputDay = inputDateValue;
 
 const statusClass: Record<string, string> = {
   booked: "bg-blue-500/15 text-blue-300",

@@ -2,7 +2,7 @@ import Link from "next/link";
 import { addHours, addDays, differenceInCalendarDays, format, startOfDay, subDays } from "date-fns";
 import { CalendarDays, CarFront, Gauge, Route, TriangleAlert, UserCheck } from "lucide-react";
 import { prisma } from "@/lib/db";
-import { contactName, formatDateTime } from "@/lib/format";
+import { contactName, formatDateTime, inputDateTimeValue } from "@/lib/format";
 import {
   getAccessibleContactIds,
   getAccessibleLeadIds,
@@ -41,7 +41,9 @@ const statusTone: Record<string, "neutral" | "success" | "warning" | "danger" | 
   no_show: "danger",
 };
 
-const inputDate = (date: Date) => format(date, "yyyy-MM-dd'T'HH:mm");
+// Pinned to Africa/Johannesburg — see lib/format.ts. date-fns format() would
+// use the server timezone and seed this field two hours early.
+const inputDate = inputDateTimeValue;
 
 const TEST_DRIVE_FILTERS = ["", "booked", "confirmed", "checked_out", "completed", "cancelled", "no_show"] as const;
 
