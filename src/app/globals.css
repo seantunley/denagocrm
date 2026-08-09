@@ -209,7 +209,7 @@
   .btn-primary,
   .btn-secondary,
   .btn-danger {
-    @apply inline-flex h-9 items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-all cursor-pointer outline-none focus-visible:ring-4 focus-visible:ring-orange-500/15 disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-all cursor-pointer outline-none focus-visible:ring-4 focus-visible:ring-orange-500/15 disabled:opacity-50 disabled:cursor-not-allowed;
   }
   .btn-primary {
     @apply bg-orange-600 text-white shadow-[0_8px_24px_rgba(234,88,12,0.16)] hover:bg-orange-500 hover:-translate-y-px hover:shadow-[0_10px_28px_rgba(234,88,12,0.24)];
@@ -221,10 +221,10 @@
     @apply bg-red-700 text-white hover:bg-red-600;
   }
   .btn-sm {
-    @apply h-7 px-2.5 py-1 text-xs;
+    @apply min-h-7 px-2.5 py-1 text-xs;
   }
   .input {
-    @apply h-9 w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-sm text-slate-100 outline-none transition placeholder:text-slate-600 hover:border-white/15 focus:border-orange-500/60 focus:bg-white/[0.055] focus:ring-4 focus:ring-orange-500/10;
+    @apply min-h-9 w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-sm text-slate-100 outline-none transition placeholder:text-slate-600 hover:border-white/15 focus:border-orange-500/60 focus:bg-white/[0.055] focus:ring-4 focus:ring-orange-500/10;
   }
   .label {
     @apply mb-1 block text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400;

@@ -61,7 +61,15 @@ test("shared workspace primitives enforce the compact density contract", () => {
   const captureForm = read("src", "components", "capture-form.tsx");
   const mobileWorkspace = read("src", "components", "mobile-workspace.tsx");
 
-  assert.match(globalCss, /h-9 items-center justify-center/);
+  const buttonRule = globalCss.match(/\.btn,\s*[\s\S]*?\.btn-danger \{([\s\S]*?)\n  \}/)?.[1] ?? "";
+  const smallButtonRule = globalCss.match(/\.btn-sm \{([\s\S]*?)\n  \}/)?.[1] ?? "";
+  const inputRule = globalCss.match(/\.input \{([\s\S]*?)\n  \}/)?.[1] ?? "";
+
+  assert.match(buttonRule, /min-h-9/);
+  assert.doesNotMatch(buttonRule, /(?:^|\s)h-9(?:\s|$)/);
+  assert.match(smallButtonRule, /min-h-7/);
+  assert.match(inputRule, /min-h-9/);
+  assert.doesNotMatch(inputRule, /(?:^|\s)h-9(?:\s|$)/);
   assert.match(globalCss, /rounded-xl border border-white\/\[0\.075\] bg-card p-4/);
   assert.match(globalCss, /px-3 py-2\.5/);
   assert.match(visualSystem, /rounded-xl border border-border bg-card p-3/);
