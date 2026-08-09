@@ -3,6 +3,7 @@ import { format } from "date-fns";
 import { prisma } from "./db";
 import { logAudit } from "./audit";
 import { sendPushToAll } from "./push";
+import { cancelWorkshopBooking, rescheduleWorkshopBooking } from "./bookingSlots";
 
 export type BotBookingMatch = { contactId: string | null; leadId: string | null };
 export type BotBookingSummary = {
@@ -50,10 +51,6 @@ function ownerWhere(owner: BotBookingMatch): { OR: ({ contactId: string } | { le
   return OR.length ? { OR } : null;
 }
 
-/**
- * Find the customer's next live workshop reservation. We deliberately do not
- * create a contact while looking something up: a failed lookup must be read-only.
- */
 export async function findUpcomingBotBooking(
   match: BotBookingMatch,
   vars: Record<string, string>,
@@ -81,69 +78,91 @@ export async function findUpcomingBotBooking(
   };
 }
 
-/**
- * Cancel only a future PLANNED workshop activity belonging to this conversation's
- * customer. History is retained with status=cancelled; the workshop capacity
- * engine counts planned rows only, so cancellation releases the slot without
- * deleting the audit trail.
- *
- * Idempotent by construction: a retry sees no matching planned row and returns
- * `alreadyCancelled=true` when the same activity is now cancelled.
- */
+/** Populate deterministic flow variables used by the management template. */
+export async function lookupBotBooking(
+  match: BotBookingMatch,
+  vars: Record<string, string>,
+): Promise<{ ok: boolean; label?: string }> {
+  const booking = await findUpcomingBotBooking(match, vars);
+  if (!booking) {
+    vars.booking_found = "no";
+    delete vars.booking_id;
+    delete vars.booking_slot;
+    delete vars.booking_summary;
+    return { ok: false };
+  }
+  vars.booking_found = "yes";
+  vars.booking_id = booking.id;
+  vars.booking_slot = booking.label;
+  vars.booking_summary = booking.summary;
+  return { ok: true, label: booking.label };
+}
+
 export async function cancelBotBooking(
   bookingId: string,
   match: BotBookingMatch,
   vars: Record<string, string>,
 ): Promise<{ ok: boolean; alreadyCancelled?: boolean; label?: string }> {
   const owner = await resolveBookingOwner(match, vars);
-  const scope = ownerWhere(owner);
-  if (!scope || !bookingId) return { ok: false };
-
-  const existing = await prisma.activity.findFirst({
-    where: {
-      id: bookingId,
-      category: "workshop",
-      dueDate: { gte: new Date() },
-      ...scope,
-    },
-    select: { id: true, summary: true, status: true, dueDate: true },
-  });
-  if (!existing?.dueDate) return { ok: false };
-  const label = format(existing.dueDate, "EEE d MMM · HH:mm");
-  if (existing.status === "cancelled") return { ok: true, alreadyCancelled: true, label };
-  if (existing.status !== "planned") return { ok: false };
-
-  const updated = await prisma.activity.updateMany({
-    where: {
-      id: existing.id,
-      status: "planned",
-      category: "workshop",
-      dueDate: { gte: new Date() },
-      ...scope,
-    },
-    data: { status: "cancelled" },
-  });
-  if (updated.count !== 1) {
-    // A concurrent cancellation is success, not an error. Re-read only this
-    // customer-owned booking before deciding.
-    const after = await prisma.activity.findFirst({
-      where: { id: existing.id, category: "workshop", ...scope },
-      select: { status: true },
-    });
-    return after?.status === "cancelled" ? { ok: true, alreadyCancelled: true, label } : { ok: false };
+  const result = await cancelWorkshopBooking({ bookingId, owner });
+  if (!result.ok) {
+    vars.booking_cancelled = "no";
+    return { ok: false };
   }
+  const label = result.dueDate ? format(result.dueDate, "EEE d MMM · HH:mm") : vars.booking_slot;
+  vars.booking_cancelled = "yes";
+  if (label) vars.booking_slot = label;
 
-  await logAudit({
-    action: "workshop.booking_cancelled",
-    summary: `Chatbot cancelled workshop booking “${existing.summary}” for ${label}`,
-    entityType: "Activity",
-    entityId: existing.id,
-    userName: "Chatbot",
-  }).catch(() => {});
-  await sendPushToAll({
-    title: "Service booking cancelled",
-    body: `${existing.summary} · ${label}`.slice(0, 180),
-    url: "/workshop-calendar",
-  }, "bot_handoff").catch(() => {});
-  return { ok: true, label };
+  if (!result.alreadyCancelled) {
+    await logAudit({
+      action: "workshop.booking_cancelled",
+      summary: `Chatbot cancelled workshop booking “${result.summary ?? bookingId}”${label ? ` for ${label}` : ""}`,
+      entityType: "Activity",
+      entityId: bookingId,
+      userName: "Chatbot",
+    }).catch(() => {});
+    await sendPushToAll({
+      title: "Service booking cancelled",
+      body: `${result.summary ?? "Workshop booking"}${label ? ` · ${label}` : ""}`.slice(0, 180),
+      url: "/workshop-calendar",
+    }, "bot_handoff").catch(() => {});
+  }
+  return { ok: true, alreadyCancelled: result.alreadyCancelled, label };
+}
+
+export async function rescheduleBotBooking(
+  bookingId: string,
+  slotId: string,
+  match: BotBookingMatch,
+  vars: Record<string, string>,
+): Promise<{ ok: boolean; label?: string }> {
+  const [date, time] = slotId.split("_");
+  if (!bookingId || !date || !time) return { ok: false };
+  const owner = await resolveBookingOwner(match, vars);
+  try {
+    const result = await rescheduleWorkshopBooking({ bookingId, date, time, owner });
+    if (!result.ok || !result.dueDate) {
+      vars.booking_rescheduled = "no";
+      return { ok: false };
+    }
+    const label = format(result.dueDate, "EEE d MMM · HH:mm");
+    vars.booking_rescheduled = "yes";
+    vars.booking_slot = label;
+    await logAudit({
+      action: "workshop.booking_rescheduled",
+      summary: `Chatbot moved workshop booking “${result.summary ?? bookingId}” to ${label}`,
+      entityType: "Activity",
+      entityId: bookingId,
+      userName: "Chatbot",
+    }).catch(() => {});
+    await sendPushToAll({
+      title: "Service booking rescheduled",
+      body: `${result.summary ?? "Workshop booking"} · ${label}`.slice(0, 180),
+      url: "/workshop-calendar",
+    }, "bot_handoff").catch(() => {});
+    return { ok: true, label };
+  } catch (error) {
+    if (error instanceof Error && (error.message === "SLOT_TAKEN" || error.message === "SLOT_INVALID")) return { ok: false };
+    throw error;
+  }
 }
