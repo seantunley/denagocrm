@@ -8,7 +8,7 @@ import { maybeAutoReply } from "./bot";
 import { flowRuntimeVars, greetingVars } from "./flowSession";
 import { resolveTenantActor } from "./tenantActor";
 import { crmActions } from "./flowActions";
-import { runFlow, type FlowInput, type FlowSession, type FlowCtx } from "./flow";
+import { runFlow, type FlowInput, type FlowSession, type FlowCtx, type FlowHandoffContext } from "./flow";
 import { resolveFlowSnapshot } from "./flowPublishing";
 import { flushBotOutboxConversation } from "./botOutbox";
 import { enqueueBotMessagesTx } from "./botOutboxWrite";
@@ -37,6 +37,14 @@ async function loadSession(key: string): Promise<{ nodeId: string | null; vars: 
 
 function storedVars(vars: Record<string, string>, flowVersionId: string | null): string {
   return JSON.stringify({ ...vars, ...(flowVersionId ? { [FLOW_VERSION_VAR]: flowVersionId } : {}) });
+}
+
+function handoffBody(context?: FlowHandoffContext): string {
+  const summary = context?.summary?.trim();
+  const reason = context?.reason?.trim();
+  if (summary) return `${summary}${reason ? ` · ${reason}` : ""}`.slice(0, 220);
+  if (reason) return `Handoff: ${reason}`.slice(0, 220);
+  return "The assistant handed a chat over to a human.";
 }
 
 async function priceList(): Promise<string> {
@@ -79,10 +87,14 @@ function buildCtx(digits: string, match: { contactId: string | null; leadId: str
       }
       const history = await whatsappHistory(match.contactId, match.leadId, digits);
       const ai = await generateBotReply({ history, customerName: name, isCustomer });
-      return ai ?? { reply: "Let me get one of our team to help you with that — they'll be in touch shortly 👍", handoff: true };
+      return ai ?? { reply: "Let me get one of our team to help you with that — they'll be in touch shortly 👍", handoff: true, confidence: "low", intent: "unknown", handoffReason: "AI unavailable" };
     },
-    handoff: async () => {
-      await sendPushToAll({ title: "WhatsApp needs you 🙋", body: "The assistant handed a chat over to a human.", url: match.contactId ? `/contacts/${match.contactId}` : match.leadId ? `/leads/${match.leadId}` : "/inbox" }, "bot_handoff").catch(() => {});
+    handoff: async (_vars, context) => {
+      await sendPushToAll({
+        title: "WhatsApp needs you 🙋",
+        body: handoffBody(context),
+        url: match.contactId ? `/contacts/${match.contactId}` : match.leadId ? `/leads/${match.leadId}` : "/inbox",
+      }, "bot_handoff").catch(() => {});
     },
     ...crmActions("whatsapp", { contactId: match.contactId, leadId: match.leadId }),
   };
