@@ -1,7 +1,9 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { renderSignature } from "@/lib/dashboard/renderSignature";
 import {
   parseConfigStrict,
   type CardConfig,
@@ -209,6 +211,7 @@ export function DashboardEditorProvider({
    */
   const inFlight = useRef(0);
   const [, startTransition] = useTransition();
+  const router = useRouter();
 
   // The last arrangement the server accepted, so a refused save has somewhere to
   // roll back to. Not state: rolling back must not itself schedule a save.
@@ -325,6 +328,19 @@ export function DashboardEditorProvider({
             const result = await saveDashboardConfig(slug, next);
             if (result?.error) throw new Error(result.error);
             committed.current = next;
+
+            /*
+             * Ask the server to draw again ONLY when it would draw something
+             * different — a card added, reconfigured, switched off, or moved
+             * into a section whose rule hides it. See renderSignature.
+             *
+             * The action no longer revalidates on its own, because the common
+             * save is a card moving and the client already holds every node it
+             * needs for that. Doing it unconditionally re-ran every card's
+             * queries per drag pause and remounted the card tree under the
+             * pointer, which is what put an error page in front of the user.
+             */
+            if (renderSignature(previous) !== renderSignature(next)) router.refresh();
             // The server will echo this back via revalidatePath. Remember it so
             // the re-seed below recognises it as ours and keeps the history.
             const seedKey = JSON.stringify(next);
@@ -358,7 +374,7 @@ export function DashboardEditorProvider({
         });
       }, SAVE_DEBOUNCE_MS);
     },
-    [slug],
+    [slug, router],
   );
 
   const update = useCallback(

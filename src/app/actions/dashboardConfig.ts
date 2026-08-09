@@ -336,8 +336,30 @@ export async function saveDashboardConfig(slug: unknown, config: unknown): Promi
       where: { id: row.id },
       data: { config: validated(config) },
     });
-    // The page only — the switcher shows titles, and this changes none of them.
-    revalidatePath("/");
+    /*
+     * NO REVALIDATION HERE, deliberately. This used to call revalidatePath("/").
+     *
+     * A config save is usually a card moving, and the client is already holding
+     * every rendered card node and the whole config — it needs nothing from the
+     * server to draw the new arrangement. Revalidating re-ran the entire home
+     * screen, every card's queries included, on every autosave: a 17-to-23
+     * second round trip in development, once per pause in a drag. Worse, the new
+     * RSC payload REMOUNTS the card tree, so every dnd-kit droppable
+     * unregistered and registered again mid-gesture — enough dispatches in one
+     * commit, under StrictMode's double-invoked effects, to pass React's
+     * nested-update limit and throw "Maximum update depth exceeded" into the
+     * route's error boundary. That was the error page after heavy dragging.
+     *
+     * Navigation stays correct without it: this page is dynamic — it reads the
+     * session and the database on every request — and `staleTimes.dynamic`
+     * defaults to 0, so it is not held in the client cache and a return visit
+     * refetches it regardless.
+     *
+     * What the client cannot do for itself is produce a node for a card that has
+     * just been ADDED or reconfigured. It asks for that itself, with
+     * router.refresh(), when lib/dashboard/renderSignature says the server would
+     * now draw something different. Moving a card is not that.
+     */
     return { success: "Dashboard saved." };
   });
 }
