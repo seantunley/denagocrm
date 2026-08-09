@@ -14,9 +14,9 @@ import {
   claimInboundBotEvent,
   completeInboundBotEvent,
   retryInboundBotEvent,
+  withInboundBotEvent,
 } from "@/lib/botInboundEvent";
 
-/** Meta webhook verification handshake (same flow as Lead Ads). */
 export async function GET(req: NextRequest) {
   const params = req.nextUrl.searchParams;
   const token = params.get("hub.verify_token");
@@ -28,10 +28,8 @@ export async function GET(req: NextRequest) {
   return new NextResponse("Verification failed", { status: 403 });
 }
 
-/** Receives WhatsApp Cloud API events (inbound customer messages). */
 export async function POST(req: NextRequest) {
   const rawBody = await req.text();
-
   const appSecret = await validateInSystemScope(() => getSetting("META_APP_SECRET"));
   if (!appSecret) {
     await logError("whatsapp-webhook", "POST received but META_APP_SECRET is not set — rejecting").catch(() => {});
@@ -42,10 +40,7 @@ export async function POST(req: NextRequest) {
     const expected = "sha256=" + crypto.createHmac("sha256", appSecret).update(rawBody, "utf8").digest("hex");
     const valid = signature.length === expected.length && crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
     if (!valid) {
-      await logError(
-        "whatsapp-webhook",
-        `Invalid signature — Meta delivered a webhook but META_APP_SECRET doesn't match (header ${signature ? "present" : "MISSING"}).`,
-      ).catch(() => {});
+      await logError("whatsapp-webhook", `Invalid signature — Meta delivered a webhook but META_APP_SECRET doesn't match (header ${signature ? "present" : "MISSING"}).`).catch(() => {});
       return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
     }
   }
@@ -76,55 +71,51 @@ export async function POST(req: NextRequest) {
           if (!claim) continue;
 
           try {
-            const from: string = message.from;
-            const profileName: string | null =
-              contactsMeta.find((c: any) => c.wa_id === from)?.profile?.name ?? null;
+            await withInboundBotEvent(claim, async () => {
+              const from: string = message.from;
+              const profileName: string | null = contactsMeta.find((c: any) => c.wa_id === from)?.profile?.name ?? null;
 
-            if (message.type === "text") {
-              const text = message.text?.body ?? "";
-              await recordInboundWhatsApp(from, profileName, text);
-              await runWhatsAppBot(from, { text });
-            } else if (message.type === "interactive") {
-              const btn = message.interactive?.button_reply;
-              const list = message.interactive?.list_reply;
-              const id: string = btn?.id ?? list?.id ?? "";
-              const title: string = btn?.title ?? list?.title ?? "";
-              if (id) {
-                await recordInboundWhatsApp(from, profileName, `👆 ${title}`);
-                await runWhatsAppBot(from, { text: title, choiceId: id });
-              }
-            } else if (message.type === "image" || message.type === "document" || message.type === "video") {
-              const media = message.image ?? message.document ?? message.video;
-              const caption: string = media?.caption ?? "";
-              let fileUrl: string | undefined;
-              if (media?.id) {
-                const dl = await fetchWhatsAppMedia(media.id).catch(() => null);
-                if (dl) {
-                  const ext = dl.contentType.includes("pdf") ? "pdf" : dl.contentType.includes("png") ? "png" : dl.contentType.split("/")[1]?.slice(0, 4) || "bin";
-                  fileUrl = await saveFile(dl.buffer, `whatsapp.${ext}`, dl.contentType).catch(() => undefined);
+              if (message.type === "text") {
+                const text = message.text?.body ?? "";
+                await recordInboundWhatsApp(from, profileName, text);
+                await runWhatsAppBot(from, { text });
+              } else if (message.type === "interactive") {
+                const btn = message.interactive?.button_reply;
+                const list = message.interactive?.list_reply;
+                const id: string = btn?.id ?? list?.id ?? "";
+                const title: string = btn?.title ?? list?.title ?? "";
+                if (id) {
+                  await recordInboundWhatsApp(from, profileName, `👆 ${title}`);
+                  await runWhatsAppBot(from, { text: title, choiceId: id });
+                }
+              } else if (message.type === "image" || message.type === "document" || message.type === "video") {
+                const media = message.image ?? message.document ?? message.video;
+                const caption: string = media?.caption ?? "";
+                let fileUrl: string | undefined;
+                if (media?.id) {
+                  const dl = await fetchWhatsAppMedia(media.id).catch(() => null);
+                  if (dl) {
+                    const ext = dl.contentType.includes("pdf") ? "pdf" : dl.contentType.includes("png") ? "png" : dl.contentType.split("/")[1]?.slice(0, 4) || "bin";
+                    fileUrl = await saveFile(dl.buffer, `whatsapp.${ext}`, dl.contentType).catch(() => undefined);
+                  }
+                }
+                await recordInboundWhatsApp(from, profileName, `📎 ${caption || "[file]"}`);
+                await runWhatsAppBot(from, { text: caption, fileUrl });
+              } else if (message.type === "audio" || message.type === "voice") {
+                const mediaId: string | undefined = message.audio?.id ?? message.voice?.id;
+                if (mediaId) {
+                  const media = await fetchWhatsAppMedia(mediaId).catch(() => null);
+                  const transcript = media ? await transcribeVoice(media.buffer, media.contentType).catch(() => null) : null;
+                  const logged = transcript ? `🎤 ${transcript}` : "🎤 [Voice note]";
+                  await recordInboundWhatsApp(from, profileName, logged);
+                  await runWhatsAppBot(from, { text: transcript ?? "[The customer sent a voice note.]" }, { voiceNote: true });
                 }
               }
-              await recordInboundWhatsApp(from, profileName, `📎 ${caption || "[file]"}`);
-              await runWhatsAppBot(from, { text: caption, fileUrl });
-            } else if (message.type === "audio" || message.type === "voice") {
-              const mediaId: string | undefined = message.audio?.id ?? message.voice?.id;
-              if (mediaId) {
-                const media = await fetchWhatsAppMedia(mediaId).catch(() => null);
-                const transcript = media ? await transcribeVoice(media.buffer, media.contentType).catch(() => null) : null;
-                const logged = transcript ? `🎤 ${transcript}` : "🎤 [Voice note]";
-                await recordInboundWhatsApp(from, profileName, logged);
-                await runWhatsAppBot(
-                  from,
-                  { text: transcript ?? "[The customer sent a voice note.]" },
-                  { voiceNote: true },
-                );
-              }
-            }
-
+            });
             await completeInboundBotEvent(claim);
           } catch (error) {
             await retryInboundBotEvent(claim, error).catch(() => {});
-            throw error; // fail the webhook so Meta retries this leased event
+            throw error;
           }
         }
       }, () => {
