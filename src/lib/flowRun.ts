@@ -5,7 +5,7 @@ import { matchByPhone } from "./whatsapp";
 import { generateBotReply, routeBotChoice, type BotMsg } from "./botAi";
 import { sendPushToAll } from "./push";
 import { maybeAutoReply } from "./bot";
-import { greetingVars } from "./flowSession";
+import { flowRuntimeVars, greetingVars } from "./flowSession";
 import { resolveTenantActor } from "./tenantActor";
 import { crmActions } from "./flowActions";
 import { runFlow, type FlowInput, type FlowSession, type FlowCtx } from "./flow";
@@ -19,50 +19,30 @@ export const FLOW_MARKER = "🤖 Flow";
 const FLOW_VERSION_VAR = "__flow_version";
 
 export async function isFlowEnabled(): Promise<boolean> {
-  return (
-    (await getSetting("BOT_ENABLED")) === "true" &&
-    (await getSetting("BOT_FLOW_ENABLED")) === "true"
-  );
+  return (await getSetting("BOT_ENABLED")) === "true" && (await getSetting("BOT_FLOW_ENABLED")) === "true";
 }
 
 const RESTART = /^\s*(menu|hi|hello|hey|start|restart|begin)\b/i;
 const isRestart = (text: string) => RESTART.test(text);
 
-async function loadSession(key: string): Promise<{
-  nodeId: string | null;
-  vars: Record<string, string>;
-  flowVersionId: string | null;
-  status: string;
-} | null> {
+async function loadSession(key: string): Promise<{ nodeId: string | null; vars: Record<string, string>; flowVersionId: string | null; status: string } | null> {
   const row = await loadBotSession("whatsapp", key);
   if (!row) return null;
   let vars: Record<string, string> = {};
-  try {
-    vars = JSON.parse(row.vars);
-  } catch {
-    /* ignore */
-  }
+  try { vars = JSON.parse(row.vars); } catch { /* ignore */ }
   const flowVersionId = vars[FLOW_VERSION_VAR] ?? null;
   delete vars[FLOW_VERSION_VAR];
   return { nodeId: row.nodeId, vars, flowVersionId, status: row.status };
 }
 
 function storedVars(vars: Record<string, string>, flowVersionId: string | null): string {
-  return JSON.stringify({
-    ...vars,
-    ...(flowVersionId ? { [FLOW_VERSION_VAR]: flowVersionId } : {}),
-  });
+  return JSON.stringify({ ...vars, ...(flowVersionId ? { [FLOW_VERSION_VAR]: flowVersionId } : {}) });
 }
 
 async function priceList(): Promise<string> {
   const products = await prisma.product.findMany({ where: { active: true }, include: { colors: true }, orderBy: { name: "asc" } });
   if (!products.length) return "I'll have the team send you our current pricing 👍";
-  return (
-    "Here's our current range:\n" +
-    products
-      .map((p) => `• ${p.name}${p.basePriceCents ? ` — from ${formatZAR(p.basePriceCents)}` : ""}` + (p.colors.length ? ` (${p.colors.map((c) => c.name).join(", ")})` : ""))
-      .join("\n")
-  );
+  return "Here's our current range:\n" + products.map((p) => `• ${p.name}${p.basePriceCents ? ` — from ${formatZAR(p.basePriceCents)}` : ""}` + (p.colors.length ? ` (${p.colors.map((c) => c.name).join(", ")})` : "")).join("\n");
 }
 
 async function coloursList(): Promise<string> {
@@ -78,15 +58,8 @@ async function whatsappHistory(contactId: string | null, leadId: string | null, 
   if (leadId) or.push({ leadId });
   or.push({ body: { contains: digits } });
   /* eslint-enable @typescript-eslint/no-explicit-any */
-  const comms = await prisma.communication.findMany({
-    where: { type: "whatsapp", OR: or },
-    orderBy: { occurredAt: "desc" },
-    take: 16,
-  });
-  return comms
-    .reverse()
-    .map((c) => ({ role: (c.direction === "inbound" ? "user" : "assistant") as "user" | "assistant", content: c.body.replace(/\n\n\[to \+?\d+\]\s*$/, "").trim() }))
-    .filter((m) => m.content);
+  const comms = await prisma.communication.findMany({ where: { type: "whatsapp", OR: or }, orderBy: { occurredAt: "desc" }, take: 16 });
+  return comms.reverse().map((c) => ({ role: (c.direction === "inbound" ? "user" : "assistant") as "user" | "assistant", content: c.body.replace(/\n\n\[to \+?\d+\]\s*$/, "").trim() })).filter((m) => m.content);
 }
 
 function buildCtx(digits: string, match: { contactId: string | null; leadId: string | null }): FlowCtx {
@@ -115,14 +88,8 @@ function buildCtx(digits: string, match: { contactId: string | null; leadId: str
   };
 }
 
-/** Runs the published flow for a WhatsApp message. Returns true if handled. */
 export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise<boolean> {
   const match = await matchByPhone(digits);
-
-  // Flow-mode ownership has one source of truth: BotSession.status. Staff replies
-  // and Take over both atomically set it to paused; Return to bot clears it. The
-  // older communication-timestamp heuristic remains only for the legacy non-flow
-  // assistant, where there is no flow session to own.
   const existing = await loadSession(digits);
   if (existing?.status === "paused") return true;
 
@@ -132,9 +99,10 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise
     const contact = match.contactId ? await prisma.contact.findUnique({ where: { id: match.contactId } }) : null;
     seed = greetingVars(contact?.firstName ?? null);
   }
+  const builtins = flowRuntimeVars("whatsapp");
   const session: FlowSession = !existing || restart
-    ? { nodeId: null, vars: seed }
-    : { nodeId: existing.nodeId, vars: existing.vars };
+    ? { nodeId: null, vars: { ...builtins, ...seed } }
+    : { nodeId: existing.nodeId, vars: { ...existing.vars, ...builtins } };
 
   const actor = await resolveTenantActor();
   if (!actor) {
@@ -146,33 +114,11 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise
   const result = await runFlow(snapshot.flow, session, input, buildCtx(digits, match));
 
   await withTenantWrite(async (tx, tenantId) => {
-    await enqueueBotMessagesTx(tx, tenantId, {
-      channel: "whatsapp",
-      key: digits,
-      messages: result.messages,
-      contactId: match.contactId,
-      leadId: match.leadId,
-      actorId: actor.id,
-    });
-
+    await enqueueBotMessagesTx(tx, tenantId, { channel: "whatsapp", key: digits, messages: result.messages, contactId: match.contactId, leadId: match.leadId, actorId: actor.id });
     if (result.handedOff) {
-      await upsertBotSessionTx(tx, tenantId, {
-        channel: "whatsapp",
-        key: digits,
-        nodeId: null,
-        vars: storedVars(session.vars, snapshot.versionId),
-        status: "paused",
-        expiresAt: new Date(Date.now() + 6 * 3600 * 1000),
-      });
+      await upsertBotSessionTx(tx, tenantId, { channel: "whatsapp", key: digits, nodeId: null, vars: storedVars(session.vars, snapshot.versionId), status: "paused", expiresAt: new Date(Date.now() + 6 * 3600 * 1000) });
     } else if (result.session) {
-      await upsertBotSessionTx(tx, tenantId, {
-        channel: "whatsapp",
-        key: digits,
-        nodeId: result.session.nodeId,
-        vars: storedVars(result.session.vars, snapshot.versionId),
-        status: "active",
-        expiresAt: new Date(Date.now() + 24 * 3600 * 1000),
-      });
+      await upsertBotSessionTx(tx, tenantId, { channel: "whatsapp", key: digits, nodeId: result.session.nodeId, vars: storedVars(result.session.vars, snapshot.versionId), status: "active", expiresAt: new Date(Date.now() + 24 * 3600 * 1000) });
     } else {
       await deleteBotSessionTx(tx, tenantId, "whatsapp", digits);
     }
@@ -182,11 +128,7 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise
   return true;
 }
 
-export async function runWhatsAppBot(
-  digits: string,
-  input: FlowInput,
-  opts: { voiceNote?: boolean } = {},
-): Promise<void> {
+export async function runWhatsAppBot(digits: string, input: FlowInput, opts: { voiceNote?: boolean } = {}): Promise<void> {
   if (opts.voiceNote) {
     await maybeAutoReply(digits, input.text, { voiceNote: true });
     return;
