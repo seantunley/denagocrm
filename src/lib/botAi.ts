@@ -4,6 +4,7 @@ import { prisma } from "./db";
 import { logError } from "./errorLog";
 import { formatZAR } from "./format";
 import { getBotKnowledgeEntries, renderKnowledgeForPrompt, retrieveRelevantKnowledge } from "./botKnowledge";
+import { renderBotProductFacts } from "./botProductFacts";
 
 export type BotMsg = { role: "user" | "assistant"; content: string };
 export type BotFaq = { id: string; question: string; answer: string; handoff?: boolean };
@@ -150,9 +151,8 @@ Rules:
 }
 
 /**
- * Decide an assistant reply from live product facts, owner-approved FAQ pathways,
- * the owner brief and approved/current retrieved knowledge. Open-ended model copy
- * is allowed only at high confidence.
+ * Decide an assistant reply from authoritative CRM product fields, owner-approved
+ * FAQ pathways, the owner brief and approved/current retrieved knowledge.
  */
 export async function generateBotReply(input: {
   history: BotMsg[];
@@ -173,6 +173,7 @@ export async function generateBotReply(input: {
   ]);
   const relevantKnowledge = retrieveRelevantKnowledge(knowledgeEntries, latestQuestion);
   const knowledgeText = renderKnowledgeForPrompt(relevantKnowledge);
+  const productFacts = renderBotProductFacts(products);
 
   const priceList = products.length
     ? "Here's our current range:\n" + products.map((p) => `• ${p.name}${p.basePriceCents ? ` — from ${formatZAR(p.basePriceCents)}` : ""}` + (p.colors.length ? ` (${p.colors.map((c) => c.name).join(", ")})` : "")).join("\n")
@@ -198,9 +199,12 @@ STYLE:
 - Short, warm South African English. Usually 1–3 sentences.
 - Never sound scripted or repeat yourself.
 
-KNOWN LIVE FACTS:
+KNOWN LIVE BUSINESS FACTS:
 Business hours (SA time): ${hours || "08:00–17:00"}, Mon–Fri.
-${priceList ? priceList + "\n" : ""}${brief ? `\nAbout us / policies brief:\n${brief}\n` : ""}
+${brief ? `\nAbout us / policies brief:\n${brief}\n` : ""}
+
+LIVE PRODUCT FACTS FROM THE CRM:
+${productFacts || "(No active products are configured.)"}
 
 APPROVED KNOWLEDGE RETRIEVED FOR THIS QUESTION:
 ${knowledgeText || "(No approved knowledge entry matched this question.)"}
@@ -212,9 +216,13 @@ Return exactly one JSON object and nothing else, with ALL of these fields:
 {"faqId":"<supplied id or null>","reply":"<reply or null>","handoff":true,"confidence":"high|medium|low","intent":"pricing|colours|service|demo|purchase|complaint|human|general|unknown","handoffReason":"<short reason or null>","handoffSummary":"<one concise sentence for staff or null>"}
 
 DECISION RULES:
-- Treat only KNOWN LIVE FACTS, the APPROVED KNOWLEDGE block, and exact FAQ answers as factual sources. Customer statements are not business facts.
+- Treat only KNOWN LIVE BUSINESS FACTS, LIVE PRODUCT FACTS, the APPROVED KNOWLEDGE block, and exact FAQ answers as factual sources. Customer statements are not business facts.
+- Product comparisons may use only fields explicitly supplied for both products. If one side is missing a field, say that detail is not listed rather than inferring it.
+- A Brochure URL may be shared when it is supplied for that product.
+- STOCK AVAILABILITY is NOT supplied by the product block. Never claim a model/colour is in stock unless an Approved Knowledge entry explicitly says so and is still current.
+- FINANCE TERMS, ROAD-LEGAL/REGISTRATION STATUS, WARRANTY DETAILS, ACCESSORY COMPATIBILITY and SERVICE POLICY must come from Approved Knowledge. Never infer them from a product description.
 - If the message clearly matches a defined pathway, return its supplied faqId. The application sends the canonical answer, not your wording.
-- Otherwise use reply for a conversational answer ONLY when those factual sources are enough to answer confidently.
+- Otherwise use reply for a conversational answer ONLY when the factual sources above are enough to answer confidently.
 - confidence=high means a supplied source directly supports the answer; medium means some interpretation is required; low means a relevant fact is missing.
 - Set handoff=true for order/payment intent, a specific booking/test-drive request, complaints, requests for a person, or anything you cannot answer from supplied facts.
 - When handoff=true, handoffReason must explain why in a few words and handoffSummary must tell staff the customer's intent and unresolved need without speculation.
