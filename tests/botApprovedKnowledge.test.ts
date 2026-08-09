@@ -49,7 +49,7 @@ test("assistant retrieves from the latest customer question and labels the sourc
   assert.match(code, /const latestQuestion = \[\.\.\.input\.history\]\.reverse\(\)\.find\(\(message\) => message\.role === "user"\)\?\.content/);
   assert.match(code, /retrieveRelevantKnowledge\(knowledgeEntries, latestQuestion\)/);
   assert.match(code, /APPROVED KNOWLEDGE RETRIEVED FOR THIS QUESTION/);
-  assert.match(code, /Treat only KNOWN LIVE FACTS, the APPROVED KNOWLEDGE block, and exact FAQ answers as factual sources/);
+  assert.match(code, /Treat only KNOWN LIVE BUSINESS FACTS, LIVE PRODUCT FACTS, the APPROVED KNOWLEDGE block, and exact FAQ answers as factual sources/);
 });
 
 test("chatbot settings expose draft, approve and expire states instead of one-click publication", () => {
