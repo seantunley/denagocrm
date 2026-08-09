@@ -18,10 +18,12 @@ model BotFlowOutbox {
   leaseUntil  DateTime?
   lastError   String?
   sentAt      DateTime?
+  communicationLoggedAt DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
   @@unique([tenantId, batchId, sequence])
   @@index([tenantId, status, availableAt])
   @@index([tenantId, channel, key, createdAt, sequence])
+  @@index([tenantId, status, communicationLoggedAt])
 }
