@@ -11,10 +11,13 @@ export type FlowIssue = {
 
 const NODE_TYPES = new Set([
   "message", "choice", "capture", "captureFile", "image", "answer",
-  "booking", "slots", "ai", "handoff", "end",
+  "booking", "slots", "condition", "ai", "handoff", "end",
 ]);
-const BUILTIN_VARS = new Set(["greeting", "first_name", "name", "known", "slot"]);
-const AUTO_TYPES = new Set<FlowNode["type"]>(["message", "image", "answer", "booking"]);
+const BUILTIN_VARS = new Set([
+  "greeting", "first_name", "name", "known", "slot",
+  "channel", "current_date", "current_time",
+]);
+const AUTO_TYPES = new Set<FlowNode["type"]>(["message", "image", "answer", "booking", "condition"]);
 
 function issue(
   severity: FlowIssue["severity"],
@@ -43,6 +46,7 @@ function optionsOf(node: unknown): FlowOption[] {
 
 function refs(node: FlowNode): string[] {
   if (node.type === "choice") return optionsOf(node).flatMap((option) => option.next ? [option.next] : []);
+  if (node.type === "condition") return [node.trueNext, node.falseNext].filter((value): value is string => Boolean(str(value)));
   if (node.type === "ai") return str(node.handoffNext) ? [str(node.handoffNext)] : [];
   if (node.type === "handoff" || node.type === "end") return [];
   const next = str((node as { next?: unknown }).next);
@@ -77,7 +81,6 @@ function reachable(flow: Flow): Set<string> {
   return seen;
 }
 
-/** Detect a cycle made only of nodes the engine walks without customer input. */
 function automaticCycles(flow: Flow): string[][] {
   const visiting = new Set<string>();
   const visited = new Set<string>();
@@ -162,6 +165,17 @@ function validateChoiceForChannel(
   return out;
 }
 
+export function flowVariables(flow: Flow): string[] {
+  const vars = new Set(BUILTIN_VARS);
+  for (const node of Object.values(flow.nodes)) {
+    if (node?.type === "capture" || node?.type === "captureFile") {
+      const variable = str(node.variable);
+      if (variable) vars.add(variable);
+    }
+  }
+  return [...vars].sort();
+}
+
 /**
  * Pure graph compiler/linter. Drafts may contain issues; publication must reject
  * every error. Warnings are actionable but do not make execution unsafe.
@@ -219,6 +233,16 @@ export function validateFlow(flow: Flow, channels: FlowChannel[] = ["whatsapp"])
       }
     }
 
+    if (node.type === "condition") {
+      const variable = str(node.condition?.variable);
+      const operator = str(node.condition?.operator);
+      if (!variable || !/^\w+$/.test(variable)) issues.push(issue("error", "condition.variable", "Condition needs a valid variable name.", id));
+      if (!["equals", "not_equals", "contains", "exists", "empty"].includes(operator)) issues.push(issue("error", "condition.operator", "Condition uses an unsupported operator.", id));
+      if (["equals", "not_equals", "contains"].includes(operator) && !str(node.condition?.value).trim()) issues.push(issue("warning", "condition.value", "This condition compares against an empty value.", id));
+      if (!node.trueNext) issues.push(issue("warning", "condition.true_dead_end", "Condition has no Yes/true destination.", id));
+      if (!node.falseNext) issues.push(issue("warning", "condition.false_dead_end", "Condition has no No/false destination.", id));
+    }
+
     if (node.type === "answer" && !node.answerSource && !str(node.text).trim()) issues.push(issue("warning", "answer.empty", "Answer node has no text or dynamic answer source.", id));
     if (node.type === "image") {
       const url = str(node.url);
@@ -252,6 +276,10 @@ export function validateFlow(flow: Flow, channels: FlowChannel[] = ["whatsapp"])
       for (const variable of referencedVars(text)) {
         if (!captured.has(variable)) issues.push(issue("warning", "variable.unknown", `Message references {{${variable}}}, but no capture or built-in variable defines it.`, str(node.id)));
       }
+    }
+    if (node.type === "condition") {
+      const variable = str(node.condition?.variable);
+      if (variable && !captured.has(variable)) issues.push(issue("warning", "condition.unknown_variable", `Condition checks {{${variable}}}, but no capture or built-in variable defines it.`, str(node.id)));
     }
   }
   return issues;
