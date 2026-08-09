@@ -26,8 +26,23 @@ test("staff replies take ownership on every inbox chatbot channel", () => {
 
 test("flow-mode WhatsApp ownership is the BotSession, not a second timestamp heuristic", () => {
   const run = src("src/lib/flowRun.ts");
-  assert.match(run, /existing\?\.status === "paused"/);
+  // Ownership is read from the session and interpreted by one shared rule. It used
+  // to be `status === "paused"`, which could not distinguish a bot handoff from a
+  // staff takeover — so a greeting evicted the person holding the conversation.
+  assert.match(run, /decideInboundAct\(/);
+  assert.match(run, /ownership: existing \? existing\.ownership : null/);
   assert.doesNotMatch(run, /botShouldPause\(/, "flow mode must not override an explicit Return to bot with a stale human-message timestamp");
+});
+
+test("staff takeover and bot handoff are recorded as different things", () => {
+  const control = src("src/lib/botConversationControl.ts");
+  assert.match(control, /ownership: "human"/, "a person taking the thread must be recorded as such");
+
+  for (const rel of ["src/lib/flowSession.ts", "src/lib/flowRun.ts"]) {
+    const code = src(rel);
+    assert.match(code, /ownership: "ai_handoff"/, `${rel}: a bot handoff is not a takeover`);
+    assert.match(code, /ownership: "bot"/, `${rel}: an advancing session is still bot-owned`);
+  }
 });
 
 test("returning a conversation to automation clears stale flow state", () => {

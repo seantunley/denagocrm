@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
 import { DEFAULT_TENANT_ID } from "./tenant";
 import { withTenantWrite, writeTenantId } from "./tenantWrite";
+import { markBotSessionDeliveryFailedTx } from "./botSessionStore";
 import type { OutMsg } from "./flow";
 import { sendWhatsAppButtons, sendWhatsAppImage, sendWhatsAppList, sendWhatsAppText } from "./whatsapp";
 import { sendDirectAttachment, sendDirectMessage, sendDirectQuickReplies } from "./messenger";
@@ -242,6 +243,22 @@ async function failDelivery(row: OutboxRow, error: string): Promise<"retry" | "d
     });
     if (dead.count !== 1) return "retry";
     await blockLaterMessages(row, lastError);
+
+    // The flow state and the customer's reality have now diverged. The session
+    // was committed BEFORE delivery — deliberately, so a provider timeout cannot
+    // lose the message that explains the new state — which means the CRM believes
+    // the customer is waiting at, say, a choice node whose prompt they never
+    // received. Their next message would be interpreted against a menu that does
+    // not exist for them.
+    //
+    // Mark the conversation instead, so the next inbound turn starts over rather
+    // than answering something unseen. This never evicts a person who has taken
+    // the thread over; see markBotSessionDeliveryFailedTx.
+    await withTenantWrite(async (tx, tenantId) => {
+      await markBotSessionDeliveryFailedTx(tx, tenantId, row.channel, row.key);
+    }).catch(async (error) => {
+      await logError("bot-outbox-session-repair", error, row.id).catch(() => {});
+    });
     if (row.flowVersionId) {
       await recordBotFlowEvents([{ channel: row.channel, conversationKey: row.key, flowVersionId: row.flowVersionId, eventType: "delivery_failed", metadata: { outboxId: row.id, attempts: row.attempts } }]);
     }

@@ -66,6 +66,10 @@ export async function pauseBotConversation(
     await pauseBotSessionTx(tx, tenantId, {
       channel: identity.channel,
       key: identity.key,
+      // A PERSON owns this thread now. Nothing the customer types hands it back —
+      // only resumeBotConversation below does. This is the distinction `paused`
+      // could not make, and the reason "hi" used to evict the salesperson.
+      ownership: "human",
       expiresAt: new Date(Date.now() + hours * 3600 * 1000),
     });
   });
