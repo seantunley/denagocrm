@@ -209,7 +209,7 @@
   .btn-primary,
   .btn-secondary,
   .btn-danger {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium transition-all cursor-pointer outline-none focus-visible:ring-4 focus-visible:ring-orange-500/15 disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-all cursor-pointer outline-none focus-visible:ring-4 focus-visible:ring-orange-500/15 disabled:opacity-50 disabled:cursor-not-allowed;
   }
   .btn-primary {
     @apply bg-orange-600 text-white shadow-[0_8px_24px_rgba(234,88,12,0.16)] hover:bg-orange-500 hover:-translate-y-px hover:shadow-[0_10px_28px_rgba(234,88,12,0.24)];
@@ -221,19 +221,19 @@
     @apply bg-red-700 text-white hover:bg-red-600;
   }
   .btn-sm {
-    @apply px-2.5 py-1 text-xs;
+    @apply min-h-7 px-2.5 py-1 text-xs;
   }
   .input {
-    @apply w-full rounded-xl border border-white/10 bg-white/[0.04] px-3.5 py-2.5 text-sm text-slate-100 outline-none transition placeholder:text-slate-600 hover:border-white/15 focus:border-orange-500/60 focus:bg-white/[0.055] focus:ring-4 focus:ring-orange-500/10;
+    @apply min-h-9 w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-sm text-slate-100 outline-none transition placeholder:text-slate-600 hover:border-white/15 focus:border-orange-500/60 focus:bg-white/[0.055] focus:ring-4 focus:ring-orange-500/10;
   }
   .label {
-    @apply block text-[11px] font-semibold text-slate-400 mb-1.5 uppercase tracking-[0.1em];
+    @apply mb-1 block text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400;
   }
   .card {
     /* min-w-0: cards live inside grids/flex rows — without it a long
        unbroken line inside sets the card's minimum width and drags the
        whole page sideways on phones */
-    @apply rounded-2xl border border-white/[0.075] bg-card p-5 shadow-sm min-w-0;
+    @apply min-w-0 rounded-xl border border-white/[0.075] bg-card p-4 shadow-sm;
   }
   .badge {
     @apply inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium;
@@ -242,10 +242,10 @@
     @apply w-full text-sm;
   }
   .table-base th {
-    @apply bg-white/[0.02] text-left text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500 px-4 py-3 border-b border-white/[0.07];
+    @apply border-b border-white/[0.07] bg-white/[0.02] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500;
   }
   .table-base td {
-    @apply px-4 py-3 border-b border-white/[0.065];
+    @apply border-b border-white/[0.065] px-3 py-2.5;
   }
   .table-base tbody tr:hover {
     @apply bg-white/[0.025];
@@ -296,7 +296,7 @@
   isolation: isolate;
 }
 .denago-workspace h1 {
-  font-size: 1.75rem;
+  font-size: 1.5rem;
   font-weight: 600;
   line-height: 1.2;
   letter-spacing: -0.035em;
@@ -356,12 +356,12 @@
     font-size: 0.9375rem;
   }
   .denago-workspace h1 {
-    font-size: 1.5rem;
+    font-size: 1.25rem;
     line-height: 1.2;
   }
   .denago-workspace .card {
-    padding: 1rem;
-    border-radius: 0.875rem;
+    padding: 0.875rem;
+    border-radius: 0.75rem;
   }
   .denago-workspace .card.p-0 {
     padding: 0;
@@ -406,17 +406,17 @@
   }
   [data-slot="responsive-entity-table"] tbody {
     display: grid;
-    gap: 0.75rem;
+    gap: 0.625rem;
   }
   [data-slot="responsive-entity-table"] tr {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.75rem 1rem;
+    gap: 0.625rem 0.875rem;
     overflow: hidden;
     border: 1px solid var(--border);
-    border-radius: 1rem;
+    border-radius: 0.75rem;
     background: var(--card);
-    padding: 1rem;
+    padding: 0.875rem;
     box-shadow: 0 1px 2px rgb(0 0 0 / 0.14);
   }
   [data-slot="responsive-entity-table"] td {

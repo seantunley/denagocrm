@@ -22,7 +22,7 @@ export function Surface({
   return (
     <section
       className={cn(
-        "overflow-hidden rounded-2xl border border-border bg-card shadow-sm",
+        "overflow-hidden rounded-xl border border-border bg-card shadow-sm",
         inset ? "bg-card/70" : "",
         className
       )}
@@ -44,10 +44,10 @@ export function SectionHeading({
   className?: string;
 }) {
   return (
-    <div className={cn("flex items-start justify-between gap-4", className)}>
+    <div className={cn("flex items-start justify-between gap-3", className)}>
       <div className="min-w-0">
         <h2 className="font-semibold tracking-tight text-foreground">{title}</h2>
-        {description && <p className="mt-1 text-xs leading-5 text-muted-foreground">{description}</p>}
+        {description && <p className="mt-0.5 text-xs leading-[1.125rem] text-muted-foreground">{description}</p>}
       </div>
       {action && <div className="shrink-0">{action}</div>}
     </div>
@@ -66,11 +66,11 @@ export function PortalPageHeader({
   action?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
       <div className="min-w-0">
         <Eyebrow>{eyebrow}</Eyebrow>
-        <h1 className="mt-2 text-3xl font-semibold tracking-[-0.045em] text-foreground">{title}</h1>
-        <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">{description}</p>
+        <h1 className="mt-1 text-2xl font-semibold tracking-[-0.045em] text-foreground">{title}</h1>
+        <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">{description}</p>
       </div>
       {action && <div className="shrink-0">{action}</div>}
     </div>
@@ -95,19 +95,19 @@ export function MetricCard({
   return (
     <div
       className={cn(
-        "group relative min-w-0 overflow-hidden rounded-2xl border border-border bg-card p-4 shadow-sm transition-colors hover:border-white/15",
+        "group relative min-w-0 overflow-hidden rounded-xl border border-border bg-card p-3 shadow-sm transition-colors hover:border-white/15",
         className
       )}
     >
       {accent && <div className="pointer-events-none absolute -right-10 -top-12 size-28 rounded-full bg-primary/10 blur-2xl" />}
       <div className="relative flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="line-clamp-2 min-h-[2.5em] text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground sm:min-h-0 sm:truncate">{label}</p>
-          <p className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-foreground tabular-nums">{value}</p>
-          {detail && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground sm:truncate">{detail}</p>}
+          <p className="line-clamp-2 min-h-[2.25em] text-[9px] font-semibold uppercase tracking-[0.13em] text-muted-foreground sm:min-h-0 sm:truncate">{label}</p>
+          <p className="mt-1.5 text-xl font-semibold tracking-[-0.04em] text-foreground tabular-nums">{value}</p>
+          {detail && <p className="mt-0.5 line-clamp-2 text-[11px] text-muted-foreground sm:truncate">{detail}</p>}
         </div>
-        <span className={cn("grid size-9 shrink-0 place-items-center rounded-xl border", accent ? "border-primary/20 bg-primary/10 text-primary" : "border-border bg-muted/50 text-muted-foreground")}>
-          <Icon className="size-[18px]" />
+        <span className={cn("grid size-8 shrink-0 place-items-center rounded-lg border", accent ? "border-primary/20 bg-primary/10 text-primary" : "border-border bg-muted/50 text-muted-foreground")}>
+          <Icon className="size-4" />
         </span>
       </div>
     </div>
@@ -124,7 +124,7 @@ export function MetricStrip({
   className?: string;
 }) {
   return (
-    <section className={cn("relative overflow-hidden rounded-2xl border border-border bg-card shadow-sm", className)}>
+    <section className={cn("relative overflow-hidden rounded-xl border border-border bg-card shadow-sm", className)}>
       {glow !== "none" && (
         <div
           className={cn(
@@ -148,7 +148,7 @@ export function WorkspaceToolbar({
   className?: string;
 }) {
   return (
-    <section className={cn("rounded-2xl border border-border bg-card/70 p-3 shadow-sm", className)}>
+    <section className={cn("rounded-xl border border-border bg-card/70 p-2.5 shadow-sm", className)}>
       {children}
     </section>
   );
@@ -168,13 +168,13 @@ export function EmptyState({
   className?: string;
 }) {
   return (
-    <div className={cn("rounded-2xl border border-dashed border-border bg-card/50 px-6 py-12 text-center", className)}>
-      <span className="mx-auto grid size-12 place-items-center rounded-2xl border border-border bg-muted/40 text-muted-foreground">
-        <Icon className="size-5" />
+    <div className={cn("rounded-xl border border-dashed border-border bg-card/50 px-5 py-8 text-center", className)}>
+      <span className="mx-auto grid size-10 place-items-center rounded-xl border border-border bg-muted/40 text-muted-foreground">
+        <Icon className="size-4" />
       </span>
-      <h3 className="mt-4 font-semibold tracking-tight text-foreground">{title}</h3>
-      <p className="mx-auto mt-1 max-w-md text-sm leading-6 text-muted-foreground">{description}</p>
-      {action && <div className="mt-5 flex justify-center">{action}</div>}
+      <h3 className="mt-3 text-sm font-semibold tracking-tight text-foreground">{title}</h3>
+      <p className="mx-auto mt-1 max-w-md text-xs leading-5 text-muted-foreground">{description}</p>
+      {action && <div className="mt-4 flex justify-center">{action}</div>}
     </div>
   );
 }
@@ -197,7 +197,7 @@ export function StatusPill({
   };
 
   return (
-    <span className={cn("inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em]", tones[tone], className)}>
+    <span className={cn("inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em]", tones[tone], className)}>
       {children}
     </span>
   );
@@ -224,7 +224,7 @@ export function FeedbackBanner({
   return (
     <div
       role={tone === "danger" || tone === "warning" ? "alert" : "status"}
-      className={cn("flex items-start gap-3 rounded-xl border px-4 py-3", style, className)}
+      className={cn("flex items-start gap-2.5 rounded-lg border px-3 py-2.5", style, className)}
     >
       <Icon className="mt-0.5 size-4 shrink-0" />
       <div className="min-w-0 text-sm">
