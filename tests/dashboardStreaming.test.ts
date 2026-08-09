@@ -80,12 +80,47 @@ test("the streamed card returns null rather than throwing on a failed load", () 
   assert.match(body, /catch\s*\{[\s\S]*?return null/, "…it degrades to nothing, as before");
 });
 
-test("the card boundary is a real error boundary, not a wrapper that looks like one", () => {
+test("the card boundary uses the framework primitive, not a hand-rolled class", () => {
+  /*
+   * The first version was a class component with getDerivedStateFromError. That
+   * is the classic way to write a boundary and it is wrong here in ways that are
+   * easy to miss:
+   *
+   *   - redirect() and notFound() work by THROWING. A custom boundary catches
+   *     them like any other failure, so a card that redirects would render
+   *     "could not be loaded" instead of redirecting.
+   *   - a class can only clear its own error state, which cannot recover a
+   *     Server Component error — the card fails again immediately.
+   *
+   * See node_modules/next/dist/docs/.../catchError.md.
+   */
   const boundary = code("src/components/dashboard/CardBoundary.tsx");
-  // A class component is still the only way to catch a render error in React.
-  assert.match(boundary, /getDerivedStateFromError/, "this is what catches the error");
-  assert.match(boundary, /componentDidCatch/, "contained must not mean silent");
+  assert.match(boundary, /unstable_catchError/, "use the framework's boundary");
+  assert.match(boundary, /from "next\/error"/);
   assert.match(boundary, /"use client"/, "an error boundary cannot be a server component");
+  assert.doesNotMatch(
+    boundary,
+    /getDerivedStateFromError|componentDidCatch/,
+    "a hand-rolled class swallows redirect() and notFound()",
+  );
+});
+
+test("a contained card failure still reaches the server", () => {
+  // The observability regression in the first version: componentDidCatch wrote
+  // to the browser console and nowhere else, so a card could fail for every user
+  // of a tenant and leave no trace anywhere. Containment must not mean silence.
+  const boundary = code("src/components/dashboard/CardBoundary.tsx");
+  assert.match(boundary, /\/api\/client-error/, "report to the same endpoint the page boundary uses");
+  assert.match(boundary, /keepalive/, "the report must survive a navigation away");
+  assert.match(boundary, /\.catch\(\(\) => \{\}\)/, "a failing reporter must not break the fallback");
+  assert.match(boundary, /dashboard card/, "the log line must say which card");
+});
+
+test("a failed card can be retried on its own", () => {
+  // unstable_retry re-fetches and re-renders just this boundary's children, so
+  // one failed card does not need a whole-page reload to recover.
+  const boundary = code("src/components/dashboard/CardBoundary.tsx");
+  assert.match(boundary, /unstable_retry\(\)/);
 });
 
 test("a failed card says nothing about why", () => {
@@ -93,11 +128,9 @@ test("a failed card says nothing about why", () => {
   // describe that row on its way out — the same rule renderCard's catch follows.
   const boundary = code("src/components/dashboard/CardBoundary.tsx");
   assert.match(boundary, /could not be loaded/i);
-  assert.doesNotMatch(
-    boundary,
-    /\{(this\.)?state\.error|error\.message|String\(error\)/,
-    "the error must not be rendered into the card",
-  );
+  // The message goes to the SERVER log, never into the rendered output.
+  const rendered = boundary.slice(boundary.indexOf("return ("));
+  assert.doesNotMatch(rendered, /error\.message|error\.stack|String\(error\)/, "no detail on screen");
 });
 
 test("the skeleton reserves height so the grid does not jump", () => {
