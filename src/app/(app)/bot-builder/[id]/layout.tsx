@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { BarChart3, Blocks, History, Pencil } from "lucide-react";
+import { requireOwner } from "@/lib/auth";
 
 export default async function FlowWorkspaceLayout({
   children,
@@ -9,6 +10,7 @@ export default async function FlowWorkspaceLayout({
   children: ReactNode;
   params: Promise<{ id: string }>;
 }) {
+  await requireOwner();
   const { id } = await params;
   const encoded = encodeURIComponent(id);
   return (
