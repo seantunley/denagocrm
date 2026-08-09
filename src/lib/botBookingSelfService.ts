@@ -3,45 +3,15 @@ import { format } from "date-fns";
 import { prisma } from "./db";
 import { logAudit } from "./audit";
 import { sendPushToAll } from "./push";
+import { channelVerifiedOwner, markUnverified, type BotBookingMatch } from "./botBookingIdentity";
 
-export type BotBookingMatch = { contactId: string | null; leadId: string | null };
+export type { BotBookingMatch };
 export type BotBookingSummary = {
   id: string;
   label: string;
   summary: string;
   dueAt: Date;
 };
-
-function phoneTail(phone: string | null | undefined): string | null {
-  const digits = String(phone ?? "").replace(/\D/g, "");
-  return digits.length >= 9 ? digits.slice(-9) : null;
-}
-
-async function resolveBookingOwner(
-  match: BotBookingMatch,
-  vars: Record<string, string>,
-): Promise<BotBookingMatch> {
-  if (match.contactId || match.leadId) return match;
-  const tail = phoneTail(vars.phone);
-  if (!tail) return match;
-
-  const contact = await prisma.contact.findFirst({
-    where: {
-      OR: [
-        { phone: { contains: tail } },
-        { whatsapp: { contains: tail } },
-      ],
-    },
-    select: { id: true },
-  });
-  if (contact) return { contactId: contact.id, leadId: null };
-
-  const lead = await prisma.lead.findFirst({
-    where: { phone: { contains: tail }, status: "open" },
-    select: { id: true, contactId: true },
-  });
-  return lead ? { contactId: lead.contactId ?? null, leadId: lead.id } : match;
-}
 
 function ownerWhere(owner: BotBookingMatch): { OR: ({ contactId: string } | { leadId: string })[] } | null {
   const OR: ({ contactId: string } | { leadId: string })[] = [];
@@ -58,7 +28,8 @@ export async function findUpcomingBotBooking(
   match: BotBookingMatch,
   vars: Record<string, string>,
 ): Promise<BotBookingSummary | null> {
-  const owner = await resolveBookingOwner(match, vars);
+  const owner = channelVerifiedOwner(match);
+  if (!owner) { markUnverified(vars); return null; }
   const scope = ownerWhere(owner);
   if (!scope) return null;
 
@@ -95,7 +66,8 @@ export async function cancelBotBooking(
   match: BotBookingMatch,
   vars: Record<string, string>,
 ): Promise<{ ok: boolean; alreadyCancelled?: boolean; label?: string }> {
-  const owner = await resolveBookingOwner(match, vars);
+  const owner = channelVerifiedOwner(match);
+  if (!owner) { markUnverified(vars); return { ok: false }; }
   const scope = ownerWhere(owner);
   if (!scope || !bookingId) return { ok: false };
 

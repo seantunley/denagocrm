@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { channelVerifiedOwner, markUnverified } from "../src/lib/botBookingIdentity";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
@@ -19,14 +20,24 @@ test("booking lookup is read-only and restricted to the conversation customer", 
   assert.doesNotMatch(lookup, /\.create\(|\.update\(|\.upsert\(/, "a failed booking lookup must not create or mutate CRM records");
 });
 
-test("captured-phone lookup matches only an existing contact or open lead", () => {
+test("a phone number typed into the chat is never an identity", () => {
+  // This primitive is not wired into any flow on this branch yet — the template
+  // and the manageBooking action arrive later in the stack. It is fixed here, at
+  // the point it is introduced, so it cannot be wired up unsafe.
+  const telegramSender = { contactId: null, leadId: null };
+  assert.equal(channelVerifiedOwner(telegramSender), null);
+
+  const vars: Record<string, string> = { phone: "0821234567", booking_id: "act_someone_else" };
+  markUnverified(vars);
+  assert.equal(vars.booking_identity, "unverified");
+  assert.equal(vars.booking_id, undefined, "a booking id from an earlier turn must not survive");
+
+  const whatsappMatched = { contactId: "c_1", leadId: null };
+  assert.deepEqual(channelVerifiedOwner(whatsappMatched), whatsappMatched);
+
   const code = src("src/lib/botBookingSelfService.ts");
-  const resolver = code.slice(code.indexOf("async function resolveBookingOwner"), code.indexOf("function ownerWhere"));
-  assert.match(resolver, /phoneTail\(vars\.phone\)/);
-  assert.match(resolver, /prisma\.contact\.findFirst/);
-  assert.match(resolver, /prisma\.lead\.findFirst/);
-  assert.match(resolver, /status: "open"/);
-  assert.doesNotMatch(resolver, /\.create\(/);
+  assert.doesNotMatch(code, /phoneTail|resolveBookingOwner|vars\.phone/);
+  assert.match(code, /channelVerifiedOwner\(match\)/);
 });
 
 test("cancellation retains history and releases workshop capacity by leaving planned state", () => {
