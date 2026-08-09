@@ -77,6 +77,12 @@ async function createInStage(input: NewLead, stageId: string) {
     ...(input.quantity != null ? { quantity: input.quantity } : {}),
     valueCents: input.valueCents ?? 0,
     externalId: input.externalId ?? null,
+    // Never write a tenant-owned Lead tenantless. The guard only stamps under
+    // enforcement, which is still dormant, so without this a new Lead lands with a
+    // NULL tenantId while existingExternalLead() looks it up by DEFAULT_TENANT_ID —
+    // the retry pre-check could never match the very rows it exists to find. Under
+    // enforcement stampCreate overwrites this with the request's scope.
+    tenantId: writeTenantId() ?? DEFAULT_TENANT_ID,
     raw: input.raw != null ? JSON.stringify(input.raw) : null,
     stageId,
     position,
@@ -108,14 +114,12 @@ async function createInStage(input: NewLead, stageId: string) {
     if (input.externalId && error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       const winner = await existingExternalLead(input.externalId);
       if (winner) return winner;
-      // `externalId` is unique across the whole table, but the lookup above is
-      // tenant-scoped, so a collision owned by ANOTHER tenant lands here with no
-      // winner to return. Retrying can never clear that, and a bare P2002 reads as
-      // transient — the webhook would release the event and replay it forever. Say
-      // what actually happened instead. (The structural fix is a composite
-      // @@unique([tenantId, externalId]), which needs its own migration.)
+      // The constraint is now @@unique([tenantId, externalId]), the same domain this
+      // lookup uses, so a P2002 here means the winner is this tenant's and the read
+      // above should have found it. Reaching this line means the two have drifted
+      // apart again — say so rather than replaying a bare P2002 for ever.
       throw new Error(
-        `Lead externalId ${input.externalId} already belongs to a different tenant — this lead cannot be created here, and retrying will not change that.`,
+        `Lead externalId ${input.externalId} collided within this tenant but no existing row could be read back; the unique constraint and existingExternalLead() no longer agree.`,
       );
     }
     throw error;

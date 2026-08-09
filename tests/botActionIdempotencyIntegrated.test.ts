@@ -127,9 +127,22 @@ test("the slot retry marker is locked before it is read, not just before capacit
   assert.ok(read < capacity, "the marker is still checked before capacity is consumed");
 });
 
-test("a cross-tenant externalId collision is reported as permanent, not retried forever", () => {
+test("the lead identity constraint and the lookup that consults it share one domain", () => {
   const creator = src("src/lib/leadCreate.ts");
+  // The row must carry a tenant. The db.ts guard only stamps one under enforcement,
+  // which is dormant, so without this the row lands NULL while the identity read
+  // asks for DEFAULT_TENANT_ID — and the pre-check never matches what it created.
+  assert.match(creator, /tenantId: writeTenantId\(\) \?\? DEFAULT_TENANT_ID/);
   const recovery = creator.slice(creator.indexOf('error.code === "P2002"'));
-  assert.match(recovery, /already belongs to a different tenant/);
-  assert.match(recovery, /retrying will not change that/);
+  assert.match(recovery, /no longer agree/);
+
+  // The constraint is scoped to the tenant, matching existingExternalLead().
+  const schema = src("prisma/schema.prisma");
+  assert.match(schema, /@@unique\(\[tenantId, externalId\]\)/);
+  assert.doesNotMatch(schema, /externalId String\? @unique/);
+
+  const migration = src("prisma/migrations/20260809200000_lead_external_id_tenant_scope/migration.sql");
+  assert.match(migration, /UPDATE "Lead" SET "tenantId" = 'tenant_denago_cpt' WHERE "tenantId" IS NULL/);
+  assert.match(migration, /DROP INDEX IF EXISTS "Lead_externalId_key"/);
+  assert.match(migration, /CREATE UNIQUE INDEX IF NOT EXISTS "Lead_tenantId_externalId_key"/);
 });
