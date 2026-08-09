@@ -5,10 +5,8 @@ import { logError } from "./errorLog";
 import { formatZAR } from "./format";
 
 export type BotMsg = { role: "user" | "assistant"; content: string };
-
-/** An owner-defined FAQ pathway: when a message matches `question`, the exact
- *  `answer` is sent (optionally then handing off to a human). */
 export type BotFaq = { id: string; question: string; answer: string; handoff?: boolean };
+export type BotChoiceOption = { id: string; label: string; description?: string };
 
 export async function getBotFaqs(): Promise<BotFaq[]> {
   const raw = await getSetting("BOT_FAQS");
@@ -46,14 +44,81 @@ function personalize(text: string, name?: string | null) {
   return text.replace(/\{\{\s*(first_name|name)\s*\}\}/g, first);
 }
 
+function parseFirstJsonObject(text: string): Record<string, unknown> {
+  const m = text.match(/\{[\s\S]*\}/);
+  const parsed = JSON.parse(m ? m[0] : "{}");
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+}
+
 /**
- * Decides the WhatsApp reply. First tries to route the message to a defined
+ * Semantic menu routing is deliberately constrained: the model may select ONE
+ * id from the graph's existing options, or null. It cannot invent a destination,
+ * emit a reply, or invoke a CRM action. Only high-confidence selections are used.
+ */
+export async function routeBotChoice(input: {
+  prompt: string;
+  text: string;
+  options: BotChoiceOption[];
+}): Promise<string | null> {
+  if (!(await isBotAiEnabled())) return null;
+  const apiKey = await getSetting("ANTHROPIC_API_KEY");
+  if (!apiKey || !input.text.trim() || input.options.length < 2) return null;
+
+  const optionList = input.options
+    .map((option) => `[${option.id}] ${option.label}${option.description ? ` — ${option.description}` : ""}`)
+    .join("\n");
+  const system = `You are a strict menu router. Map the customer's free-text reply to ONE of the supplied menu options only when their intent clearly matches it.
+
+MENU PROMPT:
+${input.prompt}
+
+ALLOWED OPTIONS:
+${optionList}
+
+Return JSON only:
+{"optionId":"<one supplied id or null>","confidence":"high|medium|low"}
+
+Rules:
+- Never invent an id.
+- Use null when the customer asks something outside the menu, mentions multiple conflicting choices, or is ambiguous.
+- Use confidence=high only when a normal human would clearly choose that menu item.
+- Do not answer the customer and do not add any other fields.`;
+
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      signal: AbortSignal.timeout(10000),
+      headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5",
+        max_tokens: 80,
+        system,
+        messages: [{ role: "user", content: input.text.trim() }],
+      }),
+    });
+    if (!res.ok) {
+      await logError("bot-choice-router", `Anthropic ${res.status}`, (await res.text().catch(() => "")).slice(0, 200));
+      return null;
+    }
+    const json = await res.json();
+    void recordAiUsage(json.usage);
+    const parsed = parseFirstJsonObject(String(json.content?.[0]?.text ?? "{}"));
+    if (parsed.confidence !== "high" || typeof parsed.optionId !== "string") return null;
+    return input.options.some((option) => option.id === parsed.optionId) ? parsed.optionId : null;
+  } catch (e) {
+    await logError("bot-choice-router", e);
+    return null;
+  }
+}
+
+/**
+ * Decides the assistant reply. First tries to route the message to a defined
  * FAQ pathway (built-in price list / colours, plus owner-defined FAQs) and
  * returns that exact answer; otherwise Claude answers conversationally,
  * grounded in the real range, prices, hours and brief. Also flags handoff.
  */
 export async function generateBotReply(input: {
-  history: BotMsg[]; // chronological; last turn is the customer's latest message
+  history: BotMsg[];
   customerName?: string | null;
   isCustomer: boolean;
   voiceNote?: boolean;
@@ -85,7 +150,6 @@ export async function generateBotReply(input: {
         .join("\n")
     : "";
 
-  // Pathways the router can choose. Built-ins are data-driven and always fresh.
   const builtins: { id: string; when: string; answer: string; handoff?: boolean }[] = [];
   if (priceList) builtins.push({ id: "builtin:pricelist", when: "asking about price, cost, how much, or a price list", answer: priceList });
   if (coloursList) builtins.push({ id: "builtin:colours", when: "asking which colours/colors are available", answer: `Our colours:\n${coloursList}` });
@@ -140,9 +204,7 @@ ${input.voiceNote ? "- This message arrived as a VOICE NOTE (transcribed). Reply
     }
     const json = await res.json();
     void recordAiUsage(json.usage);
-    const text: string = json.content?.[0]?.text ?? "{}";
-    const m = text.match(/\{[\s\S]*\}/);
-    const parsed = JSON.parse(m ? m[0] : "{}");
+    const parsed = parseFirstJsonObject(String(json.content?.[0]?.text ?? "{}"));
 
     if (parsed.faqId) {
       const p = pathways.find((x) => x.id === parsed.faqId);
