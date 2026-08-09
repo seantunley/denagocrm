@@ -4,9 +4,9 @@ import { priceList, coloursList } from "./botAnswers";
 import { sendPushToAll } from "./push";
 import { advanceFlow, greetingVars } from "./flowSession";
 import { crmActions } from "./flowActions";
-import { enqueueBotMessages, flushBotOutboxConversation } from "./botOutbox";
+import { flushBotOutboxConversation } from "./botOutbox";
+import { enqueueBotMessagesTx } from "./botOutboxWrite";
 
-// Keep the public transport surface stable for existing settings/webhook callers.
 export {
   tgSend,
   tgSendPhoto,
@@ -39,13 +39,11 @@ export async function runTelegramFlow(chatId: number | string, text: string, cal
       ...crmActions("telegram", { contactId: null, leadId: null }),
     }),
     greetingVars(null),
-    async (messages) => {
-      await enqueueBotMessages({ channel: "telegram", key, messages });
+    async (messages, tx, tenantId) => {
+      await enqueueBotMessagesTx(tx, tenantId, { channel: "telegram", key, messages });
     },
   );
 
   if (result.suppressed) return;
-  // Immediate best effort for conversational latency. A failure remains queued
-  // for the bot-outbox cron rather than being lost.
   await flushBotOutboxConversation("telegram", key);
 }
