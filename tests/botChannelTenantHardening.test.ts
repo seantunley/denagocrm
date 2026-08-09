@@ -38,6 +38,15 @@ test("Telegram resolver considers only active tenants and never returns the webh
   assert.doesNotMatch(code, /console\.|logError/);
 });
 
+test("Telegram webhook authentication never disappears when tenancy enforcement is off", () => {
+  const code = src("src/lib/telegramTenant.ts");
+  assert.match(code, /if \(!secret\) return onUnresolved\(\)/);
+  assert.doesNotMatch(code, /if \(!tenantEnforcing\(\)\) return fn\(\)/);
+  assert.match(code, /const expected = await getSetting\("TELEGRAM_WEBHOOK_SECRET"\)/);
+  assert.match(code, /if \(expected && secretEquals\(secret, expected\)\) return fn\(\)/);
+  assert.match(code, /return onUnresolved\(\)/);
+});
+
 test("Telegram secrets are decrypted only inside the trusted pre-scope resolver", () => {
   const code = src("src/lib/telegramTenant.ts");
   assert.match(code, /basePrisma\.\$queryRaw/);
