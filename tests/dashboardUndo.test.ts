@@ -75,14 +75,62 @@ test("undo on an empty history is a no-op, not a crash", () => {
   assert.match(body, /if \(!previous\) return;/);
 });
 
-test("a config arriving from the server clears the history", () => {
-  // Undoing into arrangements from before a server re-seed would resurrect state
-  // the server has already replaced.
+test("the echo of this editor's own save does NOT clear the history", () => {
+  /*
+   * The lifecycle bug that defeated the whole feature. Every successful save
+   * calls revalidatePath("/"), so the server sends the config straight back. The
+   * re-seed effect treated any changed seed as a foreign config and wiped the
+   * history - roughly 600ms after every edit.
+   *
+   * So undo only covered the window BEFORE the autosave landed, which is the
+   * opposite of why it exists: saving is immediate, so an accidental delete is
+   * already persisted by the time anyone notices, and that was precisely the
+   * state left with no history.
+   */
   const provider = code(PROVIDER);
-  const fn = provider.slice(provider.indexOf("seenSeed.current = seed;"));
-  const body = fn.slice(0, fn.indexOf("}, [seed]"));
+  const effect = provider.slice(provider.indexOf("seenSeed.current = seed;"));
+  const body = effect.slice(0, effect.indexOf("}, [seed]"));
+
+  assert.match(body, /ownSeeds\.current\.has\(seed\)/, "an echo of our own save must be recognised");
+  assert.match(body, /if \(!isOwnEcho\)/, "only a foreign config may clear the history");
+
+  const guardAt = body.indexOf("if (!isOwnEcho)");
+  const clearAt = body.indexOf("history.current = []");
+  assert.ok(guardAt !== -1 && clearAt !== -1, "both the guard and the clear must exist");
+  assert.ok(guardAt < clearAt, "an unconditional clear defeats the feature");
+});
+
+test("a genuinely foreign config still clears the history", () => {
+  // Undoing into arrangements from before someone else's change would resurrect
+  // state the server has already discarded.
+  const provider = code(PROVIDER);
+  const effect = provider.slice(provider.indexOf("seenSeed.current = seed;"));
+  const body = effect.slice(0, effect.indexOf("}, [seed]"));
   assert.match(body, /history\.current = \[\]/);
   assert.match(body, /setUndoDepth\(0\)/, "the control must disable itself again too");
+});
+
+test("a save records its seed so the echo can be recognised", () => {
+  const provider = code(PROVIDER);
+  const save = provider.slice(provider.indexOf("committed.current = next;"));
+  const body = save.slice(0, save.indexOf("} catch"));
+  assert.match(body, /ownSeeds\.current\.add\(/, "without this every echo looks foreign");
+});
+
+test("the own-seed set is bounded", () => {
+  // An echo that never arrives would otherwise leave its key there forever.
+  const provider = code(PROVIDER);
+  assert.match(provider, /const OWN_SEED_LIMIT = \d+;/);
+  assert.match(provider, /ownSeeds\.current\.size > OWN_SEED_LIMIT/);
+});
+
+test("a matched echo is consumed, so a later foreign config still clears", () => {
+  // A stale entry could otherwise match a foreign config that happened to be
+  // identical, and wrongly keep the history.
+  const provider = code(PROVIDER);
+  const effect = provider.slice(provider.indexOf("seenSeed.current = seed;"));
+  const body = effect.slice(0, effect.indexOf("}, [seed]"));
+  assert.match(body, /ownSeeds\.current\.delete\(seed\)/);
 });
 
 test("the control disables itself when there is nothing to undo", () => {

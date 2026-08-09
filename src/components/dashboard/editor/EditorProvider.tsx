@@ -89,6 +89,9 @@ const SAVE_DEBOUNCE_MS = 600;
 /** How many steps back the editor remembers. See the note beside `history`. */
 const UNDO_LIMIT = 25;
 
+/** How many un-echoed saves to remember. See the note beside `ownSeeds`. */
+const OWN_SEED_LIMIT = 8;
+
 export function DashboardEditorProvider({
   slug,
   initialConfig,
@@ -123,6 +126,24 @@ export function DashboardEditorProvider({
    * point anyone is still reasoning about what they did.
    */
   const history = useRef<DashboardConfig[]>([]);
+  /*
+   * Seeds this editor itself caused.
+   *
+   * Every successful save calls revalidatePath("/"), so the server sends the
+   * config straight back — and the re-seed effect below treats any changed seed
+   * as a foreign config and clears the undo history. That is the correct
+   * response to somebody else's change and completely wrong for the echo of the
+   * edit just made: it wiped the history roughly 600ms after every edit, so undo
+   * only ever covered the window BEFORE the autosave landed.
+   *
+   * Which is the opposite of why undo exists. The whole reason is that saving is
+   * immediate, so an accidental delete is already persisted by the time it is
+   * noticed — precisely the state that had no history left.
+   *
+   * Seeds are matched by VALUE, because the object that comes back from the
+   * server is never the object that was sent.
+   */
+  const ownSeeds = useRef<Set<string>>(new Set());
   const [undoDepth, setUndoDepth] = useState(0);
   const [saving, setSaving] = useState(false);
   const [, startTransition] = useTransition();
@@ -148,11 +169,19 @@ export function DashboardEditorProvider({
     if (seenSeed.current === seed) return;
     seenSeed.current = seed;
     committed.current = initialConfig;
-    // A config that arrived from the server is a new starting point; undoing
-    // into arrangements from before it would resurrect state the server has
-    // already replaced.
-    history.current = [];
-    setUndoDepth(0);
+    /*
+     * A seed this editor produced is the echo of its own save. The arrangement on
+     * screen is already correct and the history behind it is still valid, so it
+     * is kept. A seed from anywhere else replaced the document under us, and
+     * undoing into arrangements from before it would resurrect state the server
+     * has already discarded.
+     */
+    const isOwnEcho = ownSeeds.current.has(seed);
+    ownSeeds.current.delete(seed);
+    if (!isOwnEcho) {
+      history.current = [];
+      setUndoDepth(0);
+    }
     setConfig(initialConfig);
     // initialConfig is folded into `seed` by value.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -185,6 +214,19 @@ export function DashboardEditorProvider({
             const result = await saveDashboardConfig(slug, next);
             if (result?.error) throw new Error(result.error);
             committed.current = next;
+            // The server will echo this back via revalidatePath. Remember it so
+            // the re-seed below recognises it as ours and keeps the history.
+            const seedKey = JSON.stringify(next);
+            ownSeeds.current.add(seedKey);
+            // Bounded. An echo that never arrives — a save that changed nothing
+            // the server re-sends, a navigation before revalidation lands —
+            // would otherwise leave its key here forever. A Set preserves
+            // insertion order, so the oldest goes first.
+            while (ownSeeds.current.size > OWN_SEED_LIMIT) {
+              const oldest = ownSeeds.current.values().next().value;
+              if (oldest === undefined) break;
+              ownSeeds.current.delete(oldest);
+            }
           } catch (error) {
             /*
              * Roll the SCREEN back, not just the record of what is saved.
