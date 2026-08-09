@@ -196,35 +196,37 @@ export const SPAN_IN_GRID: Record<2 | 3 | 4, Record<1 | 2 | 3 | 4, string>> = {
 };
 
 /**
- * Row spans as STATIC class names, for exactly the reason the column table above
- * spells its own out: Tailwind scans source TEXT, so a computed `row-span-${n}`
- * never reaches the stylesheet and the card silently stays one row tall.
+ * How TALL a card is, as a minimum height ON THE CARD.
  *
- * Only applied from `sm:` upward. On a phone every card is full width and
- * stacked, so a card asking for three rows would just be a tall box with a lot
- * of empty space in it — and the row heights it would be spanning belong to
- * cards that are no longer beside it.
+ * NOT a grid row span, and the difference is the whole point.
  *
- * A grid only has rows to span if its rows are a known height, which is what
- * `auto-rows-*` on the container provides — see GRID_ROWS_CLASS. Without that a
- * row is as tall as its tallest card and spanning two of them means nothing.
+ * The first version did it with `row-span-*` plus `auto-rows-[minmax(11rem,auto)]`
+ * on the container. Spanning rows only means something if the rows have a known
+ * height, and `auto-rows` sets that minimum for EVERY row in the section — so the
+ * moment one card was made two rows tall, every other row in that section became
+ * 176px and short cards sat in tall empty boxes. That was the "huge spaces"
+ * report, and two rounds of narrowing WHEN the class applied never addressed it,
+ * because the mechanism itself was wrong.
+ *
+ * A minimum height on the card affects that card and nothing else. Its grid row
+ * grows to fit it, exactly as a row already grows for a tall chart; every other
+ * row is untouched. Neighbours in the same row keep their natural height and
+ * stay top-aligned, which is what `items-start` already does for a tall card
+ * today.
+ *
+ * Static strings, for the reason the column table above spells out: Tailwind
+ * scans source text, so a computed `min-h-[${n}rem]` never reaches the
+ * stylesheet.
+ *
+ * From `sm:` upward only — on a phone every card is full width and stacked, so a
+ * forced height is just empty space.
  */
-export const ROW_SPAN_CLASS: Record<1 | 2 | 3 | 4, string> = {
+export const CARD_MIN_HEIGHT: Record<1 | 2 | 3 | 4, string> = {
   1: "",
-  2: "sm:row-span-2",
-  3: "sm:row-span-3",
-  4: "sm:row-span-4",
+  2: "sm:min-h-[22rem]",
+  3: "sm:min-h-[33rem]",
+  4: "sm:min-h-[44rem]",
 };
-
-/**
- * Give the grid a base row height so a row span means something.
- *
- * Without this, rows are sized by their tallest card and a two-row card is
- * simply itself. `auto-rows-[minmax(0,auto)]` is the browser default and is NOT
- * what is wanted; a fixed minimum lets a taller card claim real extra space
- * while a normal card still grows past the minimum if its content needs to.
- */
-export const GRID_ROWS_CLASS = "sm:auto-rows-[minmax(11rem,auto)]";
 
 /** One column on a phone, always — a two-column card grid at 380px is unreadable. */
 export const GRID_COLUMNS_CLASS: Record<2 | 3 | 4, string> = {

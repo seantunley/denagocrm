@@ -89,158 +89,78 @@ test("an out-of-range height is refused, exactly as an out-of-range width is", (
   assert.equal(cardsFor({ id: "c1", type: "markdown", span: 1, rows: 99, content: "hi" }).length, 0);
 });
 
-// ── the classes actually exist ──────────────────────────────────────────────
+// ── how height is actually applied ──────────────────────────────────────────
 
-test("row spans are static class names, not built from a variable", () => {
-  // Tailwind scans source TEXT. A computed `row-span-${n}` never reaches the
-  // stylesheet, and the card silently stays one row tall — the exact failure the
-  // column tables in this codebase are commented at length to avoid.
+test("height is a minimum on the CARD, not a grid row span", () => {
+  /*
+   * THE MECHANISM CHANGED, and the reason is the whole story of this feature.
+   *
+   * It started as `row-span-*` plus `auto-rows-[minmax(11rem,auto)]` on the
+   * container, because spanning rows only means anything if rows have a known
+   * height. But `auto-rows` sets that minimum for EVERY row in the section — so
+   * the moment one card was made two rows tall, every other row became 176px and
+   * short cards sat in tall empty boxes.
+   *
+   * That was the "huge spaces" report. Two rounds of narrowing WHEN the class
+   * applied (unconditional → per-section → per-drawn-card) never fixed it,
+   * because each was treating a symptom of the wrong mechanism. Evidence
+   * finally settled it: the stored dashboard genuinely had a rows:2 card, so the
+   * class was applying correctly and still ruining the section.
+   *
+   * A minimum height on the card affects that card alone. Its row grows to fit
+   * it, exactly as a row already grows for a tall chart, and no other row moves.
+   */
   const shell = code("src/components/dashboard/cards/shell.tsx");
-  assert.match(shell, /sm:row-span-2/);
-  assert.match(shell, /sm:row-span-3/);
-  assert.match(shell, /sm:row-span-4/);
-  assert.doesNotMatch(shell, /row-span-\$\{/, "a computed row-span class does not exist at runtime");
+  assert.match(shell, /CARD_MIN_HEIGHT/);
+  assert.match(shell, /sm:min-h-\[22rem\]/);
+  assert.match(shell, /sm:min-h-\[33rem\]/);
+  assert.match(shell, /sm:min-h-\[44rem\]/);
 
-  const canvas = code("src/components/dashboard/editor/DashboardCanvas.tsx");
-  assert.match(canvas, /sm:row-span-2/);
-  assert.doesNotMatch(canvas, /row-span-\$\{/);
-});
-
-test("the base row height follows what is DRAWN, not what is configured", () => {
-  /*
-   * Two bugs, one line apart.
-   *
-   * First, applying `auto-rows-[minmax(11rem,auto)]` unconditionally forced
-   * EVERY row to 176px, so a row of short stat tiles left a large blank gap —
-   * reported from production as "huge spaces".
-   *
-   * Then the conditional version read the CONFIGURED cards. A `rows: 2` card
-   * that is hidden by its visibility rule, or disabled, is not in the grid at
-   * all — but it still switched the row minimum on for every natural-height card
-   * beside it. Same gaps, now caused by a card that is not even on screen.
-   *
-   * My own test protected that second bug: it asserted `section.cards.some(...)`
-   * — the buggy expression — so the whole suite stayed green. The rule is the
-   * DRAWN list, which is what the renderer a few lines below actually maps over.
-   */
-  const canvas = code("src/components/dashboard/editor/DashboardCanvas.tsx");
-
-  // `cards` is `editing ? section.cards : drawn` — the list the grid renders.
-  assert.match(
-    canvas,
-    /cards\.some\(\(entry\) => \(entry\.rows \?\? 1\) > 1\)/,
-    "the decision must follow the drawn cards",
-  );
-  assert.doesNotMatch(
-    canvas,
-    /section\.cards\.some\(\(entry\) => \(entry\.rows \?\? 1\) > 1\)/,
-    "reading the configured list counts cards that were never drawn",
-  );
-
-  const container = code("src/components/dashboard/cards/container.tsx");
-  assert.match(
-    container,
-    /children\.some\(\(\{ card: child \}\) => \(child\.rows \?\? 1\) > 1\) && GRID_ROWS_CLASS/,
-    "nested grids must read the rendered children",
-  );
-  assert.doesNotMatch(
-    container,
-    /card\.cards\.some\(\(child\) => \(child\.rows \?\? 1\) > 1\)/,
-    "renderChildren has already dropped hidden and disabled cards",
-  );
-
-  // And the class still exists — the fix must not have removed spanning outright.
-  assert.match(canvas, /auto-rows-\[minmax\(/);
-});
-
-test("a hidden tall card does not set the row height for its neighbours", () => {
-  /*
-   * The regression case in one shape. `drawn` is the cards with a slot; a card
-   * hidden by its rules has none. So the predicate must be evaluated against a
-   * list that excludes it — this pins the SHAPE of that logic, since the
-   * component itself is a client component and cannot be executed here.
-   */
-  const canvas = code("src/components/dashboard/editor/DashboardCanvas.tsx");
-
-  // The drawn list is derived from the slots, so a card the server drew nothing
-  // for is excluded before any height decision is made.
-  assert.match(canvas, /const drawn = section\.cards\.filter\(\(card\) => slots\[card\.id\] !== undefined\)/);
-  assert.match(canvas, /const cards = editing \? section\.cards : drawn/);
-
-  // The height predicate must sit AFTER that derivation and use its result.
-  const drawnAt = canvas.indexOf("const cards = editing");
-  const decisionAt = canvas.indexOf("cards.some((entry) => (entry.rows ?? 1) > 1)");
-  assert.ok(drawnAt !== -1 && decisionAt !== -1, "both must be present");
-  assert.ok(drawnAt < decisionAt, "the decision must use the already-narrowed list");
-});
-
-test("the height chain is unbroken from grid cell to visible card", () => {
-  /*
-   * The test this replaces searched for the string "sm:h-full" ANYWHERE in the
-   * file. It passed while the class sat on the placement wrapper and the card
-   * inside stayed its natural height — so a two-row card claimed the space and
-   * left the bottom half blank, which is precisely the bug the feature claims to
-   * prevent. A string search is not a chain check.
-   *
-   * Three links, each checked where it lives:
-   *   1. the grid ITEM must stop being start-aligned, or nothing below it can
-   *      inherit a height at all;
-   *   2. the content div between wrapper and card must pass the height on;
-   *   3. the visible panel must fill what it is given.
-   */
-
-  // 1. items-start means a grid item is content-height; h-full on it is a no-op.
-  //    self-stretch is what actually opts the item out of that.
-  const canvas = code("src/components/dashboard/editor/DashboardCanvas.tsx");
-  const wrapper = canvas.slice(canvas.indexOf("CARD_ROWS[card.rows"));
-  const wrapperClasses = wrapper.slice(0, wrapper.indexOf("isDragging"));
-  assert.match(wrapperClasses, /sm:self-stretch/, "h-full alone cannot stretch a start-aligned item");
-  assert.match(wrapperClasses, /sm:h-full/);
-  assert.match(wrapperClasses, /sm:flex sm:flex-col/, "the box has to be able to hand height down");
-
-  // 2. the middle link.
-  const inner = canvas.slice(canvas.indexOf("pointer-events-none select-none"));
-  const innerClasses = inner.slice(0, inner.indexOf("CardPlaceholder"));
-  assert.match(innerClasses, /sm:flex-1/, "the content div must grow into the tall wrapper");
-  assert.match(innerClasses, /sm:min-h-0/, "…and must still be allowed to shrink for scrolling");
-
-  // 3. the visible panel. Both branches of CardShell, and SectionCard, or a card
-  //    with a title behaves differently from one without.
+  // The grid must no longer impose a row height on anything.
   for (const file of [
-    "src/components/dashboard/sections.tsx",
     "src/components/dashboard/cards/shell.tsx",
+    "src/components/dashboard/cards/container.tsx",
+    "src/components/dashboard/editor/DashboardCanvas.tsx",
   ]) {
-    const panel = code(file);
-    assert.match(
-      panel,
-      /h-full[^"]*rounded-xl border border-border bg-card|flex h-full/,
-      `${file}: the panel itself must fill its cell`,
+    assert.doesNotMatch(
+      code(file),
+      /auto-rows-\[minmax/,
+      `${file}: a grid row minimum affects every row in the section`,
     );
+    assert.doesNotMatch(code(file), /row-span-\d/, `${file}: spanning rows is gone`);
   }
-
-  // and the non-editor grid container follows the same rule
-  const container = code("src/components/dashboard/cards/container.tsx");
-  assert.match(container, /sm:h-full sm:self-stretch/, "the container path needs the stretch too");
 });
 
-test("stretching is opt-in, so a normal card is untouched", () => {
-  // Every h-full above is conditional on rows > 1. If it were unconditional,
-  // every one-row card would stretch to its row and the grid's items-start
-  // behaviour — which the whole layout depends on — would be gone.
-  const canvas = code("src/components/dashboard/editor/DashboardCanvas.tsx");
-  assert.match(canvas, /card\.rows && card\.rows > 1 \? "sm:h-full sm:self-stretch/);
-  const container = code("src/components/dashboard/cards/container.tsx");
-  assert.match(container, /child\.rows && child\.rows > 1 \? "sm:h-full sm:self-stretch/);
-});
-
-test("row spans start at sm, never on a phone", () => {
-  // On a phone the grid is one column and every card is full width, so spanning
-  // rows would leave a tall empty box.
+test("the height classes are static strings", () => {
+  // Tailwind scans source TEXT, so a computed `min-h-[${n}rem]` never reaches
+  // the stylesheet and the control silently does nothing.
   const shell = code("src/components/dashboard/cards/shell.tsx");
-  const table = shell.slice(shell.indexOf("ROW_SPAN_CLASS"));
+  assert.doesNotMatch(shell, /min-h-\[\$\{/);
+});
+
+test("a taller card is applied where the card is placed, at both levels", () => {
+  const canvas = code("src/components/dashboard/editor/DashboardCanvas.tsx");
+  assert.match(canvas, /CARD_MIN_HEIGHT\[card\.rows \?\? 1\]/);
+
+  const container = code("src/components/dashboard/cards/container.tsx");
+  assert.match(container, /CARD_MIN_HEIGHT\[child\.rows \?\? 1\]/);
+});
+
+test("height only applies from sm upward", () => {
+  // On a phone every card is full width and stacked, so a forced height is just
+  // empty space.
+  const shell = code("src/components/dashboard/cards/shell.tsx");
+  const table = shell.slice(shell.indexOf("CARD_MIN_HEIGHT"));
   const block = table.slice(0, table.indexOf("};"));
-  const bare = block.match(/"(?!sm:)row-span-\d"/g);
-  assert.equal(bare, null, `unprefixed row spans apply on phones too: ${bare}`);
+  assert.equal(block.match(/"(?!sm:)min-h-/g), null, "an unprefixed height applies on phones too");
+});
+
+test("a normal card is untouched", () => {
+  // Height 1 must contribute no class at all — otherwise every card on every
+  // dashboard gets a minimum it never asked for.
+  const shell = code("src/components/dashboard/cards/shell.tsx");
+  const table = shell.slice(shell.indexOf("CARD_MIN_HEIGHT"));
+  assert.match(table.slice(0, table.indexOf("};")), /1: "",/);
 });
 
 // ── the control ─────────────────────────────────────────────────────────────

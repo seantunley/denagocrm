@@ -26,6 +26,7 @@ import { GripVertical, Plus, Settings2, Trash2, X, Check, Eye } from "lucide-rea
 import { cn } from "@/lib/utils";
 import type { CardConfig, SectionConfig, ViewConfig } from "@/lib/dashboard/config";
 import { useEditor, newId } from "./EditorProvider";
+import { CARD_MIN_HEIGHT } from "../cards/shell";
 
 /**
  * The dashboard as the user sees it, in both modes.
@@ -334,30 +335,12 @@ function SectionBlock({
         items={[...cards.map((card) => card.id), section.id]}
         strategy={NO_TRANSFORM}
       >
-        {/* auto-rows gives the grid a base row height, without which a row is
-            simply as tall as its tallest card and "span two rows" means
-            nothing. A minimum rather than a fixed height, so an ordinary card
-            still grows past it when its content needs to. */}
-        <div
-          className={cn(
-            "grid items-start gap-4",
-            // ONLY when something in this section actually spans rows.
-            //
-            // Applied unconditionally it forced EVERY row to 11rem, so a row of
-            // short stat tiles reserved 176px and left a large blank gap under
-            // it. The base row height exists solely to give a row span something
-            // to span; where nothing spans, the grid should size to its content
-            // exactly as it did before.
-            // `cards`, not `section.cards`: the decision must follow what is
-            // actually DRAWN. A rows:2 card that is hidden or disabled is not in
-            // the grid, but reading the configured list still enabled the 11rem
-            // minimum for every natural-height card beside it - the same blank
-            // gaps, from a card that is not even on screen.
-            cards.some((entry) => (entry.rows ?? 1) > 1) &&
-              "sm:auto-rows-[minmax(11rem,auto)]",
-            VIEW_COLUMNS[section.columnSpan],
-          )}
-        >
+        {/* Height is a MIN-HEIGHT on the card now, not a grid row span - see
+            CARD_MIN_HEIGHT in cards/shell.tsx. `auto-rows` set a minimum for
+            every row in the section, so one tall card made every other row tall
+            too; that was the blank-gap report, and narrowing when it applied
+            never fixed it because the mechanism was wrong. */}
+        <div className={cn("grid items-start gap-4", VIEW_COLUMNS[section.columnSpan])}>
           {cards.map((card) => (
             <SortableCard
               key={card.id}
@@ -389,19 +372,6 @@ const CARD_SPAN: Record<1 | 2 | 3 | 4, string> = {
   2: "sm:col-span-2",
   3: "sm:col-span-2 lg:col-span-3",
   4: "sm:col-span-2 lg:col-span-4",
-};
-
-/**
- * Height, in grid rows. Static strings for the same reason as the widths above.
- *
- * From `sm:` upward only: on a phone the grid is a single column and every card
- * is full width, so spanning rows would just leave a tall empty box.
- */
-const CARD_ROWS: Record<1 | 2 | 3 | 4, string> = {
-  1: "",
-  2: "sm:row-span-2",
-  3: "sm:row-span-3",
-  4: "sm:row-span-4",
 };
 
 function SortableCard({
@@ -446,23 +416,10 @@ function SortableCard({
         // select and configure, so it keeps its placeholder.
         !editing && "empty:hidden",
         CARD_SPAN[card.span],
-        CARD_ROWS[card.rows ?? 1],
-        /*
-         * A card that claimed extra rows must FILL them, or it claims the space
-         * and leaves it blank - which looks like a layout bug.
-         *
-         * SELF-STRETCH IS THE PART THAT DOES THE WORK, and h-full alone was
-         * silently useless without it. The grid is `items-start`, so an item does
-         * not stretch to its row: its height IS its content height, and h-full on
-         * it resolves to 100% of that, which is nothing. The item has to opt out
-         * of the start alignment before any height can be inherited at all.
-         *
-         * flex-col so the panel below can fill this box in turn. The chain has to
-         * be unbroken from grid cell to visible card: wrapper -> content div ->
-         * CardShell/SectionCard. A gap anywhere in it and the card stays short
-         * inside a tall cell, which is the exact bug this feature claims to fix.
-         */
-        card.rows && card.rows > 1 ? "sm:h-full sm:self-stretch sm:flex sm:flex-col" : undefined,
+        // Height as a minimum on THIS card. It affects nothing else: the grid
+        // row grows to fit it, exactly as a row already grows for a tall chart,
+        // and every other row keeps its own height.
+        CARD_MIN_HEIGHT[card.rows ?? 1],
         editing && "rounded-xl ring-1 ring-dashed ring-border",
         isDragging && "opacity-30",
       )}

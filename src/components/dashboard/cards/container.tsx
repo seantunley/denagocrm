@@ -3,8 +3,7 @@ import { MAX_CARD_DEPTH, type CardConfig, type GridCardConfig, type StackCardCon
 import { conditionsMet, isServerDecidable } from "@/lib/dashboard/conditions";
 import {
   GRID_COLUMNS_CLASS,
-  GRID_ROWS_CLASS,
-  ROW_SPAN_CLASS,
+  CARD_MIN_HEIGHT,
   SPAN_IN_GRID,
   STACK_GROW,
   type RenderContext,
@@ -135,10 +134,6 @@ export async function renderGrid(
             GRID_COLUMNS_CLASS[card.columns],
             // Only when a child actually spans rows - see the note in
             // DashboardCanvas. Unconditionally this padded every row.
-            // `children`, not `card.cards`: renderChildren has already dropped
-            // anything hidden or disabled, and a tall card that was dropped must
-            // not still set the row height for the ones that survived.
-            children.some(({ card: child }) => (child.rows ?? 1) > 1) && GRID_ROWS_CLASS,
           )}
         >
           {children.map(({ card: child, node }) => (
@@ -147,12 +142,7 @@ export async function renderGrid(
               className={cn(
                 "min-w-0",
                 spans[child.span],
-                ROW_SPAN_CLASS[child.rows ?? 1],
-                // self-stretch, not h-full alone: the grid is items-start, so an
-                // item is content-height and h-full on it resolves to nothing. The
-                // card node inside is already h-full (CardShell/SectionCard), so
-                // stretching this wrapper is enough to carry the height down.
-                child.rows && child.rows > 1 ? "sm:h-full sm:self-stretch" : undefined,
+                CARD_MIN_HEIGHT[child.rows ?? 1],
               )}
             >
               {node}
