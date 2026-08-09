@@ -10,6 +10,7 @@ import {
   type ViewConfig,
 } from "@/lib/dashboard/config";
 import { saveDashboardConfig, takeControl } from "@/app/actions/dashboardConfig";
+import { liftFromContainer, reorderInTree } from "@/lib/dashboard/cardTree";
 
 /**
  * The editing session: one working copy of the config, and one way to save it.
@@ -64,6 +65,10 @@ type EditorState = {
   updateSection: (sectionId: string, change: (section: SectionConfig) => SectionConfig) => void;
   updateCard: (cardId: string, change: (card: CardConfig) => CardConfig) => void;
   removeCard: (cardId: string) => void;
+  /** Move a card one place earlier or later among its siblings, at any depth. */
+  moveCard: (cardId: string, direction: -1 | 1) => void;
+  /** Lift a card out of the container it sits in, to just after that container. */
+  liftCard: (cardId: string) => void;
   /** Step back one change. No-op when there is nothing to step back to. */
   undo: () => void;
   /** Whether there is anything to undo, so the control can disable itself. */
@@ -311,6 +316,31 @@ export function DashboardEditorProvider({
     [update],
   );
 
+  /*
+   * Reordering and un-nesting, for cards the drag cannot reach.
+   *
+   * A card inside a grid or stack is drawn by that container on the SERVER, so
+   * the editor has no sortable node for it and drag can only ever reorder the
+   * top level. That left the children of a container with no way to be moved,
+   * reordered or taken back out — a card dragged into a group was effectively
+   * stuck there.
+   *
+   * These two operate on the CONFIG rather than on the rendered nodes, so they
+   * work identically at any depth. Both walk the tree in one place, for the same
+   * reason mapCardTree does: a second hand-rolled walk that forgot to descend
+   * would silently do nothing for exactly the cards this exists to reach.
+   */
+  const moveCard = useCallback(
+    (cardId: string, direction: -1 | 1) =>
+      update((current) => reorderInTree(current, cardId, direction)),
+    [update],
+  );
+
+  const liftCard = useCallback(
+    (cardId: string) => update((current) => liftFromContainer(current, cardId)),
+    [update],
+  );
+
   /**
    * Step back one change.
    *
@@ -340,6 +370,8 @@ export function DashboardEditorProvider({
         updateSection,
         updateCard,
         removeCard,
+        moveCard,
+        liftCard,
         undo,
         canUndo: undoDepth > 0,
         activeViewId,
