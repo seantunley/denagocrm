@@ -2,7 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { runTelegramFlow, tgAnswerCallback } from "@/lib/telegram";
 import { tgPersistInboundFile } from "@/lib/telegramTransport";
 import { logError } from "@/lib/errorLog";
-import { claimInboundBotEvent } from "@/lib/botInboundEvent";
+import {
+  claimInboundBotEvent,
+  completeInboundBotEvent,
+  retryInboundBotEvent,
+  withInboundBotEvent,
+} from "@/lib/botInboundEvent";
 import { withTelegramTenantScope } from "@/lib/telegramTenant";
 
 export async function POST(req: NextRequest) {
@@ -22,62 +27,53 @@ export async function POST(req: NextRequest) {
     };
     callback_query?: { id: string; data?: string; message?: { chat?: { id?: number } } };
   };
-  try {
-    update = await req.json();
-  } catch {
-    return NextResponse.json({ ok: true });
-  }
+  try { update = await req.json(); } catch { return NextResponse.json({ ok: true }); }
 
-  try {
-    return await withTelegramTenantScope(
-      webhookSecret,
-      async () => {
-        if (!(await claimInboundBotEvent("telegram", String(update.update_id ?? "")))) {
-          return NextResponse.json({ ok: true });
-        }
+  return withTelegramTenantScope(
+    webhookSecret,
+    async () => {
+      const claim = await claimInboundBotEvent("telegram", String(update.update_id ?? ""));
+      if (!claim) return NextResponse.json({ ok: true });
+      try {
+        await withInboundBotEvent(claim, async () => {
+          if (update.callback_query) {
+            const cq = update.callback_query;
+            await tgAnswerCallback(cq.id);
+            const chatId = cq.message?.chat?.id;
+            if (chatId != null && cq.data) await runTelegramFlow(chatId, "", cq.data);
+            return;
+          }
 
-        if (update.callback_query) {
-          const cq = update.callback_query;
-          await tgAnswerCallback(cq.id);
-          const chatId = cq.message?.chat?.id;
-          if (chatId != null && cq.data) await runTelegramFlow(chatId, "", cq.data);
-          return NextResponse.json({ ok: true });
-        }
-
-        const message = update.message;
-        const chatId = message?.chat?.id;
-        if (chatId == null || !message) return NextResponse.json({ ok: true });
-        const text = message.text ?? message.caption ?? "";
-
-        // Telegram sends multiple photo sizes; the last is normally the largest.
-        // Documents/video/audio already carry one stable file id.
-        const media = message.document ?? message.video ?? message.audio ?? message.photo?.at(-1);
-        let fileUrl: string | undefined;
-        if (media?.file_id) {
-          const fallbackName = message.document
-            ? "telegram-document.bin"
-            : message.video
-            ? "telegram-video.mp4"
-            : message.audio
-            ? "telegram-audio.bin"
-            : "telegram-photo.jpg";
-          fileUrl = await tgPersistInboundFile(
-            media.file_id,
-            media.file_name || fallbackName,
-            media.mime_type,
-          ) ?? undefined;
-        }
-
-        if (text || fileUrl) await runTelegramFlow(chatId, text, undefined, fileUrl);
+          const message = update.message;
+          const chatId = message?.chat?.id;
+          if (chatId == null || !message) return;
+          const text = message.text ?? message.caption ?? "";
+          const media = message.document ?? message.video ?? message.audio ?? message.photo?.at(-1);
+          let fileUrl: string | undefined;
+          if (media?.file_id) {
+            const fallbackName = message.document
+              ? "telegram-document.bin"
+              : message.video
+              ? "telegram-video.mp4"
+              : message.audio
+              ? "telegram-audio.bin"
+              : "telegram-photo.jpg";
+            fileUrl = await tgPersistInboundFile(media.file_id, media.file_name || fallbackName, media.mime_type) ?? undefined;
+          }
+          if (text || fileUrl) await runTelegramFlow(chatId, text, undefined, fileUrl);
+        });
+        await completeInboundBotEvent(claim);
         return NextResponse.json({ ok: true });
-      },
-      async () => {
-        await logError("telegram-webhook", "Rejected Telegram update: webhook secret did not resolve to an active tenant").catch(() => {});
-        return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-      },
-    );
-  } catch (error) {
-    await logError("telegram-webhook", error).catch(() => {});
-    return NextResponse.json({ ok: true });
-  }
+      } catch (error) {
+        await retryInboundBotEvent(claim, error).catch(() => {});
+        await logError("telegram-webhook", error).catch(() => {});
+        // Non-2xx asks Telegram to redeliver the now-released leased event.
+        return NextResponse.json({ error: "retry" }, { status: 500 });
+      }
+    },
+    async () => {
+      await logError("telegram-webhook", "Rejected Telegram update: webhook secret did not resolve to an active tenant").catch(() => {});
+      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    },
+  );
 }
