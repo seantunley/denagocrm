@@ -63,12 +63,30 @@ type EditorState = {
   setEditing: (value: boolean) => void;
   /** True while a save is in flight, for the "Saving…" hint. */
   saving: boolean;
-  /** Apply a change to the whole document and persist it. */
-  update: (change: (config: DashboardConfig) => DashboardConfig) => void;
+  /**
+   * Apply a change to the whole document and persist it.
+   *
+   * A change that returns the config it was given, unchanged and by reference,
+   * is a no-op: nothing is validated, recorded or saved. Callers driven by
+   * pointer movement should take that path rather than returning a new object
+   * describing the same arrangement.
+   *
+   * `gesture` groups consecutive changes into ONE undo step — see the note
+   * beside `gesture` in the provider.
+   */
+  update: (change: (config: DashboardConfig) => DashboardConfig, gesture?: string) => void;
   /** Convenience wrappers over `update` for the three common depths. */
-  updateView: (viewId: string, change: (view: ViewConfig) => ViewConfig) => void;
-  updateSection: (sectionId: string, change: (section: SectionConfig) => SectionConfig) => void;
-  updateCard: (cardId: string, change: (card: CardConfig) => CardConfig) => void;
+  updateView: (viewId: string, change: (view: ViewConfig) => ViewConfig, gesture?: string) => void;
+  updateSection: (
+    sectionId: string,
+    change: (section: SectionConfig) => SectionConfig,
+    gesture?: string,
+  ) => void;
+  updateCard: (
+    cardId: string,
+    change: (card: CardConfig) => CardConfig,
+    gesture?: string,
+  ) => void;
   removeCard: (cardId: string) => void;
   /** Move a card one place earlier or later among its siblings, at any depth. */
   moveCard: (cardId: string, direction: -1 | 1) => void;
@@ -117,6 +135,28 @@ export function DashboardEditorProvider({
   children: React.ReactNode;
 }) {
   const [config, setConfig] = useState<DashboardConfig>(initialConfig);
+  /*
+   * The same config, readable synchronously.
+   *
+   * `update` used to do its work inside a `setConfig(current => …)` updater,
+   * which put four side effects — a toast, an undo push, a `setUndoDepth` and a
+   * scheduled save — inside a function React requires to be PURE. React is
+   * allowed to call an updater more than once for a single update, and does when
+   * a render is interrupted and replayed; saves run inside `startTransition`, so
+   * during a drag there is always a transition in flight to interrupt one. Each
+   * replay pushed another undo entry and called `setUndoDepth` with a new value
+   * DURING the render phase, which schedules another render, which replays the
+   * updater again. That is a loop, and React ends it by throwing "Too many
+   * re-renders" — a render-phase throw, so it reached the route's error boundary
+   * and the user got an error page. It took a lot of dragging to hit and none to
+   * explain afterwards, because nothing about the arrangement was wrong.
+   *
+   * So `update` now reads from here, computes everything itself, and hands
+   * `setConfig` a finished value. Updated synchronously on every change, which
+   * matters because dragover fires several times between renders and each one
+   * has to build on the last.
+   */
+  const configRef = useRef<DashboardConfig>(initialConfig);
   const [editing, setEditing] = useState(false);
   /*
    * UNDO.
@@ -154,8 +194,30 @@ export function DashboardEditorProvider({
    * server is never the object that was sent.
    */
   const ownSeeds = useRef<Set<string>>(new Set());
+  /*
+   * The gesture the last change belonged to, so a gesture is ONE undo step.
+   *
+   * Undo was per-change, and several editing actions are not one change. A drag
+   * fires a dragover on every pointer movement and each one reordered the
+   * config; a group's name field fires on every keystroke. So one drag across a
+   * section left fifteen entries on a twenty-five entry stack — undo took
+   * fifteen presses to reverse one motion, and two drags had pushed everything
+   * else off the end.
+   *
+   * Consecutive changes carrying the same gesture id push nothing: the state
+   * from before the gesture began is already on the stack, and that is the one
+   * to come back to. Any change without a gesture, or with a different one,
+   * clears it and pushes normally.
+   */
+  const gesture = useRef<string | null>(null);
   const [undoDepth, setUndoDepth] = useState(0);
   const [saving, setSaving] = useState(false);
+  /*
+   * Saves that have left but not landed. Not the `saving` flag: this is read
+   * inside the re-seed effect, which must see the value as it is at that
+   * instant rather than as it was when the effect closed over its render.
+   */
+  const inFlight = useRef(0);
   const [, startTransition] = useTransition();
 
   // The last arrangement the server accepted, so a refused save has somewhere to
@@ -179,39 +241,88 @@ export function DashboardEditorProvider({
     if (seenSeed.current === seed) return;
     seenSeed.current = seed;
     committed.current = initialConfig;
+
     /*
-     * A seed this editor produced is the echo of its own save. The arrangement on
-     * screen is already correct and the history behind it is still valid, so it
-     * is kept. A seed from anywhere else replaced the document under us, and
-     * undoing into arrangements from before it would resurrect state the server
-     * has already discarded.
+     * A seed this editor produced is the ECHO OF ITS OWN SAVE, and re-seeding
+     * from it is how cards jumped back.
+     *
+     * Every save calls revalidatePath("/"), so the arrangement comes back around
+     * a second later. This effect adopted it unconditionally — and by then the
+     * user has usually moved something else, because a second is a long time
+     * mid-drag. Adopting the echo threw that newer arrangement off the screen and
+     * put back the one from before it. The pending save then wrote the newer
+     * arrangement anyway, so the database and the screen disagreed until its own
+     * echo arrived and moved everything a second time. From the outside: cards
+     * snapping back to where they were, then sometimes forward again.
+     *
+     * An echo can never be news. The screen is already this arrangement or ahead
+     * of it, so the seed is recorded and nothing is touched.
      */
-    const isOwnEcho = ownSeeds.current.has(seed);
-    ownSeeds.current.delete(seed);
-    if (!isOwnEcho) {
-      history.current = [];
-      setUndoDepth(0);
+    if (ownSeeds.current.has(seed)) {
+      ownSeeds.current.delete(seed);
+      return;
     }
+
+    /*
+     * Not ours — the document was changed somewhere else, another tab or another
+     * session. Worth adopting, but not over the top of unsaved work: a change in
+     * flight, or one still sitting in the debounce, is something the user made
+     * and has not been told is at risk. Our own save is moments away and will
+     * settle it; skipping here costs at most one stale render of somebody else's
+     * change, which the echo of that save corrects.
+     */
+    if (inFlight.current > 0 || timer.current !== null) return;
+
+    // A foreign config replaced the document. Undoing into arrangements from
+    // before it would resurrect state the server has already discarded.
+    history.current = [];
+    gesture.current = null;
+    setUndoDepth(0);
+    configRef.current = initialConfig;
     setConfig(initialConfig);
     // initialConfig is folded into `seed` by value.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seed]);
 
-  // A pending save must not be lost to a navigation. Flushing on unmount is the
-  // difference between "I moved it and left" and "I moved it and it went back".
+  /*
+   * The arrangement waiting out the debounce, if any.
+   *
+   * Kept so it can be written on unmount. The cleanup below used to clear the
+   * timer and stop there, under a comment claiming it flushed — so an edit made
+   * within the debounce window of navigating away was simply dropped, and came
+   * back to the previous arrangement on return. That is one of the ways "I moved
+   * it and it went back" happens, and the least visible: nothing fails, the save
+   * never happens at all.
+   */
+  const pending = useRef<DashboardConfig | null>(null);
+
   useEffect(() => {
+    const slugAtMount = slug;
     return () => {
       if (timer.current) clearTimeout(timer.current);
+      timer.current = null;
+      const unsaved = pending.current;
+      pending.current = null;
+      /*
+       * Fired without awaiting and without touching state: there is no component
+       * left to tell. A refusal here is silent, which is the right trade — the
+       * alternative is losing the edit outright, and the arrangement is re-read
+       * from the server on the way back in either way.
+       */
+      if (unsaved) void saveDashboardConfig(slugAtMount, unsaved);
     };
-  }, []);
+  }, [slug]);
 
   const persist = useCallback(
     (next: DashboardConfig) => {
       if (timer.current) clearTimeout(timer.current);
+      pending.current = next;
       timer.current = setTimeout(() => {
         timer.current = null;
+        pending.current = null;
         const previous = committed.current;
         setSaving(true);
+        inFlight.current += 1;
         startTransition(async () => {
           try {
             // Materialise a generated dashboard before its first write. Once,
@@ -247,9 +358,11 @@ export function DashboardEditorProvider({
              * cards back where they were is the only honest response to a
              * refusal.
              */
+            configRef.current = previous;
             setConfig(previous);
             toast.error(error instanceof Error ? error.message : "Could not save your dashboard.");
           } finally {
+            inFlight.current -= 1;
             setSaving(false);
           }
         });
@@ -259,60 +372,92 @@ export function DashboardEditorProvider({
   );
 
   const update = useCallback(
-    (change: (config: DashboardConfig) => DashboardConfig) => {
-      setConfig((current) => {
-        const next = change(current);
-        /*
-         * Validate BEFORE persisting, with the same parser the action uses.
-         *
-         * The server would refuse this anyway, but a round trip later — after
-         * the debounce, by which time the user has made three more edits and has
-         * no idea which one was rejected. Checking here means the message names
-         * the change that caused it, while they are still looking at it.
-         */
-        const checked = parseConfigStrict(next);
-        if (!checked.ok) {
-          toast.error(checked.error);
-          return current;
-        }
-        // Recorded only once the change is known to be valid. A refused edit
-        // never happened, so undoing past it would step over a state the user
-        // never saw.
+    (change: (config: DashboardConfig) => DashboardConfig, gestureId?: string) => {
+      const current = configRef.current;
+      const next = change(current);
+
+      /*
+       * A change that hands back what it was given did not change anything.
+       *
+       * Dragover fires on every pointer movement and most of those events leave
+       * the order exactly as it was. Taking the rest of this path for them meant
+       * running the strict parser over the whole config, adding an undo entry
+       * and queueing a write — dozens of times per drag, for one arrangement.
+       * That is most of what made dragging feel heavy.
+       */
+      if (next === current) return;
+
+      /*
+       * Validate BEFORE persisting, with the same parser the action uses.
+       *
+       * The server would refuse this anyway, but a round trip later — after
+       * the debounce, by which time the user has made three more edits and has
+       * no idea which one was rejected. Checking here means the message names
+       * the change that caused it, while they are still looking at it.
+       */
+      const checked = parseConfigStrict(next);
+      if (!checked.ok) {
+        toast.error(checked.error);
+        return;
+      }
+
+      // Recorded only once the change is known to be valid. A refused edit
+      // never happened, so undoing past it would step over a state the user
+      // never saw. Within one gesture the pre-gesture state is already on the
+      // stack, so there is nothing to add.
+      if (!gestureId || gestureId !== gesture.current) {
         history.current = [...history.current, current].slice(-UNDO_LIMIT);
         setUndoDepth(history.current.length);
-        persist(checked.config);
-        return checked.config;
-      });
+      }
+      gesture.current = gestureId ?? null;
+
+      configRef.current = checked.config;
+      setConfig(checked.config);
+      persist(checked.config);
     },
     [persist],
   );
 
   const updateView = useCallback(
-    (viewId: string, change: (view: ViewConfig) => ViewConfig) =>
-      update((current) => ({
-        ...current,
-        views: current.views.map((view) => (view.id === viewId ? change(view) : view)),
-      })),
+    (viewId: string, change: (view: ViewConfig) => ViewConfig, gestureId?: string) =>
+      update((current) => {
+        const view = current.views.find((candidate) => candidate.id === viewId);
+        if (!view) return current;
+        const next = change(view);
+        // Propagate "nothing changed" upwards rather than rebuilding the config
+        // around an identical view — see the reference check in `update`.
+        if (next === view) return current;
+        return {
+          ...current,
+          views: current.views.map((candidate) => (candidate.id === viewId ? next : candidate)),
+        };
+      }, gestureId),
     [update],
   );
 
   const updateSection = useCallback(
-    (sectionId: string, change: (section: SectionConfig) => SectionConfig) =>
-      update((current) => ({
-        ...current,
-        views: current.views.map((view) => ({
-          ...view,
-          sections: view.sections.map((section) =>
-            section.id === sectionId ? change(section) : section,
-          ),
-        })),
-      })),
+    (sectionId: string, change: (section: SectionConfig) => SectionConfig, gestureId?: string) =>
+      update(
+        (current) => ({
+          ...current,
+          views: current.views.map((view) => ({
+            ...view,
+            sections: view.sections.map((section) =>
+              section.id === sectionId ? change(section) : section,
+            ),
+          })),
+        }),
+        gestureId,
+      ),
     [update],
   );
 
   const updateCard = useCallback(
-    (cardId: string, change: (card: CardConfig) => CardConfig) =>
-      update((current) => mapCards(current, (card) => (card.id === cardId ? change(card) : card))),
+    (cardId: string, change: (card: CardConfig) => CardConfig, gestureId?: string) =>
+      update(
+        (current) => mapCards(current, (card) => (card.id === cardId ? change(card) : card)),
+        gestureId,
+      ),
     [update],
   );
 
@@ -361,6 +506,10 @@ export function DashboardEditorProvider({
     if (!previous) return;
     history.current = history.current.slice(0, -1);
     setUndoDepth(history.current.length);
+    // An undo ends whatever gesture was running, so the next change starts a new
+    // step rather than folding itself into the one just reversed.
+    gesture.current = null;
+    configRef.current = previous;
     setConfig(previous);
     persist(previous);
   }, [persist]);

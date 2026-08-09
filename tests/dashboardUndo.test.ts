@@ -44,10 +44,14 @@ test("a refused edit is not recorded", () => {
   const provider = code(PROVIDER);
   const fn = provider.slice(provider.indexOf("const update = useCallback"));
   const body = fn.slice(0, fn.indexOf("[persist]"));
-  const rejectAt = body.indexOf("return current;");
+  const rejectAt = body.indexOf("toast.error(checked.error);");
   const recordAt = body.indexOf("history.current = [");
   assert.ok(rejectAt !== -1 && recordAt !== -1);
   assert.ok(rejectAt < recordAt, "the invalid-config early return must come first");
+  // A no-op change must not be recorded either — dragover fires on every pointer
+  // movement and most of those leave the arrangement exactly as it was.
+  const noopAt = body.indexOf("if (next === current) return;");
+  assert.ok(noopAt !== -1 && noopAt < recordAt, "a change that changed nothing must not record");
 });
 
 test("history is bounded", () => {
@@ -92,12 +96,14 @@ test("the echo of this editor's own save does NOT clear the history", () => {
   const body = effect.slice(0, effect.indexOf("}, [seed]"));
 
   assert.match(body, /ownSeeds\.current\.has\(seed\)/, "an echo of our own save must be recognised");
-  assert.match(body, /if \(!isOwnEcho\)/, "only a foreign config may clear the history");
 
-  const guardAt = body.indexOf("if (!isOwnEcho)");
+  const guardAt = body.indexOf("if (ownSeeds.current.has(seed))");
   const clearAt = body.indexOf("history.current = []");
   assert.ok(guardAt !== -1 && clearAt !== -1, "both the guard and the clear must exist");
   assert.ok(guardAt < clearAt, "an unconditional clear defeats the feature");
+  // The echo branch leaves rather than falling through — it must reach neither
+  // the clear nor the re-seed below it.
+  assert.match(body.slice(guardAt, clearAt), /return;/, "the echo must return early");
 });
 
 test("a genuinely foreign config still clears the history", () => {

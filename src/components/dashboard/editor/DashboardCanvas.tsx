@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -9,21 +9,23 @@ import {
   MouseSensor,
   TouchSensor,
   closestCenter,
+  pointerWithin,
   useSensor,
   useSensors,
+  type CollisionDetection,
   type DragEndEvent,
   type DragOverEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
 import {
   SortableContext,
-  arrayMove,
   sortableKeyboardCoordinates,
   useSortable,
   type SortingStrategy,
 } from "@dnd-kit/sortable";
 import { Eye, GripVertical, Plus, Settings2, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { moveCardInView } from "@/lib/dashboard/canvasMove";
 import type { CardConfig, SectionConfig, ViewConfig } from "@/lib/dashboard/config";
 import { isContainerCard } from "@/lib/dashboard/cardTree";
 import { useEditor, newId } from "./EditorProvider";
@@ -96,6 +98,9 @@ export default function DashboardCanvas({
 }) {
   const { editing, updateView } = useEditor();
   const [activeId, setActiveId] = useState<string | null>(null);
+  // Which group the card would land in, so a cross-group move is visible before
+  // it happens rather than only after.
+  const [overSectionId, setOverSectionId] = useState<string | null>(null);
 
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 8 } }),
@@ -111,12 +116,69 @@ export default function DashboardCanvas({
    */
   const sections = editing ? view.sections : view.sections.filter((s) => hasDrawn(s, slots));
 
-  function findSectionOf(cardId: string): SectionConfig | undefined {
-    return view.sections.find((section) => section.cards.some((card) => card.id === cardId));
-  }
+  const cardIds = useMemo(
+    () => new Set(view.sections.flatMap((section) => section.cards).map((card) => card.id)),
+    [view.sections],
+  );
+
+  /*
+   * WHAT IS UNDER THE POINTER, not what is nearest the dragged thing.
+   *
+   * `closestCenter` measures from the centre of the dragged item to the centre
+   * of each droppable. That works for a list of same-sized rows and badly for
+   * this: cards here span one to four columns and vary in height, so the nearest
+   * centre is regularly not the card the pointer is over — a wide card's centre
+   * can be closer than the narrow card being pointed at. Combined with a drag
+   * overlay that is a small label rather than the card itself, the measurement
+   * was being taken from something the user could not see, and the card landed
+   * somewhere they had not aimed. That is the "erratic" report.
+   *
+   * `pointerWithin` asks the only question the user is actually asking: what am I
+   * holding this over?
+   *
+   * CARDS BEAT SECTIONS. A section's droppable covers its cards, so the pointer
+   * is inside both and the section frequently wins on centre distance — which
+   * would send the card to the end of the section every time it passed over one.
+   * Cards are therefore preferred, and a section is only the answer when the
+   * pointer is in its empty space. That is also what makes an emptied section
+   * fillable again.
+   *
+   * `closestCenter` remains the fallback, for the keyboard sensor, which has no
+   * pointer for `pointerWithin` to test.
+   */
+  const collisionDetection = useCallback<CollisionDetection>(
+    (args) => {
+      const within = pointerWithin(args);
+      const overCard = within.filter((collision) => cardIds.has(String(collision.id)));
+      if (overCard.length > 0) return overCard;
+      if (within.length > 0) return within;
+
+      const closest = closestCenter(args);
+      const closestCard = closest.filter((collision) => cardIds.has(String(collision.id)));
+      return closestCard.length > 0 ? closestCard : closest;
+    },
+    [cardIds],
+  );
+
+  /*
+   * One drag is one undo step.
+   *
+   * Dragover fires on every pointer movement, so a drag across a section made
+   * fifteen changes and left fifteen entries on a twenty-five entry undo stack.
+   * The id is minted per drag and handed to every change it causes; the provider
+   * folds them into the single step that reverses the whole motion.
+   */
+  const dragGesture = useRef<string | null>(null);
 
   function onDragStart(event: DragStartEvent) {
+    dragGesture.current = `drag-${String(event.active.id)}-${Date.now()}`;
     setActiveId(String(event.active.id));
+  }
+
+  function endDrag() {
+    dragGesture.current = null;
+    setActiveId(null);
+    setOverSectionId(null);
   }
 
   /*
@@ -126,60 +188,28 @@ export default function DashboardCanvas({
    * `over` may be a card in another section, or the section itself when it is
    * empty. Both have to move the dragged card into that section, or a section
    * that has been emptied becomes impossible to fill again.
+   *
+   * The move itself is `moveCardInView`, which derives every index from the view
+   * it is handed. It used to be computed half here and half inside the state
+   * updater, from two different copies of the document — see that file's note.
    */
   function onDragOver(event: DragOverEvent) {
     const { active, over } = event;
     if (!over) return;
     const activeCardId = String(active.id);
     const overId = String(over.id);
+
+    const target =
+      view.sections.find((section) => section.id === overId) ??
+      view.sections.find((section) => section.cards.some((card) => card.id === overId));
+    setOverSectionId((previous) => (previous === (target?.id ?? null) ? previous : target?.id ?? null));
+
     if (activeCardId === overId) return;
-
-    const from = findSectionOf(activeCardId);
-    if (!from) return;
-    const toSection =
-      view.sections.find((section) => section.id === overId) ?? findSectionOf(overId);
-    if (!toSection) return;
-
-    updateView(view.id, (current) => {
-      const moving = from.cards.find((card) => card.id === activeCardId);
-      if (!moving) return current;
-
-      if (from.id === toSection.id) {
-        const fromIndex = from.cards.findIndex((card) => card.id === activeCardId);
-        const toIndex = from.cards.findIndex((card) => card.id === overId);
-        if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return current;
-        return {
-          ...current,
-          sections: current.sections.map((section) =>
-            section.id === from.id
-              ? { ...section, cards: arrayMove(section.cards, fromIndex, toIndex) }
-              : section,
-          ),
-        };
-      }
-
-      // Dropped over the section itself (it is empty) → append. Over a card →
-      // take that card's place, so the drop lands where the gap opened.
-      const insertAt =
-        overId === toSection.id
-          ? toSection.cards.length
-          : Math.max(0, toSection.cards.findIndex((card) => card.id === overId));
-
-      return {
-        ...current,
-        sections: current.sections.map((section) => {
-          if (section.id === from.id) {
-            return { ...section, cards: section.cards.filter((card) => card.id !== activeCardId) };
-          }
-          if (section.id === toSection.id) {
-            const next = [...section.cards];
-            next.splice(insertAt, 0, moving);
-            return { ...section, cards: next };
-          }
-          return section;
-        }),
-      };
-    });
+    updateView(
+      view.id,
+      (current) => moveCardInView(current, activeCardId, overId),
+      dragGesture.current ?? undefined,
+    );
   }
 
   const activeCard = activeId
@@ -189,12 +219,12 @@ export default function DashboardCanvas({
   return (
     <DndContext
       sensors={sensors}
-      collisionDetection={closestCenter}
+      collisionDetection={collisionDetection}
       measuring={MEASURE_ALWAYS}
       onDragStart={onDragStart}
       onDragOver={onDragOver}
-      onDragEnd={(_event: DragEndEvent) => setActiveId(null)}
-      onDragCancel={() => setActiveId(null)}
+      onDragEnd={(_event: DragEndEvent) => endDrag()}
+      onDragCancel={endDrag}
     >
       <div className={cn("grid items-start gap-4", VIEW_COLUMNS[view.columns])}>
         {sections.map((section) => (
@@ -203,6 +233,7 @@ export default function DashboardCanvas({
             view={view}
             section={section}
             slots={slots}
+            isDropTarget={activeId !== null && overSectionId === section.id}
             onConfigure={onConfigure}
             onAddCard={onAddCard}
           />
@@ -245,12 +276,15 @@ function SectionBlock({
   view,
   section,
   slots,
+  isDropTarget,
   onConfigure,
   onAddCard,
 }: {
   view: ViewConfig;
   section: SectionConfig;
   slots: CardSlots;
+  /** True while a dragged card would land in this group. */
+  isDropTarget: boolean;
   onConfigure: (cardId: string) => void;
   onAddCard: (sectionId: string) => void;
 }) {
@@ -268,6 +302,8 @@ function SectionBlock({
         "min-w-0 space-y-3",
         SECTION_SPAN[section.columnSpan],
         editing && "rounded-xl border border-dashed border-border/70 p-3",
+        // Which group is being dropped into, while it is being dropped into.
+        isDropTarget && "border-solid border-primary/60 bg-primary/[0.03]",
       )}
     >
       {(section.title || editing) && (
@@ -276,10 +312,14 @@ function SectionBlock({
             <input
               value={section.title ?? ""}
               onChange={(event) =>
-                updateSection(section.id, (current) => ({
-                  ...current,
-                  title: event.target.value || undefined,
-                }))
+                updateSection(
+                  section.id,
+                  (current) => ({ ...current, title: event.target.value || undefined }),
+                  // Typing a name is one edit, not one per keystroke. Without
+                  // this a ten-character name filled half the undo stack and
+                  // pushed everything before it off the end.
+                  `title-${section.id}`,
+                )
               }
               placeholder="Group name (optional)"
               aria-label="Group name"
@@ -444,9 +484,34 @@ function SortableCard({
          */
         card.rows && card.rows > 1 ? "sm:h-full sm:self-stretch sm:flex sm:flex-col" : undefined,
         editing && "rounded-xl ring-1 ring-dashed ring-border",
-        isDragging && "opacity-30",
       )}
     >
+      {/*
+          WHERE IT LANDS, drawn where it lands.
+
+          The order already updates live as the pointer moves, so this cell IS the
+          destination — but the only thing marking it was 30% opacity on a card
+          that otherwise looked exactly like every other card on a dense screen.
+          The report was that dropping is a guess, and it was: the answer was on
+          the page and unreadable.
+
+          An overlay rather than a replacement, so the cell keeps the size the
+          card gave it and nothing reflows while the pointer is moving — a target
+          that resizes as you approach it is worse than no target. The card
+          underneath is dimmed rather than hidden, because which card is being
+          moved is the other half of the question.
+      */}
+      {isDragging && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl border-2 border-dashed border-primary bg-primary/10"
+        >
+          <span className="rounded-md bg-primary px-2 py-1 text-[11px] font-semibold text-primary-foreground shadow-sm">
+            Drops here
+          </span>
+        </div>
+      )}
+
       {editing && (
         <div className="absolute -top-2 right-2 z-20 flex items-center gap-1">
           <button
@@ -509,6 +574,9 @@ function SortableCard({
         className={cn(
           editing && "pointer-events-none select-none",
           card.rows && card.rows > 1 && "sm:min-h-0 sm:flex-1",
+          // Faded under the drop marker above, not hidden: the card being moved
+          // is still the thing being pointed at.
+          isDragging && "opacity-40",
         )}
       >
         {node ?? <CardPlaceholder card={card} />}
