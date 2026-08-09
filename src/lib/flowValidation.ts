@@ -1,4 +1,4 @@
-import { choiceId, type Flow, type FlowNode } from "./flow";
+import { choiceId, type Flow, type FlowNode, type FlowOption } from "./flow";
 
 export type FlowChannel = "whatsapp" | "messenger" | "instagram" | "telegram";
 export type FlowIssue = {
@@ -10,17 +10,8 @@ export type FlowIssue = {
 };
 
 const NODE_TYPES = new Set([
-  "message",
-  "choice",
-  "capture",
-  "captureFile",
-  "image",
-  "answer",
-  "booking",
-  "slots",
-  "ai",
-  "handoff",
-  "end",
+  "message", "choice", "capture", "captureFile", "image", "answer",
+  "booking", "slots", "ai", "handoff", "end",
 ]);
 const BUILTIN_VARS = new Set(["greeting", "first_name", "name", "known", "slot"]);
 const AUTO_TYPES = new Set<FlowNode["type"]>(["message", "image", "answer", "booking"]);
@@ -35,23 +26,37 @@ function issue(
   return { severity, code, message, ...(nodeId ? { nodeId } : {}), ...(channel ? { channel } : {}) };
 }
 
+const str = (value: unknown): string => typeof value === "string" ? value : "";
+
+function optionsOf(node: unknown): FlowOption[] {
+  if (!node || typeof node !== "object") return [];
+  const options = (node as { options?: unknown }).options;
+  if (!Array.isArray(options)) return [];
+  return options.filter((option): option is FlowOption => Boolean(option) && typeof option === "object")
+    .map((option) => ({
+      id: str((option as { id?: unknown }).id),
+      label: str((option as { label?: unknown }).label),
+      description: str((option as { description?: unknown }).description) || undefined,
+      next: str((option as { next?: unknown }).next) || undefined,
+    }));
+}
+
 function refs(node: FlowNode): string[] {
-  if (node.type === "choice") return node.options.flatMap((option) => option.next ? [option.next] : []);
-  if (node.type === "ai") return node.handoffNext ? [node.handoffNext] : [];
+  if (node.type === "choice") return optionsOf(node).flatMap((option) => option.next ? [option.next] : []);
+  if (node.type === "ai") return str(node.handoffNext) ? [str(node.handoffNext)] : [];
   if (node.type === "handoff" || node.type === "end") return [];
-  const next = (node as { next?: string }).next;
+  const next = str((node as { next?: unknown }).next);
   return next ? [next] : [];
 }
 
 function allText(node: FlowNode): string[] {
-  if (node.type === "message" || node.type === "handoff") return node.text ? [node.text] : [];
-  if (node.type === "choice" || node.type === "capture" || node.type === "captureFile" || node.type === "slots") {
-    return [node.text, ...(node.type === "slots" && node.noneText ? [node.noneText] : [])];
-  }
-  if (node.type === "image") return node.caption ? [node.caption] : [];
-  if (node.type === "answer") return node.text ? [node.text] : [];
-  if (node.type === "booking") return node.text ? [node.text] : [];
-  return [];
+  const values: unknown[] = [];
+  if (node.type === "message" || node.type === "handoff") values.push(node.text);
+  if (node.type === "choice" || node.type === "capture" || node.type === "captureFile" || node.type === "slots") values.push(node.text);
+  if (node.type === "slots") values.push(node.noneText);
+  if (node.type === "image") values.push(node.caption);
+  if (node.type === "answer" || node.type === "booking") values.push(node.text);
+  return values.map(str).filter(Boolean);
 }
 
 function referencedVars(text: string): string[] {
@@ -65,14 +70,14 @@ function reachable(flow: Flow): Set<string> {
     const id = stack.pop()!;
     if (seen.has(id)) continue;
     const node = flow.nodes[id];
-    if (!node) continue;
+    if (!node || typeof node !== "object") continue;
     seen.add(id);
-    for (const target of refs(node)) stack.push(target);
+    for (const target of refs(node as FlowNode)) stack.push(target);
   }
   return seen;
 }
 
-/** Detect a cycle consisting only of nodes the engine walks without user input. */
+/** Detect a cycle made only of nodes the engine walks without customer input. */
 function automaticCycles(flow: Flow): string[][] {
   const visiting = new Set<string>();
   const visited = new Set<string>();
@@ -85,20 +90,17 @@ function automaticCycles(flow: Flow): string[][] {
       const start = stack.indexOf(id);
       const cycle = stack.slice(start).concat(id);
       const key = [...new Set(cycle)].sort().join("|");
-      if (!emitted.has(key)) {
-        emitted.add(key);
-        cycles.push(cycle);
-      }
+      if (!emitted.has(key)) { emitted.add(key); cycles.push(cycle); }
       return;
     }
     if (visited.has(id)) return;
-    const node = flow.nodes[id];
-    if (!node || !AUTO_TYPES.has(node.type)) return;
+    const node = flow.nodes[id] as FlowNode | undefined;
+    if (!node || !NODE_TYPES.has(node.type) || !AUTO_TYPES.has(node.type)) return;
     visiting.add(id);
     stack.push(id);
     for (const target of refs(node)) {
-      const targetNode = flow.nodes[target];
-      if (targetNode && AUTO_TYPES.has(targetNode.type)) visit(target);
+      const targetNode = flow.nodes[target] as FlowNode | undefined;
+      if (targetNode && NODE_TYPES.has(targetNode.type) && AUTO_TYPES.has(targetNode.type)) visit(target);
     }
     stack.pop();
     visiting.delete(id);
@@ -109,49 +111,51 @@ function automaticCycles(flow: Flow): string[][] {
   return cycles;
 }
 
+function encodedBytes(value: string): number {
+  return new TextEncoder().encode(value).length;
+}
+
 function validateChoiceForChannel(
-  node: Extract<FlowNode, { type: "choice" }>,
+  nodeId: string,
+  options: FlowOption[],
   channel: FlowChannel,
 ): FlowIssue[] {
   const out: FlowIssue[] = [];
   if (channel === "whatsapp") {
-    if (node.options.length > 10) {
-      out.push(issue("error", "channel.whatsapp.options", "WhatsApp lists support at most 10 options; extra options would be silently dropped.", node.id, channel));
+    if (options.length > 10) {
+      out.push(issue("error", "channel.whatsapp.options", "WhatsApp lists support at most 10 options; extra options would be silently dropped.", nodeId, channel));
     }
-    const buttonMode = node.options.length <= 3;
+    const buttonMode = options.length <= 3;
     const labelLimit = buttonMode ? 20 : 24;
     const idLimit = buttonMode ? 256 : 200;
-    for (const option of node.options) {
+    for (const option of options) {
       if (option.label.length > labelLimit) {
-        out.push(issue("error", "channel.whatsapp.label", `WhatsApp ${buttonMode ? "button" : "list"} labels must be ${labelLimit} characters or fewer.`, node.id, channel));
+        out.push(issue("error", "channel.whatsapp.label", `WhatsApp ${buttonMode ? "button" : "list"} labels must be ${labelLimit} characters or fewer.`, nodeId, channel));
       }
-      if (choiceId(node.id, option.id).length > idLimit) {
-        out.push(issue("error", "channel.whatsapp.choice_id", `This WhatsApp option id exceeds the ${idLimit}-character provider limit and would no longer match when tapped.`, node.id, channel));
+      if (choiceId(nodeId, option.id).length > idLimit) {
+        out.push(issue("error", "channel.whatsapp.choice_id", `This WhatsApp option id exceeds the ${idLimit}-character provider limit and would no longer match when tapped.`, nodeId, channel));
       }
       if (!buttonMode && (option.description?.length ?? 0) > 72) {
-        out.push(issue("error", "channel.whatsapp.description", "WhatsApp list descriptions must be 72 characters or fewer.", node.id, channel));
+        out.push(issue("error", "channel.whatsapp.description", "WhatsApp list descriptions must be 72 characters or fewer.", nodeId, channel));
       }
     }
   }
 
   if (channel === "messenger" || channel === "instagram") {
-    if (node.options.length > 11) {
-      out.push(issue("error", "channel.meta.options", `${channel === "instagram" ? "Instagram" : "Messenger"} quick replies support at most 11 options; extra options would be silently dropped.`, node.id, channel));
+    const label = channel === "instagram" ? "Instagram" : "Messenger";
+    if (options.length > 11) {
+      out.push(issue("error", "channel.meta.options", `${label} quick replies support at most 11 options; extra options would be silently dropped.`, nodeId, channel));
     }
-    for (const option of node.options) {
-      if (option.label.length > 20) {
-        out.push(issue("error", "channel.meta.label", `${channel === "instagram" ? "Instagram" : "Messenger"} quick-reply labels must be 20 characters or fewer.`, node.id, channel));
-      }
-      if (choiceId(node.id, option.id).length > 1000) {
-        out.push(issue("error", "channel.meta.payload", "This quick-reply payload exceeds Meta's adapter limit.", node.id, channel));
-      }
+    for (const option of options) {
+      if (option.label.length > 20) out.push(issue("error", "channel.meta.label", `${label} quick-reply labels must be 20 characters or fewer.`, nodeId, channel));
+      if (choiceId(nodeId, option.id).length > 1000) out.push(issue("error", "channel.meta.payload", "This quick-reply payload exceeds Meta's adapter limit.", nodeId, channel));
     }
   }
 
   if (channel === "telegram") {
-    for (const option of node.options) {
-      if (Buffer.byteLength(choiceId(node.id, option.id), "utf8") > 64) {
-        out.push(issue("error", "channel.telegram.callback", "Telegram callback data is limited to 64 bytes; this option id would be truncated and stop matching.", node.id, channel));
+    for (const option of options) {
+      if (encodedBytes(choiceId(nodeId, option.id)) > 64) {
+        out.push(issue("error", "channel.telegram.callback", "Telegram callback data is limited to 64 bytes; this option id would be truncated and stop matching.", nodeId, channel));
       }
     }
   }
@@ -160,119 +164,98 @@ function validateChoiceForChannel(
 
 /**
  * Pure graph compiler/linter. Drafts may contain issues; publication must reject
- * any `error`. Warnings are actionable but do not make a graph unsafe to run.
+ * every error. Warnings are actionable but do not make execution unsafe.
  */
 export function validateFlow(flow: Flow, channels: FlowChannel[] = ["whatsapp"]): FlowIssue[] {
   const issues: FlowIssue[] = [];
-  const entries = Object.entries(flow.nodes ?? {});
-
-  if (!flow.start || !flow.nodes?.[flow.start]) {
-    issues.push(issue("error", "graph.start", "Flow needs a valid start node."));
-    return issues;
+  if (!flow || typeof flow !== "object" || !flow.nodes || typeof flow.nodes !== "object") {
+    return [issue("error", "graph.shape", "Flow data is malformed.")];
   }
-  if (entries.length === 0) {
-    issues.push(issue("error", "graph.empty", "Flow has no nodes."));
-    return issues;
-  }
-  if (entries.length > 250) {
-    issues.push(issue("error", "graph.size", "Flow exceeds the 250-node safety limit."));
-  }
+  const entries = Object.entries(flow.nodes);
+  if (!str(flow.start) || !flow.nodes[str(flow.start)]) return [issue("error", "graph.start", "Flow needs a valid start node.")];
+  if (!entries.length) return [issue("error", "graph.empty", "Flow has no nodes.")];
+  if (entries.length > 250) issues.push(issue("error", "graph.size", "Flow exceeds the 250-node safety limit."));
 
   const captured = new Set(BUILTIN_VARS);
   for (const [key, rawNode] of entries) {
-    const node = rawNode as FlowNode;
-    if (!node || typeof node !== "object" || typeof node.id !== "string" || !NODE_TYPES.has(node.type)) {
+    if (!rawNode || typeof rawNode !== "object") {
+      issues.push(issue("error", "node.shape", `Node “${key}” is malformed.`, key));
+      continue;
+    }
+    const runtimeNode = rawNode as Record<string, unknown>;
+    const id = str(runtimeNode.id);
+    const type = str(runtimeNode.type);
+    if (!id || !NODE_TYPES.has(type)) {
       issues.push(issue("error", "node.shape", `Node “${key}” has an unsupported or malformed type.`, key));
       continue;
     }
-    if (node.id !== key) {
-      issues.push(issue("error", "node.id_mismatch", `Node key “${key}” does not match its id “${node.id}”.`, key));
-    }
+    const node = rawNode as FlowNode;
+    if (id !== key) issues.push(issue("error", "node.id_mismatch", `Node key “${key}” does not match its id “${id}”.`, key));
 
     if (node.type === "capture" || node.type === "captureFile") {
-      if (!node.variable || !/^\w+$/.test(node.variable)) {
-        issues.push(issue("error", "variable.invalid", "Captured variable names must contain only letters, numbers or underscores.", node.id));
+      const variable = str(node.variable);
+      if (!variable || !/^\w+$/.test(variable)) {
+        issues.push(issue("error", "variable.invalid", "Captured variable names must contain only letters, numbers or underscores.", id));
       } else {
-        if (captured.has(node.variable) && !BUILTIN_VARS.has(node.variable)) {
-          issues.push(issue("warning", "variable.reused", `Variable {{${node.variable}}} is captured more than once.`, node.id));
-        }
-        captured.add(node.variable);
+        if (captured.has(variable) && !BUILTIN_VARS.has(variable)) issues.push(issue("warning", "variable.reused", `Variable {{${variable}}} is captured more than once.`, id));
+        captured.add(variable);
       }
     }
 
     if (node.type === "choice") {
-      if (!Array.isArray(node.options) || node.options.length === 0) {
-        issues.push(issue("error", "choice.empty", "Menu needs at least one option.", node.id));
+      const rawOptions = runtimeNode.options;
+      const options = optionsOf(node);
+      if (!Array.isArray(rawOptions) || !options.length) {
+        issues.push(issue("error", "choice.empty", "Menu needs at least one valid option.", id));
       } else {
         const ids = new Set<string>();
-        for (const option of node.options) {
-          if (!option.id || ids.has(option.id)) {
-            issues.push(issue("error", "choice.option_id", "Menu option ids must be non-empty and unique within the node.", node.id));
-          }
+        for (const option of options) {
+          if (!option.id || ids.has(option.id)) issues.push(issue("error", "choice.option_id", "Menu option ids must be non-empty and unique within the node.", id));
           ids.add(option.id);
-          if (!option.label?.trim()) issues.push(issue("error", "choice.label", "Every menu option needs a label.", node.id));
-          if (!option.next) issues.push(issue("warning", "choice.dead_end", `Option “${option.label || option.id}” ends the conversation without an explicit End node.`, node.id));
+          if (!option.label.trim()) issues.push(issue("error", "choice.label", "Every menu option needs a label.", id));
+          if (!option.next) issues.push(issue("warning", "choice.dead_end", `Option “${option.label || option.id}” ends the conversation without an explicit End node.`, id));
         }
+        for (const channel of channels) issues.push(...validateChoiceForChannel(id, options, channel));
       }
-      for (const channel of channels) issues.push(...validateChoiceForChannel(node, channel));
     }
 
-    if (node.type === "answer" && !node.answerSource && !node.text?.trim()) {
-      issues.push(issue("warning", "answer.empty", "Answer node has no text or dynamic answer source.", node.id));
-    }
+    if (node.type === "answer" && !node.answerSource && !str(node.text).trim()) issues.push(issue("warning", "answer.empty", "Answer node has no text or dynamic answer source.", id));
     if (node.type === "image") {
-      if (!node.url?.trim()) issues.push(issue("error", "image.missing", "Image node has no image URL.", node.id));
-      if (/\.private\.blob\.vercel-storage\.com/i.test(node.url ?? "")) {
-        issues.push(issue("error", "image.private_url", "Messaging providers cannot fetch a private Blob URL directly. Upload/provider media handling is required for this image.", node.id));
-      }
+      const url = str(node.url);
+      if (!url.trim()) issues.push(issue("error", "image.missing", "Image node has no image URL.", id));
+      if (/\.private\.blob\.vercel-storage\.com/i.test(url)) issues.push(issue("error", "image.private_url", "Messaging providers cannot fetch a private Blob URL directly. Upload/provider media handling is required for this image.", id));
     }
-    if (node.type === "booking" && node.action && !["service", "demo", "lead"].includes(node.action)) {
-      issues.push(issue("error", "booking.action", "CRM action is not supported by the runtime.", node.id));
-    }
+    if (node.type === "booking" && node.action && !["service", "demo", "lead"].includes(str(node.action))) issues.push(issue("error", "booking.action", "CRM action is not supported by the runtime.", id));
 
     for (const target of refs(node)) {
-      if (!flow.nodes[target]) {
-        issues.push(issue("error", "graph.missing_target", `Connection points to missing node “${target}”.`, node.id));
-      }
+      if (!flow.nodes[target]) issues.push(issue("error", "graph.missing_target", `Connection points to missing node “${target}”.`, id));
     }
 
     if (node.type === "captureFile") {
       for (const channel of channels) {
         if (channel !== "whatsapp") {
-          issues.push(issue("error", "channel.file_capture", `File capture is not implemented for ${channel === "instagram" ? "Instagram" : channel === "messenger" ? "Messenger" : "Telegram"}; this flow would pause forever on that channel.`, node.id, channel));
+          const label = channel === "instagram" ? "Instagram" : channel === "messenger" ? "Messenger" : "Telegram";
+          issues.push(issue("error", "channel.file_capture", `File capture is not implemented for ${label}; this flow would pause forever on that channel.`, id, channel));
         }
       }
     }
   }
 
   const live = reachable(flow);
-  for (const [id] of entries) {
-    if (!live.has(id)) issues.push(issue("warning", "graph.unreachable", "Node is not reachable from the start node.", id));
-  }
-  for (const cycle of automaticCycles(flow)) {
-    issues.push(issue("error", "graph.automatic_cycle", `Automatic loop detected: ${cycle.join(" → ")}. It would run until the engine guard stops it.`, cycle[0]));
-  }
+  for (const [id] of entries) if (!live.has(id)) issues.push(issue("warning", "graph.unreachable", "Node is not reachable from the start node.", id));
+  for (const cycle of automaticCycles(flow)) issues.push(issue("error", "graph.automatic_cycle", `Automatic loop detected: ${cycle.join(" → ")}. It would run until the engine guard stops it.`, cycle[0]));
 
-  // Variable references are linted after collecting every capture so ordering in
-  // the serialized record cannot create false "unknown variable" warnings.
-  for (const [, node] of entries) {
-    if (!node || typeof node !== "object" || typeof (node as FlowNode).type !== "string") continue;
-    for (const text of allText(node as FlowNode)) {
+  for (const [, rawNode] of entries) {
+    if (!rawNode || typeof rawNode !== "object" || !NODE_TYPES.has(str((rawNode as { type?: unknown }).type))) continue;
+    const node = rawNode as FlowNode;
+    for (const text of allText(node)) {
       for (const variable of referencedVars(text)) {
-        if (!captured.has(variable)) {
-          issues.push(issue("warning", "variable.unknown", `Message references {{${variable}}}, but no capture or built-in variable defines it.`, (node as FlowNode).id));
-        }
+        if (!captured.has(variable)) issues.push(issue("warning", "variable.unknown", `Message references {{${variable}}}, but no capture or built-in variable defines it.`, str(node.id)));
       }
     }
   }
-
   return issues;
 }
 
-export function flowErrors(issues: FlowIssue[]): FlowIssue[] {
-  return issues.filter((item) => item.severity === "error");
-}
-
-export function flowWarnings(issues: FlowIssue[]): FlowIssue[] {
-  return issues.filter((item) => item.severity === "warning");
-}
+export const flowErrors = (issues: FlowIssue[]): FlowIssue[] => issues.filter((item) => item.severity === "error");
+export const flowWarnings = (issues: FlowIssue[]): FlowIssue[] => issues.filter((item) => item.severity === "warning");
