@@ -159,6 +159,8 @@ export default function DashboardCanvas({
    * error page.
    */
   const [preview, setPreview] = useState<DropPreview | null>(null);
+  /** The dragged card's measured height, so the marker can match it exactly. */
+  const [activeHeight, setActiveHeight] = useState<number | null>(null);
   /*
    * The last thing the pointer was over, so a drop that lands outside every
    * droppable still goes where the marker promised. dnd-kit reports `over` as
@@ -313,6 +315,18 @@ export default function DashboardCanvas({
 
   function onDragStart(event: DragStartEvent) {
     dragGesture.current = `drag-${String(event.active.id)}-${Date.now()}`;
+    /*
+     * The card's real height, so the marker can be the same size.
+     *
+     * A card's span says how many COLUMNS it takes; nothing says how tall it is,
+     * because that comes from its content. The marker matched the width and was
+     * its own 5rem tall, so the row it joined came out shorter than the row the
+     * card left, and everything below moved by the difference. A drag log showed
+     * a 96px step: an 80px marker where a 280px card had been.
+     *
+     * Measured once, at the start, from the rect dnd-kit already took.
+     */
+    setActiveHeight(event.active.rect.current.initial?.height ?? null);
     setActiveId(String(event.active.id));
   }
 
@@ -320,6 +334,7 @@ export default function DashboardCanvas({
     dragGesture.current = null;
     lastOverId.current = null;
     setActiveId(null);
+    setActiveHeight(null);
     setPreview(null);
   }
 
@@ -391,6 +406,7 @@ export default function DashboardCanvas({
             slots={slots}
             activeId={activeId}
             activeCard={activeCard}
+            activeHeight={activeHeight}
             dropAt={preview && preview.sectionId === section.id ? preview.index : null}
             onConfigure={onConfigure}
             onAddCard={onAddCard}
@@ -463,6 +479,7 @@ function SectionBlock({
   slots,
   activeId,
   activeCard,
+  activeHeight,
   dropAt,
   onConfigure,
   onAddCard,
@@ -474,6 +491,8 @@ function SectionBlock({
   activeId: string | null;
   /** The card being dragged, so the marker can take its exact shape. */
   activeCard: CardConfig | undefined;
+  /** Its measured height in pixels, or null when nothing is being dragged. */
+  activeHeight: number | null;
   /**
    * Where the marker goes in this group, counted over its cards WITHOUT the
    * dragged one — or null when the card would not land here.
@@ -550,7 +569,7 @@ function SectionBlock({
     dropAt,
   ).map((entry) =>
     entry.kind === "marker" ? (
-      <DropMarker key="drop-marker" card={activeCard} />
+      <DropMarker key="drop-marker" card={activeCard} height={activeHeight} />
     ) : (
       <SortableCard
         key={entry.id}
@@ -700,10 +719,21 @@ function SectionBlock({
  * reflowing the whole arrangement under the pointer, which said the same thing
  * far less clearly and is what produced the error page - see `dropPreview`.
  */
-function DropMarker({ card }: { card: CardConfig | undefined }) {
+function DropMarker({ card, height }: { card: CardConfig | undefined; height: number | null }) {
   return (
     <div
       aria-hidden
+      /*
+       * The card's measured height, so the row it joins is the height of the row
+       * the card left. A span says how many COLUMNS a card takes and nothing
+       * about how tall it is - that comes from its content - so matching the
+       * span alone still moved everything below by the difference. A drag log
+       * showed a 96px step: an 80px marker where a 280px card had been.
+       *
+       * min-height rather than height, because the row can legitimately be
+       * taller than the card was if something else in it is.
+       */
+      style={height ? { minHeight: height } : undefined}
       className={cn(
         "flex min-h-20 items-center justify-center rounded-xl border-2 border-dashed border-primary bg-primary/10",
         /*

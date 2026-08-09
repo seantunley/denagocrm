@@ -621,6 +621,29 @@ test("the marker takes the same shape as the card it stands in for", () => {
   assert.match(body, /CARD_ROWS\[card\.rows \?\? 1\]/, "…and its height");
 
   // It has to be given the card to do that, which means threading it down.
-  assert.match(canvas, /<DropMarker key="drop-marker" card=\{activeCard\} \/>/);
+  assert.match(canvas, /<DropMarker key="drop-marker" card=\{activeCard\} height=\{activeHeight\} \/>/);
   assert.match(canvas, /activeCard=\{activeCard\}/, "the section must receive it");
+});
+
+test("the marker is as tall as the card, not just as wide", () => {
+  /*
+   * A span says how many COLUMNS a card takes. Nothing in the config says how
+   * TALL it is — that comes from its content — so matching the span alone still
+   * left the marker its own 5rem while the card it replaced was 280px, and
+   * everything below moved by the difference.
+   *
+   * A drag log caught the residue after the span fix: every left edge held still
+   * (314, 1481, 897 throughout) while one card's top flipped 573 -> 477 -> 573.
+   * 96px, which is an 80px marker plus a 16px gap.
+   */
+  const canvas = code(CANVAS);
+  const fn = canvas.slice(canvas.indexOf("function DropMarker"));
+  const body = fn.slice(0, fn.indexOf("\n}"));
+  assert.match(body, /style=\{height \? \{ minHeight: height \} : undefined\}/);
+
+  // Measured once at drag start, from the rect dnd-kit already took, and
+  // cleared when the drag ends so it cannot leak into the next one.
+  assert.match(canvas, /setActiveHeight\(event\.active\.rect\.current\.initial\?\.height \?\? null\)/);
+  const end = canvas.slice(canvas.indexOf("function endDrag"));
+  assert.match(end.slice(0, end.indexOf("\n  }")), /setActiveHeight\(null\)/);
 });
