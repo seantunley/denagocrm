@@ -245,11 +245,14 @@ test("the drop position is drawn, not implied", () => {
   // The order already updated live, so the destination cell was on screen — with
   // nothing marking it but 30% opacity on a card that otherwise looked like
   // every other card. Reported as: you cannot see where it will slot in.
+  // The marker is its own element now, drawn in the destination slot rather
+  // than on the dragged card - tests/dashboardDropPreview.test.ts checks that
+  // the position it promises is the position the drop delivers.
   const canvas = read(CANVAS);
-  assert.match(canvas, /\{isDragging && \(/, "the dragged card's cell must render a marker");
-  assert.match(canvas, /Drops here/);
+  assert.match(canvas, /function DropMarker\(\)/, "there must be a marker");
   assert.match(canvas, /border-dashed border-primary/);
-  assert.match(canvas, /isDropTarget/, "and the receiving group must be marked too");
+  assert.match(canvas, /\{isDragging && \(/, "and the card being moved must be marked as the source");
+  assert.match(canvas, /dropAt !== null &&/, "and the receiving group outlined");
 });
 
 test("the pointer decides the target, not the nearest centre", () => {
@@ -278,8 +281,11 @@ test("the move maths reads one copy of the document", () => {
   // the updater, against `current`. Dragover fires faster than React renders, so
   // the two were routinely different documents and the card landed a position
   // out. Everything now derives from the view the mover is handed.
+  // The move now runs once, on the drop, rather than on every dragover - but the
+  // rule is the same one: it derives from the view it is handed, not from the
+  // props captured when the handler was created.
   const canvas = code(CANVAS);
-  const handler = canvas.slice(canvas.indexOf("function onDragOver"));
+  const handler = canvas.slice(canvas.indexOf("function onDragEnd"));
   const body = handler.slice(0, handler.indexOf("\n  }\n"));
   assert.match(body, /moveCardInView\(current,/);
   assert.doesNotMatch(body, /from\.cards|toSection\.cards/, "no indices from the props");

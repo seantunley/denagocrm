@@ -40,6 +40,124 @@ function sectionOf(view: ViewConfig, cardId: string): SectionConfig | undefined 
   return view.sections.find((section) => section.cards.some((card) => card.id === cardId));
 }
 
+/** Where a marker should be drawn to promise where the card will land. */
+export type DropPreview = {
+  sectionId: string;
+  /** Insertion index into that section's cards WITH the dragged card removed. */
+  index: number;
+};
+
+/**
+ * Where the card would land if it were dropped now.
+ *
+ * ── WHY A PREVIEW AND NOT A MOVE ────────────────────────────────────────────
+ *
+ * The canvas used to apply the real move on every dragover, so the arrangement
+ * reflowed live under the pointer. The intention was good — the gap you drop
+ * into is the gap you can see — and the mechanism is what put an error page in
+ * front of the user.
+ *
+ * Two cards can swap forever. Drag A over B and A takes B's index, so the order
+ * becomes B, A. The pointer has not moved, but the card beneath it is now B
+ * again, so the next dragover moves A back, and the next moves it forward. With
+ * droppables re-measured on every render, dragover keeps firing and the pair
+ * oscillates as fast as React can render.
+ *
+ * That is not a theory about the crash; it is what the captured stack shows.
+ * dnd-kit's SortableContext only calls `measureDroppableContainers` when its
+ * item list has CHANGED IN VALUE, and it was calling it from a layout effect
+ * often enough, in a single commit, to pass React's nested-update limit —
+ * reported as "Maximum update depth exceeded", thrown during commit, caught by
+ * the route's error boundary. Every one of those calls means the order changed
+ * again.
+ *
+ * So the order no longer changes during a drag. Nothing moves, nothing is
+ * re-measured, nothing is saved, and there is no pair to oscillate: the canvas
+ * draws a marker where the card will go, and `moveCardInView` runs once, on
+ * drop. The promise the live reflow was making is kept by the marker, which is
+ * also the thing that was actually missing — the report was that dropping is a
+ * guess, and a grid quietly reflowing under the pointer is not an answer to it.
+ *
+ * ── THE INDEX ───────────────────────────────────────────────────────────────
+ *
+ * Counted over the section's cards WITHOUT the dragged one, because that is the
+ * list the card is being inserted into and the only count that matches where it
+ * ends up. Dragging the first card onto the second returns 1, not 0: with the
+ * first removed the second is at 0, and the card goes after it.
+ *
+ * The invariant, which the tests assert directly, is that this index is where
+ * `moveCardInView` actually puts the card. A marker that promises one position
+ * and a drop that delivers another is worse than no marker.
+ */
+export function dropPreview(
+  view: ViewConfig,
+  activeCardId: string,
+  overId: string,
+): DropPreview | null {
+  const from = sectionOf(view, activeCardId);
+  if (!from) return null;
+
+  const target = view.sections.find((section) => section.id === overId) ?? sectionOf(view, overId);
+  if (!target) return null;
+
+  // Over the section rather than a card: the empty space below everything, so
+  // the card goes last. Counted without the dragged card, which for a move
+  // within one section is one shorter than the section's own list.
+  const without = target.cards.filter((card) => card.id !== activeCardId);
+  if (overId === target.id) return { sectionId: target.id, index: without.length };
+
+  /*
+   * Over a card: its index in the section's OWN list, dragged card included.
+   *
+   * Not its index in `without`, which is the tempting mistake and is wrong by
+   * one for every forward move within a section. `moveCardInView` lifts the
+   * card out and re-inserts it at the index the target had BEFORE the lift —
+   * the arrayMove semantics — so dragging the first card onto the third lands
+   * it at 2, while its index among the remaining two is 1.
+   *
+   * Cross-section, the two counts are identical, because the dragged card was
+   * never in the target to begin with.
+   */
+  const index = target.cards.findIndex((card) => card.id === overId);
+  if (index < 0) return { sectionId: target.id, index: without.length };
+  return { sectionId: target.id, index };
+}
+
+/** One thing the canvas draws in a section: a card, or the drop marker. */
+export type CanvasSlot = { kind: "card"; id: string } | { kind: "marker" };
+
+/**
+ * A section's cards with the drop marker inserted where the card will land.
+ *
+ * Pure, and separate from the component, because the placement is an off-by-one
+ * waiting to happen and the only way to be sure of it is to run it. The marker
+ * has to go BEFORE the card currently occupying its slot, and the dragged card
+ * has to be skipped while counting — it has not moved, so it is still drawn, but
+ * `dropAt` counts the list it is being inserted into, which does not include it.
+ *
+ * A `dropAt` past the last slot means the end, which is what "dropped in the
+ * empty space below the cards" resolves to.
+ */
+export function layoutWithMarker(
+  cardIds: string[],
+  activeId: string | null,
+  dropAt: number | null,
+): CanvasSlot[] {
+  const slots: CanvasSlot[] = [];
+  let slot = 0;
+  for (const id of cardIds) {
+    if (id === activeId) {
+      slots.push({ kind: "card", id });
+      continue;
+    }
+    if (dropAt === slot) slots.push({ kind: "marker" });
+    slot += 1;
+    slots.push({ kind: "card", id });
+  }
+  if (dropAt !== null && dropAt >= slot) slots.push({ kind: "marker" });
+  return slots;
+}
+
 /**
  * Move `activeCardId` to wherever `overId` points.
  *

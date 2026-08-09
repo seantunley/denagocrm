@@ -25,7 +25,12 @@ import {
 } from "@dnd-kit/sortable";
 import { GripVertical, Plus, Settings2, Trash2, X, Check, Eye } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { moveCardInView } from "@/lib/dashboard/canvasMove";
+import {
+  dropPreview,
+  layoutWithMarker,
+  moveCardInView,
+  type DropPreview,
+} from "@/lib/dashboard/canvasMove";
 import type { CardConfig, SectionConfig, ViewConfig } from "@/lib/dashboard/config";
 import { useEditor, newId } from "./EditorProvider";
 
@@ -96,9 +101,21 @@ export default function DashboardCanvas({
 }) {
   const { editing, updateView } = useEditor();
   const [activeId, setActiveId] = useState<string | null>(null);
-  // Which group the card would land in, so a cross-group move is visible before
-  // it happens rather than only after.
-  const [overSectionId, setOverSectionId] = useState<string | null>(null);
+  /*
+   * Where the card would land, so the destination is visible BEFORE the drop.
+   *
+   * This is the whole of what changes during a drag. The document does not: see
+   * `dropPreview` for why reordering it under the pointer was what produced the
+   * error page.
+   */
+  const [preview, setPreview] = useState<DropPreview | null>(null);
+  /*
+   * The last thing the pointer was over, so a drop that lands outside every
+   * droppable still goes where the marker promised. dnd-kit reports `over` as
+   * null in that case, and dropping a card into nothing should not silently
+   * undo the whole gesture.
+   */
+  const lastOverId = useRef<string | null>(null);
 
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 8 } }),
@@ -175,8 +192,24 @@ export default function DashboardCanvas({
 
   function endDrag() {
     dragGesture.current = null;
+    lastOverId.current = null;
     setActiveId(null);
-    setOverSectionId(null);
+    setPreview(null);
+  }
+
+  /**
+   * Commit the move, once, on the drop.
+   *
+   * The whole gesture is one change to the document, one save and one undo step.
+   * It used to be one of each per pointer movement.
+   */
+  function onDragEnd(event: DragEndEvent) {
+    const activeCardId = String(event.active.id);
+    const overId = event.over ? String(event.over.id) : lastOverId.current;
+    const gesture = dragGesture.current ?? undefined;
+    endDrag();
+    if (!overId || overId === activeCardId) return;
+    updateView(view.id, (current) => moveCardInView(current, activeCardId, overId), gesture);
   }
 
   /*
@@ -196,17 +229,16 @@ export default function DashboardCanvas({
     if (!over) return;
     const activeCardId = String(active.id);
     const overId = String(over.id);
-
-    const target =
-      view.sections.find((section) => section.id === overId) ??
-      view.sections.find((section) => section.cards.some((card) => card.id === overId));
-    setOverSectionId((previous) => (previous === (target?.id ?? null) ? previous : target?.id ?? null));
-
     if (activeCardId === overId) return;
-    updateView(
-      view.id,
-      (current) => moveCardInView(current, activeCardId, overId),
-      dragGesture.current ?? undefined,
+
+    lastOverId.current = overId;
+    const next = dropPreview(view, activeCardId, overId);
+    // Only when it actually moved. Dragover fires on every pointer movement and
+    // most of those events point at the same place as the last one.
+    setPreview((current) =>
+      current && next && current.sectionId === next.sectionId && current.index === next.index
+        ? current
+        : next,
     );
   }
 
@@ -221,7 +253,7 @@ export default function DashboardCanvas({
       measuring={MEASURE_ALWAYS}
       onDragStart={onDragStart}
       onDragOver={onDragOver}
-      onDragEnd={(_event: DragEndEvent) => endDrag()}
+      onDragEnd={onDragEnd}
       onDragCancel={endDrag}
     >
       <div className={cn("grid items-start gap-4", VIEW_COLUMNS[view.columns])}>
@@ -231,7 +263,8 @@ export default function DashboardCanvas({
             view={view}
             section={section}
             slots={slots}
-            isDropTarget={activeId !== null && overSectionId === section.id}
+            activeId={activeId}
+            dropAt={preview && preview.sectionId === section.id ? preview.index : null}
             onConfigure={onConfigure}
             onAddCard={onAddCard}
           />
@@ -274,15 +307,21 @@ function SectionBlock({
   view,
   section,
   slots,
-  isDropTarget,
+  activeId,
+  dropAt,
   onConfigure,
   onAddCard,
 }: {
   view: ViewConfig;
   section: SectionConfig;
   slots: CardSlots;
-  /** True while a dragged card would land in this group. */
-  isDropTarget: boolean;
+  /** The card being dragged anywhere on the canvas, or null. */
+  activeId: string | null;
+  /**
+   * Where the marker goes in this group, counted over its cards WITHOUT the
+   * dragged one — or null when the card would not land here.
+   */
+  dropAt: number | null;
   onConfigure: (cardId: string) => void;
   onAddCard: (sectionId: string) => void;
 }) {
@@ -308,6 +347,35 @@ function SectionBlock({
     [cardIdKey, section.id],
   );
 
+  /*
+   * The cards, with a marker inserted where the dragged one would land.
+   *
+   * `dropAt` counts the cards WITHOUT the dragged one, so the dragged card is
+   * skipped when counting while still being drawn in place — it has not moved,
+   * and making it vanish mid-gesture would reflow the grid, which is the thing
+   * this design exists to stop.
+   *
+   * A marker past the last slot lands at the end, which is what "dropped in the
+   * empty space below the cards" means.
+   */
+  const byId = new Map(cards.map((card) => [card.id, card]));
+  const withDropMarker = layoutWithMarker(
+    cards.map((card) => card.id),
+    activeId,
+    dropAt,
+  ).map((entry) =>
+    entry.kind === "marker" ? (
+      <DropMarker key="drop-marker" />
+    ) : (
+      <SortableCard
+        key={entry.id}
+        card={byId.get(entry.id)!}
+        node={slots[entry.id]}
+        onConfigure={onConfigure}
+      />
+    ),
+  );
+
   // AFTER the hooks, deliberately. A hook below a conditional return is a
   // different number of hooks on the render where the condition flips, and React
   // ends that with "Rendered more hooks than during the previous render".
@@ -320,7 +388,7 @@ function SectionBlock({
         SECTION_SPAN[section.columnSpan],
         editing && "rounded-xl border border-dashed border-border/70 p-3",
         // Which group is being dropped into, while it is being dropped into.
-        isDropTarget && "border-solid border-primary/60 bg-primary/[0.03]",
+        dropAt !== null && "border-solid border-primary/60 bg-primary/[0.03]",
       )}
     >
       {(section.title || editing) && (
@@ -421,14 +489,7 @@ function SectionBlock({
             VIEW_COLUMNS[section.columnSpan],
           )}
         >
-          {cards.map((card) => (
-            <SortableCard
-              key={card.id}
-              card={card}
-              node={slots[card.id]}
-              onConfigure={onConfigure}
-            />
-          ))}
+          {withDropMarker}
           {editing && (
             <button
               type="button"
@@ -442,6 +503,27 @@ function SectionBlock({
         </div>
       </SortableContext>
     </section>
+  );
+}
+
+/**
+ * Where the card will land.
+ *
+ * The one thing that moves during a drag, and the answer to "you cannot see
+ * where it is going to slot in, so it is a guess". It used to be answered by
+ * reflowing the whole arrangement under the pointer, which said the same thing
+ * far less clearly and is what produced the error page - see `dropPreview`.
+ */
+function DropMarker() {
+  return (
+    <div
+      aria-hidden
+      className="flex min-h-20 items-center justify-center rounded-xl border-2 border-dashed border-primary bg-primary/10"
+    >
+      <span className="rounded-md bg-primary px-2 py-1 text-[11px] font-semibold text-primary-foreground shadow-sm">
+        Drops here
+      </span>
+    </div>
   );
 }
 
@@ -558,12 +640,8 @@ function SortableCard({
       {isDragging && (
         <div
           aria-hidden
-          className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl border-2 border-dashed border-primary bg-primary/10"
-        >
-          <span className="rounded-md bg-primary px-2 py-1 text-[11px] font-semibold text-primary-foreground shadow-sm">
-            Drops here
-          </span>
-        </div>
+          className="pointer-events-none absolute inset-0 z-10 rounded-xl border-2 border-dashed border-primary/50"
+        />
       )}
 
       {editing && (

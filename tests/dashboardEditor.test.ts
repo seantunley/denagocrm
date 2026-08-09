@@ -46,20 +46,40 @@ test("the canvas lays out from local config, never from the server's copy", () =
   );
 });
 
-test("the reorder happens on drag-over, not on drop", () => {
+test("the drop position is previewed on drag-over and committed on drop", () => {
+  /*
+   * REVERSED, ON EVIDENCE. This rule used to be the opposite: the real move was
+   * applied on every dragover so the arrangement reflowed live, on the reasoning
+   * that the gap you drop into should be the gap you can see.
+   *
+   * The reasoning was right and the mechanism was what crashed the page. Two
+   * cards can swap forever: drag A over B and A takes B's index, so the pointer,
+   * which has not moved, is over B again and the next dragover moves A back.
+   * dnd-kit re-measures its droppables whenever the item list changes IN VALUE,
+   * from a layout effect, and enough of those in one commit passes React's
+   * nested-update limit - thrown during commit, so the route's error boundary
+   * turned it into an error page. The captured stack named it:
+   *
+   *     at useDroppableMeasuring.useCallback[measureDroppableContainers]
+   *     at SortableContext.useIsomorphicLayoutEffect
+   *     at commitHookLayoutEffects
+   *
+   * So the gap you can see is now a MARKER, and the document changes once, on
+   * the drop. tests/dashboardDropPreview.test.ts checks that the position the
+   * marker promises is the position the drop delivers.
+   */
   const canvas = CANVAS();
   assert.match(canvas, /function onDragOver\(event: DragOverEvent\)/, "must handle drag-over");
   assert.match(canvas, /onDragOver=\{onDragOver\}/, "and wire it to the context");
-  // onDragEnd must do nothing but end the drag. A reorder there means the grid
-  // does not reflow under the pointer and the drop target is invisible.
-  assert.match(
-    canvas,
-    /onDragEnd=\{\(_event: DragEndEvent\) => endDrag\(\)\}/,
-    "drop must only end the drag; the move already happened on drag-over",
+  assert.match(canvas, /onDragEnd=\{onDragEnd\}/, "and commit on the drop");
+
+  const over = canvas.split("function onDragOver")[1]?.split("\n  }")[0] ?? "";
+  assert.ok(over.length > 0, "could not isolate the drag-over handler");
+  assert.doesNotMatch(
+    over,
+    /update(View|Section|Card)?\(/,
+    "dragging over something must not edit the document",
   );
-  const end = canvas.split("function endDrag()")[1]?.split("\n  }")[0] ?? "";
-  assert.ok(end.length > 0, "could not isolate endDrag");
-  assert.doesNotMatch(end, /update|move/i, "ending a drag must not itself move anything");
 });
 
 test("no size-uniform sorting strategy is used", () => {
@@ -77,8 +97,18 @@ test("no size-uniform sorting strategy is used", () => {
 });
 
 test("drop targets are re-measured continuously", () => {
-  // The DOM genuinely reorders here, so rects captured at drag-start go stale
-  // the moment the first swap happens. Symptom: works for one swap, then fights.
+  /*
+   * The reason changed, the requirement did not.
+   *
+   * It used to be that the DOM reordered under the pointer, so rects captured
+   * at drag-start went stale on the first swap. Nothing reorders during a drag
+   * now - see the preview note above - but cards still resize on their own as
+   * streamed data resolves, and a card that grew after drag-start would
+   * otherwise be targeted at the size it used to be.
+   *
+   * It is also much cheaper than it was: re-measuring is triggered by the item
+   * list changing, and that list is now still for the whole gesture.
+   */
   const canvas = CANVAS();
   assert.match(
     canvas,
@@ -104,23 +134,22 @@ test("an emptied section is still a drop target", () => {
 
 test("a card can be dragged between sections, not just within one", () => {
   const canvas = CANVAS();
-  // Anchored on the full declaration: "const activeCard" is a PREFIX of
-  // "const activeCardId", which appears earlier and would slice the body away.
-  const over = canvas.split("function onDragOver")[1]?.split("const activeCard =")[0] ?? "";
-  assert.ok(over.length > 0, "could not isolate the drag-over handler");
   /*
-   * The move itself moved out to lib/dashboard/canvasMove, where it can be
-   * executed rather than grepped — tests/dashboardCanvasMove.test.ts covers the
-   * within-section, cross-section and empty-section cases against real configs.
+   * The move itself lives in lib/dashboard/canvasMove, where it can be executed
+   * rather than grepped - tests/dashboardCanvasMove.test.ts covers the
+   * within-section, cross-section and empty-section cases against real configs,
+   * and tests/dashboardDropPreview.test.ts sweeps every card over every target.
    *
-   * It moved because computing it here was the bug: the handler derived its
-   * indices from the `view` prop and applied them inside the state updater to
-   * `current`, and dragover fires faster than React renders, so those were
-   * routinely different documents. What is left to check here is that the
-   * handler still delegates, and still does not do that arithmetic itself.
+   * It moved out because computing it in the handler was a bug of its own: the
+   * indices came from the `view` prop and were applied inside the state updater
+   * to `current`, and dragover fires faster than React renders, so those were
+   * routinely different documents. What is checked here is that the canvas still
+   * delegates, and still does no index arithmetic of its own.
    */
-  assert.match(over, /moveCardInView\(current, activeCardId, overId\)/, "must delegate the move");
-  assert.doesNotMatch(over, /splice|findIndex/, "no index arithmetic against the props");
+  const end = canvas.split("function onDragEnd")[1]?.split("\n  }")[0] ?? "";
+  assert.ok(end.length > 0, "could not isolate the drop handler");
+  assert.match(end, /moveCardInView\(current, activeCardId, overId\)/, "must delegate the move");
+  assert.doesNotMatch(end, /splice|findIndex/, "no index arithmetic in the canvas");
 });
 
 /* ── saving ───────────────────────────────────────────────────────── */
