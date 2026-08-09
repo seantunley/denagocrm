@@ -4,45 +4,15 @@ import { prisma } from "./db";
 import { logAudit } from "./audit";
 import { sendPushToAll } from "./push";
 import { cancelWorkshopBooking, rescheduleWorkshopBooking } from "./bookingSlots";
+import { channelVerifiedOwner, markUnverified, type BotBookingMatch } from "./botBookingIdentity";
 
-export type BotBookingMatch = { contactId: string | null; leadId: string | null };
+export type { BotBookingMatch };
 export type BotBookingSummary = {
   id: string;
   label: string;
   summary: string;
   dueAt: Date;
 };
-
-function phoneTail(phone: string | null | undefined): string | null {
-  const digits = String(phone ?? "").replace(/\D/g, "");
-  return digits.length >= 9 ? digits.slice(-9) : null;
-}
-
-async function resolveBookingOwner(
-  match: BotBookingMatch,
-  vars: Record<string, string>,
-): Promise<BotBookingMatch> {
-  if (match.contactId || match.leadId) return match;
-  const tail = phoneTail(vars.phone);
-  if (!tail) return match;
-
-  const contact = await prisma.contact.findFirst({
-    where: {
-      OR: [
-        { phone: { contains: tail } },
-        { whatsapp: { contains: tail } },
-      ],
-    },
-    select: { id: true },
-  });
-  if (contact) return { contactId: contact.id, leadId: null };
-
-  const lead = await prisma.lead.findFirst({
-    where: { phone: { contains: tail }, status: "open" },
-    select: { id: true, contactId: true },
-  });
-  return lead ? { contactId: lead.contactId ?? null, leadId: lead.id } : match;
-}
 
 function ownerWhere(owner: BotBookingMatch): { OR: ({ contactId: string } | { leadId: string })[] } | null {
   const OR: ({ contactId: string } | { leadId: string })[] = [];
@@ -51,12 +21,9 @@ function ownerWhere(owner: BotBookingMatch): { OR: ({ contactId: string } | { le
   return OR.length ? { OR } : null;
 }
 
-export async function findUpcomingBotBooking(
-  match: BotBookingMatch,
-  vars: Record<string, string>,
-): Promise<BotBookingSummary | null> {
-  const owner = await resolveBookingOwner(match, vars);
-  const scope = ownerWhere(owner);
+export async function findUpcomingBotBooking(match: BotBookingMatch): Promise<BotBookingSummary | null> {
+  const owner = channelVerifiedOwner(match);
+  const scope = owner ? ownerWhere(owner) : null;
   if (!scope) return null;
 
   const activity = await prisma.activity.findFirst({
@@ -83,7 +50,15 @@ export async function lookupBotBooking(
   match: BotBookingMatch,
   vars: Record<string, string>,
 ): Promise<{ ok: boolean; label?: string }> {
-  const booking = await findUpcomingBotBooking(match, vars);
+  // Say WHY there is no booking to show. "Not found" and "we cannot tell who you
+  // are" need different words to the customer and different handling in the graph.
+  if (!channelVerifiedOwner(match)) {
+    vars.booking_found = "no";
+    markUnverified(vars);
+    return { ok: false };
+  }
+  vars.booking_identity = "verified";
+  const booking = await findUpcomingBotBooking(match);
   if (!booking) {
     vars.booking_found = "no";
     delete vars.booking_id;
@@ -103,7 +78,12 @@ export async function cancelBotBooking(
   match: BotBookingMatch,
   vars: Record<string, string>,
 ): Promise<{ ok: boolean; alreadyCancelled?: boolean; label?: string }> {
-  const owner = await resolveBookingOwner(match, vars);
+  const owner = channelVerifiedOwner(match);
+  if (!owner) {
+    vars.booking_cancelled = "no";
+    markUnverified(vars);
+    return { ok: false };
+  }
   const result = await cancelWorkshopBooking({ bookingId, owner });
   if (!result.ok) {
     vars.booking_cancelled = "no";
@@ -138,7 +118,12 @@ export async function rescheduleBotBooking(
 ): Promise<{ ok: boolean; label?: string }> {
   const [date, time] = slotId.split("_");
   if (!bookingId || !date || !time) return { ok: false };
-  const owner = await resolveBookingOwner(match, vars);
+  const owner = channelVerifiedOwner(match);
+  if (!owner) {
+    vars.booking_rescheduled = "no";
+    markUnverified(vars);
+    return { ok: false };
+  }
   try {
     const result = await rescheduleWorkshopBooking({ bookingId, date, time, owner });
     if (!result.ok || !result.dueDate) {
