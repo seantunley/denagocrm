@@ -57,6 +57,8 @@ export type FlowCtx = {
   bookSlot?: (slotId: string, vars: Record<string, string>, nodeId: string) => Promise<{ ok: boolean; label?: string }>;
   rescheduleSlot?: (slotId: string, vars: Record<string, string>, nodeId: string) => Promise<{ ok: boolean; label?: string }>;
   routeChoice?: (input: { prompt: string; text: string; options: FlowOption[]; vars: Record<string, string> }) => Promise<string | null>;
+  /** Pure observation hook; runners persist this in the analytics ledger. */
+  recordAction?: (nodeId: string, action: string, ok: boolean) => void;
 };
 
 const FORMAT_RE: Record<string, RegExp> = {
@@ -126,8 +128,10 @@ async function runSlotSelection(node: Extract<FlowNode, { type: "slots" }>, inpu
   if (!input.choiceId?.startsWith(`${node.id}|`)) return { nodeId: node.next ?? null };
   const slotId = input.choiceId.slice(node.id.length + 1);
   const handler = node.action === "reschedule" ? ctx.rescheduleSlot : ctx.bookSlot;
+  const action = node.action === "reschedule" ? "booking_reschedule" : "slot_booking";
   if (!handler) return { nodeId: node.next ?? null };
   const res = await handler(slotId, vars, node.id);
+  ctx.recordAction?.(node.id, action, res.ok);
   if (!res.ok) {
     const opts = ctx.availableSlots ? await ctx.availableSlots() : [];
     if (opts.length) {
@@ -199,11 +203,19 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
     } else if (node.type === "answer") {
       const text = node.answerSource ? await ctx.dynamicAnswer(node.answerSource) : interpolate(node.text ?? "", vars); if (text) messages.push({ type: "text", text }); nodeId = node.next ?? null;
     } else if (node.type === "booking") {
-      if (node.action === "lookup" || node.action === "cancel") { if (ctx.manageBooking) await ctx.manageBooking(node.action, vars, node.id); }
-      else await ctx.createBooking(vars, node.action, node.id);
+      if (node.action === "lookup" || node.action === "cancel") {
+        if (ctx.manageBooking) {
+          const outcome = await ctx.manageBooking(node.action, vars, node.id);
+          if (node.action === "cancel") ctx.recordAction?.(node.id, "booking_cancel", outcome.ok);
+        }
+      } else {
+        await ctx.createBooking(vars, node.action, node.id);
+        ctx.recordAction?.(node.id, `booking_${node.action ?? "service"}`, true);
+      }
       if (node.text) messages.push({ type: "text", text: interpolate(node.text, vars) }); nodeId = node.next ?? null;
     } else if (node.type === "journey") {
       const outcome = ctx.startJourney ? await ctx.startJourney(node.journeyId, vars, node.id) : { ok: false, reason: "Journey action unavailable" };
+      ctx.recordAction?.(node.id, "journey_start", outcome.ok);
       if (!vars.journey_started) vars.journey_started = outcome.ok ? "yes" : "no";
       if (outcome.reason && !vars.journey_reason) vars.journey_reason = outcome.reason;
       if (node.text) messages.push({ type: "text", text: interpolate(node.text, vars) });
