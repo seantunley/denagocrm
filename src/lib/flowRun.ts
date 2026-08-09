@@ -4,7 +4,7 @@ import { formatZAR } from "./format";
 import { matchByPhone } from "./whatsapp";
 import { generateBotReply, routeBotChoice, type BotMsg } from "./botAi";
 import { sendPushToAll } from "./push";
-import { maybeAutoReply, botShouldPause } from "./bot";
+import { maybeAutoReply } from "./bot";
 import { flowRuntimeVars, greetingVars } from "./flowSession";
 import { resolveTenantActor } from "./tenantActor";
 import { crmActions } from "./flowActions";
@@ -118,8 +118,6 @@ function buildCtx(digits: string, match: { contactId: string | null; leadId: str
 /** Runs the published flow for a WhatsApp message. Returns true if handled. */
 export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise<boolean> {
   const match = await matchByPhone(digits);
-  if (await botShouldPause(match.contactId, match.leadId, digits)) return true;
-
   const existing = await loadSession(digits);
   if (existing?.status === "paused") return true;
 
