@@ -3,7 +3,10 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { requireOwner } from "@/lib/auth";
 import { DEFAULT_FLOW, type Flow } from "@/lib/flow";
+import { validateFlow } from "@/lib/flowValidation";
+import { enabledFlowChannels } from "@/lib/flowValidationServer";
 import FlowBuilder from "@/components/FlowBuilder";
+import FlowLintPanel from "@/components/FlowLintPanel";
 
 export default async function FlowEditorPage({ params }: { params: Promise<{ id: string }> }) {
   await requireOwner();
@@ -18,6 +21,8 @@ export default async function FlowEditorPage({ params }: { params: Promise<{ id:
   } catch {
     /* use default */
   }
+  const channels = await enabledFlowChannels();
+  const issues = validateFlow(flow, channels);
 
   return (
     <div className="space-y-4">
@@ -31,6 +36,7 @@ export default async function FlowEditorPage({ params }: { params: Promise<{ id:
           You are editing a draft. Save keeps these changes private; publish them from All flows when they are ready for customers.
         </p>
       </div>
+      <FlowLintPanel issues={issues} channels={channels} />
       <FlowBuilder flowId={row.id} initial={flow} />
     </div>
   );
