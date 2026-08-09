@@ -1,6 +1,9 @@
 import { conditionsMet, isServerDecidable, type ConditionContext } from "@/lib/dashboard/conditions";
 import type { CardConfig, DashboardConfig, SectionConfig, ViewConfig } from "@/lib/dashboard/config";
+import { Suspense } from "react";
 import { renderCard, type RenderContext } from "./cards";
+import { CardBoundary } from "./CardBoundary";
+import { CardSkeleton } from "./CardSkeleton";
 
 /**
  * Turning a stored view into rendered cards.
@@ -111,6 +114,35 @@ async function fill(
    * error page: drop the card, keep the dashboard. This is the screen a user
    * cannot route around.
    */
+  /*
+   * STREAM THE CARD, UNLESS ITS VISIBILITY DEPENDS ON ITS OWN DATA.
+   *
+   * Every card here already loads in parallel, but the page awaited all of them
+   * before rendering anything, so the whole dashboard cost the SLOWEST query.
+   * One report card against a large table held up the agenda, the greeting and
+   * every tile that was ready in milliseconds.
+   *
+   * A card whose rules are server-decidable has already been admitted by
+   * `admittedUpFront` above, so nothing left to decide needs its data: it can be
+   * handed over as an unresolved element and stream in on its own.
+   *
+   * A card with a data-dependent rule ("hide when empty") cannot. Deciding
+   * whether it appears AT ALL requires its signals, and streaming it would mean
+   * drawing a placeholder for a card that then turns out to be hidden — a
+   * skeleton that vanishes is worse than a slightly later paint. Those are still
+   * awaited, exactly as before.
+   */
+  if (isServerDecidable(card.visibility)) {
+    slots[card.id] = (
+      <CardBoundary key={card.id} title={card.title}>
+        <Suspense fallback={<CardSkeleton title={card.title} />}>
+          <StreamedCard card={card} render={render} />
+        </Suspense>
+      </CardBoundary>
+    );
+    return;
+  }
+
   let result;
   try {
     result = await renderCard(card, render);
@@ -121,4 +153,23 @@ async function fill(
   // Step 3 — the conditions that needed the card's own data.
   if (!conditionsMet(card.visibility, { ...ctx, signals: result.signals })) return;
   slots[card.id] = result.node;
+}
+
+/**
+ * One streamed card. Async, so React can suspend on it and send the rest of the
+ * page first.
+ *
+ * The try/catch that used to wrap this lives in the CardBoundary around it now:
+ * once a card resolves after the shell has been sent, a throw no longer lands in
+ * a server-side catch. Returning null on failure keeps "one bad card costs one
+ * card" true, and the boundary covers what a return cannot — a throw during
+ * render rather than during load.
+ */
+async function StreamedCard({ card, render }: { card: CardConfig; render: RenderContext }) {
+  try {
+    const result = await renderCard(card, render);
+    return result.node ?? null;
+  } catch {
+    return null;
+  }
 }
