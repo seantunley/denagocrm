@@ -7,6 +7,29 @@ import { formatZAR } from "./format";
 export type BotMsg = { role: "user" | "assistant"; content: string };
 export type BotFaq = { id: string; question: string; answer: string; handoff?: boolean };
 export type BotChoiceOption = { id: string; label: string; description?: string };
+export type BotConfidence = "high" | "medium" | "low";
+export type BotIntent = "pricing" | "colours" | "service" | "demo" | "purchase" | "complaint" | "human" | "general" | "unknown";
+export type BotReplyDecision = {
+  reply: string;
+  handoff: boolean;
+  confidence: BotConfidence;
+  intent: BotIntent;
+  handoffReason?: string;
+  handoffSummary?: string;
+};
+
+type ParsedDecision = {
+  faqId: string | null;
+  reply: string | null;
+  handoff: boolean;
+  confidence: BotConfidence;
+  intent: BotIntent;
+  handoffReason?: string;
+  handoffSummary?: string;
+};
+
+const CONFIDENCE = new Set<BotConfidence>(["high", "medium", "low"]);
+const INTENTS = new Set<BotIntent>(["pricing", "colours", "service", "demo", "purchase", "complaint", "human", "general", "unknown"]);
 
 export async function getBotFaqs(): Promise<BotFaq[]> {
   const raw = await getSetting("BOT_FAQS");
@@ -20,10 +43,7 @@ export async function getBotFaqs(): Promise<BotFaq[]> {
 }
 
 export async function isBotAiEnabled(): Promise<boolean> {
-  return (
-    (await getSetting("BOT_AI_ENABLED")) === "true" &&
-    Boolean(await getSetting("ANTHROPIC_API_KEY"))
-  );
+  return (await getSetting("BOT_AI_ENABLED")) === "true" && Boolean(await getSetting("ANTHROPIC_API_KEY"));
 }
 
 function sanitize(msgs: BotMsg[]): BotMsg[] {
@@ -44,10 +64,45 @@ function personalize(text: string, name?: string | null) {
   return text.replace(/\{\{\s*(first_name|name)\s*\}\}/g, first);
 }
 
-function parseFirstJsonObject(text: string): Record<string, unknown> {
-  const m = text.match(/\{[\s\S]*\}/);
-  const parsed = JSON.parse(m ? m[0] : "{}");
-  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+function textField(value: unknown, max: number): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const clean = value.trim();
+  return clean ? clean.slice(0, max) : undefined;
+}
+
+/**
+ * Deliberately strict. The model was previously allowed to wrap JSON in prose or
+ * fences and a greedy regex then fished the first object out. That made malformed
+ * responses look valid. The contract now accepts exactly one JSON object and
+ * validates every decision field before it can influence a customer reply.
+ */
+function strictJsonObject(text: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(text.trim());
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+export function parseBotDecision(text: string): ParsedDecision | null {
+  const raw = strictJsonObject(text);
+  if (!raw || typeof raw.handoff !== "boolean") return null;
+  if (typeof raw.confidence !== "string" || !CONFIDENCE.has(raw.confidence as BotConfidence)) return null;
+  const confidence = raw.confidence as BotConfidence;
+  const intent = typeof raw.intent === "string" && INTENTS.has(raw.intent as BotIntent) ? raw.intent as BotIntent : "unknown";
+  const faqId = raw.faqId === null ? null : textField(raw.faqId, 120) ?? null;
+  const reply = raw.reply === null ? null : textField(raw.reply, 1600) ?? null;
+  if (!faqId && !reply) return null;
+  return {
+    faqId,
+    reply,
+    handoff: raw.handoff,
+    confidence,
+    intent,
+    handoffReason: textField(raw.handoffReason, 180),
+    handoffSummary: textField(raw.handoffSummary, 320),
+  };
 }
 
 /**
@@ -64,9 +119,7 @@ export async function routeBotChoice(input: {
   const apiKey = await getSetting("ANTHROPIC_API_KEY");
   if (!apiKey || !input.text.trim() || input.options.length < 2) return null;
 
-  const optionList = input.options
-    .map((option) => `[${option.id}] ${option.label}${option.description ? ` — ${option.description}` : ""}`)
-    .join("\n");
+  const optionList = input.options.map((option) => `[${option.id}] ${option.label}${option.description ? ` — ${option.description}` : ""}`).join("\n");
   const system = `You are a strict menu router. Map the customer's free-text reply to ONE of the supplied menu options only when their intent clearly matches it.
 
 MENU PROMPT:
@@ -75,7 +128,7 @@ ${input.prompt}
 ALLOWED OPTIONS:
 ${optionList}
 
-Return JSON only:
+Return exactly one JSON object and nothing else:
 {"optionId":"<one supplied id or null>","confidence":"high|medium|low"}
 
 Rules:
@@ -89,12 +142,7 @@ Rules:
       method: "POST",
       signal: AbortSignal.timeout(10000),
       headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5",
-        max_tokens: 80,
-        system,
-        messages: [{ role: "user", content: input.text.trim() }],
-      }),
+      body: JSON.stringify({ model: "claude-haiku-4-5", max_tokens: 80, system, messages: [{ role: "user", content: input.text.trim() }] }),
     });
     if (!res.ok) {
       await logError("bot-choice-router", `Anthropic ${res.status}`, (await res.text().catch(() => "")).slice(0, 200));
@@ -102,8 +150,8 @@ Rules:
     }
     const json = await res.json();
     void recordAiUsage(json.usage);
-    const parsed = parseFirstJsonObject(String(json.content?.[0]?.text ?? "{}"));
-    if (parsed.confidence !== "high" || typeof parsed.optionId !== "string") return null;
+    const parsed = strictJsonObject(String(json.content?.[0]?.text ?? ""));
+    if (!parsed || parsed.confidence !== "high" || typeof parsed.optionId !== "string") return null;
     return input.options.some((option) => option.id === parsed.optionId) ? parsed.optionId : null;
   } catch (e) {
     await logError("bot-choice-router", e);
@@ -112,17 +160,16 @@ Rules:
 }
 
 /**
- * Decides the assistant reply. First tries to route the message to a defined
- * FAQ pathway (built-in price list / colours, plus owner-defined FAQs) and
- * returns that exact answer; otherwise Claude answers conversationally,
- * grounded in the real range, prices, hours and brief. Also flags handoff.
+ * Decide an assistant reply from approved live product facts, the owner brief and
+ * canonical FAQ pathways. Open-ended model copy is allowed only at high
+ * confidence. Medium/low open questions hand off instead of guessing.
  */
 export async function generateBotReply(input: {
   history: BotMsg[];
   customerName?: string | null;
   isCustomer: boolean;
   voiceNote?: boolean;
-}): Promise<{ reply: string; handoff: boolean } | null> {
+}): Promise<BotReplyDecision | null> {
   const apiKey = await getSetting("ANTHROPIC_API_KEY");
   if (!apiKey) return null;
 
@@ -134,20 +181,10 @@ export async function generateBotReply(input: {
   ]);
 
   const priceList = products.length
-    ? "Here's our current range:\n" +
-      products
-        .map(
-          (p) =>
-            `• ${p.name}${p.basePriceCents ? ` — from ${formatZAR(p.basePriceCents)}` : ""}` +
-            (p.colors.length ? ` (${p.colors.map((c) => c.name).join(", ")})` : "")
-        )
-        .join("\n")
+    ? "Here's our current range:\n" + products.map((p) => `• ${p.name}${p.basePriceCents ? ` — from ${formatZAR(p.basePriceCents)}` : ""}` + (p.colors.length ? ` (${p.colors.map((c) => c.name).join(", ")})` : "")).join("\n")
     : "";
   const coloursList = products.length
-    ? products
-        .filter((p) => p.colors.length)
-        .map((p) => `${p.name}: ${p.colors.map((c) => c.name).join(", ")}`)
-        .join("\n")
+    ? products.filter((p) => p.colors.length).map((p) => `${p.name}: ${p.colors.map((c) => c.name).join(", ")}`).join("\n")
     : "";
 
   const builtins: { id: string; when: string; answer: string; handoff?: boolean }[] = [];
@@ -159,44 +196,39 @@ export async function generateBotReply(input: {
     ...faqs.map((f) => ({ id: f.id, when: f.question, answer: f.answer, handoff: f.handoff })),
   ];
   const pathwayList = pathways.map((p) => `[${p.id}] ${p.when}`).join("\n") || "(none)";
+  const who = input.customerName ? `You're chatting with ${input.customerName}${input.isCustomer ? ", an existing customer" : ""}.` : "";
 
-  const who = input.customerName
-    ? `You're chatting with ${input.customerName}${input.isCustomer ? ", an existing customer" : ""}.`
-    : "";
+  const system = `You are the customer assistant for Denago Cape Town, an authorised Denago electric golf-cart dealer and service centre in Cape Town, South Africa. ${who}
 
-  const system = `You are the WhatsApp assistant for Denago Cape Town, an authorised Denago electric golf-cart dealer and service centre in Cape Town, South Africa. ${who}
+STYLE:
+- Short, warm South African English. Usually 1–3 sentences.
+- Never sound scripted or repeat yourself.
 
-STYLE — sound like a warm, helpful human, not a bot:
-- WhatsApp style: short replies (usually 1–3 sentences), South African English.
-- Use the first name occasionally, not every message. The odd tasteful emoji is fine.
-- Never sound scripted or repeat yourself; answer what they actually asked.
-
-WHAT YOU KNOW:
+KNOWN FACTS:
 Business hours (SA time): ${hours || "08:00–17:00"}, Mon–Fri.
 ${priceList ? priceList + "\n" : ""}${brief ? `\nAbout us / policies:\n${brief}\n` : ""}
-DEFINED FAQ PATHWAYS — if the customer's message clearly matches one of these, use it (its exact answer will be sent):
+
+DEFINED FAQ PATHWAYS:
 ${pathwayList}
 
-HOW TO RESPOND — strict JSON only:
-- If the message matches a pathway above: {"faqId": "<the id>", "handoff": <true|false>}
-- Otherwise answer conversationally: {"faqId": null, "reply": "<your whatsapp message>", "handoff": <true|false>}
+Return exactly one JSON object and nothing else, with ALL of these fields:
+{"faqId":"<supplied id or null>","reply":"<reply or null>","handoff":true,"confidence":"high|medium|low","intent":"pricing|colours|service|demo|purchase|complaint|human|general|unknown","handoffReason":"<short reason or null>","handoffSummary":"<one concise sentence for staff or null>"}
 
-RULES:
-- Only state facts given above. NEVER invent prices, specs, stock, dates or promises. If unsure, say you'll check with the team and hand off.
-- Set handoff true when the customer wants to order/pay, book a specific date/test drive, has a complaint, asks something you don't know, or asks for a person.
-${input.voiceNote ? "- This message arrived as a VOICE NOTE (transcribed). Reply naturally; it will then be handed to a human.\n" : ""}`;
+DECISION RULES:
+- If the message clearly matches a defined pathway, return its supplied faqId. The application sends the canonical answer, not your wording.
+- Otherwise use reply for a conversational answer ONLY when the facts above are enough to answer confidently.
+- confidence=high means the supplied facts directly support the answer; medium means some interpretation is required; low means a relevant fact is missing.
+- Set handoff=true for order/payment intent, a specific booking/test-drive request, complaints, requests for a person, or anything you cannot answer from supplied facts.
+- When handoff=true, handoffReason must explain why in a few words and handoffSummary must tell staff the customer's intent and unresolved need without speculation.
+- Never invent prices, specs, stock, dates, legal status, finance terms or promises.
+${input.voiceNote ? "- This arrived as a transcribed voice note. Reply naturally; the application may still route it to a human.\n" : ""}`;
 
   try {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       signal: AbortSignal.timeout(15000),
       headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5",
-        max_tokens: 400,
-        system,
-        messages: sanitize(input.history).slice(-14),
-      }),
+      body: JSON.stringify({ model: "claude-haiku-4-5", max_tokens: 500, system, messages: sanitize(input.history).slice(-14) }),
     });
     if (!res.ok) {
       await logError("bot-ai", `Anthropic ${res.status}`, (await res.text().catch(() => "")).slice(0, 200));
@@ -204,21 +236,49 @@ ${input.voiceNote ? "- This message arrived as a VOICE NOTE (transcribed). Reply
     }
     const json = await res.json();
     void recordAiUsage(json.usage);
-    const parsed = parseFirstJsonObject(String(json.content?.[0]?.text ?? "{}"));
+    const parsed = parseBotDecision(String(json.content?.[0]?.text ?? ""));
+    if (!parsed) {
+      await logError("bot-ai", "Assistant returned a response outside the decision contract").catch(() => {});
+      return null;
+    }
 
     if (parsed.faqId) {
-      const p = pathways.find((x) => x.id === parsed.faqId);
-      if (p) {
-        return {
-          reply: personalize(p.answer, input.customerName),
-          handoff: Boolean(p.handoff) || Boolean(parsed.handoff),
-        };
-      }
+      const pathway = pathways.find((item) => item.id === parsed.faqId);
+      if (!pathway) return null;
+      const handoff = Boolean(pathway.handoff) || parsed.handoff || parsed.confidence === "low";
+      return {
+        reply: personalize(pathway.answer, input.customerName),
+        handoff,
+        confidence: parsed.confidence,
+        intent: parsed.intent,
+        handoffReason: parsed.handoffReason,
+        handoffSummary: parsed.handoffSummary,
+      };
     }
-    if (typeof parsed.reply === "string" && parsed.reply.trim()) {
-      return { reply: personalize(parsed.reply.trim(), input.customerName), handoff: Boolean(parsed.handoff) };
+
+    // Canonical pathways may be used at medium confidence because their copy is
+    // owner-approved. Open-ended model copy must be high confidence or it becomes
+    // a handoff instead of a plausible-sounding guess.
+    if (parsed.confidence !== "high") {
+      return {
+        reply: "Let me get one of our team to confirm that for you — they'll pick it up from here 👍",
+        handoff: true,
+        confidence: parsed.confidence,
+        intent: parsed.intent,
+        handoffReason: parsed.handoffReason || `${parsed.confidence} confidence open question`,
+        handoffSummary: parsed.handoffSummary,
+      };
     }
-    return null;
+
+    if (!parsed.reply) return null;
+    return {
+      reply: personalize(parsed.reply, input.customerName),
+      handoff: parsed.handoff,
+      confidence: parsed.confidence,
+      intent: parsed.intent,
+      handoffReason: parsed.handoffReason,
+      handoffSummary: parsed.handoffSummary,
+    };
   } catch (e) {
     await logError("bot-ai", e);
     return null;
