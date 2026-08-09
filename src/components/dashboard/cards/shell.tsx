@@ -190,6 +190,37 @@ export const SPAN_IN_GRID: Record<2 | 3 | 4, Record<1 | 2 | 3 | 4, string>> = {
   },
 };
 
+/**
+ * Row spans as STATIC class names, for exactly the reason the column table above
+ * spells its own out: Tailwind scans source TEXT, so a computed `row-span-${n}`
+ * never reaches the stylesheet and the card silently stays one row tall.
+ *
+ * Only applied from `sm:` upward. On a phone every card is full width and
+ * stacked, so a card asking for three rows would just be a tall box with a lot
+ * of empty space in it — and the row heights it would be spanning belong to
+ * cards that are no longer beside it.
+ *
+ * A grid only has rows to span if its rows are a known height, which is what
+ * `auto-rows-*` on the container provides — see GRID_ROWS_CLASS. Without that a
+ * row is as tall as its tallest card and spanning two of them means nothing.
+ */
+export const ROW_SPAN_CLASS: Record<1 | 2 | 3 | 4, string> = {
+  1: "",
+  2: "sm:row-span-2",
+  3: "sm:row-span-3",
+  4: "sm:row-span-4",
+};
+
+/**
+ * Give the grid a base row height so a row span means something.
+ *
+ * Without this, rows are sized by their tallest card and a two-row card is
+ * simply itself. `auto-rows-[minmax(0,auto)]` is the browser default and is NOT
+ * what is wanted; a fixed minimum lets a taller card claim real extra space
+ * while a normal card still grows past the minimum if its content needs to.
+ */
+export const GRID_ROWS_CLASS = "sm:auto-rows-[minmax(11rem,auto)]";
+
 /** One column on a phone, always — a two-column card grid at 380px is unreadable. */
 export const GRID_COLUMNS_CLASS: Record<2 | 3 | 4, string> = {
   2: "grid-cols-1 sm:grid-cols-2",

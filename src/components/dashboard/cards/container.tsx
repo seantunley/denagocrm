@@ -3,6 +3,8 @@ import { MAX_CARD_DEPTH, type CardConfig, type GridCardConfig, type StackCardCon
 import { conditionsMet, isServerDecidable } from "@/lib/dashboard/conditions";
 import {
   GRID_COLUMNS_CLASS,
+  GRID_ROWS_CLASS,
+  ROW_SPAN_CLASS,
   SPAN_IN_GRID,
   STACK_GROW,
   type RenderContext,
@@ -124,9 +126,20 @@ export async function renderGrid(
             {card.title}
           </p>
         )}
-        <div className={cn("grid items-start gap-3", GRID_COLUMNS_CLASS[card.columns])}>
+        {/* items-start keeps a one-row card its natural height; a card that asked
+            for extra rows overrides it with h-full so it actually fills the space
+            it claimed, rather than claiming it and leaving it blank. */}
+        <div className={cn("grid items-start gap-3", GRID_COLUMNS_CLASS[card.columns], GRID_ROWS_CLASS)}>
           {children.map(({ card: child, node }) => (
-            <div key={child.id} className={cn("min-w-0", spans[child.span])}>
+            <div
+              key={child.id}
+              className={cn(
+                "min-w-0",
+                spans[child.span],
+                ROW_SPAN_CLASS[child.rows ?? 1],
+                child.rows && child.rows > 1 ? "sm:h-full" : undefined,
+              )}
+            >
               {node}
             </div>
           ))}

@@ -215,6 +215,37 @@ function CommonFields({ card, patch }: { card: CardConfig; patch: Patch }) {
         </div>
       </div>
 
+      <div className="space-y-1.5">
+        <Label>Height</Label>
+        {/*
+          Same static-class discipline as Width above. 1 is "natural height" and
+          is stored as ABSENT rather than as rows:1 — see ROWS in config.ts. So
+          the pressed state compares against `card.rows ?? 1`, not card.rows,
+          which would leave no chip lit on every card that has never been
+          resized.
+        */}
+        <div className="flex gap-1.5">
+          {SPAN_OPTIONS.map((n) => (
+            <button
+              key={n}
+              type="button"
+              aria-pressed={(card.rows ?? 1) === n}
+              aria-label={`${n} row${n > 1 ? "s" : ""} tall`}
+              // Height 1 clears the field rather than storing it, so a card
+              // nobody resized keeps following whatever the natural height is.
+              onClick={() => patch(card, { rows: n === 1 ? undefined : n })}
+              className={cn(
+                CHIP_BASE,
+                "w-8 justify-center",
+                (card.rows ?? 1) === n ? CHIP_ACTIVE : CHIP_INACTIVE,
+              )}
+            >
+              {n}
+            </button>
+          ))}
+        </div>
+      </div>
+
       <DisabledToggle card={card} patch={patch} />
     </section>
   );

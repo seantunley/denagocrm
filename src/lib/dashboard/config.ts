@@ -228,12 +228,34 @@ export function isQueryCard(type: CardType): boolean {
 }
 
 const SPAN = z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]);
+
+/**
+ * How TALL a card is, in grid rows.
+ *
+ * Width has always been configurable and height never was, so a chart sat at
+ * the same height as a two-number stat tile and a long list scrolled inside a
+ * box that could have been twice the size. This is the other half of "pick how
+ * big this card is".
+ *
+ * OPTIONAL, NOT DEFAULTED TO 1, and that is deliberate. Every card in every
+ * stored config predates this field, so it has to be absent-safe either way —
+ * but a zod `.default(1)` would write `rows: 1` into every card the next time
+ * anyone saved, bloating configs with a value nobody chose and freezing each
+ * card at today's natural height. Absent means "whatever height this card
+ * naturally wants", and only a deliberate choice is ever stored.
+ *
+ * Capped at 4 to match SPAN. A card taller than that on a laptop pushes
+ * everything else off the screen, which is the failure this is supposed to fix
+ * rather than cause.
+ */
+const ROWS = z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]);
 const TITLE = z.string().max(LIMITS.titleLength).optional();
 
 const BASE_CARD = {
   id: z.string().min(1).max(40),
   title: TITLE,
   span: SPAN.default(1),
+  rows: ROWS.optional(),
   visibility: CONDITIONS,
   /**
    * Kept in the config but not rendered.
@@ -353,6 +375,7 @@ type CardBase = {
   id: string;
   title?: string;
   span: 1 | 2 | 3 | 4;
+  rows?: 1 | 2 | 3 | 4;
   visibility?: Condition[];
   disabled?: boolean;
 };
