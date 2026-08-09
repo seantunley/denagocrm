@@ -117,15 +117,63 @@ test("the grid has a base row height, or spanning rows means nothing", () => {
   }
 });
 
-test("a taller card fills the space it claimed", () => {
-  // Claiming two rows and rendering at natural height leaves a visible gap that
-  // reads as a layout bug.
+test("the height chain is unbroken from grid cell to visible card", () => {
+  /*
+   * The test this replaces searched for the string "sm:h-full" ANYWHERE in the
+   * file. It passed while the class sat on the placement wrapper and the card
+   * inside stayed its natural height — so a two-row card claimed the space and
+   * left the bottom half blank, which is precisely the bug the feature claims to
+   * prevent. A string search is not a chain check.
+   *
+   * Three links, each checked where it lives:
+   *   1. the grid ITEM must stop being start-aligned, or nothing below it can
+   *      inherit a height at all;
+   *   2. the content div between wrapper and card must pass the height on;
+   *   3. the visible panel must fill what it is given.
+   */
+
+  // 1. items-start means a grid item is content-height; h-full on it is a no-op.
+  //    self-stretch is what actually opts the item out of that.
+  const canvas = code("src/components/dashboard/editor/DashboardCanvas.tsx");
+  const wrapper = canvas.slice(canvas.indexOf("CARD_ROWS[card.rows"));
+  const wrapperClasses = wrapper.slice(0, wrapper.indexOf("isDragging"));
+  assert.match(wrapperClasses, /sm:self-stretch/, "h-full alone cannot stretch a start-aligned item");
+  assert.match(wrapperClasses, /sm:h-full/);
+  assert.match(wrapperClasses, /sm:flex sm:flex-col/, "the box has to be able to hand height down");
+
+  // 2. the middle link.
+  const inner = canvas.slice(canvas.indexOf("pointer-events-none select-none"));
+  const innerClasses = inner.slice(0, inner.indexOf("CardPlaceholder"));
+  assert.match(innerClasses, /sm:flex-1/, "the content div must grow into the tall wrapper");
+  assert.match(innerClasses, /sm:min-h-0/, "…and must still be allowed to shrink for scrolling");
+
+  // 3. the visible panel. Both branches of CardShell, and SectionCard, or a card
+  //    with a title behaves differently from one without.
   for (const file of [
-    "src/components/dashboard/cards/container.tsx",
-    "src/components/dashboard/editor/DashboardCanvas.tsx",
+    "src/components/dashboard/sections.tsx",
+    "src/components/dashboard/cards/shell.tsx",
   ]) {
-    assert.match(code(file), /sm:h-full/, `${file} must stretch a multi-row card`);
+    const panel = code(file);
+    assert.match(
+      panel,
+      /h-full[^"]*rounded-xl border border-border bg-card|flex h-full/,
+      `${file}: the panel itself must fill its cell`,
+    );
   }
+
+  // and the non-editor grid container follows the same rule
+  const container = code("src/components/dashboard/cards/container.tsx");
+  assert.match(container, /sm:h-full sm:self-stretch/, "the container path needs the stretch too");
+});
+
+test("stretching is opt-in, so a normal card is untouched", () => {
+  // Every h-full above is conditional on rows > 1. If it were unconditional,
+  // every one-row card would stretch to its row and the grid's items-start
+  // behaviour — which the whole layout depends on — would be gone.
+  const canvas = code("src/components/dashboard/editor/DashboardCanvas.tsx");
+  assert.match(canvas, /card\.rows && card\.rows > 1 \? "sm:h-full sm:self-stretch/);
+  const container = code("src/components/dashboard/cards/container.tsx");
+  assert.match(container, /child\.rows && child\.rows > 1 \? "sm:h-full sm:self-stretch/);
 });
 
 test("row spans start at sm, never on a phone", () => {

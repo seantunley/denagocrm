@@ -137,7 +137,11 @@ export async function renderGrid(
                 "min-w-0",
                 spans[child.span],
                 ROW_SPAN_CLASS[child.rows ?? 1],
-                child.rows && child.rows > 1 ? "sm:h-full" : undefined,
+                // self-stretch, not h-full alone: the grid is items-start, so an
+                // item is content-height and h-full on it resolves to nothing. The
+                // card node inside is already h-full (CardShell/SectionCard), so
+                // stretching this wrapper is enough to carry the height down.
+                child.rows && child.rows > 1 ? "sm:h-full sm:self-stretch" : undefined,
               )}
             >
               {node}

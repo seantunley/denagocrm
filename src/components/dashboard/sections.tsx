@@ -65,7 +65,10 @@ export function SectionCard({
   children: React.ReactNode;
 }) {
   return (
-    <div className="min-w-0 rounded-xl border border-border bg-card p-4 shadow-sm">
+    // h-full so a card given extra rows fills them. In a normal one-row cell the
+    // grid is items-start, so the cell is content-height and this resolves to no
+    // change; only a card that opted into self-stretch is affected.
+    <div className="flex h-full min-w-0 flex-col rounded-xl border border-border bg-card p-4 shadow-sm">
       <div className="mb-2 flex items-center justify-between">
         <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
           {title}

@@ -114,7 +114,12 @@ export function CardShell({
       </SectionCard>
     );
   }
-  return <div className="min-w-0 rounded-xl border border-border bg-card p-4 shadow-sm">{children}</div>;
+  // Same as SectionCard above: fills a cell that was made taller, no-op otherwise.
+  return (
+    <div className="flex h-full min-w-0 flex-col rounded-xl border border-border bg-card p-4 shadow-sm">
+      {children}
+    </div>
+  );
 }
 
 /**

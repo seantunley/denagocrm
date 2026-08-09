@@ -416,9 +416,22 @@ function SortableCard({
         "relative min-w-0",
         CARD_SPAN[card.span],
         CARD_ROWS[card.rows ?? 1],
-        // A card that claimed extra rows must FILL them, or it claims the
-        // space and leaves it blank — which looks like a layout bug.
-        card.rows && card.rows > 1 ? "sm:h-full" : undefined,
+        /*
+         * A card that claimed extra rows must FILL them, or it claims the space
+         * and leaves it blank - which looks like a layout bug.
+         *
+         * SELF-STRETCH IS THE PART THAT DOES THE WORK, and h-full alone was
+         * silently useless without it. The grid is `items-start`, so an item does
+         * not stretch to its row: its height IS its content height, and h-full on
+         * it resolves to 100% of that, which is nothing. The item has to opt out
+         * of the start alignment before any height can be inherited at all.
+         *
+         * flex-col so the panel below can fill this box in turn. The chain has to
+         * be unbroken from grid cell to visible card: wrapper -> content div ->
+         * CardShell/SectionCard. A gap anywhere in it and the card stays short
+         * inside a tall cell, which is the exact bug this feature claims to fix.
+         */
+        card.rows && card.rows > 1 ? "sm:h-full sm:self-stretch sm:flex sm:flex-col" : undefined,
         editing && "rounded-xl ring-1 ring-dashed ring-border",
         isDragging && "opacity-30",
       )}
@@ -454,7 +467,15 @@ function SortableCard({
         </div>
       )}
 
-      <div className={cn(editing && "pointer-events-none select-none")}>
+      {/* The middle link in the height chain. min-h-0 because a flex child
+          otherwise refuses to shrink below its content, which would break
+          scrolling inside a card shorter than what it holds. */}
+      <div
+        className={cn(
+          editing && "pointer-events-none select-none",
+          card.rows && card.rows > 1 && "sm:min-h-0 sm:flex-1",
+        )}
+      >
         {node ?? <CardPlaceholder card={card} />}
       </div>
     </div>
