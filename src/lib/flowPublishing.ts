@@ -8,6 +8,13 @@ export type FlowSnapshot = {
   flowId: string | null;
 };
 
+export class PinnedFlowVersionUnavailableError extends Error {
+  constructor(versionId: string) {
+    super(`Pinned chatbot flow version is unavailable: ${versionId}`);
+    this.name = "PinnedFlowVersionUnavailableError";
+  }
+}
+
 function parseFlow(definition: string): Flow | null {
   try {
     const parsed = JSON.parse(definition);
@@ -21,10 +28,12 @@ function parseFlow(definition: string): Flow | null {
 /**
  * Resolve the immutable graph a conversation should execute.
  *
- * A pinned version ALWAYS wins. New sessions take the current publication for
- * their channel (or the WhatsApp publication as the existing cross-channel
- * fallback). Until every installation has republished once, the old BotFlow.active
- * row remains a backwards-compatible fallback.
+ * A pinned version ALWAYS wins. If that immutable snapshot is missing or corrupt,
+ * fail closed rather than resuming the customer's old node/variables against a
+ * different live graph. New sessions take the current publication for their
+ * channel (or the WhatsApp publication as the existing cross-channel fallback).
+ * Until every installation has republished once, the old BotFlow.active row
+ * remains a backwards-compatible fallback for NEW, unpinned sessions only.
  */
 export async function resolveFlowSnapshot(
   channel: string,
@@ -33,7 +42,8 @@ export async function resolveFlowSnapshot(
   if (pinnedVersionId) {
     const pinned = await prisma.botFlowVersion.findUnique({ where: { id: pinnedVersionId } });
     const flow = pinned ? parseFlow(pinned.definition) : null;
-    if (pinned && flow) return { flow, versionId: pinned.id, flowId: pinned.flowId };
+    if (!pinned || !flow) throw new PinnedFlowVersionUnavailableError(pinnedVersionId);
+    return { flow, versionId: pinned.id, flowId: pinned.flowId };
   }
 
   const publication =
