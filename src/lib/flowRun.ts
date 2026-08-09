@@ -14,9 +14,11 @@ import { maybeAutoReply, botShouldPause } from "./bot";
 import { greetingVars } from "./flowSession";
 import { resolveTenantActor } from "./tenantActor";
 import { crmActions } from "./flowActions";
-import { runFlow, DEFAULT_FLOW, type Flow, type FlowInput, type FlowSession, type FlowCtx } from "./flow";
+import { runFlow, type FlowInput, type FlowSession, type FlowCtx } from "./flow";
+import { resolveFlowSnapshot } from "./flowPublishing";
 
 export const FLOW_MARKER = "🤖 Flow";
+const FLOW_VERSION_VAR = "__flow_version";
 
 export async function isFlowEnabled(): Promise<boolean> {
   return (
@@ -25,24 +27,16 @@ export async function isFlowEnabled(): Promise<boolean> {
   );
 }
 
-async function getActiveFlow(): Promise<Flow> {
-  const row = await prisma.botFlow.findFirst({ where: { channel: "whatsapp", active: true } });
-  if (row) {
-    try {
-      const f = JSON.parse(row.definition);
-      if (f?.start && f?.nodes) return f as Flow;
-    } catch {
-      /* fall through to default */
-    }
-  }
-  return DEFAULT_FLOW;
-}
-
 const RESTART = /^\s*(menu|hi|hello|hey|start|restart|begin)\b/i;
 const isRestart = (text: string) => RESTART.test(text);
 
 /* ---- persistence ---- */
-async function loadSession(key: string): Promise<{ nodeId: string | null; vars: Record<string, string>; status: string } | null> {
+async function loadSession(key: string): Promise<{
+  nodeId: string | null;
+  vars: Record<string, string>;
+  flowVersionId: string | null;
+  status: string;
+} | null> {
   const row = await prisma.botSession.findUnique({ where: { channel_key: { channel: "whatsapp", key } } });
   if (!row) return null;
   if (row.expiresAt < new Date()) {
@@ -55,13 +49,25 @@ async function loadSession(key: string): Promise<{ nodeId: string | null; vars: 
   } catch {
     /* ignore */
   }
-  return { nodeId: row.nodeId, vars, status: row.status };
+  const flowVersionId = vars[FLOW_VERSION_VAR] ?? null;
+  delete vars[FLOW_VERSION_VAR];
+  return { nodeId: row.nodeId, vars, flowVersionId, status: row.status };
 }
 
-async function saveSession(key: string, session: FlowSession, status = "active", hours = 24) {
+async function saveSession(
+  key: string,
+  session: FlowSession,
+  flowVersionId: string | null,
+  status = "active",
+  hours = 24,
+) {
+  const storedVars = {
+    ...session.vars,
+    ...(flowVersionId ? { [FLOW_VERSION_VAR]: flowVersionId } : {}),
+  };
   const data = {
     nodeId: session.nodeId,
-    vars: JSON.stringify(session.vars),
+    vars: JSON.stringify(storedVars),
     status,
     expiresAt: new Date(Date.now() + hours * 3600 * 1000),
   };
@@ -103,8 +109,7 @@ async function whatsappHistory(contactId: string | null, leadId: string | null, 
   /* eslint-enable @typescript-eslint/no-explicit-any */
   // `take` applies before any client-side ordering. Fetch newest first so a long
   // thread gives the model the latest 16 turns, then reverse them back into the
-  // chronological order Anthropic expects. Ascending + take previously selected
-  // the oldest 16 messages forever once a conversation grew past that size.
+  // chronological order Anthropic expects.
   const comms = await prisma.communication.findMany({
     where: { type: "whatsapp", OR: or },
     orderBy: { occurredAt: "desc" },
@@ -148,11 +153,6 @@ async function logOutbound(
   digits: string,
   actorId: string,
 ) {
-  // The actor is PASSED IN, resolved before anything was sent. It used to be
-  // resolved here with `if (!firstUser) return`, so a missing tenant actor meant
-  // the customer had the message and the CRM had no record of it. Review found
-  // this on the Messenger side; it was always true here too, and copying the
-  // pattern would have established parity without audit safety.
   await prisma.communication.create({
     data: {
       type: "whatsapp",
@@ -166,7 +166,7 @@ async function logOutbound(
   });
 }
 
-/** Runs the active flow for a WhatsApp message. Returns true if handled. */
+/** Runs the published flow for a WhatsApp message. Returns true if handled. */
 export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise<boolean> {
   const match = await matchByPhone(digits);
   if (await botShouldPause(match.contactId, match.leadId, digits)) return true; // human is handling
@@ -192,8 +192,13 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise
     return true;
   }
 
-  const flow = await getActiveFlow();
-  const result = await runFlow(flow, session, input, buildCtx(digits, match));
+  // A continuation stays on its pinned immutable publication. Typing menu/start
+  // deliberately begins a new conversation and therefore takes today's version.
+  const snapshot = await resolveFlowSnapshot(
+    "whatsapp",
+    restart ? null : existing?.flowVersionId ?? null,
+  );
+  const result = await runFlow(snapshot.flow, session, input, buildCtx(digits, match));
 
   for (const m of result.messages) {
     let ok = false;
@@ -214,8 +219,8 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise
     }
   }
 
-  if (result.handedOff) await saveSession(digits, { nodeId: null, vars: session.vars }, "paused", 6);
-  else if (result.session) await saveSession(digits, result.session);
+  if (result.handedOff) await saveSession(digits, { nodeId: null, vars: session.vars }, snapshot.versionId, "paused", 6);
+  else if (result.session) await saveSession(digits, result.session, snapshot.versionId);
   else await clearSession(digits);
   return true;
 }
