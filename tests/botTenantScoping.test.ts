@@ -105,6 +105,26 @@ test("BotSession's declared identity matches the index the database actually has
   assert.deepEqual(indexed, columns, "schema and migration must agree on BotSession's identity");
 });
 
+test("a dead message stops the backlog at the failure, not the conversation for ever", () => {
+  const code = src("src/lib/botOutbox.ts");
+
+  // Ordering is enforced at the moment of failure: the whole existing backlog for
+  // that conversation is killed in the same step, so nothing queued behind the
+  // failure can overtake it — a Meta image and its split-out caption die together.
+  const fail = code.slice(code.indexOf("async function failDelivery"), code.indexOf("async function deliverClaimed"));
+  assert.match(fail, /blockLaterMessages\(row, lastError\)/);
+  const block = code.slice(code.indexOf("async function blockLaterMessages"), code.indexOf("async function failDelivery"));
+  assert.match(block, /status: \{ in: \["pending", "retry"\] \}/);
+  assert.match(block, /data: \{\s*status: "dead"/);
+
+  // And having done that, a dead row must stop being a barrier — otherwise one
+  // undeliverable message silences the bot for that customer for ever.
+  const earliest = code.slice(code.indexOf("async function earliestUnfinished"), code.indexOf("async function claimOldest"));
+  assert.match(earliest, /status: \{ notIn: \["sent", "dead"\] \}/);
+  const claim = code.slice(code.indexOf("async function claimOldest"), code.indexOf("function retryAt"));
+  assert.doesNotMatch(claim, /row\.status === "dead"/, "a dead row must no longer veto the claim");
+});
+
 test("no chatbot table exists without a Prisma model to certify its tenancy", () => {
   // tenantSchemaContract certifies that every MODEL is global or tenant-scoped
   // before enforcement can be switched on. A table created by raw migration SQL

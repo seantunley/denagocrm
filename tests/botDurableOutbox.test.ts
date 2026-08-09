@@ -52,10 +52,14 @@ test("outbox preserves order behind retry and terminal dead-letter barriers", ()
 
   const worker = src("src/lib/botOutbox.ts");
   assert.match(worker, /orderBy: \[\{ createdAt: "asc" \}, \{ sequence: "asc" \}, \{ id: "asc" \}\]/);
-  assert.match(worker, /status: \{ not: "sent" \}/);
-  assert.match(worker, /row\.status === "dead"/);
   assert.match(worker, /if \(outcome !== "sent"\) break/);
+  // The barrier is applied AT the failure — the whole existing backlog dies with
+  // the message it was queued behind, so nothing overtakes it.
   assert.match(worker, /Blocked by earlier failed message/);
+  // It is not applied for ever. See botTenantScoping.test.ts for why a dead row
+  // must stop being a barrier once the backlog has been killed: leaving it as one
+  // silenced the bot for that customer permanently, with no reaper.
+  assert.match(worker, /status: \{ notIn: \["sent", "dead"\] \}/);
 });
 
 test("outbox lease completion is fenced by the claim generation", () => {

@@ -171,10 +171,31 @@ async function repairCommunicationLog(row: OutboxRow): Promise<boolean> {
   return true;
 }
 
-/** A terminally dead row remains the conversation's ordering barrier. */
+/**
+ * The next message this conversation may send.
+ *
+ * Ordering is enforced at the moment of failure, not for ever. When a message
+ * exhausts its retries, `blockLaterMessages` marks the ENTIRE existing backlog
+ * for that conversation `dead` in the same step — so nothing that was queued
+ * behind the failure can overtake it. A Meta image and its split-out caption die
+ * together; the caption cannot arrive alone.
+ *
+ * Once that has happened the dead rows are history. Treating them as a permanent
+ * barrier — which is what excluding only `sent` did — meant one undeliverable
+ * message silenced the bot for that customer for ever: every later message sorted
+ * behind a row that could never be claimed, with no reaper and no operator
+ * surface. An expired token or a customer who blocks the business number is
+ * enough to reach eight failed attempts.
+ *
+ * So dead rows stop being a barrier, and it is safe for them to, precisely
+ * because the backlog was already killed. A message enqueued in the narrow window
+ * between the final failure and blockLaterMessages survives as `pending` and will
+ * send: it is genuinely new, produced after the failure, and holding it back
+ * would restore the silence this is fixing.
+ */
 async function earliestUnfinished(channel: string, key: string): Promise<OutboxRow | null> {
   return prisma.botFlowOutbox.findFirst({
-    where: { tenantId: outboxTenantId(), channel, key, status: { not: "sent" } },
+    where: { tenantId: outboxTenantId(), channel, key, status: { notIn: ["sent", "dead"] } },
     orderBy: [{ createdAt: "asc" }, { sequence: "asc" }, { id: "asc" }],
   }) as Promise<OutboxRow | null>;
 }
@@ -182,7 +203,7 @@ async function earliestUnfinished(channel: string, key: string): Promise<OutboxR
 async function claimOldest(channel: string, key: string): Promise<OutboxRow | null> {
   const now = new Date();
   const row = await earliestUnfinished(channel, key);
-  if (!row || row.status === "dead" || row.availableAt > now || (row.status === "running" && row.leaseUntil && row.leaseUntil > now)) return null;
+  if (!row || row.availableAt > now || (row.status === "running" && row.leaseUntil && row.leaseUntil > now)) return null;
 
   // attempts is the lease generation. Every later mutation must match it so an
   // expired worker cannot complete/fail a lease that another worker reclaimed.
