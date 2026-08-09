@@ -16,6 +16,7 @@ import {
 } from "./messenger";
 import { tgSend, tgSendPhoto } from "./telegramTransport";
 import { logError } from "./errorLog";
+import type { CronSliceContext } from "./tenantCron";
 
 const FLOW_MARKER = "🤖 Flow";
 const MAX_ATTEMPTS = 8;
@@ -40,6 +41,7 @@ type OutboxRow = {
 };
 
 export type BotOutboxRun = { sent: number; retried: number; dead: number; repairedLogs: number };
+type OutboxBudget = Pick<CronSliceContext, "shouldStop">;
 
 function storedMessages(channel: string, messages: OutMsg[]): OutMsg[] {
   const out: OutMsg[] = [];
@@ -283,9 +285,11 @@ export async function flushBotOutboxConversation(
   channel: string,
   key: string,
   limit = 20,
+  budget?: OutboxBudget,
 ): Promise<BotOutboxRun> {
   const stats: BotOutboxRun = { sent: 0, retried: 0, dead: 0, repairedLogs: 0 };
   for (let i = 0; i < limit; i++) {
+    if (budget?.shouldStop(4_000)) break;
     const row = await claimOldest(channel, key);
     if (!row) break;
     const outcome = await deliverClaimed(row);
@@ -296,7 +300,7 @@ export async function flushBotOutboxConversation(
 }
 
 /** Repair sent messages whose provider delivery succeeded but CRM logging did not. */
-async function repairPendingCommunicationLogs(limit: number): Promise<number> {
+async function repairPendingCommunicationLogs(limit: number, budget?: OutboxBudget): Promise<number> {
   const rows = await prisma.botFlowOutbox.findMany({
     where: { status: "sent", communicationLoggedAt: null },
     orderBy: { sentAt: "asc" },
@@ -304,6 +308,7 @@ async function repairPendingCommunicationLogs(limit: number): Promise<number> {
   }) as OutboxRow[];
   let repaired = 0;
   for (const row of rows) {
+    if (budget?.shouldStop(4_000)) break;
     try {
       if (await repairCommunicationLog(row)) repaired += 1;
     } catch (error) {
@@ -314,9 +319,11 @@ async function repairPendingCommunicationLogs(limit: number): Promise<number> {
 }
 
 /** Per-tenant cron drain. Conversation ordering is preserved by claimOldest(). */
-export async function flushBotOutbox(limit = 50): Promise<BotOutboxRun> {
+export async function flushBotOutbox(limit = 50, budget?: OutboxBudget): Promise<BotOutboxRun> {
   const stats: BotOutboxRun = { sent: 0, retried: 0, dead: 0, repairedLogs: 0 };
-  stats.repairedLogs = await repairPendingCommunicationLogs(Math.min(limit, 25));
+  if (budget?.shouldStop(4_000)) return stats;
+  stats.repairedLogs = await repairPendingCommunicationLogs(Math.min(limit, 25), budget);
+  if (budget?.shouldStop(4_000)) return stats;
 
   const due = await prisma.botFlowOutbox.findMany({
     where: { status: { notIn: ["sent", "dead"] }, availableAt: { lte: new Date() } },
@@ -328,11 +335,11 @@ export async function flushBotOutbox(limit = 50): Promise<BotOutboxRun> {
   const conversations = [...new Set(due.map((row) => `${row.channel}\u0000${row.key}`))];
   let remaining = limit;
   for (const conversation of conversations) {
-    if (remaining <= 0) break;
+    if (remaining <= 0 || budget?.shouldStop(4_000)) break;
     const split = conversation.indexOf("\u0000");
     const channel = conversation.slice(0, split);
     const key = conversation.slice(split + 1);
-    const run = await flushBotOutboxConversation(channel, key, remaining);
+    const run = await flushBotOutboxConversation(channel, key, remaining, budget);
     stats.sent += run.sent;
     stats.retried += run.retried;
     stats.dead += run.dead;
