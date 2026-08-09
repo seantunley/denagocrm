@@ -2,13 +2,12 @@
  * Shared multi-channel flow runner. Any messaging channel (Messenger,
  * Instagram, Telegram, …) uses this to advance a conversation: it manages the
  * BotSession state + transcript and delegates IO to a per-channel FlowCtx.
- * Each channel adapter renders/delivers the returned OutMsg[] through its own
- * durable outbox.
  */
-import { prisma } from "./db";
 import type { BotMsg } from "./botAi";
 import { runFlow, type Flow, type FlowCtx, type FlowInput, type OutMsg } from "./flow";
 import { resolveFlowSnapshot } from "./flowPublishing";
+import { withTenantWrite, type TenantWriteTx } from "./tenantWrite";
+import { loadBotSession, upsertBotSessionTx, deleteBotSessionTx } from "./botSessionStore";
 
 export type SessionState = {
   nodeId: string | null;
@@ -19,21 +18,19 @@ export type SessionState = {
 
 const RESTART = /^\s*(menu|hi|hello|hey|start|restart|begin)\b/i;
 
-/** Seed variables so a flow can greet a known customer by name. */
 export function greetingVars(firstName: string | null): Record<string, string> {
   return firstName
     ? { first_name: firstName, name: firstName, known: "1", greeting: `Hey ${firstName} 👋 Welcome back to Denago Cape Town!` }
     : { greeting: "Hi there 👋 Welcome to Denago Cape Town!" };
 }
 
-/** Backwards-compatible helper for callers that only need the current graph. */
 export async function getActiveFlowFor(channel: string): Promise<Flow> {
   return (await resolveFlowSnapshot(channel)).flow;
 }
 
 async function loadState(channel: string, key: string): Promise<(SessionState & { status: string }) | null> {
-  const row = await prisma.botSession.findUnique({ where: { channel_key: { channel, key } } });
-  if (!row || row.expiresAt < new Date()) return null;
+  const row = await loadBotSession(channel, key);
+  if (!row) return null;
   try {
     const p = JSON.parse(row.vars);
     return {
@@ -48,22 +45,8 @@ async function loadState(channel: string, key: string): Promise<(SessionState & 
   }
 }
 
-async function saveState(channel: string, key: string, state: SessionState, status = "active", hours = 12) {
-  const data = {
-    nodeId: state.nodeId,
-    vars: JSON.stringify({ v: state.vars, m: state.msgs.slice(-20), fv: state.flowVersionId }),
-    status,
-    expiresAt: new Date(Date.now() + hours * 3600 * 1000),
-  };
-  await prisma.botSession.upsert({
-    where: { channel_key: { channel, key } },
-    update: data,
-    create: { channel, key, ...data },
-  });
-}
-
-async function clearState(channel: string, key: string) {
-  await prisma.botSession.deleteMany({ where: { channel, key } });
+function storedState(state: SessionState): string {
+  return JSON.stringify({ v: state.vars, m: state.msgs.slice(-20), fv: state.flowVersionId });
 }
 
 function recordBotMsgs(state: SessionState, messages: OutMsg[]) {
@@ -74,14 +57,15 @@ function recordBotMsgs(state: SessionState, messages: OutMsg[]) {
 }
 
 export type ChannelResult = { messages: OutMsg[]; done: boolean; suppressed?: boolean };
+export type PersistFlowMessages = (
+  messages: OutMsg[],
+  tx: TenantWriteTx,
+  tenantId: string,
+) => Promise<void>;
 
 /**
- * Advance the flow for one inbound message on a channel.
- *
- * `persistMessages`, when supplied, MUST durably persist the outbound work before
- * this function commits the new BotSession state. This is the ordering guarantee
- * that prevents "CRM/session says step 7, customer only saw step 5" when the
- * provider or serverless invocation fails between deciding and delivering a reply.
+ * Advance one inbound turn. The outbox batch and new BotSession position commit
+ * in the SAME tenant transaction. Delivery happens after this function returns.
  */
 export async function advanceFlow(
   channel: string,
@@ -89,13 +73,13 @@ export async function advanceFlow(
   input: FlowInput,
   makeCtx: (state: SessionState) => FlowCtx,
   seedVars?: Record<string, string>,
-  persistMessages?: (messages: OutMsg[]) => Promise<void>,
+  persistMessages?: PersistFlowMessages,
 ): Promise<ChannelResult> {
   const existing = await loadState(channel, key);
   const restart = !input.choiceId && RESTART.test(input.text);
 
   if (existing?.status === "paused" && !restart) {
-    return { messages: [], done: true, suppressed: true }; // a human is handling
+    return { messages: [], done: true, suppressed: true };
   }
 
   const state: SessionState = !existing || restart
@@ -114,20 +98,40 @@ export async function advanceFlow(
   const result = await runFlow(snapshot.flow, { nodeId: state.nodeId, vars: state.vars }, input, makeCtx(state));
   recordBotMsgs(state, result.messages);
 
-  // Persist the send intent BEFORE advancing/clearing/pausing the session. If the
-  // insert fails, the webhook can be retried and the old session remains truthful.
-  if (result.messages.length && persistMessages) await persistMessages(result.messages);
+  await withTenantWrite(async (tx, tenantId) => {
+    if (result.messages.length && persistMessages) {
+      await persistMessages(result.messages, tx, tenantId);
+    }
 
-  if (result.session) {
-    state.nodeId = result.session.nodeId;
-    state.vars = result.session.vars;
-    await saveState(channel, key, state, "active");
-    return { messages: result.messages, done: false };
-  }
-  if (result.handedOff) {
-    await saveState(channel, key, { ...state, nodeId: null }, "paused", 6);
-    return { messages: result.messages, done: true };
-  }
-  await clearState(channel, key);
+    if (result.session) {
+      state.nodeId = result.session.nodeId;
+      state.vars = result.session.vars;
+      await upsertBotSessionTx(tx, tenantId, {
+        channel,
+        key,
+        nodeId: state.nodeId,
+        vars: storedState(state),
+        status: "active",
+        expiresAt: new Date(Date.now() + 12 * 3600 * 1000),
+      });
+      return;
+    }
+
+    if (result.handedOff) {
+      await upsertBotSessionTx(tx, tenantId, {
+        channel,
+        key,
+        nodeId: null,
+        vars: storedState(state),
+        status: "paused",
+        expiresAt: new Date(Date.now() + 6 * 3600 * 1000),
+      });
+      return;
+    }
+
+    await deleteBotSessionTx(tx, tenantId, channel, key);
+  });
+
+  if (result.session) return { messages: result.messages, done: false };
   return { messages: result.messages, done: true };
 }
