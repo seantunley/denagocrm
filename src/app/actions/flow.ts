@@ -69,8 +69,13 @@ export async function renameFlow(id: string, formData: FormData) {
 
 export async function deleteFlow(id: string) {
   await requireOwner();
-  const flow = await prisma.botFlow.findUnique({ where: { id } });
-  if (!flow || flow.active) return;
+  const [flow, publishedVersion] = await Promise.all([
+    prisma.botFlow.findUnique({ where: { id } }),
+    prisma.botFlowVersion.findFirst({ where: { flowId: id }, select: { id: true } }),
+  ]);
+  // Published snapshots may still be referenced by active BotSession pins. A
+  // flow that has ever been published therefore remains as immutable history.
+  if (!flow || flow.active || publishedVersion) return;
   await prisma.botFlow.delete({ where: { id } });
   revalidatePath("/bot-builder");
 }
