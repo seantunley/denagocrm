@@ -10,6 +10,7 @@ import { runWhatsAppBot } from "@/lib/flowRun";
 import { withChannelTenantScope, validateInSystemScope } from "@/lib/tenantScopeEntry";
 import { logError } from "@/lib/errorLog";
 import { secretEquals } from "@/lib/secretCompare";
+import { claimInboundBotEvent } from "@/lib/botInboundEvent";
 
 /** Meta webhook verification handshake (same flow as Lead Ads). */
 export async function GET(req: NextRequest) {
@@ -88,6 +89,11 @@ export async function POST(req: NextRequest) {
       }
 
       for (const message of value.messages ?? []) {
+        // Meta retries message webhooks. The message id is stable across those
+        // deliveries, so only the first one may record the inbound or drive a
+        // side-effecting flow node.
+        if (!(await claimInboundBotEvent("whatsapp", String(message.id ?? "")))) continue;
+
         const from: string = message.from;
         const profileName: string | null =
           contactsMeta.find((c: any) => c.wa_id === from)?.profile?.name ?? null;
