@@ -10,6 +10,13 @@ export type FlowSnapshot = {
   flowId: string | null;
 };
 
+export class PinnedFlowVersionUnavailableError extends Error {
+  constructor(versionId: string) {
+    super(`Pinned chatbot flow version is unavailable: ${versionId}`);
+    this.name = "PinnedFlowVersionUnavailableError";
+  }
+}
+
 function parseFlow(definition: string): Flow | null {
   try {
     const parsed = JSON.parse(definition);
@@ -20,9 +27,7 @@ function parseFlow(definition: string): Flow | null {
   return null;
 }
 
-/**
- * Resolve the immutable graph a conversation should execute.
- */
+/** Resolve the immutable graph a conversation should execute. */
 export async function resolveFlowSnapshot(
   channel: string,
   pinnedVersionId?: string | null,
@@ -30,7 +35,8 @@ export async function resolveFlowSnapshot(
   if (pinnedVersionId) {
     const pinned = await prisma.botFlowVersion.findUnique({ where: { id: pinnedVersionId } });
     const flow = pinned ? parseFlow(pinned.definition) : null;
-    if (pinned && flow) return { flow, versionId: pinned.id, flowId: pinned.flowId };
+    if (!pinned || !flow) throw new PinnedFlowVersionUnavailableError(pinnedVersionId);
+    return { flow, versionId: pinned.id, flowId: pinned.flowId };
   }
 
   const publication =
