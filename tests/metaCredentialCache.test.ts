@@ -8,6 +8,22 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
 
 /**
+ * The assertions below describe what the code DOES, so an explanation of the bug
+ * sitting in a comment must not be mistaken for the fix.
+ */
+const stripComments = (code: string) =>
+  code.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
+/** The body of `getPageToken`, comments removed. */
+const pageTokenFn = () => {
+  const code = stripComments(src("src/lib/messenger.ts"));
+  return code.slice(
+    code.indexOf("async function getPageToken"),
+    code.indexOf("export async function sendDirectMessage"),
+  );
+};
+
+/**
  * A Meta page token is a per-tenant credential, and the send it authorises goes
  * out on that tenant's Facebook Page.
  *
@@ -55,4 +71,74 @@ test("the cache key and the credential lookup describe the same tenant", () => {
     /ambientTenantId\(\)/,
     "re-reading ambient scope after the key is computed lets the two drift apart again",
   );
+});
+
+/**
+ * Keying the cache by tenant answers WHOSE token it is. It does not answer
+ * WHETHER the token is still the one the workspace's credential derives.
+ *
+ * Consulting the cache before resolving the tenant's source credential means a
+ * hit short-circuits the lookup entirely, so the page token stays usable for up
+ * to the full TTL after the system-user token was rotated or the integration was
+ * disconnected — sending on behalf of a Page the workspace no longer authorises.
+ * Resolving the source credential FIRST and fingerprinting it makes the cached
+ * entry valid only while the credential it was derived from is unchanged.
+ */
+
+test("the source credential is resolved before the cache is consulted", () => {
+  const fn = pageTokenFn();
+  const resolveAt = fn.indexOf('resolveTenantCredential(tenantId, "META_PAGE_ACCESS_TOKEN")');
+  const cacheReadAt = fn.indexOf("pageTokenCache.get(");
+  assert.ok(resolveAt > 0, "the tenant's source credential must be resolved inside getPageToken");
+  assert.ok(cacheReadAt > 0, "the cache must be read inside getPageToken");
+  assert.ok(
+    resolveAt < cacheReadAt,
+    "a cache hit must not be able to short-circuit reading the tenant's current credential",
+  );
+});
+
+test("a cached page token is only served while its source credential is unchanged", () => {
+  const fn = pageTokenFn();
+  assert.match(
+    fn,
+    /const sourceHash = sourceFingerprint\(sysToken\);/,
+    "the credential actually read this call must be fingerprinted",
+  );
+  assert.match(
+    fn,
+    /cached\s*&&\s*cached\.sourceHash === sourceHash\s*&&/,
+    "a cached entry must be rejected when the source credential no longer matches",
+  );
+  assert.match(
+    fn,
+    /pageTokenCache\.set\(cacheKey,\s*\{\s*token,\s*sourceHash,/,
+    "the fingerprint must be stored alongside the derived token, or it can never be compared",
+  );
+  // A TTL alone is what let a rotated credential keep working; it stays as a
+  // backstop but must not be the only condition.
+  assert.match(fn, /Date\.now\(\) - cached\.fetchedAt < PAGE_TOKEN_TTL_MS/, "the TTL backstop must remain");
+});
+
+test("disconnecting the integration drops the derived page token immediately", () => {
+  const fn = pageTokenFn();
+  const missing = fn.slice(fn.indexOf("if (!sysToken)"), fn.indexOf("const sourceHash"));
+  assert.ok(missing.length > 0, "getPageToken must handle a missing source credential");
+  assert.match(
+    missing,
+    /pageTokenCache\.delete\(cacheKey\)/,
+    "a disconnected integration must evict the derived token rather than serve it out of the TTL",
+  );
+  assert.match(missing, /return null;/, "no source credential means no page token");
+});
+
+test("the per-tenant cache cannot grow without bound", () => {
+  const fn = pageTokenFn();
+  // One Map slot per tenant in a long-lived process is a leak unless something
+  // reclaims them; the write path is the only place guaranteed to run.
+  assert.match(
+    fn,
+    /for \(const \[key, entry\] of pageTokenCache\)/,
+    "expired entries must be reclaimed",
+  );
+  assert.match(fn, /pageTokenCache\.delete\(key\)/, "reclaiming must actually remove the entry");
 });
