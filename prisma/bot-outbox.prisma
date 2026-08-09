@@ -14,6 +14,13 @@ model BotFlowOutbox {
   leadId      String?
   actorId     String?
   status      String    @default("pending") // pending | running | retry | sent | dead
+  /// Supplied by the surface that composed the message and held stable across its
+  /// retries, so a resubmission after an ambiguous failure resolves to the row
+  /// that already exists instead of sending the customer a second copy.
+  clientIdempotencyKey String?
+  /// Machine-readable classification beside the human `lastError`, so a retry
+  /// policy can tell "the number is invalid" from "Meta was briefly down".
+  failureCode String?
   attempts    Int       @default(0)
   availableAt DateTime  @default(now())
   leaseUntil  DateTime?
@@ -24,6 +31,7 @@ model BotFlowOutbox {
   updatedAt   DateTime  @updatedAt
 
   @@unique([tenantId, batchId, sequence])
+  @@unique([tenantId, clientIdempotencyKey])
   @@index([tenantId, status, availableAt])
   @@index([tenantId, channel, key, createdAt, sequence])
   @@index([tenantId, status, communicationLoggedAt])

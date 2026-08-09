@@ -68,6 +68,22 @@ export default function InboxReply({
     setEnterSends(readEnterSends(typeof window === "undefined" ? null : window.localStorage));
   }, []);
 
+  /**
+   * One identity per COMPOSED message, held across this box's own retries.
+   *
+   * That is the whole point: if a send fails ambiguously — the provider may or
+   * may not have accepted it — pressing Send again must resolve to the message
+   * already queued rather than deliver a second copy. The key therefore changes
+   * only after a send is confirmed, never on re-render and never on failure.
+   */
+  const [sendKey, setSendKey] = useState<string>("");
+  useEffect(() => {
+    if (!sendKey) setSendKey(crypto.randomUUID());
+  }, [sendKey]);
+  useEffect(() => {
+    if (state?.ok) setSendKey(crypto.randomUUID());
+  }, [state?.ok]);
+
   function onKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
     const intent = enterIntent(
       {
@@ -193,6 +209,7 @@ ${el.value.slice(end)}`;
         <input type="hidden" name="contactId" value={contactId ?? ""} />
       )}
       <input type="hidden" name="revalidate" value={revalidate} />
+      <input type="hidden" name="clientIdempotencyKey" value={sendKey} />
 
       <div className="flex items-center gap-1.5">
         <textarea

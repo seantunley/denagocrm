@@ -106,6 +106,92 @@ export async function enqueueBotMessages(input: {
   });
 }
 
+/**
+ * A staff reply, recorded and queued in ONE transaction.
+ *
+ * The manual reply paths called the provider first and wrote the CRM record
+ * afterwards. A provider success followed by a failed insert left the customer
+ * holding a message the CRM had no record of: staff were told it failed, retried,
+ * and the customer received it twice. Ordering alone does not fix that — the
+ * retry has to be recognisable — so the caller supplies a
+ * `clientIdempotencyKey` that stays stable across ITS retries.
+ *
+ * The CRM Communication and the delivery intent commit together, so history can
+ * never disagree with what was queued. Delivery itself is the outbox worker's
+ * job: the same leases, retries, ordering barriers and dead-lettering the bot
+ * paths already use, rather than a second parallel ledger for staff sends.
+ *
+ * Returns the Communication and whether this call created it. A duplicate key
+ * returns `created: false` and sends nothing further.
+ */
+export async function enqueueStaffMessage(input: {
+  channel: string;
+  /** Provider recipient identity: WhatsApp digits, PSID, IG id. */
+  key: string;
+  message: OutMsg;
+  clientIdempotencyKey: string;
+  body: string;
+  contactId?: string | null;
+  leadId?: string | null;
+  actorId: string;
+  attachmentUrl?: string | null;
+  attachmentType?: string | null;
+}): Promise<{ created: boolean; communicationId: string | null }> {
+  const batchId = crypto.randomUUID();
+  const createdAt = new Date();
+
+  try {
+    return await withTenantWrite(async (tx, tenantId) => {
+      // The delivery intent is written FIRST, so the unique
+      // (tenantId, clientIdempotencyKey) rejects a duplicate before any CRM
+      // history exists for it. Writing the Communication first and discovering
+      // the duplicate afterwards would commit a message the CRM claims to have
+      // sent and the outbox never queued — the very disagreement this exists to
+      // prevent.
+      await tx.botFlowOutbox.create({
+        data: {
+          tenantId,
+          channel: input.channel,
+          key: input.key,
+          batchId,
+          sequence: 0,
+          payload: input.message as unknown as Prisma.InputJsonValue,
+          clientIdempotencyKey: input.clientIdempotencyKey,
+          contactId: input.contactId ?? null,
+          leadId: input.leadId ?? null,
+          actorId: input.actorId,
+          createdAt,
+          availableAt: createdAt,
+        },
+      });
+
+      const communication = await tx.communication.create({
+        data: {
+          type: input.channel,
+          direction: "outbound",
+          body: input.body,
+          attachmentUrl: input.attachmentUrl ?? null,
+          attachmentType: input.attachmentType ?? null,
+          contactId: input.contactId ?? null,
+          leadId: input.leadId ?? null,
+          userId: input.actorId,
+          tenantId,
+        },
+        select: { id: true },
+      });
+
+      return { created: true, communicationId: communication.id };
+    });
+  } catch (error) {
+    // A resubmission of the same composed message, or two submissions racing.
+    // The transaction rolled back, so the winner's single copy stands alone.
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      return { created: false, communicationId: null };
+    }
+    throw error;
+  }
+}
+
 function asOutMsg(payload: unknown): OutMsg | null {
   if (!payload || typeof payload !== "object") return null;
   const value = payload as Record<string, unknown>;
