@@ -82,7 +82,7 @@ export async function POST(req: NextRequest) {
             continue;
           }
           if (ev.message?.is_echo) {
-            if (text) await recordDmEcho(platform, String(ev.recipient?.id ?? ""), text);
+            if (text) await recordDmEcho(platform, String(ev.recipient?.id ?? ""), text, ev.message?.mid ? String(ev.message.mid) : null);
             continue;
           }
           if (!ev.message || (!text && attachments.length === 0)) continue;

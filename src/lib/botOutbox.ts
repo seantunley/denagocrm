@@ -212,7 +212,7 @@ function asOutMsg(payload: unknown): OutMsg | null {
   return null;
 }
 
-async function sendProvider(row: OutboxRow): Promise<{ ok: boolean; error?: string }> {
+async function sendProvider(row: OutboxRow): Promise<{ ok: boolean; error?: string; providerMessageId?: string }> {
   const message = asOutMsg(row.payload);
   if (!message) return { ok: false, error: "Invalid outbox payload" };
   if (row.channel === "whatsapp") {
@@ -347,13 +347,13 @@ async function failDelivery(row: OutboxRow, error: string): Promise<"retry" | "d
 }
 
 async function deliverClaimed(row: OutboxRow): Promise<"sent" | "retry" | "dead"> {
-  let result: { ok: boolean; error?: string };
+  let result: { ok: boolean; error?: string; providerMessageId?: string };
   try { result = await sendProvider(row); } catch (error) { result = { ok: false, error: error instanceof Error ? error.message : String(error) }; }
   if (!result.ok) return failDelivery(row, result.error ?? "Provider rejected chatbot message");
 
   const sent = await prisma.botFlowOutbox.updateMany({
     where: { id: row.id, status: "running", attempts: row.attempts },
-    data: { status: "sent", sentAt: new Date(), leaseUntil: null, lastError: null },
+    data: { status: "sent", sentAt: new Date(), leaseUntil: null, lastError: null, providerMessageId: result.providerMessageId ?? null },
   });
   if (sent.count !== 1) {
     await logError("bot-outbox-stale-lease", new Error("Provider accepted a send after this worker's outbox lease was superseded"), row.id).catch(() => {});

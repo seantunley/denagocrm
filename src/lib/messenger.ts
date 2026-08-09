@@ -7,6 +7,8 @@ import { createLeadRecordIfPipelineReady } from "./leadCreate";
 import { saveFile } from "./storage";
 import { resolveTenantActor } from "./tenantActor";
 import { currentTenantScope } from "./tenantScope";
+import { writeTenantId } from "./tenantWrite";
+import { DEFAULT_TENANT_ID } from "./tenant";
 
 const GRAPH = "https://graph.facebook.com/v21.0";
 
@@ -76,7 +78,7 @@ export async function sendDirectMessage(
   platform: DmPlatform,
   recipientId: string,
   text: string
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; error?: string; providerMessageId?: string }> {
   const token = await getPageToken();
   if (!token) return { ok: false, error: "Meta page token is not configured (Settings → Integrations)." };
   const res = await fetch(`${GRAPH}/me/messages?access_token=${encodeURIComponent(token)}`, {
@@ -99,7 +101,13 @@ export async function sendDirectMessage(
       : msg;
     return { ok: false, error: friendly };
   }
-  return { ok: true };
+  // Meta answers an accepted send with its own message id. Keeping it is what
+  // lets the echo of this very message be recognised as ours later, instead of
+  // being written into the customer's history a second time.
+  const accepted = await res.json().catch(() => null);
+  const providerMessageId: string | undefined =
+    typeof accepted?.message_id === "string" ? accepted.message_id : undefined;
+  return { ok: true, providerMessageId };
 }
 
 /** Sends a DM with tappable quick-reply chips (menu options). */
@@ -366,7 +374,30 @@ export async function recordInboundDm(
 }
 
 /** Replies sent from Business Suite / the phone app arrive as echoes — file them too. */
-export async function recordDmEcho(platform: DmPlatform, recipientId: string, text: string) {
+/**
+ * Meta echoes every message the Page sends back to the webhook, including the
+ * ones WE sent. Recording each echo unconditionally wrote a second outbound row
+ * for a message the CRM had already logged, so one real customer message showed
+ * up twice in history.
+ *
+ * `providerMessageId` is what tells them apart: the delivery ledger keeps the id
+ * Meta returned when it accepted our send, so an echo carrying that same id is
+ * demonstrably our own message coming back rather than something a colleague
+ * sent from the Facebook Page inbox — which is a genuine event worth recording.
+ */
+export async function recordDmEcho(
+  platform: DmPlatform,
+  recipientId: string,
+  text: string,
+  providerMessageId?: string | null,
+) {
+  if (providerMessageId) {
+    const ours = await prisma.botFlowOutbox.findFirst({
+      where: { providerMessageId, tenantId: writeTenantId() ?? DEFAULT_TENANT_ID },
+      select: { id: true },
+    });
+    if (ours) return; // already in history, written when the send was queued
+  }
   const idField = platform === "instagram" ? "instagramId" : "messengerPsid";
   const contact = await prisma.contact.findFirst({ where: { [idField]: recipientId } });
   if (!contact) return;
