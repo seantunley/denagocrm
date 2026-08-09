@@ -10,11 +10,11 @@ const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
 /**
  * THE BOT MAY NOT TALK TO A CUSTOMER OFF THE RECORD.
  *
- * runDmFlow answers every inbound Messenger and Instagram DM, sends through the
- * Page's own token — so the customer sees it — and wrote NOTHING to
- * Communication. Staff opening that thread saw the customer's messages and their
- * own, with no sign the assistant had already replied. That includes the aiReply
- * path, whose text nobody here wrote or reviewed.
+ * runDmFlow answered every inbound Messenger and Instagram DM, sent through the
+ * Page's own token — so the customer saw it — and wrote NOTHING to Communication.
+ * Staff opening that thread saw the customer's messages and their own, with no
+ * sign the assistant had already replied. That includes the aiReply path, whose
+ * text nobody here wrote or reviewed.
  *
  * It surfaced from the other end on 2026-08-08: a customer received two hostile
  * messages that appeared nowhere in the CRM. The bot turned out to be disabled, so
@@ -22,15 +22,30 @@ const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
  * "the CRM cannot prove what it did or did not send" is exactly the position not
  * to be in when that question is asked.
  *
- * The WhatsApp bot has always recorded its replies (`logOutbound` in flowRun.ts).
- * The DM channels were simply missing the same call. These tests pin the parity.
+ * WHERE THE GUARANTEE NOW LIVES. The bot no longer sends from runDmFlow or
+ * runWhatsAppFlow at all. Both write their replies into the durable outbox inside
+ * the same transaction that advances the flow, and the outbox worker is the only
+ * thing that talks to a provider. The parity these tests defend is therefore
+ * structural rather than duplicated — ONE sender, ONE recorder — so the assertions
+ * moved to it instead of being deleted.
+ *
+ * It is also strictly stronger than the shape it replaces. Send-then-log could not
+ * survive a process dying between the two: the customer had the message and the
+ * CRM did not. A sent row now carries `communicationLoggedAt`, and a sweep repairs
+ * any row that sent without logging.
  */
 
 /** A function body, brace-matched from its declaration. */
 function functionBody(code: string, declaration: string): string {
   const start = code.indexOf(declaration);
   assert.ok(start !== -1, `could not find ${declaration}`);
-  const open = code.indexOf("{", start);
+  // The body's opening brace is the one that ENDS ITS LINE. Taking the first `{`
+  // instead lands inside a return type like `Promise<{ ok: boolean }>`, and the
+  // extracted "body" is then only the signature — every assertion against it
+  // would pass or fail for the wrong reason.
+  const offset = code.slice(start).search(/\{[ \t]*\r?\n/);
+  assert.ok(offset !== -1, `could not find the body of ${declaration}`);
+  const open = start + offset;
   let depth = 1;
   let i = open + 1;
   for (; i < code.length && depth > 0; i += 1) {
@@ -49,116 +64,105 @@ test("the extractor stops at the function's own end", () => {
   assert.doesNotMatch(body, /NOT_IN_A/);
 });
 
-test("every DM send is followed by a record of what was sent", () => {
-  const body = functionBody(src("src/lib/flowDm.ts"), "export async function runDmFlow");
-
-  const sends = body.match(/await send(DirectMessage|DirectAttachment|DirectQuickReplies)\(/g) ?? [];
-  const logs = body.match(/await logOutboundDm\(/g) ?? [];
-  assert.ok(sends.length >= 3, `expected the three DM send kinds, found ${sends.length}`);
-  assert.equal(
-    logs.length,
-    sends.length,
-    `${sends.length} sends but ${logs.length} records — a send with no record is a message only the customer can see`,
-  );
+test("the extractor is not fooled by a brace in the return type", () => {
+  const sample = "async function f(x: number): Promise<{ ok: boolean }> {\n  REAL_BODY();\n}\n";
+  assert.match(functionBody(sample, "async function f("), /REAL_BODY/);
 });
 
-test("a record is written only when the send reported success", () => {
-  // A row for a message Meta rejected is a different lie in the same place. Same
-  // rule the WhatsApp bot follows.
-  const body = functionBody(src("src/lib/flowDm.ts"), "export async function runDmFlow");
-  const guarded = body.match(/if \(\w+\.ok\) await logOutboundDm\(/g) ?? [];
-  const guardedBlocks = body.match(/if \(\w+\.ok\) \{[\s\S]*?logOutboundDm\(/g) ?? [];
-  const logs = body.match(/await logOutboundDm\(/g) ?? [];
-  assert.equal(
-    guarded.length + guardedBlocks.length,
-    logs.length,
-    "every logOutboundDm must sit behind an .ok check",
-  );
+test("nothing reaches a customer except through the outbox", () => {
+  // A direct provider call in a flow runner would bypass the record entirely.
+  for (const rel of ["src/lib/flowDm.ts", "src/lib/flowRun.ts"]) {
+    const code = src(rel);
+    assert.doesNotMatch(code, /await sendDirect(Message|Attachment|QuickReplies)\(/, `${rel} must not send directly`);
+    assert.doesNotMatch(code, /await sendWhatsApp(Text|Image|Buttons|List)\(/, `${rel} must not send directly`);
+    assert.match(code, /enqueueBotMessagesTx\(/, `${rel} must enqueue instead`);
+  }
+});
+
+test("every kind the bot can send is a kind the outbox can record", () => {
+  // The old test counted sends against logs inside one function. With a single
+  // sender it becomes a coverage question: any message shape sendProvider can
+  // deliver, timelineBody must be able to render — otherwise a delivered message
+  // has nothing to write down.
+  const code = src("src/lib/botOutbox.ts");
+  const send = functionBody(code, "async function sendProvider");
+  const render = functionBody(code, "function timelineBody");
+  for (const kind of ["text", "image"]) {
+    assert.ok(send.includes(`"${kind}"`), `sendProvider must handle ${kind}`);
+    assert.ok(render.includes(`"${kind}"`), `timelineBody must render ${kind}`);
+  }
+  assert.ok(send.includes("message.options"), "sendProvider must handle a choice");
+  assert.ok(render.includes("message.options"), "timelineBody must render a choice");
+  for (const channel of ["whatsapp", "messenger", "instagram", "telegram"]) {
+    assert.ok(send.includes(`"${channel}"`), `sendProvider must handle ${channel}`);
+  }
+});
+
+test("a record is written only after the send reported success", () => {
+  // A row for a message the provider rejected is a different lie in the same place.
+  const deliver = functionBody(src("src/lib/botOutbox.ts"), "async function deliverClaimed");
+  const fail = deliver.indexOf("failDelivery");
+  const log = deliver.indexOf("repairCommunicationLog");
+  assert.ok(fail !== -1 && log !== -1, "delivery must both fail closed and record");
+  assert.ok(fail < log, "a rejected send must return before anything is recorded");
+  assert.match(deliver, /status: "sent"/);
 });
 
 test("the recorder writes an outbound Communication on the right channel", () => {
-  const body = functionBody(src("src/lib/flowDm.ts"), "async function logOutboundDm");
-  assert.match(body, /prisma\.communication\.create/);
+  const body = functionBody(src("src/lib/botOutbox.ts"), "async function repairCommunicationLog");
+  assert.match(body, /prisma\.communication\.upsert/);
   assert.match(body, /direction: "outbound"/);
-  assert.match(body, /type: platform/, "messenger and instagram must file under their own channel");
+  assert.match(body, /type: row\.channel/, "each channel must file under its own name");
   assert.match(body, /subject: FLOW_MARKER/, "so the inbox can tell a bot reply from a person's");
 });
 
-test("both channels' bots record, and share one marker", () => {
-  // Parity is the actual property. WhatsApp had it; the DM channels did not, and
-  // nothing in the repo compared them.
-  const wa = src("src/lib/flowRun.ts");
-  const dm = src("src/lib/flowDm.ts");
-  assert.match(wa, /async function logOutbound\(/, "the WhatsApp recorder must still exist");
-  assert.match(dm, /async function logOutboundDm\(/, "and the DM one");
+test("all channels record through one recorder and share one marker", () => {
+  // Parity is the property. It used to need two implementations kept in step;
+  // there is now one, which is the stronger version of the same thing.
+  const code = src("src/lib/botOutbox.ts");
+  const body = functionBody(code, "async function repairCommunicationLog");
+  assert.match(body, /\["whatsapp", "messenger", "instagram"\]/, "every recorded channel in one list");
 
-  // One marker, imported — two spellings would split the inbox's idea of "a bot
-  // said this", and only one of them would be filtered.
-  assert.match(wa, /export const FLOW_MARKER/, "the marker must be shared, not private");
-  assert.match(dm, /import \{ FLOW_MARKER \} from "\.\/flowRun"/);
-  assert.doesNotMatch(dm, /FLOW_MARKER = /, "and must not be restated");
+  // Exactly one definition anywhere. Two spellings would split the inbox's idea
+  // of "a bot said this", and only one of them would be filtered.
+  const defs = ["src/lib/botOutbox.ts", "src/lib/flowDm.ts", "src/lib/flowRun.ts"]
+    .filter((rel) => /FLOW_MARKER = /.test(src(rel)));
+  assert.deepEqual(defs, ["src/lib/botOutbox.ts"], "the marker must be defined once, with the recorder");
 });
 
 test("the AI reply path is inside the recorded loop", () => {
   // The reply this matters most for: aiReply generates text nobody here wrote, and
-  // it reaches the customer through the same result.messages loop. If it ever gets
+  // it reaches the customer through the same messages collection. If it ever gets
   // its own send path, this test is where that shows up.
   const body = functionBody(src("src/lib/flowDm.ts"), "export async function runDmFlow");
   assert.match(body, /aiReply:/, "the AI path lives in this function");
-  const sendsOutsideLoop = body.slice(0, body.indexOf("for (const m of result.messages)"));
-  assert.doesNotMatch(
-    sendsOutsideLoop,
-    /await sendDirect/,
-    "a send before the recorded loop would be unrecorded again",
-  );
+  assert.doesNotMatch(body, /await sendDirect/, "any send here would be outside the outbox");
 });
 
-/**
- * …AND THE RECORD MAY NOT BE OPTIONAL.
- *
- * Review found the first version still allowed the exact thing this PR exists to
- * stop. The logger resolved the tenant actor AFTER the message had gone:
- *
- *   Meta send succeeds
- *     → resolveTenantActor() returns null
- *     → logger returns silently
- *     → customer has the message, CRM has no record
- *
- * The WhatsApp bot had the same weakness, so copying its pattern gave parity and
- * not safety. Both now resolve the actor BEFORE anything is sent and refuse to
- * speak without one: a bot that stays quiet is better than one that talks to a
- * customer with no trace of it.
- */
-
-test("neither bot sends before it can record", () => {
-  for (const [file, sendCall] of [
-    ["src/lib/flowDm.ts", "await sendDirect"],
-    ["src/lib/flowRun.ts", "await sendWhatsApp"],
-  ] as const) {
+test("neither bot speaks before it can record", () => {
+  // Unchanged in substance: the actor is resolved BEFORE anything is queued, and a
+  // runner with no actor stays quiet rather than talking to a customer untraceably.
+  for (const file of ["src/lib/flowDm.ts", "src/lib/flowRun.ts"]) {
     const code = src(file);
     const resolve = code.indexOf("await resolveTenantActor()");
-    const firstSend = code.indexOf(sendCall);
+    const enqueue = code.indexOf("await enqueueBotMessagesTx(");
     assert.ok(resolve !== -1, `${file}: must resolve an actor`);
-    assert.ok(firstSend !== -1, `${file}: must send something`);
-    assert.ok(
-      resolve < firstSend,
-      `${file}: the actor must be resolved BEFORE the first send, or a send can outlive its record`,
-    );
+    assert.ok(enqueue !== -1, `${file}: must enqueue something`);
+    assert.ok(resolve < enqueue, `${file}: the actor must be resolved BEFORE the reply is queued`);
     assert.match(code, /refusing to reply on/, `${file}: refusal must be visible, not silent`);
   }
 });
 
-test("the loggers cannot silently skip a record", () => {
-  // `if (!actor) return` inside the logger is the defect. The actor is now a
-  // required argument, so there is no path where the write is skipped.
-  for (const [file, fn] of [
-    ["src/lib/flowDm.ts", "async function logOutboundDm"],
-    ["src/lib/flowRun.ts", "async function logOutbound"],
-  ] as const) {
-    const code = src(file);
-    const body = functionBody(code, fn);
-    assert.doesNotMatch(body, /if \(!\w+\) return;/, `${file}: the logger must not bail out`);
-    assert.match(body, /actorId/, `${file}: the actor must be supplied by the caller`);
-    assert.doesNotMatch(body, /resolveTenantActor/, `${file}: and not resolved after the send`);
-  }
+test("a message that sent but did not record is repaired, not forgotten", () => {
+  // The failure send-then-log could not survive: the process dies after the
+  // provider accepted and before the Communication was written.
+  const code = src("src/lib/botOutbox.ts");
+  const sweep = functionBody(code, "async function repairPendingCommunicationLogs");
+  assert.match(sweep, /status: "sent", communicationLoggedAt: null/, "the sweep must find exactly those rows");
+  assert.match(src("prisma/bot-outbox.prisma"), /communicationLoggedAt DateTime\?/, "and the column must exist to find them by");
+
+  const logger = functionBody(code, "async function repairCommunicationLog");
+  assert.doesNotMatch(logger, /if \(!\w+\) return;/, "the logger must not bail out silently");
+  assert.match(logger, /userId: row\.actorId/, "the actor comes from the durable row, not a post-hoc lookup");
+  assert.doesNotMatch(logger, /resolveTenantActor/, "and is never resolved after the send");
 });
