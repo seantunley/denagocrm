@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   DndContext,
   DragOverlay,
@@ -163,6 +164,36 @@ export default function DashboardCanvas({
    * undo the whole gesture.
    */
   const lastOverId = useRef<string | null>(null);
+
+  /*
+   * THE DRAG LABEL HAS TO ESCAPE THE PAGE WRAPPER.
+   *
+   * globals.css gives every direct child of `.denago-workspace` the
+   * `workspace-enter` entry animation, with `animation-fill-mode: both`. That
+   * fill mode is what keeps the animation's final frame applied FOREVER after it
+   * finishes — and its final frame is `transform: translateY(0)`.
+   *
+   * A transform other than `none` makes an element the containing block for
+   * every `position: fixed` descendant. dnd-kit's overlay is position:fixed with
+   * `top`/`left` taken from viewport-space rects, so those coordinates were
+   * being resolved against the page wrapper's box instead of the viewport: the
+   * label came out displaced by the wrapper's own offset, constantly, for the
+   * whole drag. It followed the pointer perfectly and never arrived at it.
+   *
+   * Which is why two rounds of arithmetic on the overlay changed nothing — both
+   * were correct inside a coordinate space that was already wrong.
+   *
+   * A portal to `document.body` puts it outside the transformed ancestor
+   * entirely. React context still reaches it, so it remains a child of the
+   * DndContext as far as dnd-kit is concerned. This is also why the app's
+   * dialogs and popovers are unaffected: Radix portals them already, and
+   * DragOverlay is the one piece of fixed-position UI here that does not.
+   *
+   * Set from an effect so the server render and the first client render agree on
+   * null; a drag cannot start before hydration anyway.
+   */
+  const [overlayHost, setOverlayHost] = useState<HTMLElement | null>(null);
+  useEffect(() => setOverlayHost(document.body), []);
 
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 8 } }),
@@ -397,18 +428,23 @@ export default function DashboardCanvas({
           which is measured from this node - becomes the label's size rather than
           the card's.
       */}
-      <DragOverlay
-        dropAnimation={null}
-        modifiers={[snapToCursor]}
-        style={{ width: "auto", height: "auto" }}
-      >
-        {activeCard ? (
-          <div className="flex cursor-grabbing items-center gap-2 rounded-lg border border-primary/40 bg-card px-3 py-2 text-xs font-medium text-foreground shadow-lg">
-            <GripVertical className="size-3.5 text-muted-foreground" />
-            {cardLabel(activeCard)}
-          </div>
-        ) : null}
-      </DragOverlay>
+      {overlayHost
+        ? createPortal(
+            <DragOverlay
+              dropAnimation={null}
+              modifiers={[snapToCursor]}
+              style={{ width: "auto", height: "auto" }}
+            >
+              {activeCard ? (
+                <div className="flex cursor-grabbing items-center gap-2 rounded-lg border border-primary/40 bg-card px-3 py-2 text-xs font-medium text-foreground shadow-lg">
+                  <GripVertical className="size-3.5 text-muted-foreground" />
+                  {cardLabel(activeCard)}
+                </div>
+              ) : null}
+            </DragOverlay>,
+            overlayHost,
+          )
+        : null}
     </DndContext>
   );
 }
