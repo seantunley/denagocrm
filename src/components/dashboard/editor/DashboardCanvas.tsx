@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import {
   DndContext,
@@ -80,6 +80,10 @@ import { useEditor, newId } from "./EditorProvider";
  * once, on the drop. The gap you can see is now drawn rather than reflowed into
  * existence, which is a clearer answer to the same question.
  */
+
+/** Module-level so the snapshot is referentially stable across renders. */
+const subscribeToNothing = () => () => {};
+const getDocumentBody = () => document.body;
 
 const NO_TRANSFORM: SortingStrategy = () => null;
 const MEASURE_ALWAYS = { droppable: { strategy: MeasuringStrategy.Always } };
@@ -187,11 +191,14 @@ export default function DashboardCanvas({
    * dialogs and popovers are unaffected: Radix portals them already, and
    * DragOverlay is the one piece of fixed-position UI here that does not.
    *
-   * Set from an effect so the server render and the first client render agree on
-   * null; a drag cannot start before hydration anyway.
+   * Read through useSyncExternalStore rather than set from an effect. It is the
+   * shape React provides for a value that simply does not exist on the server: a
+   * server snapshot of null, a client snapshot of document.body, and a
+   * subscribe that never fires because the body never changes. Setting state in
+   * an effect would do the same job by triggering a second render, which is what
+   * react-hooks/set-state-in-effect is there to catch.
    */
-  const [overlayHost, setOverlayHost] = useState<HTMLElement | null>(null);
-  useEffect(() => setOverlayHost(document.body), []);
+  const overlayHost = useSyncExternalStore(subscribeToNothing, getDocumentBody, () => null);
 
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 8 } }),
