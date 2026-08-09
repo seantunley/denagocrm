@@ -16,6 +16,7 @@ CREATE TABLE "BotFlowOutbox" (
     "leaseUntil" TIMESTAMP(3),
     "lastError" TEXT,
     "sentAt" TIMESTAMP(3),
+    "communicationLoggedAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "BotFlowOutbox_pkey" PRIMARY KEY ("id"),
@@ -28,6 +29,8 @@ CREATE INDEX "BotFlowOutbox_tenant_status_available_idx"
     ON "BotFlowOutbox"("tenantId", "status", "availableAt");
 CREATE INDEX "BotFlowOutbox_tenant_channel_key_created_idx"
     ON "BotFlowOutbox"("tenantId", "channel", "key", "createdAt", "sequence");
+CREATE INDEX "BotFlowOutbox_tenant_status_log_idx"
+    ON "BotFlowOutbox"("tenantId", "status", "communicationLoggedAt");
 
 ALTER TABLE "BotFlowOutbox" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "BotFlowOutbox_tenant_isolation" ON "BotFlowOutbox"
