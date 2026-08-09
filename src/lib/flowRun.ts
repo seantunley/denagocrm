@@ -1,13 +1,7 @@
 import { prisma } from "./db";
 import { getSetting } from "./settings";
 import { formatZAR } from "./format";
-import {
-  matchByPhone,
-  sendWhatsAppText,
-  sendWhatsAppButtons,
-  sendWhatsAppList,
-  sendWhatsAppImage,
-} from "./whatsapp";
+import { matchByPhone } from "./whatsapp";
 import { generateBotReply, type BotMsg } from "./botAi";
 import { sendPushToAll } from "./push";
 import { maybeAutoReply, botShouldPause } from "./bot";
@@ -16,6 +10,7 @@ import { resolveTenantActor } from "./tenantActor";
 import { crmActions } from "./flowActions";
 import { runFlow, type FlowInput, type FlowSession, type FlowCtx } from "./flow";
 import { resolveFlowSnapshot } from "./flowPublishing";
+import { enqueueBotMessages, flushBotOutboxConversation } from "./botOutbox";
 
 export const FLOW_MARKER = "🤖 Flow";
 const FLOW_VERSION_VAR = "__flow_version";
@@ -30,7 +25,6 @@ export async function isFlowEnabled(): Promise<boolean> {
 const RESTART = /^\s*(menu|hi|hello|hey|start|restart|begin)\b/i;
 const isRestart = (text: string) => RESTART.test(text);
 
-/* ---- persistence ---- */
 async function loadSession(key: string): Promise<{
   nodeId: string | null;
   vars: Record<string, string>;
@@ -82,7 +76,6 @@ async function clearSession(key: string) {
   await prisma.botSession.deleteMany({ where: { channel: "whatsapp", key } });
 }
 
-/* ---- context (IO the engine calls) ---- */
 async function priceList(): Promise<string> {
   const products = await prisma.product.findMany({ where: { active: true }, include: { colors: true }, orderBy: { name: "asc" } });
   if (!products.length) return "I'll have the team send you our current pricing 👍";
@@ -107,9 +100,6 @@ async function whatsappHistory(contactId: string | null, leadId: string | null, 
   if (leadId) or.push({ leadId });
   or.push({ body: { contains: digits } });
   /* eslint-enable @typescript-eslint/no-explicit-any */
-  // `take` applies before any client-side ordering. Fetch newest first so a long
-  // thread gives the model the latest 16 turns, then reverse them back into the
-  // chronological order Anthropic expects.
   const comms = await prisma.communication.findMany({
     where: { type: "whatsapp", OR: or },
     orderBy: { occurredAt: "desc" },
@@ -146,33 +136,13 @@ function buildCtx(digits: string, match: { contactId: string | null; leadId: str
   };
 }
 
-async function logOutbound(
-  text: string,
-  contactId: string | null,
-  leadId: string | null,
-  digits: string,
-  actorId: string,
-) {
-  await prisma.communication.create({
-    data: {
-      type: "whatsapp",
-      direction: "outbound",
-      subject: FLOW_MARKER,
-      body: contactId || leadId ? text : `${text}\n\n[to +${digits}]`,
-      contactId,
-      leadId,
-      userId: actorId,
-    },
-  });
-}
-
 /** Runs the published flow for a WhatsApp message. Returns true if handled. */
 export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise<boolean> {
   const match = await matchByPhone(digits);
-  if (await botShouldPause(match.contactId, match.leadId, digits)) return true; // human is handling
+  if (await botShouldPause(match.contactId, match.leadId, digits)) return true;
 
   const existing = await loadSession(digits);
-  if (existing?.status === "paused") return true; // waiting for a human after a handoff
+  if (existing?.status === "paused") return true;
 
   const restart = isRestart(input.text) && !input.choiceId;
   let seed: Record<string, string> = {};
@@ -180,48 +150,39 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise
     const contact = match.contactId ? await prisma.contact.findUnique({ where: { id: match.contactId } }) : null;
     seed = greetingVars(contact?.firstName ?? null);
   }
-  const session: FlowSession =
-    !existing || restart ? { nodeId: null, vars: seed } : { nodeId: existing.nodeId, vars: existing.vars };
+  const session: FlowSession = !existing || restart
+    ? { nodeId: null, vars: seed }
+    : { nodeId: existing.nodeId, vars: existing.vars };
 
-  // FAIL CLOSED BEFORE SENDING ANYTHING. Without a tenant actor a reply cannot be
-  // recorded, and a bot that talks to a customer with no trace of it is worse
-  // than a bot that stays quiet.
   const actor = await resolveTenantActor();
   if (!actor) {
     console.error("[bot] refusing to reply on whatsapp: no tenant actor, so the reply could not be recorded");
     return true;
   }
 
-  // A continuation stays on its pinned immutable publication. Typing menu/start
-  // deliberately begins a new conversation and therefore takes today's version.
-  const snapshot = await resolveFlowSnapshot(
-    "whatsapp",
-    restart ? null : existing?.flowVersionId ?? null,
-  );
+  const snapshot = await resolveFlowSnapshot("whatsapp", restart ? null : existing?.flowVersionId ?? null);
   const result = await runFlow(snapshot.flow, session, input, buildCtx(digits, match));
 
-  for (const m of result.messages) {
-    let ok = false;
-    if (m.type === "text") {
-      ok = (await sendWhatsAppText(digits, m.text)).ok;
-      if (ok) await logOutbound(m.text, match.contactId, match.leadId, digits, actor.id);
-    } else if (m.type === "image") {
-      ok = (await sendWhatsAppImage(digits, m.url, m.caption)).ok;
-      if (ok) await logOutbound(m.caption ? `🖼 ${m.caption}` : "🖼 [image]", match.contactId, match.leadId, digits, actor.id);
-    } else {
-      // choice: buttons (≤3) or list (>3)
-      const res =
-        m.options.length <= 3
-          ? await sendWhatsAppButtons(digits, m.text, m.options.map((o) => ({ id: o.id, title: o.label })))
-          : await sendWhatsAppList(digits, m.text, "Choose", m.options.map((o) => ({ id: o.id, title: o.label, description: o.description })));
-      ok = res.ok;
-      if (ok) await logOutbound(`${m.text}\n${m.options.map((o) => `• ${o.label}`).join("\n")}`, match.contactId, match.leadId, digits, actor.id);
-    }
-  }
+  // First make the outbound intent durable. If this insert fails, no BotSession
+  // state below is committed and the inbound webhook can safely be retried.
+  await enqueueBotMessages({
+    channel: "whatsapp",
+    key: digits,
+    messages: result.messages,
+    contactId: match.contactId,
+    leadId: match.leadId,
+    actorId: actor.id,
+  });
 
+  // Then commit the new conversation position. At this point every message that
+  // explains the position exists durably even if the process dies before send.
   if (result.handedOff) await saveSession(digits, { nodeId: null, vars: session.vars }, snapshot.versionId, "paused", 6);
   else if (result.session) await saveSession(digits, result.session, snapshot.versionId);
   else await clearSession(digits);
+
+  // Finally attempt immediate delivery. Failure is NOT fatal to the flow: the
+  // queued rows remain retryable and the cron will pick them up in order.
+  await flushBotOutboxConversation("whatsapp", digits);
   return true;
 }
 
@@ -232,7 +193,7 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise
 export async function runWhatsAppBot(
   digits: string,
   input: FlowInput,
-  opts: { voiceNote?: boolean } = {}
+  opts: { voiceNote?: boolean } = {},
 ): Promise<void> {
   if (opts.voiceNote) {
     await maybeAutoReply(digits, input.text, { voiceNote: true });
