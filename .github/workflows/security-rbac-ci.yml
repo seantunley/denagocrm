@@ -304,6 +304,14 @@ jobs:
       - name: Migrations run every statement on one session
         run: npm run test:migration-session
 
+      # A source assertion cannot tell "the row budget is bounded" from "the row
+      # budget is bounded PER CONVERSATION", and only the second one keeps a quiet
+      # thread visible next to a busy one. Both shapes select threads first and
+      # both look correct; the difference shows up only against a dataset where
+      # one conversation carries more recent messages than the entire page budget.
+      - name: Inbox -- one loud conversation cannot starve the quiet ones
+        run: npm run test:inbox-selection
+
   # -- LANE 3: migrating a database that already has data ----------------------
   #
   # Its own job and its own scratch database, so its four minutes overlap the

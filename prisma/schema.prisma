@@ -1045,6 +1045,11 @@ model Communication {
   @@index([messageId])
   @@index([archivedAt])
   @@index([tenantId])
+  // A thread is keyed by contact when it has one and by lead otherwise, and the
+  // inbox reads it newest-first: both the "when was each thread last active"
+  // aggregate and the per-thread top-N slice. Neither key had an index.
+  @@index([contactId, type, occurredAt(sort: Desc)], map: "Communication_contact_thread_idx")
+  @@index([leadId, type, occurredAt(sort: Desc)], map: "Communication_lead_thread_idx")
 }
 
 /// A shared-inbox conversation: groups related messages with a contact (or lead)
