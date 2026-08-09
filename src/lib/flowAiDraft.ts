@@ -52,19 +52,25 @@ Allowed node types and fields:
 - captureFile: {id,type:"captureFile",text,variable,next?}
 - image: {id,type:"image",url,caption?,next?}
 - answer: {id,type:"answer",text?,answerSource?:"pricelist"|"colours",next?}
-- booking: {id,type:"booking",action?:"service"|"demo"|"lead",text?,next?}
-- slots: {id,type:"slots",text,noneText?,next?}
+- booking: {id,type:"booking",action?:"service"|"demo"|"lead"|"lookup"|"cancel",text?,next?}
+- slots: {id,type:"slots",action?:"book"|"reschedule",text,noneText?,next?}
 - condition: {id,type:"condition",condition:{variable,operator:"equals"|"not_equals"|"contains"|"exists"|"empty",value?},trueNext?,falseNext?}
 - ai: {id,type:"ai",handoffNext?}
 - handoff: {id,type:"handoff",text?}
 - end: {id,type:"end"}
 
-Built-in variables available at runtime: greeting, first_name, name, known, slot, channel, current_date, current_time. Captured variables become available after their capture node.
+Built-in variables available at runtime: greeting, first_name, name, known, slot, channel, current_date, current_time.
+Booking lookup populates: booking_found, booking_id, booking_slot, booking_summary.
+Booking cancellation populates: booking_cancelled. Successful reschedule updates booking_slot and booking_rescheduled.
+Captured variables become available after their capture node.
 
 Rules:
 - Every node object's id MUST equal its key in nodes.
 - Use only the allowed node types/actions. Do not invent email/SMS/webhook/code nodes.
-- CRM writes happen only through booking(service|demo|lead) and slots. Use handoff when the requested action is unsupported.
+- CRM writes happen only through booking(service|demo|lead|cancel) and slots(book|reschedule). booking(lookup) is read-only.
+- For cancel/reschedule, run booking(action="lookup") first and branch on booking_found before using booking_id.
+- slots(action="reschedule") atomically moves the existing Activity; do not model “book new then cancel old”.
+- Use handoff when the requested action is unsupported.
 - Do not invent URLs, prices, policies, product specs or business copy the owner did not provide in the instruction/current flow. Use answerSource for live price/colour lists and ai for open questions.
 - Keep menu labels concise enough for messaging channels; prefer <=20 characters and <=10 options.
 - Avoid automatic cycles. Waiting nodes (choice/capture/captureFile/slots/ai) are fine.
