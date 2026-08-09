@@ -334,7 +334,16 @@ function SectionBlock({
         items={[...cards.map((card) => card.id), section.id]}
         strategy={NO_TRANSFORM}
       >
-        <div className={cn("grid items-start gap-4", VIEW_COLUMNS[section.columnSpan])}>
+        {/* auto-rows gives the grid a base row height, without which a row is
+            simply as tall as its tallest card and "span two rows" means
+            nothing. A minimum rather than a fixed height, so an ordinary card
+            still grows past it when its content needs to. */}
+        <div
+          className={cn(
+            "grid items-start gap-4 sm:auto-rows-[minmax(11rem,auto)]",
+            VIEW_COLUMNS[section.columnSpan],
+          )}
+        >
           {cards.map((card) => (
             <SortableCard
               key={card.id}
@@ -368,6 +377,19 @@ const CARD_SPAN: Record<1 | 2 | 3 | 4, string> = {
   4: "sm:col-span-2 lg:col-span-4",
 };
 
+/**
+ * Height, in grid rows. Static strings for the same reason as the widths above.
+ *
+ * From `sm:` upward only: on a phone the grid is a single column and every card
+ * is full width, so spanning rows would just leave a tall empty box.
+ */
+const CARD_ROWS: Record<1 | 2 | 3 | 4, string> = {
+  1: "",
+  2: "sm:row-span-2",
+  3: "sm:row-span-3",
+  4: "sm:row-span-4",
+};
+
 function SortableCard({
   card,
   node,
@@ -393,6 +415,23 @@ function SortableCard({
       className={cn(
         "relative min-w-0",
         CARD_SPAN[card.span],
+        CARD_ROWS[card.rows ?? 1],
+        /*
+         * A card that claimed extra rows must FILL them, or it claims the space
+         * and leaves it blank - which looks like a layout bug.
+         *
+         * SELF-STRETCH IS THE PART THAT DOES THE WORK, and h-full alone was
+         * silently useless without it. The grid is `items-start`, so an item does
+         * not stretch to its row: its height IS its content height, and h-full on
+         * it resolves to 100% of that, which is nothing. The item has to opt out
+         * of the start alignment before any height can be inherited at all.
+         *
+         * flex-col so the panel below can fill this box in turn. The chain has to
+         * be unbroken from grid cell to visible card: wrapper -> content div ->
+         * CardShell/SectionCard. A gap anywhere in it and the card stays short
+         * inside a tall cell, which is the exact bug this feature claims to fix.
+         */
+        card.rows && card.rows > 1 ? "sm:h-full sm:self-stretch sm:flex sm:flex-col" : undefined,
         editing && "rounded-xl ring-1 ring-dashed ring-border",
         isDragging && "opacity-30",
       )}
@@ -428,7 +467,15 @@ function SortableCard({
         </div>
       )}
 
-      <div className={cn(editing && "pointer-events-none select-none")}>
+      {/* The middle link in the height chain. min-h-0 because a flex child
+          otherwise refuses to shrink below its content, which would break
+          scrolling inside a card shorter than what it holds. */}
+      <div
+        className={cn(
+          editing && "pointer-events-none select-none",
+          card.rows && card.rows > 1 && "sm:min-h-0 sm:flex-1",
+        )}
+      >
         {node ?? <CardPlaceholder card={card} />}
       </div>
     </div>
