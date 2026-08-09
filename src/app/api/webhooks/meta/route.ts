@@ -11,18 +11,20 @@ import { metaReceipt } from "@/lib/deliveryReceipts";
 import { applyReceipt } from "@/lib/messageReceipts";
 import { withChannelTenantScope, validateInSystemScope } from "@/lib/tenantScopeEntry";
 import { secretEquals } from "@/lib/secretCompare";
-import { claimInboundBotEvent } from "@/lib/botInboundEvent";
+import {
+  claimInboundBotEvent,
+  completeInboundBotEvent,
+  retryInboundBotEvent,
+  withInboundBotEvent,
+} from "@/lib/botInboundEvent";
 
-/** Meta webhook verification handshake. */
 export async function GET(req: NextRequest) {
   const params = req.nextUrl.searchParams;
   const mode = params.get("hub.mode");
   const token = params.get("hub.verify_token");
   const challenge = params.get("hub.challenge");
   const verifyToken = await validateInSystemScope(() => getSetting("META_VERIFY_TOKEN"));
-  if (mode === "subscribe" && secretEquals(token, verifyToken) && challenge) {
-    return new NextResponse(challenge, { status: 200 });
-  }
+  if (mode === "subscribe" && secretEquals(token, verifyToken) && challenge) return new NextResponse(challenge, { status: 200 });
   return new NextResponse("Verification failed", { status: 403 });
 }
 
@@ -35,46 +37,30 @@ async function fetchLeadDetails(leadgenId: string, accessToken: string) {
   return res.json();
 }
 
-async function latestPersistedDmAttachment(
-  platform: DmPlatform,
-  senderId: string,
-  receivedAfter: Date,
-): Promise<string | undefined> {
+async function latestPersistedDmAttachment(platform: DmPlatform, senderId: string, receivedAfter: Date): Promise<string | undefined> {
   const idField = platform === "instagram" ? "instagramId" : "messengerPsid";
   const contact = await prisma.contact.findFirst({ where: { [idField]: senderId }, select: { id: true } });
   if (!contact) return undefined;
   const saved = await prisma.communication.findFirst({
-    where: {
-      type: platform,
-      direction: "inbound",
-      contactId: contact.id,
-      attachmentUrl: { not: null },
-      occurredAt: { gte: receivedAfter },
-    },
+    where: { type: platform, direction: "inbound", contactId: contact.id, attachmentUrl: { not: null }, occurredAt: { gte: receivedAfter } },
     orderBy: { occurredAt: "desc" },
     select: { attachmentUrl: true },
   });
   return saved?.attachmentUrl ?? undefined;
 }
 
-/** Receives leadgen events from Facebook/Instagram Lead Ads. */
 export async function POST(req: NextRequest) {
   const rawBody = await req.text();
   const appSecret = await validateInSystemScope(() => getSetting("META_APP_SECRET"));
   if (!appSecret) return NextResponse.json({ error: "Webhook not configured" }, { status: 503 });
-  {
-    const signature = req.headers.get("x-hub-signature-256") ?? "";
-    const expected = "sha256=" + crypto.createHmac("sha256", appSecret).update(rawBody, "utf8").digest("hex");
-    const valid = signature.length === expected.length && crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
-    if (!valid) return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
+  const signature = req.headers.get("x-hub-signature-256") ?? "";
+  const expected = "sha256=" + crypto.createHmac("sha256", appSecret).update(rawBody, "utf8").digest("hex");
+  if (!(signature.length === expected.length && crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected)))) {
+    return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
   }
 
   let body: unknown;
-  try {
-    body = JSON.parse(rawBody);
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
-  }
+  try { body = JSON.parse(rawBody); } catch { return NextResponse.json({ error: "Invalid JSON" }, { status: 400 }); }
 
   /* eslint-disable @typescript-eslint/no-explicit-any */
   const objectType = (body as any).object as string | undefined;
@@ -84,43 +70,42 @@ export async function POST(req: NextRequest) {
       const endpointId = String(entry.id ?? "");
       await withChannelTenantScope(platform, endpointId, async () => {
         for (const ev of entry.messaging ?? []) {
-          try {
-            const text: string = ev.message?.text ?? "";
-            const attachments = ((ev.message?.attachments ?? []) as any[])
-              .map((a) => ({ type: String(a.type ?? "file"), url: String(a.payload?.url ?? "") }))
-              .filter((a) => a.url);
-            if (ev.delivery || ev.read) {
-              const receipt = metaReceipt(ev, platform);
-              if (receipt) await applyReceipt(receipt);
-              continue;
-            }
-            if (ev.message?.is_echo) {
-              if (text) await recordDmEcho(platform, String(ev.recipient?.id ?? ""), text);
-              continue;
-            }
-            if (ev.message && (text || attachments.length > 0)) {
-              if (!(await claimInboundBotEvent(platform, String(ev.message?.mid ?? "")))) continue;
+          const text: string = ev.message?.text ?? "";
+          const attachments = ((ev.message?.attachments ?? []) as any[])
+            .map((a) => ({ type: String(a.type ?? "file"), url: String(a.payload?.url ?? "") }))
+            .filter((a) => a.url);
+          if (ev.delivery || ev.read) {
+            const receipt = metaReceipt(ev, platform);
+            if (receipt) await applyReceipt(receipt);
+            continue;
+          }
+          if (ev.message?.is_echo) {
+            if (text) await recordDmEcho(platform, String(ev.recipient?.id ?? ""), text);
+            continue;
+          }
+          if (!ev.message || (!text && attachments.length === 0)) continue;
 
+          const claim = await claimInboundBotEvent(platform, String(ev.message?.mid ?? ""));
+          if (!claim) continue;
+          try {
+            await withInboundBotEvent(claim, async () => {
               const referral = ev.message.referral ?? ev.referral ?? ev.postback?.referral ?? null;
               const senderId = String(ev.sender?.id ?? "");
-              // Bound the persisted-attachment lookup to THIS inbound event so an
-              // older file from the same customer can never satisfy a new capture.
               const receivedAfter = new Date(Date.now() - 1000);
               await recordInboundDm(platform, senderId, text, referral, attachments);
-              const fileUrl = attachments.length
-                ? await latestPersistedDmAttachment(platform, senderId, receivedAfter)
-                : undefined;
+              const fileUrl = attachments.length ? await latestPersistedDmAttachment(platform, senderId, receivedAfter) : undefined;
               const payload: string | undefined = ev.message.quick_reply?.payload;
               if (text || payload || fileUrl) await runDmFlow(platform, senderId, text, payload, fileUrl);
-            }
-          } catch (e) {
+            });
+            await completeInboundBotEvent(claim);
+          } catch (error) {
+            await retryInboundBotEvent(claim, error).catch(() => {});
             const { logError } = await import("@/lib/errorLog");
-            await logError("meta-dm-webhook", e);
+            await logError("meta-dm-webhook", error).catch(() => {});
+            throw error; // Meta gets non-2xx and redelivers the released event.
           }
         }
-      }, () => {
-        console.warn(`[tenant-channel] skipped ${platform} DM: unmapped endpoint ${endpointId || "?"}`);
-      });
+      }, () => console.warn(`[tenant-channel] skipped ${platform} DM: unmapped endpoint ${endpointId || "?"}`));
     }
   }
   /* eslint-enable @typescript-eslint/no-explicit-any */
@@ -132,7 +117,6 @@ export async function POST(req: NextRequest) {
       const leadgenId = String(change.value?.leadgen_id ?? "");
       if (!leadgenId) continue;
       const pageId = String(change.value?.page_id ?? "");
-
       await withChannelTenantScope("messenger", pageId, async () => {
         const existing = await basePrisma.lead.findUnique({ where: { externalId: leadgenId }, select: { id: true } });
         if (existing) return;
@@ -142,30 +126,19 @@ export async function POST(req: NextRequest) {
           const details = await fetchLeadDetails(leadgenId, accessToken);
           const parsed = parseLeadFields(details.field_data ?? []);
           await createIntakeLead({
-            name: parsed.name ?? "New lead",
-            email: parsed.email,
-            phone: parsed.phone,
-            model: parsed.model,
-            color: parsed.color,
-            message: parsed.message,
-            source: metaSource(details.platform),
-            externalId: leadgenId,
-            raw: details,
+            name: parsed.name ?? "New lead", email: parsed.email, phone: parsed.phone,
+            model: parsed.model, color: parsed.color, message: parsed.message,
+            source: metaSource(details.platform), externalId: leadgenId, raw: details,
           });
         } catch (err) {
           await createIntakeLead({
             name: "Facebook lead (details pending)",
             message: `Could not fetch lead ${leadgenId} from Graph API: ${err instanceof Error ? err.message : "unknown error"}. Check the Page Access Token in Settings.`,
-            source: "facebook",
-            externalId: leadgenId,
-            raw: change.value,
+            source: "facebook", externalId: leadgenId, raw: change.value,
           }).catch(() => {});
         }
-      }, () => {
-        console.warn(`[tenant-channel] skipped leadgen: unmapped page_id ${pageId || "?"}`);
-      });
+      }, () => console.warn(`[tenant-channel] skipped leadgen: unmapped page_id ${pageId || "?"}`));
     }
   }
-
   return NextResponse.json({ received: true });
 }
