@@ -18,8 +18,16 @@ import { RotateCcw, ArrowLeft } from "lucide-react";
  * again". Somebody rearranging their dashboard lost the whole app.
  *
  * This boundary sits inside the layout, so it keeps the shell, keeps the
- * navigation, and CAN retry: `reset()` re-renders the failed segment without a
- * document load, and the rest of the app was never unmounted.
+ * navigation, and CAN retry.
+ *
+ * RETRY, NOT RESET. `reset()` only clears the error state and re-renders the
+ * children — it does not re-fetch anything, so a segment that failed because a
+ * query failed simply throws again on the same stale RSC output, and the button
+ * appears to do nothing. Next's own docs put it plainly: "In most cases, you
+ * should use unstable_retry() instead." `unstable_retry()` re-fetches and
+ * re-renders the segment inside a Transition, which preserves Client Component
+ * state outside this boundary. Since almost everything that lands here is a
+ * failed server query, that difference is the whole value of the button.
  *
  * WHAT IT DELIBERATELY DOES NOT SAY. Like global-error, it does not promise that
  * nothing was saved. A server action may have committed before the render that
@@ -35,10 +43,10 @@ import { RotateCcw, ArrowLeft } from "lucide-react";
  */
 export default function AppError({
   error,
-  reset,
+  unstable_retry,
 }: {
   error: Error & { digest?: string };
-  reset: () => void;
+  unstable_retry: () => void;
 }) {
   useEffect(() => {
     // Report once per error instance. A client-side crash produces no digest and
@@ -79,7 +87,7 @@ export default function AppError({
         <div className="mt-5 flex flex-wrap gap-2">
           <button
             type="button"
-            onClick={reset}
+            onClick={() => unstable_retry()}
             className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90"
           >
             <RotateCcw className="size-4" aria-hidden />
