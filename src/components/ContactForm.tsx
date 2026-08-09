@@ -334,7 +334,7 @@ export default function ContactForm({
         className={cn(
           "flex items-center justify-between gap-4 rounded-2xl border border-border bg-card p-3 shadow-sm",
           isPage && "sticky bottom-[calc(5.25rem+env(safe-area-inset-bottom))] z-20 sm:static sm:p-4",
-          isDialog && "sticky bottom-0 z-20 -mx-5 -mb-5 rounded-b-none border-x-0 border-b-0 bg-[#111412]/95 px-5 backdrop-blur-xl sm:-mx-6 sm:-mb-6 sm:px-6",
+          isDialog && "sticky bottom-0 z-20 -mx-4 -mb-4 rounded-b-none border-x-0 border-b-0 bg-[#111412]/95 px-4 backdrop-blur-xl",
         )}
       >
         <p className="hidden text-xs text-muted-foreground sm:block">Fields marked * are required.</p>

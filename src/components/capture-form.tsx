@@ -142,7 +142,7 @@ export function CaptureFooter({
       className={cn(
         "flex items-center justify-between gap-3 rounded-xl border border-border bg-card p-2.5 shadow-sm",
         variant === "page" && "sticky bottom-[calc(5.25rem+env(safe-area-inset-bottom))] z-20 sm:static sm:p-3",
-        variant === "dialog" && "sticky bottom-0 z-20 -mx-5 -mb-5 rounded-b-none border-x-0 border-b-0 bg-[#111412]/95 px-5 backdrop-blur-xl sm:-mx-6 sm:-mb-6 sm:px-6",
+        variant === "dialog" && "sticky bottom-0 z-20 -mx-4 -mb-4 rounded-b-none border-x-0 border-b-0 bg-[#111412]/95 px-4 backdrop-blur-xl",
       )}
     >
       <p className="hidden text-xs text-muted-foreground sm:block">{requiredNote}</p>
