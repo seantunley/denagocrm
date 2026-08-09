@@ -40,11 +40,11 @@ export async function resolveTelegramTenant(secret: string | null | undefined): 
   return null;
 }
 
-export async function withTelegramTenantScope<T>(
+export async function withTelegramTenantScope<T, U>(
   secret: string | null | undefined,
   fn: () => Promise<T>,
-  onUnresolved: () => T | Promise<T>,
-): Promise<T> {
+  onUnresolved: () => U | Promise<U>,
+): Promise<T | U> {
   // Match the rest of the tenancy rollout: when enforcement is intentionally
   // dormant, preserve the existing single-tenant path exactly.
   if (!tenantEnforcing()) return fn();
