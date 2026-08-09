@@ -18,7 +18,7 @@ export default async function FlowSimulatorPage({ params }: { params: Promise<{ 
       eyebrow="Flow simulator"
       title={<span className="flex items-center gap-2"><FlaskConical className="size-5 text-primary" />Test {flow.name}</span>}
       status={flow.active ? <span className="badge bg-emerald-500/15 text-emerald-300">Live flow · testing draft</span> : undefined}
-      description="Runs the saved draft through the production graph engine with every write and send replaced by a simulator effect."
+      description="Runs the saved draft through the production graph engine with every write/send replaced by a simulator effect."
     >
       <FlowSimulator flowId={flow.id} />
     </EntityDetailShell>
