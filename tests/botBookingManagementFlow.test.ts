@@ -99,8 +99,8 @@ test("booking management starter compiles across every connected channel", () =>
 test("visual builder exposes booking management actions and their runtime variables", () => {
   const builder = src("src/components/FlowBuilder.tsx");
   assert.match(builder, /Find customer's next service booking/);
-  assert.match(builder, /Cancel \{\{booking_id\}\}/);
-  assert.match(builder, /Move \{\{booking_id\}\} to a new slot/);
+  assert.match(builder, /Cancel \{"\{\{booking_id\}\}"\}/);
+  assert.match(builder, /Move \{"\{\{booking_id\}\}"\} to a new slot/);
   assert.match(builder, /booking_found/);
   assert.match(builder, /booking_rescheduled/);
 });
