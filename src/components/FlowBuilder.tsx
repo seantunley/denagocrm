@@ -42,7 +42,7 @@ import {
 } from "@xyflow/react";
 import { saveFlow, resetFlow } from "@/app/actions/flow";
 import { uploadCampaignImage } from "@/app/actions/campaigns";
-import type { ConditionOperator, FlowNode } from "@/lib/flow";
+import type { BookingAction, ConditionOperator, FlowNode, SlotAction } from "@/lib/flow";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { cn } from "@/lib/utils";
 import { BuilderSaveStatus, BuilderWorkspaceBar, BuilderWorkspaceShell } from "@/components/builder-workspace";
@@ -51,7 +51,10 @@ type Pos = { x: number; y: number };
 type FlowData = { start: string; nodes: Record<string, FlowNode>; positions?: Record<string, Pos> };
 type RFData = { flow: FlowNode; isStart: boolean };
 
-const BUILTIN_VARIABLES = ["greeting", "first_name", "name", "known", "slot", "channel", "current_date", "current_time"];
+const BUILTIN_VARIABLES = [
+  "greeting", "first_name", "name", "known", "slot", "channel", "current_date", "current_time",
+  "booking_found", "booking_id", "booking_slot", "booking_summary", "booking_cancelled", "booking_rescheduled",
+];
 
 const TYPE_META: Record<string, { icon: LucideIcon; label: string; tone: string; header: string; handle: string }> = {
   message: { icon: MessageSquare, label: "Message", tone: "border-sky-400/40", header: "bg-sky-500/15 text-sky-200", handle: "#38bdf8" },
@@ -60,8 +63,8 @@ const TYPE_META: Record<string, { icon: LucideIcon; label: string; tone: string;
   captureFile: { icon: FileUp, label: "Get a file", tone: "border-cyan-400/40", header: "bg-cyan-500/15 text-cyan-200", handle: "#22d3ee" },
   image: { icon: ImageIcon, label: "Send image", tone: "border-violet-400/40", header: "bg-violet-500/15 text-violet-200", handle: "#a78bfa" },
   answer: { icon: Sparkles, label: "Answer", tone: "border-blue-400/40", header: "bg-blue-500/15 text-blue-200", handle: "#60a5fa" },
-  slots: { icon: CalendarDays, label: "Book a slot", tone: "border-emerald-400/40", header: "bg-emerald-500/15 text-emerald-200", handle: "#34d399" },
-  booking: { icon: Wrench, label: "CRM action", tone: "border-emerald-400/40", header: "bg-emerald-500/15 text-emerald-200", handle: "#34d399" },
+  slots: { icon: CalendarDays, label: "Workshop slots", tone: "border-emerald-400/40", header: "bg-emerald-500/15 text-emerald-200", handle: "#34d399" },
+  booking: { icon: Wrench, label: "CRM / booking action", tone: "border-emerald-400/40", header: "bg-emerald-500/15 text-emerald-200", handle: "#34d399" },
   condition: { icon: GitBranch, label: "Condition", tone: "border-fuchsia-400/40", header: "bg-fuchsia-500/15 text-fuchsia-200", handle: "#e879f9" },
   ai: { icon: Bot, label: "AI answer", tone: "border-orange-400/50", header: "bg-orange-500/15 text-orange-200", handle: "#fb923c" },
   handoff: { icon: Hand, label: "Hand off", tone: "border-amber-400/40", header: "bg-amber-500/15 text-amber-100", handle: "#fbbf24" },
@@ -74,8 +77,12 @@ function summary(n: FlowNode): string {
   if (n.type === "captureFile") return `Ask for a file → {{${n.variable}}}`;
   if (n.type === "image") return n.url ? "Sends an image" : "(no image set)";
   if (n.type === "answer") return n.answerSource ? `Send ${n.answerSource}` : (n.text ?? "").slice(0, 50);
-  if (n.type === "slots") return "Offers real open workshop slots";
-  if (n.type === "booking") return `Creates a ${n.action ?? "service"} in the CRM`;
+  if (n.type === "slots") return n.action === "reschedule" ? "Moves an existing booking to a real open slot" : "Offers real open workshop slots";
+  if (n.type === "booking") {
+    if (n.action === "lookup") return "Finds this customer's next service booking";
+    if (n.action === "cancel") return "Cancels the customer-owned booking in {{booking_id}}";
+    return `Creates a ${n.action ?? "service"} in the CRM`;
+  }
   if (n.type === "condition") {
     const op = n.condition.operator.replace("_", " ");
     return `{{${n.condition.variable || "variable"}}} ${op}${n.condition.value ? ` “${n.condition.value}”` : ""}`;
@@ -140,7 +147,7 @@ function blankNode(type: FlowNode["type"], id: string): FlowNode {
     case "captureFile": return { id, type, text: "Please send a photo", variable: "photo" };
     case "image": return { id, type, url: "" };
     case "answer": return { id, type, answerSource: "pricelist" };
-    case "slots": return { id, type, text: "Here are our next open times — pick one:", noneText: "We're fully booked online — the team will call you." };
+    case "slots": return { id, type, action: "book", text: "Here are our next open times — pick one:", noneText: "We're fully booked online — the team will call you." };
     case "booking": return { id, type, action: "service", text: "Thanks — the team will confirm shortly." };
     case "condition": return { id, type, condition: { variable: "channel", operator: "equals", value: "whatsapp" } };
     case "ai": return { id, type };
@@ -343,7 +350,7 @@ function NodePanel({ node, isStart, nodeOptions, variables, onChange, onDelete, 
 
       {node.type === "image" && <><div><label className="label">Image</label><input className="input" value={node.url} onChange={(e) => onChange({ ...node, url: e.target.value })} placeholder="Paste an image URL, or upload →" /><label className="btn-secondary btn-sm mt-1.5 inline-flex cursor-pointer"><Upload className="size-3.5" /> Upload<input type="file" accept="image/*" className="hidden" onChange={async (e) => { const f = e.target.files?.[0]; e.target.value = ""; if (!f) return; const fd = new FormData(); fd.set("file", f); const url = await uploadCampaignImage(fd); if (url) onChange({ ...node, url }); }} /></label></div>{node.url && <img src={node.url} alt="" className="max-h-32 rounded-lg border border-slate-800" />}<div><label className="label">Caption (optional)</label><input className="input" value={node.caption ?? ""} onChange={(e) => onChange({ ...node, caption: e.target.value })} /></div></>}
 
-      {node.type === "slots" && <><div><label className="label">Prompt</label><textarea className="input" rows={2} value={node.text} onChange={(e) => onChange({ ...node, text: e.target.value })} /></div><div><label className="label">If nothing&apos;s open</label><textarea className="input" rows={2} value={node.noneText ?? ""} onChange={(e) => onChange({ ...node, noneText: e.target.value })} /></div><p className="text-xs text-slate-500">Shows your real open workshop slots (from booking settings) as buttons and reserves the chosen one in the diary. The time lands in <code>{"{{slot}}"}</code>.</p></>}
+      {node.type === "slots" && <><div><label className="label">Slot action</label><select className="input" value={node.action ?? "book"} onChange={(e) => onChange({ ...node, action: e.target.value as SlotAction })}><option value="book">Book a new service slot</option><option value="reschedule">Move {{booking_id}} to a new slot</option></select></div><div><label className="label">Prompt</label><textarea className="input" rows={2} value={node.text} onChange={(e) => onChange({ ...node, text: e.target.value })} /></div><div><label className="label">If nothing&apos;s open</label><textarea className="input" rows={2} value={node.noneText ?? ""} onChange={(e) => onChange({ ...node, noneText: e.target.value })} /></div><p className="text-xs text-slate-500">{node.action === "reschedule" ? <>Atomically moves the existing customer-owned booking in <code>{"{{booking_id}}"}</code>. Put a Booking lookup node first.</> : <>Shows real open workshop slots and reserves the chosen one. The time lands in <code>{"{{slot}}"}</code>.</>}</p></>}
 
       {node.type === "answer" && <><div><label className="label">Answer type</label><select className="input" value={node.answerSource ?? "static"} onChange={(e) => { const v = e.target.value; onChange(v === "static" ? { ...node, answerSource: undefined, text: node.text ?? "" } : { ...node, answerSource: v as "pricelist" | "colours", text: undefined }); }}><option value="static">Custom text</option><option value="pricelist">Price list (from products)</option><option value="colours">Colours (from products)</option></select></div>{!node.answerSource && <div><label className="label">Text</label><textarea className="input" rows={4} value={node.text ?? ""} onChange={(e) => onChange({ ...node, text: e.target.value })} /></div>}</>}
 
@@ -351,7 +358,7 @@ function NodePanel({ node, isStart, nodeOptions, variables, onChange, onDelete, 
 
       {node.type === "ai" && <p className="text-xs text-slate-400">Chats conversationally, grounded in your prices, hours and brief. Connect the amber dot to a node to control where it goes when it hands off (otherwise it just notifies the team).</p>}
 
-      {node.type === "booking" && <><div><label className="label">What to create</label><select className="input" value={node.action ?? "service"} onChange={(e) => onChange({ ...node, action: e.target.value as "service" | "demo" | "lead" })}><option value="service">Service request (workshop)</option><option value="demo">Demo / test-drive (lead + test-drive activity)</option><option value="lead">Lead / enquiry</option></select><p className="text-xs text-slate-500 mt-1">Built from captured fields (name, phone, email, service, model). For a real dated service booking use the &quot;Book a slot&quot; node instead.</p></div><div><label className="label">Confirmation message</label><textarea className="input" rows={3} value={node.text ?? ""} onChange={(e) => onChange({ ...node, text: e.target.value })} /></div></>}
+      {node.type === "booking" && <><div><label className="label">Action</label><select className="input" value={node.action ?? "service"} onChange={(e) => onChange({ ...node, action: e.target.value as BookingAction })}><option value="service">Create service request</option><option value="demo">Create demo / test-drive lead</option><option value="lead">Create lead / enquiry</option><option value="lookup">Find customer's next service booking</option><option value="cancel">Cancel {{booking_id}}</option></select><p className="text-xs text-slate-500 mt-1">{node.action === "lookup" ? <>Read-only. Sets <code>{"{{booking_found}}"}</code>, <code>{"{{booking_id}}"}</code>, <code>{"{{booking_slot}}"}</code> and <code>{"{{booking_summary}}"}</code> from an existing customer record.</> : node.action === "cancel" ? <>Cancels only the future customer-owned booking in <code>{"{{booking_id}}"}</code> and retains its Activity history.</> : <>Built from captured fields (name, phone, email, service, model). For a real dated service booking use Workshop slots.</>}</p></div><div><label className="label">Message after action (optional)</label><textarea className="input" rows={3} value={node.text ?? ""} onChange={(e) => onChange({ ...node, text: e.target.value })} /></div></>}
 
       {node.type === "choice" && <div className="space-y-2"><div><label className="label">Prompt</label><textarea className="input" rows={2} value={node.text} onChange={(e) => onChange({ ...node, text: e.target.value })} /></div><label className="label">Options</label>{node.options.map((o, i) => <div key={o.id} className="rounded-lg border border-slate-800 p-2 space-y-1.5"><div className="flex gap-1.5"><input className="input btn-sm flex-1" value={o.label} onChange={(e) => onChange({ ...node, options: node.options.map((x) => x.id === o.id ? { ...x, label: e.target.value } : x) })} /><button onClick={() => onChange({ ...node, options: node.options.filter((x) => x.id !== o.id) })} className="px-1 text-muted-foreground hover:text-red-400"><X className="size-4" /><span className="sr-only">Remove option</span></button></div><TargetPicker nodeOptions={nodeOptions} value={o.next} onPick={(v) => onChange({ ...node, options: node.options.map((x) => x.id === o.id ? { ...x, next: v } : x) })} />{i === 2 && node.options.length > 3 && <p className="text-[10px] text-amber-400">WhatsApp shows &gt;3 options as a list.</p>}</div>)}<button onClick={() => onChange({ ...node, options: [...node.options, { id: `o${Date.now().toString(36)}`, label: `Option ${node.options.length + 1}` }] })} className="btn-secondary btn-sm w-full">+ Add option</button></div>}
 
