@@ -1,12 +1,21 @@
 import { prisma } from "./db";
 import { DEFAULT_FLOW, type Flow } from "./flow";
 import { withTenantWrite } from "./tenantWrite";
+import { flowErrors } from "./flowValidation";
+import { FlowPublishValidationError, validateFlowForEnabledChannels } from "./flowValidationServer";
 
 export type FlowSnapshot = {
   flow: Flow;
   versionId: string | null;
   flowId: string | null;
 };
+
+export class PinnedFlowVersionUnavailableError extends Error {
+  constructor(versionId: string) {
+    super(`Pinned chatbot flow version is unavailable: ${versionId}`);
+    this.name = "PinnedFlowVersionUnavailableError";
+  }
+}
 
 function parseFlow(definition: string): Flow | null {
   try {
@@ -18,14 +27,7 @@ function parseFlow(definition: string): Flow | null {
   return null;
 }
 
-/**
- * Resolve the immutable graph a conversation should execute.
- *
- * A pinned version ALWAYS wins. New sessions take the current publication for
- * their channel (or the WhatsApp publication as the existing cross-channel
- * fallback). Until every installation has republished once, the old BotFlow.active
- * row remains a backwards-compatible fallback.
- */
+/** Resolve the immutable graph a conversation should execute. */
 export async function resolveFlowSnapshot(
   channel: string,
   pinnedVersionId?: string | null,
@@ -33,7 +35,8 @@ export async function resolveFlowSnapshot(
   if (pinnedVersionId) {
     const pinned = await prisma.botFlowVersion.findUnique({ where: { id: pinnedVersionId } });
     const flow = pinned ? parseFlow(pinned.definition) : null;
-    if (pinned && flow) return { flow, versionId: pinned.id, flowId: pinned.flowId };
+    if (!pinned || !flow) throw new PinnedFlowVersionUnavailableError(pinnedVersionId);
+    return { flow, versionId: pinned.id, flowId: pinned.flowId };
   }
 
   const publication =
@@ -48,8 +51,6 @@ export async function resolveFlowSnapshot(
     if (version && flow) return { flow, versionId: version.id, flowId: version.flowId };
   }
 
-  // Compatibility path for the first deploy: an existing active flow stays live
-  // until the owner explicitly publishes it and creates its first immutable version.
   const legacy =
     (await prisma.botFlow.findFirst({ where: { channel, active: true } })) ??
     (channel === "whatsapp"
@@ -64,23 +65,30 @@ export async function resolveFlowSnapshot(
 }
 
 /**
- * Publish the CURRENT draft as a new immutable version and atomically switch the
- * channel publication to it. All writes share one transaction; the unique
- * (tenantId, channel) publication row is the database-level "one live flow"
- * invariant that the old updateMany + update pair did not provide concurrently.
+ * Publish the CURRENT draft as a new immutable version. Every caller passes the
+ * same graph/channel compiler before customer-facing publication.
  */
 export async function publishFlowSnapshot(
   flowId: string,
   actorId?: string | null,
 ): Promise<{ versionId: string; version: number; channel: string }> {
+  const draft = await prisma.botFlow.findUnique({ where: { id: flowId } });
+  if (!draft) throw new Error("FLOW_NOT_FOUND");
+  const parsed = parseFlow(draft.definition);
+  if (!parsed) {
+    throw new FlowPublishValidationError([
+      { severity: "error", code: "graph.shape", message: "Flow definition is malformed." },
+    ]);
+  }
+  const issues = await validateFlowForEnabledChannels(parsed);
+  if (flowErrors(issues).length) throw new FlowPublishValidationError(issues);
+
   return withTenantWrite(async (tx, tenantId) => {
     const flow = await tx.botFlow.findFirst({ where: { id: flowId, tenantId } });
     if (!flow) throw new Error("FLOW_NOT_FOUND");
+    if (flow.definition !== draft.definition) throw new Error("FLOW_CHANGED_DURING_PUBLISH");
 
-    const max = await tx.botFlowVersion.aggregate({
-      where: { tenantId, flowId },
-      _max: { version: true },
-    });
+    const max = await tx.botFlowVersion.aggregate({ where: { tenantId, flowId }, _max: { version: true } });
     const version = (max._max.version ?? 0) + 1;
     const snapshot = await tx.botFlowVersion.create({
       data: {
@@ -93,17 +101,8 @@ export async function publishFlowSnapshot(
       },
     });
 
-    // Keep the legacy flag truthful for the existing list UI and compatibility
-    // readers, but publication itself is governed by the unique row below.
-    await tx.botFlow.updateMany({
-      where: { tenantId, channel: flow.channel },
-      data: { active: false },
-    });
-    await tx.botFlow.updateMany({
-      where: { id: flow.id, tenantId },
-      data: { active: true },
-    });
-
+    await tx.botFlow.updateMany({ where: { tenantId, channel: flow.channel }, data: { active: false } });
+    await tx.botFlow.updateMany({ where: { id: flow.id, tenantId }, data: { active: true } });
     await tx.botFlowPublication.upsert({
       where: { tenantId_channel: { tenantId, channel: flow.channel } },
       update: {
@@ -120,17 +119,11 @@ export async function publishFlowSnapshot(
         publishedById: actorId ?? null,
       },
     });
-
     return { versionId: snapshot.id, version, channel: flow.channel };
   });
 }
 
-/** Publication metadata used by the flow library to distinguish live from draft changes. */
-export async function getFlowPublicationMeta(): Promise<
-  Map<string, { versionId: string; publishedAt: Date }>
-> {
+export async function getFlowPublicationMeta(): Promise<Map<string, { versionId: string; publishedAt: Date }>> {
   const publications = await prisma.botFlowPublication.findMany();
-  return new Map(
-    publications.map((p) => [p.flowId, { versionId: p.versionId, publishedAt: p.publishedAt }]),
-  );
+  return new Map(publications.map((p) => [p.flowId, { versionId: p.versionId, publishedAt: p.publishedAt }]));
 }
