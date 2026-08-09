@@ -6,7 +6,6 @@
  */
 
 export type FlowOption = { id: string; label: string; description?: string; next?: string };
-
 export type CaptureFormat = "text" | "email" | "phone" | "number" | "date";
 export type ConditionOperator = "equals" | "not_equals" | "contains" | "exists" | "empty";
 export type FlowCondition = { variable: string; operator: ConditionOperator; value?: string };
@@ -30,12 +29,10 @@ export type FlowNode =
   | { id: string; type: "end" };
 
 export type Flow = { start: string; nodes: Record<string, FlowNode> };
-
 export type OutMsg =
   | { type: "text"; text: string }
   | { type: "image"; url: string; caption?: string }
   | { type: "choice"; text: string; options: { id: string; label: string; description?: string }[] };
-
 export type FlowSession = { nodeId: string | null; vars: Record<string, string> };
 export type FlowInput = { text: string; choiceId?: string; fileUrl?: string };
 
@@ -58,18 +55,14 @@ export type FlowHandoffContext = {
 export type FlowCtx = {
   aiReply: (vars: Record<string, string>) => Promise<FlowAiReply>;
   dynamicAnswer: (source: "pricelist" | "colours") => Promise<string>;
-  createBooking: (vars: Record<string, string>, action?: BookingCreateAction) => Promise<void>;
-  manageBooking?: (action: BookingManageAction, vars: Record<string, string>) => Promise<{ ok: boolean }>;
+  /** nodeId participates in the retry-stable business-effect identity. */
+  createBooking: (vars: Record<string, string>, action: BookingCreateAction | undefined, nodeId: string) => Promise<void>;
+  manageBooking?: (action: BookingManageAction, vars: Record<string, string>, nodeId: string) => Promise<{ ok: boolean }>;
   handoff: (vars: Record<string, string>, context?: FlowHandoffContext) => Promise<void>;
   availableSlots?: () => Promise<{ id: string; label: string }[]>;
-  bookSlot?: (slotId: string, vars: Record<string, string>) => Promise<{ ok: boolean; label?: string }>;
-  rescheduleSlot?: (slotId: string, vars: Record<string, string>) => Promise<{ ok: boolean; label?: string }>;
-  routeChoice?: (input: {
-    prompt: string;
-    text: string;
-    options: FlowOption[];
-    vars: Record<string, string>;
-  }) => Promise<string | null>;
+  bookSlot?: (slotId: string, vars: Record<string, string>, nodeId: string) => Promise<{ ok: boolean; label?: string }>;
+  rescheduleSlot?: (slotId: string, vars: Record<string, string>, nodeId: string) => Promise<{ ok: boolean; label?: string }>;
+  routeChoice?: (input: { prompt: string; text: string; options: FlowOption[]; vars: Record<string, string> }) => Promise<string | null>;
 };
 
 const FORMAT_RE: Record<string, RegExp> = {
@@ -109,12 +102,7 @@ const HANDOFF_KEYS = {
 } as const;
 
 function rememberHandoff(vars: Record<string, string>, ai: FlowAiReply): FlowHandoffContext {
-  const context: FlowHandoffContext = {
-    confidence: ai.confidence,
-    intent: ai.intent,
-    reason: ai.handoffReason,
-    summary: ai.handoffSummary,
-  };
+  const context: FlowHandoffContext = { confidence: ai.confidence, intent: ai.intent, reason: ai.handoffReason, summary: ai.handoffSummary };
   if (context.confidence) vars[HANDOFF_KEYS.confidence] = context.confidence;
   if (context.intent) vars[HANDOFF_KEYS.intent] = context.intent;
   if (context.reason) vars[HANDOFF_KEYS.reason] = context.reason;
@@ -133,7 +121,6 @@ function rememberedHandoff(vars: Record<string, string>): FlowHandoffContext | u
   return context.confidence || context.intent || context.reason || context.summary ? context : undefined;
 }
 
-/** Encode/decode a choice id so an interactive reply tells us node + option. */
 export const choiceId = (nodeId: string, optId: string) => `${nodeId}|${optId}`;
 
 function matchChoice(node: Extract<FlowNode, { type: "choice" }>, input: FlowInput): string | null {
@@ -144,20 +131,13 @@ function matchChoice(node: Extract<FlowNode, { type: "choice" }>, input: FlowInp
   const t = input.text.trim().toLowerCase();
   const asNum = parseInt(t, 10);
   if (!Number.isNaN(asNum) && node.options[asNum - 1]) return node.options[asNum - 1].next ?? null;
-  const hit = node.options.find((o) => t && o.label.toLowerCase().replace(/[^a-z0-9 ]/g, "").includes(t));
-  return hit?.next ?? null;
+  return node.options.find((o) => t && o.label.toLowerCase().replace(/[^a-z0-9 ]/g, "").includes(t))?.next ?? null;
 }
 
-async function semanticChoice(
-  node: Extract<FlowNode, { type: "choice" }>,
-  input: FlowInput,
-  vars: Record<string, string>,
-  ctx: FlowCtx,
-): Promise<string | null> {
+async function semanticChoice(node: Extract<FlowNode, { type: "choice" }>, input: FlowInput, vars: Record<string, string>, ctx: FlowCtx) {
   if (!ctx.routeChoice || input.choiceId || !input.text.trim()) return null;
   const optionId = await ctx.routeChoice({ prompt: interpolate(node.text, vars), text: input.text, options: node.options, vars });
-  if (!optionId) return null;
-  return node.options.find((option) => option.id === optionId)?.next ?? null;
+  return optionId ? node.options.find((option) => option.id === optionId)?.next ?? null : null;
 }
 
 async function runSlotSelection(
@@ -171,15 +151,11 @@ async function runSlotSelection(
   const slotId = input.choiceId.slice(node.id.length + 1);
   const handler = node.action === "reschedule" ? ctx.rescheduleSlot : ctx.bookSlot;
   if (!handler) return { nodeId: node.next ?? null };
-  const res = await handler(slotId, vars);
+  const res = await handler(slotId, vars, node.id);
   if (!res.ok) {
     const opts = ctx.availableSlots ? await ctx.availableSlots() : [];
     if (opts.length) {
-      messages.push({
-        type: "choice",
-        text: "That one just filled up — here are the next open times:",
-        options: opts.map((o) => ({ id: choiceId(node.id, o.id), label: o.label })),
-      });
+      messages.push({ type: "choice", text: "That one just filled up — here are the next open times:", options: opts.map((o) => ({ id: choiceId(node.id, o.id), label: o.label })) });
       return { nodeId: node.id, wait: { messages, session: { nodeId: node.id, vars }, handedOff: false } };
     }
   } else if (res.label) {
@@ -189,12 +165,7 @@ async function runSlotSelection(
   return { nodeId: node.next ?? null };
 }
 
-export async function runFlow(
-  flow: Flow,
-  session: FlowSession,
-  input: FlowInput,
-  ctx: FlowCtx
-): Promise<FlowResult> {
+export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput, ctx: FlowCtx): Promise<FlowResult> {
   const messages: OutMsg[] = [];
   const vars = { ...session.vars };
   let nodeId: string | null;
@@ -238,9 +209,7 @@ export async function runFlow(
           await ctx.handoff(vars, handoffContext);
           return { messages, session: null, handedOff: true };
         }
-      } else {
-        return { messages, session: { nodeId: cur.id, vars }, handedOff: false };
-      }
+      } else return { messages, session: { nodeId: cur.id, vars }, handedOff: false };
     } else nodeId = flow.start;
   } else nodeId = flow.start;
 
@@ -264,10 +233,8 @@ export async function runFlow(
       nodeId = node.next ?? null;
     } else if (node.type === "booking") {
       if (node.action === "lookup" || node.action === "cancel") {
-        if (ctx.manageBooking) await ctx.manageBooking(node.action, vars);
-      } else {
-        await ctx.createBooking(vars, node.action);
-      }
+        if (ctx.manageBooking) await ctx.manageBooking(node.action, vars, node.id);
+      } else await ctx.createBooking(vars, node.action, node.id);
       if (node.text) messages.push({ type: "text", text: interpolate(node.text, vars) });
       nodeId = node.next ?? null;
     } else if (node.type === "slots") {
@@ -297,9 +264,7 @@ export async function runFlow(
           await ctx.handoff(vars, handoffContext);
           return { messages, session: null, handedOff: true };
         }
-      } else {
-        return { messages, session: { nodeId: node.id, vars }, handedOff: false };
-      }
+      } else return { messages, session: { nodeId: node.id, vars }, handedOff: false };
     } else if (node.type === "handoff") {
       if (node.text) messages.push({ type: "text", text: interpolate(node.text, vars) });
       await ctx.handoff(vars, handoffContext);
@@ -315,9 +280,7 @@ export const DEFAULT_FLOW: Flow = {
   start: "welcome",
   nodes: {
     welcome: {
-      id: "welcome",
-      type: "choice",
-      text: "{{greeting}} How can we help today?",
+      id: "welcome", type: "choice", text: "{{greeting}} How can we help today?",
       options: [
         { id: "prices", label: "💰 Prices", next: "showPrices" },
         { id: "book", label: "🔧 Book a service", next: "bookName" },
@@ -326,9 +289,7 @@ export const DEFAULT_FLOW: Flow = {
     },
     showPrices: { id: "showPrices", type: "answer", answerSource: "pricelist", next: "afterPrices" },
     afterPrices: {
-      id: "afterPrices",
-      type: "choice",
-      text: "Anything else?",
+      id: "afterPrices", type: "choice", text: "Anything else?",
       options: [
         { id: "chat", label: "💬 Ask a question", next: "aiChat" },
         { id: "menu", label: "🏠 Main menu", next: "welcome" },
