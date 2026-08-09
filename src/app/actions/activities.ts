@@ -8,6 +8,7 @@ import {
   requirePermission,
   type PermissionUser,
 } from "@/lib/permissions";
+import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { reserveSlot } from "@/lib/bookingSlots";
 import { ensureTimelinePin } from "@/lib/timelinePins";
@@ -215,14 +216,34 @@ export type CompleteAssessment = {
   leadName: string | null;
 };
 
+/**
+ * The views a completed activity changes. Named once so the immediate path and
+ * the deferred one cannot drift into refreshing different things.
+ */
+function revalidateActivityViews() {
+  revalidatePath("/activities");
+  revalidatePath("/");
+  revalidatePath("/calendar");
+}
+
+/**
+ * Refresh those views once the next-step dialog is finished with.
+ *
+ * completeActivityAssess deliberately does NOT revalidate when it reports
+ * needsNextStep, because that unmounts the row holding the dialog open. The
+ * client calls this when the dialog closes, however it closed.
+ */
+export async function refreshAfterNextStep(): Promise<void> {
+  await requireUser();
+  revalidateActivityViews();
+}
+
 export async function completeActivityAssess(
   id: string,
   note: string,
 ): Promise<CompleteAssessment> {
   const activity = await finishActivity(id, note);
-  revalidatePath("/activities");
-  revalidatePath("/");
-  revalidatePath("/calendar");
+
   let needsNextStep = false;
   if (activity.lead && activity.lead.status === "open") {
     const remaining = await prisma.activity.count({
@@ -230,6 +251,28 @@ export async function completeActivityAssess(
     });
     needsNextStep = remaining === 0;
   }
+
+  /*
+   * REVALIDATE ONLY WHEN THE FLOW IS ACTUALLY OVER.
+   *
+   * These three calls used to run immediately after finishActivity, before
+   * needsNextStep was even computed. When a next step IS needed, the caller
+   * responds by opening the "What's next?" dialog — and the state holding that
+   * dialog open lives in CompleteActivityButton, which sits INSIDE the agenda
+   * row for the activity just completed.
+   *
+   * Revalidating "/" removes that row (it is no longer a planned activity), so
+   * React unmounted the button, and the dialog went with it. Both happen in the
+   * same transition as the setState that opened it, so the dialog painted and
+   * vanished: "pops up and immediately disappears".
+   *
+   * When no next step is needed nothing opens, so refreshing here is right and
+   * the row should go at once. When one IS needed the row has to outlive the
+   * decision, and the client calls router.refresh() when the dialog closes —
+   * whether it was completed or dismissed.
+   */
+  if (!needsNextStep) revalidateActivityViews();
+
   return {
     done: true,
     needsNextStep,
