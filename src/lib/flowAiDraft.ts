@@ -3,7 +3,7 @@ import { getSetting } from "./settings";
 import { logError } from "./errorLog";
 import { recordAiUsage } from "./systemHealth";
 import type { Flow } from "./flow";
-import { flowErrors, validateFlow, type FlowChannel, type FlowIssue } from "./flowValidation";
+import { validateFlow, type FlowChannel, type FlowIssue } from "./flowValidation";
 
 export type GeneratedFlowDraft = {
   flow: Flow & { positions?: Record<string, { x: number; y: number }> };
@@ -104,16 +104,13 @@ ${instruction}`;
       return null;
     }
     const flow = parsed as unknown as GeneratedFlowDraft["flow"];
-    // Defense in depth before the normal compiler: generated Journey references
-    // must be from the list the server supplied, never merely syntactically valid.
     const allowedJourneyIds = new Set(journeys.map((journey) => journey.id));
     for (const node of Object.values(flow.nodes)) {
       if (node?.type === "journey" && !allowedJourneyIds.has(node.journeyId)) {
         return { flow, issues: [{ severity: "error", code: "journey.ai_unapproved", message: "AI draft referenced a Journey that was not in the active allow-list.", nodeId: node.id }] };
       }
     }
-    const issues = validateFlow(flow, input.channels);
-    return { flow, issues };
+    return { flow, issues: validateFlow(flow, input.channels) };
   } catch (error) {
     await logError("bot-flow-ai-draft", error).catch(() => {});
     return null;
