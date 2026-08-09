@@ -21,3 +21,26 @@ model BotInboundEvent {
   @@index([tenantId, status, leaseUntil])
   @@index([createdAt])
 }
+
+/// Append-only execution ledger for chatbot funnel/drop-off analytics.
+///
+/// Written by raw SQL and by the BotSession trigger, never through the client —
+/// but it is declared here anyway. A table with no model is invisible to
+/// tenantSchemaContract, which is the test that has to certify every model is
+/// global or tenant-scoped before enforcement can be switched on; an orphan table
+/// is exactly how the earlier RLS coverage drift happened.
+model BotFlowEvent {
+  id              String   @id @default(cuid())
+  tenantId        String
+  channel         String
+  conversationKey String
+  flowVersionId   String?
+  nodeId          String?
+  eventType       String
+  metadata        Json?
+  occurredAt      DateTime @default(now())
+
+  @@index([tenantId, flowVersionId, occurredAt])
+  @@index([tenantId, nodeId, eventType, occurredAt])
+  @@index([tenantId, channel, conversationKey, occurredAt])
+}

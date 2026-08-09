@@ -1,6 +1,7 @@
 import { prisma } from "./db";
 import { DEFAULT_FLOW, type Flow } from "./flow";
-import { withTenantWrite } from "./tenantWrite";
+import { DEFAULT_TENANT_ID } from "./tenant";
+import { withTenantWrite, writeTenantId } from "./tenantWrite";
 import { flowErrors } from "./flowValidation";
 import { FlowPublishValidationError, validateFlowForEnabledChannels } from "./flowValidationServer";
 
@@ -15,6 +16,22 @@ export class PinnedFlowVersionUnavailableError extends Error {
     super(`Pinned chatbot flow version is unavailable: ${versionId}`);
     this.name = "PinnedFlowVersionUnavailableError";
   }
+}
+
+/** The tenant whose published flow answers this conversation. */
+function flowTenantId(): string {
+  return writeTenantId() ?? DEFAULT_TENANT_ID;
+}
+
+/**
+ * BotFlow predates tenancy and its `tenantId` is still nullable, so the legacy
+ * fallback cannot filter strictly without hiding every flow an existing install
+ * already has. The founding tenant therefore owns the NULL rows — the same rule
+ * statistics.ts applies, and for the same reason. A second tenant sees only its
+ * own.
+ */
+function legacyFlowTenant(tenantId: string) {
+  return tenantId === DEFAULT_TENANT_ID ? { OR: [{ tenantId }, { tenantId: null }] } : { tenantId };
 }
 
 function parseFlow(definition: string): Flow | null {
@@ -39,11 +56,21 @@ export async function resolveFlowSnapshot(
     return { flow, versionId: pinned.id, flowId: pinned.flowId };
   }
 
+  // Scope the runtime resolver to the owning tenant explicitly.
+  //
+  // BotFlowPublication is UNIQUE (tenantId, channel), so with the tenant named
+  // this is a single deterministic row. Without it, `findFirst` had no tenant
+  // predicate AND no ordering: while enforcement is dormant an inbound message
+  // could be answered with whichever tenant's published flow Postgres happened to
+  // return first. That is not a reporting leak — it is the wrong business logic
+  // running against a real customer, and the same shape repeats on the legacy
+  // fallback below.
+  const tenantId = flowTenantId();
   const publication =
-    (await prisma.botFlowPublication.findFirst({ where: { channel } })) ??
+    (await prisma.botFlowPublication.findFirst({ where: { tenantId, channel } })) ??
     (channel === "whatsapp"
       ? null
-      : await prisma.botFlowPublication.findFirst({ where: { channel: "whatsapp" } }));
+      : await prisma.botFlowPublication.findFirst({ where: { tenantId, channel: "whatsapp" } }));
 
   if (publication) {
     const version = await prisma.botFlowVersion.findUnique({ where: { id: publication.versionId } });
@@ -51,11 +78,12 @@ export async function resolveFlowSnapshot(
     if (version && flow) return { flow, versionId: version.id, flowId: version.flowId };
   }
 
+  const legacyTenant = legacyFlowTenant(tenantId);
   const legacy =
-    (await prisma.botFlow.findFirst({ where: { channel, active: true } })) ??
+    (await prisma.botFlow.findFirst({ where: { ...legacyTenant, channel, active: true }, orderBy: { id: "asc" } })) ??
     (channel === "whatsapp"
       ? null
-      : await prisma.botFlow.findFirst({ where: { channel: "whatsapp", active: true } }));
+      : await prisma.botFlow.findFirst({ where: { ...legacyTenant, channel: "whatsapp", active: true }, orderBy: { id: "asc" } }));
   if (legacy) {
     const flow = parseFlow(legacy.definition);
     if (flow) return { flow, versionId: null, flowId: legacy.id };

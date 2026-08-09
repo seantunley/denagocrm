@@ -624,7 +624,12 @@ model BotSession {
   updatedAt DateTime @updatedAt @default(now())
   expiresAt DateTime
 
-  @@unique([channel, key])
+  // Migration 20260809152000 replaced the global (channel, key) index with this
+  // one, because a channel participant id is not unique across tenants — the same
+  // customer can message two tenant-owned WhatsApp numbers. The model was left
+  // declaring the old shape, so the next `prisma migrate dev` would have written a
+  // migration DROPPING the tenant-scoped index and restoring the global one.
+  @@unique([tenantId, channel, key])
   @@index([tenantId])
 }
 

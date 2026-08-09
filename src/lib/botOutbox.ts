@@ -1,7 +1,8 @@
 import crypto from "crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
-import { withTenantWrite } from "./tenantWrite";
+import { DEFAULT_TENANT_ID } from "./tenant";
+import { withTenantWrite, writeTenantId } from "./tenantWrite";
 import type { OutMsg } from "./flow";
 import { sendWhatsAppButtons, sendWhatsAppImage, sendWhatsAppList, sendWhatsAppText } from "./whatsapp";
 import { sendDirectAttachment, sendDirectMessage, sendDirectQuickReplies } from "./messenger";
@@ -35,6 +36,28 @@ type OutboxRow = {
 
 export type BotOutboxRun = { sent: number; retried: number; dead: number; repairedLogs: number };
 type OutboxBudget = Pick<CronSliceContext, "shouldStop">;
+
+/**
+ * The tenant whose queue this call may touch.
+ *
+ * A conversation is identified by `(channel, key)` — a phone number, a Telegram
+ * chat id, a Page-scoped id. None of those are unique across tenants: the same
+ * customer messaging two tenant-owned WhatsApp numbers produces the SAME key
+ * twice. Migration 20260809152000 acknowledged that for BotSession and the
+ * outbox was missed, so every conversation query here matched other tenants'
+ * rows as well.
+ *
+ * That was not only a read leak. `blockLaterMessages` mass-marks rows `dead`, and
+ * `sendProvider` resolves credentials from the AMBIENT tenant scope rather than
+ * from the row — so an unscoped claim could deliver one tenant's message from
+ * another tenant's WhatsApp number, or kill their queue.
+ *
+ * This mirrors exactly what `withTenantWrite` stamps on the way in, so the filter
+ * and the writer always agree, including while enforcement is dormant.
+ */
+function outboxTenantId(): string {
+  return writeTenantId() ?? DEFAULT_TENANT_ID;
+}
 
 function storedMessages(channel: string, messages: OutMsg[]): OutMsg[] {
   const out: OutMsg[] = [];
@@ -151,7 +174,7 @@ async function repairCommunicationLog(row: OutboxRow): Promise<boolean> {
 /** A terminally dead row remains the conversation's ordering barrier. */
 async function earliestUnfinished(channel: string, key: string): Promise<OutboxRow | null> {
   return prisma.botFlowOutbox.findFirst({
-    where: { channel, key, status: { not: "sent" } },
+    where: { tenantId: outboxTenantId(), channel, key, status: { not: "sent" } },
     orderBy: [{ createdAt: "asc" }, { sequence: "asc" }, { id: "asc" }],
   }) as Promise<OutboxRow | null>;
 }
@@ -180,7 +203,7 @@ function retryAt(attempts: number): Date { return new Date(Date.now() + Math.min
 
 async function blockLaterMessages(row: OutboxRow, error: string): Promise<void> {
   await prisma.botFlowOutbox.updateMany({
-    where: { channel: row.channel, key: row.key, id: { not: row.id }, status: { in: ["pending", "retry"] } },
+    where: { tenantId: outboxTenantId(), channel: row.channel, key: row.key, id: { not: row.id }, status: { in: ["pending", "retry"] } },
     data: {
       status: "dead",
       leaseUntil: null,
@@ -250,7 +273,7 @@ export async function flushBotOutboxConversation(
 /** Repair sent messages whose provider delivery succeeded but CRM logging did not. */
 async function repairPendingCommunicationLogs(limit: number, budget?: OutboxBudget): Promise<number> {
   const rows = await prisma.botFlowOutbox.findMany({
-    where: { status: "sent", communicationLoggedAt: null },
+    where: { tenantId: outboxTenantId(), status: "sent", communicationLoggedAt: null },
     orderBy: { sentAt: "asc" },
     take: limit,
   }) as OutboxRow[];
@@ -274,7 +297,7 @@ export async function flushBotOutbox(limit = 50, budget?: OutboxBudget): Promise
   if (budget?.shouldStop(4_000)) return stats;
 
   const due = await prisma.botFlowOutbox.findMany({
-    where: { status: { notIn: ["sent", "dead"] }, availableAt: { lte: new Date() } },
+    where: { tenantId: outboxTenantId(), status: { notIn: ["sent", "dead"] }, availableAt: { lte: new Date() } },
     orderBy: [{ createdAt: "asc" }, { sequence: "asc" }],
     take: limit * 2,
     select: { channel: true, key: true },
