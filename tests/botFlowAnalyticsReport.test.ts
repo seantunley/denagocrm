@@ -29,12 +29,14 @@ test("drop-off is only calculated for deterministic waiting-node interactions", 
   assert.match(code, /progressionRate: interactive && reached > 0/);
 });
 
-test("report surface is explicit about the current stateful-flow analytics scope", () => {
+test("report surface is explicit about the current analytics scope", () => {
   const page = src("src/app/(app)/bot-analytics/page.tsx");
   assert.match(page, /Latest-version funnel/);
-  assert.match(page, /Reach is unique customer conversations/);
-  assert.match(page, /one-shot graph made entirely of automatic nodes/);
-  assert.match(page, /stateful guided flows/);
+  assert.match(page, /Reach is a recorded visit to a waiting node/);
+  // One-shot automatic graphs are now counted, so the surface must say they are
+  // included rather than carrying the old "not counted yet" caveat.
+  assert.match(page, /automatic one-shot graphs/);
+  assert.match(page, /stateful guided conversations/);
 });
 
 test("report includes channel, completion, handoff and node funnel views", () => {

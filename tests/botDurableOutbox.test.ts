@@ -20,7 +20,8 @@ test("bot sessions are database-unique by tenant, channel and participant", () =
 test("shared channel transitions commit outbox rows and BotSession in one tenant transaction", () => {
   const code = src("src/lib/flowSession.ts");
   assert.match(code, /withTenantWrite\(async \(tx, tenantId\) => \{/);
-  assert.match(code, /await persistMessages\(result\.messages, tx, tenantId\)/);
+  // Outbox rows are now also pinned to the flow version that produced them.
+  assert.match(code, /await persistMessages\(result\.messages, tx, tenantId(, snapshot\.versionId)?\)/);
   assert.match(code, /await upsertBotSessionTx\(tx, tenantId/);
   assert.match(code, /await deleteBotSessionTx\(tx, tenantId, channel, key\)/);
 });
@@ -38,7 +39,7 @@ test("WhatsApp commits its durable batch and session position atomically before 
 test("DM and Telegram adapters write their outbox rows through the shared session transaction", () => {
   for (const rel of ["src/lib/flowDm.ts", "src/lib/telegram.ts"]) {
     const code = src(rel);
-    assert.match(code, /async \(messages, tx, tenantId\) =>/);
+    assert.match(code, /async \(messages, tx, tenantId(, flowVersionId)?\) =>/);
     assert.match(code, /enqueueBotMessagesTx\(tx, tenantId/);
     assert.match(code, /flushBotOutboxConversation/);
   }
