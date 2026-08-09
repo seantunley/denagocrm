@@ -15,7 +15,7 @@ const read = (rel: string) =>
 import {
   DEFAULT_WEATHER_CITIES,
   MAX_WEATHER_CITIES,
-  flagEmoji,
+  flagUrl,
   isValidZone,
   parseWeatherCities,
   serialiseWeatherCities,
@@ -123,13 +123,39 @@ test("names are trimmed and bounded", () => {
   assert.doesNotMatch(city.name, /^\s|\s$/);
 });
 
-test("a country code becomes an emoji flag, and a bad one becomes nothing", () => {
-  // Emoji rather than SVG assets: those exist for two countries and a tenant may
-  // pick anywhere. A broken image is worse than no flag.
-  assert.equal(flagEmoji("ZA"), "🇿🇦");
-  assert.equal(flagEmoji("za"), "🇿🇦");
-  assert.equal(flagEmoji("RU"), "🇷🇺");
-  for (const bad of [undefined, "", "Z", "ZAF", "1A"]) assert.equal(flagEmoji(bad as string), "");
+test("a country code becomes a real flag image, not an emoji", () => {
+  /*
+   * The first version returned a regional-indicator emoji pair. It needs no
+   * assets and covers every country — and does not work: WINDOWS SHIPS NO
+   * COUNTRY-FLAG FONT, so Chrome and Edge there render the two letters "ZA"
+   * instead of a flag. That is most of this app's users seeing what reads as a
+   * bug, and it is exactly what was reported.
+   */
+  assert.equal(flagUrl("ZA"), "/api/flag/za");
+  assert.equal(flagUrl("za"), "/api/flag/za");
+  assert.equal(flagUrl("RU"), "/api/flag/ru");
+  // Missing or malformed renders nothing rather than a broken image.
+  for (const bad of [undefined, "", "Z", "ZAF", "1A"]) assert.equal(flagUrl(bad as string), null);
+});
+
+test("the flag is served from our own origin", () => {
+  // Same reasoning as the city search: fetching flagcdn from the browser would
+  // mean widening img-src in lib/csp.ts, which lists a host only when something
+  // needs it. A same-origin path keeps the policy untouched.
+  assert.match(flagUrl("ZA")!, /^\/api\/flag\//, "must be same-origin");
+
+  const route = read("src/app/api/flag/[code]/route.ts");
+  assert.match(route, /\[A-Za-z\]\{2\}/, "only two letters may reach the outbound URL");
+  assert.match(route, /image\/svg\+xml/);
+
+  const csp = read("src/lib/csp.ts");
+  assert.doesNotMatch(csp, /flagcdn/, "the policy must not have been widened for this");
+});
+
+test("a flag that cannot be fetched is a gap, not a broken image", () => {
+  const route = read("src/app/api/flag/[code]/route.ts");
+  assert.match(route, /catch \{/, "an upstream failure must not reach the page");
+  assert.match(route, /width="1" height="1"/, "…it degrades to a blank");
 });
 
 test("the strip reads its cities from the tenant setting, not a constant", () => {

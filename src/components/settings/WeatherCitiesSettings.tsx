@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { Search, X, Loader2 } from "lucide-react";
 import { saveWeatherCities } from "@/app/actions/settings";
-import { MAX_WEATHER_CITIES, flagEmoji, type WeatherCity } from "@/lib/weatherCities";
+import { MAX_WEATHER_CITIES, flagUrl, type WeatherCity } from "@/lib/weatherCities";
 
 type Found = WeatherCity & { region?: string };
 
@@ -100,7 +100,12 @@ export default function WeatherCitiesSettings({ initial }: { initial: WeatherCit
             key={`${city.lat},${city.lon}`}
             className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2"
           >
-            <span aria-hidden className="text-base leading-none">{flagEmoji(city.country)}</span>
+            {flagUrl(city.country) ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={flagUrl(city.country)!} alt="" width={18} height={13} className="h-3.5 w-auto rounded-[2px]" />
+            ) : (
+              <span className="w-[18px]" />
+            )}
             <span className="flex-1 text-sm text-foreground">{city.name}</span>
             <span className="text-xs text-muted-foreground">{city.zone}</span>
             <button
@@ -145,7 +150,12 @@ export default function WeatherCitiesSettings({ initial }: { initial: WeatherCit
                   onClick={() => add(found)}
                   className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent"
                 >
-                  <span aria-hidden>{flagEmoji(found.country)}</span>
+                  {flagUrl(found.country) ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={flagUrl(found.country)!} alt="" width={18} height={13} className="h-3 w-auto rounded-[2px]" />
+                  ) : (
+                    <span className="w-[18px]" />
+                  )}
                   <span className="text-foreground">{found.name}</span>
                   {found.region && (
                     <span className="truncate text-xs text-muted-foreground">{found.region}</span>

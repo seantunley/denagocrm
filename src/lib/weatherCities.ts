@@ -126,18 +126,17 @@ export function serialiseWeatherCities(cities: readonly WeatherCity[]): string {
 }
 
 /**
- * An ISO-3166 alpha-2 code as an emoji flag.
+ * The URL of a country's flag, served from our own origin.
  *
- * Emoji rather than the SVG assets the old strip used: those exist for two
- * countries, and a tenant may pick anywhere. A missing or malformed code simply
- * renders nothing, which is better than a broken image.
+ * NOT an emoji. The first version used a regional-indicator pair, which needs no
+ * assets and covers every country — and does not work: Windows ships no
+ * country-flag font, so Chrome and Edge there draw the two letters "ZA" instead
+ * of a flag. That is most of this app's users seeing what looks like a bug.
+ *
+ * Returns null for a missing or malformed code, so the caller renders nothing
+ * rather than a broken image. See app/api/flag/[code] for why it is proxied.
  */
-export function flagEmoji(country: string | undefined): string {
-  if (!country || !/^[A-Za-z]{2}$/.test(country)) return "";
-  const base = 0x1f1e6;
-  const upper = country.toUpperCase();
-  return String.fromCodePoint(
-    base + (upper.charCodeAt(0) - 65),
-    base + (upper.charCodeAt(1) - 65),
-  );
+export function flagUrl(country: string | undefined): string | null {
+  if (!country || !/^[A-Za-z]{2}$/.test(country)) return null;
+  return `/api/flag/${country.toLowerCase()}`;
 }

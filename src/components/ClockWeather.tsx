@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { flagEmoji, type WeatherCity } from "@/lib/weatherCities";
+import { flagUrl, type WeatherCity } from "@/lib/weatherCities";
 
 // WMO weather codes → something a human wants to see
 function describe(code: number): { icon: string; label: string } {
@@ -90,8 +90,18 @@ export default function ClockWeather({ cities }: { cities: WeatherCity[] }) {
             {/* An emoji flag, not an SVG asset: those exist for two countries
                 and a tenant may pick anywhere. A missing code renders nothing,
                 which beats a broken image. */}
-            {flagEmoji(c.country) && (
-              <span aria-hidden className="text-sm leading-none">{flagEmoji(c.country)}</span>
+            {flagUrl(c.country) && (
+              // A real SVG, served from our own origin. An emoji flag renders as
+              // the two letters on Windows, which is where most of these users are.
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={flagUrl(c.country)!}
+                alt=""
+                width={18}
+                height={13}
+                loading="lazy"
+                className="h-3 w-auto rounded-[2px]"
+              />
             )}
             <span className="text-xs text-muted-foreground">{c.name}</span>
             <span className="text-[15px] font-semibold tabular-nums text-foreground">
