@@ -11,6 +11,8 @@ export type SlotConfig = {
   horizonDays: number;
 };
 
+export type WorkshopBookingOwner = { contactId: string | null; leadId: string | null };
+
 export async function getSlotConfig(): Promise<SlotConfig> {
   const [times, days, capacity, horizon] = await Promise.all([
     getSetting("BOOKING_SLOT_TIMES"),
@@ -103,19 +105,7 @@ export function slotInstantOrThrow(date: string, time: string, config: SlotConfi
 /**
  * Claim capacity for a slot inside an existing transaction. Takes a
  * transaction-scoped advisory lock keyed on the slot instant so two concurrent
- * bookings can't both pass the count check and overfill the slot (the old
- * count-then-create had no lock — READ COMMITTED let both readers see the same
- * count). Throws "SLOT_TAKEN" when full. Does NOT create the activity — the
- * caller creates it (and any contact/job card) in the same transaction so a full
- * slot rolls everything back.
- *
- * TENANT SCOPING: this runs on `basePrisma` (the guard does NOT scope it), so both
- * the lock and the count are namespaced by `tenantId` EXPLICITLY. Under enforcement
- * one tenant's bookings must neither consume another tenant's slot capacity nor
- * contend on its lock; `getDayAvailability()` reads through the scoped client, so an
- * unscoped count here would also DISAGREE with what the customer was shown. When
- * `tenantId` is null (dormant / trusted system) the lock and count are byte-for-byte
- * the pre-tenancy single-namespace behaviour.
+ * bookings can't both pass the count check and overfill the slot.
  */
 export async function claimSlotCapacity(
   tx: Prisma.TransactionClient,
@@ -125,7 +115,6 @@ export async function claimSlotCapacity(
 ): Promise<void> {
   const instant = Math.floor(dt.getTime() / 1000);
   if (tenantId) {
-    // Per-tenant lock namespace: same instant in two tenants is two distinct slots.
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`slot:${tenantId}:${instant}`})::bigint)`;
   } else {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(${BigInt(instant)})`;
@@ -141,10 +130,23 @@ export async function claimSlotCapacity(
   if (taken >= capacity) throw new Error("SLOT_TAKEN");
 }
 
-/**
- * Books a slot atomically: re-checks capacity under an advisory lock inside a
- * transaction and throws "SLOT_TAKEN" if it filled up in the meantime.
- */
+async function lockWorkshopBooking(
+  tx: Prisma.TransactionClient,
+  bookingId: string,
+  tenantId: string | null,
+): Promise<void> {
+  const namespace = `workshop-booking:${tenantId ?? "global"}:${bookingId}`;
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${namespace})::bigint)`;
+}
+
+function ownerWhere(owner: WorkshopBookingOwner) {
+  const OR: ({ contactId: string } | { leadId: string })[] = [];
+  if (owner.contactId) OR.push({ contactId: owner.contactId });
+  if (owner.leadId) OR.push({ leadId: owner.leadId });
+  return OR.length ? { OR } : null;
+}
+
+/** Books a slot atomically under the slot-capacity lock. */
 export async function reserveSlot(input: {
   date: string;
   time: string;
@@ -159,9 +161,6 @@ export async function reserveSlot(input: {
 }) {
   const config = await getSlotConfig();
   const dt = slotInstantOrThrow(input.date, input.time, config);
-  // Namespace the slot capacity by the caller's tenant, and STAMP the workshop
-  // activity — reserveSlot runs on basePrisma, so the guard won't do either. null
-  // (dormant / system) → unchanged, unstamped, single-namespace behaviour.
   const tenantId = writeTenantId();
 
   return basePrisma.$transaction(async (tx) => {
@@ -181,5 +180,83 @@ export async function reserveSlot(input: {
         ...(tenantId ? { tenantId } : {}),
       },
     });
+  });
+}
+
+/**
+ * Cancel one customer-owned future workshop booking while holding a per-booking
+ * lock. This serialises cancel-vs-reschedule races and retains the Activity row.
+ */
+export async function cancelWorkshopBooking(input: {
+  bookingId: string;
+  owner: WorkshopBookingOwner;
+}): Promise<{ ok: boolean; alreadyCancelled?: boolean; dueDate?: Date; summary?: string }> {
+  const scope = ownerWhere(input.owner);
+  if (!scope) return { ok: false };
+  const tenantId = writeTenantId();
+  return basePrisma.$transaction(async (tx) => {
+    await lockWorkshopBooking(tx, input.bookingId, tenantId);
+    const existing = await tx.activity.findFirst({
+      where: {
+        id: input.bookingId,
+        category: "workshop",
+        dueDate: { gte: new Date() },
+        ...(tenantId ? { tenantId } : {}),
+        ...scope,
+      },
+      select: { id: true, status: true, dueDate: true, summary: true },
+    });
+    if (!existing?.dueDate) return { ok: false };
+    if (existing.status === "cancelled") return { ok: true, alreadyCancelled: true, dueDate: existing.dueDate, summary: existing.summary };
+    if (existing.status !== "planned") return { ok: false };
+    await tx.activity.update({ where: { id: existing.id }, data: { status: "cancelled" } });
+    return { ok: true, dueDate: existing.dueDate, summary: existing.summary };
+  });
+}
+
+/**
+ * Atomically MOVE an existing customer-owned booking. We first serialise all
+ * mutations of that booking, then claim the destination slot capacity under the
+ * same transaction, then update the existing Activity row. There is never a
+ * second live booking and therefore no crash window between "book new" and
+ * "cancel old".
+ */
+export async function rescheduleWorkshopBooking(input: {
+  bookingId: string;
+  date: string;
+  time: string;
+  owner: WorkshopBookingOwner;
+}): Promise<{ ok: boolean; dueDate?: Date; summary?: string }> {
+  const scope = ownerWhere(input.owner);
+  if (!scope) return { ok: false };
+  const config = await getSlotConfig();
+  const destination = slotInstantOrThrow(input.date, input.time, config);
+  const tenantId = writeTenantId();
+
+  return basePrisma.$transaction(async (tx) => {
+    await lockWorkshopBooking(tx, input.bookingId, tenantId);
+    const existing = await tx.activity.findFirst({
+      where: {
+        id: input.bookingId,
+        category: "workshop",
+        status: "planned",
+        dueDate: { gte: new Date() },
+        ...(tenantId ? { tenantId } : {}),
+        ...scope,
+      },
+      select: { id: true, dueDate: true, summary: true },
+    });
+    if (!existing?.dueDate) return { ok: false };
+    if (existing.dueDate.getTime() === destination.getTime()) {
+      return { ok: true, dueDate: existing.dueDate, summary: existing.summary };
+    }
+
+    await claimSlotCapacity(tx, destination, config.capacity, tenantId);
+    const moved = await tx.activity.update({
+      where: { id: existing.id },
+      data: { dueDate: destination },
+      select: { dueDate: true, summary: true },
+    });
+    return { ok: true, dueDate: moved.dueDate ?? destination, summary: moved.summary };
   });
 }
