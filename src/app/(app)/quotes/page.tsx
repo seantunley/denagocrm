@@ -1,8 +1,14 @@
 import Link from "next/link";
 import { CheckCircle2, CircleDollarSign, FileText, Plus, Search, Send } from "lucide-react";
 import { prisma } from "@/lib/db";
-import { requireAnyPermission, getAccessibleQuoteIds, hasPermission } from "@/lib/permissions";
+import {
+  requireAnyPermission,
+  getAccessibleQuoteIds,
+  getAccessibleLeadIds,
+  hasPermission,
+} from "@/lib/permissions";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
+import { leadOptionLabels } from "@/lib/leadOption";
 import { payableTotalCents } from "@/lib/pricing";
 import {
   QUOTE_EDITOR_INCLUDE,
@@ -55,6 +61,21 @@ export default async function QuotesPage({
 }) {
   const user = await requireAnyPermission("quotes.view_all", "quotes.view_owned");
   const accessibleQuoteIds = await getAccessibleQuoteIds(user);
+  /*
+   * THE LEAD PICKER NEEDS LEAD RBAC, NOT QUOTE RBAC.
+   *
+   * Reaching this page needs quotes.view_all or quotes.view_owned. Neither says
+   * anything about which LEADS the viewer may see - that is leads.view_all vs
+   * leads.view_owned, with its own owner/creator/team rules - and the open-lead
+   * query had no scope at all, so the picker offered every open lead in the
+   * tenant to anyone who could open a quote.
+   *
+   * It mattered less while the option showed `title`, which is the vehicle. The
+   * label now leads with the CUSTOMER NAME, which turns a scoping gap into a
+   * disclosure of customer names for leads the viewer cannot open. Scoping the
+   * query is the fix; a label is not the place to hide a record.
+   */
+  const accessibleLeadIds = await getAccessibleLeadIds(user);
   const { edit, q, status } = await searchParams;
   const [quotes, contacts, openLeads, products, allVersions, validDaysRaw, quoteTerms] = await Promise.all([
     prisma.quote.findMany({
@@ -68,7 +89,12 @@ export default async function QuotesPage({
     prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
     // Open leads offered as an optional link when starting a fresh quote.
     prisma.lead.findMany({
-      where: { status: "open" },
+      where: {
+        status: "open",
+        // null means "may see every lead"; an empty array means none, and
+        // `id: { in: [] }` correctly matches nothing.
+        ...(accessibleLeadIds ? { id: { in: accessibleLeadIds } } : {}),
+      },
       orderBy: { createdAt: "desc" },
       select: { id: true, title: true, name: true, contactId: true },
       take: 500,
@@ -109,9 +135,16 @@ export default async function QuotesPage({
     terms: quoteTerms || "Prices include VAT. Delivery arranged on acceptance. E&OE.",
   };
   const contactOptions = contacts.map((contact) => ({ id: contact.id, label: contactName(contact) }));
-  const leadOptions = openLeads.map((lead) => ({
+  // `lead.title` is the MODEL someone wants, and a dealership sells the same few
+  // models repeatedly — so preferring it made every option in the picker read
+  // the same. leadOptionLabel leads with the customer and appends a short id,
+  // which is the only thing that separates two open leads for the same customer
+  // and the same model.
+  // Labelled as a LIST, not one at a time: the reference only guarantees
+  // uniqueness if it is chosen against the other options on offer.
+  const leadOptions = leadOptionLabels(openLeads).map((lead) => ({
     id: lead.id,
-    label: lead.title || lead.name,
+    label: lead.label,
     contactId: lead.contactId,
   }));
   const productOptions = products.map((product) => ({

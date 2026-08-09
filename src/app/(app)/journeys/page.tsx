@@ -2,7 +2,8 @@ import Link from "next/link";
 import { Activity, Workflow } from "lucide-react";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
-import { requireRoute } from "@/lib/permissions";
+import { leadOptionLabels } from "@/lib/leadOption";
+import { requireRoute, getAccessibleLeadIds } from "@/lib/permissions";
 import { formatDateTime } from "@/lib/format";
 import JourneyBuilder, { type JourneyBuilderDefaults } from "@/components/JourneyBuilder";
 import JourneyTestRun from "@/components/JourneyTestRun";
@@ -102,7 +103,11 @@ function statusTone(status: string) {
 }
 
 export default async function JourneysPage() {
-  await requireRoute("/journeys");
+  const user = await requireRoute("/journeys");
+  // Lead RBAC for the test-lead picker below. Reaching this page says nothing
+  // about which leads the viewer may see, and the option now leads with the
+  // customer name - the same hole the quote editor had.
+  const accessibleLeadIds = await getAccessibleLeadIds(user);
   const [journeys, stages, users, templates, tags, segments, recentRuns, testLeads] = await Promise.all([
     prisma.journey.findMany({
       where: { status: { not: "archived" } },
@@ -127,16 +132,24 @@ export default async function JourneysPage() {
     // because this feeds a <select> and the operator is looking for one they
     // recognise, not browsing the pipeline.
     prisma.lead.findMany({
-      where: { status: "open" },
+      where: {
+        status: "open",
+        // Lead RBAC, not the journeys route guard - the option leads with the
+        // customer's name, so an unscoped list discloses names the viewer
+        // cannot open. null means every lead is permitted.
+        ...(accessibleLeadIds ? { id: { in: accessibleLeadIds } } : {}),
+      },
       orderBy: { updatedAt: "desc" },
       take: 100,
       select: { id: true, title: true, name: true },
     }),
   ]);
   const options = { stages, users, templates, tags, segments };
-  const leadOptions = testLeads.map((lead) => ({
+  // Same rule as the quote editor: `title` is the model, which repeats across
+  // leads, so preferring it makes every option read the same.
+  const leadOptions = leadOptionLabels(testLeads).map((lead) => ({
     id: lead.id,
-    label: lead.title || lead.name,
+    label: lead.label,
   }));
 
   return (

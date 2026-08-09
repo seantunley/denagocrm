@@ -23,6 +23,7 @@ import { loadBillToFleets, quoteBillTo } from "@/lib/quoteBillTo";
 import {
   requireLeadAccess,
   requireContactAccess,
+  canAccessLead,
   requirePermission,
   requireQuoteAccess,
   canAccessQuote,
@@ -405,6 +406,21 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
     if (!lead) return { ok: false, error: "That lead is no longer available." };
     if (lead.contactId && lead.contactId !== data.contactId) {
       return { ok: false, error: "That lead belongs to a different customer." };
+    }
+    /*
+     * AND the caller must be able to SEE this lead.
+     *
+     * The checks above ask whether the lead exists and whether it belongs to
+     * the chosen customer. Neither asks whether this user may open it, and a
+     * server action is reachable by direct POST - so a leadId that never
+     * appeared in anyone's picker could still be attached here. Scoping the
+     * picker query alone would have left that open.
+     *
+     * Deliberately the same refusal as a missing lead: telling somebody a
+     * lead exists but is not theirs confirms the record.
+     */
+    if (!(await canAccessLead(user, lead.id))) {
+      return { ok: false, error: "That lead is no longer available." };
     }
     linkedLeadId = lead.id;
   }
