@@ -13,6 +13,7 @@ import { secretEquals } from "@/lib/secretCompare";
 import {
   claimInboundBotEvent,
   completeInboundBotEvent,
+  InboundBotEventLeasedError,
   retryInboundBotEvent,
   withInboundBotEvent,
 } from "@/lib/botInboundEvent";
@@ -58,8 +59,16 @@ export async function POST(req: NextRequest) {
         }
 
         for (const message of value.messages ?? []) {
-          const claim = await claimInboundBotEvent("whatsapp", String(message.id ?? ""));
-          if (!claim) continue;
+          const outcome = await claimInboundBotEvent("whatsapp", String(message.id ?? ""));
+          if (outcome.status === "completed") continue; // genuinely done — ack it.
+          if (outcome.status === "unidentified") {
+            await logError("whatsapp-webhook", "Inbound message carried no provider id — skipped, because no retry-safe CRM action identity can be derived from it.").catch(() => {});
+            continue;
+          }
+          // Leased: the attempt holding it may have died. Ack would retire Meta's
+          // redelivery and lose the message, so ask to be sent it again instead.
+          if (outcome.status === "leased") throw new InboundBotEventLeasedError("whatsapp", String(message.id ?? ""));
+          const claim = outcome.claim;
           try {
             await withInboundBotEvent(claim, async () => {
               const from: string = message.from;
