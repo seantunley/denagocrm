@@ -68,18 +68,27 @@ const LEAD_CAPTURE_FLOW: Flow = {
 };
 
 /**
- * Ask for a phone even on identity-aware channels so Telegram and a customer who
- * messages from a different number can still resolve an EXISTING CRM record. The
- * lookup never creates a contact merely to satisfy this flow.
+ * Identity comes from the CHANNEL, never from a number typed into the chat.
+ *
+ * This flow used to open by asking "what's the contact number used for the
+ * booking?" and treat the answer as identity. On Telegram that was the only
+ * check there was, so anyone who knew a customer's number could read back their
+ * next booking and then move or cancel it. The question is gone rather than
+ * softened: asking for it at all implies it proves something.
+ *
+ * Where the channel cannot identify the sender the flow says so and hands over
+ * to a person. Restoring self-service there needs proof of control of the number
+ * (a one-time code), not a lookup.
  */
 const BOOKING_MANAGEMENT_FLOW: Flow = {
   start: "intro",
   nodes: {
-    intro: { id: "intro", type: "message", text: "{{greeting}} I can check, move or cancel an existing service booking.", next: "phone" },
-    phone: { id: "phone", type: "capture", text: "What's the contact number used for the booking?", variable: "phone", format: "phone", next: "lookup" },
-    lookup: { id: "lookup", type: "booking", action: "lookup", next: "found" },
+    intro: { id: "intro", type: "message", text: "{{greeting}} I can check, move or cancel an existing service booking.", next: "lookup" },
+    lookup: { id: "lookup", type: "booking", action: "lookup", next: "identified" },
+    identified: { id: "identified", type: "condition", condition: { variable: "booking_identity", operator: "equals", value: "verified" }, trueNext: "found", falseNext: "unverified" },
+    unverified: { id: "unverified", type: "message", text: "For your security I can only manage a booking from the number or account it was made with. I'll get one of the team to help you from here.", next: "handoff" },
     found: { id: "found", type: "condition", condition: { variable: "booking_found", operator: "equals", value: "yes" }, trueNext: "show", falseNext: "notFound" },
-    notFound: { id: "notFound", type: "message", text: "I couldn't find a future service booking on that customer record. I'll get the team to help.", next: "handoff" },
+    notFound: { id: "notFound", type: "message", text: "I couldn't find a future service booking on your customer record. I'll get the team to help.", next: "handoff" },
     show: {
       id: "show",
       type: "choice",

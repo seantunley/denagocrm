@@ -96,6 +96,65 @@ test("booking management starter compiles across every connected channel", () =>
   assert.ok(Object.values(flow.nodes).some((node) => node.type === "slots" && node.action === "reschedule"));
 });
 
+/** Edge/field view of a node — the graph walk does not care which variant it is. */
+type AnyNode = {
+  type: string;
+  variable?: string;
+  next?: string;
+  trueNext?: string;
+  falseNext?: string;
+  options?: { next?: string }[];
+  condition?: { variable?: string; value?: string };
+};
+
+test("the starter never asks for a phone number as proof of identity", () => {
+  const flow = flowTemplate("booking_management").definition;
+  const at = (id: string) => flow.nodes[id] as AnyNode | undefined;
+  const nodes = Object.values(flow.nodes) as AnyNode[];
+
+  // The question is gone rather than ignored: asking "what's the contact number
+  // used for the booking?" implies the answer proves something, and it does not.
+  assert.equal(
+    nodes.find((node) => node.type === "capture" && node.variable === "phone"),
+    undefined,
+    "no capture node may collect a phone as the identity step",
+  );
+
+  const gate = nodes.find((node) => node.type === "condition" && node.condition?.variable === "booking_identity");
+  assert.ok(gate, "the graph must branch on channel-verified identity");
+  assert.equal(gate.condition?.value, "verified");
+  assert.ok(gate.trueNext && gate.falseNext, "the identity gate must have both branches");
+
+  // Everything an unverified customer can reach, without crossing into the
+  // verified branch.
+  const reachable = (from: string, stop: string): Set<string> => {
+    const seen = new Set<string>();
+    const queue = [from];
+    while (queue.length) {
+      const id = queue.shift() as string;
+      if (!id || seen.has(id) || id === stop) continue;
+      seen.add(id);
+      const node = at(id);
+      if (!node) continue;
+      for (const next of [node.next, node.trueNext, node.falseNext, ...(node.options ?? []).map((o) => o.next)]) {
+        if (next) queue.push(next);
+      }
+    }
+    return seen;
+  };
+
+  const unverified = reachable(gate.falseNext as string, gate.trueNext as string);
+  for (const id of unverified) {
+    const node = at(id) as AnyNode;
+    assert.notEqual(node.type, "booking", `unverified path reached a booking action at "${id}"`);
+    assert.notEqual(node.type, "slots", `unverified path reached a slot mutation at "${id}"`);
+  }
+  assert.ok(
+    [...unverified].some((id) => at(id)?.type === "handoff"),
+    "an unverified customer must end up with a person, not a dead end",
+  );
+});
+
 test("visual builder exposes booking management actions and their runtime variables", () => {
   const builder = src("src/components/FlowBuilder.tsx");
   assert.match(builder, /Find customer&apos;s next service booking/);
