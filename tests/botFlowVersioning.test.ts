@@ -18,6 +18,7 @@ test("one immutable publication exists per tenant and channel", () => {
   const migration = src("prisma/migrations/20260809150000_bot_flow_publications/migration.sql");
   assert.match(migration, /BotFlowPublication_tenant_channel_key/);
   assert.match(migration, /FORCE ROW LEVEL SECURITY/);
+  assert.match(migration, /BotFlowVersion_flowId_fkey[\s\S]*ON DELETE RESTRICT/);
 });
 
 test("publishing snapshots the draft and switches live state in one tenant transaction", () => {
@@ -27,6 +28,21 @@ test("publishing snapshots the draft and switches live state in one tenant trans
   assert.match(code, /definition: flow\.definition/);
   assert.match(code, /tx\.botFlowPublication\.upsert/);
   assert.match(code, /tenantId_channel: \{ tenantId, channel: flow\.channel \}/);
+});
+
+test("a missing pinned version fails closed instead of falling through to the current publication", () => {
+  const code = src("src/lib/flowPublishing.ts");
+  const pinAt = code.indexOf("if (pinnedVersionId)");
+  const throwAt = code.indexOf("throw new PinnedFlowVersionUnavailableError", pinAt);
+  const publicationAt = code.indexOf("const publication", pinAt);
+  assert.ok(pinAt >= 0 && throwAt > pinAt && publicationAt > throwAt);
+  assert.match(code, /if \(!pinned \|\| !flow\) throw new PinnedFlowVersionUnavailableError\(pinnedVersionId\)/);
+});
+
+test("published flows cannot be deleted while immutable versions may still be session-pinned", () => {
+  const actions = src("src/app/actions/flow.ts");
+  assert.match(actions, /prisma\.botFlowVersion\.findFirst\(\{ where: \{ flowId: id \}/);
+  assert.match(actions, /if \(!flow \|\| flow\.active \|\| publishedVersion\) return/);
 });
 
 test("shared channel sessions persist and resolve a pinned flow version", () => {
