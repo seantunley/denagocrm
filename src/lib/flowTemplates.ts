@@ -1,6 +1,6 @@
 import { DEFAULT_FLOW, type Flow } from "./flow";
 
-export type FlowTemplateId = "general" | "sales" | "service" | "lead_capture";
+export type FlowTemplateId = "general" | "sales" | "service" | "lead_capture" | "booking_management";
 export type FlowTemplate = {
   id: FlowTemplateId;
   name: string;
@@ -15,7 +15,7 @@ const SERVICE_FLOW: Flow = {
     name: { id: "name", type: "capture", text: "What's your name?", variable: "name", next: "phone" },
     phone: { id: "phone", type: "capture", text: "Thanks {{name}}. What's the best contact number?", variable: "phone", format: "phone", next: "service" },
     service: { id: "service", type: "capture", text: "What does the cart need help with?", variable: "service", next: "slot" },
-    slot: { id: "slot", type: "slots", text: "Choose one of the next available workshop times:", noneText: "There aren't open online slots just now — I'll log a service request so the team can call you.", next: "confirm" },
+    slot: { id: "slot", type: "slots", action: "book", text: "Choose one of the next available workshop times:", noneText: "There aren't open online slots just now — I'll log a service request so the team can call you.", next: "confirm" },
     confirm: { id: "confirm", type: "message", text: "You're booked, {{name}} — {{slot}}. We'll see you then. 🔧", next: "end" },
     end: { id: "end", type: "end" },
   },
@@ -67,6 +67,47 @@ const LEAD_CAPTURE_FLOW: Flow = {
   },
 };
 
+/**
+ * Ask for a phone even on identity-aware channels so Telegram and a customer who
+ * messages from a different number can still resolve an EXISTING CRM record. The
+ * lookup never creates a contact merely to satisfy this flow.
+ */
+const BOOKING_MANAGEMENT_FLOW: Flow = {
+  start: "intro",
+  nodes: {
+    intro: { id: "intro", type: "message", text: "{{greeting}} I can check, move or cancel an existing service booking.", next: "phone" },
+    phone: { id: "phone", type: "capture", text: "What's the contact number used for the booking?", variable: "phone", format: "phone", next: "lookup" },
+    lookup: { id: "lookup", type: "booking", action: "lookup", next: "found" },
+    found: { id: "found", type: "condition", condition: { variable: "booking_found", operator: "equals", value: "yes" }, trueNext: "show", falseNext: "notFound" },
+    notFound: { id: "notFound", type: "message", text: "I couldn't find a future service booking on that customer record. I'll get the team to help.", next: "handoff" },
+    show: {
+      id: "show",
+      type: "choice",
+      text: "I found your next booking for {{booking_slot}}. What would you like to do?",
+      options: [
+        { id: "move", label: "Move booking", next: "newSlot" },
+        { id: "cancel", label: "Cancel booking", next: "confirmCancel" },
+        { id: "keep", label: "Keep it", next: "keep" },
+      ],
+    },
+    confirmCancel: {
+      id: "confirmCancel",
+      type: "choice",
+      text: "Cancel the service booking for {{booking_slot}}?",
+      options: [
+        { id: "yes", label: "Yes, cancel", next: "cancel" },
+        { id: "no", label: "No, keep it", next: "keep" },
+      ],
+    },
+    cancel: { id: "cancel", type: "booking", action: "cancel", text: "Done — your booking for {{booking_slot}} has been cancelled.", next: "end" },
+    newSlot: { id: "newSlot", type: "slots", action: "reschedule", text: "Choose a new workshop time:", noneText: "There aren't any open online times right now — I'll get the team to help you move it.", next: "moved" },
+    moved: { id: "moved", type: "message", text: "Done — your service booking is now {{booking_slot}}. 🔧", next: "end" },
+    keep: { id: "keep", type: "message", text: "No problem — your booking stays at {{booking_slot}}.", next: "end" },
+    handoff: { id: "handoff", type: "handoff", text: "One of the team will pick this up from here." },
+    end: { id: "end", type: "end" },
+  },
+};
+
 export const FLOW_TEMPLATES: FlowTemplate[] = [
   {
     id: "general",
@@ -85,6 +126,12 @@ export const FLOW_TEMPLATES: FlowTemplate[] = [
     name: "Service booking",
     description: "Capture customer/service details and offer real workshop availability.",
     definition: SERVICE_FLOW,
+  },
+  {
+    id: "booking_management",
+    name: "Manage service booking",
+    description: "Find an existing customer booking, then keep, cancel or atomically move it to another real workshop slot.",
+    definition: BOOKING_MANAGEMENT_FLOW,
   },
   {
     id: "lead_capture",
