@@ -15,19 +15,16 @@ import {
   claimInboundBotEvent,
   completeInboundBotEvent,
   retryInboundBotEvent,
+  withInboundBotEvent,
 } from "@/lib/botInboundEvent";
 
-/** Meta webhook verification handshake. */
 export async function GET(req: NextRequest) {
   const params = req.nextUrl.searchParams;
   const mode = params.get("hub.mode");
   const token = params.get("hub.verify_token");
   const challenge = params.get("hub.challenge");
-
   const verifyToken = await validateInSystemScope(() => getSetting("META_VERIFY_TOKEN"));
-  if (mode === "subscribe" && secretEquals(token, verifyToken) && challenge) {
-    return new NextResponse(challenge, { status: 200 });
-  }
+  if (mode === "subscribe" && secretEquals(token, verifyToken) && challenge) return new NextResponse(challenge, { status: 200 });
   return new NextResponse("Verification failed", { status: 403 });
 }
 
@@ -40,10 +37,8 @@ async function fetchLeadDetails(leadgenId: string, accessToken: string) {
   return res.json();
 }
 
-/** Receives leadgen events from Facebook/Instagram Lead Ads and DM events. */
 export async function POST(req: NextRequest) {
   const rawBody = await req.text();
-
   const appSecret = await validateInSystemScope(() => getSetting("META_APP_SECRET"));
   if (!appSecret) return NextResponse.json({ error: "Webhook not configured" }, { status: 503 });
   {
@@ -54,15 +49,10 @@ export async function POST(req: NextRequest) {
   }
 
   let body: unknown;
-  try {
-    body = JSON.parse(rawBody);
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
-  }
+  try { body = JSON.parse(rawBody); } catch { return NextResponse.json({ error: "Invalid JSON" }, { status: 400 }); }
 
   /* eslint-disable @typescript-eslint/no-explicit-any */
   const objectType = (body as any).object as string | undefined;
-
   if (objectType === "page" || objectType === "instagram") {
     const platform: DmPlatform = objectType === "instagram" ? "instagram" : "messenger";
     for (const entry of (body as any).entry ?? []) {
@@ -88,17 +78,19 @@ export async function POST(req: NextRequest) {
           const claim = await claimInboundBotEvent(platform, String(ev.message?.mid ?? ""));
           if (!claim) continue;
           try {
-            const referral = ev.message.referral ?? ev.referral ?? ev.postback?.referral ?? null;
-            const senderId = String(ev.sender?.id ?? "");
-            await recordInboundDm(platform, senderId, text, referral, attachments);
-            const payload: string | undefined = ev.message.quick_reply?.payload;
-            if (text || payload) await runDmFlow(platform, senderId, text, payload);
+            await withInboundBotEvent(claim, async () => {
+              const referral = ev.message.referral ?? ev.referral ?? ev.postback?.referral ?? null;
+              const senderId = String(ev.sender?.id ?? "");
+              await recordInboundDm(platform, senderId, text, referral, attachments);
+              const payload: string | undefined = ev.message.quick_reply?.payload;
+              if (text || payload) await runDmFlow(platform, senderId, text, payload);
+            });
             await completeInboundBotEvent(claim);
           } catch (error) {
             await retryInboundBotEvent(claim, error).catch(() => {});
             const { logError } = await import("@/lib/errorLog");
             await logError("meta-dm-webhook", error).catch(() => {});
-            throw error; // non-2xx makes Meta redeliver the released event
+            throw error;
           }
         }
       }, () => {
@@ -108,9 +100,7 @@ export async function POST(req: NextRequest) {
   }
   /* eslint-enable @typescript-eslint/no-explicit-any */
 
-  const entries =
-    (body as { entry?: { changes?: { field: string; value: Record<string, unknown> }[] }[] }).entry ?? [];
-
+  const entries = (body as { entry?: { changes?: { field: string; value: Record<string, unknown> }[] }[] }).entry ?? [];
   for (const entry of entries) {
     for (const change of entry.changes ?? []) {
       if (change.field !== "leadgen") continue;
@@ -119,45 +109,27 @@ export async function POST(req: NextRequest) {
       const pageId = String(change.value?.page_id ?? "");
 
       await withChannelTenantScope("messenger", pageId, async () => {
-        const existing = await basePrisma.lead.findUnique({
-          where: { externalId: leadgenId },
-          select: { id: true },
-        });
+        const existing = await basePrisma.lead.findUnique({ where: { externalId: leadgenId }, select: { id: true } });
         if (existing) return;
-
-        const accessToken = await resolveTenantCredential(
-          currentTenantScope()?.tenantId ?? null,
-          "META_PAGE_ACCESS_TOKEN",
-        );
+        const accessToken = await resolveTenantCredential(currentTenantScope()?.tenantId ?? null, "META_PAGE_ACCESS_TOKEN");
         try {
           if (!accessToken) throw new Error("META_PAGE_ACCESS_TOKEN not configured");
           const details = await fetchLeadDetails(leadgenId, accessToken);
           const parsed = parseLeadFields(details.field_data ?? []);
           await createIntakeLead({
-            name: parsed.name ?? "New lead",
-            email: parsed.email,
-            phone: parsed.phone,
-            model: parsed.model,
-            color: parsed.color,
-            message: parsed.message,
-            source: metaSource(details.platform),
-            externalId: leadgenId,
-            raw: details,
+            name: parsed.name ?? "New lead", email: parsed.email, phone: parsed.phone,
+            model: parsed.model, color: parsed.color, message: parsed.message,
+            source: metaSource(details.platform), externalId: leadgenId, raw: details,
           });
         } catch (err) {
           await createIntakeLead({
             name: "Facebook lead (details pending)",
             message: `Could not fetch lead ${leadgenId} from Graph API: ${err instanceof Error ? err.message : "unknown error"}. Check the Page Access Token in Settings.`,
-            source: "facebook",
-            externalId: leadgenId,
-            raw: change.value,
+            source: "facebook", externalId: leadgenId, raw: change.value,
           }).catch(() => {});
         }
-      }, () => {
-        console.warn(`[tenant-channel] skipped leadgen: unmapped page_id ${pageId || "?"}`);
-      });
+      }, () => console.warn(`[tenant-channel] skipped leadgen: unmapped page_id ${pageId || "?"}`));
     }
   }
-
   return NextResponse.json({ received: true });
 }
