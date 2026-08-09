@@ -11,6 +11,7 @@ import { metaReceipt } from "@/lib/deliveryReceipts";
 import { applyReceipt } from "@/lib/messageReceipts";
 import { withChannelTenantScope, validateInSystemScope } from "@/lib/tenantScopeEntry";
 import { secretEquals } from "@/lib/secretCompare";
+import { claimInboundBotEvent } from "@/lib/botInboundEvent";
 
 /** Meta webhook verification handshake. */
 export async function GET(req: NextRequest) {
@@ -103,6 +104,10 @@ export async function POST(req: NextRequest) {
             continue;
           }
           if (ev.message && (text || attachments.length > 0)) {
+            // Meta's mid is stable across webhook retries. Only the first delivery
+            // may record the inbound or advance a side-effecting chatbot flow.
+            if (!(await claimInboundBotEvent(platform, String(ev.message?.mid ?? "")))) continue;
+
             const referral = ev.message.referral ?? ev.referral ?? ev.postback?.referral ?? null;
             const senderId = String(ev.sender?.id ?? "");
             await recordInboundDm(platform, senderId, text, referral, attachments);
