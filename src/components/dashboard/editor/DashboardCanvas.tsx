@@ -390,6 +390,7 @@ export default function DashboardCanvas({
             section={section}
             slots={slots}
             activeId={activeId}
+            activeCard={activeCard}
             dropAt={preview && preview.sectionId === section.id ? preview.index : null}
             onConfigure={onConfigure}
             onAddCard={onAddCard}
@@ -461,6 +462,7 @@ function SectionBlock({
   section,
   slots,
   activeId,
+  activeCard,
   dropAt,
   onConfigure,
   onAddCard,
@@ -470,6 +472,8 @@ function SectionBlock({
   slots: CardSlots;
   /** The card being dragged anywhere on the canvas, or null. */
   activeId: string | null;
+  /** The card being dragged, so the marker can take its exact shape. */
+  activeCard: CardConfig | undefined;
   /**
    * Where the marker goes in this group, counted over its cards WITHOUT the
    * dragged one — or null when the card would not land here.
@@ -546,7 +550,7 @@ function SectionBlock({
     dropAt,
   ).map((entry) =>
     entry.kind === "marker" ? (
-      <DropMarker key="drop-marker" />
+      <DropMarker key="drop-marker" card={activeCard} />
     ) : (
       <SortableCard
         key={entry.id}
@@ -696,11 +700,29 @@ function SectionBlock({
  * reflowing the whole arrangement under the pointer, which said the same thing
  * far less clearly and is what produced the error page - see `dropPreview`.
  */
-function DropMarker() {
+function DropMarker({ card }: { card: CardConfig | undefined }) {
   return (
     <div
       aria-hidden
-      className="flex min-h-20 items-center justify-center rounded-xl border-2 border-dashed border-primary bg-primary/10"
+      className={cn(
+        "flex min-h-20 items-center justify-center rounded-xl border-2 border-dashed border-primary bg-primary/10",
+        /*
+         * THE SAME SHAPE AS THE CARD IT STANDS IN FOR.
+         *
+         * Taking the dragged card out of the flow and putting a marker in its
+         * place only holds the layout still if the two occupy the same cells.
+         * The marker was always one column; cards here span one, two or three.
+         * So replacing a three-column card with a one-column marker re-packed
+         * every card after it, and a drag log caught exactly that - the same
+         * card's left edge flipping 314 -> 897 -> 314 between consecutive
+         * drag-over events, in a grid whose columns are 567 wide.
+         *
+         * Which put the layout back to moving under the pointer for anything
+         * wider than one column, by a different route than before.
+         */
+        card ? CARD_SPAN[card.span] : undefined,
+        card ? CARD_ROWS[card.rows ?? 1] : undefined,
+      )}
     >
       <span className="rounded-md bg-primary px-2 py-1 text-[11px] font-semibold text-primary-foreground shadow-sm">
         Drops here
