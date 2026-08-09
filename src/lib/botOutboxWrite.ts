@@ -7,6 +7,7 @@ export type BotOutboxWriteInput = {
   channel: string;
   key: string;
   messages: OutMsg[];
+  flowVersionId?: string | null;
   contactId?: string | null;
   leadId?: string | null;
   actorId?: string | null;
@@ -18,16 +19,12 @@ function storedMessages(channel: string, messages: OutMsg[]): OutMsg[] {
     if ((channel === "messenger" || channel === "instagram") && message.type === "image" && message.caption) {
       out.push({ type: "image", url: message.url });
       out.push({ type: "text", text: message.caption });
-    } else {
-      out.push(message);
-    }
+    } else out.push(message);
   }
   return out;
 }
 
 function jsonPayload(message: OutMsg): Prisma.InputJsonValue {
-  // Flow option objects may contain `description: undefined`; Prisma JSON input
-  // rejects undefined even though normal JSON would simply omit the property.
   return JSON.parse(JSON.stringify(message)) as Prisma.InputJsonValue;
 }
 
@@ -51,6 +48,7 @@ export async function enqueueBotMessagesTx(
         batchId,
         sequence,
         payload: jsonPayload(messages[sequence]),
+        flowVersionId: input.flowVersionId ?? null,
         contactId: input.contactId ?? null,
         leadId: input.leadId ?? null,
         actorId: input.actorId ?? null,
@@ -61,7 +59,6 @@ export async function enqueueBotMessagesTx(
   }
 }
 
-/** Standalone writer for callers that do not have session state to commit. */
 export async function enqueueBotMessages(input: BotOutboxWriteInput): Promise<void> {
   await withTenantWrite(async (tx, tenantId) => enqueueBotMessagesTx(tx, tenantId, input));
 }
