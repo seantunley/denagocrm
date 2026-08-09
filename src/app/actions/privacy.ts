@@ -7,6 +7,8 @@ import { requireContactAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { CONSENT_TYPES } from "@/lib/consent";
 import { type CustomEntity } from "@/lib/customFields";
+import { DEFAULT_TENANT_ID } from "@/lib/tenant";
+import { writeTenantId } from "@/lib/tenantWrite";
 
 export async function recordConsent(contactId: string, formData: FormData) {
   return asActionResult(async () => {
@@ -111,6 +113,7 @@ export async function anonymizeContact(contactId: string) {
 
       await tx.consentRecord.create({
         data: {
+          tenantId: writeTenantId() ?? DEFAULT_TENANT_ID,
           contactId,
           type: "data_processing",
           granted: false,

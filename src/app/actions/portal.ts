@@ -6,7 +6,6 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { basePrisma, prisma } from "@/lib/db";
 import { currentTenantScope } from "@/lib/tenantScope";
-import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { resolveTenantActor } from "@/lib/tenantActor";
 import { sendEmail, isSmtpConfigured } from "@/lib/email";
 import { getPortalContact, setPortalCookie, clearPortalCookie } from "@/lib/portal";
@@ -25,6 +24,8 @@ import {
   rateLimitKey,
   registerRateLimitAttempt,
 } from "@/lib/rateLimit";
+import { DEFAULT_TENANT_ID } from "@/lib/tenant";
+import { writeTenantId } from "@/lib/tenantWrite";
 
 export type PortalAuthState = { ok?: boolean; sent?: boolean; error?: string };
 const str = (value: FormDataEntryValue | null) => String(value ?? "").trim();
@@ -347,7 +348,7 @@ export async function updatePortalPreferences(formData: FormData) {
         "updatedAt" = CURRENT_TIMESTAMP
     `;
     await tx.contact.update({ where: { id: scope.viewerContactId }, data: { marketingOptOut: !emailMarketing } });
-    await tx.consentRecord.create({ data: { contactId: scope.viewerContactId, type: "marketing", granted: emailMarketing, source: "portal", note: "Updated in customer portal" } });
+    await tx.consentRecord.create({ data: { tenantId: writeTenantId() ?? DEFAULT_TENANT_ID, contactId: scope.viewerContactId, type: "marketing", granted: emailMarketing, source: "portal", note: "Updated in customer portal" } });
   });
   await logAudit({ action: "portal.preferences_updated", summary: "Customer updated portal communication preferences", contactId: scope.viewerContactId, after: { emailServiceUpdates, smsServiceUpdates, emailMarketing }, userName: "Customer portal" });
   revalidatePath("/portal");
