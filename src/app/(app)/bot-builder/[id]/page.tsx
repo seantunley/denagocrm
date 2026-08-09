@@ -7,8 +7,8 @@ import { DEFAULT_FLOW, type Flow } from "@/lib/flow";
 import { validateFlow } from "@/lib/flowValidation";
 import { enabledFlowChannels } from "@/lib/flowValidationServer";
 import FlowBuilder from "@/components/FlowBuilder";
-import FlowLintPanel from "@/components/FlowLintPanel";
 import FlowAiDraftForm from "@/components/FlowAiDraftForm";
+import FlowLintPanel from "@/components/FlowLintPanel";
 
 export default async function FlowEditorPage({ params }: { params: Promise<{ id: string }> }) {
   await requireOwner();
@@ -49,6 +49,7 @@ export default async function FlowEditorPage({ params }: { params: Promise<{ id:
         </div>
         <Link href={`/bot-builder/${row.id}/test`} className="btn-secondary btn-sm"><FlaskConical className="size-4" />Test saved draft</Link>
       </div>
+      <FlowAiDraftForm flowId={row.id} />
       <FlowLintPanel issues={issues} channels={channels} />
       <FlowAiDraftForm flowId={row.id} />
       <FlowBuilder flowId={row.id} initial={flow} journeys={journeys} />

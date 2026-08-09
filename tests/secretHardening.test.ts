@@ -44,12 +44,11 @@ test("secretEquals handles multi-byte input without throwing", () => {
 });
 
 test("every webhook compares its secret in constant time", () => {
-  const webhooks = [
-    "src/app/api/webhooks/telegram/route.ts",
+  const directWebhooks = [
     "src/app/api/webhooks/meta/route.ts",
     "src/app/api/webhooks/whatsapp/route.ts",
   ];
-  for (const rel of webhooks) {
+  for (const rel of directWebhooks) {
     const code = src(rel);
     assert.match(code, /secretEquals\(/, `${rel} must compare its secret with secretEquals`);
     assert.doesNotMatch(
@@ -58,6 +57,12 @@ test("every webhook compares its secret in constant time", () => {
       `${rel} still has a short-circuiting secret comparison`,
     );
   }
+
+  const telegramRoute = src("src/app/api/webhooks/telegram/route.ts");
+  const telegramTenant = src("src/lib/telegramTenant.ts");
+  assert.match(telegramRoute, /withTelegramTenantScope\(/);
+  assert.match(telegramTenant, /secretEquals\(secret, expected\)/);
+  assert.doesNotMatch(telegramRoute, /!==\s*secret\b|===\s*verifyToken\b|token\s*===\s*verifyToken/);
 });
 
 

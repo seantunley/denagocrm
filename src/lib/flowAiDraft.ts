@@ -66,13 +66,14 @@ Captured variables become available after their capture node.
 
 Rules:
 - Every node object's id MUST equal its key in nodes.
-- Use only allowed node types/actions. Do not invent email/SMS/webhook/code/wait nodes.
+- Use only the allowed node types/actions. Do not invent email/SMS/webhook/code/wait nodes.
 - Flow is real-time. Long waits, scheduled messages, drips and delayed follow-ups belong in an existing Journey selected by journeyId.
 - A journey node may use ONLY an id from ACTIVE JOURNEYS above. Never invent, alter or infer an id from a Journey name.
 - If no active Journey can satisfy a requested delayed workflow, use a handoff or preserve the current graph; do not invent scheduling in Flow.
 - CRM writes happen only through booking(service|demo|lead|cancel), slots(book|reschedule), and explicit journey enrolment. booking(lookup) is read-only.
 - For cancel/reschedule, run booking(action="lookup") first and branch on booking_found before using booking_id.
 - slots(action="reschedule") atomically moves the existing Activity; never model “book new then cancel old”.
+- Use handoff when the requested action is unsupported.
 - Do not invent URLs, prices, policies, specs or facts. Use answerSource for live price/colour lists and ai for open questions.
 - Prefer menu labels <=20 characters and <=10 options.
 - Avoid automatic cycles. Waiting nodes (choice/capture/captureFile/slots/ai) are fine.

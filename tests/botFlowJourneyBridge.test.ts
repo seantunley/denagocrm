@@ -9,6 +9,18 @@ import { flowErrors, validateFlow } from "../src/lib/flowValidation";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
 
+/**
+ * Strip comments before scanning for a banned call — the same problem, and the
+ * same fix, as tests/oneAutomationEngine.test.ts: the note explaining why this
+ * module deliberately avoids `enrollJourneyNow()` names the very function the
+ * guard below scans for.
+ *
+ * Whole-line `//` only, so a `https://` inside a string literal survives.
+ */
+const stripComments = (code: string) =>
+  code.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+const shipped = (rel: string) => stripComments(src(rel));
+
 const baseCtx: FlowCtx = {
   aiReply: async () => ({ reply: "AI", handoff: false }),
   dynamicAnswer: async () => "dynamic",
@@ -51,7 +63,7 @@ test("direct enrolment uses the existing Journey runner rather than scheduling a
   assert.match(code, /getActiveVersion\(journey\)/);
   assert.match(code, /eventKey: input\.eventKey/);
   assert.match(code, /outcome\.refusal === "duplicate_event"/);
-  assert.doesNotMatch(code, /enrollJourneyNow|scheduleJourney|scheduleJourneyInternal|processScheduledJourneys/);
+  assert.doesNotMatch(shipped("src/lib/journeyDirectEnrollment.ts"), /enrollJourneyNow|scheduleJourney|scheduleJourneyInternal|processScheduledJourneys/);
 });
 
 test("Flow Journey enrolment requires an existing customer and retry-stable provider event identity", () => {
@@ -103,5 +115,5 @@ test("Flow never gains its own scheduler or wait node", () => {
   const flow = src("src/lib/flow.ts");
   assert.doesNotMatch(flow, /type: "wait"|type: "delay"|setTimeout\(|scheduleJourney/);
   const oneEngine = src("tests/oneAutomationEngine.test.ts");
-  assert.match(oneEngine, /one surviving asynchronous automation engine/i);
+  assert.match(oneEngine, /exactly one automation engine/i);
 });

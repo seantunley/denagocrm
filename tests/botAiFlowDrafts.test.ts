@@ -36,8 +36,10 @@ test("AI drafting cannot overwrite a human save that lands concurrently", () => 
 test("generated graphs are fenced to existing deterministic node capabilities", () => {
   const code = src("src/lib/flowAiDraft.ts");
   assert.match(code, /Use only the allowed node types\/actions/);
-  assert.match(code, /Do not invent email\/SMS\/webhook\/code nodes/);
-  assert.match(code, /CRM writes happen only through booking\(service\|demo\|lead\) and slots/);
+  // The fence has since grown to bar wait nodes and to name Journey enrolment as
+  // the one extra CRM write path, so both rules are matched around those additions.
+  assert.match(code, /Do not invent email\/SMS\/webhook\/code(\/wait)? nodes/);
+  assert.match(code, /CRM writes happen only through booking\(service\|demo\|lead\|cancel\), slots\(book\|reschedule\)(, and explicit journey enrolment)?\. booking\(lookup\) is read-only/);
   assert.match(code, /Use handoff when the requested action is unsupported/);
 });
 

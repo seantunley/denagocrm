@@ -4,15 +4,8 @@ import { requireOwner } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { getBotFlowAnalyticsReport } from "@/lib/botFlowAnalyticsReport";
 import { WorkspaceHero } from "@/components/workspace-hero";
-import {
-  MobileDataCard,
-  MobileDataField,
-  MobileDataFields,
-  MobileDataHeader,
-  MobileDataList,
-  ResponsiveDataView,
-} from "@/components/responsive-patterns";
 import { EmptyState, StatusPill, Surface } from "@/components/visual-system";
+import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 
 const pct = (part: number, total: number) => total > 0 ? `${Math.round((part / total) * 1000) / 10}%` : "—";
 const channelLabel = (channel: string) => channel === "whatsapp" ? "WhatsApp" : channel === "instagram" ? "Instagram" : channel === "messenger" ? "Messenger" : channel === "telegram" ? "Telegram" : channel;
@@ -113,54 +106,28 @@ export default async function BotAnalyticsPage({
             {report.nodes.length === 0 ? (
               <div className="p-8 text-center text-sm text-muted-foreground">No node-level activity has been recorded for this version yet.</div>
             ) : (
-              <ResponsiveDataView
-                mobile={
-                  <MobileDataList>
+              <ResponsiveEntityTable className="rounded-none border-0 bg-transparent">
+                <table className="table-base w-full min-w-[980px] text-left text-sm">
+                  <thead className="bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
+                    <tr><th className="px-5 py-3">Node</th><th className="px-3 py-3">Type</th><th className="px-3 py-3 text-right">Reached</th><th className="px-3 py-3 text-right">Progressed</th><th className="px-3 py-3 text-right">Rate</th><th className="px-3 py-3 text-right">Drop-off</th><th className="px-3 py-3 text-right">CRM actions</th><th className="px-3 py-3 text-right">Handoffs</th><th className="px-5 py-3 text-right">Delivery failures</th></tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
                     {report.nodes.map((node) => (
-                      <MobileDataCard key={node.nodeId}>
-                        <MobileDataHeader
-                          title={node.label}
-                          detail={`${node.type} · ${node.nodeId}`}
-                          aside={<span className="text-sm font-semibold">{node.reached}</span>}
-                        />
-                        <MobileDataFields>
-                          <MobileDataField label="Reached">{node.reached}</MobileDataField>
-                          <MobileDataField label="Progressed">{node.interacted ?? "—"}</MobileDataField>
-                          <MobileDataField label="Rate">{node.progressionRate == null ? "—" : `${node.progressionRate}%`}</MobileDataField>
-                          <MobileDataField label="Drop-off">{node.dropOff ?? "—"}</MobileDataField>
-                          <MobileDataField label="CRM actions">{node.crmActions}</MobileDataField>
-                          <MobileDataField label="Handoffs">{node.handoffs}</MobileDataField>
-                          <MobileDataField label="Delivery failures" wide>{node.deliveryFailures}</MobileDataField>
-                        </MobileDataFields>
-                      </MobileDataCard>
+                      <tr key={node.nodeId} className="hover:bg-muted/20">
+                        <td data-primary className="px-5 py-3"><p className="max-w-md font-medium text-foreground">{node.label}</p><p className="mt-0.5 font-mono text-[10px] text-muted-foreground">{node.nodeId}</p></td>
+                        <td data-label="Type" className="px-3 py-3 text-xs text-muted-foreground">{node.type}</td>
+                        <td data-label="Reached" className="px-3 py-3 text-right font-medium">{node.reached}</td>
+                        <td data-label="Progressed" className="px-3 py-3 text-right">{node.interacted ?? "—"}</td>
+                        <td data-label="Rate" className="px-3 py-3 text-right">{node.progressionRate == null ? "—" : `${node.progressionRate}%`}</td>
+                        <td data-label="Drop-off" className="px-3 py-3 text-right">{node.dropOff ?? "—"}</td>
+                        <td data-label="CRM actions" className="px-3 py-3 text-right">{node.crmActions}</td>
+                        <td data-label="Handoffs" className="px-3 py-3 text-right">{node.handoffs}</td>
+                        <td data-label="Delivery failures" className="px-5 py-3 text-right">{node.deliveryFailures}</td>
+                      </tr>
                     ))}
-                  </MobileDataList>
-                }
-                desktop={
-                  <div className="overflow-x-auto">
-                    <table className="w-full min-w-[980px] text-left text-sm">
-                      <thead className="bg-muted/35 text-[11px] uppercase tracking-wide text-muted-foreground">
-                        <tr><th className="px-5 py-3">Node</th><th className="px-3 py-3">Type</th><th className="px-3 py-3 text-right">Reached</th><th className="px-3 py-3 text-right">Progressed</th><th className="px-3 py-3 text-right">Rate</th><th className="px-3 py-3 text-right">Drop-off</th><th className="px-3 py-3 text-right">CRM actions</th><th className="px-3 py-3 text-right">Handoffs</th><th className="px-5 py-3 text-right">Delivery failures</th></tr>
-                      </thead>
-                      <tbody className="divide-y divide-border">
-                        {report.nodes.map((node) => (
-                          <tr key={node.nodeId} className="hover:bg-muted/20">
-                            <td className="px-5 py-3"><p className="max-w-md font-medium text-foreground">{node.label}</p><p className="mt-0.5 font-mono text-[10px] text-muted-foreground">{node.nodeId}</p></td>
-                            <td className="px-3 py-3 text-xs text-muted-foreground">{node.type}</td>
-                            <td className="px-3 py-3 text-right font-medium">{node.reached}</td>
-                            <td className="px-3 py-3 text-right">{node.interacted ?? "—"}</td>
-                            <td className="px-3 py-3 text-right">{node.progressionRate == null ? "—" : `${node.progressionRate}%`}</td>
-                            <td className="px-3 py-3 text-right">{node.dropOff ?? "—"}</td>
-                            <td className="px-3 py-3 text-right">{node.crmActions}</td>
-                            <td className="px-3 py-3 text-right">{node.handoffs}</td>
-                            <td className="px-5 py-3 text-right">{node.deliveryFailures}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                }
-              />
+                  </tbody>
+                </table>
+              </ResponsiveEntityTable>
             )}
           </Surface>
 
