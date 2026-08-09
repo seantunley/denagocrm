@@ -543,3 +543,30 @@ test("nearest-to-pointer measures from the pointer, and skips the unmeasured", (
   assert.equal(nearestId(["ghost"], rectOf, { x: 0, y: 0 }), null);
   assert.equal(nearestId([], rectOf, { x: 0, y: 0 }), null);
 });
+
+test("the drag label's own box is the label, not the card", () => {
+  /*
+   * The modifier alone was not enough, and the reason is in dnd-kit's source.
+   * PositionedOverlay builds its style as:
+   *
+   *     { ...baseStyles, width: rect.width, height: rect.height,
+   *       top: rect.top, left: rect.left, transform, ..., ...style }
+   *
+   * where `rect` is the ACTIVE NODE's rect. So the overlay wrapper is a whole
+   * card wide and tall and the label sits in its top-left corner — centring that
+   * wrapper on the pointer puts the label half a card away from it, constantly,
+   * which is what "follows cursor now but still far far apart" was.
+   *
+   * `...style` is spread LAST, so auto overrides the measured size. Then the
+   * wrapper hugs the label and centring it centres the label.
+   */
+  const canvas = code(CANVAS);
+  assert.match(
+    canvas,
+    /style=\{\{ width: "auto", height: "auto" \}\}/,
+    "the overlay must not keep the dragged card's dimensions",
+  );
+  // Both halves are needed: the modifier centres it, the style makes "it" the
+  // label rather than a card-sized box.
+  assert.match(canvas, /modifiers=\{\[snapToCursor\]\}/);
+});
