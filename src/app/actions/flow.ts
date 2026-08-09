@@ -58,10 +58,14 @@ export async function renameFlow(id: string, formData: FormData) {
 
 export async function deleteFlow(id: string) {
   await requireOwner();
-  const flow = await prisma.botFlow.findUnique({ where: { id } });
-  // A live publication must be replaced before its draft can be deleted. This is
-  // enforced server-side as well as by the list UI.
-  if (!flow || flow.active) return;
+  const [flow, publishedVersion] = await Promise.all([
+    prisma.botFlow.findUnique({ where: { id } }),
+    prisma.botFlowVersion.findFirst({ where: { flowId: id }, select: { id: true } }),
+  ]);
+  // Once a flow has ever been published, its immutable versions may still be
+  // referenced by live BotSession state. Retain that history rather than making
+  // a customer's pinned session silently jump to another graph.
+  if (!flow || flow.active || publishedVersion) return;
   await prisma.botFlow.delete({ where: { id } });
   revalidatePath("/bot-builder");
 }
