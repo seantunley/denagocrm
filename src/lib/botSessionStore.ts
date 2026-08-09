@@ -71,6 +71,36 @@ export async function upsertBotSessionTx(
   );
 }
 
+/**
+ * Pause a conversation without destroying its current graph position or captured
+ * variables. This is intentionally a single UPSERT: a staff reply racing an
+ * inbound webhook must not read state in JavaScript and then overwrite a newer
+ * node/vars snapshot merely to change ownership.
+ *
+ * When no session exists yet we create a minimal paused row. When one exists we
+ * change ONLY ownership/expiry and preserve the graph snapshot verbatim.
+ */
+export async function pauseBotSessionTx(
+  tx: TenantWriteTx,
+  tenantId: string,
+  input: { channel: string; key: string; expiresAt: Date },
+): Promise<void> {
+  await tx.$executeRawUnsafe(
+    `INSERT INTO "BotSession"
+       ("id", "tenantId", "channel", "key", "nodeId", "vars", "status", "updatedAt", "expiresAt")
+     VALUES ($1, $2, $3, $4, NULL, '{}', 'paused', CURRENT_TIMESTAMP, $5)
+     ON CONFLICT ("tenantId", "channel", "key") DO UPDATE
+       SET "status" = 'paused',
+           "updatedAt" = CURRENT_TIMESTAMP,
+           "expiresAt" = EXCLUDED."expiresAt"`,
+    crypto.randomUUID(),
+    tenantId,
+    input.channel,
+    input.key,
+    input.expiresAt,
+  );
+}
+
 export async function deleteBotSessionTx(
   tx: TenantWriteTx,
   tenantId: string,
