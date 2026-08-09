@@ -166,3 +166,48 @@ test("a message that sent but did not record is repaired, not forgotten", () => 
   assert.match(logger, /userId: row\.actorId/, "the actor comes from the durable row, not a post-hoc lookup");
   assert.doesNotMatch(logger, /resolveTenantActor/, "and is never resolved after the send");
 });
+
+/**
+ * The parent branch restated the same guarantee at a coarser grain while this
+ * branch was splitting it into the cases above. Both are kept: these two pin
+ * ordering and attribution INSIDE each runner's own body (the checks above scan
+ * the whole file), which is the stricter reading of the same property.
+ */
+
+test("channel runners persist replies before asking the durable outbox to deliver", () => {
+  for (const [file, declaration, directSend] of [
+    ["src/lib/flowDm.ts", "export async function runDmFlow", /sendDirect(Message|Attachment|QuickReplies)\(/],
+    ["src/lib/flowRun.ts", "export async function runWhatsAppFlow", /sendWhatsApp(Text|Image|Buttons|List)\(/],
+  ] as const) {
+    const body = functionBody(src(file), declaration);
+    const actor = body.indexOf("await resolveTenantActor()");
+    const enqueue = body.indexOf("await enqueueBotMessagesTx(");
+    const flush = body.indexOf("await flushBotOutboxConversation(");
+
+    assert.ok(actor >= 0, `${file}: must resolve the actor before accepting outbound work`);
+    assert.ok(enqueue > actor, `${file}: must persist outbound work after resolving its actor`);
+    assert.ok(flush > enqueue, `${file}: must not deliver before the durable rows exist`);
+    assert.match(body, /actorId: actor\.id/, `${file}: every durable reply needs an attributable timeline actor`);
+    assert.doesNotMatch(body, directSend, `${file}: provider sends belong only in the durable worker`);
+  }
+});
+
+test("the durable worker records accepted provider messages on the CRM timeline", () => {
+  const code = src("src/lib/botOutbox.ts");
+  const sender = code;
+  const delivery = functionBody(code, "async function deliverClaimed");
+  const recorder = functionBody(code, "async function repairCommunicationLog");
+
+  assert.match(sender, /sendDirect(Message|Attachment|QuickReplies)\(/, "DM delivery must use the shared worker");
+  assert.match(sender, /sendWhatsApp(Text|Image|Buttons|List)\(/, "WhatsApp delivery must use the shared worker");
+
+  const accepted = delivery.indexOf('data: { status: "sent", sentAt: new Date()');
+  const recorded = delivery.indexOf("await repairCommunicationLog", accepted);
+  assert.ok(accepted >= 0 && recorded > accepted, "only provider-accepted messages may reach timeline repair");
+
+  assert.match(recorder, /prisma\.communication\.upsert/);
+  assert.match(recorder, /direction: "outbound"/);
+  assert.match(recorder, /type: row\.channel/, "each reply must be filed under its provider channel");
+  assert.match(recorder, /subject: FLOW_MARKER/, "the inbox needs one shared bot marker");
+  assert.match(recorder, /dedupeKey = `bot-outbox:\$\{row\.id\}`/, "timeline repair must be idempotent");
+});
