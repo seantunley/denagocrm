@@ -37,7 +37,7 @@ test("generated graphs are fenced to existing deterministic node capabilities", 
   const code = src("src/lib/flowAiDraft.ts");
   assert.match(code, /Use only the allowed node types\/actions/);
   assert.match(code, /Do not invent email\/SMS\/webhook\/code nodes/);
-  assert.match(code, /CRM writes happen only through booking\(service\|demo\|lead\) and slots/);
+  assert.match(code, /CRM writes happen only through booking\(service\|demo\|lead\|cancel\) and slots\(book\|reschedule\)\. booking\(lookup\) is read-only/);
   assert.match(code, /Use handoff when the requested action is unsupported/);
 });
 
