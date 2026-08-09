@@ -4,6 +4,8 @@ CREATE TABLE "BotFlowOutbox" (
     "tenantId" TEXT NOT NULL,
     "channel" TEXT NOT NULL,
     "key" TEXT NOT NULL,
+    "batchId" TEXT NOT NULL,
+    "sequence" INTEGER NOT NULL,
     "payload" JSONB NOT NULL,
     "contactId" TEXT,
     "leadId" TEXT,
@@ -20,10 +22,12 @@ CREATE TABLE "BotFlowOutbox" (
     CONSTRAINT "BotFlowOutbox_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
+CREATE UNIQUE INDEX "BotFlowOutbox_tenant_batch_sequence_key"
+    ON "BotFlowOutbox"("tenantId", "batchId", "sequence");
 CREATE INDEX "BotFlowOutbox_tenant_status_available_idx"
     ON "BotFlowOutbox"("tenantId", "status", "availableAt");
 CREATE INDEX "BotFlowOutbox_tenant_channel_key_created_idx"
-    ON "BotFlowOutbox"("tenantId", "channel", "key", "createdAt");
+    ON "BotFlowOutbox"("tenantId", "channel", "key", "createdAt", "sequence");
 
 ALTER TABLE "BotFlowOutbox" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "BotFlowOutbox_tenant_isolation" ON "BotFlowOutbox"
