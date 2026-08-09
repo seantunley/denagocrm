@@ -11,8 +11,10 @@ test("flow simulator runs the real engine but imports no CRM write helpers", () 
   const action = src("src/app/actions/flowSimulator.ts");
   assert.match(action, /runFlow\(flow, session, turn/);
   assert.doesNotMatch(action, /createIntakeLead|createLeadRecord|reserveSlot|sendWhatsApp|sendDirectMessage|tgSend|prisma\.activity\.create/);
-  assert.match(action, /CRM: would create/);
-  assert.match(action, /CRM: would reserve slot/);
+  // The trace now names the executing node as well, so these stay anchored on
+  // the "would" wording that proves the simulator only describes the effect.
+  assert.match(action, /CRM: node .*would create/);
+  assert.match(action, /CRM: node .*would reserve slot/);
 });
 
 test("simulated AI and handoff are explicit test effects", () => {

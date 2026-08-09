@@ -9,7 +9,6 @@ import { enabledFlowChannels } from "@/lib/flowValidationServer";
 import FlowBuilder from "@/components/FlowBuilder";
 import FlowAiDraftForm from "@/components/FlowAiDraftForm";
 import FlowLintPanel from "@/components/FlowLintPanel";
-import FlowAiDraftForm from "@/components/FlowAiDraftForm";
 
 export default async function FlowEditorPage({ params }: { params: Promise<{ id: string }> }) {
   await requireOwner();
