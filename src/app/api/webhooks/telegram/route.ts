@@ -8,6 +8,7 @@ import {
   claimInboundBotEvent,
   completeInboundBotEvent,
   retryInboundBotEvent,
+  withInboundBotEvent,
 } from "@/lib/botInboundEvent";
 
 export async function POST(req: NextRequest) {
@@ -37,15 +38,17 @@ export async function POST(req: NextRequest) {
       if (!claim) return;
 
       try {
-        if (update.callback_query) {
-          const cq = update.callback_query;
-          await tgAnswerCallback(cq.id);
-          const chatId = cq.message?.chat?.id;
-          if (chatId != null && cq.data) await runTelegramFlow(chatId, "", cq.data);
-        } else if (update.message?.text) {
-          const chatId = update.message.chat?.id;
-          if (chatId != null) await runTelegramFlow(chatId, update.message.text);
-        }
+        await withInboundBotEvent(claim, async () => {
+          if (update.callback_query) {
+            const cq = update.callback_query;
+            await tgAnswerCallback(cq.id);
+            const chatId = cq.message?.chat?.id;
+            if (chatId != null && cq.data) await runTelegramFlow(chatId, "", cq.data);
+          } else if (update.message?.text) {
+            const chatId = update.message.chat?.id;
+            if (chatId != null) await runTelegramFlow(chatId, update.message.text);
+          }
+        });
         await completeInboundBotEvent(claim);
       } catch (error) {
         await retryInboundBotEvent(claim, error).catch(() => {});
