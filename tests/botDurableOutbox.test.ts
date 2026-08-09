@@ -44,7 +44,7 @@ test("DM and Telegram adapters write their outbox rows through the shared sessio
   }
 });
 
-test("outbox preserves order and stops behind a retrying earlier message", () => {
+test("outbox preserves order behind retry and terminal dead-letter barriers", () => {
   const schema = src("prisma/bot-outbox.prisma");
   assert.match(schema, /batchId\s+String/);
   assert.match(schema, /sequence\s+Int/);
@@ -52,7 +52,18 @@ test("outbox preserves order and stops behind a retrying earlier message", () =>
 
   const worker = src("src/lib/botOutbox.ts");
   assert.match(worker, /orderBy: \[\{ createdAt: "asc" \}, \{ sequence: "asc" \}, \{ id: "asc" \}\]/);
-  assert.match(worker, /if \(outcome === "retry"\) break/);
+  assert.match(worker, /where: \{ channel, key, status: \{ not: "sent" \} \}/);
+  assert.match(worker, /if \(!row \|\| row\.status === "dead"\) return null/);
+  assert.match(worker, /if \(outcome !== "sent"\) break/);
+  assert.match(worker, /Blocked by earlier failed message/);
+});
+
+test("outbox lease completion is fenced by the claim generation", () => {
+  const code = src("src/lib/botOutbox.ts");
+  assert.match(code, /attempts: row\.attempts,/);
+  assert.match(code, /attempts: row\.attempts \+ 1/);
+  assert.match(code, /where: \{ id: row\.id, status: "running", attempts: row\.attempts \}/);
+  assert.doesNotMatch(code, /return prisma\.botFlowOutbox\.findUnique\(\{ where: \{ id: row\.id \} \}\)/);
 });
 
 test("provider success is never resent just because CRM timeline logging failed", () => {
@@ -78,5 +89,8 @@ test("bot outbox recovery runs every five minutes", () => {
   assert.ok(vercel.crons.some((cron) => cron.path === "/api/cron/bot-outbox" && cron.schedule === "*/5 * * * *"));
   const route = src("src/app/api/cron/bot-outbox/route.ts");
   assert.match(route, /runCronPerTenant/);
+  // The slice context has to be handed DOWN, not merely checked at the top: the
+  // drain loops over conversations and sends to a provider inside each one, so
+  // without the budget it runs until the platform kills it, possibly mid-send.
   assert.match(route, /flushBotOutbox\(50, budget\)/);
 });

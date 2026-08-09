@@ -10,6 +10,13 @@ export type FlowSnapshot = {
   flowId: string | null;
 };
 
+export class PinnedFlowVersionUnavailableError extends Error {
+  constructor(versionId: string) {
+    super(`Pinned chatbot flow version is unavailable: ${versionId}`);
+    this.name = "PinnedFlowVersionUnavailableError";
+  }
+}
+
 function parseFlow(definition: string): Flow | null {
   try {
     const parsed = JSON.parse(definition);
@@ -22,6 +29,13 @@ function parseFlow(definition: string): Flow | null {
 
 /**
  * Resolve the immutable graph a conversation should execute.
+ *
+ * A pinned version ALWAYS wins. If that immutable snapshot is missing or corrupt,
+ * fail closed rather than resuming the customer's old node/variables against a
+ * different live graph. New sessions take the current publication for their
+ * channel (or the WhatsApp publication as the existing cross-channel fallback).
+ * Until every installation has republished once, the old BotFlow.active row
+ * remains a backwards-compatible fallback for NEW, unpinned sessions only.
  */
 export async function resolveFlowSnapshot(
   channel: string,
@@ -30,7 +44,8 @@ export async function resolveFlowSnapshot(
   if (pinnedVersionId) {
     const pinned = await prisma.botFlowVersion.findUnique({ where: { id: pinnedVersionId } });
     const flow = pinned ? parseFlow(pinned.definition) : null;
-    if (pinned && flow) return { flow, versionId: pinned.id, flowId: pinned.flowId };
+    if (!pinned || !flow) throw new PinnedFlowVersionUnavailableError(pinnedVersionId);
+    return { flow, versionId: pinned.id, flowId: pinned.flowId };
   }
 
   const publication =
@@ -59,11 +74,8 @@ export async function resolveFlowSnapshot(
 }
 
 /**
- * Publish the CURRENT draft as a new immutable version.
- *
- * Validation lives HERE rather than only in the builder action: any future
- * caller, script or Server Action must pass the same graph/channel compiler
- * before a version can become customer-facing.
+ * Publish the CURRENT draft as a new immutable version. Every caller passes the
+ * same graph/channel compiler before customer-facing publication.
  */
 export async function publishFlowSnapshot(
   flowId: string,
@@ -81,17 +93,11 @@ export async function publishFlowSnapshot(
   if (flowErrors(issues).length) throw new FlowPublishValidationError(issues);
 
   return withTenantWrite(async (tx, tenantId) => {
-    // Re-read inside the transaction. If the draft changed between validation
-    // and this point, refuse rather than publishing a different definition than
-    // the one the compiler approved.
     const flow = await tx.botFlow.findFirst({ where: { id: flowId, tenantId } });
     if (!flow) throw new Error("FLOW_NOT_FOUND");
     if (flow.definition !== draft.definition) throw new Error("FLOW_CHANGED_DURING_PUBLISH");
 
-    const max = await tx.botFlowVersion.aggregate({
-      where: { tenantId, flowId },
-      _max: { version: true },
-    });
+    const max = await tx.botFlowVersion.aggregate({ where: { tenantId, flowId }, _max: { version: true } });
     const version = (max._max.version ?? 0) + 1;
     const snapshot = await tx.botFlowVersion.create({
       data: {
@@ -104,15 +110,8 @@ export async function publishFlowSnapshot(
       },
     });
 
-    await tx.botFlow.updateMany({
-      where: { tenantId, channel: flow.channel },
-      data: { active: false },
-    });
-    await tx.botFlow.updateMany({
-      where: { id: flow.id, tenantId },
-      data: { active: true },
-    });
-
+    await tx.botFlow.updateMany({ where: { tenantId, channel: flow.channel }, data: { active: false } });
+    await tx.botFlow.updateMany({ where: { id: flow.id, tenantId }, data: { active: true } });
     await tx.botFlowPublication.upsert({
       where: { tenantId_channel: { tenantId, channel: flow.channel } },
       update: {
@@ -129,14 +128,11 @@ export async function publishFlowSnapshot(
         publishedById: actorId ?? null,
       },
     });
-
     return { versionId: snapshot.id, version, channel: flow.channel };
   });
 }
 
-export async function getFlowPublicationMeta(): Promise<
-  Map<string, { versionId: string; publishedAt: Date }>
-> {
+export async function getFlowPublicationMeta(): Promise<Map<string, { versionId: string; publishedAt: Date }>> {
   const publications = await prisma.botFlowPublication.findMany();
   return new Map(publications.map((p) => [p.flowId, { versionId: p.versionId, publishedAt: p.publishedAt }]));
 }
