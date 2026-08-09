@@ -43,6 +43,16 @@ export type FlowCtx = {
   handoff: (vars: Record<string, string>) => Promise<void>;
   availableSlots?: () => Promise<{ id: string; label: string }[]>;
   bookSlot?: (slotId: string, vars: Record<string, string>) => Promise<{ ok: boolean; label?: string }>;
+  /**
+   * Optional constrained semantic router for free text at a Menu node. It may
+   * return one of the node's option ids or null; the graph still owns the target.
+   */
+  routeChoice?: (input: {
+    prompt: string;
+    text: string;
+    options: FlowOption[];
+    vars: Record<string, string>;
+  }) => Promise<string | null>;
 };
 
 const FORMAT_RE: Record<string, RegExp> = {
@@ -89,6 +99,23 @@ function matchChoice(node: Extract<FlowNode, { type: "choice" }>, input: FlowInp
   return hit?.next ?? null;
 }
 
+async function semanticChoice(
+  node: Extract<FlowNode, { type: "choice" }>,
+  input: FlowInput,
+  vars: Record<string, string>,
+  ctx: FlowCtx,
+): Promise<string | null> {
+  if (!ctx.routeChoice || input.choiceId || !input.text.trim()) return null;
+  const optionId = await ctx.routeChoice({
+    prompt: interpolate(node.text, vars),
+    text: input.text,
+    options: node.options,
+    vars,
+  });
+  if (!optionId) return null;
+  return node.options.find((option) => option.id === optionId)?.next ?? null;
+}
+
 export async function runFlow(
   flow: Flow,
   session: FlowSession,
@@ -103,8 +130,9 @@ export async function runFlow(
     const cur = flow.nodes[session.nodeId];
     if (cur?.type === "choice") {
       nodeId = matchChoice(cur, input);
+      if (!nodeId) nodeId = await semanticChoice(cur, input, vars, ctx);
       if (!nodeId) {
-        messages.push({ type: "choice", text: cur.text, options: cur.options.map((o) => ({ id: choiceId(cur.id, o.id), label: o.label, description: o.description })) });
+        messages.push({ type: "choice", text: interpolate(cur.text, vars), options: cur.options.map((o) => ({ id: choiceId(cur.id, o.id), label: o.label, description: o.description })) });
         return { messages, session: { nodeId: cur.id, vars }, handedOff: false };
       }
     } else if (cur?.type === "capture") {
