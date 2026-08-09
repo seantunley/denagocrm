@@ -340,7 +340,16 @@ function SectionBlock({
             still grows past it when its content needs to. */}
         <div
           className={cn(
-            "grid items-start gap-4 sm:auto-rows-[minmax(11rem,auto)]",
+            "grid items-start gap-4",
+            // ONLY when something in this section actually spans rows.
+            //
+            // Applied unconditionally it forced EVERY row to 11rem, so a row of
+            // short stat tiles reserved 176px and left a large blank gap under
+            // it. The base row height exists solely to give a row span something
+            // to span; where nothing spans, the grid should size to its content
+            // exactly as it did before.
+            section.cards.some((entry) => (entry.rows ?? 1) > 1) &&
+              "sm:auto-rows-[minmax(11rem,auto)]",
             VIEW_COLUMNS[section.columnSpan],
           )}
         >

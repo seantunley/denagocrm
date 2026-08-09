@@ -129,7 +129,15 @@ export async function renderGrid(
         {/* items-start keeps a one-row card its natural height; a card that asked
             for extra rows overrides it with h-full so it actually fills the space
             it claimed, rather than claiming it and leaving it blank. */}
-        <div className={cn("grid items-start gap-3", GRID_COLUMNS_CLASS[card.columns], GRID_ROWS_CLASS)}>
+        <div
+          className={cn(
+            "grid items-start gap-3",
+            GRID_COLUMNS_CLASS[card.columns],
+            // Only when a child actually spans rows - see the note in
+            // DashboardCanvas. Unconditionally this padded every row.
+            card.cards.some((child) => (child.rows ?? 1) > 1) && GRID_ROWS_CLASS,
+          )}
+        >
           {children.map(({ card: child, node }) => (
             <div
               key={child.id}
