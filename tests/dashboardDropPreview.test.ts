@@ -570,3 +570,34 @@ test("the drag label's own box is the label, not the card", () => {
   // label rather than a card-sized box.
   assert.match(canvas, /modifiers=\{\[snapToCursor\]\}/);
 });
+
+test("the cell count does not change during a drag", () => {
+  /*
+   * The marker used to be an EXTRA cell. Drawing it pushed every following card
+   * along, which re-measured them, which chose a different target, which moved
+   * the marker, which shifted the cards again — you were aiming at something
+   * that moved because you aimed at it.
+   *
+   * A drag log caught it directly. Across three consecutive drag-over events,
+   * while the pointer moved a few dozen pixels, the first card's top went
+   * 290 -> 158 -> 108 and the chosen target went card-8 -> card-4 -> card-8.
+   *
+   * One cell leaves, one arrives: the dragged card is taken out of the flow and
+   * the marker occupies a cell, so the count is constant for the whole gesture.
+   */
+  const canvas = code(CANVAS);
+  assert.match(canvas, /isDragging && "hidden"/, "the dragged card must leave the flow");
+
+  // …and it must still be RENDERED, because the element holds useSortable's ref
+  // and unmounting it mid-drag takes the drag's own node with it.
+  assert.doesNotMatch(
+    canvas,
+    /if \(isDragging\) return null/,
+    "hidden, not unmounted — the ref has to survive the gesture",
+  );
+
+  // The count only balances if exactly one marker is drawn.
+  const marker = layoutWithMarker(["a", "b", "c"], "a", 1);
+  assert.equal(marker.filter((entry) => entry.kind === "marker").length, 1);
+  assert.equal(marker.filter((entry) => entry.kind === "card").length, 3, "all cards still render");
+});
