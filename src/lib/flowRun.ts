@@ -2,7 +2,7 @@ import { prisma } from "./db";
 import { getSetting } from "./settings";
 import { formatZAR } from "./format";
 import { matchByPhone } from "./whatsapp";
-import { generateBotReply, type BotMsg } from "./botAi";
+import { generateBotReply, routeBotChoice, type BotMsg } from "./botAi";
 import { sendPushToAll } from "./push";
 import { maybeAutoReply, botShouldPause } from "./bot";
 import { greetingVars } from "./flowSession";
@@ -92,6 +92,7 @@ async function whatsappHistory(contactId: string | null, leadId: string | null, 
 function buildCtx(digits: string, match: { contactId: string | null; leadId: string | null }): FlowCtx {
   return {
     dynamicAnswer: (source) => (source === "colours" ? coloursList() : priceList()),
+    routeChoice: ({ prompt, text, options }) => routeBotChoice({ prompt, text, options }),
     aiReply: async () => {
       let name: string | null = null;
       let isCustomer = false;
@@ -141,9 +142,6 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise
   const snapshot = await resolveFlowSnapshot("whatsapp", restart ? null : existing?.flowVersionId ?? null);
   const result = await runFlow(snapshot.flow, session, input, buildCtx(digits, match));
 
-  // The durable outbound batch and new session position are ONE transaction.
-  // Nothing can expose a new conversation position without the messages that
-  // explain it, and a failed session write cannot leave an orphaned duplicate batch.
   await withTenantWrite(async (tx, tenantId) => {
     await enqueueBotMessagesTx(tx, tenantId, {
       channel: "whatsapp",
@@ -181,10 +179,6 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise
   return true;
 }
 
-/**
- * Single WhatsApp entry point. Voice notes and the AI-off case use the
- * conversational/keyword bot; otherwise, when a flow is enabled, run the flow.
- */
 export async function runWhatsAppBot(
   digits: string,
   input: FlowInput,
