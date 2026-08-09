@@ -1,33 +1,107 @@
 import crypto from "crypto";
 import { withTenantWrite } from "./tenantWrite";
 
-/**
- * Atomically claims one provider-delivered inbound message/update before it can
- * drive the chatbot or create CRM side effects.
- *
- * Meta and Telegram retry webhooks. Without a durable provider-id fence, the
- * same customer message can be recorded twice and can execute a booking, lead
- * action or bot reply twice. The unique constraint is scoped by tenant + channel
- * so provider ids from different tenants/channels can never collide.
- *
- * Providers are expected to supply a stable id. If they do not, fail open for
- * that event rather than dropping a legitimate customer message we cannot
- * identify safely.
- */
-export async function claimInboundBotEvent(channel: string, providerId: string): Promise<boolean> {
-  const id = providerId.trim();
-  if (!id) return true;
+export type InboundBotEventClaim = { rowId: string | null };
 
-  return withTenantWrite(async (tx, tenantId) => {
-    const inserted = await tx.$executeRawUnsafe(
-      `INSERT INTO "BotInboundEvent" ("id", "tenantId", "channel", "providerId", "createdAt")
-       VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
-       ON CONFLICT ("tenantId", "channel", "providerId") DO NOTHING`,
-      crypto.randomUUID(),
+/**
+ * Four outcomes rather than a nullable claim. `completed` and `leased` both mean
+ * "do not process this now", but they need OPPOSITE answers to the provider: a
+ * completed event is genuinely finished and must be acked, while a leased one is
+ * owned by an attempt that may already have died. Acking a leased event retires
+ * the provider's redelivery and loses the message permanently, because nothing
+ * sweeps a lease that expires with no one waiting on it.
+ *
+ * `unidentified` is a provider event carrying no stable id. It used to be run
+ * unfenced on the grounds that dropping a real message is worse, but an unfenced
+ * event is exactly the one a redelivery repeats in full — and later PRs in this
+ * stack hang CRM action identities off this row, so "unfenced" becomes "books
+ * twice". All three providers always send an id; refusing and logging is the
+ * honest answer.
+ */
+export type InboundBotEventOutcome =
+  | { status: "claimed"; claim: InboundBotEventClaim }
+  | { status: "completed" }
+  | { status: "leased" }
+  | { status: "unidentified" };
+
+/** Thrown so the route answers non-2xx and the provider redelivers once the lease expires. */
+export class InboundBotEventLeasedError extends Error {
+  constructor(channel: string, providerId: string) {
+    super(`Inbound ${channel} event ${providerId} is leased by another attempt — asking the provider to redeliver`);
+    this.name = "InboundBotEventLeasedError";
+  }
+}
+
+/**
+ * Atomically lease one provider-delivered inbound message/update before it can
+ * drive the chatbot or create CRM side effects.
+ */
+export async function claimInboundBotEvent(
+  channel: string,
+  providerId: string,
+): Promise<InboundBotEventOutcome> {
+  const stableId = providerId.trim();
+  if (!stableId) return { status: "unidentified" };
+
+  return withTenantWrite(async (tx, tenantId): Promise<InboundBotEventOutcome> => {
+    const id = crypto.randomUUID();
+    const rows = await tx.$queryRawUnsafe(
+      `INSERT INTO "BotInboundEvent"
+         ("id", "tenantId", "channel", "providerId", "status", "attempts", "leaseUntil", "createdAt", "updatedAt")
+       VALUES ($1, $2, $3, $4, 'running', 1, NOW() + INTERVAL '5 minutes', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       ON CONFLICT ("tenantId", "channel", "providerId") DO UPDATE
+         SET "status" = 'running',
+             "attempts" = "BotInboundEvent"."attempts" + 1,
+             "leaseUntil" = NOW() + INTERVAL '5 minutes',
+             "lastError" = NULL,
+             "updatedAt" = NOW()
+       WHERE "BotInboundEvent"."status" <> 'completed'
+         AND ("BotInboundEvent"."leaseUntil" IS NULL OR "BotInboundEvent"."leaseUntil" < NOW())
+       RETURNING "id"`,
+      id,
       tenantId,
       channel,
-      id,
-    );
-    return Number(inserted) === 1;
+      stableId,
+    ) as Array<{ id: string }>;
+    if (rows[0]) return { status: "claimed", claim: { rowId: rows[0].id } };
+
+    // No row means one of two opposite things. Ask which, so the caller can ack a
+    // finished event but let a live lease be redelivered.
+    const settled = await tx.$queryRawUnsafe(
+      `SELECT "status" FROM "BotInboundEvent"
+        WHERE "tenantId" = $1 AND "channel" = $2 AND "providerId" = $3`,
+      tenantId,
+      channel,
+      stableId,
+    ) as Array<{ status: string }>;
+    // A row that vanished between the two statements is treated as leased: asking
+    // for a redelivery is recoverable, acking a message we never ran is not.
+    return settled[0]?.status === "completed" ? { status: "completed" } : { status: "leased" };
+  });
+}
+
+/** Mark the leased event complete only after all critical webhook work succeeded. */
+export async function completeInboundBotEvent(claim: InboundBotEventClaim): Promise<void> {
+  if (!claim.rowId) return;
+  await withTenantWrite(async (tx, tenantId) => {
+    await tx.botInboundEvent.updateMany({
+      where: { id: claim.rowId, tenantId, status: "running" },
+      data: { status: "completed", completedAt: new Date(), leaseUntil: null, lastError: null },
+    });
+  });
+}
+
+/** Release a failed event immediately so the provider's retry can reclaim it. */
+export async function retryInboundBotEvent(
+  claim: InboundBotEventClaim,
+  error: unknown,
+): Promise<void> {
+  if (!claim.rowId) return;
+  const message = (error instanceof Error ? error.message : String(error)).slice(0, 1000);
+  await withTenantWrite(async (tx, tenantId) => {
+    await tx.botInboundEvent.updateMany({
+      where: { id: claim.rowId, tenantId, status: "running" },
+      data: { status: "retry", leaseUntil: null, lastError: message },
+    });
   });
 }
