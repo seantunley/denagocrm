@@ -15,7 +15,6 @@ import { enqueueBotMessagesTx } from "./botOutboxWrite";
 import { withTenantWrite } from "./tenantWrite";
 import { loadBotSession, upsertBotSessionTx, deleteBotSessionTx } from "./botSessionStore";
 
-export const FLOW_MARKER = "🤖 Flow";
 const FLOW_VERSION_VAR = "__flow_version";
 
 export async function isFlowEnabled(): Promise<boolean> {

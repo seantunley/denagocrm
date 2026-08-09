@@ -1,16 +1,23 @@
-/// Provider-delivered inbound chatbot events already accepted for processing.
+/// Provider-delivered inbound chatbot events accepted for processing.
 ///
-/// Meta and Telegram retry webhooks. This ledger is the durable fence that keeps
-/// one provider message/update from advancing a flow or creating CRM side effects
-/// more than once. Provider ids are namespaced by tenant and channel.
+/// A row is leased while its webhook work is running and becomes `completed`
+/// only after that work succeeds. A crashed invocation therefore becomes
+/// claimable again when its lease expires instead of turning a retry into a
+/// permanent no-op.
 model BotInboundEvent {
-  id         String   @id @default(cuid())
+  id         String    @id @default(cuid())
   tenantId   String
   channel    String
   providerId String
-  createdAt  DateTime @default(now())
+  status     String    @default("running") // running | retry | completed
+  attempts   Int       @default(1)
+  leaseUntil DateTime?
+  completedAt DateTime?
+  lastError  String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
   @@unique([tenantId, channel, providerId])
-  @@index([tenantId])
+  @@index([tenantId, status, leaseUntil])
   @@index([createdAt])
 }

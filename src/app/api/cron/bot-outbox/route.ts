@@ -19,6 +19,9 @@ export async function GET(req: NextRequest) {
   if (!budget.ok) return NextResponse.json({ ok: false, skipped: budget.reason }, { status: 503 });
 
   const runs = await runCronPerTenant(async (_tenantId, budget) => {
+    // Hand the slice context DOWN, not just check it here. The drain loops over
+    // conversations and sends to a provider inside each one; without the budget
+    // it runs until the platform kills it, possibly mid-send.
     if (budget.shouldStop(4_000)) return { skipped: "deadline" as const };
     return flushBotOutbox(50, budget);
   },
