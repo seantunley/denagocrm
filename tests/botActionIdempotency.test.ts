@@ -34,7 +34,13 @@ test("bot lead actions use stable external ids derived from event plus node", ()
   assert.match(actions, /currentInboundBotEventId\(\)/);
   assert.match(actions, /`bot:\$\{eventId\}:\$\{nodeId\}:\$\{kind\}`/);
   assert.match(actions, /externalId: key/);
-  assert.doesNotMatch(actions, /createIntakeLead\([\s\S]*?\)\.catch\(\(\) => \{\}\)/);
+
+  const leadBranchStart = actions.indexOf('if (action === "lead")');
+  const serviceBranchStart = actions.indexOf("const userId = await firstUserId()", leadBranchStart);
+  assert.ok(leadBranchStart >= 0 && serviceBranchStart > leadBranchStart, "could not isolate the lead action branch");
+  const leadBranch = actions.slice(leadBranchStart, serviceBranchStart);
+  assert.match(leadBranch, /await createIntakeLead\(/);
+  assert.doesNotMatch(leadBranch, /\.catch\(\(\) => \{\}\)/, "lead creation failures must remain retryable");
 });
 
 test("the one lead creator treats externalId as a durable idempotency identity", () => {
