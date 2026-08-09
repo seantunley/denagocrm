@@ -92,7 +92,12 @@ export async function advanceFlow(
   }
 
   const state: SessionState = !existing || restart ? { nodeId: null, vars: { ...(seedVars ?? {}) }, msgs: [] } : { nodeId: existing.nodeId, vars: existing.vars, msgs: existing.msgs };
-  if (existing && !restart) state.msgs.push({ role: "user", content: input.text });
+  // The current turn belongs in the transcript even when this is the FIRST turn.
+  // Previously a flow whose start node was AI invoked the model with an empty
+  // history because user messages were appended only when a session already
+  // existed. Choice callbacks with no text stay out of the natural-language
+  // transcript; their rendered label is already represented by the flow state.
+  if (input.text.trim()) state.msgs.push({ role: "user", content: input.text });
 
   const flow = await getActiveFlowFor(channel);
   const result = await runFlow(flow, { nodeId: state.nodeId, vars: state.vars }, input, makeCtx(state));
