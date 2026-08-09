@@ -16,6 +16,10 @@ const NODE_TYPES = new Set([
 const BUILTIN_VARS = new Set([
   "greeting", "first_name", "name", "known", "slot",
   "channel", "current_date", "current_time",
+  // Deterministic outputs populated by booking(action=lookup/cancel) and
+  // slots(action=reschedule). They are runtime-owned, not customer-entered.
+  "booking_found", "booking_id", "booking_slot", "booking_summary",
+  "booking_cancelled", "booking_rescheduled",
 ]);
 const AUTO_TYPES = new Set<FlowNode["type"]>(["message", "image", "answer", "booking", "condition"]);
 
@@ -191,6 +195,7 @@ export function validateFlow(flow: Flow, channels: FlowChannel[] = ["whatsapp"])
   if (entries.length > 250) issues.push(issue("error", "graph.size", "Flow exceeds the 250-node safety limit."));
 
   const captured = new Set(BUILTIN_VARS);
+  const hasBookingLookup = entries.some(([, node]) => node?.type === "booking" && node.action === "lookup");
   for (const [key, rawNode] of entries) {
     if (!rawNode || typeof rawNode !== "object") {
       issues.push(issue("error", "node.shape", `Node “${key}” is malformed.`, key));
@@ -249,7 +254,18 @@ export function validateFlow(flow: Flow, channels: FlowChannel[] = ["whatsapp"])
       if (!url.trim()) issues.push(issue("error", "image.missing", "Image node has no image URL.", id));
       if (/\.private\.blob\.vercel-storage\.com/i.test(url)) issues.push(issue("error", "image.private_url", "Messaging providers cannot fetch a private Blob URL directly. Upload/provider media handling is required for this image.", id));
     }
-    if (node.type === "booking" && node.action && !["service", "demo", "lead"].includes(str(node.action))) issues.push(issue("error", "booking.action", "CRM action is not supported by the runtime.", id));
+    if (node.type === "booking" && node.action && !["service", "demo", "lead", "lookup", "cancel"].includes(str(node.action))) {
+      issues.push(issue("error", "booking.action", "CRM/booking action is not supported by the runtime.", id));
+    }
+    if (node.type === "booking" && node.action === "cancel" && !hasBookingLookup) {
+      issues.push(issue("warning", "booking.lookup_missing", "Cancel booking normally needs a Booking lookup node first so {{booking_id}} belongs to this customer.", id));
+    }
+    if (node.type === "slots" && node.action && !["book", "reschedule"].includes(str(node.action))) {
+      issues.push(issue("error", "slots.action", "Slot action must book a new appointment or reschedule an existing booking.", id));
+    }
+    if (node.type === "slots" && node.action === "reschedule" && !hasBookingLookup) {
+      issues.push(issue("warning", "booking.lookup_missing", "Reschedule normally needs a Booking lookup node first so the existing customer-owned booking is known.", id));
+    }
 
     for (const target of refs(node)) {
       if (!flow.nodes[target]) issues.push(issue("error", "graph.missing_target", `Connection points to missing node “${target}”.`, id));
