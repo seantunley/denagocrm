@@ -61,10 +61,11 @@ export async function claimInboundBotEvent(
 
 /** Mark the lease complete only after all critical webhook work succeeded. */
 export async function completeInboundBotEvent(claim: InboundBotEventClaim): Promise<void> {
-  if (!claim.rowId) return;
+  const rowId = claim.rowId;
+  if (!rowId) return;
   await withTenantWrite(async (tx, tenantId) => {
     await tx.botInboundEvent.updateMany({
-      where: { id: claim.rowId, tenantId, status: "running" },
+      where: { id: rowId, tenantId, status: "running" },
       data: { status: "completed", completedAt: new Date(), leaseUntil: null, lastError: null },
     });
   });
@@ -75,11 +76,12 @@ export async function retryInboundBotEvent(
   claim: InboundBotEventClaim,
   error: unknown,
 ): Promise<void> {
-  if (!claim.rowId) return;
+  const rowId = claim.rowId;
+  if (!rowId) return;
   const message = (error instanceof Error ? error.message : String(error)).slice(0, 1000);
   await withTenantWrite(async (tx, tenantId) => {
     await tx.botInboundEvent.updateMany({
-      where: { id: claim.rowId, tenantId, status: "running" },
+      where: { id: rowId, tenantId, status: "running" },
       data: { status: "retry", leaseUntil: null, lastError: message },
     });
   });
