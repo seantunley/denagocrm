@@ -40,7 +40,8 @@ test("WhatsApp sessions persist and resolve their publication pin", () => {
   const code = src("src/lib/flowRun.ts");
   assert.match(code, /FLOW_VERSION_VAR = "__flow_version"/);
   assert.match(code, /existing\?\.flowVersionId \?\? null/);
-  assert.match(code, /saveSession\(digits, result\.session, snapshot\.versionId\)/);
+  assert.match(code, /storedVars\(result\.session\.vars, snapshot\.versionId\)/);
+  assert.match(code, /upsertBotSessionTx\(tx, tenantId/);
 });
 
 test("saving a flow is a draft operation and publishing is explicit", () => {
