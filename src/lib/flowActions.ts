@@ -1,7 +1,7 @@
 /**
  * CRM-connected flow actions shared by every channel adapter: real workshop
- * availability, atomic slot booking, demo/test-drive creation and lead capture
- * — all writing straight into the CRM (no guessing).
+ * availability, atomic slot booking, booking self-service, demo/test-drive
+ * creation and lead capture — all deterministic CRM operations.
  */
 import { addDays, format } from "date-fns";
 import { prisma } from "./db";
@@ -10,6 +10,7 @@ import { createIntakeLead } from "./leadIntake";
 import { createLeadRecordIfPipelineReady } from "./leadCreate";
 import { sendPushToAll } from "./push";
 import { resolveTenantActor } from "./tenantActor";
+import { cancelBotBooking, lookupBotBooking, rescheduleBotBooking } from "./botBookingSelfService";
 
 type Match = { contactId: string | null; leadId: string | null };
 
@@ -43,8 +44,6 @@ async function ensureContact(source: string, vars: Record<string, string>, match
 }
 
 async function firstUserId(): Promise<string | null> {
-  // Tenant-aware (channel scope established by the webhook chokepoint); dormant →
-  // the oldest active user, unchanged.
   return (await resolveTenantActor())?.id ?? null;
 }
 
@@ -57,15 +56,6 @@ async function createDemo(source: string, vars: Record<string, string>, match: M
   const userId = await firstUserId();
   if (!userId) return;
   const who = await ensureContact(source, vars, match);
-  // Through the one lead creator. This path created the Lead row itself with no
-  // audit entry, no `position` (so it sorted below every form lead) and no
-  // `lead_created` automations at all — a bot test-drive request never triggered
-  // the follow-up rule the workspace had configured for a new lead.
-  //
-  // The push stays the demo-specific one on the `bot_handoff` toggle rather than
-  // the generic "New lead": it says more, staff already recognise it, and one
-  // request should announce itself once. …IfPipelineReady keeps the old
-  // `if (!stage) return` guard — no pipeline, no lead and no test-drive activity.
   const title = `Demo / test drive — ${vars.name || "customer"}`;
   const lead = await createLeadRecordIfPipelineReady({
     title,
@@ -124,13 +114,24 @@ export function crmActions(source: string, match: Match) {
         return { ok: false };
       }
     },
+    rescheduleSlot: async (slotId: string, vars: Record<string, string>): Promise<{ ok: boolean; label?: string }> => {
+      if (!vars.booking_id) return { ok: false };
+      return rescheduleBotBooking(vars.booking_id, slotId, match, vars);
+    },
+    manageBooking: async (action: "lookup" | "cancel", vars: Record<string, string>): Promise<{ ok: boolean }> => {
+      if (action === "lookup") return lookupBotBooking(match, vars);
+      if (!vars.booking_id) {
+        vars.booking_cancelled = "no";
+        return { ok: false };
+      }
+      return cancelBotBooking(vars.booking_id, match, vars);
+    },
     createBooking: async (vars: Record<string, string>, action?: "service" | "demo" | "lead") => {
       if (action === "demo") return createDemo(source, vars, match);
       if (action === "lead") {
         await createIntakeLead({ name: vars.name || `${source} enquiry`, email: vars.email || null, phone: vars.phone || null, message: vars.service || vars.message || "Chatbot enquiry", source }).catch(() => {});
         return;
       }
-      // service without a booked slot → a workshop request the team confirms
       const userId = await firstUserId();
       if (!userId) return;
       const who = await ensureContact(source, vars, match);
