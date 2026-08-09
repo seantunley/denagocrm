@@ -18,11 +18,10 @@ export async function GET(req: NextRequest) {
   });
   if (!budget.ok) return NextResponse.json({ ok: false, skipped: budget.reason }, { status: 503 });
 
-  const runs = await runCronPerTenant(
-    async (_tenantId, tenantBudget) => {
-      if (tenantBudget.shouldStop(4_000)) return { skipped: "deadline" as const };
-      return flushBotOutbox(50);
-    },
+  const runs = await runCronPerTenant(async (_tenantId, budget) => {
+    if (budget.shouldStop(4_000)) return { skipped: "deadline" as const };
+    return flushBotOutbox(50, budget);
+  },
     {
       maxRuntimeMs: budget.remainingMs,
       minStartBudgetMs: 4_000,

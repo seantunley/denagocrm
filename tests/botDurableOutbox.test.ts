@@ -78,5 +78,5 @@ test("bot outbox recovery runs every five minutes", () => {
   assert.ok(vercel.crons.some((cron) => cron.path === "/api/cron/bot-outbox" && cron.schedule === "*/5 * * * *"));
   const route = src("src/app/api/cron/bot-outbox/route.ts");
   assert.match(route, /runCronPerTenant/);
-  assert.match(route, /flushBotOutbox\(50\)/);
+  assert.match(route, /flushBotOutbox\(50, budget\)/);
 });
