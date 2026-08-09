@@ -50,13 +50,16 @@ test("the reorder happens on drag-over, not on drop", () => {
   const canvas = CANVAS();
   assert.match(canvas, /function onDragOver\(event: DragOverEvent\)/, "must handle drag-over");
   assert.match(canvas, /onDragOver=\{onDragOver\}/, "and wire it to the context");
-  // onDragEnd must do nothing but clear the active card. A reorder there means
-  // the grid does not reflow under the pointer and the drop target is invisible.
+  // onDragEnd must do nothing but end the drag. A reorder there means the grid
+  // does not reflow under the pointer and the drop target is invisible.
   assert.match(
     canvas,
-    /onDragEnd=\{\(_event: DragEndEvent\) => setActiveId\(null\)\}/,
+    /onDragEnd=\{\(_event: DragEndEvent\) => endDrag\(\)\}/,
     "drop must only end the drag; the move already happened on drag-over",
   );
+  const end = canvas.split("function endDrag()")[1]?.split("\n  }")[0] ?? "";
+  assert.ok(end.length > 0, "could not isolate endDrag");
+  assert.doesNotMatch(end, /update|move/i, "ending a drag must not itself move anything");
 });
 
 test("no size-uniform sorting strategy is used", () => {
@@ -101,13 +104,19 @@ test("a card can be dragged between sections, not just within one", () => {
   // "const activeCardId", which appears earlier and would slice the body away.
   const over = canvas.split("function onDragOver")[1]?.split("const activeCard =")[0] ?? "";
   assert.ok(over.length > 0, "could not isolate the drag-over handler");
-  assert.match(over, /if \(from\.id === toSection\.id\)/, "the within-section case must be handled");
-  assert.match(over, /splice\(insertAt, 0, moving\)/, "the cross-section case must insert");
-  assert.match(
-    over,
-    /overId === toSection\.id\s*\?\s*toSection\.cards\.length/,
-    "dropping onto an empty section must append to it",
-  );
+  /*
+   * The move itself moved out to lib/dashboard/canvasMove, where it can be
+   * executed rather than grepped — tests/dashboardCanvasMove.test.ts covers the
+   * within-section, cross-section and empty-section cases against real configs.
+   *
+   * It moved because computing it here was the bug: the handler derived its
+   * indices from the `view` prop and applied them inside the state updater to
+   * `current`, and dragover fires faster than React renders, so those were
+   * routinely different documents. What is left to check here is that the
+   * handler still delegates, and still does not do that arithmetic itself.
+   */
+  assert.match(over, /moveCardInView\(current, activeCardId, overId\)/, "must delegate the move");
+  assert.doesNotMatch(over, /splice|findIndex/, "no index arithmetic against the props");
 });
 
 /* ── saving ───────────────────────────────────────────────────────── */
@@ -157,7 +166,11 @@ test("an edit is validated before it is persisted, with the same parser the acti
   // user has made three more edits and has no idea which one was rejected.
   const provider = PROVIDER();
   assert.match(provider, /const checked = parseConfigStrict\(next\);/, "must validate locally");
-  assert.match(provider, /if \(!checked\.ok\) \{\s*toast\.error\(checked\.error\);\s*return current;/, "and refuse the change, showing the parser's own message");
+  assert.match(
+    provider,
+    /if \(!checked\.ok\) \{\s*toast\.error\(checked\.error\);\s*return;/,
+    "and refuse the change, showing the parser's own message",
+  );
 });
 
 test("a re-render with an unchanged server config does not clobber a live edit", () => {
