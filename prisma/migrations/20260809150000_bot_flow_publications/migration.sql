@@ -10,7 +10,10 @@ CREATE TABLE "BotFlowVersion" (
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "BotFlowVersion_pkey" PRIMARY KEY ("id"),
     CONSTRAINT "BotFlowVersion_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE,
-    CONSTRAINT "BotFlowVersion_flowId_fkey" FOREIGN KEY ("flowId") REFERENCES "BotFlow"("id") ON DELETE CASCADE ON UPDATE CASCADE
+    -- Published snapshots outlive the mutable draft row. Restrict deletion of a
+    -- BotFlow once it has versions so a live session's pinned version cannot be
+    -- removed underneath it.
+    CONSTRAINT "BotFlowVersion_flowId_fkey" FOREIGN KEY ("flowId") REFERENCES "BotFlow"("id") ON DELETE RESTRICT ON UPDATE CASCADE
 );
 
 CREATE UNIQUE INDEX "BotFlowVersion_tenant_flow_version_key"

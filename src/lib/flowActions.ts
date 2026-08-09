@@ -32,14 +32,24 @@ export async function availableSlots(max = 6): Promise<{ id: string; label: stri
 
 async function ensureContact(source: string, vars: Record<string, string>, match: Match): Promise<Match> {
   if (match.contactId) return match;
-  if (vars.name || vars.phone || vars.email) {
-    const [first, ...rest] = (vars.name || "Customer").trim().split(/\s+/);
-    const c = await prisma.contact.create({
-      data: { firstName: first || "Customer", lastName: rest.join(" ") || null, phone: vars.phone || null, email: vars.email || null, source },
-    });
-    return { contactId: c.id, leadId: match.leadId };
-  }
-  return match;
+  // A phone or an email is required, and not merely one of three options: they are
+  // the only fields a later attempt can match on. Creating a Contact from a bare
+  // name leaves nothing to find, so a provider redelivery — or the customer
+  // restarting the flow — added another one every time.
+  const identity = [
+    vars.phone ? { phone: vars.phone } : null,
+    vars.email ? { email: vars.email } : null,
+  ].filter(Boolean) as Array<{ phone: string } | { email: string }>;
+  if (!identity.length) return match;
+
+  const existing = await prisma.contact.findFirst({ where: { OR: identity } });
+  if (existing) return { contactId: existing.id, leadId: match.leadId };
+
+  const [first, ...rest] = (vars.name || "Customer").trim().split(/\s+/);
+  const c = await prisma.contact.create({
+    data: { firstName: first || "Customer", lastName: rest.join(" ") || null, phone: vars.phone || null, email: vars.email || null, source },
+  });
+  return { contactId: c.id, leadId: match.leadId };
 }
 
 async function firstUserId(): Promise<string | null> {
