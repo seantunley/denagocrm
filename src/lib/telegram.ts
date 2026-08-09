@@ -4,6 +4,7 @@ import { priceList, coloursList } from "./botAnswers";
 import { sendPushToAll } from "./push";
 import { advanceFlow, greetingVars } from "./flowSession";
 import { crmActions } from "./flowActions";
+import type { FlowHandoffContext } from "./flow";
 import { flushBotOutboxConversation } from "./botOutbox";
 import { enqueueBotMessagesTx } from "./botOutboxWrite";
 
@@ -19,6 +20,12 @@ async function tgBotEnabled(): Promise<boolean> {
   return (await getSetting("BOT_ENABLED")) === "true" && (await getSetting("BOT_TG_ENABLED")) === "true";
 }
 
+function handoffBody(context?: FlowHandoffContext): string {
+  if (context?.summary) return `${context.summary}${context.reason ? ` · ${context.reason}` : ""}`.slice(0, 220);
+  if (context?.reason) return `Handoff: ${context.reason}`.slice(0, 220);
+  return "The assistant handed a chat over.";
+}
+
 /** Run the published flow for an inbound Telegram update. */
 export async function runTelegramFlow(chatId: number | string, text: string, callbackData?: string) {
   if (!(await tgBotEnabled())) return;
@@ -32,10 +39,10 @@ export async function runTelegramFlow(chatId: number | string, text: string, cal
       routeChoice: ({ prompt, text: freeText, options }) => routeBotChoice({ prompt, text: freeText, options }),
       aiReply: async (vars) => {
         const ai = await generateBotReply({ history: state.msgs, customerName: vars.name ?? null, isCustomer: false });
-        return ai ?? { reply: "Let me get a team member to help 👍", handoff: true };
+        return ai ?? { reply: "Let me get a team member to help 👍", handoff: true, confidence: "low", intent: "unknown", handoffReason: "AI unavailable" };
       },
-      handoff: async () => {
-        await sendPushToAll({ title: "Telegram needs you 🙋", body: "The assistant handed a chat over.", url: "/inbox" }, "bot_handoff").catch(() => {});
+      handoff: async (_vars, context) => {
+        await sendPushToAll({ title: "Telegram needs you 🙋", body: handoffBody(context), url: "/inbox" }, "bot_handoff").catch(() => {});
       },
       ...crmActions("telegram", { contactId: null, leadId: null }),
     }),
