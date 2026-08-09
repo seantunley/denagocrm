@@ -451,3 +451,43 @@ test("the canvas asks for the nearest card rather than appending", () => {
     "the dragged card must not be offered as its own target",
   );
 });
+
+/* ── the thing you are carrying ───────────────────────────────────── */
+
+test("the drag label is pinned to the cursor", () => {
+  /*
+   * Reported: "service due is not following the cursor."
+   *
+   * dnd-kit places an overlay at the DRAGGED ELEMENT's position moved by the
+   * pointer delta, which is right when the overlay is a copy of the element and
+   * wrong here — it is a small label standing in for a card that can be most of
+   * the screen wide. Grabbing a wide card by its handle at the top-right draws
+   * the label at the card's top-LEFT, hundreds of pixels away, and it stays that
+   * far away for the whole drag.
+   *
+   * It matters more than usual now: the card itself no longer moves, so the
+   * label is the only thing saying a drag is happening.
+   */
+  const canvas = code(CANVAS);
+  assert.match(canvas, /modifiers=\{\[snapToCursor\]\}/, "the overlay must be pinned");
+  assert.match(canvas, /const snapToCursor: Modifier =/);
+  // Centred on where the pointer GRABBED, offset by half the label, or it hangs
+  // off one corner of the cursor instead of sitting under it.
+  assert.match(canvas, /draggingNodeRect\.width \/ 2/);
+  assert.match(canvas, /draggingNodeRect\.height \/ 2/);
+  // Nothing to measure means leave it alone rather than throw it to the origin.
+  assert.match(canvas, /if \(!draggingNodeRect \|\| !activatorEvent\) return transform;/);
+});
+
+test("no new dependency was added for twelve lines", () => {
+  // @dnd-kit/modifiers exports snapCenterToCursor. It is not a dependency here,
+  // and the function is short enough that adding a package to get it would be a
+  // worse trade than writing it next to the thing that uses it.
+  const pkg = JSON.parse(read("package.json")) as {
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+  };
+  const all = { ...pkg.dependencies, ...pkg.devDependencies };
+  assert.ok(!("@dnd-kit/modifiers" in all), "the modifier is written out, not installed");
+  assert.ok("@dnd-kit/utilities" in all, "getEventCoordinates comes from a package already here");
+});
