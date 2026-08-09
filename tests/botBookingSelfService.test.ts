@@ -30,8 +30,8 @@ test("captured-phone lookup matches only an existing contact or open lead", () =
 });
 
 test("cancellation retains history and releases workshop capacity by leaving planned state", () => {
-  const code = src("src/lib/botBookingSelfService.ts");
-  const cancel = code.slice(code.indexOf("export async function cancelBotBooking"));
+  const code = src("src/lib/bookingSlots.ts");
+  const cancel = code.slice(code.indexOf("export async function cancelWorkshopBooking"), code.indexOf("export async function rescheduleWorkshopBooking"));
   assert.match(cancel, /existing\.status === "cancelled"/);
   assert.match(cancel, /existing\.status !== "planned"/);
   assert.match(cancel, /data: \{ status: "cancelled" \}/);
@@ -39,19 +39,19 @@ test("cancellation retains history and releases workshop capacity by leaving pla
 });
 
 test("cancellation is idempotent under retries and concurrent cancellation", () => {
-  const code = src("src/lib/botBookingSelfService.ts");
-  const cancel = code.slice(code.indexOf("export async function cancelBotBooking"));
-  assert.match(cancel, /updateMany/);
-  assert.match(cancel, /status: "planned"/);
-  assert.match(cancel, /updated\.count !== 1/);
-  assert.match(cancel, /after\?\.status === "cancelled"/);
+  const code = src("src/lib/bookingSlots.ts");
+  const cancel = code.slice(code.indexOf("export async function cancelWorkshopBooking"), code.indexOf("export async function rescheduleWorkshopBooking"));
+  assert.match(cancel, /basePrisma\.\$transaction/);
+  assert.match(cancel, /lockWorkshopBooking\(tx, input\.bookingId, tenantId\)/);
+  assert.match(cancel, /existing\.status === "cancelled"/);
   assert.match(cancel, /alreadyCancelled: true/);
 });
 
 test("a booking id alone is never enough to cancel someone else's reservation", () => {
-  const code = src("src/lib/botBookingSelfService.ts");
-  const cancel = code.slice(code.indexOf("export async function cancelBotBooking"));
-  assert.match(cancel, /const scope = ownerWhere\(owner\)/);
-  assert.match(cancel, /if \(!scope \|\| !bookingId\) return \{ ok: false \}/);
+  const code = src("src/lib/bookingSlots.ts");
+  const cancel = code.slice(code.indexOf("export async function cancelWorkshopBooking"), code.indexOf("export async function rescheduleWorkshopBooking"));
+  assert.match(cancel, /const scope = ownerWhere\(input\.owner\)/);
+  assert.match(cancel, /if \(!scope\) return \{ ok: false \}/);
+  assert.match(cancel, /id: input\.bookingId/);
   assert.match(cancel, /\.\.\.scope/);
 });

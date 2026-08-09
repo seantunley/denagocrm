@@ -141,8 +141,8 @@ BEGIN
       END IF;
     END IF;
 
-    -- Bot handoff writes paused + NULL nodeId. Manual takeover preserves the
-    -- current nodeId, so it must not be counted as an AI/flow handoff conversion.
+    -- Bot handoff writes paused + NULL nodeId.
+    -- Manual takeover preserves the current nodeId, so it must not be counted as an AI/flow handoff conversion.
     IF OLD."status" = 'active'
        AND NEW."status" = 'paused'
        AND NEW."nodeId" IS NULL
