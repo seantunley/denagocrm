@@ -240,6 +240,8 @@ ${input.voiceNote ? "- This arrived as a transcribed voice note. Reply naturally
       return null;
     }
 
+    // Canonical pathways may be used at medium confidence because the
+    // application sends their approved answer instead of model-authored copy.
     if (parsed.faqId) {
       const pathway = pathways.find((item) => item.id === parsed.faqId);
       if (!pathway) return null;
