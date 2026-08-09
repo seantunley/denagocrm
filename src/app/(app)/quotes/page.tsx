@@ -3,7 +3,7 @@ import { CheckCircle2, CircleDollarSign, FileText, Plus, Search, Send } from "lu
 import { prisma } from "@/lib/db";
 import { requireAnyPermission, getAccessibleQuoteIds, hasPermission } from "@/lib/permissions";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
-import { leadOptionLabel } from "@/lib/leadOption";
+import { leadOptionLabels } from "@/lib/leadOption";
 import { payableTotalCents } from "@/lib/pricing";
 import {
   QUOTE_EDITOR_INCLUDE,
@@ -115,9 +115,11 @@ export default async function QuotesPage({
   // the same. leadOptionLabel leads with the customer and appends a short id,
   // which is the only thing that separates two open leads for the same customer
   // and the same model.
-  const leadOptions = openLeads.map((lead) => ({
+  // Labelled as a LIST, not one at a time: the reference only guarantees
+  // uniqueness if it is chosen against the other options on offer.
+  const leadOptions = leadOptionLabels(openLeads).map((lead) => ({
     id: lead.id,
-    label: leadOptionLabel(lead),
+    label: lead.label,
     contactId: lead.contactId,
   }));
   const productOptions = products.map((product) => ({

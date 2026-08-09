@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { leadOptionLabel, shortLeadRef } from "../src/lib/leadOption";
+import { leadOptionLabel, leadOptionLabels, shortLeadRef } from "../src/lib/leadOption";
 
 /**
  * THE BUG THIS COVERS.
@@ -83,4 +83,81 @@ test("the label never ends with a dangling separator", () => {
     assert.doesNotMatch(label, /[—·]\s*$/, `dangling separator in: ${label}`);
     assert.doesNotMatch(label, /\s{2,}/, `doubled spaces in: ${label}`);
   }
+});
+
+// ── uniqueness is a property of the LIST ────────────────────────────────────
+
+/**
+ * Review caught this: the first version used the last six characters of the cuid
+ * as "the" reference and called that a tie-breaker. It is not one. Two ids ending
+ * in the same six characters produce the same label again — and since the whole
+ * reason the reference exists is that picking the wrong lead attaches a quote to
+ * another customer, "probably unique" is the wrong standard.
+ *
+ * Uniqueness belongs to the list, so the list is what gets labelled.
+ */
+
+test("ids colliding on their last six characters still get distinct labels", () => {
+  // The exact failure the short suffix could not prevent.
+  const leads = [
+    { id: "clx000000aaAAA111ABC123", name: "Mike LD", title: "Rover XL" },
+    { id: "clx000000bbBBB222ABC123", name: "Mike LD", title: "Rover XL" },
+  ];
+  assert.equal(shortLeadRef(leads[0].id), shortLeadRef(leads[1].id), "…they do collide at six");
+
+  const labels = leadOptionLabels(leads).map((l) => l.label);
+  assert.equal(new Set(labels).size, 2, `still ambiguous: ${JSON.stringify(labels)}`);
+});
+
+test("the reference grows only as far as it has to", () => {
+  // Nobody should read a longer handle than the situation requires.
+  const distinct = leadOptionLabels([
+    { id: "clx000000aaaaaa", name: "Mike LD", title: "Rover XL" },
+    { id: "clx000000bbbbbb", name: "Mike LD", title: "Rover XL" },
+  ]);
+  for (const option of distinct) {
+    const ref = option.label.split("·").pop()!.trim();
+    assert.equal(ref.length, 6, `expected a six-character ref, got ${ref}`);
+  }
+});
+
+test("a reference is only shown when something is actually ambiguous", () => {
+  // A handle on every option is noise when no two options are alike.
+  const labels = leadOptionLabels([
+    { id: "clx000000aaaaaa", name: "Mike LD", title: "Rover XL" },
+    { id: "clx000000bbbbbb", name: "Sarah T", title: "Rover XL" },
+  ]).map((l) => l.label);
+  assert.deepEqual(labels, ["Mike LD — Rover XL", "Sarah T — Rover XL"]);
+});
+
+test("every option in a realistic list is distinct", () => {
+  const leads = Array.from({ length: 40 }, (_, i) => ({
+    id: `clx${String(i).padStart(3, "0")}shared`,
+    name: "Mike LD",
+    title: "Denago EV Rover XL",
+  }));
+  const labels = leadOptionLabels(leads).map((l) => l.label);
+  assert.equal(new Set(labels).size, leads.length, "no two options may read the same");
+});
+
+test("identical ids are not papered over", () => {
+  // Two entries sharing an id is a data problem no reference length can fix, and
+  // inventing a difference would hide it.
+  const labels = leadOptionLabels([
+    { id: "clx000000aaaaaa", name: "Mike LD", title: "Rover" },
+    { id: "clx000000aaaaaa", name: "Mike LD", title: "Rover" },
+  ]).map((l) => l.label);
+  assert.equal(labels[0], labels[1], "the labels match because the leads genuinely do");
+});
+
+test("an empty list is fine", () => {
+  assert.deepEqual(leadOptionLabels([]), []);
+});
+
+test("the original fields survive labelling", () => {
+  // The pages read contactId off the result.
+  const [option] = leadOptionLabels([
+    { id: "clx000000aaaaaa", name: "Mike LD", title: "Rover", contactId: "c1" },
+  ]);
+  assert.equal((option as { contactId?: string }).contactId, "c1");
 });
