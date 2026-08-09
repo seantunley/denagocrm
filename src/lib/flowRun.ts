@@ -101,12 +101,17 @@ async function whatsappHistory(contactId: string | null, leadId: string | null, 
   if (leadId) or.push({ leadId });
   or.push({ body: { contains: digits } });
   /* eslint-enable @typescript-eslint/no-explicit-any */
+  // `take` applies before any client-side ordering. Fetch newest first so a long
+  // thread gives the model the latest 16 turns, then reverse them back into the
+  // chronological order Anthropic expects. Ascending + take previously selected
+  // the oldest 16 messages forever once a conversation grew past that size.
   const comms = await prisma.communication.findMany({
     where: { type: "whatsapp", OR: or },
-    orderBy: { occurredAt: "asc" },
+    orderBy: { occurredAt: "desc" },
     take: 16,
   });
   return comms
+    .reverse()
     .map((c) => ({ role: (c.direction === "inbound" ? "user" : "assistant") as "user" | "assistant", content: c.body.replace(/\n\n\[to \+?\d+\]\s*$/, "").trim() }))
     .filter((m) => m.content);
 }
