@@ -4,6 +4,7 @@ import { honoredTenantClaim, decideStaffTenantScope } from "./tenant";
 import { tenantEnforcing } from "./tenantEnforcement";
 import { enterTenantScope, runInTenantScope } from "./tenantScope";
 import { resolveChannelTenant, type ChannelKind } from "./channelTenant";
+import { decideChannelScope, type ChannelResolution } from "./channelScopeDecision";
 
 /**
  * Run `fn` in a trusted `system` scope (`{ tenantId: null, system: true }`) — the
@@ -46,6 +47,13 @@ export function validateInSystemScope<T>(fn: () => Promise<T>): Promise<T> {
  * on (per environment, step 5), these establish the scope so downstream DB access
  * is confined to the caller's tenant, and a request that can't resolve one fails
  * closed at the db layer.
+ *
+ * ONE DELIBERATE EXCEPTION: {@link withChannelTenantScope}. Its principal is an
+ * inbound webhook authenticated by an install-GLOBAL secret that every tenant on
+ * the same Meta app shares, so skipping resolution while dormant does not preserve
+ * "the pre-tenancy path" — it silently files a second tenant's traffic under the
+ * founding one. It therefore resolves in every mode, and falls back to the
+ * unscoped path only when nothing resolves. See its own doc block.
  */
 
 /**
@@ -141,16 +149,28 @@ export async function withTokenTenantScope<T>(
  * is called once per event inside the entry/change loop — each event runs in its own
  * resolved tenant scope.
  *
- * DORMANT when off: runs `fn()` directly — byte-for-byte the pre-tenancy path, no
- * channel lookup, no ALS overhead.
+ * Resolution runs in EVERY tenancy mode — the mode decides how a MISS is handled,
+ * never whether we look. The webhook's only authentication is one install-global
+ * `META_APP_SECRET` HMAC, which every tenant subscribed to the same Meta app
+ * shares; if we skip the lookup while enforcement is off, a SECOND tenant's
+ * inbound traffic runs unscoped and is filed under the founding tenant (its
+ * conversations, contacts, leads and bot sessions), with replies going out from
+ * the founding tenant's number. See ./channelScopeDecision for the full rule.
  *
- * ENFORCING: resolves the owning tenant via `resolveChannelTenant` (basePrisma,
- * active-tenant JOIN). If the endpoint is unknown / disabled / points at a suspended
- * or deleted tenant, it runs `onUnresolved()` WITHOUT running `fn` — an unmapped
- * inbound event is skipped (fail closed), never processed against the wrong tenant or
- * unscoped. Otherwise `fn` runs INSIDE the resolved tenant scope (reliable
+ * ENFORCING: `fn` runs INSIDE the resolved tenant scope (reliable
  * `runInTenantScope`), so every downstream read/write/actor pick is confined to that
- * tenant; the scope reverts when `fn` returns.
+ * tenant; the scope reverts when `fn` returns. If the endpoint is unknown / disabled
+ * / points at a suspended or deleted tenant, it runs `onUnresolved()` WITHOUT running
+ * `fn` — an unmapped inbound event is skipped (fail closed), never processed against
+ * the wrong tenant or unscoped. UNCHANGED by this fix.
+ *
+ * DORMANT when off: a RESOLVED endpoint is still scoped — that is the point. But an
+ * unmapped one falls back to running `fn()` unscoped, exactly as before, because an
+ * empty `ChannelIdentity` is the NORMAL state of an existing single-tenant install
+ * (the map is populated by a manual pre-enforcement backfill). Failing closed here
+ * would turn every inbound message into an error the moment this ships. A lookup that
+ * THROWS degrades the same way, for the same reason: dormant ran no query at all
+ * before, so a missing table or a database blip must not break a working webhook.
  */
 export async function withChannelTenantScope<T>(
   channel: ChannelKind,
@@ -158,8 +178,19 @@ export async function withChannelTenantScope<T>(
   fn: () => Promise<T>,
   onUnresolved: () => T | Promise<T>,
 ): Promise<T> {
-  if (!tenantEnforcing()) return fn();
-  const tenantId = await resolveChannelTenant(channel, externalId);
-  if (!tenantId) return onUnresolved();
-  return runInTenantScope({ tenantId, system: false }, fn);
+  let resolution: ChannelResolution;
+  let lookupError: unknown;
+  try {
+    const tenantId = await resolveChannelTenant(channel, externalId);
+    resolution = tenantId ? { status: "resolved", tenantId } : { status: "unmapped" };
+  } catch (error) {
+    lookupError = error;
+    resolution = { status: "failed" };
+  }
+
+  const decision = decideChannelScope(tenantEnforcing(), resolution);
+  if (decision.run === "rethrow") throw lookupError;
+  if (decision.run === "unresolved") return onUnresolved();
+  if (decision.run === "unscoped") return fn();
+  return runInTenantScope({ tenantId: decision.tenantId, system: false }, fn);
 }

@@ -13,7 +13,7 @@
 import { randomUUID, createHash } from "node:crypto";
 import { prisma, basePrisma } from "../src/lib/db";
 import { __setTenantEnforcingForTests } from "../src/lib/tenantEnforcement";
-import { runInTenantScope } from "../src/lib/tenantScope";
+import { runInTenantScope, currentTenantScope } from "../src/lib/tenantScope";
 import { establishTenantScopeFromId, establishStaffTenantScope, withTokenTenantScope, withChannelTenantScope, validateInSystemScope, withSystemScope } from "../src/lib/tenantScopeEntry";
 import { runCronPerTenant, activeTenantIds } from "../src/lib/tenantCron";
 import { logAudit } from "../src/lib/audit";
@@ -980,6 +980,25 @@ async function main() {
     check("push: DORMANT delivers to ALL devices (global, unchanged)", dormPushIds.includes(subAId) && dormPushIds.includes(subBId) && dormPushIds.includes(subCId));
     const chDorm = await withChannelTenantScope("whatsapp", `nope_${SFX}`, async () => "ran", () => "skipped");
     check("channel: DORMANT runs the event directly even for an unmapped id (byte-for-byte legacy)", chDorm === "ran");
+    // …but a MAPPED endpoint is scoped even while dormant: the webhook's only auth is
+    // an install-global HMAC every tenant on the same Meta app shares, so skipping the
+    // lookup files a second tenant's inbound traffic under the founding tenant.
+    const chDormMapped = await withChannelTenantScope(
+      "whatsapp",
+      waEndpointA,
+      async () => currentTenantScope()?.tenantId ?? "unscoped",
+      () => "skipped",
+    );
+    check("channel: DORMANT still scopes a MAPPED endpoint to its owning tenant", chDormMapped === TENANT_A);
+    const chDormMappedReads = await withChannelTenantScope(
+      "whatsapp",
+      waEndpointA,
+      async () => (await prisma.contact.findMany({ where: { id: { in: [idA, idB] } }, select: { id: true } })).map((r) => r.id),
+      () => [] as string[],
+    );
+    // The db.ts guard is still dormant, so reads remain unfiltered — the scope is
+    // carried for credential/actor resolution, not (yet) for query filtering.
+    check("channel: DORMANT mapped scope does NOT start filtering reads (guard still off)", chDormMappedReads.length === 2);
     // C4: dormant cron runs ONCE globally (tenantId null), the slice unscoped sees all rows.
     const dormCron = await runCronPerTenant(async () =>
       (await prisma.contact.findMany({ where: { id: { in: [idA, idB] } }, select: { id: true } })).map((r) => r.id),
