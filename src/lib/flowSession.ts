@@ -24,8 +24,8 @@ export function greetingVars(firstName: string | null): Record<string, string> {
     : { greeting: "Hi there 👋 Welcome to Denago Cape Town!" };
 }
 
-function runtimeVars(channel: string): Record<string, string> {
-  const now = new Date();
+/** Runtime-owned variables are refreshed on every inbound turn on every channel. */
+export function flowRuntimeVars(channel: string, now = new Date()): Record<string, string> {
   return {
     channel,
     current_date: new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Johannesburg", year: "numeric", month: "2-digit", day: "2-digit" }).format(now),
@@ -72,10 +72,6 @@ export type PersistFlowMessages = (
   tenantId: string,
 ) => Promise<void>;
 
-/**
- * Advance one inbound turn. The outbox batch and new BotSession position commit
- * in the SAME tenant transaction. Delivery happens after this function returns.
- */
 export async function advanceFlow(
   channel: string,
   key: string,
@@ -86,7 +82,7 @@ export async function advanceFlow(
 ): Promise<ChannelResult> {
   const existing = await loadState(channel, key);
   const restart = !input.choiceId && RESTART.test(input.text);
-  const builtins = runtimeVars(channel);
+  const builtins = flowRuntimeVars(channel);
 
   if (existing?.status === "paused" && !restart) {
     return { messages: [], done: true, suppressed: true };
@@ -109,33 +105,17 @@ export async function advanceFlow(
   recordBotMsgs(state, result.messages);
 
   await withTenantWrite(async (tx, tenantId) => {
-    if (result.messages.length && persistMessages) {
-      await persistMessages(result.messages, tx, tenantId);
-    }
+    if (result.messages.length && persistMessages) await persistMessages(result.messages, tx, tenantId);
 
     if (result.session) {
       state.nodeId = result.session.nodeId;
       state.vars = result.session.vars;
-      await upsertBotSessionTx(tx, tenantId, {
-        channel,
-        key,
-        nodeId: state.nodeId,
-        vars: storedState(state),
-        status: "active",
-        expiresAt: new Date(Date.now() + 12 * 3600 * 1000),
-      });
+      await upsertBotSessionTx(tx, tenantId, { channel, key, nodeId: state.nodeId, vars: storedState(state), status: "active", expiresAt: new Date(Date.now() + 12 * 3600 * 1000) });
       return;
     }
 
     if (result.handedOff) {
-      await upsertBotSessionTx(tx, tenantId, {
-        channel,
-        key,
-        nodeId: null,
-        vars: storedState(state),
-        status: "paused",
-        expiresAt: new Date(Date.now() + 6 * 3600 * 1000),
-      });
+      await upsertBotSessionTx(tx, tenantId, { channel, key, nodeId: null, vars: storedState(state), status: "paused", expiresAt: new Date(Date.now() + 6 * 3600 * 1000) });
       return;
     }
 
