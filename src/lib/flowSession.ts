@@ -24,8 +24,8 @@ export function greetingVars(firstName: string | null): Record<string, string> {
     : { greeting: "Hi there 👋 Welcome to Denago Cape Town!" };
 }
 
-function runtimeVars(channel: string): Record<string, string> {
-  const now = new Date();
+/** Runtime-owned variables are refreshed on every inbound turn on every channel. */
+export function flowRuntimeVars(channel: string, now = new Date()): Record<string, string> {
   return {
     channel,
     current_date: new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Johannesburg", year: "numeric", month: "2-digit", day: "2-digit" }).format(now),
@@ -86,7 +86,7 @@ export async function advanceFlow(
 ): Promise<ChannelResult> {
   const existing = await loadState(channel, key);
   const restart = !input.choiceId && RESTART.test(input.text);
-  const builtins = runtimeVars(channel);
+  const builtins = flowRuntimeVars(channel);
 
   if (existing?.status === "paused" && !restart) {
     return { messages: [], done: true, suppressed: true };
