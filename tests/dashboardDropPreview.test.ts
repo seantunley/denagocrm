@@ -3,7 +3,12 @@ import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { dropPreview, layoutWithMarker, moveCardInView } from "../src/lib/dashboard/canvasMove";
+import {
+  dropPreview,
+  insertionTargetInSection,
+  layoutWithMarker,
+  moveCardInView,
+} from "../src/lib/dashboard/canvasMove";
 import type { CardConfig, SectionConfig, ViewConfig } from "../src/lib/dashboard/config";
 
 /**
@@ -331,4 +336,118 @@ test("no marker when nothing is being dragged", () => {
 test("an empty section still draws the marker", () => {
   // Otherwise dropping into a group you have just emptied shows nothing at all.
   assert.deepEqual(layoutWithMarker([], "a", 0), [{ kind: "marker" }]);
+});
+
+/* ── the marker has to be near the pointer ────────────────────────── */
+
+/*
+ * Reported after the marker landed: "these two things do not line up nicely.
+ * sometimes service due is at the top and the drops here is all the way at the
+ * bottom."
+ *
+ * Over a SECTION but not a card used to mean one thing — append — which is right
+ * for an empty group and wrong almost everywhere else. The pointer is over the
+ * section rather than a card constantly: sections have padding, they hold an
+ * "Add a card" button, the grid is `items-start` so short cards leave empty
+ * space beneath them in their own row, and a section stretches to its tallest
+ * column. So the marker sat at the bottom of the group while the card was being
+ * dragged near the top, and stopped meaning anything.
+ */
+
+/** A two-column grid of 100x50 cards at 10px gaps, laid out in reading order. */
+const grid = (ids: string[]) => {
+  const boxes = new Map<string, { top: number; left: number; width: number; height: number }>();
+  ids.forEach((id, i) => {
+    boxes.set(id, {
+      left: (i % 2) * 110,
+      top: Math.floor(i / 2) * 60,
+      width: 100,
+      height: 50,
+    });
+  });
+  return (id: string) => boxes.get(id);
+};
+
+test("empty space just left of a card means before it", () => {
+  const rectOf = grid(["a", "b", "c", "d"]);
+  // x=5 is inside a's left half, y=25 is level with the first row.
+  assert.equal(insertionTargetInSection(["a", "b", "c", "d"], rectOf, { x: 5, y: 25 }, "s1"), "a");
+});
+
+test("empty space just right of a card means after it", () => {
+  const rectOf = grid(["a", "b", "c", "d"]);
+  // Past a's midpoint, still in the first row: the marker belongs before b.
+  assert.equal(insertionTargetInSection(["a", "b", "c", "d"], rectOf, { x: 95, y: 25 }, "s1"), "b");
+});
+
+test("empty space below a card means the next row, not the end of the group", () => {
+  // The reported symptom. The pointer is under the first card, so the marker
+  // belongs at the start of the second row - not at the bottom of the group.
+  const rectOf = grid(["a", "b", "c", "d"]);
+  assert.equal(insertionTargetInSection(["a", "b", "c", "d"], rectOf, { x: 50, y: 55 }, "s1"), "b");
+});
+
+test("past the last card is the only case that appends", () => {
+  const rectOf = grid(["a", "b", "c", "d"]);
+  assert.equal(
+    insertionTargetInSection(["a", "b", "c", "d"], rectOf, { x: 200, y: 400 }, "s1"),
+    "s1",
+    "below and beyond everything means the end",
+  );
+});
+
+test("the marker follows the pointer across a row", () => {
+  // Sweeping left to right must produce a marker that moves in one direction,
+  // never one that teleports to the bottom of the group in the middle.
+  const ids = ["a", "b", "c", "d"];
+  const rectOf = grid(ids);
+  const seen = [0, 40, 60, 95, 120, 160, 180, 215].map((x) =>
+    insertionTargetInSection(ids, rectOf, { x, y: 25 }, "s1"),
+  );
+  assert.deepEqual(seen, ["a", "a", "b", "b", "b", "b", "c", "c"]);
+});
+
+test("a group with nothing else in it still appends", () => {
+  // The one case the old behaviour got right, and an empty group has to stay
+  // fillable — there is nothing inside it to aim at.
+  assert.equal(insertionTargetInSection([], grid([]), { x: 10, y: 10 }, "s1"), "s1");
+});
+
+test("an unmeasured card is skipped rather than aimed at", () => {
+  /*
+   * dnd-kit has no rect for a droppable it has not measured yet. Treating a
+   * missing rect as a zero box at the origin would put a phantom target in the
+   * top-left corner, and the marker would jump to it from anywhere above and
+   * left of the real cards.
+   *
+   * The cards are therefore placed AWAY from the origin and the pointer near
+   * it — otherwise a zero box at 0,0 is further from the pointer than the real
+   * cards anyway and the test passes whether the rect is skipped or not.
+   */
+  const boxes: Record<string, { top: number; left: number; width: number; height: number }> = {
+    a: { left: 500, top: 500, width: 100, height: 50 },
+    b: { left: 610, top: 500, width: 100, height: 50 },
+  };
+  // Last in the list, so a phantom at the origin gives a DIFFERENT answer: the
+  // pointer would be past it, there would be no card after it, and the result
+  // would be the section. With ghost first the phantom's "after" is `a`, which
+  // is the right answer for the wrong reason and hides the bug.
+  const target = insertionTargetInSection(
+    ["a", "b", "ghost"],
+    (id) => boxes[id],
+    { x: 10, y: 10 },
+    "s1",
+  );
+  assert.equal(target, "a", "an unmeasured card must not become a phantom target");
+});
+
+test("the canvas asks for the nearest card rather than appending", () => {
+  const canvas = code(CANVAS);
+  assert.match(canvas, /insertionTargetInSection\(/);
+  assert.match(canvas, /args\.pointerCoordinates/, "the pointer is what decides");
+  assert.match(
+    canvas,
+    /card\.id !== activeCardId/,
+    "the dragged card must not be offered as its own target",
+  );
 });
