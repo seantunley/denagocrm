@@ -7,18 +7,15 @@ import { sendPushToAll } from "./push";
 import { advanceFlow, greetingVars } from "./flowSession";
 import { crmActions } from "./flowActions";
 import { choiceId as encodeChoice } from "./flow";
-import { enqueueBotMessages, flushBotOutboxConversation } from "./botOutbox";
+import { flushBotOutboxConversation } from "./botOutbox";
+import { enqueueBotMessagesTx } from "./botOutboxWrite";
 import type { DmPlatform } from "./messenger";
 
 async function dmBotEnabled(): Promise<boolean> {
   return (await getSetting("BOT_ENABLED")) === "true" && (await getSetting("BOT_DM_ENABLED")) === "true";
 }
 
-/**
- * Runs the published flow for an inbound Messenger / Instagram DM. Outbound
- * work is durably queued BEFORE the shared BotSession advances; this function
- * then performs an immediate best-effort drain for normal chat latency.
- */
+/** Run the published Messenger / Instagram flow with durable outbound delivery. */
 export async function runDmFlow(
   platform: DmPlatform,
   senderId: string,
@@ -28,8 +25,6 @@ export async function runDmFlow(
   if (!senderId) return;
   if (!(await dmBotEnabled())) return;
 
-  // Without a tenant actor a DM reply could not be attributed to Communication.
-  // Refuse before the engine runs rather than sending off the CRM record.
   const actor = await resolveTenantActor();
   if (!actor) {
     console.error(`[bot] refusing to reply on ${platform}: no tenant actor, so the reply could not be recorded`);
@@ -56,8 +51,8 @@ export async function runDmFlow(
       ...crmActions(platform, { contactId: contact?.id ?? null, leadId: null }),
     }),
     greetingVars(contact?.firstName ?? null),
-    async (messages) => {
-      await enqueueBotMessages({
+    async (messages, tx, tenantId) => {
+      await enqueueBotMessagesTx(tx, tenantId, {
         channel: platform,
         key: senderId,
         messages,
@@ -71,5 +66,4 @@ export async function runDmFlow(
   await flushBotOutboxConversation(platform, senderId);
 }
 
-// re-export so callers building choices stay consistent with the engine
 export { encodeChoice };
