@@ -254,15 +254,6 @@ export function validateFlow(flow: Flow, channels: FlowChannel[] = ["whatsapp"])
     for (const target of refs(node)) {
       if (!flow.nodes[target]) issues.push(issue("error", "graph.missing_target", `Connection points to missing node “${target}”.`, id));
     }
-
-    if (node.type === "captureFile") {
-      for (const channel of channels) {
-        if (channel !== "whatsapp") {
-          const label = channel === "instagram" ? "Instagram" : channel === "messenger" ? "Messenger" : "Telegram";
-          issues.push(issue("error", "channel.file_capture", `File capture is not implemented for ${label}; this flow would pause forever on that channel.`, id, channel));
-        }
-      }
-    }
   }
 
   const live = reachable(flow);
