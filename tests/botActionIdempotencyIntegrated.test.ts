@@ -23,6 +23,14 @@ test("leased inbound event identity reaches every provider chatbot path", () => 
   }
 });
 
+test("inbound event lease completion is fenced by its claim generation", () => {
+  const helper = src("src/lib/botInboundEvent.ts");
+  assert.match(helper, /leaseAttempt: number \| null/);
+  assert.match(helper, /RETURNING "id", "attempts"/);
+  assert.match(helper, /leaseAttempt: rows\[0\]\.attempts/);
+  assert.match(helper, /where: \{ id: rowId, tenantId, status: "running", attempts: leaseAttempt \}/);
+});
+
 test("side-effecting flow callbacks receive the executing node id", () => {
   const flow = src("src/lib/flow.ts");
   assert.match(flow, /handler\(slotId, vars, node\.id\)/);
