@@ -134,6 +134,26 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise
 }
 
 export async function runWhatsAppBot(digits: string, input: FlowInput, opts: { voiceNote?: boolean } = {}): Promise<void> {
+  // Ownership gates EVERY route into the bot, not just the flow runner.
+  //
+  // maybeAutoReply never reads BotSession — its only brake is botShouldPause, a
+  // timestamp heuristic over the last outbound Communication, and the legacy
+  // keyword path has no brake at all. Pressing Take over writes no Communication,
+  // so that heuristic still sees the bot as the last speaker. A voice note (or
+  // any message at all when BOT_FLOW_ENABLED is off) therefore reached the AI and
+  // it answered over the salesperson — the exact thing conversation ownership
+  // exists to prevent, entered through a door the ownership check did not cover.
+  const owned = await loadSession(digits);
+  if (owned) {
+    const gate = decideInboundAct({
+      ownership: owned.ownership,
+      text: input.text,
+      // A voice note is not a typed control command, so it can never be a resume.
+      hasChoiceId: Boolean(input.choiceId) || Boolean(opts.voiceNote),
+    });
+    if (gate.act === "suppress") return;
+  }
+
   if (opts.voiceNote) { await maybeAutoReply(digits, input.text, { voiceNote: true }); return; }
   if (await isFlowEnabled()) { await runWhatsAppFlow(digits, input); return; }
   await maybeAutoReply(digits, input.text);

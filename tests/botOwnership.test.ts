@@ -59,6 +59,40 @@ test("no session at all is a fresh run", () => {
   assert.equal(act(null, "I want a service booking"), "restart");
 });
 
+test("ownership gates every route into the bot, not just the flow runner", () => {
+  // The hole an adversarial review found in the first version of this fix:
+  // runWhatsAppBot sends voice notes — and everything, when BOT_FLOW_ENABLED is
+  // off — to maybeAutoReply, which never reads BotSession. Its only brake is a
+  // timestamp heuristic over the last outbound Communication, and Take over
+  // writes no Communication, so the AI answered over the salesperson.
+  const run = src("src/lib/flowRun.ts");
+  const entry = run.slice(run.indexOf("export async function runWhatsAppBot"));
+  const gate = entry.indexOf("decideInboundAct(");
+  const voice = entry.indexOf("maybeAutoReply(digits, input.text, { voiceNote: true })");
+  const flow = entry.indexOf("runWhatsAppFlow(digits, input)");
+  assert.ok(gate >= 0, "the entry point must consult ownership");
+  assert.ok(gate < voice, "the voice-note path must be gated");
+  assert.ok(gate < flow, "and so must the flow path");
+});
+
+test("an in-flight bot turn cannot take a conversation back from staff", () => {
+  // A turn runs for seconds (aiReply is a live model call). Staff can press Take
+  // over during it. Without a guard the turn commits afterwards and silently
+  // returns the thread to the bot, with the takeover already audited.
+  const store = src("src/lib/botSessionStore.ts");
+  const upsert = store.slice(store.indexOf("export async function upsertBotSessionTx"));
+  assert.match(upsert.slice(0, upsert.indexOf("\n}")), /WHERE "BotSession"\."ownership" <> 'human'/);
+
+  const del = store.slice(store.indexOf("export async function deleteBotSessionTx"));
+  assert.match(del.slice(0, del.indexOf("\n}")), /ownership: \{ not: "human" \}/);
+
+  // …but a PERSON handing the thread back must still be able to clear it.
+  const release = store.slice(store.indexOf("export async function releaseBotSessionTx"));
+  const body = release.slice(0, release.indexOf("\n}"));
+  assert.doesNotMatch(body, /ownership/, "staff release is the one path allowed to discard human ownership");
+  assert.match(src("src/lib/botConversationControl.ts"), /releaseBotSessionTx\(/);
+});
+
 test("the runtime asks this module rather than testing status directly", () => {
   // The defect was `existing?.status === "paused" && !restart`, which cannot tell
   // a bot handoff from a human takeover. If that shape comes back, so does the bug.

@@ -77,7 +77,8 @@ export async function upsertBotSessionTx(
            "status" = EXCLUDED."status",
            "ownership" = EXCLUDED."ownership",
            "updatedAt" = CURRENT_TIMESTAMP,
-           "expiresAt" = EXCLUDED."expiresAt"`,
+           "expiresAt" = EXCLUDED."expiresAt"
+       WHERE "BotSession"."ownership" <> 'human'`,
     crypto.randomUUID(),
     tenantId,
     input.channel,
@@ -145,7 +146,30 @@ export async function pauseBotSessionTx(
   );
 }
 
+/**
+ * Clear a session the BOT finished with.
+ *
+ * Refuses a human-owned row. A turn can be in flight for seconds — `aiReply` is a
+ * live model call — and staff can press Take over during it. Without this the
+ * in-flight turn commits afterwards and silently returns the thread to the bot,
+ * with the takeover already audited and the UI already showing "Human handling".
+ * That is the same read-then-write race `pauseBotSessionTx` was written to avoid,
+ * running in the other direction.
+ */
 export async function deleteBotSessionTx(
+  tx: TenantWriteTx,
+  tenantId: string,
+  channel: string,
+  key: string,
+): Promise<void> {
+  await tx.botSession.deleteMany({ where: { tenantId, channel, key, ownership: { not: "human" } } });
+}
+
+/**
+ * Clear a session because a PERSON handed it back. This is the one path that may
+ * discard human ownership, because a human is the one asking.
+ */
+export async function releaseBotSessionTx(
   tx: TenantWriteTx,
   tenantId: string,
   channel: string,

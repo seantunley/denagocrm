@@ -48,7 +48,10 @@ test("staff takeover and bot handoff are recorded as different things", () => {
 test("returning a conversation to automation clears stale flow state", () => {
   const control = src("src/lib/botConversationControl.ts");
   assert.match(control, /export async function resumeBotConversation/);
-  assert.match(control, /deleteBotSessionTx\(tx, tenantId, identity\.channel, identity\.key\)/);
+  // Staff release uses the UNGUARDED variant deliberately: the runtime's
+  // deleteBotSessionTx now refuses human-owned rows so an in-flight turn cannot
+  // take the thread back, and a person handing it back must still be able to.
+  assert.match(control, /releaseBotSessionTx\(tx, tenantId, identity\.channel, identity\.key\)/);
 
   const action = src("src/app/actions/conversations.ts");
   assert.match(action, /mode === "human" \? "conversation\.bot_paused" : "conversation\.bot_resumed"/);
