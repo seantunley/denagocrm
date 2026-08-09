@@ -43,10 +43,10 @@ export default function ModalTrigger({
         <button className={buttonClass}>{label}</button>
       </DialogTrigger>
       <ResponsiveDialogContent className="gap-0 border-white/20 bg-[#111412] p-0 shadow-[0_30px_100px_rgba(0,0,0,.65)] sm:max-w-2xl">
-        <DialogHeader className="sticky top-0 z-10 border-b border-white/[0.07] bg-[#111412]/95 px-5 pb-4 pr-14 pt-6 text-left backdrop-blur-xl sm:px-6 sm:pr-14 sm:py-5">
-          <DialogTitle className="text-xl tracking-tight">{title}</DialogTitle>
+        <DialogHeader className="sticky top-0 z-10 border-b border-white/[0.07] bg-[#111412]/95 px-4 pb-3 pr-14 pt-4 text-left backdrop-blur-xl sm:px-4 sm:pr-14 sm:py-3.5">
+          <DialogTitle className="text-lg tracking-tight">{title}</DialogTitle>
         </DialogHeader>
-        <div className="p-5 sm:p-6 [&>.card]:border-0 [&>.card]:bg-transparent [&>.card]:p-0 [&>.card]:shadow-none">
+        <div className="p-4 [&>.card]:border-0 [&>.card]:bg-transparent [&>.card]:p-0 [&>.card]:shadow-none">
           <ModalCloseContext.Provider value={() => setOpen(false)}>
             {children}
           </ModalCloseContext.Provider>

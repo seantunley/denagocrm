@@ -198,9 +198,9 @@ export default function AppShell({
 
       <main className="relative lg:pl-60">
         <div className="pointer-events-none fixed inset-x-0 top-0 -z-10 h-72 bg-[radial-gradient(circle_at_65%_0%,rgba(249,115,22,.045),transparent_42%)] lg:left-60" />
-        <div className="denago-workspace mx-auto max-w-[1800px] p-4 pb-24 pt-16 lg:p-7 lg:pt-6">
+        <div className="denago-workspace mx-auto max-w-[1800px] p-3 pb-24 pt-15 sm:p-4 sm:pb-24 sm:pt-16 lg:p-5 lg:pt-4">
           {/* Desktop-only furniture — takes real estate on phones */}
-          <div className="mb-5 hidden lg:block">
+          <div className="mb-3 hidden lg:block">
             <ClockWeather />
           </div>
           {children}

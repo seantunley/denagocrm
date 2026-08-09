@@ -21,23 +21,23 @@ export function CaptureHero({
   summary?: { label: string; value: ReactNode }[];
 }) {
   return (
-    <div className="relative overflow-hidden rounded-2xl border border-white/[0.08] bg-[linear-gradient(135deg,rgba(234,88,12,.13),rgba(255,255,255,.015)_58%)] p-4 sm:p-5">
+    <div className="relative overflow-hidden rounded-xl border border-white/[0.08] bg-[linear-gradient(135deg,rgba(234,88,12,.13),rgba(255,255,255,.015)_58%)] p-3.5 sm:p-4">
       <div className="pointer-events-none absolute -right-12 -top-16 size-40 rounded-full bg-primary/10 blur-3xl" />
       <div className="relative flex items-start gap-3">
-        <span className="grid size-10 shrink-0 place-items-center rounded-2xl border border-primary/20 bg-primary/10 text-primary">
-          <Icon className="size-5" />
+        <span className="grid size-9 shrink-0 place-items-center rounded-xl border border-primary/20 bg-primary/10 text-primary">
+          <Icon className="size-4" />
         </span>
         <div className="min-w-0 flex-1">
           <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">{eyebrow}</p>
           <p className="mt-1 text-sm font-semibold text-foreground">{title}</p>
           <p className="mt-1 max-w-xl text-xs leading-5 text-muted-foreground">{description}</p>
           {summary.length > 0 && (
-            <div className={cn("mt-3 grid gap-2 text-xs", summary.length >= 3 ? "grid-cols-2 sm:grid-cols-3" : "grid-cols-2")}>
+            <div className={cn("mt-2.5 grid gap-1.5 text-xs", summary.length >= 3 ? "grid-cols-2 sm:grid-cols-3" : "grid-cols-2")}>
               {summary.map((item, index) => (
                 <div
                   key={item.label}
                   className={cn(
-                    "rounded-xl border border-white/[0.07] bg-black/10 px-3 py-2",
+                    "rounded-lg border border-white/[0.07] bg-black/10 px-2.5 py-1.5",
                     summary.length >= 3 && index === summary.length - 1 && "col-span-2 sm:col-span-1",
                   )}
                 >
@@ -65,17 +65,17 @@ export function CaptureSection({
   children: ReactNode;
 }) {
   return (
-    <section className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
-      <div className="flex items-start gap-3 border-b border-border bg-muted/20 px-4 py-4 sm:px-5">
-        <span className="grid size-9 shrink-0 place-items-center rounded-xl border border-primary/20 bg-primary/10 text-primary">
-          <Icon className="size-[18px]" />
+    <section className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+      <div className="flex items-start gap-2.5 border-b border-border bg-muted/20 px-3.5 py-3 sm:px-4">
+        <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-primary/20 bg-primary/10 text-primary">
+          <Icon className="size-4" />
         </span>
         <div className="min-w-0">
           <h2 className="font-semibold tracking-tight text-foreground">{title}</h2>
           <p className="mt-0.5 text-xs leading-5 text-muted-foreground">{description}</p>
         </div>
       </div>
-      <div className="grid gap-4 p-4 sm:grid-cols-2 sm:p-5">{children}</div>
+      <div className="grid gap-3.5 p-3.5 sm:grid-cols-2 sm:p-4">{children}</div>
     </section>
   );
 }
@@ -140,8 +140,8 @@ export function CaptureFooter({
   return (
     <div
       className={cn(
-        "flex items-center justify-between gap-4 rounded-2xl border border-border bg-card p-3 shadow-sm",
-        variant === "page" && "sticky bottom-[calc(5.25rem+env(safe-area-inset-bottom))] z-20 sm:static sm:p-4",
+        "flex items-center justify-between gap-3 rounded-xl border border-border bg-card p-2.5 shadow-sm",
+        variant === "page" && "sticky bottom-[calc(5.25rem+env(safe-area-inset-bottom))] z-20 sm:static sm:p-3",
         variant === "dialog" && "sticky bottom-0 z-20 -mx-5 -mb-5 rounded-b-none border-x-0 border-b-0 bg-[#111412]/95 px-5 backdrop-blur-xl sm:-mx-6 sm:-mb-6 sm:px-6",
       )}
     >

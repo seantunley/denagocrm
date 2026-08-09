@@ -47,9 +47,25 @@ test("workshop calendar and social inbox retain their existing shared hero", () 
 test("the shared workspace hero keeps its visual system in a compact footprint", () => {
   const hero = read("src", "components", "workspace-hero.tsx");
 
-  assert.match(hero, /p-4 sm:px-5 sm:py-4/);
+  assert.match(hero, /p-3\.5 sm:px-4 sm:py-3\.5/);
   assert.match(hero, /xl:flex xl:items-center xl:gap-4/);
-  assert.match(hero, /mt-3 grid grid-cols-2/);
-  assert.match(hero, /px-3 py-2 backdrop-blur-sm/);
+  assert.match(hero, /mt-2\.5 grid grid-cols-2/);
+  assert.match(hero, /px-2\.5 py-1\.5 backdrop-blur-sm/);
   assert.doesNotMatch(hero, /sm:p-6|mt-6 grid/);
+});
+
+test("shared workspace primitives enforce the compact density contract", () => {
+  const globalCss = read("src", "app", "globals.css");
+  const visualSystem = read("src", "components", "visual-system.tsx");
+  const detailShell = read("src", "components", "entity-detail-shell.tsx");
+  const captureForm = read("src", "components", "capture-form.tsx");
+  const mobileWorkspace = read("src", "components", "mobile-workspace.tsx");
+
+  assert.match(globalCss, /h-9 items-center justify-center/);
+  assert.match(globalCss, /rounded-xl border border-white\/\[0\.075\] bg-card p-4/);
+  assert.match(globalCss, /px-3 py-2\.5/);
+  assert.match(visualSystem, /rounded-xl border border-border bg-card p-3/);
+  assert.match(detailShell, /space-y-4/);
+  assert.match(captureForm, /grid gap-3\.5 p-3\.5/);
+  assert.match(mobileWorkspace, /min-h-9/);
 });
