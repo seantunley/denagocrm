@@ -292,9 +292,28 @@ function SectionBlock({
   // Same rule as the read-only path: in normal use a section with nothing drawn
   // leaves no empty box, because a heading over nothing reads as a failure.
   const drawn = section.cards.filter((card) => slots[card.id] !== undefined);
-  if (!editing && drawn.length === 0) return null;
-
   const cards = editing ? section.cards : drawn;
+  /*
+   * Identity is load-bearing here - dnd-kit compares this array BY IDENTITY to
+   * decide whether the list has changed. See the note on the SortableContext
+   * below.
+   *
+   * Keyed on the ids as JSON rather than on the card objects: every edit
+   * rebuilds the config, so an array of cards would be a new dependency on
+   * every render and the memo would never hold. JSON rather than a joined
+   * string because a card id can come from the raw editor and may contain any
+   * character, including whatever separator was picked.
+   */
+  const cardIdKey = JSON.stringify(cards.map((card) => card.id));
+  const sortableItems = useMemo(
+    () => [...(JSON.parse(cardIdKey) as string[]), section.id],
+    [cardIdKey, section.id],
+  );
+
+  // AFTER the hooks, deliberately. A hook below a conditional return is a
+  // different number of hooks on the render where the condition flips, and React
+  // ends that with "Rendered more hooks than during the previous render".
+  if (!editing && drawn.length === 0) return null;
 
   return (
     <section
@@ -371,9 +390,18 @@ function SectionBlock({
       )}
 
       <SortableContext
-        // The section id is in the list so an EMPTY section is still a drop
-        // target. Without it a section you emptied can never be filled again.
-        items={[...cards.map((card) => card.id), section.id]}
+        /*
+         * The section id is in the list so an EMPTY section is still a drop
+         * target. Without it a section you emptied can never be filled again.
+         *
+         * Memoised because dnd-kit compares this array BY IDENTITY, in several
+         * places, to decide whether the list has changed — `previousItems !==
+         * items` gates its layout-animation decision, and a ref is reconciled
+         * against it on every commit. A fresh array each render made that
+         * comparison permanently true, so it was answering "the list just
+         * changed" continuously, for a list that had not changed at all.
+         */
+        items={sortableItems}
         strategy={NO_TRANSFORM}
       >
         {/* auto-rows gives the grid a base row height, without which a row is
@@ -454,6 +482,34 @@ function SortableCard({
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, isDragging } = useSortable({
     id: card.id,
     disabled: !editing,
+    /*
+     * NO LAYOUT ANIMATION. This is the other half of "no transforms", and its
+     * absence is what put an error page in front of the user.
+     *
+     * The strategy above is already NO_TRANSFORM, because these cards are
+     * different sizes and transform-based previews send them to visibly wrong
+     * places. But `animateLayoutChanges` is a SEPARATE mechanism, defaulted on,
+     * and it survived that: on every index change useSortable's
+     * `useDerivedTransform` measures the card, computes a FLIP delta and calls
+     * setState from a LAYOUT effect, with a second effect that immediately sets
+     * it back to null. That is two renders per index change, from the commit
+     * phase.
+     *
+     * Reordering happens on dragover, so during a drag the index changes as fast
+     * as the pointer moves, and droppables are re-measured continuously. Enough
+     * of those pairs nest in one commit to pass React's limit, and React reports
+     * it as "Maximum update depth exceeded" — thrown during commit, so the
+     * route's error boundary catches it and shows an error page. The captured
+     * stack named this hook directly:
+     *
+     *     at useDerivedTransform.useIsomorphicLayoutEffect (@dnd-kit/sortable)
+     *     at commitHookLayoutEffects
+     *
+     * Nothing is lost by refusing it. The transform it produces is never read —
+     * this component does not apply `transform` or `transition` to anything, by
+     * the same decision that set NO_TRANSFORM.
+     */
+    animateLayoutChanges: () => false,
   });
 
   // Not in edit mode and nothing to draw — the card's own rules hid it, or it
