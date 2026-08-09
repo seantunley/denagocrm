@@ -27,13 +27,18 @@ function handoffBody(context?: FlowHandoffContext): string {
 }
 
 /** Run the published flow for an inbound Telegram update. */
-export async function runTelegramFlow(chatId: number | string, text: string, callbackData?: string) {
+export async function runTelegramFlow(
+  chatId: number | string,
+  text: string,
+  callbackData?: string,
+  fileUrl?: string,
+) {
   if (!(await tgBotEnabled())) return;
   const key = String(chatId);
   const result = await advanceFlow(
     "telegram",
     key,
-    { text, choiceId: callbackData },
+    { text, choiceId: callbackData, fileUrl },
     (state) => ({
       dynamicAnswer: (s) => (s === "colours" ? coloursList() : priceList()),
       routeChoice: ({ prompt, text: freeText, options }) => routeBotChoice({ prompt, text: freeText, options }),
