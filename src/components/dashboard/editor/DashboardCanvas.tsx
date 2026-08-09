@@ -377,7 +377,29 @@ export default function DashboardCanvas({
         )}
       </div>
 
-      <DragOverlay dropAnimation={null} modifiers={[snapToCursor]}>
+      {/*
+          SHRINK THE OVERLAY TO THE LABEL. Without this the label still is not
+          where the pointer is, even with the modifier above.
+
+          dnd-kit sizes and positions its overlay wrapper from the ACTIVE NODE's
+          rect - `width: rect.width, height: rect.height` in PositionedOverlay -
+          so the wrapper is a whole CARD wide and tall, and this label sits in
+          its top-left corner. Centring that wrapper on the pointer therefore
+          puts the label half a card up and to the left of it: a constant offset,
+          hundreds of pixels for a wide card, which reads as following the cursor
+          from a distance and never catching up.
+
+          `style` is spread last in PositionedOverlay's own style object, so auto
+          wins over the measured width and height. The wrapper then hugs the
+          label, the modifier centres the label itself, and `dragOverlay.rect` -
+          which is measured from this node - becomes the label's size rather than
+          the card's.
+      */}
+      <DragOverlay
+        dropAnimation={null}
+        modifiers={[snapToCursor]}
+        style={{ width: "auto", height: "auto" }}
+      >
         {activeCard ? (
           <div className="flex cursor-grabbing items-center gap-2 rounded-lg border border-primary/40 bg-card px-3 py-2 text-xs font-medium text-foreground shadow-lg">
             <GripVertical className="size-3.5 text-muted-foreground" />
