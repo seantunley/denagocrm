@@ -5,6 +5,9 @@ import { currentTenantScope } from "./tenantScope";
 import { tenantEnforcing } from "./tenantEnforcement";
 import { TenantScopeError } from "./tenantGuard";
 
+/** Transaction client used inside withTenantWrite(). */
+export type TenantWriteTx = Parameters<Parameters<typeof basePrisma.$transaction>[0]>[0];
+
 /**
  * How a tenant-owned read/write on an UNGUARDED path should behave for the CURRENT
  * scope. This is the single source of truth for the global/tenant/closed decision —
@@ -72,10 +75,8 @@ export function writeTenantId(): string | null {
  * composite `(tenantId, parentId)` FKs hold.
  */
 export async function withTenantWrite<T>(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  fn: (tx: any, tenantId: string) => Promise<T>,
+  fn: (tx: TenantWriteTx, tenantId: string) => Promise<T>,
 ): Promise<T> {
   const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (basePrisma as any).$transaction((tx: any) => fn(tx, tenantId));
+  return basePrisma.$transaction((tx) => fn(tx, tenantId));
 }
