@@ -27,20 +27,57 @@ export type ScopeClass =
   | { mode: "closed" };
 
 export function currentScopeClass(): ScopeClass {
-  if (!tenantEnforcing()) return { mode: "global" };
+  if (!tenantEnforcing()) return { mode: "global" }; // dormant — unchanged behaviour
   const scope = currentTenantScope();
-  if (!scope) return { mode: "closed" };
-  if (scope.system) return { mode: "global" };
-  if (!scope.tenantId) return { mode: "closed" };
+  if (!scope) return { mode: "closed" }; // enforcing but no scope established → fail closed
+  if (scope.system) return { mode: "global" }; // deliberate trusted system bypass
+  if (!scope.tenantId) return { mode: "closed" }; // enforcing + null non-system scope → fail closed
   return { mode: "tenant", tenantId: scope.tenantId };
 }
 
+/**
+ * The tenantId to STAMP onto / FILTER a tenant-owned write with on an UNGUARDED
+ * path — a `basePrisma` transaction (row locks, raw SQL) or a global model joined
+ * by hand — where the db.ts guard does NOT auto-scope. Returns:
+ *
+ *   - a concrete tenantId under enforcement with a tenant scope (stamp + filter +
+ *     namespace any advisory lock with it);
+ *   - `null` when GLOBAL (dormant OR a trusted system scope) → the caller stamps
+ *     nothing and applies no extra filter: byte-for-byte the pre-tenancy path;
+ *   - THROWS {@link TenantScopeError} when CLOSED (enforcement on, no/again-null
+ *     scope) so an unguarded write can never land tenantless, over-count another
+ *     tenant's rows, or broadcast cross-tenant. Fail closed, exactly like the
+ *     guarded client throwing on a scopeless query.
+ */
 export function writeTenantId(): string | null {
   const s = currentScopeClass();
-  if (s.mode === "closed") throw new TenantScopeError("No tenant scope established for a tenant-owned write");
+  if (s.mode === "closed") {
+    throw new TenantScopeError("No tenant scope established for a tenant-owned write");
+  }
   return s.mode === "tenant" ? s.tenantId : null;
 }
 
+/**
+ * Run `fn` as ONE atomic transaction on the trusted bypass client (`basePrisma`),
+ * handing it the transaction client and the owning tenantId. Use this to keep a
+ * multi-write aggregate — a parent plus children the top-level guard would refuse
+ * as a NESTED relation write — all-or-nothing: any throw rolls the whole thing back.
+ *
+ * The resolved tenantId is:
+ *   - the current tenant under enforcement (see {@link writeTenantId});
+ *   - `DEFAULT_TENANT_ID` when GLOBAL (enforcement off, or a trusted system scope),
+ *     so a row is NEVER written tenantless during the pre-enforcement rollout window
+ *     (a NULL-tenant row is invisible once enforcement flips on and fails the
+ *     preflight). Throws (fail closed) when enforcing with no usable scope.
+ *
+ * Every write inside MUST stamp `tenantId` explicitly — bypass means the db.ts guard
+ * will not do it for you, and the children share the parent's tenant so the
+ * composite `(tenantId, parentId)` FKs hold.
+ *
+ * Keep this legacy callback contract broad for now: #400 needs a concrete
+ * TenantWriteTx for its own new helpers, but globally tightening every existing
+ * withTenantWrite caller belongs in a dedicated typing/refactor PR.
+ */
 export async function withTenantWrite<T>(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   fn: (tx: any, tenantId: string) => Promise<T>,
