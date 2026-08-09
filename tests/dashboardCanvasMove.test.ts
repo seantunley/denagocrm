@@ -249,7 +249,7 @@ test("the drop position is drawn, not implied", () => {
   // than on the dragged card - tests/dashboardDropPreview.test.ts checks that
   // the position it promises is the position the drop delivers.
   const canvas = read(CANVAS);
-  assert.match(canvas, /function DropMarker\(\)/, "there must be a marker");
+  assert.match(canvas, /function DropMarker\(/, "there must be a marker");
   assert.match(canvas, /border-dashed border-primary/);
   assert.match(canvas, /dropAt !== null &&/, "and the receiving group outlined");
   // The dragged card leaves the flow so the marker can take its cell - what the

@@ -148,7 +148,11 @@ test("the height chain is unbroken from grid cell to visible card", () => {
   // 1. items-start means a grid item is content-height; h-full on it is a no-op.
   //    self-stretch is what actually opts the item out of that.
   const canvas = code("src/components/dashboard/editor/DashboardCanvas.tsx");
-  const wrapper = canvas.slice(canvas.indexOf("CARD_ROWS[card.rows"));
+  // Scoped to SortableCard: DropMarker also uses CARD_ROWS now, to take the
+  // exact shape of the card it stands in for, and it appears earlier in the
+  // file. An unscoped search finds the marker and checks the wrong element.
+  const sortable = canvas.slice(canvas.indexOf("function SortableCard"));
+  const wrapper = sortable.slice(sortable.indexOf("CARD_ROWS[card.rows"));
   const wrapperClasses = wrapper.slice(0, wrapper.indexOf("isDragging"));
   assert.match(wrapperClasses, /sm:self-stretch/, "h-full alone cannot stretch a start-aligned item");
   assert.match(wrapperClasses, /sm:h-full/);

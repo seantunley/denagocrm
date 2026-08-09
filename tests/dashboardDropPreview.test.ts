@@ -200,10 +200,10 @@ test("a drop outside every droppable still goes where the marker promised", () =
 });
 
 test("the marker is drawn, and the dragged card is not the marker", () => {
-  // The dragged card stays where it is, dimmed. It is the SOURCE; the marker is
-  // the destination, and labelling both "Drops here" would be a lie on one.
+  // The dragged card leaves the flow entirely; the marker takes its cell. Only
+  // one element may claim to be the destination, or one of them is lying.
   const canvas = read(CANVAS);
-  assert.match(canvas, /function DropMarker\(\)/);
+  assert.match(canvas, /function DropMarker\(/);
   assert.match(canvas, /Drops here/);
   assert.equal(
     (canvas.match(/Drops here/g) ?? []).length,
@@ -600,4 +600,27 @@ test("the cell count does not change during a drag", () => {
   const marker = layoutWithMarker(["a", "b", "c"], "a", 1);
   assert.equal(marker.filter((entry) => entry.kind === "marker").length, 1);
   assert.equal(marker.filter((entry) => entry.kind === "card").length, 3, "all cards still render");
+});
+
+test("the marker takes the same shape as the card it stands in for", () => {
+  /*
+   * Taking the dragged card out of the flow only holds the layout still if the
+   * marker occupies the SAME cells. The marker was always one column wide;
+   * cards here span one, two or three. So replacing a three-column card with a
+   * one-column marker re-packed everything after it.
+   *
+   * A drag log caught exactly that, after the out-of-flow change: in a grid
+   * whose columns are 567px wide, the same card's left edge flipped
+   * 314 -> 897 -> 314 between consecutive drag-over events. The layout was back
+   * to moving under the pointer, by a different route.
+   */
+  const canvas = code(CANVAS);
+  const fn = canvas.slice(canvas.indexOf("function DropMarker"));
+  const body = fn.slice(0, fn.indexOf("\n}"));
+  assert.match(body, /CARD_SPAN\[card\.span\]/, "the marker must match the card's width");
+  assert.match(body, /CARD_ROWS\[card\.rows \?\? 1\]/, "…and its height");
+
+  // It has to be given the card to do that, which means threading it down.
+  assert.match(canvas, /<DropMarker key="drop-marker" card=\{activeCard\} \/>/);
+  assert.match(canvas, /activeCard=\{activeCard\}/, "the section must receive it");
 });
