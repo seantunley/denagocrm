@@ -6,20 +6,31 @@ import { prisma } from "@/lib/db";
 import { requireOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { DEFAULT_FLOW } from "@/lib/flow";
+import { flowTemplate } from "@/lib/flowTemplates";
 import { publishFlowSnapshot } from "@/lib/flowPublishing";
 
-/** Create a new flow (from the default) and open it in the builder. */
+/** Create a new draft from one of the shipped, compiler-checked templates. */
 export async function createFlow(formData: FormData) {
   const owner = await requireOwner();
-  const name = String(formData.get("name") ?? "").trim() || "New flow";
+  const template = flowTemplate(String(formData.get("templateId") ?? "general"));
+  const requestedName = String(formData.get("name") ?? "").trim();
+  const name = requestedName || template.name;
   const count = await prisma.botFlow.count();
   const flow = await prisma.botFlow.create({
-    data: { name, definition: JSON.stringify(DEFAULT_FLOW), active: count === 0 },
+    data: {
+      name,
+      definition: JSON.stringify(template.definition),
+      active: count === 0,
+    },
   });
-  // Preserve the old "first flow is live" behaviour, but make it live through an
-  // immutable publication rather than leaving the first installation on the
-  // compatibility active-Boolean path indefinitely.
+  // Preserve the old "first flow is live" behaviour, but publish the exact
+  // selected template as an immutable snapshot rather than swapping in default.
   if (count === 0) await publishFlowSnapshot(flow.id, owner.id);
+  await logAudit({
+    action: "bot.flow_created",
+    summary: `Chatbot flow “${name}” created from ${template.name} template`,
+    user: owner,
+  });
   redirect(`/bot-builder/${flow.id}`);
 }
 
@@ -59,8 +70,6 @@ export async function renameFlow(id: string, formData: FormData) {
 export async function deleteFlow(id: string) {
   await requireOwner();
   const flow = await prisma.botFlow.findUnique({ where: { id } });
-  // A live publication must be replaced before its draft can be deleted. This is
-  // enforced server-side as well as by the list UI.
   if (!flow || flow.active) return;
   await prisma.botFlow.delete({ where: { id } });
   revalidatePath("/bot-builder");
