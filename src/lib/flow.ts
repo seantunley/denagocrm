@@ -10,6 +10,10 @@ export type FlowOption = { id: string; label: string; description?: string; next
 export type CaptureFormat = "text" | "email" | "phone" | "number" | "date";
 export type ConditionOperator = "equals" | "not_equals" | "contains" | "exists" | "empty";
 export type FlowCondition = { variable: string; operator: ConditionOperator; value?: string };
+export type BookingCreateAction = "service" | "demo" | "lead";
+export type BookingManageAction = "lookup" | "cancel";
+export type BookingAction = BookingCreateAction | BookingManageAction;
+export type SlotAction = "book" | "reschedule";
 
 export type FlowNode =
   | { id: string; type: "message"; text: string; next?: string }
@@ -18,8 +22,8 @@ export type FlowNode =
   | { id: string; type: "captureFile"; text: string; variable: string; next?: string }
   | { id: string; type: "image"; url: string; caption?: string; next?: string }
   | { id: string; type: "answer"; text?: string; answerSource?: "pricelist" | "colours"; next?: string }
-  | { id: string; type: "booking"; text?: string; action?: "service" | "demo" | "lead"; next?: string }
-  | { id: string; type: "slots"; text: string; noneText?: string; next?: string }
+  | { id: string; type: "booking"; text?: string; action?: BookingAction; next?: string }
+  | { id: string; type: "slots"; text: string; noneText?: string; action?: SlotAction; next?: string }
   | { id: string; type: "condition"; condition: FlowCondition; trueNext?: string; falseNext?: string }
   | { id: string; type: "ai"; handoffNext?: string }
   | { id: string; type: "handoff"; text?: string }
@@ -54,10 +58,12 @@ export type FlowHandoffContext = {
 export type FlowCtx = {
   aiReply: (vars: Record<string, string>) => Promise<FlowAiReply>;
   dynamicAnswer: (source: "pricelist" | "colours") => Promise<string>;
-  createBooking: (vars: Record<string, string>, action?: "service" | "demo" | "lead") => Promise<void>;
+  createBooking: (vars: Record<string, string>, action?: BookingCreateAction) => Promise<void>;
+  manageBooking?: (action: BookingManageAction, vars: Record<string, string>) => Promise<{ ok: boolean }>;
   handoff: (vars: Record<string, string>, context?: FlowHandoffContext) => Promise<void>;
   availableSlots?: () => Promise<{ id: string; label: string }[]>;
   bookSlot?: (slotId: string, vars: Record<string, string>) => Promise<{ ok: boolean; label?: string }>;
+  rescheduleSlot?: (slotId: string, vars: Record<string, string>) => Promise<{ ok: boolean; label?: string }>;
   routeChoice?: (input: {
     prompt: string;
     text: string;
@@ -154,6 +160,35 @@ async function semanticChoice(
   return node.options.find((option) => option.id === optionId)?.next ?? null;
 }
 
+async function runSlotSelection(
+  node: Extract<FlowNode, { type: "slots" }>,
+  input: FlowInput,
+  vars: Record<string, string>,
+  ctx: FlowCtx,
+  messages: OutMsg[],
+): Promise<{ nodeId: string | null; wait?: FlowResult }> {
+  if (!input.choiceId?.startsWith(`${node.id}|`)) return { nodeId: node.next ?? null };
+  const slotId = input.choiceId.slice(node.id.length + 1);
+  const handler = node.action === "reschedule" ? ctx.rescheduleSlot : ctx.bookSlot;
+  if (!handler) return { nodeId: node.next ?? null };
+  const res = await handler(slotId, vars);
+  if (!res.ok) {
+    const opts = ctx.availableSlots ? await ctx.availableSlots() : [];
+    if (opts.length) {
+      messages.push({
+        type: "choice",
+        text: "That one just filled up — here are the next open times:",
+        options: opts.map((o) => ({ id: choiceId(node.id, o.id), label: o.label })),
+      });
+      return { nodeId: node.id, wait: { messages, session: { nodeId: node.id, vars }, handedOff: false } };
+    }
+  } else if (res.label) {
+    vars.slot = res.label;
+    if (node.action === "reschedule") vars.booking_slot = res.label;
+  }
+  return { nodeId: node.next ?? null };
+}
+
 export async function runFlow(
   flow: Flow,
   session: FlowSession,
@@ -190,18 +225,9 @@ export async function runFlow(
       vars[cur.variable] = input.fileUrl;
       nodeId = cur.next ?? null;
     } else if (cur?.type === "slots") {
-      if (input.choiceId?.startsWith(`${cur.id}|`) && ctx.bookSlot) {
-        const slotId = input.choiceId.slice(cur.id.length + 1);
-        const res = await ctx.bookSlot(slotId, vars);
-        if (!res.ok) {
-          const opts = ctx.availableSlots ? await ctx.availableSlots() : [];
-          if (opts.length) {
-            messages.push({ type: "choice", text: "That one just filled up — here are the next open times:", options: opts.map((o) => ({ id: choiceId(cur.id, o.id), label: o.label })) });
-            return { messages, session: { nodeId: cur.id, vars }, handedOff: false };
-          }
-        } else if (res.label) vars.slot = res.label;
-        nodeId = cur.next ?? null;
-      } else nodeId = cur.next ?? null;
+      const selected = await runSlotSelection(cur, input, vars, ctx, messages);
+      if (selected.wait) return selected.wait;
+      nodeId = selected.nodeId;
     } else if (cur?.type === "ai") {
       const ai = await ctx.aiReply(vars);
       messages.push({ type: "text", text: ai.reply });
@@ -237,7 +263,11 @@ export async function runFlow(
       if (text) messages.push({ type: "text", text });
       nodeId = node.next ?? null;
     } else if (node.type === "booking") {
-      await ctx.createBooking(vars, node.action);
+      if (node.action === "lookup" || node.action === "cancel") {
+        if (ctx.manageBooking) await ctx.manageBooking(node.action, vars);
+      } else {
+        await ctx.createBooking(vars, node.action);
+      }
       if (node.text) messages.push({ type: "text", text: interpolate(node.text, vars) });
       nodeId = node.next ?? null;
     } else if (node.type === "slots") {
@@ -308,7 +338,7 @@ export const DEFAULT_FLOW: Flow = {
     bookName: { id: "bookName", type: "capture", text: "Sure — let's get you booked in. What's your name?", variable: "name", next: "bookPhone" },
     bookPhone: { id: "bookPhone", type: "capture", text: "Thanks {{name}}! What's the best contact number?", variable: "phone", format: "phone", next: "bookService" },
     bookService: { id: "bookService", type: "capture", text: "What does the cart need? (service, repair, etc.)", variable: "service", next: "chooseSlot" },
-    chooseSlot: { id: "chooseSlot", type: "slots", text: "Here are our next available service times — pick one:", noneText: "We're fully booked online just now — I've logged your request and the team will call you to find a time. 📞", next: "bookConfirm" },
+    chooseSlot: { id: "chooseSlot", type: "slots", action: "book", text: "Here are our next available service times — pick one:", noneText: "We're fully booked online just now — I've logged your request and the team will call you to find a time. 📞", next: "bookConfirm" },
     bookConfirm: { id: "bookConfirm", type: "message", text: "You're booked, {{name}}! 🛠 {{slot}}. We'll see you then — message *menu* if anything changes.", next: "end" },
     aiChat: { id: "aiChat", type: "ai" },
     bye: { id: "bye", type: "message", text: "Cheers! Message *menu* any time to start again. 🛺", next: "end" },
