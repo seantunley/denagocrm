@@ -16,7 +16,9 @@ import {
   type DragEndEvent,
   type DragOverEvent,
   type DragStartEvent,
+  type Modifier,
 } from "@dnd-kit/core";
+import { getEventCoordinates } from "@dnd-kit/utilities";
 import {
   SortableContext,
   sortableKeyboardCoordinates,
@@ -78,6 +80,37 @@ import { useEditor, newId } from "./EditorProvider";
 
 const NO_TRANSFORM: SortingStrategy = () => null;
 const MEASURE_ALWAYS = { droppable: { strategy: MeasuringStrategy.Always } };
+
+/**
+ * Keep the drag label under the cursor.
+ *
+ * By default an overlay is placed at the DRAGGED ELEMENT's position, moved by
+ * the pointer's delta — which is right when the overlay is a copy of the
+ * element, and wrong here, where it is a small label standing in for a card that
+ * can be most of the screen wide. Grab a wide card by its handle, at its
+ * top-right, and the label is drawn at the card's top-LEFT: hundreds of pixels
+ * from the pointer, and it stays that far away for the whole drag. Reported as
+ * the label not following the cursor.
+ *
+ * Centring it on the pointer is what people expect from something they are
+ * carrying, and it matters more here than usual: the card itself does not move
+ * any more, so this label is the only thing that says a drag is happening at
+ * all.
+ *
+ * Written out rather than taken from @dnd-kit/modifiers, which is a dependency
+ * this project does not have and would be a package for one twelve-line
+ * function.
+ */
+const snapToCursor: Modifier = ({ activatorEvent, draggingNodeRect, transform }) => {
+  if (!draggingNodeRect || !activatorEvent) return transform;
+  const grabbedAt = getEventCoordinates(activatorEvent);
+  if (!grabbedAt) return transform;
+  return {
+    ...transform,
+    x: transform.x + grabbedAt.x - draggingNodeRect.left - draggingNodeRect.width / 2,
+    y: transform.y + grabbedAt.y - draggingNodeRect.top - draggingNodeRect.height / 2,
+  };
+};
 
 const VIEW_COLUMNS: Record<1 | 2 | 3 | 4, string> = {
   1: "grid-cols-1",
@@ -330,7 +363,7 @@ export default function DashboardCanvas({
         )}
       </div>
 
-      <DragOverlay dropAnimation={null}>
+      <DragOverlay dropAnimation={null} modifiers={[snapToCursor]}>
         {activeCard ? (
           <div className="flex cursor-grabbing items-center gap-2 rounded-lg border border-primary/40 bg-card px-3 py-2 text-xs font-medium text-foreground shadow-lg">
             <GripVertical className="size-3.5 text-muted-foreground" />
