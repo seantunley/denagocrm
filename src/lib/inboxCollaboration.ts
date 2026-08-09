@@ -1,30 +1,14 @@
 import "server-only";
 import { basePrisma } from "./db";
+import { DEFAULT_TENANT_ID } from "./tenant";
+import { botIdentityForRecord } from "./botConversationControl";
 import { threadCollaborationKey, type ThreadCollaboration, type ThreadIdentity } from "./inboxThreads";
 
 /**
  * Joining the inbox's THREADS to the Conversation rows that carry collaboration.
- *
- * The inbox renders threads grouped from Communication rows (buildInboxThreads),
- * while assignment and notes live on Conversation. Both group the same way — one
- * per contact-or-lead per channel — so the two can be matched, but the thread's
- * identity is a composed string and the conversation's is a cuid, and nothing
- * connects them except this agreement.
- *
- * That agreement is the fragile part, so `threadCollaborationKey` exists to state
- * it once, and a test builds a real thread through buildInboxThreads and asserts
- * the keys match. If either side's grouping changes, that test fails rather than
- * the inbox quietly showing every thread as unassigned.
- */
-
-/**
- * Load assignment and notes for the given threads, in one query per table.
- *
- * basePrisma: the caller has ALREADY scoped which threads exist (the inbox page
- * resolves accessibleInboxWhere before grouping), so these look up rows for
- * contacts and leads the user is established to be allowed. Going back through
- * the scoped client would re-filter on a tenant scope that is not yet stamped and
- * return nothing.
+ * Both the inbox and the chatbot ownership controls address the same underlying
+ * contact-or-lead + channel conversation; this loader makes that relationship
+ * explicit instead of asking the browser to rediscover it with one request per row.
  */
 export async function collaborationForThreads(
   threads: ThreadIdentity[],
@@ -47,11 +31,21 @@ export async function collaborationForThreads(
     },
     select: {
       id: true,
+      tenantId: true,
       channel: true,
       contactId: true,
       leadId: true,
       lastMessageAt: true,
       assignedTo: { select: { id: true, name: true } },
+      contact: {
+        select: {
+          whatsapp: true,
+          phone: true,
+          messengerPsid: true,
+          instagramId: true,
+        },
+      },
+      lead: { select: { phone: true } },
     },
     // Newest first, so when a contact has both an open and a closed conversation
     // on one channel the live one is the one that wins the key below.
@@ -94,13 +88,50 @@ export async function collaborationForThreads(
     ]),
   );
 
+  const botTargets = conversations.flatMap((conversation) => {
+    const identity = botIdentityForRecord(conversation);
+    return identity
+      ? [{
+          conversationId: conversation.id,
+          tenantId: conversation.tenantId ?? DEFAULT_TENANT_ID,
+          ...identity,
+        }]
+      : [];
+  });
+  const pausedSessions = botTargets.length
+    ? await basePrisma.botSession.findMany({
+        where: {
+          status: "paused",
+          expiresAt: { gt: new Date() },
+          OR: botTargets.map((target) => ({
+            tenantId: target.tenantId,
+            channel: target.channel,
+            key: target.key,
+          })),
+        },
+        select: { tenantId: true, channel: true, key: true },
+      })
+    : [];
+  const paused = new Set(pausedSessions.map((session) => `${session.tenantId}:${session.channel}:${session.key}`));
+  const botByConversation = new Map(
+    botTargets.map((target) => [
+      target.conversationId,
+      paused.has(`${target.tenantId}:${target.channel}:${target.key}`) ? "human" as const : "bot" as const,
+    ]),
+  );
+  const supportedConversations = new Set(botTargets.map((target) => target.conversationId));
+
   for (const conversation of conversations) {
     const key = threadCollaborationKey(conversation);
-    if (!key || byKey.has(key)) continue; // first (newest) wins
+    if (!key || byKey.has(key)) continue;
     byKey.set(key, {
       conversationId: conversation.id,
       assignee: conversation.assignedTo ?? null,
       notes: notesByConversation.get(conversation.id) ?? [],
+      bot: {
+        supported: supportedConversations.has(conversation.id),
+        mode: botByConversation.get(conversation.id) ?? "bot",
+      },
       draft: draftByConversation.get(conversation.id) ?? null,
     });
   }
