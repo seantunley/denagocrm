@@ -4,12 +4,13 @@ import { prisma } from "@/lib/db";
 import { requireOwner } from "@/lib/auth";
 import { getSetting, putSetting } from "@/lib/settings";
 import { DEFAULT_FLOW } from "@/lib/flow";
+import { getFlowPublicationMeta, publishFlowSnapshot } from "@/lib/flowPublishing";
 import { createFlow, setActiveFlow, duplicateFlow, deleteFlow, renameFlow } from "@/app/actions/flow";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import { EmptyState, StatusPill, Surface } from "@/components/visual-system";
 
 export default async function BotBuilderPage() {
-  await requireOwner();
+  const owner = await requireOwner();
 
   // One-time seed / migrate the previous single flow into the library.
   if ((await prisma.botFlow.count()) === 0) {
@@ -27,19 +28,28 @@ export default async function BotBuilderPage() {
         /* keep default */
       }
     }
-    await prisma.botFlow.create({ data: { name, definition, active: true } });
+    const seeded = await prisma.botFlow.create({ data: { name, definition, active: true } });
+    await publishFlowSnapshot(seeded.id, owner.id);
     if (legacy) await putSetting("BOT_FLOW", "");
   }
 
-  const flows = await prisma.botFlow.findMany({ orderBy: [{ active: "desc" }, { updatedAt: "desc" }] });
+  const [flows, publicationMeta] = await Promise.all([
+    prisma.botFlow.findMany({ orderBy: [{ active: "desc" }, { updatedAt: "desc" }] }),
+    getFlowPublicationMeta(),
+  ]);
+  const hasDraftChanges = (flow: (typeof flows)[number]) => {
+    const publication = publicationMeta.get(flow.id);
+    return flow.active && (!publication || flow.updatedAt > publication.publishedAt);
+  };
+  const pendingDrafts = flows.filter((flow) => !flow.active || hasDraftChanges(flow)).length;
 
   return (
     <div className="space-y-5">
-      <WorkspaceHero icon={GitBranch} eyebrow="Conversation design" title="Flow builder" description="Design guided customer journeys, test variations and choose the single flow that runs across every connected channel."
+      <WorkspaceHero icon={GitBranch} eyebrow="Conversation design" title="Flow builder" description="Design guided customer journeys as drafts, then publish an immutable version when it is ready for customers. Existing conversations finish on the version they started with."
         stats={[
           { label: "Flows", value: flows.length, icon: Layers3 },
           { label: "Live", value: flows.filter((flow) => flow.active).length, icon: Radio, tone: "success" },
-          { label: "Drafts", value: flows.filter((flow) => !flow.active).length, icon: Pencil },
+          { label: "Drafts / changes", value: pendingDrafts, icon: Pencil },
           { label: "Channels", value: "One journey", icon: GitBranch },
         ]}
         actions={<form action={createFlow}>
@@ -48,8 +58,11 @@ export default async function BotBuilderPage() {
         </form>}
       />
 
-      {flows.length === 0 ? <EmptyState icon={GitBranch} title="Create your first conversation" description="Start with a guided journey, then set it live when it is ready for customers." /> : <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {flows.map((f) => (
+      {flows.length === 0 ? <EmptyState icon={GitBranch} title="Create your first conversation" description="Start with a guided journey, then publish it when it is ready for customers." /> : <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {flows.map((f) => {
+          const publication = publicationMeta.get(f.id);
+          const pending = hasDraftChanges(f);
+          return (
           <Surface key={f.id} className="group flex min-h-52 flex-col p-5 transition hover:border-primary/35">
             <div className="flex items-center justify-between gap-2">
               <form action={renameFlow.bind(null, f.id)} className="flex-1 min-w-0">
@@ -59,20 +72,25 @@ export default async function BotBuilderPage() {
                   className="bg-transparent font-semibold text-foreground w-full outline-none focus:bg-muted rounded px-1 -mx-1"
                 />
               </form>
-              {f.active ? (
-                <StatusPill tone="success">Live</StatusPill>
-              ) : (
-                <form action={setActiveFlow.bind(null, f.id)}>
-                  <button className="btn-secondary btn-sm">Set live</button>
-                </form>
-              )}
+              <div className="flex items-center gap-1.5">
+                {f.active && <StatusPill tone="success">Live</StatusPill>}
+                {pending && <StatusPill tone="warning">Draft changed</StatusPill>}
+              </div>
             </div>
-            <p className="mt-2 text-xs text-muted-foreground">Updated {f.updatedAt.toLocaleDateString("en-ZA")}</p>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Draft updated {f.updatedAt.toLocaleDateString("en-ZA")}
+              {publication ? ` · published ${publication.publishedAt.toLocaleDateString("en-ZA")}` : " · not versioned yet"}
+            </p>
             <div className="my-5 flex flex-1 items-center gap-2 text-muted-foreground" aria-hidden>
               {[0, 1, 2].map((step) => <span key={step} className="flex items-center gap-2"><span className="grid size-8 place-items-center rounded-lg border border-border bg-muted/40"><GitBranch className="size-3.5" /></span>{step < 2 && <span className="h-px w-5 bg-border" />}</span>)}
             </div>
             <div className="flex gap-2 flex-wrap border-t border-border/70 pt-3">
-              <Link href={`/bot-builder/${f.id}`} className="btn-primary btn-sm"><Pencil className="size-3.5" />Edit flow</Link>
+              <Link href={`/bot-builder/${f.id}`} className="btn-primary btn-sm"><Pencil className="size-3.5" />Edit draft</Link>
+              {(!f.active || pending) && (
+                <form action={setActiveFlow.bind(null, f.id)}>
+                  <button className="btn-secondary btn-sm">{f.active ? "Publish changes" : "Publish"}</button>
+                </form>
+              )}
               <form action={duplicateFlow.bind(null, f.id)}>
                 <button className="btn-secondary btn-sm"><Copy className="size-3.5" />Duplicate</button>
               </form>
@@ -83,7 +101,7 @@ export default async function BotBuilderPage() {
               )}
             </div>
           </Surface>
-        ))}
+        )})}
       </div>}
     </div>
   );
