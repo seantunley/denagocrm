@@ -6,9 +6,15 @@
  */
 import { prisma } from "./db";
 import type { BotMsg } from "./botAi";
-import { runFlow, DEFAULT_FLOW, type Flow, type FlowCtx, type FlowInput, type OutMsg } from "./flow";
+import { runFlow, type Flow, type FlowCtx, type FlowInput, type OutMsg } from "./flow";
+import { resolveFlowSnapshot } from "./flowPublishing";
 
-export type SessionState = { nodeId: string | null; vars: Record<string, string>; msgs: BotMsg[] };
+export type SessionState = {
+  nodeId: string | null;
+  vars: Record<string, string>;
+  msgs: BotMsg[];
+  flowVersionId: string | null;
+};
 
 const RESTART = /^\s*(menu|hi|hello|hey|start|restart|begin)\b/i;
 
@@ -19,20 +25,9 @@ export function greetingVars(firstName: string | null): Record<string, string> {
     : { greeting: "Hi there 👋 Welcome to Denago Cape Town!" };
 }
 
-/** Active flow for a channel: its own live flow, else the live WhatsApp one. */
+/** Backwards-compatible helper for callers that only need the current graph. */
 export async function getActiveFlowFor(channel: string): Promise<Flow> {
-  const row =
-    (await prisma.botFlow.findFirst({ where: { channel, active: true } })) ??
-    (await prisma.botFlow.findFirst({ where: { channel: "whatsapp", active: true } }));
-  if (row) {
-    try {
-      const f = JSON.parse(row.definition);
-      if (f?.start && f?.nodes) return f as Flow;
-    } catch {
-      /* default */
-    }
-  }
-  return DEFAULT_FLOW;
+  return (await resolveFlowSnapshot(channel)).flow;
 }
 
 async function loadState(channel: string, key: string): Promise<(SessionState & { status: string }) | null> {
@@ -40,16 +35,24 @@ async function loadState(channel: string, key: string): Promise<(SessionState & 
   if (!row || row.expiresAt < new Date()) return null;
   try {
     const p = JSON.parse(row.vars);
-    return { nodeId: row.nodeId, vars: p.v ?? {}, msgs: p.m ?? [], status: row.status };
+    return {
+      nodeId: row.nodeId,
+      vars: p.v ?? {},
+      msgs: p.m ?? [],
+      flowVersionId: p.fv ?? null,
+      status: row.status,
+    };
   } catch {
-    return { nodeId: row.nodeId, vars: {}, msgs: [], status: row.status };
+    return { nodeId: row.nodeId, vars: {}, msgs: [], flowVersionId: null, status: row.status };
   }
 }
 
 async function saveState(channel: string, key: string, state: SessionState, status = "active", hours = 12) {
   const data = {
     nodeId: state.nodeId,
-    vars: JSON.stringify({ v: state.vars, m: state.msgs.slice(-20) }),
+    // Keep the immutable publication pin beside the existing transcript wrapper;
+    // no BotSession schema change is needed and old rows parse with fv = null.
+    vars: JSON.stringify({ v: state.vars, m: state.msgs.slice(-20), fv: state.flowVersionId }),
     status,
     expiresAt: new Date(Date.now() + hours * 3600 * 1000),
   };
@@ -91,16 +94,23 @@ export async function advanceFlow(
     return { messages: [], done: true, suppressed: true }; // a human is handling
   }
 
-  const state: SessionState = !existing || restart ? { nodeId: null, vars: { ...(seedVars ?? {}) }, msgs: [] } : { nodeId: existing.nodeId, vars: existing.vars, msgs: existing.msgs };
+  const state: SessionState = !existing || restart
+    ? { nodeId: null, vars: { ...(seedVars ?? {}) }, msgs: [], flowVersionId: null }
+    : {
+        nodeId: existing.nodeId,
+        vars: existing.vars,
+        msgs: existing.msgs,
+        flowVersionId: existing.flowVersionId,
+      };
+
   // The current turn belongs in the transcript even when this is the FIRST turn.
-  // Previously a flow whose start node was AI invoked the model with an empty
-  // history because user messages were appended only when a session already
-  // existed. Choice callbacks with no text stay out of the natural-language
-  // transcript; their rendered label is already represented by the flow state.
   if (input.text.trim()) state.msgs.push({ role: "user", content: input.text });
 
-  const flow = await getActiveFlowFor(channel);
-  const result = await runFlow(flow, { nodeId: state.nodeId, vars: state.vars }, input, makeCtx(state));
+  // Existing sessions stay on the publication they started with. A restart is a
+  // deliberate new conversation and therefore takes the current publication.
+  const snapshot = await resolveFlowSnapshot(channel, restart ? null : state.flowVersionId);
+  state.flowVersionId = snapshot.versionId;
+  const result = await runFlow(snapshot.flow, { nodeId: state.nodeId, vars: state.vars }, input, makeCtx(state));
   recordBotMsgs(state, result.messages);
 
   if (result.session) {
