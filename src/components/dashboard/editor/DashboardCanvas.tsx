@@ -10,6 +10,7 @@ import {
   TouchSensor,
   closestCenter,
   pointerWithin,
+  useDroppable,
   useSensor,
   useSensors,
   type CollisionDetection,
@@ -32,6 +33,7 @@ import {
   insertionTargetInSection,
   layoutWithMarker,
   moveCardInView,
+  nearestId,
   type DropPreview,
 } from "@/lib/dashboard/canvasMove";
 import type { CardConfig, SectionConfig, ViewConfig } from "@/lib/dashboard/config";
@@ -210,41 +212,53 @@ export default function DashboardCanvas({
       const overCard = within.filter((collision) => cardIds.has(String(collision.id)));
       if (overCard.length > 0) return overCard;
 
-      /*
-       * Over a SECTION but not a card, which happens constantly: sections have
-       * padding, they hold an "Add a card" button, the grid is `items-start` so
-       * short cards leave empty space under them in their own row, and a section
-       * stretches to its tallest column.
-       *
-       * Answering "append" for all of that put the marker at the bottom of the
-       * group while the card was being dragged near the top - the two were
-       * nowhere near each other, which is what was reported. The empty space
-       * now resolves to the nearest card, on the side the pointer is nearest to.
-       */
-      const overSection = within.find((collision) => !cardIds.has(String(collision.id)));
       const pointer = args.pointerCoordinates;
-      if (overSection && pointer) {
-        const section = view.sections.find((entry) => entry.id === String(overSection.id));
-        const activeCardId = String(args.active.id);
-        const siblings = section?.cards.filter((card) => card.id !== activeCardId) ?? [];
-        if (siblings.length > 0) {
-          return [
-            {
-              id: insertionTargetInSection(
-                siblings.map((card) => card.id),
-                (id) => args.droppableRects.get(id),
-                pointer,
-                section!.id,
-              ),
-            },
-          ];
-        }
+      if (!pointer) {
+        // The keyboard sensor, which has no pointer for any of the below.
+        const closest = closestCenter(args);
+        const closestCard = closest.filter((collision) => cardIds.has(String(collision.id)));
+        return closestCard.length > 0 ? closestCard : closest;
       }
-      if (within.length > 0) return within;
 
-      const closest = closestCenter(args);
-      const closestCard = closest.filter((collision) => cardIds.has(String(collision.id)));
-      return closestCard.length > 0 ? closestCard : closest;
+      const rectOf = (id: string) => args.droppableRects.get(id);
+
+      /*
+       * Not over a card. Find the GROUP first, then the place within it.
+       *
+       * Over a group but not a card happens constantly - groups have padding,
+       * they hold an "Add a card" button, the grid is `items-start` so short
+       * cards leave empty space under them inside their own row, and a group
+       * stretches to its tallest column. And the pointer is often inside nothing
+       * at all: the gap between two groups, the page margin, the strip past the
+       * last column.
+       *
+       * Falling back to dnd-kit's closestCenter for that measured from the
+       * DRAGGED CARD's rectangle rather than the pointer, and for a card
+       * spanning half the screen those are nowhere near each other - which is
+       * why the marker kept appearing in a group nobody was pointing at.
+       */
+      const sectionId =
+        within.map((collision) => String(collision.id)).find((id) => !cardIds.has(id)) ??
+        nearestId(
+          view.sections.map((entry) => entry.id),
+          rectOf,
+          pointer,
+        );
+      if (!sectionId) return [];
+
+      const section = view.sections.find((entry) => entry.id === sectionId);
+      const activeCardId = String(args.active.id);
+      const siblings = section?.cards.filter((card) => card.id !== activeCardId) ?? [];
+      return [
+        {
+          id: insertionTargetInSection(
+            siblings.map((card) => card.id),
+            rectOf,
+            pointer,
+            sectionId,
+          ),
+        },
+      ];
     },
     [cardIds, view.sections],
   );
@@ -400,6 +414,25 @@ function SectionBlock({
   onAddCard: (sectionId: string) => void;
 }) {
   const { editing, updateSection, updateView } = useEditor();
+  /*
+   * THE GROUP IS A DROP TARGET IN ITS OWN RIGHT, and until now it only claimed
+   * to be.
+   *
+   * Its id was listed in the SortableContext below, under a comment saying that
+   * is what keeps an emptied group fillable — but SortableContext only declares
+   * which items SORT. A droppable exists where useDroppable is called, and it
+   * never was, so the group had no registered rectangle at all: nothing could
+   * ever collide with it, an emptied group genuinely could not be refilled, and
+   * every "the pointer is over a group" branch was unreachable code.
+   *
+   * The visible symptom was the marker landing nowhere near the pointer. With no
+   * group to collide with, a pointer that was not directly over a card fell
+   * through to dnd-kit's closestCenter, which measures from the DRAGGED CARD's
+   * rectangle rather than the pointer — and for a card spanning half the screen
+   * those are nowhere near each other.
+   */
+  const { setNodeRef: setSectionRef } = useDroppable({ id: section.id, disabled: !editing });
+
   // Same rule as the read-only path: in normal use a section with nothing drawn
   // leaves no empty box, because a heading over nothing reads as a failure.
   const drawn = section.cards.filter((card) => slots[card.id] !== undefined);
@@ -457,6 +490,7 @@ function SectionBlock({
 
   return (
     <section
+      ref={setSectionRef}
       className={cn(
         "min-w-0 space-y-3",
         SECTION_SPAN[section.columnSpan],
