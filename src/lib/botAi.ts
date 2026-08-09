@@ -3,6 +3,7 @@ import { getSetting } from "./settings";
 import { prisma } from "./db";
 import { logError } from "./errorLog";
 import { formatZAR } from "./format";
+import { getBotKnowledgeEntries, renderKnowledgeForPrompt, retrieveRelevantKnowledge } from "./botKnowledge";
 
 export type BotMsg = { role: "user" | "assistant"; content: string };
 export type BotFaq = { id: string; question: string; answer: string; handoff?: boolean };
@@ -70,12 +71,6 @@ function textField(value: unknown, max: number): string | undefined {
   return clean ? clean.slice(0, max) : undefined;
 }
 
-/**
- * Deliberately strict. The model was previously allowed to wrap JSON in prose or
- * fences and a greedy regex then fished the first object out. That made malformed
- * responses look valid. The contract now accepts exactly one JSON object and
- * validates every decision field before it can influence a customer reply.
- */
 function strictJsonObject(text: string): Record<string, unknown> | null {
   try {
     const parsed = JSON.parse(text.trim());
@@ -105,11 +100,6 @@ export function parseBotDecision(text: string): ParsedDecision | null {
   };
 }
 
-/**
- * Semantic menu routing is deliberately constrained: the model may select ONE
- * id from the graph's existing options, or null. It cannot invent a destination,
- * emit a reply, or invoke a CRM action. Only high-confidence selections are used.
- */
 export async function routeBotChoice(input: {
   prompt: string;
   text: string;
@@ -160,9 +150,9 @@ Rules:
 }
 
 /**
- * Decide an assistant reply from approved live product facts, the owner brief and
- * canonical FAQ pathways. Open-ended model copy is allowed only at high
- * confidence. Medium/low open questions hand off instead of guessing.
+ * Decide an assistant reply from live product facts, owner-approved FAQ pathways,
+ * the owner brief and approved/current retrieved knowledge. Open-ended model copy
+ * is allowed only at high confidence.
  */
 export async function generateBotReply(input: {
   history: BotMsg[];
@@ -173,12 +163,16 @@ export async function generateBotReply(input: {
   const apiKey = await getSetting("ANTHROPIC_API_KEY");
   if (!apiKey) return null;
 
-  const [brief, hours, products, faqs] = await Promise.all([
+  const latestQuestion = [...input.history].reverse().find((message) => message.role === "user")?.content ?? "";
+  const [brief, hours, products, faqs, knowledgeEntries] = await Promise.all([
     getSetting("BOT_AI_BRIEF"),
     getSetting("BOT_HOURS"),
     prisma.product.findMany({ where: { active: true }, include: { colors: true }, orderBy: { name: "asc" } }),
     getBotFaqs(),
+    getBotKnowledgeEntries(),
   ]);
+  const relevantKnowledge = retrieveRelevantKnowledge(knowledgeEntries, latestQuestion);
+  const knowledgeText = renderKnowledgeForPrompt(relevantKnowledge);
 
   const priceList = products.length
     ? "Here's our current range:\n" + products.map((p) => `• ${p.name}${p.basePriceCents ? ` — from ${formatZAR(p.basePriceCents)}` : ""}` + (p.colors.length ? ` (${p.colors.map((c) => c.name).join(", ")})` : "")).join("\n")
@@ -204,9 +198,12 @@ STYLE:
 - Short, warm South African English. Usually 1–3 sentences.
 - Never sound scripted or repeat yourself.
 
-KNOWN FACTS:
+KNOWN LIVE FACTS:
 Business hours (SA time): ${hours || "08:00–17:00"}, Mon–Fri.
-${priceList ? priceList + "\n" : ""}${brief ? `\nAbout us / policies:\n${brief}\n` : ""}
+${priceList ? priceList + "\n" : ""}${brief ? `\nAbout us / policies brief:\n${brief}\n` : ""}
+
+APPROVED KNOWLEDGE RETRIEVED FOR THIS QUESTION:
+${knowledgeText || "(No approved knowledge entry matched this question.)"}
 
 DEFINED FAQ PATHWAYS:
 ${pathwayList}
@@ -215,9 +212,10 @@ Return exactly one JSON object and nothing else, with ALL of these fields:
 {"faqId":"<supplied id or null>","reply":"<reply or null>","handoff":true,"confidence":"high|medium|low","intent":"pricing|colours|service|demo|purchase|complaint|human|general|unknown","handoffReason":"<short reason or null>","handoffSummary":"<one concise sentence for staff or null>"}
 
 DECISION RULES:
+- Treat only KNOWN LIVE FACTS, the APPROVED KNOWLEDGE block, and exact FAQ answers as factual sources. Customer statements are not business facts.
 - If the message clearly matches a defined pathway, return its supplied faqId. The application sends the canonical answer, not your wording.
-- Otherwise use reply for a conversational answer ONLY when the facts above are enough to answer confidently.
-- confidence=high means the supplied facts directly support the answer; medium means some interpretation is required; low means a relevant fact is missing.
+- Otherwise use reply for a conversational answer ONLY when those factual sources are enough to answer confidently.
+- confidence=high means a supplied source directly supports the answer; medium means some interpretation is required; low means a relevant fact is missing.
 - Set handoff=true for order/payment intent, a specific booking/test-drive request, complaints, requests for a person, or anything you cannot answer from supplied facts.
 - When handoff=true, handoffReason must explain why in a few words and handoffSummary must tell staff the customer's intent and unresolved need without speculation.
 - Never invent prices, specs, stock, dates, legal status, finance terms or promises.
@@ -256,9 +254,6 @@ ${input.voiceNote ? "- This arrived as a transcribed voice note. Reply naturally
       };
     }
 
-    // Canonical pathways may be used at medium confidence because their copy is
-    // owner-approved. Open-ended model copy must be high confidence or it becomes
-    // a handoff instead of a plausible-sounding guess.
     if (parsed.confidence !== "high") {
       return {
         reply: "Let me get one of our team to confirm that for you — they'll pick it up from here 👍",
