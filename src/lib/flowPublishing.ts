@@ -1,6 +1,8 @@
 import { prisma } from "./db";
 import { DEFAULT_FLOW, type Flow } from "./flow";
 import { withTenantWrite } from "./tenantWrite";
+import { flowErrors } from "./flowValidation";
+import { FlowPublishValidationError, validateFlowForEnabledChannels } from "./flowValidationServer";
 
 export type FlowSnapshot = {
   flow: Flow;
@@ -20,11 +22,6 @@ function parseFlow(definition: string): Flow | null {
 
 /**
  * Resolve the immutable graph a conversation should execute.
- *
- * A pinned version ALWAYS wins. New sessions take the current publication for
- * their channel (or the WhatsApp publication as the existing cross-channel
- * fallback). Until every installation has republished once, the old BotFlow.active
- * row remains a backwards-compatible fallback.
  */
 export async function resolveFlowSnapshot(
   channel: string,
@@ -48,8 +45,6 @@ export async function resolveFlowSnapshot(
     if (version && flow) return { flow, versionId: version.id, flowId: version.flowId };
   }
 
-  // Compatibility path for the first deploy: an existing active flow stays live
-  // until the owner explicitly publishes it and creates its first immutable version.
   const legacy =
     (await prisma.botFlow.findFirst({ where: { channel, active: true } })) ??
     (channel === "whatsapp"
@@ -64,18 +59,34 @@ export async function resolveFlowSnapshot(
 }
 
 /**
- * Publish the CURRENT draft as a new immutable version and atomically switch the
- * channel publication to it. All writes share one transaction; the unique
- * (tenantId, channel) publication row is the database-level "one live flow"
- * invariant that the old updateMany + update pair did not provide concurrently.
+ * Publish the CURRENT draft as a new immutable version.
+ *
+ * Validation lives HERE rather than only in the builder action: any future
+ * caller, script or Server Action must pass the same graph/channel compiler
+ * before a version can become customer-facing.
  */
 export async function publishFlowSnapshot(
   flowId: string,
   actorId?: string | null,
 ): Promise<{ versionId: string; version: number; channel: string }> {
+  const draft = await prisma.botFlow.findUnique({ where: { id: flowId } });
+  if (!draft) throw new Error("FLOW_NOT_FOUND");
+  const parsed = parseFlow(draft.definition);
+  if (!parsed) {
+    throw new FlowPublishValidationError([
+      { severity: "error", code: "graph.shape", message: "Flow definition is malformed." },
+    ]);
+  }
+  const issues = await validateFlowForEnabledChannels(parsed);
+  if (flowErrors(issues).length) throw new FlowPublishValidationError(issues);
+
   return withTenantWrite(async (tx, tenantId) => {
+    // Re-read inside the transaction. If the draft changed between validation
+    // and this point, refuse rather than publishing a different definition than
+    // the one the compiler approved.
     const flow = await tx.botFlow.findFirst({ where: { id: flowId, tenantId } });
     if (!flow) throw new Error("FLOW_NOT_FOUND");
+    if (flow.definition !== draft.definition) throw new Error("FLOW_CHANGED_DURING_PUBLISH");
 
     const max = await tx.botFlowVersion.aggregate({
       where: { tenantId, flowId },
@@ -93,8 +104,6 @@ export async function publishFlowSnapshot(
       },
     });
 
-    // Keep the legacy flag truthful for the existing list UI and compatibility
-    // readers, but publication itself is governed by the unique row below.
     await tx.botFlow.updateMany({
       where: { tenantId, channel: flow.channel },
       data: { active: false },
@@ -125,12 +134,9 @@ export async function publishFlowSnapshot(
   });
 }
 
-/** Publication metadata used by the flow library to distinguish live from draft changes. */
 export async function getFlowPublicationMeta(): Promise<
   Map<string, { versionId: string; publishedAt: Date }>
 > {
   const publications = await prisma.botFlowPublication.findMany();
-  return new Map(
-    publications.map((p) => [p.flowId, { versionId: p.versionId, publishedAt: p.publishedAt }]),
-  );
+  return new Map(publications.map((p) => [p.flowId, { versionId: p.versionId, publishedAt: p.publishedAt }]));
 }
