@@ -5,6 +5,7 @@ import SocialThreadList from "@/components/SocialThreadList";
 import InstallAppButton from "@/components/InstallAppButton";
 import { buildInboxThreads } from "@/lib/inboxThreads";
 import { loadInboxComms } from "@/lib/inboxQuery";
+import { conversationIdsForThreads } from "@/lib/inboxConversations";
 
 export const metadata = { title: "Chats — Denago Messages" };
 
@@ -19,6 +20,11 @@ export default async function MessagesChatsPage() {
   const comms = await loadInboxComms(scopeWhere);
 
   const threads = buildInboxThreads(comms);
+  // Resolved BEFORE the reply boxes render, not when Send is pressed: a Messenger
+  // or Instagram reply is delivered on the channel this row names, so without it
+  // the box has nothing to post and refuses. The full inbox gets the same ids via
+  // its collaboration payload.
+  const conversations = await conversationIdsForThreads(threads);
   const unread = threads.filter((t) => t.unread).length;
 
   return (
@@ -43,6 +49,7 @@ export default async function MessagesChatsPage() {
               <SocialThreadList
                 list={threads}
                 empty="No conversations yet. WhatsApp chats appear once the number is connected; Messenger and Instagram DMs flow once Meta approves messaging."
+                conversations={conversations}
                 revalidate="/messages"
               />
             ),
@@ -55,6 +62,7 @@ export default async function MessagesChatsPage() {
               <SocialThreadList
                 list={threads.filter((t) => t.channel === "whatsapp")}
                 empty="No WhatsApp conversations yet."
+                conversations={conversations}
                 revalidate="/messages"
               />
             ),
@@ -67,6 +75,7 @@ export default async function MessagesChatsPage() {
               <SocialThreadList
                 list={threads.filter((t) => t.channel === "messenger")}
                 empty="No Messenger conversations yet."
+                conversations={conversations}
                 revalidate="/messages"
               />
             ),
@@ -79,6 +88,7 @@ export default async function MessagesChatsPage() {
               <SocialThreadList
                 list={threads.filter((t) => t.channel === "instagram")}
                 empty="No Instagram DMs yet."
+                conversations={conversations}
                 revalidate="/messages"
               />
             ),

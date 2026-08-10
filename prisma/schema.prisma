@@ -621,10 +621,18 @@ model BotSession {
   nodeId    String? // current waiting node
   vars      String   @default("{}") // captured variables, JSON
   status    String   @default("active") // active | paused
+  // WHY the bot is quiet, which `status` alone could not say. See botOwnership.ts:
+  // bot | ai_handoff | human | delivery_failed.
+  ownership String   @default("bot")
   updatedAt DateTime @updatedAt @default(now())
   expiresAt DateTime
 
-  @@unique([channel, key])
+  // Migration 20260809152000 replaced the global (channel, key) index with this
+  // one, because a channel participant id is not unique across tenants — the same
+  // customer can message two tenant-owned WhatsApp numbers. The model was left
+  // declaring the old shape, so the next `prisma migrate dev` would have written a
+  // migration DROPPING the tenant-scoped index and restoring the global one.
+  @@unique([tenantId, channel, key])
   @@index([tenantId])
 }
 
@@ -673,7 +681,7 @@ model Lead {
   lostAt     DateTime?
   lostReason String?
   position   Int     @default(0)
-  externalId String? @unique // e.g. Facebook leadgen_id
+  externalId String? // e.g. Facebook leadgen_id — unique PER TENANT, see @@unique below
   raw        String? // raw intake payload (JSON string)
 
   // Multi-tenancy (Phase B — additive/inert): owning tenant. See Contact.tenantId.
@@ -712,6 +720,7 @@ model Lead {
   referral  Referral?
 
   @@index([tenantId])
+  @@unique([tenantId, externalId]) // a provider id is unique to the provider, not to us
   @@unique([tenantId, id])
 }
 
@@ -1601,13 +1610,14 @@ model OtpChallenge {
 model GoogleReview {
   id          String   @id @default(cuid())
   tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
-  externalKey String   @unique // hash of author + time (Places API has no stable id)
+  externalKey String   // hash of author + time (Places API has no stable id) — unique PER TENANT
   author      String
   rating      Int
   text        String?
   publishedAt DateTime
   raw         String?
   createdAt   DateTime @default(now())
+  @@unique([tenantId, externalKey]) // two tenants may watch the same Place
   @@index([tenantId])
 }
 
