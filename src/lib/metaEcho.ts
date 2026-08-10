@@ -13,13 +13,33 @@
  */
 
 /**
- * How long after a send an echo can still be recognised by its CONTENT.
+ * How long after a DELIVERY ATTEMPT an echo can still be recognised by content.
  *
- * Only the race below uses it — an exact id match has no window at all. Ten
- * minutes is far longer than the gap it covers (one HTTP response) and short
- * enough that yesterday's identical greeting is not mistaken for today's.
+ * WHICH CLOCK matters more than how long, and the first version measured from
+ * the wrong one. It bounded `createdAt` — when the message was QUEUED — which is
+ * not when it is sent. A durable queue exists precisely so those can be far
+ * apart:
+ *
+ *   10:00  reply queued
+ *   10:00  worker unavailable — deployment, outage, paused drain, backlog
+ *   10:20  worker recovers, claims the row, sends it
+ *   10:20  Meta accepts and emits the echo immediately
+ *   10:20  the echo arrives before providerMessageId has been committed
+ *
+ * That row is in flight AT THIS MOMENT, and a ten-minute bound on `createdAt`
+ * excluded it — so the outage the queue survived produced exactly the duplicate
+ * the queue was meant to prevent, and the longer the outage the more certain it
+ * became.
+ *
+ * The clock is the current attempt: the LEASE for a claimed row, `sentAt` for
+ * one already sent. Both move with the attempt, so an hour spent waiting in the
+ * queue changes nothing.
+ *
+ * Only the race uses this at all — an exact id match has no window. Ten minutes
+ * is far longer than the gap it covers (one HTTP response) and short enough that
+ * yesterday's identical greeting is not mistaken for today's.
  */
-export const ECHO_CONTENT_WINDOW_MS = 10 * 60 * 1000;
+export const ECHO_ATTEMPT_WINDOW_MS = 10 * 60 * 1000;
 
 /** A queued delivery, as much of it as this decision needs. */
 export type LedgerRow = { providerMessageId: string | null; payload: unknown };

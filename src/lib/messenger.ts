@@ -9,7 +9,7 @@ import { resolveTenantActor } from "./tenantActor";
 import { currentTenantScope } from "./tenantScope";
 import { writeTenantId } from "./tenantWrite";
 import { DEFAULT_TENANT_ID } from "./tenant";
-import { decideEcho, ECHO_CONTENT_WINDOW_MS } from "./metaEcho";
+import { decideEcho, ECHO_ATTEMPT_WINDOW_MS } from "./metaEcho";
 
 const GRAPH = "https://graph.facebook.com/v21.0";
 
@@ -405,6 +405,11 @@ async function echoIsOurOwnSend(
 
   // Only fetched when the exact answer missed — which is the race, not the
   // ordinary case.
+  //
+  // Bounded by the DELIVERY ATTEMPT, never by when the row was queued. A durable
+  // queue is allowed to hold a message for hours; what makes a row a candidate
+  // here is that a worker is sending it NOW.
+  const attemptFloor = new Date(Date.now() - ECHO_ATTEMPT_WINDOW_MS);
   const inFlight = ledgerHasId
     ? []
     : await prisma.botFlowOutbox.findMany({
@@ -412,11 +417,20 @@ async function echoIsOurOwnSend(
           tenantId,
           channel: platform,
           key,
-          // `running` IS the race; `sent` covers the worker having recorded the
-          // send before this echo was processed but with no id to record.
-          status: { in: ["running", "sent"] },
           providerMessageId: null,
-          createdAt: { gte: new Date(Date.now() - ECHO_CONTENT_WINDOW_MS) },
+          OR: [
+            // Claimed: the LEASE is the clock. It is set to now + LEASE_MS when a
+            // worker takes the row, so a live lease is in the FUTURE — this admits
+            // every row a worker currently holds, however long it sat in the queue
+            // first, and excludes one whose lease lapsed long ago.
+            { status: "running", leaseUntil: { gte: attemptFloor } },
+            // Already recorded sent, but with no id to record — `sentAt` is the
+            // clock for the attempt that got there first.
+            { status: "sent", sentAt: { gte: attemptFloor } },
+          ],
+          // A row with neither timestamp cannot be dated, so it is not admitted.
+          // Refusing to guess costs a duplicate in a case that should not arise;
+          // guessing would suppress a colleague's genuine reply indefinitely.
         },
         select: { payload: true, providerMessageId: true },
         orderBy: { createdAt: "desc" },

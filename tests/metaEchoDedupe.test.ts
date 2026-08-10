@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-import { decideEcho, outboundTextOf, ECHO_CONTENT_WINDOW_MS } from "../src/lib/metaEcho";
+import { decideEcho, outboundTextOf, ECHO_ATTEMPT_WINDOW_MS } from "../src/lib/metaEcho";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
@@ -128,11 +128,38 @@ test("the text of a payload is read the way the sender would have sent it", () =
   assert.equal(outboundTextOf({ type: "attachment", url: "https://x/y.pdf" }), null);
 });
 
-test("the content window is short enough to be about the race, not about dedupe", () => {
+test("the window is short enough to be about the race, not about dedupe", () => {
   // Long enough to cover one HTTP response many times over; short enough that
   // yesterday's identical greeting is a new message.
-  assert.ok(ECHO_CONTENT_WINDOW_MS >= 60_000, "must comfortably cover a slow provider response");
-  assert.ok(ECHO_CONTENT_WINDOW_MS <= 60 * 60 * 1000, "an hour-wide net would suppress genuine repeats");
+  assert.ok(ECHO_ATTEMPT_WINDOW_MS >= 60_000, "must comfortably cover a slow provider response");
+  assert.ok(ECHO_ATTEMPT_WINDOW_MS <= 60 * 60 * 1000, "an hour-wide net would suppress genuine repeats");
+});
+
+/**
+ * WHICH CLOCK THE WINDOW MEASURES.
+ *
+ * It bounded `createdAt` — when the message was QUEUED. A durable queue exists
+ * so that queueing and sending can be far apart, so a row queued at 10:00 and
+ * sent at 10:20 after a worker outage was excluded by a ten-minute window while
+ * being in flight at that very moment. The longer the outage, the more certain
+ * the duplicate: the queue survived and produced the exact failure it was
+ * protecting against.
+ */
+
+test("the fallback is bounded by the delivery attempt, not by when the row was queued", () => {
+  const messenger = src("src/lib/messenger.ts");
+  const fn = messenger.slice(
+    messenger.indexOf("async function echoIsOurOwnSend"),
+    messenger.indexOf("export async function recordDmEcho"),
+  );
+  // A claimed row is dated by its LEASE, which is set to now + LEASE_MS at claim
+  // time and therefore moves with the attempt.
+  assert.match(fn, /\{ status: "running", leaseUntil: \{ gte: attemptFloor \} \}/);
+  // A sent row is dated by when it was sent.
+  assert.match(fn, /\{ status: "sent", sentAt: \{ gte: attemptFloor \} \}/);
+  // And createdAt must not bound it again.
+  const where = fn.slice(fn.indexOf("const inFlight"), fn.indexOf("select: { payload"));
+  assert.doesNotMatch(where, /createdAt: \{ gte/, "queue-creation time is not when the message is sent");
 });
 
 /**

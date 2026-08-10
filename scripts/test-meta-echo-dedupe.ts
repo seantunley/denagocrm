@@ -89,7 +89,15 @@ async function cleanup() {
 
 let queued = 0;
 /** A delivery in whatever state the test needs, on this conversation. */
-async function queue(opts: { text: string; status: string; providerMessageId: string | null; createdAt?: Date }) {
+async function queue(opts: {
+  text: string;
+  status: string;
+  providerMessageId: string | null;
+  createdAt?: Date;
+  /** When the worker claimed it — a live lease is in the future. */
+  leaseUntil?: Date | null;
+  sentAt?: Date | null;
+}) {
   queued += 1;
   return basePrisma.botFlowOutbox.create({
     data: {
@@ -102,6 +110,15 @@ async function queue(opts: { text: string; status: string; providerMessageId: st
       status: opts.status,
       providerMessageId: opts.providerMessageId,
       origin: "staff",
+      // Defaults that mirror what claimOldest and deliverClaimed actually write,
+      // so a row in this state is a row the worker could really have produced.
+      leaseUntil:
+        opts.leaseUntil !== undefined
+          ? opts.leaseUntil
+          : opts.status === "running"
+          ? new Date(Date.now() + 60_000)
+          : null,
+      sentAt: opts.sentAt !== undefined ? opts.sentAt : opts.status === "sent" ? new Date() : null,
       ...(opts.createdAt ? { createdAt: opts.createdAt } : {}),
     },
     select: { id: true },
@@ -158,15 +175,51 @@ async function main() {
   // ── 5. THE WINDOW IS A WINDOW ─────────────────────────────────────────────
   //
   // An old unreconciled row must not suppress today's echo for ever, or a single
-  // failed send silences that sentence on that conversation permanently.
+  // failed send silences that sentence on that conversation permanently. The
+  // clock is the ATTEMPT, so this is a row whose attempt was long ago.
   await queue({
     text: "Ancient greeting",
     status: "sent",
     providerMessageId: null,
     createdAt: new Date(Date.now() - 24 * 3600_000),
+    sentAt: new Date(Date.now() - 24 * 3600_000),
   });
   await recordDmEcho("messenger", PSID, "Ancient greeting", null);
-  check("an echo matching only a long-past send is recorded", (await outboundCount()) === 3);
+  check("an echo matching only a long-past ATTEMPT is recorded", (await outboundCount()) === 3);
+
+  // ── 5b. A LONG WAIT IN THE QUEUE IS NOT A LONG-PAST ATTEMPT ───────────────
+  //
+  // THE REGRESSION THE REVIEW ASKED FOR. Queued at 10:00, worker unavailable for
+  // twenty minutes, claimed and sent at 10:20, Meta accepts and emits the echo
+  // before providerMessageId is committed. The row is in flight AT THIS MOMENT
+  // and its createdAt is twenty minutes old — a window measured from creation
+  // excluded it, so the outage the queue survived produced the duplicate the
+  // queue exists to prevent.
+  await queue({
+    text: "Queued before the outage",
+    status: "running",
+    providerMessageId: null,
+    createdAt: new Date(Date.now() - 20 * 60_000),
+    leaseUntil: new Date(Date.now() + 60_000), // claimed just now
+  });
+  await recordDmEcho("messenger", PSID, "Queued before the outage", "mid.after-outage");
+  check(
+    "an echo for a row queued long ago but SENT just now is recognised",
+    (await outboundCount()) === 3,
+    `${await outboundCount()} outbound rows`,
+  );
+
+  // The same row an hour later, its lease long lapsed and never reconciled: that
+  // is not an attempt in progress, and an echo arriving then is somebody else's.
+  await queue({
+    text: "Abandoned attempt",
+    status: "running",
+    providerMessageId: null,
+    createdAt: new Date(Date.now() - 90 * 60_000),
+    leaseUntil: new Date(Date.now() - 60 * 60_000),
+  });
+  await recordDmEcho("messenger", PSID, "Abandoned attempt", null);
+  check("an echo matching only a lapsed lease is recorded", (await outboundCount()) === 4);
 
   // ── 6. ANOTHER TENANT'S SEND CANNOT SUPPRESS THIS ONE ─────────────────────
   await basePrisma.botFlowOutbox.create({
@@ -179,11 +232,12 @@ async function main() {
       payload: { type: "text", text: "Cross tenant" },
       status: "running",
       providerMessageId: null,
+      leaseUntil: new Date(Date.now() + 60_000),
       origin: "staff",
     },
   });
   await recordDmEcho("messenger", PSID, "Cross tenant", null);
-  check("a matching row in ANOTHER tenant does not suppress the echo", (await outboundCount()) === 4);
+  check("a matching row in ANOTHER tenant does not suppress the echo", (await outboundCount()) === 5);
 
   // ── 7. THE ECHO DOES NOT RESURRECT AN ARCHIVED THREAD ─────────────────────
   //
