@@ -78,7 +78,12 @@ test("a private or local reference becomes a signed URL on our own public origin
 test("a deployment that cannot serve the provider refuses instead of guessing", () => {
   const local = "9f3c1a2b-photo.png";
   assert.equal(outboundMediaUrl(local, "image/png", { secret: SECRET, origin: null }), null);
-  assert.equal(outboundMediaUrl(local, "image/png", { secret: undefined, origin: ORIGIN }), null);
+  // `null`, not `undefined`. Undefined means "read the deployment's own secret",
+  // so this assertion used to pass or fail on whether SESSION_SECRET happened to
+  // be set in the shell — green here, red in CI, and testing the environment
+  // rather than the code either way.
+  assert.equal(outboundMediaUrl(local, "image/png", { secret: null, origin: ORIGIN }), null);
+  assert.equal(outboundMediaUrl(local, "image/png", { secret: "", origin: ORIGIN }), null);
 
   // The origins that look configured and are not fetchable by Meta.
   assert.equal(publicOrigin({ NEXT_PUBLIC_APP_URL: "http://localhost:3000" }), null);
@@ -86,6 +91,36 @@ test("a deployment that cannot serve the provider refuses instead of guessing", 
   assert.equal(publicOrigin({ NEXT_PUBLIC_APP_URL: "https://dev.local" }), null);
   assert.equal(publicOrigin({ NEXT_PUBLIC_APP_URL: "" }), null);
   assert.equal(publicOrigin({ NEXT_PUBLIC_APP_URL: "https://crm.example.com/" }), ORIGIN);
+});
+
+test("omitting an option reads the deployment's own value, and null overrides it", () => {
+  // The behaviour the assertion above was accidentally relying on, pinned
+  // deliberately instead. Both options must read the same way, because a caller
+  // that can express "absent" for one and not the other is how a refusal test
+  // comes to depend on the shell it runs in.
+  const local = "9f3c1a2b-photo.png";
+  const previousSecret = process.env.SESSION_SECRET;
+  const previousUrl = process.env.NEXT_PUBLIC_APP_URL;
+  try {
+    process.env.SESSION_SECRET = "ambient-secret";
+    process.env.NEXT_PUBLIC_APP_URL = ORIGIN;
+    // Nothing passed: both come from the environment, and the result is usable.
+    const url = outboundMediaUrl(local, "image/png");
+    assert.ok(url?.startsWith(`${ORIGIN}/api/outbound-media/`), String(url));
+    assert.equal(verifyOutboundMediaToken(url!.split("/").pop()!, "ambient-secret")?.ref, local);
+    // An explicit null refuses even with the environment fully configured.
+    assert.equal(outboundMediaUrl(local, "image/png", { secret: null }), null);
+    assert.equal(outboundMediaUrl(local, "image/png", { origin: null }), null);
+
+    // And a deployment with no secret at all refuses, whatever the origin says.
+    delete process.env.SESSION_SECRET;
+    assert.equal(outboundMediaUrl(local, "image/png"), null);
+  } finally {
+    if (previousSecret === undefined) delete process.env.SESSION_SECRET;
+    else process.env.SESSION_SECRET = previousSecret;
+    if (previousUrl === undefined) delete process.env.NEXT_PUBLIC_APP_URL;
+    else process.env.NEXT_PUBLIC_APP_URL = previousUrl;
+  }
 });
 
 /**

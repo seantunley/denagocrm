@@ -117,11 +117,22 @@ export function verifyOutboundMediaToken(
 export function outboundMediaUrl(
   ref: string,
   contentType: string,
-  options: { secret?: string; origin?: string | null; now?: number; ttlMs?: number } = {},
+  /**
+   * `secret` and `origin` behave identically on purpose: OMITTED means "read the
+   * deployment's own", and an explicit `null` means "this deployment has none".
+   *
+   * They were not symmetric — `secret` was `string | undefined`, so the only way
+   * to say "no secret" was `undefined`, which is also how you say "use the
+   * ambient one". A test written to check the refusal therefore passed or failed
+   * on whether SESSION_SECRET happened to be set in the shell, which is how it
+   * came to be green locally and red in CI. An option that cannot express the
+   * case it is being asked about is a defect in the option.
+   */
+  options: { secret?: string | null; origin?: string | null; now?: number; ttlMs?: number } = {},
 ): string | null {
   if (isPubliclyFetchable(ref)) return ref;
 
-  const secret = options.secret ?? process.env.SESSION_SECRET;
+  const secret = options.secret === undefined ? process.env.SESSION_SECRET : options.secret;
   const origin = options.origin === undefined ? publicOrigin() : options.origin;
   if (!secret || !origin) return null;
 
