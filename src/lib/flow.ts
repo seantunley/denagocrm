@@ -20,9 +20,9 @@ export type FlowNode =
   | { id: string; type: "captureFile"; text: string; variable: string; next?: string }
   | { id: string; type: "image"; url: string; caption?: string; next?: string }
   | { id: string; type: "answer"; text?: string; answerSource?: "pricelist" | "colours"; next?: string }
-  | { id: string; type: "booking"; text?: string; action?: BookingAction; next?: string }
-  | { id: string; type: "slots"; text: string; noneText?: string; action?: SlotAction; next?: string }
-  | { id: string; type: "journey"; journeyId: string; text?: string; next?: string }
+  | { id: string; type: "booking"; text?: string; failureText?: string; action?: BookingAction; next?: string; failureNext?: string }
+  | { id: string; type: "slots"; text: string; noneText?: string; action?: SlotAction; next?: string; failureNext?: string }
+  | { id: string; type: "journey"; journeyId: string; text?: string; failureText?: string; next?: string; failureNext?: string }
   | { id: string; type: "condition"; condition: FlowCondition; trueNext?: string; falseNext?: string }
   | { id: string; type: "ai"; handoffNext?: string }
   | { id: string; type: "handoff"; text?: string }
@@ -138,11 +138,39 @@ async function runSlotSelection(node: Extract<FlowNode, { type: "slots" }>, inpu
       messages.push({ type: "choice", text: "That one just filled up — here are the next open times:", options: opts.map((o) => ({ id: choiceId(node.id, o.id), label: o.label })) });
       return { nodeId: node.id, wait: { messages, session: { nodeId: node.id, vars }, handedOff: false } as FlowResult };
     }
+    // No alternatives left, and the reservation failed. Falling through to `next`
+    // sent the customer the success text — "You're booked" — for a slot that was
+    // taken between showing the menu and their tap.
+    return { nodeId: node.failureNext ?? node.next ?? null };
   } else if (res.label) {
     vars.slot = res.label;
     if (node.action === "reschedule") vars.booking_slot = res.label;
   }
   return { nodeId: node.next ?? null };
+}
+
+/**
+ * Where a side-effecting node goes, and what it says, once its action has either
+ * worked or not.
+ *
+ * Both used to be unconditional: the node sent its text and moved to `next`
+ * whatever happened. So a failed cancellation still said "Done — your booking has
+ * been cancelled", and a Journey that refused to start still said it had. Telling
+ * a customer an action succeeded when it did not is the worst failure this engine
+ * can produce — worse than an error, because they act on it.
+ *
+ * `failureNext` is optional so existing graphs keep working; without one the node
+ * still advances, but it stays silent rather than claiming success.
+ */
+function actionOutcome(
+  node: { text?: string; failureText?: string; next?: string; failureNext?: string },
+  ok: boolean,
+  vars: Record<string, string>,
+  messages: OutMsg[],
+): string | null {
+  const text = ok ? node.text : node.failureText;
+  if (text) messages.push({ type: "text", text: interpolate(text, vars) });
+  return (ok ? node.next : node.failureNext ?? node.next) ?? null;
 }
 
 export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput, ctx: FlowCtx): Promise<FlowResult> {
@@ -203,26 +231,33 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
     } else if (node.type === "answer") {
       const text = node.answerSource ? await ctx.dynamicAnswer(node.answerSource) : interpolate(node.text ?? "", vars); if (text) messages.push({ type: "text", text }); nodeId = node.next ?? null;
     } else if (node.type === "booking") {
+      // An action that FAILED must not fall through to the success text. The
+      // shipped cancellation node says "Done — your booking has been cancelled",
+      // and it used to say that whether or not anything was cancelled. Telling a
+      // customer their booking is gone when it is not is worse than any error.
+      let ok = true;
       if (node.action === "lookup" || node.action === "cancel") {
         if (ctx.manageBooking) {
           const outcome = await ctx.manageBooking(node.action, vars, node.id);
-          if (node.action === "cancel") ctx.recordAction?.(node.id, "booking_cancel", outcome.ok);
+          if (node.action === "cancel") { ok = outcome.ok; ctx.recordAction?.(node.id, "booking_cancel", outcome.ok); }
         }
       } else {
         await ctx.createBooking(vars, node.action, node.id);
         ctx.recordAction?.(node.id, `booking_${node.action ?? "service"}`, true);
       }
-      if (node.text) messages.push({ type: "text", text: interpolate(node.text, vars) }); nodeId = node.next ?? null;
+      nodeId = actionOutcome(node, ok, vars, messages);
     } else if (node.type === "journey") {
       const outcome = ctx.startJourney ? await ctx.startJourney(node.journeyId, vars, node.id) : { ok: false, reason: "Journey action unavailable" };
       ctx.recordAction?.(node.id, "journey_start", outcome.ok);
       if (!vars.journey_started) vars.journey_started = outcome.ok ? "yes" : "no";
       if (outcome.reason && !vars.journey_reason) vars.journey_reason = outcome.reason;
-      if (node.text) messages.push({ type: "text", text: interpolate(node.text, vars) });
-      nodeId = node.next ?? null;
+      nodeId = actionOutcome(node, outcome.ok, vars, messages);
     } else if (node.type === "slots") {
       const opts = ctx.availableSlots ? await ctx.availableSlots() : [];
-      if (!opts.length) { messages.push({ type: "text", text: node.noneText || "We don't have open slots online right now — leave your details and the team will call you to book. 📞" }); nodeId = node.next ?? null; }
+      // No slots is NOT the success path. It used to fall through to `next`, whose
+      // shipped text is "You're booked, {{name}}!" — after a turn in which nothing
+      // was booked at all.
+      if (!opts.length) { messages.push({ type: "text", text: node.noneText || "We don't have open slots online right now — leave your details and the team will call you to book. 📞" }); nodeId = node.failureNext ?? node.next ?? null; }
       else { messages.push({ type: "choice", text: interpolate(node.text, vars), options: opts.map((o) => ({ id: choiceId(node.id, o.id), label: o.label })) }); return { messages, session: { nodeId: node.id, vars }, handedOff: false }; }
     } else if (node.type === "choice") {
       messages.push({ type: "choice", text: interpolate(node.text, vars), options: node.options.map((o) => ({ id: choiceId(node.id, o.id), label: o.label, description: o.description })) }); return { messages, session: { nodeId: node.id, vars }, handedOff: false };
@@ -254,7 +289,8 @@ export const DEFAULT_FLOW: Flow = {
     bookName: { id: "bookName", type: "capture", text: "Sure — let's get you booked in. What's your name?", variable: "name", next: "bookPhone" },
     bookPhone: { id: "bookPhone", type: "capture", text: "Thanks {{name}}! What's the best contact number?", variable: "phone", format: "phone", next: "bookService" },
     bookService: { id: "bookService", type: "capture", text: "What does the cart need? (service, repair, etc.)", variable: "service", next: "chooseSlot" },
-    chooseSlot: { id: "chooseSlot", type: "slots", action: "book", text: "Here are our next available service times — pick one:", noneText: "We're fully booked online just now — I've logged your request and the team will call you to find a time. 📞", next: "bookConfirm" },
+    chooseSlot: { id: "chooseSlot", type: "slots", action: "book", text: "Here are our next available service times — pick one:", noneText: "We're fully booked online just now — I've logged your request and the team will call you to find a time. 📞", next: "bookConfirm", failureNext: "slotHandoff" },
+    slotHandoff: { id: "slotHandoff", type: "handoff", text: "I couldn't hold a time for you — the team will call you to book it." },
     bookConfirm: { id: "bookConfirm", type: "message", text: "You're booked, {{name}}! 🛠 {{slot}}. We'll see you then — message *menu* if anything changes.", next: "end" },
     aiChat: { id: "aiChat", type: "ai" },
     bye: { id: "bye", type: "message", text: "Cheers! Message *menu* any time to start again. 🛺", next: "end" },
