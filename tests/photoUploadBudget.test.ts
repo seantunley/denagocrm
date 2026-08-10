@@ -146,8 +146,12 @@ test("every camera field resizes before submitting", () => {
       /<input[^>]*capture="environment"/,
       `${file} still posts unresized camera files`,
     );
-    assert.match(code, /<PhotoUploadField/, `${file} must use the resizing field`);
+    assert.match(code, /<(?:PhotoUploadField|MobilePhotoCapture)/, `${file} must use the resizing field directly or through the mobile capture primitive`);
   }
+
+  const mobileCapture = src("src/components/MobilePhotoCapture.tsx");
+  assert.match(mobileCapture, /<PhotoUploadField/);
+  assert.match(mobileCapture, /<SaveButton[^>]*w-full/);
 });
 
 test("both upload actions enforce the TOTAL payload, not only per-file", () => {
@@ -158,11 +162,14 @@ test("both upload actions enforce the TOTAL payload, not only per-file", () => {
   }
 });
 
-test("the capture menu asks for the WRITE permission it leads to", () => {
-  // Offering a view-only technician a camera button that can only end in a refusal
-  // is not an authorization bug, but it is a promise the app cannot keep.
+test("the capture menu requires both the write and route-read permissions it needs", () => {
+  // A shortcut is useful only when the person can both perform the upload and
+  // open the destination page that contains the record picker.
   const nav = src("src/components/MobileCompanionNav.tsx");
-  assert.match(nav, /can\("jobcards\.manage"\) && packOn\("\/jobcards"\)/);
+  assert.match(
+    nav,
+    /can\("jobcards\.manage"\) && can\("jobcards\.view_all", "jobcards\.view_owned"\) && packOn\("\/jobcards"\)/,
+  );
   assert.match(nav, /can\("deliveries\.manage"\) && packOn\("\/deliveries"\)/);
   assert.doesNotMatch(nav, /can\("deliveries\.view", "deliveries\.manage"\)/, "view is not enough to upload");
 });

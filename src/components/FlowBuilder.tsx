@@ -1,7 +1,7 @@
 "use client";
 
 import "@xyflow/react/dist/style.css";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Bot,
@@ -132,6 +132,30 @@ function NodeCard({ data }: NodeProps) {
         </div>
       ) : n.type === "ai" ? (
         <Handle type="source" position={Position.Right} id="handoff" style={{ background: meta.handle }} />
+      ) : FALLIBLE.has(n.type) ? (
+        // A fallible action has three outcomes, and until now the canvas drew one.
+        // The failure and unavailable routes were authorable only in the inspector,
+        // so a graph could not be read off the diagram: the operator saw an
+        // apparently-linear booking flow whose failure branch was invisible.
+        <div className="pb-1">
+          <div className="relative border-t border-slate-800 px-3 py-1 text-[11px] text-emerald-300">Done
+            <Handle type="source" position={Position.Right} id="out" style={{ top: "92px", background: "#34d399" }} />
+          </div>
+          <div className="relative border-t border-slate-800 px-3 py-1 text-[11px] text-amber-300">If it fails
+            <Handle type="source" position={Position.Right} id="failure" style={{ top: "118px", background: "#fbbf24" }} />
+          </div>
+          {/* The inspector offers this on slots, but the edge builder draws it from
+              the DATA — and the AI drafter, the shipped templates and reusable
+              blocks can all produce an unavailableNext on a booking or Journey
+              node. Rendering it only for slots left such an edge with no handle to
+              anchor to: the graph had the edge and the card had nowhere to put it.
+              So it appears whenever THIS node actually carries the route. */}
+          {(n.type === "slots" || Boolean((n as { unavailableNext?: string }).unavailableNext)) && (
+            <div className="relative border-t border-slate-800 px-3 py-1 text-[11px] text-slate-400">If none available
+              <Handle type="source" position={Position.Right} id="unavailable" style={{ top: "144px", background: "#94a3b8" }} />
+            </div>
+          )}
+        </div>
       ) : n.type === "handoff" || n.type === "end" ? null : (
         <Handle type="source" position={Position.Right} id="out" style={{ background: meta.handle }} />
       )}
@@ -162,7 +186,7 @@ function blankNode(type: FlowNode["type"], id: string): FlowNode {
   }
 }
 
-export default function FlowBuilder({ flowId, initial, journeys = [] }: { flowId: string; initial: FlowData; journeys?: FlowJourneyOption[] }) {
+export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt }: { flowId: string; initial: FlowData; journeys?: FlowJourneyOption[]; updatedAt: string }) {
   const router = useRouter();
   const [start, setStart] = useState(initial.start);
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState<Node<RFData>>(
@@ -175,6 +199,22 @@ export default function FlowBuilder({ flowId, initial, journeys = [] }: { flowId
   );
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [status, setStatus] = useState("Saved");
+  // The draft stamp this canvas is working from. Every save is fenced against it,
+  // and a successful save adopts the new one.
+  const savedAt = useRef<string>(updatedAt);
+  // Leaving with unsaved work loses it silently. The canvas already tracks the
+  // state; it just never told the browser.
+  //
+  // Scope: beforeunload fires on a document unload, so this catches closing the
+  // tab and navigating away from the app — not in-app <Link> navigation, which
+  // never unloads. That is the larger share of accidental loss; a router-level
+  // guard for the rest is worth doing properly rather than half-doing here.
+  useEffect(() => {
+    if (status === "Saved") return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [status]);
   const [fullscreen, setFullscreen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
@@ -188,13 +228,25 @@ export default function FlowBuilder({ flowId, initial, journeys = [] }: { flowId
     const out: Edge[] = [];
     for (const rn of rfNodes) {
       const n = rn.data.flow;
-      const add = (handle: string, target?: string) => {
-        if (target && rfNodes.some((x) => x.id === target)) out.push({ id: `${n.id}:${handle}`, source: n.id, sourceHandle: handle, target, animated: true, style: { stroke: "#475569" } });
+      const add = (handle: string, target?: string, look?: Partial<Edge>) => {
+        if (target && rfNodes.some((x) => x.id === target)) out.push({ id: `${n.id}:${handle}`, source: n.id, sourceHandle: handle, target, animated: true, style: { stroke: "#475569" }, ...look });
       };
       if (n.type === "choice") n.options.forEach((o) => add(`opt:${o.id}`, o.next));
       else if (n.type === "condition") { add("true", n.trueNext); add("false", n.falseNext); }
       else if (n.type === "ai") add("handoff", n.handoffNext);
       else if (n.type !== "handoff" && n.type !== "end") add("out", (n as { next?: string }).next);
+
+      // The failure and unavailable routes decide what a customer is told when a
+      // booking cannot be made, and they were drawn nowhere. Amber for a failure,
+      // dashed slate for "the request was fine, there is just no capacity" — the
+      // distinction the engine makes and the canvas did not.
+      //
+      // Drawn from the DATA, not from what the inspector can author, so a graph
+      // that arrived from the AI drafter, a template or a reusable block still
+      // shows every edge it actually has.
+      const routed = n as { failureNext?: string; unavailableNext?: string };
+      add("failure", routed.failureNext, { label: "fails", style: { stroke: "#f59e0b" }, labelStyle: { fill: "#fbbf24", fontSize: 10 }, labelBgStyle: { fill: "#0f172a" } });
+      add("unavailable", routed.unavailableNext, { label: "none available", style: { stroke: "#94a3b8", strokeDasharray: "5 4" }, labelStyle: { fill: "#cbd5e1", fontSize: 10 }, labelBgStyle: { fill: "#0f172a" } });
     }
     return out;
   }, [rfNodes]);
@@ -211,6 +263,12 @@ export default function FlowBuilder({ flowId, initial, journeys = [] }: { flowId
         if (c.sourceHandle === "false") return { ...n, falseNext: c.target! };
       }
       if (n.type === "ai" && c.sourceHandle === "handoff") return { ...n, handoffNext: c.target! };
+      // Without these, dragging from the new failure/unavailable handles fell
+      // through to the success route below — silently wiring "if it fails" to the
+      // node that tells the customer it worked, which is the one thing the publish
+      // compiler exists to refuse.
+      if (c.sourceHandle === "failure") return { ...n, failureNext: c.target! } as FlowNode;
+      if (c.sourceHandle === "unavailable") return { ...n, unavailableNext: c.target! } as FlowNode;
       return { ...n, next: c.target! } as FlowNode;
     });
   }, [patch]);
@@ -243,8 +301,16 @@ export default function FlowBuilder({ flowId, initial, journeys = [] }: { flowId
       nodes[rn.id] = rn.data.flow;
       positions[rn.id] = rn.position;
     }
-    const res = await saveFlow(flowId, JSON.stringify({ start, nodes, positions }));
-    setStatus(res.ok ? "Saved" : res.error ?? "Save failed");
+    const res = await saveFlow(flowId, JSON.stringify({ start, nodes, positions }), savedAt.current);
+    if (res.ok) {
+      savedAt.current = res.updatedAt ?? savedAt.current;
+      setStatus("Saved");
+    } else {
+      // A conflict must be loud. Silently keeping "Unsaved changes" would let the
+      // owner keep editing a draft the server has already refused.
+      setStatus(res.conflict ? "Not saved — this draft changed elsewhere" : res.error ?? "Save failed");
+      if (res.error) toast.error(res.error);
+    }
     if (res.ok) {
       toast.success("Flow saved");
       router.refresh();
@@ -274,7 +340,23 @@ export default function FlowBuilder({ flowId, initial, journeys = [] }: { flowId
           </button>
         </div>
         <button type="button" onClick={onSave} className="btn-primary btn-sm"><Save className="size-4" />Save</button>
-        <ConfirmActionDialog destructive title="Reset this flow?" description="Every node, connection and unsaved change will be replaced with the default flow." confirmLabel="Reset flow" onConfirm={async () => { await resetFlow(flowId); toast.success("Flow reset"); router.refresh(); }} trigger={<button type="button" className="btn-secondary btn-sm"><RotateCcwIcon />Reset</button>} />
+        <ConfirmActionDialog destructive title="Reset this flow?" description="Every node, connection and unsaved change will be replaced with the default flow." confirmLabel="Reset flow" onConfirm={async () => {
+          // Reset can be refused for exactly the reason Save can. Announcing
+          // "Flow reset" regardless is the same silent loss one level up: the
+          // operator believes the draft is back to default and keeps working.
+          const res = await resetFlow(flowId, savedAt.current);
+          if (!res.ok) {
+            setStatus("Not saved — this draft changed elsewhere");
+            toast.error(res.error ?? "Could not reset this flow.");
+            return;
+          }
+          // Adopt the revision the reset produced, or the canvas still holds the
+          // pre-Reset stamp and its next save conflicts against its own reset.
+          savedAt.current = res.updatedAt ?? savedAt.current;
+          setStatus("Saved");
+          toast.success("Flow reset");
+          router.refresh();
+        }} trigger={<button type="button" className="btn-secondary btn-sm"><RotateCcwIcon />Reset</button>} />
         <button type="button" onClick={() => setFullscreen((value) => !value)} className="btn-secondary btn-sm" title={fullscreen ? "Exit full screen" : "Full screen"}>
           {fullscreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}<span className="hidden sm:inline">{fullscreen ? "Exit" : "Full screen"}</span>
         </button>

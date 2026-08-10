@@ -8,13 +8,21 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
 
 test("Meta page-token cache is tenant-keyed and invalidated when the source token rotates", () => {
+  // This used to pin the statements inside getPageToken verbatim, which made it a
+  // test that the function had not been edited. Those rules moved onto
+  // DerivedCredentialCache, where tests/metaCredentialCache.test.ts exercises them
+  // against a real cache with a controlled clock. What is worth pinning HERE is
+  // the wiring the cache cannot check for itself: that the page token goes through
+  // it at all, keyed by tenant, with the credential passed in.
   const code = src("src/lib/messenger.ts");
-  assert.match(code, /const pageTokenCache = new Map<string, PageTokenCacheEntry>\(\)/);
-  assert.match(code, /const tenantKey = ambientTenantId\(\) \?\? "__global__"/);
-  assert.match(code, /const sourceHash = tokenHash\(sysToken\)/);
-  assert.match(code, /cached\.sourceHash === sourceHash/);
-  assert.match(code, /pageTokenCache\.set\(tenantKey/);
-  assert.doesNotMatch(code, /let cachedPageToken:/);
+  assert.match(code, /new DerivedCredentialCache<string>\(\{ ttlMs: PAGE_TOKEN_TTL_MS \}\)/);
+  const fn = code.slice(
+    code.indexOf("async function getPageToken"),
+    code.indexOf("export async function sendDirectMessage"),
+  );
+  assert.match(fn, /pageTokenCache\.resolve\(tenantId \?\? GLOBAL_TOKEN_KEY, sysToken,/, "keyed by tenant, credential passed in");
+  // A single shared slot cannot express "whose token is this", whatever it is called.
+  assert.doesNotMatch(code, /let\s+cachedPageToken\s*:/);
 });
 
 test("Telegram tenant resolution happens before any guarded webhook work", () => {

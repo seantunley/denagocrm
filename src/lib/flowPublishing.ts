@@ -4,6 +4,7 @@ import { DEFAULT_TENANT_ID } from "./tenant";
 import { withTenantWrite, writeTenantId } from "./tenantWrite";
 import { flowErrors } from "./flowValidation";
 import { legacyFlowTenant } from "./flowTenantScope";
+import { builderTenantId, runtimeFlowTenantId } from "./flowScope";
 import { FlowPublishValidationError, validateFlowForEnabledChannels } from "./flowValidationServer";
 
 export type FlowSnapshot = {
@@ -19,10 +20,7 @@ export class PinnedFlowVersionUnavailableError extends Error {
   }
 }
 
-/** The tenant whose published flow answers this conversation. */
-function flowTenantId(): string {
-  return writeTenantId() ?? DEFAULT_TENANT_ID;
-}
+/** The tenant whose published flow answers this conversation. @see ./flowScope */
 
 /**
  * BotFlow predates tenancy and its `tenantId` is still nullable, so the legacy
@@ -48,7 +46,7 @@ export async function resolveFlowSnapshot(
   pinnedVersionId?: string | null,
 ): Promise<FlowSnapshot> {
   if (pinnedVersionId) {
-    const pinned = await prisma.botFlowVersion.findUnique({ where: { id: pinnedVersionId } });
+    const pinned = await prisma.botFlowVersion.findFirst({ where: { id: pinnedVersionId, tenantId: runtimeFlowTenantId() } });
     const flow = pinned ? parseFlow(pinned.definition) : null;
     if (!pinned || !flow) throw new PinnedFlowVersionUnavailableError(pinnedVersionId);
     return { flow, versionId: pinned.id, flowId: pinned.flowId };
@@ -63,7 +61,7 @@ export async function resolveFlowSnapshot(
   // return first. That is not a reporting leak — it is the wrong business logic
   // running against a real customer, and the same shape repeats on the legacy
   // fallback below.
-  const tenantId = flowTenantId();
+  const tenantId = runtimeFlowTenantId();
   const publication =
     (await prisma.botFlowPublication.findFirst({ where: { tenantId, channel } })) ??
     (channel === "whatsapp"
@@ -71,7 +69,7 @@ export async function resolveFlowSnapshot(
       : await prisma.botFlowPublication.findFirst({ where: { tenantId, channel: "whatsapp" } }));
 
   if (publication) {
-    const version = await prisma.botFlowVersion.findUnique({ where: { id: publication.versionId } });
+    const version = await prisma.botFlowVersion.findFirst({ where: { id: publication.versionId, tenantId } });
     const flow = version ? parseFlow(version.definition) : null;
     if (version && flow) return { flow, versionId: version.id, flowId: version.flowId };
   }
@@ -101,7 +99,11 @@ export async function publishFlowSnapshot(
   flowId: string,
   actorId?: string | null,
 ): Promise<{ versionId: string; version: number; channel: string }> {
-  const draft = await prisma.botFlow.findUnique({ where: { id: flowId } });
+  // Publishing is a STAFF action, so the tenant is the session's active workspace
+  // — not writeTenantId(), which is null while enforcement is dormant and would
+  // publish a second workspace's draft into the founding tenant's live slot.
+  const tenantId = await builderTenantId();
+  const draft = await prisma.botFlow.findFirst({ where: { id: flowId, ...legacyFlowTenant(tenantId) } });
   if (!draft) throw new Error("FLOW_NOT_FOUND");
   const parsed = parseFlow(draft.definition);
   if (!parsed) {
@@ -112,7 +114,7 @@ export async function publishFlowSnapshot(
   const issues = await validateFlowForEnabledChannels(parsed);
   if (flowErrors(issues).length) throw new FlowPublishValidationError(issues);
 
-  return withTenantWrite(async (tx, tenantId) => {
+  return withTenantWrite(async (tx) => {
     // Re-read inside the transaction. If the draft changed between validation
     // and this point, refuse rather than publishing a different definition than
     // the one the compiler approved.
@@ -181,6 +183,6 @@ export async function publishFlowSnapshot(
 export async function getFlowPublicationMeta(): Promise<
   Map<string, { versionId: string; publishedAt: Date }>
 > {
-  const publications = await prisma.botFlowPublication.findMany();
+  const publications = await prisma.botFlowPublication.findMany({ where: { tenantId: await builderTenantId() } });
   return new Map(publications.map((p) => [p.flowId, { versionId: p.versionId, publishedAt: p.publishedAt }]));
 }
