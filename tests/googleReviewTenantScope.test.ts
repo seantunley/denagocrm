@@ -27,8 +27,8 @@ test("the Inbox lists only the active tenant's Google reviews", () => {
   const call = page.slice(page.indexOf("basePrisma.googleReview.findMany"));
   assert.match(
     call.slice(0, 400),
-    /where: \{ \.\.\.activeTenantPredicate\(/,
-    "a bypass-client read of tenant-owned data must carry an explicit tenant predicate",
+    /where: \{ tenantId: workspaceTenantId, \.\.\.activeTenantPredicate\(/,
+    "a bypass-client read of tenant-owned data must name a concrete tenant AND keep the enforced predicate",
   );
 });
 
@@ -75,4 +75,49 @@ test("two tenants can hold the same review key without colliding", () => {
   assert.ok(unique, "GoogleReview must declare a composite identity");
   const parts = unique[1].split(",").map((s) => s.trim());
   assert.deepEqual(parts, ["tenantId", "externalKey"], "tenant must lead the review identity");
+});
+
+/**
+ * THE P0 IS NOT CLOSED BY A PREDICATE THAT RETURNS `{}`.
+ *
+ * `activeTenantPredicate` yields no filter while enforcement is dormant, which
+ * is the right general rule — filtering on a tenant nobody told us about would
+ * hide rows written before the column existed. But dormant is the mode this
+ * actually ships in, every day until enforcement is switched on, and for all of
+ * that time an unscoped bypass read shows every workspace's reviews to every
+ * workspace. An unscoped read is not a migration mechanism.
+ *
+ * The order matters and is the whole argument: the migration backfills every
+ * tenantless review onto the founding tenant FIRST, which is what leaves nothing
+ * for an explicit filter to hide.
+ */
+test("the inbox review query names a tenant even while enforcement is dormant", () => {
+  const page = src("src/app/(app)/inbox/page.tsx");
+
+  // The session's workspace, resolved the same way in every enforcement mode.
+  assert.match(page, /const workspaceTenantId = \(await getActiveTenantId\(\)\) \?\? DEFAULT_TENANT_ID;/);
+  assert.match(
+    page,
+    /where: \{ tenantId: workspaceTenantId, \.\.\.activeTenantPredicate\("inbox Google reviews"\) \}/,
+    "the concrete tenant must be in the where clause, not only the enforcement-dependent predicate",
+  );
+
+  // activeTenantPredicate is still spread LAST, so under enforcement the
+  // established scope wins and the scopeless-owner case still throws rather than
+  // silently widening to every tenant.
+  const where = page.slice(page.indexOf("basePrisma.googleReview.findMany"));
+  const concrete = where.indexOf("tenantId: workspaceTenantId");
+  const predicate = where.indexOf("activeTenantPredicate(");
+  assert.ok(concrete >= 0 && predicate > concrete, "the enforced predicate must take precedence");
+});
+
+test("the backfill that makes an explicit filter safe ships with it", () => {
+  const migration = src("prisma/migrations/20260809210000_google_review_tenant_scope/migration.sql");
+  // Without this, filtering by tenant would hide every review written before the
+  // column existed — which is precisely why the unscoped read was chosen.
+  assert.match(
+    migration,
+    /UPDATE "GoogleReview" SET "tenantId" = 'tenant_denago_cpt' WHERE "tenantId" IS NULL;/,
+    "legacy rows must be given an owner before anything filters on one",
+  );
 });

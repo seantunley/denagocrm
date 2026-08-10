@@ -1,7 +1,8 @@
 import { ExternalLink, Inbox, MessageSquare, Star } from "lucide-react";
 import { prisma, basePrisma } from "@/lib/db";
 import { activeTenantPredicate } from "@/lib/tenantPredicate";
-import { requireUser } from "@/lib/auth";
+import { getActiveTenantId, requireUser } from "@/lib/auth";
+import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { accessibleInboxWhere, hasPermission } from "@/lib/permissions";
 import AutoRefresh from "@/components/AutoRefresh";
 import Tabs from "@/components/Tabs";
@@ -18,6 +19,9 @@ export const metadata = { title: "Social inbox — DenagoCRM" };
 
 export default async function InboxPage() {
   const user = await requireUser();
+  // The workspace this person is signed in to, resolved identically whether
+  // tenant enforcement is off, observing or on.
+  const workspaceTenantId = (await getActiveTenantId()) ?? DEFAULT_TENANT_ID;
   const scopeWhere = await accessibleInboxWhere(user);
   const channelWhere = { type: { in: ["whatsapp", "messenger", "instagram"] } };
   const [activeComms, archivedComms, reviews, placeId] = await Promise.all([
@@ -35,8 +39,27 @@ export default async function InboxPage() {
     }),
     // Reviews are tenant-owned. This read runs on the bypass client, so the
     // predicate the RLS extension would have added has to be added by hand.
+    //
+    // `activeTenantPredicate` alone is NOT enough, and the reason is the mode
+    // this actually ships in. It returns `{}` while enforcement is dormant —
+    // correct as a general rule, because filtering on a tenant nobody told us
+    // about would hide legacy rows written before the column existed. But an
+    // unscoped read is not a migration mechanism: it means that for the whole
+    // dormant period — which is every day until enforcement is switched on —
+    // this page shows every workspace's reviews to every workspace.
+    //
+    // The migration beside this change backfills every tenantless review onto
+    // the founding tenant, so there are no legacy rows left for a filter to
+    // hide. That is what makes filtering safe here, and it is why the two must
+    // land together.
+    //
+    // So the tenant comes from the SESSION — the workspace this person is signed
+    // in to — which is resolved the same way in every enforcement mode.
+    // activeTenantPredicate is still spread last, so under enforcement the
+    // established scope wins and the scopeless-owner case still throws rather
+    // than quietly widening to every tenant.
     basePrisma.googleReview.findMany({
-      where: { ...activeTenantPredicate("inbox Google reviews") },
+      where: { tenantId: workspaceTenantId, ...activeTenantPredicate("inbox Google reviews") },
       orderBy: { publishedAt: "desc" },
       take: 10,
     }),
