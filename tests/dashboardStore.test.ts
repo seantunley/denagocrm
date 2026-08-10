@@ -113,12 +113,14 @@ test("every exported action resolves the acting user from the session", () => {
   const bodies = exportBodies(actions);
   assert.equal(bodies.length, 7, "unexpected number of exported actions");
   for (const body of bodies) {
-    // requireOwner is requireUser plus a role check — it resolves the SAME
-    // session user and then refuses a non-owner. Publishing is owner-only, so it
-    // is the stricter of the two, not a way around this rule.
+    // requireOwner and requireTenantOwner are requireUser plus an entitlement
+    // check — they resolve the SAME session user and then refuse. Publishing is
+    // restricted to the owner OF THE ACTIVE WORKSPACE (requireTenantOwner: the
+    // platform role, or Tenant.ownerUserId), which is the stricter of the two,
+    // not a way around this rule.
     assert.match(
       body,
-      /const user = await require(User|Owner)\(\);/,
+      /const user = await require(User|Owner|TenantOwner)\(\);/,
       `${body.slice(0, body.indexOf("("))} does not resolve the acting user from the session`,
     );
   }

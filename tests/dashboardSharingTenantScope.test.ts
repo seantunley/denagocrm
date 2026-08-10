@@ -105,6 +105,32 @@ test("both reads name the tenant instead of assuming the client added one", () =
 });
 
 test("the viewer's tenant is resolved, not inherited from a dormant guard", () => {
+  // …and it is resolved by DELEGATING to the same helper that stamps a dashboard
+  // on create. This file used to pin the ladder's source text here, which is how
+  // a read resolver and a write resolver end up as two copies of one rule — and a
+  // single rung of disagreement means a user creates a dashboard, publishes it,
+  // and their own workspace cannot see it. One rule, one implementation.
   const resolver = src("src/lib/dashboard/viewerTenant.ts");
-  assert.match(resolver, /writeTenantId\(\) \?\? \(await getActiveTenantId\(\)\) \?\? DEFAULT_TENANT_ID/);
+  assert.match(resolver, /return actingTenantId\(\);/);
+  assert.doesNotMatch(
+    resolver.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, ""),
+    /writeTenantId|getActiveTenantId|DEFAULT_TENANT_ID/,
+    "a second copy of the ladder is the defect, not the fix",
+  );
+});
+
+test("the write path stamps the tenant the read path will look for", () => {
+  // The two halves of blocker 1. `createDashboard` names the acting workspace
+  // because the db.ts guard does not — and it has to be the SAME workspace
+  // `sharedInTenant()` is later handed, or publishing writes a row nobody can
+  // read. Run end to end in tests/dashboardSharingLifecycle.test.ts.
+  const code = (rel: string) =>
+    src(rel).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  const actions = code("src/app/actions/dashboardConfig.ts");
+  assert.equal(
+    (actions.match(/tenantId: await actingTenantId\(\)/g) ?? []).length,
+    2,
+    "both createDashboard and takeControl must name the workspace",
+  );
+  assert.match(code("src/app/actions/dashboard.ts"), /tenantId: await actingTenantId\(\)/);
 });

@@ -4,7 +4,7 @@ import { LayoutGrid } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { dashboardsForViewer, type LoadedDashboard } from "@/lib/dashboard/store";
 import { viewerConditionContext } from "@/lib/dashboard/viewer";
-import { dashboardViewer } from "@/lib/dashboard/data";
+import { isTenantOwner } from "@/lib/auth";
 import { renderViewSlots, visibleViews } from "./DashboardView";
 import DashboardEditorRoot from "./editor/DashboardEditorRoot";
 
@@ -51,9 +51,23 @@ export default async function DashboardScreen({
   tab?: string;
 }) {
   const ctx = await viewerConditionContext();
-  // Owners decide what the whole workspace sees. Resolved here rather than
-  // inferred in the client, which has no authoritative view of the role.
-  const { user: viewer } = await dashboardViewer();
+  /*
+   * Who may publish to THIS workspace.
+   *
+   * `viewer.role === "owner"` was the wrong question and hid the button from the
+   * only people the feature is for: tenant ownership is a row
+   * (`Tenant.ownerUserId`) for the ACTIVE workspace, not the platform role, so
+   * under the old predicate the provisioned owner of tenant B saw no Share
+   * control at all. Qualifying the server action alone would not have been
+   * enough — the button would still have vanished for the very person entitled to
+   * press it, and a control that is absent produces no refusal anybody can
+   * report.
+   *
+   * Same predicate the action enforces (`isTenantOwner`/`requireTenantOwner`), so
+   * the two cannot drift. Resolved on the server: the client has no authoritative
+   * view of either the role or the workspace.
+   */
+  const canPublish = await isTenantOwner();
   const dashboards = await dashboardsForViewer();
   const views = visibleViews(dashboard.config, ctx);
 
@@ -112,8 +126,9 @@ export default async function DashboardScreen({
          */
         canEdit={!dashboard.shared}
         shared={dashboard.shared}
-        // Owners decide what the workspace sees; everyone else builds their own.
-        isOwner={viewer.role === "owner"}
+        // The owner of THIS workspace decides what it sees; everyone else builds
+        // their own. Not the platform role — see `canPublish` above.
+        canPublish={canPublish}
         // Plain arrays, not Sets — a Set does not survive the server→client
         // boundary. The picker and builder rebuild Sets from these once,
         // memoised, rather than every consumer doing its own conversion.

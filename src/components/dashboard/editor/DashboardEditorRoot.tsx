@@ -41,7 +41,7 @@ export default function DashboardEditorRoot({
   slots,
   canEdit,
   shared,
-  isOwner,
+  canPublish,
   access,
 }: {
   slug: string;
@@ -59,8 +59,17 @@ export default function DashboardEditorRoot({
   canEdit: boolean;
   /** Already published to the workspace. */
   shared: boolean;
-  /** Only an owner decides what the whole workspace sees. */
-  isOwner: boolean;
+  /**
+   * The owner of THIS workspace decides what it sees.
+   *
+   * Deliberately not named `isOwner`, and deliberately not the platform role. It
+   * used to be both, and that hid the control from the provisioned owner of every
+   * workspace but the founding one — the exact people the feature exists for. The
+   * server resolves `isTenantOwner()`, the same predicate `setDashboardShared`
+   * enforces, and hands down the ANSWER rather than an input the client would have
+   * to re-derive.
+   */
+  canPublish: boolean;
   /** Resolved once on the server and handed down — see CardPicker's doc comment. */
   access: EditorAccess;
 }) {
@@ -78,7 +87,7 @@ export default function DashboardEditorRoot({
         slots={slots}
         canEdit={canEdit}
         shared={shared}
-        isOwner={isOwner}
+        canPublish={canPublish}
         access={access}
       />
     </DashboardEditorProvider>
@@ -92,7 +101,7 @@ function Inner({
   slots,
   canEdit,
   shared,
-  isOwner,
+  canPublish,
   access,
 }: {
   slug: string;
@@ -101,7 +110,7 @@ function Inner({
   slots: CardSlots;
   canEdit: boolean;
   shared: boolean;
-  isOwner: boolean;
+  canPublish: boolean;
   access: EditorAccess;
 }) {
   const { config, editing, setEditing, saving, update, updateView, undo, canUndo } = useEditor();
@@ -234,12 +243,19 @@ function Inner({
         )}
 
         {/*
-            Publishing is an OWNER act, and separate from editing: it changes what
-            the whole workspace sees, not what this person sees. Shown only on
-            your own dashboard, because ownDashboard refuses anything else anyway
-            and offering a control that always fails is worse than not offering it.
+            Publishing is a WORKSPACE-OWNER act, and separate from editing: it
+            changes what the whole workspace sees, not what this person sees.
+            Shown only on your own dashboard, because ownDashboard refuses
+            anything else anyway and offering a control that always fails is worse
+            than not offering it.
+
+            `canPublish` is the server's answer from `isTenantOwner()`, not the
+            platform role. It was the platform role, and the effect was that the
+            owner of tenant B — the only person who could ever publish a tenant-B
+            dashboard, because ownDashboard scopes to the caller's own rows —
+            never saw the button at all.
         */}
-        {canEdit && isOwner && (
+        {canEdit && canPublish && (
           <button
             type="button"
             disabled={sharing}

@@ -1,7 +1,5 @@
 import "server-only";
-import { DEFAULT_TENANT_ID } from "@/lib/tenant";
-import { writeTenantId } from "@/lib/tenantWrite";
-import { getActiveTenantId } from "@/lib/auth";
+import { actingTenantId } from "@/lib/actingTenant";
 
 /**
  * The workspace a dashboard viewer is acting in.
@@ -18,11 +16,15 @@ import { getActiveTenantId } from "@/lib/auth";
  * it. The predicate has to name the tenant itself rather than assume something
  * upstream added one.
  *
- * Same rule as everywhere else in this codebase: an enforced scope wins, then
- * the session's validated active workspace, then the founding tenant — which is
- * what a session minted before the `tid` claim resolves to, and is byte-for-byte
- * today's single-tenant behaviour.
+ * DELEGATED, NOT RE-DERIVED. This used to spell the ladder out again —
+ * `writeTenantId() ?? (await getActiveTenantId()) ?? DEFAULT_TENANT_ID` — which is
+ * the same rule `actingTenantId()` applies to STAMP a dashboard on create. Two
+ * copies of one rule is the shape of the bug this whole change is about: the
+ * moment the write resolver and the read resolver disagree by a single rung, a
+ * user creates a dashboard, publishes it, and it is invisible to their own
+ * workspace — a silent failure with nothing to report. One rule, one caller-facing
+ * name per side, no second answer.
  */
 export async function viewerTenantId(): Promise<string> {
-  return writeTenantId() ?? (await getActiveTenantId()) ?? DEFAULT_TENANT_ID;
+  return actingTenantId();
 }

@@ -34,11 +34,36 @@ const MIGRATION = "prisma/migrations/20260809120000_dashboard_sharing/migration.
 
 // ── who may publish ─────────────────────────────────────────────────────────
 
-test("only an owner can publish a dashboard", () => {
+test("only the owner OF THIS WORKSPACE can publish a dashboard", () => {
+  // `requireOwner()` was the wrong gate and the name says why: `role === "owner"`
+  // is a property of the PLATFORM. Under it the provisioned owner of tenant B
+  // could not publish tenant B's own dashboard, and the one account that passed
+  // would find nothing to publish — `ownDashboard()` scopes to the caller's own
+  // rows. Publishing to your own workspace is tenant-local administration, which
+  // is exactly what requireTenantOwner() is for.
+  //
+  // Executed, not just matched: tests/dashboardSharingLifecycle.test.ts runs the
+  // real gate for a tenant-B owner and for tenant-B staff.
   const actions = code(ACTION);
   const fn = actions.slice(actions.indexOf("export async function setDashboardShared"));
   const body = fn.slice(0, fn.indexOf("\n}\n") + 2);
-  assert.match(body, /requireOwner\(\)/, "everyone builds; only an owner publishes");
+  assert.match(body, /requireTenantOwner\(\)/, "everyone builds; the workspace's owner publishes");
+  assert.doesNotMatch(body, /requireOwner\(\)/, "the platform role locks out every other workspace");
+});
+
+test("the UI asks the same question the gate does", () => {
+  // Qualifying the server action alone is not enough: the button would still have
+  // vanished for the very person entitled to press it, and an absent control
+  // produces no refusal anybody can report. `viewer.role === "owner"` was the
+  // predicate; it is now the server's `isTenantOwner()` answer.
+  const screen = code(SCREEN);
+  assert.match(screen, /isTenantOwner\(\)/, "the screen must resolve tenant ownership, not the role");
+  assert.doesNotMatch(screen, /role === "owner"/, "the platform role is not the question");
+  assert.match(screen, /canPublish=\{canPublish\}/);
+
+  const editor = code("src/components/dashboard/editor/DashboardEditorRoot.tsx");
+  assert.match(editor, /\{canEdit && canPublish && \(/, "the Share control hangs off the resolved answer");
+  assert.doesNotMatch(editor, /isOwner/, "no client-side re-derivation of who owns the workspace");
 });
 
 test("an owner can only publish their OWN dashboard", () => {
