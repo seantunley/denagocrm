@@ -1,7 +1,6 @@
 import crypto from "crypto";
+import { Prisma } from "@prisma/client";
 import { basePrisma } from "./db";
-import { activeTenantPredicate } from "./tenantPredicate";
-import { writeTenantId } from "./tenantWrite";
 import { DEFAULT_TENANT_ID } from "./tenant";
 import { getSetting, putSetting, resolveIntegrationBundle } from "./settings";
 import { currentTenantScope } from "./tenantScope";
@@ -14,6 +13,56 @@ import { sendPushToAll } from "./push";
  * Google Maps (deep link in the inbox) until Business Profile API access is
  * approved.
  */
+/**
+ * Store one review for one tenant, or recognise it as already stored FOR THAT
+ * TENANT.
+ *
+ * Split out of the sync loop so the property below can be exercised against a
+ * real database without a Places API key. A schema test proves the composite
+ * key exists; only running two tenants through this proves the runtime uses it.
+ *
+ * THE DEDUPE MUST NAME THE TENANT, NOT ASK WHETHER ENFORCEMENT IS ON. It used
+ * `activeTenantPredicate`, which returns `{}` while enforcement is dormant — so
+ * the lookup was global, and whoever synced a shared Google Place first
+ * suppressed every other tenant's copy of the same review. The composite unique
+ * key added by this change is the same fact stated in the database, so the
+ * lookup uses it directly and cannot drift from it.
+ */
+export async function recordGoogleReview(input: {
+  tenantId: string;
+  externalKey: string;
+  author: string;
+  rating: number;
+  text: string | null;
+  publishedAt: Date;
+  raw: string;
+}): Promise<{ id: string; rating: number; text: string | null } | null> {
+  const existing = await basePrisma.googleReview.findUnique({
+    where: { tenantId_externalKey: { tenantId: input.tenantId, externalKey: input.externalKey } },
+    select: { id: true },
+  });
+  if (existing) return null;
+  try {
+    return await basePrisma.googleReview.create({
+      data: {
+        externalKey: input.externalKey,
+        tenantId: input.tenantId,
+        author: input.author,
+        rating: input.rating,
+        text: input.text,
+        publishedAt: input.publishedAt,
+        raw: input.raw,
+      },
+      select: { id: true, rating: true, text: true },
+    });
+  } catch (error) {
+    // Two sync runs for the same tenant racing. The constraint is the real
+    // fence; the read above is only an optimisation.
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") return null;
+    throw error;
+  }
+}
+
 export async function syncGoogleReviews(): Promise<number> {
   // Ambient tenant read for the credential lookup only — the tenantId used to
   // STAMP GOOGLE_REVIEWS_LAST_SYNC / GoogleReview rows below is a separate
@@ -36,12 +85,17 @@ export async function syncGoogleReviews(): Promise<number> {
   // resolves to the founding tenant (the platform-default settings owner).
   await putSetting("GOOGLE_REVIEWS_LAST_SYNC", new Date().toISOString());
 
-  // Stamp the owning tenant on each stored review (GoogleReview.tenantId is a
-  // nullable Phase-B column; null in off-mode / no scope, as before).
-  // Never store a tenant-owned review tenantless: the guard only stamps under
-  // enforcement, which is dormant, so a NULL row here becomes invisible the day
-  // RLS is switched on.
-  const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
+  // The tenant this sync belongs to — the SAME one the credentials came from.
+  //
+  // This was `writeTenantId() ?? DEFAULT_TENANT_ID`, and that is wrong here for
+  // a reason specific to this function: writeTenantId deliberately returns null
+  // while enforcement is dormant, so every review was stamped onto the founding
+  // tenant no matter whose cron slice produced it. The slice DOES know — it runs
+  // inside runInTenantScope, which is exactly where the credential lookup two
+  // lines above already reads its tenant from. Reading it from a different place
+  // than the credentials is how a review fetched with tenant B's Places key came
+  // to be filed under tenant A.
+  const tenantId = credentialTenantId ?? DEFAULT_TENANT_ID;
 
   const res = await fetch(
     `https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}?fields=reviews&key=${encodeURIComponent(apiKey)}`,
@@ -66,23 +120,16 @@ export async function syncGoogleReviews(): Promise<number> {
       .createHash("sha256")
       .update(`${author}|${publishedAt.toISOString()}`)
       .digest("hex");
-    // Scoped: two tenants may legitimately watch the same Google Place, and a
-    // global dedupe would let whoever synced first suppress the other's copy.
-    const existing = await basePrisma.googleReview.findFirst({
-      where: { externalKey, ...activeTenantPredicate("Google review sync dedupe") },
+    const review = await recordGoogleReview({
+      tenantId,
+      externalKey,
+      author,
+      rating: Math.round(r.rating ?? 0),
+      text: r.text?.text ?? r.originalText?.text ?? null,
+      publishedAt,
+      raw: JSON.stringify(r),
     });
-    if (existing) continue;
-    const review = await basePrisma.googleReview.create({
-      data: {
-        externalKey,
-        tenantId,
-        author,
-        rating: Math.round(r.rating ?? 0),
-        text: r.text?.text ?? r.originalText?.text ?? null,
-        publishedAt,
-        raw: JSON.stringify(r),
-      },
-    });
+    if (!review) continue;
     created++;
     await sendPushToAll({
       title: `New Google review ${"⭐".repeat(Math.min(5, review.rating))}`,

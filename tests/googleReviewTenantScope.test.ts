@@ -32,22 +32,58 @@ test("the Inbox lists only the active tenant's Google reviews", () => {
   );
 });
 
-test("review sync stamps the owning tenant and dedupes within it", () => {
+/**
+ * THIS TEST USED TO PIN BOTH DEFECTS IN PLACE.
+ *
+ * It required `writeTenantId() ?? DEFAULT_TENANT_ID` and
+ * `where: { externalKey, ...activeTenantPredicate(...) }` — the two shapes that
+ * made the sync wrong in the mode it ships in. writeTenantId returns null while
+ * enforcement is dormant, so every review was filed under the founding tenant
+ * regardless of whose slice fetched it, with whose Places credentials. And the
+ * predicate returns `{}` while dormant, so the dedupe was global and whoever
+ * synced a shared Place first suppressed everyone else's copy.
+ *
+ * What it can check is the SHAPE. That the shape produces the right rows for two
+ * real tenants is proved against a database in
+ * scripts/test-google-review-tenant-isolation.ts, which CI runs in the
+ * integration lane — and which fails 5 of 7 if either defect is reintroduced.
+ */
+test("review sync resolves its tenant the same way its credentials do", () => {
   const sync = src("src/lib/googleReviews.ts");
-  // A NULL-tenant review is invisible the day RLS is switched on.
-  assert.match(sync, /const tenantId = writeTenantId\(\) \?\? DEFAULT_TENANT_ID;/);
+
+  // The slice already knows which tenant it is: the credential lookup reads it
+  // from the ambient scope. Reading the row's owner from anywhere else is how a
+  // review fetched with tenant B's key came to be filed under tenant A.
+  assert.match(sync, /const tenantId = credentialTenantId \?\? DEFAULT_TENANT_ID;/);
   assert.doesNotMatch(
     sync,
-    /const tenantId = currentTenantScope\(\)\?\.tenantId \?\? null;/,
-    "the sync must not write a tenantless review",
+    /const tenantId = writeTenantId\(\)/,
+    "writeTenantId is null while enforcement is dormant, which is every day until it is switched on",
   );
-  // The dedupe must not reach across tenants.
+  assert.doesNotMatch(sync, /const tenantId = currentTenantScope\(\)\?\.tenantId \?\? null;/, "a tenantless review is invisible the day RLS is switched on");
+});
+
+test("the sync dedupe names the tenant instead of asking whether enforcement is on", () => {
+  const sync = src("src/lib/googleReviews.ts");
+  // The composite unique key is the same fact stated in the database, so the
+  // lookup uses it directly and cannot drift from it.
+  assert.match(
+    sync,
+    /findUnique\(\{\s*where: \{ tenantId_externalKey: \{ tenantId: input\.tenantId, externalKey: input\.externalKey \} \}/,
+  );
+  assert.doesNotMatch(
+    sync,
+    /activeTenantPredicate\(/,
+    "that predicate is {} while dormant, which makes the dedupe global",
+  );
   assert.doesNotMatch(
     sync,
     /googleReview\.findUnique\(\{ where: \{ externalKey \} \}\)/,
     "a global externalKey lookup lets one tenant suppress another's review",
   );
-  assert.match(sync, /where: \{ externalKey, \.\.\.activeTenantPredicate\(/);
+  // The constraint is the real fence; the read is an optimisation, so a race
+  // between two runs of the same tenant's sync must not throw.
+  assert.match(sync, /error\.code === "P2002"/);
 });
 
 test("the review identity constraint is scoped to the tenant that reads it", () => {
