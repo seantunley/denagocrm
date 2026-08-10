@@ -45,16 +45,17 @@ test("product context is capped before reaching the model", () => {
 
 test("assistant receives maintained product facts and explicit no-inference fences", () => {
   const code = src("src/lib/botAi.ts");
+  const prompt = src("src/lib/botPrompt.ts");
   assert.match(code, /renderBotProductFacts\(products\)/);
-  assert.match(code, /LIVE PRODUCT FACTS FROM THE CRM/);
-  assert.match(code, /STOCK AVAILABILITY is NOT supplied/);
-  assert.match(code, /FINANCE TERMS, ROAD-LEGAL\/REGISTRATION STATUS, WARRANTY DETAILS, ACCESSORY COMPATIBILITY and SERVICE POLICY must come from Approved Knowledge/);
-  assert.match(code, /Product comparisons may use only fields explicitly supplied for both products/);
+  assert.match(prompt, /LIVE PRODUCT FACTS FROM THE CRM/);
+  assert.match(prompt, /STOCK AVAILABILITY is NOT supplied/);
+  assert.match(prompt, /FINANCE TERMS, ROAD-LEGAL\/REGISTRATION STATUS, WARRANTY DETAILS, ACCESSORY COMPATIBILITY and SERVICE POLICY must come from Approved Knowledge/);
+  assert.match(prompt, /Product comparisons may use only fields explicitly supplied for both products/);
 });
 
 test("brochure links may be shared only when present in the product record", () => {
   const renderer = src("src/lib/botProductFacts.ts");
   assert.match(renderer, /product\.brochureUrl \? `Brochure:/);
-  const ai = src("src/lib/botAi.ts");
-  assert.match(ai, /A Brochure URL may be shared when it is supplied for that product/);
+  const prompt = src("src/lib/botPrompt.ts");
+  assert.match(prompt, /A Brochure URL may be shared when it is supplied for that product/);
 });

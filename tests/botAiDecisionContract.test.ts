@@ -69,14 +69,14 @@ test("handoff metadata survives a waiting node through session variables", async
 });
 
 test("assistant output is strict JSON rather than regex-extracted prose", () => {
-  const code = src("src/lib/botAi.ts");
-  const strict = code.slice(code.indexOf("function strictJsonObject"), code.indexOf("export function parseBotDecision"));
+  const code = src("src/lib/botDecision.ts");
+  const strict = code.slice(code.indexOf("export function strictJsonObject"), code.indexOf("export function parseBotDecision"));
   assert.match(strict, /JSON\.parse\(text\.trim\(\)\)/);
-  assert.doesNotMatch(strict, /match\(/, "must not fish a JSON-looking object out of prose or code fences");
+  assert.doesNotMatch(strict, /\.match\(/, "must not fish a JSON-looking object out of prose or code fences");
 });
 
 test("open-ended medium and low confidence answers hand off instead of guessing", () => {
-  const code = src("src/lib/botAi.ts");
+  const code = src("src/lib/botDecision.ts");
   assert.match(code, /if \(parsed\.confidence !== "high"\)/);
   assert.match(code, /confidence open question/);
   assert.match(code, /Canonical pathways may be used at medium confidence/);

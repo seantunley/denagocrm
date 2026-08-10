@@ -8,7 +8,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
 
 test("knowledge retrieval can use only approved entries inside their validity window", () => {
-  const code = src("src/lib/botKnowledge.ts");
+  const code = src("src/lib/botKnowledgeRetrieval.ts");
   assert.match(code, /entry\.status !== "approved"/);
   assert.match(code, /entry\.validFrom && new Date\(entry\.validFrom\) > now/);
   assert.match(code, /entry\.validUntil && new Date\(entry\.validUntil\) < now/);
@@ -39,17 +39,19 @@ test("library files are provenance only; their bytes are never automatically tru
   assert.match(add, /sourceLabel = document\.name/);
   assert.doesNotMatch(add, /readFile\(|extract|pdf|arrayBuffer/);
 
-  const knowledge = src("src/lib/botKnowledge.ts");
+  const knowledge = src("src/lib/botKnowledgeRetrieval.ts");
   assert.match(knowledge, /sourceType: "manual" \| "library"/);
   assert.doesNotMatch(knowledge, /readFile\(|fetch\(/);
+  assert.doesNotMatch(src("src/lib/botKnowledge.ts"), /readFile\(|fetch\(/);
 });
 
 test("assistant retrieves from the latest customer question and labels the source as approved knowledge", () => {
   const code = src("src/lib/botAi.ts");
+  const prompt = src("src/lib/botPrompt.ts");
   assert.match(code, /const latestQuestion = \[\.\.\.input\.history\]\.reverse\(\)\.find\(\(message\) => message\.role === "user"\)\?\.content/);
   assert.match(code, /retrieveRelevantKnowledge\(knowledgeEntries, latestQuestion\)/);
-  assert.match(code, /APPROVED KNOWLEDGE RETRIEVED FOR THIS QUESTION/);
-  assert.match(code, /Treat only KNOWN LIVE BUSINESS FACTS, LIVE PRODUCT FACTS, the APPROVED KNOWLEDGE block, and exact FAQ answers as factual sources/);
+  assert.match(prompt, /APPROVED KNOWLEDGE RETRIEVED FOR THIS QUESTION/);
+  assert.match(prompt, /Treat only KNOWN LIVE BUSINESS FACTS, LIVE PRODUCT FACTS, the APPROVED KNOWLEDGE block, and exact FAQ answers as factual sources/);
 });
 
 test("chatbot settings expose draft, approve and expire states instead of one-click publication", () => {
