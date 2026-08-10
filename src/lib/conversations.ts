@@ -1,4 +1,5 @@
 import "server-only";
+import { Prisma } from "@prisma/client";
 import { basePrisma } from "./db";
 import { currentTenantScope } from "./tenantScope";
 import { tenantEnforcing } from "./tenantEnforcement";
@@ -74,34 +75,132 @@ export async function resolveConversationId(data: MessageData): Promise<string |
 }
 
 /**
- * Roll a conversation's counters forward for a new message. Inbound messages set
- * `unread` (cleared only when staff open the thread) and `lastInboundAt`; the first
- * outbound after an inbound records `firstResponseAt` (response-time foundation).
+ * Rewrite a conversation's derived state from the messages that exist, holding
+ * the conversation's row lock for the whole read-then-write.
+ *
+ * WHY ABSOLUTE, AND WHY EVERYWHERE.
+ *
+ * This used to roll the counters forward INCREMENTALLY — `messageCount: {
+ * increment: 1 }` and friends — which is correct on its own and cannot be mixed
+ * with anything else. The echo cleanup has to write ABSOLUTE values, because an
+ * increment has no inverse that restores `lastMessageAt`, `lastDirection` or
+ * `firstResponseAt` when the message that supplied them is removed. Absolute and
+ * relative writers on one row do not compose:
+ *
+ *   cleanup                       a real new message
+ *   ───────                       ──────────────────
+ *                                 INSERT Communication  (committed)
+ *   snapshot: 6 messages
+ *   write messageCount = 6
+ *                                 increment -> 7        ← one too high, for ever
+ *
+ * and the mirror image, where the cleanup's snapshot predates the insert and its
+ * absolute write throws the increment away. A lock around the cleanup alone
+ * fixes neither: the INSERT and its bookkeeping are separate operations, so the
+ * lock cannot span them.
+ *
+ * So there is exactly one way to write this projection, and it is absolute. Both
+ * writers take the conversation's row lock first, then recompute from the rows
+ * that are committed at that moment. Every writer recomputes AFTER its own row
+ * change has committed, so whichever acquires the lock last sees every change
+ * and writes the truth. Any interleaving converges; none can leave the count
+ * disagreeing with the transcript.
+ *
+ * It costs no more than it used to. The incremental version was a read followed
+ * by an update — two round trips. This is a lock followed by one statement that
+ * computes and writes together.
+ */
+const RECOMPUTE_SQL = (conversationId: string, tenantId: string | null) => Prisma.sql`
+  WITH msgs AS (
+    SELECT direction, "occurredAt", id
+      FROM "Communication"
+     WHERE "conversationId" = ${conversationId}
+  ),
+  first_inbound AS (
+    SELECT min("occurredAt") AS at FROM msgs WHERE direction = 'inbound'
+  ),
+  agg AS (
+    SELECT count(*)::int AS cnt,
+           max("occurredAt") AS last_at,
+           max("occurredAt") FILTER (WHERE direction = 'inbound') AS last_inbound_at
+      FROM msgs
+  ),
+  newest AS (
+    SELECT direction FROM msgs ORDER BY "occurredAt" DESC, id DESC LIMIT 1
+  ),
+  first_response AS (
+    -- The same rule the incremental version applied one message at a time: the
+    -- first outbound that happened once a customer message existed.
+    SELECT min(m."occurredAt") AS at
+      FROM msgs m, first_inbound f
+     WHERE f.at IS NOT NULL AND m.direction = 'outbound' AND m."occurredAt" >= f.at
+  )
+  UPDATE "Conversation" c
+     SET "messageCount"    = agg.cnt,
+         -- An emptied conversation falls back to its own creation time rather
+         -- than to now(): "last message at" must never be later than the last
+         -- message.
+         "lastMessageAt"   = COALESCE(agg.last_at, c."createdAt"),
+         "lastDirection"   = (SELECT direction FROM newest),
+         "lastInboundAt"   = agg.last_inbound_at,
+         "firstResponseAt" = (SELECT at FROM first_response)
+    FROM agg
+   WHERE c.id = ${conversationId}
+     AND (${tenantId}::text IS NULL OR c."tenantId" = ${tenantId})
+`;
+
+/**
+ * Take the conversation's row lock, then recompute. Callers must already have
+ * committed whatever row change they are reporting.
+ */
+async function lockAndRecompute(
+  tx: Prisma.TransactionClient,
+  conversationId: string,
+  tenantId: string | null,
+): Promise<void> {
+  // The fence. Everything after this in the transaction takes a fresh snapshot,
+  // so a writer that queued behind another sees that other's committed work.
+  await tx.$executeRaw`SELECT id FROM "Conversation" WHERE id = ${conversationId} FOR UPDATE`;
+  await tx.$executeRaw(RECOMPUTE_SQL(conversationId, tenantId));
+}
+
+/**
+ * Recompute one conversation's derived state, on its own.
+ *
+ * `unread` is deliberately NOT derived. It means "nobody has opened the inbound
+ * messages", it is cleared explicitly by `markConversationRead`, and deriving it
+ * here would let a recompute silently mark a thread read — or silently unread a
+ * thread somebody had just opened.
+ */
+export async function recomputeConversationDerivedState(conversationId: string): Promise<void> {
+  const tenantId = scopedConversationTenantId();
+  await basePrisma.$transaction(async (tx) => {
+    await lockAndRecompute(tx, conversationId, tenantId);
+  });
+}
+
+/**
+ * Roll a conversation forward for a new message.
+ *
+ * Inbound messages additionally set `unread`, which is state rather than a
+ * derivation — nothing about the messages themselves says whether a person has
+ * looked at them — so it is written here and cleared only by
+ * `markConversationRead`.
  */
 export async function bumpConversation(
   conversationId: string,
   msg: { direction?: string | null; occurredAt?: Date }
 ): Promise<void> {
-  const when = msg.occurredAt ?? new Date();
-  const inbound = msg.direction === "inbound";
-  const conv = await basePrisma.conversation.findUnique({
-    where: { id: conversationId },
-    select: { firstResponseAt: true, lastInboundAt: true },
-  });
-  const data: Record<string, unknown> = { lastMessageAt: when, messageCount: { increment: 1 } };
-  // Kept current here, not only backfilled by the migration that added it: the
-  // column answers "is a customer waiting on us?", and a value that stops
-  // updating after deployment is worse than no column, because it reads as
-  // current. Written on every message, including the outbound one that clears it.
-  if (msg.direction) data.lastDirection = msg.direction;
-  if (inbound) {
-    data.unread = true;
-    data.lastInboundAt = when;
-  } else if (conv?.lastInboundAt && !conv.firstResponseAt) {
-    data.firstResponseAt = when;
-  }
   const tenantId = scopedConversationTenantId();
-  await basePrisma.conversation.update({ where: { id: conversationId, ...(tenantId ? { tenantId } : {}) }, data });
+  await basePrisma.$transaction(async (tx) => {
+    await lockAndRecompute(tx, conversationId, tenantId);
+    if (msg.direction === "inbound") {
+      await tx.conversation.updateMany({
+        where: { id: conversationId, ...(tenantId ? { tenantId } : {}) },
+        data: { unread: true },
+      });
+    }
+  });
 }
 
 /** Mark a conversation read (a staff member opened it). */
@@ -110,78 +209,6 @@ export async function markConversationRead(conversationId: string): Promise<void
   await basePrisma.conversation.update({
     where: { id: conversationId, ...(tenantId ? { tenantId } : {}) },
     data: { unread: false },
-  });
-}
-
-/**
- * Recompute a conversation's derived state from the messages that remain.
- *
- * `bumpConversation` rolls these forward INCREMENTALLY, one message at a time,
- * which is right on the way in and useless on the way out: an increment has no
- * inverse that can restore `lastMessageAt`, `lastDirection` or `firstResponseAt`
- * when the message that supplied them is removed. Decrementing the count alone
- * would leave a projection that is arithmetically tidy and factually wrong.
- *
- * So this recomputes rather than reverses, which also makes it idempotent —
- * running it twice, or on a conversation nothing was removed from, is a no-op.
- * It reads as few rows as it can: three aggregates and two lookups, never the
- * whole thread.
- *
- * `unread` is deliberately NOT recomputed. It means "nobody has opened the
- * inbound messages", it is cleared explicitly by `markConversationRead`, and the
- * only rows this is called for are OUTBOUND — which never set it. Deriving it
- * here would let a cleanup silently mark a thread read.
- */
-export async function recomputeConversationDerivedState(conversationId: string): Promise<void> {
-  const conversation = await basePrisma.conversation.findUnique({
-    where: { id: conversationId },
-    select: { createdAt: true },
-  });
-  if (!conversation) return;
-
-  const [all, inbound] = await Promise.all([
-    basePrisma.communication.aggregate({
-      where: { conversationId },
-      _count: { _all: true },
-      _max: { occurredAt: true },
-    }),
-    basePrisma.communication.aggregate({
-      where: { conversationId, direction: "inbound" },
-      _min: { occurredAt: true },
-      _max: { occurredAt: true },
-    }),
-  ]);
-
-  const newest = await basePrisma.communication.findFirst({
-    where: { conversationId },
-    orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
-    select: { direction: true },
-  });
-
-  // The same rule bumpConversation applies incrementally — the first outbound
-  // that happened once a customer message existed — asked of the surviving rows
-  // instead of remembered from the order they arrived in.
-  const firstInboundAt = inbound._min.occurredAt;
-  const firstResponse = firstInboundAt
-    ? await basePrisma.communication.findFirst({
-        where: { conversationId, direction: "outbound", occurredAt: { gte: firstInboundAt } },
-        orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
-        select: { occurredAt: true },
-      })
-    : null;
-
-  const tenantId = scopedConversationTenantId();
-  await basePrisma.conversation.update({
-    where: { id: conversationId, ...(tenantId ? { tenantId } : {}) },
-    data: {
-      messageCount: all._count._all,
-      // An emptied conversation falls back to its own creation time rather than
-      // to now(): "last message at" must never be later than the last message.
-      lastMessageAt: all._max.occurredAt ?? conversation.createdAt,
-      lastDirection: newest?.direction ?? null,
-      lastInboundAt: inbound._max.occurredAt ?? null,
-      firstResponseAt: firstResponse?.occurredAt ?? null,
-    },
   });
 }
 

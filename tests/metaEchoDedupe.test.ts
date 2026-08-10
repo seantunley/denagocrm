@@ -144,23 +144,71 @@ test("the conversation is RECOMPUTED, because an increment has no inverse", () =
   const conversations = shipped("src/lib/conversations.ts");
   assert.match(conversations, /export async function recomputeConversationDerivedState/);
   assert.match(conversations, /export async function deleteCommunicationsAndReconcile/);
-  const recompute = conversations.slice(conversations.indexOf("export async function recomputeConversationDerivedState"));
-  const body = recompute.slice(0, recompute.indexOf("export async function deleteCommunicationsAndReconcile"));
-  // Every field bumpConversation writes has to come back, not just the count:
+
+  // Every field the projection carries has to come back, not just the count:
   // decrementing alone leaves a projection that is tidy and factually wrong.
+  const sql = conversations.slice(conversations.indexOf("const RECOMPUTE_SQL"), conversations.indexOf("async function lockAndRecompute"));
   for (const field of ["messageCount", "lastMessageAt", "lastDirection", "lastInboundAt", "firstResponseAt"]) {
-    assert.match(body, new RegExp(`${field}:`), `${field} must be restored, not left behind`);
+    assert.match(sql, new RegExp(`"${field}"`), `${field} must be restored, not left behind`);
   }
-  assert.doesNotMatch(body, /decrement/, "recomputation, not reversal");
   // `unread` means "nobody has opened the inbound messages" and is cleared
   // explicitly; deriving it here would let a cleanup silently mark a thread read.
-  assert.doesNotMatch(body, /unread/, "unread is not derived state");
+  assert.doesNotMatch(sql, /unread/, "unread is not derived state");
+
   // The recompute runs AFTER the delete, or it sees the row it is removing.
   const remove = conversations.slice(conversations.indexOf("export async function deleteCommunicationsAndReconcile"));
   assert.ok(
     remove.indexOf("recomputeConversationDerivedState") > remove.indexOf("deleteMany"),
     "the recomputation must see the world without those rows",
   );
+});
+
+/**
+ * THE TWO WRITERS HAVE TO COMPOSE.
+ *
+ * A new message used to report itself with an INCREMENT while the cleanup wrote
+ * an ABSOLUTE snapshot, and the two do not compose in either order: the snapshot
+ * either misses an insert that then increments on top of it, or includes one that
+ * then increments again. A lock around the cleanup alone fixes neither, because
+ * the INSERT and its bookkeeping are separate operations and no lock spans them.
+ */
+
+test("there is exactly ONE way the projection is written, and it is absolute", () => {
+  const conversations = shipped("src/lib/conversations.ts");
+  // No relative arithmetic anywhere: an increment beside an absolute write is the
+  // defect, whichever function it lives in.
+  assert.doesNotMatch(conversations, /increment:/, "a relative write cannot compose with an absolute one");
+  assert.doesNotMatch(conversations, /decrement:/);
+
+  // Both writers go through the same fenced recompute.
+  assert.match(conversations, /async function lockAndRecompute\(/);
+  for (const writer of ["recomputeConversationDerivedState", "bumpConversation"]) {
+    const start = conversations.indexOf(`export async function ${writer}(`);
+    assert.ok(start > 0, `${writer} must exist`);
+    const body = conversations.slice(start, conversations.indexOf("\n}", start));
+    assert.match(body, /lockAndRecompute\(tx, conversationId, tenantId\)/, `${writer} must use the fenced recompute`);
+    assert.match(body, /basePrisma\.\$transaction\(/, `${writer} must hold the lock for the whole read-then-write`);
+  }
+});
+
+test("the fence is a row lock taken BEFORE anything is read", () => {
+  const conversations = shipped("src/lib/conversations.ts");
+  const fn = conversations.slice(conversations.indexOf("async function lockAndRecompute"));
+  const body = fn.slice(0, fn.indexOf("\n}"));
+  assert.match(body, /SELECT id FROM "Conversation" WHERE id = \$\{conversationId\} FOR UPDATE/);
+  assert.ok(
+    body.indexOf("FOR UPDATE") < body.indexOf("RECOMPUTE_SQL"),
+    "the lock must precede the read, or the snapshot it protects is already taken",
+  );
+});
+
+test("unread is still written on inbound — it is state, not a derivation", () => {
+  // Nothing about the messages says whether a person has LOOKED at them, so a
+  // recompute cannot produce it and must not clear it.
+  const conversations = shipped("src/lib/conversations.ts");
+  const bump = conversations.slice(conversations.indexOf("export async function bumpConversation"));
+  assert.match(bump.slice(0, 900), /msg\.direction === "inbound"/);
+  assert.match(bump.slice(0, 900), /data: \{ unread: true \}/);
 });
 
 test("the worker removes the echo only after the id is committed", () => {

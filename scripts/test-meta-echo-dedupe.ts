@@ -136,17 +136,16 @@ const projection = async () => {
 };
 
 /**
- * `lastMessageAt` is checked as an INVARIANT rather than by comparing to a
- * captured baseline, because the two clocks differ by design.
- *
- * `bumpConversation` stamps `msg.occurredAt ?? new Date()` — and a create that
- * does not name occurredAt leaves it to the column default, so the conversation
- * records the application's clock while the row records the database's. They are
- * a fraction of a millisecond apart and never equal, which makes a captured
- * baseline impossible to match exactly and says nothing about the cleanup.
- *
- * The property that matters is the one recomputation restores: the conversation
+ * `lastMessageAt` is checked as an INVARIANT rather than against a captured
+ * baseline, because the invariant is the stronger statement: the conversation
  * says the last message arrived when the last surviving message actually did.
+ *
+ * It also now holds everywhere, which it did not before. `bumpConversation`
+ * stamped `msg.occurredAt ?? new Date()` — the application's clock — while a
+ * create that does not name occurredAt leaves the row with the database's
+ * default, so the two were always a fraction of a millisecond apart. Recomputing
+ * from the rows reads the row's own occurredAt, so that small untruth is gone
+ * rather than worked around.
  */
 const lastMessageAtTracksNewestRow = async () => {
   const conversation = await basePrisma.conversation.findFirst({
@@ -326,9 +325,9 @@ async function main() {
   check("every surviving row is threaded", (await unthreaded()) === 0);
   const counted = JSON.parse(await projection()).messageCount;
   check("and the projection counts exactly the surviving rows", counted === (await outboundCount()), `${counted}`);
-  // No lastMessageAt assertion here on purpose: nothing was reconciled in this
-  // section, so the value legitimately carries bumpConversation's own clock. The
-  // invariant is asserted where a cleanup actually ran.
+  // Asserted here too, not only after a cleanup: every writer is absolute now,
+  // so the conversation tracks the newest surviving message at all times.
+  check("and still points at the newest surviving message", await lastMessageAtTracksNewestRow());
 
   // ── 8. THE ECHO DOES NOT RESURRECT AN ARCHIVED THREAD ─────────────────────
   //
@@ -344,6 +343,119 @@ async function main() {
     select: { archivedAt: true },
   });
   check("an echo into an archived thread stays archived", newest !== null && newest.archivedAt !== null);
+
+  await concurrency();
+}
+
+/**
+ * ── 9. THE CLEANUP RACING A REAL MESSAGE ──────────────────────────────────
+ *
+ * The projection is written by two different kinds of writer, and they used not
+ * to compose. A new message reported itself with an INCREMENT; the cleanup wrote
+ * an ABSOLUTE snapshot. Either order corrupts the row the cleanup exists to
+ * repair:
+ *
+ *   cleanup                       a real new message
+ *   ───────                       ──────────────────
+ *   delete speculative echo
+ *   snapshot: 5 messages
+ *                                 INSERT Communication  (committed)
+ *                                 increment -> 6
+ *   write messageCount = 5                              ← one too low
+ *
+ * and the mirror image, where the snapshot includes the insert and the increment
+ * then runs on top of it — one too high. A lock around the cleanup alone fixes
+ * neither, because the INSERT and its bookkeeping are separate operations and no
+ * lock can span them.
+ *
+ * Both writers are absolute under one row lock now. This fires them at each
+ * other repeatedly and checks the four invariants after every round: serial code
+ * cannot show any of it.
+ */
+async function concurrencyRound(round: number): Promise<boolean> {
+  const { prisma } = await import("../src/lib/db");
+  const conversation = await basePrisma.conversation.findFirst({
+    where: { contactId: ids.contact, channel: "messenger" },
+    select: { id: true },
+  });
+  if (!conversation) return false;
+
+  // A speculative echo to clean up, written exactly as the webhook writes one.
+  const mid = `mid.race-${round}`;
+  await recordDmEcho("messenger", PSID, `Speculative ${round}`, mid);
+
+  // The cleanup and a legitimate new message, fired together. The new message
+  // alternates direction so lastDirection, lastInboundAt and firstResponseAt are
+  // all exercised, not just the count.
+  const inbound = round % 2 === 0;
+  await Promise.all([
+    deleteCommunicationsAndReconcile({ dedupeKey: metaEchoDedupeKey(DEFAULT_TENANT_ID, mid) }),
+    prisma.communication.create({
+      data: {
+        type: "messenger",
+        direction: inbound ? "inbound" : "outbound",
+        body: `Real ${round}`,
+        contactId: ids.contact,
+        userId: ids.user,
+      },
+    }),
+  ]);
+
+  // The truth, from the rows that survived.
+  const rows = await basePrisma.communication.findMany({
+    where: { conversationId: conversation.id },
+    select: { direction: true, occurredAt: true, id: true },
+  });
+  const sorted = [...rows].sort(
+    (a, b) => a.occurredAt.getTime() - b.occurredAt.getTime() || (a.id < b.id ? -1 : 1),
+  );
+  const newest = sorted[sorted.length - 1];
+  const inboundTimes = sorted.filter((r) => r.direction === "inbound").map((r) => r.occurredAt.getTime());
+  const firstInbound = inboundTimes.length ? Math.min(...inboundTimes) : null;
+  const firstResponse =
+    firstInbound === null
+      ? null
+      : sorted.find((r) => r.direction === "outbound" && r.occurredAt.getTime() >= firstInbound)?.occurredAt ?? null;
+
+  const projected = await basePrisma.conversation.findUnique({
+    where: { id: conversation.id },
+    select: { messageCount: true, lastMessageAt: true, lastDirection: true, lastInboundAt: true, firstResponseAt: true },
+  });
+
+  const same = (a: Date | null | undefined, b: Date | null | undefined) =>
+    (a?.getTime() ?? null) === (b?.getTime() ?? null);
+  const ok =
+    projected?.messageCount === rows.length &&
+    same(projected?.lastMessageAt, newest?.occurredAt) &&
+    projected?.lastDirection === (newest?.direction ?? null) &&
+    same(projected?.lastInboundAt, inboundTimes.length ? new Date(Math.max(...inboundTimes)) : null) &&
+    same(projected?.firstResponseAt, firstResponse);
+  if (!ok) {
+    console.log(
+      `    round ${round}: rows=${rows.length} projected=${JSON.stringify(projected)} expected lastDirection=${newest?.direction}`,
+    );
+  }
+  return ok;
+}
+
+async function concurrency() {
+  let allRounds = true;
+  for (let round = 0; round < 24; round++) {
+    if (!(await concurrencyRound(round))) allRounds = false;
+  }
+  check("the cleanup racing a real message leaves the projection exact, every round", allRounds);
+
+  // And the transcript is still what it should be: 24 real messages plus the
+  // rows the earlier sections deliberately left behind. Every speculative echo
+  // was removed, none of the real ones were.
+  const speculative = await basePrisma.communication.count({
+    where: { contactId: ids.contact, body: { startsWith: "Speculative " } },
+  });
+  check("no speculative row survives the races", speculative === 0, `${speculative} left`);
+  const real = await basePrisma.communication.count({
+    where: { contactId: ids.contact, body: { startsWith: "Real " } },
+  });
+  check("and every legitimate message does", real === 24, `${real} of 24`);
 }
 
 main()
