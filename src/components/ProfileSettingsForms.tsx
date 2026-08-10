@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import { CheckCircle2, ImagePlus, Mail, Trash2, UserRound } from "lucide-react";
 import {
   removeOwnAvatar,
@@ -53,10 +53,27 @@ export default function ProfileSettingsForms({
   const [photoState, photoAction, photoPending] = useActionState(updateOwnAvatar, initialState);
   const [removeState, removeAction, removePending] = useActionState(removeOwnAvatar, initialState);
   const [preview, setPreview] = useState<string | null>(null);
+  const formRef = useRef<HTMLFormElement>(null);
 
   useEffect(() => () => {
     if (preview) URL.revokeObjectURL(preview);
   }, [preview]);
+
+  // A successful upload has to end the "pending pick" state. `preview` is what
+  // drives Save being offered and Remove being hidden, and the server action
+  // cannot clear it — revalidatePath refreshes the SERVER props, and this
+  // component's local state survives that untouched. Without this the screen
+  // still shows "Save photo" after the photo is already saved, offers it with no
+  // file behind it once the form resets, keeps Remove hidden, and holds the old
+  // object URL alive.
+  useEffect(() => {
+    if (!photoState.ok) return;
+    setPreview((previous) => {
+      if (previous) URL.revokeObjectURL(previous);
+      return null;
+    });
+    formRef.current?.reset();
+  }, [photoState]);
 
   const avatarSrc = preview ?? (hasAvatar ? `/api/profile/avatar?v=${encodeURIComponent(avatarVersion ?? "current")}` : undefined);
 
@@ -81,15 +98,14 @@ export default function ProfileSettingsForms({
                   block, a help paragraph, a full-width file input and its own
                   card section — a whole panel to change one image. Picking a file
                   reveals Save, so the button is not standing there doing nothing. */}
-              <form action={photoAction} className="mt-3 flex flex-wrap items-center gap-2">
-                <label
-                  htmlFor="profile-avatar"
-                  className="btn-secondary btn-sm cursor-pointer"
-                  title="JPG, PNG or WebP. Maximum 3 MB. Square images work best."
-                >
+              <form ref={formRef} action={photoAction} className="mt-3 flex flex-wrap items-center gap-2">
+                <label htmlFor="profile-avatar" className="btn-secondary btn-sm cursor-pointer">
                   <ImagePlus className="size-4" />
                   {hasAvatar ? "Change photo" : "Add photo"}
                 </label>
+                {/* Visible, not a title attribute: a phone has no hover, so a
+                    tooltip is the one place this guidance cannot be read. */}
+                <span className="text-[11px] text-muted-foreground">JPG, PNG or WebP · max 3 MB</span>
                 <input
                   id="profile-avatar"
                   name="avatar"

@@ -110,15 +110,26 @@ export default function AppShell({
       <QuickCreateDialog />
       <Toaster />
 
-      {/* Mobile top bar. The logo stays centred, so the cluster is positioned
-          rather than laid out — a flex row would push the logo off-centre. */}
-      <header className="fixed inset-x-0 top-0 z-40 flex h-12 items-center justify-center border-b border-sidebar-border bg-sidebar/90 px-4 backdrop-blur-xl lg:hidden">
-        <BrandLogo
-          logoUrl={brand?.logoUrl ?? null}
-          alt={brand?.displayName ?? "Denago Cape Town"}
-          className="h-6 w-auto object-contain"
-        />
-        <div className="absolute right-2 top-1/2 -translate-y-1/2">
+      {/* Mobile top bar. Three columns, not a centred logo with the cluster
+          floating over it: an absolutely-positioned cluster reserves NO layout
+          space, so on a 375px screen a wordmark brand — BrandLogo falls back to
+          the workspace name, whitespace-nowrap, up to 120 characters — ran
+          straight underneath the controls. The outer columns are the same width,
+          so the logo is still optically centred, and it CLIPS rather than
+          growing into the cluster. */}
+      <header className="fixed inset-x-0 top-0 z-40 flex h-12 items-center gap-2 border-b border-sidebar-border bg-sidebar/90 px-2 backdrop-blur-xl lg:hidden">
+        <div className="w-[7.5rem] shrink-0" aria-hidden />
+        {/* min-w-0 lets the flex item shrink below its content, overflow-hidden
+            clips what is left. Together the centre column can never grow past its
+            own width, so the logo cannot reach the cluster whatever it contains. */}
+        <div className="flex min-w-0 flex-1 justify-center overflow-hidden">
+          <BrandLogo
+            logoUrl={brand?.logoUrl ?? null}
+            alt={brand?.displayName ?? "Denago Cape Town"}
+            className="h-6 w-auto max-w-full object-contain"
+          />
+        </div>
+        <div className="flex w-[7.5rem] shrink-0 justify-end">
           <AccountCluster user={user} isOwner={user.role === "owner"} />
         </div>
       </header>

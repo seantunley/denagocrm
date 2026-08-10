@@ -136,3 +136,110 @@ test("the password section opens when it is linked to", () => {
   assert.match(page, /const \{ tab: rawTab, section \} = await searchParams;/);
   assert.match(page, /<details id="password" open=\{section === "password"\}>/);
 });
+
+/**
+ * The mobile header, as geometry.
+ *
+ * The first version centred the logo with `justify-center` and floated the
+ * cluster over it with `absolute right-2`. An absolutely-positioned element
+ * reserves NO layout space, so nothing stopped the two from occupying the same
+ * pixels — and BrandLogo's fallback is the workspace NAME, `whitespace-nowrap`,
+ * bounded at 120 characters. On a 375px screen an ordinary wordmark ran straight
+ * under the controls.
+ *
+ * This is not a browser test: there is no viewport harness in this repo
+ * (puppeteer-core is here only to render guide PDFs). So the fix is made
+ * STRUCTURAL rather than tuned — three real columns, the outer two a fixed equal
+ * width, the centre `min-w-0 overflow-hidden` — and what is asserted below is
+ * that contract plus the arithmetic that makes it hold at the narrowest
+ * supported width. A layout that cannot overlap beats a measurement that happened
+ * not to.
+ */
+
+const REM = 16;
+const SIDE_COLUMN_REM = 7.5;
+const NARROWEST_PHONE = 320; // smaller than the 375 the report used
+
+test("the mobile header columns fit the narrowest phone with the centre still positive", () => {
+  const side = SIDE_COLUMN_REM * REM;            // 120px
+  const padding = 2 * (0.5 * REM);               // px-2 either side
+  const gaps = 2 * (0.5 * REM);                  // gap-2 between three columns
+  const centre = NARROWEST_PHONE - side * 2 - padding - gaps;
+
+  assert.ok(centre > 0, `centre column collapses at ${NARROWEST_PHONE}px (got ${centre}px)`);
+  // The cluster is ~115px of controls; its column must actually hold them.
+  assert.ok(side >= 115, `cluster column ${side}px cannot hold ~115px of controls`);
+});
+
+test("the cluster occupies a column instead of floating over the logo", () => {
+  const shell = src("src/components/AppShell.tsx");
+  const mobileBar = shell.slice(shell.indexOf("{/* Mobile top bar"), shell.indexOf("{/* Desktop top bar"));
+
+  // The defect: absolute positioning reserves no space.
+  assert.doesNotMatch(mobileBar, /absolute right-2/, "an absolutely-positioned cluster cannot reserve space");
+  // The HEADER element itself must lay columns out, not centre one child. The
+  // centre column still uses justify-center — to centre the logo inside itself.
+  const headerTag = mobileBar.slice(mobileBar.indexOf("<header"), mobileBar.indexOf(">", mobileBar.indexOf("<header")));
+  assert.doesNotMatch(headerTag, /justify-center/, "the header must not centre a single child");
+  assert.match(headerTag, /flex h-12 items-center gap-2/);
+
+  // Two equal, non-shrinking outer columns keep the logo optically centred.
+  assert.equal((mobileBar.match(/w-\[7\.5rem\] shrink-0/g) ?? []).length, 2, "matched side columns");
+  // And the centre must be able to shrink AND clip, or a long wordmark still wins.
+  assert.match(mobileBar, /flex min-w-0 flex-1 justify-center overflow-hidden/);
+  assert.match(mobileBar, /className="h-6 w-auto max-w-full object-contain"/);
+});
+
+/**
+ * A successful upload has to end the "pending pick" state.
+ *
+ * `preview` is what offers Save and hides Remove, and the server action cannot
+ * clear it: revalidatePath refreshes the SERVER props, and this client
+ * component's local state survives that untouched. So the screen kept saying
+ * "Save photo" after the photo was already saved, kept offering it once the form
+ * had reset and there was no file behind it, kept Remove hidden, and held the old
+ * object URL alive.
+ */
+
+/** The component's own rule for which photo controls are showing. */
+function photoControls(state: { preview: string | null; hasAvatar: boolean }) {
+  return {
+    save: Boolean(state.preview),
+    remove: state.hasAvatar && !state.preview,
+  };
+}
+
+test("choosing, saving and removing a photo moves through the right controls", () => {
+  // No photo yet.
+  let s = { preview: null as string | null, hasAvatar: false };
+  assert.deepEqual(photoControls(s), { save: false, remove: false });
+
+  // Pick a file: Save appears.
+  s = { preview: "blob:new", hasAvatar: false };
+  assert.deepEqual(photoControls(s), { save: true, remove: false });
+
+  // Upload succeeds. The effect clears preview; the server props now say hasAvatar.
+  s = { preview: null, hasAvatar: true };
+  assert.deepEqual(photoControls(s), { save: false, remove: true },
+    "Save must go and Remove must come back once the photo is saved");
+
+  // Leaving preview set — the defect — offers Save with nothing behind it.
+  assert.deepEqual(photoControls({ preview: "blob:new", hasAvatar: true }), { save: true, remove: false });
+});
+
+test("the upload effect clears and revokes the preview, and resets the form", () => {
+  const forms = src("src/components/ProfileSettingsForms.tsx");
+  const effect = forms.slice(forms.indexOf("if (!photoState.ok) return;"), forms.indexOf("const avatarSrc"));
+  assert.match(effect, /URL\.revokeObjectURL\(previous\)/, "the old object URL must not leak");
+  assert.match(effect, /return null;/, "and preview must actually clear");
+  assert.match(effect, /formRef\.current\?\.reset\(\)/, "the file input must not keep a stale selection");
+  assert.match(forms, /\}, \[photoState\]\);/, "keyed on the action result, not on render");
+});
+
+test("the format guidance is readable without a hover", () => {
+  // It had been moved into a title attribute. A phone has no hover, so that is
+  // the one place this guidance cannot be read.
+  const forms = src("src/components/ProfileSettingsForms.tsx");
+  assert.match(forms, /JPG, PNG or WebP · max 3 MB/);
+  assert.doesNotMatch(forms, /title="JPG, PNG or WebP/);
+});
