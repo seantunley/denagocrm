@@ -304,6 +304,15 @@ jobs:
       - name: Migrations run every statement on one session
         run: npm run test:migration-session
 
+      # A DM reply is delivered on the channel the stored Conversation names, so
+      # that a caller with inbox.reply cannot choose Messenger or Instagram for a
+      # customer who has both. The source tests can see that the resolver is
+      # called; only a real database shows that one customer on two platforms ends
+      # up with two conversations and that each thread resolves to its own — and
+      # that a page rendered twice does not create a second one.
+      - name: Binding -- a DM thread resolves to its own channel's conversation
+        run: npm run test:dm-binding
+
       # A schema test proves the composite key exists; only two real tenants
       # running through the sync prove the runtime uses it. The dormant-mode
       # predicate returned {} , so whoever synced a shared Google Place first
