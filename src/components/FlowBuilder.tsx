@@ -144,7 +144,13 @@ function NodeCard({ data }: NodeProps) {
           <div className="relative border-t border-slate-800 px-3 py-1 text-[11px] text-amber-300">If it fails
             <Handle type="source" position={Position.Right} id="failure" style={{ top: "118px", background: "#fbbf24" }} />
           </div>
-          {n.type === "slots" && (
+          {/* The inspector offers this on slots, but the edge builder draws it from
+              the DATA — and the AI drafter, the shipped templates and reusable
+              blocks can all produce an unavailableNext on a booking or Journey
+              node. Rendering it only for slots left such an edge with no handle to
+              anchor to: the graph had the edge and the card had nowhere to put it.
+              So it appears whenever THIS node actually carries the route. */}
+          {(n.type === "slots" || Boolean((n as { unavailableNext?: string }).unavailableNext)) && (
             <div className="relative border-t border-slate-800 px-3 py-1 text-[11px] text-slate-400">If none available
               <Handle type="source" position={Position.Right} id="unavailable" style={{ top: "144px", background: "#94a3b8" }} />
             </div>

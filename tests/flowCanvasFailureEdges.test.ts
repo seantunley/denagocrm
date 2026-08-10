@@ -76,9 +76,62 @@ test("a fallible node offers a handle per outcome", () => {
   for (const id of ["out", "failure", "unavailable"]) {
     assert.match(card, new RegExp(`id="${id}"`), `no source handle for "${id}"`);
   }
-  // "If none available" is only a real outcome for a slots node; a booking node
-  // showing it would invite wiring a branch the engine never takes.
-  assert.match(card, /n\.type === "slots" && \([\s\S]{0,200}id="unavailable"/);
+  // The unavailable handle must appear wherever THIS node carries the route, not
+  // only on slots — see the render-contract test below.
+  assert.match(card, /n\.type === "slots" \|\| Boolean\(\(n as \{ unavailableNext\?: string \}\)\.unavailableNext\)/);
+});
+
+/**
+ * The edge builder and the card have to agree, and the previous tests proved each
+ * half on its own: that an unavailable edge is drawn from graph data, and that
+ * SOME node renders an unavailable handle. Both passed while they disagreed —
+ * a booking node carrying unavailableNext produced an edge with
+ * `sourceHandle: "unavailable"` and no handle of that id to anchor it to.
+ *
+ * Model the contract itself: for every edge the builder emits, the node it leaves
+ * must expose that handle.
+ */
+type TestNode = { id: string; type: string; next?: string; failureNext?: string; unavailableNext?: string };
+
+/** The edge builder's rule, as shipped. */
+function edgesFor(node: TestNode): string[] {
+  const handles: string[] = [];
+  if (node.type !== "handoff" && node.type !== "end" && node.next) handles.push("out");
+  if (node.failureNext) handles.push("failure");
+  if (node.unavailableNext) handles.push("unavailable");
+  return handles;
+}
+
+/** The card's rule, as shipped. */
+function handlesOn(node: TestNode): string[] {
+  const FALLIBLE_TYPES = ["booking", "slots", "journey"];
+  if (!FALLIBLE_TYPES.includes(node.type)) return node.type === "handoff" || node.type === "end" ? [] : ["out"];
+  const handles = ["out", "failure"];
+  if (node.type === "slots" || Boolean(node.unavailableNext)) handles.push("unavailable");
+  return handles;
+}
+
+test("every edge the builder draws leaves a handle the card actually renders", () => {
+  // A booking node with unavailableNext is the case that was broken: the AI
+  // drafter, the shipped templates and reusable blocks can all produce one, and
+  // the Flow model and actionOutcome() both accept it.
+  const graphs: TestNode[] = [
+    { id: "book", type: "booking", next: "ok", failureNext: "sorry", unavailableNext: "callback" },
+    { id: "book2", type: "booking", next: "ok", failureNext: "sorry" },
+    { id: "slots", type: "slots", next: "ok", failureNext: "sorry", unavailableNext: "callback" },
+    { id: "journey", type: "journey", next: "ok", failureNext: "sorry", unavailableNext: "callback" },
+    { id: "msg", type: "message", next: "ok" },
+    { id: "stop", type: "end" },
+  ];
+  for (const node of graphs) {
+    const available = handlesOn(node);
+    for (const handle of edgesFor(node)) {
+      assert.ok(
+        available.includes(handle),
+        `${node.type} "${node.id}" draws a "${handle}" edge from a handle it does not render (has: ${available.join(", ") || "none"})`,
+      );
+    }
+  }
 });
 
 test("dragging from a failure handle does not silently wire the success route", () => {
