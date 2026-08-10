@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { prisma } from "./db";
+import { customerRecordTenantId } from "./customerRecordTenant";
 import { resolveTenantCredential } from "./settings";
 import { logAudit } from "./audit";
 import { sendPushToAll } from "./push";
@@ -330,6 +331,11 @@ export async function recordInboundDm(
   // something the inbox should announce.
   let insertedAny = false;
   const firstUser = await resolveTenantActor(); // tenant-aware (channel scope); dormant → oldest active user
+  // An inbound webhook has no session to inherit from, and while stamping is dormant
+  // the channel scope is not established either — so the customer record this message
+  // is filed against is what says who owns it. Resolved once for the message and every
+  // one of its attachments; they all point at the same pair.
+  const inboundTenantId = await customerRecordTenantId({ contactId: contact.id, leadId });
   if (firstUser) {
     if (text) {
       // create(), NOT createMany(): db.ts hooks communication.create to resolve
@@ -345,6 +351,7 @@ export async function recordInboundDm(
             contactId: contact.id,
             leadId,
             userId: firstUser.id,
+            tenantId: inboundTenantId,
             ...(key ? { dedupeKey: key } : {}),
           },
         });
@@ -384,6 +391,7 @@ export async function recordInboundDm(
           contactId: contact.id,
           leadId,
           userId: firstUser.id,
+          tenantId: inboundTenantId,
             ...(attKey ? { dedupeKey: attKey } : {}),
           },
         });
@@ -445,6 +453,7 @@ export async function recordDmEcho(platform: DmPlatform, recipientId: string, te
       contactId: contact.id,
       userId: firstUser.id,
       archivedAt: latest?.archivedAt ?? null,
+      tenantId: await customerRecordTenantId({ contactId: contact.id }),
     },
   });
 }

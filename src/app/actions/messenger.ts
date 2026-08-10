@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
+import { customerRecordTenantId } from "@/lib/customerRecordTenant";
 import { canAccessContact, requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { sendDirectMessage, sendDirectAttachment, type DmPlatform } from "@/lib/messenger";
@@ -61,6 +62,7 @@ export async function sendDmReply(
       attachmentType,
       contactId,
       userId: user.id,
+      tenantId: await customerRecordTenantId({ contactId }),
     },
   });
   await pauseBotConversation({ channel: platform, key: recipientId }, 12);

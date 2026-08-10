@@ -27,7 +27,9 @@ export async function GET(req: NextRequest) {
       minStartBudgetMs: 4_000,
       concurrency: 2,
       onError: async (tenantId, error) => {
-        await logError("bot-outbox-cron", error, `tenant ${tenantId}`).catch(() => {});
+        // The tenant was already being written into the free-text context; put it in
+        // the column too, where per-tenant error health can actually read it.
+        await logError("bot-outbox-cron", error, `tenant ${tenantId}`, { tenantId }).catch(() => {});
       },
     },
   );

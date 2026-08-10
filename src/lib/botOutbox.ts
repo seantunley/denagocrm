@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
+import { customerRecordTenantId } from "./customerRecordTenant";
 import { DEFAULT_TENANT_ID } from "./tenant";
 import { withTenantWrite, writeTenantId } from "./tenantWrite";
 import type { OutMsg } from "./flow";
@@ -165,7 +166,10 @@ async function repairCommunicationLog(row: OutboxRow): Promise<boolean> {
   await prisma.communication.upsert({
     where: { dedupeKey },
     update: {},
-    create: { type: row.channel, direction: "outbound", subject: FLOW_MARKER, body: storedBody, contactId: row.contactId, leadId: row.leadId, userId: row.actorId, dedupeKey },
+    // `tenantForOutbox()` resolves an unowned write to DEFAULT_TENANT_ID because the
+    // outbox only needs a stable partition key. A Communication is a customer record
+    // and carries composite keys to Contact and Lead, so its owner is theirs.
+    create: { type: row.channel, direction: "outbound", subject: FLOW_MARKER, body: storedBody, contactId: row.contactId, leadId: row.leadId, userId: row.actorId, dedupeKey, tenantId: await customerRecordTenantId({ contactId: row.contactId, leadId: row.leadId }) },
   });
   await prisma.botFlowOutbox.updateMany({ where: { id: row.id, status: "sent", communicationLoggedAt: null }, data: { communicationLoggedAt: new Date() } });
   return true;

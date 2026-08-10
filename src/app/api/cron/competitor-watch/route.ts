@@ -117,7 +117,9 @@ export async function GET(req: NextRequest) {
     minStartBudgetMs: MIN_START_BUDGET_MS,
     concurrency: 2,
     rotationWindowMs: 24 * 60 * 60 * 1000,
-    onError: (tenantId, error) => logError(`competitor-watch:${tenantId}`, error),
+    // Attribute to the failing tenant: `onError` runs outside its scope, so this is
+    // the only point at which the owner of the failure is still known.
+    onError: (tenantId, error) => logError(`competitor-watch:${tenantId}`, error, undefined, { tenantId }),
   });
 
   const dormant = runs.length === 1 && runs[0].tenantId === null ? runs[0] : null;

@@ -179,8 +179,23 @@ test("src/app/api/bookings/route.ts: stamps the write tenant + namespaces slot c
   assert.match(code, /const\s+writeTid\s*=\s*writeTenantId\(\)/, "must resolve the write tenant once");
   // the resolved tenant is threaded into the slot capacity claim (per-tenant slots)
   assert.match(code, /claimSlotCapacity\([^)]*writeTid/, "must pass the write tenant to claimSlotCapacity");
+
+  // STAMPING is a different question from NAMESPACING, and the 2026-08-10 audit is
+  // why. `writeTenantId()` is null while enforcement is dormant, so stamping from
+  // it alone wrote every online booking — contact, job card and activity — with no
+  // owner at all. The API key that authenticated the request names exactly one
+  // tenant, so that is the fallback; a legacy global key still resolves null and
+  // nothing is invented.
+  assert.match(code, /const\s+stampTid\s*=\s*writeTid\s*\?\?\s*auth\.tenantId/, "a new row takes the API key's tenant when the scope is dormant");
+  // …and the capacity count must NOT be narrowed the same way: every pre-existing
+  // NULL-tenant booking would become invisible to it and the slot double-booked.
+  assert.doesNotMatch(code, /claimSlotCapacity\([^)]*stampTid/, "capacity must stay on writeTid");
+  // A row pointing at an EXISTING contact must claim that contact's tenant, not the
+  // key's: the composite (tenantId, contactId) key refuses anything else and the
+  // customer's booking would 500.
+  assert.match(code, /const\s+rowTid\s*=\s*contact\s*\?\s*contact\.tenantId\s*:\s*stampTid/, "children follow the contact they point at");
   // every tenant-owned create is stamped (contact, job card, activity → 3 sites)
-  const stamps = code.match(/tenantId:\s*writeTid/g) ?? [];
+  const stamps = code.match(/tenantId:\s*(stampTid|rowTid)/g) ?? [];
   assert.ok(stamps.length >= 3, `every created row must be stamped with the tenant (found ${stamps.length}, expected ≥3)`);
 });
 

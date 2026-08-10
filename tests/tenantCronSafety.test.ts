@@ -51,6 +51,14 @@ test("non-user audit entries inherit only an explicit normal tenant scope", () =
   assert.match(code, /currentTenantScope/, "audit attribution must read the explicit async tenant scope");
   assert.match(code, /scope\s*&&\s*!scope\.system\s*&&\s*scope\.tenantId/, "system or missing scopes must remain global");
   assert.match(code, /if\s*\(!entry\.user\)/, "scope attribution must apply to cron, portal, webhook and public-token actors");
+  // Re-examined for the 2026-08-10 pre-flip audit and kept: the non-user branch must
+  // NOT reach for the staff cookie. A public token page or the portal can be opened
+  // in a browser that also holds a CRM session, and that cookie says who is signed
+  // in, not who owns the record — while a cron and a webhook carry no cookie at all,
+  // so the fallback would add misattribution and no attribution.
+  const branchStart = code.indexOf("if (!entry.user)");
+  const nonUserBranch = code.slice(branchStart, code.indexOf("try {", branchStart));
+  assert.doesNotMatch(nonUserBranch, /getActiveTenantId/);
 });
 
 // ── Dormant mode must still establish a tenant scope ────────────────────────

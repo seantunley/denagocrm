@@ -1,4 +1,5 @@
 import { prisma } from "./db";
+import { customerRecordTenantId } from "./customerRecordTenant";
 import { getSetting } from "./settings";
 import { sendWhatsAppText, uploadWhatsAppMedia, sendWhatsAppAudioId, matchByPhone } from "./whatsapp";
 import { sendPushToAll } from "./push";
@@ -127,6 +128,8 @@ async function logOutbound(reply: string, subject: string, contactId: string | n
       contactId,
       leadId,
       userId: firstUser.id,
+      // A webhook has no session; the customer record it is replying to is the owner.
+      tenantId: await customerRecordTenantId({ contactId, leadId }),
     },
   });
 }

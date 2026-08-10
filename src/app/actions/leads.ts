@@ -11,6 +11,7 @@ import { softDeleteRecord } from "@/lib/trash";
 import { createLeadRecord } from "@/lib/leadCreate";
 import { triggerSurvey } from "@/lib/surveys";
 import { removeTimelinePin } from "@/lib/timelinePins";
+import { customerRecordTenantId } from "@/lib/customerRecordTenant";
 import { resolveTenantMemberUser } from "@/lib/tenantActor";
 import {
   hasPermission,
@@ -355,6 +356,17 @@ export async function moveLeadToTestDrive(
   }
 
   const position = await nextPosition(stageId);
+  // Resolved BEFORE the transaction opens, deliberately. Inside it the lead row is
+  // locked by the update, and recordTenantId reads on a different connection —
+  // asking for the same row there would block on the lock this transaction holds.
+  // Both parents are consulted: the composite keys are (tenantId, leadId) AND
+  // (tenantId, contactId), so a lead and a contact that disagree must yield NULL
+  // rather than a value that fails one of them and rolls the booking back.
+  const linkedContact = await prisma.lead.findUnique({
+    where: { id: leadId },
+    select: { contactId: true },
+  });
+  const activityTenantId = await customerRecordTenantId({ leadId, contactId: linkedContact?.contactId });
   const lead = await prisma.$transaction(async (tx) => {
     const updated = await tx.lead.update({
       where: { id: leadId },
@@ -374,6 +386,7 @@ export async function moveLeadToTestDrive(
       contactId: updated.contactId,
       assignedToId: updated.assignedToId ?? user.id,
       createdById: user.id,
+      tenantId: activityTenantId,
     };
     const existing = await tx.activity.findFirst({
       where: { leadId, type: "test_drive", status: "planned" },

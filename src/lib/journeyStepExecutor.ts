@@ -1,5 +1,6 @@
 import { addDays, addHours, addMinutes } from "date-fns";
 import { prisma, basePrisma } from "./db";
+import { customerRecordTenantId } from "./customerRecordTenant";
 import { nextStepDueDate } from "./businessHours";
 import { getNextStepScheduling } from "./nextStepConfig";
 import { resolveTenantActor } from "./tenantActor";
@@ -176,6 +177,7 @@ async function recordCommunication(
       leadId,
       contactId,
       userId,
+      tenantId: await customerRecordTenantId({ contactId, leadId }),
     },
   });
 }
@@ -318,6 +320,7 @@ export async function executeJourneyStep(args: {
           contactId,
           assignedToId: userId,
           createdById: userId,
+          tenantId: await customerRecordTenantId({ contactId, leadId }),
         },
       });
       return { status: "completed", note: `Activity created for ${dueDays} day(s)` };

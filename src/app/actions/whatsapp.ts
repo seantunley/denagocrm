@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
+import { customerRecordTenantId } from "@/lib/customerRecordTenant";
 import { canAccessContact, canAccessLead, requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { sendWhatsAppText, waDigits } from "@/lib/whatsapp";
@@ -34,6 +35,7 @@ export async function sendWhatsAppMessage(
       contactId,
       leadId,
       userId: user.id,
+      tenantId: await customerRecordTenantId({ contactId, leadId }),
     },
   });
   // A human reply is an ownership decision, not merely a timestamp heuristic.

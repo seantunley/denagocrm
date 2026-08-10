@@ -4,6 +4,7 @@ import crypto from "crypto";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
+import { agreedTenantId } from "@/lib/compositeTenantRules";
 import { canAccessQuote, requirePermission } from "@/lib/permissions";
 import { logAuditStrict } from "@/lib/audit";
 import { saveFile } from "@/lib/storage";
@@ -158,6 +159,13 @@ export async function createTestDriveBooking(formData: FormData) {
   const resolvedProductId = productId ?? demoVehicle?.productId ?? lead?.productId ?? null;
   const modelName = product?.name ?? demoVehicle?.name ?? lead?.title ?? "Vehicle";
   const activityId = crypto.randomUUID();
+  // Both parents are already in hand, so the owner is decided without another read.
+  // Activity's composite keys are (tenantId, contactId) and (tenantId, leadId): a
+  // contact and a lead that disagree can only be satisfied by NULL.
+  const activityTenantId = agreedTenantId(
+    [contact.tenantId, ...(lead ? [lead.tenantId] : [])],
+    null,
+  );
 
   const booking = await prisma.$transaction(async (tx) => {
     const created = await tx.testDriveBooking.create({
@@ -189,6 +197,7 @@ export async function createTestDriveBooking(formData: FormData) {
         contactId,
         assignedToId: salespersonId,
         createdById: user.id,
+        tenantId: activityTenantId,
       },
     });
     return created;

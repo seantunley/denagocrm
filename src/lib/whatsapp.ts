@@ -1,4 +1,5 @@
 import { prisma } from "./db";
+import { customerRecordTenantId } from "./customerRecordTenant";
 import { credentialOwnerTenantId, resolveIntegrationBundleForTenant, resolveTenantCredential } from "./settings";
 import { sendPushToAll } from "./push";
 import { createLeadRecordIfPipelineReady } from "./leadCreate";
@@ -485,6 +486,10 @@ export async function recordInboundWhatsApp(
         contactId,
         leadId,
         userId: firstUser.id,
+        // The dedupe key above falls back to DEFAULT_TENANT_ID because it only has to
+        // be STABLE. Ownership is a different standard and must never be invented:
+        // the customer record decides, or nobody does.
+        tenantId: await customerRecordTenantId({ contactId, leadId }),
         ...(dedupeKey ? { dedupeKey } : {}),
       },
     });
