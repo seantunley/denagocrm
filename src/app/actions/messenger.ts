@@ -12,7 +12,7 @@ import {
   type AttachmentKind,
   type OutboxPayload,
 } from "@/lib/botOutbox";
-import { sendOutcomeMessage, staffReplyIdempotencyKey } from "@/lib/messageDelivery";
+import { attachmentDigest, sendOutcomeMessage, staffReplyIdempotencyKey } from "@/lib/messageDelivery";
 import { outboundMediaUrl } from "@/lib/outboundMedia";
 
 const ATTACH_KIND = (mime: string): AttachmentKind =>
@@ -111,12 +111,16 @@ export async function sendDmReply(
    * delivers.
    */
   let providerUrl: string | null = null;
+  let fileDigest: string | null = null;
   if (hasFile) {
     if (file.size > 4 * 1024 * 1024) {
       return { error: "File too big — 4MB max here. For larger files, share a Library link instead." };
     }
     const buffer = Buffer.from(await file.arrayBuffer());
     const contentType = file.type || "application/octet-stream";
+    // Taken from the BYTES, before they are stored anywhere, so it is the same
+    // on every submission of the same file.
+    fileDigest = attachmentDigest(buffer);
     attachmentUrl = await saveFile(buffer, file.name || "attachment", contentType);
     attachmentKind = ATTACH_KIND(file.type || "");
     providerUrl = outboundMediaUrl(attachmentUrl, contentType);
@@ -158,7 +162,13 @@ export async function sendDmReply(
    * it describes.
    */
   const label = platform === "instagram" ? "Instagram" : "Messenger";
-  const part = (message: OutboxPayload, body: string, url: string | null, kind: string | null) => ({
+  const part = (
+    message: OutboxPayload,
+    body: string,
+    url: string | null,
+    kind: string | null,
+    digest: string | null,
+  ) => ({
     message,
     body,
     attachmentUrl: url,
@@ -171,7 +181,12 @@ export async function sendDmReply(
       contactId,
       leadId: null,
       body,
-      attachmentUrl: url,
+      // The DIGEST, not the URL. saveFile mints a fresh random name on every
+      // call, so a resubmission of the same file uploads it again and gets a
+      // different URL. Keying on that made the key unstable in precisely the
+      // situation it exists for — an ambiguous failure followed by a retry —
+      // and the customer received the attachment twice.
+      attachmentDigest: digest,
     }),
   });
 
@@ -179,17 +194,18 @@ export async function sendDmReply(
     // The queued payload carries the PROVIDER-fetchable URL; the timeline row
     // keeps the storage ref, which is what the inbox renders through its own
     // authenticated route.
-    ...(attachmentUrl && attachmentKind && providerUrl
+    ...(attachmentUrl && attachmentKind && providerUrl && fileDigest
       ? [
           part(
-            { type: "attachment", kind: attachmentKind, url: providerUrl },
+            { type: "attachment", kind: attachmentKind, url: providerUrl, digest: fileDigest },
             ATTACHMENT_BODY[attachmentKind],
             attachmentUrl,
             attachmentKind,
+            fileDigest,
           ),
         ]
       : []),
-    ...(text ? [part({ type: "text", text }, text, null, null)] : []),
+    ...(text ? [part({ type: "text", text }, text, null, null, null)] : []),
   ];
 
   const queued = await enqueueStaffReply({

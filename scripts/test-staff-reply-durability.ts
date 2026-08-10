@@ -36,7 +36,7 @@ import {
   flushBotOutboxConversation,
   type OutboxPayload,
 } from "../src/lib/botOutbox";
-import { sendOutcomeMessage, staffReplyIdempotencyKey } from "../src/lib/messageDelivery";
+import { attachmentDigest, sendOutcomeMessage, staffReplyIdempotencyKey } from "../src/lib/messageDelivery";
 import { pauseBotConversation } from "../src/lib/botConversationControl";
 
 const SFX = Math.random().toString(16).slice(2, 10);
@@ -464,7 +464,12 @@ async function main() {
   // retried, and the customer received the ATTACHMENT TWICE because neither
   // provider call was recognisable as one that had already succeeded.
   const dmComposition = `dm_${SFX}`;
-  const dmKey = (body: string, url: string | null) =>
+  // Keyed on the BYTES, exactly as the action does. saveFile mints a fresh
+  // random storage name per upload, so keying on the URL made a resubmission of
+  // the same file derive a different key and queue the attachment twice. Passing
+  // a fixed URL on both attempts — which the earlier version of this test did —
+  // proves the queue primitive while bypassing that instability entirely.
+  const dmKey = (body: string, digest: string | null) =>
     staffReplyIdempotencyKey({
       compositionId: dmComposition,
       channel: "messenger",
@@ -473,11 +478,11 @@ async function main() {
       contactId: ids.contact,
       leadId: null,
       body,
-      attachmentUrl: url,
+      attachmentDigest: digest,
     });
-  const dmPart = (body: string, url: string | null, message: OutboxPayload) => ({
+  const dmPart = (body: string, url: string | null, message: OutboxPayload, digest: string | null) => ({
     message,
-    clientIdempotencyKey: dmKey(body, url),
+    clientIdempotencyKey: dmKey(body, digest),
     body,
     attachmentUrl: url,
   });
@@ -490,9 +495,17 @@ async function main() {
       actorId: ids.user,
     });
 
-  const fileUrl = "https://example.test/brochure.pdf";
-  const filePart = dmPart("📎 File", fileUrl, { type: "attachment", kind: "file", url: fileUrl });
-  const textPart = dmPart("Here's the brochure.", null, { type: "text", text: "Here's the brochure." });
+  // The same file, uploaded twice: identical BYTES, different storage names —
+  // which is what saveFile actually produces on a resubmission.
+  const fileBytes = Buffer.from(`brochure-${SFX}`);
+  const fileDigest = attachmentDigest(fileBytes);
+  const upload1 = `https://example.test/${SFX}-a.pdf`;
+  const upload2 = `https://example.test/${SFX}-b.pdf`;
+  const filePartAt = (url: string) =>
+    dmPart("📎 File", url, { type: "attachment", kind: "file", url, digest: fileDigest }, fileDigest);
+
+  const filePart = filePartAt(upload1);
+  const textPart = dmPart("Here's the brochure.", null, { type: "text", text: "Here's the brochure." }, null);
   const dm = await dmReply([filePart, textPart]);
   check(
     "an attachment and its text are both accepted, in one operation",
@@ -526,7 +539,9 @@ async function main() {
   // The retry after a half-succeeded submission: the SAME composition resent.
   // Neither half may be duplicated, and the text half must resolve to the row
   // that already exists rather than sending the customer a second copy.
-  const retry = await dmReply([filePart, textPart]);
+  // The retry re-uploads: a NEW storage URL for the SAME bytes. This is the case
+  // the old fixed-URL test could not reach.
+  const retry = await dmReply([filePartAt(upload2), textPart]);
   check(
     "resending the same composition duplicates neither half",
     retry.outcome === "duplicate" && retry.parts.every((p) => p.outcome === "duplicate"),
@@ -548,11 +563,13 @@ async function main() {
   // submits the same composition again. The attachment half is already accepted;
   // writing every part blindly would hit its key, roll the whole thing back, and
   // lose the correction. Only the missing half may be written.
-  const editedText = dmPart("Here's the brochure — collection is Friday.", null, {
-    type: "text",
-    text: "Here's the brochure — collection is Friday.",
-  });
-  const dmCorrected = await dmReply([filePart, editedText]);
+  const editedText = dmPart(
+    "Here's the brochure — collection is Friday.",
+    null,
+    { type: "text", text: "Here's the brochure — collection is Friday." },
+    null,
+  );
+  const dmCorrected = await dmReply([filePartAt(`https://example.test/${SFX}-c.pdf`), editedText]);
   check(
     "an edited half still sends when the other half is already accepted",
     dmCorrected.outcome === "created" &&

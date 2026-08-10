@@ -3,7 +3,12 @@ import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { staffReplyIdempotencyKey } from "../src/lib/messageDelivery";
+import {
+  attachmentDigest,
+  stablePayload,
+  staffReplyIdempotencyKey,
+  staffReplyMatchesRow,
+} from "../src/lib/messageDelivery";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
@@ -48,32 +53,92 @@ test("an attachment and its text are two independently deduplicated messages", (
     contactId: "ct1",
     leadId: null,
   };
-  const attachment = staffReplyIdempotencyKey({ ...base, body: "🖼 Image", attachmentUrl: "https://x/y.png" });
-  const message = staffReplyIdempotencyKey({ ...base, body: "here it is", attachmentUrl: null });
+  const bytes = Buffer.from("the same file bytes");
+  const digest = attachmentDigest(bytes);
+  const attachment = staffReplyIdempotencyKey({ ...base, body: "🖼 Image", attachmentDigest: digest });
+  const message = staffReplyIdempotencyKey({ ...base, body: "here it is", attachmentDigest: null });
   assert.notEqual(attachment, message, "the two halves must not share a key, or one silences the other");
-
-  // Same submission repeated resolves each half to its own existing row.
-  assert.equal(
-    attachment,
-    staffReplyIdempotencyKey({ ...base, body: "🖼 Image", attachmentUrl: "https://x/y.png" }),
-  );
 
   // A DIFFERENT file in the same composition is a different message; otherwise
   // correcting an attachment after a failure would re-send the first one.
   assert.notEqual(
     attachment,
-    staffReplyIdempotencyKey({ ...base, body: "🖼 Image", attachmentUrl: "https://x/z.png" }),
+    staffReplyIdempotencyKey({ ...base, body: "🖼 Image", attachmentDigest: attachmentDigest(Buffer.from("other bytes")) }),
   );
+});
 
+/**
+ * THE KEY MUST SURVIVE THE UPLOAD, AND IT DID NOT.
+ *
+ * `saveFile` mints a fresh random storage name on every call. The action folded
+ * the resulting URL into the idempotency key, so resubmitting the SAME file
+ * uploaded it again, produced a different URL, derived a different key, and
+ * queued the attachment a second time — the customer received it twice. That is
+ * the exact failure the key exists to prevent, reintroduced by the one input
+ * guaranteed to change between attempts.
+ *
+ * The bytes are what the customer receives, so the bytes are the identity.
+ */
+test("the attachment's identity survives being re-uploaded to a new location", () => {
+  const base = {
+    compositionId: "c1",
+    channel: "messenger",
+    key: "psid-1",
+    actorId: "u1",
+    contactId: "ct1",
+    leadId: null,
+    body: "🖼 Image",
+  };
+  const bytes = Buffer.from("identical bytes, uploaded twice");
+
+  // Two submissions of the same file: same bytes, different storage names.
+  const first = staffReplyIdempotencyKey({ ...base, attachmentDigest: attachmentDigest(bytes) });
+  const second = staffReplyIdempotencyKey({ ...base, attachmentDigest: attachmentDigest(Buffer.from(bytes)) });
+  assert.equal(first, second, "a re-upload of the same file must resolve to the same message");
+
+  // And the action derives it from the BYTES, before they are stored.
   const action = shipped("src/app/actions/messenger.ts");
-  // The attachment is listed FIRST, parts carry a sequence, and a conversation is
-  // claimed by (createdAt, sequence, id) — so the caption cannot overtake the
-  // file it describes.
-  const attachAt = action.indexOf('type: "attachment"');
-  const textAt = action.indexOf('part({ type: "text", text }');
-  assert.ok(attachAt >= 0 && textAt > attachAt, "the attachment must be listed before its text");
-  const outbox = shipped("src/lib/botOutbox.ts");
-  assert.match(outbox, /sequence: index,/, "a part's position in the reply must be recorded, not inferred");
+  const digestAt = action.indexOf("fileDigest = attachmentDigest(buffer)");
+  const saveAt = action.indexOf("await saveFile(");
+  assert.ok(digestAt >= 0 && saveAt > digestAt, "the digest must be taken before the file is stored");
+  assert.match(action, /attachmentDigest: digest,/, "the key must carry the digest");
+  assert.doesNotMatch(action, /attachmentDigest: url/, "never the storage URL");
+  assert.doesNotMatch(
+    action,
+    /staffReplyIdempotencyKey\(\{[\s\S]{0,400}attachmentUrl:/,
+    "the volatile storage URL must not reach the key at all",
+  );
+});
+
+/**
+ * The verification has the mirror of the same problem. A genuine duplicate
+ * carries a NEW storage URL in its payload, so comparing payloads verbatim
+ * reports a conflict for the caller's own retry and loses the reply.
+ */
+test("verifying a duplicate ignores where the bytes happen to be stored", () => {
+  const identity = { channel: "messenger", key: "psid-1", actorId: "u1", contactId: "ct1", leadId: null };
+  const row = {
+    ...identity,
+    payload: { type: "attachment", kind: "file", url: "https://store/a-1.pdf", digest: "abc" },
+  };
+  const resubmitted = {
+    ...identity,
+    payload: { type: "attachment", kind: "file", url: "https://store/a-2.pdf", digest: "abc" },
+  };
+  assert.equal(staffReplyMatchesRow(resubmitted, row), true, "a re-upload of the same bytes is the same message");
+
+  // Different bytes at the same location is NOT the same message.
+  assert.equal(
+    staffReplyMatchesRow({ ...identity, payload: { type: "attachment", kind: "file", url: "https://store/a-1.pdf", digest: "zzz" } }, row),
+    false,
+  );
+  // And a text payload is still compared whole — nothing is dropped from it.
+  assert.deepEqual(stablePayload({ type: "text", text: "hi" }), { type: "text", text: "hi" });
+  assert.deepEqual(stablePayload({ type: "attachment", kind: "file", url: "x", digest: "d" }), {
+    type: "attachment",
+    kind: "file",
+    digest: "d",
+  });
 });
 
 test("the upload happens outside the transaction, and nothing else does", () => {
@@ -128,7 +193,11 @@ test("the durable rewrite keeps the reply bound to its own thread", () => {
  */
 test("the queue can carry every attachment kind the DM path accepts", () => {
   const outbox = shipped("src/lib/botOutbox.ts");
-  assert.match(outbox, /export type OutboxPayload = OutMsg \| \{ type: "attachment"; kind: AttachmentKind; url: string \}/);
+  assert.match(outbox, /export type OutboxPayload =\s*\n\s*\| OutMsg\s*\n\s*\| \{/);
+  assert.match(outbox, /type: "attachment";\s*\n\s*kind: AttachmentKind;/);
+  // The digest travels WITH the payload so a duplicate can be recognised across
+  // a re-upload that changed the url.
+  assert.match(outbox, /digest\?: string;/);
   assert.match(outbox, /ATTACHMENT_KINDS: AttachmentKind\[\] = \["image", "audio", "video", "file"\]/);
 
   // Parsed defensively: a payload is JSON from the database, not a trusted value.

@@ -125,7 +125,18 @@ export type StaffReplyIdentity = {
   contactId?: string | null;
   leadId?: string | null;
   body: string;
-  attachmentUrl?: string | null;
+  /**
+   * A hash of the attachment's BYTES, never its storage URL.
+   *
+   * `saveFile` mints a fresh random name on every call, so the URL differs on
+   * every submission of the same file. Folding that into the key made the key
+   * unstable in exactly the situation it exists for: press Send, get an
+   * ambiguous failure, press Send again — the file uploads again, gets a new
+   * URL, derives a new key, and the customer receives the attachment twice.
+   *
+   * The bytes are what the customer receives, so the bytes are the identity.
+   */
+  attachmentDigest?: string | null;
 };
 
 /** The identity as a stable ordered tuple — the one place its shape is decided. */
@@ -138,8 +149,13 @@ function identityTuple(input: StaffReplyIdentity): unknown[] {
     input.contactId ?? null,
     input.leadId ?? null,
     input.body,
-    input.attachmentUrl ?? null,
+    input.attachmentDigest ?? null,
   ];
+}
+
+/** sha256 of an attachment's bytes — its identity, independent of where it is stored. */
+export function attachmentDigest(bytes: Buffer | Uint8Array): string {
+  return crypto.createHash("sha256").update(bytes).digest("hex");
 }
 
 /**
@@ -196,6 +212,23 @@ export function canonicalJson(value: unknown): string {
   return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(",")}}`;
 }
 
+/**
+ * The part of a payload that identifies the MESSAGE rather than its delivery.
+ *
+ * An attachment's `url` is where this submission happened to put the bytes, and
+ * a resubmission puts identical bytes somewhere else. Comparing it would report
+ * a conflict for a genuine duplicate — the caller's own retry — and lose the
+ * reply. The digest travels in the payload precisely so the comparison has
+ * something stable to use instead.
+ */
+export function stablePayload(payload: unknown): unknown {
+  if (!payload || typeof payload !== "object") return payload;
+  const value = payload as Record<string, unknown>;
+  if (value.type !== "attachment") return payload;
+  const { url: _volatile, ...rest } = value;
+  return rest;
+}
+
 export function staffReplyMatchesRow(
   input: { channel: string; key: string; actorId: string; contactId?: string | null; leadId?: string | null; payload: unknown },
   row: { channel: string; key: string; actorId: string | null; contactId: string | null; leadId: string | null; payload: unknown },
@@ -206,7 +239,7 @@ export function staffReplyMatchesRow(
     row.actorId === input.actorId &&
     row.contactId === (input.contactId ?? null) &&
     row.leadId === (input.leadId ?? null) &&
-    canonicalJson(row.payload) === canonicalJson(input.payload)
+    canonicalJson(stablePayload(row.payload)) === canonicalJson(stablePayload(input.payload))
   );
 }
 

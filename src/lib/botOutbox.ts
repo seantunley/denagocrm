@@ -544,7 +544,16 @@ export async function deliveryStateForMessages(
  * can emit, to describe a capability that belongs to the queue.
  */
 export type AttachmentKind = "image" | "audio" | "video" | "file";
-export type OutboxPayload = OutMsg | { type: "attachment"; kind: AttachmentKind; url: string };
+export type OutboxPayload =
+  | OutMsg
+  | {
+      type: "attachment";
+      kind: AttachmentKind;
+      /** Where the bytes are, for THIS submission. Volatile — see stablePayload. */
+      url: string;
+      /** What the bytes ARE. The message's identity across re-uploads. */
+      digest?: string;
+    };
 
 const ATTACHMENT_KINDS: AttachmentKind[] = ["image", "audio", "video", "file"];
 
@@ -556,7 +565,12 @@ function asOutMsg(payload: unknown): OutboxPayload | null {
     typeof value.url === "string" &&
     ATTACHMENT_KINDS.includes(value.kind as AttachmentKind)
   ) {
-    return { type: "attachment", kind: value.kind as AttachmentKind, url: value.url };
+    return {
+      type: "attachment",
+      kind: value.kind as AttachmentKind,
+      url: value.url,
+      ...(typeof value.digest === "string" ? { digest: value.digest } : {}),
+    };
   }
   if (value.type === "text" && typeof value.text === "string") return { type: "text", text: value.text };
   if (value.type === "image" && typeof value.url === "string") return { type: "image", url: value.url, caption: typeof value.caption === "string" ? value.caption : undefined };
