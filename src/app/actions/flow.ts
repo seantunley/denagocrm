@@ -12,8 +12,8 @@ import { builderTenantId, flowScope } from "@/lib/flowScope";
 
 /** Create a new draft from one of the shipped, compiler-checked templates. */
 export async function createFlow(formData: FormData) {
-  const scope = await flowScope();
   const owner = await requireOwner();
+  const scope = await flowScope();
   const template = flowTemplate(String(formData.get("templateId") ?? "general"));
   const requestedName = String(formData.get("name") ?? "").trim();
   const name = requestedName || template.name;
@@ -48,8 +48,8 @@ export async function saveFlow(
   /** The draft's `updatedAt` as it was when this canvas loaded it. Required. */
   expectedUpdatedAt: string,
 ): Promise<{ ok?: boolean; error?: string; conflict?: boolean; updatedAt?: string }> {
-  const scope = await flowScope();
   const owner = await requireOwner();
+  const scope = await flowScope();
   let parsed: unknown;
   try {
     parsed = JSON.parse(json);
@@ -104,8 +104,8 @@ export async function resetFlow(
   /** The draft's `updatedAt` as it was when this canvas loaded it. Required. */
   expectedUpdatedAt: string,
 ): Promise<{ ok?: boolean; error?: string; conflict?: boolean; updatedAt?: string }> {
-  const scope = await flowScope();
   await requireOwner();
+  const scope = await flowScope();
   // Reset is a draft writer too — the most destructive one — so it carries the
   // same MANDATORY fence as Save. An optional stamp with an unconditional `else`
   // left the authoritative action still able to overwrite newer work.
@@ -141,16 +141,16 @@ export async function resetFlow(
 }
 
 export async function renameFlow(id: string, formData: FormData) {
-  const scope = await flowScope();
   await requireOwner();
+  const scope = await flowScope();
   const name = String(formData.get("name") ?? "").trim();
   if (name) await prisma.botFlow.updateMany({ where: { id, ...scope }, data: { name } });
   revalidatePath("/bot-builder");
 }
 
 export async function deleteFlow(id: string) {
-  const scope = await flowScope();
   await requireOwner();
+  const scope = await flowScope();
   const [flow, publishedVersion] = await Promise.all([
     prisma.botFlow.findFirst({ where: { id, ...scope } }),
     prisma.botFlowVersion.findFirst({ where: { flowId: id }, select: { id: true } }),
@@ -163,8 +163,8 @@ export async function deleteFlow(id: string) {
 }
 
 export async function duplicateFlow(id: string) {
-  const scope = await flowScope();
   await requireOwner();
+  const scope = await flowScope();
   const src = await prisma.botFlow.findFirst({ where: { id, ...scope } });
   if (!src) return;
   await prisma.botFlow.create({

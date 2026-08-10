@@ -194,7 +194,9 @@ test("a flow is stamped with its tenant at creation, including the first-run see
   // already what silently broke Publish. Both creation paths must stamp, and with
   // the workspace that is creating it.
   assert.match(src("src/app/actions/flow.ts"), /tenantId: await builderTenantId\(\)/);
-  assert.match(src("src/app/(app)/bot-builder/page.tsx"), /botFlow\.create\(\{ data: \{ name, definition, active: true, tenantId: await builderTenantId\(\) \} \}\)/);
+  const list = src("src/app/(app)/bot-builder/page.tsx");
+  assert.match(list, /const tenantId = await builderTenantId\(\);/);
+  assert.match(list, /botFlow\.create\(\{ data: \{ name, definition, active: true, tenantId \} \}\)/);
 });
 
 test("the seed decision and the list agree, or a new workspace never gets its own flow", () => {
@@ -230,4 +232,83 @@ test("Reset carries the same mandatory fence as Save", () => {
   const reset = action.slice(action.indexOf("export async function resetFlow"), action.indexOf("export async function renameFlow"));
   assert.match(reset, /expectedUpdatedAt: string,/, "no optional stamp to opt out with");
   assert.doesNotMatch(reset, /botFlow\.update\(/, "and no unfenced branch behind it");
+});
+
+// ---------------------------------------------------------------------------
+// Lifecycle: WHEN the scope is resolved matters as much as what it resolves to.
+// ---------------------------------------------------------------------------
+
+test("ENFORCED: authentication must establish the scope before anything reads it", () => {
+  // Under enforcement writeTenantId() THROWS when no scope exists yet, and the
+  // staff scope is established by getCurrentUser() inside requireOwner(). So an
+  // action that resolved its scope first would throw TenantScopeError before
+  // requireOwner() was ever reached — every Flow Builder write dead the moment
+  // isolation was switched on. Dormant mode hid it completely: writeTenantId()
+  // simply returns null there.
+  const order = (code: string, fn: string, next: string) => {
+    const body = code.slice(code.indexOf(`export async function ${fn}`), code.indexOf(`export async function ${next}`) >>> 0 || undefined);
+    const authAt = body.search(/await requireOwner\(\)/);
+    const scopeAt = body.search(/await flowScope\(\)|await builderTenantId\(\)/);
+    return { authAt, scopeAt, fn };
+  };
+  const flow = src("src/app/actions/flow.ts");
+  const snippets = src("src/app/actions/flowSnippets.ts");
+  const versions = src("src/app/actions/flowVersions.ts");
+  const simulator = src("src/app/actions/flowSimulator.ts");
+  const ai = src("src/app/actions/flowAi.ts");
+
+  const cases: Array<[string, string, string]> = [
+    [flow, "createFlow", "saveFlow"],
+    [flow, "saveFlow", "resetFlow"],
+    [flow, "resetFlow", "renameFlow"],
+    [flow, "renameFlow", "deleteFlow"],
+    [flow, "deleteFlow", "duplicateFlow"],
+    [flow, "duplicateFlow", "setActiveFlow"],
+    [snippets, "saveCurrentFlowAsSnippet", "insertSavedFlowSnippet"],
+    [snippets, "insertSavedFlowSnippet", "deleteFlowSnippet"],
+    [versions, "restoreFlowVersionToDraft", "\u0000"],
+    [simulator, "simulateFlowTurn", "\u0000"],
+    [ai, "generateFlowDraftAction", "\u0000"],
+  ];
+  for (const [code, fn, next] of cases) {
+    const { authAt, scopeAt } = order(code, fn, next);
+    assert.ok(authAt >= 0, `${fn} does not authenticate`);
+    if (scopeAt < 0) continue; // this action does not resolve a builder scope
+    assert.ok(scopeAt > authAt, `${fn} resolves the tenant scope BEFORE requireOwner establishes it`);
+  }
+});
+
+test("a second workspace's first flow is the shipped default, not the founding tenant's", () => {
+  // getSetting/putSetting resolve every key to the founding tenant while
+  // enforcement is dormant. Once the flow list became per-workspace, a brand new
+  // workspace fell into the seed branch and this read tenant A's legacy BOT_FLOW
+  // graph, published it as B's, then CLEARED A's setting on the way out — a
+  // cross-tenant disclosure and a destructive cross-tenant write, both created by
+  // scoping only the list.
+  const list = src("src/app/(app)/bot-builder/page.tsx");
+  assert.match(list, /const founding = tenantId === DEFAULT_TENANT_ID;/);
+  assert.match(list, /const legacy = founding \? await getSetting\("BOT_FLOW"\) : null;/);
+  // The clear is already gated on `legacy`, which is now null for anyone else.
+  assert.match(list, /if \(legacy\) await putSetting\("BOT_FLOW", ""\);/);
+});
+
+test("reusable blocks are per workspace, and the founding tenant keeps its own key", () => {
+  // Same dormant-mode AppSettings behaviour: one global key meant a second
+  // workspace listed the founding tenant's saved blocks, could insert one into its
+  // own draft, and could DELETE them.
+  const store = src("src/lib/flowSnippets.ts");
+  assert.match(store, /export async function flowSnippetsSettingKey\(\)/);
+  assert.match(store, /tenantId === DEFAULT_TENANT_ID \? FLOW_SNIPPETS_SETTING : `\$\{FLOW_SNIPPETS_SETTING\}:\$\{tenantId\}`/);
+  assert.match(store, /getSetting\(await flowSnippetsSettingKey\(\)\)/);
+  // Every writer too, or a save lands in a bucket the reader never looks in.
+  const actions = src("src/app/actions/flowSnippets.ts");
+  assert.equal((actions.match(/putSetting\(await flowSnippetsSettingKey\(\)/g) ?? []).length, 2);
+  assert.doesNotMatch(actions, /putSetting\(FLOW_SNIPPETS_SETTING/);
+});
+
+test("the per-workspace block key is a namespace, not a rename", () => {
+  // The founding tenant must keep the exact existing key, or every block saved
+  // before this change disappears from the workspace that owns them.
+  const store = src("src/lib/flowSnippets.ts");
+  assert.match(store, /export const FLOW_SNIPPETS_SETTING = "BOT_FLOW_SNIPPETS";/);
 });
