@@ -21,3 +21,28 @@ export function legacyFlowTenant(tenantId: string): { tenantId: string } | { OR:
     ? { OR: [{ tenantId }, { tenantId: null }] }
     : { tenantId };
 }
+
+/**
+ * Which tenant a STAFF BUILDER request is for.
+ *
+ * `enforcedTenantId` is `writeTenantId()` — the enforced scope, or null while
+ * enforcement is DORMANT. Resolving the builder from that alone was the defect in
+ * the first version of this change: dormant is today, so every builder request
+ * collapsed to the founding tenant regardless of the workspace the session was
+ * acting as, and a second workspace's owner still listed, opened and saved the
+ * founding tenant's flows. The scoping was real and pointed at the wrong tenant.
+ *
+ * `sessionTenantId` is `getActiveTenantId()` — the session's active workspace,
+ * already validated and already dropped when the claim went stale.
+ *
+ * Falling back to the founding tenant covers a session minted before the claim
+ * existed, which is byte-for-byte today's single-tenant behaviour.
+ *
+ * Pure, so the rule can be executed by a test rather than pattern-matched.
+ */
+export function decideBuilderTenant(input: {
+  enforcedTenantId: string | null;
+  sessionTenantId: string | null;
+}): string {
+  return input.enforcedTenantId ?? input.sessionTenantId ?? DEFAULT_TENANT_ID;
+}

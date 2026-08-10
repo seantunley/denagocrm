@@ -73,7 +73,7 @@ test("a writer landing between the write and the stamp read cannot be adopted", 
 test("the server fences the write and reports the conflict rather than swallowing it", () => {
   const action = src("src/app/actions/flow.ts");
   const save = action.slice(action.indexOf("export async function saveFlow"), action.indexOf("export async function resetFlow"));
-  assert.match(save, /where: \{ id, updatedAt: expected \}/, "the save must be fenced");
+  assert.match(save, /where: \{ id, updatedAt: expected, \.\.\.scope \}/, "the save must be fenced");
   assert.match(save, /written\.count !== 1/, "and must notice when it did not land");
   assert.match(save, /conflict: true/, "the caller needs to know it was a conflict, not a generic failure");
   // Losing work silently is the defect; the refusal has to be explained.
@@ -83,7 +83,7 @@ test("the server fences the write and reports the conflict rather than swallowin
   // transaction. Reading it separately lets another writer land in between, and
   // this tab would adopt THEIR timestamp without having seen their definition.
   assert.match(save, /prisma\.\$transaction\(async \(tx\) =>/);
-  assert.match(save, /tx\.botFlow\.findUnique/, "the stamp must be read inside the transaction");
+  assert.match(save, /tx\.botFlow\.findFirst/, "the stamp must be read inside the transaction");
   assert.match(save, /updatedAt: result\.toISOString\(\)/, "and it is the stamp THIS write produced");
 
   // No opt-out. An optional stamp let a caller bypass the invariant this enforces.

@@ -1,5 +1,6 @@
 import { getSetting } from "./settings";
 import { prisma } from "./db";
+import { journeyScope } from "./flowScope";
 import type { Flow } from "./flow";
 import { flowErrors, publishSeverity, validateFlow, type FlowChannel, type FlowIssue } from "./flowValidation";
 
@@ -27,7 +28,11 @@ export async function validateFlowForEnabledChannels(flow: Flow): Promise<FlowIs
   const journeyNodes = Object.values(flow.nodes).filter((node) => node.type === "journey");
   const ids = [...new Set(journeyNodes.map((node) => node.type === "journey" ? node.journeyId : "").filter(Boolean))];
   if (!ids.length) return issues;
-  const active = await prisma.journey.findMany({ where: { id: { in: ids }, status: "active" }, select: { id: true } });
+  // Scope the check to the workspace publishing. Unscoped, another tenant's
+  // active Journey satisfied it, so a flow could be published pointing at a
+  // Journey this workspace does not own — the builder/publication boundary
+  // staying cross-tenant after every BotFlow query had been scoped.
+  const active = await prisma.journey.findMany({ where: { id: { in: ids }, status: "active", ...(await journeyScope()) }, select: { id: true } });
   const activeIds = new Set(active.map((journey) => journey.id));
   for (const node of journeyNodes) {
     if (node.type === "journey" && node.journeyId && !activeIds.has(node.journeyId)) {

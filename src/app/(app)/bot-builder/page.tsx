@@ -12,6 +12,8 @@ import { createFlow, duplicateFlow, deleteFlow, renameFlow } from "@/app/actions
 import PublishFlowButton from "@/components/PublishFlowButton";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import { EmptyState, StatusPill, Surface } from "@/components/visual-system";
+import { builderTenantId, flowScope } from "@/lib/flowScope";
+import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 
 function parseDraft(definition: string): Flow | null {
   try {
@@ -24,9 +26,22 @@ function parseDraft(definition: string): Flow | null {
 
 export default async function BotBuilderPage() {
   const owner = await requireOwner();
+  const scope = await flowScope();
 
-  if ((await prisma.botFlow.count()) === 0) {
-    const legacy = await getSetting("BOT_FLOW");
+  const tenantId = await builderTenantId();
+  if ((await prisma.botFlow.count({ where: scope })) === 0) {
+    // The one-time import of the pre-BotFlow `BOT_FLOW` setting belongs to the
+    // FOUNDING tenant and nobody else. getSetting/putSetting deliberately resolve
+    // every key to the founding tenant while enforcement is dormant, so once the
+    // list above became per-workspace this branch would have handed a brand new
+    // workspace the founding tenant's conversation graph as its first flow — and
+    // then CLEARED that tenant's setting on the way out. A cross-tenant read and a
+    // destructive cross-tenant write, both introduced by scoping only the list.
+    //
+    // A second workspace starts from the shipped default, which is what it should
+    // have started from.
+    const founding = tenantId === DEFAULT_TENANT_ID;
+    const legacy = founding ? await getSetting("BOT_FLOW") : null;
     let definition = JSON.stringify(DEFAULT_FLOW);
     let name = "Default flow";
     if (legacy) {
@@ -40,13 +55,13 @@ export default async function BotBuilderPage() {
         /* keep default */
       }
     }
-    const seeded = await prisma.botFlow.create({ data: { name, definition, active: true } });
+    const seeded = await prisma.botFlow.create({ data: { name, definition, active: true, tenantId } });
     await publishFlowSnapshot(seeded.id, owner.id).catch(() => {});
     if (legacy) await putSetting("BOT_FLOW", "");
   }
 
   const [flows, publicationMeta, channels] = await Promise.all([
-    prisma.botFlow.findMany({ orderBy: [{ active: "desc" }, { updatedAt: "desc" }] }),
+    prisma.botFlow.findMany({ where: scope, orderBy: [{ active: "desc" }, { updatedAt: "desc" }] }),
     getFlowPublicationMeta(),
     enabledFlowChannels(),
   ]);
