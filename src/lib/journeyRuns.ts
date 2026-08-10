@@ -35,6 +35,7 @@ import { NEVER_STOP, type StopSignal } from "./stopSignal";
 import { budgetStopUpdate } from "./journeyRunState";
 import { withEnrolmentLock } from "./journeyArbitration";
 import { activeTenantPredicate } from "./tenantPredicate";
+import { inheritedTenantId } from "./tenantWrite";
 
 const MAX_RUN_ATTEMPTS = 3;
 const MAX_STEPS_PER_TICK = 20;
@@ -60,8 +61,25 @@ const MAX_STEPS_PER_RUN = 500;
 /** A single step can send an email or a WhatsApp message. */
 const STEP_RESERVE_MS = 4_000;
 
-async function updateStepLog(args: {
+type StepLogArgs = {
   runId: string;
+  /**
+   * The owning tenant, taken from the RUN this log belongs to — never from the
+   * ambient scope and never from `writeTenantId()` alone.
+   *
+   * A step log is a fact about one run, so the run decides. Reading it from the
+   * scope would let the two disagree: `processOneRun` fetches the run by bare id,
+   * so a run belonging to workspace A can be driven inside a tick scoped to
+   * whatever the caller last established, and a trace row filed under a different
+   * workspace from its own run is worse than one filed under none.
+   *
+   * This was the whole of the defect. The upsert below stamped nothing at all and
+   * relied on the db.ts guard, which stamps nothing while enforcement is dormant —
+   * so every JourneyStepLog ever written carried a NULL tenant (6 of 6 on
+   * production at the 2026-08-10 audit), while its `@@unique([runId, path])` and
+   * its cascade from JourneyRun made it look properly parented.
+   */
+  tenantId: string;
   /** Hierarchical trace path — the identity of one EXECUTION of a step. */
   path: string;
   stepId: string;
@@ -69,7 +87,9 @@ async function updateStepLog(args: {
   status: string;
   note?: string;
   output?: Record<string, unknown>;
-}) {
+};
+
+async function writeStepLog(args: StepLogArgs) {
   const done = ["completed", "skipped", "failed"].includes(args.status);
   await prisma.journeyStepLog.upsert({
     // Keyed on the PATH, not the step id. `@@unique([runId, stepId])` could not
@@ -79,6 +99,10 @@ async function updateStepLog(args: {
     // carries the iteration number, so each execution keeps its own row.
     where: { runId_path: { runId: args.runId, path: args.path } },
     create: {
+      // The guard cannot supply this: `scopeArgs` returns its args untouched
+      // unless `tenantEnforcing()`, and an upsert's `create` branch is not
+      // stamped by anything else.
+      tenantId: args.tenantId,
       runId: args.runId,
       path: args.path,
       stepId: args.stepId,
@@ -238,6 +262,20 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
     include: { journey: true, journeyVersion: true },
   });
   if (!run || !["queued", "waiting"].includes(run.status)) return false;
+
+  /**
+   * Every trace row this tick writes, stamped with the RUN'S OWN owner.
+   *
+   * Resolved once, from the row already in hand, and threaded into all thirteen
+   * log sites so none of them can be added later without it. `inheritedTenantId`
+   * prefers an enforced scope (and keeps its fail-closed throw), then the run,
+   * then the tick's own scope, then the founding tenant — so a legacy run written
+   * before runs were owned still produces reachable trace rows rather than
+   * propagating its own NULL into thirteen more.
+   */
+  const logTenantId = inheritedTenantId(run.tenantId);
+  const logStep = (args: Omit<StepLogArgs, "tenantId">) =>
+    writeStepLog({ ...args, tenantId: logTenantId });
 
   const claimed = await prisma.journeyRun.updateMany({
     where: { id: run.id, status: { in: ["queued", "waiting"] }, nextRunAt: { lte: new Date() } },
@@ -444,7 +482,7 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
       // `condition` falls through to its own nextStepId rather than picking a
       // branch: a muted question has no answer to branch on.
       if (step.enabled === false) {
-        await updateStepLog({
+        await logStep({
           runId: run.id,
           path,
           stepId: step.id,
@@ -468,7 +506,7 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
           entered = enterRepeat(step, keyPath, stepContext, lookup);
         }
 
-        await updateStepLog({
+        await logStep({
           runId: run.id,
           path,
           stepId: step.id,
@@ -504,7 +542,7 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
         if (!armedWait) {
           const wait = armWaitState(path, config, now);
           cursor = { ...cloneCursor(cursor), wait };
-          await updateStepLog({
+          await logStep({
             runId: run.id,
             path,
             stepId: step.id,
@@ -546,7 +584,7 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
         const note = timedOut
           ? `Timed out after ${config.timeoutMinutes} minute(s) waiting for ${config.triggers.join(" or ")}`
           : `Woken by ${wokeBy?.type}`;
-        await updateStepLog({
+        await logStep({
           runId: run.id,
           path,
           stepId: step.id,
@@ -619,7 +657,7 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
         // something already known — for "wait until Won" on a lead that is
         // already Won, a minute of nothing on every such enrolment.
         if (!armedWait && met) {
-          await updateStepLog({
+          await logStep({
             runId: run.id,
             path,
             stepId: step.id,
@@ -636,7 +674,7 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
         if (!armedWait) {
           const wait = armWaitState(path, config, now);
           cursor = { ...cloneCursor(cursor), wait };
-          await updateStepLog({
+          await logStep({
             runId: run.id,
             path,
             stepId: step.id,
@@ -667,7 +705,7 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
         const note = timedOut
           ? `Timed out after ${config.timeoutMinutes} minute(s) waiting for the condition`
           : "Condition became true";
-        await updateStepLog({
+        await logStep({
           runId: run.id,
           path,
           stepId: step.id,
@@ -707,7 +745,7 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
           templateVars: journeyTemplateVars(stepContext),
         });
         context = withJourneyVars(context, applied.vars);
-        await updateStepLog({
+        await logStep({
           runId: run.id,
           path,
           stepId: step.id,
@@ -741,7 +779,7 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
       const owned = await prisma.journeyRun.count({ where: { id: run.id, status: "running" } });
       if (owned === 0) return false;
 
-      await updateStepLog({ runId: run.id, path, stepId: step.id, stepType: step.type, status: "running" });
+      await logStep({ runId: run.id, path, stepId: step.id, stepType: step.type, status: "running" });
 
       let result;
       try {
@@ -765,7 +803,7 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
         // behind it.
         if (isControlFlow(error) || !step.continueOnError) throw error;
         const message = error instanceof Error ? error.message : "Step failed";
-        await updateStepLog({
+        await logStep({
           runId: run.id,
           path,
           stepId: step.id,
@@ -779,7 +817,7 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
       }
 
       const nextTop = inSequence ? null : resolveTopLevelNext(step, result);
-      await updateStepLog({
+      await logStep({
         runId: run.id,
         path,
         stepId: step.id,
@@ -861,7 +899,7 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
     /* ── deliberate control flow: not faults, never retried ──────────────── */
     if (error instanceof StopJourney || error instanceof ConditionFailed) {
       if (position) {
-        await updateStepLog({
+        await logStep({
           runId: run.id,
           path: position.path,
           stepId: position.step.id,
@@ -877,7 +915,7 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
     const abort = error instanceof AbortJourney;
     const message = error instanceof Error ? error.message : "Unknown journey run error";
     if (position) {
-      await updateStepLog({
+      await logStep({
         runId: run.id,
         path: position.path,
         stepId: position.step.id,
