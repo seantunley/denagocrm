@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { canAccessContact, canAccessLead, requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { sendWhatsAppText, waDigits } from "@/lib/whatsapp";
+import { pauseBotConversation } from "@/lib/botConversationControl";
 
 export type WaState = { ok?: string; error?: string };
 
@@ -35,6 +36,9 @@ export async function sendWhatsAppMessage(
       userId: user.id,
     },
   });
+  // A human reply is an ownership decision, not merely a timestamp heuristic.
+  // Pause the same BotSession the flow runtime checks on the next inbound turn.
+  await pauseBotConversation({ channel: "whatsapp", key: digits }, 12);
   await logAudit({
     action: "whatsapp.sent",
     summary: `WhatsApp sent to +${digits}: “${text.slice(0, 60)}${text.length > 60 ? "…" : ""}”`,

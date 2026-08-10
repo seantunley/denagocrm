@@ -1,0 +1,46 @@
+/// Provider-delivered inbound chatbot events accepted for processing.
+///
+/// A row is leased while its webhook work is running and becomes `completed`
+/// only after that work succeeds. A crashed invocation therefore becomes
+/// claimable again when its lease expires instead of turning a retry into a
+/// permanent no-op.
+model BotInboundEvent {
+  id          String    @id @default(cuid())
+  tenantId    String
+  channel     String
+  providerId  String
+  status      String    @default("running") // running | retry | completed
+  attempts    Int       @default(1)
+  leaseUntil  DateTime?
+  completedAt DateTime?
+  lastError   String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([tenantId, channel, providerId])
+  @@index([tenantId, status, leaseUntil])
+  @@index([createdAt])
+}
+
+/// Append-only execution ledger for chatbot funnel/drop-off analytics.
+///
+/// Written by raw SQL and by the BotSession trigger, never through the client —
+/// but it is declared here anyway. A table with no model is invisible to
+/// tenantSchemaContract, which is the test that has to certify every model is
+/// global or tenant-scoped before enforcement can be switched on; an orphan table
+/// is exactly how the earlier RLS coverage drift happened.
+model BotFlowEvent {
+  id              String   @id @default(cuid())
+  tenantId        String
+  channel         String
+  conversationKey String
+  flowVersionId   String?
+  nodeId          String?
+  eventType       String
+  metadata        Json?
+  occurredAt      DateTime @default(now())
+
+  @@index([tenantId, flowVersionId, occurredAt])
+  @@index([tenantId, nodeId, eventType, occurredAt])
+  @@index([tenantId, channel, conversationKey, occurredAt])
+}

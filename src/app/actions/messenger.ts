@@ -6,6 +6,7 @@ import { canAccessContact, requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { sendDirectMessage, sendDirectAttachment, type DmPlatform } from "@/lib/messenger";
 import { saveFile } from "@/lib/storage";
+import { pauseBotConversation } from "@/lib/botConversationControl";
 
 const ATTACH_KIND = (mime: string): "image" | "audio" | "video" | "file" =>
   mime.startsWith("image/") ? "image" : mime.startsWith("audio/") ? "audio" : mime.startsWith("video/") ? "video" : "file";
@@ -104,6 +105,7 @@ export async function sendDmReply(
       userId: user.id,
     },
   });
+  await pauseBotConversation({ channel: platform, key: recipientId }, 12);
   await logAudit({
     action: `${platform}.sent`,
     summary: `${platform === "instagram" ? "Instagram" : "Messenger"} reply sent: “${text.slice(0, 60)}${text.length > 60 ? "…" : ""}”`,
