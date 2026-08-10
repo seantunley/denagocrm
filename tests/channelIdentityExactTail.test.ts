@@ -87,6 +87,41 @@ test("a Lead pointing at the matched Contact is the same person", () => {
   assert.equal(distinctIdentities([], []), 0);
 });
 
+test("two leads on the matched contact must not hide a third person", () => {
+  // Why the candidate query cannot be truncated to two rows: ROWS ARE NOT
+  // IDENTITIES. Two Leads both pointing at the matched Contact fill both slots and
+  // collapse to one person, so a third row belonging to somebody else is never
+  // fetched and the number reads as unambiguous.
+  const contacts = [{ id: "c1" }];
+  const leads = [
+    { id: "l1", contactId: "c1" },   // same person as C1
+    { id: "l2", contactId: "c1" },   // same person as C1
+    { id: "l3", contactId: null },   // SOMEBODY ELSE
+  ];
+  assert.equal(distinctIdentities(contacts, leads), 2, "C1 and L3 are two people");
+
+  const match = { contactId: "c1", leadId: null, ambiguous: distinctIdentities(contacts, leads) > 1 };
+  assert.equal(match.ambiguous, true);
+  assert.equal(channelVerifiedOwner(match), null, "booking self-service must refuse this");
+
+  // The truncation that hid it: the first two lead rows alone prove nothing.
+  assert.equal(distinctIdentities(contacts, leads.slice(0, 2)), 1, "which is exactly the false negative");
+});
+
+test("reaching the candidate bound is itself ambiguous", () => {
+  // A bound can always hide an identity, so hitting it means uniqueness cannot be
+  // PROVED — and that is the same answer as proving there are two.
+  const wa = src("src/lib/whatsapp.ts");
+  assert.match(wa, /const CANDIDATE_LIMIT = \d+;/);
+  assert.match(wa, /take: CANDIDATE_LIMIT/);
+  const lookup = wa.slice(wa.indexOf("export async function matchByPhone"), wa.indexOf("/** Logs an inbound WhatsApp"));
+  assert.doesNotMatch(lookup, /take: 2/, "rows are not identities, so two rows prove nothing");
+  assert.match(wa, /const truncated = contacts\.length >= CANDIDATE_LIMIT \|\| leads\.length >= CANDIDATE_LIMIT;/);
+  assert.match(wa, /const ambiguous = truncated \|\| distinctIdentities\(contacts, leads\) > 1;/);
+  // Rows must stay lightweight, or the bound becomes a real page size.
+  assert.match(wa, /select: \{ id: true, contactId: true \}/);
+});
+
 test("the lookup matches the end of the number and picks deterministically", () => {
   const wa = src("src/lib/whatsapp.ts");
   const match = wa.slice(wa.indexOf("export async function matchByPhone"), wa.indexOf("/** Logs an inbound WhatsApp"));
@@ -100,12 +135,10 @@ test("the lookup matches the end of the number and picks deterministically", () 
   // could resolve to different customers on different requests.
   assert.match(match, /orderBy: \[\{ createdAt: "asc" \}, \{ id: "asc" \}\]/);
   assert.doesNotMatch(match, /take: 1\b/);
-  // take: 2 is how it learns there IS a second one.
-  assert.match(match, /take: 2/);
   // Both tables are read before identity is decided; returning early on a Contact
   // could not see a conflicting open Lead.
   assert.match(match, /const \[contacts, leads\] = await Promise\.all\(/);
-  assert.match(match, /const ambiguous = distinctIdentities\(contacts, leads\) > 1;/);
+  assert.match(match, /const ambiguous = truncated \|\| distinctIdentities\(contacts, leads\) > 1;/);
   assert.doesNotMatch(match, /ambiguous: contacts\.length > 1/, "row count within one table is not the rule");
 });
 
