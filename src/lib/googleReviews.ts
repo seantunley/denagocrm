@@ -131,11 +131,19 @@ export async function syncGoogleReviews(): Promise<number> {
     });
     if (!review) continue;
     created++;
-    await sendPushToAll({
-      title: `New Google review ${"⭐".repeat(Math.min(5, review.rating))}`,
-      body: `${author}: ${(review.text ?? "").slice(0, 90) || "(no text)"}`,
-      url: "/inbox",
-    }, "review").catch(() => {});
+    // Named explicitly, for the same reason the review row is: the default
+    // resolves to EVERY device in the table while enforcement is dormant, and
+    // this payload carries a customer's words. Scoping the row and then
+    // broadcasting its text would reopen the hole one line later.
+    await sendPushToAll(
+      {
+        title: `New Google review ${"⭐".repeat(Math.min(5, review.rating))}`,
+        body: `${author}: ${(review.text ?? "").slice(0, 90) || "(no text)"}`,
+        url: "/inbox",
+      },
+      "review",
+      { tenantId },
+    ).catch(() => {});
   }
   return created;
 }

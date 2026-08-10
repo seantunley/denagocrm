@@ -157,3 +157,29 @@ test("the backfill that makes an explicit filter safe ships with it", () => {
     "legacy rows must be given an owner before anything filters on one",
   );
 });
+
+/**
+ * SCOPING THE ROW AND THEN BROADCASTING ITS TEXT REOPENS THE HOLE ONE LINE LATER.
+ *
+ * `pushRecipientsForCurrentScope` treats dormant enforcement as "global" and
+ * returns EVERY PushSubscription in the table. That is a defensible rollout
+ * default and it is not a filter — so a notification carrying a customer's words
+ * cannot rely on it. The review row is scoped by hand for exactly this period;
+ * the push has to be too, or the author and review text still reach every
+ * tenant's phones.
+ */
+test("the review notification is aimed at the tenant that owns the review", () => {
+  const sync = src("src/lib/googleReviews.ts");
+  assert.match(sync, /"review",\s*\n\s*\{ tenantId \},/, "the push must name the owning tenant");
+
+  const push = src("src/lib/push.ts");
+  assert.match(push, /export async function pushRecipientsForTenant\(tenantId: string\)/);
+  // Same shape as the enforcing branch, with the tenant named by the caller
+  // rather than inferred from a scope that may not exist yet.
+  const targeted = push.slice(push.indexOf("export async function pushRecipientsForTenant"), push.indexOf("export async function pushRecipientsForCurrentScope"));
+  assert.match(targeted, /WHERE m\."tenantId" = \$\{tenantId\} AND t\."active" = true AND u\."disabledAt" IS NULL/);
+  assert.doesNotMatch(targeted, /currentScopeClass|tenantEnforcing/, "it must not ask whether enforcement is on");
+
+  // And the default path is unchanged for callers that genuinely are global.
+  assert.match(push, /options\.tenantId\s*\n?\s*\? await pushRecipientsForTenant\(options\.tenantId\)\s*\n?\s*: await pushRecipientsForCurrentScope\(\)/);
+});
