@@ -6,6 +6,7 @@ import { getBotFlowAnalyticsReport } from "@/lib/botFlowAnalyticsReport";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import { EmptyState, StatusPill, Surface } from "@/components/visual-system";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
+import { flowScope } from "@/lib/flowScope";
 
 const pct = (part: number, total: number) => total > 0 ? `${Math.round((part / total) * 1000) / 10}%` : "—";
 const channelLabel = (channel: string) => channel === "whatsapp" ? "WhatsApp" : channel === "instagram" ? "Instagram" : channel === "messenger" ? "Messenger" : channel === "telegram" ? "Telegram" : channel;
@@ -17,7 +18,9 @@ export default async function BotAnalyticsPage({
 }) {
   await requireOwner();
   const params = await searchParams;
+  const scope = await flowScope();
   const flows = await prisma.botFlow.findMany({
+    where: scope,
     select: { id: true, name: true, active: true, updatedAt: true },
     orderBy: [{ active: "desc" }, { updatedAt: "desc" }],
   });

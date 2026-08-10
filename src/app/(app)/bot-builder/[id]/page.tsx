@@ -9,11 +9,13 @@ import { enabledFlowChannels } from "@/lib/flowValidationServer";
 import FlowBuilder from "@/components/FlowBuilder";
 import FlowAiDraftForm from "@/components/FlowAiDraftForm";
 import FlowLintPanel from "@/components/FlowLintPanel";
+import { flowScope, journeyScope } from "@/lib/flowScope";
 
 export default async function FlowEditorPage({ params }: { params: Promise<{ id: string }> }) {
   await requireOwner();
   const { id } = await params;
-  const row = await prisma.botFlow.findUnique({ where: { id } });
+  const scope = await flowScope();
+  const row = await prisma.botFlow.findFirst({ where: { id, ...scope } });
   if (!row) notFound();
 
   let flow: Flow = DEFAULT_FLOW;
@@ -27,7 +29,7 @@ export default async function FlowEditorPage({ params }: { params: Promise<{ id:
   const [channels, journeys] = await Promise.all([
     enabledFlowChannels(),
     prisma.journey.findMany({
-      where: { status: "active" },
+      where: { status: "active", ...(await journeyScope()) },
       select: { id: true, name: true },
       orderBy: { name: "asc" },
     }),
@@ -51,7 +53,7 @@ export default async function FlowEditorPage({ params }: { params: Promise<{ id:
       </div>
       <FlowLintPanel issues={issues} channels={channels} />
       <FlowAiDraftForm flowId={row.id} />
-      <FlowBuilder flowId={row.id} initial={flow} journeys={journeys} />
+      <FlowBuilder flowId={row.id} initial={flow} journeys={journeys} updatedAt={row.updatedAt.toISOString()} />
     </div>
   );
 }

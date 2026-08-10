@@ -1,10 +1,11 @@
 import { AlertCircle, AlertTriangle, CheckCircle2, Info, type LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
+import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
 export function Eyebrow({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <p className={cn("text-[10px] font-semibold uppercase tracking-[0.18em] text-primary", className)}>
+    <p className={cn("text-[11px] font-medium tracking-[0.04em] text-primary", className)}>
       {children}
     </p>
   );
@@ -14,16 +15,27 @@ export function Surface({
   children,
   className,
   inset = false,
+  level = "raised",
 }: {
   children: ReactNode;
   className?: string;
   inset?: boolean;
+  level?: "raised" | "base" | "inset";
 }) {
+  const resolvedLevel = inset ? "inset" : level;
+  const levels = {
+    raised: "bg-card shadow-[0_1px_2px_rgba(0,0,0,0.16)]",
+    base: "bg-card/70",
+    inset: "bg-background/35",
+  };
+
   return (
     <section
+      data-slot="surface"
+      data-level={resolvedLevel}
       className={cn(
-        "overflow-hidden rounded-xl border border-border bg-card shadow-sm",
-        inset ? "bg-card/70" : "",
+        "overflow-hidden rounded-xl border border-border",
+        levels[resolvedLevel],
         className
       )}
     >
@@ -102,7 +114,7 @@ export function MetricCard({
       {accent && <div className="pointer-events-none absolute -right-10 -top-12 size-28 rounded-full bg-primary/10 blur-2xl" />}
       <div className="relative flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="line-clamp-2 min-h-[2.25em] text-[9px] font-semibold uppercase tracking-[0.13em] text-muted-foreground sm:min-h-0 sm:truncate">{label}</p>
+          <p className="line-clamp-2 min-h-[2.25em] text-[11px] font-medium tracking-[0.02em] text-muted-foreground sm:min-h-0 sm:truncate">{label}</p>
           <p className="mt-1.5 text-xl font-semibold tracking-[-0.04em] text-foreground tabular-nums">{value}</p>
           {detail && <p className="mt-0.5 line-clamp-2 text-[11px] text-muted-foreground sm:truncate">{detail}</p>}
         </div>
@@ -168,8 +180,8 @@ export function EmptyState({
   className?: string;
 }) {
   return (
-    <div className={cn("rounded-xl border border-dashed border-border bg-card/50 px-5 py-8 text-center", className)}>
-      <span className="mx-auto grid size-10 place-items-center rounded-xl border border-border bg-muted/40 text-muted-foreground">
+    <div className={cn("rounded-xl border border-border/70 bg-muted/[0.14] px-5 py-8 text-center", className)}>
+      <span className="mx-auto grid size-9 place-items-center rounded-lg bg-muted/60 text-muted-foreground">
         <Icon className="size-4" />
       </span>
       <h3 className="mt-3 text-sm font-semibold tracking-tight text-foreground">{title}</h3>
@@ -197,7 +209,7 @@ export function StatusPill({
   };
 
   return (
-    <span className={cn("inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em]", tones[tone], className)}>
+    <span data-slot="status-pill" data-tone={tone} className={cn("inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium leading-4", tones[tone], className)}>
       {children}
     </span>
   );
@@ -238,12 +250,12 @@ export function FeedbackBanner({
 export function PageSkeleton({ variant = "dashboard" }: { variant?: "dashboard" | "list" | "form" | "builder" }) {
   if (variant === "builder") {
     return (
-      <div className="space-y-3" aria-label="Loading builder" role="status">
-        <div className="h-14 animate-pulse rounded-2xl border border-border bg-card" />
+      <div data-slot="page-skeleton" data-variant="builder" className="space-y-3" aria-label="Loading builder" aria-busy="true" role="status">
+        <Skeleton className="h-12 rounded-xl border border-border bg-card" />
         <div className="grid min-h-[65vh] gap-3 md:grid-cols-[15rem_minmax(0,1fr)_18rem]">
-          <div className="hidden animate-pulse rounded-2xl border border-border bg-card md:block" />
-          <div className="animate-pulse rounded-2xl border border-border bg-muted/40" />
-          <div className="hidden animate-pulse rounded-2xl border border-border bg-card md:block" />
+          <Skeleton className="hidden rounded-xl border border-border bg-card md:block" />
+          <Skeleton className="rounded-xl border border-border bg-muted/40" />
+          <Skeleton className="hidden rounded-xl border border-border bg-card md:block" />
         </div>
         <span className="sr-only">Loading builder</span>
       </div>
@@ -252,11 +264,11 @@ export function PageSkeleton({ variant = "dashboard" }: { variant?: "dashboard" 
 
   if (variant === "list") {
     return (
-      <div className="space-y-5" aria-label="Loading records" role="status">
-        <div className="space-y-2"><div className="h-7 w-44 animate-pulse rounded-lg bg-muted" /><div className="h-4 w-72 max-w-full animate-pulse rounded bg-muted/70" /></div>
-        <div className="h-12 animate-pulse rounded-2xl border border-border bg-card" />
-        <div className="divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card">
-          {[0, 1, 2, 3, 4].map((item) => <div key={item} className="h-20 animate-pulse bg-muted/20" />)}
+      <div data-slot="page-skeleton" data-variant="list" className="space-y-4" aria-label="Loading records" aria-busy="true" role="status">
+        <Skeleton className="h-24 rounded-xl border border-border bg-card" />
+        <Skeleton className="h-10 rounded-xl border border-border bg-card/70" />
+        <div className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
+          {[0, 1, 2, 3, 4].map((item) => <Skeleton key={item} className="h-14 rounded-none bg-muted/20" />)}
         </div>
         <span className="sr-only">Loading records</span>
       </div>
@@ -265,24 +277,21 @@ export function PageSkeleton({ variant = "dashboard" }: { variant?: "dashboard" 
 
   if (variant === "form") {
     return (
-      <div className="mx-auto max-w-3xl space-y-5" aria-label="Loading form" role="status">
-        <div className="h-8 w-52 animate-pulse rounded-lg bg-muted" />
-        {[0, 1, 2].map((section) => <div key={section} className="h-40 animate-pulse rounded-2xl border border-border bg-card" />)}
+      <div data-slot="page-skeleton" data-variant="form" className="mx-auto max-w-3xl space-y-4" aria-label="Loading form" aria-busy="true" role="status">
+        <Skeleton className="h-16 rounded-xl border border-border bg-card" />
+        {[0, 1, 2].map((section) => <Skeleton key={section} className="h-32 rounded-xl border border-border bg-card" />)}
         <span className="sr-only">Loading form</span>
       </div>
     );
   }
 
   return (
-    <div className="space-y-6" aria-label="Loading page" role="status">
-      <div className="space-y-2">
-        <div className="h-7 w-48 animate-pulse rounded-lg bg-muted" />
-        <div className="h-4 w-full max-w-lg animate-pulse rounded bg-muted/70" />
-      </div>
+    <div data-slot="page-skeleton" data-variant="dashboard" className="space-y-4" aria-label="Loading page" aria-busy="true" role="status">
+      <Skeleton className="h-20 rounded-xl border border-border bg-card" />
       <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        {[0, 1, 2, 3].map((item) => <div key={item} className="h-28 animate-pulse rounded-2xl border border-border bg-card" />)}
+        {[0, 1, 2, 3].map((item) => <Skeleton key={item} className="h-20 rounded-xl border border-border bg-card" />)}
       </div>
-      <div className="h-72 animate-pulse rounded-2xl border border-border bg-card" />
+      <Skeleton className="h-64 rounded-xl border border-border bg-card" />
       <span className="sr-only">Loading</span>
     </div>
   );
