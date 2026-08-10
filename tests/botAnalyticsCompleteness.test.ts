@@ -32,8 +32,13 @@ test("successful CRM and Journey effects emit node-level crm_action analytics", 
   const flow = src("src/lib/flow.ts");
   assert.match(flow, /recordAction\?:/);
   assert.match(flow, /ctx\.recordAction\?\.\(node\.id, "journey_start", outcome\.ok\)/);
-  assert.match(flow, /ctx\.recordAction\?\.\(node\.id, "booking_cancel", outcome\.ok\)/);
-  assert.match(flow, /ctx\.recordAction\?\.\(node\.id, `booking_\$\{node\.action \?\? "service"\}`, true\)/);
+  // Every booking action now reports its REAL outcome, not a hard-coded true.
+  // createBooking used to return void, so a demo request that created nothing —
+  // no actor, or no pipeline stage — was recorded as a successful crm_action and
+  // the customer was told it had been sent.
+  assert.match(flow, /ctx\.recordAction\?\.\(node\.id, `booking_\$\{node\.action\}`, outcome\.ok\)/);
+  assert.match(flow, /ctx\.recordAction\?\.\(node\.id, `booking_\$\{node\.action \?\? "service"\}`, outcome\.ok\)/);
+  assert.doesNotMatch(flow, /recordAction\?\.\([^)]*, true\)/, "no action may be recorded as successful unconditionally");
   assert.match(flow, /ctx\.recordAction\?\.\(node\.id, action, res\.ok\)/);
   for (const rel of ["src/lib/flowSession.ts", "src/lib/flowRun.ts"]) assert.match(src(rel), /eventType: "crm_action"/);
 });

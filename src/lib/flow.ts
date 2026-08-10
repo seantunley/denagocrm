@@ -13,6 +13,16 @@ export type BookingManageAction = "lookup" | "cancel";
 export type BookingAction = BookingCreateAction | BookingManageAction;
 export type SlotAction = "book" | "reschedule";
 
+/**
+ * What a side-effecting action actually did.
+ *
+ * `unavailable` is a THIRD state, not a flavour of failure: "there are no
+ * appointments left" is a valid request the business cannot satisfy right now,
+ * while "the reservation failed" is a system/business failure. They deserve
+ * different words to the customer, so the graph routes them separately.
+ */
+export type ActionOutcome = { ok: boolean; unavailable?: boolean; reason?: string };
+
 export type FlowNode =
   | { id: string; type: "message"; text: string; next?: string }
   | { id: string; type: "choice"; text: string; options: FlowOption[] }
@@ -20,9 +30,9 @@ export type FlowNode =
   | { id: string; type: "captureFile"; text: string; variable: string; next?: string }
   | { id: string; type: "image"; url: string; caption?: string; next?: string }
   | { id: string; type: "answer"; text?: string; answerSource?: "pricelist" | "colours"; next?: string }
-  | { id: string; type: "booking"; text?: string; failureText?: string; action?: BookingAction; next?: string; failureNext?: string }
-  | { id: string; type: "slots"; text: string; noneText?: string; action?: SlotAction; next?: string; failureNext?: string }
-  | { id: string; type: "journey"; journeyId: string; text?: string; failureText?: string; next?: string; failureNext?: string }
+  | { id: string; type: "booking"; text?: string; failureText?: string; action?: BookingAction; next?: string; failureNext?: string; unavailableNext?: string }
+  | { id: string; type: "slots"; text: string; noneText?: string; failureText?: string; action?: SlotAction; next?: string; failureNext?: string; unavailableNext?: string }
+  | { id: string; type: "journey"; journeyId: string; text?: string; failureText?: string; next?: string; failureNext?: string; unavailableNext?: string }
   | { id: string; type: "condition"; condition: FlowCondition; trueNext?: string; falseNext?: string }
   | { id: string; type: "ai"; handoffNext?: string }
   | { id: string; type: "handoff"; text?: string }
@@ -49,8 +59,8 @@ export type FlowHandoffContext = { confidence?: "high" | "medium" | "low"; inten
 export type FlowCtx = {
   aiReply: (vars: Record<string, string>) => Promise<FlowAiReply>;
   dynamicAnswer: (source: "pricelist" | "colours") => Promise<string>;
-  createBooking: (vars: Record<string, string>, action: BookingCreateAction | undefined, nodeId: string) => Promise<void>;
-  manageBooking?: (action: BookingManageAction, vars: Record<string, string>, nodeId: string) => Promise<{ ok: boolean }>;
+  createBooking: (vars: Record<string, string>, action: BookingCreateAction | undefined, nodeId: string) => Promise<ActionOutcome>;
+  manageBooking?: (action: BookingManageAction, vars: Record<string, string>, nodeId: string) => Promise<ActionOutcome>;
   startJourney?: (journeyId: string, vars: Record<string, string>, nodeId: string) => Promise<{ ok: boolean; reason?: string }>;
   handoff: (vars: Record<string, string>, context?: FlowHandoffContext) => Promise<void>;
   availableSlots?: () => Promise<{ id: string; label: string }[]>;
@@ -125,11 +135,35 @@ async function semanticChoice(node: Extract<FlowNode, { type: "choice" }>, input
 }
 
 async function runSlotSelection(node: Extract<FlowNode, { type: "slots" }>, input: FlowInput, vars: Record<string, string>, ctx: FlowCtx, messages: OutMsg[]) {
-  if (!input.choiceId?.startsWith(`${node.id}|`)) return { nodeId: node.next ?? null };
+  const slotAction = node.action === "reschedule" ? "booking_reschedule" : "slot_booking";
+
+  // `next` is reachable ONLY after a reservation actually succeeded.
+  //
+  // This used to advance to `next` when the customer typed instead of tapping —
+  // so someone looking at the slot menu who replied "9am please" was sent straight
+  // to "You're booked…" with no booking made. A stale or malformed callback id did
+  // the same. Re-offer the times and keep waiting instead: an unparsed reply is
+  // not a selection.
+  if (!input.choiceId?.startsWith(`${node.id}|`)) {
+    const opts = ctx.availableSlots ? await ctx.availableSlots() : [];
+    if (!opts.length) {
+      messages.push({ type: "text", text: node.noneText || "We don't have open slots online right now — leave your details and the team will call you to book. 📞" });
+      return { nodeId: node.unavailableNext ?? node.failureNext ?? null };
+    }
+    messages.push({ type: "choice", text: interpolate(node.text, vars), options: opts.map((o) => ({ id: choiceId(node.id, o.id), label: o.label })) });
+    return { nodeId: node.id, wait: { messages, session: { nodeId: node.id, vars }, handedOff: false } as FlowResult };
+  }
+
   const slotId = input.choiceId.slice(node.id.length + 1);
   const handler = node.action === "reschedule" ? ctx.rescheduleSlot : ctx.bookSlot;
-  const action = node.action === "reschedule" ? "booking_reschedule" : "slot_booking";
-  if (!handler) return { nodeId: node.next ?? null };
+  const action = slotAction;
+  // The channel adapter did not supply a reservation handler, so nothing can be
+  // booked. Fail closed rather than reporting success for an action that never ran.
+  if (!handler) {
+    ctx.recordAction?.(node.id, slotAction, false);
+    if (node.failureText) messages.push({ type: "text", text: interpolate(node.failureText, vars) });
+    return { nodeId: node.failureNext ?? null };
+  }
   const res = await handler(slotId, vars, node.id);
   ctx.recordAction?.(node.id, action, res.ok);
   if (!res.ok) {
@@ -141,7 +175,8 @@ async function runSlotSelection(node: Extract<FlowNode, { type: "slots" }>, inpu
     // No alternatives left, and the reservation failed. Falling through to `next`
     // sent the customer the success text — "You're booked" — for a slot that was
     // taken between showing the menu and their tap.
-    return { nodeId: node.failureNext ?? node.next ?? null };
+    if (node.failureText) messages.push({ type: "text", text: interpolate(node.failureText, vars) });
+    return { nodeId: node.failureNext ?? null };
   } else if (res.label) {
     vars.slot = res.label;
     if (node.action === "reschedule") vars.booking_slot = res.label;
@@ -163,14 +198,23 @@ async function runSlotSelection(node: Extract<FlowNode, { type: "slots" }>, inpu
  * still advances, but it stays silent rather than claiming success.
  */
 function actionOutcome(
-  node: { text?: string; failureText?: string; next?: string; failureNext?: string },
-  ok: boolean,
+  node: { text?: string; failureText?: string; next?: string; failureNext?: string; unavailableNext?: string },
+  outcome: ActionOutcome,
   vars: Record<string, string>,
   messages: OutMsg[],
 ): string | null {
-  const text = ok ? node.text : node.failureText;
-  if (text) messages.push({ type: "text", text: interpolate(text, vars) });
-  return (ok ? node.next : node.failureNext ?? node.next) ?? null;
+  if (outcome.ok) {
+    if (node.text) messages.push({ type: "text", text: interpolate(node.text, vars) });
+    return node.next ?? null;
+  }
+  if (node.failureText) messages.push({ type: "text", text: interpolate(node.failureText, vars) });
+  // A failed action NEVER falls back to `next`. That fallback is precisely how a
+  // customer was told "Done — your booking has been cancelled" for a cancellation
+  // that did not happen. With no route defined the turn simply ends: saying
+  // nothing is recoverable, claiming success is not. The publish compiler refuses
+  // a new graph that leaves this undefined.
+  const route = outcome.unavailable ? node.unavailableNext ?? node.failureNext : node.failureNext;
+  return route ?? null;
 }
 
 export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput, ctx: FlowCtx): Promise<FlowResult> {
@@ -235,29 +279,33 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
       // shipped cancellation node says "Done — your booking has been cancelled",
       // and it used to say that whether or not anything was cancelled. Telling a
       // customer their booking is gone when it is not is worse than any error.
-      let ok = true;
+      let outcome: ActionOutcome;
       if (node.action === "lookup" || node.action === "cancel") {
-        if (ctx.manageBooking) {
-          const outcome = await ctx.manageBooking(node.action, vars, node.id);
-          if (node.action === "cancel") { ok = outcome.ok; ctx.recordAction?.(node.id, "booking_cancel", outcome.ok); }
-        }
+        outcome = ctx.manageBooking
+          ? await ctx.manageBooking(node.action, vars, node.id)
+          : { ok: false, reason: "Booking management is unavailable" };
+        // The lookup result drives the route too. It was previously discarded, so a
+        // lookup that found nothing — or refused an unidentified customer — still
+        // continued down the success branch and relied on later condition nodes to
+        // catch it. That made the ENGINE unsafe even where the template was not.
+        ctx.recordAction?.(node.id, `booking_${node.action}`, outcome.ok);
       } else {
-        await ctx.createBooking(vars, node.action, node.id);
-        ctx.recordAction?.(node.id, `booking_${node.action ?? "service"}`, true);
+        outcome = await ctx.createBooking(vars, node.action, node.id);
+        ctx.recordAction?.(node.id, `booking_${node.action ?? "service"}`, outcome.ok);
       }
-      nodeId = actionOutcome(node, ok, vars, messages);
+      nodeId = actionOutcome(node, outcome, vars, messages);
     } else if (node.type === "journey") {
       const outcome = ctx.startJourney ? await ctx.startJourney(node.journeyId, vars, node.id) : { ok: false, reason: "Journey action unavailable" };
       ctx.recordAction?.(node.id, "journey_start", outcome.ok);
       if (!vars.journey_started) vars.journey_started = outcome.ok ? "yes" : "no";
       if (outcome.reason && !vars.journey_reason) vars.journey_reason = outcome.reason;
-      nodeId = actionOutcome(node, outcome.ok, vars, messages);
+      nodeId = actionOutcome(node, outcome, vars, messages);
     } else if (node.type === "slots") {
       const opts = ctx.availableSlots ? await ctx.availableSlots() : [];
       // No slots is NOT the success path. It used to fall through to `next`, whose
       // shipped text is "You're booked, {{name}}!" — after a turn in which nothing
       // was booked at all.
-      if (!opts.length) { messages.push({ type: "text", text: node.noneText || "We don't have open slots online right now — leave your details and the team will call you to book. 📞" }); nodeId = node.failureNext ?? node.next ?? null; }
+      if (!opts.length) { messages.push({ type: "text", text: node.noneText || "We don't have open slots online right now — leave your details and the team will call you to book. 📞" }); nodeId = node.unavailableNext ?? node.failureNext ?? null; }
       else { messages.push({ type: "choice", text: interpolate(node.text, vars), options: opts.map((o) => ({ id: choiceId(node.id, o.id), label: o.label })) }); return { messages, session: { nodeId: node.id, vars }, handedOff: false }; }
     } else if (node.type === "choice") {
       messages.push({ type: "choice", text: interpolate(node.text, vars), options: node.options.map((o) => ({ id: choiceId(node.id, o.id), label: o.label, description: o.description })) }); return { messages, session: { nodeId: node.id, vars }, handedOff: false };
@@ -289,7 +337,7 @@ export const DEFAULT_FLOW: Flow = {
     bookName: { id: "bookName", type: "capture", text: "Sure — let's get you booked in. What's your name?", variable: "name", next: "bookPhone" },
     bookPhone: { id: "bookPhone", type: "capture", text: "Thanks {{name}}! What's the best contact number?", variable: "phone", format: "phone", next: "bookService" },
     bookService: { id: "bookService", type: "capture", text: "What does the cart need? (service, repair, etc.)", variable: "service", next: "chooseSlot" },
-    chooseSlot: { id: "chooseSlot", type: "slots", action: "book", text: "Here are our next available service times — pick one:", noneText: "We're fully booked online just now — I've logged your request and the team will call you to find a time. 📞", next: "bookConfirm", failureNext: "slotHandoff" },
+    chooseSlot: { id: "chooseSlot", type: "slots", action: "book", text: "Here are our next available service times — pick one:", noneText: "We're fully booked online just now — I've logged your request and the team will call you to find a time. 📞", next: "bookConfirm", unavailableNext: "slotHandoff", failureNext: "slotHandoff" },
     slotHandoff: { id: "slotHandoff", type: "handoff", text: "I couldn't hold a time for you — the team will call you to book it." },
     bookConfirm: { id: "bookConfirm", type: "message", text: "You're booked, {{name}}! 🛠 {{slot}}. We'll see you then — message *menu* if anything changes.", next: "end" },
     aiChat: { id: "aiChat", type: "ai" },

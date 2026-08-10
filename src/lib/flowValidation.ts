@@ -35,9 +35,14 @@ function refs(node: FlowNode): string[] {
   if (node.type === "condition") return [node.trueNext, node.falseNext].filter((value): value is string => Boolean(str(value)));
   if (node.type === "ai") return str(node.handoffNext) ? [str(node.handoffNext)] : [];
   if (node.type === "handoff" || node.type === "end") return [];
+  // Every outgoing edge, or the graph tooling silently ignores whole branches:
+  // a missing target on one of these would not be reported, nodes reachable only
+  // through it would be called unreachable, and an automatic loop running through
+  // it would not be detected.
   const next = str((node as { next?: unknown }).next);
   const failure = str((node as { failureNext?: unknown }).failureNext);
-  return [next, failure].filter(Boolean);
+  const unavailable = str((node as { unavailableNext?: unknown }).unavailableNext);
+  return [next, failure, unavailable].filter(Boolean);
 }
 
 /** Nodes that perform a customer-visible side effect which can legitimately fail. */
@@ -215,4 +220,22 @@ export function validateFlow(flow: Flow, channels: FlowChannel[] = ["whatsapp"])
 }
 
 export const flowErrors = (issues: FlowIssue[]) => issues.filter((item) => item.severity === "error");
+
+/**
+ * Codes that are advisory while EDITING but fatal at PUBLICATION.
+ *
+ * A draft that predates the action-outcome contract must still open, and a live
+ * published version keeps running untouched — so the editor shows a warning. But
+ * publishing is a deliberate act and the migration boundary: an action that can
+ * fail while flowing into a node that announces success is how a customer gets
+ * told their booking was cancelled when it was not. Refuse it there.
+ */
+const FATAL_ON_PUBLISH = new Set(["action.no_failure_branch"]);
+
+/** Re-grade editing warnings that must block a new publication. */
+export function publishSeverity(issues: FlowIssue[]): FlowIssue[] {
+  return issues.map((issue) =>
+    FATAL_ON_PUBLISH.has(issue.code) && issue.severity === "warning" ? { ...issue, severity: "error" as const } : issue,
+  );
+}
 export const flowWarnings = (issues: FlowIssue[]) => issues.filter((item) => item.severity === "warning");
