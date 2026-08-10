@@ -9,7 +9,8 @@ import { flowScope } from "@/lib/flowScope";
 export default async function FlowSimulatorPage({ params }: { params: Promise<{ id: string }> }) {
   await requireOwner();
   const { id } = await params;
-  const flow = await prisma.botFlow.findFirst({ where: { id, ...flowScope() } });
+  const scope = await flowScope();
+  const flow = await prisma.botFlow.findFirst({ where: { id, ...scope } });
   if (!flow) notFound();
 
   return (

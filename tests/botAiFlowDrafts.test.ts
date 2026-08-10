@@ -28,7 +28,7 @@ test("only compiler-clean generated graphs may replace the saved draft", () => {
 
 test("AI drafting cannot overwrite a human save that lands concurrently", () => {
   const action = src("src/app/actions/flowAi.ts");
-  assert.match(action, /where: \{ id: flowId, definition: originalDefinition, \.\.\.flowScope\(\) \}/);
+  assert.match(action, /where: \{ id: flowId, definition: originalDefinition, \.\.\.scope \}/);
   assert.match(action, /if \(updated\.count !== 1\)/);
   assert.match(action, /Nothing was overwritten/);
 });

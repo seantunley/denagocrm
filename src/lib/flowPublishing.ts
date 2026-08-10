@@ -4,7 +4,7 @@ import { DEFAULT_TENANT_ID } from "./tenant";
 import { withTenantWrite, writeTenantId } from "./tenantWrite";
 import { flowErrors } from "./flowValidation";
 import { legacyFlowTenant } from "./flowTenantScope";
-import { flowTenantId } from "./flowScope";
+import { builderTenantId, runtimeFlowTenantId } from "./flowScope";
 import { FlowPublishValidationError, validateFlowForEnabledChannels } from "./flowValidationServer";
 
 export type FlowSnapshot = {
@@ -46,7 +46,7 @@ export async function resolveFlowSnapshot(
   pinnedVersionId?: string | null,
 ): Promise<FlowSnapshot> {
   if (pinnedVersionId) {
-    const pinned = await prisma.botFlowVersion.findFirst({ where: { id: pinnedVersionId, tenantId: flowTenantId() } });
+    const pinned = await prisma.botFlowVersion.findFirst({ where: { id: pinnedVersionId, tenantId: runtimeFlowTenantId() } });
     const flow = pinned ? parseFlow(pinned.definition) : null;
     if (!pinned || !flow) throw new PinnedFlowVersionUnavailableError(pinnedVersionId);
     return { flow, versionId: pinned.id, flowId: pinned.flowId };
@@ -61,7 +61,7 @@ export async function resolveFlowSnapshot(
   // return first. That is not a reporting leak — it is the wrong business logic
   // running against a real customer, and the same shape repeats on the legacy
   // fallback below.
-  const tenantId = flowTenantId();
+  const tenantId = runtimeFlowTenantId();
   const publication =
     (await prisma.botFlowPublication.findFirst({ where: { tenantId, channel } })) ??
     (channel === "whatsapp"
@@ -99,7 +99,11 @@ export async function publishFlowSnapshot(
   flowId: string,
   actorId?: string | null,
 ): Promise<{ versionId: string; version: number; channel: string }> {
-  const draft = await prisma.botFlow.findFirst({ where: { id: flowId, ...legacyFlowTenant(flowTenantId()) } });
+  // Publishing is a STAFF action, so the tenant is the session's active workspace
+  // — not writeTenantId(), which is null while enforcement is dormant and would
+  // publish a second workspace's draft into the founding tenant's live slot.
+  const tenantId = await builderTenantId();
+  const draft = await prisma.botFlow.findFirst({ where: { id: flowId, ...legacyFlowTenant(tenantId) } });
   if (!draft) throw new Error("FLOW_NOT_FOUND");
   const parsed = parseFlow(draft.definition);
   if (!parsed) {
@@ -110,7 +114,7 @@ export async function publishFlowSnapshot(
   const issues = await validateFlowForEnabledChannels(parsed);
   if (flowErrors(issues).length) throw new FlowPublishValidationError(issues);
 
-  return withTenantWrite(async (tx, tenantId) => {
+  return withTenantWrite(async (tx) => {
     // Re-read inside the transaction. If the draft changed between validation
     // and this point, refuse rather than publishing a different definition than
     // the one the compiler approved.
@@ -179,6 +183,6 @@ export async function publishFlowSnapshot(
 export async function getFlowPublicationMeta(): Promise<
   Map<string, { versionId: string; publishedAt: Date }>
 > {
-  const publications = await prisma.botFlowPublication.findMany({ where: { tenantId: flowTenantId() } });
+  const publications = await prisma.botFlowPublication.findMany({ where: { tenantId: await builderTenantId() } });
   return new Map(publications.map((p) => [p.flowId, { versionId: p.versionId, publishedAt: p.publishedAt }]));
 }

@@ -12,8 +12,9 @@ import { flowScope } from "@/lib/flowScope";
 export default async function FlowBlocksPage({ params }: { params: Promise<{ id: string }> }) {
   await requireOwner();
   const { id } = await params;
+  const scope = await flowScope();
   const [flow, snippets] = await Promise.all([
-    prisma.botFlow.findFirst({ where: { id, ...flowScope() } }),
+    prisma.botFlow.findFirst({ where: { id, ...scope } }),
     getFlowSnippets(),
   ]);
   if (!flow) notFound();

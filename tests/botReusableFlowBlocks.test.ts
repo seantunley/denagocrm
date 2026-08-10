@@ -65,7 +65,7 @@ test("saving reusable blocks requires a compiler-clean owner draft", () => {
 
 test("insertion uses optimistic concurrency so it cannot overwrite a canvas save", () => {
   const action = src("src/app/actions/flowSnippets.ts");
-  assert.match(action, /where: \{ id: flowId, definition: row\.definition, \.\.\.flowScope\(\) \}/);
+  assert.match(action, /where: \{ id: flowId, definition: row\.definition, \.\.\.scope \}/);
   assert.match(action, /if \(updated\.count !== 1\) return/);
 });
 

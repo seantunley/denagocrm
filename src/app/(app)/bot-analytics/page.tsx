@@ -18,8 +18,9 @@ export default async function BotAnalyticsPage({
 }) {
   await requireOwner();
   const params = await searchParams;
+  const scope = await flowScope();
   const flows = await prisma.botFlow.findMany({
-    where: flowScope(),
+    where: scope,
     select: { id: true, name: true, active: true, updatedAt: true },
     orderBy: [{ active: "desc" }, { updatedAt: "desc" }],
   });

@@ -26,8 +26,9 @@ function parseDefinition(raw: string): FlowSnippet["definition"] | null {
 }
 
 export async function saveCurrentFlowAsSnippet(flowId: string, formData: FormData) {
+  const scope = await flowScope();
   const owner = await requireOwner();
-  const row = await prisma.botFlow.findFirst({ where: { id: flowId, ...flowScope() } });
+  const row = await prisma.botFlow.findFirst({ where: { id: flowId, ...scope } });
   if (!row) return;
   const definition = parseDefinition(row.definition);
   if (!definition) return;
@@ -44,9 +45,10 @@ export async function saveCurrentFlowAsSnippet(flowId: string, formData: FormDat
 }
 
 export async function insertSavedFlowSnippet(flowId: string, snippetId: string) {
+  const scope = await flowScope();
   const owner = await requireOwner();
   const [row, snippets] = await Promise.all([
-    prisma.botFlow.findFirst({ where: { id: flowId, ...flowScope() } }),
+    prisma.botFlow.findFirst({ where: { id: flowId, ...scope } }),
     getFlowSnippets(),
   ]);
   const snippet = snippets.find((item) => item.id === snippetId);
@@ -57,7 +59,7 @@ export async function insertSavedFlowSnippet(flowId: string, snippetId: string) 
 
   // Do not overwrite a canvas save that landed while this request was reading.
   const updated = await prisma.botFlow.updateMany({
-    where: { id: flowId, definition: row.definition, ...flowScope() },
+    where: { id: flowId, definition: row.definition, ...scope },
     data: { definition: JSON.stringify(merged.definition) },
   });
   if (updated.count !== 1) return;

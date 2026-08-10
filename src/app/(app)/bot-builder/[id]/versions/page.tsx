@@ -9,7 +9,8 @@ import { writeTenantId } from "@/lib/tenantWrite";
 import { restoreFlowVersionToDraft } from "@/app/actions/flowVersions";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import { EmptyState, StatusPill, Surface } from "@/components/visual-system";
-import { flowScope } from "@/lib/flowScope";
+import { builderTenantId } from "@/lib/flowScope";
+import { legacyFlowTenant } from "@/lib/flowTenantScope";
 
 type VersionRow = {
   id: string;
@@ -30,9 +31,10 @@ function nodeCount(definition: string): number {
 export default async function FlowVersionsPage({ params }: { params: Promise<{ id: string }> }) {
   await requireOwner();
   const { id } = await params;
-  const flow = await prisma.botFlow.findFirst({ where: { id, ...flowScope() } });
+  const tenantId = await builderTenantId();
+  const scope = legacyFlowTenant(tenantId);
+  const flow = await prisma.botFlow.findFirst({ where: { id, ...scope } });
   if (!flow) notFound();
-  const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
   const versions = await basePrisma.$queryRaw<VersionRow[]>(Prisma.sql`
     SELECT "id", "version", "definition", "publishedAt"
       FROM "BotFlowVersion"

@@ -11,7 +11,7 @@ import { getFlowPublicationMeta, publishFlowSnapshot } from "@/lib/flowPublishin
 import { createFlow, setActiveFlow, duplicateFlow, deleteFlow, renameFlow } from "@/app/actions/flow";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import { EmptyState, StatusPill, Surface } from "@/components/visual-system";
-import { flowScope, flowTenantId } from "@/lib/flowScope";
+import { builderTenantId, flowScope } from "@/lib/flowScope";
 
 function parseDraft(definition: string): Flow | null {
   try {
@@ -24,8 +24,9 @@ function parseDraft(definition: string): Flow | null {
 
 export default async function BotBuilderPage() {
   const owner = await requireOwner();
+  const scope = await flowScope();
 
-  if ((await prisma.botFlow.count({ where: flowScope() })) === 0) {
+  if ((await prisma.botFlow.count({ where: scope })) === 0) {
     const legacy = await getSetting("BOT_FLOW");
     let definition = JSON.stringify(DEFAULT_FLOW);
     let name = "Default flow";
@@ -40,13 +41,13 @@ export default async function BotBuilderPage() {
         /* keep default */
       }
     }
-    const seeded = await prisma.botFlow.create({ data: { name, definition, active: true, tenantId: flowTenantId() } });
+    const seeded = await prisma.botFlow.create({ data: { name, definition, active: true, tenantId: await builderTenantId() } });
     await publishFlowSnapshot(seeded.id, owner.id).catch(() => {});
     if (legacy) await putSetting("BOT_FLOW", "");
   }
 
   const [flows, publicationMeta, channels] = await Promise.all([
-    prisma.botFlow.findMany({ where: flowScope(), orderBy: [{ active: "desc" }, { updatedAt: "desc" }] }),
+    prisma.botFlow.findMany({ where: scope, orderBy: [{ active: "desc" }, { updatedAt: "desc" }] }),
     getFlowPublicationMeta(),
     enabledFlowChannels(),
   ]);

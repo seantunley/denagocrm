@@ -73,7 +73,7 @@ test("a writer landing between the write and the stamp read cannot be adopted", 
 test("the server fences the write and reports the conflict rather than swallowing it", () => {
   const action = src("src/app/actions/flow.ts");
   const save = action.slice(action.indexOf("export async function saveFlow"), action.indexOf("export async function resetFlow"));
-  assert.match(save, /where: \{ id, updatedAt: expected, \.\.\.flowScope\(\) \}/, "the save must be fenced");
+  assert.match(save, /where: \{ id, updatedAt: expected, \.\.\.scope \}/, "the save must be fenced");
   assert.match(save, /written\.count !== 1/, "and must notice when it did not land");
   assert.match(save, /conflict: true/, "the caller needs to know it was a conflict, not a generic failure");
   // Losing work silently is the defect; the refusal has to be explained.

@@ -59,6 +59,9 @@ test("a newly created flow is not born tenantless", () => {
   const creates = actions.match(/botFlow\.create\(\{[\s\S]*?\}\)/g) ?? [];
   assert.ok(creates.length >= 2, `expected the create sites, found ${creates.length}`);
   for (const create of creates) {
-    assert.match(create, /tenantId: writeTenantId\(\) \?\? DEFAULT_TENANT_ID/, `a create still writes a tenantless flow:\n${create}`);
+    // The session's active workspace, not writeTenantId() — that is null while
+    // enforcement is dormant, so it would stamp a second workspace's new flow
+    // with the founding tenant's id.
+    assert.match(create, /tenantId: await builderTenantId\(\)/, `a create still writes the wrong tenant:\n${create}`);
   }
 });

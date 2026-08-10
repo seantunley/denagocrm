@@ -8,17 +8,16 @@ import { logAudit } from "@/lib/audit";
 import { DEFAULT_FLOW } from "@/lib/flow";
 import { flowTemplate } from "@/lib/flowTemplates";
 import { publishFlowSnapshot } from "@/lib/flowPublishing";
-import { DEFAULT_TENANT_ID } from "@/lib/tenant";
-import { writeTenantId } from "@/lib/tenantWrite";
-import { flowScope } from "@/lib/flowScope";
+import { builderTenantId, flowScope } from "@/lib/flowScope";
 
 /** Create a new draft from one of the shipped, compiler-checked templates. */
 export async function createFlow(formData: FormData) {
+  const scope = await flowScope();
   const owner = await requireOwner();
   const template = flowTemplate(String(formData.get("templateId") ?? "general"));
   const requestedName = String(formData.get("name") ?? "").trim();
   const name = requestedName || template.name;
-  const count = await prisma.botFlow.count({ where: flowScope() });
+  const count = await prisma.botFlow.count({ where: scope });
   const flow = await prisma.botFlow.create({
     data: {
       name,
@@ -28,7 +27,7 @@ export async function createFlow(formData: FormData) {
       // dormant, so every flow made since the 20260722146000 backfill was
       // tenantless — which is what silently broke Publish, and what forces the
       // legacy NULL-tolerant rule everywhere a flow is read.
-      tenantId: writeTenantId() ?? DEFAULT_TENANT_ID,
+      tenantId: await builderTenantId(),
     },
   });
   // Preserve the old "first flow is live" behaviour, but publish the exact
@@ -49,6 +48,7 @@ export async function saveFlow(
   /** The draft's `updatedAt` as it was when this canvas loaded it. Required. */
   expectedUpdatedAt: string,
 ): Promise<{ ok?: boolean; error?: string; conflict?: boolean; updatedAt?: string }> {
+  const scope = await flowScope();
   const owner = await requireOwner();
   let parsed: unknown;
   try {
@@ -74,13 +74,13 @@ export async function saveFlow(
   // the same lost update in a narrower window.
   const result = await prisma.$transaction(async (tx) => {
     const written = await tx.botFlow.updateMany({
-      where: { id, updatedAt: expected, ...flowScope() },
+      where: { id, updatedAt: expected, ...scope },
       data: { definition },
     });
     if (written.count !== 1) return null;
     // Read inside the transaction, so it is the row this write produced. The
     // updateMany above holds the row lock until commit.
-    const row = await tx.botFlow.findFirst({ where: { id, ...flowScope() }, select: { updatedAt: true } });
+    const row = await tx.botFlow.findFirst({ where: { id, ...scope }, select: { updatedAt: true } });
     return row?.updatedAt ?? null;
   });
 
@@ -104,6 +104,7 @@ export async function resetFlow(
   /** The draft's `updatedAt` as it was when this canvas loaded it. Required. */
   expectedUpdatedAt: string,
 ): Promise<{ ok?: boolean; error?: string; conflict?: boolean; updatedAt?: string }> {
+  const scope = await flowScope();
   await requireOwner();
   // Reset is a draft writer too — the most destructive one — so it carries the
   // same MANDATORY fence as Save. An optional stamp with an unconditional `else`
@@ -117,11 +118,11 @@ export async function resetFlow(
   // THIS write produced, or the canvas adopts a later writer's revision unseen.
   const result = await prisma.$transaction(async (tx) => {
     const written = await tx.botFlow.updateMany({
-      where: { id, updatedAt: expected, ...flowScope() },
+      where: { id, updatedAt: expected, ...scope },
       data: { definition: JSON.stringify(DEFAULT_FLOW) },
     });
     if (written.count !== 1) return null;
-    const row = await tx.botFlow.findFirst({ where: { id, ...flowScope() }, select: { updatedAt: true } });
+    const row = await tx.botFlow.findFirst({ where: { id, ...scope }, select: { updatedAt: true } });
     return row?.updatedAt ?? null;
   });
 
@@ -140,31 +141,34 @@ export async function resetFlow(
 }
 
 export async function renameFlow(id: string, formData: FormData) {
+  const scope = await flowScope();
   await requireOwner();
   const name = String(formData.get("name") ?? "").trim();
-  if (name) await prisma.botFlow.updateMany({ where: { id, ...flowScope() }, data: { name } });
+  if (name) await prisma.botFlow.updateMany({ where: { id, ...scope }, data: { name } });
   revalidatePath("/bot-builder");
 }
 
 export async function deleteFlow(id: string) {
+  const scope = await flowScope();
   await requireOwner();
   const [flow, publishedVersion] = await Promise.all([
-    prisma.botFlow.findFirst({ where: { id, ...flowScope() } }),
+    prisma.botFlow.findFirst({ where: { id, ...scope } }),
     prisma.botFlowVersion.findFirst({ where: { flowId: id }, select: { id: true } }),
   ]);
   // Published snapshots may still be referenced by active BotSession pins. A
   // flow that has ever been published therefore remains as immutable history.
   if (!flow || flow.active || publishedVersion) return;
-  await prisma.botFlow.deleteMany({ where: { id, ...flowScope() } });
+  await prisma.botFlow.deleteMany({ where: { id, ...scope } });
   revalidatePath("/bot-builder");
 }
 
 export async function duplicateFlow(id: string) {
+  const scope = await flowScope();
   await requireOwner();
-  const src = await prisma.botFlow.findFirst({ where: { id, ...flowScope() } });
+  const src = await prisma.botFlow.findFirst({ where: { id, ...scope } });
   if (!src) return;
   await prisma.botFlow.create({
-    data: { name: `${src.name} (copy)`, definition: src.definition, channel: src.channel, active: false, tenantId: writeTenantId() ?? DEFAULT_TENANT_ID },
+    data: { name: `${src.name} (copy)`, definition: src.definition, channel: src.channel, active: false, tenantId: await builderTenantId() },
   });
   revalidatePath("/bot-builder");
 }
