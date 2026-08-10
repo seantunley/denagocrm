@@ -53,6 +53,7 @@ export type HarnessSkip = { skipped: true; reason: string };
 
 const DB_NAME = "denagocrm_harness_test";
 const EMBEDDED_PORT = Number(process.env.TENANT_HARNESS_PG_PORT ?? 55432);
+
 const EMBEDDED_USER = "harness";
 const EMBEDDED_PASSWORD = "harness";
 
@@ -66,9 +67,25 @@ const EMBEDDED_PASSWORD = "harness";
  *
  * Delete it to force a from-empty rebuild:
  *   rm -rf "$(node -p 'require("os").tmpdir()')/denagocrm-harness-pg"
+ *
+ * KEYED TO THE PORT, because "one machine" turned out not to be the right unit
+ * when two suites run at once. Both failure modes were observed live:
+ *   - two servers pointed at ONE data directory — the second `initdb` refuses
+ *     ("directory exists but is not empty") and, worse, a start that does
+ *     succeed has two postmasters over one cluster;
+ *   - two suites sharing ONE server and database — `purgeLeftovers()` in
+ *     ./seed.ts deletes every `harness_%` tenant, so one run wipes the other's
+ *     fixture mid-flight and the victim fails with something that looks like an
+ *     isolation bug and is not.
+ * So a run that wants its own cluster asks for its own port and gets its own
+ * directory with it. The DEFAULT port keeps the historical directory name, so an
+ * existing cluster is still reused rather than silently rebuilt from empty.
  */
+const DEFAULT_EMBEDDED_PORT = 55432;
+
 function embeddedDataDir() {
-  return path.join(os.tmpdir(), "denagocrm-harness-pg");
+  const base = path.join(os.tmpdir(), "denagocrm-harness-pg");
+  return EMBEDDED_PORT === DEFAULT_EMBEDDED_PORT ? base : `${base}-${EMBEDDED_PORT}`;
 }
 
 /**

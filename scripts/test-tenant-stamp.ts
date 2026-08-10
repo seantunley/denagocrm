@@ -176,31 +176,85 @@ async function run(): Promise<number> {
     return new Set(rows.map((r) => r.id));
   }
 
-  /** Run `fn`, then return the single row id that appeared in `table`. */
-  async function createdRowId(table: string, fn: () => Promise<void>): Promise<string> {
-    const before = await idsIn(table);
-    await fn();
-    const after = await idsIn(table);
-    const fresh = [...after].filter((id) => !before.has(id));
-    if (fresh.length !== 1) {
-      throw new Error(
-        `expected exactly one new ${table} row, saw ${fresh.length} — cannot attribute ownership`,
-      );
-    }
-    return fresh[0];
-  }
+  /**
+   * Run `fn`, then return the single row id that appeared in `table` — or a
+   * reason why no row can be attributed.
+   *
+   * The action is allowed to THROW here rather than aborting the suite, and that
+   * is not defensive padding: a wrongly-stamped write does not always reach the
+   * table. Some of these models carry a COMPOSITE foreign key on
+   * `(tenantId, <parent>Id)`, so stamping a tenant that does not own the parent
+   * is rejected by PostgreSQL outright (P2003). "The row was refused" and "the
+   * row landed under the wrong owner" are both failures of the same property —
+   * the acting tenant's row is not there — and each check has to be able to say
+   * which of the two happened without stopping the other two checks from running.
+   */
+  type Created = { id: string } | { failed: string };
 
-  /** A redirect is how these two actions finish; it is control flow, not a fault. */
-  async function swallowRedirect(fn: () => Promise<unknown>): Promise<void> {
+  async function createdRowId(table: string, fn: () => Promise<void>): Promise<Created> {
+    const before = await idsIn(table);
     try {
       await fn();
     } catch (error) {
-      if (!(error instanceof HarnessRedirect)) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      const code = (error as { code?: string })?.code;
+      const constraint = (error as { meta?: { constraint?: string } })?.meta?.constraint;
+      const after = await idsIn(table);
+      const leaked = [...after].filter((id) => !before.has(id));
+      if (leaked.length === 1) return { id: leaked[0] };
+      return {
+        failed:
+          code === "P2003"
+            ? `the write was REJECTED by PostgreSQL (${code}, constraint ${constraint}) — ` +
+              `the stamped tenant does not own the parent row, so no ${table} was persisted at all`
+            : `the action threw and no ${table} row was persisted: ${message.split("\n")[0]}`,
+      };
     }
+    const after = await idsIn(table);
+    const fresh = [...after].filter((id) => !before.has(id));
+    if (fresh.length !== 1) {
+      return {
+        failed: `expected exactly one new ${table} row, saw ${fresh.length} — cannot attribute ownership`,
+      };
+    }
+    return { id: fresh[0] };
+  }
+
+  /**
+   * A redirect is how these two actions finish — and ALSO how this codebase says
+   * NO: requirePermission redirects to "/", requireContactAccess to "/contacts",
+   * requireVehicleAccess to "/vehicles". The two are the same exception type, so
+   * a blanket catch would turn "access refused, nothing was written" into a
+   * silent skip. Only the SUCCESS destination is accepted; anything else is
+   * re-thrown carrying the location it tried to go to.
+   */
+  async function expectRedirectTo(
+    prefix: string,
+    fn: () => Promise<unknown>,
+  ): Promise<void> {
+    try {
+      await fn();
+    } catch (error) {
+      if (error instanceof HarnessRedirect) {
+        if (error.location.startsWith(prefix)) return;
+        throw new Error(
+          `action refused: redirected to "${error.location}" instead of "${prefix}…" — ` +
+            `the access guard said no, so nothing was written`,
+        );
+      }
+      throw error;
+    }
+    throw new Error(`expected a redirect to "${prefix}…" — the action returned instead`);
   }
 
   /** THE ASSERTION. The row's `tenantId` column, straight out of PostgreSQL. */
-  async function assertOwnedByB(label: string, table: string, id: string): Promise<void> {
+  async function assertOwnedByB(label: string, table: string, created: Created): Promise<void> {
+    if ("failed" in created) {
+      record(label, false, `expected B=${B}, but ${created.failed}`);
+      record(`${label} — does not belong to tenant A`, false, `no ${table} row exists to own`);
+      return;
+    }
+    const id = created.id;
     const stored = await storedTenantId(table, id);
     const shown =
       stored === undefined ? "<no such row>" : stored === null ? "NULL (unowned)" : stored;
@@ -230,27 +284,27 @@ async function run(): Promise<number> {
      * PR is about. */
     console.log("\n  Quote — createQuoteForContact");
     const { createQuoteForContact } = await import("../src/app/actions/quotes");
-    const quoteId = await createdRowId("Quote", async () => {
+    const quote = await createdRowId("Quote", async () => {
       await actAsStaff(fixture.b, async () => {
         const form = new FormData();
         form.set("contactId", fixture.b.rows.contactId);
-        await swallowRedirect(() => createQuoteForContact(form));
+        await expectRedirectTo("/quotes?edit=", () => createQuoteForContact(form));
       });
     });
-    await assertOwnedByB("Quote created in B is owned by B", "Quote", quoteId);
+    await assertOwnedByB("Quote created in B is owned by B", "Quote", quote);
 
     /* ── 2. JobCard ───────────────────────────────────────────────────────── */
     console.log("\n  JobCard — createJobCard");
     const { createJobCard } = await import("../src/app/actions/jobcards");
-    const jobCardId = await createdRowId("JobCard", async () => {
+    const jobCard = await createdRowId("JobCard", async () => {
       await actAsStaff(fixture.b, async () => {
         const form = new FormData();
         form.set("vehicleId", fixture.b.rows.vehicleId);
         form.set("description", "harness check-in");
-        await swallowRedirect(() => createJobCard(form));
+        await expectRedirectTo("/jobcards/", () => createJobCard(form));
       });
     });
-    await assertOwnedByB("JobCard created in B is owned by B", "JobCard", jobCardId);
+    await assertOwnedByB("JobCard created in B is owned by B", "JobCard", jobCard);
 
     /* ── 3. ConsentRecord ─────────────────────────────────────────────────
      * The consent write PR #430 fixed is the POPIA erasure record in
@@ -260,7 +314,7 @@ async function run(): Promise<number> {
      * asOwner. */
     console.log("\n  ConsentRecord — anonymizeContact (POPIA erasure record)");
     const { anonymizeContact } = await import("../src/app/actions/privacy");
-    const consentId = await createdRowId("ConsentRecord", async () => {
+    const consent = await createdRowId("ConsentRecord", async () => {
       await actAsStaff(
         fixture.b,
         async () => {
@@ -274,7 +328,7 @@ async function run(): Promise<number> {
     await assertOwnedByB(
       "ConsentRecord created in B is owned by B",
       "ConsentRecord",
-      consentId,
+      consent,
     );
   } finally {
     await teardown(fixture);

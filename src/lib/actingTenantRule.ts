@@ -35,5 +35,6 @@ export function decideActingTenant(input: {
   /** `getActiveTenantId()` — the session's validated active workspace. */
   sessionTenantId: string | null;
 }): string {
-  return input.enforcedTenantId ?? input.sessionTenantId ?? DEFAULT_TENANT_ID;
+  // MUTATION (temporary): the original defect — ignore the acting workspace.
+  return input.enforcedTenantId ?? DEFAULT_TENANT_ID;
 }
