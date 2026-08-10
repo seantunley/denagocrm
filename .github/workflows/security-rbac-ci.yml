@@ -313,6 +313,13 @@ jobs:
       - name: Binding -- a DM thread resolves to its own channel's conversation
         run: npm run test:dm-binding
 
+      # A schema test proves the composite key exists; only two real tenants
+      # running through the sync prove the runtime uses it. The dormant-mode
+      # predicate returned {} , so whoever synced a shared Google Place first
+      # suppressed everyone else's copy of the same review.
+      - name: Isolation -- one Google Place, two tenants, two reviews
+        run: npm run test:review-isolation
+
   # -- LANE 3: migrating a database that already has data ----------------------
   #
   # Its own job and its own scratch database, so its four minutes overlap the

@@ -1,12 +1,16 @@
-import crypto from "crypto";
 import { prisma } from "./db";
 import { resolveTenantCredential } from "./settings";
 import { logAudit } from "./audit";
 import { sendPushToAll } from "./push";
+import { inboundCommunicationKey, isDedupeKeyConflict } from "./inboundMessageKey";
+import { currentInboundBotEventId } from "./botInboundEvent";
+import { DEFAULT_TENANT_ID } from "./tenant";
+import { writeTenantId } from "./tenantWrite";
 import { createLeadRecordIfPipelineReady } from "./leadCreate";
 import { saveFile } from "./storage";
 import { resolveTenantActor } from "./tenantActor";
 import { currentTenantScope } from "./tenantScope";
+import { DerivedCredentialCache } from "./derivedCredentialCache";
 
 const GRAPH = "https://graph.facebook.com/v21.0";
 
@@ -34,27 +38,23 @@ export async function isMessengerConfigured(): Promise<boolean> {
 /**
  * The system-user token manages the page; sends need the page-scoped token.
  *
- * This cache used to be ONE module-global token. A warm server process serving
- * tenant B within 30 minutes of tenant A could therefore reuse A's page token.
- * Cache by tenant and bind the entry to a fingerprint of the current source
- * credential so rotating a token invalidates the cached derived page token too.
+ * Every rule about WHOSE token this is and WHETHER it is still derivable lives in
+ * DerivedCredentialCache, where it can be exercised directly. What is left here
+ * is the part specific to Meta: which credential the page token is derived from,
+ * and how the exchange is made.
+ *
+ * Note the shape. The tenant is read ONCE and feeds both the key and the
+ * credential lookup — two reads of a mutable ambient scope can disagree, and when
+ * they do the entry is filed under one tenant holding another's token. And the
+ * source credential is resolved BEFORE the cache is reachable at all, because it
+ * is an argument: a rotation or a disconnect cannot be short-circuited by a hit.
  */
-type PageTokenCacheEntry = { token: string; sourceHash: string; fetchedAt: number };
-const pageTokenCache = new Map<string, PageTokenCacheEntry>();
-const tokenHash = (value: string) => crypto.createHash("sha256").update(value).digest("hex");
+const PAGE_TOKEN_TTL_MS = 30 * 60 * 1000;
+const GLOBAL_TOKEN_KEY = " global";
+const pageTokenCache = new DerivedCredentialCache<string>({ ttlMs: PAGE_TOKEN_TTL_MS });
 
-async function getPageToken(): Promise<string | null> {
-  const tenantKey = ambientTenantId() ?? "__global__";
-  const sysToken = await resolveTenantCredential(ambientTenantId(), "META_PAGE_ACCESS_TOKEN");
-  if (!sysToken) {
-    pageTokenCache.delete(tenantKey);
-    return null;
-  }
-  const sourceHash = tokenHash(sysToken);
-  const cached = pageTokenCache.get(tenantKey);
-  if (cached && cached.sourceHash === sourceHash && Date.now() - cached.fetchedAt < 30 * 60 * 1000) {
-    return cached.token;
-  }
+/** Exchange a system-user token for the page-scoped one. Null on any failure. */
+async function exchangeForPageToken(sysToken: string): Promise<string | null> {
   try {
     const res = await fetch(
       `${GRAPH}/me/accounts?fields=id,access_token&access_token=${encodeURIComponent(sysToken)}`,
@@ -62,13 +62,17 @@ async function getPageToken(): Promise<string | null> {
     );
     if (!res.ok) return null;
     const json = await res.json();
-    const token: string | undefined = json.data?.[0]?.access_token;
-    if (!token) return null;
-    pageTokenCache.set(tenantKey, { token, sourceHash, fetchedAt: Date.now() });
-    return token;
+    return json.data?.[0]?.access_token ?? null;
   } catch {
     return null;
   }
+}
+
+async function getPageToken(): Promise<string | null> {
+  // ONCE. Both the key and the lookup below must describe the same tenant.
+  const tenantId = ambientTenantId();
+  const sysToken = await resolveTenantCredential(tenantId, "META_PAGE_ACCESS_TOKEN");
+  return pageTokenCache.resolve(tenantId ?? GLOBAL_TOKEN_KEY, sysToken, exchangeForPageToken);
 }
 
 /** Sends a Messenger / Instagram DM (24-hour customer-service window applies). */
@@ -243,7 +247,9 @@ export async function recordInboundDm(
   senderId: string,
   text: string,
   referral: Referral,
-  attachments: InboundAttachment[] = []
+  attachments: InboundAttachment[] = [],
+  /** The provider's message id (mid), so a redelivery reuses these rows. */
+  providerMessageId?: string,
 ) {
   const idField = platform === "instagram" ? "instagramId" : "messengerPsid";
   let contact = await prisma.contact.findFirst({ where: { [idField]: senderId } });
@@ -310,25 +316,58 @@ export async function recordInboundDm(
     }
   }
 
+  // One identity for this provider event, shared by the text row and every
+  // attachment row. See inboundMessageKey: the ledger row id is globally unique,
+  // so the transcript's boundary matches the ledger's exactly.
+  const identity = {
+    ledgerEventId: currentInboundBotEventId(),
+    tenantId: writeTenantId() ?? DEFAULT_TENANT_ID,
+    channel: platform,
+    providerId: providerMessageId ?? "",
+  };
+  // "Nothing new was written" — NOT "some row was a duplicate". A retry where the
+  // text already existed but a missing attachment is newly inserted HAS produced
+  // something the inbox should announce.
+  let insertedAny = false;
   const firstUser = await resolveTenantActor(); // tenant-aware (channel scope); dormant → oldest active user
   if (firstUser) {
     if (text) {
-      await prisma.communication.create({
-        data: {
-          type: platform,
-          direction: "inbound",
-          body: text,
-          contactId: contact.id,
-          leadId,
-          userId: firstUser.id,
-        },
-      });
+      // create(), NOT createMany(): db.ts hooks communication.create to resolve
+      // and attach the Conversation and bump its counters. There is no createMany
+      // hook, and the whole inbox collaboration layer hangs off Conversation rows.
+      const key = inboundCommunicationKey(identity);
+      try {
+        await prisma.communication.create({
+          data: {
+            type: platform,
+            direction: "inbound",
+            body: text,
+            contactId: contact.id,
+            leadId,
+            userId: firstUser.id,
+            ...(key ? { dedupeKey: key } : {}),
+          },
+        });
+        insertedAny = true;
+      } catch (error) {
+        if (!key || !isDedupeKeyConflict(error)) throw error;
+      }
     }
     // Media becomes one communication per attachment, stored permanently
-    for (const att of attachments.slice(0, 5)) {
+    for (const [index, att] of attachments.slice(0, 5).entries()) {
+      const attKey = inboundCommunicationKey(identity, index);
+      // Check BEFORE downloading. persistAttachment writes permanent storage under
+      // a fresh random object name every call, so persisting first and deduping
+      // afterwards left an orphaned blob for every redelivery — the transcript was
+      // clean and the bucket was not. Attachments are explicitly part of this
+      // dedupe contract, so the cheap read comes first.
+      if (attKey && (await prisma.communication.findUnique({ where: { dedupeKey: attKey }, select: { id: true } }))) {
+        continue;
+      }
       const saved = await persistAttachment(att);
-      await prisma.communication.create({
-        data: {
+      try {
+        await prisma.communication.create({
+          data: {
           type: platform,
           direction: "inbound",
           body: saved
@@ -345,8 +384,15 @@ export async function recordInboundDm(
           contactId: contact.id,
           leadId,
           userId: firstUser.id,
-        },
-      });
+            ...(attKey ? { dedupeKey: attKey } : {}),
+          },
+        });
+        insertedAny = true;
+      } catch (error) {
+        // Lost a race with a concurrent redelivery between the check and the
+        // insert. The blob is already written; the transcript stays single.
+        if (!attKey || !isDedupeKeyConflict(error)) throw error;
+      }
     }
     const { reopenThreadOnInbound } = await import("@/lib/reopenThread");
     await reopenThreadOnInbound(contact.id, leadId, platform);
@@ -358,6 +404,13 @@ export async function recordInboundDm(
         ? "🎤 sent a voice note"
         : `sent a ${attachments[0].type}`
       : "sent a message");
+  // Notify only when this delivery actually added something. A pure redelivery
+  // must not buzz everyone again; a retry that finally lands a missing attachment
+  // legitimately should. Note this is "nothing new was written", which is a
+  // near-proxy for "already notified" rather than proof of it — a durable
+  // notification identity would be the exact answer, and is not worth its own
+  // table for a push.
+  if (!insertedAny) return;
   await sendPushToAll({
     title: platform === "instagram" ? "New Instagram DM 📸" : "New Messenger message 🔵",
     body: `${contact.firstName}${contact.lastName ? ` ${contact.lastName}` : ""}: ${pushBody.slice(0, 80)}`,

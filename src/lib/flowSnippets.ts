@@ -1,12 +1,31 @@
 import "server-only";
 import crypto from "crypto";
 import { getSetting } from "./settings";
+import { builderTenantId } from "./flowScope";
+import { DEFAULT_TENANT_ID } from "./tenant";
 import type { FlowSnippet } from "./flowSnippetDefinition";
 
 export { insertFlowSnippet } from "./flowSnippetDefinition";
 export type { FlowSnippet } from "./flowSnippetDefinition";
 
 export const FLOW_SNIPPETS_SETTING = "BOT_FLOW_SNIPPETS";
+
+/**
+ * Reusable flow blocks live in AppSettings, and while enforcement is dormant
+ * getSetting/putSetting deliberately resolve EVERY key to the founding tenant. So
+ * a single global key meant a second workspace listed the founding tenant's saved
+ * blocks, could insert one into its own draft, and could DELETE them — a
+ * cross-tenant read and a destructive cross-tenant write on a builder surface
+ * this change is otherwise closing.
+ *
+ * Namespacing the key per workspace fixes it with no migration: the founding
+ * tenant keeps the existing key and its existing blocks, and a second workspace
+ * gets its own bucket rather than a share of A's.
+ */
+export async function flowSnippetsSettingKey(): Promise<string> {
+  const tenantId = await builderTenantId();
+  return tenantId === DEFAULT_TENANT_ID ? FLOW_SNIPPETS_SETTING : `${FLOW_SNIPPETS_SETTING}:${tenantId}`;
+}
 
 function validDefinition(value: unknown): value is FlowSnippet["definition"] {
   if (!value || typeof value !== "object") return false;
@@ -15,7 +34,7 @@ function validDefinition(value: unknown): value is FlowSnippet["definition"] {
 }
 
 export async function getFlowSnippets(): Promise<FlowSnippet[]> {
-  const raw = await getSetting(FLOW_SNIPPETS_SETTING);
+  const raw = await getSetting(await flowSnippetsSettingKey());
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw);

@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { requireOwner } from "@/lib/auth";
 import { coloursList, priceList } from "@/lib/botAnswers";
 import { runFlow, type Flow, type FlowInput, type FlowSession, type OutMsg } from "@/lib/flow";
+import { flowScope } from "@/lib/flowScope";
 
 export type SimulatorTurnInput = {
   flowId: string;
@@ -25,7 +26,8 @@ function simulatedSlotLabel(slotId: string): string {
 /** Production graph engine + explicitly non-writing effects. */
 export async function simulateFlowTurn(input: SimulatorTurnInput): Promise<SimulatorTurnResult> {
   await requireOwner();
-  const row = await prisma.botFlow.findUnique({ where: { id: input.flowId } });
+  const scope = await flowScope();
+  const row = await prisma.botFlow.findFirst({ where: { id: input.flowId, ...scope } });
   if (!row) return { ok: false, error: "Flow not found.", messages: [], session: null, handedOff: false, trace: [], vars: {} };
   const flow = parseFlow(row.definition);
   if (!flow) return { ok: false, error: "Flow data is malformed.", messages: [], session: null, handedOff: false, trace: [], vars: {} };
