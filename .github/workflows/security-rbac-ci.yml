@@ -304,14 +304,6 @@ jobs:
       - name: Migrations run every statement on one session
         run: npm run test:migration-session
 
-      # A source test can assert that the ledger HAS a failureCode column and that
-      # the writes share a transaction. It cannot show that any runtime path ever
-      # sets that column, that a duplicate submission finds the bot already
-      # paused, or that automation queued before a person answered never reaches
-      # the customer. Those are behaviours, and only a real database shows them.
-      - name: Inbox -- a staff reply is one durable decision
-        run: npm run test:staff-reply
-
       # A DM reply is delivered on the channel the stored Conversation names, so
       # that a caller with inbox.reply cannot choose Messenger or Instagram for a
       # customer who has both. The source tests can see that the resolver is
@@ -320,6 +312,37 @@ jobs:
       # that a page rendered twice does not create a second one.
       - name: Binding -- a DM thread resolves to its own channel's conversation
         run: npm run test:dm-binding
+
+      # A schema test proves the composite key exists; only two real tenants
+      # running through the sync prove the runtime uses it. The dormant-mode
+      # predicate returned {} , so whoever synced a shared Google Place first
+      # suppressed everyone else's copy of the same review.
+      - name: Isolation -- one Google Place, two tenants, two reviews
+        run: npm run test:review-isolation
+
+      # A source assertion cannot tell "the row budget is bounded" from "the row
+      # budget is bounded PER CONVERSATION", and only the second one keeps a quiet
+      # thread visible next to a busy one. Both shapes select threads first and
+      # both look correct; the difference shows up only against a dataset where
+      # one conversation carries more recent messages than the entire page budget.
+      - name: Inbox -- one loud conversation cannot starve the quiet ones
+        run: npm run test:inbox-selection
+
+      # A source test can assert that the ledger HAS a failureCode column and that
+      # the writes share a transaction. It cannot show that any runtime path ever
+      # sets that column, that a duplicate submission finds the bot already
+      # paused, or that automation queued before a person answered never reaches
+      # the customer. Those are behaviours, and only a real database shows them.
+      - name: Inbox -- a staff reply is one durable decision
+        run: npm run test:staff-reply
+
+      # Meta echoes every message the Page sends, including ours. The pure tests
+      # exercise the rule that tells them apart; only a real database can hold a
+      # row in the state the worker is in between Meta accepting a send and the
+      # UPDATE that records its id -- which is the window where the echo used to
+      # be written into the customer's history a second time.
+      - name: Inbox -- our own Meta echo is not recorded twice
+        run: npm run test:meta-echo
 
   # -- LANE 3: migrating a database that already has data ----------------------
   #

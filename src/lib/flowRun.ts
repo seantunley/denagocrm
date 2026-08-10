@@ -20,6 +20,9 @@ import { decideInboundAct, type BotOwnership } from "./botOwnership";
 
 export const FLOW_MARKER = "🤖 Flow";
 const FLOW_VERSION_VAR = "__flow_version";
+// Reserved, like __flow_version: the analytics trigger reads it out of the stored
+// vars because a paused session's own `nodeId` is null by design.
+const HANDOFF_NODE_VAR = "__handoff_node";
 export async function isFlowEnabled(): Promise<boolean> { return (await getSetting("BOT_ENABLED")) === "true" && (await getSetting("BOT_FLOW_ENABLED")) === "true"; }
 
 type LoadedSession = { nodeId: string | null; vars: Record<string, string>; flowVersionId: string | null; status: string; ownership: BotOwnership };
@@ -34,7 +37,7 @@ async function loadSession(key: string): Promise<LoadedSession | null> {
   delete vars[FLOW_VERSION_VAR];
   return { nodeId: row.nodeId, vars, flowVersionId, status: row.status, ownership: row.ownership };
 }
-function storedVars(vars: Record<string, string>, flowVersionId: string | null): string { return JSON.stringify({ ...vars, ...(flowVersionId ? { [FLOW_VERSION_VAR]: flowVersionId } : {}) }); }
+function storedVars(vars: Record<string, string>, flowVersionId: string | null, endedAt?: string | null): string { return JSON.stringify({ ...vars, ...(flowVersionId ? { [FLOW_VERSION_VAR]: flowVersionId } : {}), ...(endedAt ? { [HANDOFF_NODE_VAR]: endedAt } : {}) }); }
 function handoffBody(context?: FlowHandoffContext): string {
   const summary = context?.summary?.trim(); const reason = context?.reason?.trim();
   if (summary) return `${summary}${reason ? ` · ${reason}` : ""}`.slice(0, 220);
@@ -137,7 +140,7 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise
     }
     if (events.length) await recordBotFlowEventsTx(tx, tenantId, events);
 
-    if (result.handedOff) await upsertBotSessionTx(tx, tenantId, { channel: "whatsapp", key: digits, nodeId: null, vars: storedVars(session.vars, snapshot.versionId), status: "paused", ownership: "ai_handoff", expiresAt: new Date(Date.now() + 6 * 3600 * 1000) });
+    if (result.handedOff) await upsertBotSessionTx(tx, tenantId, { channel: "whatsapp", key: digits, nodeId: null, vars: storedVars(session.vars, snapshot.versionId, result.endedAt), status: "paused", ownership: "ai_handoff", expiresAt: new Date(Date.now() + 6 * 3600 * 1000) });
     else if (result.session) await upsertBotSessionTx(tx, tenantId, { channel: "whatsapp", key: digits, nodeId: result.session.nodeId, vars: storedVars(result.session.vars, snapshot.versionId), status: "active", ownership: "bot", expiresAt: new Date(Date.now() + 24 * 3600 * 1000) });
     else await deleteBotSessionTx(tx, tenantId, "whatsapp", digits);
   });
