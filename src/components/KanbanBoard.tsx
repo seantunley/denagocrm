@@ -773,13 +773,16 @@ export default function KanbanBoard({
     const snapshot = stages;
     applyMove(lead.id, fromStage.id, targetStageId);
     startTransition(async () => {
-      try {
-        await moveLead(lead.id, targetStageId);
-      } catch (error) {
-        // moveLead throws for a refused move — no permission for this pipeline,
-        // or a stage that requires booking details. The message is the reason.
-        rollbackTo(snapshot, error instanceof Error ? error.message : "Couldn't move the lead");
-      }
+      // A refused move — no permission for this pipeline, a stage that requires
+      // booking details — comes back as `{ ok: false, error }`, the same shape
+      // confirmTestDrive below already reads. The `.catch` is for the move never
+      // reaching the server at all; the board must not keep a card in a column
+      // the server never accepted, whichever way the attempt ended.
+      const result = await moveLead(lead.id, targetStageId).catch(() => ({
+        ok: false as const,
+        error: "Couldn't move the lead",
+      }));
+      if (!result.ok) rollbackTo(snapshot, result.error ?? "Couldn't move the lead");
     });
   }
 

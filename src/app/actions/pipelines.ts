@@ -14,6 +14,7 @@ import {
   archivePipeline,
   captureForecastSnapshot,
   createPipeline,
+  getOwnedPipelineRow,
   getPipelineStage,
   listPipelineStages,
   reorderPipelineStages,
@@ -81,10 +82,13 @@ export async function createSalesPipeline(formData: FormData) {
 export async function editSalesPipeline(id: string, formData: FormData) {
   return asActionResult(async () => {
     const user = await requirePermission("pipelines.manage");
-    const before = await basePrisma.$queryRaw<Array<Record<string, unknown>>>`
-      SELECT * FROM "SalesPipeline" WHERE "id" = ${id} LIMIT 1
-    `;
-    if (!before[0]) throw new ActionRefusal("Pipeline not found");
+    // `id` is a bound server-action argument, so it is client-supplied and
+    // forgeable. This read was unscoped: a pipeline id from another workspace
+    // returned that workspace's entire row, and even though `updatePipeline`
+    // then refused, the row had already been copied into THIS tenant's audit
+    // trail as the `before` snapshot, where it stays and is readable.
+    const before = await getOwnedPipelineRow(id);
+    if (!before) throw new ActionRefusal("Pipeline not found");
     const name = str(formData, "name");
     if (!name) throw new ActionRefusal("Pipeline name is required");
     const after = {
@@ -101,7 +105,7 @@ export async function editSalesPipeline(id: string, formData: FormData) {
       entityType: "SalesPipeline",
       entityId: id,
       user,
-      before: before[0],
+      before,
       after,
     });
     revalidatePath("/settings/pipelines");
@@ -203,18 +207,19 @@ export async function archiveSalesPipeline(id: string, formData: FormData) {
   return asActionResult(async () => {
     void formData;
     const user = await requirePermission("pipelines.manage");
-    const before = await basePrisma.$queryRaw<Array<Record<string, unknown>>>`
-      SELECT * FROM "SalesPipeline" WHERE "id" = ${id} LIMIT 1
-    `;
-    if (!before[0]) throw new ActionRefusal("Pipeline not found");
+    // The same unscoped `before` read as editSalesPipeline, with the same
+    // consequence: another workspace's full row lifted into this tenant's audit
+    // trail before `archivePipeline` got a chance to refuse.
+    const before = await getOwnedPipelineRow(id);
+    if (!before) throw new ActionRefusal("Pipeline not found");
     await archivePipeline(id);
     await logAuditStrict({
       action: "pipeline.archived",
-      summary: `Archived sales pipeline “${String(before[0].name ?? id)}”`,
+      summary: `Archived sales pipeline “${String(before.name ?? id)}”`,
       entityType: "SalesPipeline",
       entityId: id,
       user,
-      before: before[0],
+      before,
       after: { archived: true },
     });
     revalidatePath("/settings/pipelines");

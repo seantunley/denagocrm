@@ -2,7 +2,7 @@ import crypto from "crypto";
 import { Prisma } from "@prisma/client";
 import { basePrisma } from "./db";
 import { actingTenantId } from "./actingTenant";
-import { DEFAULT_TENANT_ID } from "./tenant";
+import { pipelineScopeFor, pipelineScopeSql, stageTenantId } from "./pipelineTenantRule";
 import { currentScopeClass, writeTenantId } from "./tenantWrite";
 
 export type SalesPipelineRow = {
@@ -51,11 +51,6 @@ export type ForecastLeadRow = {
 };
 
 /**
- * Tenant predicate for raw SQL paths that bypass the guarded Prisma client.
- * Dormant/system scope preserves the legacy global behaviour; a concrete tenant
- * filters the requested column; an enforcing but missing scope returns no rows.
- */
-/**
  * SalesPipeline's own tenant predicate, resolved from the ACTING WORKSPACE.
  *
  * `tenantFilter` below returns Prisma.empty while enforcement is dormant — which
@@ -77,15 +72,53 @@ export type ForecastLeadRow = {
  *   - `createPipeline` stamped no tenantId at all, so a pipeline created from a
  *     tenant's own UI was born tenantless.
  *
- * tenantId is nullable here, so the founding tenant owns the rows that predate
- * tenancy — the same legacy rule BotFlow, Journey and Dashboard use.
+ * The decision itself — STRICT equality, with no "NULL means the founding tenant"
+ * fallback — lives in {@link pipelineScopeFor}, which a test executes with two
+ * concrete tenant ids. This function is only the seam that turns it into SQL.
  */
-async function pipelineTenantFilter(alias = '"tenantId"') {
-  const tenantId = await actingTenantId();
-  const column = Prisma.raw(alias);
-  return tenantId === DEFAULT_TENANT_ID
-    ? Prisma.sql`AND (${column} = ${tenantId} OR ${column} IS NULL)`
-    : Prisma.sql`AND ${column} = ${tenantId}`;
+async function pipelineTenantFilter(alias: '"tenantId"' | 'p."tenantId"' = '"tenantId"') {
+  return pipelineScopeSql(pipelineScopeFor({ actingTenantId: await actingTenantId() }), alias);
+}
+
+/** A pipeline as its OWNER row: the id, the owning tenant, and whether it is live. */
+export type OwnedPipeline = { id: string; tenantId: string | null; active: boolean };
+
+/**
+ * Load a pipeline THROUGH the tenant boundary, or refuse.
+ *
+ * The single gate every pipeline-scoped mutation goes through, because the id
+ * always arrives from the client — a route param, a bound server-action argument,
+ * a form post — and is therefore forgeable. Returning the row's `tenantId` is the
+ * point: children stamped from it (see {@link stageTenantId}) inherit the parent's
+ * owner rather than the editor's, and the value is already inside the caller's
+ * boundary because this is the query that established the boundary.
+ */
+async function requireOwnedPipeline(id: string): Promise<OwnedPipeline> {
+  const scope = await pipelineTenantFilter();
+  const rows = await basePrisma.$queryRaw<OwnedPipeline[]>`
+    SELECT "id", "tenantId", "active" FROM "SalesPipeline"
+    WHERE "id" = ${id} AND "deletedAt" IS NULL ${scope}
+    LIMIT 1
+  `;
+  const pipeline = rows[0];
+  if (!pipeline) throw new Error("Pipeline not found");
+  return pipeline;
+}
+
+/**
+ * The full pipeline row for an audit `before` snapshot, scoped to the caller.
+ *
+ * The unscoped `SELECT * FROM "SalesPipeline" WHERE "id" = $1` this replaces was
+ * not harmless just because the mutation beside it refused: it copied another
+ * workspace's entire row — name, description, type, ownership — into the caller's
+ * own audit trail, where it stays and is readable.
+ */
+export async function getOwnedPipelineRow(id: string): Promise<Record<string, unknown> | null> {
+  const scope = await pipelineTenantFilter();
+  const rows = await basePrisma.$queryRaw<Array<Record<string, unknown>>>`
+    SELECT * FROM "SalesPipeline" WHERE "id" = ${id} AND "deletedAt" IS NULL ${scope} LIMIT 1
+  `;
+  return rows[0] ?? null;
 }
 
 function tenantFilter(column: '"tenantId"' | 'l."tenantId"' | 's."tenantId"') {
@@ -262,16 +295,17 @@ export async function addPipelineStage(input: {
   closedStatus?: string | null;
   entryAction?: string | null;
 }) {
-  const tenantId = writeTenantId();
   const scope = tenantFilter('"tenantId"');
   // The pipeline this stage is being attached to must be one this workspace owns.
   // Unscoped, a known pipeline id was enough to add a stage to another tenant's
   // process — the acceptance gate the review names explicitly.
-  const pipelineScope = await pipelineTenantFilter();
-  const pipeline = await basePrisma.$queryRaw<Array<{ active: boolean }>>`
-    SELECT "active" FROM "SalesPipeline" WHERE "id" = ${input.pipelineId} AND "deletedAt" IS NULL ${pipelineScope} LIMIT 1
-  `;
-  if (!pipeline[0]) throw new Error("Pipeline not found");
+  const pipeline = await requireOwnedPipeline(input.pipelineId);
+  // The stage's owner is the PIPELINE's owner. It used to be `writeTenantId()`,
+  // which is null while enforcement is dormant, so every stage created since the
+  // 20260722130000 backfill was born unowned and would go invisible to its own
+  // workspace at the flip — the parent was moved onto `actingTenantId()` and the
+  // child was left behind.
+  const tenantId = stageTenantId({ pipelineTenantId: pipeline.tenantId, actingTenantId: await actingTenantId() });
   const rows = await basePrisma.$queryRaw<Array<{ nextOrder: number }>>`
     SELECT COALESCE(MAX("order"), -1) + 1 AS "nextOrder"
     FROM "PipelineStage"
@@ -314,20 +348,28 @@ export async function updatePipelineStage(id: string, input: {
     SELECT "pipelineId" FROM "PipelineStage" WHERE "id" = ${id} ${scope} LIMIT 1
   `;
   if (!current[0]) throw new Error("Pipeline stage not found");
+  // `tenantFilter` is Prisma.empty while enforcement is dormant, so the lookup
+  // above reaches every workspace's stages. The pipeline the stage hangs off is
+  // what carries a real boundary — resolve it, and refuse if it is not ours.
+  const pipeline = await requireOwnedPipeline(current[0].pipelineId);
   await assertEntryActionAvailable(current[0].pipelineId, input.entryAction, id);
   await basePrisma.$executeRaw`
     UPDATE "PipelineStage"
     SET "name" = ${input.name}, "color" = ${input.color},
       "defaultProbability" = ${Math.max(0, Math.min(100, input.defaultProbability))},
       "staleAfterDays" = ${input.staleAfterDays ?? null}, "isClosed" = ${closed.isClosed},
-      "closedStatus" = ${closed.closedStatus}, "entryAction" = ${input.entryAction ?? null}
-    WHERE "id" = ${id} ${scope}
+      "closedStatus" = ${closed.closedStatus}, "entryAction" = ${input.entryAction ?? null},
+      "tenantId" = ${stageTenantId({ pipelineTenantId: pipeline.tenantId, actingTenantId: await actingTenantId() })}
+    WHERE "id" = ${id} AND "pipelineId" = ${pipeline.id} ${scope}
   `;
 }
 
 export async function reorderPipelineStages(pipelineId: string, stageIds: string[]) {
   writeTenantId();
   const scope = tenantFilter('"tenantId"');
+  // Same gate as add/update: reordering is a write to a pipeline's shape, and the
+  // pipelineId arrives from the client.
+  await requireOwnedPipeline(pipelineId);
   const actual = await basePrisma.$queryRaw<Array<{ id: string }>>`
     SELECT "id" FROM "PipelineStage"
     WHERE "pipelineId" = ${pipelineId} ${scope}
@@ -448,16 +490,23 @@ export async function captureForecastSnapshot(input: {
   userId?: string | null;
 }) {
   if (!/^\d{4}-\d{2}$/.test(input.period)) throw new Error("Forecast period must be YYYY-MM");
+  // Same class as the two named reads: `pipelineId` arrives from a form post, and
+  // was written straight into the snapshot's FK without ever being checked against
+  // the caller's workspace. And the snapshot itself was inserted with NO tenantId
+  // at all — a row born unowned, on a table the 20260725160000 backfill has
+  // already claimed, so nothing else would ever pick it up.
+  if (input.pipelineId) await requireOwnedPipeline(input.pipelineId);
+  const tenantId = await actingTenantId();
   const leads = await listForecastLeads(input);
   const summary = summarizeForecast(leads);
   await basePrisma.$executeRaw`
     INSERT INTO "ForecastSnapshot" (
       "id", "period", "pipelineId", "teamId", "userId", "openValueCents", "weightedValueCents",
-      "commitValueCents", "bestCaseValueCents", "opportunityCount"
+      "commitValueCents", "bestCaseValueCents", "opportunityCount", "tenantId"
     ) VALUES (
       ${crypto.randomUUID()}, ${input.period}, ${input.pipelineId ?? null}, ${input.teamId ?? null}, ${input.userId ?? null},
       ${BigInt(summary.openValueCents)}, ${BigInt(summary.weightedValueCents)}, ${BigInt(summary.commitValueCents)},
-      ${BigInt(summary.bestCaseValueCents)}, ${summary.count}
+      ${BigInt(summary.bestCaseValueCents)}, ${summary.count}, ${tenantId}
     )
   `;
   return summary;

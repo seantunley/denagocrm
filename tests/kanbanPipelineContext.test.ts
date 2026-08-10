@@ -87,7 +87,10 @@ test("a rejected move restores exactly what the user was looking at", () => {
   const snapshotAt = requestMove.indexOf("const snapshot = stages;");
   const applyAt = requestMove.indexOf("applyMove(lead.id");
   assert.ok(snapshotAt >= 0 && applyAt > snapshotAt, "the snapshot must precede the optimistic move");
-  assert.match(requestMove, /catch \(error\) \{[\s\S]{0,200}rollbackTo\(snapshot/, "a throw must roll back");
+  assert.match(requestMove, /if \(!result\.ok\) rollbackTo\(snapshot/, "a refusal must roll back");
+  // A transport failure has to roll back too, or the board keeps a card in a
+  // column the server never accepted.
+  assert.match(requestMove, /\.catch\(\(\) => \(\{[\s\S]{0,120}ok: false as const/);
   // The old behaviour: a toast and nothing else, leaving the card where the
   // server refused to put it.
   assert.doesNotMatch(requestMove, /catch \(\) => \{\s*toast\.error/);
@@ -96,6 +99,41 @@ test("a rejected move restores exactly what the user was looking at", () => {
   const confirm = board.slice(board.indexOf("function confirmTestDrive("), board.indexOf("function removeLead("));
   assert.match(confirm, /const snapshot = stages;/);
   assert.match(confirm, /rollbackTo\(snapshot, result\.error/);
+});
+
+/**
+ * The rollback is the first code on this board that tries to DISPLAY a refusal,
+ * and `moveLead` was the only action it calls that signalled one by throwing.
+ * Next's guidance for Server Functions is the opposite — "avoid using try/catch
+ * blocks and throw errors. Instead, model expected errors as return values"
+ * (node_modules/next/dist/docs/01-app/01-getting-started/10-error-handling.md) —
+ * and every sibling the board calls already returns `{ ok, error }`.
+ */
+test("a refused move is a return value, not a throw", () => {
+  const actions = src("src/app/actions/leads.ts");
+  const moveLead = actions.slice(
+    actions.indexOf("export async function moveLead("),
+    actions.indexOf("export async function moveLeadToTestDrive("),
+  );
+  assert.ok(moveLead.length > 0, "moveLead must still exist");
+  assert.match(moveLead, /Promise<\{ ok: boolean; error\?: string \}>/, "the signature says so");
+  assert.match(moveLead, /return \{ ok: false, error: "You do not have permission to move leads between pipelines" \}/);
+  assert.match(moveLead, /return \{ ok: false, error: "This stage requires test-drive booking details" \}/);
+  assert.match(moveLead, /return \{ ok: true \};/, "the success path must report success");
+  // Bare throws are what produced a digest on the client and a hash in the toast.
+  const code = moveLead.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  assert.doesNotMatch(code, /throw new Error\(/, "an expected refusal must not be thrown");
+
+  // The shared stage lookup has the same two shapes: a value for the callers that
+  // return, a refusal for the ones inside asActionResult.
+  const resolve = actions.slice(actions.indexOf("async function resolveOpenStage("), actions.indexOf("export async function createLead("));
+  assert.match(resolve, /return \{ error: "Selected pipeline stage does not exist" \}/);
+  assert.match(resolve, /if \("error" in resolved\) throw new ActionRefusal\(resolved\.error\)/);
+  assert.doesNotMatch(
+    resolve.slice(0, resolve.indexOf("async function validateOpenStage(")),
+    /throw /,
+    "the value form must not throw",
+  );
 });
 
 /* ── one pipeline is the board's context ───────────────────────────────── */
@@ -182,8 +220,18 @@ test("the pipeline predicate resolves the acting workspace, not the dormant scop
   // tenantFilter() returns Prisma.empty while enforcement is dormant, which is
   // today — fine on top of an already-scoped client, useless on basePrisma.
   const lib = src("src/lib/pipelines.ts");
-  const fn = lib.slice(lib.indexOf("async function pipelineTenantFilter"), lib.indexOf("function tenantFilter"));
+  const fn = lib.slice(
+    lib.indexOf("async function pipelineTenantFilter"),
+    lib.indexOf("/** A pipeline as its OWNER row"),
+  );
   assert.match(fn, /await actingTenantId\(\)/);
-  assert.match(fn, /IS NULL\)`/, "the founding tenant keeps rows that predate tenancy");
-  assert.match(fn, /AND \$\{column\} = \$\{tenantId\}`/, "a second workspace gets a strict filter");
+  // The decision itself moved to pipelineTenantRule.ts, where a test EXECUTES it
+  // with two tenant ids — see tests/pipelineTenantIsolation.test.ts. What is left
+  // here is the seam, and the seam must not hold a second, divergent copy.
+  assert.match(fn, /pipelineScopeSql\(pipelineScopeFor\(/);
+  assert.doesNotMatch(fn, /Prisma\.sql/, "no hand-rolled predicate beside the shared one");
+  // The "tenantId IS NULL means the founding tenant" rule this shipped with is
+  // gone: both July backfills already claimed every legacy NULL, so a NULL row
+  // today was written by the bug being fixed and may belong to a second tenant.
+  assert.doesNotMatch(fn, /IS NULL/);
 });
