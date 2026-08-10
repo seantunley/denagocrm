@@ -8,6 +8,8 @@ import { logAudit } from "@/lib/audit";
 import { DEFAULT_FLOW } from "@/lib/flow";
 import { flowTemplate } from "@/lib/flowTemplates";
 import { publishFlowSnapshot } from "@/lib/flowPublishing";
+import { FlowPublishValidationError } from "@/lib/flowValidationServer";
+import { flowErrors, type FlowIssue } from "@/lib/flowValidation";
 import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { writeTenantId } from "@/lib/tenantWrite";
 
@@ -169,10 +171,41 @@ export async function duplicateFlow(id: string) {
 }
 
 /** Publish this draft as a NEW immutable live version for its channel. */
-export async function setActiveFlow(id: string) {
+export type PublishFlowState = { ok?: string; error?: string; issues?: FlowIssue[] };
+
+/**
+ * Publish this draft as a NEW immutable live version for its channel.
+ *
+ * This used to `.catch(() => null)` and return silently, which threw away the one
+ * thing the operator needed. The server validates MORE than the editor can — it
+ * checks that every referenced Journey is still active, re-reads the exact draft
+ * inside the transaction, and refuses a graph whose failing action would announce
+ * success — so a correct refusal appeared as a button that did nothing at all.
+ *
+ * publishFlowSnapshot already throws FlowPublishValidationError carrying the exact
+ * issues, plus specific conditions like FLOW_CHANGED_DURING_PUBLISH. Surface them.
+ */
+export async function setActiveFlow(id: string, _previous?: PublishFlowState): Promise<PublishFlowState> {
   const owner = await requireOwner();
-  const published = await publishFlowSnapshot(id, owner.id).catch(() => null);
-  if (!published) return;
+  let published: Awaited<ReturnType<typeof publishFlowSnapshot>>;
+  try {
+    published = await publishFlowSnapshot(id, owner.id);
+  } catch (error) {
+    if (error instanceof FlowPublishValidationError) {
+      const errors = flowErrors(error.issues);
+      return {
+        error: `This flow cannot be published yet: ${errors.slice(0, 3).map((issue) => issue.message).join(" · ")}`,
+        issues: error.issues,
+      };
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    if (message === "FLOW_CHANGED_DURING_PUBLISH") {
+      return { error: "The draft changed while it was being published. Reload and publish again — nothing was published." };
+    }
+    if (message === "FLOW_NOT_FOUND") return { error: "That flow no longer exists." };
+    // An unexpected failure is still reported rather than swallowed.
+    return { error: "Publishing failed. Nothing was published; please try again." };
+  }
   await logAudit({
     action: "bot.flow_published",
     summary: `Chatbot flow published as version ${published.version}`,
@@ -180,4 +213,5 @@ export async function setActiveFlow(id: string) {
   });
   revalidatePath("/bot-builder");
   revalidatePath(`/bot-builder/${id}`);
+  return { ok: `Published as version ${published.version}.` };
 }
