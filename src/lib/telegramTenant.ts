@@ -45,11 +45,18 @@ export async function withTelegramTenantScope<T, U>(
   fn: () => Promise<T>,
   onUnresolved: () => U | Promise<U>,
 ): Promise<T | U> {
+  // Authentication is mandatory in every tenancy mode. Turning tenant
+  // enforcement off may relax database scoping, but it must never turn a signed
+  // provider webhook into an anonymous public flow endpoint.
   if (!secret) return onUnresolved();
 
   const tenantId = await resolveTelegramTenant(secret);
   if (tenantId) return runInTenantScope({ tenantId, system: false }, fn);
 
+  // Preserve the pre-enforcement single-tenant rollout path for installations
+  // whose webhook secret still lives on the founding/default tenant. This is a
+  // credential check, not a tenancy bypass: an unknown/missing secret still fails
+  // closed, and enforce mode never falls back to the global/default setting.
   if (!tenantEnforcing()) {
     const expected = await getSetting("TELEGRAM_WEBHOOK_SECRET");
     if (expected && secretEquals(secret, expected)) return fn();
