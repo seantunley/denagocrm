@@ -3,6 +3,12 @@ import { Prisma } from "@prisma/client";
 import { prisma, basePrisma } from "./db";
 import { getSetting } from "./settings";
 import { writeTenantId } from "./tenantWrite";
+import {
+  adoptsUnownedParents,
+  bookingTenantId,
+  bookingTenantWhere,
+  slotLock,
+} from "./bookingTenant";
 
 export type SlotConfig = {
   times: string[]; // "08:00" …
@@ -64,11 +70,23 @@ export async function getDayAvailability(date: string) {
 
   const dayStart = new Date(`${date}T00:00:00+02:00`);
   const dayEnd = addDays(dayStart, 1);
+  // WHOSE calendar this is. The read goes through the guarded client, but the guard
+  // only filters while `tenantEnforcing()` is true — which it is not — so without
+  // this predicate a second workshop's bookings make this workshop's slots read as
+  // full, and vice versa. `writeTenantId()` throws when the scope has been LOST, so
+  // this fails closed rather than falling back to every tenant's rows; it returns
+  // null when the scope is GLOBAL, which the founding tenant stands in for.
+  //
+  // The SAME predicate is used by `claimSlotCapacity` below, deliberately: an
+  // availability read that disagreed with the capacity count would offer a slot the
+  // booker then refuses with SLOT_TAKEN.
+  const tenantId = bookingTenantId(writeTenantId());
   const existing = await prisma.activity.findMany({
     where: {
       category: "workshop",
       status: "planned",
       dueDate: { gte: dayStart, lt: dayEnd },
+      ...bookingTenantWhere(tenantId),
     },
     select: { dueDate: true },
   });
@@ -110,35 +128,93 @@ export function slotInstantOrThrow(date: string, time: string, config: SlotConfi
  * slot rolls everything back.
  *
  * TENANT SCOPING: this runs on `basePrisma` (the guard does NOT scope it), so both
- * the lock and the count are namespaced by `tenantId` EXPLICITLY. Under enforcement
- * one tenant's bookings must neither consume another tenant's slot capacity nor
- * contend on its lock; `getDayAvailability()` reads through the scoped client, so an
- * unscoped count here would also DISAGREE with what the customer was shown. When
- * `tenantId` is null (dormant / trusted system) the lock and count are byte-for-byte
- * the pre-tenancy single-namespace behaviour.
+ * the lock and the count are namespaced by `tenantId` EXPLICITLY, and `tenantId` is
+ * ALWAYS a real tenant — `bookingTenantId()` resolves the global/dormant null to the
+ * founding tenant. It used to be nullable, and null meant "no namespace, no filter":
+ * one tenant's bookings consumed another's capacity and contended on its lock, and
+ * the count disagreed with what `getDayAvailability()` showed the customer.
+ *
+ * The count uses the SAME predicate as that read (`bookingTenantWhere`), which keeps
+ * counting legacy tenantless rows for the founding tenant. That is not sloppiness —
+ * a count that stopped seeing them would report a taken slot as free and double-book
+ * the workshop. See src/lib/bookingTenant.ts for why the NULL arm outlives the
+ * backfill migration.
  */
 export async function claimSlotCapacity(
   tx: Prisma.TransactionClient,
   dt: Date,
   capacity: number,
-  tenantId: string | null
+  tenantId: string
 ): Promise<void> {
   const instant = Math.floor(dt.getTime() / 1000);
-  if (tenantId) {
-    // Per-tenant lock namespace: same instant in two tenants is two distinct slots.
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`slot:${tenantId}:${instant}`})::bigint)`;
+  const lock = slotLock(tenantId, instant);
+  if (lock.kind === "tenant") {
+    // Per-tenant lock namespace: the same instant in two tenants is two slots.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lock.key})::bigint)`;
   } else {
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(${BigInt(instant)})`;
+    // The founding tenant keeps the pre-tenancy key so a rolling deploy never has
+    // two instances holding different locks for the same slot.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(${BigInt(lock.instant)})`;
   }
   const taken = await tx.activity.count({
     where: {
       category: "workshop",
       status: "planned",
       dueDate: dt,
-      ...(tenantId ? { tenantId } : {}),
+      ...bookingTenantWhere(tenantId),
     },
   });
   if (taken >= capacity) throw new Error("SLOT_TAKEN");
+}
+
+/**
+ * Adopt a booking's still-un-owned parent rows into `tenantId` before a STAMPED
+ * activity is written against them.
+ *
+ * 20260727140000_composite_tenant_fks added composite tenant foreign keys —
+ * `Activity("tenantId","contactId") -> Contact("tenantId","id")` and the same for
+ * Lead — and they are MATCH SIMPLE: a NULL "tenantId" satisfies them trivially,
+ * which is the only reason today's tenantless bookings are legal. Stamping the
+ * activity makes the check REAL, so an activity stamped with the founding tenant
+ * whose contact is still un-owned is refused and the booking 500s. The backfill
+ * migration clears every row that exists when it runs, but it cannot keep them
+ * clear: while enforcement is dormant an ordinary `prisma.contact.create` (the
+ * chatbot's `ensureContact`, the CRM's own new-contact form) still writes
+ * tenantless rows the next booking may link to.
+ *
+ * `tenantId: null` in every WHERE means ANOTHER tenant's record is never adopted —
+ * a genuinely cross-tenant link stays a hard foreign-key refusal. And the caller
+ * only runs this while the scope is global (see `adoptsUnownedParents`): under
+ * enforcement the guard stamps parents itself and an unresolvable link must fail.
+ *
+ * Ordered parents-first, because adopting a Lead re-checks Lead -> PipelineStage /
+ * Product / Contact. Every statement matches zero rows in steady state.
+ */
+async function adoptUnownedBookingParents(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  contactId: string | null,
+  leadId: string | null
+): Promise<void> {
+  if (leadId) {
+    const lead = await tx.lead.findUnique({
+      where: { id: leadId },
+      select: { tenantId: true, stageId: true, productId: true, contactId: true },
+    });
+    if (lead && lead.tenantId === null) {
+      await tx.pipelineStage.updateMany({ where: { id: lead.stageId, tenantId: null }, data: { tenantId } });
+      if (lead.productId) {
+        await tx.product.updateMany({ where: { id: lead.productId, tenantId: null }, data: { tenantId } });
+      }
+      if (lead.contactId) {
+        await tx.contact.updateMany({ where: { id: lead.contactId, tenantId: null }, data: { tenantId } });
+      }
+      await tx.lead.updateMany({ where: { id: leadId, tenantId: null }, data: { tenantId } });
+    }
+  }
+  if (contactId) {
+    await tx.contact.updateMany({ where: { id: contactId, tenantId: null }, data: { tenantId } });
+  }
 }
 
 /**
@@ -160,12 +236,23 @@ export async function reserveSlot(input: {
   const config = await getSlotConfig();
   const dt = slotInstantOrThrow(input.date, input.time, config);
   // Namespace the slot capacity by the caller's tenant, and STAMP the workshop
-  // activity — reserveSlot runs on basePrisma, so the guard won't do either. null
-  // (dormant / system) → unchanged, unstamped, single-namespace behaviour.
-  const tenantId = writeTenantId();
+  // activity — reserveSlot runs on basePrisma, so the guard will never do either,
+  // and it will never do it retrospectively once enforcement is switched on either.
+  // `scoped` is null on every request today (the scope is GLOBAL while enforcement
+  // is dormant); the previous `...(tenantId ? { tenantId } : {})` therefore stamped
+  // NOTHING, and every chatbot and staff-scheduled workshop booking landed
+  // tenantless for ever, to be filed under the founding tenant by statistics.ts.
+  const scoped = writeTenantId();
+  const tenantId = bookingTenantId(scoped);
 
   return basePrisma.$transaction(async (tx) => {
     await claimSlotCapacity(tx, dt, config.capacity, tenantId);
+    // The stamp below makes the composite tenant FKs to Contact/Lead real; this
+    // brings any parent the dormant guard left un-owned along with it. No-op once
+    // enforcement is on, and never touches another tenant's row.
+    if (adoptsUnownedParents(scoped)) {
+      await adoptUnownedBookingParents(tx, tenantId, input.contactId, input.leadId);
+    }
     return tx.activity.create({
       data: {
         type: input.type ?? "meeting",
@@ -178,7 +265,7 @@ export async function reserveSlot(input: {
         leadId: input.leadId,
         assignedToId: input.assignedToId ?? input.userId,
         createdById: input.userId,
-        ...(tenantId ? { tenantId } : {}),
+        tenantId,
       },
     });
   });

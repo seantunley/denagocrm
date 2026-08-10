@@ -7,6 +7,7 @@ import { throttlePublic } from "@/lib/publicThrottle";
 import { API_KEY_POLICY } from "@/lib/rateLimit";
 import { establishTenantScopeFromId } from "@/lib/tenantScopeEntry";
 import { writeTenantId } from "@/lib/tenantWrite";
+import { adoptsUnownedParents, bookingTenantId } from "@/lib/bookingTenant";
 import { resolveTenantActor } from "@/lib/tenantActor";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { logAudit } from "@/lib/audit";
@@ -127,9 +128,14 @@ export async function POST(req: NextRequest) {
 
   // The tenant to STAMP every row with (and namespace the slot capacity by). The
   // writes below run on `basePrisma` for the row lock, so the db.ts guard does NOT
-  // scope or stamp them — we do it explicitly. null under dormant/system → unstamped,
-  // single-namespace, exactly the pre-tenancy behaviour.
-  const writeTid = writeTenantId();
+  // scope or stamp them — and it never will, not even after enforcement is switched
+  // on. `writeTenantId()` is null on every request today (the scope is GLOBAL while
+  // enforcement is dormant), so the old `...(writeTid ? { tenantId: writeTid } : {})`
+  // stamped nothing and every website service booking — contact, job card and
+  // workshop activity alike — landed tenantless for ever. Resolve the global null to
+  // the founding tenant, the same rule statistics.ts already reads these rows by.
+  const scopedTid = writeTenantId();
+  const writeTid = bookingTenantId(scopedTid);
 
   // Everything that WRITES runs in ONE transaction, and the slot capacity is
   // claimed FIRST. Previously the contact and job card were created before the
@@ -139,6 +145,29 @@ export async function POST(req: NextRequest) {
   try {
     outcome = await basePrisma.$transaction(async (tx) => {
       await claimSlotCapacity(tx, dt, config.capacity, writeTid);
+
+      // Stamping the rows below makes the composite tenant FKs real — JobCard ->
+      // Vehicle/Contact and Activity -> Contact are MATCH SIMPLE, so they were only
+      // ever satisfied because the child's tenantId was NULL. A MATCHED contact (and
+      // its vehicle) can still be un-owned: the dormant guard stamps nothing, so any
+      // contact created since the backfill migration is tenantless. Bring them along
+      // rather than let the booking fail on a foreign key. Parents first — adopting a
+      // Vehicle re-checks Vehicle -> Product/Fleet/Contact. Never touches a row that
+      // already belongs to someone, and never runs under enforcement.
+      if (adoptsUnownedParents(scopedTid)) {
+        if (contact) {
+          await tx.contact.updateMany({ where: { id: contact.id, tenantId: null }, data: { tenantId: writeTid } });
+        }
+        if (vehicle && vehicle.tenantId === null) {
+          if (vehicle.productId) {
+            await tx.product.updateMany({ where: { id: vehicle.productId, tenantId: null }, data: { tenantId: writeTid } });
+          }
+          if (vehicle.fleetId) {
+            await tx.fleet.updateMany({ where: { id: vehicle.fleetId, tenantId: null }, data: { tenantId: writeTid } });
+          }
+          await tx.vehicle.updateMany({ where: { id: vehicle.id, tenantId: null }, data: { tenantId: writeTid } });
+        }
+      }
 
       // A service booking is workshop work — it must never open a sales lead.
       let contactId: string | null = contact?.id ?? null;
@@ -153,7 +182,7 @@ export async function POST(req: NextRequest) {
             phone: b.phone,
             source: "website",
             notes: `Created from an online service booking for ${b.date} at ${b.time}.`,
-            ...(writeTid ? { tenantId: writeTid } : {}),
+            tenantId: writeTid,
           },
         });
         contactId = created.id;
@@ -171,7 +200,7 @@ export async function POST(req: NextRequest) {
             }`,
             vehicleId: vehicle.id,
             contactId,
-            ...(writeTid ? { tenantId: writeTid } : {}),
+            tenantId: writeTid,
           },
         });
         jobCardNumber = jc.number;
@@ -194,7 +223,7 @@ export async function POST(req: NextRequest) {
           contactId,
           assignedToId: firstUser.id,
           createdById: firstUser.id,
-          ...(writeTid ? { tenantId: writeTid } : {}),
+          tenantId: writeTid,
         },
       });
       return { activityId: activity.id, contactId, jobCardNumber, createdContact };
