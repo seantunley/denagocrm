@@ -13,8 +13,9 @@ import { resolveFlowSnapshot } from "./flowPublishing";
 import { flushBotOutboxConversation } from "./botOutbox";
 import { enqueueBotMessagesTx } from "./botOutboxWrite";
 import { withTenantWrite } from "./tenantWrite";
-import { loadBotSession, upsertBotSessionTx, deleteBotSessionTx } from "./botSessionStore";
+import { loadBotSession, upsertBotSessionTx, deleteBotSessionTx, botStillOwnsTx } from "./botSessionStore";
 import { recordBotFlowEventsTx, type BotFlowEventInput } from "./botFlowAnalytics";
+import { completeInboundBotEventTx, currentInboundBotClaim } from "./botInboundEvent";
 import { decideInboundAct, type BotOwnership } from "./botOwnership";
 
 export const FLOW_MARKER = "🤖 Flow";
@@ -111,6 +112,18 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise
   const result = await runFlow(snapshot.flow, session, input, buildCtx(digits, match, actions));
 
   await withTenantWrite(async (tx, tenantId) => {
+    // Fence the whole turn, not just the session write. The AI call above can take
+    // seconds; a salesperson can press Take over during it. Guarding only the
+    // session update meant ownership was correctly kept while THIS turn's reply
+    // had already been queued — so the bot still sent one more message over the
+    // person. FOR UPDATE holds the row for the rest of this transaction, so a
+    // takeover cannot slip in between the check and the enqueue.
+    if (!(await botStillOwnsTx(tx, tenantId, "whatsapp", digits))) return;
+    // Acknowledge the provider event in the SAME transaction as the graph move.
+    // Completing it afterwards left a window where the session and outbox committed,
+    // the process died, and the redelivery then replayed the old message against an
+    // already-advanced graph — a phone number read as the answer to the next question.
+    await completeInboundBotEventTx(tx, tenantId, currentInboundBotClaim());
     if (restart) await tx.$executeRawUnsafe(`SELECT set_config('app.bot_flow_transition', 'restart', true)`);
     await enqueueBotMessagesTx(tx, tenantId, { channel: "whatsapp", key: digits, messages: result.messages, flowVersionId: snapshot.versionId, contactId: match.contactId, leadId: match.leadId, actorId: actor.id });
 

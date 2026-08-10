@@ -52,10 +52,15 @@ test("outbox preserves order behind retry and terminal dead-letter barriers", ()
 
   const worker = src("src/lib/botOutbox.ts");
   assert.match(worker, /orderBy: \[\{ createdAt: "asc" \}, \{ sequence: "asc" \}, \{ id: "asc" \}\]/);
-  assert.match(worker, /if \(outcome !== "sent"\) break/);
+  // A failure stops the drain so nothing overtakes it. A CANCELLED row does not:
+  // it was withdrawn on purpose, and the person's own reply may be queued behind
+  // it — stopping there would silence the takeover that caused the cancellation.
+  assert.match(worker, /if \(outcome !== "sent" && outcome !== "cancelled"\) break/);
   // The barrier is applied AT the failure — the whole existing backlog dies with
   // the message it was queued behind, so nothing overtakes it.
   assert.match(worker, /Blocked by earlier failed message/);
+  // #425 made the barrier atomic and renamed it; the property is unchanged.
+  assert.match(worker, /killMessageAndBacklog\(row, lastError, failureCode\)/);
   // It is not applied for ever. See botTenantScoping.test.ts for why a dead row
   // must stop being a barrier once the backlog has been killed: leaving it as one
   // silenced the bot for that customer permanently, with no reaper.

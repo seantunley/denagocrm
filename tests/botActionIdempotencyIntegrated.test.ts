@@ -10,7 +10,10 @@ const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
 test("leased inbound event identity reaches every provider chatbot path", () => {
   const helper = src("src/lib/botInboundEvent.ts");
   assert.match(helper, /new AsyncLocalStorage<InboundBotEventContext>/);
-  assert.match(helper, /inboundEventContext\.run\(\{ eventId: claim\.rowId \}, fn\)/);
+  // The whole claim is carried now, not just its row id: the flow transaction
+  // settles the lease itself, and that needs the generation as well.
+  assert.match(helper, /inboundEventContext\.run\(\{ claim \}, fn\)/);
+  assert.match(helper, /export async function completeInboundBotEventTx/);
   for (const rel of [
     "src/app/api/webhooks/whatsapp/route.ts",
     "src/app/api/webhooks/meta/route.ts",
@@ -67,9 +70,23 @@ test("slot retry marker is checked before capacity is consumed", () => {
 
 test("inbound ledger migration preserves old accepted events as completed", () => {
   const migration = src("prisma/migrations/20260809172000_bot_inbound_event_leases/migration.sql");
-  assert.match(migration, /ADD COLUMN "status" TEXT NOT NULL DEFAULT 'completed'/);
+  // Existing rows are events already accepted before this rollout, so they must
+  // land as `completed` rather than becoming replayable provider ids.
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS "status" TEXT NOT NULL DEFAULT 'completed'/);
   assert.match(migration, /UPDATE "BotInboundEvent"/);
   assert.match(migration, /ALTER COLUMN "status" SET DEFAULT 'running'/);
+
+  // And every statement must be reentrant. 20260809144000 exists as two different
+  // files under one directory name across this stack — the lower branches create
+  // BotInboundEvent WITH these columns, the upper ones rely on this migration to
+  // add them. A bare ADD COLUMN is 42701 on half the merge orders, and the
+  // migration runner opens no transaction, so a half-applied file is re-run from
+  // the top on the next deploy.
+  // Scan the SQL only — the comment above explains the hazard and naturally
+  // contains the very phrases being looked for.
+  const sql = migration.replace(/^\s*--.*$/gm, "");
+  const unguarded = sql.match(/ADD COLUMN(?! IF NOT EXISTS)|CREATE INDEX(?! IF NOT EXISTS)/g) ?? [];
+  assert.deepEqual(unguarded, [], "every ADD COLUMN / CREATE INDEX here must be guarded");
 });
 
 /* ── a live lease is not the same answer as a finished event ─────────────── */
@@ -145,4 +162,24 @@ test("the lead identity constraint and the lookup that consults it share one dom
   assert.match(migration, /UPDATE "Lead" SET "tenantId" = 'tenant_denago_cpt' WHERE "tenantId" IS NULL/);
   assert.match(migration, /DROP INDEX IF EXISTS "Lead_externalId_key"/);
   assert.match(migration, /CREATE UNIQUE INDEX IF NOT EXISTS "Lead_tenantId_externalId_key"/);
+});
+
+test("the provider event is acknowledged in the same transaction as the graph move", () => {
+  // Completing it AFTER the flow transaction committed left a window that
+  // corrupts conversation state rather than merely duplicating an effect: the
+  // session and outbox commit, the process dies, the lease expires, and the
+  // redelivery replays the old message against an ALREADY-ADVANCED graph — the
+  // customer's phone number read as their answer to "what service do you need?".
+  // CRM action idempotency cannot help; the damage is in the graph position.
+  for (const rel of ["src/lib/flowRun.ts", "src/lib/flowSession.ts"]) {
+    const code = src(rel);
+    const tx = code.indexOf("await withTenantWrite(async (tx, tenantId)");
+    const complete = code.indexOf("completeInboundBotEventTx(tx, tenantId", tx);
+    const session = code.indexOf("upsertBotSessionTx(tx, tenantId", tx);
+    assert.ok(tx >= 0, `${rel}: must open a tenant write transaction`);
+    assert.ok(complete > tx, `${rel}: the event must be completed INSIDE that transaction`);
+    assert.ok(session > tx, `${rel}: and the session written in it too`);
+    // Before the branches, or the session/handoff paths return early and skip it.
+    assert.ok(complete < session, `${rel}: completion must not sit after an early return`);
+  }
 });

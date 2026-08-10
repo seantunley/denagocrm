@@ -5,7 +5,7 @@ import { evaluateCondition, runFlow, type Flow, type FlowCtx } from "../src/lib/
 const ctx: FlowCtx = {
   aiReply: async () => ({ reply: "AI", handoff: false }),
   dynamicAnswer: async () => "dynamic",
-  createBooking: async () => {},
+  createBooking: async () => ({ ok: true }),
   handoff: async () => {},
 };
 

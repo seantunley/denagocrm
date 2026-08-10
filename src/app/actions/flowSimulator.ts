@@ -60,6 +60,11 @@ export async function simulateFlowTurn(input: SimulatorTurnInput): Promise<Simul
       manageBooking: async (action, vars, nodeId) => {
         if (action === "lookup") {
           trace.push(`CRM: node ${nodeId} would look up this customer's next booking`);
+          // The simulator models a customer the CHANNEL identified — the only kind
+          // production will act for. Without this the booking starter always fell
+          // to its "I can only manage a booking from the number it was made with"
+          // branch, so an operator testing the template concluded it was broken.
+          vars.booking_identity = "verified";
           vars.booking_found = "yes";
           vars.booking_id = "simulated-activity-id";
           vars.booking_slot = "Tue 15 Jan · 09:00 (simulated)";
@@ -77,7 +82,7 @@ export async function simulateFlowTurn(input: SimulatorTurnInput): Promise<Simul
         vars.journey_run_id = "simulated-journey-run";
         return { ok: true, reason: "simulated enrolment" };
       },
-      createBooking: async (_vars, action, nodeId) => { trace.push(`CRM: node ${nodeId} would create ${action ?? "service"}`); },
+      createBooking: async (_vars, action, nodeId) => { trace.push(`CRM: node ${nodeId} would create ${action ?? "service"}`); return { ok: true }; },
       handoff: async () => { trace.push("Handoff: would pause bot and notify team"); },
     });
 
