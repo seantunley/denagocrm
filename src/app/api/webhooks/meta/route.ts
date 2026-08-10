@@ -103,7 +103,7 @@ export async function POST(req: NextRequest) {
               const referral = ev.message.referral ?? ev.referral ?? ev.postback?.referral ?? null;
               const senderId = String(ev.sender?.id ?? "");
               const receivedAfter = new Date(Date.now() - 1000);
-              await recordInboundDm(platform, senderId, text, referral, attachments);
+              await recordInboundDm(platform, senderId, text, referral, attachments, String(ev.message?.mid ?? ""));
               const fileUrl = attachments.length ? await latestPersistedDmAttachment(platform, senderId, receivedAfter) : undefined;
               const payload: string | undefined = ev.message.quick_reply?.payload;
               if (text || payload || fileUrl) await runDmFlow(platform, senderId, text, payload, fileUrl);

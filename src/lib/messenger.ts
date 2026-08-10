@@ -3,6 +3,10 @@ import { prisma } from "./db";
 import { resolveTenantCredential } from "./settings";
 import { logAudit } from "./audit";
 import { sendPushToAll } from "./push";
+import { inboundCommunicationKey, isDedupeKeyConflict } from "./inboundMessageKey";
+import { currentInboundBotEventId } from "./botInboundEvent";
+import { DEFAULT_TENANT_ID } from "./tenant";
+import { writeTenantId } from "./tenantWrite";
 import { createLeadRecordIfPipelineReady } from "./leadCreate";
 import { saveFile } from "./storage";
 import { resolveTenantActor } from "./tenantActor";
@@ -243,7 +247,9 @@ export async function recordInboundDm(
   senderId: string,
   text: string,
   referral: Referral,
-  attachments: InboundAttachment[] = []
+  attachments: InboundAttachment[] = [],
+  /** The provider's message id (mid), so a redelivery reuses these rows. */
+  providerMessageId?: string,
 ) {
   const idField = platform === "instagram" ? "instagramId" : "messengerPsid";
   let contact = await prisma.contact.findFirst({ where: { [idField]: senderId } });
@@ -310,25 +316,58 @@ export async function recordInboundDm(
     }
   }
 
+  // One identity for this provider event, shared by the text row and every
+  // attachment row. See inboundMessageKey: the ledger row id is globally unique,
+  // so the transcript's boundary matches the ledger's exactly.
+  const identity = {
+    ledgerEventId: currentInboundBotEventId(),
+    tenantId: writeTenantId() ?? DEFAULT_TENANT_ID,
+    channel: platform,
+    providerId: providerMessageId ?? "",
+  };
+  // "Nothing new was written" — NOT "some row was a duplicate". A retry where the
+  // text already existed but a missing attachment is newly inserted HAS produced
+  // something the inbox should announce.
+  let insertedAny = false;
   const firstUser = await resolveTenantActor(); // tenant-aware (channel scope); dormant → oldest active user
   if (firstUser) {
     if (text) {
-      await prisma.communication.create({
-        data: {
-          type: platform,
-          direction: "inbound",
-          body: text,
-          contactId: contact.id,
-          leadId,
-          userId: firstUser.id,
-        },
-      });
+      // create(), NOT createMany(): db.ts hooks communication.create to resolve
+      // and attach the Conversation and bump its counters. There is no createMany
+      // hook, and the whole inbox collaboration layer hangs off Conversation rows.
+      const key = inboundCommunicationKey(identity);
+      try {
+        await prisma.communication.create({
+          data: {
+            type: platform,
+            direction: "inbound",
+            body: text,
+            contactId: contact.id,
+            leadId,
+            userId: firstUser.id,
+            ...(key ? { dedupeKey: key } : {}),
+          },
+        });
+        insertedAny = true;
+      } catch (error) {
+        if (!key || !isDedupeKeyConflict(error)) throw error;
+      }
     }
     // Media becomes one communication per attachment, stored permanently
-    for (const att of attachments.slice(0, 5)) {
+    for (const [index, att] of attachments.slice(0, 5).entries()) {
+      const attKey = inboundCommunicationKey(identity, index);
+      // Check BEFORE downloading. persistAttachment writes permanent storage under
+      // a fresh random object name every call, so persisting first and deduping
+      // afterwards left an orphaned blob for every redelivery — the transcript was
+      // clean and the bucket was not. Attachments are explicitly part of this
+      // dedupe contract, so the cheap read comes first.
+      if (attKey && (await prisma.communication.findUnique({ where: { dedupeKey: attKey }, select: { id: true } }))) {
+        continue;
+      }
       const saved = await persistAttachment(att);
-      await prisma.communication.create({
-        data: {
+      try {
+        await prisma.communication.create({
+          data: {
           type: platform,
           direction: "inbound",
           body: saved
@@ -345,8 +384,15 @@ export async function recordInboundDm(
           contactId: contact.id,
           leadId,
           userId: firstUser.id,
-        },
-      });
+            ...(attKey ? { dedupeKey: attKey } : {}),
+          },
+        });
+        insertedAny = true;
+      } catch (error) {
+        // Lost a race with a concurrent redelivery between the check and the
+        // insert. The blob is already written; the transcript stays single.
+        if (!attKey || !isDedupeKeyConflict(error)) throw error;
+      }
     }
     const { reopenThreadOnInbound } = await import("@/lib/reopenThread");
     await reopenThreadOnInbound(contact.id, leadId, platform);
@@ -358,6 +404,13 @@ export async function recordInboundDm(
         ? "🎤 sent a voice note"
         : `sent a ${attachments[0].type}`
       : "sent a message");
+  // Notify only when this delivery actually added something. A pure redelivery
+  // must not buzz everyone again; a retry that finally lands a missing attachment
+  // legitimately should. Note this is "nothing new was written", which is a
+  // near-proxy for "already notified" rather than proof of it — a durable
+  // notification identity would be the exact answer, and is not worth its own
+  // table for a push.
+  if (!insertedAny) return;
   await sendPushToAll({
     title: platform === "instagram" ? "New Instagram DM 📸" : "New Messenger message 🔵",
     body: `${contact.firstName}${contact.lastName ? ` ${contact.lastName}` : ""}: ${pushBody.slice(0, 80)}`,

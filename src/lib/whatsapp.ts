@@ -3,6 +3,10 @@ import { credentialOwnerTenantId, resolveIntegrationBundleForTenant, resolveTena
 import { sendPushToAll } from "./push";
 import { createLeadRecordIfPipelineReady } from "./leadCreate";
 import { resolveTenantActor } from "./tenantActor";
+import { inboundCommunicationKey, isDedupeKeyConflict } from "./inboundMessageKey";
+import { currentInboundBotEventId } from "./botInboundEvent";
+import { DEFAULT_TENANT_ID } from "./tenant";
+import { writeTenantId } from "./tenantWrite";
 import { currentTenantScope } from "./tenantScope";
 
 /**
@@ -354,7 +358,9 @@ export async function fetchWhatsAppMedia(
 export async function recordInboundWhatsApp(
   fromDigits: string,
   profileName: string | null,
-  text: string
+  text: string,
+  /** The provider's message id, so a redelivery reuses this row instead of adding one. */
+  providerMessageId?: string,
 ) {
   const match = await matchByPhone(fromDigits);
   const { contactId } = match;
@@ -391,24 +397,53 @@ export async function recordInboundWhatsApp(
   // (established by the webhook chokepoint); dormant → the oldest active user.
   const firstUser = await resolveTenantActor();
   if (!firstUser) return;
-  await prisma.communication.create({
-    data: {
-      type: "whatsapp",
-      direction: "inbound",
-      body: text,
-      contactId,
-      leadId,
-      userId: firstUser.id,
-    },
+  // create(), NOT createMany(): db.ts extends communication.create to resolve and
+  // attach the Conversation and then bump its counters, unread flag and
+  // last-inbound timestamp. There is no createMany hook, so batching would file
+  // messages with no Conversation at all — and assignment, notes, drafts and
+  // bot/human ownership all hang off Conversation rows. The unique dedupeKey is
+  // the replay signal instead: the first delivery takes the normal path with every
+  // hook, a redelivery is refused by the index.
+  const dedupeKey = inboundCommunicationKey({
+    ledgerEventId: currentInboundBotEventId(),
+    tenantId: writeTenantId() ?? DEFAULT_TENANT_ID,
+    channel: "whatsapp",
+    providerId: providerMessageId ?? "",
   });
+  let inserted = true;
+  try {
+    await prisma.communication.create({
+      data: {
+        type: "whatsapp",
+        direction: "inbound",
+        body: text,
+        contactId,
+        leadId,
+        userId: firstUser.id,
+        ...(dedupeKey ? { dedupeKey } : {}),
+      },
+    });
+  } catch (error) {
+    if (!dedupeKey || !isDedupeKeyConflict(error)) throw error;
+    inserted = false;
+  }
+
+  // Notify immediately after the row lands, BEFORE the other fallible work below.
+  // "The transcript row already existed" is not the same fact as "the notification
+  // already went out", and ordering it here is what keeps them close enough to be
+  // honest: the only way to reach this on a replay is a genuine duplicate insert.
+  if (inserted) {
+    await sendPushToAll({
+      title: "New WhatsApp message 💬",
+      body: `${profileName ?? "+" + fromDigits}: ${text.slice(0, 80)}`,
+      url: "/messages",
+    }, "whatsapp").catch(() => {});
+  }
+
   const { reopenThreadOnInbound } = await import("@/lib/reopenThread");
   await reopenThreadOnInbound(contactId, leadId, "whatsapp");
 
   // Notify on every inbound — WhatsApp is the primary contact channel. Opens the
   // Messages app so replies aren't lost in the CRM.
-  await sendPushToAll({
-    title: "New WhatsApp message 💬",
-    body: `${profileName ?? "+" + fromDigits}: ${text.slice(0, 80)}`,
-    url: "/messages",
-  }, "whatsapp").catch(() => {});
+
 }
