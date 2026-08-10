@@ -25,7 +25,6 @@ import {
   registerRateLimitAttempt,
 } from "@/lib/rateLimit";
 import { DEFAULT_TENANT_ID } from "@/lib/tenant";
-import { writeTenantId } from "@/lib/tenantWrite";
 
 export type PortalAuthState = { ok?: boolean; sent?: boolean; error?: string };
 const str = (value: FormDataEntryValue | null) => String(value ?? "").trim();
@@ -336,7 +335,16 @@ export async function updatePortalPreferences(formData: FormData) {
   const smsServiceUpdates = formData.get("smsServiceUpdates") === "on";
   const emailMarketing = formData.get("emailMarketing") === "on";
 
-  const tenantId = currentTenantScope()?.tenantId ?? null;
+  // A portal request is a CUSTOMER, not a staff session, so there is no acting
+  // workspace to resolve — getActiveTenantId() would be null here and the
+  // founding-tenant fallback would file another tenant's customer's consent
+  // against tenant A. The Contact already knows who owns it, and that is the
+  // only tenant this write can legitimately belong to.
+  const owner = await basePrisma.contact.findUnique({
+    where: { id: scope.viewerContactId },
+    select: { tenantId: true },
+  });
+  const tenantId = currentTenantScope()?.tenantId ?? owner?.tenantId ?? null;
   await basePrisma.$transaction(async (tx) => {
     await tx.$executeRaw`
       INSERT INTO "PortalPreference" ("contactId", "tenantId", "emailServiceUpdates", "smsServiceUpdates", "emailMarketing", "updatedAt")
@@ -348,7 +356,7 @@ export async function updatePortalPreferences(formData: FormData) {
         "updatedAt" = CURRENT_TIMESTAMP
     `;
     await tx.contact.update({ where: { id: scope.viewerContactId }, data: { marketingOptOut: !emailMarketing } });
-    await tx.consentRecord.create({ data: { tenantId: writeTenantId() ?? DEFAULT_TENANT_ID, contactId: scope.viewerContactId, type: "marketing", granted: emailMarketing, source: "portal", note: "Updated in customer portal" } });
+    await tx.consentRecord.create({ data: { tenantId: tenantId ?? DEFAULT_TENANT_ID, contactId: scope.viewerContactId, type: "marketing", granted: emailMarketing, source: "portal", note: "Updated in customer portal" } });
   });
   await logAudit({ action: "portal.preferences_updated", summary: "Customer updated portal communication preferences", contactId: scope.viewerContactId, after: { emailServiceUpdates, smsServiceUpdates, emailMarketing }, userName: "Customer portal" });
   revalidatePath("/portal");

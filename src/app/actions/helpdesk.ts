@@ -22,6 +22,7 @@ import {
   TICKET_TYPES,
   statusMeta,
 } from "@/lib/helpdesk-constants";
+import { actingTenantId } from "@/lib/actingTenant";
 
 function str(formData: FormData, key: string): string {
   return String(formData.get(key) ?? "").trim();
@@ -60,7 +61,7 @@ async function bestEffort(scope: string, context: string, write: () => Promise<u
 
 async function notifyCustomer(contactId: string, title: string, body: string, href: string) {
   // Founding tenant when enforcement is off, so this never lands tenantless.
-  const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
+  const tenantId = await actingTenantId();
   await bestEffort("helpdesk.notify", `${title} for contact ${contactId}`, () => basePrisma.$executeRaw`
     INSERT INTO "PortalNotification" ("id","contactId","title","body","href","kind","tenantId")
     VALUES (${randomUUID()}, ${contactId}, ${title}, ${body}, ${href}, 'case', ${tenantId})`);
@@ -68,9 +69,12 @@ async function notifyCustomer(contactId: string, title: string, body: string, hr
 
 /** Append a system "event" line item to the ticket timeline. */
 async function logEvent(caseId: string, userId: string, body: string, meta: Prisma.InputJsonObject) {
+  // Resolved OUTSIDE the callback: it is one lookup for the whole call, and the
+  // callback is not async.
+  const tenantId = await actingTenantId();
   await bestEffort("helpdesk.event", `${body} on case ${caseId}`, () =>
     prisma.customerCaseMessage.create({
-      data: { caseId, userId, direction: "staff", type: "event", body, meta, tenantId: writeTenantId() ?? DEFAULT_TENANT_ID },
+      data: { caseId, userId, direction: "staff", type: "event", body, meta, tenantId },
     }),
   );
 }
@@ -204,7 +208,7 @@ export async function addNote(caseId: string, formData: FormData): Promise<Actio
     const body = str(formData, "body");
     if (body.length < 1) throw new ActionRefusal("Write a note before saving.");
     await prisma.customerCaseMessage.create({
-      data: { caseId, userId: user.id, direction: "staff", type: "note", body, tenantId: writeTenantId() ?? DEFAULT_TENANT_ID },
+      data: { caseId, userId: user.id, direction: "staff", type: "note", body, tenantId: await actingTenantId() },
     });
     await logAudit({ action: "case.note_added", summary: "Added an internal note", user, entityType: "CustomerCase", entityId: caseId });
     revalidatePath(`/cases/${caseId}`);
@@ -302,7 +306,7 @@ export async function addTicketTag(caseId: string, formData: FormData): Promise<
     // slug is unique PER TENANT now (@@unique([tenantId, slug])). Stamp the owning
     // tenant explicitly so this is correct with enforcement OFF too (the scoped
     // guard is dormant then and would leave tenantId NULL, violating NOT NULL).
-    const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
+    const tenantId = await actingTenantId();
     const tag = await prisma.supportTag.upsert({
       where: { tenantId_slug: { tenantId, slug } },
       update: {},
@@ -392,7 +396,7 @@ export async function saveMailbox(formData: FormData): Promise<ActionResult> {
       } else {
         // Stamp the owning tenant explicitly — tenantId is NOT NULL and the scoped
         // guard is dormant with enforcement off. slug is unique per tenant.
-        const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
+        const tenantId = await actingTenantId();
         await prisma.supportMailbox.create({ data: { ...data, slug: slugify(name), tenantId } });
       }
     });
@@ -413,7 +417,7 @@ export async function saveCannedReply(formData: FormData): Promise<ActionResult>
     if (id) {
       await prisma.cannedReply.update({ where: { id }, data: { title, body, mailboxId } });
     } else {
-      await prisma.cannedReply.create({ data: { title, body, mailboxId, createdById: user.id, tenantId: writeTenantId() ?? DEFAULT_TENANT_ID } });
+      await prisma.cannedReply.create({ data: { title, body, mailboxId, createdById: user.id, tenantId: await actingTenantId() } });
     }
     await logAudit({ action: "helpdesk.canned_saved", summary: `Saved reply ${title}`, user });
     revalidatePath("/settings/helpdesk");

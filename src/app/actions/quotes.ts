@@ -40,6 +40,7 @@ import {
 import type { QuoteEditorRecord } from "@/components/quotes/QuoteEditorDialog";
 import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { writeTenantId } from "@/lib/tenantWrite";
+import { actingTenantId } from "@/lib/actingTenant";
 
 const quoteDraftSchema = z.object({
   id: z.string().trim().min(1).optional(),
@@ -111,7 +112,7 @@ async function createQuoteFromLeadRecord(leadId: string) {
     const number = await nextQuoteNumber(tx);
     return tx.quote.create({
       data: {
-        tenantId: writeTenantId() ?? DEFAULT_TENANT_ID,
+        tenantId: await actingTenantId(),
         number,
         leadId,
         contactId: lead.contactId,
@@ -182,7 +183,7 @@ export async function createQuoteForContact(formData: FormData) {
     const number = await nextQuoteNumber(tx);
     return tx.quote.create({
       data: {
-        tenantId: writeTenantId() ?? DEFAULT_TENANT_ID,
+        tenantId: await actingTenantId(),
         number,
         contactId,
         createdById: user.id,
@@ -290,7 +291,7 @@ export async function createQuoteForFleet(formData: FormData) {
       const number = await nextQuoteNumber(tx);
       return tx.quote.create({
         data: {
-          tenantId: writeTenantId() ?? DEFAULT_TENANT_ID,
+          tenantId: await actingTenantId(),
           number,
           contactId: contact.id,
           fleetId: fleet.id,
@@ -506,13 +507,16 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
       // Inherit the hidden columns by row id, and KEEP that id — see quoteRows.
       const itemRows = itemRowsFor(normalizedItems, priorById(existing.items));
       const feeRows = feeRowsFor(normalizedFees, priorById(existing.fees));
+      // One resolution for every row written below — the .map callbacks are not
+      // async, and every row here belongs to the same workspace anyway.
+      const rowTenantId = await actingTenantId();
       await tx.quoteItem.deleteMany({ where: { quoteId: existing.id } });
       if (itemRows.length > 0) {
-        await tx.quoteItem.createMany({ data: itemRows.map((row) => ({ ...row, quoteId: existing.id, tenantId: writeTenantId() ?? DEFAULT_TENANT_ID })) });
+        await tx.quoteItem.createMany({ data: itemRows.map((row) => ({ ...row, quoteId: existing.id, tenantId: rowTenantId })) });
       }
       await tx.quoteFee.deleteMany({ where: { quoteId: existing.id } });
       if (feeRows.length > 0) {
-        await tx.quoteFee.createMany({ data: feeRows.map((row) => ({ ...row, quoteId: existing.id, tenantId: writeTenantId() ?? DEFAULT_TENANT_ID })) });
+        await tx.quoteFee.createMany({ data: feeRows.map((row) => ({ ...row, quoteId: existing.id, tenantId: rowTenantId })) });
       }
       // The rows as PERSISTED, so the audit figure below is the one the database
       // and every screen agree on. Built from normalizedItems it silently
@@ -538,7 +542,7 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
     return {
       quote: await tx.quote.create({
         data: {
-          tenantId: writeTenantId() ?? DEFAULT_TENANT_ID,
+          tenantId: await actingTenantId(),
           number,
           contactId: data.contactId,
           leadId: linkedLeadId,
@@ -623,7 +627,7 @@ export async function createQuoteRevision(quoteId: string) {
       const number = await nextQuoteNumber(tx);
       const created = await tx.quote.create({
         data: {
-          tenantId: writeTenantId() ?? DEFAULT_TENANT_ID,
+          tenantId: await actingTenantId(),
           number,
           contactId: original.contactId,
           leadId: original.leadId,
@@ -669,8 +673,9 @@ export async function createQuoteRevision(quoteId: string) {
         select: { defId: true, value: true },
       });
       if (cfValues.length > 0) {
+        const cfTenantId = await actingTenantId();
         await tx.customFieldValue.createMany({
-          data: cfValues.map((v) => ({ defId: v.defId, recordId: created.id, value: v.value, tenantId: writeTenantId() ?? DEFAULT_TENANT_ID })),
+          data: cfValues.map((v) => ({ defId: v.defId, recordId: created.id, value: v.value, tenantId: cfTenantId })),
         });
       }
       await tx.quote.update({

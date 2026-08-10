@@ -23,6 +23,7 @@ import {
 } from "@/lib/permissions";
 import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { writeTenantId } from "@/lib/tenantWrite";
+import { actingTenantId } from "@/lib/actingTenant";
 
 /**
  * Says what actually happened. Reporting "Photos uploaded" after silently
@@ -163,7 +164,7 @@ export async function createJobCard(formData: FormData) {
     const number = await nextJobCardNumber(tx);
     const jc = await tx.jobCard.create({
       data: {
-        tenantId: writeTenantId() ?? DEFAULT_TENANT_ID,
+        tenantId: await actingTenantId(),
         number,
         vehicleId,
         contactId: vehicle.contactId,
@@ -174,7 +175,7 @@ export async function createJobCard(formData: FormData) {
     });
     if (jc.kmIn != null) {
       await tx.mileageLog.create({
-        data: { vehicleId, km: jc.kmIn, note: `Job card #${jc.number} check-in`, tenantId: writeTenantId() ?? DEFAULT_TENANT_ID },
+        data: { vehicleId, km: jc.kmIn, note: `Job card #${jc.number} check-in`, tenantId: await actingTenantId() },
       });
     }
     return jc;
@@ -239,7 +240,7 @@ export async function addJobCardItem(jobCardId: string, formData: FormData) {
         const claim = await claimPartStock(tx, partId, qty);
         if (!claim.ok) return claim;
       }
-      await tx.jobCardItem.create({ data: { tenantId: writeTenantId() ?? DEFAULT_TENANT_ID, jobCardId, kind, description, qty, unitPriceCents, partId } });
+      await tx.jobCardItem.create({ data: { tenantId: await actingTenantId(), jobCardId, kind, description, qty, unitPriceCents, partId } });
       return { ok: true as const };
     });
     if (!outcome.ok) throw new ActionRefusal(`Only ${outcome.available} × ${outcome.name} in stock.`);
@@ -809,7 +810,7 @@ export async function applyServicePackage(jobCardId: string, formData: FormData)
           }
         }
         await tx.jobCardItem.create({
-          data: { jobCardId, kind: item.kind, description: item.description, qty: item.qty, unitPriceCents: item.unitPriceCents, partId: item.partId, tenantId: writeTenantId() ?? DEFAULT_TENANT_ID },
+          data: { jobCardId, kind: item.kind, description: item.description, qty: item.qty, unitPriceCents: item.unitPriceCents, partId: item.partId, tenantId: await actingTenantId() },
         });
       }
       return { ok: true as const };

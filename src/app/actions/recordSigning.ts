@@ -30,6 +30,7 @@ import { renderRequestSigningSheets, signedFieldStamps } from "@/lib/signing/ren
 import type { StampField } from "@/lib/doceditor/serialize";
 import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { writeTenantId } from "@/lib/tenantWrite";
+import { actingTenantId } from "@/lib/actingTenant";
 
 type Kind = "quote" | "jobcard";
 type Result = {
@@ -289,7 +290,7 @@ export async function startRecordSigning(
       if (open) return { kind: "reused" as const, requestId: open.id };
       const document = await tx.document.create({
         data: {
-          tenantId: writeTenantId() ?? DEFAULT_TENANT_ID,
+          tenantId: await actingTenantId(),
           fileName: `${envelope.title}.pdf`,
           storedName,
           mimeType: "application/pdf",
