@@ -16,6 +16,8 @@
     "test:unit": "node --import tsx --test \"tests/**/*.test.ts\"",
     "test:journeys": "node --import tsx --test tests/journeyTypes.test.ts tests/journeyLeadOutcome.test.ts",
     "check:visual": "node scripts/check-visual-consistency.mjs",
+    "//verify:stack": "Pre-merge verification of an INTEGRATED head, in one command. Runs prisma validate, migration ordering, schema-vs-migration UNIQUE agreement, typecheck, lint, unit tests and the production build CI deliberately skips. Opens no database connection — see the header of scripts/verify-stack.mjs.",
+    "verify:stack": "node scripts/verify-stack.mjs",
     "prisma:generate": "prisma generate --schema ./prisma",
     "prisma:migrate": "node scripts/apply-migrations.mjs",
     "prisma:validate": "prisma validate --schema ./prisma",
