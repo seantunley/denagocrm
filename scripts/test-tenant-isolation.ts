@@ -140,7 +140,7 @@ async function runMode(mode: "dormant" | "enforced", suffix: string): Promise<Mo
     });
     const actorA = actorFor(fixture.a);
 
-    setVictimHandles(fixture.b.rows.dashboardSlug, fixture.b.rows.activityId);
+    setVictimHandles(fixture.b.rows.dashboardSlug, fixture.b.rows.activityId, fixture.b.rows.pipelineId);
 
     // The action layer logs every unexpected failure through console.error
     // (asActionResult). Those are EXPECTED here — provoking refusals is the
@@ -195,7 +195,10 @@ async function main() {
   // this reason and the order is load-bearing.
   process.env.DATABASE_URL = db.url;
   process.env.DATABASE_URL_UNPOOLED = db.url;
-  process.env.NODE_ENV = "test";
+  // NODE_ENV is typed readonly; assigned through the record so the harness looks
+  // like a test process to the code under test (__setTenantEnforcingForTests
+  // refuses to run at all when NODE_ENV is "production").
+  (process.env as Record<string, string>).NODE_ENV = "test";
   process.env.SESSION_SECRET ??= "harness-session-secret-for-local-runs-only";
   process.env.SETTINGS_ENCRYPTION_KEY ??= "0123456789abcdef".repeat(4);
   // TENANT_ENFORCEMENT is deliberately NOT set: each mode drives

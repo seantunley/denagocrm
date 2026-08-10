@@ -115,11 +115,21 @@ export async function buildMatrix(): Promise<MatrixEntry[]> {
       readById: async (actor, id) => actor.as(() => pipelineLib.getPipelineStage(id)),
       updateById: async (actor, id, value) =>
         actor.as(() => pipelines.editSalesPipelineStage(id, fd({ name: value, defaultProbability: "20" }))),
+      // LIST THE VICTIM'S PIPELINE, NOT THE ACTOR'S.
+      //
+      // This probe originally listed the ACTOR's own pipeline, and mutation
+      // testing proved that worthless: deleting the tenant predicate from
+      // listPipelineStages() outright did not turn the suite red, because a
+      // query scoped by `pipelineId = <A's pipeline>` cannot return B's stages
+      // whether or not it also filters by tenant. The check was passing for a
+      // reason that had nothing to do with the boundary it claimed to test.
+      //
+      // Asking for B's pipeline id is the realistic attack anyway — the id is
+      // in a URL — and it makes the tenant predicate the ONLY thing standing
+      // between A and B's rows, which is the point.
       list: async (actor) =>
-        actor.as(async () =>
-          (await pipelineLib.listPipelineStages(actor.tenant.rows.pipelineId)).map((s) => s.id),
-        ),
-      gaps: "no delete action exists for a stage; moveStage is not driven.",
+        actor.as(async () => (await pipelineLib.listPipelineStages(victimPipeline)).map((s) => s.id)),
+      gaps: "no delete action exists for a stage; moveStage and reorderPipelineStages are not driven.",
     },
 
     /* ───────────────────────────────────────────────────────────────────────
@@ -381,10 +391,12 @@ export async function buildMatrix(): Promise<MatrixEntry[]> {
  * rather than threaded through every closure so the table stays readable. */
 let victimSlug = "";
 let victimActivity = "";
+let victimPipeline = "";
 
-export function setVictimHandles(slug: string, activityId: string): void {
+export function setVictimHandles(slug: string, activityId: string, pipelineId: string): void {
   victimSlug = slug;
   victimActivity = activityId;
+  victimPipeline = pipelineId;
 }
 
 function victimSlugFor(_actor: unknown): string {

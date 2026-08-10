@@ -391,3 +391,42 @@ jobs:
           export DATABASE_URL="${DATABASE_URL%/*}/signing_upgrade"
           export DATABASE_URL_UNPOOLED="$DATABASE_URL"
           npm run test:signing-upgrade
+
+      # TWO-TENANT RUNTIME ISOLATION.
+      #
+      # Every other tenancy check in this workflow reads source text. They were
+      # all green on the day the pre-flip audit found five models 100% unowned in
+      # production and SalesPipeline never filtered by tenant at all, because a
+      # schema-shaped guardrail gives a schema-shaped guarantee. This one seeds
+      # two tenants and drives the real server actions, then asserts on the
+      # tenantId PostgreSQL actually stored.
+      #
+      # Its own scratch database, for the same reason test:signing-upgrade has
+      # one -- it creates, mutates and deletes rows deliberately -- and derived
+      # from DATABASE_URL rather than written out, so no new connection-string
+      # literal appears for the secret scanner to be told to ignore. The harness
+      # REFUSES a database whose name does not end in _test/_harness/_scratch, and
+      # refuses one that is the same database as DATABASE_URL, so the name here is
+      # load-bearing rather than decorative.
+      #
+      # It runs twice internally: the DORMANT pass records today's real exposure
+      # without failing, the ENFORCED pass is the pre-flip gate and fails the job.
+      #
+      # NON-BLOCKING FOR NOW, and this line is a to-do with a deadline, not a
+      # preference. The enforced pass currently fails 10 checks against main --
+      # all of SalesPipeline, plus Quote/JobCard/TimelinePin row ownership, plus
+      # two global unique indexes -- so making it blocking today would paint CI
+      # permanently red, and a permanently red check is one everybody learns to
+      # scroll past. It reports in the log meanwhile.
+      #
+      # DELETE `continue-on-error` the moment those are fixed, and certainly
+      # before TENANT_ENFORCEMENT is flipped anywhere: an advisory pre-flip gate
+      # is not a gate.
+      - name: Two-tenant runtime isolation harness
+        continue-on-error: true
+        run: |
+          admin="${DATABASE_URL%/*}/postgres"
+          psql "$admin" -c 'DROP DATABASE IF EXISTS denagocrm_harness_test'
+          psql "$admin" -c 'CREATE DATABASE denagocrm_harness_test'
+          export TENANT_HARNESS_DATABASE_URL="${DATABASE_URL%/*}/denagocrm_harness_test"
+          npm run test:tenant-isolation

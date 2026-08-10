@@ -72,10 +72,12 @@ export async function actAsStaff<T>(
     const resolved = await resolveActingTenant(
       options.asOwner ? tenant.ownerUserId : tenant.memberUserId,
     );
-    return runInTenantScope(
-      { tenantId: resolved?.tenantId ?? tenant.tenantId, system: false },
-      fn,
-    );
+    // SoleTenantResult is `{tenantId} | {error}`. Falling back to the fixture's
+    // own id on the error branch is deliberate: a resolution failure is a fact
+    // about the seed, and letting the probes run anyway makes it show up as the
+    // specific check that fails rather than as every check failing at once.
+    const tenantId = "tenantId" in resolved ? resolved.tenantId : tenant.tenantId;
+    return runInTenantScope({ tenantId, system: false }, fn);
   });
 }
 

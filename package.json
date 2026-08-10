@@ -36,7 +36,11 @@
     "check:backup-coverage": "tsx --tsconfig tsconfig.scripts.json scripts/check-backup-coverage.ts",
     "test:draft-concurrency": "tsx --tsconfig tsconfig.scripts.json scripts/test-conversation-draft-concurrency.ts",
     "test:receipt-isolation": "tsx --tsconfig tsconfig.scripts.json scripts/test-receipt-tenant-isolation.ts",
-    "test:migration-session": "tsx --tsconfig tsconfig.scripts.json scripts/test-migration-session-continuity.ts"
+    "test:migration-session": "tsx --tsconfig tsconfig.scripts.json scripts/test-migration-session-continuity.ts",
+    "test:tenant-isolation": "tsx --tsconfig tsconfig.harness.json scripts/test-tenant-isolation.ts",
+    "harness:provision": "tsx --tsconfig tsconfig.harness.json scripts/harness/provision-only.ts",
+    "//harness:install-postgres": "embedded-postgres is NOT a dependency: it downloads ~130MB of PostgreSQL server binaries, which every `npm ci` would then pay for, including CI's -- and CI does not need it (it already runs a postgres service and sets TENANT_HARNESS_DATABASE_URL). Installed on demand instead, for local runs with no Docker.",
+    "harness:install-postgres": "npm install --no-save embedded-postgres"
   },
   "dependencies": {
     "@blocknote/core": "0.51.4",
