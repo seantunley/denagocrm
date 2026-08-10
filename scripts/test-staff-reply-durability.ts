@@ -33,6 +33,7 @@ import {
   enqueueBotMessages,
   enqueueStaffMessage,
   flushBotOutboxConversation,
+  type OutboxPayload,
 } from "../src/lib/botOutbox";
 import { sendOutcomeMessage, staffReplyIdempotencyKey } from "../src/lib/messageDelivery";
 
@@ -66,6 +67,8 @@ const ids = {
   /** A channel no adapter supports, so a send fails permanently without a network call. */
   deadChannel: `nosuch_${SFX}`,
   deadKey: `k_${SFX}`,
+  /** The same customer's Messenger identity, for the attachment path. */
+  psid: `psid_${SFX}`,
 };
 
 const composition = `comp_${SFX}`;
@@ -101,15 +104,22 @@ async function seed() {
     },
   });
   await basePrisma.contact.create({
-    data: { id: ids.contact, firstName: "Staff", whatsapp: ids.wa, createdById: ids.user, tenantId: DEFAULT_TENANT_ID },
+    data: {
+      id: ids.contact,
+      firstName: "Staff",
+      whatsapp: ids.wa,
+      messengerPsid: ids.psid,
+      createdById: ids.user,
+      tenantId: DEFAULT_TENANT_ID,
+    },
   });
 }
 
 async function cleanup() {
   await basePrisma.botFlowOutbox.deleteMany({
-    where: { OR: [{ key: ids.wa }, { key: ids.deadKey }] },
+    where: { OR: [{ key: ids.wa }, { key: ids.deadKey }, { key: ids.psid }] },
   });
-  await basePrisma.botSession.deleteMany({ where: { key: { in: [ids.wa, ids.deadKey] } } });
+  await basePrisma.botSession.deleteMany({ where: { key: { in: [ids.wa, ids.deadKey, ids.psid] } } });
   await basePrisma.communication.deleteMany({ where: { contactId: ids.contact } });
   // AuditEvent is append-only at the DATABASE level — a trigger refuses DELETE.
   // That is the point of an audit trail and this test does not get to be an
@@ -351,6 +361,81 @@ async function main() {
     Boolean(outcome.error) && !outcome.ok,
     JSON.stringify(outcome),
   );
+
+  // ── A DM attachment and its caption ──────────────────────────────────────
+  //
+  // Meta has no single call carrying both, so they are two queued messages. The
+  // failure this replaces: the file was sent, the text send failed, the person
+  // retried, and the customer received the ATTACHMENT TWICE because neither
+  // provider call was recognisable as one that had already succeeded.
+  const dmComposition = `dm_${SFX}`;
+  const dmKey = (body: string, url: string | null) =>
+    staffReplyIdempotencyKey({
+      compositionId: dmComposition,
+      channel: "messenger",
+      key: ids.psid,
+      actorId: ids.user,
+      contactId: ids.contact,
+      leadId: null,
+      body,
+      attachmentUrl: url,
+    });
+  const dmPart = (body: string, url: string | null, message: OutboxPayload) =>
+    enqueueStaffMessage({
+      channel: "messenger",
+      key: ids.psid,
+      message,
+      clientIdempotencyKey: dmKey(body, url),
+      body,
+      attachmentUrl: url,
+      contactId: ids.contact,
+      actorId: ids.user,
+    });
+
+  const fileUrl = "https://example.test/brochure.pdf";
+  const part1 = await dmPart("📎 File", fileUrl, { type: "attachment", kind: "file", url: fileUrl });
+  const part2 = await dmPart("Here's the brochure.", null, { type: "text", text: "Here's the brochure." });
+  check("an attachment and its text are both accepted", part1.created && part2.created);
+
+  const dmRows = await basePrisma.botFlowOutbox.findMany({
+    where: { tenantId: DEFAULT_TENANT_ID, key: ids.psid, origin: "staff" },
+    orderBy: [{ createdAt: "asc" }, { sequence: "asc" }, { id: "asc" }],
+    select: { payload: true, communicationId: true },
+  });
+  check(
+    "the attachment is queued ahead of its caption, so it cannot arrive second",
+    (dmRows[0]?.payload as { type?: string } | null)?.type === "attachment" &&
+      (dmRows[1]?.payload as { type?: string } | null)?.type === "text",
+    JSON.stringify(dmRows.map((row) => (row.payload as { type?: string } | null)?.type)),
+  );
+  check(
+    "each half has its own timeline row, as the customer receives them",
+    dmRows.length === 2 && new Set(dmRows.map((row) => row.communicationId)).size === 2,
+    JSON.stringify(dmRows.map((row) => row.communicationId)),
+  );
+
+  // The retry after a half-succeeded submission: the SAME composition resent.
+  // Neither half may be duplicated, and the text half must resolve to the row
+  // that already exists rather than sending the customer a second copy.
+  const retry1 = await dmPart("📎 File", fileUrl, { type: "attachment", kind: "file", url: fileUrl });
+  const retry2 = await dmPart("Here's the brochure.", null, { type: "text", text: "Here's the brochure." });
+  check(
+    "resending the same composition duplicates neither half",
+    retry1.outcome === "duplicate" && retry2.outcome === "duplicate",
+    `${retry1.outcome} / ${retry2.outcome}`,
+  );
+  const dmCount = await basePrisma.botFlowOutbox.count({
+    where: { tenantId: DEFAULT_TENANT_ID, key: ids.psid, origin: "staff" },
+  });
+  check("and the customer is still owed exactly two messages", dmCount === 2, `${dmCount} rows`);
+
+  // Correcting the attachment after a failure must actually send the NEW file.
+  const replacedFile = await dmPart("📎 File", "https://example.test/v2.pdf", {
+    type: "attachment",
+    kind: "file",
+    url: "https://example.test/v2.pdf",
+  });
+  check("a corrected attachment is a different message and sends", replacedFile.created);
 }
 
 main()

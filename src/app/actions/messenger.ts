@@ -3,13 +3,28 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { canAccessContact, requirePermission } from "@/lib/permissions";
-import { logAudit } from "@/lib/audit";
-import { sendDirectMessage, sendDirectAttachment, type DmPlatform } from "@/lib/messenger";
+import { type DmPlatform } from "@/lib/messenger";
 import { saveFile } from "@/lib/storage";
-import { pauseBotConversation } from "@/lib/botConversationControl";
+import {
+  deliveryStateForMessages,
+  enqueueStaffMessage,
+  flushBotOutboxConversation,
+  type AttachmentKind,
+  type OutboxPayload,
+  type StaffReplyResult,
+} from "@/lib/botOutbox";
+import { sendOutcomeMessage, staffReplyIdempotencyKey } from "@/lib/messageDelivery";
 
-const ATTACH_KIND = (mime: string): "image" | "audio" | "video" | "file" =>
+const ATTACH_KIND = (mime: string): AttachmentKind =>
   mime.startsWith("image/") ? "image" : mime.startsWith("audio/") ? "audio" : mime.startsWith("video/") ? "video" : "file";
+
+/** What the timeline shows for an attachment with no caption of its own. */
+const ATTACHMENT_BODY: Record<AttachmentKind, string> = {
+  image: "🖼 Image",
+  audio: "🎤 Voice note",
+  video: "🎬 Video",
+  file: "📎 File",
+};
 
 export type DmState = { ok?: string; error?: string };
 
@@ -73,45 +88,112 @@ export async function sendDmReply(
     return { error: `This contact has no ${platform === "instagram" ? "Instagram" : "Messenger"} identity, so the reply cannot be delivered there.` };
   }
 
+  const compositionId = String(formData.get("compositionId") ?? "").trim();
+  if (!compositionId) return { error: "This reply is missing its send key — reload the page and try again." };
+
+  /**
+   * The upload is the one thing that cannot join the transaction.
+   *
+   * It is an external side effect, so it happens first and its only failure mode
+   * is an orphaned blob — cheap, and invisible to the customer. Everything after
+   * it is durable.
+   */
   let attachmentUrl: string | null = null;
-  let attachmentType: "image" | "audio" | "video" | "file" | null = null;
+  let attachmentKind: AttachmentKind | null = null;
   if (hasFile) {
     if (file.size > 4 * 1024 * 1024) {
       return { error: "File too big — 4MB max here. For larger files, share a Library link instead." };
     }
     const buffer = Buffer.from(await file.arrayBuffer());
     attachmentUrl = await saveFile(buffer, file.name || "attachment", file.type || "application/octet-stream");
-    attachmentType = ATTACH_KIND(file.type || "");
-    const sent = await sendDirectAttachment(platform, recipientId, {
-      type: attachmentType,
+    attachmentKind = ATTACH_KIND(file.type || "");
+  }
+
+  /**
+   * Record and queue, then deliver — never the other way round.
+   *
+   * This path called the provider FIRST and wrote the CRM record afterwards,
+   * exactly as the WhatsApp path used to. A provider success followed by a failed
+   * insert left the customer holding a message the CRM had no record of: staff
+   * were told it failed, retried, and the customer received it twice. With an
+   * attachment it was worse — the file was sent, then the text send failed, and
+   * the retry re-sent BOTH, so the customer got the attachment twice.
+   *
+   * An attachment and its accompanying text are two provider sends, because Meta
+   * has no single call that carries both. They are therefore two queued messages
+   * and two timeline rows, which is also what the customer actually receives —
+   * and it means each one is independently deduplicated, retried and reported.
+   * A retry after a half-succeeded submission resends only the half that failed.
+   *
+   * Ordering is the outbox's: rows sharing a conversation are claimed oldest
+   * first, and a failure blocks what was queued behind it, so the caption can
+   * never arrive before the file it describes.
+   */
+  const outgoing: { message: OutboxPayload; body: string; url: string | null; kind: string | null }[] = [];
+  if (attachmentUrl && attachmentKind) {
+    outgoing.push({
+      message: { type: "attachment", kind: attachmentKind, url: attachmentUrl },
+      body: ATTACHMENT_BODY[attachmentKind],
       url: attachmentUrl,
+      kind: attachmentKind,
     });
-    if (!sent.ok) return { error: sent.error };
   }
+  if (text) outgoing.push({ message: { type: "text", text }, body: text, url: null, kind: null });
 
-  if (text) {
-    const result = await sendDirectMessage(platform, recipientId, text);
-    if (!result.ok) return { error: result.error };
-  }
-
-  await prisma.communication.create({
-    data: {
-      type: platform,
-      direction: "outbound",
-      body: text || (attachmentType === "image" ? "🖼 Image" : "📎 File"),
-      attachmentUrl,
-      attachmentType,
+  const label = platform === "instagram" ? "Instagram" : "Messenger";
+  const results: StaffReplyResult[] = [];
+  for (const part of outgoing) {
+    const queued = await enqueueStaffMessage({
+      channel: platform,
+      key: recipientId,
+      message: part.message,
+      clientIdempotencyKey: staffReplyIdempotencyKey({
+        compositionId,
+        channel: platform,
+        key: recipientId,
+        actorId: user.id,
+        contactId,
+        leadId: null,
+        body: part.body,
+        attachmentUrl: part.url,
+      }),
+      body: part.body,
+      attachmentUrl: part.url,
+      attachmentType: part.kind,
       contactId,
-      userId: user.id,
-    },
-  });
-  await pauseBotConversation({ channel: platform, key: recipientId }, 12);
-  await logAudit({
-    action: `${platform}.sent`,
-    summary: `${platform === "instagram" ? "Instagram" : "Messenger"} reply sent: “${text.slice(0, 60)}${text.length > 60 ? "…" : ""}”`,
-    contactId,
-    user,
-  });
+      actorId: user.id,
+      // Ownership, history, the delivery intent and the trail commit together.
+      // The second call's pause and fence are idempotent, and the fence only
+      // touches BOT-origin rows, so it can never withdraw the first part of this
+      // very reply.
+      audit: {
+        action: `${platform}.sent`,
+        summary: `${label} reply sent: “${part.body.slice(0, 60)}${part.body.length > 60 ? "…" : ""}”`,
+        user,
+      },
+    });
+    if (queued.outcome === "conflict") {
+      return { error: "This reply could not be matched to its send — reload the conversation and try again." };
+    }
+    results.push(queued);
+  }
+
+  // Best-effort immediate drain so the reply leaves now rather than on the next
+  // cron tick; the worker owns retries, ordering and dead-lettering if it fails.
+  await flushBotOutboxConversation(platform, recipientId).catch(() => {});
+
   revalidatePath(String(formData.get("revalidate") ?? "/inbox"));
-  return { ok: "Sent ✓" };
+
+  /**
+   * The truth about what was queued, read back after the drain — never a blanket
+   * "Sent ✓", which is what this returned even when the provider had refused.
+   *
+   * With two parts, the WORST outcome is the answer: an attachment that did not
+   * arrive is not made acceptable by the caption that did.
+   */
+  const ids = results.map((r) => r.communicationId).filter((id): id is string => Boolean(id));
+  if (!ids.length) return { ok: "Queued — sending…" };
+  const states = await deliveryStateForMessages(ids);
+  const outcomes = ids.map((id) => sendOutcomeMessage(states.get(id)));
+  return outcomes.find((outcome) => outcome.error) ?? outcomes[outcomes.length - 1];
 }

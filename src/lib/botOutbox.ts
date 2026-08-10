@@ -166,7 +166,7 @@ export async function enqueueStaffMessage(input: {
   channel: string;
   /** Provider recipient identity: WhatsApp digits, PSID, IG id. */
   key: string;
-  message: OutMsg;
+  message: OutboxPayload;
   clientIdempotencyKey: string;
   body: string;
   contactId?: string | null;
@@ -410,9 +410,31 @@ export async function deliveryStateForMessages(
   return states;
 }
 
-function asOutMsg(payload: unknown): OutMsg | null {
+/**
+ * What an outbox row may carry.
+ *
+ * A superset of the flow's `OutMsg`, and deliberately a separate type rather than
+ * a widened one. A staff reply can attach a voice note, a video or a PDF —
+ * `sendDirectAttachment` has always accepted all four kinds — while a flow can
+ * only ever produce text, an image or a choice. Adding `attachment` to `OutMsg`
+ * would oblige every flow node, simulator and validator to handle a case no flow
+ * can emit, to describe a capability that belongs to the queue.
+ */
+export type AttachmentKind = "image" | "audio" | "video" | "file";
+export type OutboxPayload = OutMsg | { type: "attachment"; kind: AttachmentKind; url: string };
+
+const ATTACHMENT_KINDS: AttachmentKind[] = ["image", "audio", "video", "file"];
+
+function asOutMsg(payload: unknown): OutboxPayload | null {
   if (!payload || typeof payload !== "object") return null;
   const value = payload as Record<string, unknown>;
+  if (
+    value.type === "attachment" &&
+    typeof value.url === "string" &&
+    ATTACHMENT_KINDS.includes(value.kind as AttachmentKind)
+  ) {
+    return { type: "attachment", kind: value.kind as AttachmentKind, url: value.url };
+  }
   if (value.type === "text" && typeof value.text === "string") return { type: "text", text: value.text };
   if (value.type === "image" && typeof value.url === "string") return { type: "image", url: value.url, caption: typeof value.caption === "string" ? value.caption : undefined };
   if (value.type === "choice" && typeof value.text === "string" && Array.isArray(value.options)) {
@@ -428,6 +450,15 @@ function asOutMsg(payload: unknown): OutMsg | null {
 async function sendProvider(row: OutboxRow): Promise<{ ok: boolean; error?: string }> {
   const message = asOutMsg(row.payload);
   if (!message) return { ok: false, error: "Invalid outbox payload" };
+  if (message.type === "attachment") {
+    // Only Meta's DM channels have a generic attachment endpoint. Naming the
+    // channel in the error matters: this is a permanent failure, so it is what
+    // the operator will see under the message that did not go.
+    if (row.channel !== "messenger" && row.channel !== "instagram") {
+      return { ok: false, error: `Unsupported bot channel: ${row.channel} cannot send a ${message.kind} attachment` };
+    }
+    return sendDirectAttachment(row.channel, row.key, { type: message.kind, url: message.url });
+  }
   if (row.channel === "whatsapp") {
     if (message.type === "text") return sendWhatsAppText(row.key, message.text);
     if (message.type === "image") return sendWhatsAppImage(row.key, message.url, message.caption);
@@ -448,9 +479,17 @@ async function sendProvider(row: OutboxRow): Promise<{ ok: boolean; error?: stri
   return { ok: false, error: `Unsupported bot channel: ${row.channel}` };
 }
 
+const ATTACHMENT_LABEL: Record<AttachmentKind, string> = {
+  image: "🖼 [image]",
+  audio: "🎤 [voice note]",
+  video: "🎬 [video]",
+  file: "📎 [file]",
+};
+
 function timelineBody(row: OutboxRow): string | null {
   const message = asOutMsg(row.payload);
   if (!message) return null;
+  if (message.type === "attachment") return ATTACHMENT_LABEL[message.kind];
   if (message.type === "text") return message.text;
   if (message.type === "image") return message.caption ? `🖼 ${message.caption}` : "🖼 [image]";
   return `${message.text}\n${message.options.map((o) => `• ${o.label}`).join("\n")}`;
