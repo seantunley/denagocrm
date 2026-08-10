@@ -112,10 +112,19 @@ test("a dead message stops the backlog at the failure, not the conversation for 
   // that conversation is killed in the same step, so nothing queued behind the
   // failure can overtake it — a Meta image and its split-out caption die together.
   const fail = code.slice(code.indexOf("async function failDelivery"), code.indexOf("async function deliverClaimed"));
-  assert.match(fail, /blockLaterMessages\(row, lastError\)/);
-  const block = code.slice(code.indexOf("async function blockLaterMessages"), code.indexOf("async function failDelivery"));
-  assert.match(block, /status: \{ in: \["pending", "retry"\] \}/);
-  assert.match(block, /data: \{\s*status: "dead"/);
+  assert.match(fail, /killMessageAndBacklog\(row, lastError\)/);
+
+  const blockStart = code.indexOf("async function killMessageAndBacklog");
+  const block = code.slice(blockStart, code.indexOf("\n}", blockStart));
+  // ONE transaction. As two statements there was a window in which a concurrent
+  // worker stepped over the just-dead head row and sent the next one — a caption
+  // with no image. That is a regression against main, where WhatsApp sent inline
+  // and sequentially so overtaking could not happen at all.
+  assert.match(block, /prisma\.\$transaction/, "the barrier must be atomic");
+  // `running` included: a row another worker claimed inside that window is
+  // exactly the one that would overtake.
+  assert.match(block, /status: \{ in: \["pending", "retry", "running"\] \}/);
+  assert.match(block, /status: "dead"/);
 
   // And having done that, a dead row must stop being a barrier — otherwise one
   // undeliverable message silences the bot for that customer for ever.
@@ -146,4 +155,19 @@ test("no chatbot table exists without a Prisma model to certify its tenancy", ()
 
   const orphans = [...created].filter((table) => !declared.has(table));
   assert.deepEqual(orphans, [], `chatbot tables with no Prisma model: ${orphans.join(", ")}`);
+});
+
+test("a send the provider accepted is never recorded as a delivery failure", () => {
+  // deliverClaimed's `sent.count !== 1` means the provider ACCEPTED the message
+  // and only this worker's lease was superseded. Returning "retry" there sent it
+  // to the customer twice, and a later error on the duplicate could carry the row
+  // to `dead` — which now resets the conversation and discards captured
+  // variables. So a delivery that succeeded ended up recorded as one that failed,
+  // and the customer mid-booking got "Hi there 👋 Welcome to Denago Cape Town!"
+  const deliver = src("src/lib/botOutbox.ts");
+  const body = deliver.slice(deliver.indexOf("async function deliverClaimed"), deliver.indexOf("\n}", deliver.indexOf("async function deliverClaimed")));
+  const stale = body.slice(body.indexOf("sent.count !== 1"));
+  assert.match(stale, /status: "sent"/, "an accepted send must be recorded as sent");
+  assert.match(stale, /return "sent"/, "and must not be reported as a retry");
+  assert.doesNotMatch(stale, /return "retry"/);
 });

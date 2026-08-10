@@ -223,26 +223,47 @@ async function claimOldest(channel: string, key: string): Promise<OutboxRow | nu
 
 function retryAt(attempts: number): Date { return new Date(Date.now() + Math.min(15 * 60 * 1000, 15_000 * 2 ** Math.max(0, attempts - 1))); }
 
-async function blockLaterMessages(row: OutboxRow, error: string): Promise<void> {
-  await prisma.botFlowOutbox.updateMany({
-    where: { tenantId: outboxTenantId(), channel: row.channel, key: row.key, id: { not: row.id }, status: { in: ["pending", "retry"] } },
-    data: {
-      status: "dead",
-      leaseUntil: null,
-      lastError: `Blocked by earlier failed message ${row.id}: ${error}`.slice(0, 1000),
-    },
+/**
+ * Kill the message AND the backlog behind it in ONE transaction.
+ *
+ * These were two separate awaited statements. Since `earliestUnfinished` skips
+ * dead rows, a concurrent worker could land in the gap between them, step over
+ * the just-dead head row, claim the next one and send it — delivering a Meta
+ * caption whose image had permanently failed, or a "Choose an option" list with
+ * no preceding context. That is a regression against main, where WhatsApp sent
+ * inline and sequentially so overtaking was structurally impossible.
+ *
+ * `running` rows are included deliberately: a row another worker claimed inside
+ * the window is exactly the one that would overtake. Its own terminal write is
+ * fenced by `attempts`, so this cannot corrupt a live send — the worker simply
+ * finds its lease superseded.
+ */
+async function killMessageAndBacklog(row: OutboxRow, lastError: string): Promise<boolean> {
+  const blocked = `Blocked by earlier failed message ${row.id}: ${lastError}`.slice(0, 1000);
+  return prisma.$transaction(async (tx) => {
+    const dead = await tx.botFlowOutbox.updateMany({
+      where: { id: row.id, status: "running", attempts: row.attempts },
+      data: { status: "dead", leaseUntil: null, lastError },
+    });
+    if (dead.count !== 1) return false;
+    await tx.botFlowOutbox.updateMany({
+      where: {
+        tenantId: outboxTenantId(),
+        channel: row.channel,
+        key: row.key,
+        id: { not: row.id },
+        status: { in: ["pending", "retry", "running"] },
+      },
+      data: { status: "dead", leaseUntil: null, lastError: blocked },
+    });
+    return true;
   });
 }
 
 async function failDelivery(row: OutboxRow, error: string): Promise<"retry" | "dead"> {
   const lastError = error.slice(0, 1000);
   if (row.attempts >= MAX_ATTEMPTS) {
-    const dead = await prisma.botFlowOutbox.updateMany({
-      where: { id: row.id, status: "running", attempts: row.attempts },
-      data: { status: "dead", leaseUntil: null, lastError },
-    });
-    if (dead.count !== 1) return "retry";
-    await blockLaterMessages(row, lastError);
+    if (!(await killMessageAndBacklog(row, lastError))) return "retry";
 
     // The flow state and the customer's reality have now diverged. The session
     // was committed BEFORE delivery — deliberately, so a provider timeout cannot
@@ -282,8 +303,19 @@ async function deliverClaimed(row: OutboxRow): Promise<"sent" | "retry" | "dead"
     data: { status: "sent", sentAt: new Date(), leaseUntil: null, lastError: null },
   });
   if (sent.count !== 1) {
-    await logError("bot-outbox-stale-lease", new Error("Provider accepted a send after this worker's outbox lease was superseded"), row.id).catch(() => {});
-    return "retry";
+    // The provider ACCEPTED this message; only our lease was superseded while it
+    // was in flight. Record that unconditionally, so the newer lease-holder does
+    // not send it a second time and — more importantly — so a later error on the
+    // duplicate cannot carry the row to `dead` and reset a conversation the
+    // customer was in fact receiving. A delivery that succeeded must never end up
+    // recorded as a delivery failure.
+    await prisma.botFlowOutbox.updateMany({
+      where: { id: row.id, status: { notIn: ["sent", "dead"] } },
+      data: { status: "sent", sentAt: new Date(), leaseUntil: null, lastError: null },
+    });
+    await logError("bot-outbox-stale-lease", new Error("Provider accepted a send after this worker's outbox lease was superseded; recorded as sent so it is not delivered twice"), row.id).catch(() => {});
+    await repairCommunicationLog({ ...row, status: "sent" }).catch(() => {});
+    return "sent";
   }
   await repairCommunicationLog({ ...row, status: "sent" }).catch(async (error) => { await logError("bot-outbox-log", error, row.id).catch(() => {}); });
   return "sent";
