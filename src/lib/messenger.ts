@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { prisma } from "./db";
 import { resolveTenantCredential } from "./settings";
 import { logAudit } from "./audit";
@@ -30,14 +31,30 @@ export async function isMessengerConfigured(): Promise<boolean> {
   return Boolean(await resolveTenantCredential(ambientTenantId(), "META_PAGE_ACCESS_TOKEN"));
 }
 
-/** The system-user token manages the page; sends need the page-scoped token. */
-let cachedPageToken: { token: string; fetchedAt: number } | null = null;
+/**
+ * The system-user token manages the page; sends need the page-scoped token.
+ *
+ * This cache used to be ONE module-global token. A warm server process serving
+ * tenant B within 30 minutes of tenant A could therefore reuse A's page token.
+ * Cache by tenant and bind the entry to a fingerprint of the current source
+ * credential so rotating a token invalidates the cached derived page token too.
+ */
+type PageTokenCacheEntry = { token: string; sourceHash: string; fetchedAt: number };
+const pageTokenCache = new Map<string, PageTokenCacheEntry>();
+const tokenHash = (value: string) => crypto.createHash("sha256").update(value).digest("hex");
+
 async function getPageToken(): Promise<string | null> {
-  if (cachedPageToken && Date.now() - cachedPageToken.fetchedAt < 30 * 60 * 1000) {
-    return cachedPageToken.token;
-  }
+  const tenantKey = ambientTenantId() ?? "__global__";
   const sysToken = await resolveTenantCredential(ambientTenantId(), "META_PAGE_ACCESS_TOKEN");
-  if (!sysToken) return null;
+  if (!sysToken) {
+    pageTokenCache.delete(tenantKey);
+    return null;
+  }
+  const sourceHash = tokenHash(sysToken);
+  const cached = pageTokenCache.get(tenantKey);
+  if (cached && cached.sourceHash === sourceHash && Date.now() - cached.fetchedAt < 30 * 60 * 1000) {
+    return cached.token;
+  }
   try {
     const res = await fetch(
       `${GRAPH}/me/accounts?fields=id,access_token&access_token=${encodeURIComponent(sysToken)}`,
@@ -47,7 +64,7 @@ async function getPageToken(): Promise<string | null> {
     const json = await res.json();
     const token: string | undefined = json.data?.[0]?.access_token;
     if (!token) return null;
-    cachedPageToken = { token, fetchedAt: Date.now() };
+    pageTokenCache.set(tenantKey, { token, sourceHash, fetchedAt: Date.now() });
     return token;
   } catch {
     return null;

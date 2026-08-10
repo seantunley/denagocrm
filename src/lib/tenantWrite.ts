@@ -5,6 +5,9 @@ import { currentTenantScope } from "./tenantScope";
 import { tenantEnforcing } from "./tenantEnforcement";
 import { TenantScopeError } from "./tenantGuard";
 
+/** Transaction client for new helpers that want an explicit Prisma transaction type. */
+export type TenantWriteTx = Parameters<Parameters<typeof basePrisma.$transaction>[0]>[0];
+
 /**
  * How a tenant-owned read/write on an UNGUARDED path should behave for the CURRENT
  * scope. This is the single source of truth for the global/tenant/closed decision —
@@ -70,6 +73,10 @@ export function writeTenantId(): string | null {
  * Every write inside MUST stamp `tenantId` explicitly — bypass means the db.ts guard
  * will not do it for you, and the children share the parent's tenant so the
  * composite `(tenantId, parentId)` FKs hold.
+ *
+ * Keep this legacy callback contract broad for now: #400 needs a concrete
+ * TenantWriteTx for its own new helpers, but globally tightening every existing
+ * withTenantWrite caller belongs in a dedicated typing/refactor PR.
  */
 export async function withTenantWrite<T>(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

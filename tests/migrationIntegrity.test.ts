@@ -308,7 +308,13 @@ test("session GUCs really do span separate statements, in every migration that u
     spans.push({ name, between: last - isSet[0] - 1 });
   }
 
-  assert.equal(spans.length, 10, "ten migrations set a session GUC");
+  // 10 → 14: the four chatbot backfills now wrap themselves in
+  // SET app.bypass_rls, because they write FORCE-RLS tables and would otherwise
+  // match zero rows, succeed, and be recorded as applied where the migrating role
+  // does not bypass RLS. As the comment above says, the count is not the property
+  // — the span between SET and its last dependent statement is — but it is worth
+  // knowing when the number moves and why.
+  assert.equal(spans.length, 14, "fourteen migrations set a session GUC");
   for (const { name, between } of spans) {
     assert.ok(between > 0, `${name}: a SET with no following statement would not need session pinning`);
   }

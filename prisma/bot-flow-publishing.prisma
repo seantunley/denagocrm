@@ -1,0 +1,33 @@
+/// Immutable snapshot of one saved chatbot flow at publication time.
+model BotFlowVersion {
+  id          String   @id @default(cuid())
+  tenantId    String
+  flowId      String
+  channel     String
+  version     Int
+  definition  String
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  @@unique([tenantId, flowId, version])
+  @@index([tenantId, channel, createdAt])
+  @@index([flowId])
+}
+
+/// The single published chatbot snapshot for a tenant + channel.
+///
+/// Runtime reads this table instead of trusting the mutable BotFlow.active row.
+/// The unique key is the database invariant that only one version can be live.
+model BotFlowPublication {
+  id            String   @id @default(cuid())
+  tenantId      String
+  channel       String
+  flowId        String
+  versionId     String
+  publishedById String?
+  publishedAt   DateTime @default(now())
+
+  @@unique([tenantId, channel])
+  @@index([flowId])
+  @@index([versionId])
+}
