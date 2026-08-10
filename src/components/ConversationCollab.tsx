@@ -3,32 +3,15 @@
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { unstable_rethrow } from "next/navigation";
-import { UserRound } from "lucide-react";
-import { assignConversation, addConversationNote } from "@/app/actions/conversations";
+import { Bot, Hand, UserRound } from "lucide-react";
+import {
+  assignConversation,
+  addConversationNote,
+  setConversationBotMode,
+} from "@/app/actions/conversations";
 import { formatDateTime } from "@/lib/format";
 import type { ThreadCollaboration } from "@/lib/inboxThreads";
 
-/**
- * Who is dealing with this conversation, and what should the next person know.
- *
- * Rebuilt from PR #17. The two things a shared inbox needs that a personal one
- * does not: an owner, so "is anyone on this?" has an answer that is not a
- * question to the room; and staff-only notes, so the handover context ("promised
- * a callback Tuesday, waiting on stock") sits beside the thread rather than in
- * somebody's memory.
- *
- * Notes are NEVER sent to the customer. That is worth being loud about in the UI,
- * because the box sits directly above a reply box that is.
- */
-/**
- * Shown when the call never reaches the server — overwhelmingly a tab older than
- * the running deployment, since a failure INSIDE the action comes back as a value.
- *
- * Stated locally rather than imported: PR #364 introduces the shared sentence in
- * components/actionError.ts, and importing from an unmerged branch is how fifteen
- * PRs came to be stacked on each other and never shipped. Fold this into that
- * constant once #364 is on main.
- */
 const NOT_DELIVERED =
   "That did not reach the server, so nothing was saved. If this page has been open a while, refresh it and try again.";
 
@@ -44,6 +27,7 @@ export default function ConversationCollab({
   const [pending, startTransition] = useTransition();
   const [note, setNote] = useState("");
   const [assignee, setAssignee] = useState(collaboration.assignee?.id ?? "");
+  const [botMode, setBotMode] = useState<"bot" | "human">(collaboration.bot.mode);
 
   const run = (work: () => Promise<{ error?: string; success?: string } | void>) => {
     startTransition(async () => {
@@ -86,6 +70,44 @@ export default function ConversationCollab({
         </select>
       </div>
 
+      {collaboration.bot.supported && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card px-3 py-2.5">
+          {botMode === "human"
+            ? <Hand className="size-4 shrink-0 text-amber-400" />
+            : <Bot className="size-4 shrink-0 text-emerald-400" />}
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-xs font-medium text-foreground">Conversation control</p>
+              <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${botMode === "human" ? "bg-amber-500/15 text-amber-300" : "bg-emerald-500/15 text-emerald-300"}`}>
+                {botMode === "human" ? "Human handling" : "Bot available"}
+              </span>
+            </div>
+            <p className="mt-0.5 text-[10px] leading-4 text-muted-foreground">
+              {botMode === "human"
+                ? "Automation is paused for this customer. Returning it to the bot starts a fresh flow on their next message."
+                : "A staff reply automatically takes over and pauses automated replies."}
+            </p>
+          </div>
+          {canAct && (
+            <button
+              type="button"
+              className={botMode === "human" ? "btn-secondary btn-sm" : "btn-primary btn-sm"}
+              disabled={pending}
+              onClick={() => {
+                const next = botMode === "human" ? "bot" : "human";
+                run(async () => {
+                  const result = await setConversationBotMode(collaboration.conversationId, next);
+                  if (!(result && "error" in result && result.error)) setBotMode(next);
+                  return result;
+                });
+              }}
+            >
+              {pending ? "Saving…" : botMode === "human" ? "Return to bot" : "Take over"}
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="space-y-2">
         {collaboration.notes.length > 0 && (
           <ul className="space-y-1.5">
@@ -117,8 +139,6 @@ export default function ConversationCollab({
               onClick={() =>
                 run(async () => {
                   const result = await addConversationNote(collaboration.conversationId, note);
-                  // Cleared only on success, so a refused note is not lost from the
-                  // box the moment the person is told to fix it.
                   if (!(result && "error" in result && result.error)) setNote("");
                   return result;
                 })
