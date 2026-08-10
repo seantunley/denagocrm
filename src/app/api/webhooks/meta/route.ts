@@ -11,7 +11,12 @@ import { metaReceipt } from "@/lib/deliveryReceipts";
 import { applyReceipt } from "@/lib/messageReceipts";
 import { withChannelTenantScope, validateInSystemScope } from "@/lib/tenantScopeEntry";
 import { secretEquals } from "@/lib/secretCompare";
-import { claimInboundBotEvent } from "@/lib/botInboundEvent";
+import {
+  claimInboundBotEvent,
+  completeInboundBotEvent,
+  InboundBotEventLeasedError,
+  retryInboundBotEvent,
+} from "@/lib/botInboundEvent";
 
 /** Meta webhook verification handshake. */
 export async function GET(req: NextRequest) {
@@ -19,6 +24,7 @@ export async function GET(req: NextRequest) {
   const mode = params.get("hub.mode");
   const token = params.get("hub.verify_token");
   const challenge = params.get("hub.challenge");
+
   const verifyToken = await validateInSystemScope(() => getSetting("META_VERIFY_TOKEN"));
   if (mode === "subscribe" && secretEquals(token, verifyToken) && challenge) {
     return new NextResponse(challenge, { status: 200 });
@@ -29,7 +35,7 @@ export async function GET(req: NextRequest) {
 async function fetchLeadDetails(leadgenId: string, accessToken: string) {
   const res = await fetch(
     `https://graph.facebook.com/v21.0/${leadgenId}?fields=field_data,created_time,ad_name,form_id,platform&access_token=${encodeURIComponent(accessToken)}`,
-    { cache: "no-store", signal: AbortSignal.timeout(10000) }
+    { cache: "no-store", signal: AbortSignal.timeout(10000) },
   );
   if (!res.ok) throw new Error(`Graph API ${res.status}: ${await res.text()}`);
   return res.json();
@@ -57,9 +63,10 @@ async function latestPersistedDmAttachment(
   return saved?.attachmentUrl ?? undefined;
 }
 
-/** Receives leadgen events from Facebook/Instagram Lead Ads. */
+/** Receives leadgen events from Facebook/Instagram Lead Ads and DM events. */
 export async function POST(req: NextRequest) {
   const rawBody = await req.text();
+
   const appSecret = await validateInSystemScope(() => getSetting("META_APP_SECRET"));
   if (!appSecret) return NextResponse.json({ error: "Webhook not configured" }, { status: 503 });
   {
@@ -78,44 +85,58 @@ export async function POST(req: NextRequest) {
 
   /* eslint-disable @typescript-eslint/no-explicit-any */
   const objectType = (body as any).object as string | undefined;
+
   if (objectType === "page" || objectType === "instagram") {
     const platform: DmPlatform = objectType === "instagram" ? "instagram" : "messenger";
     for (const entry of (body as any).entry ?? []) {
       const endpointId = String(entry.id ?? "");
       await withChannelTenantScope(platform, endpointId, async () => {
         for (const ev of entry.messaging ?? []) {
-          try {
-            const text: string = ev.message?.text ?? "";
-            const attachments = ((ev.message?.attachments ?? []) as any[])
-              .map((a) => ({ type: String(a.type ?? "file"), url: String(a.payload?.url ?? "") }))
-              .filter((a) => a.url);
-            if (ev.delivery || ev.read) {
-              const receipt = metaReceipt(ev, platform);
-              if (receipt) await applyReceipt(receipt);
-              continue;
-            }
-            if (ev.message?.is_echo) {
-              if (text) await recordDmEcho(platform, String(ev.recipient?.id ?? ""), text);
-              continue;
-            }
-            if (ev.message && (text || attachments.length > 0)) {
-              if (!(await claimInboundBotEvent(platform, String(ev.message?.mid ?? "")))) continue;
+          const text: string = ev.message?.text ?? "";
+          const attachments = ((ev.message?.attachments ?? []) as any[])
+            .map((a) => ({ type: String(a.type ?? "file"), url: String(a.payload?.url ?? "") }))
+            .filter((a) => a.url);
 
-              const referral = ev.message.referral ?? ev.referral ?? ev.postback?.referral ?? null;
-              const senderId = String(ev.sender?.id ?? "");
-              // Bound the persisted-attachment lookup to THIS inbound event so an
-              // older file from the same customer can never satisfy a new capture.
-              const receivedAfter = new Date(Date.now() - 1000);
-              await recordInboundDm(platform, senderId, text, referral, attachments);
-              const fileUrl = attachments.length
-                ? await latestPersistedDmAttachment(platform, senderId, receivedAfter)
-                : undefined;
-              const payload: string | undefined = ev.message.quick_reply?.payload;
-              if (text || payload || fileUrl) await runDmFlow(platform, senderId, text, payload, fileUrl);
-            }
-          } catch (e) {
+          if (ev.delivery || ev.read) {
+            const receipt = metaReceipt(ev, platform);
+            if (receipt) await applyReceipt(receipt);
+            continue;
+          }
+          if (ev.message?.is_echo) {
+            if (text) await recordDmEcho(platform, String(ev.recipient?.id ?? ""), text);
+            continue;
+          }
+          if (!ev.message || (!text && attachments.length === 0)) continue;
+
+          const outcome = await claimInboundBotEvent(platform, String(ev.message?.mid ?? ""));
+          if (outcome.status === "completed") continue; // genuinely done — ack it.
+          if (outcome.status === "unidentified") {
             const { logError } = await import("@/lib/errorLog");
-            await logError("meta-dm-webhook", e);
+            await logError("meta-dm-webhook", "Inbound message carried no provider mid — skipped, because a redelivery would repeat it unfenced.").catch(() => {});
+            continue;
+          }
+          // Leased: the attempt holding it may have died. Ack would retire the
+          // provider's redelivery and lose the message, so ask to be sent it again.
+          if (outcome.status === "leased") throw new InboundBotEventLeasedError(platform, String(ev.message?.mid ?? ""));
+          const claim = outcome.claim;
+          try {
+            const referral = ev.message.referral ?? ev.referral ?? ev.postback?.referral ?? null;
+            const senderId = String(ev.sender?.id ?? "");
+            // Bound the persisted-attachment lookup to THIS inbound event so an
+            // older file from the same customer can never satisfy a new capture.
+            const receivedAfter = new Date(Date.now() - 1000);
+            await recordInboundDm(platform, senderId, text, referral, attachments);
+            const fileUrl = attachments.length
+              ? await latestPersistedDmAttachment(platform, senderId, receivedAfter)
+              : undefined;
+            const payload: string | undefined = ev.message.quick_reply?.payload;
+            if (text || payload || fileUrl) await runDmFlow(platform, senderId, text, payload, fileUrl);
+            await completeInboundBotEvent(claim);
+          } catch (error) {
+            await retryInboundBotEvent(claim, error).catch(() => {});
+            const { logError } = await import("@/lib/errorLog");
+            await logError("meta-dm-webhook", error).catch(() => {});
+            throw error; // non-2xx makes Meta redeliver the released event
           }
         }
       }, () => {
@@ -125,7 +146,9 @@ export async function POST(req: NextRequest) {
   }
   /* eslint-enable @typescript-eslint/no-explicit-any */
 
-  const entries = (body as { entry?: { changes?: { field: string; value: Record<string, unknown> }[] }[] }).entry ?? [];
+  const entries =
+    (body as { entry?: { changes?: { field: string; value: Record<string, unknown> }[] }[] }).entry ?? [];
+
   for (const entry of entries) {
     for (const change of entry.changes ?? []) {
       if (change.field !== "leadgen") continue;
@@ -134,9 +157,16 @@ export async function POST(req: NextRequest) {
       const pageId = String(change.value?.page_id ?? "");
 
       await withChannelTenantScope("messenger", pageId, async () => {
-        const existing = await basePrisma.lead.findUnique({ where: { externalId: leadgenId }, select: { id: true } });
+        const existing = await basePrisma.lead.findUnique({
+          where: { externalId: leadgenId },
+          select: { id: true },
+        });
         if (existing) return;
-        const accessToken = await resolveTenantCredential(currentTenantScope()?.tenantId ?? null, "META_PAGE_ACCESS_TOKEN");
+
+        const accessToken = await resolveTenantCredential(
+          currentTenantScope()?.tenantId ?? null,
+          "META_PAGE_ACCESS_TOKEN",
+        );
         try {
           if (!accessToken) throw new Error("META_PAGE_ACCESS_TOKEN not configured");
           const details = await fetchLeadDetails(leadgenId, accessToken);

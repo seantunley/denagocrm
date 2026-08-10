@@ -203,9 +203,14 @@ async function repairCommunicationLog(row: OutboxRow): Promise<boolean> {
   return true;
 }
 
+/**
+ * The earliest non-sent row is the ordering barrier. A dead row deliberately
+ * remains a barrier: later customer copy must not overtake a terminally failed
+ * earlier message.
+ */
 async function earliestUnfinished(channel: string, key: string): Promise<OutboxRow | null> {
   return prisma.botFlowOutbox.findFirst({
-    where: { channel, key, status: { notIn: ["sent", "dead"] } },
+    where: { channel, key, status: { not: "sent" } },
     orderBy: [{ createdAt: "asc" }, { sequence: "asc" }, { id: "asc" }],
   }) as Promise<OutboxRow | null>;
 }
@@ -213,13 +218,18 @@ async function earliestUnfinished(channel: string, key: string): Promise<OutboxR
 async function claimOldest(channel: string, key: string): Promise<OutboxRow | null> {
   const now = new Date();
   const row = await earliestUnfinished(channel, key);
-  if (!row) return null;
+  if (!row || row.status === "dead") return null;
   if (row.availableAt > now) return null;
   if (row.status === "running" && row.leaseUntil && row.leaseUntil > now) return null;
 
+  // attempts is also the lease generation. Matching the generation on every
+  // completion/failure update prevents an expired worker from mutating a lease
+  // that a newer worker has since reclaimed.
+  const leaseUntil = new Date(Date.now() + LEASE_MS);
   const claimed = await prisma.botFlowOutbox.updateMany({
     where: {
       id: row.id,
+      attempts: row.attempts,
       availableAt: { lte: now },
       OR: [
         { status: { in: ["pending", "retry"] } },
@@ -229,12 +239,12 @@ async function claimOldest(channel: string, key: string): Promise<OutboxRow | nu
     data: {
       status: "running",
       attempts: { increment: 1 },
-      leaseUntil: new Date(Date.now() + LEASE_MS),
+      leaseUntil,
       lastError: null,
     },
   });
   if (claimed.count !== 1) return null;
-  return prisma.botFlowOutbox.findUnique({ where: { id: row.id } }) as Promise<OutboxRow | null>;
+  return { ...row, status: "running", attempts: row.attempts + 1, leaseUntil };
 }
 
 function retryAt(attempts: number): Date {
@@ -242,21 +252,39 @@ function retryAt(attempts: number): Date {
   return new Date(Date.now() + delayMs);
 }
 
+async function blockLaterMessages(row: OutboxRow, error: string): Promise<void> {
+  await prisma.botFlowOutbox.updateMany({
+    where: {
+      channel: row.channel,
+      key: row.key,
+      id: { not: row.id },
+      status: { in: ["pending", "retry"] },
+    },
+    data: {
+      status: "dead",
+      leaseUntil: null,
+      lastError: `Blocked by earlier failed message ${row.id}: ${error}`.slice(0, 1000),
+    },
+  });
+}
+
 async function failDelivery(row: OutboxRow, error: string): Promise<"retry" | "dead"> {
   const lastError = error.slice(0, 1000);
   if (row.attempts >= MAX_ATTEMPTS) {
-    await prisma.botFlowOutbox.updateMany({
-      where: { id: row.id, status: "running" },
+    const dead = await prisma.botFlowOutbox.updateMany({
+      where: { id: row.id, status: "running", attempts: row.attempts },
       data: { status: "dead", leaseUntil: null, lastError },
     });
+    if (dead.count !== 1) return "retry";
+    await blockLaterMessages(row, lastError);
     await logError("bot-outbox", new Error(lastError), `${row.channel}:${row.key}:${row.id}`).catch(() => {});
     return "dead";
   }
-  await prisma.botFlowOutbox.updateMany({
-    where: { id: row.id, status: "running" },
+  const retried = await prisma.botFlowOutbox.updateMany({
+    where: { id: row.id, status: "running", attempts: row.attempts },
     data: { status: "retry", leaseUntil: null, lastError, availableAt: retryAt(row.attempts) },
   });
-  return "retry";
+  return retried.count === 1 ? "retry" : "retry";
 }
 
 async function deliverClaimed(row: OutboxRow): Promise<"sent" | "retry" | "dead"> {
@@ -270,10 +298,15 @@ async function deliverClaimed(row: OutboxRow): Promise<"sent" | "retry" | "dead"
 
   // Provider acceptance is final for delivery purposes. Timeline logging is a
   // separate repairable state so a CRM insert failure never resends to customer.
-  await prisma.botFlowOutbox.updateMany({
-    where: { id: row.id, status: "running" },
+  // The lease generation fences a stale worker from finalising a newer claim.
+  const sent = await prisma.botFlowOutbox.updateMany({
+    where: { id: row.id, status: "running", attempts: row.attempts },
     data: { status: "sent", sentAt: new Date(), leaseUntil: null, lastError: null },
   });
+  if (sent.count !== 1) {
+    await logError("bot-outbox-stale-lease", new Error("Provider accepted a send after this worker's outbox lease was superseded"), row.id).catch(() => {});
+    return "retry";
+  }
   await repairCommunicationLog({ ...row, status: "sent" }).catch(async (error) => {
     await logError("bot-outbox-log", error, row.id).catch(() => {});
   });
@@ -294,7 +327,7 @@ export async function flushBotOutboxConversation(
     if (!row) break;
     const outcome = await deliverClaimed(row);
     stats[outcome === "sent" ? "sent" : outcome === "retry" ? "retried" : "dead"] += 1;
-    if (outcome === "retry") break;
+    if (outcome !== "sent") break;
   }
   return stats;
 }

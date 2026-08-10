@@ -5,7 +5,12 @@ import { tgPersistInboundFile } from "@/lib/telegramTransport";
 import { logError } from "@/lib/errorLog";
 import { withSystemScope } from "@/lib/tenantScope";
 import { secretEquals } from "@/lib/secretCompare";
-import { claimInboundBotEvent } from "@/lib/botInboundEvent";
+import {
+  claimInboundBotEvent,
+  completeInboundBotEvent,
+  InboundBotEventLeasedError,
+  retryInboundBotEvent,
+} from "@/lib/botInboundEvent";
 
 export async function POST(req: NextRequest) {
   const secret = await getSetting("TELEGRAM_WEBHOOK_SECRET");
@@ -39,44 +44,36 @@ export async function POST(req: NextRequest) {
 
   try {
     await withSystemScope(async () => {
-      if (!(await claimInboundBotEvent("telegram", String(update.update_id ?? "")))) return;
-
-      if (update.callback_query) {
-        const cq = update.callback_query;
-        await tgAnswerCallback(cq.id);
-        const chatId = cq.message?.chat?.id;
-        if (chatId != null && cq.data) await runTelegramFlow(chatId, "", cq.data);
+      const outcome = await claimInboundBotEvent("telegram", String(update.update_id ?? ""));
+      if (outcome.status === "completed") return; // genuinely done — ack it.
+      if (outcome.status === "unidentified") {
+        await logError("telegram-webhook", "Inbound update carried no update_id — skipped, because a redelivery would repeat it unfenced.").catch(() => {});
         return;
       }
+      // Leased: the attempt holding it may have died. Ack would retire the
+      // provider's redelivery and lose the message, so ask to be sent it again.
+      if (outcome.status === "leased") throw new InboundBotEventLeasedError("telegram", String(update.update_id ?? ""));
+      const claim = outcome.claim;
 
-      const message = update.message;
-      const chatId = message?.chat?.id;
-      if (chatId == null || !message) return;
-      const text = message.text ?? message.caption ?? "";
-
-      // Telegram sends multiple photo sizes; the last is normally the largest.
-      // Documents/video/audio already carry one stable file id.
-      const media = message.document ?? message.video ?? message.audio ?? message.photo?.at(-1);
-      let fileUrl: string | undefined;
-      if (media?.file_id) {
-        const fallbackName = message.document
-          ? "telegram-document.bin"
-          : message.video
-          ? "telegram-video.mp4"
-          : message.audio
-          ? "telegram-audio.bin"
-          : "telegram-photo.jpg";
-        fileUrl = await tgPersistInboundFile(
-          media.file_id,
-          media.file_name || fallbackName,
-          media.mime_type,
-        ) ?? undefined;
+      try {
+        if (update.callback_query) {
+          const cq = update.callback_query;
+          await tgAnswerCallback(cq.id);
+          const chatId = cq.message?.chat?.id;
+          if (chatId != null && cq.data) await runTelegramFlow(chatId, "", cq.data);
+        } else if (update.message?.text) {
+          const chatId = update.message.chat?.id;
+          if (chatId != null) await runTelegramFlow(chatId, update.message.text);
+        }
+        await completeInboundBotEvent(claim);
+      } catch (error) {
+        await retryInboundBotEvent(claim, error).catch(() => {});
+        throw error;
       }
-
-      if (text || fileUrl) await runTelegramFlow(chatId, text, undefined, fileUrl);
     });
   } catch (error) {
     await logError("telegram-webhook", error).catch(() => {});
+    return NextResponse.json({ error: "Update processing failed" }, { status: 500 });
   }
   return NextResponse.json({ ok: true });
 }

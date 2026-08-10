@@ -4,13 +4,21 @@ CREATE TABLE "BotInboundEvent" (
     "tenantId" TEXT NOT NULL,
     "channel" TEXT NOT NULL,
     "providerId" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'running',
+    "attempts" INTEGER NOT NULL DEFAULT 1,
+    "leaseUntil" TIMESTAMP(3),
+    "completedAt" TIMESTAMP(3),
+    "lastError" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "BotInboundEvent_pkey" PRIMARY KEY ("id"),
     CONSTRAINT "BotInboundEvent_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
 CREATE UNIQUE INDEX "BotInboundEvent_tenant_channel_provider_key"
     ON "BotInboundEvent"("tenantId", "channel", "providerId");
+CREATE INDEX "BotInboundEvent_tenant_status_lease_idx"
+    ON "BotInboundEvent"("tenantId", "status", "leaseUntil");
 CREATE INDEX "BotInboundEvent_createdAt_idx" ON "BotInboundEvent"("createdAt");
 
 ALTER TABLE "BotInboundEvent" ENABLE ROW LEVEL SECURITY;
