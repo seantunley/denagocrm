@@ -132,4 +132,10 @@ $$;
 -- tenant-scoped identity index cannot constrain either — Postgres treats NULLs
 -- as distinct, so the UNIQUE (tenantId, channel, key) added by 20260809152000
 -- does not constrain NULL-tenant rows at all.
+-- BotSession carries FORCE ROW LEVEL SECURITY. Where the migrating role does not
+-- bypass RLS, this backfill would match ZERO rows, SUCCEED, and be recorded as
+-- applied — the exact "recorded but never really ran" shape behind this project's
+-- earlier P2022 outage. Same escape hatch basePrisma uses.
+SET app.bypass_rls = 'on';
 UPDATE "BotSession" SET "tenantId" = 'tenant_denago_cpt' WHERE "tenantId" IS NULL;
+RESET app.bypass_rls;

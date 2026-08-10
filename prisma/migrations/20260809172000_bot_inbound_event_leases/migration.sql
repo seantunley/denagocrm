@@ -25,6 +25,11 @@ ALTER TABLE "BotInboundEvent"
   ADD COLUMN IF NOT EXISTS "lastError" TEXT,
   ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP;
 
+-- These tables carry FORCE ROW LEVEL SECURITY. Where the migrating role does
+-- not bypass RLS, an unwrapped backfill matches ZERO rows, SUCCEEDS, and is
+-- recorded as applied — the exact "recorded but never really ran" shape behind
+-- this project's earlier P2022 outage. Same escape hatch basePrisma uses.
+SET app.bypass_rls = 'on';
 UPDATE "BotInboundEvent"
    SET "completedAt" = COALESCE("completedAt", "createdAt"),
        "updatedAt" = COALESCE("updatedAt", "createdAt")
@@ -38,3 +43,4 @@ ALTER TABLE "BotInboundEvent" ALTER COLUMN "status" SET DEFAULT 'running';
 
 CREATE INDEX IF NOT EXISTS "BotInboundEvent_tenant_status_lease_idx"
   ON "BotInboundEvent"("tenantId", "status", "leaseUntil");
+RESET app.bypass_rls;

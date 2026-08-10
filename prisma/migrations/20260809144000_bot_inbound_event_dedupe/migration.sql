@@ -1,5 +1,5 @@
 -- Durable webhook retry fence for chatbot-driving inbound provider events.
-CREATE TABLE "BotInboundEvent" (
+CREATE TABLE IF NOT EXISTS "BotInboundEvent" (
     "id" TEXT NOT NULL,
     "tenantId" TEXT NOT NULL,
     "channel" TEXT NOT NULL,
@@ -9,11 +9,12 @@ CREATE TABLE "BotInboundEvent" (
     CONSTRAINT "BotInboundEvent_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
-CREATE UNIQUE INDEX "BotInboundEvent_tenant_channel_provider_key"
+CREATE UNIQUE INDEX IF NOT EXISTS "BotInboundEvent_tenant_channel_provider_key"
     ON "BotInboundEvent"("tenantId", "channel", "providerId");
-CREATE INDEX "BotInboundEvent_createdAt_idx" ON "BotInboundEvent"("createdAt");
+CREATE INDEX IF NOT EXISTS "BotInboundEvent_createdAt_idx" ON "BotInboundEvent"("createdAt");
 
 ALTER TABLE "BotInboundEvent" ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "BotInboundEvent_tenant_isolation" ON "BotInboundEvent";
 CREATE POLICY "BotInboundEvent_tenant_isolation" ON "BotInboundEvent"
   USING (
     current_setting('app.bypass_rls', true) = 'on'

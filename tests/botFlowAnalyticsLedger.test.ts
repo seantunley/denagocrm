@@ -9,7 +9,7 @@ const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
 
 test("flow analytics has a purpose-built tenant/RLS ledger", () => {
   const migration = src("prisma/migrations/20260809154500_bot_flow_events/migration.sql");
-  assert.match(migration, /CREATE TABLE "BotFlowEvent"/);
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS "BotFlowEvent"/);
   assert.match(migration, /"tenantId" TEXT NOT NULL/);
   assert.match(migration, /"flowVersionId" TEXT/);
   assert.match(migration, /"nodeId" TEXT/);

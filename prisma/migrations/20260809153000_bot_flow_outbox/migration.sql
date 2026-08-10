@@ -1,5 +1,5 @@
 -- Durable chatbot outbound delivery queue.
-CREATE TABLE "BotFlowOutbox" (
+CREATE TABLE IF NOT EXISTS "BotFlowOutbox" (
     "id" TEXT NOT NULL,
     "tenantId" TEXT NOT NULL,
     "channel" TEXT NOT NULL,
@@ -23,16 +23,17 @@ CREATE TABLE "BotFlowOutbox" (
     CONSTRAINT "BotFlowOutbox_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
-CREATE UNIQUE INDEX "BotFlowOutbox_tenant_batch_sequence_key"
+CREATE UNIQUE INDEX IF NOT EXISTS "BotFlowOutbox_tenant_batch_sequence_key"
     ON "BotFlowOutbox"("tenantId", "batchId", "sequence");
-CREATE INDEX "BotFlowOutbox_tenant_status_available_idx"
+CREATE INDEX IF NOT EXISTS "BotFlowOutbox_tenant_status_available_idx"
     ON "BotFlowOutbox"("tenantId", "status", "availableAt");
-CREATE INDEX "BotFlowOutbox_tenant_channel_key_created_idx"
+CREATE INDEX IF NOT EXISTS "BotFlowOutbox_tenant_channel_key_created_idx"
     ON "BotFlowOutbox"("tenantId", "channel", "key", "createdAt", "sequence");
-CREATE INDEX "BotFlowOutbox_tenant_status_log_idx"
+CREATE INDEX IF NOT EXISTS "BotFlowOutbox_tenant_status_log_idx"
     ON "BotFlowOutbox"("tenantId", "status", "communicationLoggedAt");
 
 ALTER TABLE "BotFlowOutbox" ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "BotFlowOutbox_tenant_isolation" ON "BotFlowOutbox";
 CREATE POLICY "BotFlowOutbox_tenant_isolation" ON "BotFlowOutbox"
   USING (current_setting('app.bypass_rls', true) = 'on' OR "tenantId" = current_setting('app.current_tenant', true))
   WITH CHECK (current_setting('app.bypass_rls', true) = 'on' OR "tenantId" = current_setting('app.current_tenant', true));

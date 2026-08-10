@@ -39,9 +39,15 @@ ALTER TABLE "BotSession"
 --
 -- Restricting to the column's own default also makes the intent exact: classify
 -- rows that have never been classified, and touch nothing else.
+-- These tables carry FORCE ROW LEVEL SECURITY. Where the migrating role does
+-- not bypass RLS, an unwrapped backfill matches ZERO rows, SUCCEEDS, and is
+-- recorded as applied — the exact "recorded but never really ran" shape behind
+-- this project's earlier P2022 outage. Same escape hatch basePrisma uses.
+SET app.bypass_rls = 'on';
 UPDATE "BotSession"
    SET "ownership" = 'ai_handoff'
  WHERE "status" = 'paused'
    AND "ownership" = 'bot';
 
 CREATE INDEX IF NOT EXISTS "BotSession_tenant_ownership_idx" ON "BotSession"("tenantId", "ownership");
+RESET app.bypass_rls;

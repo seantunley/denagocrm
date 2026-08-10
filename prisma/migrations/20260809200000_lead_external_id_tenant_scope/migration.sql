@@ -14,6 +14,11 @@
 --    is still dormant — so Leads created since then were written with a NULL
 --    tenantId. Those rows are invisible to the tenant-scoped identity read, and
 --    would also be invisible to RLS once enforcement flips on.
+-- These tables carry FORCE ROW LEVEL SECURITY. Where the migrating role does
+-- not bypass RLS, an unwrapped backfill matches ZERO rows, SUCCEEDS, and is
+-- recorded as applied — the exact "recorded but never really ran" shape behind
+-- this project's earlier P2022 outage. Same escape hatch basePrisma uses.
+SET app.bypass_rls = 'on';
 UPDATE "Lead" SET "tenantId" = 'tenant_denago_cpt' WHERE "tenantId" IS NULL;
 
 -- 2. Swap the global identity for the tenant-scoped one. Order matters only for
@@ -21,3 +26,4 @@ UPDATE "Lead" SET "tenantId" = 'tenant_denago_cpt' WHERE "tenantId" IS NULL;
 --    already rejected by the global constraint being dropped.
 DROP INDEX IF EXISTS "Lead_externalId_key";
 CREATE UNIQUE INDEX IF NOT EXISTS "Lead_tenantId_externalId_key" ON "Lead" ("tenantId", "externalId");
+RESET app.bypass_rls;
