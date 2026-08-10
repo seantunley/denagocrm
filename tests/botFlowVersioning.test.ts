@@ -23,7 +23,12 @@ test("one immutable publication exists per tenant and channel", () => {
 
 test("publishing snapshots the draft and switches live state in one tenant transaction", () => {
   const code = src("src/lib/flowPublishing.ts");
-  assert.match(code, /withTenantWrite\(async \(tx, tenantId\)/);
+  // The transaction must NOT re-derive its own tenantId: withTenantWrite resolves
+  // writeTenantId(), which is the founding tenant while enforcement is dormant, so
+  // publishing a second workspace's draft would stamp the version, the publication
+  // and the flow itself with tenant A. The staff workspace is resolved above it.
+  assert.match(code, /const tenantId = await builderTenantId\(\);/);
+  assert.match(code, /withTenantWrite\(async \(tx\) =>/);
   assert.match(code, /tx\.botFlowVersion\.create/);
   assert.match(code, /definition: flow\.definition/);
   assert.match(code, /tx\.botFlowPublication\.upsert/);
