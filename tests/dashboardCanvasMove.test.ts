@@ -203,7 +203,10 @@ test("a foreign change never overwrites work that is not saved yet", () => {
   const provider = code(PROVIDER);
   const effect = provider.slice(provider.indexOf("const seed = JSON.stringify"));
   const body = effect.slice(0, effect.indexOf("}, [seed]);"));
-  const guard = /if \(inFlight\.current > 0 \|\| timer\.current !== null\) return;/;
+  // `inFlight` is a boolean rather than a count now: the save queue writes one
+  // arrangement at a time, so "how many are out" can only ever be nought or one.
+  // The rule it guards is unchanged.
+  const guard = /if \(inFlight\.current \|\| timer\.current !== null\) return;/;
   assert.match(body, guard);
   assert.ok(
     body.search(guard) < body.indexOf("setConfig(initialConfig)"),
@@ -216,10 +219,15 @@ test("an edit inside the debounce survives leaving the page", () => {
   // flushed. An edit made within 600ms of navigating away was dropped outright —
   // no failure, no save, and the previous arrangement on return.
   const provider = code(PROVIDER);
-  assert.match(provider, /pending\.current = next;/, "the debounced config must be held");
+  // The arrangement waiting out the debounce lives in the save queue now, which
+  // is also what makes the last write correct: it is chained behind anything
+  // already in flight, so it carries the revision that write produced instead of
+  // one the server is about to refuse.
+  assert.match(provider, /queue\.submit\(next\);/, "the debounced config must be held");
+  assert.match(provider, /const unsaved = queue\.takeQueued\(\);/, "…and picked up on the way out");
   assert.match(
     provider,
-    /if \(unsaved\) void saveDashboardConfig\(/,
+    /void queue\.settled\(\)\.then\(\(\) => saveDashboardConfig\(/,
     "…and written on unmount rather than discarded",
   );
 });
