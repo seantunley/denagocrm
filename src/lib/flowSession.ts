@@ -10,6 +10,7 @@ import { withTenantWrite, type TenantWriteTx } from "./tenantWrite";
 import { loadBotSession, upsertBotSessionTx, deleteBotSessionTx } from "./botSessionStore";
 import { recordBotFlowEventsTx, type BotFlowEventInput } from "./botFlowAnalytics";
 import { decideInboundAct, type BotOwnership } from "./botOwnership";
+import { sessionAfterTurn } from "./flowTurnState";
 
 export type SessionState = {
   nodeId: string | null;
@@ -53,8 +54,15 @@ async function loadState(channel: string, key: string): Promise<LoadedSession | 
   }
 }
 
-function storedState(state: SessionState): string {
-  return JSON.stringify({ v: state.vars, m: state.msgs.slice(-20), fv: state.flowVersionId });
+/**
+ * `vars` is an explicit argument rather than being read off `state`, so the
+ * variables that get persisted are chosen at the call site and cannot be left
+ * behind by a forgotten `state.vars = …` assignment. That assignment existing on
+ * only one of the two persistence branches is exactly how a handoff came to store
+ * the values from before the final turn.
+ */
+function storedState(vars: Record<string, string>, state: SessionState): string {
+  return JSON.stringify({ v: vars, m: state.msgs.slice(-20), fv: state.flowVersionId });
 }
 
 function recordBotMsgs(state: SessionState, messages: OutMsg[]) {
@@ -139,6 +147,10 @@ export async function advanceFlow(
   };
   const result = await runFlow(snapshot.flow, { nodeId: state.nodeId, vars: state.vars }, input, ctx);
   recordBotMsgs(state, result.messages);
+  // The engine ran on a COPY of state.vars, so nothing it or a CRM action wrote is
+  // visible here until this line. It used to happen only inside the `result.session`
+  // branch, which is why a handoff persisted the variables from before the final turn.
+  const after = sessionAfterTurn(result);
 
   await withTenantWrite(async (tx, tenantId) => {
     // The BotSession analytics trigger uses this local transaction flag to avoid
@@ -151,17 +163,9 @@ export async function advanceFlow(
     const events = analyticsEvents({ channel, key, flowVersionId: snapshot.versionId, actions, oneShot });
     if (events.length) await recordBotFlowEventsTx(tx, tenantId, events);
 
-    if (result.session) {
-      state.nodeId = result.session.nodeId;
-      state.vars = result.session.vars;
-      await upsertBotSessionTx(tx, tenantId, { channel, key, nodeId: state.nodeId, vars: storedState(state), status: "active", ownership: "bot", expiresAt: new Date(Date.now() + 12 * 3600 * 1000) });
-      return;
-    }
-
-    if (result.handedOff) {
-      // The BOT handed off. A person has not taken this yet, so an explicit
-      // "menu"/"restart" may still bring the customer back — but a greeting may not.
-      await upsertBotSessionTx(tx, tenantId, { channel, key, nodeId: null, vars: storedState(state), status: "paused", ownership: "ai_handoff", expiresAt: new Date(Date.now() + 6 * 3600 * 1000) });
+    if (after.keep) {
+      const ttlMs = (after.ownership === "bot" ? 12 : 6) * 3600 * 1000;
+      await upsertBotSessionTx(tx, tenantId, { channel, key, nodeId: after.nodeId, vars: storedState(after.vars, state), status: after.status, ownership: after.ownership, expiresAt: new Date(Date.now() + ttlMs) });
       return;
     }
 

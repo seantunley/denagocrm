@@ -49,7 +49,9 @@ test("free text may select only an existing menu option id", async () => {
     },
   );
   assert.equal(seenPrompt, "How can we help?");
-  assert.deepEqual(result.messages, [{ type: "text", text: "Service route" }]);
+  // Origin node included: routing to "service" must emit the service node's message,
+  // which is a stronger claim than the wording alone.
+  assert.deepEqual(result.messages, [{ type: "text", nodeId: "service", text: "Service route" }]);
 });
 
 test("an invented semantic option id is ignored and the menu is re-shown", async () => {

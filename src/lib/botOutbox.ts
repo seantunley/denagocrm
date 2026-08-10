@@ -24,6 +24,8 @@ type OutboxRow = {
   sequence: number;
   payload: unknown;
   flowVersionId: string | null;
+  /** Flow node that produced this message; null for rows enqueued before it was recorded. */
+  nodeId: string | null;
   contactId: string | null;
   leadId: string | null;
   actorId: string | null;
@@ -64,8 +66,8 @@ function storedMessages(channel: string, messages: OutMsg[]): OutMsg[] {
   const out: OutMsg[] = [];
   for (const message of messages) {
     if ((channel === "messenger" || channel === "instagram") && message.type === "image" && message.caption) {
-      out.push({ type: "image", url: message.url });
-      out.push({ type: "text", text: message.caption });
+      out.push({ type: "image", url: message.url, nodeId: message.nodeId });
+      out.push({ type: "text", text: message.caption, nodeId: message.nodeId });
     } else out.push(message);
   }
   return out;
@@ -96,6 +98,7 @@ export async function enqueueBotMessages(input: {
           sequence,
           payload: messages[sequence] as unknown as Prisma.InputJsonValue,
           flowVersionId: input.flowVersionId ?? null,
+          nodeId: messages[sequence].nodeId ?? null,
           contactId: input.contactId ?? null,
           leadId: input.leadId ?? null,
           actorId: input.actorId ?? null,
@@ -110,14 +113,15 @@ export async function enqueueBotMessages(input: {
 function asOutMsg(payload: unknown): OutMsg | null {
   if (!payload || typeof payload !== "object") return null;
   const value = payload as Record<string, unknown>;
-  if (value.type === "text" && typeof value.text === "string") return { type: "text", text: value.text };
-  if (value.type === "image" && typeof value.url === "string") return { type: "image", url: value.url, caption: typeof value.caption === "string" ? value.caption : undefined };
+  const nodeId = typeof value.nodeId === "string" ? value.nodeId : undefined;
+  if (value.type === "text" && typeof value.text === "string") return { type: "text", text: value.text, nodeId };
+  if (value.type === "image" && typeof value.url === "string") return { type: "image", url: value.url, caption: typeof value.caption === "string" ? value.caption : undefined, nodeId };
   if (value.type === "choice" && typeof value.text === "string" && Array.isArray(value.options)) {
     const options = value.options
       .filter((option): option is Record<string, unknown> => Boolean(option) && typeof option === "object")
       .filter((option) => typeof option.id === "string" && typeof option.label === "string")
       .map((option) => ({ id: option.id as string, label: option.label as string, description: typeof option.description === "string" ? option.description : undefined }));
-    return { type: "choice", text: value.text, options };
+    return { type: "choice", text: value.text, options, nodeId };
   }
   return null;
 }
@@ -260,7 +264,18 @@ async function failDelivery(row: OutboxRow, error: string): Promise<"retry" | "d
       await logError("bot-outbox-session-repair", error, row.id).catch(() => {});
     });
     if (row.flowVersionId) {
-      await recordBotFlowEvents([{ channel: row.channel, conversationKey: row.key, flowVersionId: row.flowVersionId, eventType: "delivery_failed", metadata: { outboxId: row.id, attempts: row.attempts } }]);
+      await recordBotFlowEvents([{
+        channel: row.channel,
+        conversationKey: row.key,
+        flowVersionId: row.flowVersionId,
+        // Without this the event carried a version but no node, so the dashboard's
+        // per-node delivery-failure column was zero for every node while the
+        // version total was not — the failing node was unfindable. The payload is
+        // the fallback for a row whose column predates the migration.
+        nodeId: row.nodeId ?? asOutMsg(row.payload)?.nodeId ?? null,
+        eventType: "delivery_failed",
+        metadata: { outboxId: row.id, attempts: row.attempts },
+      }]);
     }
     await logError("bot-outbox", new Error(lastError), `${row.channel}:${row.key}:${row.id}`).catch(() => {});
     return "dead";

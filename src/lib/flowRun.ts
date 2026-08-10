@@ -16,6 +16,7 @@ import { withTenantWrite } from "./tenantWrite";
 import { loadBotSession, upsertBotSessionTx, deleteBotSessionTx } from "./botSessionStore";
 import { recordBotFlowEventsTx, type BotFlowEventInput } from "./botFlowAnalytics";
 import { decideInboundAct, type BotOwnership } from "./botOwnership";
+import { sessionAfterTurn } from "./flowTurnState";
 
 export const FLOW_MARKER = "🤖 Flow";
 const FLOW_VERSION_VAR = "__flow_version";
@@ -109,6 +110,10 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise
   const snapshot = await resolveFlowSnapshot("whatsapp", restart ? null : existing?.flowVersionId ?? null);
   const actions: ActionObservation[] = [];
   const result = await runFlow(snapshot.flow, session, input, buildCtx(digits, match, actions));
+  // `session.vars` is what the turn STARTED with — the engine works on a copy, so
+  // everything this turn captured or a CRM action wrote lives on `result.vars`.
+  // Persisting `session.vars` on handoff is what lost it.
+  const after = sessionAfterTurn(result);
 
   await withTenantWrite(async (tx, tenantId) => {
     if (restart) await tx.$executeRawUnsafe(`SELECT set_config('app.bot_flow_transition', 'restart', true)`);
@@ -124,9 +129,10 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise
     }
     if (events.length) await recordBotFlowEventsTx(tx, tenantId, events);
 
-    if (result.handedOff) await upsertBotSessionTx(tx, tenantId, { channel: "whatsapp", key: digits, nodeId: null, vars: storedVars(session.vars, snapshot.versionId), status: "paused", ownership: "ai_handoff", expiresAt: new Date(Date.now() + 6 * 3600 * 1000) });
-    else if (result.session) await upsertBotSessionTx(tx, tenantId, { channel: "whatsapp", key: digits, nodeId: result.session.nodeId, vars: storedVars(result.session.vars, snapshot.versionId), status: "active", ownership: "bot", expiresAt: new Date(Date.now() + 24 * 3600 * 1000) });
-    else await deleteBotSessionTx(tx, tenantId, "whatsapp", digits);
+    if (after.keep) {
+      const ttlMs = (after.ownership === "bot" ? 24 : 6) * 3600 * 1000;
+      await upsertBotSessionTx(tx, tenantId, { channel: "whatsapp", key: digits, nodeId: after.nodeId, vars: storedVars(after.vars, snapshot.versionId), status: after.status, ownership: after.ownership, expiresAt: new Date(Date.now() + ttlMs) });
+    } else await deleteBotSessionTx(tx, tenantId, "whatsapp", digits);
   });
 
   await flushBotOutboxConversation("whatsapp", digits);

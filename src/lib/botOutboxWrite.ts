@@ -17,8 +17,10 @@ function storedMessages(channel: string, messages: OutMsg[]): OutMsg[] {
   const out: OutMsg[] = [];
   for (const message of messages) {
     if ((channel === "messenger" || channel === "instagram") && message.type === "image" && message.caption) {
-      out.push({ type: "image", url: message.url });
-      out.push({ type: "text", text: message.caption });
+      // Both halves keep the origin node: they are one node's output, they die
+      // together when delivery fails, and they must be attributed together.
+      out.push({ type: "image", url: message.url, nodeId: message.nodeId });
+      out.push({ type: "text", text: message.caption, nodeId: message.nodeId });
     } else out.push(message);
   }
   return out;
@@ -49,6 +51,8 @@ export async function enqueueBotMessagesTx(
         sequence,
         payload: jsonPayload(messages[sequence]),
         flowVersionId: input.flowVersionId ?? null,
+        // Per ROW, not per batch: one turn can emit messages from several nodes.
+        nodeId: messages[sequence].nodeId ?? null,
         contactId: input.contactId ?? null,
         leadId: input.leadId ?? null,
         actorId: input.actorId ?? null,

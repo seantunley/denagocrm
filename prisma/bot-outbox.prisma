@@ -10,6 +10,10 @@ model BotFlowOutbox {
   sequence    Int
   payload     Json
   flowVersionId String?
+  /// Flow node that produced this message. Null only for rows enqueued before
+  /// this column existed — a delivery failure with no node cannot be attributed,
+  /// which is why the per-node dashboard read zero while the version total did not.
+  nodeId      String?
   contactId   String?
   leadId      String?
   actorId     String?
@@ -28,4 +32,5 @@ model BotFlowOutbox {
   @@index([tenantId, channel, key, createdAt, sequence])
   @@index([tenantId, status, communicationLoggedAt])
   @@index([tenantId, flowVersionId, status])
+  @@index([tenantId, flowVersionId, nodeId])
 }

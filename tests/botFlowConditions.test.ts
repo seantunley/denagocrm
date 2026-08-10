@@ -31,10 +31,12 @@ test("runFlow follows Yes and No condition branches without calling AI", async (
     },
   };
 
+  // The messages now name the node that emitted them, so the branch that ran is
+  // asserted by origin as well as by wording.
   const yes = await runFlow(flow, { nodeId: null, vars: { channel: "whatsapp" } }, { text: "" }, guardedCtx);
-  assert.deepEqual(yes.messages, [{ type: "text", text: "WhatsApp route" }]);
+  assert.deepEqual(yes.messages, [{ type: "text", nodeId: "yes", text: "WhatsApp route" }]);
 
   const no = await runFlow(flow, { nodeId: null, vars: { channel: "instagram" } }, { text: "" }, guardedCtx);
-  assert.deepEqual(no.messages, [{ type: "text", text: "Other route" }]);
+  assert.deepEqual(no.messages, [{ type: "text", nodeId: "no", text: "Other route" }]);
   assert.equal(aiCalls, 0);
 });

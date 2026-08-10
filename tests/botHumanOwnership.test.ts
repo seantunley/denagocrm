@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { sessionAfterTurn } from "../src/lib/flowTurnState";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
@@ -38,10 +39,30 @@ test("staff takeover and bot handoff are recorded as different things", () => {
   const control = src("src/lib/botConversationControl.ts");
   assert.match(control, /ownership: "human"/, "a person taking the thread must be recorded as such");
 
-  for (const rel of ["src/lib/flowSession.ts", "src/lib/flowRun.ts"]) {
+  // This used to scan flowSession.ts and flowRun.ts for the ownership literals,
+  // because each runner wrote the wait/handoff/end branch out by hand. They now
+  // share one decision, so the property is EXECUTED against it instead — and the
+  // runners are held to using it, which is what stops the two copies drifting
+  // apart again (they already had, on the variables each branch stored).
+  const waiting = sessionAfterTurn({ session: { nodeId: "menu", vars: {} }, handedOff: false, vars: {} });
+  assert.deepEqual(
+    waiting.keep ? { status: waiting.status, ownership: waiting.ownership } : null,
+    { status: "active", ownership: "bot" },
+    "an advancing session is still bot-owned",
+  );
+
+  const handedOff = sessionAfterTurn({ session: null, handedOff: true, vars: {} });
+  assert.deepEqual(
+    handedOff.keep ? { status: handedOff.status, ownership: handedOff.ownership } : null,
+    { status: "paused", ownership: "ai_handoff" },
+    "a bot handoff is not a takeover",
+  );
+
+  // Neither runner may mint "human" — only an explicit staff action does that.
+  for (const rel of ["src/lib/flowSession.ts", "src/lib/flowRun.ts", "src/lib/flowTurnState.ts"]) {
     const code = src(rel);
-    assert.match(code, /ownership: "ai_handoff"/, `${rel}: a bot handoff is not a takeover`);
-    assert.match(code, /ownership: "bot"/, `${rel}: an advancing session is still bot-owned`);
+    assert.match(code, /sessionAfterTurn|export function sessionAfterTurn/, `${rel}: ownership after a turn comes from the shared decision`);
+    assert.doesNotMatch(code, /ownership: "human"/, `${rel}: a runner must never take a conversation on a person's behalf`);
   }
 });
 

@@ -50,13 +50,25 @@ test("shared channel sessions persist and resolve a pinned flow version", () => 
   assert.match(code, /flowVersionId: p\.fv \?\? null/);
   assert.match(code, /fv: state\.flowVersionId/);
   assert.match(code, /resolveFlowSnapshot\(channel, restart \? null : state\.flowVersionId\)/);
+  // Same guard as the WhatsApp runner: the pinned version is stored alongside the
+  // variables the TURN produced. `state.vars` is what the turn started with, and
+  // persisting those is the defect flowTurnState exists to prevent.
+  assert.match(code, /storedState\(after\.vars, state\)/);
+  assert.doesNotMatch(code, /storedState\(state\.vars/, "a persisted session must never carry the pre-turn variables");
 });
 
 test("WhatsApp sessions persist and resolve their publication pin", () => {
   const code = src("src/lib/flowRun.ts");
   assert.match(code, /FLOW_VERSION_VAR = "__flow_version"/);
   assert.match(code, /existing\?\.flowVersionId \?\? null/);
-  assert.match(code, /storedVars\(result\.session\.vars, snapshot\.versionId\)/);
+  // This used to read `storedVars(result.session.vars, …)`, which pinned the
+  // version only on the branch where the bot was still waiting. The handoff branch
+  // wrote `session.vars` — the PRE-TURN variables — so it lost the turn's own work
+  // AND took a different route to the same store. Both outcomes now go through the
+  // single decision in flowTurnState, so the pin travels with every persisted
+  // session rather than with one of two hand-written branches.
+  assert.match(code, /storedVars\(after\.vars, snapshot\.versionId\)/);
+  assert.doesNotMatch(code, /storedVars\(session\.vars/, "a persisted session must never carry the pre-turn variables");
   assert.match(code, /upsertBotSessionTx\(tx, tenantId/);
 });
 

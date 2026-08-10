@@ -83,7 +83,11 @@ export async function simulateFlowTurn(input: SimulatorTurnInput): Promise<Simul
 
     for (const message of result.messages) trace.push(message.type === "choice" ? `Output: menu (${message.options.length} options)` : `Output: ${message.type}`);
     trace.push(result.handedOff ? "Stop: handed off" : result.session?.nodeId ? `Wait: ${result.session.nodeId}` : "Stop: flow ended");
-    return { ok: true, messages: result.messages, session: result.session, handedOff: result.handedOff, trace, vars: result.session?.vars ?? session.vars };
+    // `result.vars`, not `result.session?.vars ?? session.vars`: session is null on
+    // handoff and at the end of the graph, so the fallback showed the variables
+    // from BEFORE the final turn — the Variables panel omitted the booking id the
+    // last node had just written, exactly where an author most needs to see it.
+    return { ok: true, messages: result.messages, session: result.session, handedOff: result.handedOff, trace, vars: result.vars };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : "Simulation failed.", messages: [], session, handedOff: false, trace: [...trace, "Error: simulation stopped"], vars: session.vars };
   }

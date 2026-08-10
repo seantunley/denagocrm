@@ -29,10 +29,24 @@ export type FlowNode =
   | { id: string; type: "end" };
 
 export type Flow = { start: string; nodes: Record<string, FlowNode> };
+
+/**
+ * `nodeId` is the node that PRODUCED this message, carried with it all the way
+ * into the durable outbox row.
+ *
+ * Without it a delivery failure could only be attributed to a flow version: the
+ * per-node dashboard showed zero failures for every node while the version total
+ * was non-zero, so the one node whose message the provider keeps rejecting — an
+ * image the customer's client refuses, a button list too long for the channel —
+ * was indistinguishable from the nodes that always deliver.
+ *
+ * Optional because rows enqueued before this existed have no origin recorded,
+ * and a null there must read as "unknown", never as "attributed to nothing".
+ */
 export type OutMsg =
-  | { type: "text"; text: string }
-  | { type: "image"; url: string; caption?: string }
-  | { type: "choice"; text: string; options: { id: string; label: string; description?: string }[] };
+  | { type: "text"; text: string; nodeId?: string }
+  | { type: "image"; url: string; caption?: string; nodeId?: string }
+  | { type: "choice"; text: string; options: { id: string; label: string; description?: string }[]; nodeId?: string };
 export type FlowSession = { nodeId: string | null; vars: Record<string, string> };
 export type FlowInput = { text: string; choiceId?: string; fileUrl?: string };
 
@@ -72,7 +86,26 @@ function validateCapture(format: CaptureFormat | undefined, text: string): boole
   return FORMAT_RE[format]?.test(text.trim()) ?? true;
 }
 
-export type FlowResult = { messages: OutMsg[]; session: FlowSession | null; handedOff: boolean };
+export type FlowResult = {
+  messages: OutMsg[];
+  session: FlowSession | null;
+  handedOff: boolean;
+  /**
+   * The variables as they stand at the END of this turn — on EVERY path.
+   *
+   * `runFlow` works on a copy of `session.vars` (so a turn that stops on a
+   * validation error cannot leave half-applied state on the caller's object),
+   * and it used to hand that copy back only inside `session`. `session` is null
+   * on handoff and when the graph ends, so on exactly those paths the turn's own
+   * work was dropped on the floor: the capture the customer had just answered,
+   * the `booking_id`/`booking_slot` a CRM action had written, `journey_run_id`,
+   * and the `__handoff_*` context that a later turn reads back. The person
+   * picking up a handover was shown the state from BEFORE the final message.
+   *
+   * Required, not optional, so every return site has to answer the question.
+   */
+  vars: Record<string, string>;
+};
 const interpolate = (text: string, vars: Record<string, string>) => text.replace(/\{\{\s*(\w+)\s*\}\}/g, (_m, k) => vars[k] ?? "");
 
 export function evaluateCondition(condition: FlowCondition, vars: Record<string, string>): boolean {
@@ -135,8 +168,8 @@ async function runSlotSelection(node: Extract<FlowNode, { type: "slots" }>, inpu
   if (!res.ok) {
     const opts = ctx.availableSlots ? await ctx.availableSlots() : [];
     if (opts.length) {
-      messages.push({ type: "choice", text: "That one just filled up — here are the next open times:", options: opts.map((o) => ({ id: choiceId(node.id, o.id), label: o.label })) });
-      return { nodeId: node.id, wait: { messages, session: { nodeId: node.id, vars }, handedOff: false } as FlowResult };
+      messages.push({ type: "choice", nodeId: node.id, text: "That one just filled up — here are the next open times:", options: opts.map((o) => ({ id: choiceId(node.id, o.id), label: o.label })) });
+      return { nodeId: node.id, wait: { messages, session: { nodeId: node.id, vars }, handedOff: false, vars } as FlowResult };
     }
   } else if (res.label) {
     vars.slot = res.label;
@@ -157,21 +190,21 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
       nodeId = matchChoice(cur, input);
       if (!nodeId) nodeId = await semanticChoice(cur, input, vars, ctx);
       if (!nodeId) {
-        messages.push({ type: "choice", text: interpolate(cur.text, vars), options: cur.options.map((o) => ({ id: choiceId(cur.id, o.id), label: o.label, description: o.description })) });
-        return { messages, session: { nodeId: cur.id, vars }, handedOff: false };
+        messages.push({ type: "choice", nodeId: cur.id, text: interpolate(cur.text, vars), options: cur.options.map((o) => ({ id: choiceId(cur.id, o.id), label: o.label, description: o.description })) });
+        return { messages, session: { nodeId: cur.id, vars }, handedOff: false, vars };
       }
     } else if (cur?.type === "capture") {
       if (!validateCapture(cur.format, input.text)) {
         const hint = cur.format === "email" ? " (please enter a valid email)" : cur.format === "phone" ? " (please enter a valid phone number)" : cur.format === "number" ? " (please enter a number)" : "";
-        messages.push({ type: "text", text: interpolate(cur.text, vars) + hint });
-        return { messages, session: { nodeId: cur.id, vars }, handedOff: false };
+        messages.push({ type: "text", nodeId: cur.id, text: interpolate(cur.text, vars) + hint });
+        return { messages, session: { nodeId: cur.id, vars }, handedOff: false, vars };
       }
       vars[cur.variable] = input.text.trim();
       nodeId = cur.next ?? null;
     } else if (cur?.type === "captureFile") {
       if (!input.fileUrl) {
-        messages.push({ type: "text", text: interpolate(cur.text, vars) + " (please attach a photo or file)" });
-        return { messages, session: { nodeId: cur.id, vars }, handedOff: false };
+        messages.push({ type: "text", nodeId: cur.id, text: interpolate(cur.text, vars) + " (please attach a photo or file)" });
+        return { messages, session: { nodeId: cur.id, vars }, handedOff: false, vars };
       }
       vars[cur.variable] = input.fileUrl;
       nodeId = cur.next ?? null;
@@ -181,12 +214,12 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
       nodeId = selected.nodeId;
     } else if (cur?.type === "ai") {
       const ai = await ctx.aiReply(vars);
-      messages.push({ type: "text", text: ai.reply });
+      messages.push({ type: "text", nodeId: cur.id, text: ai.reply });
       if (ai.handoff) {
         handoffContext = rememberHandoff(vars, ai);
         nodeId = cur.handoffNext ?? null;
-        if (!nodeId) { await ctx.handoff(vars, handoffContext); return { messages, session: null, handedOff: true }; }
-      } else return { messages, session: { nodeId: cur.id, vars }, handedOff: false };
+        if (!nodeId) { await ctx.handoff(vars, handoffContext); return { messages, session: null, handedOff: true, vars }; }
+      } else return { messages, session: { nodeId: cur.id, vars }, handedOff: false, vars };
     } else nodeId = flow.start;
   } else nodeId = flow.start;
 
@@ -195,13 +228,13 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
     const node = flow.nodes[nodeId];
     if (!node) break;
     if (node.type === "message") {
-      messages.push({ type: "text", text: interpolate(node.text, vars) }); nodeId = node.next ?? null;
+      messages.push({ type: "text", nodeId: node.id, text: interpolate(node.text, vars) }); nodeId = node.next ?? null;
     } else if (node.type === "image") {
-      messages.push({ type: "image", url: node.url, caption: node.caption ? interpolate(node.caption, vars) : undefined }); nodeId = node.next ?? null;
+      messages.push({ type: "image", nodeId: node.id, url: node.url, caption: node.caption ? interpolate(node.caption, vars) : undefined }); nodeId = node.next ?? null;
     } else if (node.type === "captureFile") {
-      messages.push({ type: "text", text: interpolate(node.text, vars) }); return { messages, session: { nodeId: node.id, vars }, handedOff: false };
+      messages.push({ type: "text", nodeId: node.id, text: interpolate(node.text, vars) }); return { messages, session: { nodeId: node.id, vars }, handedOff: false, vars };
     } else if (node.type === "answer") {
-      const text = node.answerSource ? await ctx.dynamicAnswer(node.answerSource) : interpolate(node.text ?? "", vars); if (text) messages.push({ type: "text", text }); nodeId = node.next ?? null;
+      const text = node.answerSource ? await ctx.dynamicAnswer(node.answerSource) : interpolate(node.text ?? "", vars); if (text) messages.push({ type: "text", nodeId: node.id, text }); nodeId = node.next ?? null;
     } else if (node.type === "booking") {
       if (node.action === "lookup" || node.action === "cancel") {
         if (ctx.manageBooking) {
@@ -212,33 +245,33 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
         await ctx.createBooking(vars, node.action, node.id);
         ctx.recordAction?.(node.id, `booking_${node.action ?? "service"}`, true);
       }
-      if (node.text) messages.push({ type: "text", text: interpolate(node.text, vars) }); nodeId = node.next ?? null;
+      if (node.text) messages.push({ type: "text", nodeId: node.id, text: interpolate(node.text, vars) }); nodeId = node.next ?? null;
     } else if (node.type === "journey") {
       const outcome = ctx.startJourney ? await ctx.startJourney(node.journeyId, vars, node.id) : { ok: false, reason: "Journey action unavailable" };
       ctx.recordAction?.(node.id, "journey_start", outcome.ok);
       if (!vars.journey_started) vars.journey_started = outcome.ok ? "yes" : "no";
       if (outcome.reason && !vars.journey_reason) vars.journey_reason = outcome.reason;
-      if (node.text) messages.push({ type: "text", text: interpolate(node.text, vars) });
+      if (node.text) messages.push({ type: "text", nodeId: node.id, text: interpolate(node.text, vars) });
       nodeId = node.next ?? null;
     } else if (node.type === "slots") {
       const opts = ctx.availableSlots ? await ctx.availableSlots() : [];
-      if (!opts.length) { messages.push({ type: "text", text: node.noneText || "We don't have open slots online right now — leave your details and the team will call you to book. 📞" }); nodeId = node.next ?? null; }
-      else { messages.push({ type: "choice", text: interpolate(node.text, vars), options: opts.map((o) => ({ id: choiceId(node.id, o.id), label: o.label })) }); return { messages, session: { nodeId: node.id, vars }, handedOff: false }; }
+      if (!opts.length) { messages.push({ type: "text", nodeId: node.id, text: node.noneText || "We don't have open slots online right now — leave your details and the team will call you to book. 📞" }); nodeId = node.next ?? null; }
+      else { messages.push({ type: "choice", nodeId: node.id, text: interpolate(node.text, vars), options: opts.map((o) => ({ id: choiceId(node.id, o.id), label: o.label })) }); return { messages, session: { nodeId: node.id, vars }, handedOff: false, vars }; }
     } else if (node.type === "choice") {
-      messages.push({ type: "choice", text: interpolate(node.text, vars), options: node.options.map((o) => ({ id: choiceId(node.id, o.id), label: o.label, description: o.description })) }); return { messages, session: { nodeId: node.id, vars }, handedOff: false };
+      messages.push({ type: "choice", nodeId: node.id, text: interpolate(node.text, vars), options: node.options.map((o) => ({ id: choiceId(node.id, o.id), label: o.label, description: o.description })) }); return { messages, session: { nodeId: node.id, vars }, handedOff: false, vars };
     } else if (node.type === "capture") {
-      messages.push({ type: "text", text: interpolate(node.text, vars) }); return { messages, session: { nodeId: node.id, vars }, handedOff: false };
+      messages.push({ type: "text", nodeId: node.id, text: interpolate(node.text, vars) }); return { messages, session: { nodeId: node.id, vars }, handedOff: false, vars };
     } else if (node.type === "condition") {
       nodeId = evaluateCondition(node.condition, vars) ? node.trueNext ?? null : node.falseNext ?? null;
     } else if (node.type === "ai") {
-      const ai = await ctx.aiReply(vars); messages.push({ type: "text", text: ai.reply });
-      if (ai.handoff) { handoffContext = rememberHandoff(vars, ai); nodeId = node.handoffNext ?? null; if (!nodeId) { await ctx.handoff(vars, handoffContext); return { messages, session: null, handedOff: true }; } }
-      else return { messages, session: { nodeId: node.id, vars }, handedOff: false };
+      const ai = await ctx.aiReply(vars); messages.push({ type: "text", nodeId: node.id, text: ai.reply });
+      if (ai.handoff) { handoffContext = rememberHandoff(vars, ai); nodeId = node.handoffNext ?? null; if (!nodeId) { await ctx.handoff(vars, handoffContext); return { messages, session: null, handedOff: true, vars }; } }
+      else return { messages, session: { nodeId: node.id, vars }, handedOff: false, vars };
     } else if (node.type === "handoff") {
-      if (node.text) messages.push({ type: "text", text: interpolate(node.text, vars) }); await ctx.handoff(vars, handoffContext); return { messages, session: null, handedOff: true };
-    } else return { messages, session: null, handedOff: false };
+      if (node.text) messages.push({ type: "text", nodeId: node.id, text: interpolate(node.text, vars) }); await ctx.handoff(vars, handoffContext); return { messages, session: null, handedOff: true, vars };
+    } else return { messages, session: null, handedOff: false, vars };
   }
-  return { messages, session: null, handedOff: false };
+  return { messages, session: null, handedOff: false, vars };
 }
 
 export const DEFAULT_FLOW: Flow = {

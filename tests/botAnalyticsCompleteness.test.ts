@@ -38,7 +38,7 @@ test("successful CRM and Journey effects emit node-level crm_action analytics", 
   for (const rel of ["src/lib/flowSession.ts", "src/lib/flowRun.ts"]) assert.match(src(rel), /eventType: "crm_action"/);
 });
 
-test("outbox rows retain immutable flow-version attribution", () => {
+test("outbox rows retain immutable flow-version and origin-node attribution", () => {
   const schema = src("prisma/bot-outbox.prisma");
   assert.match(schema, /flowVersionId String\?/);
   const migration = src("prisma/migrations/20260809180500_bot_outbox_flow_version/migration.sql");
@@ -46,6 +46,17 @@ test("outbox rows retain immutable flow-version attribution", () => {
   assert.match(migration, /ON DELETE SET NULL/);
   const writer = src("src/lib/botOutboxWrite.ts");
   assert.match(writer, /flowVersionId: input\.flowVersionId \?\? null/);
+
+  // A version alone could not say WHICH node's message died, so the per-node
+  // delivery-failure column read zero while the version total did not. The model
+  // and its migration are checked together here on purpose: a model that
+  // disagrees with its migration is silently reverted by the next `migrate dev`.
+  // The behaviour itself — row, split Meta caption, and the recorded event — is
+  // EXECUTED in botOutboxNodeAttribution.test.ts.
+  assert.match(schema, /nodeId\s+String\?/);
+  const nodeMigration = src("prisma/migrations/20260810120000_bot_outbox_origin_node/migration.sql");
+  assert.match(nodeMigration, /ALTER TABLE "BotFlowOutbox"\s*\n\s*ADD COLUMN "nodeId" TEXT;/);
+  assert.doesNotMatch(nodeMigration, /NOT NULL/, "an additive column on a live queue cannot be NOT NULL");
 });
 
 test("provider failure is recorded only when the durable message becomes terminally dead", () => {
