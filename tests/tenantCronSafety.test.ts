@@ -96,15 +96,20 @@ test("survey distribution queue still requires a scope (the guard is not weakene
 for (const file of ["src/lib/metaLeadSync.ts", "src/app/api/webhooks/meta/route.ts"]) {
   test(`${file}: Meta lead dedupe sees soft-deleted leads`, () => {
     const code = src(file);
+    // findFirst, not findUnique: externalId is unique per TENANT now, so it is no
+    // longer a unique key on its own. What matters here is unchanged — the read
+    // goes through basePrisma, so a soft-deleted lead is still seen and skipped.
     assert.match(
       code,
-      /basePrisma\.lead\.findUnique\(\s*\{\s*\n?\s*where:\s*\{\s*externalId/,
+      /basePrisma\.lead\.find(Unique|First)\(\s*\{\s*\n?\s*where:\s*\{\s*externalId/,
       "the externalId dedupe must use basePrisma so deleted leads are not resurrected",
     );
     assert.doesNotMatch(
       code,
-      /[^e]prisma\.lead\.findUnique\(\s*\{\s*where:\s*\{\s*externalId/,
+      /[^e]prisma\.lead\.find(Unique|First)\(\s*\{\s*where:\s*\{\s*externalId/,
       "the guarded client hides soft-deleted rows and must not be used for this dedupe",
     );
+    // and it must be scoped, or one tenant's lead suppresses another's.
+    assert.match(code, /externalId: [^,]+, tenantId:/);
   });
 }

@@ -4,8 +4,8 @@
 /* ─────────────────────────────────────────────────────────────────────────
    Design tokens — Linear-style dark, Denago orange accent.
    New (shadcn/Radix) components consume these via @theme mappings below.
-   The legacy .btn/.card/.input utilities further down stay intact so pages
-   not yet migrated keep rendering during the redesign.
+   Legacy utilities and component primitives intentionally share the same
+   control geometry so old and newly migrated screens feel like one product.
    ──────────────────────────────────────────────────────────────────────── */
 :root {
   --radius: 0.625rem;
@@ -114,6 +114,7 @@
   body {
     @apply text-foreground antialiased;
     background: var(--background);
+    text-rendering: optimizeLegibility;
     /* Long unbroken strings (URLs, VINs, tokens) wrap instead of dragging
        the whole page sideways on phones */
     overflow-wrap: anywhere;
@@ -209,13 +210,13 @@
   .btn-primary,
   .btn-secondary,
   .btn-danger {
-    @apply inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-all cursor-pointer outline-none focus-visible:ring-4 focus-visible:ring-orange-500/15 disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply inline-flex min-h-9 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium outline-none transition-[background-color,border-color,color,box-shadow] duration-150 focus-visible:ring-4 focus-visible:ring-orange-500/15 disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-primary {
-    @apply bg-orange-600 text-white shadow-[0_8px_24px_rgba(234,88,12,0.16)] hover:bg-orange-500 hover:-translate-y-px hover:shadow-[0_10px_28px_rgba(234,88,12,0.24)];
+    @apply bg-orange-600 text-white shadow-[0_4px_14px_rgba(234,88,12,0.18)] hover:bg-orange-500 hover:shadow-[0_5px_18px_rgba(234,88,12,0.22)];
   }
   .btn-secondary {
-    @apply bg-white/[0.045] text-slate-200 border border-white/10 shadow-sm hover:bg-white/[0.075] hover:border-white/15;
+    @apply border border-white/10 bg-white/[0.035] text-slate-200 hover:border-white/15 hover:bg-white/[0.065];
   }
   .btn-danger {
     @apply bg-red-700 text-white hover:bg-red-600;
@@ -224,10 +225,10 @@
     @apply min-h-7 px-2.5 py-1 text-xs;
   }
   .input {
-    @apply min-h-9 w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-sm text-slate-100 outline-none transition placeholder:text-slate-600 hover:border-white/15 focus:border-orange-500/60 focus:bg-white/[0.055] focus:ring-4 focus:ring-orange-500/10;
+    @apply min-h-9 w-full rounded-lg border border-input bg-white/[0.035] px-3 py-1.5 text-sm text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)] outline-none transition-[background-color,border-color,box-shadow] duration-150 placeholder:text-muted-foreground hover:border-white/15 focus:border-orange-500/60 focus:bg-white/[0.05] focus:ring-4 focus:ring-orange-500/10;
   }
   .label {
-    @apply mb-1 block text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400;
+    @apply mb-1 block text-xs font-medium leading-4 text-slate-300;
   }
   .card {
     /* min-w-0: cards live inside grids/flex rows — without it a long
@@ -242,7 +243,7 @@
     @apply w-full text-sm;
   }
   .table-base th {
-    @apply border-b border-white/[0.07] bg-white/[0.02] px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500;
+    @apply border-b border-white/[0.07] bg-white/[0.02] px-3 py-2 text-left text-[11px] font-medium tracking-[0.02em] text-slate-400;
   }
   .table-base td {
     @apply border-b border-white/[0.065] px-3 py-2.5;
@@ -306,11 +307,8 @@
 .denago-workspace h3 {
   letter-spacing: -0.015em;
 }
-.denago-workspace > * {
-  animation: workspace-enter 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
-}
 .denago-workspace :is(.card, [data-slot="card"], table, details) {
-  transition: border-color 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
+  transition: border-color 140ms ease, box-shadow 140ms ease, background-color 140ms ease;
 }
 .denago-workspace :is(.card, [data-slot="card"]):hover {
   border-color: color-mix(in oklab, var(--border), white 5%);
@@ -321,10 +319,6 @@
 .denago-workspace :is(a, button, input, select, textarea):focus-visible {
   outline: 2px solid color-mix(in oklab, var(--primary), white 16%);
   outline-offset: 3px;
-}
-@keyframes workspace-enter {
-  from { opacity: 0; transform: translateY(5px); }
-  to { opacity: 1; transform: translateY(0); }
 }
 @media (prefers-reduced-motion: reduce) {
   html:focus-within { scroll-behavior: auto; }
@@ -432,11 +426,10 @@
     display: block;
     margin-bottom: 0.2rem;
     color: var(--muted-foreground);
-    font-size: 0.625rem;
-    font-weight: 600;
-    letter-spacing: 0.12em;
+    font-size: 0.6875rem;
+    font-weight: 500;
+    letter-spacing: 0.02em;
     line-height: 1rem;
-    text-transform: uppercase;
   }
   [data-slot="responsive-entity-table"] td[data-primary],
   [data-slot="responsive-entity-table"] td[data-actions],

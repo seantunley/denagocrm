@@ -21,6 +21,10 @@ import {
   executeMigrationSql,
   withSingleConnection,
   directMigrationUrlProblem,
+  unacknowledgedDrift,
+  staleAcknowledgements,
+  ACKNOWLEDGED_DRIFT,
+  SCHEMA_FILE_COUNT,
 } from "../scripts/apply-migrations.mjs";
 import { splitSqlStatements } from "../scripts/lib/splitSqlStatements.mjs";
 
@@ -308,7 +312,20 @@ test("session GUCs really do span separate statements, in every migration that u
     spans.push({ name, between: last - isSet[0] - 1 });
   }
 
-  assert.equal(spans.length, 10, "ten migrations set a session GUC");
+  // 10 → 14: the four chatbot backfills now wrap themselves in
+  // SET app.bypass_rls, because they write FORCE-RLS tables and would otherwise
+  // match zero rows, succeed, and be recorded as applied where the migrating role
+  // does not bypass RLS. As the comment above says, the count is not the property
+  // — the span between SET and its last dependent statement is — but it is worth
+  // knowing when the number moves and why.
+  //
+  // 14 → 15: the GoogleReview tenant-scope backfill, for the same reason and
+  // caught by the same sibling invariant in migrationReentrancy.test.ts. There it
+  // was worse than a silent no-op: the tenant-scoped unique index built in the
+  // next statement would have been built over rows still holding a NULL tenantId,
+  // and NULLs do not conflict in a unique index — so the duplicate the migration
+  // exists to prevent would have been admitted by the constraint meant to stop it.
+  assert.equal(spans.length, 15, "fifteen migrations set a session GUC");
   for (const { name, between } of spans) {
     assert.ok(between > 0, `${name}: a SET with no following statement would not need session pinning`);
   }
@@ -484,4 +501,149 @@ test("the missing-table check recognises both signals and nothing else", () => {
   assert.equal(isMissingLedgerTable({ meta: { code: "08006" } }), false);
   assert.equal(isMissingLedgerTable({ message: 'relation "Contact" does not exist' }), false);
   assert.equal(isMissingLedgerTable(undefined), false);
+});
+
+// ── The drift probe must see the WHOLE schema ───────────────────────────────
+
+/**
+ * The schema is split across many files and the probe read one of them.
+ *
+ * So the integrity check — the gate that exists to stop a recorded-but-not-applied
+ * migration shipping code against a missing column — never looked at any model
+ * defined outside schema.prisma. Every bot, journey, campaign, governance,
+ * dashboard and integration table was outside the only check that would have
+ * caught a missing one, including BotFlowOutbox, whose migrations this same
+ * runner applies.
+ *
+ * It also made the schema unable to express a relation crossing two files: a
+ * relation field in schema.prisma pointing at a model defined elsewhere is
+ * unresolvable when only that file is parsed, so the probe fails to parse the
+ * very model it is checking — and a probe that cannot answer blocks the deploy,
+ * correctly. The split was quietly costing referential integrity.
+ */
+test("the drift probe diffs against every schema file, not just schema.prisma", () => {
+  const runner = readFileSync(join(root, "scripts/apply-migrations.mjs"), "utf8");
+  const probe = runner.slice(runner.indexOf("function defaultRunDiff"), runner.indexOf("export function migrationChecksum"));
+
+  assert.match(probe, /"--to-schema-datamodel",\s*schemaPath/, "the probe must be given the schema DIRECTORY");
+  assert.doesNotMatch(probe, /schemaFile/, "diffing one file leaves six unchecked");
+  // And the single-file path must not survive anywhere, or it invites reuse.
+  assert.doesNotMatch(runner, /const schemaFile\b/);
+});
+
+test("every schema file is actually part of the schema the probe reads", () => {
+  const files = readdirSync(join(root, "prisma")).filter((name) => name.endsWith(".prisma"));
+  // The runner's own explanation names this number. It said "seven" long after
+  // it was thirteen, and a stale figure in the explanation of a safety gate is
+  // how the gate stops being understood — so the number is held to reality here.
+  assert.equal(
+    SCHEMA_FILE_COUNT,
+    files.length,
+    `SCHEMA_FILE_COUNT and the comment beside it are stale: the schema now has ${files.length} files`,
+  );
+  // If this ever drops to one, the test above stops meaning anything.
+  assert.ok(files.length > 1, `expected a multi-file schema, found ${files.join(", ")}`);
+  assert.ok(files.includes("schema.prisma"));
+  // Named explicitly: these carry models the probe was blind to, and a rename
+  // that silently dropped one should fail here rather than in production.
+  for (const file of ["governance.prisma", "journeys.prisma", "integrations.prisma"]) {
+    assert.ok(files.includes(file), `${file} is missing from the schema directory`);
+  }
+});
+
+test("indexes the schema declares are actually created by a migration", () => {
+  const dir = join(root, "prisma/migrations/20260810120000_declared_indexes_that_were_never_created");
+  assert.ok(existsSync(dir), "the migration must exist");
+  const sql = readFileSync(join(dir, "migration.sql"), "utf8");
+  // Both were declared in schema.prisma and absent from the database. A foreign
+  // key is not an index in PostgreSQL, which is how Team.managerId came to have
+  // a constraint and no index.
+  assert.match(sql, /CREATE INDEX IF NOT EXISTS "Team_managerId_idx" ON "Team"\("managerId"\)/);
+  assert.match(sql, /CREATE INDEX IF NOT EXISTS "UserRole_roleId_idx" ON "UserRole"\("roleId"\)/);
+
+  // Both models live in governance.prisma — a file the single-file probe never
+  // read, which is why these were invisible rather than merely unprioritised.
+  const governance = readFileSync(join(root, "prisma/governance.prisma"), "utf8");
+  assert.match(governance, /@@index\(\[managerId\]\)/, "the migration must match what the schema declares");
+  assert.match(governance, /@@index\(\[roleId\]\)/);
+});
+
+// ── The warning list has to be able to reach zero ───────────────────────────
+
+/**
+ * A list that cannot reach zero stops being read, and this one proved it:
+ * Team.@@index([managerId]) and UserRole.@@index([roleId]) were genuinely
+ * missing from every database and sat in the warnings unnoticed, beside entries
+ * nobody could ever clear.
+ *
+ * Acknowledging is not suppressing. Each entry is an exact statement with a
+ * recorded reason, so anything that is not literally that still reports.
+ */
+const ARTEFACT_DIFF = [
+  "-- AlterTable",
+  'ALTER TABLE "Role" ALTER COLUMN "updatedAt" DROP DEFAULT;',
+  "",
+  "-- CreateIndex",
+  'CREATE UNIQUE INDEX "StockUnit_stockNumber_key" ON "StockUnit"("stockNumber");',
+  "",
+  "-- AlterTable",
+  'ALTER TABLE "UserRole" ALTER COLUMN "tenantId" DROP DEFAULT,',
+  'ALTER COLUMN "id" DROP DEFAULT;',
+].join("\n");
+
+test("a database whose only differences are known artefacts reports nothing", () => {
+  assert.deepEqual(unacknowledgedDrift(ARTEFACT_DIFF), []);
+});
+
+test("a genuinely missing index is still reported", () => {
+  const withReal = `${ARTEFACT_DIFF}\n\n-- CreateIndex\nCREATE INDEX "Team_managerId_idx" ON "Team"("managerId");`;
+  assert.deepEqual(unacknowledgedDrift(withReal), [
+    'CREATE INDEX "Team_managerId_idx" ON "Team"("managerId")',
+  ]);
+});
+
+test("an acknowledgement matches only the exact statement it describes", () => {
+  // Same shape, different table. Acknowledging "Role.updatedAt" must not
+  // acknowledge every DROP DEFAULT anyone ever adds.
+  const other = '-- AlterTable\nALTER TABLE "SomeNewTable" ALTER COLUMN "updatedAt" DROP DEFAULT;';
+  assert.deepEqual(unacknowledgedDrift(other), [
+    'ALTER TABLE "SomeNewTable" ALTER COLUMN "updatedAt" DROP DEFAULT',
+  ]);
+
+  // And the two-column statements are matched WHOLE. Acknowledging the
+  // continuation line alone would acknowledge that fragment wherever it
+  // appeared, including under a table nobody has vetted.
+  const fragmentElsewhere = '-- AlterTable\nALTER TABLE "Unvetted" ALTER COLUMN "tenantId" DROP DEFAULT,\nALTER COLUMN "id" DROP DEFAULT;';
+  assert.equal(unacknowledgedDrift(fragmentElsewhere).length, 1);
+});
+
+test("the diff's own -- AlterTable headers do not defeat the match", () => {
+  // The statement splitter keeps the header attached, so normalisation has to
+  // strip it. Without that, every acknowledgement silently fails to match.
+  const headerless = 'ALTER TABLE "Role" ALTER COLUMN "updatedAt" DROP DEFAULT;';
+  assert.deepEqual(unacknowledgedDrift(headerless), []);
+});
+
+test("every acknowledgement records why it is permanent", () => {
+  assert.ok(ACKNOWLEDGED_DRIFT.length > 0);
+  for (const entry of ACKNOWLEDGED_DRIFT) {
+    assert.ok(entry.sql?.trim(), "an entry must name the statement it acknowledges");
+    assert.ok(
+      entry.why && entry.why.length > 20,
+      `"${entry.sql}" must record WHY it can never be cleared, or it is indistinguishable from a bug nobody fixed`,
+    );
+  }
+  // No duplicates: two entries for one statement means one of them is unread.
+  const seen = new Set(ACKNOWLEDGED_DRIFT.map((e) => e.sql.replace(/\s+/g, " ").trim()));
+  assert.equal(seen.size, ACKNOWLEDGED_DRIFT.length, "duplicate acknowledgements");
+});
+
+test("acknowledgements that stopped describing anything are reported", () => {
+  // An allowlist nobody prunes is how the next real finding gets hidden.
+  const stale = staleAcknowledgements(ARTEFACT_DIFF);
+  assert.ok(stale.length > 0, "entries absent from this small diff must be flagged");
+  assert.ok(!stale.includes('ALTER TABLE "Role" ALTER COLUMN "updatedAt" DROP DEFAULT'));
+  // Nothing is stale when the diff contains every acknowledged statement.
+  const everything = ACKNOWLEDGED_DRIFT.map((e) => e.sql).join("\n");
+  assert.deepEqual(staleAcknowledgements(everything), []);
 });

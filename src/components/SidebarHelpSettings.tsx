@@ -37,6 +37,9 @@ import { SETTINGS_NAV_GROUPS, settingsHref } from "@/lib/settings-navigation";
 const ROW =
   "group flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-[13px] text-muted-foreground transition-all hover:bg-sidebar-accent hover:text-sidebar-accent-foreground data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground";
 
+const ICON_TRIGGER =
+  "group grid size-8 place-items-center rounded-lg text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground data-[state=open]:bg-sidebar-accent data-[state=open]:text-primary";
+
 const PANEL =
   "overflow-hidden rounded-2xl border-sidebar-border/80 bg-popover/98 p-0 shadow-[0_24px_80px_rgba(0,0,0,.38)] backdrop-blur-xl";
 
@@ -52,12 +55,22 @@ const GROUP_ICONS: Record<string, LucideIcon> = {
   System: Activity,
 };
 
+/**
+ * Icon-only triggers for the top bar, full rows for the sidebar.
+ *
+ * The panels themselves are identical — only the trigger and the side the panel
+ * opens from change, because a bar at the top of the page cannot open a menu
+ * upwards or to the right the way a sidebar footer could.
+ */
 export default function SidebarHelpSettings({
   isOwner,
   permissions = [],
+  compact = false,
 }: {
   isOwner: boolean;
   permissions?: string[];
+  /** Render as icon buttons in a horizontal row, for the top bar. */
+  compact?: boolean;
 }) {
   const pathname = usePathname();
   const held = new Set(permissions);
@@ -71,21 +84,25 @@ export default function SidebarHelpSettings({
     .map((group) => ({ ...group, items: group.items.filter(canSee) }))
     .filter((group) => group.items.length > 0);
 
+  const triggerClass = compact ? ICON_TRIGGER : ROW;
+  const panelSide = compact ? "bottom" : "right";
+  const panelAlign = "end" as const;
+
   return (
-    <div className="space-y-0.5">
+    <div className={compact ? "flex items-center gap-1" : "space-y-0.5"}>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <button type="button" className={ROW}>
-            <span className="grid size-7 place-items-center rounded-md border border-sidebar-border bg-sidebar-accent/50 text-muted-foreground transition-colors group-hover:text-primary group-data-[state=open]:text-primary">
+          <button type="button" className={triggerClass} aria-label={compact ? "Help" : undefined}>
+            <span className={compact ? "contents" : "grid size-7 place-items-center rounded-md border border-sidebar-border bg-sidebar-accent/50 text-muted-foreground transition-colors group-hover:text-primary group-data-[state=open]:text-primary"}>
               <LifeBuoy className="size-3.5" />
             </span>
-            <span className="flex-1 text-left">Help</span>
-            <ChevronRight className="size-3.5 text-muted-foreground/50 transition-transform group-data-[state=open]:translate-x-0.5 group-data-[state=open]:text-primary" />
+            {!compact && <span className="flex-1 text-left">Help</span>}
+            {!compact && <ChevronRight className="size-3.5 text-muted-foreground/50 transition-transform group-data-[state=open]:translate-x-0.5 group-data-[state=open]:text-primary" />}
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent
-          side="right"
-          align="end"
+          side={panelSide}
+          align={panelAlign}
           sideOffset={10}
           collisionPadding={16}
           className={`w-[min(22rem,calc(100vw-2rem))] ${PANEL}`}
@@ -149,17 +166,17 @@ export default function SidebarHelpSettings({
 
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <button type="button" className={ROW}>
-            <span className="grid size-7 place-items-center rounded-md border border-sidebar-border bg-sidebar-accent/50 text-muted-foreground transition-colors group-hover:text-primary group-data-[state=open]:text-primary">
+          <button type="button" className={triggerClass} aria-label={compact ? "Settings" : undefined}>
+            <span className={compact ? "contents" : "grid size-7 place-items-center rounded-md border border-sidebar-border bg-sidebar-accent/50 text-muted-foreground transition-colors group-hover:text-primary group-data-[state=open]:text-primary"}>
               <Settings className="size-3.5" />
             </span>
-            <span className="flex-1 text-left">Settings</span>
-            <ChevronRight className="size-3.5 text-muted-foreground/50 transition-transform group-data-[state=open]:translate-x-0.5 group-data-[state=open]:text-primary" />
+            {!compact && <span className="flex-1 text-left">Settings</span>}
+            {!compact && <ChevronRight className="size-3.5 text-muted-foreground/50 transition-transform group-data-[state=open]:translate-x-0.5 group-data-[state=open]:text-primary" />}
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent
-          side="right"
-          align="end"
+          side={panelSide}
+          align={panelAlign}
           sideOffset={10}
           collisionPadding={16}
           className={`flex max-h-[min(80vh,48rem)] w-[min(38rem,calc(100vw-2rem))] flex-col ${PANEL}`}

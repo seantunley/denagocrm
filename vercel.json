@@ -9,6 +9,10 @@
       "schedule": "*/5 * * * *"
     },
     {
+      "path": "/api/cron/bot-outbox",
+      "schedule": "*/5 * * * *"
+    },
+    {
       "path": "/api/cron/journeys",
       "schedule": "*/15 * * * *"
     },

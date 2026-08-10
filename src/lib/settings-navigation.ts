@@ -39,6 +39,7 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
       { key: "company", label: "Company profile", href: "/settings/company", keywords: ["business", "address", "phone", "branding", "footer", "logo", "details"] },
       { key: "modules", label: "Modules", href: "/settings/modules", keywords: ["features", "packs", "enable", "disable", "automotive", "workshop", "inbox", "add-ons"] },
       { key: "custom-fields", label: "Custom fields", href: "/settings/custom-fields", keywords: ["custom", "fields", "eav", "extra", "attributes", "metadata", "contact fields", "lead fields", "properties"] },
+      { key: "clock-weather", label: "Clock & weather", href: "/settings/clock-weather", keywords: ["clock", "time", "weather", "cities", "timezone", "city", "temperature"] },
     ],
   },
   {
