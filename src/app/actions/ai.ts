@@ -14,6 +14,7 @@ import {
   hasPermission,
 } from "@/lib/permissions";
 import { aiCheckDraft, aiResearch } from "@/lib/ai";
+import { inheritedTenantId } from "@/lib/tenantWrite";
 import { basePrisma } from "@/lib/db";
 import { contactName } from "@/lib/format";
 
@@ -167,11 +168,20 @@ export async function researchRecord(
   let name = "";
   let email: string | null = null;
   let resolvedContactId = contactId;
+  /**
+   * The owner of the record being enriched, carried to the note below.
+   *
+   * Taken from the row rather than from the session so the note and the record it
+   * annotates can never disagree, and so this path and the cron path
+   * (`runAutoResearch`) answer the same question the same way.
+   */
+  let subjectTenantId: string | null = null;
   if (leadId) {
     const l = await prisma.lead.findUnique({ where: { id: leadId } });
     if (!l) return { error: "Lead not found." };
     name = l.name;
     email = l.email;
+    subjectTenantId = l.tenantId;
     // Link the research to the LEAD'S OWN contact — never a contactId supplied
     // alongside the leadId, which would let a caller point the write at an
     // unrelated contact they happen to have access to.
@@ -181,6 +191,7 @@ export async function researchRecord(
     if (!c) return { error: "Contact not found." };
     name = contactName(c);
     email = c.email;
+    subjectTenantId = c.tenantId;
   }
 
   // Only enrich the linked contact if this user may also EDIT it — writing
@@ -200,7 +211,14 @@ export async function researchRecord(
   // Appended to the record's research history + latest snapshot column.
   const researchedAt = new Date();
   await prisma.researchNote.create({
-    data: { body: result.summary, leadId, contactId: canWriteContact ? resolvedContactId : null },
+    // Stamped explicitly: the db.ts guard adds nothing while enforcement is
+    // dormant, so every note written through this action landed unowned.
+    data: {
+      tenantId: inheritedTenantId(subjectTenantId),
+      body: result.summary,
+      leadId,
+      contactId: canWriteContact ? resolvedContactId : null,
+    },
   });
   if (leadId) {
     await prisma.lead.update({

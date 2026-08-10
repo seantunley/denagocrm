@@ -1,8 +1,8 @@
 import "server-only";
 import { DEFAULT_TENANT_ID } from "./tenant";
 import { writeTenantId } from "./tenantWrite";
-import { getActiveTenantId } from "./auth";
-import { decideBuilderTenant, legacyFlowTenant } from "./flowTenantScope";
+import { actingTenantId } from "./actingTenant";
+import { legacyFlowTenant } from "./flowTenantScope";
 
 /**
  * The tenant a RUNTIME read is for — a webhook answering a customer.
@@ -37,12 +37,15 @@ export function runtimeFlowTenantId(): string {
  * closed, when enforcement is on with no usable scope); then the session's
  * workspace; then the founding tenant, which is what a session minted before the
  * claim existed resolves to — byte-for-byte today's single-tenant behaviour.
+ *
+ * Now a thin alias over {@link ./actingTenant}.`actingTenantId`, which is the same
+ * rule for the same reason and is what the non-flow session writers (dashboards,
+ * test-drive bookings) call. Kept as a name because "the tenant a flow BUILDER
+ * request is for" is the vocabulary the rest of this module reads in — but there
+ * is exactly ONE implementation, so a fix to the rule cannot land in half of it.
  */
 export async function builderTenantId(): Promise<string> {
-  return decideBuilderTenant({
-    enforcedTenantId: writeTenantId(),
-    sessionTenantId: await getActiveTenantId(),
-  });
+  return actingTenantId();
 }
 
 /**

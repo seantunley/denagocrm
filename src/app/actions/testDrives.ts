@@ -8,6 +8,7 @@ import { canAccessQuote, requirePermission } from "@/lib/permissions";
 import { logAuditStrict } from "@/lib/audit";
 import { saveFile } from "@/lib/storage";
 import { resolveTenantMemberUser } from "@/lib/tenantActor";
+import { actingTenantId } from "@/lib/actingTenant";
 import {
   assertTestDriveCustomerAccess,
   requireTestDriveManageAccess,
@@ -159,9 +160,26 @@ export async function createTestDriveBooking(formData: FormData) {
   const modelName = product?.name ?? demoVehicle?.name ?? lead?.title ?? "Vehicle";
   const activityId = crypto.randomUUID();
 
+  // The workspace the session is acting as. Resolved BEFORE the transaction: it
+  // reads the session cookie, and doing that inside an open transaction holds a
+  // connection for the duration of an unrelated await.
+  const bookingTenantId = await actingTenantId();
+
   const booking = await prisma.$transaction(async (tx) => {
     const created = await tx.testDriveBooking.create({
       data: {
+        // Stamped from the SESSION, not left to the db.ts guard. The guard's
+        // `scopeArgs` returns its args untouched unless `tenantEnforcing()`, and
+        // enforcement is dormant in every environment — so this row was being
+        // written with a NULL tenant (2 of 2 on production at the 2026-08-10
+        // audit) and would have vanished from the workspace that booked it the
+        // moment enforcement flipped.
+        //
+        // NOTE for whoever owns Activity: the sibling `tx.activity.create` below
+        // is the same defect and is deliberately NOT touched here — Activity is
+        // on the other half of the audit list (14 of 61 unowned) and belongs in
+        // that change, not this one.
+        tenantId: bookingTenantId,
         reference: newReference(),
         status: "booked",
         leadId,
