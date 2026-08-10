@@ -28,7 +28,7 @@ const ATTACHMENT_BODY: Record<AttachmentKind, string> = {
 
 export type DmState = { ok?: string; error?: string };
 
-/** Narrows a stored/declared channel string to a platform we can actually send on. */
+/** Narrows a stored conversation channel to a platform we can actually send on. */
 function isDmPlatform(value: string): value is DmPlatform {
   return value === "messenger" || value === "instagram";
 }
@@ -49,36 +49,34 @@ export async function sendDmReply(
   if (!contact) return { error: "Contact not found." };
 
   /**
-   * The THREAD decides the channel — never the contact's identity set.
+   * The stored CONVERSATION decides the channel — never the contact's identity
+   * set, and never the browser.
    *
    * This used to read `contact.instagramId && !contact.messengerPsid`, so a
    * customer who had messaged on both platforms always resolved to Messenger:
    * a reply typed into an Instagram thread was delivered over Messenger, to the
    * same person, on a channel they were not looking at.
    *
-   * The Conversation is the authority when we have one. Otherwise the channel the
-   * reply box was rendered for is accepted, but only after it is checked against
-   * the identity the contact actually has — the RECIPIENT is always resolved here
-   * from that channel, never supplied by the client.
+   * A posted `channel` field would fix that thread but not the authority problem:
+   * anyone holding inbox.reply could then pick which platform a dual-identity
+   * customer received on, and the audit trail would record whichever they chose.
+   * So the conversation id is REQUIRED, it is re-read here, and both the channel
+   * and the recipient come out of that row. There is no fallback — an unresolved
+   * thread refuses rather than guessing.
    */
   const conversationId = String(formData.get("conversationId") ?? "").trim();
-  const declaredChannel = String(formData.get("channel") ?? "").trim();
-  let platform: DmPlatform | null = null;
-
-  if (conversationId) {
-    const conversation = await prisma.conversation.findFirst({
-      where: { id: conversationId, contactId },
-      select: { channel: true },
-    });
-    if (!conversation) return { error: "That conversation does not belong to this customer." };
-    if (!isDmPlatform(conversation.channel)) {
-      return { error: `This is a ${conversation.channel} conversation, not a Messenger or Instagram one.` };
-    }
-    platform = conversation.channel;
-  } else if (isDmPlatform(declaredChannel)) {
-    platform = declaredChannel;
+  if (!conversationId) {
+    return { error: "This thread has no conversation to reply on yet — reopen it and try again." };
   }
-  if (!platform) return { error: "Reply channel could not be determined — reopen the conversation and try again." };
+  const conversation = await prisma.conversation.findFirst({
+    where: { id: conversationId, contactId },
+    select: { channel: true },
+  });
+  if (!conversation) return { error: "That conversation does not belong to this customer." };
+  if (!isDmPlatform(conversation.channel)) {
+    return { error: `This is a ${conversation.channel} conversation, not a Messenger or Instagram one.` };
+  }
+  const platform: DmPlatform = conversation.channel;
 
   const recipientId = platform === "instagram" ? contact.instagramId : contact.messengerPsid;
   // Deliberately no fallback to the other platform: sending to the wrong channel

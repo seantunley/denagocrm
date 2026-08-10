@@ -33,10 +33,16 @@ export default function InboxReply({
   revalidate: string;
   aiConfigured?: boolean;
   /**
-   * Draft persistence is OPT-IN: without a conversationId the box behaves exactly
-   * as it did before. /messages renders the same component and has no
-   * conversation resolved, and a reply box that silently stopped saving would be
-   * worse than one that never claimed to.
+   * The canonical Conversation for this thread.
+   *
+   * For Messenger and Instagram it is REQUIRED to send: the server reads the
+   * delivery channel and the recipient off this row precisely so the browser
+   * cannot name them. Without it the box refuses rather than posting a reply the
+   * action will reject.
+   *
+   * Draft persistence rides on the same id but stays opt-in, and additionally
+   * needs `viewerId` — a box that saves a draft it can neither restore nor
+   * attribute is worse than one that never claimed to.
    */
   conversationId?: string | null;
   draft?: { ownerId: string; ownerName: string; body: string; updatedAt: Date } | null;
@@ -127,7 +133,16 @@ ${el.value.slice(end)}`;
     el.selectionStart = el.selectionEnd = start + 1;
   }
 
-  const drafting = Boolean(conversationId);
+  // Autosave needs a viewer as much as it needs a conversation: without one the
+  // box can save a draft it will never restore and can never attribute, which is
+  // the "worse than never claiming to" case the prop note describes. /messages
+  // resolves the conversation for the send route but has no viewer, so it sends
+  // without drafting.
+  const drafting = Boolean(conversationId && viewerId);
+  // A DM cannot be sent without the conversation the server reads the channel
+  // from. Blocking here rather than letting the action refuse means nobody types
+  // a reply that was never sendable.
+  const missingConversation = channel !== "whatsapp" && !conversationId;
   // Whose draft is on the server, decided with the SAME function the action uses.
   // Deciding it again here by hand is how the client and the server come to
   // disagree about who owns a thread.
@@ -206,6 +221,15 @@ ${el.value.slice(end)}`;
           conversation. Your draft will not be saved — check with them before sending.
         </p>
       )}
+      {missingConversation && (
+        <p
+          role="status"
+          className="mb-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-200"
+        >
+          This thread is not linked to a conversation yet, so we cannot tell which account to
+          reply from. Refresh the inbox — if it persists, the conversation needs rebuilding.
+        </p>
+      )}
       {channel === "whatsapp" ? (
         <>
           <input type="hidden" name="phone" value={phone ?? ""} />
@@ -215,12 +239,11 @@ ${el.value.slice(end)}`;
       ) : (
         <>
           <input type="hidden" name="contactId" value={contactId ?? ""} />
-          {/* The channel this box was rendered for. The server prefers the
-              Conversation when one exists and re-checks this against the
-              contact's identities either way — it is a statement of which
-              thread is open, not a licence to pick a delivery route. */}
-          <input type="hidden" name="channel" value={channel} />
-          {conversationId && <input type="hidden" name="conversationId" value={conversationId} />}
+          {/* The conversation, and nothing else about the route. The server reads
+              the channel and the recipient off this row; no `channel` field is
+              posted, because a client that can name the channel can choose which
+              platform a dual-identity customer is answered on. */}
+          <input type="hidden" name="conversationId" value={conversationId ?? ""} />
         </>
       )}
       <input type="hidden" name="revalidate" value={revalidate} />
@@ -239,6 +262,7 @@ ${el.value.slice(end)}`;
           // or re-render on every keystroke.
           defaultValue={restored}
           onChange={drafting ? queueDraftSave : undefined}
+          disabled={missingConversation}
         />
         <button
           type="button"
@@ -272,7 +296,7 @@ ${el.value.slice(end)}`;
             </button>
           </>
         )}
-        <button className="btn-primary btn-sm">Send</button>
+        <button className="btn-primary btn-sm" disabled={missingConversation}>Send</button>
       </div>
 
       <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">

@@ -312,6 +312,15 @@ jobs:
       - name: Inbox -- a staff reply is one durable decision
         run: npm run test:staff-reply
 
+      # A DM reply is delivered on the channel the stored Conversation names, so
+      # that a caller with inbox.reply cannot choose Messenger or Instagram for a
+      # customer who has both. The source tests can see that the resolver is
+      # called; only a real database shows that one customer on two platforms ends
+      # up with two conversations and that each thread resolves to its own — and
+      # that a page rendered twice does not create a second one.
+      - name: Binding -- a DM thread resolves to its own channel's conversation
+        run: npm run test:dm-binding
+
   # -- LANE 3: migrating a database that already has data ----------------------
   #
   # Its own job and its own scratch database, so its four minutes overlap the
