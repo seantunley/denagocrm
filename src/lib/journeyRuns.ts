@@ -274,7 +274,7 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
    * propagating its own NULL into thirteen more.
    */
   const logTenantId = inheritedTenantId(run.tenantId);
-  const logStep = (args: Omit<StepLogArgs, "tenantId">) =>
+  const updateStepLog = (args: Omit<StepLogArgs, "tenantId">) =>
     writeStepLog({ ...args, tenantId: logTenantId });
 
   const claimed = await prisma.journeyRun.updateMany({
@@ -482,7 +482,7 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
       // `condition` falls through to its own nextStepId rather than picking a
       // branch: a muted question has no answer to branch on.
       if (step.enabled === false) {
-        await logStep({
+        await updateStepLog({
           runId: run.id,
           path,
           stepId: step.id,
@@ -506,7 +506,7 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
           entered = enterRepeat(step, keyPath, stepContext, lookup);
         }
 
-        await logStep({
+        await updateStepLog({
           runId: run.id,
           path,
           stepId: step.id,
@@ -542,7 +542,7 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
         if (!armedWait) {
           const wait = armWaitState(path, config, now);
           cursor = { ...cloneCursor(cursor), wait };
-          await logStep({
+          await updateStepLog({
             runId: run.id,
             path,
             stepId: step.id,
@@ -584,7 +584,7 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
         const note = timedOut
           ? `Timed out after ${config.timeoutMinutes} minute(s) waiting for ${config.triggers.join(" or ")}`
           : `Woken by ${wokeBy?.type}`;
-        await logStep({
+        await updateStepLog({
           runId: run.id,
           path,
           stepId: step.id,
@@ -657,7 +657,7 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
         // something already known — for "wait until Won" on a lead that is
         // already Won, a minute of nothing on every such enrolment.
         if (!armedWait && met) {
-          await logStep({
+          await updateStepLog({
             runId: run.id,
             path,
             stepId: step.id,
@@ -674,7 +674,7 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
         if (!armedWait) {
           const wait = armWaitState(path, config, now);
           cursor = { ...cloneCursor(cursor), wait };
-          await logStep({
+          await updateStepLog({
             runId: run.id,
             path,
             stepId: step.id,
@@ -705,7 +705,7 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
         const note = timedOut
           ? `Timed out after ${config.timeoutMinutes} minute(s) waiting for the condition`
           : "Condition became true";
-        await logStep({
+        await updateStepLog({
           runId: run.id,
           path,
           stepId: step.id,
@@ -745,7 +745,7 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
           templateVars: journeyTemplateVars(stepContext),
         });
         context = withJourneyVars(context, applied.vars);
-        await logStep({
+        await updateStepLog({
           runId: run.id,
           path,
           stepId: step.id,
@@ -779,7 +779,7 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
       const owned = await prisma.journeyRun.count({ where: { id: run.id, status: "running" } });
       if (owned === 0) return false;
 
-      await logStep({ runId: run.id, path, stepId: step.id, stepType: step.type, status: "running" });
+      await updateStepLog({ runId: run.id, path, stepId: step.id, stepType: step.type, status: "running" });
 
       let result;
       try {
@@ -803,7 +803,7 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
         // behind it.
         if (isControlFlow(error) || !step.continueOnError) throw error;
         const message = error instanceof Error ? error.message : "Step failed";
-        await logStep({
+        await updateStepLog({
           runId: run.id,
           path,
           stepId: step.id,
@@ -817,7 +817,7 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
       }
 
       const nextTop = inSequence ? null : resolveTopLevelNext(step, result);
-      await logStep({
+      await updateStepLog({
         runId: run.id,
         path,
         stepId: step.id,
@@ -899,7 +899,7 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
     /* ── deliberate control flow: not faults, never retried ──────────────── */
     if (error instanceof StopJourney || error instanceof ConditionFailed) {
       if (position) {
-        await logStep({
+        await updateStepLog({
           runId: run.id,
           path: position.path,
           stepId: position.step.id,
@@ -915,7 +915,7 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
     const abort = error instanceof AbortJourney;
     const message = error instanceof Error ? error.message : "Unknown journey run error";
     if (position) {
-      await logStep({
+      await updateStepLog({
         runId: run.id,
         path: position.path,
         stepId: position.step.id,
