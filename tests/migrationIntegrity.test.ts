@@ -325,7 +325,16 @@ test("session GUCs really do span separate statements, in every migration that u
   // next statement would have been built over rows still holding a NULL tenantId,
   // and NULLs do not conflict in a unique index — so the duplicate the migration
   // exists to prevent would have been admitted by the constraint meant to stop it.
-  assert.equal(spans.length, 15, "fifteen migrations set a session GUC");
+  //
+  // 15 → 16: 20260810130000_orphan_table_tenant_coverage, for the same reason as
+  // those five and one more specific to it. It backfills tenantId on tables that
+  // the SAME FILE then puts behind a FORCE'd policy. On a first run the UPDATE
+  // precedes the ENABLE and needs nothing; on a RE-RUN — which the runner makes
+  // an ordinary occurrence, because it opens no transaction and a part-applied
+  // migration re-runs from the top — the policy is already there and the backfill
+  // is subject to it. Under a migrating role without BYPASSRLS that UPDATE would
+  // match zero rows, succeed, and be recorded as applied.
+  assert.equal(spans.length, 16, "sixteen migrations set a session GUC");
   for (const { name, between } of spans) {
     assert.ok(between > 0, `${name}: a SET with no following statement would not need session pinning`);
   }
