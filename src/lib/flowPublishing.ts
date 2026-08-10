@@ -3,6 +3,7 @@ import { DEFAULT_FLOW, type Flow } from "./flow";
 import { DEFAULT_TENANT_ID } from "./tenant";
 import { withTenantWrite, writeTenantId } from "./tenantWrite";
 import { flowErrors } from "./flowValidation";
+import { legacyFlowTenant } from "./flowTenantScope";
 import { FlowPublishValidationError, validateFlowForEnabledChannels } from "./flowValidationServer";
 
 export type FlowSnapshot = {
@@ -30,9 +31,6 @@ function flowTenantId(): string {
  * statistics.ts applies, and for the same reason. A second tenant sees only its
  * own.
  */
-function legacyFlowTenant(tenantId: string) {
-  return tenantId === DEFAULT_TENANT_ID ? { OR: [{ tenantId }, { tenantId: null }] } : { tenantId };
-}
 
 function parseFlow(definition: string): Flow | null {
   try {
@@ -118,7 +116,14 @@ export async function publishFlowSnapshot(
     // Re-read inside the transaction. If the draft changed between validation
     // and this point, refuse rather than publishing a different definition than
     // the one the compiler approved.
-    const flow = await tx.botFlow.findFirst({ where: { id: flowId, tenantId } });
+    // Same legacy-NULL rule the reader uses. BotFlow predates tenancy, its
+    // tenantId is still nullable, and nothing stamps it while the guard is
+    // dormant — so every flow created since the 20260722146000 backfill has
+    // tenantId = NULL. Filtering strictly here made this throw FLOW_NOT_FOUND for
+    // all of them, and setActiveFlow catches that into null: the operator clicked
+    // Publish and NOTHING happened — no audit, no revalidate, no error. The
+    // reader twenty lines above already knew this; the writer did not.
+    const flow = await tx.botFlow.findFirst({ where: { id: flowId, ...legacyFlowTenant(tenantId) } });
     if (!flow) throw new Error("FLOW_NOT_FOUND");
     if (flow.definition !== draft.definition) throw new Error("FLOW_CHANGED_DURING_PUBLISH");
 
@@ -138,13 +143,18 @@ export async function publishFlowSnapshot(
       },
     });
 
+    // Deactivating siblings has to reach the NULL-tenant rows too, or the
+    // previous live flow stays `active` alongside the new one.
     await tx.botFlow.updateMany({
-      where: { tenantId, channel: flow.channel },
+      where: { ...legacyFlowTenant(tenantId), channel: flow.channel },
       data: { active: false },
     });
+    // Stamp the tenant while we are here: a row that publishes should stop being
+    // tenantless, so the population needing the legacy rule shrinks instead of
+    // growing. Publishing is the one moment we certainly know which tenant owns it.
     await tx.botFlow.updateMany({
-      where: { id: flow.id, tenantId },
-      data: { active: true },
+      where: { id: flow.id, ...legacyFlowTenant(tenantId) },
+      data: { active: true, tenantId },
     });
 
     await tx.botFlowPublication.upsert({
