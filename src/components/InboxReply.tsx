@@ -213,7 +213,15 @@ ${el.value.slice(end)}`;
           {leadId && <input type="hidden" name="leadId" value={leadId} />}
         </>
       ) : (
-        <input type="hidden" name="contactId" value={contactId ?? ""} />
+        <>
+          <input type="hidden" name="contactId" value={contactId ?? ""} />
+          {/* The channel this box was rendered for. The server prefers the
+              Conversation when one exists and re-checks this against the
+              contact's identities either way — it is a statement of which
+              thread is open, not a licence to pick a delivery route. */}
+          <input type="hidden" name="channel" value={channel} />
+          {conversationId && <input type="hidden" name="conversationId" value={conversationId} />}
+        </>
       )}
       <input type="hidden" name="revalidate" value={revalidate} />
       <input type="hidden" name="compositionId" value={compositionId} />

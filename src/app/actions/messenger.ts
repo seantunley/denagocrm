@@ -13,6 +13,11 @@ const ATTACH_KIND = (mime: string): "image" | "audio" | "video" | "file" =>
 
 export type DmState = { ok?: string; error?: string };
 
+/** Narrows a stored/declared channel string to a platform we can actually send on. */
+function isDmPlatform(value: string): value is DmPlatform {
+  return value === "messenger" || value === "instagram";
+}
+
 export async function sendDmReply(
   _prev: DmState | undefined,
   formData: FormData
@@ -27,9 +32,46 @@ export async function sendDmReply(
 
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });
   if (!contact) return { error: "Contact not found." };
-  const platform: DmPlatform = contact.instagramId && !contact.messengerPsid ? "instagram" : "messenger";
+
+  /**
+   * The THREAD decides the channel — never the contact's identity set.
+   *
+   * This used to read `contact.instagramId && !contact.messengerPsid`, so a
+   * customer who had messaged on both platforms always resolved to Messenger:
+   * a reply typed into an Instagram thread was delivered over Messenger, to the
+   * same person, on a channel they were not looking at.
+   *
+   * The Conversation is the authority when we have one. Otherwise the channel the
+   * reply box was rendered for is accepted, but only after it is checked against
+   * the identity the contact actually has — the RECIPIENT is always resolved here
+   * from that channel, never supplied by the client.
+   */
+  const conversationId = String(formData.get("conversationId") ?? "").trim();
+  const declaredChannel = String(formData.get("channel") ?? "").trim();
+  let platform: DmPlatform | null = null;
+
+  if (conversationId) {
+    const conversation = await prisma.conversation.findFirst({
+      where: { id: conversationId, contactId },
+      select: { channel: true },
+    });
+    if (!conversation) return { error: "That conversation does not belong to this customer." };
+    if (!isDmPlatform(conversation.channel)) {
+      return { error: `This is a ${conversation.channel} conversation, not a Messenger or Instagram one.` };
+    }
+    platform = conversation.channel;
+  } else if (isDmPlatform(declaredChannel)) {
+    platform = declaredChannel;
+  }
+  if (!platform) return { error: "Reply channel could not be determined — reopen the conversation and try again." };
+
   const recipientId = platform === "instagram" ? contact.instagramId : contact.messengerPsid;
-  if (!recipientId) return { error: "This contact has no Messenger/Instagram identity." };
+  // Deliberately no fallback to the other platform: sending to the wrong channel
+  // is worse than not sending, because the customer sees nothing and staff see
+  // "Sent ✓".
+  if (!recipientId) {
+    return { error: `This contact has no ${platform === "instagram" ? "Instagram" : "Messenger"} identity, so the reply cannot be delivered there.` };
+  }
 
   let attachmentUrl: string | null = null;
   let attachmentType: "image" | "audio" | "video" | "file" | null = null;
