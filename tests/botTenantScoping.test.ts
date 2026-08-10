@@ -171,3 +171,19 @@ test("a send the provider accepted is never recorded as a delivery failure", () 
   assert.match(stale, /return "sent"/, "and must not be reported as a retry");
   assert.doesNotMatch(stale, /return "retry"/);
 });
+
+test("dead-lettering and conversation repair commit together", () => {
+  // They used to be two transactions: the dead-letter committed, then a separate
+  // best-effort call set ownership = delivery_failed. If the process died between
+  // them the repair never happened and no retry remained to trigger it — the
+  // message is already terminal — so the customer was back to waiting at a prompt
+  // they never received, which is the exact state the repair exists to prevent.
+  const code = src("src/lib/botOutbox.ts");
+  const start = code.indexOf("async function killMessageAndBacklog");
+  const body = code.slice(start, code.indexOf("\n}", start));
+  assert.match(body, /prisma\.\$transaction/);
+  assert.match(body, /"ownership" = 'delivery_failed'/, "the repair must be in that transaction");
+  assert.match(body, /"ownership" <> 'human'/, "and must never evict a staff takeover");
+  // No second, best-effort repair left behind.
+  assert.doesNotMatch(code, /bot-outbox-session-repair/);
+});

@@ -3,7 +3,6 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
 import { DEFAULT_TENANT_ID } from "./tenant";
 import { withTenantWrite, writeTenantId } from "./tenantWrite";
-import { markBotSessionDeliveryFailedTx } from "./botSessionStore";
 import type { OutMsg } from "./flow";
 import { sendWhatsAppButtons, sendWhatsAppImage, sendWhatsAppList, sendWhatsAppText } from "./whatsapp";
 import { sendDirectAttachment, sendDirectMessage, sendDirectQuickReplies } from "./messenger";
@@ -240,6 +239,7 @@ function retryAt(attempts: number): Date { return new Date(Date.now() + Math.min
  */
 async function killMessageAndBacklog(row: OutboxRow, lastError: string): Promise<boolean> {
   const blocked = `Blocked by earlier failed message ${row.id}: ${lastError}`.slice(0, 1000);
+  const tenantId = outboxTenantId();
   return prisma.$transaction(async (tx) => {
     const dead = await tx.botFlowOutbox.updateMany({
       where: { id: row.id, status: "running", attempts: row.attempts },
@@ -248,7 +248,7 @@ async function killMessageAndBacklog(row: OutboxRow, lastError: string): Promise
     if (dead.count !== 1) return false;
     await tx.botFlowOutbox.updateMany({
       where: {
-        tenantId: outboxTenantId(),
+        tenantId,
         channel: row.channel,
         key: row.key,
         id: { not: row.id },
@@ -256,6 +256,19 @@ async function killMessageAndBacklog(row: OutboxRow, lastError: string): Promise
       },
       data: { status: "dead", leaseUntil: null, lastError: blocked },
     });
+    // Repair the conversation HERE, not in a second best-effort transaction.
+    // Separately, the dead-letter could commit, the process die, and the session
+    // repair never happen — with no retry left to trigger it, because the message
+    // is already terminal. The customer would then be back to waiting at a prompt
+    // they never received, which is the exact state this repair exists to prevent.
+    await tx.$executeRawUnsafe(
+      `UPDATE "BotSession"
+          SET "ownership" = 'delivery_failed', "updatedAt" = CURRENT_TIMESTAMP
+        WHERE "tenantId" = $1 AND "channel" = $2 AND "key" = $3 AND "ownership" <> 'human'`,
+      tenantId,
+      row.channel,
+      row.key,
+    );
     return true;
   });
 }
@@ -263,23 +276,9 @@ async function killMessageAndBacklog(row: OutboxRow, lastError: string): Promise
 async function failDelivery(row: OutboxRow, error: string): Promise<"retry" | "dead"> {
   const lastError = error.slice(0, 1000);
   if (row.attempts >= MAX_ATTEMPTS) {
+    // Kills the message, the backlog behind it, and repairs the conversation —
+    // all in one transaction, so none of the three can commit without the others.
     if (!(await killMessageAndBacklog(row, lastError))) return "retry";
-
-    // The flow state and the customer's reality have now diverged. The session
-    // was committed BEFORE delivery — deliberately, so a provider timeout cannot
-    // lose the message that explains the new state — which means the CRM believes
-    // the customer is waiting at, say, a choice node whose prompt they never
-    // received. Their next message would be interpreted against a menu that does
-    // not exist for them.
-    //
-    // Mark the conversation instead, so the next inbound turn starts over rather
-    // than answering something unseen. This never evicts a person who has taken
-    // the thread over; see markBotSessionDeliveryFailedTx.
-    await withTenantWrite(async (tx, tenantId) => {
-      await markBotSessionDeliveryFailedTx(tx, tenantId, row.channel, row.key);
-    }).catch(async (error) => {
-      await logError("bot-outbox-session-repair", error, row.id).catch(() => {});
-    });
     if (row.flowVersionId) {
       await recordBotFlowEvents([{ channel: row.channel, conversationKey: row.key, flowVersionId: row.flowVersionId, eventType: "delivery_failed", metadata: { outboxId: row.id, attempts: row.attempts } }]);
     }
