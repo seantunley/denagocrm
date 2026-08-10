@@ -1,4 +1,3 @@
-import crypto from "crypto";
 import { prisma } from "./db";
 import { resolveTenantCredential } from "./settings";
 import { logAudit } from "./audit";
@@ -11,6 +10,7 @@ import { createLeadRecordIfPipelineReady } from "./leadCreate";
 import { saveFile } from "./storage";
 import { resolveTenantActor } from "./tenantActor";
 import { currentTenantScope } from "./tenantScope";
+import { DerivedCredentialCache } from "./derivedCredentialCache";
 
 const GRAPH = "https://graph.facebook.com/v21.0";
 
@@ -38,27 +38,23 @@ export async function isMessengerConfigured(): Promise<boolean> {
 /**
  * The system-user token manages the page; sends need the page-scoped token.
  *
- * This cache used to be ONE module-global token. A warm server process serving
- * tenant B within 30 minutes of tenant A could therefore reuse A's page token.
- * Cache by tenant and bind the entry to a fingerprint of the current source
- * credential so rotating a token invalidates the cached derived page token too.
+ * Every rule about WHOSE token this is and WHETHER it is still derivable lives in
+ * DerivedCredentialCache, where it can be exercised directly. What is left here
+ * is the part specific to Meta: which credential the page token is derived from,
+ * and how the exchange is made.
+ *
+ * Note the shape. The tenant is read ONCE and feeds both the key and the
+ * credential lookup — two reads of a mutable ambient scope can disagree, and when
+ * they do the entry is filed under one tenant holding another's token. And the
+ * source credential is resolved BEFORE the cache is reachable at all, because it
+ * is an argument: a rotation or a disconnect cannot be short-circuited by a hit.
  */
-type PageTokenCacheEntry = { token: string; sourceHash: string; fetchedAt: number };
-const pageTokenCache = new Map<string, PageTokenCacheEntry>();
-const tokenHash = (value: string) => crypto.createHash("sha256").update(value).digest("hex");
+const PAGE_TOKEN_TTL_MS = 30 * 60 * 1000;
+const GLOBAL_TOKEN_KEY = " global";
+const pageTokenCache = new DerivedCredentialCache<string>({ ttlMs: PAGE_TOKEN_TTL_MS });
 
-async function getPageToken(): Promise<string | null> {
-  const tenantKey = ambientTenantId() ?? "__global__";
-  const sysToken = await resolveTenantCredential(ambientTenantId(), "META_PAGE_ACCESS_TOKEN");
-  if (!sysToken) {
-    pageTokenCache.delete(tenantKey);
-    return null;
-  }
-  const sourceHash = tokenHash(sysToken);
-  const cached = pageTokenCache.get(tenantKey);
-  if (cached && cached.sourceHash === sourceHash && Date.now() - cached.fetchedAt < 30 * 60 * 1000) {
-    return cached.token;
-  }
+/** Exchange a system-user token for the page-scoped one. Null on any failure. */
+async function exchangeForPageToken(sysToken: string): Promise<string | null> {
   try {
     const res = await fetch(
       `${GRAPH}/me/accounts?fields=id,access_token&access_token=${encodeURIComponent(sysToken)}`,
@@ -66,13 +62,17 @@ async function getPageToken(): Promise<string | null> {
     );
     if (!res.ok) return null;
     const json = await res.json();
-    const token: string | undefined = json.data?.[0]?.access_token;
-    if (!token) return null;
-    pageTokenCache.set(tenantKey, { token, sourceHash, fetchedAt: Date.now() });
-    return token;
+    return json.data?.[0]?.access_token ?? null;
   } catch {
     return null;
   }
+}
+
+async function getPageToken(): Promise<string | null> {
+  // ONCE. Both the key and the lookup below must describe the same tenant.
+  const tenantId = ambientTenantId();
+  const sysToken = await resolveTenantCredential(tenantId, "META_PAGE_ACCESS_TOKEN");
+  return pageTokenCache.resolve(tenantId ?? GLOBAL_TOKEN_KEY, sysToken, exchangeForPageToken);
 }
 
 /** Sends a Messenger / Instagram DM (24-hour customer-service window applies). */
