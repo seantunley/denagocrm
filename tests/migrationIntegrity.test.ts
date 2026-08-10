@@ -314,7 +314,14 @@ test("session GUCs really do span separate statements, in every migration that u
   // does not bypass RLS. As the comment above says, the count is not the property
   // — the span between SET and its last dependent statement is — but it is worth
   // knowing when the number moves and why.
-  assert.equal(spans.length, 14, "fourteen migrations set a session GUC");
+  //
+  // 14 → 15: the GoogleReview tenant-scope backfill, for the same reason and
+  // caught by the same sibling invariant in migrationReentrancy.test.ts. There it
+  // was worse than a silent no-op: the tenant-scoped unique index built in the
+  // next statement would have been built over rows still holding a NULL tenantId,
+  // and NULLs do not conflict in a unique index — so the duplicate the migration
+  // exists to prevent would have been admitted by the constraint meant to stop it.
+  assert.equal(spans.length, 15, "fifteen migrations set a session GUC");
   for (const { name, between } of spans) {
     assert.ok(between > 0, `${name}: a SET with no following statement would not need session pinning`);
   }
