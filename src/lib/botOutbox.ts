@@ -7,6 +7,7 @@ import { botStillOwnsTx, pauseBotSessionTx } from "./botSessionStore";
 import { logAuditStrict } from "./audit";
 import { classifyDeliveryFailure, PERMANENT_FAILURES, staffReplyMatchesRow } from "./messageDelivery";
 import { metaEchoDedupeKey } from "./metaEcho";
+import { deleteCommunicationsAndReconcile } from "./conversations";
 import type { OutMsg } from "./flow";
 import { sendWhatsAppButtons, sendWhatsAppImage, sendWhatsAppList, sendWhatsAppText } from "./whatsapp";
 import { sendDirectAttachment, sendDirectMessage, sendDirectQuickReplies } from "./messenger";
@@ -446,8 +447,12 @@ async function reconcileProviderEcho(providerMessageId: string | undefined): Pro
   // outboxTenantId(), the same value every claim and write in this file uses, so
   // the key built here is the key the webhook built for the same message.
   const tenantId = outboxTenantId();
-  await prisma.communication
-    .deleteMany({ where: { dedupeKey: metaEchoDedupeKey(tenantId, providerMessageId) } })
+  // Reconciling, not deleting. The echo was written through the guarded client,
+  // which rolled the conversation's counters forward; nothing intercepts a
+  // delete, so a bare one leaves the projection permanently ahead of the
+  // transcript — and Conversation is what the inbox reads for ordering and for
+  // "who is waiting on us".
+  await deleteCommunicationsAndReconcile({ dedupeKey: metaEchoDedupeKey(tenantId, providerMessageId) })
     .catch(() => {
       /* Best effort: a duplicate left on the timeline is visible and survivable,
          and must never turn a delivered message into a failed one. */

@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
 import { resolveTenantCredential } from "./settings";
 import { logAudit } from "./audit";
@@ -10,6 +11,7 @@ import { currentTenantScope } from "./tenantScope";
 import { writeTenantId } from "./tenantWrite";
 import { DEFAULT_TENANT_ID } from "./tenant";
 import { decideEcho } from "./metaEcho";
+import { deleteCommunicationsAndReconcile } from "./conversations";
 
 const GRAPH = "https://graph.facebook.com/v21.0";
 
@@ -431,14 +433,29 @@ export async function recordDmEcho(
     // webhook a no-op rather than a third copy.
     messageId: providerMessageId ?? null,
   };
-  const written = decision.dedupeKey
-    ? await prisma.communication.upsert({
-        where: { dedupeKey: decision.dedupeKey },
-        update: {},
-        create: { ...data, dedupeKey: decision.dedupeKey },
-        select: { id: true },
-      })
-    : await prisma.communication.create({ data, select: { id: true } });
+  /**
+   * `create`, never `upsert`, and the idempotency comes from catching the
+   * conflict instead.
+   *
+   * This mattered more than it looks. The guarded client intercepts
+   * `Communication.create` — and ONLY create — to attach the row to its
+   * conversation and roll that conversation's counters forward. An upsert
+   * silently skipped both: the echo landed with `conversationId: null`, outside
+   * the threading every conversation-scoped query depends on, while looking
+   * perfectly fine on the timeline. Measured, not assumed.
+   */
+  let written: { id: string };
+  try {
+    written = await prisma.communication.create({
+      data: decision.dedupeKey ? { ...data, dedupeKey: decision.dedupeKey } : data,
+      select: { id: true },
+    });
+  } catch (error) {
+    // Meta redelivers webhooks. The unique dedupeKey is what makes the second
+    // delivery a no-op rather than a third copy of the customer's message.
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") return;
+    throw error;
+  }
 
   if (!providerMessageId) return;
 
@@ -454,6 +471,9 @@ export async function recordDmEcho(
    * row holding this exact id — never on a resemblance.
    */
   if (await ledgerHoldsProviderId(tenantId, providerMessageId)) {
-    await prisma.communication.deleteMany({ where: { id: written.id } });
+    // Not a bare delete. The create above rolled this conversation's counters
+    // forward, and nothing intercepts a delete — so removing only the row would
+    // leave the transcript right and the projection one message ahead for ever.
+    await deleteCommunicationsAndReconcile({ id: written.id });
   }
 }

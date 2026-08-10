@@ -30,6 +30,7 @@
 import { basePrisma } from "../src/lib/db";
 import { recordDmEcho } from "../src/lib/messenger";
 import { metaEchoDedupeKey } from "../src/lib/metaEcho";
+import { deleteCommunicationsAndReconcile } from "../src/lib/conversations";
 import { DEFAULT_TENANT_ID } from "../src/lib/tenant";
 
 const SFX = Math.random().toString(16).slice(2, 10);
@@ -116,6 +117,56 @@ async function queue(opts: {
   });
 }
 
+/**
+ * The Conversation projection, which is what the inbox actually reads for
+ * ordering, pagination and "who is waiting on us".
+ *
+ * Asserting on Communication rows alone proves the duplicate DISAPPEARS. It does
+ * not prove the system is back in the state it would have had if the duplicate
+ * had never existed — and the guarded client rolls these counters forward on
+ * every create while nothing intercepts a delete, so that gap is exactly where a
+ * speculative row leaves a permanent trace.
+ */
+const projection = async () => {
+  const conversation = await basePrisma.conversation.findFirst({
+    where: { contactId: ids.contact, channel: "messenger" },
+    select: { messageCount: true, lastDirection: true, lastInboundAt: true, firstResponseAt: true },
+  });
+  return JSON.stringify(conversation);
+};
+
+/**
+ * `lastMessageAt` is checked as an INVARIANT rather than by comparing to a
+ * captured baseline, because the two clocks differ by design.
+ *
+ * `bumpConversation` stamps `msg.occurredAt ?? new Date()` — and a create that
+ * does not name occurredAt leaves it to the column default, so the conversation
+ * records the application's clock while the row records the database's. They are
+ * a fraction of a millisecond apart and never equal, which makes a captured
+ * baseline impossible to match exactly and says nothing about the cleanup.
+ *
+ * The property that matters is the one recomputation restores: the conversation
+ * says the last message arrived when the last surviving message actually did.
+ */
+const lastMessageAtTracksNewestRow = async () => {
+  const conversation = await basePrisma.conversation.findFirst({
+    where: { contactId: ids.contact, channel: "messenger" },
+    select: { id: true, lastMessageAt: true },
+  });
+  if (!conversation) return false;
+  const newest = await basePrisma.communication.findFirst({
+    where: { conversationId: conversation.id },
+    orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+    select: { occurredAt: true },
+  });
+  if (!newest) return false;
+  return conversation.lastMessageAt.getTime() === newest.occurredAt.getTime();
+};
+
+/** Every message row is threaded; an unthreaded one is invisible to the panel. */
+const unthreaded = () =>
+  basePrisma.communication.count({ where: { contactId: ids.contact, conversationId: null } });
+
 const outbound = () =>
   basePrisma.communication.findMany({
     where: { contactId: ids.contact, type: "messenger", direction: "outbound" },
@@ -134,8 +185,10 @@ async function workerCommitsId(outboxId: string, providerMessageId: string) {
     where: { id: outboxId },
     data: { status: "sent", sentAt: new Date(), leaseUntil: null, providerMessageId },
   });
-  await basePrisma.communication.deleteMany({
-    where: { dedupeKey: metaEchoDedupeKey(DEFAULT_TENANT_ID, providerMessageId) },
+  // The SAME call the worker makes — deleteCommunicationsAndReconcile, not a bare
+  // deleteMany. Reimplementing the cleanup here would test the test.
+  await deleteCommunicationsAndReconcile({
+    dedupeKey: metaEchoDedupeKey(DEFAULT_TENANT_ID, providerMessageId),
   });
 }
 
@@ -144,12 +197,23 @@ async function main() {
   await cleanup();
   await seed();
 
+  // A real CRM outbound, written the way the reply path writes one, so the
+  // conversation exists and its counters are already rolled forward. Every
+  // baseline below is taken against this.
+  const { prisma } = await import("../src/lib/db");
+  await prisma.communication.create({
+    data: { type: "messenger", direction: "outbound", body: "Our real reply", contactId: ids.contact, userId: ids.user },
+  });
+  const BASELINE = await projection();
+  check("the real reply is threaded and counted", JSON.parse(BASELINE).messageCount === 1, BASELINE);
+
   // ── 1. THE ECHO ARRIVES AFTER THE ID IS COMMITTED ─────────────────────────
   //
   // The ordinary case. Nothing is written at all.
   await queue({ text: "Reconciled reply", status: "sent", providerMessageId: "mid.reconciled" });
   await recordDmEcho("messenger", PSID, "Reconciled reply", "mid.reconciled");
-  check("an echo whose id the ledger holds is never written", (await outboundCount()) === 0);
+  check("an echo whose id the ledger holds is never written", (await outboundCount()) === 1);
+  check("and the projection is untouched", (await projection()) === BASELINE, await projection());
 
   // ── 2. THE ECHO ARRIVES FIRST — THE WORKER CLEANS UP ──────────────────────
   //
@@ -158,19 +222,32 @@ async function main() {
   const racing = await queue({ text: "In flight reply", status: "running", providerMessageId: null });
   await recordDmEcho("messenger", PSID, "In flight reply", "mid.inflight");
   const afterEcho = await outbound();
-  check("an echo arriving before the id IS recorded, not guessed away", afterEcho.length === 1);
+  check("an echo arriving before the id IS recorded, not guessed away", afterEcho.length === 2);
+  const speculative = afterEcho.find((row) => row.body === "In flight reply");
   check(
     "and it carries the provider id, which is what makes it reconcilable",
-    afterEcho[0]?.messageId === "mid.inflight",
-    afterEcho[0]?.messageId ?? "null",
+    speculative?.messageId === "mid.inflight",
+    speculative?.messageId ?? "null",
   );
   check(
     "keyed so the worker can address exactly this row",
-    afterEcho[0]?.dedupeKey === metaEchoDedupeKey(DEFAULT_TENANT_ID, "mid.inflight"),
-    afterEcho[0]?.dedupeKey ?? "null",
+    speculative?.dedupeKey === metaEchoDedupeKey(DEFAULT_TENANT_ID, "mid.inflight"),
+    speculative?.dedupeKey ?? "null",
   );
+  // THREADED. An upsert skipped the guarded client's create hook entirely, so the
+  // row landed with a null conversationId — invisible to every conversation-scoped
+  // query while looking perfectly fine on the timeline.
+  check("and it is attached to the conversation like any other message", (await unthreaded()) === 0);
+  check("the speculative row moves the projection while it exists", (await projection()) !== BASELINE);
+
   await workerCommitsId(racing.id, "mid.inflight");
-  check("and the worker removes it once the id proves it was ours", (await outboundCount()) === 0);
+  check("and the worker removes it once the id proves it was ours", (await outboundCount()) === 1);
+  check(
+    "AND puts the conversation back to the no-duplicate baseline",
+    (await projection()) === BASELINE,
+    await projection(),
+  );
+  check("with lastMessageAt back on the surviving message", await lastMessageAtTracksNewestRow());
 
   // ── 3. THE INTERLEAVING BETWEEN THE TWO ───────────────────────────────────
   //
@@ -180,7 +257,13 @@ async function main() {
   const interleaved = await queue({ text: "Interleaved reply", status: "running", providerMessageId: null });
   await workerCommitsId(interleaved.id, "mid.interleaved"); // worker finishes first
   await recordDmEcho("messenger", PSID, "Interleaved reply", "mid.interleaved");
-  check("an echo landing after the worker's cleanup does not survive", (await outboundCount()) === 0);
+  check("an echo landing after the worker's cleanup does not survive", (await outboundCount()) === 1);
+  check(
+    "and its own re-check restores the baseline too",
+    (await projection()) === BASELINE,
+    await projection(),
+  );
+  check("with lastMessageAt back on the surviving message too", await lastMessageAtTracksNewestRow());
 
   // ── 4. A COLLEAGUE ON THE PAGE IS ALWAYS RETAINED ─────────────────────────
   //
@@ -190,27 +273,42 @@ async function main() {
   // against an in-flight row and dropped their message for ever.
   const sendingThanks = await queue({ text: "Thanks", status: "running", providerMessageId: null });
   await recordDmEcho("messenger", PSID, "Thanks", "mid.colleague-thanks");
-  check("a colleague's IDENTICAL text is recorded while we are sending it", (await outboundCount()) === 1);
+  check("a colleague's IDENTICAL text is recorded while we are sending it", (await outboundCount()) === 2);
 
   // Our own send then completes with its own id. Their message must be untouched.
   await workerCommitsId(sendingThanks.id, "mid.ours-thanks");
   const survivors = await outbound();
-  check("and survives our send completing", survivors.length === 1, `${survivors.length} rows`);
+  check("and survives our send completing", survivors.length === 2, `${survivors.length} rows`);
+  const theirs = survivors.find((row) => row.body === "Thanks");
   check(
     "still theirs, still carrying their id",
-    survivors[0]?.body === "Thanks" && survivors[0]?.messageId === "mid.colleague-thanks",
-    JSON.stringify(survivors[0]),
+    theirs?.messageId === "mid.colleague-thanks",
+    JSON.stringify(theirs),
   );
   // And our OWN echo of the same words, arriving late, is still dropped.
   await recordDmEcho("messenger", PSID, "Thanks", "mid.ours-thanks");
-  check("while our own echo of the same words is dropped", (await outboundCount()) === 1);
+  check("while our own echo of the same words is dropped", (await outboundCount()) === 2);
+  // A RETAINED message must stay counted. The baseline moved by exactly one, and
+  // it moved because a real message arrived — not because a cleanup missed one.
+  const withColleague = JSON.parse(await projection());
+  check(
+    "and the colleague's message is counted, once",
+    withColleague.messageCount === 2,
+    JSON.stringify(withColleague),
+  );
+  const AFTER_COLLEAGUE = await projection();
 
   // ── 5. A REDELIVERED WEBHOOK IS A NO-OP ───────────────────────────────────
   //
   // Meta redelivers. Without the key this wrote a third copy each time.
   await recordDmEcho("messenger", PSID, "Thanks", "mid.colleague-thanks");
   await recordDmEcho("messenger", PSID, "Thanks", "mid.colleague-thanks");
-  check("a redelivered echo does not multiply", (await outboundCount()) === 1);
+  check("a redelivered echo does not multiply", (await outboundCount()) === 2);
+  check(
+    "and does not inflate the projection either",
+    (await projection()) === AFTER_COLLEAGUE,
+    await projection(),
+  );
 
   // ── 6. AN ECHO WITH NO PROVIDER ID IS KEPT ────────────────────────────────
   //
@@ -219,12 +317,18 @@ async function main() {
   // survivable; a silently discarded customer-facing message is neither.
   await queue({ text: "No mid at all", status: "running", providerMessageId: null });
   await recordDmEcho("messenger", PSID, "No mid at all", null);
-  check("an echo with no provider id is recorded rather than guessed away", (await outboundCount()) === 2);
+  check("an echo with no provider id is recorded rather than guessed away", (await outboundCount()) === 3);
 
   // ── 7. ANOTHER TENANT'S SEND CANNOT CLAIM THIS ECHO ───────────────────────
   await queue({ text: "Cross tenant", status: "sent", providerMessageId: "mid.cross", tenantId: ids.otherTenant });
   await recordDmEcho("messenger", PSID, "Cross tenant", "mid.cross");
-  check("a matching row in ANOTHER tenant does not suppress the echo", (await outboundCount()) === 3);
+  check("a matching row in ANOTHER tenant does not suppress the echo", (await outboundCount()) === 4);
+  check("every surviving row is threaded", (await unthreaded()) === 0);
+  const counted = JSON.parse(await projection()).messageCount;
+  check("and the projection counts exactly the surviving rows", counted === (await outboundCount()), `${counted}`);
+  // No lastMessageAt assertion here on purpose: nothing was reconciled in this
+  // section, so the value legitimately carries bumpConversation's own clock. The
+  // invariant is asserted where a cleanup actually ran.
 
   // ── 8. THE ECHO DOES NOT RESURRECT AN ARCHIVED THREAD ─────────────────────
   //

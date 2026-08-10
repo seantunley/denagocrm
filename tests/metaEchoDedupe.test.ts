@@ -95,18 +95,78 @@ test("the webhook re-reads the ledger after writing, and removes its own row", (
   const messenger = src("src/lib/messenger.ts");
   const fn = messenger.slice(messenger.indexOf("export async function recordDmEcho"));
   // Written first — the row exists even if this process dies before the recheck.
-  const write = fn.indexOf("prisma.communication.upsert");
+  const write = fn.indexOf("prisma.communication.create");
   const recheck = fn.indexOf("if (await ledgerHoldsProviderId(tenantId, providerMessageId))");
   assert.ok(write > 0 && recheck > write, "the re-check must come after the write, not instead of it");
-  assert.match(fn.slice(recheck), /prisma\.communication\.deleteMany\(\{ where: \{ id: written\.id \} \}\)/);
+  assert.match(fn.slice(recheck), /deleteCommunicationsAndReconcile\(\{ id: written\.id \}\)/);
   // And the row it deletes is the one it just wrote — never a lookalike.
   assert.doesNotMatch(fn.slice(recheck), /body:|text/, "the cleanup addresses one id, not a resemblance");
+});
+
+/**
+ * THE SIDE EFFECTS OF THE SPECULATIVE WRITE.
+ *
+ * The guarded client intercepts `Communication.create` — and only create — to
+ * attach the row to its conversation and roll that conversation's counters
+ * forward. Nothing intercepts a delete. So a speculative row removed with a bare
+ * deleteMany leaves the transcript correct and the projection one message ahead
+ * for ever, and Conversation is what the inbox reads for ordering, pagination
+ * and "who is waiting on us".
+ */
+
+test("the echo is written with create, so it threads and counts like any message", () => {
+  const messenger = shipped("src/lib/messenger.ts");
+  const fn = messenger.slice(messenger.indexOf("export async function recordDmEcho"));
+  assert.match(fn, /await prisma\.communication\.create\(\{/);
+  // An upsert is NOT equivalent: it bypasses the create hook, so the row lands
+  // with a null conversationId — outside every conversation-scoped query while
+  // looking perfectly fine on the timeline.
+  assert.doesNotMatch(fn, /prisma\.communication\.upsert/, "upsert skips the threading hook");
+  // Idempotency comes from the unique key instead.
+  assert.match(fn, /error\.code === "P2002"/);
+});
+
+test("both cleanups reconcile the conversation, not just the row", () => {
+  const messenger = shipped("src/lib/messenger.ts");
+  assert.match(messenger, /deleteCommunicationsAndReconcile\(\{ id: written\.id \}\)/);
+  assert.doesNotMatch(
+    messenger.slice(messenger.indexOf("export async function recordDmEcho")),
+    /prisma\.communication\.deleteMany/,
+    "a bare delete leaves the projection ahead of the transcript",
+  );
+  const outbox = shipped("src/lib/botOutbox.ts");
+  const reconcile = outbox.slice(outbox.indexOf("async function reconcileProviderEcho"));
+  assert.match(reconcile.slice(0, 900), /deleteCommunicationsAndReconcile\(\{ dedupeKey: metaEchoDedupeKey\(tenantId, providerMessageId\) \}\)/);
+  assert.doesNotMatch(reconcile.slice(0, 900), /communication\.deleteMany/);
+});
+
+test("the conversation is RECOMPUTED, because an increment has no inverse", () => {
+  const conversations = shipped("src/lib/conversations.ts");
+  assert.match(conversations, /export async function recomputeConversationDerivedState/);
+  assert.match(conversations, /export async function deleteCommunicationsAndReconcile/);
+  const recompute = conversations.slice(conversations.indexOf("export async function recomputeConversationDerivedState"));
+  const body = recompute.slice(0, recompute.indexOf("export async function deleteCommunicationsAndReconcile"));
+  // Every field bumpConversation writes has to come back, not just the count:
+  // decrementing alone leaves a projection that is tidy and factually wrong.
+  for (const field of ["messageCount", "lastMessageAt", "lastDirection", "lastInboundAt", "firstResponseAt"]) {
+    assert.match(body, new RegExp(`${field}:`), `${field} must be restored, not left behind`);
+  }
+  assert.doesNotMatch(body, /decrement/, "recomputation, not reversal");
+  // `unread` means "nobody has opened the inbound messages" and is cleared
+  // explicitly; deriving it here would let a cleanup silently mark a thread read.
+  assert.doesNotMatch(body, /unread/, "unread is not derived state");
+  // The recompute runs AFTER the delete, or it sees the row it is removing.
+  const remove = conversations.slice(conversations.indexOf("export async function deleteCommunicationsAndReconcile"));
+  assert.ok(
+    remove.indexOf("recomputeConversationDerivedState") > remove.indexOf("deleteMany"),
+    "the recomputation must see the world without those rows",
+  );
 });
 
 test("the worker removes the echo only after the id is committed", () => {
   const outbox = shipped("src/lib/botOutbox.ts");
   assert.match(outbox, /async function reconcileProviderEcho\(/);
-  assert.match(outbox, /deleteMany\(\{ where: \{ dedupeKey: metaEchoDedupeKey\(tenantId, providerMessageId\) \} \}\)/);
+  assert.match(outbox, /deleteCommunicationsAndReconcile\(\{ dedupeKey: metaEchoDedupeKey\(tenantId, providerMessageId\) \}\)/);
 
   // BOTH sent paths reconcile, and both do it AFTER their own id write. The
   // superseded-lease path commits the id in a second statement, so reconciling
@@ -193,7 +253,7 @@ test("the echo row carries the provider id on the timeline too", () => {
   const messenger = shipped("src/lib/messenger.ts");
   const fn = messenger.slice(messenger.indexOf("export async function recordDmEcho"));
   assert.match(fn, /messageId: providerMessageId \?\? null/);
-  // Upserted on the dedupe key, so Meta redelivering the webhook is a no-op
-  // rather than a third copy.
-  assert.match(fn, /where: \{ dedupeKey: decision\.dedupeKey \}/);
+  // And the unique key, so Meta redelivering the webhook is a no-op rather than
+  // a third copy of the customer's message.
+  assert.match(fn, /decision\.dedupeKey \? \{ \.\.\.data, dedupeKey: decision\.dedupeKey \} : data/);
 });
