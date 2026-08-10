@@ -34,20 +34,23 @@ export async function isMessengerConfigured(): Promise<boolean> {
 /**
  * The system-user token manages the page; sends need the page-scoped token.
  *
- * Two things have to hold at once, and the original single module-level slot held
- * neither.
+ * Tenant-keyed and fingerprint-bound already: a warm process serving tenant B
+ * must not reuse tenant A's page token, and rotating or disconnecting the source
+ * credential must not leave the derived token usable for the rest of the TTL.
  *
- * WHOSE token it is: a warm process that had served tenant A returned A's page
- * token to tenant B, and the send it authorises goes out on A's Facebook Page to
- * B's customer. The tenant is read ONCE below and feeds both the cache key and the
- * credential lookup, so the two cannot describe different tenants.
+ * Two residual hazards are closed here.
  *
- * WHETHER it is still valid: the cache used to be consulted BEFORE the tenant's
- * current source credential was read, so disconnecting the integration or
- * rotating the token left the derived page token usable for up to 30 more
- * minutes. The source credential is now resolved first and fingerprinted, and a
- * cached entry is only accepted while that fingerprint still matches — so a
- * rotation invalidates the derived token immediately, and a disconnect drops it.
+ * The tenant was read TWICE — once for the cache key, once for the credential
+ * lookup — from a scope that a concurrent request can change between the two
+ * reads. Two reads of a mutable ambient value can disagree, and when they do the
+ * entry is filed under one tenant and holds another's token: the same defect the
+ * keying exists to prevent, just narrower. It is read once now and both uses take
+ * that value.
+ *
+ * And nothing ever removed an entry. A long-lived process serving many tenants
+ * accumulated one live page token per tenant for the life of the process, none of
+ * them reachable for eviction — so the expiry bounded how long an entry was USED,
+ * not how long it was held. Expired entries are now dropped on write.
  */
 const PAGE_TOKEN_TTL_MS = 30 * 60 * 1000;
 const GLOBAL_TOKEN_KEY = " global";
@@ -56,6 +59,7 @@ const pageTokenCache = new Map<string, PageTokenCacheEntry>();
 const sourceFingerprint = (value: string) => crypto.createHash("sha256").update(value).digest("hex");
 
 async function getPageToken(): Promise<string | null> {
+  // ONCE. Both the key and the lookup below must describe the same tenant.
   const tenantId = ambientTenantId();
   const cacheKey = tenantId ?? GLOBAL_TOKEN_KEY;
 
@@ -84,7 +88,7 @@ async function getPageToken(): Promise<string | null> {
     if (!token) return null;
     const now = Date.now();
     // Drop expired entries on write so a long-lived process serving many tenants
-    // does not accumulate one slot per tenant for ever.
+    // does not hold one page token per tenant for ever.
     for (const [key, entry] of pageTokenCache) {
       if (now - entry.fetchedAt >= PAGE_TOKEN_TTL_MS) pageTokenCache.delete(key);
     }
