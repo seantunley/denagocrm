@@ -1,10 +1,10 @@
-import { prisma } from "@/lib/db";
 import { accessibleInboxWhere, requireAnyPermission } from "@/lib/permissions";
 import AutoRefresh from "@/components/AutoRefresh";
 import Tabs from "@/components/Tabs";
 import SocialThreadList from "@/components/SocialThreadList";
 import InstallAppButton from "@/components/InstallAppButton";
 import { buildInboxThreads } from "@/lib/inboxThreads";
+import { loadInboxComms } from "@/lib/inboxQuery";
 import { conversationIdsForThreads } from "@/lib/inboxConversations";
 
 export const metadata = { title: "Chats — Denago Messages" };
@@ -15,12 +15,9 @@ export default async function MessagesChatsPage() {
   // Scope to the contacts/leads this user may see; {} for view_all users.
   const scopeWhere = await accessibleInboxWhere(user);
 
-  const comms = await prisma.communication.findMany({
-    where: { type: { in: ["whatsapp", "messenger", "instagram"] }, ...scopeWhere, archivedAt: null },
-    orderBy: { occurredAt: "desc" },
-    take: 400,
-    include: { contact: true, lead: true },
-  });
+  // Same thread-first selection as the full Inbox: mobile must not see a
+  // different set of conversations than the desktop queue.
+  const comms = await loadInboxComms(scopeWhere);
 
   const threads = buildInboxThreads(comms);
   // Resolved BEFORE the reply boxes render, not when Send is pressed: a Messenger

@@ -1,5 +1,5 @@
 import { ExternalLink, Inbox, MessageSquare, Star } from "lucide-react";
-import { prisma, basePrisma } from "@/lib/db";
+import { basePrisma } from "@/lib/db";
 import { activeTenantPredicate } from "@/lib/tenantPredicate";
 import { getActiveTenantId, requireUser } from "@/lib/auth";
 import { DEFAULT_TENANT_ID } from "@/lib/tenant";
@@ -8,6 +8,7 @@ import AutoRefresh from "@/components/AutoRefresh";
 import Tabs from "@/components/Tabs";
 import SocialThreadList from "@/components/SocialThreadList";
 import { buildInboxThreads } from "@/lib/inboxThreads";
+import { loadInboxComms } from "@/lib/inboxQuery";
 import { collaborationForThreads } from "@/lib/inboxCollaboration";
 import { listTenantStaff } from "@/lib/tenantActor";
 import { getSetting } from "@/lib/settings";
@@ -25,18 +26,10 @@ export default async function InboxPage() {
   const scopeWhere = await accessibleInboxWhere(user);
   const channelWhere = { type: { in: ["whatsapp", "messenger", "instagram"] } };
   const [activeComms, archivedComms, reviews, placeId] = await Promise.all([
-    prisma.communication.findMany({
-      where: { ...channelWhere, ...scopeWhere, archivedAt: null },
-      orderBy: { occurredAt: "desc" },
-      take: 400,
-      include: { contact: true, lead: true },
-    }),
-    prisma.communication.findMany({
-      where: { ...channelWhere, ...scopeWhere, archivedAt: { not: null } },
-      orderBy: { occurredAt: "desc" },
-      take: 400,
-      include: { contact: true, lead: true },
-    }),
+    // Threads are chosen by their own recency, then their messages are loaded —
+    // so a busy conversation can no longer evict a quiet one from the queue.
+    loadInboxComms({ ...channelWhere, ...scopeWhere }, { archived: false }),
+    loadInboxComms({ ...channelWhere, ...scopeWhere }, { archived: true }),
     // Reviews are tenant-owned. This read runs on the bypass client, so the
     // predicate the RLS extension would have added has to be added by hand.
     //
