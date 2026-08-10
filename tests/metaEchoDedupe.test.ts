@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-import { decideEcho, outboundTextOf, ECHO_ATTEMPT_WINDOW_MS } from "../src/lib/metaEcho";
+import { decideEcho, metaEchoDedupeKey } from "../src/lib/metaEcho";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
@@ -15,151 +15,118 @@ const shipped = (rel: string) => stripComments(src(rel));
 /**
  * Meta echoes every message the Page sends back to the webhook, including the
  * ones we sent. Recording each echo unconditionally wrote a second outbound row
- * for a message the CRM had already logged, so one exchange showed up twice in
- * the thread.
+ * for a message already in history, so one exchange showed up twice.
  *
- * The decision is a pure function so these can exercise it rather than describe
- * it. The two source assertions at the bottom cover the wiring it cannot see.
+ * The echo of OUR send is told apart by the id Meta returned when it accepted
+ * it. We learn that id from the response to our own send, and Meta dispatches
+ * the echo the moment it accepts, so the echo can be handled BEFORE the worker
+ * commits the id — one database round trip of ambiguity.
+ *
+ * Nothing is guessed in that window. Every echo the ledger cannot already claim
+ * is RECORDED, carrying its provider id, and the duplicate is reconciled away
+ * afterwards by whichever side commits second.
  */
 
-const text = (body: string) => ({ providerMessageId: null, payload: { type: "text", text: body } });
+const TENANT = "tenant_denago_cpt";
 
-test("an echo bearing an id the ledger holds is ours", () => {
-  const decision = decideEcho({ text: "On my way", providerMessageId: "mid.1", ledgerHasId: true, inFlight: [] });
-  assert.equal(decision.ours, true);
-  assert.equal(decision.reason, "provider-id");
+test("an echo whose id the ledger already holds is dropped, not written", () => {
+  const decision = decideEcho({ tenantId: TENANT, providerMessageId: "mid.1", ledgerHasId: true });
+  assert.equal(decision.action, "drop");
+  assert.equal(decision.reason, "already-in-ledger");
 });
 
-test("an echo bearing an id the ledger does NOT hold is a colleague on the Page", () => {
-  // This is the case that must survive. A colleague replying from the Facebook
-  // Page inbox is a genuine event the CRM has no other way of learning about, so
-  // dropping every echo would trade duplicate history for missing history.
-  const decision = decideEcho({
-    text: "Different reply",
-    providerMessageId: "mid.someone-else",
-    ledgerHasId: false,
-    inFlight: [text("On my way")],
-  });
-  assert.equal(decision.ours, false);
+test("an echo the ledger cannot claim is recorded, keyed by its provider id", () => {
+  const decision = decideEcho({ tenantId: TENANT, providerMessageId: "mid.colleague", ledgerHasId: false });
+  assert.equal(decision.action, "record");
+  assert.equal(decision.dedupeKey, metaEchoDedupeKey(TENANT, "mid.colleague"));
 });
 
 /**
- * THE RACE. We learn Meta's id from the response to our OWN send, and Meta
- * dispatches the echo the moment it accepts. So the echo can arrive and be
- * processed before the worker has written that id to the row: the ledger holds
- * our message but not its id, the exact check misses, and the duplicate is
- * written anyway. The gap is one database round trip wide.
+ * THE CASE THAT MADE THE PREVIOUS DESIGN UNSOUND.
+ *
+ * The fallback compared the echo's TEXT against in-flight rows and dropped a
+ * match. So a colleague sending "Thanks" from Business Suite while the CRM
+ * happened to be sending "Thanks" lost their message permanently — and canned
+ * replies ("Thanks", "Perfect", "Yes") are exactly the ones staff send by hand
+ * and exactly the ones that collide. Missing history is worse than a duplicate,
+ * because nobody can see that it is missing.
  */
 
-test("an echo racing ahead of the id being recorded is still recognised", () => {
-  const decision = decideEcho({
-    text: "On my way",
-    providerMessageId: "mid.1",
-    ledgerHasId: false, // the worker has not written it yet
-    inFlight: [text("On my way")],
-  });
-  assert.equal(decision.ours, true);
-  assert.equal(decision.reason, "in-flight-content", "the content fallback is what closes the window");
+test("a colleague's identical text is RECORDED, not absorbed by our in-flight send", () => {
+  // We are sending "Thanks" right now; the id is not committed yet. Their echo
+  // arrives with an id of its own. There is nothing here to compare text with,
+  // by construction — the decision cannot see the message body at all.
+  const decision = decideEcho({ tenantId: TENANT, providerMessageId: "mid.theirs", ledgerHasId: false });
+  assert.equal(decision.action, "record", "a colleague's reply must survive whatever we are sending");
+  assert.equal(decision.dedupeKey, metaEchoDedupeKey(TENANT, "mid.theirs"));
 });
 
-test("an echo with no id at all is matched the same way", () => {
-  // Meta does not always populate `mid`. Without the fallback these were every
-  // send duplicated, since the id check had nothing to check.
-  const decision = decideEcho({
-    text: "On my way",
-    providerMessageId: null,
-    ledgerHasId: false,
-    inFlight: [text("On my way")],
-  });
-  assert.equal(decision.ours, true);
+test("the decision never sees message content, so it cannot be lost to a coincidence", () => {
+  const shape = shipped("src/lib/metaEcho.ts");
+  assert.doesNotMatch(shape, /outboundTextOf/, "the text comparison is gone, not merely narrowed");
+  assert.doesNotMatch(shape, /inFlight/, "and so is the in-flight content scan");
+  // decideEcho's whole input, so a future edit cannot quietly reintroduce a body.
+  const fn = shape.slice(shape.indexOf("export function decideEcho"), shape.indexOf("}", shape.indexOf("return {\n    action: \"record\",")));
+  assert.doesNotMatch(fn, /text/, "no message body may reach this decision");
 });
 
-test("a row that already carries an id cannot claim a different message's echo", () => {
-  // The narrowing condition. Once a row has been reconciled, an echo with the
-  // same text and a different id is a genuinely different message — a colleague
-  // sending the same words — and must be recorded.
-  const reconciled = { providerMessageId: "mid.ours", payload: { type: "text", text: "On my way" } };
-  const decision = decideEcho({
-    text: "On my way",
-    providerMessageId: "mid.theirs",
-    ledgerHasId: false,
-    inFlight: [reconciled],
-  });
-  assert.equal(decision.ours, false, "an already-reconciled row must not absorb another echo");
+test("an echo with no provider id is recorded and kept", () => {
+  // It cannot be correlated in either direction, so it can never be reconciled.
+  // Keeping it is the same trade taken deliberately: a duplicate is visible and
+  // survivable, a silently discarded customer-facing message is neither.
+  const decision = decideEcho({ tenantId: TENANT, providerMessageId: null, ledgerHasId: false });
+  assert.equal(decision.action, "record");
+  assert.equal(decision.dedupeKey, null);
+  assert.equal(decision.reason, "uncorrelatable");
 });
 
-test("different text on the same conversation is not absorbed", () => {
-  const decision = decideEcho({
-    text: "Actually, tomorrow",
-    providerMessageId: null,
-    ledgerHasId: false,
-    inFlight: [text("On my way")],
-  });
-  assert.equal(decision.ours, false);
-});
-
-test("an empty echo body is never matched by content", () => {
-  // Every text-less row would look like a match. Only the id can speak for those.
-  const decision = decideEcho({
-    text: "",
-    providerMessageId: null,
-    ledgerHasId: false,
-    inFlight: [{ providerMessageId: null, payload: { type: "image", url: "https://x/y.jpg" } }],
-  });
-  assert.equal(decision.ours, false);
-});
-
-test("nothing in flight means nothing to claim", () => {
-  const decision = decideEcho({ text: "On my way", providerMessageId: null, ledgerHasId: false, inFlight: [] });
-  assert.equal(decision.ours, false);
-  assert.equal(decision.reason, "not-ours");
-});
-
-test("the text of a payload is read the way the sender would have sent it", () => {
-  assert.equal(outboundTextOf({ type: "text", text: "Hello" }), "Hello");
-  // A choice message is text plus chips; the wire text is the text.
-  assert.equal(outboundTextOf({ type: "choice", text: "Pick one", options: [] }), "Pick one");
-  assert.equal(outboundTextOf({ type: "image", url: "https://x/y.jpg", caption: "The car" }), "The car");
-  // A bare image has no text, and must not read as an empty-string match.
-  assert.equal(outboundTextOf({ type: "image", url: "https://x/y.jpg" }), null);
-  assert.equal(outboundTextOf({ type: "image", url: "https://x/y.jpg", caption: "" }), null);
-  assert.equal(outboundTextOf(null), null);
-  assert.equal(outboundTextOf("just a string"), null);
-  assert.equal(outboundTextOf({ type: "attachment", url: "https://x/y.pdf" }), null);
-});
-
-test("the window is short enough to be about the race, not about dedupe", () => {
-  // Long enough to cover one HTTP response many times over; short enough that
-  // yesterday's identical greeting is a new message.
-  assert.ok(ECHO_ATTEMPT_WINDOW_MS >= 60_000, "must comfortably cover a slow provider response");
-  assert.ok(ECHO_ATTEMPT_WINDOW_MS <= 60 * 60 * 1000, "an hour-wide net would suppress genuine repeats");
+test("the dedupe key is tenant-scoped, because the constraint is global", () => {
+  // Communication.dedupeKey is unique across the whole table. Two tenants must
+  // never collide on it, whatever a provider does with its ids.
+  assert.notEqual(metaEchoDedupeKey("tenant_a", "mid.1"), metaEchoDedupeKey("tenant_b", "mid.1"));
+  assert.match(metaEchoDedupeKey("tenant_a", "mid.1"), /^meta-echo:tenant_a:mid\.1$/);
 });
 
 /**
- * WHICH CLOCK THE WINDOW MEASURES.
- *
- * It bounded `createdAt` — when the message was QUEUED. A durable queue exists
- * so that queueing and sending can be far apart, so a row queued at 10:00 and
- * sent at 10:20 after a worker outage was excluded by a ten-minute window while
- * being in flight at that very moment. The longer the outage, the more certain
- * the duplicate: the queue survived and produced the exact failure it was
- * protecting against.
+ * THE TWO CLEANUPS. Either side may commit second, so both do the same removal.
  */
 
-test("the fallback is bounded by the delivery attempt, not by when the row was queued", () => {
+test("the webhook re-reads the ledger after writing, and removes its own row", () => {
   const messenger = src("src/lib/messenger.ts");
-  const fn = messenger.slice(
-    messenger.indexOf("async function echoIsOurOwnSend"),
-    messenger.indexOf("export async function recordDmEcho"),
-  );
-  // A claimed row is dated by its LEASE, which is set to now + LEASE_MS at claim
-  // time and therefore moves with the attempt.
-  assert.match(fn, /\{ status: "running", leaseUntil: \{ gte: attemptFloor \} \}/);
-  // A sent row is dated by when it was sent.
-  assert.match(fn, /\{ status: "sent", sentAt: \{ gte: attemptFloor \} \}/);
-  // And createdAt must not bound it again.
-  const where = fn.slice(fn.indexOf("const inFlight"), fn.indexOf("select: { payload"));
-  assert.doesNotMatch(where, /createdAt: \{ gte/, "queue-creation time is not when the message is sent");
+  const fn = messenger.slice(messenger.indexOf("export async function recordDmEcho"));
+  // Written first — the row exists even if this process dies before the recheck.
+  const write = fn.indexOf("prisma.communication.upsert");
+  const recheck = fn.indexOf("if (await ledgerHoldsProviderId(tenantId, providerMessageId))");
+  assert.ok(write > 0 && recheck > write, "the re-check must come after the write, not instead of it");
+  assert.match(fn.slice(recheck), /prisma\.communication\.deleteMany\(\{ where: \{ id: written\.id \} \}\)/);
+  // And the row it deletes is the one it just wrote — never a lookalike.
+  assert.doesNotMatch(fn.slice(recheck), /body:|text/, "the cleanup addresses one id, not a resemblance");
+});
+
+test("the worker removes the echo only after the id is committed", () => {
+  const outbox = shipped("src/lib/botOutbox.ts");
+  assert.match(outbox, /async function reconcileProviderEcho\(/);
+  assert.match(outbox, /deleteMany\(\{ where: \{ dedupeKey: metaEchoDedupeKey\(tenantId, providerMessageId\) \} \}\)/);
+
+  // BOTH sent paths reconcile, and both do it AFTER their own id write. The
+  // superseded-lease path commits the id in a second statement, so reconciling
+  // before it would look while the webhook could still legitimately record one.
+  const deliver = outbox.slice(outbox.indexOf("async function deliverClaimed"));
+  const body = deliver.slice(0, deliver.indexOf('\n  return "sent";\n}') + 20);
+  const idWrites = [...body.matchAll(/providerMessageId: result\.providerMessageId \?\? null/g)].map((m) => m.index!);
+  const reconciles = [...body.matchAll(/await reconcileProviderEcho\(/g)].map((m) => m.index!);
+  assert.equal(idWrites.length, 2, "both sent paths must record the id");
+  assert.equal(reconciles.length, 2, "and both must reconcile");
+  assert.ok(reconciles[0] > idWrites[1], "the superseded-lease reconcile follows its own id write");
+  assert.ok(reconciles[1] > idWrites[0], "and the ordinary one follows its own");
+});
+
+test("a failed delivery reconciles nothing", () => {
+  // There is no proof of ownership without an accepted send, so an echo must not
+  // be removed on the strength of an attempt.
+  const outbox = shipped("src/lib/botOutbox.ts");
+  const fail = outbox.slice(outbox.indexOf("async function failDelivery"), outbox.indexOf("async function reconcileProviderEcho"));
+  assert.doesNotMatch(fail, /reconcileProviderEcho/);
 });
 
 /**
@@ -193,7 +160,7 @@ test("the ledger stores the id on BOTH paths that mark a row sent", () => {
   for (const write of writes) {
     // The superseded-lease path is the one that was missed: a message that WAS
     // delivered, recorded without its id, and therefore duplicated when its echo
-    // arrived.
+    // arrived — with nothing able to reconcile it away afterwards.
     assert.match(write, /providerMessageId: result\.providerMessageId \?\? null/);
   }
   const schema = src("prisma/bot-outbox.prisma");
@@ -210,11 +177,23 @@ test("the echo lookups are tenant-scoped", () => {
   // Without this one tenant's send suppresses another tenant's echo — the two
   // Pages are different businesses replying to different customers.
   const messenger = src("src/lib/messenger.ts");
+  assert.match(messenger, /async function ledgerHoldsProviderId\(tenantId: string, providerMessageId: string\)/);
+  const lookup = messenger.slice(messenger.indexOf("async function ledgerHoldsProviderId"));
+  assert.match(lookup.slice(0, 400), /where: \{ tenantId, providerMessageId \}/);
   const fn = messenger.slice(
-    messenger.indexOf("async function echoIsOurOwnSend"),
     messenger.indexOf("export async function recordDmEcho"),
+    messenger.indexOf("export async function recordDmEcho") + 900,
   );
   assert.match(fn, /const tenantId = writeTenantId\(\) \?\? DEFAULT_TENANT_ID;/);
-  const queries = [...fn.matchAll(/where: \{\s*\n?\s*tenantId,/g)];
-  assert.equal(queries.length, 2, "both the id lookup and the in-flight lookup must be scoped");
+});
+
+test("the echo row carries the provider id on the timeline too", () => {
+  // Not only in the dedupe key: the id is the thing that correlates this row to
+  // a receipt or a failure later, and a key is not a queryable identity.
+  const messenger = shipped("src/lib/messenger.ts");
+  const fn = messenger.slice(messenger.indexOf("export async function recordDmEcho"));
+  assert.match(fn, /messageId: providerMessageId \?\? null/);
+  // Upserted on the dedupe key, so Meta redelivering the webhook is a no-op
+  // rather than a third copy.
+  assert.match(fn, /where: \{ dedupeKey: decision\.dedupeKey \}/);
 });

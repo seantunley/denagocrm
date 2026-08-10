@@ -1,5 +1,5 @@
 /**
- * Deciding whether a Meta echo is the CRM's own message coming back.
+ * Reconciling Meta's echo of a message the CRM sent.
  *
  * Meta echoes every message the Page sends to the webhook, including ours.
  * Recording each echo unconditionally wrote a SECOND outbound row for a message
@@ -8,105 +8,105 @@
  * replying from the Facebook Page inbox, which is a real event the CRM has no
  * other way of learning about.
  *
- * The rule is here, away from the database, because it is the part that is easy
- * to get subtly wrong and impossible to check by reading a query.
+ * WHY THIS IS NOT A GUESS ANY MORE.
+ *
+ * The exact answer is Meta's own message id, which the delivery worker stores
+ * against the row it delivered. But we only learn that id from the response to
+ * our own send, and Meta dispatches the echo the moment it accepts — so the echo
+ * can arrive and be handled BEFORE the worker has committed the id. The gap is
+ * one database round trip wide.
+ *
+ * The first attempt to close it compared the echo's TEXT against in-flight rows
+ * and dropped a match. That is lossy, and not rarely: a colleague sending
+ * "Thanks" from Business Suite while the CRM is sending "Thanks" loses their
+ * message permanently. Canned replies — "Thanks", "Perfect", "Yes" — are exactly
+ * the ones staff send by hand and exactly the ones that collide. Missing history
+ * is worse than a duplicate that goes away, because nobody can see that it is
+ * missing.
+ *
+ * So nothing is decided from content. EVERY echo the ledger cannot already claim
+ * is RECORDED, carrying its provider id, and the duplicate is reconciled away
+ * afterwards by whichever side commits second:
+ *
+ *   - the echo handler re-checks the ledger after writing, and
+ *   - the worker deletes the echo row after committing the id.
+ *
+ * Two symmetric cleanups, so no interleaving leaves a duplicate behind:
+ *
+ *   worker                          webhook
+ *   ──────                          ───────
+ *   POST /me/messages
+ *   Meta accepts, returns mid.1
+ *                                   echo(mid.1): ledger has no id yet
+ *                                   → RECORD it, keyed by mid.1
+ *   UPDATE ... providerMessageId
+ *   DELETE the echo keyed by mid.1
+ *
+ * and the other order:
+ *
+ *   UPDATE ... providerMessageId
+ *   DELETE (nothing there yet)
+ *                                   echo(mid.1): ledger HAS the id
+ *                                   → drop, nothing written
+ *
+ * and the interleaving in between, where the echo handler read before the update
+ * and wrote after the delete — which its own re-check catches.
+ *
+ * A colleague's echo carries an id no outbox row will ever hold, so nothing ever
+ * deletes it. That is the property the text comparison could not give.
  */
 
 /**
- * How long after a DELIVERY ATTEMPT an echo can still be recognised by content.
+ * The dedupe key an echo-written timeline row carries.
  *
- * WHICH CLOCK matters more than how long, and the first version measured from
- * the wrong one. It bounded `createdAt` — when the message was QUEUED — which is
- * not when it is sent. A durable queue exists precisely so those can be far
- * apart:
+ * Doing double duty on purpose. It makes the echo insert idempotent — Meta
+ * redelivers webhooks, and `Communication.dedupeKey` is unique — and it gives
+ * the worker one exact row to delete, with no need to reason about which of two
+ * similar rows is ours.
  *
- *   10:00  reply queued
- *   10:00  worker unavailable — deployment, outage, paused drain, backlog
- *   10:20  worker recovers, claims the row, sends it
- *   10:20  Meta accepts and emits the echo immediately
- *   10:20  the echo arrives before providerMessageId has been committed
- *
- * That row is in flight AT THIS MOMENT, and a ten-minute bound on `createdAt`
- * excluded it — so the outage the queue survived produced exactly the duplicate
- * the queue was meant to prevent, and the longer the outage the more certain it
- * became.
- *
- * The clock is the current attempt: the LEASE for a claimed row, `sentAt` for
- * one already sent. Both move with the attempt, so an hour spent waiting in the
- * queue changes nothing.
- *
- * Only the race uses this at all — an exact id match has no window. Ten minutes
- * is far longer than the gap it covers (one HTTP response) and short enough that
- * yesterday's identical greeting is not mistaken for today's.
+ * Tenant-scoped because the uniqueness constraint is global: two tenants must
+ * never be able to collide, whatever the provider does with its ids.
  */
-export const ECHO_ATTEMPT_WINDOW_MS = 10 * 60 * 1000;
-
-/** A queued delivery, as much of it as this decision needs. */
-export type LedgerRow = { providerMessageId: string | null; payload: unknown };
-
-/**
- * The text a queued payload would have put on the wire, or null when the message
- * carries no text at all (a bare attachment, which arrives as an echo with no
- * text and is never matched against this).
- */
-export function outboundTextOf(payload: unknown): string | null {
-  if (!payload || typeof payload !== "object") return null;
-  const message = payload as { type?: string; text?: string; caption?: string };
-  if (message.type === "text" || message.type === "choice") {
-    return typeof message.text === "string" ? message.text : null;
-  }
-  if (message.type === "image") {
-    return typeof message.caption === "string" && message.caption.length > 0 ? message.caption : null;
-  }
-  return null;
+export function metaEchoDedupeKey(tenantId: string, providerMessageId: string): string {
+  return `meta-echo:${tenantId}:${providerMessageId}`;
 }
 
-export type EchoDecision = {
-  /** Whether to drop the echo instead of writing it into history. */
-  ours: boolean;
-  /** Which rule answered — so a log or a test can say WHY, not just what. */
-  reason: "provider-id" | "in-flight-content" | "not-ours";
-};
+export type EchoAction =
+  | { action: "drop"; reason: "already-in-ledger" }
+  | { action: "record"; dedupeKey: string; reason: "correlatable" }
+  | { action: "record"; dedupeKey: null; reason: "uncorrelatable" };
 
 /**
- * Is this echo ours?
+ * What to do with this echo.
  *
- * `ledgerHasId` is the exact answer: the delivery worker stores Meta's own id
- * against the row it delivered, so an echo bearing that id is unambiguously our
- * message.
+ * `ledgerHasId` means an outbox row already holds this provider id: the message
+ * is demonstrably ours and is already in history, so the echo is dropped and
+ * nothing is written.
  *
- * THE RACE THAT LEAVES. We only learn the id from the response to our own send,
- * and Meta dispatches the echo the moment it accepts — so the echo webhook can
- * arrive and be processed BEFORE the worker has written the id to the row. In
- * that window the ledger holds our message but not its id, the id check misses,
- * and the duplicate this exists to prevent is written anyway. It is not an exotic
- * interleaving: the gap is exactly one database round trip wide.
+ * Everything else is RECORDED. Either it is somebody else's message, or it is
+ * ours arriving ahead of the id — and the two are indistinguishable at this
+ * instant, so the choice is between a duplicate that gets cleaned up and a
+ * message that is gone. It is never worth guessing.
  *
- * `inFlight` closes it — rows on this same conversation, recent, that have NO
- * provider id yet. A row that already carries an id has been reconciled, so an
- * echo bearing a different id genuinely is a different message and is recorded.
- * That condition is the whole reason the fallback is narrow rather than a
- * content-dedupe that would swallow legitimate repeats.
- *
- * WHAT IT COSTS, PLAINLY: if a colleague types the identical text in the Page
- * inbox during the seconds our own identical message is in flight, their echo is
- * dropped. Against duplicating history on every single send, that is the right
- * trade — but it is a real loss, not a hypothetical one.
+ * An echo with no provider id at all cannot be correlated in either direction,
+ * so it is recorded and stays. That is the same trade taken deliberately: a
+ * duplicate is visible and survivable, a silently discarded customer-facing
+ * message is neither.
  */
 export function decideEcho(input: {
-  text: string;
+  tenantId: string;
   providerMessageId?: string | null;
   ledgerHasId: boolean;
-  inFlight: LedgerRow[];
-}): EchoDecision {
-  if (input.providerMessageId && input.ledgerHasId) return { ours: true, reason: "provider-id" };
-  // An empty echo body cannot be matched by content: every text-less row would
-  // look like it. Only the id can speak for those.
-  if (input.text.length === 0) return { ours: false, reason: "not-ours" };
-  const matched = input.inFlight.some(
-    (row) => row.providerMessageId === null && outboundTextOf(row.payload) === input.text,
-  );
-  return matched
-    ? { ours: true, reason: "in-flight-content" }
-    : { ours: false, reason: "not-ours" };
+}): EchoAction {
+  if (input.providerMessageId && input.ledgerHasId) {
+    return { action: "drop", reason: "already-in-ledger" };
+  }
+  if (!input.providerMessageId) {
+    return { action: "record", dedupeKey: null, reason: "uncorrelatable" };
+  }
+  return {
+    action: "record",
+    dedupeKey: metaEchoDedupeKey(input.tenantId, input.providerMessageId),
+    reason: "correlatable",
+  };
 }

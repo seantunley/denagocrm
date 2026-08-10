@@ -9,7 +9,7 @@ import { resolveTenantActor } from "./tenantActor";
 import { currentTenantScope } from "./tenantScope";
 import { writeTenantId } from "./tenantWrite";
 import { DEFAULT_TENANT_ID } from "./tenant";
-import { decideEcho, ECHO_ATTEMPT_WINDOW_MS } from "./metaEcho";
+import { decideEcho } from "./metaEcho";
 
 const GRAPH = "https://graph.facebook.com/v21.0";
 
@@ -377,85 +377,31 @@ export async function recordInboundDm(
   }, "dm").catch(() => {});
 }
 
-/**
- * Is this echo the CRM's own message coming back?
- *
- * The DECISION lives in lib/metaEcho.ts, where it is tested directly. What is
- * here is the pair of lookups it needs: the exact one, keyed on the provider's
- * own id, and the fallback for the window in which our send has been accepted by
- * Meta but the worker has not yet written that id to the row.
- */
-async function echoIsOurOwnSend(
-  platform: DmPlatform,
-  key: string,
-  text: string,
-  providerMessageId: string | null | undefined,
-): Promise<boolean> {
-  // Scoped, or one tenant's send would suppress another tenant's echo.
-  const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
-
-  const ledgerHasId = providerMessageId
-    ? Boolean(
-        await prisma.botFlowOutbox.findFirst({
-          where: { tenantId, providerMessageId },
-          select: { id: true },
-        }),
-      )
-    : false;
-
-  // Only fetched when the exact answer missed — which is the race, not the
-  // ordinary case.
-  //
-  // Bounded by the DELIVERY ATTEMPT, never by when the row was queued. A durable
-  // queue is allowed to hold a message for hours; what makes a row a candidate
-  // here is that a worker is sending it NOW.
-  const attemptFloor = new Date(Date.now() - ECHO_ATTEMPT_WINDOW_MS);
-  const inFlight = ledgerHasId
-    ? []
-    : await prisma.botFlowOutbox.findMany({
-        where: {
-          tenantId,
-          channel: platform,
-          key,
-          providerMessageId: null,
-          OR: [
-            // Claimed: the LEASE is the clock. It is set to now + LEASE_MS when a
-            // worker takes the row, so a live lease is in the FUTURE — this admits
-            // every row a worker currently holds, however long it sat in the queue
-            // first, and excludes one whose lease lapsed long ago.
-            { status: "running", leaseUntil: { gte: attemptFloor } },
-            // Already recorded sent, but with no id to record — `sentAt` is the
-            // clock for the attempt that got there first.
-            { status: "sent", sentAt: { gte: attemptFloor } },
-          ],
-          // A row with neither timestamp cannot be dated, so it is not admitted.
-          // Refusing to guess costs a duplicate in a case that should not arise;
-          // guessing would suppress a colleague's genuine reply indefinitely.
-        },
-        select: { payload: true, providerMessageId: true },
-        orderBy: { createdAt: "desc" },
-        take: 20,
-      });
-
-  return decideEcho({ text, providerMessageId, ledgerHasId, inFlight }).ours;
+/** Does an outbox row already hold this provider id? The one unambiguous answer. */
+async function ledgerHoldsProviderId(tenantId: string, providerMessageId: string): Promise<boolean> {
+  return Boolean(
+    await prisma.botFlowOutbox.findFirst({
+      where: { tenantId, providerMessageId },
+      select: { id: true },
+    }),
+  );
 }
 
-/**
- * Replies sent from Business Suite / the phone app arrive as echoes — file them.
- *
- * Our own sends arrive the same way and must not be filed twice; see
- * `echoIsOurOwnSend`. An echo we cannot claim IS recorded: that is a colleague
- * replying from the Page inbox, a genuine event the CRM has no other way of
- * learning about, and dropping every echo would trade duplicate history for
- * missing history.
- */
 export async function recordDmEcho(
   platform: DmPlatform,
   recipientId: string,
   text: string,
   providerMessageId?: string | null,
 ) {
-  if (await echoIsOurOwnSend(platform, recipientId, text, providerMessageId)) return;
+  // Scoped, or one tenant's send would suppress another tenant's echo.
+  const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
+  const decision = decideEcho({
+    tenantId,
+    providerMessageId,
+    ledgerHasId: providerMessageId ? await ledgerHoldsProviderId(tenantId, providerMessageId) : false,
+  });
+  if (decision.action === "drop") return;
+
   const idField = platform === "instagram" ? "instagramId" : "messengerPsid";
   const contact = await prisma.contact.findFirst({ where: { [idField]: recipientId } });
   if (!contact) return;
@@ -473,14 +419,41 @@ export async function recordDmEcho(
     select: { archivedAt: true },
   });
 
-  await prisma.communication.create({
-    data: {
-      type: platform,
-      direction: "outbound",
-      body: text,
-      contactId: contact.id,
-      userId: firstUser.id,
-      archivedAt: latest?.archivedAt ?? null,
-    },
-  });
+  const data = {
+    type: platform,
+    direction: "outbound",
+    body: text,
+    contactId: contact.id,
+    userId: firstUser.id,
+    archivedAt: latest?.archivedAt ?? null,
+    // The provider's own id travels WITH the row. It is what lets the worker
+    // recognise this as its own message later, and what makes a redelivered
+    // webhook a no-op rather than a third copy.
+    messageId: providerMessageId ?? null,
+  };
+  const written = decision.dedupeKey
+    ? await prisma.communication.upsert({
+        where: { dedupeKey: decision.dedupeKey },
+        update: {},
+        create: { ...data, dedupeKey: decision.dedupeKey },
+        select: { id: true },
+      })
+    : await prisma.communication.create({ data, select: { id: true } });
+
+  if (!providerMessageId) return;
+
+  /**
+   * THE INTERLEAVING THIS CLOSES.
+   *
+   * The ledger check above ran before the worker committed the id; this write
+   * landed after the worker's own cleanup had already looked and found nothing.
+   * Neither side is at fault and the duplicate would simply stay.
+   *
+   * So the answer is re-read after writing. Whichever of the two commits second
+   * removes the duplicate, and the row is only ever deleted on PROOF — an outbox
+   * row holding this exact id — never on a resemblance.
+   */
+  if (await ledgerHoldsProviderId(tenantId, providerMessageId)) {
+    await prisma.communication.deleteMany({ where: { id: written.id } });
+  }
 }
