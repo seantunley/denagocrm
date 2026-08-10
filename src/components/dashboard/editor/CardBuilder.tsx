@@ -195,7 +195,7 @@ function CommonFields({ card, patch }: { card: CardConfig; patch: Patch }) {
         {/*
           Tailwind classes as STATIC strings via CHIP_ACTIVE/CHIP_INACTIVE below
           — never `col-span-${n}` — same discipline CardPicker's WIDTH/TONE
-          tables and cards/shell.tsx's SPAN_IN_GRID spell out at length: Tailwind
+          tables and cards/placement.ts's SPAN_IN_GRID spell out at length: Tailwind
           scans source TEXT, so a computed class name is never generated into the
           stylesheet and the control would silently stop reflecting state.
         */}

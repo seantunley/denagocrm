@@ -1,14 +1,8 @@
 import { cn } from "@/lib/utils";
 import { MAX_CARD_DEPTH, type CardConfig, type GridCardConfig, type StackCardConfig } from "@/lib/dashboard/config";
 import { conditionsMet, isServerDecidable } from "@/lib/dashboard/conditions";
-import {
-  GRID_COLUMNS_CLASS,
-  CARD_MIN_HEIGHT,
-  SPAN_IN_GRID,
-  STACK_GROW,
-  type RenderContext,
-  type RenderedCard,
-} from "./shell";
+import { GRID_COLUMNS_CLASS, CARD_MIN_HEIGHT, SPAN_IN_GRID, STACK_GROW } from "./placement";
+import { type RenderContext, type RenderedCard } from "./shell";
 
 /**
  * The two container cards — a grid and a stack.
@@ -125,26 +119,20 @@ export async function renderGrid(
             {card.title}
           </p>
         )}
-        {/* items-start keeps a one-row card its natural height; a card that asked
-            for extra rows overrides it with h-full so it actually fills the space
-            it claimed, rather than claiming it and leaving it blank. */}
-        <div
-          className={cn(
-            "grid items-start gap-3",
-            GRID_COLUMNS_CLASS[card.columns],
-            // Only when a child actually spans rows - see the note in
-            // DashboardCanvas. Unconditionally this padded every row.
-          )}
-        >
+        {/* `items-start` keeps every card its own natural height, and the grid
+            itself is told NOTHING about height — no auto-rows, no row minimum.
+            A card that asked to be taller carries that entirely on its own panel,
+            so its row grows to fit it and no neighbouring row moves. */}
+        <div className={cn("grid items-start gap-3", GRID_COLUMNS_CLASS[card.columns])}>
           {children.map(({ card: child, node }) => (
-            <div
-              key={child.id}
-              className={cn(
-                "min-w-0",
-                spans[child.span],
-                CARD_MIN_HEIGHT[child.rows ?? 1],
-              )}
-            >
+            /* This div is the panel's DIRECT parent, which is what
+               CARD_MIN_HEIGHT requires: the class is a `[&>*]:` rule, so the
+               minimum lands on `node` — the visible bordered card — and not on
+               this box. The box keeps `height: auto` and ends up exactly as tall
+               as the card inside it. Putting a `min-h-` on the box instead was
+               the previous fix, and it left the card short with the difference
+               showing as blank page beneath it. */
+            <div key={child.id} className={cn("min-w-0", spans[child.span], CARD_MIN_HEIGHT[child.rows ?? 1])}>
               {node}
             </div>
           ))}

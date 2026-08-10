@@ -26,7 +26,7 @@ import { GripVertical, Plus, Settings2, Trash2, X, Check, Eye } from "lucide-rea
 import { cn } from "@/lib/utils";
 import type { CardConfig, SectionConfig, ViewConfig } from "@/lib/dashboard/config";
 import { useEditor, newId } from "./EditorProvider";
-import { CARD_MIN_HEIGHT } from "../cards/shell";
+import { CARD_MIN_HEIGHT } from "../cards/placement";
 
 /**
  * The dashboard as the user sees it, in both modes.
@@ -335,11 +335,11 @@ function SectionBlock({
         items={[...cards.map((card) => card.id), section.id]}
         strategy={NO_TRANSFORM}
       >
-        {/* Height is a MIN-HEIGHT on the card now, not a grid row span - see
-            CARD_MIN_HEIGHT in cards/shell.tsx. `auto-rows` set a minimum for
-            every row in the section, so one tall card made every other row tall
-            too; that was the blank-gap report, and narrowing when it applied
-            never fixed it because the mechanism was wrong. */}
+        {/* The section grid is told NOTHING about height - no auto-rows, no row
+            minimum. `auto-rows` set a minimum for EVERY row in the section, so
+            one tall card made every other row tall too, which was the blank-gap
+            report. Height belongs to the one card that asked for it; see
+            CARD_MIN_HEIGHT in cards/placement.ts. */}
         <div className={cn("grid items-start gap-4", VIEW_COLUMNS[section.columnSpan])}>
           {cards.map((card) => (
             <SortableCard
@@ -416,10 +416,22 @@ function SortableCard({
         // select and configure, so it keeps its placeholder.
         !editing && "empty:hidden",
         CARD_SPAN[card.span],
-        // Height as a minimum on THIS card. It affects nothing else: the grid
-        // row grows to fit it, exactly as a row already grows for a tall chart,
-        // and every other row keeps its own height.
-        CARD_MIN_HEIGHT[card.rows ?? 1],
+        /*
+         * Height, and ONLY when the panel is this box's direct child.
+         *
+         * CARD_MIN_HEIGHT is a `[&>*]:min-h-` rule — it hands the minimum to the
+         * children of whatever wears it. Outside edit mode the panel is the sole
+         * child, so this is the right element and the box, still `height: auto`,
+         * comes out exactly as tall as the card. Applying a plain `min-h-` here
+         * instead was the previous attempt: the box grew, the panel did not, and
+         * the difference showed as blank page under a short card.
+         *
+         * While editing there are two children — the drag chrome and the wrapper
+         * below — so the rule moves down to the wrapper. Applying it here as well
+         * would stretch the chrome, which is absolutely positioned over the card:
+         * a 22rem invisible overlay swallowing clicks meant for the card.
+         */
+        !editing && CARD_MIN_HEIGHT[card.rows ?? 1],
         editing && "rounded-xl ring-1 ring-dashed ring-border",
         isDragging && "opacity-30",
       )}
@@ -460,16 +472,17 @@ function SortableCard({
           `:empty` only matches an element with no child nodes at all, so an
           intermediate div would keep the wrapper non-empty and defeat the
           collapse above. The wrapper is only needed while editing, to stop
-          clicks reaching the card underneath the drag chrome. min-h-0 there
-          because a flex child otherwise refuses to shrink below its content.
+          clicks reaching the card underneath the drag chrome.
+
+          Being the panel's direct parent, this is where the height minimum has
+          to go in this mode — see the note on the box above. It has no height of
+          its own, so it is exactly as tall as the card it wraps, and the card is
+          as tall as it was asked to be. A card is therefore the same size while
+          you are arranging it as it is once you press Done, which is the whole
+          point of one layout in two modes.
       */}
       {editing ? (
-        <div
-          className={cn(
-            "pointer-events-none select-none",
-            card.rows && card.rows > 1 && "sm:min-h-0 sm:flex-1",
-          )}
-        >
+        <div className={cn("pointer-events-none select-none", CARD_MIN_HEIGHT[card.rows ?? 1])}>
           {node ?? <CardPlaceholder card={card} />}
         </div>
       ) : (
