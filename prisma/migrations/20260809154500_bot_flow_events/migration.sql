@@ -2,7 +2,7 @@
 -- This is intentionally separate from Communication: a message row cannot tell us
 -- which graph node was reached, selected, completed or abandoned.
 
-CREATE TABLE "BotFlowEvent" (
+CREATE TABLE IF NOT EXISTS "BotFlowEvent" (
     "id" TEXT NOT NULL,
     "tenantId" TEXT NOT NULL,
     "channel" TEXT NOT NULL,
@@ -15,22 +15,33 @@ CREATE TABLE "BotFlowEvent" (
     CONSTRAINT "BotFlowEvent_pkey" PRIMARY KEY ("id")
 );
 
-CREATE INDEX "BotFlowEvent_tenant_flow_version_idx"
+CREATE INDEX IF NOT EXISTS "BotFlowEvent_tenant_flow_version_idx"
     ON "BotFlowEvent"("tenantId", "flowVersionId", "occurredAt");
-CREATE INDEX "BotFlowEvent_tenant_node_event_idx"
+CREATE INDEX IF NOT EXISTS "BotFlowEvent_tenant_node_event_idx"
     ON "BotFlowEvent"("tenantId", "nodeId", "eventType", "occurredAt");
-CREATE INDEX "BotFlowEvent_tenant_conversation_idx"
+CREATE INDEX IF NOT EXISTS "BotFlowEvent_tenant_conversation_idx"
     ON "BotFlowEvent"("tenantId", "channel", "conversationKey", "occurredAt");
 
-ALTER TABLE "BotFlowEvent"
-    ADD CONSTRAINT "BotFlowEvent_tenantId_fkey"
-    FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+-- Postgres has no ADD CONSTRAINT IF NOT EXISTS, and the migration runner opens no
+-- transaction, so a re-run after a partial application must not die on 42710.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'BotFlowEvent_tenantId_fkey') THEN
+    ALTER TABLE "BotFlowEvent"
+      ADD CONSTRAINT "BotFlowEvent_tenantId_fkey"
+      FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
 
--- A published version may later be pruned without destroying historic funnel data,
--- so version deletion nulls the reference rather than cascading analytics away.
-ALTER TABLE "BotFlowEvent"
-    ADD CONSTRAINT "BotFlowEvent_flowVersionId_fkey"
-    FOREIGN KEY ("flowVersionId") REFERENCES "BotFlowVersion"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+  -- A published version may later be pruned without destroying historic funnel
+  -- data, so version deletion nulls the reference rather than cascading analytics
+  -- away.
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'BotFlowEvent_flowVersionId_fkey') THEN
+    ALTER TABLE "BotFlowEvent"
+      ADD CONSTRAINT "BotFlowEvent_flowVersionId_fkey"
+      FOREIGN KEY ("flowVersionId") REFERENCES "BotFlowVersion"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+  END IF;
+END
+$$;
 
 ALTER TABLE "BotFlowEvent" ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "BotFlowEvent_tenant_isolation" ON "BotFlowEvent";

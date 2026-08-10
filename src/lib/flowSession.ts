@@ -7,8 +7,10 @@ import type { BotMsg } from "./botAi";
 import { runFlow, type Flow, type FlowCtx, type FlowInput, type OutMsg } from "./flow";
 import { resolveFlowSnapshot } from "./flowPublishing";
 import { withTenantWrite, type TenantWriteTx } from "./tenantWrite";
-import { loadBotSession, upsertBotSessionTx, deleteBotSessionTx } from "./botSessionStore";
+import { loadBotSession, upsertBotSessionTx, deleteBotSessionTx, botStillOwnsTx } from "./botSessionStore";
 import { recordBotFlowEventsTx, type BotFlowEventInput } from "./botFlowAnalytics";
+import { completeInboundBotEventTx, currentInboundBotClaim } from "./botInboundEvent";
+import { decideInboundAct, type BotOwnership } from "./botOwnership";
 
 export type SessionState = {
   nodeId: string | null;
@@ -17,7 +19,8 @@ export type SessionState = {
   flowVersionId: string | null;
 };
 
-const RESTART = /^\s*(menu|hi|hello|hey|start|restart|begin)\b/i;
+// The restart/resume patterns moved to botOwnership.ts, because which one applies
+// depends on who owns the conversation.
 
 export function greetingVars(firstName: string | null): Record<string, string> {
   return firstName
@@ -37,14 +40,17 @@ export async function getActiveFlowFor(channel: string): Promise<Flow> {
   return (await resolveFlowSnapshot(channel)).flow;
 }
 
-async function loadState(channel: string, key: string): Promise<(SessionState & { status: string }) | null> {
+type LoadedSession = SessionState & { status: string; ownership: BotOwnership };
+
+async function loadState(channel: string, key: string): Promise<LoadedSession | null> {
   const row = await loadBotSession(channel, key);
   if (!row) return null;
+  const owned = { status: row.status, ownership: row.ownership };
   try {
     const p = JSON.parse(row.vars);
-    return { nodeId: row.nodeId, vars: p.v ?? {}, msgs: p.m ?? [], flowVersionId: p.fv ?? null, status: row.status };
+    return { nodeId: row.nodeId, vars: p.v ?? {}, msgs: p.m ?? [], flowVersionId: p.fv ?? null, ...owned };
   } catch {
-    return { nodeId: row.nodeId, vars: {}, msgs: [], flowVersionId: null, status: row.status };
+    return { nodeId: row.nodeId, vars: {}, msgs: [], flowVersionId: null, ...owned };
   }
 }
 
@@ -104,10 +110,18 @@ export async function advanceFlow(
   persistMessages?: PersistFlowMessages,
 ): Promise<ChannelResult> {
   const existing = await loadState(channel, key);
-  const restart = !input.choiceId && RESTART.test(input.text);
   const builtins = flowRuntimeVars(channel);
 
-  if (existing?.status === "paused" && !restart) return { messages: [], done: true, suppressed: true };
+  // `status` alone could not say WHY the bot was quiet, so a customer greeting a
+  // salesperson mid-conversation restarted the flow on top of them. The decision
+  // now depends on who owns the conversation — see botOwnership.ts.
+  const decision = decideInboundAct({
+    ownership: existing ? existing.ownership : null,
+    text: input.text,
+    hasChoiceId: Boolean(input.choiceId),
+  });
+  if (decision.act === "suppress") return { messages: [], done: true, suppressed: true };
+  const restart = decision.act === "restart";
 
   const state: SessionState = !existing || restart
     ? { nodeId: null, vars: { ...builtins, ...(seedVars ?? {}) }, msgs: [], flowVersionId: null }
@@ -128,6 +142,15 @@ export async function advanceFlow(
   recordBotMsgs(state, result.messages);
 
   await withTenantWrite(async (tx, tenantId) => {
+    // Fence the whole turn. See flowRun: guarding only the session write left the
+    // reply already queued when staff took over mid-turn, so the bot sent one
+    // more message over the person. FOR UPDATE holds the row for this transaction.
+    if (!(await botStillOwnsTx(tx, tenantId, channel, key))) return;
+    // Acknowledge the provider event in the SAME transaction as the graph move.
+    // Completing it afterwards left a window where the session and outbox committed,
+    // the process died, and the redelivery then replayed the old message against an
+    // already-advanced graph — a phone number read as the answer to the next question.
+    await completeInboundBotEventTx(tx, tenantId, currentInboundBotClaim());
     // The BotSession analytics trigger uses this local transaction flag to avoid
     // treating a restart as completion/progression of the old conversation.
     if (restart) await tx.$executeRawUnsafe(`SELECT set_config('app.bot_flow_transition', 'restart', true)`);
@@ -141,12 +164,14 @@ export async function advanceFlow(
     if (result.session) {
       state.nodeId = result.session.nodeId;
       state.vars = result.session.vars;
-      await upsertBotSessionTx(tx, tenantId, { channel, key, nodeId: state.nodeId, vars: storedState(state), status: "active", expiresAt: new Date(Date.now() + 12 * 3600 * 1000) });
+      await upsertBotSessionTx(tx, tenantId, { channel, key, nodeId: state.nodeId, vars: storedState(state), status: "active", ownership: "bot", expiresAt: new Date(Date.now() + 12 * 3600 * 1000) });
       return;
     }
 
     if (result.handedOff) {
-      await upsertBotSessionTx(tx, tenantId, { channel, key, nodeId: null, vars: storedState(state), status: "paused", expiresAt: new Date(Date.now() + 6 * 3600 * 1000) });
+      // The BOT handed off. A person has not taken this yet, so an explicit
+      // "menu"/"restart" may still bring the customer back — but a greeting may not.
+      await upsertBotSessionTx(tx, tenantId, { channel, key, nodeId: null, vars: storedState(state), status: "paused", ownership: "ai_handoff", expiresAt: new Date(Date.now() + 6 * 3600 * 1000) });
       return;
     }
 

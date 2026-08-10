@@ -1,7 +1,7 @@
 import { getSetting } from "./settings";
 import { prisma } from "./db";
 import type { Flow } from "./flow";
-import { flowErrors, validateFlow, type FlowChannel, type FlowIssue } from "./flowValidation";
+import { flowErrors, publishSeverity, validateFlow, type FlowChannel, type FlowIssue } from "./flowValidation";
 
 export async function enabledFlowChannels(): Promise<FlowChannel[]> {
   const [dmEnabled, telegramEnabled] = await Promise.all([getSetting("BOT_DM_ENABLED"), getSetting("BOT_TG_ENABLED")]);
@@ -18,6 +18,12 @@ export async function enabledFlowChannels(): Promise<FlowChannel[]> {
  */
 export async function validateFlowForEnabledChannels(flow: Flow): Promise<FlowIssue[]> {
   const issues = validateFlow(flow, await enabledFlowChannels());
+
+  // Publication is the migration boundary for the action-outcome contract; see
+  // publishSeverity. Editing stays permissive, a new publication does not.
+  const graded = publishSeverity(issues);
+  issues.length = 0;
+  issues.push(...graded);
   const journeyNodes = Object.values(flow.nodes).filter((node) => node.type === "journey");
   const ids = [...new Set(journeyNodes.map((node) => node.type === "journey" ? node.journeyId : "").filter(Boolean))];
   if (!ids.length) return issues;

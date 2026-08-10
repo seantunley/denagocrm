@@ -8,6 +8,12 @@ import { basePrisma, prisma } from "@/lib/db";
 import { ciExactIdFilter } from "@/lib/ciExact";
 import { createSessionCookie, requireUser, requireOwner } from "@/lib/auth";
 import { putSetting, getSetting } from "@/lib/settings";
+import {
+  WEATHER_CITIES_KEY,
+  parseWeatherCities,
+  serialiseWeatherCities,
+  type WeatherCity,
+} from "@/lib/weatherCities";
 import { isManagedSecret, isRegeneratable, keepBlankSubmit } from "@/lib/settingsSecrets";
 import { setNextStepScheduling } from "@/lib/nextStepConfig";
 import { PUSH_KINDS } from "@/lib/push";
@@ -462,5 +468,39 @@ export async function saveNotificationPrefs(formData: FormData) {
     const disabled = PUSH_KINDS.map((kind) => kind.id).filter((id) => !enabled.has(id));
     await putSetting("PUSH_DISABLED_KINDS", disabled.join(","));
     revalidatePath("/settings");
+  });
+}
+
+// ---- Clock / weather cities ----
+
+/**
+ * The cities in the dashboard clock/weather strip, per tenant.
+ *
+ * OWNER ONLY, and tenant-scoped twice over. `requireOwner` decides who may
+ * write, and `putSetting` resolves WHICH tenant from the request scope — it
+ * throws rather than guessing when there is none, so a caller cannot reach
+ * another tenant's list even by direct POST.
+ *
+ * Validation lives in lib/weatherCities.ts and runs on the way IN as well as on
+ * the way out, so a write cannot store something a read would reject. A bad
+ * timezone matters more than it looks: the clock would show a confidently wrong
+ * time rather than fail visibly.
+ */
+export async function saveWeatherCities(cities: unknown): Promise<ActionResult> {
+  return asActionResult(async () => {
+    await requireOwner();
+
+    if (!Array.isArray(cities)) refuse("Could not read that list of cities.");
+    const cleaned = parseWeatherCities(serialiseWeatherCities(cities as WeatherCity[]));
+
+    // Only refuse when something was offered and NONE of it survived. An empty
+    // list is a legitimate choice — somebody may want the strip bare.
+    if (cities.length > 0 && cleaned.length === 0) {
+      refuse("None of those cities were valid. Check the timezone and coordinates.");
+    }
+
+    await putSetting(WEATHER_CITIES_KEY, serialiseWeatherCities(cleaned));
+    // The strip renders in the (app) layout, so every signed-in page shows it.
+    revalidatePath("/", "layout");
   });
 }

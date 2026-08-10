@@ -11,7 +11,7 @@ const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
 const baseCtx: FlowCtx = {
   aiReply: async () => ({ reply: "I'll pass that on", handoff: true }),
   dynamicAnswer: async () => "dynamic",
-  createBooking: async () => {},
+  createBooking: async () => ({ ok: true }),
   handoff: async () => {},
 };
 

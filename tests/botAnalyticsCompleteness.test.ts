@@ -32,8 +32,13 @@ test("successful CRM and Journey effects emit node-level crm_action analytics", 
   const flow = src("src/lib/flow.ts");
   assert.match(flow, /recordAction\?:/);
   assert.match(flow, /ctx\.recordAction\?\.\(node\.id, "journey_start", outcome\.ok\)/);
-  assert.match(flow, /ctx\.recordAction\?\.\(node\.id, "booking_cancel", outcome\.ok\)/);
-  assert.match(flow, /ctx\.recordAction\?\.\(node\.id, `booking_\$\{node\.action \?\? "service"\}`, true\)/);
+  // Every booking action now reports its REAL outcome, not a hard-coded true.
+  // createBooking used to return void, so a demo request that created nothing —
+  // no actor, or no pipeline stage — was recorded as a successful crm_action and
+  // the customer was told it had been sent.
+  assert.match(flow, /ctx\.recordAction\?\.\(node\.id, `booking_\$\{node\.action\}`, outcome\.ok\)/);
+  assert.match(flow, /ctx\.recordAction\?\.\(node\.id, `booking_\$\{node\.action \?\? "service"\}`, outcome\.ok\)/);
+  assert.doesNotMatch(flow, /recordAction\?\.\([^)]*, true\)/, "no action may be recorded as successful unconditionally");
   assert.match(flow, /ctx\.recordAction\?\.\(node\.id, action, res\.ok\)/);
   for (const rel of ["src/lib/flowSession.ts", "src/lib/flowRun.ts"]) assert.match(src(rel), /eventType: "crm_action"/);
 });
@@ -50,19 +55,25 @@ test("outbox rows retain immutable flow-version attribution", () => {
 
 test("provider failure is recorded only when the durable message becomes terminally dead", () => {
   const outbox = src("src/lib/botOutbox.ts");
-  const deadAt = outbox.indexOf("if (row.attempts >= MAX_ATTEMPTS)");
+  // The terminal branch is reached by exhausting the retries OR by a failure
+  // class that will fail identically every time; both end in the same place.
+  const deadAt = outbox.indexOf("if (row.attempts >= MAX_ATTEMPTS ||");
   const recordAt = outbox.indexOf("eventType: \"delivery_failed\"", deadAt);
   const retryAt = outbox.indexOf("status: \"retry\"", deadAt);
   assert.ok(deadAt >= 0 && recordAt > deadAt && retryAt > recordAt);
   assert.match(outbox, /row\.flowVersionId/);
 });
 
-test("WhatsApp restart can deliberately escape a paused human-handoff session", () => {
+test("WhatsApp escapes a BOT handoff on an explicit command, but never a staff takeover", () => {
+  // This test used to assert `existing?.status === "paused" && !restart`, which is
+  // the defect: `paused` meant both "the bot handed off" and "a person took this
+  // over", and the restart set included greetings. A customer saying "hi" to the
+  // salesperson helping them restarted the flow on top of that person.
   const code = src("src/lib/flowRun.ts");
-  const restartAt = code.indexOf("const restart = isRestart");
-  const pauseAt = code.indexOf("existing?.status === \"paused\"", restartAt);
-  assert.ok(restartAt >= 0 && pauseAt > restartAt);
-  assert.match(code, /existing\?\.status === "paused" && !restart/);
+  assert.match(code, /decideInboundAct\(/, "WhatsApp must use the shared ownership rule");
+  assert.doesNotMatch(code, /status === "paused" && !restart/, "status alone cannot decide this");
+  // The behaviour itself is proven in botOwnership.test.ts, against the rule
+  // rather than against the source of the runner that calls it.
 });
 
 test("flow-start and node-reach denominators count explicit events rather than distinct participant ids", () => {

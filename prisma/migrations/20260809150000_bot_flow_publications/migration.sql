@@ -1,5 +1,5 @@
 -- Immutable publication snapshots for chatbot flows.
-CREATE TABLE "BotFlowVersion" (
+CREATE TABLE IF NOT EXISTS "BotFlowVersion" (
     "id" TEXT NOT NULL,
     "tenantId" TEXT NOT NULL,
     "flowId" TEXT NOT NULL,
@@ -13,13 +13,13 @@ CREATE TABLE "BotFlowVersion" (
     CONSTRAINT "BotFlowVersion_flowId_fkey" FOREIGN KEY ("flowId") REFERENCES "BotFlow"("id") ON DELETE RESTRICT ON UPDATE CASCADE
 );
 
-CREATE UNIQUE INDEX "BotFlowVersion_tenant_flow_version_key"
+CREATE UNIQUE INDEX IF NOT EXISTS "BotFlowVersion_tenant_flow_version_key"
     ON "BotFlowVersion"("tenantId", "flowId", "version");
-CREATE INDEX "BotFlowVersion_tenant_channel_created_idx"
+CREATE INDEX IF NOT EXISTS "BotFlowVersion_tenant_channel_created_idx"
     ON "BotFlowVersion"("tenantId", "channel", "createdAt");
-CREATE INDEX "BotFlowVersion_flowId_idx" ON "BotFlowVersion"("flowId");
+CREATE INDEX IF NOT EXISTS "BotFlowVersion_flowId_idx" ON "BotFlowVersion"("flowId");
 
-CREATE TABLE "BotFlowPublication" (
+CREATE TABLE IF NOT EXISTS "BotFlowPublication" (
     "id" TEXT NOT NULL,
     "tenantId" TEXT NOT NULL,
     "channel" TEXT NOT NULL,
@@ -35,18 +35,20 @@ CREATE TABLE "BotFlowPublication" (
 
 -- This is the hard invariant the old active Boolean could not provide under
 -- concurrent publication: one live snapshot for each tenant + channel.
-CREATE UNIQUE INDEX "BotFlowPublication_tenant_channel_key"
+CREATE UNIQUE INDEX IF NOT EXISTS "BotFlowPublication_tenant_channel_key"
     ON "BotFlowPublication"("tenantId", "channel");
-CREATE INDEX "BotFlowPublication_flowId_idx" ON "BotFlowPublication"("flowId");
-CREATE INDEX "BotFlowPublication_versionId_idx" ON "BotFlowPublication"("versionId");
+CREATE INDEX IF NOT EXISTS "BotFlowPublication_flowId_idx" ON "BotFlowPublication"("flowId");
+CREATE INDEX IF NOT EXISTS "BotFlowPublication_versionId_idx" ON "BotFlowPublication"("versionId");
 
 ALTER TABLE "BotFlowVersion" ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "BotFlowVersion_tenant_isolation" ON "BotFlowVersion";
 CREATE POLICY "BotFlowVersion_tenant_isolation" ON "BotFlowVersion"
   USING (current_setting('app.bypass_rls', true) = 'on' OR "tenantId" = current_setting('app.current_tenant', true))
   WITH CHECK (current_setting('app.bypass_rls', true) = 'on' OR "tenantId" = current_setting('app.current_tenant', true));
 ALTER TABLE "BotFlowVersion" FORCE ROW LEVEL SECURITY;
 
 ALTER TABLE "BotFlowPublication" ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "BotFlowPublication_tenant_isolation" ON "BotFlowPublication";
 CREATE POLICY "BotFlowPublication_tenant_isolation" ON "BotFlowPublication"
   USING (current_setting('app.bypass_rls', true) = 'on' OR "tenantId" = current_setting('app.current_tenant', true))
   WITH CHECK (current_setting('app.bypass_rls', true) = 'on' OR "tenantId" = current_setting('app.current_tenant', true));

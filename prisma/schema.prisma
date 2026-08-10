@@ -621,6 +621,9 @@ model BotSession {
   nodeId    String? // current waiting node
   vars      String   @default("{}") // captured variables, JSON
   status    String   @default("active") // active | paused
+  // WHY the bot is quiet, which `status` alone could not say. See botOwnership.ts:
+  // bot | ai_handoff | human | delivery_failed.
+  ownership String   @default("bot")
   updatedAt DateTime @updatedAt @default(now())
   expiresAt DateTime
 

@@ -24,7 +24,7 @@ const shipped = (rel: string) => stripComments(src(rel));
 const baseCtx: FlowCtx = {
   aiReply: async () => ({ reply: "AI", handoff: false }),
   dynamicAnswer: async () => "dynamic",
-  createBooking: async () => {},
+  createBooking: async () => ({ ok: true }),
   handoff: async () => {},
 };
 

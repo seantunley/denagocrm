@@ -35,9 +35,18 @@ function refs(node: FlowNode): string[] {
   if (node.type === "condition") return [node.trueNext, node.falseNext].filter((value): value is string => Boolean(str(value)));
   if (node.type === "ai") return str(node.handoffNext) ? [str(node.handoffNext)] : [];
   if (node.type === "handoff" || node.type === "end") return [];
+  // Every outgoing edge, or the graph tooling silently ignores whole branches:
+  // a missing target on one of these would not be reported, nodes reachable only
+  // through it would be called unreachable, and an automatic loop running through
+  // it would not be detected.
   const next = str((node as { next?: unknown }).next);
-  return next ? [next] : [];
+  const failure = str((node as { failureNext?: unknown }).failureNext);
+  const unavailable = str((node as { unavailableNext?: unknown }).unavailableNext);
+  return [next, failure, unavailable].filter(Boolean);
 }
+
+/** Nodes that perform a customer-visible side effect which can legitimately fail. */
+const CAN_FAIL = new Set(["booking", "slots", "journey"]);
 function allText(node: FlowNode): string[] {
   const values: unknown[] = [];
   if (node.type === "message" || node.type === "handoff") values.push(node.text);
@@ -184,6 +193,24 @@ export function validateFlow(flow: Flow, channels: FlowChannel[] = ["whatsapp"])
     if (!rawNode || typeof rawNode !== "object" || !NODE_TYPES.has(str((rawNode as { type?: unknown }).type))) continue;
     const node = rawNode as FlowNode;
     for (const text of allText(node)) for (const variable of referencedVars(text)) if (!captured.has(variable)) issues.push(issue("warning", "variable.unknown", `Message references {{${variable}}}, but no capture or built-in variable defines it.`, str(node.id)));
+
+    // A side effect that can fail, wired straight into a node that announces
+    // success, is how a customer gets told "Done — your booking has been
+    // cancelled" for a cancellation that did not happen. Either give the node a
+    // failure route, or say nothing on failure — but do not inherit the success
+    // text by default.
+    if (CAN_FAIL.has(node.type) && !str((node as { failureNext?: unknown }).failureNext)) {
+      const onwards = str((node as { next?: unknown }).next);
+      const announces = onwards ? allText(flow.nodes[onwards] ?? ({} as FlowNode)).join(" ") : "";
+      if (onwards && announces.trim()) {
+        issues.push(issue(
+          "warning",
+          "action.no_failure_branch",
+          `This action can fail, but on failure it continues to “${onwards}”, which speaks to the customer. Add a failure route (or failure text) so a failed action cannot be reported as a success.`,
+          str(node.id),
+        ));
+      }
+    }
     if (node.type === "condition") {
       const variable = str(node.condition?.variable);
       if (variable && !captured.has(variable)) issues.push(issue("warning", "condition.unknown_variable", `Condition checks {{${variable}}}, but no capture or built-in variable defines it.`, str(node.id)));
@@ -193,4 +220,22 @@ export function validateFlow(flow: Flow, channels: FlowChannel[] = ["whatsapp"])
 }
 
 export const flowErrors = (issues: FlowIssue[]) => issues.filter((item) => item.severity === "error");
+
+/**
+ * Codes that are advisory while EDITING but fatal at PUBLICATION.
+ *
+ * A draft that predates the action-outcome contract must still open, and a live
+ * published version keeps running untouched — so the editor shows a warning. But
+ * publishing is a deliberate act and the migration boundary: an action that can
+ * fail while flowing into a node that announces success is how a customer gets
+ * told their booking was cancelled when it was not. Refuse it there.
+ */
+const FATAL_ON_PUBLISH = new Set(["action.no_failure_branch"]);
+
+/** Re-grade editing warnings that must block a new publication. */
+export function publishSeverity(issues: FlowIssue[]): FlowIssue[] {
+  return issues.map((issue) =>
+    FATAL_ON_PUBLISH.has(issue.code) && issue.severity === "warning" ? { ...issue, severity: "error" as const } : issue,
+  );
+}
 export const flowWarnings = (issues: FlowIssue[]) => issues.filter((item) => item.severity === "warning");

@@ -5,6 +5,7 @@ import Tabs from "@/components/Tabs";
 import SocialThreadList from "@/components/SocialThreadList";
 import InstallAppButton from "@/components/InstallAppButton";
 import { buildInboxThreads } from "@/lib/inboxThreads";
+import { deliveryStateForMessages } from "@/lib/botOutbox";
 
 export const metadata = { title: "Chats — Denago Messages" };
 
@@ -23,6 +24,15 @@ export default async function MessagesChatsPage() {
 
   const threads = buildInboxThreads(comms);
   const unread = threads.filter((t) => t.unread).length;
+
+  // Mobile must not be a lower-safety messaging path: if a reply did not reach
+  // the customer, the surface most likely to be used on the road is the one that
+  // most needs to say so.
+  const delivery = await deliveryStateForMessages(
+    threads.flatMap((thread) =>
+      thread.messages.filter((message) => message.direction === "outbound").map((message) => message.id),
+    ),
+  );
 
   return (
     <div className="space-y-4">
@@ -44,6 +54,7 @@ export default async function MessagesChatsPage() {
             count: unread,
             content: (
               <SocialThreadList
+                delivery={delivery}
                 list={threads}
                 empty="No conversations yet. WhatsApp chats appear once the number is connected; Messenger and Instagram DMs flow once Meta approves messaging."
                 revalidate="/messages"
@@ -56,6 +67,7 @@ export default async function MessagesChatsPage() {
             count: threads.filter((t) => t.channel === "whatsapp" && t.unread).length,
             content: (
               <SocialThreadList
+                delivery={delivery}
                 list={threads.filter((t) => t.channel === "whatsapp")}
                 empty="No WhatsApp conversations yet."
                 revalidate="/messages"
@@ -68,6 +80,7 @@ export default async function MessagesChatsPage() {
             count: threads.filter((t) => t.channel === "messenger" && t.unread).length,
             content: (
               <SocialThreadList
+                delivery={delivery}
                 list={threads.filter((t) => t.channel === "messenger")}
                 empty="No Messenger conversations yet."
                 revalidate="/messages"
@@ -80,6 +93,7 @@ export default async function MessagesChatsPage() {
             count: threads.filter((t) => t.channel === "instagram" && t.unread).length,
             content: (
               <SocialThreadList
+                delivery={delivery}
                 list={threads.filter((t) => t.channel === "instagram")}
                 empty="No Instagram DMs yet."
                 revalidate="/messages"

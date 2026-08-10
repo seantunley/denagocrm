@@ -21,7 +21,7 @@ test("chatbot-driving provider webhooks claim a stable provider event id", () =>
 
 test("the inbound event fence is tenant and channel scoped", () => {
   const migration = src("prisma/migrations/20260809144000_bot_inbound_event_dedupe/migration.sql");
-  assert.match(migration, /UNIQUE INDEX "BotInboundEvent_tenant_channel_provider_key"/);
+  assert.match(migration, /UNIQUE INDEX IF NOT EXISTS "BotInboundEvent_tenant_channel_provider_key"/);
   assert.match(migration, /\("tenantId", "channel", "providerId"\)/);
   assert.match(migration, /ENABLE ROW LEVEL SECURITY/);
   assert.match(migration, /FORCE ROW LEVEL SECURITY/);
