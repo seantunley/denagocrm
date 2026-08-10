@@ -27,3 +27,27 @@ export function inboundCommunicationKey(channel: string, providerId: string, att
   const base = `${channel}:${id}`;
   return attachmentIndex === undefined ? base : `${base}:attachment:${attachmentIndex}`;
 }
+
+/**
+ * Is this the unique violation that means "another delivery of this same provider
+ * event already wrote the row"?
+ *
+ * The insert must stay `communication.create`, NOT `createMany`: db.ts extends
+ * `communication.create` specifically to resolve/attach the Conversation and then
+ * bump its counters, unread flag and last-inbound timestamp. There is no
+ * `createMany` hook, so batching would create Communications with no Conversation
+ * at all — and assignment, notes, drafts and bot/human ownership all hang off
+ * Conversation rows. Losing that would break the shared inbox to fix a duplicate.
+ *
+ * So the dedupe signal is the constraint itself: the winner takes the normal
+ * create path with all its hooks, the loser is refused by the unique index before
+ * anything is bumped.
+ */
+export function isDedupeKeyConflict(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  if (code !== "P2002") return false;
+  const target = (error as { meta?: { target?: unknown } }).meta?.target;
+  const fields = Array.isArray(target) ? target.map(String) : typeof target === "string" ? [target] : [];
+  // Only OUR uniqueness. Another unique violation is a real error and must throw.
+  return fields.length === 0 || fields.some((field) => field.toLowerCase().includes("dedupekey"));
+}

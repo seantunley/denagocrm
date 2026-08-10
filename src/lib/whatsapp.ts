@@ -3,7 +3,7 @@ import { credentialOwnerTenantId, resolveIntegrationBundleForTenant, resolveTena
 import { sendPushToAll } from "./push";
 import { createLeadRecordIfPipelineReady } from "./leadCreate";
 import { resolveTenantActor } from "./tenantActor";
-import { inboundCommunicationKey } from "./inboundMessageKey";
+import { inboundCommunicationKey, isDedupeKeyConflict } from "./inboundMessageKey";
 import { currentTenantScope } from "./tenantScope";
 
 /**
@@ -394,35 +394,48 @@ export async function recordInboundWhatsApp(
   // (established by the webhook chokepoint); dormant → the oldest active user.
   const firstUser = await resolveTenantActor();
   if (!firstUser) return;
-  // createMany + skipDuplicates rather than create: it tells us whether this is
-  // the first delivery or a replay, which decides the push below.
+  // create(), NOT createMany(): db.ts extends communication.create to resolve and
+  // attach the Conversation and then bump its counters, unread flag and
+  // last-inbound timestamp. There is no createMany hook, so batching would file
+  // messages with no Conversation at all — and assignment, notes, drafts and
+  // bot/human ownership all hang off Conversation rows. The unique dedupeKey is
+  // the replay signal instead: the first delivery takes the normal path with every
+  // hook, a redelivery is refused by the index.
   const dedupeKey = inboundCommunicationKey("whatsapp", providerMessageId ?? "");
-  const written = await prisma.communication.createMany({
-    data: [{
-      type: "whatsapp",
-      direction: "inbound",
-      body: text,
-      contactId,
-      leadId,
-      userId: firstUser.id,
-      ...(dedupeKey ? { dedupeKey } : {}),
-    }],
-    skipDuplicates: true,
-  });
-  const replayed = dedupeKey !== null && written.count === 0;
+  let inserted = true;
+  try {
+    await prisma.communication.create({
+      data: {
+        type: "whatsapp",
+        direction: "inbound",
+        body: text,
+        contactId,
+        leadId,
+        userId: firstUser.id,
+        ...(dedupeKey ? { dedupeKey } : {}),
+      },
+    });
+  } catch (error) {
+    if (!dedupeKey || !isDedupeKeyConflict(error)) throw error;
+    inserted = false;
+  }
+
+  // Notify immediately after the row lands, BEFORE the other fallible work below.
+  // "The transcript row already existed" is not the same fact as "the notification
+  // already went out", and ordering it here is what keeps them close enough to be
+  // honest: the only way to reach this on a replay is a genuine duplicate insert.
+  if (inserted) {
+    await sendPushToAll({
+      title: "New WhatsApp message 💬",
+      body: `${profileName ?? "+" + fromDigits}: ${text.slice(0, 80)}`,
+      url: "/messages",
+    }, "whatsapp").catch(() => {});
+  }
 
   const { reopenThreadOnInbound } = await import("@/lib/reopenThread");
   await reopenThreadOnInbound(contactId, leadId, "whatsapp");
 
   // Notify on every inbound — WhatsApp is the primary contact channel. Opens the
   // Messages app so replies aren't lost in the CRM.
-  // A replay must not buzz every phone again. The duplicate notification is the
-  // same defect wearing a different hat, and it is the half a person actually
-  // notices.
-  if (replayed) return;
-  await sendPushToAll({
-    title: "New WhatsApp message 💬",
-    body: `${profileName ?? "+" + fromDigits}: ${text.slice(0, 80)}`,
-    url: "/messages",
-  }, "whatsapp").catch(() => {});
+
 }
