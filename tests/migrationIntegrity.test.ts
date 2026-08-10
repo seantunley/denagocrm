@@ -25,6 +25,12 @@ import {
   staleAcknowledgements,
   ACKNOWLEDGED_DRIFT,
   SCHEMA_FILE_COUNT,
+  compareMigrationNames,
+  orderedMigrations,
+  prefixCollisions,
+  unratchetedPrefixCollisions,
+  stalePrefixCollisions,
+  KNOWN_PREFIX_COLLISIONS,
 } from "../scripts/apply-migrations.mjs";
 import { splitSqlStatements } from "../scripts/lib/splitSqlStatements.mjs";
 
@@ -646,4 +652,186 @@ test("acknowledgements that stopped describing anything are reported", () => {
   // Nothing is stale when the diff contains every acknowledged statement.
   const everything = ACKNOWLEDGED_DRIFT.map((e) => e.sql).join("\n");
   assert.deepEqual(staleAcknowledgements(everything), []);
+});
+
+// ── The apply order must be TOTAL, not merely sorted ────────────────────────
+
+/**
+ * `orderedMigrations` sorted on `parseInt(name)` alone, so two migrations sharing
+ * a prefix compared EQUAL. `Array.prototype.sort` is stable, so their relative
+ * order fell through to `readdirSync` — filesystem order on Linux, which is where
+ * CI, Vercel and disaster recovery all run. Not alphabetical, and not promised to
+ * be the same on the next machine or the next checkout.
+ *
+ * Production never saw it, purely by timing: each colliding pair was applied hours
+ * apart in separate deploys, so only one of each was ever pending in a single run.
+ * A database built FROM SCRATCH has every migration pending at once, and that is
+ * exactly disaster recovery, a fresh tenant database, CI, and preview branches.
+ *
+ * The synthetic list below mixes a real colliding pair with the legacy unpadded
+ * prefixes that make this awkward — the tie-break must NOT become a lexicographic
+ * sort, because `80_` sorts before `7_` as text.
+ */
+const SCRAMBLED = [
+  "80_tenant_integration_credentials",
+  "20260810110000_staff_reply_delivery_state",
+  "7_push_subscriptions",
+  "20260810110000_bot_session_ownership",
+  "0_init",
+];
+
+const EXPECTED_ORDER = [
+  "0_init",
+  "7_push_subscriptions",
+  "80_tenant_integration_credentials",
+  "20260810110000_bot_session_ownership",
+  "20260810110000_staff_reply_delivery_state",
+];
+
+test("the apply order is total: a shared prefix cannot depend on directory order", () => {
+  // The property is not "this list sorts to that list" — it is that the INPUT
+  // order cannot change the OUTPUT. readdirSync is the input, and it is the thing
+  // that varies between machines.
+  assert.deepEqual([...SCRAMBLED].sort(compareMigrationNames), EXPECTED_ORDER);
+  assert.deepEqual([...SCRAMBLED].reverse().sort(compareMigrationNames), EXPECTED_ORDER);
+  assert.deepEqual([...EXPECTED_ORDER].sort(compareMigrationNames), EXPECTED_ORDER);
+});
+
+test("the comparator this replaced gives a DIFFERENT answer for the same names", () => {
+  // Kept literally, so the test has demonstrable teeth: if the tie-break is ever
+  // removed, the assertions above stop failing for a reason nobody can see, and
+  // this one names what was lost.
+  const previous = (a: string, b: string) => Number.parseInt(a, 10) - Number.parseInt(b, 10);
+
+  const forward = [...SCRAMBLED].sort(previous);
+  const backward = [...SCRAMBLED].reverse().sort(previous);
+
+  assert.notDeepEqual(forward, backward, "the old comparator's output depended on the input order — that was the bug");
+  assert.notDeepEqual(forward, EXPECTED_ORDER, "…and one of the two orders it produced was the wrong one");
+  // Precisely which one, so the failure mode is on the record rather than implied:
+  // equal prefixes, stable sort, so the pair came out in whatever order it went in.
+  assert.deepEqual(forward.slice(-2), [
+    "20260810110000_staff_reply_delivery_state",
+    "20260810110000_bot_session_ownership",
+  ]);
+});
+
+test("legacy unpadded prefixes stay in NUMERIC order, never lexicographic", () => {
+  // The whole reason this runner exists instead of `prisma migrate deploy`: as
+  // text, 10 < 4 and 80 < 7, so a fresh database created the dealer-signature
+  // table before the Quote table it references.
+  assert.deepEqual(
+    ["80_tenant_integration_credentials", "7_push_subscriptions", "10_dealer_signature", "4_quotes"].sort(
+      compareMigrationNames,
+    ),
+    ["4_quotes", "7_push_subscriptions", "10_dealer_signature", "80_tenant_integration_credentials"],
+  );
+  // A tie-break that had been allowed to become the primary key would sort these
+  // the other way round; assert the pair directly so the regression is unmissable.
+  assert.ok(compareMigrationNames("7_push_subscriptions", "80_tenant_integration_credentials") < 0);
+});
+
+test("the real migration directory sorts identically however it is read", () => {
+  const once = orderedMigrations();
+  assert.ok(once.length > 190, `expected the full migration set, saw ${once.length}`);
+  // Re-sorting a shuffled copy of the same names must land in the same place.
+  const shuffled = [...once].reverse().sort(compareMigrationNames);
+  assert.deepEqual(shuffled, once);
+});
+
+// ── The ratchet: no NEW migration may share a prefix ────────────────────────
+
+test("no new pair of migrations shares a numeric prefix", () => {
+  // The two pairs on disk are recorded in KNOWN_PREFIX_COLLISIONS with the reason
+  // each is safe. Anything else fails here, while it is still a rename away from
+  // being fixed — once a migration is in production's ledger, renaming it makes it
+  // look pending and re-run.
+  assert.deepEqual(
+    unratchetedPrefixCollisions(orderedMigrations()),
+    [],
+    "give the new migration its own numeric prefix — do not add it to KNOWN_PREFIX_COLLISIONS",
+  );
+});
+
+test("the ratchet cannot silently grow", () => {
+  // Pinned COUNT as well as contents: growing the list has to be a deliberate edit
+  // to a number somebody has to justify, not a line appended in a merge.
+  assert.equal(
+    KNOWN_PREFIX_COLLISIONS.length,
+    2,
+    "a third colliding prefix must be renamed, not recorded — see the comment on KNOWN_PREFIX_COLLISIONS",
+  );
+  const dir = join(root, "prisma", "migrations");
+  for (const entry of KNOWN_PREFIX_COLLISIONS) {
+    assert.ok(
+      entry.why && entry.why.length > 20,
+      `${entry.prefix} must record WHY the pair is safe in either order, or it is indistinguishable from a bug nobody checked`,
+    );
+    assert.ok(entry.names.length > 1, `${entry.prefix} is not a collision`);
+    for (const name of entry.names) {
+      assert.ok(existsSync(join(dir, name, "migration.sql")), `${name} is recorded but not on disk`);
+    }
+  }
+});
+
+test("every recorded pair is applied in the order the ratchet names, back to back", () => {
+  // The tie-break decides these two orders. Assert the decision rather than trust
+  // it: the reason each pair is safe was reasoned about in THIS sequence.
+  const order = orderedMigrations();
+  for (const entry of KNOWN_PREFIX_COLLISIONS) {
+    const positions = entry.names.map((name: string) => order.indexOf(name));
+    assert.ok(
+      positions.every((p: number) => p >= 0),
+      `${entry.prefix}: recorded migrations must be in the apply order`,
+    );
+    assert.deepEqual(
+      order.slice(positions[0], positions[0] + entry.names.length),
+      entry.names,
+      `${entry.prefix}: the pair must be consecutive and in the recorded order`,
+    );
+  }
+});
+
+test("a THIRD migration under a known prefix is reported, not inherited", () => {
+  // Recording only the prefix would let a pair become a triple under an entry that
+  // already says "known" — and the third one was never checked against the others.
+  const withExtra = [
+    ...KNOWN_PREFIX_COLLISIONS[0].names,
+    "20260810110000_something_nobody_vetted",
+    "0_init",
+  ];
+  assert.deepEqual(unratchetedPrefixCollisions(withExtra), [
+    "20260810110000: 20260810110000_bot_session_ownership, 20260810110000_something_nobody_vetted, 20260810110000_staff_reply_delivery_state",
+  ]);
+});
+
+test("a brand-new colliding prefix is reported", () => {
+  const names = ["0_init", "99_alpha", "99_beta"];
+  assert.deepEqual(unratchetedPrefixCollisions(names), ["99: 99_alpha, 99_beta"]);
+  // …and a directory set with no collisions at all reports nothing.
+  assert.deepEqual(unratchetedPrefixCollisions(["0_init", "7_a", "80_b"]), []);
+});
+
+test("collisions are keyed on the PARSED prefix, not the literal digits", () => {
+  // `007_x` and `7_y` are different strings and the same number. The comparator
+  // ties on the number, so they collide — a detector that compared the text would
+  // miss the one case where the names give no hint.
+  assert.deepEqual(prefixCollisions(["007_padded", "7_plain", "8_alone"]), [
+    { prefix: "7", names: ["007_padded", "7_plain"] },
+  ]);
+});
+
+test("a recorded collision that stopped existing must be pruned", () => {
+  // A ratchet that can only grow is not a ratchet, and a baseline nobody prunes is
+  // how the next real finding gets hidden. Renaming is unsafe for the two pairs on
+  // disk today, but a future pair caught before it merges will be renamed — and
+  // its entry has to leave with it.
+  assert.deepEqual(
+    stalePrefixCollisions(orderedMigrations()),
+    [],
+    "every recorded prefix must still describe a real collision",
+  );
+  // A repository where the first pair was renamed away reports that entry as stale.
+  const renamed = orderedMigrations().filter((name: string) => name !== KNOWN_PREFIX_COLLISIONS[0].names[1]);
+  assert.deepEqual(stalePrefixCollisions(renamed), [KNOWN_PREFIX_COLLISIONS[0].prefix]);
 });
