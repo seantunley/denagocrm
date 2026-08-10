@@ -1,6 +1,8 @@
 import { redirect } from "next/navigation";
 import { requireUser, getActiveTenantId } from "@/lib/auth";
 import { brandForTenant, brandLogoUrl, brandStyle, DEFAULT_BRAND } from "@/lib/tenantBrand";
+import { getSetting } from "@/lib/settings";
+import { WEATHER_CITIES_KEY, parseWeatherCities } from "@/lib/weatherCities";
 import { awaitingReplyCount } from "@/lib/inboxCount";
 import { casesAwaitingCount } from "@/lib/helpdesk";
 import { getUserPermissionList } from "@/lib/permissions";
@@ -47,6 +49,19 @@ export default async function AppLayout({
   // /messages PWA and (print) layouts via the routeGuard helper.
   await assertPathModuleEnabled();
 
+  // The tenant's clock/weather cities. Resolved HERE, in the server layout,
+
+  // for the same reason `brand` is: getSetting reads the tenant from the
+
+  // request scope, which a client component cannot reach. Falls back to the
+
+  // default when unset or unreadable - this renders on every signed-in page
+
+  // and must not be able to break one.
+
+  const weatherCities = parseWeatherCities(await getSetting(WEATHER_CITIES_KEY));
+
+
   // The accent override, or nothing. `brandStyle` returns null for an unbranded
   // tenant, so this renders NO element and the shell is byte-for-byte what it was
   // — the app's own --primary from globals.css stands. One custom property is all
@@ -58,6 +73,9 @@ export default async function AppLayout({
   return (
     <>
       {style && <style>{style}</style>}
+      {/* Resolved here, in the SERVER layout, for the same reason `brand` is:
+          getSetting reads the tenant from the request scope, which a client
+          component has no access to. */}
       <AppShell
         user={{
           name: user.name,
@@ -69,6 +87,7 @@ export default async function AppLayout({
         casesWaiting={casesWaiting}
         enabledModules={enabledModules ? [...enabledModules] : undefined}
         brand={{ logoUrl: brandLogoUrl(brand), displayName: brand.displayName }}
+        weatherCities={weatherCities}
       >
         {children}
         {modal}
