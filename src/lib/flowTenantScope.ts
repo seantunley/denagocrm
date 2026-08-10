@@ -100,20 +100,32 @@ export function flowRowVisible(rowTenantId: string | null | undefined, scope: Fl
 }
 
 /**
- * The `where` fragment scoping a BotFlow or Journey query, built FROM the scope
- * above so the query cannot drift from the rule.
+ * The `where` fragment for a resolved scope, built FROM it so the query cannot
+ * drift from the rule: it admits un-owned rows if and ONLY if the scope says so.
+ *
+ * Takes the SCOPE rather than a tenant id specifically so a test can drive both
+ * branches. `flowTenantWhere` below is the one-argument form every call site
+ * uses; if only that existed, a version of this that ignored `includeUnowned`
+ * entirely would be indistinguishable from a correct one.
+ */
+export function flowScopeWhere(scope: FlowScope): { tenantId: string } | {
+  OR: Array<{ tenantId: string | null }>;
+} {
+  return scope.includeUnowned
+    ? { OR: [{ tenantId: scope.tenantId }, { tenantId: null }] }
+    : { tenantId: scope.tenantId };
+}
+
+/**
+ * The `where` fragment scoping a BotFlow or Journey query to one tenant — the
+ * form every call site uses.
  *
  * Spread this into a `findFirst`/`findMany`/`count`/`updateMany`/`deleteMany` —
  * never `findUnique`, `update` or `delete`, which take a unique selector and
  * cannot carry a tenant predicate alongside it.
  */
-export function flowTenantWhere(tenantId: string): { tenantId: string } | {
-  OR: Array<{ tenantId: string | null }>;
-} {
-  const scope = flowScopeFor({ tenantId });
-  return scope.includeUnowned
-    ? { OR: [{ tenantId: scope.tenantId }, { tenantId: null }] }
-    : { tenantId: scope.tenantId };
+export function flowTenantWhere(tenantId: string): ReturnType<typeof flowScopeWhere> {
+  return flowScopeWhere(flowScopeFor({ tenantId }));
 }
 
 /**

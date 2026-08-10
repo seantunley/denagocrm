@@ -3,7 +3,12 @@ import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { flowRowVisible, flowScopeFor, flowTenantWhere } from "../src/lib/flowTenantScope";
+import {
+  flowRowVisible,
+  flowScopeFor,
+  flowScopeWhere,
+  flowTenantWhere,
+} from "../src/lib/flowTenantScope";
 import { DEFAULT_TENANT_ID } from "../src/lib/tenant";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -70,10 +75,28 @@ test("an un-owned flow belongs to NOBODY — the founding tenant included", () =
   assert.equal(second.tenantId, TENANT_B);
   assert.equal(second.OR, undefined, "a second workspace must never inherit the tenantless rows");
 
-  // The `where` fragment and the in-memory decision are the same rule: an OR that
-  // matches NULL appears if and ONLY if the scope admits un-owned rows, so
-  // reinstating the fallback in one and not the other is not expressible.
-  assert.equal(flowRowVisible(null, { tenantId: TENANT_A, includeUnowned: true }), true);
+  // The `where` fragment and the in-memory decision are the same rule: an OR
+  // matching NULL appears if and ONLY if the scope admits un-owned rows, so
+  // reinstating the fallback in one and not the other is not expressible. Driven
+  // through `flowScopeWhere`, which takes the scope, because the one-argument
+  // `flowTenantWhere` builds a strict scope itself and could therefore hide a
+  // fragment that ignored the flag altogether.
+  for (const includeUnowned of [true, false]) {
+    const where = flowScopeWhere({ tenantId: TENANT_A, includeUnowned });
+    assert.equal(
+      "OR" in where,
+      includeUnowned,
+      "the where fragment must admit un-owned rows exactly when the scope says it does",
+    );
+    assert.equal(flowRowVisible(null, { tenantId: TENANT_A, includeUnowned }), includeUnowned);
+  }
+  assert.deepEqual(flowScopeWhere({ tenantId: TENANT_A, includeUnowned: true }), {
+    OR: [{ tenantId: TENANT_A }, { tenantId: null }],
+  });
+
+  // ...and the one-argument form is that fragment applied to a strict scope, not
+  // a second, quieter implementation of the same idea.
+  assert.deepEqual(flowTenantWhere(TENANT_B), flowScopeWhere(flowScopeFor({ tenantId: TENANT_B })));
 });
 
 test("the founding tenant is not a special case at all", () => {
@@ -104,16 +127,34 @@ test("publish reads and writes the draft with the same rule the runtime reads it
     code.indexOf("export async function getFlowPublicationMeta"),
   );
 
-  // The re-read, the deactivate sweep and the activate must ALL resolve ownership
-  // through the shared rule. A hand-written predicate on any one of them is how
-  // the reader and the writer drifted apart and killed the Publish button.
-  const filters = publish.match(/where: \{[^}]*\btenantId\b(?!\s*:\s*null)[^}]*\}/g) ?? [];
-  const offenders = filters.filter(
-    (w) => !w.includes("flowTenantWhere") && !w.includes("tenantId_channel") && !w.includes("flowId"),
-  );
-  assert.deepEqual(offenders, [], `these publish filters resolve ownership themselves:\n  ${offenders.join("\n  ")}`);
+  // EVERY BotFlow ACCESS, enumerated from the call itself rather than from the
+  // `where` clauses that happen to name a tenant.
+  //
+  // The earlier version of this assertion collected `where: { … tenantId … }`
+  // blocks and excused any containing "flowId" — which excused
+  // `where: { id: flowId, tenantId }`, a hand-written strict filter, and could not
+  // see `where: { channel }` at all because it names no tenant. Both are the
+  // defects that matter: the first is exactly the reader/writer split that killed
+  // the Publish button, and the second is an unscoped DEACTIVATE sweep that takes
+  // another workspace's live flow off the air. Starting from the call means a
+  // predicate cannot escape by omitting the word the search was keyed on.
+  const accesses = [
+    ...publish.matchAll(/botFlow\.(findFirst|findMany|count|updateMany|deleteMany|aggregate)\(/g),
+  ];
+  assert.ok(accesses.length >= 4, `expected the publish path's BotFlow calls, found ${accesses.length}`);
+  for (const access of accesses) {
+    const call = publish.slice(access.index, access.index + 160);
+    assert.match(
+      call,
+      /flowTenantWhere\(tenantId\)/,
+      `a BotFlow access in publish resolves ownership itself, or not at all:\n${call}`,
+    );
+  }
 
-  assert.match(publish, /flowTenantWhere\(tenantId\)/, "publish must use the shared rule");
+  // The sibling models take the STRICT filter, not this one: BotFlowVersion and
+  // BotFlowPublication have a NOT NULL tenantId and never needed a rule.
+  assert.match(publish, /botFlowVersion\.aggregate\(\{\s*where: \{ tenantId, flowId \}/);
+  assert.match(publish, /tenantId_channel: \{ tenantId, channel: flow\.channel \}/);
   // And it should shrink the problem rather than perpetuate it.
   assert.match(publish, /data: \{ active: true, tenantId \}/, "publishing stamps the owner it now knows");
 });
