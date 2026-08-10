@@ -8,7 +8,8 @@ import { FLOW_TEMPLATES } from "@/lib/flowTemplates";
 import { flowErrors, flowWarnings, validateFlow } from "@/lib/flowValidation";
 import { enabledFlowChannels } from "@/lib/flowValidationServer";
 import { getFlowPublicationMeta, publishFlowSnapshot } from "@/lib/flowPublishing";
-import { createFlow, setActiveFlow, duplicateFlow, deleteFlow, renameFlow } from "@/app/actions/flow";
+import { createFlow, duplicateFlow, deleteFlow, renameFlow } from "@/app/actions/flow";
+import PublishFlowButton from "@/components/PublishFlowButton";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import { EmptyState, StatusPill, Surface } from "@/components/visual-system";
 
@@ -122,7 +123,7 @@ export default async function BotBuilderPage() {
               <div className="my-5 flex flex-1 items-center gap-2 text-muted-foreground" aria-hidden>{[0,1,2].map((step) => <span key={step} className="flex items-center gap-2"><span className="grid size-8 place-items-center rounded-lg border border-border bg-muted/40"><GitBranch className="size-3.5" /></span>{step < 2 && <span className="h-px w-5 bg-border" />}</span>)}</div>
               <div className="flex gap-2 flex-wrap border-t border-border/70 pt-3">
                 <Link href={`/bot-builder/${f.id}`} className="btn-primary btn-sm"><Pencil className="size-3.5" />Edit draft</Link>
-                {(!f.active || pending) && !blocked && <form action={setActiveFlow.bind(null, f.id)}><button className="btn-secondary btn-sm">{f.active ? "Publish changes" : "Publish"}</button></form>}
+                {(!f.active || pending) && !blocked && <PublishFlowButton flowId={f.id} label={f.active ? "Publish changes" : "Publish"} />}
                 {(!f.active || pending) && blocked && <span className="btn-secondary btn-sm cursor-not-allowed opacity-50" title="Fix publish errors first">Publish blocked</span>}
                 <form action={duplicateFlow.bind(null, f.id)}><button className="btn-secondary btn-sm"><Copy className="size-3.5" />Duplicate</button></form>
                 {!f.active && <form action={deleteFlow.bind(null, f.id)}><button className="btn-secondary btn-sm text-red-400" aria-label={`Delete ${f.name}`}><Trash2 className="size-3.5" /></button></form>}
