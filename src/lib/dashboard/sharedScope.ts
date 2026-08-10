@@ -1,4 +1,4 @@
-import { DEFAULT_TENANT_ID } from "@/lib/tenant";
+import { legacyFlowTenant } from "@/lib/flowTenantScope";
 
 /**
  * `where` fragment for a dashboard PUBLISHED to a given workspace.
@@ -13,19 +13,27 @@ import { DEFAULT_TENANT_ID } from "@/lib/tenant";
  * dashboards. Tenant A publishes "Sales"; tenant B lists it, opens it by slug,
  * and reads its title, layout, card configuration and any markdown inside it.
  *
- * Dashboard.tenantId is nullable — rows predate tenancy and nothing stamped them
- * while the guard was dormant — so the founding tenant owns the untagged ones,
- * exactly as BotFlow and Journey do. A second workspace sees only its own.
+ * WHOSE ROWS COUNT is not this module's rule to invent. `Dashboard.tenantId` is
+ * nullable — rows predate tenancy and nothing stamped them while the guard was
+ * dormant — so the founding tenant owns the untagged ones and a second workspace
+ * sees only its own. That is `legacyFlowTenant`, which has been on main since
+ * #452 and is what BotFlow, Journey and statistics.ts already apply. This file
+ * carried its own copy of it, which is one more place for the rule to drift: get
+ * the legacy clause wrong here and every dashboard an existing install has
+ * silently disappears from the switcher, exactly as Publish silently died for
+ * flows.
  *
- * Import-free so the rule is executed by a test rather than pattern-matched.
+ * So the only thing added here is `sharedAt`, which is the one part that IS about
+ * dashboards.
+ *
+ * (The name says "flow" for where it was first needed, not for what it decides —
+ * see its doc comment. A rename belongs in the change that renames every caller,
+ * not in this one.)
  */
 export function sharedInTenant(tenantId: string): {
   sharedAt: { not: null };
   OR?: Array<{ tenantId: string | null }>;
   tenantId?: string;
 } {
-  const shared = { sharedAt: { not: null } } as const;
-  return tenantId === DEFAULT_TENANT_ID
-    ? { ...shared, OR: [{ tenantId }, { tenantId: null }] }
-    : { ...shared, tenantId };
+  return { sharedAt: { not: null }, ...legacyFlowTenant(tenantId) };
 }

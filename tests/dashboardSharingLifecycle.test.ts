@@ -251,8 +251,6 @@ const realLoad = loaderKey._load;
 const from = (parent: { filename?: string } | undefined, file: string) =>
   (parent?.filename ?? "").replace(/\\/g, "/").endsWith(file);
 
-let authModule: typeof import("../src/lib/auth");
-
 const AUTH_STUBS: Record<string, () => unknown> = {
   "next/headers": () => ({
     cookies: async () => ({
@@ -357,7 +355,12 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
 const audits: Row[] = [];
 const require_ = createRequire(import.meta.url);
 
-authModule = require_("../src/lib/auth.ts") as typeof import("../src/lib/auth");
+/*
+ * REQUIRED FIRST, and every reference to it above is inside a lazily-called
+ * arrow. `@/lib/auth` is handed back by identity to the actions, so there is one
+ * auth module, one session and one answer to "who is asking" in this file.
+ */
+const authModule = require_("../src/lib/auth.ts") as typeof import("../src/lib/auth");
 const actions = require_("../src/app/actions/dashboardConfig.ts") as typeof import("../src/app/actions/dashboardConfig");
 const layoutActions = require_("../src/app/actions/dashboard.ts") as typeof import("../src/app/actions/dashboard");
 const store = require_("../src/lib/dashboard/store.ts") as typeof import("../src/lib/dashboard/store");
