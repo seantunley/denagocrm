@@ -215,4 +215,22 @@ export function validateFlow(flow: Flow, channels: FlowChannel[] = ["whatsapp"])
 }
 
 export const flowErrors = (issues: FlowIssue[]) => issues.filter((item) => item.severity === "error");
+
+/**
+ * Codes that are advisory while EDITING but fatal at PUBLICATION.
+ *
+ * A draft that predates the action-outcome contract must still open, and a live
+ * published version keeps running untouched — so the editor shows a warning. But
+ * publishing is a deliberate act and the migration boundary: an action that can
+ * fail while flowing into a node that announces success is how a customer gets
+ * told their booking was cancelled when it was not. Refuse it there.
+ */
+const FATAL_ON_PUBLISH = new Set(["action.no_failure_branch"]);
+
+/** Re-grade editing warnings that must block a new publication. */
+export function publishSeverity(issues: FlowIssue[]): FlowIssue[] {
+  return issues.map((issue) =>
+    FATAL_ON_PUBLISH.has(issue.code) && issue.severity === "warning" ? { ...issue, severity: "error" as const } : issue,
+  );
+}
 export const flowWarnings = (issues: FlowIssue[]) => issues.filter((item) => item.severity === "warning");

@@ -16,6 +16,7 @@ import { cancelBotBooking, lookupBotBooking, rescheduleBotBooking } from "./botB
 import { enrollEntityInJourney } from "./journeyDirectEnrollment";
 
 type Match = { contactId: string | null; leadId: string | null };
+import type { ActionOutcome } from "./flow";
 
 export async function availableSlots(max = 6): Promise<{ id: string; label: string }[]> {
   const out: { id: string; label: string }[] = [];
@@ -86,9 +87,11 @@ async function firstUserId(): Promise<string | null> { return (await resolveTena
 function fileLines(vars: Record<string, string>): string[] { return Object.values(vars).filter((v) => /^https?:\/\//.test(v)).map((v) => `Attachment: ${v}`); }
 async function activityAlreadyExists(marker: string | null) { return marker ? prisma.activity.findFirst({ where: { note: { contains: marker } } }) : null; }
 
-async function createDemo(source: string, vars: Record<string, string>, match: Match, nodeId: string) {
+async function createDemo(source: string, vars: Record<string, string>, match: Match, nodeId: string): Promise<ActionOutcome> {
   const userId = await firstUserId();
-  if (!userId) return;
+  // No user to own the record. Returning silently made the flow tell the customer
+  // "I've sent your demo request to the team" when nothing had been created.
+  if (!userId) return { ok: false, reason: "No CRM user is available to own the request" };
   const key = botActionKey(nodeId, "demo");
   const marker = botActionMarker(key);
   const who = await ensureContact(source, vars, match);
@@ -99,7 +102,10 @@ async function createDemo(source: string, vars: Record<string, string>, match: M
     audit: { action: "lead.received", summary: `Lead “${title}” created from a ${source} demo / test-drive request`, userName: "System" },
     push: { title: "Demo / test-drive request 🚗", body: vars.name || "Customer", kind: "bot_handoff" },
   });
-  if (!lead || await activityAlreadyExists(marker)) return;
+  // createLeadRecordIfPipelineReady returns null when no pipeline stage exists.
+  if (!lead) return { ok: false, reason: "No pipeline stage is configured to receive the request" };
+  // An existing marker means a retry of an effect that already happened: success.
+  if (await activityAlreadyExists(marker)) return { ok: true };
   await prisma.activity.create({
     data: {
       type: "test_drive", summary: `Test drive — ${vars.model || "cart"}`,
@@ -108,6 +114,7 @@ async function createDemo(source: string, vars: Record<string, string>, match: M
       assignedToId: userId, createdById: userId,
     },
   });
+  return { ok: true };
 }
 
 export function crmActions(source: string, match: Match) {
@@ -154,17 +161,18 @@ export function crmActions(source: string, match: Match) {
       if (result.runId) vars.journey_run_id = result.runId;
       return { ok: result.ok, reason: result.reason };
     },
-    createBooking: async (vars: Record<string, string>, action: "service" | "demo" | "lead" | undefined, nodeId: string) => {
+    createBooking: async (vars: Record<string, string>, action: "service" | "demo" | "lead" | undefined, nodeId: string): Promise<ActionOutcome> => {
       if (action === "demo") return createDemo(source, vars, match, nodeId);
       if (action === "lead") {
         await createIntakeLead({ name: vars.name || `${source} enquiry`, email: vars.email || null, phone: vars.phone || null, message: vars.service || vars.message || "Chatbot enquiry", source, externalId: botActionKey(nodeId, "lead") });
-        return;
+        return { ok: true };
       }
       const userId = await firstUserId();
-      if (!userId) return;
+      if (!userId) return { ok: false, reason: "No CRM user is available to own the request" };
       const key = botActionKey(nodeId, "service");
       const marker = botActionMarker(key);
-      if (await activityAlreadyExists(marker)) return;
+      // Already created by an earlier attempt of this same event — a success.
+      if (await activityAlreadyExists(marker)) return { ok: true };
       const who = await ensureContact(source, vars, match);
       await prisma.activity.create({
         data: {
@@ -174,6 +182,7 @@ export function crmActions(source: string, match: Match) {
         },
       });
       await sendPushToAll({ title: "New service request 🔧", body: vars.name || "Customer", url: who.contactId ? `/contacts/${who.contactId}` : "/inbox" }, "bot_handoff").catch(() => {});
+      return { ok: true };
     },
   };
 }

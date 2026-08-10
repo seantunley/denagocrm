@@ -82,7 +82,7 @@ export async function simulateFlowTurn(input: SimulatorTurnInput): Promise<Simul
         vars.journey_run_id = "simulated-journey-run";
         return { ok: true, reason: "simulated enrolment" };
       },
-      createBooking: async (_vars, action, nodeId) => { trace.push(`CRM: node ${nodeId} would create ${action ?? "service"}`); },
+      createBooking: async (_vars, action, nodeId) => { trace.push(`CRM: node ${nodeId} would create ${action ?? "service"}`); return { ok: true }; },
       handoff: async () => { trace.push("Handoff: would pause bot and notify team"); },
     });
 
