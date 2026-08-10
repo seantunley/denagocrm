@@ -93,14 +93,14 @@ test("a viewer's own dashboard wins over a shared one at the same address", () =
   const fn = store.slice(store.indexOf("dashboardBySlug"));
   const body = fn.slice(0, fn.indexOf("parseConfig"));
   const ownAt = body.indexOf("userId: user.id");
-  const sharedAt = body.indexOf("sharedAt: { not: null }");
+  const sharedAt = body.indexOf("sharedInTenant(");
   assert.ok(ownAt !== -1 && sharedAt !== -1, "both lookups must exist");
   assert.ok(ownAt < sharedAt, "the viewer's own dashboard must be looked up first");
 });
 
 test("the switcher lists published dashboards alongside your own", () => {
   const store = code(STORE);
-  assert.match(store, /OR: \[\{ userId: user\.id \}, \{ sharedAt: \{ not: null \} \}\]/);
+  assert.match(store, /OR: \[\{ userId: user\.id \}, sharedInTenant\(tenantId\)\]/);
   assert.match(store, /shared: row\.userId !== user\.id/, "each entry must know whose it is");
 });
 
@@ -120,14 +120,21 @@ test("sharing never widens access to data", () => {
   assert.doesNotMatch(body, /permission|grant|access/i, "publishing must not touch permissions");
 });
 
-test("the tenant boundary comes from the scoped client, not this query", () => {
-  // "Shared" means shared with this tenant and never beyond it. The scoped
-  // prisma client decides that for every model; a hand-written tenantId here
-  // would be a second, drifting answer to the same question.
+test("the query names the tenant itself; the scoped client does not supply one", () => {
+  // This test used to assert the OPPOSITE — that a hand-written tenantId here
+  // would be a second, drifting answer, because the scoped prisma client decides
+  // the boundary for every model. That reasoning was wrong in the one mode that
+  // matters, and db.ts says so plainly:
+  //
+  //     if (!tenantEnforcing()) return args;   // always, today
+  //
+  // So while enforcement is dormant there is no boundary to inherit, and a bare
+  // `sharedAt: { not: null }` matched every tenant's published dashboards.
   const store = code(STORE);
   const fn = store.slice(store.indexOf("dashboardsForViewer"));
   const body = fn.slice(0, fn.indexOf("orderBy"));
-  assert.doesNotMatch(body, /tenantId/, "the tenant must come from the client's scope");
+  assert.match(body, /sharedInTenant\(tenantId\)/, "the published predicate must be tenant-qualified");
+  assert.doesNotMatch(body, /sharedAt: \{ not: null \}/, "an unqualified one matches every tenant");
 });
 
 // ── the migration ───────────────────────────────────────────────────────────

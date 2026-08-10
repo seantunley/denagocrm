@@ -182,7 +182,9 @@ test("the store's reads are keyed on the session user and take no user id", () =
   assert.equal(reads.length, 3, "expected three database reads in the store");
   for (const read of reads) {
     const own = /userId: user\.id/.test(read);
-    const published = /sharedAt: \{ not: null \}/.test(read);
+    // "Published" is `sharedInTenant(...)` now — the bare `sharedAt: { not: null }`
+    // it replaced matched every TENANT's published rows, not just this one's.
+    const published = /sharedInTenant\(/.test(read);
     assert.ok(
       own || published,
       `a store query is scoped to neither the caller nor published rows: ${read.slice(0, 120)}`,

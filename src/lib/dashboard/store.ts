@@ -2,6 +2,8 @@ import "server-only";
 import { cache } from "react";
 import { prisma } from "@/lib/db";
 import { dashboardViewer } from "./data";
+import { viewerTenantId } from "./viewerTenant";
+import { sharedInTenant } from "./sharedScope";
 import {
   CONFIG_VERSION,
   parseConfig,
@@ -104,15 +106,19 @@ export const DEFAULT_DASHBOARD_TITLE = "Home";
  */
 export const dashboardsForViewer = cache(async (): Promise<DashboardSummary[]> => {
   const { user } = await dashboardViewer();
+  const tenantId = await viewerTenantId();
   const rows = await prisma.dashboard.findMany({
     /*
-     * The viewer's own dashboards, plus any published to the tenant.
+     * The viewer's own dashboards, plus any published IN THIS WORKSPACE.
      *
-     * The tenant boundary is the scoped `prisma` client's, exactly as for every
-     * other model here — "shared" means shared with this tenant, never beyond
-     * it, and this query does not get to decide that for itself.
+     * This used to lean on the scoped `prisma` client for the tenant boundary.
+     * db.ts is explicit that there is none while enforcement is dormant — it
+     * returns args untouched — so a bare `sharedAt: { not: null }` matched every
+     * tenant's published dashboards, and tenant A's "Sales" listed for tenant B.
+     * The predicate names the tenant itself now rather than assuming something
+     * upstream added one.
      */
-    where: { OR: [{ userId: user.id }, { sharedAt: { not: null } }] },
+    where: { OR: [{ userId: user.id }, sharedInTenant(tenantId)] },
     select: {
       id: true,
       slug: true,
@@ -190,7 +196,8 @@ export const dashboardBySlug = cache(async (slug: string): Promise<LoadedDashboa
       },
     })) ??
     (await prisma.dashboard.findFirst({
-      where: { slug: path, sharedAt: { not: null } },
+      // Same rule as the switcher: published HERE, not published anywhere.
+      where: { slug: path, ...sharedInTenant(await viewerTenantId()) },
       select: {
         id: true,
         slug: true,
