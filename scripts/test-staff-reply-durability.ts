@@ -32,9 +32,12 @@ import {
   deliveryStateForMessages,
   enqueueBotMessages,
   enqueueStaffMessage,
+  enqueueStaffReply,
   flushBotOutboxConversation,
+  type OutboxPayload,
 } from "../src/lib/botOutbox";
-import { sendOutcomeMessage, staffReplyIdempotencyKey } from "../src/lib/messageDelivery";
+import { attachmentDigest, sendOutcomeMessage, staffReplyIdempotencyKey } from "../src/lib/messageDelivery";
+import { attachmentUrlForDelivery, verifyOutboundMediaToken } from "../src/lib/outboundMedia";
 import { pauseBotConversation } from "../src/lib/botConversationControl";
 
 const SFX = Math.random().toString(16).slice(2, 10);
@@ -67,6 +70,8 @@ const ids = {
   /** A channel no adapter supports, so a send fails permanently without a network call. */
   deadChannel: `nosuch_${SFX}`,
   deadKey: `k_${SFX}`,
+  /** The same customer's Messenger identity, for the attachment path. */
+  psid: `psid_${SFX}`,
   /** A conversation of its own for the takeover fence, so nothing else blocks its drain. */
   fenceKey: `2782${SFX.replace(/\D/g, "").padEnd(7, "2").slice(0, 7)}9`,
 };
@@ -104,15 +109,24 @@ async function seed() {
     },
   });
   await basePrisma.contact.create({
-    data: { id: ids.contact, firstName: "Staff", whatsapp: ids.wa, createdById: ids.user, tenantId: DEFAULT_TENANT_ID },
+    data: {
+      id: ids.contact,
+      firstName: "Staff",
+      whatsapp: ids.wa,
+      messengerPsid: ids.psid,
+      createdById: ids.user,
+      tenantId: DEFAULT_TENANT_ID,
+    },
   });
 }
 
 async function cleanup() {
   await basePrisma.botFlowOutbox.deleteMany({
-    where: { OR: [{ key: ids.wa }, { key: ids.deadKey }, { key: ids.fenceKey }] },
+    where: { OR: [{ key: ids.wa }, { key: ids.deadKey }, { key: ids.psid }, { key: ids.fenceKey }] },
   });
-  await basePrisma.botSession.deleteMany({ where: { key: { in: [ids.wa, ids.deadKey, ids.fenceKey] } } });
+  await basePrisma.botSession.deleteMany({
+    where: { key: { in: [ids.wa, ids.deadKey, ids.psid, ids.fenceKey] } },
+  });
   await basePrisma.communication.deleteMany({ where: { contactId: ids.contact } });
   // AuditEvent is append-only at the DATABASE level — a trigger refuses DELETE.
   // That is the point of an audit trail and this test does not get to be an
@@ -443,6 +457,195 @@ async function main() {
     Boolean(outcome.error) && !outcome.ok,
     JSON.stringify(outcome),
   );
+
+  // ── A DM attachment and its caption ──────────────────────────────────────
+  //
+  // Meta has no single call carrying both, so they are two queued messages. The
+  // failure this replaces: the file was sent, the text send failed, the person
+  // retried, and the customer received the ATTACHMENT TWICE because neither
+  // provider call was recognisable as one that had already succeeded.
+  const dmComposition = `dm_${SFX}`;
+  // Keyed on the BYTES, exactly as the action does. saveFile mints a fresh
+  // random storage name per upload, so keying on the URL made a resubmission of
+  // the same file derive a different key and queue the attachment twice. Passing
+  // a fixed URL on both attempts — which the earlier version of this test did —
+  // proves the queue primitive while bypassing that instability entirely.
+  const dmKey = (body: string, digest: string | null) =>
+    staffReplyIdempotencyKey({
+      compositionId: dmComposition,
+      channel: "messenger",
+      key: ids.psid,
+      actorId: ids.user,
+      contactId: ids.contact,
+      leadId: null,
+      body,
+      attachmentDigest: digest,
+    });
+  const dmPart = (body: string, url: string | null, message: OutboxPayload, digest: string | null) => ({
+    message,
+    clientIdempotencyKey: dmKey(body, digest),
+    body,
+    attachmentUrl: url,
+  });
+  const dmReply = (parts: ReturnType<typeof dmPart>[]) =>
+    enqueueStaffReply({
+      channel: "messenger",
+      key: ids.psid,
+      parts,
+      contactId: ids.contact,
+      actorId: ids.user,
+    });
+
+  // The same file, uploaded twice: identical BYTES, different storage names —
+  // which is what saveFile actually produces on a resubmission.
+  const fileBytes = Buffer.from(`brochure-${SFX}`);
+  const fileDigest = attachmentDigest(fileBytes);
+  // PRIVATE blob refs on purpose. This is the case the relay exists for — a
+  // public URL needs no signing and would not exercise the expiry at all — and
+  // it is what a deployment with BLOB_PRIVATE actually stores.
+  const upload1 = `https://abc.private.blob.vercel-storage.com/${SFX}-a.pdf`;
+  const upload2 = `https://abc.private.blob.vercel-storage.com/${SFX}-b.pdf`;
+  const filePartAt = (ref: string) =>
+    dmPart("📎 File", ref, { type: "attachment", kind: "file", ref, contentType: "application/pdf", digest: fileDigest }, fileDigest);
+
+  const filePart = filePartAt(upload1);
+  const textPart = dmPart("Here's the brochure.", null, { type: "text", text: "Here's the brochure." }, null);
+  const dm = await dmReply([filePart, textPart]);
+  check(
+    "an attachment and its text are both accepted, in one operation",
+    dm.created && dm.parts.length === 2 && dm.parts.every((p) => p.outcome === "created"),
+    JSON.stringify(dm.parts.map((p) => p.outcome)),
+  );
+
+  const dmRows = await basePrisma.botFlowOutbox.findMany({
+    where: { tenantId: DEFAULT_TENANT_ID, key: ids.psid, origin: "staff" },
+    orderBy: [{ createdAt: "asc" }, { sequence: "asc" }, { id: "asc" }],
+    select: { payload: true, communicationId: true, batchId: true, sequence: true },
+  });
+  check(
+    "both parts share one batch and carry their order explicitly",
+    new Set(dmRows.map((row) => row.batchId)).size === 1 &&
+      dmRows.map((row) => row.sequence).join(",") === "0,1",
+    JSON.stringify(dmRows.map((row) => [row.batchId, row.sequence])),
+  );
+  check(
+    "the attachment is queued ahead of its caption, so it cannot arrive second",
+    (dmRows[0]?.payload as { type?: string } | null)?.type === "attachment" &&
+      (dmRows[1]?.payload as { type?: string } | null)?.type === "text",
+    JSON.stringify(dmRows.map((row) => (row.payload as { type?: string } | null)?.type)),
+  );
+  check(
+    "each half has its own timeline row, as the customer receives them",
+    dmRows.length === 2 && new Set(dmRows.map((row) => row.communicationId)).size === 2,
+    JSON.stringify(dmRows.map((row) => row.communicationId)),
+  );
+
+  // The retry after a half-succeeded submission: the SAME composition resent.
+  // Neither half may be duplicated, and the text half must resolve to the row
+  // that already exists rather than sending the customer a second copy.
+  // The retry re-uploads: a NEW storage URL for the SAME bytes. This is the case
+  // the old fixed-URL test could not reach.
+  const retry = await dmReply([filePartAt(upload2), textPart]);
+  check(
+    "resending the same composition duplicates neither half",
+    retry.outcome === "duplicate" && retry.parts.every((p) => p.outcome === "duplicate"),
+    JSON.stringify(retry.parts.map((p) => p.outcome)),
+  );
+  check(
+    "and still resolves each half to the message it duplicates",
+    retry.parts[0]?.communicationId === dm.parts[0]?.communicationId &&
+      retry.parts[1]?.communicationId === dm.parts[1]?.communicationId,
+    JSON.stringify(retry.parts.map((p) => p.communicationId)),
+  );
+  const dmCount = await basePrisma.botFlowOutbox.count({
+    where: { tenantId: DEFAULT_TENANT_ID, key: ids.psid, origin: "staff" },
+  });
+  check("and the customer is still owed exactly two messages", dmCount === 2, `${dmCount} rows`);
+
+  // Correcting the attachment after a failure must actually send the NEW file.
+  // THE CASE ONE TRANSACTION MUST NOT BREAK. The person edits the caption and
+  // submits the same composition again. The attachment half is already accepted;
+  // writing every part blindly would hit its key, roll the whole thing back, and
+  // lose the correction. Only the missing half may be written.
+  const editedText = dmPart(
+    "Here's the brochure — collection is Friday.",
+    null,
+    { type: "text", text: "Here's the brochure — collection is Friday." },
+    null,
+  );
+  const dmCorrected = await dmReply([filePartAt(`https://abc.private.blob.vercel-storage.com/${SFX}-c.pdf`), editedText]);
+  check(
+    "an edited half still sends when the other half is already accepted",
+    dmCorrected.outcome === "created" &&
+      dmCorrected.parts[0]?.outcome === "duplicate" &&
+      dmCorrected.parts[1]?.outcome === "created",
+    JSON.stringify(dmCorrected.parts.map((p) => p.outcome)),
+  );
+  check(
+    "and the already-accepted half is not written a second time",
+    dmCorrected.parts[0]?.communicationId === dm.parts[0]?.communicationId,
+    `${dmCorrected.parts[0]?.communicationId} vs ${dm.parts[0]?.communicationId}`,
+  );
+  const finalCount = await basePrisma.botFlowOutbox.count({
+    where: { tenantId: DEFAULT_TENANT_ID, key: ids.psid, origin: "staff" },
+  });
+  check("leaving the customer owed three messages, not four", finalCount === 3, `${finalCount} rows`);
+
+  // ── A DURABLE QUEUE CANNOT HOLD AN EXPIRING CREDENTIAL ────────────────────
+  //
+  // The relay URL Meta fetches is a short-lived bearer credential for a
+  // customer's file, and the reply action used to mint one when the person
+  // pressed Send and store it IN the payload. So after a worker outage, a paused
+  // drain, a deployment or a backlog longer than the TTL, the row survived
+  // perfectly and its attachment had been dead for an hour — retried until it
+  // dead-lettered, for a message nothing was wrong with.
+  //
+  // Reading it back from the DATABASE is the point. A source test can see what
+  // the action writes; only the stored row shows what a worker picking it up
+  // tomorrow will actually have to work with.
+  const storedAttachment = await basePrisma.botFlowOutbox.findFirst({
+    where: { tenantId: DEFAULT_TENANT_ID, key: ids.psid, origin: "staff" },
+    orderBy: [{ createdAt: "asc" }, { sequence: "asc" }],
+    select: { id: true, payload: true, createdAt: true },
+  });
+  const stored = storedAttachment?.payload as
+    | { type?: string; ref?: string; url?: string; contentType?: string }
+    | null;
+  check("the queued attachment holds a durable ref", stored?.type === "attachment" && stored?.ref === upload1, JSON.stringify(stored));
+  check("and no URL at all — nothing stored can expire", stored?.url === undefined, JSON.stringify(stored));
+  check("and the content type it must be served back as", stored?.contentType === "application/pdf", stored?.contentType);
+
+  // Age the row far beyond the relay TTL, exactly as an outage would, then ask
+  // for the URL the worker would use on its NEXT attempt.
+  const sixHoursAgo = new Date(Date.now() - 6 * 3600_000);
+  await basePrisma.botFlowOutbox.update({
+    where: { id: storedAttachment!.id },
+    data: { createdAt: sixHoursAgo, availableAt: sixHoursAgo },
+  });
+  const aged = await basePrisma.botFlowOutbox.findUnique({
+    where: { id: storedAttachment!.id },
+    select: { payload: true, createdAt: true },
+  });
+  const agedPayload = aged!.payload as { ref: string; contentType?: string };
+  const secret = "durability-probe-secret";
+  const origin = "https://crm.example.test";
+  // What the OLD code would have delivered: the URL minted when it was queued.
+  const queueTimeUrl = attachmentUrlForDelivery(agedPayload, {
+    secret,
+    origin,
+    now: aged!.createdAt.getTime(),
+  });
+  check(
+    "a URL minted when the row was queued is dead by now",
+    verifyOutboundMediaToken(queueTimeUrl!.split("/").pop()!, secret) === null,
+  );
+  // What the worker does now, from the same stored row.
+  const attemptUrl = attachmentUrlForDelivery(agedPayload, { secret, origin });
+  const claim = attemptUrl ? verifyOutboundMediaToken(attemptUrl.split("/").pop()!, secret) : null;
+  check("but the row still yields a valid URL on this attempt", claim !== null);
+  check("pointing at the same bytes", claim?.ref === upload1, claim?.ref);
+  check("served as what it is", claim?.contentType === "application/pdf", claim?.contentType);
+  check("and it is a fresh credential, not the stored one", attemptUrl !== queueTimeUrl);
 }
 
 main()

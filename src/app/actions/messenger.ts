@@ -3,13 +3,28 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { canAccessContact, requirePermission } from "@/lib/permissions";
-import { logAudit } from "@/lib/audit";
-import { sendDirectMessage, sendDirectAttachment, type DmPlatform } from "@/lib/messenger";
+import { type DmPlatform } from "@/lib/messenger";
 import { saveFile } from "@/lib/storage";
-import { pauseBotConversation } from "@/lib/botConversationControl";
+import {
+  deliveryStateForMessages,
+  enqueueStaffReply,
+  flushBotOutboxConversation,
+  type AttachmentKind,
+  type OutboxPayload,
+} from "@/lib/botOutbox";
+import { attachmentDigest, sendOutcomeMessage, staffReplyIdempotencyKey } from "@/lib/messageDelivery";
+import { canServeOutboundMedia } from "@/lib/outboundMedia";
 
-const ATTACH_KIND = (mime: string): "image" | "audio" | "video" | "file" =>
+const ATTACH_KIND = (mime: string): AttachmentKind =>
   mime.startsWith("image/") ? "image" : mime.startsWith("audio/") ? "audio" : mime.startsWith("video/") ? "video" : "file";
+
+/** What the timeline shows for an attachment with no caption of its own. */
+const ATTACHMENT_BODY: Record<AttachmentKind, string> = {
+  image: "🖼 Image",
+  audio: "🎤 Voice note",
+  video: "🎬 Video",
+  file: "📎 File",
+};
 
 export type DmState = { ok?: string; error?: string };
 
@@ -71,45 +86,166 @@ export async function sendDmReply(
     return { error: `This contact has no ${platform === "instagram" ? "Instagram" : "Messenger"} identity, so the reply cannot be delivered there.` };
   }
 
+  const compositionId = String(formData.get("compositionId") ?? "").trim();
+  if (!compositionId) return { error: "This reply is missing its send key — reload the page and try again." };
+
+  /**
+   * The upload is the one thing that cannot join the transaction.
+   *
+   * It is an external side effect, so it happens first and its only failure mode
+   * is an orphaned blob — cheap, and invisible to the customer. Everything after
+   * it is durable.
+   */
   let attachmentUrl: string | null = null;
-  let attachmentType: "image" | "audio" | "video" | "file" | null = null;
+  let attachmentKind: AttachmentKind | null = null;
+  let attachmentContentType: string | null = null;
+  let fileDigest: string | null = null;
   if (hasFile) {
     if (file.size > 4 * 1024 * 1024) {
       return { error: "File too big — 4MB max here. For larger files, share a Library link instead." };
     }
     const buffer = Buffer.from(await file.arrayBuffer());
-    attachmentUrl = await saveFile(buffer, file.name || "attachment", file.type || "application/octet-stream");
-    attachmentType = ATTACH_KIND(file.type || "");
-    const sent = await sendDirectAttachment(platform, recipientId, {
-      type: attachmentType,
-      url: attachmentUrl,
-    });
-    if (!sent.ok) return { error: sent.error };
+    attachmentContentType = file.type || "application/octet-stream";
+    // Taken from the BYTES, before they are stored anywhere, so it is the same
+    // on every submission of the same file.
+    fileDigest = attachmentDigest(buffer);
+    attachmentUrl = await saveFile(buffer, file.name || "attachment", attachmentContentType);
+    attachmentKind = ATTACH_KIND(file.type || "");
+    /**
+     * ASKED, NOT MINTED.
+     *
+     * Meta does not accept bytes on its send endpoint — it accepts a URL and
+     * fetches it anonymously. `saveFile` returns a publicly readable blob URL on
+     * Vercel, a PRIVATE blob URL when BLOB_PRIVATE is on, and a BARE FILENAME
+     * when self-hosted; the last two produce a message the CRM accepts, shows in
+     * the timeline, retries, and never delivers. So the person is told NOW,
+     * which is something they can act on — send the text, or share a link.
+     *
+     * But only the QUESTION is asked here. The URL itself is a short-lived
+     * bearer credential and belongs to the delivery attempt, not to the queue:
+     * see the `ref` field on the attachment payload.
+     */
+    if (!canServeOutboundMedia(attachmentUrl)) {
+      return {
+        error:
+          "This deployment cannot serve attachments to Messenger or Instagram — set NEXT_PUBLIC_APP_URL to a public https address, or send a link instead.",
+      };
+    }
   }
 
-  if (text) {
-    const result = await sendDirectMessage(platform, recipientId, text);
-    if (!result.ok) return { error: result.error };
-  }
-
-  await prisma.communication.create({
-    data: {
-      type: platform,
-      direction: "outbound",
-      body: text || (attachmentType === "image" ? "🖼 Image" : "📎 File"),
-      attachmentUrl,
-      attachmentType,
+  /**
+   * Record and queue, then deliver — never the other way round.
+   *
+   * This path called the provider FIRST and wrote the CRM record afterwards,
+   * exactly as the WhatsApp path used to. A provider success followed by a failed
+   * insert left the customer holding a message the CRM had no record of: staff
+   * were told it failed, retried, and the customer received it twice. With an
+   * attachment it was worse — the file was sent, then the text send failed, and
+   * the retry re-sent BOTH, so the customer got the attachment twice.
+   *
+   * An attachment and its accompanying text are two provider sends, because Meta
+   * has no single call that carries both. They are therefore two queued messages
+   * and two timeline rows, which is also what the customer actually receives —
+   * and each is independently deduplicated, retried and reported.
+   *
+   * They are ACCEPTED as one operation, though. Two separate calls would leave a
+   * state where the file was queued and the caption was not: the outbox then
+   * delivers a bare attachment with no explanation, and the caption arrives only
+   * if the person happens to retry. Handing both parts to one transaction removes
+   * that state rather than making it recoverable.
+   *
+   * Ordering is the outbox's: parts share a batch and carry a sequence, and a
+   * conversation is claimed by (createdAt, sequence, id) with a failure blocking
+   * what was queued behind it — so the caption can never arrive before the file
+   * it describes.
+   */
+  const label = platform === "instagram" ? "Instagram" : "Messenger";
+  const part = (
+    message: OutboxPayload,
+    body: string,
+    url: string | null,
+    kind: string | null,
+    digest: string | null,
+  ) => ({
+    message,
+    body,
+    attachmentUrl: url,
+    attachmentType: kind,
+    clientIdempotencyKey: staffReplyIdempotencyKey({
+      compositionId,
+      channel: platform,
+      key: recipientId,
+      actorId: user.id,
       contactId,
-      userId: user.id,
+      leadId: null,
+      body,
+      // The DIGEST, not the URL. saveFile mints a fresh random name on every
+      // call, so a resubmission of the same file uploads it again and gets a
+      // different URL. Keying on that made the key unstable in precisely the
+      // situation it exists for — an ambiguous failure followed by a retry —
+      // and the customer received the attachment twice.
+      attachmentDigest: digest,
+    }),
+  });
+
+  const parts = [
+    // The queued payload carries the DURABLE storage ref, not a URL. The worker
+    // mints a fresh provider-fetchable one on each attempt, so a reply that waits
+    // out an outage still arrives. The timeline row keeps the same ref, which is
+    // what the inbox renders through its own authenticated route.
+    ...(attachmentUrl && attachmentKind && fileDigest
+      ? [
+          part(
+            {
+              type: "attachment",
+              kind: attachmentKind,
+              ref: attachmentUrl,
+              contentType: attachmentContentType ?? "application/octet-stream",
+              digest: fileDigest,
+            },
+            ATTACHMENT_BODY[attachmentKind],
+            attachmentUrl,
+            attachmentKind,
+            fileDigest,
+          ),
+        ]
+      : []),
+    ...(text ? [part({ type: "text", text }, text, null, null, null)] : []),
+  ];
+
+  const queued = await enqueueStaffReply({
+    channel: platform,
+    key: recipientId,
+    parts,
+    contactId,
+    actorId: user.id,
+    audit: {
+      action: `${platform}.sent`,
+      summary: `${label} reply sent: “${(text || ATTACHMENT_BODY[attachmentKind ?? "file"]).slice(0, 60)}${text.length > 60 ? "…" : ""}”`,
+      user,
     },
   });
-  await pauseBotConversation({ channel: platform, key: recipientId }, 12);
-  await logAudit({
-    action: `${platform}.sent`,
-    summary: `${platform === "instagram" ? "Instagram" : "Messenger"} reply sent: “${text.slice(0, 60)}${text.length > 60 ? "…" : ""}”`,
-    contactId,
-    user,
-  });
+
+  if (queued.outcome === "conflict") {
+    return { error: "This reply could not be matched to its send — reload the conversation and try again." };
+  }
+
+  // Best-effort immediate drain so the reply leaves now rather than on the next
+  // cron tick; the worker owns retries, ordering and dead-lettering if it fails.
+  await flushBotOutboxConversation(platform, recipientId).catch(() => {});
+
   revalidatePath(String(formData.get("revalidate") ?? "/inbox"));
-  return { ok: "Sent ✓" };
+
+  /**
+   * The truth about what was queued, read back after the drain — never a blanket
+   * "Sent ✓", which is what this returned even when the provider had refused.
+   *
+   * With two parts, the WORST outcome is the answer: an attachment that did not
+   * arrive is not made acceptable by the caption that did.
+   */
+  const ids = queued.parts.map((p) => p.communicationId).filter((id): id is string => Boolean(id));
+  if (!ids.length) return { ok: "Queued — sending…" };
+  const states = await deliveryStateForMessages(ids);
+  const outcomes = ids.map((id) => sendOutcomeMessage(states.get(id)));
+  return outcomes.find((outcome) => outcome.error) ?? outcomes[outcomes.length - 1];
 }

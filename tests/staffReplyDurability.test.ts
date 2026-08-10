@@ -19,11 +19,16 @@ const stripComments = (code: string) =>
   code.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 const shipped = (rel: string) => stripComments(src(rel));
 
+/**
+ * The real implementation. `enqueueStaffMessage` is a one-part wrapper over it —
+ * a reply may be several provider sends (an attachment and its caption), and all
+ * of them are accepted as one operation.
+ */
 const staffFn = () => {
   const outbox = shipped("src/lib/botOutbox.ts");
   return outbox.slice(
+    outbox.indexOf("export async function enqueueStaffReply"),
     outbox.indexOf("export async function enqueueStaffMessage"),
-    outbox.indexOf("async function cancelPendingBotOutputTx"),
   );
 };
 
@@ -99,9 +104,9 @@ test("a duplicate reports what became of the message it duplicates", () => {
   // Returning a bare `created: false` left the caller with nothing to report, so
   // it reported success. The duplicate must resolve to the row that already
   // exists so the person is told the truth about it.
-  assert.match(fn, /clientIdempotencyKey: input\.clientIdempotencyKey/, "the duplicate must be looked up by its key");
-  assert.match(fn, /communicationId: existing\.communicationId \?\? null/);
-  assert.match(fn, /outcome: "duplicate"/, "and must say plainly that it is a duplicate, not a fresh send");
+  assert.match(fn, /clientIdempotencyKey: \{ in: input\.parts\.map/, "the duplicate must be looked up by its key");
+  assert.match(fn, /communicationId: row\?\.communicationId \?\? null/);
+  assert.match(fn, /outcome: created \? "created" : "duplicate"/, "and must say plainly which it is");
 
   const action = shipped("src/app/actions/whatsapp.ts");
   assert.doesNotMatch(

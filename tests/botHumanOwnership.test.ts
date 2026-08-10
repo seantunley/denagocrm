@@ -24,19 +24,24 @@ test("staff replies take ownership on every inbox chatbot channel", () => {
   // duplicate and stops. See staffReplyDurability.test.ts for the ordering.
   const outbox = src("src/lib/botOutbox.ts");
   const staff = outbox.slice(
+    outbox.indexOf("export async function enqueueStaffReply"),
     outbox.indexOf("export async function enqueueStaffMessage"),
-    outbox.indexOf("async function cancelPendingBotOutputTx"),
   );
   assert.match(staff, /pauseBotSessionTx\(tx, tenantId, \{/);
   assert.match(staff, /channel: input\.channel,\s*\n\s*key: input\.key,/);
 
-  const whatsapp = src("src/app/actions/whatsapp.ts");
-  assert.match(whatsapp, /enqueueStaffMessage\(\{/, "the WhatsApp reply must go through that write");
-
-  // Meta DMs still pause explicitly: that path has not been moved onto the
-  // durable queue yet, so its ownership step is still its own await.
-  const meta = src("src/app/actions/messenger.ts");
-  assert.match(meta, /pauseBotConversation\(\{ channel: platform, key: recipientId \}, 12\)/);
+  // BOTH inbox reply paths now go through that write, so both take ownership in
+  // the same commit that accepts the reply — and neither can be interrupted
+  // between accepting a message and pausing the bot that would answer over it.
+  for (const path of ["src/app/actions/whatsapp.ts", "src/app/actions/messenger.ts"]) {
+    const action = src(path);
+    assert.match(action, /enqueueStaffReply\(\{|enqueueStaffMessage\(\{/, `${path} must take ownership through the durable write`);
+    assert.doesNotMatch(
+      action,
+      /pauseBotConversation\(/,
+      `${path} must not pause in a separate await the request can skip`,
+    );
+  }
 });
 
 test("flow-mode WhatsApp ownership is the BotSession, not a second timestamp heuristic", () => {
