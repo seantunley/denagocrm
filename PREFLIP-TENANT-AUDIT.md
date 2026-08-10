@@ -171,6 +171,55 @@ this before the flip rather than after.
 
 ---
 
+## 3b. CORRECTION — the headline number was wrong
+
+Added 2026-08-10, after the writers were investigated. **The "843 rows written by
+code paths still running" figure above is misleading and should not be quoted.**
+Most of those rows are correct by design.
+
+Breaking the 843 down by what the writer actually turned out to be:
+
+| rows | table | verdict |
+|---:|---|---|
+| 752 | `ErrorLog` | **by design** — see below |
+| 24 | `AuditEvent` | correct — platform-admin and `system`-scope actions are legitimately unowned |
+| 12 | `AuditLog` | correct — same |
+| 10 | `JourneyEvent` | writer was **already fixed** on 2026-08-05; these rows predate the fix |
+| 17 | `Communication` | genuinely defective |
+| 11 | `Activity` | genuinely defective |
+| 6 | `JourneyRun` | genuinely defective |
+| 5 | `Conversation` | genuinely defective |
+| 2 | `CompetitorBrief` | genuinely defective |
+| 1 each | `TestDriveBooking`, `Dashboard`, `ResearchNote` | genuinely defective |
+
+**So 44 rows came from genuinely broken writers, not 843.** All 44 writers are now
+fixed across PRs #462 and `fix/tenant-stamp-audit-trail`.
+
+Two more entries in the full 1,607 are likewise not debt: `BackupRun` 13/13 has an
+**orphan column** in production that no Prisma model declares and nothing writes —
+drift recorded in `20260806180000_rls_enforce_gap`, correctly left alone. And
+`UserSession` 1/79 is a user with no `TenantMember` row, which is a provisioning
+gap, not a stamping bug.
+
+### `ErrorLog` is GLOBAL — decided
+
+`tenantId` on `ErrorLog` is **attribution, not ownership**. Scoping it would make an
+unscoped write **fail closed** under enforcement: the system log goes dark exactly
+when the system is broken, and the record of why would be the record that could not
+be written. Logging must never throw, so a tenant can never be a precondition for it.
+
+The cost, stated plainly rather than hidden: a NULL row is readable from every
+workspace's System Log, so an unattributed message or stack trace is visible
+cross-tenant. That is bounded by `redactUrl` at the write and by the screen being
+admin-only, and it is cheaper than losing the log.
+
+`schema.prisma` had already made this decision; it simply was not written anywhere
+the *guard* could be seen to make it, which is why this audit read 1,167 unowned
+rows as undecided debt. It is now in `GLOBAL_MODELS`. **1,167 is the expected shape,
+not a defect count.**
+
+---
+
 ## 4. Why the module was skipped — the actual answer
 
 The question was: how did an entire module get past a fine-toothed multi-tenancy
