@@ -33,7 +33,12 @@ test("the founding tenant owns legacy NULL-tenant rows; a second tenant sees onl
 
 test("publish reads and writes the draft with the same rule the runtime reads it with", () => {
   const code = src("src/lib/flowPublishing.ts");
-  const publish = code.slice(code.indexOf("export async function publishFlowSnapshot"));
+  // Bound the slice: BotFlowPublication/BotFlowVersion have a NOT NULL tenantId
+  // and are filtered STRICTLY on purpose. Only BotFlow carries legacy NULLs.
+  const publish = code.slice(
+    code.indexOf("export async function publishFlowSnapshot"),
+    code.indexOf("export async function getFlowPublicationMeta"),
+  );
 
   // The re-read, the deactivate sweep and the activate must all tolerate a legacy
   // NULL tenant — a strict filter on any one of them reintroduces the dead button

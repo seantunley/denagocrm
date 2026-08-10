@@ -9,11 +9,12 @@ import { enabledFlowChannels } from "@/lib/flowValidationServer";
 import FlowBuilder from "@/components/FlowBuilder";
 import FlowAiDraftForm from "@/components/FlowAiDraftForm";
 import FlowLintPanel from "@/components/FlowLintPanel";
+import { flowScope } from "@/lib/flowScope";
 
 export default async function FlowEditorPage({ params }: { params: Promise<{ id: string }> }) {
   await requireOwner();
   const { id } = await params;
-  const row = await prisma.botFlow.findUnique({ where: { id } });
+  const row = await prisma.botFlow.findFirst({ where: { id, ...flowScope() } });
   if (!row) notFound();
 
   let flow: Flow = DEFAULT_FLOW;

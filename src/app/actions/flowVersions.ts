@@ -8,6 +8,7 @@ import { requireOwner } from "@/lib/auth";
 import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { writeTenantId } from "@/lib/tenantWrite";
 import { logAudit } from "@/lib/audit";
+import { flowScope } from "@/lib/flowScope";
 
 type VersionRow = { id: string; version: number; definition: string };
 
@@ -41,7 +42,7 @@ export async function restoreFlowVersionToDraft(
   // A canvas save that lands after the history page rendered wins; rollback then
   // does nothing instead of overwriting newer work.
   const updated = await prisma.botFlow.updateMany({
-    where: { id: flowId, updatedAt: expectedUpdatedAt },
+    where: { id: flowId, updatedAt: expectedUpdatedAt, ...flowScope() },
     data: { definition: version.definition },
   });
   if (updated.count !== 1) return;

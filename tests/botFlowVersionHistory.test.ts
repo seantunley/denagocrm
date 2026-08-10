@@ -32,7 +32,7 @@ test("restore is tenant-bound to the selected flow and version", () => {
 test("rollback cannot overwrite a newer canvas save", () => {
   const action = src("src/app/actions/flowVersions.ts");
   assert.match(action, /expectedUpdatedAt/);
-  assert.match(action, /where: \{ id: flowId, updatedAt: expectedUpdatedAt \}/);
+  assert.match(action, /where: \{ id: flowId, updatedAt: expectedUpdatedAt, \.\.\.flowScope\(\) \}/);
   assert.match(action, /if \(updated\.count !== 1\) return/);
 });
 

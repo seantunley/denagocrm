@@ -7,6 +7,7 @@ import { putSetting } from "@/lib/settings";
 import { logAudit } from "@/lib/audit";
 import { enabledFlowChannels } from "@/lib/flowValidationServer";
 import { flowErrors, validateFlow } from "@/lib/flowValidation";
+import { flowScope } from "@/lib/flowScope";
 import {
   FLOW_SNIPPETS_SETTING,
   getFlowSnippets,
@@ -26,7 +27,7 @@ function parseDefinition(raw: string): FlowSnippet["definition"] | null {
 
 export async function saveCurrentFlowAsSnippet(flowId: string, formData: FormData) {
   const owner = await requireOwner();
-  const row = await prisma.botFlow.findUnique({ where: { id: flowId } });
+  const row = await prisma.botFlow.findFirst({ where: { id: flowId, ...flowScope() } });
   if (!row) return;
   const definition = parseDefinition(row.definition);
   if (!definition) return;
@@ -45,7 +46,7 @@ export async function saveCurrentFlowAsSnippet(flowId: string, formData: FormDat
 export async function insertSavedFlowSnippet(flowId: string, snippetId: string) {
   const owner = await requireOwner();
   const [row, snippets] = await Promise.all([
-    prisma.botFlow.findUnique({ where: { id: flowId } }),
+    prisma.botFlow.findFirst({ where: { id: flowId, ...flowScope() } }),
     getFlowSnippets(),
   ]);
   const snippet = snippets.find((item) => item.id === snippetId);
@@ -56,7 +57,7 @@ export async function insertSavedFlowSnippet(flowId: string, snippetId: string) 
 
   // Do not overwrite a canvas save that landed while this request was reading.
   const updated = await prisma.botFlow.updateMany({
-    where: { id: flowId, definition: row.definition },
+    where: { id: flowId, definition: row.definition, ...flowScope() },
     data: { definition: JSON.stringify(merged.definition) },
   });
   if (updated.count !== 1) return;

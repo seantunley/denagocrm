@@ -10,6 +10,7 @@ import { flowTemplate } from "@/lib/flowTemplates";
 import { publishFlowSnapshot } from "@/lib/flowPublishing";
 import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { writeTenantId } from "@/lib/tenantWrite";
+import { flowScope } from "@/lib/flowScope";
 
 /** Create a new draft from one of the shipped, compiler-checked templates. */
 export async function createFlow(formData: FormData) {
@@ -17,7 +18,7 @@ export async function createFlow(formData: FormData) {
   const template = flowTemplate(String(formData.get("templateId") ?? "general"));
   const requestedName = String(formData.get("name") ?? "").trim();
   const name = requestedName || template.name;
-  const count = await prisma.botFlow.count();
+  const count = await prisma.botFlow.count({ where: flowScope() });
   const flow = await prisma.botFlow.create({
     data: {
       name,
@@ -73,13 +74,13 @@ export async function saveFlow(
   // the same lost update in a narrower window.
   const result = await prisma.$transaction(async (tx) => {
     const written = await tx.botFlow.updateMany({
-      where: { id, updatedAt: expected },
+      where: { id, updatedAt: expected, ...flowScope() },
       data: { definition },
     });
     if (written.count !== 1) return null;
     // Read inside the transaction, so it is the row this write produced. The
     // updateMany above holds the row lock until commit.
-    const row = await tx.botFlow.findUnique({ where: { id }, select: { updatedAt: true } });
+    const row = await tx.botFlow.findFirst({ where: { id, ...flowScope() }, select: { updatedAt: true } });
     return row?.updatedAt ?? null;
   });
 
@@ -116,11 +117,11 @@ export async function resetFlow(
   // THIS write produced, or the canvas adopts a later writer's revision unseen.
   const result = await prisma.$transaction(async (tx) => {
     const written = await tx.botFlow.updateMany({
-      where: { id, updatedAt: expected },
+      where: { id, updatedAt: expected, ...flowScope() },
       data: { definition: JSON.stringify(DEFAULT_FLOW) },
     });
     if (written.count !== 1) return null;
-    const row = await tx.botFlow.findUnique({ where: { id }, select: { updatedAt: true } });
+    const row = await tx.botFlow.findFirst({ where: { id, ...flowScope() }, select: { updatedAt: true } });
     return row?.updatedAt ?? null;
   });
 
@@ -141,26 +142,26 @@ export async function resetFlow(
 export async function renameFlow(id: string, formData: FormData) {
   await requireOwner();
   const name = String(formData.get("name") ?? "").trim();
-  if (name) await prisma.botFlow.update({ where: { id }, data: { name } });
+  if (name) await prisma.botFlow.updateMany({ where: { id, ...flowScope() }, data: { name } });
   revalidatePath("/bot-builder");
 }
 
 export async function deleteFlow(id: string) {
   await requireOwner();
   const [flow, publishedVersion] = await Promise.all([
-    prisma.botFlow.findUnique({ where: { id } }),
+    prisma.botFlow.findFirst({ where: { id, ...flowScope() } }),
     prisma.botFlowVersion.findFirst({ where: { flowId: id }, select: { id: true } }),
   ]);
   // Published snapshots may still be referenced by active BotSession pins. A
   // flow that has ever been published therefore remains as immutable history.
   if (!flow || flow.active || publishedVersion) return;
-  await prisma.botFlow.delete({ where: { id } });
+  await prisma.botFlow.deleteMany({ where: { id, ...flowScope() } });
   revalidatePath("/bot-builder");
 }
 
 export async function duplicateFlow(id: string) {
   await requireOwner();
-  const src = await prisma.botFlow.findUnique({ where: { id } });
+  const src = await prisma.botFlow.findFirst({ where: { id, ...flowScope() } });
   if (!src) return;
   await prisma.botFlow.create({
     data: { name: `${src.name} (copy)`, definition: src.definition, channel: src.channel, active: false, tenantId: writeTenantId() ?? DEFAULT_TENANT_ID },

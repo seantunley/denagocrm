@@ -4,11 +4,12 @@ import { prisma } from "@/lib/db";
 import { requireOwner } from "@/lib/auth";
 import FlowSimulator from "@/components/FlowSimulator";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
+import { flowScope } from "@/lib/flowScope";
 
 export default async function FlowSimulatorPage({ params }: { params: Promise<{ id: string }> }) {
   await requireOwner();
   const { id } = await params;
-  const flow = await prisma.botFlow.findUnique({ where: { id } });
+  const flow = await prisma.botFlow.findFirst({ where: { id, ...flowScope() } });
   if (!flow) notFound();
 
   return (

@@ -7,12 +7,13 @@ import { getFlowSnippets } from "@/lib/flowSnippets";
 import { deleteFlowSnippet, insertSavedFlowSnippet, saveCurrentFlowAsSnippet } from "@/app/actions/flowSnippets";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import { EmptyState, Surface } from "@/components/visual-system";
+import { flowScope } from "@/lib/flowScope";
 
 export default async function FlowBlocksPage({ params }: { params: Promise<{ id: string }> }) {
   await requireOwner();
   const { id } = await params;
   const [flow, snippets] = await Promise.all([
-    prisma.botFlow.findUnique({ where: { id } }),
+    prisma.botFlow.findFirst({ where: { id, ...flowScope() } }),
     getFlowSnippets(),
   ]);
   if (!flow) notFound();
