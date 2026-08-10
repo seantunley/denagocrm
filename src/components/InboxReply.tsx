@@ -69,19 +69,26 @@ export default function InboxReply({
   }, []);
 
   /**
-   * One identity per COMPOSED message, held across this box's own retries.
+   * One identity per COMPOSITION — not per message, and not per attempt.
    *
-   * That is the whole point: if a send fails ambiguously — the provider may or
-   * may not have accepted it — pressing Send again must resolve to the message
-   * already queued rather than deliver a second copy. The key therefore changes
-   * only after a send is confirmed, never on re-render and never on failure.
+   * If a send fails ambiguously — the provider may or may not have accepted it —
+   * pressing Send again must resolve to the message already queued rather than
+   * deliver a second copy, so this cannot change on re-render or on failure. But
+   * it must not be the whole key either: a person whose send failed usually
+   * EDITS the message before retrying, and a key that ignored the text would
+   * discard the correction as a duplicate and deliver the original.
+   *
+   * So the box supplies the composition and the server folds in what is actually
+   * being sent. Same text resubmitted → same key → dedupes. Corrected text →
+   * different key → sends. This value changes only once a send is confirmed,
+   * which is what keeps two deliberately identical replies two messages.
    */
-  const [sendKey, setSendKey] = useState<string>("");
+  const [compositionId, setCompositionId] = useState<string>("");
   useEffect(() => {
-    if (!sendKey) setSendKey(crypto.randomUUID());
-  }, [sendKey]);
+    if (!compositionId) setCompositionId(crypto.randomUUID());
+  }, [compositionId]);
   useEffect(() => {
-    if (state?.ok) setSendKey(crypto.randomUUID());
+    if (state?.ok) setCompositionId(crypto.randomUUID());
   }, [state?.ok]);
 
   function onKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -209,7 +216,7 @@ ${el.value.slice(end)}`;
         <input type="hidden" name="contactId" value={contactId ?? ""} />
       )}
       <input type="hidden" name="revalidate" value={revalidate} />
-      <input type="hidden" name="clientIdempotencyKey" value={sendKey} />
+      <input type="hidden" name="compositionId" value={compositionId} />
 
       <div className="flex items-center gap-1.5">
         <textarea

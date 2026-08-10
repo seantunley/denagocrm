@@ -13,7 +13,23 @@ model BotFlowOutbox {
   contactId   String?
   leadId      String?
   actorId     String?
-  status      String    @default("pending") // pending | running | retry | sent | dead
+  /// Who composed this message: "bot" (a flow produced it) or "staff" (a person
+  /// typed it in the inbox).
+  ///
+  /// Not cosmetic, and not derivable from actorId — a bot row carries the actor
+  /// it acts on behalf of too. Human takeover CANCELS the automation's unsent
+  /// backlog for the conversation and must not touch the person's own reply, so
+  /// something has to say which is which. Defaults to "bot": every row that
+  /// existed before this column was one.
+  origin      String    @default("bot") // bot | staff
+  /// pending | running | retry | sent | dead | cancelled
+  ///
+  /// `cancelled` is a message that will deliberately never be sent — automation
+  /// output superseded when a person took the conversation over. Distinct from
+  /// `dead`, which is a message we tried to send and could not: one is a decision,
+  /// the other is a failure, and an operator looking at a silent conversation
+  /// needs to tell them apart.
+  status      String    @default("pending")
   /// Supplied by the surface that composed the message and held stable across its
   /// retries, so a resubmission after an ambiguous failure resolves to the row
   /// that already exists instead of sending the customer a second copy.
@@ -21,6 +37,21 @@ model BotFlowOutbox {
   /// Machine-readable classification beside the human `lastError`, so a retry
   /// policy can tell "the number is invalid" from "Meta was briefly down".
   failureCode String?
+  /// The CRM timeline row this delivery is for.
+  ///
+  /// Without it the two halves cannot be joined: the Communication says a message
+  /// exists and the outbox knows whether it ever reached the customer, and the
+  /// inbox could only ever render the first. That is how a bubble comes to read
+  /// "Sent ✓" under a message the provider rejected eight times.
+  ///
+  /// A scalar with a database-level FK rather than a Prisma relation, exactly as
+  /// `flowVersionId` above. The migration runner's drift probe diffs against
+  /// `schema.prisma` alone (scripts/apply-migrations.mjs), so a relation declared
+  /// here and back-referenced from Communication makes that probe unable to parse
+  /// the model it is checking — and a probe that cannot answer blocks the deploy.
+  /// The referential guarantee is identical; only the generated client accessor
+  /// is absent, and nothing needs one.
+  communicationId String?
   attempts    Int       @default(0)
   availableAt DateTime  @default(now())
   leaseUntil  DateTime?
@@ -32,7 +63,9 @@ model BotFlowOutbox {
 
   @@unique([tenantId, batchId, sequence])
   @@unique([tenantId, clientIdempotencyKey])
+  @@unique([tenantId, communicationId])
   @@index([tenantId, status, availableAt])
+  @@index([tenantId, channel, key, origin, status])
   @@index([tenantId, channel, key, createdAt, sequence])
   @@index([tenantId, status, communicationLoggedAt])
   @@index([tenantId, flowVersionId, status])

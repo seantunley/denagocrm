@@ -59,7 +59,11 @@ test("outbox preserves order behind retry and terminal dead-letter barriers", ()
   // It is not applied for ever. See botTenantScoping.test.ts for why a dead row
   // must stop being a barrier once the backlog has been killed: leaving it as one
   // silenced the bot for that customer permanently, with no reaper.
-  assert.match(worker, /status: \{ notIn: \["sent", "dead"\] \}/);
+  // `cancelled` joins them: automation output withdrawn when a person took the
+  // conversation over is equally finished, and leaving it in the queue would make
+  // it an unclaimable head — the same permanent silence, by another route.
+  assert.match(worker, /FINISHED_STATUSES = \["sent", "dead", "cancelled"\]/);
+  assert.match(worker, /status: \{ notIn: FINISHED_STATUSES \}/);
 });
 
 test("outbox lease completion is fenced by the claim generation", () => {

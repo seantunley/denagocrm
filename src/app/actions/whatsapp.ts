@@ -2,10 +2,9 @@
 
 import { revalidatePath } from "next/cache";
 import { canAccessContact, canAccessLead, requirePermission } from "@/lib/permissions";
-import { logAudit } from "@/lib/audit";
 import { waDigits } from "@/lib/whatsapp";
-import { enqueueStaffMessage, flushBotOutboxConversation } from "@/lib/botOutbox";
-import { pauseBotConversation } from "@/lib/botConversationControl";
+import { deliveryStateForMessages, enqueueStaffMessage, flushBotOutboxConversation } from "@/lib/botOutbox";
+import { sendOutcomeMessage, staffReplyIdempotencyKey } from "@/lib/messageDelivery";
 
 export type WaState = { ok?: string; error?: string };
 
@@ -30,43 +29,64 @@ export async function sendWhatsAppMessage(
    * This used to call the provider first and write the Communication after. A
    * provider success followed by a failed insert left the customer holding a
    * message the CRM had no record of: staff were told it failed, retried, and
-   * the customer received it twice. The reply box holds one idempotency key per
-   * composed message and keeps it across its own retries, so a resubmission
-   * resolves to the row that already exists instead of sending a second copy.
+   * the customer received it twice.
+   *
+   * The reply box supplies a composition id, not a finished key. The key is
+   * derived from that id AND the message it is sending, so a resubmission of the
+   * same text resolves to the row that already exists, while text the person
+   * CORRECTED after a failure is a different message and actually sends. A key
+   * tied to the box alone would have delivered the typo.
    */
-  const idempotencyKey = String(formData.get("clientIdempotencyKey") ?? "").trim();
-  if (!idempotencyKey) return { error: "This reply is missing its send key — reload the page and try again." };
+  const compositionId = String(formData.get("compositionId") ?? "").trim();
+  if (!compositionId) return { error: "This reply is missing its send key — reload the page and try again." };
 
   const queued = await enqueueStaffMessage({
     channel: "whatsapp",
     key: digits,
     message: { type: "text", text },
-    clientIdempotencyKey: idempotencyKey,
+    clientIdempotencyKey: staffReplyIdempotencyKey({
+      compositionId,
+      channel: "whatsapp",
+      key: digits,
+      body: text,
+    }),
     body: text,
     contactId,
     leadId,
     actorId: user.id,
+    // Ownership, history, the delivery intent and the trail commit together.
+    // Nothing here is left as a follow-up await that an interrupted request can
+    // skip — least of all pausing the bot, which a retry could never repair
+    // because a retry recognises the duplicate and stops.
+    audit: {
+      action: "whatsapp.sent",
+      summary: `WhatsApp sent to +${digits}: “${text.slice(0, 60)}${text.length > 60 ? "…" : ""}”`,
+      user,
+    },
   });
-  if (!queued.created) {
-    // Already accepted under this key. Saying "Sent ✓" is the truth: the message
-    // is queued or delivered, and this submission must not add another.
-    revalidatePath(String(formData.get("revalidate") ?? "/"));
-    return { ok: "Sent ✓" };
-  }
 
   // Best-effort immediate drain so the reply leaves now rather than on the next
   // cron tick; the worker owns retries, ordering and dead-lettering if it fails.
+  // Its result is deliberately not the answer — a drain covers the whole
+  // conversation, and what this person needs to know is what happened to THEIR
+  // message.
   await flushBotOutboxConversation("whatsapp", digits).catch(() => {});
-  // A human reply is an ownership decision, not merely a timestamp heuristic.
-  // Pause the same BotSession the flow runtime checks on the next inbound turn.
-  await pauseBotConversation({ channel: "whatsapp", key: digits }, 12);
-  await logAudit({
-    action: "whatsapp.sent",
-    summary: `WhatsApp sent to +${digits}: “${text.slice(0, 60)}${text.length > 60 ? "…" : ""}”`,
-    contactId,
-    leadId,
-    user,
-  });
+
   revalidatePath(String(formData.get("revalidate") ?? "/"));
-  return { ok: "Sent ✓" };
+
+  /**
+   * The truth about this message, read back after the drain.
+   *
+   * Answering "Sent ✓" the moment the row was written — which is what this did,
+   * on both the new and the duplicate path — reports a send that may not have
+   * happened. That is worse than reporting a failure: it ends the person's
+   * attention on the conversation, and the customer never hears from them again.
+   *
+   * The duplicate path reads the same state, so a resubmission is told what
+   * became of the message it is a duplicate OF, rather than being congratulated
+   * for sending nothing.
+   */
+  if (!queued.communicationId) return { ok: "Queued — sending…" };
+  const state = (await deliveryStateForMessages([queued.communicationId])).get(queued.communicationId);
+  return sendOutcomeMessage(state);
 }

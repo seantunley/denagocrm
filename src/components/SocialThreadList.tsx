@@ -7,7 +7,8 @@ import { formatDateTime } from "@/lib/format";
 import { threadCollaborationKey, type InboxThread, type ThreadCollaboration } from "@/lib/inboxThreads";
 import ConversationCollab from "@/components/ConversationCollab";
 import { EmptyState, StatusPill } from "@/components/visual-system";
-import { RECEIPT_CHANNELS, receiptLabel } from "@/lib/deliveryReceipts";
+import { RECEIPT_CHANNELS } from "@/lib/deliveryReceipts";
+import { deliveryLabel, type DeliveryState } from "@/lib/messageDelivery";
 
 export const CHANNEL_META: Record<string, { label: string; icon: React.ReactNode }> = {
   whatsapp: {
@@ -35,6 +36,7 @@ export default function SocialThreadList({
   staff = [],
   canCollaborate = false,
   viewerId,
+  delivery,
 }: {
   list: InboxThread[];
   empty: string;
@@ -45,6 +47,12 @@ export default function SocialThreadList({
   canCollaborate?: boolean;
   /** The signed-in user, so the reply box can tell their own draft from a colleague's. */
   viewerId?: string | null;
+  /**
+   * How far each outbound message actually got, by Communication id. Absent for
+   * messages sent before the durable queue existed — and for those the label
+   * falls back to the receipt alone, which is all that was ever known about them.
+   */
+  delivery?: Map<string, DeliveryState>;
 }) {
   if (list.length === 0) {
     return <EmptyState icon={MessageCircle} title="No conversations here" description={empty} className="max-w-4xl" />;
@@ -123,14 +131,26 @@ export default function SocialThreadList({
                     {(!message.attachmentUrl || (message.body && !message.body.startsWith("🖼") && !message.body.startsWith("🎤") && !message.body.startsWith("🎬") && !message.body.startsWith("📎"))) && message.body}
                   </div>
                   {(() => {
-                    // Under the bubble, and only on our own messages: a receipt
-                    // says what the CUSTOMER did with what we sent.
-                    const label = receiptLabel(message, RECEIPT_CHANNELS.has(thread.channel));
-                    return label ? (
-                      <p className="ml-auto mt-0.5 pr-1 text-right text-[10px] text-muted-foreground">
-                        {label === "Seen" ? "Seen ✓✓" : label === "Delivered" ? "Delivered ✓✓" : "Sent ✓"}
-                      </p>
-                    ) : null;
+                    // Under the bubble, and only on our own messages. Two things
+                    // are being reported: whether the message reached the channel
+                    // at all (the outbox) and what the CUSTOMER did with it (the
+                    // receipt). Showing only the second is how a rejected message
+                    // came to read "Sent ✓".
+                    const label = deliveryLabel(
+                      message,
+                      RECEIPT_CHANNELS.has(thread.channel),
+                      delivery?.get(message.id),
+                    );
+                    if (!label) return null;
+                    const tone =
+                      label.tone === "failed"
+                        ? "text-red-400"
+                        : label.tone === "pending"
+                          ? "text-amber-300"
+                          : "text-muted-foreground";
+                    return (
+                      <p className={`ml-auto mt-0.5 pr-1 text-right text-[10px] ${tone}`}>{label.text}</p>
+                    );
                   })()}
                   </div>
                 ))}

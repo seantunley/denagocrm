@@ -2,7 +2,10 @@ import crypto from "crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
 import { DEFAULT_TENANT_ID } from "./tenant";
-import { withTenantWrite, writeTenantId } from "./tenantWrite";
+import { withTenantWrite, writeTenantId, type TenantWriteTx } from "./tenantWrite";
+import { pauseBotSessionTx } from "./botSessionStore";
+import { logAuditStrict } from "./audit";
+import { classifyDeliveryFailure, PERMANENT_FAILURES } from "./messageDelivery";
 import type { OutMsg } from "./flow";
 import { sendWhatsAppButtons, sendWhatsAppImage, sendWhatsAppList, sendWhatsAppText } from "./whatsapp";
 import { sendDirectAttachment, sendDirectMessage, sendDirectQuickReplies } from "./messenger";
@@ -106,23 +109,49 @@ export async function enqueueBotMessages(input: {
   });
 }
 
+export type StaffReplyResult = {
+  /** False when this exact composition was already accepted; nothing new was written. */
+  created: boolean;
+  communicationId: string | null;
+  outboxId: string | null;
+};
+
 /**
- * A staff reply, recorded and queued in ONE transaction.
+ * A staff reply: ownership, history and delivery intent, as ONE durable operation.
  *
  * The manual reply paths called the provider first and wrote the CRM record
  * afterwards. A provider success followed by a failed insert left the customer
  * holding a message the CRM had no record of: staff were told it failed, retried,
  * and the customer received it twice. Ordering alone does not fix that — the
- * retry has to be recognisable — so the caller supplies a
- * `clientIdempotencyKey` that stays stable across ITS retries.
+ * retry has to be recognisable — so the key above stays stable across retries of
+ * the same composition.
  *
- * The CRM Communication and the delivery intent commit together, so history can
- * never disagree with what was queued. Delivery itself is the outbox worker's
- * job: the same leases, retries, ordering barriers and dead-lettering the bot
- * paths already use, rather than a second parallel ledger for staff sends.
+ * But recording and queueing are not the whole act. Replying by hand is a
+ * DECISION about who owns the conversation, and the parts of that decision used
+ * to be separate awaits after the write: pause the bot, cancel what it was about
+ * to say, write the trail. Anything that interrupted the request between them
+ * left the decision half-made — most damagingly, an accepted reply with the bot
+ * never paused, which the retry could not repair because the retry recognises the
+ * duplicate and returns early. The customer then gets the person's answer and the
+ * bot's next scripted line after it.
  *
- * Returns the Communication and whether this call created it. A duplicate key
- * returns `created: false` and sends nothing further.
+ * So all five commit together or none do:
+ *
+ *   1. the bot is paused for this conversation — a person owns it now;
+ *   2. automation output still queued for it is CANCELLED, because it was
+ *      composed for a conversation the bot was still running and can otherwise
+ *      be delivered after the human answer, contradicting it;
+ *   3. the delivery intent is written, its unique key rejecting a duplicate
+ *      before any CRM history exists for it;
+ *   4. the CRM Communication is written;
+ *   5. the two are linked, so the inbox can show what actually happened to the
+ *      message rather than assuming it left.
+ *
+ * A duplicate key therefore proves the whole decision already committed once.
+ *
+ * Delivery itself remains the outbox worker's job: the same leases, retries,
+ * ordering barriers and dead-lettering the bot paths already use, rather than a
+ * second parallel ledger for staff sends.
  */
 export async function enqueueStaffMessage(input: {
   channel: string;
@@ -136,25 +165,45 @@ export async function enqueueStaffMessage(input: {
   actorId: string;
   attachmentUrl?: string | null;
   attachmentType?: string | null;
-}): Promise<{ created: boolean; communicationId: string | null }> {
+  /** Written in the same transaction, so an accepted reply is always accounted for. */
+  audit?: { action: string; summary: string; user: { id: string; name: string } };
+  /** How long the person keeps the conversation after replying. */
+  pauseHours?: number;
+}): Promise<StaffReplyResult> {
   const batchId = crypto.randomUUID();
   const createdAt = new Date();
 
   try {
     return await withTenantWrite(async (tx, tenantId) => {
-      // The delivery intent is written FIRST, so the unique
+      // 1 + 2. Ownership. Both are scoped to this tenant's conversation, and both
+      // happen before the intent exists, so a duplicate submission finding the
+      // intent already there knows they happened.
+      //
+      // Unconditional, for every channel a staff reply can go out on: a
+      // BotSession is keyed by (tenant, channel, key), so pausing one that does
+      // not exist creates it already paused — which is the correct state for a
+      // conversation a person has answered, whether or not a flow had reached it.
+      await pauseBotSessionTx(tx, tenantId, {
+        channel: input.channel,
+        key: input.key,
+        expiresAt: new Date(createdAt.getTime() + (input.pauseHours ?? 12) * 3600 * 1000),
+      });
+      await cancelPendingBotOutputTx(tx, tenantId, input.channel, input.key);
+
+      // 3. The delivery intent, FIRST of the two writes, so the unique
       // (tenantId, clientIdempotencyKey) rejects a duplicate before any CRM
       // history exists for it. Writing the Communication first and discovering
       // the duplicate afterwards would commit a message the CRM claims to have
       // sent and the outbox never queued — the very disagreement this exists to
       // prevent.
-      await tx.botFlowOutbox.create({
+      const queued = await tx.botFlowOutbox.create({
         data: {
           tenantId,
           channel: input.channel,
           key: input.key,
           batchId,
           sequence: 0,
+          origin: "staff",
           payload: input.message as unknown as Prisma.InputJsonValue,
           clientIdempotencyKey: input.clientIdempotencyKey,
           contactId: input.contactId ?? null,
@@ -168,8 +217,10 @@ export async function enqueueStaffMessage(input: {
           // one staff reply into two rows, one of them attributed to the bot.
           communicationLoggedAt: createdAt,
         },
+        select: { id: true },
       });
 
+      // 4. History.
       const communication = await tx.communication.create({
         data: {
           type: input.channel,
@@ -185,16 +236,122 @@ export async function enqueueStaffMessage(input: {
         select: { id: true },
       });
 
-      return { created: true, communicationId: communication.id };
+      // 5. The link, without which the inbox can only ever show that a message
+      // exists and never whether it arrived.
+      await tx.botFlowOutbox.update({
+        where: { id: queued.id },
+        data: { communicationId: communication.id },
+      });
+
+      if (input.audit) {
+        await logAuditStrict(
+          {
+            action: input.audit.action,
+            summary: input.audit.summary,
+            contactId: input.contactId ?? null,
+            leadId: input.leadId ?? null,
+            user: input.audit.user,
+          },
+          tx,
+        );
+      }
+
+      return { created: true, communicationId: communication.id, outboxId: queued.id };
     });
   } catch (error) {
     // A resubmission of the same composed message, or two submissions racing.
-    // The transaction rolled back, so the winner's single copy stands alone.
+    // The transaction rolled back, so the winner's single copy stands alone —
+    // and because the whole decision was in that transaction, the winner also
+    // paused the bot, cancelled its backlog and wrote the trail.
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      return { created: false, communicationId: null };
+      const existing = await prisma.botFlowOutbox.findFirst({
+        where: { tenantId: outboxTenantId(), clientIdempotencyKey: input.clientIdempotencyKey },
+        select: { id: true, communicationId: true },
+      });
+      return {
+        created: false,
+        communicationId: existing?.communicationId ?? null,
+        outboxId: existing?.id ?? null,
+      };
     }
     throw error;
   }
+}
+
+/**
+ * Automation output for this conversation that has not left yet, withdrawn.
+ *
+ * A flow composes its messages for a conversation the BOT is still running. Once
+ * a person answers, anything still queued was written under an assumption that no
+ * longer holds — it can arrive seconds after the human reply and contradict it,
+ * or ask a question the person has just answered. Pausing the session stops the
+ * flow producing anything NEW; it does nothing about what is already in the
+ * queue, and that backlog is exactly what the customer sees next.
+ *
+ * `pending` and `retry` only. A `running` row is already at the provider and its
+ * lease belongs to a worker: cancelling it here would race that worker to decide
+ * what happened to a message that may already have been delivered. Its own
+ * completion path is the one place that can answer that, so it is left alone.
+ */
+async function cancelPendingBotOutputTx(
+  tx: TenantWriteTx,
+  tenantId: string,
+  channel: string,
+  key: string,
+): Promise<number> {
+  const cancelled = await tx.botFlowOutbox.updateMany({
+    where: { tenantId, channel, key, origin: "bot", status: { in: ["pending", "retry"] } },
+    data: {
+      status: "cancelled",
+      leaseUntil: null,
+      failureCode: "superseded_by_human",
+      lastError: "Cancelled: a person took over this conversation before this message was sent",
+    },
+  });
+  return cancelled.count;
+}
+
+/**
+ * How far each of these timeline rows actually got.
+ *
+ * The inbox showed "Sent ✓" under every outbound bubble that had no read receipt,
+ * because the timeline row was all it had — and a Communication exists from the
+ * moment the reply is accepted, long before anything reaches the customer. So a
+ * message still queued, and a message the provider rejected eight times, and a
+ * message cancelled when a colleague took the conversation over all rendered
+ * identically to one that was delivered.
+ *
+ * Rows with no outbox record are absent from the map. That is the honest answer
+ * for them: every outbound message written before this queue existed went out
+ * through a direct provider call whose result was never recorded, and inventing
+ * a state for those would be worse than showing none.
+ */
+export type MessageDeliveryState = {
+  status: string;
+  failureCode: string | null;
+  lastError: string | null;
+  attempts: number;
+};
+
+export async function deliveryStateForMessages(
+  communicationIds: string[],
+): Promise<Map<string, MessageDeliveryState>> {
+  if (communicationIds.length === 0) return new Map();
+  const rows = await prisma.botFlowOutbox.findMany({
+    where: { tenantId: outboxTenantId(), communicationId: { in: communicationIds } },
+    select: { communicationId: true, status: true, failureCode: true, lastError: true, attempts: true },
+  });
+  const states = new Map<string, MessageDeliveryState>();
+  for (const row of rows) {
+    if (!row.communicationId) continue;
+    states.set(row.communicationId, {
+      status: row.status,
+      failureCode: row.failureCode,
+      lastError: row.lastError,
+      attempts: row.attempts,
+    });
+  }
+  return states;
 }
 
 function asOutMsg(payload: unknown): OutMsg | null {
@@ -283,10 +440,17 @@ async function repairCommunicationLog(row: OutboxRow): Promise<boolean> {
  * between the final failure and blockLaterMessages survives as `pending` and will
  * send: it is genuinely new, produced after the failure, and holding it back
  * would restore the silence this is fixing.
+ *
+ * `cancelled` is excluded for the same reason and more plainly: it is a message
+ * somebody decided not to send. Leaving it claimable would deliver it after all;
+ * leaving it in the queue as an unclaimable head would silence the conversation
+ * for ever, which is the exact failure the paragraph above exists to prevent.
  */
+const FINISHED_STATUSES = ["sent", "dead", "cancelled"];
+
 async function earliestUnfinished(channel: string, key: string): Promise<OutboxRow | null> {
   return prisma.botFlowOutbox.findFirst({
-    where: { tenantId: outboxTenantId(), channel, key, status: { notIn: ["sent", "dead"] } },
+    where: { tenantId: outboxTenantId(), channel, key, status: { notIn: FINISHED_STATUSES } },
     orderBy: [{ createdAt: "asc" }, { sequence: "asc" }, { id: "asc" }],
   }) as Promise<OutboxRow | null>;
 }
@@ -326,22 +490,23 @@ async function blockLaterMessages(row: OutboxRow, error: string): Promise<void> 
 
 async function failDelivery(row: OutboxRow, error: string): Promise<"retry" | "dead"> {
   const lastError = error.slice(0, 1000);
-  if (row.attempts >= MAX_ATTEMPTS) {
+  const failureCode = classifyDeliveryFailure(lastError);
+  if (row.attempts >= MAX_ATTEMPTS || PERMANENT_FAILURES.has(failureCode)) {
     const dead = await prisma.botFlowOutbox.updateMany({
       where: { id: row.id, status: "running", attempts: row.attempts },
-      data: { status: "dead", leaseUntil: null, lastError },
+      data: { status: "dead", leaseUntil: null, lastError, failureCode },
     });
     if (dead.count !== 1) return "retry";
     await blockLaterMessages(row, lastError);
     if (row.flowVersionId) {
-      await recordBotFlowEvents([{ channel: row.channel, conversationKey: row.key, flowVersionId: row.flowVersionId, eventType: "delivery_failed", metadata: { outboxId: row.id, attempts: row.attempts } }]);
+      await recordBotFlowEvents([{ channel: row.channel, conversationKey: row.key, flowVersionId: row.flowVersionId, eventType: "delivery_failed", metadata: { outboxId: row.id, attempts: row.attempts, failureCode } }]);
     }
-    await logError("bot-outbox", new Error(lastError), `${row.channel}:${row.key}:${row.id}`).catch(() => {});
+    await logError("bot-outbox", new Error(lastError), `${row.channel}:${row.key}:${row.id}:${failureCode}`).catch(() => {});
     return "dead";
   }
   await prisma.botFlowOutbox.updateMany({
     where: { id: row.id, status: "running", attempts: row.attempts },
-    data: { status: "retry", leaseUntil: null, lastError, availableAt: retryAt(row.attempts) },
+    data: { status: "retry", leaseUntil: null, lastError, failureCode, availableAt: retryAt(row.attempts) },
   });
   return "retry";
 }
@@ -353,7 +518,7 @@ async function deliverClaimed(row: OutboxRow): Promise<"sent" | "retry" | "dead"
 
   const sent = await prisma.botFlowOutbox.updateMany({
     where: { id: row.id, status: "running", attempts: row.attempts },
-    data: { status: "sent", sentAt: new Date(), leaseUntil: null, lastError: null },
+    data: { status: "sent", sentAt: new Date(), leaseUntil: null, lastError: null, failureCode: null },
   });
   if (sent.count !== 1) {
     await logError("bot-outbox-stale-lease", new Error("Provider accepted a send after this worker's outbox lease was superseded"), row.id).catch(() => {});
@@ -409,7 +574,7 @@ export async function flushBotOutbox(limit = 50, budget?: OutboxBudget): Promise
   if (budget?.shouldStop(4_000)) return stats;
 
   const due = await prisma.botFlowOutbox.findMany({
-    where: { tenantId: outboxTenantId(), status: { notIn: ["sent", "dead"] }, availableAt: { lte: new Date() } },
+    where: { tenantId: outboxTenantId(), status: { notIn: FINISHED_STATUSES }, availableAt: { lte: new Date() } },
     orderBy: [{ createdAt: "asc" }, { sequence: "asc" }],
     take: limit * 2,
     select: { channel: true, key: true },

@@ -120,7 +120,8 @@ test("a dead message stops the backlog at the failure, not the conversation for 
   // And having done that, a dead row must stop being a barrier — otherwise one
   // undeliverable message silences the bot for that customer for ever.
   const earliest = code.slice(code.indexOf("async function earliestUnfinished"), code.indexOf("async function claimOldest"));
-  assert.match(earliest, /status: \{ notIn: \["sent", "dead"\] \}/);
+  assert.match(earliest, /status: \{ notIn: FINISHED_STATUSES \}/);
+  assert.match(code, /FINISHED_STATUSES = \["sent", "dead", "cancelled"\]/);
   const claim = code.slice(code.indexOf("async function claimOldest"), code.indexOf("function retryAt"));
   assert.doesNotMatch(claim, /row\.status === "dead"/, "a dead row must no longer veto the claim");
 });
