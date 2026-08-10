@@ -127,6 +127,8 @@ test("the DM reply refuses rather than queueing a URL the provider cannot fetch"
 
   // The QUEUED payload carries the provider URL; the timeline row keeps the
   // storage ref, which the inbox renders through its own authenticated route.
-  assert.match(action, /\{ type: "attachment", kind: attachmentKind, url: providerUrl \}/);
+  assert.match(action, /\{ type: "attachment", kind: attachmentKind, url: providerUrl, digest: fileDigest \}/);
   assert.match(action, /ATTACHMENT_BODY\[attachmentKind\],\s*\n\s*attachmentUrl,/, "history keeps the storage ref");
+  // The provider URL is a delivery detail; the digest is the message identity.
+  assert.match(action, /attachmentDigest: digest,/);
 });
