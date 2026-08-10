@@ -49,7 +49,9 @@ test("record quick-create metadata and writes remain tenant scoped", () => {
   assert.match(quickCreateSource, /action=\{createQuickContact\}/);
   assert.match(quickCreateSource, /action=\{createQuickVehicle\}/);
   assert.match(quickCreateSource, /scheduleQuickActivity\(formData\)/);
-  assert.match(quickCreateActionSource, /resolveTenantMemberUser\(id\)/);
+  // See quickCreateTenantScope.test.ts: the gateway is on the shared contract.
+  assert.match(quickCreateActionSource, /resolveAssignableUser\(formData\.get\(key\), label\)/);
+  assert.doesNotMatch(quickCreateActionSource, /\bresolveTenantMemberUser\s*\(/);
   assert.match(quickCreateActionSource, /prisma\.pipelineStage\.findUnique/);
   assert.match(quickCreateActionSource, /prisma\.contact\.findUnique/);
   assert.match(quickCreateActionSource, /prisma\.product\.findUnique/);

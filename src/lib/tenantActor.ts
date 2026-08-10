@@ -2,8 +2,7 @@ import "server-only";
 import { Prisma } from "@prisma/client";
 import { basePrisma } from "./db";
 import { currentScopeClass } from "./tenantWrite";
-import { ActionRefusal } from "./actionFailure";
-import { decideAssignment, normalizeAssigneeId } from "./assignableUser";
+import { resolveAssignment } from "./assignableUser";
 
 export type TenantActor = { id: string; name: string; email: string };
 
@@ -114,15 +113,14 @@ export async function resolveAssignableUser(
   raw: unknown,
   label: string,
 ): Promise<TenantActor | null> {
-  // The membership lookup is the tenant boundary; decideAssignment is the rule
-  // applied to its answer. Both read the posted value through the SAME normaliser,
-  // so what gets looked up is always exactly what the rule then judges — a second,
-  // private notion of "blank" here is how the two halves would drift apart.
-  const userId = normalizeAssigneeId(raw);
-  const candidate = userId === null ? null : await resolveTenantMemberUser(userId);
-  const outcome = decideAssignment(raw, candidate, label);
-  if (!outcome.ok) throw new ActionRefusal(outcome.message);
-  return outcome.userId === null ? null : candidate;
+  // Everything except the database is in `resolveAssignment`, which is where a
+  // test can execute it. What is left here is the one thing that genuinely needs
+  // a server: the TenantMember join. Keeping the composition on the far side of
+  // `server-only` meant the rule every caller leans on — a bad id THROWS, it does
+  // not come back as null — could only ever be checked by grepping for the word
+  // `throw`, and the regression that matters most looks perfectly correct to a
+  // grep.
+  return resolveAssignment(raw, label, resolveTenantMemberUser);
 }
 
 /**

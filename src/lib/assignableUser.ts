@@ -29,6 +29,11 @@
  * actionFailure.ts vs actionResult.ts.
  */
 
+// actionFailure.ts is likewise free of `server-only` and of Prisma, so importing
+// the refusal type keeps this module executable by a test while letting the
+// contract throw the very thing every action already throws.
+import { ActionRefusal } from "./actionFailure";
+
 /**
  * The result of looking an id up through tenant membership: the member, or null
  * when the id resolved to nobody who works in the current workspace.
@@ -85,4 +90,51 @@ export function decideAssignment(
     return { ok: false, message: assignmentRefusalMessage(label) };
   }
   return { ok: true, userId: candidate.id };
+}
+
+/**
+ * How an id is turned into a person: the TenantMember join, or a test's stand-in.
+ *
+ * Generic in what the lookup returns so the caller keeps whatever the join gave
+ * it — `resolveTenantMemberUser` hands back an email as well, and actions use it.
+ * Narrowing everything to `{ id, name }` here would push every caller into a
+ * second lookup for the rest of the record, which is how "resolved" and "written"
+ * drift apart.
+ */
+export type MembershipLookup<T extends { id: string; name: string }> = (
+  userId: string,
+) => Promise<T | null>;
+
+/**
+ * The WHOLE contract — normalise, look up, decide, refuse — with the database
+ * passed in.
+ *
+ * This composition used to live in tenantActor.ts, on the far side of
+ * `server-only`, which meant the one thing every caller depends on ("a bad id
+ * THROWS; it does not come back as null") could only be checked by grepping the
+ * source for the word `throw`. That is the failure mode this module was split
+ * out to avoid: the tempting regression — swallow the refusal and return null,
+ * so an attempted cross-tenant assignment and a deliberate "Unassigned" become
+ * the same save — leaves the lookup call, the rule call and every call site
+ * looking exactly right. Only running it tells you.
+ *
+ * So the lookup is a parameter. tenantActor supplies the real TenantMember join;
+ * a test supplies a fake one and executes the same code the actions run.
+ *
+ * Returns the member, or null for a deliberately blank selection. Throws
+ * {@link ActionRefusal} for anything else that does not resolve.
+ */
+export async function resolveAssignment<T extends { id: string; name: string }>(
+  raw: unknown,
+  label: string,
+  lookup: MembershipLookup<T>,
+): Promise<T | null> {
+  // Both halves read the posted value through the SAME normaliser, so what gets
+  // looked up is always exactly what the rule then judges — a second, private
+  // notion of "blank" here is how the two would drift apart.
+  const userId = normalizeAssigneeId(raw);
+  const candidate = userId === null ? null : await lookup(userId);
+  const outcome = decideAssignment(raw, candidate, label);
+  if (!outcome.ok) throw new ActionRefusal(outcome.message);
+  return outcome.userId === null ? null : candidate;
 }

@@ -7,8 +7,10 @@ import { prisma } from "@/lib/db";
 import { canAccessQuote, requirePermission } from "@/lib/permissions";
 import { logAuditStrict } from "@/lib/audit";
 import { saveFile } from "@/lib/storage";
-import { resolveTenantMemberUser } from "@/lib/tenantActor";
+import { resolveAssignableUser } from "@/lib/tenantActor";
 import { actingTenantId } from "@/lib/actingTenant";
+import { ActionRefusal } from "@/lib/actionFailure";
+import { assignmentRefusalMessage } from "@/lib/assignableUser";
 import {
   assertTestDriveCustomerAccess,
   requireTestDriveManageAccess,
@@ -116,9 +118,22 @@ async function assertDemoVehicleAvailable(args: {
   if (overlap) throw new Error(`The demo vehicle is already booked on ${overlap.reference}`);
 }
 
+/**
+ * A test drive names TWO people, and which of them was rejected is the whole
+ * content of the message — hence the `label`, which the shared contract already
+ * takes for exactly this reason. Only the private copy of the membership rule is
+ * gone; the distinction it drew is not.
+ *
+ * The one thing this adds over `resolveAssignableUser` is that a BLANK id is an
+ * error rather than "deliberately unassigned". Everywhere else a cleared picker
+ * legitimately means nobody; here both fields name a person, and the copy this
+ * replaces refused a blank id too. Callers already guarantee it — the optional
+ * second salesperson is guarded by a ternary — so this is the guard staying shut,
+ * not a new one.
+ */
 async function requireAssignableStaff(userId: string, label: string) {
-  const member = await resolveTenantMemberUser(userId);
-  if (!member) throw new Error(`${label} is not an active member of this workspace`);
+  const member = await resolveAssignableUser(userId, label);
+  if (!member) throw new ActionRefusal(assignmentRefusalMessage(label));
   return member;
 }
 
@@ -140,9 +155,9 @@ export async function createTestDriveBooking(formData: FormData) {
   const [contact, lead, salesperson, accompanying, demoVehicle, product] = await Promise.all([
     prisma.contact.findFirst({ where: { id: contactId, deletedAt: null } }),
     leadId ? prisma.lead.findFirst({ where: { id: leadId, deletedAt: null } }) : null,
-    requireAssignableStaff(salespersonId, "Salesperson"),
+    requireAssignableStaff(salespersonId, "salesperson"),
     accompanyingSalespersonId
-      ? requireAssignableStaff(accompanyingSalespersonId, "Accompanying salesperson")
+      ? requireAssignableStaff(accompanyingSalespersonId, "accompanying salesperson")
       : null,
     demoVehicleId ? prisma.demoVehicle.findFirst({ where: { id: demoVehicleId, deletedAt: null } }) : null,
     productId ? prisma.product.findFirst({ where: { id: productId, deletedAt: null } }) : null,
@@ -240,9 +255,9 @@ export async function updateTestDriveBooking(id: string, formData: FormData) {
   await assertDemoVehicleAvailable({ demoVehicleId, start: scheduledStart, end: expectedReturnAt, excludeBookingId: id });
 
   await Promise.all([
-    requireAssignableStaff(salespersonId, "Salesperson"),
+    requireAssignableStaff(salespersonId, "salesperson"),
     accompanyingSalespersonId
-      ? requireAssignableStaff(accompanyingSalespersonId, "Accompanying salesperson")
+      ? requireAssignableStaff(accompanyingSalespersonId, "accompanying salesperson")
       : Promise.resolve(null),
   ]);
 

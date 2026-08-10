@@ -15,7 +15,11 @@ test("global quick-create metadata and writes remain tenant scoped", () => {
   assert.match(quickCreateDialogSource, /action=\{createQuickContact\}/);
   assert.match(quickCreateDialogSource, /action=\{createQuickVehicle\}/);
   assert.match(quickCreateDialogSource, /scheduleQuickActivity\(formData\)/);
-  assert.match(quickCreateActionSource, /resolveTenantMemberUser\(id\)/);
+  // Via the shared contract now, not this file's own copy of the membership
+  // check. The gateway and the action it delegates to were two answers to one
+  // question; they share an implementation so they cannot give different ones.
+  assert.match(quickCreateActionSource, /resolveAssignableUser\(formData\.get\(key\), label\)/);
+  assert.doesNotMatch(quickCreateActionSource, /\bresolveTenantMemberUser\s*\(/);
   assert.match(quickCreateActionSource, /prisma\.pipelineStage\.findUnique/);
   assert.match(quickCreateActionSource, /prisma\.contact\.findUnique/);
   assert.match(quickCreateActionSource, /prisma\.product\.findUnique/);
