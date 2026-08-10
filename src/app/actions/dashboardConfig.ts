@@ -229,7 +229,6 @@ export async function createDashboard(title: unknown): Promise<ActionResult> {
     const slug = await freeSlug(user.id, parsed.data);
     await prisma.dashboard.create({
       data: {
-        tenantId: await actingTenantId(),
         userId: user.id,
         slug,
         title: parsed.data,
