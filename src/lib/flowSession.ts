@@ -54,8 +54,10 @@ async function loadState(channel: string, key: string): Promise<LoadedSession | 
   }
 }
 
-function storedState(state: SessionState): string {
-  return JSON.stringify({ v: state.vars, m: state.msgs.slice(-20), fv: state.flowVersionId });
+function storedState(state: SessionState, endedAt?: string | null): string {
+  // `hn` is read by the analytics trigger: a paused session's own nodeId is null by
+  // design, so without it a handoff is attributed to no node in the funnel.
+  return JSON.stringify({ v: state.vars, m: state.msgs.slice(-20), fv: state.flowVersionId, ...(endedAt ? { hn: endedAt } : {}) });
 }
 
 function recordBotMsgs(state: SessionState, messages: OutMsg[]) {
@@ -171,7 +173,7 @@ export async function advanceFlow(
     if (result.handedOff) {
       // The BOT handed off. A person has not taken this yet, so an explicit
       // "menu"/"restart" may still bring the customer back — but a greeting may not.
-      await upsertBotSessionTx(tx, tenantId, { channel, key, nodeId: null, vars: storedState(state), status: "paused", ownership: "ai_handoff", expiresAt: new Date(Date.now() + 6 * 3600 * 1000) });
+      await upsertBotSessionTx(tx, tenantId, { channel, key, nodeId: null, vars: storedState(state, result.endedAt), status: "paused", ownership: "ai_handoff", expiresAt: new Date(Date.now() + 6 * 3600 * 1000) });
       return;
     }
 

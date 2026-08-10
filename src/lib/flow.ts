@@ -82,7 +82,24 @@ function validateCapture(format: CaptureFormat | undefined, text: string): boole
   return FORMAT_RE[format]?.test(text.trim()) ?? true;
 }
 
-export type FlowResult = { messages: OutMsg[]; session: FlowSession | null; handedOff: boolean };
+export type FlowResult = {
+  messages: OutMsg[];
+  session: FlowSession | null;
+  handedOff: boolean;
+  /**
+   * The last node this turn executed, for a turn that ENDED — handed off, or ran
+   * to completion. Null while the flow is still waiting, where `session.nodeId`
+   * already says where it stands.
+   *
+   * A handoff writes a session with `nodeId: null`, because the bot is no longer
+   * positioned anywhere, so the analytics trigger recorded `flow_handoff` against
+   * no node at all. That is the `handoffs` column the per-node funnel displays:
+   * every conversation handed off on its FIRST turn was counted in the summary and
+   * attributed to nothing in the graph, so the node that gives up on customers was
+   * invisible in the one report built to find it.
+   */
+  endedAt?: string | null;
+};
 const interpolate = (text: string, vars: Record<string, string>) => text.replace(/\{\{\s*(\w+)\s*\}\}/g, (_m, k) => vars[k] ?? "");
 
 export function evaluateCondition(condition: FlowCondition, vars: Record<string, string>): boolean {
@@ -222,6 +239,8 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
   const vars = { ...session.vars };
   let nodeId: string | null;
   let handoffContext = rememberedHandoff(vars);
+  // The node this turn last executed, so an ending turn can say where it ended.
+  let lastNodeId: string | null = null;
 
   if (session.nodeId) {
     const cur = flow.nodes[session.nodeId];
@@ -257,7 +276,7 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
       if (ai.handoff) {
         handoffContext = rememberHandoff(vars, ai);
         nodeId = cur.handoffNext ?? null;
-        if (!nodeId) { await ctx.handoff(vars, handoffContext); return { messages, session: null, handedOff: true }; }
+        if (!nodeId) { await ctx.handoff(vars, handoffContext); return { messages, session: null, handedOff: true, endedAt: cur.id }; }
       } else return { messages, session: { nodeId: cur.id, vars }, handedOff: false };
     } else nodeId = flow.start;
   } else nodeId = flow.start;
@@ -266,6 +285,7 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
   while (nodeId && guard++ < 50) {
     const node = flow.nodes[nodeId];
     if (!node) break;
+    lastNodeId = node.id;
     if (node.type === "message") {
       messages.push({ type: "text", text: interpolate(node.text, vars) }); nodeId = node.next ?? null;
     } else if (node.type === "image") {
@@ -315,13 +335,13 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
       nodeId = evaluateCondition(node.condition, vars) ? node.trueNext ?? null : node.falseNext ?? null;
     } else if (node.type === "ai") {
       const ai = await ctx.aiReply(vars); messages.push({ type: "text", text: ai.reply });
-      if (ai.handoff) { handoffContext = rememberHandoff(vars, ai); nodeId = node.handoffNext ?? null; if (!nodeId) { await ctx.handoff(vars, handoffContext); return { messages, session: null, handedOff: true }; } }
+      if (ai.handoff) { handoffContext = rememberHandoff(vars, ai); nodeId = node.handoffNext ?? null; if (!nodeId) { await ctx.handoff(vars, handoffContext); return { messages, session: null, handedOff: true, endedAt: node.id }; } }
       else return { messages, session: { nodeId: node.id, vars }, handedOff: false };
     } else if (node.type === "handoff") {
-      if (node.text) messages.push({ type: "text", text: interpolate(node.text, vars) }); await ctx.handoff(vars, handoffContext); return { messages, session: null, handedOff: true };
-    } else return { messages, session: null, handedOff: false };
+      if (node.text) messages.push({ type: "text", text: interpolate(node.text, vars) }); await ctx.handoff(vars, handoffContext); return { messages, session: null, handedOff: true, endedAt: node.id };
+    } else return { messages, session: null, handedOff: false, endedAt: node.id };
   }
-  return { messages, session: null, handedOff: false };
+  return { messages, session: null, handedOff: false, endedAt: lastNodeId };
 }
 
 export const DEFAULT_FLOW: Flow = {
