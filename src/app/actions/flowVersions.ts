@@ -8,6 +8,8 @@ import { requireOwner } from "@/lib/auth";
 import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { writeTenantId } from "@/lib/tenantWrite";
 import { logAudit } from "@/lib/audit";
+import { builderTenantId } from "@/lib/flowScope";
+import { legacyFlowTenant } from "@/lib/flowTenantScope";
 
 type VersionRow = { id: string; version: number; definition: string };
 
@@ -24,7 +26,9 @@ export async function restoreFlowVersionToDraft(
   const owner = await requireOwner();
   const expectedUpdatedAt = new Date(String(formData.get("expectedUpdatedAt") ?? ""));
   if (Number.isNaN(expectedUpdatedAt.getTime())) return;
-  const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
+  // Both the snapshot read and the draft write belong to the same workspace.
+  const tenantId = await builderTenantId();
+  const scope = legacyFlowTenant(tenantId);
 
   const rows = await basePrisma.$queryRaw<VersionRow[]>(Prisma.sql`
     SELECT "id", "version", "definition"
@@ -41,7 +45,7 @@ export async function restoreFlowVersionToDraft(
   // A canvas save that lands after the history page rendered wins; rollback then
   // does nothing instead of overwriting newer work.
   const updated = await prisma.botFlow.updateMany({
-    where: { id: flowId, updatedAt: expectedUpdatedAt },
+    where: { id: flowId, updatedAt: expectedUpdatedAt, ...scope },
     data: { definition: version.definition },
   });
   if (updated.count !== 1) return;

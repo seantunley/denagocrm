@@ -1,11 +1,14 @@
 import { ExternalLink, Inbox, MessageSquare, Star } from "lucide-react";
-import { prisma, basePrisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { basePrisma } from "@/lib/db";
+import { activeTenantPredicate } from "@/lib/tenantPredicate";
+import { getActiveTenantId, requireUser } from "@/lib/auth";
+import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { accessibleInboxWhere, hasPermission } from "@/lib/permissions";
 import AutoRefresh from "@/components/AutoRefresh";
 import Tabs from "@/components/Tabs";
 import SocialThreadList from "@/components/SocialThreadList";
 import { buildInboxThreads } from "@/lib/inboxThreads";
+import { loadInboxComms } from "@/lib/inboxQuery";
 import { deliveryStateForMessages } from "@/lib/botOutbox";
 import { collaborationForThreads } from "@/lib/inboxCollaboration";
 import { listTenantStaff } from "@/lib/tenantActor";
@@ -18,22 +21,42 @@ export const metadata = { title: "Social inbox — DenagoCRM" };
 
 export default async function InboxPage() {
   const user = await requireUser();
+  // The workspace this person is signed in to, resolved identically whether
+  // tenant enforcement is off, observing or on.
+  const workspaceTenantId = (await getActiveTenantId()) ?? DEFAULT_TENANT_ID;
   const scopeWhere = await accessibleInboxWhere(user);
   const channelWhere = { type: { in: ["whatsapp", "messenger", "instagram"] } };
   const [activeComms, archivedComms, reviews, placeId] = await Promise.all([
-    prisma.communication.findMany({
-      where: { ...channelWhere, ...scopeWhere, archivedAt: null },
-      orderBy: { occurredAt: "desc" },
-      take: 400,
-      include: { contact: true, lead: true },
+    // Threads are chosen by their own recency, then their messages are loaded —
+    // so a busy conversation can no longer evict a quiet one from the queue.
+    loadInboxComms({ ...channelWhere, ...scopeWhere }, { archived: false }),
+    loadInboxComms({ ...channelWhere, ...scopeWhere }, { archived: true }),
+    // Reviews are tenant-owned. This read runs on the bypass client, so the
+    // predicate the RLS extension would have added has to be added by hand.
+    //
+    // `activeTenantPredicate` alone is NOT enough, and the reason is the mode
+    // this actually ships in. It returns `{}` while enforcement is dormant —
+    // correct as a general rule, because filtering on a tenant nobody told us
+    // about would hide legacy rows written before the column existed. But an
+    // unscoped read is not a migration mechanism: it means that for the whole
+    // dormant period — which is every day until enforcement is switched on —
+    // this page shows every workspace's reviews to every workspace.
+    //
+    // The migration beside this change backfills every tenantless review onto
+    // the founding tenant, so there are no legacy rows left for a filter to
+    // hide. That is what makes filtering safe here, and it is why the two must
+    // land together.
+    //
+    // So the tenant comes from the SESSION — the workspace this person is signed
+    // in to — which is resolved the same way in every enforcement mode.
+    // activeTenantPredicate is still spread last, so under enforcement the
+    // established scope wins and the scopeless-owner case still throws rather
+    // than quietly widening to every tenant.
+    basePrisma.googleReview.findMany({
+      where: { tenantId: workspaceTenantId, ...activeTenantPredicate("inbox Google reviews") },
+      orderBy: { publishedAt: "desc" },
+      take: 10,
     }),
-    prisma.communication.findMany({
-      where: { ...channelWhere, ...scopeWhere, archivedAt: { not: null } },
-      orderBy: { occurredAt: "desc" },
-      take: 400,
-      include: { contact: true, lead: true },
-    }),
-    basePrisma.googleReview.findMany({ orderBy: { publishedAt: "desc" }, take: 10 }),
     getSetting("GOOGLE_PLACE_ID"),
   ]);
 

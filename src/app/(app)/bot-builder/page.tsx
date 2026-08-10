@@ -8,9 +8,12 @@ import { FLOW_TEMPLATES } from "@/lib/flowTemplates";
 import { flowErrors, flowWarnings, validateFlow } from "@/lib/flowValidation";
 import { enabledFlowChannels } from "@/lib/flowValidationServer";
 import { getFlowPublicationMeta, publishFlowSnapshot } from "@/lib/flowPublishing";
-import { createFlow, setActiveFlow, duplicateFlow, deleteFlow, renameFlow } from "@/app/actions/flow";
+import { createFlow, duplicateFlow, deleteFlow, renameFlow } from "@/app/actions/flow";
+import PublishFlowButton from "@/components/PublishFlowButton";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import { EmptyState, StatusPill, Surface } from "@/components/visual-system";
+import { builderTenantId, flowScope } from "@/lib/flowScope";
+import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 
 function parseDraft(definition: string): Flow | null {
   try {
@@ -23,9 +26,22 @@ function parseDraft(definition: string): Flow | null {
 
 export default async function BotBuilderPage() {
   const owner = await requireOwner();
+  const scope = await flowScope();
 
-  if ((await prisma.botFlow.count()) === 0) {
-    const legacy = await getSetting("BOT_FLOW");
+  const tenantId = await builderTenantId();
+  if ((await prisma.botFlow.count({ where: scope })) === 0) {
+    // The one-time import of the pre-BotFlow `BOT_FLOW` setting belongs to the
+    // FOUNDING tenant and nobody else. getSetting/putSetting deliberately resolve
+    // every key to the founding tenant while enforcement is dormant, so once the
+    // list above became per-workspace this branch would have handed a brand new
+    // workspace the founding tenant's conversation graph as its first flow — and
+    // then CLEARED that tenant's setting on the way out. A cross-tenant read and a
+    // destructive cross-tenant write, both introduced by scoping only the list.
+    //
+    // A second workspace starts from the shipped default, which is what it should
+    // have started from.
+    const founding = tenantId === DEFAULT_TENANT_ID;
+    const legacy = founding ? await getSetting("BOT_FLOW") : null;
     let definition = JSON.stringify(DEFAULT_FLOW);
     let name = "Default flow";
     if (legacy) {
@@ -39,13 +55,13 @@ export default async function BotBuilderPage() {
         /* keep default */
       }
     }
-    const seeded = await prisma.botFlow.create({ data: { name, definition, active: true } });
+    const seeded = await prisma.botFlow.create({ data: { name, definition, active: true, tenantId } });
     await publishFlowSnapshot(seeded.id, owner.id).catch(() => {});
     if (legacy) await putSetting("BOT_FLOW", "");
   }
 
   const [flows, publicationMeta, channels] = await Promise.all([
-    prisma.botFlow.findMany({ orderBy: [{ active: "desc" }, { updatedAt: "desc" }] }),
+    prisma.botFlow.findMany({ where: scope, orderBy: [{ active: "desc" }, { updatedAt: "desc" }] }),
     getFlowPublicationMeta(),
     enabledFlowChannels(),
   ]);
@@ -122,7 +138,7 @@ export default async function BotBuilderPage() {
               <div className="my-5 flex flex-1 items-center gap-2 text-muted-foreground" aria-hidden>{[0,1,2].map((step) => <span key={step} className="flex items-center gap-2"><span className="grid size-8 place-items-center rounded-lg border border-border bg-muted/40"><GitBranch className="size-3.5" /></span>{step < 2 && <span className="h-px w-5 bg-border" />}</span>)}</div>
               <div className="flex gap-2 flex-wrap border-t border-border/70 pt-3">
                 <Link href={`/bot-builder/${f.id}`} className="btn-primary btn-sm"><Pencil className="size-3.5" />Edit draft</Link>
-                {(!f.active || pending) && !blocked && <form action={setActiveFlow.bind(null, f.id)}><button className="btn-secondary btn-sm">{f.active ? "Publish changes" : "Publish"}</button></form>}
+                {(!f.active || pending) && !blocked && <PublishFlowButton flowId={f.id} label={f.active ? "Publish changes" : "Publish"} />}
                 {(!f.active || pending) && blocked && <span className="btn-secondary btn-sm cursor-not-allowed opacity-50" title="Fix publish errors first">Publish blocked</span>}
                 <form action={duplicateFlow.bind(null, f.id)}><button className="btn-secondary btn-sm"><Copy className="size-3.5" />Duplicate</button></form>
                 {!f.active && <form action={deleteFlow.bind(null, f.id)}><button className="btn-secondary btn-sm text-red-400" aria-label={`Delete ${f.name}`}><Trash2 className="size-3.5" /></button></form>}

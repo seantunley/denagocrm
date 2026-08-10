@@ -33,7 +33,12 @@ test("the founding tenant owns legacy NULL-tenant rows; a second tenant sees onl
 
 test("publish reads and writes the draft with the same rule the runtime reads it with", () => {
   const code = src("src/lib/flowPublishing.ts");
-  const publish = code.slice(code.indexOf("export async function publishFlowSnapshot"));
+  // Bound the slice: BotFlowPublication/BotFlowVersion have a NOT NULL tenantId
+  // and are filtered STRICTLY on purpose. Only BotFlow carries legacy NULLs.
+  const publish = code.slice(
+    code.indexOf("export async function publishFlowSnapshot"),
+    code.indexOf("export async function getFlowPublicationMeta"),
+  );
 
   // The re-read, the deactivate sweep and the activate must all tolerate a legacy
   // NULL tenant — a strict filter on any one of them reintroduces the dead button
@@ -54,6 +59,9 @@ test("a newly created flow is not born tenantless", () => {
   const creates = actions.match(/botFlow\.create\(\{[\s\S]*?\}\)/g) ?? [];
   assert.ok(creates.length >= 2, `expected the create sites, found ${creates.length}`);
   for (const create of creates) {
-    assert.match(create, /tenantId: writeTenantId\(\) \?\? DEFAULT_TENANT_ID/, `a create still writes a tenantless flow:\n${create}`);
+    // The session's active workspace, not writeTenantId() — that is null while
+    // enforcement is dormant, so it would stamp a second workspace's new flow
+    // with the founding tenant's id.
+    assert.match(create, /tenantId: await builderTenantId\(\)/, `a create still writes the wrong tenant:\n${create}`);
   }
 });

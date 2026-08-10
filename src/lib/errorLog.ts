@@ -59,10 +59,26 @@ async function tenantForError(): Promise<string | null> {
  * fires at most once per 30 minutes PER TENANT so a crash-loop can't melt your
  * phone — and so one tenant's error storm cannot silence another tenant's alert.
  */
+export type LogErrorOptions = {
+  /**
+   * Attribute to this tenant instead of inferring one. For a caller that KNOWS
+   * the owner — an inbound webhook, which has no staff session to fall back to.
+   */
+  tenantId?: string | null;
+  /**
+   * Whether this may raise the first-error push. Default true. Set false for an
+   * EXPECTED, self-healing condition: a lease contention is the system working,
+   * and while enforcement is dormant `sendPushToAll` has no scope to narrow to,
+   * so it would notify every subscription on the install.
+   */
+  alert?: boolean;
+};
+
 export async function logError(
   scope: string,
   err: unknown,
-  context?: string
+  context?: string,
+  options?: LogErrorOptions,
 ): Promise<void> {
   try {
     // EVERY string that lands in ErrorLog goes through redactUrl first. The
@@ -75,7 +91,7 @@ export async function logError(
       err instanceof Error ? err.message : typeof err === "string" ? err : JSON.stringify(err);
     const message = redactUrl(raw);
     const stack = err instanceof Error && err.stack ? redactUrl(err.stack).slice(0, 4000) : undefined;
-    const tenantId = await tenantForError();
+    const tenantId = options?.tenantId !== undefined ? options.tenantId : await tenantForError();
 
     await basePrisma.errorLog.create({
       data: {
@@ -91,6 +107,7 @@ export async function logError(
     // first-error alert for every other tenant — the alert would simply never
     // fire for them, silently. Unattributed errors (tenantId null) throttle as
     // their own bucket rather than joining an arbitrary tenant's.
+    if (options?.alert === false) return;
     const recent = await basePrisma.errorLog.count({
       where: {
         createdAt: { gte: new Date(Date.now() - 30 * 60 * 1000) },

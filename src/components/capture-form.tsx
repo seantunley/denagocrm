@@ -28,7 +28,7 @@ export function CaptureHero({
           <Icon className="size-4" />
         </span>
         <div className="min-w-0 flex-1">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">{eyebrow}</p>
+          <p className="text-[11px] font-medium tracking-[0.04em] text-primary">{eyebrow}</p>
           <p className="mt-1 text-sm font-semibold text-foreground">{title}</p>
           <p className="mt-1 max-w-xl text-xs leading-5 text-muted-foreground">{description}</p>
           {summary.length > 0 && (
@@ -41,7 +41,7 @@ export function CaptureHero({
                     summary.length >= 3 && index === summary.length - 1 && "col-span-2 sm:col-span-1",
                   )}
                 >
-                  <span className="block text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">{item.label}</span>
+                  <span className="block text-[10px] font-medium tracking-[0.02em] text-muted-foreground">{item.label}</span>
                   <span className="mt-1 block truncate font-medium text-foreground">{item.value}</span>
                 </div>
               ))}
@@ -126,17 +126,20 @@ export function CaptureField({
   );
 }
 
+type CaptureFooterSubmit =
+  | { label: string; kind: CaptureKind; children?: never }
+  | { label?: never; kind?: never; children: ReactNode };
+
 export function CaptureFooter({
   label,
   requiredNote,
   kind,
   variant,
+  children,
 }: {
-  label: string;
   requiredNote: string;
-  kind: CaptureKind;
   variant: CaptureFormVariant;
-}) {
+} & CaptureFooterSubmit) {
   return (
     <div
       className={cn(
@@ -146,7 +149,7 @@ export function CaptureFooter({
       )}
     >
       <p className="hidden text-xs text-muted-foreground sm:block">{requiredNote}</p>
-      <CaptureSubmitButton label={label} kind={kind} />
+      {children ?? (label && kind ? <CaptureSubmitButton label={label} kind={kind} /> : null)}
     </div>
   );
 }
