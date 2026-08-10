@@ -1,7 +1,7 @@
 "use client";
 
 import "@xyflow/react/dist/style.css";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Bot,
@@ -162,7 +162,7 @@ function blankNode(type: FlowNode["type"], id: string): FlowNode {
   }
 }
 
-export default function FlowBuilder({ flowId, initial, journeys = [] }: { flowId: string; initial: FlowData; journeys?: FlowJourneyOption[] }) {
+export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt }: { flowId: string; initial: FlowData; journeys?: FlowJourneyOption[]; updatedAt?: string }) {
   const router = useRouter();
   const [start, setStart] = useState(initial.start);
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState<Node<RFData>>(
@@ -175,6 +175,17 @@ export default function FlowBuilder({ flowId, initial, journeys = [] }: { flowId
   );
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [status, setStatus] = useState("Saved");
+  // The draft stamp this canvas is working from. Every save is fenced against it,
+  // and a successful save adopts the new one.
+  const savedAt = useRef(updatedAt);
+  // Leaving with unsaved work loses it silently. The canvas already tracks the
+  // state; it just never told the browser.
+  useEffect(() => {
+    if (status === "Saved") return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [status]);
   const [fullscreen, setFullscreen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
@@ -243,8 +254,16 @@ export default function FlowBuilder({ flowId, initial, journeys = [] }: { flowId
       nodes[rn.id] = rn.data.flow;
       positions[rn.id] = rn.position;
     }
-    const res = await saveFlow(flowId, JSON.stringify({ start, nodes, positions }));
-    setStatus(res.ok ? "Saved" : res.error ?? "Save failed");
+    const res = await saveFlow(flowId, JSON.stringify({ start, nodes, positions }), savedAt.current);
+    if (res.ok) {
+      savedAt.current = res.updatedAt ?? savedAt.current;
+      setStatus("Saved");
+    } else {
+      // A conflict must be loud. Silently keeping "Unsaved changes" would let the
+      // owner keep editing a draft the server has already refused.
+      setStatus(res.conflict ? "Not saved — this draft changed elsewhere" : res.error ?? "Save failed");
+      if (res.error) toast.error(res.error);
+    }
     if (res.ok) {
       toast.success("Flow saved");
       router.refresh();

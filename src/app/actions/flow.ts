@@ -42,7 +42,16 @@ export async function createFlow(formData: FormData) {
 }
 
 /** Persist a flow's DRAFT definition (JSON: { start, nodes, positions }). */
-export async function saveFlow(id: string, json: string): Promise<{ ok?: boolean; error?: string }> {
+export async function saveFlow(
+  id: string,
+  json: string,
+  /**
+   * The draft's `updatedAt` as it was when this canvas loaded it. Optional only so
+   * an older client cannot break; when absent the save is unfenced, exactly as
+   * before.
+   */
+  expectedUpdatedAt?: string,
+): Promise<{ ok?: boolean; error?: string; conflict?: boolean; updatedAt?: string }> {
   const owner = await requireOwner();
   let parsed: unknown;
   try {
@@ -52,11 +61,35 @@ export async function saveFlow(id: string, json: string): Promise<{ ok?: boolean
   }
   const f = parsed as { start?: string; nodes?: Record<string, unknown> };
   if (!f.start || !f.nodes || !f.nodes[f.start]) return { error: "Flow needs a valid start node." };
-  await prisma.botFlow.update({ where: { id }, data: { definition: JSON.stringify(parsed) } });
+
+  // Optimistic concurrency, the same fence flowVersions.ts and the AI drafting
+  // path already use. Plain `update({ where: { id } })` is blind last-writer-wins:
+  // two tabs open the same draft, the first saves a rewritten booking branch, the
+  // second saves an older graph, and the first tab's work is gone with no warning.
+  // This is the ONE draft writer that did not check.
+  const definition = JSON.stringify(parsed);
+  if (expectedUpdatedAt) {
+    const expected = new Date(expectedUpdatedAt);
+    const written = Number.isNaN(expected.getTime())
+      ? { count: 0 }
+      : await prisma.botFlow.updateMany({ where: { id, updatedAt: expected }, data: { definition } });
+    if (written.count !== 1) {
+      // Say what happened and refuse, rather than silently discarding either side.
+      return {
+        conflict: true,
+        error: "This draft was changed somewhere else after you opened it. Reload to see the newer version — your changes have not been saved.",
+      };
+    }
+  } else {
+    await prisma.botFlow.update({ where: { id }, data: { definition } });
+  }
+
+  const saved = await prisma.botFlow.findUnique({ where: { id }, select: { updatedAt: true } });
   await logAudit({ action: "bot.flow_saved", summary: "Chatbot flow draft updated", user: owner });
   revalidatePath(`/bot-builder/${id}`);
   revalidatePath("/bot-builder");
-  return { ok: true };
+  // Hand back the new stamp so the next save from this tab fences against it.
+  return { ok: true, updatedAt: saved?.updatedAt.toISOString() };
 }
 
 /** Revert a flow draft to the built-in default definition. Published versions are immutable. */

@@ -86,7 +86,8 @@ test("visual editor exposes only server-supplied active Journeys", () => {
   const page = src("src/app/(app)/bot-builder/[id]/page.tsx");
   assert.match(page, /prisma\.journey\.findMany/);
   assert.match(page, /where: \{ status: "active" \}/);
-  assert.match(page, /<FlowBuilder flowId=\{row\.id\} initial=\{flow\} journeys=\{journeys\} \/>/);
+  // The canvas also receives the draft's updatedAt now, to fence its saves.
+  assert.match(page, /<FlowBuilder flowId=\{row\.id\} initial=\{flow\} journeys=\{journeys\}/);
   assert.match(page, /<FlowAiDraftForm flowId=\{row\.id\} \/>/);
 
   const builder = src("src/components/FlowBuilder.tsx");

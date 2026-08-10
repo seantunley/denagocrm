@@ -51,7 +51,7 @@ export default async function FlowEditorPage({ params }: { params: Promise<{ id:
       </div>
       <FlowLintPanel issues={issues} channels={channels} />
       <FlowAiDraftForm flowId={row.id} />
-      <FlowBuilder flowId={row.id} initial={flow} journeys={journeys} />
+      <FlowBuilder flowId={row.id} initial={flow} journeys={journeys} updatedAt={row.updatedAt.toISOString()} />
     </div>
   );
 }
