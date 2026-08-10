@@ -177,10 +177,14 @@ test("forget() evicts one key and leaves the rest", async () => {
  */
 test("getPageToken reads the tenant once and passes the credential in", () => {
   const code = src("src/lib/messenger.ts").replace(/^\s*\/\/.*$/gm, "");
-  const fn = code.slice(
-    code.indexOf("async function getPageToken"),
-    code.indexOf("export async function sendDirectMessage"),
-  );
+  // getPageToken's OWN body, ended at its closing brace rather than at whatever
+  // declaration happens to follow. Slicing to the next known export made this
+  // assertion depend on the file's running order: once a shared sender helper
+  // moved in between, the slice swallowed it and the no-inline-fetch check below
+  // failed on somebody else's fetch.
+  const start = code.indexOf("async function getPageToken");
+  assert.ok(start > 0, "getPageToken must exist");
+  const fn = code.slice(start, code.indexOf("\n}", start) + 2);
   assert.match(fn, /const tenantId = ambientTenantId\(\);/, "the tenant is resolved once, up front");
   assert.match(
     fn,

@@ -37,6 +37,10 @@ model BotFlowOutbox {
   /// Machine-readable classification beside the human `lastError`, so a retry
   /// policy can tell "the number is invalid" from "Meta was briefly down".
   failureCode String?
+  /// The provider's own id for the accepted send. It is what correlates an echo,
+  /// a delivery receipt and a failure back to the exact message that caused them —
+  /// precision a conversation-level watermark cannot express.
+  providerMessageId String?
   /// The CRM timeline row this delivery is for.
   ///
   /// Without it the two halves cannot be joined: the Communication says a message
@@ -65,6 +69,7 @@ model BotFlowOutbox {
   @@unique([tenantId, clientIdempotencyKey])
   @@unique([tenantId, communicationId])
   @@index([tenantId, status, availableAt])
+  @@index([tenantId, providerMessageId])
   @@index([tenantId, channel, key, origin, status])
   @@index([tenantId, channel, key, createdAt, sequence])
   @@index([tenantId, status, communicationLoggedAt])

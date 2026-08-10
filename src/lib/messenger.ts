@@ -1,3 +1,6 @@
+import { Prisma } from "@prisma/client";
+import { decideEcho } from "./metaEcho";
+import { deleteCommunicationsAndReconcile } from "./conversations";
 import { prisma } from "./db";
 import { resolveTenantCredential } from "./settings";
 import { logAudit } from "./audit";
@@ -75,35 +78,70 @@ async function getPageToken(): Promise<string | null> {
   return pageTokenCache.resolve(tenantId ?? GLOBAL_TOKEN_KEY, sysToken, exchangeForPageToken);
 }
 
-/** Sends a Messenger / Instagram DM (24-hour customer-service window applies). */
-export async function sendDirectMessage(
-  platform: DmPlatform,
+/**
+ * The outcome of a Meta send.
+ *
+ * `providerMessageId` is Meta's own id for the accepted message, and it is the
+ * only thing that can later identify the echo of THIS send among the echoes of
+ * every message the Page has ever sent. Every sender must return it: an echo the
+ * ledger cannot recognise is written into the customer's history a second time.
+ */
+export type MetaSendResult = { ok: boolean; error?: string; providerMessageId?: string };
+
+/**
+ * Every Meta send is the same POST to the same endpoint, and the reply carries
+ * the same `message_id`. They were three separate functions each parsing their
+ * own response, and only ONE of them was ever taught to keep that id — so a
+ * plain text reply could be recognised as our own echo and the identical text
+ * sent with quick-reply chips could not, for no reason a reader could see.
+ *
+ * One call site now, so "keep the id" is not a thing a future sender can forget
+ * to do. `humanise` is the only per-sender difference: turning Meta's wording for
+ * the 24-hour window and for pending app review into something a salesperson can
+ * act on.
+ */
+async function postToSendApi(
+  message: unknown,
   recipientId: string,
-  text: string
-): Promise<{ ok: boolean; error?: string }> {
+  humanise: (message: string) => string = (message) => message,
+): Promise<MetaSendResult> {
   const token = await getPageToken();
   if (!token) return { ok: false, error: "Meta page token is not configured (Settings → Integrations)." };
   const res = await fetch(`${GRAPH}/me/messages?access_token=${encodeURIComponent(token)}`, {
     signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      recipient: { id: recipientId },
-      messaging_type: "RESPONSE",
-      message: { text },
-    }),
+    body: JSON.stringify({ recipient: { id: recipientId }, messaging_type: "RESPONSE", message }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => null);
-    const msg: string = err?.error?.message ?? `Send API error ${res.status}`;
-    const friendly = /24|window|outside/i.test(msg)
-      ? "Outside the 24-hour reply window — the customer must message you first."
-      : /permission|OAuth/i.test(msg)
-      ? `Meta hasn't approved messaging permissions yet (app review pending): ${msg}`
-      : msg;
-    return { ok: false, error: friendly };
+    return { ok: false, error: humanise(err?.error?.message ?? `Send API error ${res.status}`) };
   }
-  return { ok: true };
+  const accepted = await res.json().catch(() => null);
+  return {
+    ok: true,
+    providerMessageId: typeof accepted?.message_id === "string" ? accepted.message_id : undefined,
+  };
+}
+
+/** Meta's send errors, in words a salesperson can act on. */
+function humaniseSendError(message: string): string {
+  if (/24|window|outside/i.test(message)) {
+    return "Outside the 24-hour reply window — the customer must message you first.";
+  }
+  if (/permission|OAuth/i.test(message)) {
+    return `Meta hasn't approved messaging permissions yet (app review pending): ${message}`;
+  }
+  return message;
+}
+
+/** Sends a Messenger / Instagram DM (24-hour customer-service window applies). */
+export async function sendDirectMessage(
+  platform: DmPlatform,
+  recipientId: string,
+  text: string
+): Promise<MetaSendResult> {
+  return postToSendApi({ text }, recipientId, humaniseSendError);
 }
 
 /** Sends a DM with tappable quick-reply chips (menu options). */
@@ -112,31 +150,19 @@ export async function sendDirectQuickReplies(
   recipientId: string,
   text: string,
   replies: { title: string; payload: string }[]
-): Promise<{ ok: boolean; error?: string }> {
-  const token = await getPageToken();
-  if (!token) return { ok: false, error: "Meta page token is not configured." };
-  const res = await fetch(`${GRAPH}/me/messages?access_token=${encodeURIComponent(token)}`, {
-    signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      recipient: { id: recipientId },
-      messaging_type: "RESPONSE",
-      message: {
-        text,
-        quick_replies: replies.slice(0, 11).map((r) => ({
-          content_type: "text",
-          title: r.title.slice(0, 20),
-          payload: r.payload.slice(0, 1000),
-        })),
-      },
-    }),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => null);
-    return { ok: false, error: err?.error?.message ?? `Send API error ${res.status}` };
-  }
-  return { ok: true };
+): Promise<MetaSendResult> {
+  return postToSendApi(
+    {
+      text,
+      quick_replies: replies.slice(0, 11).map((r) => ({
+        content_type: "text",
+        title: r.title.slice(0, 20),
+        payload: r.payload.slice(0, 1000),
+      })),
+    },
+    recipientId,
+    humaniseSendError,
+  );
 }
 
 /** Sends an image / audio / video / file attachment by URL. */
@@ -144,26 +170,12 @@ export async function sendDirectAttachment(
   platform: DmPlatform,
   recipientId: string,
   attachment: { type: "image" | "audio" | "video" | "file"; url: string }
-): Promise<{ ok: boolean; error?: string }> {
-  const token = await getPageToken();
-  if (!token) return { ok: false, error: "Meta page token is not configured (Settings → Integrations)." };
-  const res = await fetch(`${GRAPH}/me/messages?access_token=${encodeURIComponent(token)}`, {
-    signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      recipient: { id: recipientId },
-      messaging_type: "RESPONSE",
-      message: {
-        attachment: { type: attachment.type, payload: { url: attachment.url, is_reusable: false } },
-      },
-    }),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => null);
-    return { ok: false, error: err?.error?.message ?? `Send API error ${res.status}` };
-  }
-  return { ok: true };
+): Promise<MetaSendResult> {
+  return postToSendApi(
+    { attachment: { type: attachment.type, payload: { url: attachment.url, is_reusable: false } } },
+    recipientId,
+    humaniseSendError,
+  );
 }
 
 export type InboundAttachment = { type: string; url: string };
@@ -418,8 +430,31 @@ export async function recordInboundDm(
   }, "dm").catch(() => {});
 }
 
-/** Replies sent from Business Suite / the phone app arrive as echoes — file them too. */
-export async function recordDmEcho(platform: DmPlatform, recipientId: string, text: string) {
+/** Does an outbox row already hold this provider id? The one unambiguous answer. */
+async function ledgerHoldsProviderId(tenantId: string, providerMessageId: string): Promise<boolean> {
+  return Boolean(
+    await prisma.botFlowOutbox.findFirst({
+      where: { tenantId, providerMessageId },
+      select: { id: true },
+    }),
+  );
+}
+
+export async function recordDmEcho(
+  platform: DmPlatform,
+  recipientId: string,
+  text: string,
+  providerMessageId?: string | null,
+) {
+  // Scoped, or one tenant's send would suppress another tenant's echo.
+  const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
+  const decision = decideEcho({
+    tenantId,
+    providerMessageId,
+    ledgerHasId: providerMessageId ? await ledgerHoldsProviderId(tenantId, providerMessageId) : false,
+  });
+  if (decision.action === "drop") return;
+
   const idField = platform === "instagram" ? "instagramId" : "messengerPsid";
   const contact = await prisma.contact.findFirst({ where: { [idField]: recipientId } });
   if (!contact) return;
@@ -437,14 +472,59 @@ export async function recordDmEcho(platform: DmPlatform, recipientId: string, te
     select: { archivedAt: true },
   });
 
-  await prisma.communication.create({
-    data: {
-      type: platform,
-      direction: "outbound",
-      body: text,
-      contactId: contact.id,
-      userId: firstUser.id,
-      archivedAt: latest?.archivedAt ?? null,
-    },
-  });
+  const data = {
+    type: platform,
+    direction: "outbound",
+    body: text,
+    contactId: contact.id,
+    userId: firstUser.id,
+    archivedAt: latest?.archivedAt ?? null,
+    // The provider's own id travels WITH the row. It is what lets the worker
+    // recognise this as its own message later, and what makes a redelivered
+    // webhook a no-op rather than a third copy.
+    messageId: providerMessageId ?? null,
+  };
+  /**
+   * `create`, never `upsert`, and the idempotency comes from catching the
+   * conflict instead.
+   *
+   * This mattered more than it looks. The guarded client intercepts
+   * `Communication.create` — and ONLY create — to attach the row to its
+   * conversation and roll that conversation's counters forward. An upsert
+   * silently skipped both: the echo landed with `conversationId: null`, outside
+   * the threading every conversation-scoped query depends on, while looking
+   * perfectly fine on the timeline. Measured, not assumed.
+   */
+  let written: { id: string };
+  try {
+    written = await prisma.communication.create({
+      data: decision.dedupeKey ? { ...data, dedupeKey: decision.dedupeKey } : data,
+      select: { id: true },
+    });
+  } catch (error) {
+    // Meta redelivers webhooks. The unique dedupeKey is what makes the second
+    // delivery a no-op rather than a third copy of the customer's message.
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") return;
+    throw error;
+  }
+
+  if (!providerMessageId) return;
+
+  /**
+   * THE INTERLEAVING THIS CLOSES.
+   *
+   * The ledger check above ran before the worker committed the id; this write
+   * landed after the worker's own cleanup had already looked and found nothing.
+   * Neither side is at fault and the duplicate would simply stay.
+   *
+   * So the answer is re-read after writing. Whichever of the two commits second
+   * removes the duplicate, and the row is only ever deleted on PROOF — an outbox
+   * row holding this exact id — never on a resemblance.
+   */
+  if (await ledgerHoldsProviderId(tenantId, providerMessageId)) {
+    // Not a bare delete. The create above rolled this conversation's counters
+    // forward, and nothing intercepts a delete — so removing only the row would
+    // leave the transcript right and the projection one message ahead for ever.
+    await deleteCommunicationsAndReconcile({ id: written.id });
+  }
 }

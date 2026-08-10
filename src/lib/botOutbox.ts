@@ -6,6 +6,8 @@ import { withTenantWrite, writeTenantId, type TenantWriteTx } from "./tenantWrit
 import { botStillOwnsTx, pauseBotSessionTx } from "./botSessionStore";
 import { logAuditStrict } from "./audit";
 import { classifyDeliveryFailure, PERMANENT_FAILURES, staffReplyMatchesRow } from "./messageDelivery";
+import { metaEchoDedupeKey } from "./metaEcho";
+import { deleteCommunicationsAndReconcile } from "./conversations";
 import type { OutMsg } from "./flow";
 import { sendWhatsAppButtons, sendWhatsAppImage, sendWhatsAppList, sendWhatsAppText } from "./whatsapp";
 import { sendDirectAttachment, sendDirectMessage, sendDirectQuickReplies } from "./messenger";
@@ -426,7 +428,38 @@ function asOutMsg(payload: unknown): OutMsg | null {
   return null;
 }
 
-async function sendProvider(row: OutboxRow): Promise<{ ok: boolean; error?: string }> {
+/**
+ * Remove the echo of a message we have just proved is ours.
+ *
+ * Meta echoes our own sends back to the webhook, and the echo can arrive before
+ * this worker has committed the provider id — so the webhook, unable to tell it
+ * from a colleague replying in Business Suite, records it. That is deliberate:
+ * guessing from the message TEXT drops a colleague's "Thanks" whenever we happen
+ * to be sending "Thanks", and a lost message is worse than a duplicate nobody
+ * has had time to read.
+ *
+ * Committing the id is the proof. The echo row is keyed by that id, so this is
+ * an exact delete of one row, not a resemblance match — and it is a no-op in the
+ * ordinary case where the echo arrived after the id and was never written.
+ */
+async function reconcileProviderEcho(providerMessageId: string | undefined): Promise<void> {
+  if (!providerMessageId) return;
+  // outboxTenantId(), the same value every claim and write in this file uses, so
+  // the key built here is the key the webhook built for the same message.
+  const tenantId = outboxTenantId();
+  // Reconciling, not deleting. The echo was written through the guarded client,
+  // which rolled the conversation's counters forward; nothing intercepts a
+  // delete, so a bare one leaves the projection permanently ahead of the
+  // transcript — and Conversation is what the inbox reads for ordering and for
+  // "who is waiting on us".
+  await deleteCommunicationsAndReconcile({ dedupeKey: metaEchoDedupeKey(tenantId, providerMessageId) })
+    .catch(() => {
+      /* Best effort: a duplicate left on the timeline is visible and survivable,
+         and must never turn a delivered message into a failed one. */
+    });
+}
+
+async function sendProvider(row: OutboxRow): Promise<{ ok: boolean; error?: string; providerMessageId?: string }> {
   const message = asOutMsg(row.payload);
   if (!message) return { ok: false, error: "Invalid outbox payload" };
   if (row.channel === "whatsapp") {
@@ -671,13 +704,13 @@ async function deliverClaimed(row: OutboxRow): Promise<"sent" | "retry" | "dead"
   // claimed.
   if (!(await botMayStillSpeak(row))) return "cancelled";
 
-  let result: { ok: boolean; error?: string };
+  let result: { ok: boolean; error?: string; providerMessageId?: string };
   try { result = await sendProvider(row); } catch (error) { result = { ok: false, error: error instanceof Error ? error.message : String(error) }; }
   if (!result.ok) return failDelivery(row, result.error ?? "Provider rejected chatbot message");
 
   const sent = await prisma.botFlowOutbox.updateMany({
     where: { id: row.id, status: "running", attempts: row.attempts },
-    data: { status: "sent", sentAt: new Date(), leaseUntil: null, lastError: null, failureCode: null },
+    data: { status: "sent", sentAt: new Date(), leaseUntil: null, lastError: null, failureCode: null, providerMessageId: result.providerMessageId ?? null },
   });
   if (sent.count !== 1) {
     // The provider ACCEPTED this message; only our lease was superseded while it
@@ -688,12 +721,21 @@ async function deliverClaimed(row: OutboxRow): Promise<"sent" | "retry" | "dead"
     // recorded as a delivery failure.
     await prisma.botFlowOutbox.updateMany({
       where: { id: row.id, status: { notIn: ["sent", "dead"] } },
-      data: { status: "sent", sentAt: new Date(), leaseUntil: null, lastError: null },
+      // The provider id goes on too. Without it this row is a message that WAS
+      // delivered and cannot be recognised when its echo comes back, so the one
+      // path where the lease was superseded is also the one path that duplicates
+      // the customer's history.
+      data: { status: "sent", sentAt: new Date(), leaseUntil: null, lastError: null, providerMessageId: result.providerMessageId ?? null },
     });
     await logError("bot-outbox-stale-lease", new Error("Provider accepted a send after this worker's outbox lease was superseded; recorded as sent so it is not delivered twice"), row.id).catch(() => {});
+    // AFTER the write above, not before it: on this path the id is committed by
+    // that second statement, and reconciling first would look for the echo while
+    // the webhook could still legitimately be recording one.
+    await reconcileProviderEcho(result.providerMessageId);
     await repairCommunicationLog({ ...row, status: "sent" }).catch(() => {});
     return "sent";
   }
+  await reconcileProviderEcho(result.providerMessageId);
   await repairCommunicationLog({ ...row, status: "sent" }).catch(async (error) => { await logError("bot-outbox-log", error, row.id).catch(() => {}); });
   return "sent";
 }
