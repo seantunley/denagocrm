@@ -42,7 +42,12 @@ export async function createFlow(formData: FormData) {
 }
 
 /** Persist a flow's DRAFT definition (JSON: { start, nodes, positions }). */
-export async function saveFlow(id: string, json: string): Promise<{ ok?: boolean; error?: string }> {
+export async function saveFlow(
+  id: string,
+  json: string,
+  /** The draft's `updatedAt` as it was when this canvas loaded it. Required. */
+  expectedUpdatedAt: string,
+): Promise<{ ok?: boolean; error?: string; conflict?: boolean; updatedAt?: string }> {
   const owner = await requireOwner();
   let parsed: unknown;
   try {
@@ -52,19 +57,85 @@ export async function saveFlow(id: string, json: string): Promise<{ ok?: boolean
   }
   const f = parsed as { start?: string; nodes?: Record<string, unknown> };
   if (!f.start || !f.nodes || !f.nodes[f.start]) return { error: "Flow needs a valid start node." };
-  await prisma.botFlow.update({ where: { id }, data: { definition: JSON.stringify(parsed) } });
+
+  const expected = new Date(expectedUpdatedAt);
+  // No unfenced path. An optional stamp meant the server still allowed a caller to
+  // opt out of the exact invariant this exists to enforce.
+  if (Number.isNaN(expected.getTime())) {
+    return { error: "This editor is out of date — reload the page before saving." };
+  }
+
+  const definition = JSON.stringify(parsed);
+  // The conditional write and reading back the revision it produced must be ONE
+  // transaction. As two statements, another legitimate writer could land between
+  // them; this tab would then adopt THEIR timestamp without ever having seen their
+  // definition, and its next save would overwrite their work without a conflict —
+  // the same lost update in a narrower window.
+  const result = await prisma.$transaction(async (tx) => {
+    const written = await tx.botFlow.updateMany({
+      where: { id, updatedAt: expected },
+      data: { definition },
+    });
+    if (written.count !== 1) return null;
+    // Read inside the transaction, so it is the row this write produced. The
+    // updateMany above holds the row lock until commit.
+    const row = await tx.botFlow.findUnique({ where: { id }, select: { updatedAt: true } });
+    return row?.updatedAt ?? null;
+  });
+
+  if (!result) {
+    return {
+      conflict: true,
+      error: "This draft was changed somewhere else after you opened it. Reload to see the newer version — your changes have not been saved.",
+    };
+  }
+
   await logAudit({ action: "bot.flow_saved", summary: "Chatbot flow draft updated", user: owner });
   revalidatePath(`/bot-builder/${id}`);
   revalidatePath("/bot-builder");
-  return { ok: true };
+  // Hand back the stamp this write produced, so the next save fences against it.
+  return { ok: true, updatedAt: result.toISOString() };
 }
 
 /** Revert a flow draft to the built-in default definition. Published versions are immutable. */
-export async function resetFlow(id: string) {
+export async function resetFlow(
+  id: string,
+  /** The draft's `updatedAt` as it was when this canvas loaded it. Required. */
+  expectedUpdatedAt: string,
+): Promise<{ ok?: boolean; error?: string; conflict?: boolean; updatedAt?: string }> {
   await requireOwner();
-  await prisma.botFlow.update({ where: { id }, data: { definition: JSON.stringify(DEFAULT_FLOW) } });
+  // Reset is a draft writer too — the most destructive one — so it carries the
+  // same MANDATORY fence as Save. An optional stamp with an unconditional `else`
+  // left the authoritative action still able to overwrite newer work.
+  const expected = new Date(expectedUpdatedAt);
+  if (Number.isNaN(expected.getTime())) {
+    return { conflict: true, error: "This editor is out of date — reload the page before resetting." };
+  }
+
+  // Same one-transaction rule as saveFlow: the stamp handed back must be the one
+  // THIS write produced, or the canvas adopts a later writer's revision unseen.
+  const result = await prisma.$transaction(async (tx) => {
+    const written = await tx.botFlow.updateMany({
+      where: { id, updatedAt: expected },
+      data: { definition: JSON.stringify(DEFAULT_FLOW) },
+    });
+    if (written.count !== 1) return null;
+    const row = await tx.botFlow.findUnique({ where: { id }, select: { updatedAt: true } });
+    return row?.updatedAt ?? null;
+  });
+
+  if (!result) {
+    return {
+      conflict: true,
+      error: "This draft was changed somewhere else after you opened it. Reload to see the newer version — it has not been reset.",
+    };
+  }
+
   revalidatePath(`/bot-builder/${id}`);
   revalidatePath("/bot-builder");
+  // Hand back the new stamp, or the canvas would still hold the pre-Reset
+  // revision and its next save would report a conflict against its own Reset.
+  return { ok: true, updatedAt: result.toISOString() };
 }
 
 export async function renameFlow(id: string, formData: FormData) {
