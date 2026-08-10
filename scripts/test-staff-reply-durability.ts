@@ -35,6 +35,7 @@ import {
   flushBotOutboxConversation,
 } from "../src/lib/botOutbox";
 import { sendOutcomeMessage, staffReplyIdempotencyKey } from "../src/lib/messageDelivery";
+import { pauseBotConversation } from "../src/lib/botConversationControl";
 
 const SFX = Math.random().toString(16).slice(2, 10);
 let passed = 0;
@@ -66,6 +67,8 @@ const ids = {
   /** A channel no adapter supports, so a send fails permanently without a network call. */
   deadChannel: `nosuch_${SFX}`,
   deadKey: `k_${SFX}`,
+  /** A conversation of its own for the takeover fence, so nothing else blocks its drain. */
+  fenceKey: `2782${SFX.replace(/\D/g, "").padEnd(7, "2").slice(0, 7)}9`,
 };
 
 const composition = `comp_${SFX}`;
@@ -107,9 +110,9 @@ async function seed() {
 
 async function cleanup() {
   await basePrisma.botFlowOutbox.deleteMany({
-    where: { OR: [{ key: ids.wa }, { key: ids.deadKey }] },
+    where: { OR: [{ key: ids.wa }, { key: ids.deadKey }, { key: ids.fenceKey }] },
   });
-  await basePrisma.botSession.deleteMany({ where: { key: { in: [ids.wa, ids.deadKey] } } });
+  await basePrisma.botSession.deleteMany({ where: { key: { in: [ids.wa, ids.deadKey, ids.fenceKey] } } });
   await basePrisma.communication.deleteMany({ where: { contactId: ids.contact } });
   // AuditEvent is append-only at the DATABASE level — a trigger refuses DELETE.
   // That is the point of an audit trail and this test does not get to be an
@@ -291,6 +294,95 @@ async function main() {
     queueHead?.origin === "staff",
     `queue head origin: ${queueHead?.origin ?? "none"}`,
   );
+
+  // ── ZERO BOT MESSAGES AFTER TAKEOVER, WHATEVER THE BOT WAS DOING ─────────
+  //
+  // Cancelling the pending queue at takeover does not prove this property, which
+  // is why it is tested separately. Two states survive that cancel:
+  //
+  //   a) a flow turn that STARTED before takeover and commits after it — the AI
+  //      call takes seconds, and the person presses Take over during it;
+  //   b) a row a worker had already CLAIMED, which takeover deliberately does not
+  //      touch because its lease belongs to that worker.
+  //
+  // Both must end with the bot silent. Its own conversation, so the assertion is
+  // about the fence and not about whatever else is queued: a staff reply sitting
+  // ahead in the queue would block the drain before it ever reached these rows.
+  await enqueueBotMessages({
+    channel: "whatsapp",
+    key: ids.fenceKey,
+    messages: [{ type: "text", text: "in flight when the person took over" }, { type: "text", text: "and the line after it" }],
+    contactId: ids.contact,
+  });
+
+  // The person takes the conversation over. No staff message is queued here —
+  // Take over is a claim of ownership on its own, and the fence must hold for it.
+  await pauseBotConversation({ channel: "whatsapp", key: ids.fenceKey }, 12);
+  const owned = await basePrisma.botSession.findFirst({
+    where: { tenantId: DEFAULT_TENANT_ID, channel: "whatsapp", key: ids.fenceKey },
+    select: { ownership: true },
+  });
+  check("taking over records that a person owns the conversation", owned?.ownership === "human", `ownership: ${owned?.ownership}`);
+
+  // (b) One row was already CLAIMED when that happened — the state takeover
+  // cannot withdraw — and its worker then died, leaving the lease to expire.
+  const inFlight = await basePrisma.botFlowOutbox.findFirst({
+    where: { tenantId: DEFAULT_TENANT_ID, key: ids.fenceKey, origin: "bot" },
+    orderBy: { sequence: "asc" },
+    select: { id: true, status: true },
+  });
+  check(
+    "a claimed row survives takeover's cancel, exactly as designed",
+    inFlight?.status === "cancelled" || inFlight?.status === "pending",
+    `status: ${inFlight?.status}`,
+  );
+  await basePrisma.botFlowOutbox.updateMany({
+    where: { id: inFlight!.id },
+    data: { status: "running", attempts: 1, leaseUntil: new Date(Date.now() - 60_000), failureCode: null },
+  });
+
+  // The drain runs. Nothing here may reach the provider.
+  const afterTakeover = await flushBotOutboxConversation("whatsapp", ids.fenceKey);
+  const fenceRows = await basePrisma.botFlowOutbox.findMany({
+    where: { tenantId: DEFAULT_TENANT_ID, key: ids.fenceKey, origin: "bot" },
+    select: { status: true, failureCode: true },
+  });
+  check(
+    "a bot message claimed before takeover is withdrawn at the delivery gate, not sent",
+    fenceRows.every((row) => row.status === "cancelled"),
+    JSON.stringify(fenceRows),
+  );
+  check(
+    "and says it was superseded by a person, not that it failed",
+    fenceRows.every((row) => row.failureCode === "superseded_by_human"),
+    JSON.stringify(fenceRows),
+  );
+  check(
+    "the drain reports it as cancelled rather than delivered",
+    afterTakeover.cancelled >= 1 && afterTakeover.sent === 0,
+    JSON.stringify(afterTakeover),
+  );
+  // "None are marked sent" is too weak on its own — this environment has no
+  // provider credentials, so nothing could be delivered even unfenced. The
+  // property is that the provider was never CALLED, and a provider-derived
+  // failure code is the evidence that it was: without the fence these rows come
+  // back `retry` / `not_configured`, which only a real send attempt produces.
+  const botSent = await basePrisma.botFlowOutbox.count({
+    where: { tenantId: DEFAULT_TENANT_ID, key: ids.fenceKey, origin: "bot", status: "sent" },
+  });
+  check("ZERO bot-origin messages were sent after the takeover", botSent === 0, `${botSent} bot messages sent`);
+  check(
+    "and none of them reached the provider at all",
+    fenceRows.every((row) => row.failureCode === "superseded_by_human"),
+    `a provider-derived failure code means the send was attempted: ${JSON.stringify(fenceRows)}`,
+  );
+
+  // The fence is about OWNERSHIP, not about silencing a conversation: the
+  // person's own replies elsewhere are untouched.
+  const staffStillQueued = await basePrisma.botFlowOutbox.count({
+    where: { tenantId: DEFAULT_TENANT_ID, key: ids.wa, origin: "staff", status: { notIn: ["cancelled", "dead"] } },
+  });
+  check("the person's own replies are not cancelled with the bot's", staffStillQueued > 0, `${staffStillQueued} staff rows live`);
 
   // ── A permanent failure is classified, stored and ACTED ON ────────────────
   //

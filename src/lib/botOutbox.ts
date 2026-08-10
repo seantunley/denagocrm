@@ -3,7 +3,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
 import { DEFAULT_TENANT_ID } from "./tenant";
 import { withTenantWrite, writeTenantId, type TenantWriteTx } from "./tenantWrite";
-import { markBotSessionDeliveryFailedTx, pauseBotSessionTx } from "./botSessionStore";
+import { botStillOwnsTx, pauseBotSessionTx } from "./botSessionStore";
 import { logAuditStrict } from "./audit";
 import { classifyDeliveryFailure, PERMANENT_FAILURES, staffReplyMatchesRow } from "./messageDelivery";
 import type { OutMsg } from "./flow";
@@ -29,6 +29,7 @@ type OutboxRow = {
   contactId: string | null;
   leadId: string | null;
   actorId: string | null;
+  origin: string;
   attempts: number;
   status: string;
   availableAt: Date;
@@ -37,7 +38,7 @@ type OutboxRow = {
   communicationLoggedAt: Date | null;
 };
 
-export type BotOutboxRun = { sent: number; retried: number; dead: number; repairedLogs: number };
+export type BotOutboxRun = { sent: number; retried: number; dead: number; cancelled: number; repairedLogs: number };
 type OutboxBudget = Pick<CronSliceContext, "shouldStop">;
 
 /**
@@ -533,14 +534,54 @@ async function claimOldest(channel: string, key: string): Promise<OutboxRow | nu
 
 function retryAt(attempts: number): Date { return new Date(Date.now() + Math.min(15 * 60 * 1000, 15_000 * 2 ** Math.max(0, attempts - 1))); }
 
-async function blockLaterMessages(row: OutboxRow, error: string): Promise<void> {
-  await prisma.botFlowOutbox.updateMany({
-    where: { tenantId: outboxTenantId(), channel: row.channel, key: row.key, id: { not: row.id }, status: { in: ["pending", "retry"] } },
-    data: {
-      status: "dead",
-      leaseUntil: null,
-      lastError: `Blocked by earlier failed message ${row.id}: ${error}`.slice(0, 1000),
-    },
+/**
+ * Kill the message AND the backlog behind it in ONE transaction.
+ *
+ * These were two separate awaited statements. Since `earliestUnfinished` skips
+ * dead rows, a concurrent worker could land in the gap between them, step over
+ * the just-dead head row, claim the next one and send it — delivering a Meta
+ * caption whose image had permanently failed, or a "Choose an option" list with
+ * no preceding context. That is a regression against main, where WhatsApp sent
+ * inline and sequentially so overtaking was structurally impossible.
+ *
+ * `running` rows are included deliberately: a row another worker claimed inside
+ * the window is exactly the one that would overtake. Its own terminal write is
+ * fenced by `attempts`, so this cannot corrupt a live send — the worker simply
+ * finds its lease superseded.
+ */
+async function killMessageAndBacklog(row: OutboxRow, lastError: string, failureCode: string): Promise<boolean> {
+  const blocked = `Blocked by earlier failed message ${row.id}: ${lastError}`.slice(0, 1000);
+  const tenantId = outboxTenantId();
+  return prisma.$transaction(async (tx) => {
+    const dead = await tx.botFlowOutbox.updateMany({
+      where: { id: row.id, status: "running", attempts: row.attempts },
+      data: { status: "dead", leaseUntil: null, lastError, failureCode },
+    });
+    if (dead.count !== 1) return false;
+    await tx.botFlowOutbox.updateMany({
+      where: {
+        tenantId,
+        channel: row.channel,
+        key: row.key,
+        id: { not: row.id },
+        status: { in: ["pending", "retry", "running"] },
+      },
+      data: { status: "dead", leaseUntil: null, lastError: blocked, failureCode: "blocked_by_earlier_failure" },
+    });
+    // Repair the conversation HERE, not in a second best-effort transaction.
+    // Separately, the dead-letter could commit, the process die, and the session
+    // repair never happen — with no retry left to trigger it, because the message
+    // is already terminal. The customer would then be back to waiting at a prompt
+    // they never received, which is the exact state this repair exists to prevent.
+    await tx.$executeRawUnsafe(
+      `UPDATE "BotSession"
+          SET "ownership" = 'delivery_failed', "updatedAt" = CURRENT_TIMESTAMP
+        WHERE "tenantId" = $1 AND "channel" = $2 AND "key" = $3 AND "ownership" <> 'human'`,
+      tenantId,
+      row.channel,
+      row.key,
+    );
+    return true;
   });
 }
 
@@ -548,28 +589,9 @@ async function failDelivery(row: OutboxRow, error: string): Promise<"retry" | "d
   const lastError = error.slice(0, 1000);
   const failureCode = classifyDeliveryFailure(lastError);
   if (row.attempts >= MAX_ATTEMPTS || PERMANENT_FAILURES.has(failureCode)) {
-    const dead = await prisma.botFlowOutbox.updateMany({
-      where: { id: row.id, status: "running", attempts: row.attempts },
-      data: { status: "dead", leaseUntil: null, lastError, failureCode },
-    });
-    if (dead.count !== 1) return "retry";
-    await blockLaterMessages(row, lastError);
-
-    // The flow state and the customer's reality have now diverged. The session
-    // was committed BEFORE delivery — deliberately, so a provider timeout cannot
-    // lose the message that explains the new state — which means the CRM believes
-    // the customer is waiting at, say, a choice node whose prompt they never
-    // received. Their next message would be interpreted against a menu that does
-    // not exist for them.
-    //
-    // Mark the conversation instead, so the next inbound turn starts over rather
-    // than answering something unseen. This never evicts a person who has taken
-    // the thread over; see markBotSessionDeliveryFailedTx.
-    await withTenantWrite(async (tx, tenantId) => {
-      await markBotSessionDeliveryFailedTx(tx, tenantId, row.channel, row.key);
-    }).catch(async (error) => {
-      await logError("bot-outbox-session-repair", error, row.id).catch(() => {});
-    });
+    // Kills the message, the backlog behind it, and repairs the conversation —
+    // all in one transaction, so none of the three can commit without the others.
+    if (!(await killMessageAndBacklog(row, lastError, failureCode))) return "retry";
     if (row.flowVersionId) {
       await recordBotFlowEvents([{ channel: row.channel, conversationKey: row.key, flowVersionId: row.flowVersionId, eventType: "delivery_failed", metadata: { outboxId: row.id, attempts: row.attempts, failureCode } }]);
     }
@@ -583,7 +605,60 @@ async function failDelivery(row: OutboxRow, error: string): Promise<"retry" | "d
   return "retry";
 }
 
-async function deliverClaimed(row: OutboxRow): Promise<"sent" | "retry" | "dead"> {
+/**
+ * MAY THE BOT STILL SPEAK IN THIS CONVERSATION?
+ *
+ * Cancelling the queue at takeover is necessary and not sufficient, and the gap
+ * is not theoretical — it is the shape of the whole feature. A message that a
+ * worker has already CLAIMED is `running`, and takeover deliberately does not
+ * touch a running row: its lease belongs to a worker that may already be at the
+ * provider, and deciding its outcome from another transaction would race that
+ * worker over a message that might already have been delivered. So the row
+ * survives takeover, the worker finishes, and the bot speaks over the person.
+ *
+ * The same hole covers anything enqueued in the window: a flow turn that began
+ * before takeover and commits after it. #425 fences that at the ENQUEUE side with
+ * `botStillOwnsTx`, and that is the right place for the paths it covers — but it
+ * is one call site per channel runtime, and a queue that only enforces ownership
+ * where somebody remembered to ask is not enforcing it.
+ *
+ * So ownership is checked HERE too, at the last point before the provider is
+ * called, for every bot-origin row on every path. The session row is taken FOR
+ * UPDATE, so a takeover cannot commit between the check and the decision.
+ *
+ * What this does NOT claim: a takeover committing DURING the provider call
+ * cannot be caught by anything, because the message is already gone. The
+ * guarantee is that no bot message is sent after a takeover this process could
+ * have observed — which is the strongest statement a queue with an external
+ * side effect can make.
+ */
+async function botMayStillSpeak(row: OutboxRow): Promise<boolean> {
+  if (row.origin !== "bot") return true; // a person's own reply is never fenced
+  return withTenantWrite(async (tx, tenantId) => {
+    if (await botStillOwnsTx(tx, tenantId, row.channel, row.key)) return true;
+    // Withdraw this row AND anything queued behind it, inside the same
+    // transaction that observed the takeover — so the next claim cannot pick up
+    // a sibling that this one just proved is superseded.
+    await tx.botFlowOutbox.updateMany({
+      where: { id: row.id },
+      data: {
+        status: "cancelled",
+        leaseUntil: null,
+        failureCode: "superseded_by_human",
+        lastError: "Cancelled: a person took over this conversation before this message was sent",
+      },
+    });
+    await cancelPendingBotOutputTx(tx, tenantId, row.channel, row.key);
+    return false;
+  });
+}
+
+async function deliverClaimed(row: OutboxRow): Promise<"sent" | "retry" | "dead" | "cancelled"> {
+  // Last gate before the provider. A claimed row is not licence to send: the
+  // conversation may have changed hands since it was queued, or since it was
+  // claimed.
+  if (!(await botMayStillSpeak(row))) return "cancelled";
+
   let result: { ok: boolean; error?: string };
   try { result = await sendProvider(row); } catch (error) { result = { ok: false, error: error instanceof Error ? error.message : String(error) }; }
   if (!result.ok) return failDelivery(row, result.error ?? "Provider rejected chatbot message");
@@ -593,8 +668,19 @@ async function deliverClaimed(row: OutboxRow): Promise<"sent" | "retry" | "dead"
     data: { status: "sent", sentAt: new Date(), leaseUntil: null, lastError: null, failureCode: null },
   });
   if (sent.count !== 1) {
-    await logError("bot-outbox-stale-lease", new Error("Provider accepted a send after this worker's outbox lease was superseded"), row.id).catch(() => {});
-    return "retry";
+    // The provider ACCEPTED this message; only our lease was superseded while it
+    // was in flight. Record that unconditionally, so the newer lease-holder does
+    // not send it a second time and — more importantly — so a later error on the
+    // duplicate cannot carry the row to `dead` and reset a conversation the
+    // customer was in fact receiving. A delivery that succeeded must never end up
+    // recorded as a delivery failure.
+    await prisma.botFlowOutbox.updateMany({
+      where: { id: row.id, status: { notIn: ["sent", "dead"] } },
+      data: { status: "sent", sentAt: new Date(), leaseUntil: null, lastError: null },
+    });
+    await logError("bot-outbox-stale-lease", new Error("Provider accepted a send after this worker's outbox lease was superseded; recorded as sent so it is not delivered twice"), row.id).catch(() => {});
+    await repairCommunicationLog({ ...row, status: "sent" }).catch(() => {});
+    return "sent";
   }
   await repairCommunicationLog({ ...row, status: "sent" }).catch(async (error) => { await logError("bot-outbox-log", error, row.id).catch(() => {}); });
   return "sent";
@@ -607,14 +693,16 @@ export async function flushBotOutboxConversation(
   limit = 20,
   budget?: OutboxBudget,
 ): Promise<BotOutboxRun> {
-  const stats: BotOutboxRun = { sent: 0, retried: 0, dead: 0, repairedLogs: 0 };
+  const stats: BotOutboxRun = { sent: 0, retried: 0, dead: 0, cancelled: 0, repairedLogs: 0 };
   for (let i = 0; i < limit; i++) {
     if (budget?.shouldStop(4_000)) break;
     const row = await claimOldest(channel, key);
     if (!row) break;
     const outcome = await deliverClaimed(row);
-    stats[outcome === "sent" ? "sent" : outcome === "retry" ? "retried" : "dead"] += 1;
-    if (outcome !== "sent") break;
+    stats[outcome === "sent" ? "sent" : outcome === "retry" ? "retried" : outcome === "cancelled" ? "cancelled" : "dead"] += 1;
+    // A cancelled row is not a failure and does not stop the drain: the person's
+    // OWN reply is queued behind it and must still go out.
+    if (outcome !== "sent" && outcome !== "cancelled") break;
   }
   return stats;
 }
@@ -640,7 +728,7 @@ async function repairPendingCommunicationLogs(limit: number, budget?: OutboxBudg
 
 /** Per-tenant cron drain. Conversation ordering is preserved by claimOldest(). */
 export async function flushBotOutbox(limit = 50, budget?: OutboxBudget): Promise<BotOutboxRun> {
-  const stats: BotOutboxRun = { sent: 0, retried: 0, dead: 0, repairedLogs: 0 };
+  const stats: BotOutboxRun = { sent: 0, retried: 0, dead: 0, cancelled: 0, repairedLogs: 0 };
   if (budget?.shouldStop(4_000)) return stats;
   stats.repairedLogs = await repairPendingCommunicationLogs(Math.min(limit, 25), budget);
   if (budget?.shouldStop(4_000)) return stats;
@@ -663,7 +751,8 @@ export async function flushBotOutbox(limit = 50, budget?: OutboxBudget): Promise
     stats.sent += run.sent;
     stats.retried += run.retried;
     stats.dead += run.dead;
-    remaining -= run.sent + run.retried + run.dead;
+    stats.cancelled += run.cancelled;
+    remaining -= run.sent + run.retried + run.dead + run.cancelled;
   }
   return stats;
 }

@@ -281,9 +281,12 @@ test("a failure is classified, stored and acted on", () => {
   assert.match(fail, /failureCode = classifyDeliveryFailure\(lastError\)/);
   // Stored on BOTH outcomes — a row that is going to be retried is exactly where
   // an operator looks to find out why.
-  const dead = fail.slice(fail.indexOf('status: "dead"'));
+  // The terminal path is #425's atomic killMessageAndBacklog, which now carries
+  // the classification into the row it kills.
+  assert.match(fail, /killMessageAndBacklog\(row, lastError, failureCode\)/, "the terminal path must record the classification");
+  const kill = outbox.slice(outbox.indexOf("async function killMessageAndBacklog"), outbox.indexOf("async function failDelivery"));
+  assert.match(kill, /data: \{ status: "dead", leaseUntil: null, lastError, failureCode \}/);
   const retry = fail.slice(fail.indexOf('status: "retry"'));
-  assert.match(dead.slice(0, 120), /failureCode/, "the terminal path must record the classification");
   assert.match(retry.slice(0, 120), /failureCode/, "so must the retry path — that is where an operator looks");
   // And acted on, which is the difference between a column and a policy.
   assert.match(fail, /PERMANENT_FAILURES\.has\(failureCode\)/, "a permanent failure must not spend eight attempts");

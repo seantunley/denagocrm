@@ -9,8 +9,14 @@
 -- `delivery_failed` is the third case: the last outbound message exhausted its
 -- retries, so the customer never saw it and the stored node is a prompt that does
 -- not exist for them.
+-- Reentrant. The migration runner (scripts/apply-migrations.mjs) opens NO
+-- transaction and issues statements one at a time in autocommit, so a
+-- statement_timeout or a dropped connection leaves a file half-applied and
+-- UNRECORDED — and the next deploy re-runs it from the top. A bare ADD COLUMN
+-- would then hit 42701 and wedge the deploy, which is the hand-DDL repair this
+-- project has already had to do once.
 ALTER TABLE "BotSession"
-  ADD COLUMN "ownership" TEXT NOT NULL DEFAULT 'bot';
+  ADD COLUMN IF NOT EXISTS "ownership" TEXT NOT NULL DEFAULT 'bot';
 
 -- Existing paused rows are classified as bot handoffs, not human takeovers.
 --
@@ -22,6 +28,26 @@ ALTER TABLE "BotSession"
 -- handoff still requires the customer to type an explicit "menu"/"restart", which
 -- is a far narrower hole than the greeting that exists today, and it closes as
 -- soon as these rows expire.
-UPDATE "BotSession" SET "ownership" = 'ai_handoff' WHERE "status" = 'paused';
+--
+-- `AND "ownership" = 'bot'` is what makes re-running this SAFE, and it is not a
+-- micro-optimisation. Without it, a second run once the feature is live rewrites
+-- every conversation a salesperson currently owns (`ownership = 'human'`, which
+-- is stored with `status = 'paused'`) back to `ai_handoff` — handing live
+-- customer threads back to the bot underneath the person holding them. Given the
+-- runner has no transaction and a partially applied file gets re-run from the
+-- top, that is a realistic sequence, not a hypothetical one.
+--
+-- Restricting to the column's own default also makes the intent exact: classify
+-- rows that have never been classified, and touch nothing else.
+-- These tables carry FORCE ROW LEVEL SECURITY. Where the migrating role does
+-- not bypass RLS, an unwrapped backfill matches ZERO rows, SUCCEEDS, and is
+-- recorded as applied — the exact "recorded but never really ran" shape behind
+-- this project's earlier P2022 outage. Same escape hatch basePrisma uses.
+SET app.bypass_rls = 'on';
+UPDATE "BotSession"
+   SET "ownership" = 'ai_handoff'
+ WHERE "status" = 'paused'
+   AND "ownership" = 'bot';
 
-CREATE INDEX "BotSession_tenant_ownership_idx" ON "BotSession"("tenantId", "ownership");
+CREATE INDEX IF NOT EXISTS "BotSession_tenant_ownership_idx" ON "BotSession"("tenantId", "ownership");
+RESET app.bypass_rls;

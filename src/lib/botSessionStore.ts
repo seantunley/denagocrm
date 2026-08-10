@@ -92,6 +92,38 @@ export async function upsertBotSessionTx(
 }
 
 /**
+ * Does the bot still own this conversation — and hold it for the rest of this
+ * transaction?
+ *
+ * Guarding only the session WRITE was not enough. A turn queues its outbound
+ * messages first and updates the session afterwards, so when staff took over
+ * mid-turn the session update was correctly refused while the reply was already
+ * committed to the outbox and went out over the salesperson. Ownership was kept;
+ * the customer still got one more bot message.
+ *
+ * `FOR UPDATE` is the point: it locks the session row, so a takeover cannot
+ * commit between this check and the enqueue. Callers must run this BEFORE
+ * queueing anything and abandon the turn when it returns false.
+ */
+export async function botStillOwnsTx(
+  tx: TenantWriteTx,
+  tenantId: string,
+  channel: string,
+  key: string,
+): Promise<boolean> {
+  const rows = (await tx.$queryRawUnsafe(
+    `SELECT "ownership" FROM "BotSession"
+      WHERE "tenantId" = $1 AND "channel" = $2 AND "key" = $3
+      FOR UPDATE`,
+    tenantId,
+    channel,
+    key,
+  )) as Array<{ ownership: string }>;
+  // No row means no session yet — a first turn, which the bot owns by definition.
+  return rows[0]?.ownership !== "human";
+}
+
+/**
  * Record that the last outbound message for this conversation definitively failed.
  *
  * Deliberately narrow: it changes ONLY ownership, never the node or the

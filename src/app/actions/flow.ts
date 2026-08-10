@@ -8,6 +8,8 @@ import { logAudit } from "@/lib/audit";
 import { DEFAULT_FLOW } from "@/lib/flow";
 import { flowTemplate } from "@/lib/flowTemplates";
 import { publishFlowSnapshot } from "@/lib/flowPublishing";
+import { DEFAULT_TENANT_ID } from "@/lib/tenant";
+import { writeTenantId } from "@/lib/tenantWrite";
 
 /** Create a new draft from one of the shipped, compiler-checked templates. */
 export async function createFlow(formData: FormData) {
@@ -21,6 +23,11 @@ export async function createFlow(formData: FormData) {
       name,
       definition: JSON.stringify(template.definition),
       active: count === 0,
+      // Stamp the owner at creation. The db.ts guard does not while enforcement is
+      // dormant, so every flow made since the 20260722146000 backfill was
+      // tenantless — which is what silently broke Publish, and what forces the
+      // legacy NULL-tolerant rule everywhere a flow is read.
+      tenantId: writeTenantId() ?? DEFAULT_TENANT_ID,
     },
   });
   // Preserve the old "first flow is live" behaviour, but publish the exact
@@ -85,7 +92,7 @@ export async function duplicateFlow(id: string) {
   const src = await prisma.botFlow.findUnique({ where: { id } });
   if (!src) return;
   await prisma.botFlow.create({
-    data: { name: `${src.name} (copy)`, definition: src.definition, channel: src.channel, active: false },
+    data: { name: `${src.name} (copy)`, definition: src.definition, channel: src.channel, active: false, tenantId: writeTenantId() ?? DEFAULT_TENANT_ID },
   });
   revalidatePath("/bot-builder");
 }
