@@ -67,9 +67,23 @@ test("slot retry marker is checked before capacity is consumed", () => {
 
 test("inbound ledger migration preserves old accepted events as completed", () => {
   const migration = src("prisma/migrations/20260809172000_bot_inbound_event_leases/migration.sql");
-  assert.match(migration, /ADD COLUMN "status" TEXT NOT NULL DEFAULT 'completed'/);
+  // Existing rows are events already accepted before this rollout, so they must
+  // land as `completed` rather than becoming replayable provider ids.
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS "status" TEXT NOT NULL DEFAULT 'completed'/);
   assert.match(migration, /UPDATE "BotInboundEvent"/);
   assert.match(migration, /ALTER COLUMN "status" SET DEFAULT 'running'/);
+
+  // And every statement must be reentrant. 20260809144000 exists as two different
+  // files under one directory name across this stack — the lower branches create
+  // BotInboundEvent WITH these columns, the upper ones rely on this migration to
+  // add them. A bare ADD COLUMN is 42701 on half the merge orders, and the
+  // migration runner opens no transaction, so a half-applied file is re-run from
+  // the top on the next deploy.
+  // Scan the SQL only — the comment above explains the hazard and naturally
+  // contains the very phrases being looked for.
+  const sql = migration.replace(/^\s*--.*$/gm, "");
+  const unguarded = sql.match(/ADD COLUMN(?! IF NOT EXISTS)|CREATE INDEX(?! IF NOT EXISTS)/g) ?? [];
+  assert.deepEqual(unguarded, [], "every ADD COLUMN / CREATE INDEX here must be guarded");
 });
 
 /* ── a live lease is not the same answer as a finished event ─────────────── */
