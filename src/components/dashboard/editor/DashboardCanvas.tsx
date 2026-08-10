@@ -22,21 +22,12 @@ import {
   useSortable,
   type SortingStrategy,
 } from "@dnd-kit/sortable";
-import {
-  ArrowUpFromLine,
-  Check,
-  ChevronDown,
-  ChevronUp,
-  Eye,
-  GripVertical,
-  Plus,
-  Settings2,
-  Trash2,
-  X,
-} from "lucide-react";
+import { Eye, GripVertical, Plus, Settings2, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { CardConfig, SectionConfig, ViewConfig } from "@/lib/dashboard/config";
+import { isContainerCard } from "@/lib/dashboard/cardTree";
 import { useEditor, newId } from "./EditorProvider";
+import ContainerContents, { cardLabel } from "./ContainerContents";
 
 /**
  * The dashboard as the user sees it, in both modes.
@@ -419,7 +410,7 @@ function SortableCard({
   node: React.ReactNode;
   onConfigure: (cardId: string) => void;
 }) {
-  const { editing, removeCard } = useEditor();
+  const { editing, removeCard, moveCard, liftCard } = useEditor();
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, isDragging } = useSortable({
     id: card.id,
     disabled: !editing,
@@ -492,15 +483,25 @@ function SortableCard({
           sortable node for any of them: drag can only ever reorder the top level,
           and a card inside a group had no settings button, no remove, and no way
           back out. It was reachable only by editing the raw JSON.
-      
-          This lists them. Every child gets the same three actions its parent has,
-          plus a lift, and they act on the CONFIG rather than on rendered nodes -
-          so they work at any depth without a second grid implementation.
+
+          ContainerContents lists them - DESCENDANTS, not just children, so a card
+          two containers down is reachable too. Every row gets the same three
+          actions this card has plus a lift, and they act on the CONFIG rather
+          than on rendered nodes, so they work at any depth without a second grid
+          implementation.
       */}
-      {editing && (card.type === "grid" || card.type === "stack") && (
-        <ContainerContents card={card} onConfigure={onConfigure} />
+      {editing && isContainerCard(card) && (
+        <ContainerContents
+          cards={card.cards}
+          actions={{
+            onConfigure,
+            onMove: moveCard,
+            onLift: liftCard,
+            onRemove: removeCard,
+          }}
+        />
       )}
-      
+
       {/* The middle link in the height chain. min-h-0 because a flex child
           otherwise refuses to shrink below its content, which would break
           scrolling inside a card shorter than what it holds. */}
@@ -512,102 +513,6 @@ function SortableCard({
       >
         {node ?? <CardPlaceholder card={card} />}
       </div>
-    </div>
-  );
-}
-
-/**
- * The children of a container, listed so they can actually be worked with.
- *
- * WHY THIS EXISTS. A grid or stack renders its children on the server, inside
- * its own node, so the editor never has a sortable element for any of them.
- * Drag therefore only ever reordered the TOP level, and a card placed inside a
- * group had no settings button, no remove and no way back out — the only route
- * to it was the raw JSON editor. That is what "these are not individual widgets"
- * and "I can add a visibility rule but no other settings" were both describing:
- * the selected card was the container, and its children were unreachable.
- *
- * Every child gets the same actions its parent has, plus a lift. They act on the
- * CONFIG rather than on rendered nodes, so one implementation covers any depth
- * and there is still only one grid renderer.
- *
- * Nudge buttons rather than nested drag-and-drop, deliberately. Dragging inside
- * a dragging thing is the part that behaves erratically, and a card that moves
- * exactly one place when asked is more useful than one that sometimes lands
- * where you meant.
- */
-function ContainerContents({
-  card,
-  onConfigure,
-}: {
-  card: Extract<CardConfig, { type: "grid" | "stack" }>;
-  onConfigure: (cardId: string) => void;
-}) {
-  const { moveCard, liftCard, removeCard } = useEditor();
-
-  if (card.cards.length === 0) {
-    return (
-      <p className="mb-2 rounded-lg border border-dashed border-border px-2.5 py-2 text-[11px] text-muted-foreground">
-        This group is empty. Add a card to it from the raw editor, or drag one in.
-      </p>
-    );
-  }
-
-  return (
-    <div className="mb-2 space-y-1 rounded-lg border border-dashed border-border p-1.5">
-      <p className="px-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-        In this group
-      </p>
-      {card.cards.map((child, index) => (
-        <div key={child.id} className="flex items-center gap-1 rounded-md bg-card/60 px-1.5 py-1">
-          <span className="min-w-0 flex-1 truncate text-[11px] text-foreground">
-            {cardLabel(child)}
-          </span>
-          <button
-            type="button"
-            onClick={() => moveCard(child.id, -1)}
-            disabled={index === 0}
-            aria-label={`Move ${cardLabel(child)} earlier`}
-            className="flex size-6 items-center justify-center rounded text-muted-foreground hover:text-foreground disabled:opacity-30"
-          >
-            <ChevronUp className="size-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={() => moveCard(child.id, 1)}
-            disabled={index === card.cards.length - 1}
-            aria-label={`Move ${cardLabel(child)} later`}
-            className="flex size-6 items-center justify-center rounded text-muted-foreground hover:text-foreground disabled:opacity-30"
-          >
-            <ChevronDown className="size-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={() => liftCard(child.id)}
-            aria-label={`Move ${cardLabel(child)} out of this group`}
-            title="Move out of this group"
-            className="flex size-6 items-center justify-center rounded text-muted-foreground hover:text-foreground"
-          >
-            <ArrowUpFromLine className="size-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={() => onConfigure(child.id)}
-            aria-label={`Settings for ${cardLabel(child)}`}
-            className="flex size-6 items-center justify-center rounded text-muted-foreground hover:text-foreground"
-          >
-            <Settings2 className="size-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={() => removeCard(child.id)}
-            aria-label={`Remove ${cardLabel(child)}`}
-            className="flex size-6 items-center justify-center rounded text-muted-foreground hover:text-destructive"
-          >
-            <X className="size-3.5" />
-          </button>
-        </div>
-      ))}
     </div>
   );
 }
@@ -637,13 +542,6 @@ function CardPlaceholder({ card }: { card: CardConfig }) {
       </p>
     </div>
   );
-}
-
-/** A human name for a card, for drag overlays, labels and screen readers. */
-export function cardLabel(card: CardConfig): string {
-  if (card.title) return card.title;
-  if (card.type === "builtin") return card.card.replace(/-/g, " ");
-  return card.type;
 }
 
 function hasDrawn(section: SectionConfig, slots: CardSlots): boolean {

@@ -10,7 +10,12 @@ import {
   type ViewConfig,
 } from "@/lib/dashboard/config";
 import { saveDashboardConfig, takeControl } from "@/app/actions/dashboardConfig";
-import { liftFromContainer, reorderInTree } from "@/lib/dashboard/cardTree";
+import {
+  filterCards,
+  liftFromContainer,
+  mapCards,
+  reorderInTree,
+} from "@/lib/dashboard/cardTree";
 
 /**
  * The editing session: one working copy of the config, and one way to save it.
@@ -326,9 +331,11 @@ export function DashboardEditorProvider({
    * stuck there.
    *
    * These two operate on the CONFIG rather than on the rendered nodes, so they
-   * work identically at any depth. Both walk the tree in one place, for the same
-   * reason mapCardTree does: a second hand-rolled walk that forgot to descend
-   * would silently do nothing for exactly the cards this exists to reach.
+   * work identically at any depth. Like every other walk the editor performs
+   * they live in lib/dashboard/cardTree, which is what lets a test execute them:
+   * a hand-rolled walk that forgot to descend would silently do nothing for
+   * exactly the cards this exists to reach, and this file cannot be imported by
+   * the test process at all.
    */
   const moveCard = useCallback(
     (cardId: string, direction: -1 | 1) =>
@@ -380,66 +387,6 @@ export function DashboardEditorProvider({
       {children}
     </EditorContext.Provider>
   );
-}
-
-/* ── walking the card tree ────────────────────────────────────────── */
-
-/*
- * Cards nest, so every edit to a card has to reach into containers as well as
- * into sections. These two are the only places that recursion is written, which
- * is deliberate: a second hand-rolled walk that forgot to descend into `grid`
- * would make editing a card inside a container silently do nothing.
- */
-
-function mapCardTree(cards: CardConfig[], change: (card: CardConfig) => CardConfig): CardConfig[] {
-  return cards.map((card) => {
-    const mapped = change(card);
-    if (mapped.type === "grid" || mapped.type === "stack") {
-      return { ...mapped, cards: mapCardTree(mapped.cards, change) };
-    }
-    return mapped;
-  });
-}
-
-function filterCardTree(cards: CardConfig[], keep: (card: CardConfig) => boolean): CardConfig[] {
-  return cards.filter(keep).map((card) => {
-    if (card.type === "grid" || card.type === "stack") {
-      return { ...card, cards: filterCardTree(card.cards, keep) };
-    }
-    return card;
-  });
-}
-
-export function mapCards(
-  config: DashboardConfig,
-  change: (card: CardConfig) => CardConfig,
-): DashboardConfig {
-  return {
-    ...config,
-    views: config.views.map((view) => ({
-      ...view,
-      sections: view.sections.map((section) => ({
-        ...section,
-        cards: mapCardTree(section.cards, change),
-      })),
-    })),
-  };
-}
-
-export function filterCards(
-  config: DashboardConfig,
-  keep: (card: CardConfig) => boolean,
-): DashboardConfig {
-  return {
-    ...config,
-    views: config.views.map((view) => ({
-      ...view,
-      sections: view.sections.map((section) => ({
-        ...section,
-        cards: filterCardTree(section.cards, keep),
-      })),
-    })),
-  };
 }
 
 /**
