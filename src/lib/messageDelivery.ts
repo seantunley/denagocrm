@@ -215,17 +215,21 @@ export function canonicalJson(value: unknown): string {
 /**
  * The part of a payload that identifies the MESSAGE rather than its delivery.
  *
- * An attachment's `url` is where this submission happened to put the bytes, and
- * a resubmission puts identical bytes somewhere else. Comparing it would report
- * a conflict for a genuine duplicate — the caller's own retry — and lose the
- * reply. The digest travels in the payload precisely so the comparison has
- * something stable to use instead.
+ * An attachment's `ref` is where this submission happened to put the bytes, and
+ * a resubmission puts identical bytes somewhere else — saveFile mints a fresh
+ * random name every call. Comparing it would report a conflict for a genuine
+ * duplicate — the caller's own retry — and lose the reply. The digest travels in
+ * the payload precisely so the comparison has something stable to use instead.
+ *
+ * `url` is stripped too, though nothing writes it any more: a payload queued
+ * before the durable-ref change carries one, and a comparison that suddenly
+ * started counting it would call those rows conflicts.
  */
 export function stablePayload(payload: unknown): unknown {
   if (!payload || typeof payload !== "object") return payload;
   const value = payload as Record<string, unknown>;
   if (value.type !== "attachment") return payload;
-  const { url: _volatile, ...rest } = value;
+  const { ref: _location, url: _legacyLocation, ...rest } = value;
   return rest;
 }
 

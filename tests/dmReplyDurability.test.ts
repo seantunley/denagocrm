@@ -195,6 +195,9 @@ test("the queue can carry every attachment kind the DM path accepts", () => {
   const outbox = shipped("src/lib/botOutbox.ts");
   assert.match(outbox, /export type OutboxPayload =\s*\n\s*\| OutMsg\s*\n\s*\| \{/);
   assert.match(outbox, /type: "attachment";\s*\n\s*kind: AttachmentKind;/);
+  // The DURABLE reference, not a URL: a queue cannot store an expiring credential.
+  assert.match(outbox, /ref: string;/);
+  assert.match(outbox, /contentType\?: string;/);
   // The digest travels WITH the payload so a duplicate can be recognised across
   // a re-upload that changed the url.
   assert.match(outbox, /digest\?: string;/);
@@ -209,7 +212,11 @@ test("the queue can carry every attachment kind the DM path accepts", () => {
   const send = outbox.slice(outbox.indexOf("async function sendProvider"), outbox.indexOf("function timelineBody"));
   assert.match(send, /row\.channel !== "messenger" && row\.channel !== "instagram"/);
   assert.match(send, /Unsupported bot channel/, "which classifies as invalid_payload, i.e. permanent");
-  assert.match(send, /sendDirectAttachment\(row\.channel, row\.key, \{ type: message\.kind, url: message\.url \}\)/);
+  // The url is MINTED for this attempt, from the durable ref the payload carries.
+  // Reading a stored one is how a queue that survives an outage delivers a link
+  // that expired during it — see tests/outboundMediaDelivery.test.ts.
+  assert.match(send, /const url = attachmentUrlForDelivery\(message\);/);
+  assert.match(send, /sendDirectAttachment\(row\.channel, row\.key, \{ type: message\.kind, url \}\)/);
 
   const flow = shipped("src/lib/flow.ts");
   assert.doesNotMatch(flow, /type: "attachment"/, "the flow's vocabulary must not grow a case no flow can emit");

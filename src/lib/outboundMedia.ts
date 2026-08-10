@@ -139,3 +139,42 @@ export function outboundMediaUrl(
   const expiresAt = (options.now ?? Date.now()) + (options.ttlMs ?? DEFAULT_TTL_MS);
   return `${origin}/api/outbound-media/${signOutboundMediaToken(ref, contentType, expiresAt, secret)}`;
 }
+
+/**
+ * Could this deployment produce a URL the provider can fetch for `ref`?
+ *
+ * Asked at ACCEPT time, so a person is told "not sent, and why" instead of the
+ * message failing silently in the queue. Deliberately returns a boolean rather
+ * than the URL: a relay URL is a short-lived bearer credential for a customer's
+ * file, and anything that persists one has, by construction, put an expiring
+ * value into a durable record. The URL is minted per delivery attempt instead —
+ * see `attachmentUrlForDelivery` in lib/botOutbox.ts.
+ */
+export function canServeOutboundMedia(
+  ref: string,
+  options: { secret?: string | null; origin?: string | null } = {},
+): boolean {
+  return outboundMediaUrl(ref, "application/octet-stream", options) !== null;
+}
+
+/**
+ * The URL to hand the provider for THIS delivery attempt.
+ *
+ * A relay URL is a short-lived bearer credential for a customer's file: anyone
+ * holding it can fetch the bytes, so it has to expire. That makes it exactly the
+ * wrong thing to persist in a durable queue, and persisting it was the defect.
+ * The reply action minted one when the person pressed Send and stored it in the
+ * outbox payload, so a worker outage, a paused drain, a deployment or a backlog
+ * longer than the TTL left the row perfectly durable and its attachment already
+ * dead — retried until it dead-lettered, for a message nothing was wrong with.
+ *
+ * The queue stores the durable storage ref; this mints the credential per
+ * attempt, so the TTL only ever has to cover the seconds between this call and
+ * the provider fetching, which is what it was chosen for.
+ */
+export function attachmentUrlForDelivery(
+  message: { ref: string; contentType?: string },
+  options: { now?: number; secret?: string | null; origin?: string | null } = {},
+): string | null {
+  return outboundMediaUrl(message.ref, message.contentType ?? "application/octet-stream", options);
+}

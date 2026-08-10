@@ -37,6 +37,7 @@ import {
   type OutboxPayload,
 } from "../src/lib/botOutbox";
 import { attachmentDigest, sendOutcomeMessage, staffReplyIdempotencyKey } from "../src/lib/messageDelivery";
+import { attachmentUrlForDelivery, verifyOutboundMediaToken } from "../src/lib/outboundMedia";
 import { pauseBotConversation } from "../src/lib/botConversationControl";
 
 const SFX = Math.random().toString(16).slice(2, 10);
@@ -499,10 +500,13 @@ async function main() {
   // which is what saveFile actually produces on a resubmission.
   const fileBytes = Buffer.from(`brochure-${SFX}`);
   const fileDigest = attachmentDigest(fileBytes);
-  const upload1 = `https://example.test/${SFX}-a.pdf`;
-  const upload2 = `https://example.test/${SFX}-b.pdf`;
-  const filePartAt = (url: string) =>
-    dmPart("📎 File", url, { type: "attachment", kind: "file", url, digest: fileDigest }, fileDigest);
+  // PRIVATE blob refs on purpose. This is the case the relay exists for — a
+  // public URL needs no signing and would not exercise the expiry at all — and
+  // it is what a deployment with BLOB_PRIVATE actually stores.
+  const upload1 = `https://abc.private.blob.vercel-storage.com/${SFX}-a.pdf`;
+  const upload2 = `https://abc.private.blob.vercel-storage.com/${SFX}-b.pdf`;
+  const filePartAt = (ref: string) =>
+    dmPart("📎 File", ref, { type: "attachment", kind: "file", ref, contentType: "application/pdf", digest: fileDigest }, fileDigest);
 
   const filePart = filePartAt(upload1);
   const textPart = dmPart("Here's the brochure.", null, { type: "text", text: "Here's the brochure." }, null);
@@ -569,7 +573,7 @@ async function main() {
     { type: "text", text: "Here's the brochure — collection is Friday." },
     null,
   );
-  const dmCorrected = await dmReply([filePartAt(`https://example.test/${SFX}-c.pdf`), editedText]);
+  const dmCorrected = await dmReply([filePartAt(`https://abc.private.blob.vercel-storage.com/${SFX}-c.pdf`), editedText]);
   check(
     "an edited half still sends when the other half is already accepted",
     dmCorrected.outcome === "created" &&
@@ -586,6 +590,62 @@ async function main() {
     where: { tenantId: DEFAULT_TENANT_ID, key: ids.psid, origin: "staff" },
   });
   check("leaving the customer owed three messages, not four", finalCount === 3, `${finalCount} rows`);
+
+  // ── A DURABLE QUEUE CANNOT HOLD AN EXPIRING CREDENTIAL ────────────────────
+  //
+  // The relay URL Meta fetches is a short-lived bearer credential for a
+  // customer's file, and the reply action used to mint one when the person
+  // pressed Send and store it IN the payload. So after a worker outage, a paused
+  // drain, a deployment or a backlog longer than the TTL, the row survived
+  // perfectly and its attachment had been dead for an hour — retried until it
+  // dead-lettered, for a message nothing was wrong with.
+  //
+  // Reading it back from the DATABASE is the point. A source test can see what
+  // the action writes; only the stored row shows what a worker picking it up
+  // tomorrow will actually have to work with.
+  const storedAttachment = await basePrisma.botFlowOutbox.findFirst({
+    where: { tenantId: DEFAULT_TENANT_ID, key: ids.psid, origin: "staff" },
+    orderBy: [{ createdAt: "asc" }, { sequence: "asc" }],
+    select: { id: true, payload: true, createdAt: true },
+  });
+  const stored = storedAttachment?.payload as
+    | { type?: string; ref?: string; url?: string; contentType?: string }
+    | null;
+  check("the queued attachment holds a durable ref", stored?.type === "attachment" && stored?.ref === upload1, JSON.stringify(stored));
+  check("and no URL at all — nothing stored can expire", stored?.url === undefined, JSON.stringify(stored));
+  check("and the content type it must be served back as", stored?.contentType === "application/pdf", stored?.contentType);
+
+  // Age the row far beyond the relay TTL, exactly as an outage would, then ask
+  // for the URL the worker would use on its NEXT attempt.
+  const sixHoursAgo = new Date(Date.now() - 6 * 3600_000);
+  await basePrisma.botFlowOutbox.update({
+    where: { id: storedAttachment!.id },
+    data: { createdAt: sixHoursAgo, availableAt: sixHoursAgo },
+  });
+  const aged = await basePrisma.botFlowOutbox.findUnique({
+    where: { id: storedAttachment!.id },
+    select: { payload: true, createdAt: true },
+  });
+  const agedPayload = aged!.payload as { ref: string; contentType?: string };
+  const secret = "durability-probe-secret";
+  const origin = "https://crm.example.test";
+  // What the OLD code would have delivered: the URL minted when it was queued.
+  const queueTimeUrl = attachmentUrlForDelivery(agedPayload, {
+    secret,
+    origin,
+    now: aged!.createdAt.getTime(),
+  });
+  check(
+    "a URL minted when the row was queued is dead by now",
+    verifyOutboundMediaToken(queueTimeUrl!.split("/").pop()!, secret) === null,
+  );
+  // What the worker does now, from the same stored row.
+  const attemptUrl = attachmentUrlForDelivery(agedPayload, { secret, origin });
+  const claim = attemptUrl ? verifyOutboundMediaToken(attemptUrl.split("/").pop()!, secret) : null;
+  check("but the row still yields a valid URL on this attempt", claim !== null);
+  check("pointing at the same bytes", claim?.ref === upload1, claim?.ref);
+  check("served as what it is", claim?.contentType === "application/pdf", claim?.contentType);
+  check("and it is a fresh credential, not the stored one", attemptUrl !== queueTimeUrl);
 }
 
 main()

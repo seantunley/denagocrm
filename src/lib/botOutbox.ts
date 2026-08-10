@@ -6,6 +6,7 @@ import { withTenantWrite, writeTenantId, type TenantWriteTx } from "./tenantWrit
 import { botStillOwnsTx, pauseBotSessionTx } from "./botSessionStore";
 import { logAuditStrict } from "./audit";
 import { classifyDeliveryFailure, PERMANENT_FAILURES, staffReplyMatchesRow } from "./messageDelivery";
+import { attachmentUrlForDelivery } from "./outboundMedia";
 import type { OutMsg } from "./flow";
 import { sendWhatsAppButtons, sendWhatsAppImage, sendWhatsAppList, sendWhatsAppText } from "./whatsapp";
 import { sendDirectAttachment, sendDirectMessage, sendDirectQuickReplies } from "./messenger";
@@ -549,8 +550,23 @@ export type OutboxPayload =
   | {
       type: "attachment";
       kind: AttachmentKind;
-      /** Where the bytes are, for THIS submission. Volatile — see stablePayload. */
-      url: string;
+      /**
+       * The DURABLE storage reference — what `saveFile` returned, and the thing
+       * that still identifies these bytes tomorrow.
+       *
+       * NOT a provider-fetchable URL. This carried the signed relay URL, minted
+       * when the person pressed Send and valid for an hour, which quietly undid
+       * the guarantee the queue exists to give: a worker outage, a paused drain,
+       * a deployment or a backlog longer than that hour left the row perfectly
+       * durable and its attachment already expired. A durable queue cannot store
+       * an expiring credential; it stores the identity and mints the credential
+       * per attempt. See `attachmentUrlForDelivery`.
+       *
+       * Volatile across resubmissions of the same file — see stablePayload.
+       */
+      ref: string;
+      /** Served back on the relay, so the provider is told what it is fetching. */
+      contentType?: string;
       /** What the bytes ARE. The message's identity across re-uploads. */
       digest?: string;
     };
@@ -562,13 +578,14 @@ function asOutMsg(payload: unknown): OutboxPayload | null {
   const value = payload as Record<string, unknown>;
   if (
     value.type === "attachment" &&
-    typeof value.url === "string" &&
+    typeof value.ref === "string" &&
     ATTACHMENT_KINDS.includes(value.kind as AttachmentKind)
   ) {
     return {
       type: "attachment",
       kind: value.kind as AttachmentKind,
-      url: value.url,
+      ref: value.ref,
+      ...(typeof value.contentType === "string" ? { contentType: value.contentType } : {}),
       ...(typeof value.digest === "string" ? { digest: value.digest } : {}),
     };
   }
@@ -594,7 +611,20 @@ async function sendProvider(row: OutboxRow): Promise<{ ok: boolean; error?: stri
     if (row.channel !== "messenger" && row.channel !== "instagram") {
       return { ok: false, error: `Unsupported bot channel: ${row.channel} cannot send a ${message.kind} attachment` };
     }
-    return sendDirectAttachment(row.channel, row.key, { type: message.kind, url: message.url });
+    // Minted HERE, for this attempt, from the durable ref — never read out of the
+    // payload. That is the whole difference between a queue that survives an
+    // outage and one that only appears to.
+    const url = attachmentUrlForDelivery(message);
+    if (!url) {
+      // Classifies as `not_configured`, which is deliberately NOT permanent: an
+      // operator who sets a public origin should see the backlog drain, not find
+      // it dead-lettered while they were fixing it.
+      return {
+        ok: false,
+        error: "Attachments are not configured for delivery: this deployment has no public https origin Meta could fetch from",
+      };
+    }
+    return sendDirectAttachment(row.channel, row.key, { type: message.kind, url });
   }
   if (row.channel === "whatsapp") {
     if (message.type === "text") return sendWhatsAppText(row.key, message.text);

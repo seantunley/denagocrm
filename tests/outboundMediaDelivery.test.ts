@@ -4,12 +4,15 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import {
+  attachmentUrlForDelivery,
+  canServeOutboundMedia,
   isPubliclyFetchable,
   outboundMediaUrl,
   publicOrigin,
   signOutboundMediaToken,
   verifyOutboundMediaToken,
 } from "../src/lib/outboundMedia";
+import { classifyDeliveryFailure, PERMANENT_FAILURES } from "../src/lib/messageDelivery";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
@@ -155,15 +158,106 @@ test("the route serves only what it signed, and never as something executable", 
   assert.doesNotMatch(route, /status: 40[13]/, "a distinct code would distinguish the failure modes");
 });
 
-test("the DM reply refuses rather than queueing a URL the provider cannot fetch", () => {
-  const action = stripComments(src("src/app/actions/messenger.ts"));
-  assert.match(action, /providerUrl = outboundMediaUrl\(attachmentUrl, contentType\)/);
-  assert.match(action, /if \(!providerUrl\) \{[\s\S]{0,200}return \{/, "a deployment that cannot deliver must fail the send");
+/**
+ * THE DURABILITY PROPERTY, WHICH IS NOT THE SECURITY PROPERTY.
+ *
+ * The relay URL expires — that is deliberate, and the tests above cover it. But
+ * the reply action minted one when the person pressed Send and put it IN the
+ * durable outbox payload, which quietly undid the guarantee this whole branch
+ * exists to add: after a worker outage, a paused drain, a deployment or a
+ * backlog longer than the TTL, the row survived perfectly and the attachment it
+ * was trying to deliver had been dead for an hour. It would then retry a URL
+ * that could never work until the row dead-lettered.
+ *
+ * A durable queue cannot store an expiring credential. It stores the identity
+ * and mints the credential per attempt.
+ */
 
-  // The QUEUED payload carries the provider URL; the timeline row keeps the
-  // storage ref, which the inbox renders through its own authenticated route.
-  assert.match(action, /\{ type: "attachment", kind: attachmentKind, url: providerUrl, digest: fileDigest \}/);
+test("the queue stores the durable reference, never an expiring URL", () => {
+  const action = stripComments(src("src/app/actions/messenger.ts"));
+  // The payload carries the storage ref and the content type; no URL is minted
+  // here at all, only the question of whether one COULD be.
+  assert.match(action, /ref: attachmentUrl,/, "the payload keeps the durable storage ref");
+  assert.match(action, /canServeOutboundMedia\(attachmentUrl\)/, "accept-time check asks, it does not mint");
+  assert.doesNotMatch(action, /outboundMediaUrl\(/, "the action must not mint a URL it would then persist");
+  assert.doesNotMatch(action, /url: providerUrl/, "an expiring URL must never enter the payload");
   assert.match(action, /ATTACHMENT_BODY\[attachmentKind\],\s*\n\s*attachmentUrl,/, "history keeps the storage ref");
-  // The provider URL is a delivery detail; the digest is the message identity.
+  // The location is a delivery detail; the digest is the message identity.
   assert.match(action, /attachmentDigest: digest,/);
+
+  // And the worker mints from the ref rather than reading a stored url.
+  const outbox = stripComments(src("src/lib/botOutbox.ts"));
+  const attachmentBranch = outbox.slice(
+    outbox.indexOf('if (message.type === "attachment")'),
+    outbox.indexOf('if (row.channel === "whatsapp")'),
+  );
+  assert.match(attachmentBranch, /const url = attachmentUrlForDelivery\(message\);/);
+  assert.match(attachmentBranch, /sendDirectAttachment\(row\.channel, row\.key, \{ type: message\.kind, url \}\)/);
+  // A flow's own `image` message carries a URL its author supplied, which is not
+  // a minted credential and is not in scope here; the ATTACHMENT branch must have
+  // no stored-url route at all.
+  assert.doesNotMatch(attachmentBranch, /message\.url/, "the payload's own url is not a delivery route any more");
+  // And the payload type no longer has anywhere to put one.
+  assert.doesNotMatch(outbox, /type: "attachment";[\s\S]{0,400}\n\s+url: string;/, "the attachment payload has no url field");
+});
+
+test("a message queued long before its delivery attempt still gets a usable URL", () => {
+  // The regression, in the terms that actually failed: queue private/local media,
+  // let far more than the relay TTL pass, then deliver.
+  const local = "9f3c1a2b-photo.png";
+  const queuedAt = 1_700_000_000_000;
+  const deliveredAt = queuedAt + 6 * 60 * 60 * 1000; // six hours of outage
+
+  // What the OLD code did: mint at queue time, store it, send it later.
+  const mintedAtQueueTime = outboundMediaUrl(local, "image/jpeg", {
+    secret: SECRET,
+    origin: ORIGIN,
+    now: queuedAt,
+  });
+  assert.ok(mintedAtQueueTime, "the queue-time URL was valid when it was made");
+  assert.equal(
+    verifyOutboundMediaToken(mintedAtQueueTime!.split("/").pop()!, SECRET, deliveredAt),
+    null,
+    "and by delivery time it is dead — which is exactly why it must not be stored",
+  );
+
+  // What the queue stores now, and what the worker does with it.
+  const payload = { type: "attachment" as const, kind: "image" as const, ref: local, contentType: "image/jpeg" };
+  const mintedAtDelivery = attachmentUrlForDelivery(payload, {
+    secret: SECRET,
+    origin: ORIGIN,
+    now: deliveredAt,
+  });
+  assert.ok(mintedAtDelivery, "the worker must produce a URL at delivery time");
+  const claim = verifyOutboundMediaToken(mintedAtDelivery!.split("/").pop()!, SECRET, deliveredAt);
+  assert.equal(claim?.ref, local, "and it must point at the same bytes");
+  assert.equal(claim?.contentType, "image/jpeg");
+  assert.notEqual(mintedAtDelivery, mintedAtQueueTime, "a fresh credential, not the stored one");
+
+  // A second attempt after ANOTHER TTL is fine too — nothing accumulates staleness.
+  const retryAt = deliveredAt + 6 * 60 * 60 * 1000;
+  const retryUrl = attachmentUrlForDelivery(payload, { secret: SECRET, origin: ORIGIN, now: retryAt });
+  assert.ok(verifyOutboundMediaToken(retryUrl!.split("/").pop()!, SECRET, retryAt));
+});
+
+test("a deployment that cannot serve media refuses at accept time AND at delivery", () => {
+  const local = "9f3c1a2b-photo.png";
+  assert.equal(canServeOutboundMedia(local, { secret: SECRET, origin: null }), false);
+  assert.equal(canServeOutboundMedia(local, { secret: null, origin: ORIGIN }), false);
+  assert.equal(canServeOutboundMedia(local, { secret: SECRET, origin: ORIGIN }), true);
+  // A public blob needs no relay at all, so it is always servable.
+  assert.equal(canServeOutboundMedia("https://abc.public.blob.vercel-storage.com/x.png", { secret: null, origin: null }), true);
+
+  // And the worker's own refusal, for the case where config changed after accept.
+  const payload = { type: "attachment" as const, kind: "file" as const, ref: local };
+  assert.equal(attachmentUrlForDelivery(payload, { secret: SECRET, origin: null }), null);
+
+  // That refusal must be retryable, not a dead letter: an operator fixing the
+  // origin should see the backlog drain rather than find it discarded.
+  const outbox = stripComments(src("src/lib/botOutbox.ts"));
+  const refusal = outbox.slice(outbox.indexOf("const url = attachmentUrlForDelivery"));
+  const message = refusal.slice(0, refusal.indexOf("sendDirectAttachment"));
+  assert.match(message, /Attachments are not configured for delivery/);
+  assert.equal(classifyDeliveryFailure("Attachments are not configured for delivery: this deployment has no public https origin Meta could fetch from"), "not_configured");
+  assert.equal(PERMANENT_FAILURES.has("not_configured"), false, "a fixable config problem must not dead-letter");
 });

@@ -13,7 +13,7 @@ import {
   type OutboxPayload,
 } from "@/lib/botOutbox";
 import { attachmentDigest, sendOutcomeMessage, staffReplyIdempotencyKey } from "@/lib/messageDelivery";
-import { outboundMediaUrl } from "@/lib/outboundMedia";
+import { canServeOutboundMedia } from "@/lib/outboundMedia";
 
 const ATTACH_KIND = (mime: string): AttachmentKind =>
   mime.startsWith("image/") ? "image" : mime.startsWith("audio/") ? "audio" : mime.startsWith("video/") ? "video" : "file";
@@ -98,34 +98,34 @@ export async function sendDmReply(
    */
   let attachmentUrl: string | null = null;
   let attachmentKind: AttachmentKind | null = null;
-  /**
-   * What META fetches, which is not necessarily what we stored.
-   *
-   * Meta does not accept bytes on its send endpoint — it accepts a URL and
-   * fetches it anonymously from its own infrastructure. `saveFile` returns a
-   * publicly readable blob URL on Vercel, a PRIVATE blob URL when BLOB_PRIVATE
-   * is on, and a BARE FILENAME when self-hosted. Queueing the last two produces
-   * a message the CRM accepts, shows in the timeline, retries — and never
-   * delivers.
-   */
-  let providerUrl: string | null = null;
+  let attachmentContentType: string | null = null;
   let fileDigest: string | null = null;
   if (hasFile) {
     if (file.size > 4 * 1024 * 1024) {
       return { error: "File too big — 4MB max here. For larger files, share a Library link instead." };
     }
     const buffer = Buffer.from(await file.arrayBuffer());
-    const contentType = file.type || "application/octet-stream";
+    attachmentContentType = file.type || "application/octet-stream";
     // Taken from the BYTES, before they are stored anywhere, so it is the same
     // on every submission of the same file.
     fileDigest = attachmentDigest(buffer);
-    attachmentUrl = await saveFile(buffer, file.name || "attachment", contentType);
+    attachmentUrl = await saveFile(buffer, file.name || "attachment", attachmentContentType);
     attachmentKind = ATTACH_KIND(file.type || "");
-    providerUrl = outboundMediaUrl(attachmentUrl, contentType);
-    // A refusal, not a fallback. Queueing a ref the provider cannot fetch is a
-    // message that fails silently; telling the person now is something they can
-    // act on — send the text, or share a Library link.
-    if (!providerUrl) {
+    /**
+     * ASKED, NOT MINTED.
+     *
+     * Meta does not accept bytes on its send endpoint — it accepts a URL and
+     * fetches it anonymously. `saveFile` returns a publicly readable blob URL on
+     * Vercel, a PRIVATE blob URL when BLOB_PRIVATE is on, and a BARE FILENAME
+     * when self-hosted; the last two produce a message the CRM accepts, shows in
+     * the timeline, retries, and never delivers. So the person is told NOW,
+     * which is something they can act on — send the text, or share a link.
+     *
+     * But only the QUESTION is asked here. The URL itself is a short-lived
+     * bearer credential and belongs to the delivery attempt, not to the queue:
+     * see the `ref` field on the attachment payload.
+     */
+    if (!canServeOutboundMedia(attachmentUrl)) {
       return {
         error:
           "This deployment cannot serve attachments to Messenger or Instagram — set NEXT_PUBLIC_APP_URL to a public https address, or send a link instead.",
@@ -189,13 +189,20 @@ export async function sendDmReply(
   });
 
   const parts = [
-    // The queued payload carries the PROVIDER-fetchable URL; the timeline row
-    // keeps the storage ref, which is what the inbox renders through its own
-    // authenticated route.
-    ...(attachmentUrl && attachmentKind && providerUrl && fileDigest
+    // The queued payload carries the DURABLE storage ref, not a URL. The worker
+    // mints a fresh provider-fetchable one on each attempt, so a reply that waits
+    // out an outage still arrives. The timeline row keeps the same ref, which is
+    // what the inbox renders through its own authenticated route.
+    ...(attachmentUrl && attachmentKind && fileDigest
       ? [
           part(
-            { type: "attachment", kind: attachmentKind, url: providerUrl, digest: fileDigest },
+            {
+              type: "attachment",
+              kind: attachmentKind,
+              ref: attachmentUrl,
+              contentType: attachmentContentType ?? "application/octet-stream",
+              digest: fileDigest,
+            },
             ATTACHMENT_BODY[attachmentKind],
             attachmentUrl,
             attachmentKind,
