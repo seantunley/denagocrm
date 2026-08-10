@@ -226,3 +226,109 @@ test("every shipped template survives its own PUBLISH compiler", () => {
     assert.deepEqual(issues, [], `${id} would be refused at publish: ${issues.map((i) => `${i.nodeId}:${i.code}`).join(", ")}`);
   }
 });
+
+test("typing instead of tapping never advances to the booked confirmation", async () => {
+  // The customer is looking at the slot menu and replies "9am please". There is no
+  // choiceId, so the engine used to return `next` — straight into "You're booked…"
+  // with nothing reserved.
+  const flow: Flow = {
+    start: "s",
+    nodes: {
+      s: { id: "s", type: "slots", action: "book", text: "Pick a time:", next: "confirm", failureNext: "bad", unavailableNext: "callback" },
+      confirm: { id: "confirm", type: "message", text: "You're booked!", next: "end" },
+      bad: { id: "bad", type: "message", text: "Something went wrong.", next: "end" },
+      callback: { id: "callback", type: "message", text: "We'll call you.", next: "end" },
+      end: { id: "end", type: "end" },
+    },
+  };
+  let reserved = 0;
+  const out = await runFlow(
+    flow,
+    { nodeId: "s", vars: {} },
+    { text: "9am please" },
+    { ...baseCtx, availableSlots: async () => [{ id: "2030-01-15_09:00", label: "Tue 09:00" }], bookSlot: async () => { reserved += 1; return { ok: true }; } },
+  );
+  const said = out.messages.map((m) => (m.type === "text" ? m.text : "")).join(" ");
+  assert.equal(reserved, 0, "nothing may be reserved from an unparsed reply");
+  assert.doesNotMatch(said, /You're booked/);
+  assert.equal(out.session?.nodeId, "s", "it must stay on the slots node and re-offer");
+  assert.equal(out.messages.some((m) => m.type === "choice"), true, "and show the times again");
+});
+
+test("a stale or malformed callback id is not a selection either", async () => {
+  const flow: Flow = {
+    start: "s",
+    nodes: {
+      s: { id: "s", type: "slots", action: "book", text: "Pick a time:", next: "confirm", failureNext: "bad", unavailableNext: "callback" },
+      confirm: { id: "confirm", type: "message", text: "You're booked!", next: "end" },
+      bad: { id: "bad", type: "message", text: "Something went wrong.", next: "end" },
+      callback: { id: "callback", type: "message", text: "We'll call you.", next: "end" },
+      end: { id: "end", type: "end" },
+    },
+  };
+  const out = await runFlow(
+    flow,
+    { nodeId: "s", vars: {} },
+    { text: "", choiceId: "someOtherNode|2030-01-15_09:00" },
+    { ...baseCtx, availableSlots: async () => [{ id: "2030-01-15_09:00", label: "Tue 09:00" }], bookSlot: async () => ({ ok: true }) },
+  );
+  assert.doesNotMatch(out.messages.map((m) => (m.type === "text" ? m.text : "")).join(" "), /You're booked/);
+  assert.equal(out.session?.nodeId, "s");
+});
+
+test("a channel with no reservation handler fails closed", async () => {
+  // bookSlot/rescheduleSlot are optional on FlowCtx, so the engine itself must not
+  // assume a booking happened when no adapter supplied one.
+  const flow: Flow = {
+    start: "s",
+    nodes: {
+      s: { id: "s", type: "slots", action: "book", text: "Pick a time:", next: "confirm", failureNext: "bad" },
+      confirm: { id: "confirm", type: "message", text: "You're booked!", next: "end" },
+      bad: { id: "bad", type: "message", text: "A person will help you book.", next: "end" },
+      end: { id: "end", type: "end" },
+    },
+  };
+  const out = await runFlow(flow, { nodeId: "s", vars: {} }, { text: "", choiceId: "s|2030-01-15_09:00" }, { ...baseCtx });
+  const said = out.messages.map((m) => (m.type === "text" ? m.text : "")).join(" ");
+  assert.doesNotMatch(said, /You're booked/);
+  assert.match(said, /A person will help you book/);
+});
+
+test("unavailableNext is a real edge everywhere the compiler looks", () => {
+  const dangling: Flow = {
+    start: "s",
+    nodes: {
+      s: { id: "s", type: "slots", action: "book", text: "Pick:", next: "confirm", failureNext: "bad", unavailableNext: "does-not-exist" },
+      confirm: { id: "confirm", type: "message", text: "Booked.", next: "end" },
+      bad: { id: "bad", type: "message", text: "Sorry.", next: "end" },
+      end: { id: "end", type: "end" },
+    },
+  };
+  const missing = validateFlow(dangling, ["whatsapp"]).filter((i) => i.code === "graph.missing_target");
+  assert.equal(missing.length, 1, "a dangling unavailableNext must be a missing-target error");
+
+  // And a node reachable ONLY through unavailableNext is not "unreachable".
+  const onlyViaUnavailable: Flow = {
+    start: "s",
+    nodes: {
+      s: { id: "s", type: "slots", action: "book", text: "Pick:", next: "confirm", failureNext: "bad", unavailableNext: "callback" },
+      confirm: { id: "confirm", type: "message", text: "Booked.", next: "end" },
+      bad: { id: "bad", type: "message", text: "Sorry.", next: "end" },
+      callback: { id: "callback", type: "message", text: "We'll call you.", next: "end" },
+      end: { id: "end", type: "end" },
+    },
+  };
+  const unreachable = validateFlow(onlyViaUnavailable, ["whatsapp"]).filter((i) => i.code === "graph.unreachable");
+  assert.deepEqual(unreachable.map((i) => i.nodeId), [], "the unavailable branch is reachable");
+});
+
+test("the builder can author every route the publish gate demands", () => {
+  const builder = readFileSync(new URL("../src/components/FlowBuilder.tsx", import.meta.url), "utf8");
+  assert.match(builder, /If it fails, go to/, "failureNext must be authorable");
+  assert.match(builder, /If nothing is available, go to/, "unavailableNext must be authorable");
+  assert.match(builder, /failureText/, "and the failure message");
+  // Deleting a node must clear these edges too, or publish rejects a graph the
+  // operator did not break.
+  assert.match(builder, /routed\.failureNext === removedId/);
+  assert.match(builder, /routed\.unavailableNext === removedId/);
+});

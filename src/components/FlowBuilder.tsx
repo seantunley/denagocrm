@@ -323,9 +323,19 @@ function clearRefs(n: FlowNode, removedId: string): FlowNode {
   if (n.type === "choice") return { ...n, options: n.options.map((o) => (o.next === removedId ? { ...o, next: undefined } : o)) };
   if (n.type === "condition") return { ...n, trueNext: n.trueNext === removedId ? undefined : n.trueNext, falseNext: n.falseNext === removedId ? undefined : n.falseNext };
   if (n.type === "ai") return n.handoffNext === removedId ? { ...n, handoffNext: undefined } : n;
-  const nn = n as { next?: string };
-  return nn.next === removedId ? ({ ...n, next: undefined } as FlowNode) : n;
+  // Deleting a node has to clear EVERY edge pointing at it, not just `next`.
+  // A dangling failureNext/unavailableNext would now be a publish error the
+  // operator did not create and cannot see on the canvas.
+  const routed = n as { next?: string; failureNext?: string; unavailableNext?: string };
+  const cleared: Record<string, undefined> = {};
+  if (routed.next === removedId) cleared.next = undefined;
+  if (routed.failureNext === removedId) cleared.failureNext = undefined;
+  if (routed.unavailableNext === removedId) cleared.unavailableNext = undefined;
+  return Object.keys(cleared).length ? ({ ...n, ...cleared } as FlowNode) : n;
 }
+
+/** Node types whose action can fail, and therefore need their own outcome routes. */
+const FALLIBLE = new Set(["booking", "slots", "journey"]);
 
 function TargetPicker({ value, onPick, nodeOptions }: { value?: string; onPick: (value?: string) => void; nodeOptions: { id: string; label: string }[] }) {
   return <select className="input btn-sm" value={value ?? ""} onChange={(event) => onPick(event.target.value || undefined)}><option value="">— (ends here) —</option>{nodeOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select>;
@@ -371,6 +381,37 @@ function NodePanel({ node, isStart, nodeOptions, variables, journeys, onChange, 
       {node.type === "choice" && <div className="space-y-2"><div><label className="label">Prompt</label><textarea className="input" rows={2} value={node.text} onChange={(e) => onChange({ ...node, text: e.target.value })} /></div><label className="label">Options</label>{node.options.map((o, i) => <div key={o.id} className="rounded-lg border border-slate-800 p-2 space-y-1.5"><div className="flex gap-1.5"><input className="input btn-sm flex-1" value={o.label} onChange={(e) => onChange({ ...node, options: node.options.map((x) => x.id === o.id ? { ...x, label: e.target.value } : x) })} /><button onClick={() => onChange({ ...node, options: node.options.filter((x) => x.id !== o.id) })} className="px-1 text-muted-foreground hover:text-red-400"><X className="size-4" /><span className="sr-only">Remove option</span></button></div><TargetPicker nodeOptions={nodeOptions} value={o.next} onPick={(v) => onChange({ ...node, options: node.options.map((x) => x.id === o.id ? { ...x, next: v } : x) })} />{i === 2 && node.options.length > 3 && <p className="text-[10px] text-amber-400">WhatsApp shows &gt;3 options as a list.</p>}</div>)}<button onClick={() => onChange({ ...node, options: [...node.options, { id: `o${Date.now().toString(36)}`, label: `Option ${node.options.length + 1}` }] })} className="btn-secondary btn-sm w-full">+ Add option</button></div>}
 
       {(node.type === "message" || node.type === "answer" || node.type === "capture" || node.type === "captureFile" || node.type === "image" || node.type === "booking" || node.type === "slots" || node.type === "journey") && <div><label className="label">Then go to</label><TargetPicker nodeOptions={nodeOptions} value={(node as { next?: string }).next} onPick={(v) => onChange({ ...node, next: v } as FlowNode)} /></div>}
+      {FALLIBLE.has(node.type) && (
+        <div className="space-y-2 rounded-lg border border-amber-900/40 bg-amber-950/20 p-2">
+          <p className="text-[11px] text-amber-300">
+            This action can fail. Publishing is refused if a failure would continue into a node that
+            tells the customer it worked.
+          </p>
+          <div>
+            <label className="label">If it fails, say (optional)</label>
+            <textarea
+              className="input"
+              rows={2}
+              placeholder="I couldn't do that just yet — a person will pick it up."
+              value={(node as { failureText?: string }).failureText ?? ""}
+              onChange={(e) => onChange({ ...node, failureText: e.target.value || undefined } as FlowNode)}
+            />
+          </div>
+          <div>
+            <label className="label">If it fails, go to</label>
+            <TargetPicker nodeOptions={nodeOptions} value={(node as { failureNext?: string }).failureNext} onPick={(v) => onChange({ ...node, failureNext: v } as FlowNode)} />
+          </div>
+          {node.type === "slots" && (
+            <div>
+              <label className="label">If nothing is available, go to</label>
+              <TargetPicker nodeOptions={nodeOptions} value={(node as { unavailableNext?: string }).unavailableNext} onPick={(v) => onChange({ ...node, unavailableNext: v } as FlowNode)} />
+              <p className="text-[10px] text-muted-foreground mt-1">
+                Different from a failure: the request was fine, there is just no capacity right now.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
       {node.type === "ai" && <div><label className="label">On hand-off, go to</label><TargetPicker nodeOptions={nodeOptions} value={node.handoffNext} onPick={(v) => onChange({ ...node, handoffNext: v })} /></div>}
 
       {!isStart && <button onClick={onDelete} className="btn-danger btn-sm w-full">Delete node</button>}

@@ -35,9 +35,14 @@ function refs(node: FlowNode): string[] {
   if (node.type === "condition") return [node.trueNext, node.falseNext].filter((value): value is string => Boolean(str(value)));
   if (node.type === "ai") return str(node.handoffNext) ? [str(node.handoffNext)] : [];
   if (node.type === "handoff" || node.type === "end") return [];
+  // Every outgoing edge, or the graph tooling silently ignores whole branches:
+  // a missing target on one of these would not be reported, nodes reachable only
+  // through it would be called unreachable, and an automatic loop running through
+  // it would not be detected.
   const next = str((node as { next?: unknown }).next);
   const failure = str((node as { failureNext?: unknown }).failureNext);
-  return [next, failure].filter(Boolean);
+  const unavailable = str((node as { unavailableNext?: unknown }).unavailableNext);
+  return [next, failure, unavailable].filter(Boolean);
 }
 
 /** Nodes that perform a customer-visible side effect which can legitimately fail. */

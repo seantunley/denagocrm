@@ -135,11 +135,34 @@ async function semanticChoice(node: Extract<FlowNode, { type: "choice" }>, input
 }
 
 async function runSlotSelection(node: Extract<FlowNode, { type: "slots" }>, input: FlowInput, vars: Record<string, string>, ctx: FlowCtx, messages: OutMsg[]) {
-  if (!input.choiceId?.startsWith(`${node.id}|`)) return { nodeId: node.next ?? null };
+  const slotAction = node.action === "reschedule" ? "booking_reschedule" : "slot_booking";
+
+  // `next` is reachable ONLY after a reservation actually succeeded.
+  //
+  // This used to advance to `next` when the customer typed instead of tapping —
+  // so someone looking at the slot menu who replied "9am please" was sent straight
+  // to "You're booked…" with no booking made. A stale or malformed callback id did
+  // the same. Re-offer the times and keep waiting instead: an unparsed reply is
+  // not a selection.
+  if (!input.choiceId?.startsWith(`${node.id}|`)) {
+    const opts = ctx.availableSlots ? await ctx.availableSlots() : [];
+    if (!opts.length) {
+      messages.push({ type: "text", text: node.noneText || "We don't have open slots online right now — leave your details and the team will call you to book. 📞" });
+      return { nodeId: node.unavailableNext ?? node.failureNext ?? null };
+    }
+    messages.push({ type: "choice", text: interpolate(node.text, vars), options: opts.map((o) => ({ id: choiceId(node.id, o.id), label: o.label })) });
+    return { nodeId: node.id, wait: { messages, session: { nodeId: node.id, vars }, handedOff: false } as FlowResult };
+  }
+
   const slotId = input.choiceId.slice(node.id.length + 1);
   const handler = node.action === "reschedule" ? ctx.rescheduleSlot : ctx.bookSlot;
-  const action = node.action === "reschedule" ? "booking_reschedule" : "slot_booking";
-  if (!handler) return { nodeId: node.next ?? null };
+  const action = slotAction;
+  // The channel adapter did not supply a reservation handler, so nothing can be
+  // booked. Fail closed rather than reporting success for an action that never ran.
+  if (!handler) {
+    ctx.recordAction?.(node.id, slotAction, false);
+    return { nodeId: node.failureNext ?? node.unavailableNext ?? null };
+  }
   const res = await handler(slotId, vars, node.id);
   ctx.recordAction?.(node.id, action, res.ok);
   if (!res.ok) {
