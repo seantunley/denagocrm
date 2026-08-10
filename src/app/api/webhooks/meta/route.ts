@@ -11,11 +11,11 @@ import { runDmFlow } from "@/lib/flowDm";
 import { metaReceipt } from "@/lib/deliveryReceipts";
 import { applyReceipt } from "@/lib/messageReceipts";
 import { withChannelTenantScope, validateInSystemScope } from "@/lib/tenantScopeEntry";
+import { inboundRetryResponse, noteInboundRetry, noteLeasedInbound } from "@/lib/webhookRetry";
 import { secretEquals } from "@/lib/secretCompare";
 import {
   claimInboundBotEvent,
   completeInboundBotEvent,
-  InboundBotEventLeasedError,
   retryInboundBotEvent,
   withInboundBotEvent,
 } from "@/lib/botInboundEvent";
@@ -68,6 +68,13 @@ export async function POST(req: NextRequest) {
   const objectType = (body as any).object as string | undefined;
   if (objectType === "page" || objectType === "instagram") {
     const platform: DmPlatform = objectType === "instagram" ? "instagram" : "messenger";
+    // Both retry signals below — a leased event, and a message whose handler threw
+    // — leave the batch loop, and neither was caught here, so they escaped the
+    // route as unhandled rejections. Aborting the batch is deliberate: a batch
+    // carries consecutive messages from one customer, so processing the siblings
+    // of a message we could not finish would answer the second question before the
+    // first, and the redelivery replays the whole batch in order anyway.
+    try {
     for (const entry of (body as any).entry ?? []) {
       const endpointId = String(entry.id ?? "");
       await withChannelTenantScope(platform, endpointId, async () => {
@@ -96,7 +103,9 @@ export async function POST(req: NextRequest) {
           }
           // Leased: the attempt holding it may have died. Ack would retire Meta's
           // redelivery and lose the message, so ask to be sent it again instead.
-          if (outcome.status === "leased") throw new InboundBotEventLeasedError(platform, String(ev.message?.mid ?? ""));
+          // Logged HERE, inside the tenant scope that owns it. At the outer
+          // boundary the scope has unwound and the row files unattributed.
+          if (outcome.status === "leased") throw await noteLeasedInbound("meta-dm-webhook", platform, endpointId, `${platform} ${String(ev.message?.mid ?? "")}`);
           const claim = outcome.claim;
           try {
             await withInboundBotEvent(claim, async () => {
@@ -113,10 +122,15 @@ export async function POST(req: NextRequest) {
             await retryInboundBotEvent(claim, error).catch(() => {});
             const { logError } = await import("@/lib/errorLog");
             await logError("meta-dm-webhook", error).catch(() => {});
-            throw error; // Meta gets non-2xx and redelivers the released event.
+            // Already logged, with its claim released. Rethrowing the raw error
+            // made the outer boundary log the same failure a second time.
+            throw await noteInboundRetry("meta-dm-webhook", "failed", `${platform} ${String(ev.message?.mid ?? "")}`);
           }
         }
       }, () => console.warn(`[tenant-channel] skipped ${platform} DM: unmapped endpoint ${endpointId || "?"}`));
+    }
+    } catch (error) {
+      return inboundRetryResponse("meta-dm-webhook", error);
     }
   }
   /* eslint-enable @typescript-eslint/no-explicit-any */

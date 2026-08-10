@@ -2,10 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { runTelegramFlow, tgAnswerCallback } from "@/lib/telegram";
 import { tgPersistInboundFile } from "@/lib/telegramTransport";
 import { logError } from "@/lib/errorLog";
+import { inboundRetryResponse, noteInboundRetry } from "@/lib/webhookRetry";
 import {
   claimInboundBotEvent,
   completeInboundBotEvent,
-  InboundBotEventLeasedError,
   retryInboundBotEvent,
   withInboundBotEvent,
 } from "@/lib/botInboundEvent";
@@ -30,7 +30,12 @@ export async function POST(req: NextRequest) {
   };
   try { update = await req.json(); } catch { return NextResponse.json({ ok: true }); }
 
-  return withTelegramTenantScope(
+  // The leased signal below is thrown outside the inner try, so without this it
+  // leaves the route as an unhandled rejection: no ErrorLog row, a crashed
+  // invocation in the platform's eyes, and an unexplained 500 in the run of
+  // statuses Telegram sees. Answer it deliberately instead.
+  try {
+    return await withTelegramTenantScope(
     webhookSecret,
     async () => {
       const outcome = await claimInboundBotEvent("telegram", String(update.update_id ?? ""));
@@ -41,7 +46,14 @@ export async function POST(req: NextRequest) {
       }
       // Leased: the attempt holding it may have died. Ack would retire Telegram's
       // redelivery and lose the update, so ask to be sent it again instead.
-      if (outcome.status === "leased") throw new InboundBotEventLeasedError("telegram", String(update.update_id ?? ""));
+      // Logged HERE, inside the tenant scope that owns it. At the outer boundary
+      // the scope has unwound and the row files unattributed.
+      //
+      // Telegram needs no explicit endpoint lookup: withTelegramTenantScope
+      // resolves the secret to a tenant and enters runInTenantScope for it
+      // REGARDLESS of enforcement, unlike withChannelTenantScope, which runs fn()
+      // bare while dormant. The scope here is already the owning tenant.
+      if (outcome.status === "leased") throw await noteInboundRetry("telegram-webhook", "leased", `telegram ${String(update.update_id ?? "")}`);
       const claim = outcome.claim;
       try {
         await withInboundBotEvent(claim, async () => {
@@ -84,5 +96,8 @@ export async function POST(req: NextRequest) {
       await logError("telegram-webhook", "Rejected Telegram update: webhook secret did not resolve to an active tenant").catch(() => {});
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     },
-  );
+    );
+  } catch (error) {
+    return inboundRetryResponse("telegram-webhook", error);
+  }
 }

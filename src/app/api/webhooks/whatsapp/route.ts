@@ -9,11 +9,11 @@ import { saveFile } from "@/lib/storage";
 import { runWhatsAppBot } from "@/lib/flowRun";
 import { withChannelTenantScope, validateInSystemScope } from "@/lib/tenantScopeEntry";
 import { logError } from "@/lib/errorLog";
+import { inboundRetryResponse, noteInboundRetry, noteLeasedInbound } from "@/lib/webhookRetry";
 import { secretEquals } from "@/lib/secretCompare";
 import {
   claimInboundBotEvent,
   completeInboundBotEvent,
-  InboundBotEventLeasedError,
   retryInboundBotEvent,
   withInboundBotEvent,
 } from "@/lib/botInboundEvent";
@@ -46,6 +46,13 @@ export async function POST(req: NextRequest) {
 
   /* eslint-disable @typescript-eslint/no-explicit-any */
   const entries = (body as any).entry ?? [];
+  // Both retry signals below — a leased event, and a message whose handler threw —
+  // leave the batch loop, and neither was caught here, so they escaped the route
+  // as unhandled rejections. Aborting the batch is deliberate: a batch carries
+  // consecutive messages from one customer, so processing the siblings of a
+  // message we could not finish would answer the second question before the
+  // first, and the redelivery replays the whole batch in order anyway.
+  try {
   for (const entry of entries) {
     for (const change of entry.changes ?? []) {
       if (change.field !== "messages") continue;
@@ -67,7 +74,9 @@ export async function POST(req: NextRequest) {
           }
           // Leased: the attempt holding it may have died. Ack would retire Meta's
           // redelivery and lose the message, so ask to be sent it again instead.
-          if (outcome.status === "leased") throw new InboundBotEventLeasedError("whatsapp", String(message.id ?? ""));
+          // Logged HERE, inside the tenant scope that owns it. At the outer
+          // boundary the scope has unwound and the row files unattributed.
+          if (outcome.status === "leased") throw await noteLeasedInbound("whatsapp-webhook", "whatsapp", phoneNumberId, `whatsapp ${String(message.id ?? "")}`);
           const claim = outcome.claim;
           try {
             await withInboundBotEvent(claim, async () => {
@@ -113,11 +122,16 @@ export async function POST(req: NextRequest) {
           } catch (error) {
             await retryInboundBotEvent(claim, error).catch(() => {});
             await logError("whatsapp-webhook", error).catch(() => {});
-            throw error; // non-2xx makes Meta redeliver; completed siblings are skipped.
+            // Already logged, with its claim released. Rethrowing the raw error
+            // made the outer boundary log the same failure a second time.
+            throw await noteInboundRetry("whatsapp-webhook", "failed", `whatsapp ${String(message.id ?? "")}`);
           }
         }
       }, () => console.warn(`[tenant-channel] skipped WhatsApp inbound: unmapped phone_number_id ${phoneNumberId ?? "?"}`));
     }
+  }
+  } catch (error) {
+    return inboundRetryResponse("whatsapp-webhook", error);
   }
   /* eslint-enable @typescript-eslint/no-explicit-any */
   return NextResponse.json({ received: true });
