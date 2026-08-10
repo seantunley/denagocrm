@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ChevronsUpDown, LogOut, Settings, Trash2 } from "lucide-react";
+import { ChevronsUpDown, KeyRound, LogOut, Settings, Trash2, UserRound } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   DropdownMenu,
@@ -103,12 +103,27 @@ export default function AccountMenu({
             <DropdownMenuSeparator />
           </>
         )}
-        <DropdownMenuLabel className="text-muted-foreground">v{APP_VERSION}</DropdownMenuLabel>
+        {/* Your own account first. These were reachable only by opening Settings
+            and finding the right tab — and the password form additionally sat
+            collapsed inside it, so `section=password` opens it on arrival rather
+            than landing you next to it. */}
+        <DropdownMenuItem asChild>
+          <Link href="/settings?tab=account">
+            <UserRound className="size-4" />
+            My profile
+          </Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link href="/settings?tab=account&section=password#password">
+            <KeyRound className="size-4" />
+            Change password
+          </Link>
+        </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem asChild>
           <Link href="/settings">
             <Settings className="size-4" />
-            Settings
+            Workspace settings
           </Link>
         </DropdownMenuItem>
         {isOwner && (
@@ -124,6 +139,8 @@ export default function AccountMenu({
           <LogOut className="size-4" />
           Sign out
         </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel className="py-1 text-[11px] font-normal text-muted-foreground">v{APP_VERSION}</DropdownMenuLabel>
       </DropdownMenuContent>
     </DropdownMenu>
   );

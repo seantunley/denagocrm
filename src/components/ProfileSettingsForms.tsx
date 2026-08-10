@@ -76,46 +76,52 @@ export default function ProfileSettingsForms({
               </div>
               <p className="mt-1 truncate text-sm text-muted-foreground">{email}</p>
               <p className="mt-2 text-xs text-muted-foreground">Member since {createdAt}</p>
+
+              {/* The photo control belongs BESIDE the photo. It had a labelled
+                  block, a help paragraph, a full-width file input and its own
+                  card section — a whole panel to change one image. Picking a file
+                  reveals Save, so the button is not standing there doing nothing. */}
+              <form action={photoAction} className="mt-3 flex flex-wrap items-center gap-2">
+                <label
+                  htmlFor="profile-avatar"
+                  className="btn-secondary btn-sm cursor-pointer"
+                  title="JPG, PNG or WebP. Maximum 3 MB. Square images work best."
+                >
+                  <ImagePlus className="size-4" />
+                  {hasAvatar ? "Change photo" : "Add photo"}
+                </label>
+                <input
+                  id="profile-avatar"
+                  name="avatar"
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  className="sr-only"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    setPreview((previous) => {
+                      if (previous) URL.revokeObjectURL(previous);
+                      return file ? URL.createObjectURL(file) : null;
+                    });
+                  }}
+                  required
+                />
+                {preview ? (
+                  <button className="btn-primary btn-sm" disabled={photoPending}>
+                    {photoPending ? "Saving…" : "Save photo"}
+                  </button>
+                ) : null}
+                <Result state={photoState} />
+              </form>
+              {hasAvatar && !preview ? (
+                <form action={removeAction} className="mt-2">
+                  <button className="text-xs text-muted-foreground underline-offset-2 hover:text-destructive hover:underline" disabled={removePending}>
+                    <Trash2 className="mr-1 inline size-3" />{removePending ? "Removing…" : "Remove photo"}
+                  </button>
+                  <Result state={removeState} />
+                </form>
+              ) : null}
             </div>
           </div>
-        </div>
-
-        <div className="grid gap-5 p-5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end sm:p-6">
-          <form action={photoAction} className="space-y-3">
-            <div>
-              <label htmlFor="profile-avatar" className="label">Profile photo</label>
-              <p className="mb-3 text-xs text-muted-foreground">JPG, PNG or WebP. Maximum 3 MB. Square images work best.</p>
-              <input
-                id="profile-avatar"
-                name="avatar"
-                type="file"
-                accept="image/jpeg,image/png,image/webp"
-                className="input h-auto cursor-pointer py-2 file:mr-3 file:rounded-md file:border-0 file:bg-primary/10 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-primary"
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  setPreview((previous) => {
-                    if (previous) URL.revokeObjectURL(previous);
-                    return file ? URL.createObjectURL(file) : null;
-                  });
-                }}
-                required
-              />
-            </div>
-            <div className="flex flex-wrap items-center gap-3">
-              <button className="btn-primary btn-sm" disabled={photoPending}>
-                <ImagePlus className="size-4" /> {photoPending ? "Uploading…" : "Upload photo"}
-              </button>
-              <Result state={photoState} />
-            </div>
-          </form>
-          {hasAvatar ? (
-            <form action={removeAction}>
-              <button className="btn-secondary btn-sm text-destructive" disabled={removePending}>
-                <Trash2 className="size-4" /> {removePending ? "Removing…" : "Remove photo"}
-              </button>
-              <Result state={removeState} />
-            </form>
-          ) : null}
         </div>
       </section>
 
@@ -124,7 +130,7 @@ export default function ProfileSettingsForms({
           <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary"><UserRound className="size-4" /></span>
           <div><h2 className="font-semibold">Personal details</h2><p className="text-xs text-muted-foreground">Used across assignments, communications and your email signature.</p></div>
         </div>
-        <form action={profileAction} className="grid gap-4 sm:grid-cols-2">
+        <form action={profileAction} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <div>
             <label htmlFor="profile-name" className="label">Full name</label>
             <input id="profile-name" name="name" className="input" defaultValue={name} maxLength={100} autoComplete="name" required />
@@ -133,11 +139,11 @@ export default function ProfileSettingsForms({
             <label htmlFor="profile-job-title" className="label">Job title <span className="font-normal text-muted-foreground">(optional)</span></label>
             <input id="profile-job-title" name="jobTitle" className="input" defaultValue={jobTitle ?? ""} maxLength={100} autoComplete="organization-title" placeholder="e.g. Sales Consultant" />
           </div>
-          <div className="sm:col-span-2">
+          <div className="sm:col-span-2 lg:col-span-1">
             <label htmlFor="profile-mobile" className="label">Phone number <span className="font-normal text-muted-foreground">(optional)</span></label>
             <input id="profile-mobile" name="mobile" type="tel" className="input" defaultValue={mobile ?? ""} maxLength={30} autoComplete="tel" placeholder="e.g. +27 82 123 4567" />
           </div>
-          <div className="flex flex-wrap items-center gap-3 sm:col-span-2">
+          <div className="flex flex-wrap items-center gap-3 sm:col-span-2 lg:col-span-3">
             <button className="btn-primary btn-sm" disabled={profilePending}>{profilePending ? "Saving…" : "Save profile"}</button>
             <Result state={profileState} />
           </div>

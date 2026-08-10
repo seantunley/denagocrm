@@ -30,9 +30,12 @@ type ShellUser = { name: string; role: string; permissions: string[]; avatarVers
  */
 function AccountCluster({ user, isOwner }: { user: ShellUser; isOwner: boolean }) {
   return (
-    <div className="flex items-center gap-1">
+    // Held together as one object rather than three loose icons: a hairline
+    // border and a barely-there fill, so it reads as a group without competing
+    // with the page. The divider separates "app help" from "you".
+    <div className="flex items-center gap-0.5 rounded-xl border border-sidebar-border/70 bg-sidebar-accent/25 p-1 transition-colors hover:border-sidebar-border">
       <SidebarHelpSettings isOwner={isOwner} permissions={user.permissions} compact />
-      <div className="mx-1 h-5 w-px bg-sidebar-border" aria-hidden />
+      <div className="mx-0.5 h-5 w-px bg-sidebar-border/70" aria-hidden />
       <AccountMenu user={user} isOwner={isOwner} compact />
     </div>
   );

@@ -171,7 +171,7 @@ export default function SidebarHelpSettings({
               <Settings className="size-3.5" />
             </span>
             {!compact && <span className="flex-1 text-left">Settings</span>}
-            <ChevronRight className="size-3.5 text-muted-foreground/50 transition-transform group-data-[state=open]:translate-x-0.5 group-data-[state=open]:text-primary" />
+            {!compact && <ChevronRight className="size-3.5 text-muted-foreground/50 transition-transform group-data-[state=open]:translate-x-0.5 group-data-[state=open]:text-primary" />}
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent

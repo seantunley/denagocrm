@@ -80,6 +80,27 @@ test("the compact variant is a trigger change, not a second menu", () => {
   assert.match(menu, /side=\{compact \? "bottom" : "top"\}/);
 });
 
+test("the compact triggers are icon-only", () => {
+  // The Settings trigger kept its ChevronRight while Help lost it, so the chevron
+  // wrapped under the icon inside an 8x8 grid button — a stray ">" below the gear.
+  // Both affordances belong to the sidebar row, where there is a label to point at.
+  const help = src("src/components/SidebarHelpSettings.tsx");
+  const triggers = help.slice(help.indexOf("const triggerClass ="), help.indexOf("const settingsGroups") > 0 ? help.length : help.length);
+  const chevrons = triggers.match(/<ChevronRight className="size-3\.5 text-muted-foreground\/50/g) ?? [];
+  const guarded = triggers.match(/\{!compact && <ChevronRight className="size-3\.5 text-muted-foreground\/50/g) ?? [];
+  assert.equal(chevrons.length, guarded.length, "every trigger chevron must be hidden when compact");
+  assert.equal(guarded.length, 2, "Help and Settings");
+});
+
+test("the cluster reads as one object", () => {
+  const shell = src("src/components/AppShell.tsx");
+  const cluster = shell.slice(shell.indexOf("function AccountCluster("), shell.indexOf("function SidebarInner("));
+  assert.match(cluster, /rounded-xl border border-sidebar-border\/70/, "a hairline holds it together");
+  assert.match(cluster, /bg-sidebar-accent\/25/, "and a barely-there fill");
+  // Subtle means it must not read as a button or compete with the page.
+  assert.doesNotMatch(cluster, /bg-primary|shadow-lg|border-primary/);
+});
+
 test("an avatar-only trigger still says who you are", () => {
   // The sidebar showed the name next to the avatar. Behind an avatar alone it
   // has to be in the menu, or you cannot tell which account you are signed into.
@@ -92,4 +113,26 @@ test("an avatar-only trigger still says who you are", () => {
   const help = src("src/components/SidebarHelpSettings.tsx");
   assert.match(help, /aria-label=\{compact \? "Help" : undefined\}/);
   assert.match(help, /aria-label=\{compact \? "Settings" : undefined\}/);
+});
+
+test("your own account is reachable from the menu, not just the workspace's", () => {
+  // "Settings" alone meant opening the workspace settings and finding the right
+  // tab. The password form sat collapsed inside that tab as well, so arriving on
+  // the page still left it to be found.
+  const menu = src("src/components/AccountMenu.tsx");
+  assert.match(menu, /href="\/settings\?tab=account"[\s\S]{0,80}My profile/);
+  assert.match(menu, /href="\/settings\?tab=account&section=password#password"[\s\S]{0,90}Change password/);
+  // Personal items come before the workspace-wide ones.
+  assert.ok(menu.indexOf("My profile") < menu.indexOf("Workspace settings"));
+  assert.ok(menu.indexOf("Change password") < menu.indexOf("Workspace settings"));
+  // Sign out stays last among the actions; the version is reference, not an action.
+  assert.ok(menu.indexOf("Sign out") < menu.indexOf("APP_VERSION}</DropdownMenuLabel>"));
+});
+
+test("the password section opens when it is linked to", () => {
+  // A <details> that arrives closed has not answered the request.
+  const page = src("src/app/(app)/settings/page.tsx");
+  assert.match(page, /searchParams: Promise<\{ tab\?: string; section\?: string \}>/);
+  assert.match(page, /const \{ tab: rawTab, section \} = await searchParams;/);
+  assert.match(page, /<details id="password" open=\{section === "password"\}>/);
 });
