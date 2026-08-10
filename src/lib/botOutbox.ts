@@ -626,11 +626,23 @@ async function failDelivery(row: OutboxRow, error: string): Promise<"retry" | "d
  * called, for every bot-origin row on every path. The session row is taken FOR
  * UPDATE, so a takeover cannot commit between the check and the decision.
  *
- * What this does NOT claim: a takeover committing DURING the provider call
- * cannot be caught by anything, because the message is already gone. The
- * guarantee is that no bot message is sent after a takeover this process could
- * have observed — which is the strongest statement a queue with an external
- * side effect can make.
+ * WHAT THIS DOES NOT CLAIM, STATED PRECISELY. The FOR UPDATE lock is held only
+ * for the duration of this check's transaction, and that transaction commits
+ * before the provider is called. So the race is not merely "a takeover during
+ * the provider call" — it is anything that commits in the gap AFTER this check
+ * commits and BEFORE the send begins, as well as during the send itself. Both
+ * windows are real and neither is closed here.
+ *
+ * Closing them would mean holding a database transaction across an external HTTP
+ * call, which trades a narrow race for a much worse failure mode: a provider
+ * timeout would pin a row lock for the length of that timeout, and a crash
+ * mid-send would leave it held until the connection is reaped.
+ *
+ * So the honest guarantee is bounded: no bot message is sent after a takeover
+ * that had already committed when this check ran. The window it leaves is the
+ * few milliseconds between that check and the send, against the original bug's
+ * window of "for as long as the row sat in the queue" — which for a claimed row
+ * was the whole lease, and for a pending one was indefinite.
  */
 async function botMayStillSpeak(row: OutboxRow): Promise<boolean> {
   if (row.origin !== "bot") return true; // a person's own reply is never fenced
