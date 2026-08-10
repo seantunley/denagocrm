@@ -4,6 +4,7 @@ import { sendPushToAll } from "./push";
 import { createLeadRecordIfPipelineReady } from "./leadCreate";
 import { resolveTenantActor } from "./tenantActor";
 import { currentTenantScope } from "./tenantScope";
+import { distinctIdentities } from "./botBookingIdentity";
 
 /**
  * Every outbound call is bounded. Node fetch has NO default timeout, so an
@@ -131,35 +132,45 @@ export async function isWhatsAppConfigured(): Promise<boolean> {
  * ONE person. Ordinary conversation still uses the deterministic pick — an inbound
  * message must be filed somewhere — but an action that touches an existing booking
  * refuses it, because "probably this customer" is not identity.
+ *
+ * Ambiguity is counted ACROSS both tables. Returning as soon as a Contact matched
+ * meant one Contact and one unrelated open Lead on the same number read as
+ * unambiguous, and that is two people. A Lead pointing AT a matched Contact is the
+ * same person, so identities collapse on contactId rather than on row count.
+ *
+ * Known limitation: CRM phone fields are free-form, so `082 123 4567` still does
+ * not match the digit tail. That predates this change — `contains` also required a
+ * contiguous run — and fixing it properly means comparing normalised digits, which
+ * needs a stored normalised column to stay indexable. Worth doing; not this.
  */
 export type PhoneMatch = { contactId: string | null; leadId: string | null; ambiguous: boolean };
 
 export async function matchByPhone(digits: string): Promise<PhoneMatch> {
   const variants = [digits, "0" + digits.slice(2), "+" + digits];
   const tails = [...new Set(variants.map((v) => v.slice(-9)))];
-  const contacts = await prisma.contact.findMany({
-    where: {
-      OR: tails.flatMap((tail) => [
-        { phone: { endsWith: tail } },
-        { whatsapp: { endsWith: tail } },
-      ]),
-    },
-    // Oldest first: stable across requests, and the original record rather than a
-    // later duplicate. `take: 2` only to detect that there IS a second one.
-    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-    take: 2,
-    select: { id: true },
-  });
-  if (contacts[0]) return { contactId: contacts[0].id, leadId: null, ambiguous: contacts.length > 1 };
+  // Both tables, always. Stopping at the first matching Contact could not see an
+  // unrelated open Lead on the same number, and that is a second person.
+  // Oldest first: stable across requests, and the original record rather than a
+  // later duplicate. `take: 2` only to learn that there IS more than one.
+  const [contacts, leads] = await Promise.all([
+    prisma.contact.findMany({
+      where: { OR: tails.flatMap((tail) => [{ phone: { endsWith: tail } }, { whatsapp: { endsWith: tail } }]) },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      take: 2,
+      select: { id: true },
+    }),
+    prisma.lead.findMany({
+      where: { phone: { endsWith: digits.slice(-9) }, status: "open" },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      take: 2,
+      select: { id: true, contactId: true },
+    }),
+  ]);
 
-  const leads = await prisma.lead.findMany({
-    where: { phone: { endsWith: digits.slice(-9) }, status: "open" },
-    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-    take: 2,
-    select: { id: true, contactId: true },
-  });
+  const ambiguous = distinctIdentities(contacts, leads) > 1;
+  if (contacts[0]) return { contactId: contacts[0].id, leadId: null, ambiguous };
   const lead = leads[0];
-  return { contactId: lead?.contactId ?? null, leadId: lead?.id ?? null, ambiguous: leads.length > 1 };
+  return { contactId: lead?.contactId ?? null, leadId: lead?.id ?? null, ambiguous };
 }
 
 /**

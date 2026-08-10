@@ -57,3 +57,23 @@ export function markUnverified(vars: Record<string, string>): void {
   delete vars.booking_slot;
   delete vars.booking_summary;
 }
+
+/**
+ * How many DIFFERENT people a channel lookup found.
+ *
+ * A Lead pointing at a Contact that also matched is the same person, not a second
+ * one, so identities collapse on contactId rather than on row count — otherwise an
+ * ordinary lead-plus-contact pair would refuse self-service for a customer whose
+ * records are perfectly consistent.
+ *
+ * Import-free, in the module that states the security rule, so it is executable by
+ * a test rather than inferred from the query that calls it.
+ */
+export function distinctIdentities(
+  contacts: ReadonlyArray<{ id: string }>,
+  leads: ReadonlyArray<{ id: string; contactId: string | null }>,
+): number {
+  const identities = new Set<string>(contacts.map((c) => `contact:${c.id}`));
+  for (const lead of leads) identities.add(lead.contactId ? `contact:${lead.contactId}` : `lead:${lead.id}`);
+  return identities.size;
+}

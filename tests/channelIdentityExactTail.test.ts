@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { channelVerifiedOwner, markUnverified } from "../src/lib/botBookingIdentity";
+import { channelVerifiedOwner, distinctIdentities, markUnverified } from "../src/lib/botBookingIdentity";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8").replace(/\r\n/g, "\n");
@@ -59,6 +59,34 @@ test("refusing identity also drops anything an earlier turn had resolved", () =>
   assert.equal(vars.booking_summary, undefined);
 });
 
+test("one Contact and one unrelated open Lead is two people, not one", () => {
+  // The hole: the lookup returned as soon as a Contact matched, so a matching open
+  // Lead on the same number was never seen. "Two records answering to one number
+  // is not proof of one person" only held WITHIN a table.
+  const C1 = [{ id: "c1" }];
+  const L2 = [{ id: "l2", contactId: null }];
+  assert.equal(distinctIdentities(C1, L2), 2, "a contact and an unrelated lead are two identities");
+
+  const match = { contactId: "c1", leadId: null, ambiguous: distinctIdentities(C1, L2) > 1 };
+  assert.equal(match.ambiguous, true);
+  assert.equal(channelVerifiedOwner(match), null, "booking self-service must refuse this");
+});
+
+test("a Lead pointing at the matched Contact is the same person", () => {
+  // Collapsing on row count instead would refuse self-service for a customer whose
+  // records are perfectly consistent — an ordinary contact with an open lead.
+  assert.equal(distinctIdentities([{ id: "c1" }], [{ id: "l1", contactId: "c1" }]), 1);
+  assert.equal(channelVerifiedOwner({ contactId: "c1", leadId: null, ambiguous: false })?.contactId, "c1");
+
+  // Two leads for one contact are still one person.
+  assert.equal(distinctIdentities([], [{ id: "l1", contactId: "cX" }, { id: "l2", contactId: "cX" }]), 1);
+  // Two contacts, or two unlinked leads, are still two.
+  assert.equal(distinctIdentities([{ id: "c1" }, { id: "c2" }], []), 2);
+  assert.equal(distinctIdentities([], [{ id: "l1", contactId: null }, { id: "l2", contactId: null }]), 2);
+  // Nothing matched at all.
+  assert.equal(distinctIdentities([], []), 0);
+});
+
 test("the lookup matches the end of the number and picks deterministically", () => {
   const wa = src("src/lib/whatsapp.ts");
   const match = wa.slice(wa.indexOf("export async function matchByPhone"), wa.indexOf("/** Logs an inbound WhatsApp"));
@@ -74,8 +102,11 @@ test("the lookup matches the end of the number and picks deterministically", () 
   assert.doesNotMatch(match, /take: 1\b/);
   // take: 2 is how it learns there IS a second one.
   assert.match(match, /take: 2/);
-  assert.match(match, /ambiguous: contacts\.length > 1/);
-  assert.match(match, /ambiguous: leads\.length > 1/);
+  // Both tables are read before identity is decided; returning early on a Contact
+  // could not see a conflicting open Lead.
+  assert.match(match, /const \[contacts, leads\] = await Promise\.all\(/);
+  assert.match(match, /const ambiguous = distinctIdentities\(contacts, leads\) > 1;/);
+  assert.doesNotMatch(match, /ambiguous: contacts\.length > 1/, "row count within one table is not the rule");
 });
 
 test("the security boundary consumes the flag, or reporting it changes nothing", () => {
