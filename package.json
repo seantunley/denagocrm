@@ -41,7 +41,9 @@
     "test:dm-binding": "tsx --tsconfig tsconfig.scripts.json scripts/test-dm-conversation-binding.ts",
     "test:inbox-selection": "tsx --tsconfig tsconfig.scripts.json scripts/test-inbox-thread-selection.ts",
     "test:staff-reply": "tsx --tsconfig tsconfig.scripts.json scripts/test-staff-reply-durability.ts",
-    "test:meta-echo": "tsx --tsconfig tsconfig.scripts.json scripts/test-meta-echo-dedupe.ts"
+    "test:meta-echo": "tsx --tsconfig tsconfig.scripts.json scripts/test-meta-echo-dedupe.ts",
+    "test:tenant-stamp": "tsx --tsconfig tsconfig.harness.json scripts/test-tenant-stamp.ts",
+    "harness:install-postgres": "npm i --no-save --no-package-lock embedded-postgres"
   },
   "dependencies": {
     "@blocknote/core": "0.51.4",
