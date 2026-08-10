@@ -485,3 +485,60 @@ test("the missing-table check recognises both signals and nothing else", () => {
   assert.equal(isMissingLedgerTable({ message: 'relation "Contact" does not exist' }), false);
   assert.equal(isMissingLedgerTable(undefined), false);
 });
+
+// ── The drift probe must see the WHOLE schema ───────────────────────────────
+
+/**
+ * The schema is split across seven files and the probe read one of them.
+ *
+ * So the integrity check — the gate that exists to stop a recorded-but-not-applied
+ * migration shipping code against a missing column — never looked at any model
+ * defined outside schema.prisma. Every bot, journey, campaign, governance,
+ * dashboard and integration table was outside the only check that would have
+ * caught a missing one, including BotFlowOutbox, whose migrations this same
+ * runner applies.
+ *
+ * It also made the schema unable to express a relation crossing two files: a
+ * relation field in schema.prisma pointing at a model defined elsewhere is
+ * unresolvable when only that file is parsed, so the probe fails to parse the
+ * very model it is checking — and a probe that cannot answer blocks the deploy,
+ * correctly. The split was quietly costing referential integrity.
+ */
+test("the drift probe diffs against every schema file, not just schema.prisma", () => {
+  const runner = readFileSync(join(root, "scripts/apply-migrations.mjs"), "utf8");
+  const probe = runner.slice(runner.indexOf("function defaultRunDiff"), runner.indexOf("export function migrationChecksum"));
+
+  assert.match(probe, /"--to-schema-datamodel",\s*schemaPath/, "the probe must be given the schema DIRECTORY");
+  assert.doesNotMatch(probe, /schemaFile/, "diffing one file leaves six unchecked");
+  // And the single-file path must not survive anywhere, or it invites reuse.
+  assert.doesNotMatch(runner, /const schemaFile\b/);
+});
+
+test("every schema file is actually part of the schema the probe reads", () => {
+  const files = readdirSync(join(root, "prisma")).filter((name) => name.endsWith(".prisma"));
+  // If this ever drops to one, the test above stops meaning anything.
+  assert.ok(files.length > 1, `expected a multi-file schema, found ${files.join(", ")}`);
+  assert.ok(files.includes("schema.prisma"));
+  // Named explicitly: these carry models the probe was blind to, and a rename
+  // that silently dropped one should fail here rather than in production.
+  for (const file of ["governance.prisma", "journeys.prisma", "integrations.prisma"]) {
+    assert.ok(files.includes(file), `${file} is missing from the schema directory`);
+  }
+});
+
+test("indexes the schema declares are actually created by a migration", () => {
+  const dir = join(root, "prisma/migrations/20260810120000_declared_indexes_that_were_never_created");
+  assert.ok(existsSync(dir), "the migration must exist");
+  const sql = readFileSync(join(dir, "migration.sql"), "utf8");
+  // Both were declared in schema.prisma and absent from the database. A foreign
+  // key is not an index in PostgreSQL, which is how Team.managerId came to have
+  // a constraint and no index.
+  assert.match(sql, /CREATE INDEX IF NOT EXISTS "Team_managerId_idx" ON "Team"\("managerId"\)/);
+  assert.match(sql, /CREATE INDEX IF NOT EXISTS "UserRole_roleId_idx" ON "UserRole"\("roleId"\)/);
+
+  // Both models live in governance.prisma — a file the single-file probe never
+  // read, which is why these were invisible rather than merely unprioritised.
+  const governance = readFileSync(join(root, "prisma/governance.prisma"), "utf8");
+  assert.match(governance, /@@index\(\[managerId\]\)/, "the migration must match what the schema declares");
+  assert.match(governance, /@@index\(\[roleId\]\)/);
+});

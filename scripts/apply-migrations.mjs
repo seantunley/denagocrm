@@ -41,7 +41,6 @@ const CHECK_ONLY = process.argv.includes("--check");
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const migrationsDir = join(root, "prisma", "migrations");
 const schemaPath = join(root, "prisma");
-const schemaFile = join(schemaPath, "schema.prisma");
 
 // Arbitrary 32-bit constant. A session advisory lock on this key serialises
 // concurrent runs (e.g. two overlapping Vercel deploys) so they cannot apply
@@ -208,11 +207,34 @@ export function migrationRoleProblem({ role, canCreate, unpooledConfigured }) {
   );
 }
 
-/** Default schema-diff probe: `prisma migrate diff` (DB → deployed schema). */
+/**
+ * Default schema-diff probe: `prisma migrate diff` (DB → deployed schema).
+ *
+ * Diffs against the schema DIRECTORY, not `schema.prisma` alone.
+ *
+ * The schema is split across seven files, and this probe read one of them. So the
+ * integrity check — the gate that exists to stop a recorded-but-not-applied
+ * migration shipping code against a missing column — has never looked at any
+ * model defined outside `schema.prisma`. Every bot, journey, campaign,
+ * governance, dashboard and integration table was outside the only check that
+ * would have caught a missing one.
+ *
+ * It also made the schema unable to express a relation that crosses files: a
+ * relation field in `schema.prisma` pointing at a model defined elsewhere is
+ * unresolvable when only that file is parsed, and the probe fails to parse the
+ * very model it is checking. A parse failure here BLOCKS the deploy (correctly —
+ * a gate that cannot answer must not wave things through), so the split was
+ * quietly costing us referential integrity we would otherwise have declared.
+ *
+ * Directory form measured against a fully-migrated database before this changed:
+ * zero blocking differences, so no deploy that passes today starts failing. It
+ * reports eighteen more NON-blocking ones, which are warnings and are the point —
+ * see the pull request for the three that turned out to be real missing indexes.
+ */
 function defaultRunDiff(childEnv) {
   return capture(
     NPX,
-    ["prisma", "migrate", "diff", "--from-url", childEnv.DATABASE_URL, "--to-schema-datamodel", schemaFile, "--script"],
+    ["prisma", "migrate", "diff", "--from-url", childEnv.DATABASE_URL, "--to-schema-datamodel", schemaPath, "--script"],
     childEnv,
   );
 }
