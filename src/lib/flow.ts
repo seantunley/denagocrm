@@ -31,7 +31,7 @@ export type FlowNode =
   | { id: string; type: "image"; url: string; caption?: string; next?: string }
   | { id: string; type: "answer"; text?: string; answerSource?: "pricelist" | "colours"; next?: string }
   | { id: string; type: "booking"; text?: string; failureText?: string; action?: BookingAction; next?: string; failureNext?: string; unavailableNext?: string }
-  | { id: string; type: "slots"; text: string; noneText?: string; action?: SlotAction; next?: string; failureNext?: string; unavailableNext?: string }
+  | { id: string; type: "slots"; text: string; noneText?: string; failureText?: string; action?: SlotAction; next?: string; failureNext?: string; unavailableNext?: string }
   | { id: string; type: "journey"; journeyId: string; text?: string; failureText?: string; next?: string; failureNext?: string; unavailableNext?: string }
   | { id: string; type: "condition"; condition: FlowCondition; trueNext?: string; falseNext?: string }
   | { id: string; type: "ai"; handoffNext?: string }
@@ -161,7 +161,8 @@ async function runSlotSelection(node: Extract<FlowNode, { type: "slots" }>, inpu
   // booked. Fail closed rather than reporting success for an action that never ran.
   if (!handler) {
     ctx.recordAction?.(node.id, slotAction, false);
-    return { nodeId: node.failureNext ?? node.unavailableNext ?? null };
+    if (node.failureText) messages.push({ type: "text", text: interpolate(node.failureText, vars) });
+    return { nodeId: node.failureNext ?? null };
   }
   const res = await handler(slotId, vars, node.id);
   ctx.recordAction?.(node.id, action, res.ok);
@@ -174,7 +175,8 @@ async function runSlotSelection(node: Extract<FlowNode, { type: "slots" }>, inpu
     // No alternatives left, and the reservation failed. Falling through to `next`
     // sent the customer the success text — "You're booked" — for a slot that was
     // taken between showing the menu and their tap.
-    return { nodeId: node.failureNext ?? node.unavailableNext ?? null };
+    if (node.failureText) messages.push({ type: "text", text: interpolate(node.failureText, vars) });
+    return { nodeId: node.failureNext ?? null };
   } else if (res.label) {
     vars.slot = res.label;
     if (node.action === "reschedule") vars.booking_slot = res.label;

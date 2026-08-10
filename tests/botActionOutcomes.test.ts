@@ -322,6 +322,70 @@ test("unavailableNext is a real edge everywhere the compiler looks", () => {
   assert.deepEqual(unreachable.map((i) => i.nodeId), [], "the unavailable branch is reachable");
 });
 
+test("a real failure never lands on the no-capacity branch", async () => {
+  // The contract says these mean different things. A graph may define only
+  // unavailableNext — and a broken reservation subsystem would then tell the
+  // customer "we're fully booked" when capacity is fine. Not a false success, but
+  // still false customer-facing state.
+  const onlyUnavailable: Flow = {
+    start: "s",
+    nodes: {
+      s: { id: "s", type: "slots", action: "book", text: "Pick:", next: "confirm", unavailableNext: "fullyBooked" },
+      confirm: { id: "confirm", type: "message", text: "You're booked!", next: "end" },
+      fullyBooked: { id: "fullyBooked", type: "message", text: "We're fully booked right now.", next: "end" },
+      end: { id: "end", type: "end" },
+    },
+  };
+
+  const failed = await runFlow(
+    onlyUnavailable,
+    { nodeId: "s", vars: {} },
+    { text: "", choiceId: "s|2030-01-15_09:00" },
+    { ...baseCtx, availableSlots: async () => [], bookSlot: async () => ({ ok: false }) },
+  );
+  const failedSaid = failed.messages.map((m) => (m.type === "text" ? m.text : "")).join(" ");
+  assert.doesNotMatch(failedSaid, /You're booked/);
+  assert.doesNotMatch(failedSaid, /fully booked/, "a failed reservation is not a capacity problem");
+
+  // The missing-handler case is the same class of failure.
+  const noHandler = await runFlow(onlyUnavailable, { nodeId: "s", vars: {} }, { text: "", choiceId: "s|2030-01-15_09:00" }, { ...baseCtx });
+  const noHandlerSaid = noHandler.messages.map((m) => (m.type === "text" ? m.text : "")).join(" ");
+  assert.doesNotMatch(noHandlerSaid, /You're booked|fully booked/);
+
+  // Genuine no-capacity still reaches it.
+  const none = await runFlow(onlyUnavailable, { nodeId: null, vars: {} }, { text: "" }, { ...baseCtx, availableSlots: async () => [] });
+  assert.match(none.messages.map((m) => (m.type === "text" ? m.text : "")).join(" "), /fully booked/);
+});
+
+test("the Slots failure message an operator types is actually sent", async () => {
+  // The builder offers "If it fails, say" on Slots. The node type did not declare
+  // failureText and the runtime never emitted it, so an operator could save the
+  // sentence and have it silently ignored. A regex over FlowBuilder.tsx could not
+  // see that; this drives the engine.
+  const flow: Flow = {
+    start: "s",
+    nodes: {
+      s: {
+        id: "s", type: "slots", action: "book", text: "Pick:",
+        failureText: "Sorry, I couldn't reserve that.",
+        next: "confirm", failureNext: "bad",
+      },
+      confirm: { id: "confirm", type: "message", text: "You're booked!", next: "end" },
+      bad: { id: "bad", type: "message", text: "A person will help.", next: "end" },
+      end: { id: "end", type: "end" },
+    },
+  };
+  const out = await runFlow(
+    flow,
+    { nodeId: "s", vars: {} },
+    { text: "", choiceId: "s|2030-01-15_09:00" },
+    { ...baseCtx, availableSlots: async () => [], bookSlot: async () => ({ ok: false }) },
+  );
+  const said = out.messages.map((m) => (m.type === "text" ? m.text : "")).join(" ");
+  assert.match(said, /couldn't reserve that/, "the operator's failure message must reach the customer");
+  assert.doesNotMatch(said, /You're booked/);
+});
+
 test("the builder can author every route the publish gate demands", () => {
   const builder = readFileSync(new URL("../src/components/FlowBuilder.tsx", import.meta.url), "utf8");
   assert.match(builder, /If it fails, go to/, "failureNext must be authorable");
