@@ -76,7 +76,7 @@ export async function POST(req: NextRequest) {
 
               if (message.type === "text") {
                 const text = message.text?.body ?? "";
-                await recordInboundWhatsApp(from, profileName, text);
+                await recordInboundWhatsApp(from, profileName, text, String(message.id ?? ""));
                 await runWhatsAppBot(from, { text });
               } else if (message.type === "interactive") {
                 const btn = message.interactive?.button_reply;
@@ -84,7 +84,7 @@ export async function POST(req: NextRequest) {
                 const id: string = btn?.id ?? list?.id ?? "";
                 const title: string = btn?.title ?? list?.title ?? "";
                 if (!id) return;
-                await recordInboundWhatsApp(from, profileName, `👆 ${title}`);
+                await recordInboundWhatsApp(from, profileName, `👆 ${title}`, String(message.id ?? ""));
                 await runWhatsAppBot(from, { text: title, choiceId: id });
               } else if (message.type === "image" || message.type === "document" || message.type === "video") {
                 const media = message.image ?? message.document ?? message.video;
@@ -97,7 +97,7 @@ export async function POST(req: NextRequest) {
                     fileUrl = await saveFile(dl.buffer, `whatsapp.${ext}`, dl.contentType).catch(() => undefined);
                   }
                 }
-                await recordInboundWhatsApp(from, profileName, `📎 ${caption || "[file]"}`);
+                await recordInboundWhatsApp(from, profileName, `📎 ${caption || "[file]"}`, String(message.id ?? ""));
                 await runWhatsAppBot(from, { text: caption, fileUrl });
               } else if (message.type === "audio" || message.type === "voice") {
                 const mediaId: string | undefined = message.audio?.id ?? message.voice?.id;
@@ -105,7 +105,7 @@ export async function POST(req: NextRequest) {
                 const media = await fetchWhatsAppMedia(mediaId).catch(() => null);
                 const transcript = media ? await transcribeVoice(media.buffer, media.contentType).catch(() => null) : null;
                 const logged = transcript ? `🎤 ${transcript}` : "🎤 [Voice note]";
-                await recordInboundWhatsApp(from, profileName, logged);
+                await recordInboundWhatsApp(from, profileName, logged, String(message.id ?? ""));
                 await runWhatsAppBot(from, { text: transcript ?? "[The customer sent a voice note.]" }, { voiceNote: true });
               }
             });
