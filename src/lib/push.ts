@@ -30,6 +30,32 @@ const PUSH_TIMEOUT_MS = 10_000;
  * Exported so scripts/test-tenant-guard.ts can prove the selection directly without
  * a live web-push transport.
  */
+/**
+ * Every device belonging to ONE named tenant, whatever the enforcement mode.
+ *
+ * `pushRecipientsForCurrentScope` treats dormant enforcement as "global" and
+ * returns every PushSubscription in the table. That is a defensible default for
+ * a rollout in which one workspace exists — and it is not a filter, so it cannot
+ * be relied on by anything carrying customer data that a second workspace must
+ * not see. A Google review's author and text is exactly that: the review row
+ * itself is now tenant-scoped by hand for the dormant period, and a notification
+ * that broadcast the same words to every tenant's phones would reopen the hole
+ * one line later.
+ *
+ * So this asks the tenant question directly. Same query as the enforcing branch
+ * above, with the tenant named by the caller instead of inferred from a scope
+ * that may not exist yet.
+ */
+export async function pushRecipientsForTenant(tenantId: string): Promise<PushRecipient[]> {
+  return basePrisma.$queryRaw<PushRecipient[]>`
+    SELECT ps."id", ps."endpoint", ps."p256dh", ps."auth"
+    FROM "PushSubscription" ps
+    JOIN "TenantMember" m ON m."userId" = ps."userId"
+    JOIN "Tenant" t ON t."id" = m."tenantId"
+    JOIN "User" u ON u."id" = ps."userId"
+    WHERE m."tenantId" = ${tenantId} AND t."active" = true AND u."disabledAt" IS NULL`;
+}
+
 export async function pushRecipientsForCurrentScope(): Promise<PushRecipient[]> {
   const s = currentScopeClass();
   if (s.mode === "closed") return [];
@@ -92,19 +118,29 @@ async function isKindDisabled(kind?: PushKind): Promise<boolean> {
   return value.split(",").includes(kind);
 }
 
-/** Sends a push notification to every subscribed device; prunes dead subscriptions. */
+/**
+ * Sends a push notification to every subscribed device; prunes dead subscriptions.
+ *
+ * `tenantId` names the workspace explicitly and is what a caller carrying
+ * CUSTOMER data must use: without it, dormant enforcement resolves to "every
+ * device in the table", which is a rollout default rather than a boundary.
+ */
 export async function sendPushToAll(
   payload: {
     title: string;
     body: string;
     url?: string;
   },
-  kind?: PushKind
+  kind?: PushKind,
+  options: { tenantId?: string | null } = {},
 ): Promise<number> {
   if (!ensureConfigured()) return 0;
   if (await isKindDisabled(kind)) return 0;
-  // Deliver only to the CURRENT tenant's devices (all devices when global/system).
-  const subs = await pushRecipientsForCurrentScope();
+  // Deliver only to the CURRENT tenant's devices (all devices when global/system),
+  // or to exactly the named tenant when the caller knows which one it is.
+  const subs = options.tenantId
+    ? await pushRecipientsForTenant(options.tenantId)
+    : await pushRecipientsForCurrentScope();
   let sent = 0;
   await Promise.all(
     subs.map(async (sub) => {

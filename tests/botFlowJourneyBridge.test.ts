@@ -77,7 +77,9 @@ test("Flow Journey enrolment requires an existing customer and retry-stable prov
 
 test("publication validates that every Journey target is still active", () => {
   const server = src("src/lib/flowValidationServer.ts");
-  assert.match(server, /prisma\.journey\.findMany\(\{ where: \{ id: \{ in: ids \}, status: "active" \}/);
+  // Scoped to the publishing workspace now — another tenant's active Journey
+  // must not satisfy the check.
+  assert.match(server, /prisma\.journey\.findMany\(\{ where: \{ id: \{ in: ids \}, status: "active", \.\.\.\(await journeyScope\(\)\) \}/);
   assert.match(server, /code: "journey\.unavailable"/);
   assert.match(server, /severity: "error"/);
 });
@@ -85,8 +87,9 @@ test("publication validates that every Journey target is still active", () => {
 test("visual editor exposes only server-supplied active Journeys", () => {
   const page = src("src/app/(app)/bot-builder/[id]/page.tsx");
   assert.match(page, /prisma\.journey\.findMany/);
-  assert.match(page, /where: \{ status: "active" \}/);
-  assert.match(page, /<FlowBuilder flowId=\{row\.id\} initial=\{flow\} journeys=\{journeys\} \/>/);
+  assert.match(page, /where: \{ status: "active", \.\.\.\(await journeyScope\(\)\) \}/);
+  // The canvas also receives the draft's updatedAt now, to fence its saves.
+  assert.match(page, /<FlowBuilder flowId=\{row\.id\} initial=\{flow\} journeys=\{journeys\}/);
   assert.match(page, /<FlowAiDraftForm flowId=\{row\.id\} \/>/);
 
   const builder = src("src/components/FlowBuilder.tsx");

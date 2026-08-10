@@ -49,6 +49,12 @@ Push invoices + customers to accounting so the deal isn't captured twice.
   grounded in models/prices/policies, with human handoff on uncertainty.
 - **Follow-up drip sequences**: multi-step nurture (approximated today with
   several idle-automation rules).
+- **Borrow from Dittofeed** (MIT): MJML for responsive email HTML, their
+  `emailo` low-code email editor, their subscription-group/unsubscribe model, and
+  their segment operator set as comparison material. Their journey *engine* is
+  deliberately not on the list — it runs on Temporal + ClickHouse + Kafka, which
+  this deployment does not have. Scope, licence position and ordering are in
+  [docs/dittofeed-borrow-queue.md](docs/dittofeed-borrow-queue.md).
 
 ## Shipped since this file was first written
 
