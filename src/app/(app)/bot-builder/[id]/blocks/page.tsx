@@ -4,6 +4,7 @@ import { Blocks, CopyPlus, Save, Trash2 } from "lucide-react";
 import { requireOwner } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { getFlowSnippets } from "@/lib/flowSnippets";
+import { builderOwnedWhere } from "@/lib/flowTenantScopeServer";
 import { deleteFlowSnippet, insertSavedFlowSnippet, saveCurrentFlowAsSnippet } from "@/app/actions/flowSnippets";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import { EmptyState, Surface } from "@/components/visual-system";
@@ -12,7 +13,9 @@ export default async function FlowBlocksPage({ params }: { params: Promise<{ id:
   await requireOwner();
   const { id } = await params;
   const [flow, snippets] = await Promise.all([
-    prisma.botFlow.findUnique({ where: { id } }),
+    // Saved blocks live in AppSetting, which settings.ts already resolves per
+    // tenant; the draft this page saves FROM is what needed owning.
+    prisma.botFlow.findFirst({ where: { id, ...builderOwnedWhere() } }),
     getFlowSnippets(),
   ]);
   if (!flow) notFound();

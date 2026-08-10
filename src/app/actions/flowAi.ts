@@ -6,6 +6,7 @@ import { requireOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { generateFlowDraft } from "@/lib/flowAiDraft";
 import { enabledFlowChannels } from "@/lib/flowValidationServer";
+import { builderOwnedWhere } from "@/lib/flowTenantScopeServer";
 import { flowErrors } from "@/lib/flowValidation";
 
 export type FlowAiDraftState = { ok?: string; error?: string; warnings?: string[] };
@@ -21,9 +22,11 @@ export async function generateFlowDraftAction(
   if (instruction.length < 8) return { error: "Describe the change you want in a little more detail." };
 
   const [row, channels, journeys] = await Promise.all([
-    prisma.botFlow.findUnique({ where: { id: flowId } }),
+    prisma.botFlow.findFirst({ where: { id: flowId, ...builderOwnedWhere() } }),
     enabledFlowChannels(),
-    prisma.journey.findMany({ where: { status: "active" }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
+    // The assistant is told which journeys it may wire into the graph. Unscoped,
+    // it could be handed — and could commit — another workspace's journey ids.
+    prisma.journey.findMany({ where: { status: "active", ...builderOwnedWhere() }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
   ]);
   if (!row) return { error: "Flow not found." };
   const originalDefinition = row.definition;
@@ -39,7 +42,7 @@ export async function generateFlowDraftAction(
   }
 
   const updated = await prisma.botFlow.updateMany({
-    where: { id: flowId, definition: originalDefinition },
+    where: { id: flowId, definition: originalDefinition, ...builderOwnedWhere() },
     data: { definition: JSON.stringify(generated.flow) },
   });
   if (updated.count !== 1) return { error: "The draft changed while the assistant was working. Nothing was overwritten — run it again on the latest draft." };

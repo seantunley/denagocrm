@@ -1,5 +1,6 @@
 import { getSetting } from "./settings";
 import { prisma } from "./db";
+import { builderOwnedWhere } from "./flowTenantScopeServer";
 import type { Flow } from "./flow";
 import { flowErrors, validateFlow, type FlowChannel, type FlowIssue } from "./flowValidation";
 
@@ -21,7 +22,15 @@ export async function validateFlowForEnabledChannels(flow: Flow): Promise<FlowIs
   const journeyNodes = Object.values(flow.nodes).filter((node) => node.type === "journey");
   const ids = [...new Set(journeyNodes.map((node) => node.type === "journey" ? node.journeyId : "").filter(Boolean))];
   if (!ids.length) return issues;
-  const active = await prisma.journey.findMany({ where: { id: { in: ids }, status: "active" }, select: { id: true } });
+  // "…no longer active in this workspace" has to mean THIS workspace. Unscoped,
+  // a journey node pointing at another tenant's Journey id validated clean and
+  // publication then shipped a graph whose enrolment effect writes across the
+  // tenant boundary at runtime. Journey.tenantId is nullable, so the founding
+  // tenant keeps its legacy NULL journeys.
+  const active = await prisma.journey.findMany({
+    where: { id: { in: ids }, status: "active", ...builderOwnedWhere() },
+    select: { id: true },
+  });
   const activeIds = new Set(active.map((journey) => journey.id));
   for (const node of journeyNodes) {
     if (node.type === "journey" && node.journeyId && !activeIds.has(node.journeyId)) {

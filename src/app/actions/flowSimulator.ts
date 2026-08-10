@@ -2,6 +2,7 @@
 
 import { prisma } from "@/lib/db";
 import { requireOwner } from "@/lib/auth";
+import { builderOwnedWhere } from "@/lib/flowTenantScopeServer";
 import { coloursList, priceList } from "@/lib/botAnswers";
 import { runFlow, type Flow, type FlowInput, type FlowSession, type OutMsg } from "@/lib/flow";
 
@@ -25,7 +26,10 @@ function simulatedSlotLabel(slotId: string): string {
 /** Production graph engine + explicitly non-writing effects. */
 export async function simulateFlowTurn(input: SimulatorTurnInput): Promise<SimulatorTurnResult> {
   await requireOwner();
-  const row = await prisma.botFlow.findUnique({ where: { id: input.flowId } });
+  // `flowId` arrives in the request body, so this is a read of an arbitrary id by
+  // any owner. The simulator writes nothing, but it renders the whole graph — its
+  // messages, menus and captured variables — which is the design itself.
+  const row = await prisma.botFlow.findFirst({ where: { id: input.flowId, ...builderOwnedWhere() } });
   if (!row) return { ok: false, error: "Flow not found.", messages: [], session: null, handedOff: false, trace: [], vars: {} };
   const flow = parseFlow(row.definition);
   if (!flow) return { ok: false, error: "Flow data is malformed.", messages: [], session: null, handedOff: false, trace: [], vars: {} };

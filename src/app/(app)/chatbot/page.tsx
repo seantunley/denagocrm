@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db";
 import Link from "next/link";
 import { requireOwner } from "@/lib/auth";
 import { decryptValue } from "@/lib/settings";
+import { builderOwnedWhere, builderTenantId } from "@/lib/flowTenantScopeServer";
 import { getBotFaqs } from "@/lib/botAi";
 import { getBotKnowledgeEntries, knowledgeIsCurrent } from "@/lib/botKnowledge";
 import {
@@ -24,10 +25,17 @@ import { StatusPill, Surface } from "@/components/visual-system";
 export default async function ChatbotSettingsPage() {
   await requireOwner();
   const [settings, botFaqs, knowledge, libraryDocuments, hasWhisper, tg] = await Promise.all([
-    prisma.appSetting.findMany(),
+    // AppSetting.key is unique PER TENANT, so an unscoped findMany plus
+    // `settings.find(s => s.key === key)` below returned whichever workspace's row
+    // Postgres happened to hand back first — this page's every toggle, office-hour
+    // and AI brief could have been another workspace's. tenantId is NOT NULL here,
+    // so the filter is strict; it is the same row settings.ts writes back to.
+    prisma.appSetting.findMany({ where: { tenantId: builderTenantId() } }),
     getBotFaqs(),
     getBotKnowledgeEntries(),
-    prisma.libraryDocument.findMany({ select: { id: true, name: true }, orderBy: { updatedAt: "desc" }, take: 100 }),
+    // The provenance picker: an unscoped list let a knowledge entry cite another
+    // workspace's document name. LibraryDocument.tenantId is nullable → legacy rule.
+    prisma.libraryDocument.findMany({ where: builderOwnedWhere(), select: { id: true, name: true }, orderBy: { updatedAt: "desc" }, take: 100 }),
     whisperConfigured(),
     telegramStatus(),
   ]);

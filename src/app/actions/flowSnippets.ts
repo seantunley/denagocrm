@@ -6,6 +6,7 @@ import { requireOwner } from "@/lib/auth";
 import { putSetting } from "@/lib/settings";
 import { logAudit } from "@/lib/audit";
 import { enabledFlowChannels } from "@/lib/flowValidationServer";
+import { builderOwnedWhere } from "@/lib/flowTenantScopeServer";
 import { flowErrors, validateFlow } from "@/lib/flowValidation";
 import {
   FLOW_SNIPPETS_SETTING,
@@ -26,7 +27,10 @@ function parseDefinition(raw: string): FlowSnippet["definition"] | null {
 
 export async function saveCurrentFlowAsSnippet(flowId: string, formData: FormData) {
   const owner = await requireOwner();
-  const row = await prisma.botFlow.findUnique({ where: { id: flowId } });
+  // A block is a COPY of a draft's graph into this workspace's saved settings, so
+  // an unowned read here would have lifted another workspace's conversation design
+  // wholesale — the leak is the definition, not just the name.
+  const row = await prisma.botFlow.findFirst({ where: { id: flowId, ...builderOwnedWhere() } });
   if (!row) return;
   const definition = parseDefinition(row.definition);
   if (!definition) return;
@@ -45,7 +49,7 @@ export async function saveCurrentFlowAsSnippet(flowId: string, formData: FormDat
 export async function insertSavedFlowSnippet(flowId: string, snippetId: string) {
   const owner = await requireOwner();
   const [row, snippets] = await Promise.all([
-    prisma.botFlow.findUnique({ where: { id: flowId } }),
+    prisma.botFlow.findFirst({ where: { id: flowId, ...builderOwnedWhere() } }),
     getFlowSnippets(),
   ]);
   const snippet = snippets.find((item) => item.id === snippetId);
@@ -54,9 +58,10 @@ export async function insertSavedFlowSnippet(flowId: string, snippetId: string) 
   if (!current) return;
   const merged = insertFlowSnippet(current, snippet.definition);
 
-  // Do not overwrite a canvas save that landed while this request was reading.
+  // Do not overwrite a canvas save that landed while this request was reading —
+  // and do not write outside this workspace, which the id alone does not prevent.
   const updated = await prisma.botFlow.updateMany({
-    where: { id: flowId, definition: row.definition },
+    where: { id: flowId, definition: row.definition, ...builderOwnedWhere() },
     data: { definition: JSON.stringify(merged.definition) },
   });
   if (updated.count !== 1) return;

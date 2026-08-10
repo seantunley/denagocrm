@@ -8,6 +8,7 @@ import { FLOW_TEMPLATES } from "@/lib/flowTemplates";
 import { flowErrors, flowWarnings, validateFlow } from "@/lib/flowValidation";
 import { enabledFlowChannels } from "@/lib/flowValidationServer";
 import { getFlowPublicationMeta, publishFlowSnapshot } from "@/lib/flowPublishing";
+import { builderOwnedWhere, builderTenantId } from "@/lib/flowTenantScopeServer";
 import { createFlow, setActiveFlow, duplicateFlow, deleteFlow, renameFlow } from "@/app/actions/flow";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import { EmptyState, StatusPill, Surface } from "@/components/visual-system";
@@ -24,7 +25,13 @@ function parseDraft(definition: string): Flow | null {
 export default async function BotBuilderPage() {
   const owner = await requireOwner();
 
-  if ((await prisma.botFlow.count()) === 0) {
+  // Every read and write below names the workspace. `requireOwner()` proves the
+  // caller is AN owner, not which workspace's flows they may see, and the db.ts
+  // guard only supplies that predicate under enforcement — which is off in
+  // production. Unscoped, `count()` also made a second workspace's first visit
+  // skip the seed (it counted the founding tenant's flows) and then show that
+  // tenant's library.
+  if ((await prisma.botFlow.count({ where: builderOwnedWhere() })) === 0) {
     const legacy = await getSetting("BOT_FLOW");
     let definition = JSON.stringify(DEFAULT_FLOW);
     let name = "Default flow";
@@ -39,13 +46,15 @@ export default async function BotBuilderPage() {
         /* keep default */
       }
     }
-    const seeded = await prisma.botFlow.create({ data: { name, definition, active: true } });
+    const seeded = await prisma.botFlow.create({
+      data: { tenantId: builderTenantId(), name, definition, active: true },
+    });
     await publishFlowSnapshot(seeded.id, owner.id).catch(() => {});
     if (legacy) await putSetting("BOT_FLOW", "");
   }
 
   const [flows, publicationMeta, channels] = await Promise.all([
-    prisma.botFlow.findMany({ orderBy: [{ active: "desc" }, { updatedAt: "desc" }] }),
+    prisma.botFlow.findMany({ where: builderOwnedWhere(), orderBy: [{ active: "desc" }, { updatedAt: "desc" }] }),
     getFlowPublicationMeta(),
     enabledFlowChannels(),
   ]);

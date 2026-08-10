@@ -4,8 +4,7 @@ import { History, RotateCcw, ShieldCheck } from "lucide-react";
 import { Prisma } from "@prisma/client";
 import { requireOwner } from "@/lib/auth";
 import { basePrisma, prisma } from "@/lib/db";
-import { DEFAULT_TENANT_ID } from "@/lib/tenant";
-import { writeTenantId } from "@/lib/tenantWrite";
+import { builderOwnedWhere, builderTenantId } from "@/lib/flowTenantScopeServer";
 import { restoreFlowVersionToDraft } from "@/app/actions/flowVersions";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import { EmptyState, StatusPill, Surface } from "@/components/visual-system";
@@ -29,9 +28,12 @@ function nodeCount(definition: string): number {
 export default async function FlowVersionsPage({ params }: { params: Promise<{ id: string }> }) {
   await requireOwner();
   const { id } = await params;
-  const flow = await prisma.botFlow.findUnique({ where: { id } });
+  // The version query below was already tenant-scoped, but the flow it names was
+  // not: a flow id from another workspace rendered that workspace's flow name and
+  // live/draft state in the hero (with an empty version list). Own the flow first.
+  const tenantId = builderTenantId();
+  const flow = await prisma.botFlow.findFirst({ where: { id, ...builderOwnedWhere() } });
   if (!flow) notFound();
-  const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
   const versions = await basePrisma.$queryRaw<VersionRow[]>(Prisma.sql`
     SELECT "id", "version", "definition", "publishedAt"
       FROM "BotFlowVersion"

@@ -2,6 +2,7 @@ import { prisma } from "./db";
 import { DEFAULT_FLOW, type Flow } from "./flow";
 import { DEFAULT_TENANT_ID } from "./tenant";
 import { withTenantWrite, writeTenantId } from "./tenantWrite";
+import { nullableTenantWhere } from "./flowTenantScope";
 import { flowErrors } from "./flowValidation";
 import { FlowPublishValidationError, validateFlowForEnabledChannels } from "./flowValidationServer";
 
@@ -29,10 +30,12 @@ function flowTenantId(): string {
  * already has. The founding tenant therefore owns the NULL rows — the same rule
  * statistics.ts applies, and for the same reason. A second tenant sees only its
  * own.
+ *
+ * The rule itself now lives in flowTenantScope.ts, so the administration surface
+ * (the builder, its tools, analytics) filters BotFlow by exactly the predicate
+ * the runtime resolves it with, rather than a second copy that could drift.
  */
-function legacyFlowTenant(tenantId: string) {
-  return tenantId === DEFAULT_TENANT_ID ? { OR: [{ tenantId }, { tenantId: null }] } : { tenantId };
-}
+const legacyFlowTenant = nullableTenantWhere;
 
 function parseFlow(definition: string): Flow | null {
   try {
@@ -49,8 +52,15 @@ export async function resolveFlowSnapshot(
   channel: string,
   pinnedVersionId?: string | null,
 ): Promise<FlowSnapshot> {
+  // BotFlowVersion.tenantId is NOT NULL, so the pin is filtered strictly. A
+  // conversation's pinned version is always one this tenant published; naming the
+  // tenant means a pin that somehow points elsewhere fails closed
+  // (PinnedFlowVersionUnavailableError) instead of executing another workspace's
+  // graph against a real customer.
+  const tenantId = flowTenantId();
+
   if (pinnedVersionId) {
-    const pinned = await prisma.botFlowVersion.findUnique({ where: { id: pinnedVersionId } });
+    const pinned = await prisma.botFlowVersion.findFirst({ where: { id: pinnedVersionId, tenantId } });
     const flow = pinned ? parseFlow(pinned.definition) : null;
     if (!pinned || !flow) throw new PinnedFlowVersionUnavailableError(pinnedVersionId);
     return { flow, versionId: pinned.id, flowId: pinned.flowId };
@@ -65,7 +75,6 @@ export async function resolveFlowSnapshot(
   // return first. That is not a reporting leak — it is the wrong business logic
   // running against a real customer, and the same shape repeats on the legacy
   // fallback below.
-  const tenantId = flowTenantId();
   const publication =
     (await prisma.botFlowPublication.findFirst({ where: { tenantId, channel } })) ??
     (channel === "whatsapp"
@@ -73,7 +82,7 @@ export async function resolveFlowSnapshot(
       : await prisma.botFlowPublication.findFirst({ where: { tenantId, channel: "whatsapp" } }));
 
   if (publication) {
-    const version = await prisma.botFlowVersion.findUnique({ where: { id: publication.versionId } });
+    const version = await prisma.botFlowVersion.findFirst({ where: { id: publication.versionId, tenantId } });
     const flow = version ? parseFlow(version.definition) : null;
     if (version && flow) return { flow, versionId: version.id, flowId: version.flowId };
   }
@@ -103,7 +112,12 @@ export async function publishFlowSnapshot(
   flowId: string,
   actorId?: string | null,
 ): Promise<{ versionId: string; version: number; channel: string }> {
-  const draft = await prisma.botFlow.findUnique({ where: { id: flowId } });
+  // Named tenant, not a bare id. Publishing is the action that makes a draft
+  // customer-facing, so "an owner" holding a flow id from another workspace must
+  // get FLOW_NOT_FOUND here rather than a compiler run against someone else's graph.
+  const draft = await prisma.botFlow.findFirst({
+    where: { id: flowId, ...legacyFlowTenant(flowTenantId()) },
+  });
   if (!draft) throw new Error("FLOW_NOT_FOUND");
   const parsed = parseFlow(draft.definition);
   if (!parsed) {
@@ -118,7 +132,11 @@ export async function publishFlowSnapshot(
     // Re-read inside the transaction. If the draft changed between validation
     // and this point, refuse rather than publishing a different definition than
     // the one the compiler approved.
-    const flow = await tx.botFlow.findFirst({ where: { id: flowId, tenantId } });
+    // `legacyFlowTenant`, not a strict `tenantId`: an existing single-tenant
+    // install's flows are all still NULL-tenant, and a strict predicate here
+    // would fail every publish on them with FLOW_NOT_FOUND.
+    const ownedFlow = legacyFlowTenant(tenantId);
+    const flow = await tx.botFlow.findFirst({ where: { id: flowId, ...ownedFlow } });
     if (!flow) throw new Error("FLOW_NOT_FOUND");
     if (flow.definition !== draft.definition) throw new Error("FLOW_CHANGED_DURING_PUBLISH");
 
@@ -139,11 +157,11 @@ export async function publishFlowSnapshot(
     });
 
     await tx.botFlow.updateMany({
-      where: { tenantId, channel: flow.channel },
+      where: { ...ownedFlow, channel: flow.channel },
       data: { active: false },
     });
     await tx.botFlow.updateMany({
-      where: { id: flow.id, tenantId },
+      where: { id: flow.id, ...ownedFlow },
       data: { active: true },
     });
 
@@ -171,6 +189,12 @@ export async function publishFlowSnapshot(
 export async function getFlowPublicationMeta(): Promise<
   Map<string, { versionId: string; publishedAt: Date }>
 > {
-  const publications = await prisma.botFlowPublication.findMany();
+  // The builder list renders "published / draft changed" from this map. Unscoped
+  // it returned every workspace's publications, so one owner's flow could be
+  // labelled from another owner's publication row (flowId keys are unique per
+  // tenant, not globally). BotFlowPublication.tenantId is NOT NULL → strict.
+  const publications = await prisma.botFlowPublication.findMany({
+    where: { tenantId: flowTenantId() },
+  });
   return new Map(publications.map((p) => [p.flowId, { versionId: p.versionId, publishedAt: p.publishedAt }]));
 }

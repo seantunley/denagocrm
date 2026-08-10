@@ -6,6 +6,7 @@ import { requireOwner } from "@/lib/auth";
 import { DEFAULT_FLOW, type Flow } from "@/lib/flow";
 import { validateFlow } from "@/lib/flowValidation";
 import { enabledFlowChannels } from "@/lib/flowValidationServer";
+import { builderOwnedWhere } from "@/lib/flowTenantScopeServer";
 import FlowBuilder from "@/components/FlowBuilder";
 import FlowAiDraftForm from "@/components/FlowAiDraftForm";
 import FlowLintPanel from "@/components/FlowLintPanel";
@@ -13,7 +14,11 @@ import FlowLintPanel from "@/components/FlowLintPanel";
 export default async function FlowEditorPage({ params }: { params: Promise<{ id: string }> }) {
   await requireOwner();
   const { id } = await params;
-  const row = await prisma.botFlow.findUnique({ where: { id } });
+  // `findFirst` with the owning workspace named, never `findUnique` on a bare id:
+  // filtering the LIST is not enough on its own, because a guessed or leaked flow
+  // id would still open another workspace's canvas. `notFound()` rather than a
+  // 403, so the response cannot confirm that the id exists somewhere else.
+  const row = await prisma.botFlow.findFirst({ where: { id, ...builderOwnedWhere() } });
   if (!row) notFound();
 
   let flow: Flow = DEFAULT_FLOW;
@@ -26,8 +31,11 @@ export default async function FlowEditorPage({ params }: { params: Promise<{ id:
 
   const [channels, journeys] = await Promise.all([
     enabledFlowChannels(),
+    // The canvas's Journey picker writes the chosen id into the graph, so an
+    // unscoped list does not merely show another workspace's journey names — it
+    // lets a flow node enrol customers into that workspace's journey at runtime.
     prisma.journey.findMany({
-      where: { status: "active" },
+      where: { status: "active", ...builderOwnedWhere() },
       select: { id: true, name: true },
       orderBy: { name: "asc" },
     }),

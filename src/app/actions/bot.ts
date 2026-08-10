@@ -7,6 +7,7 @@ import { prisma } from "@/lib/db";
 import { putSetting, getSetting } from "@/lib/settings";
 import { getBotFaqs } from "@/lib/botAi";
 import { getBotKnowledgeEntries, type BotKnowledgeEntry, type BotKnowledgeStatus } from "@/lib/botKnowledge";
+import { builderOwnedWhere } from "@/lib/flowTenantScopeServer";
 import { logAudit } from "@/lib/audit";
 
 const clean = (value: FormDataEntryValue | null, max = 5000) => String(value ?? "").trim().slice(0, max);
@@ -71,7 +72,13 @@ export async function addBotKnowledge(formData: FormData) {
   const sourceDocumentId = clean(formData.get("sourceDocumentId"), 120) || undefined;
   let sourceLabel: string | undefined;
   if (sourceDocumentId) {
-    const document = await prisma.libraryDocument.findUnique({ where: { id: sourceDocumentId }, select: { name: true } });
+    // Provenance must come from a document this workspace owns; the id is posted
+    // by the form. The entry stores the document's NAME, so an unowned lookup
+    // would copy another workspace's filename into this one's knowledge base.
+    const document = await prisma.libraryDocument.findFirst({
+      where: { id: sourceDocumentId, ...builderOwnedWhere() },
+      select: { name: true },
+    });
     if (!document) return;
     sourceLabel = document.name;
   }

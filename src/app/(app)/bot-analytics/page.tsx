@@ -3,6 +3,7 @@ import { BarChart3, GitBranch, MessagesSquare, Radio, UserRound } from "lucide-r
 import { requireOwner } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { getBotFlowAnalyticsReport } from "@/lib/botFlowAnalyticsReport";
+import { builderOwnedWhere } from "@/lib/flowTenantScopeServer";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import { EmptyState, StatusPill, Surface } from "@/components/visual-system";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
@@ -18,9 +19,13 @@ export default async function BotAnalyticsPage({
   await requireOwner();
   const params = await searchParams;
   const flows = await prisma.botFlow.findMany({
+    where: builderOwnedWhere(),
     select: { id: true, name: true, active: true, updatedAt: true },
     orderBy: [{ active: "desc" }, { updatedAt: "desc" }],
   });
+  // `?flowId=` is user input, so the selection is resolved against the OWNED list
+  // rather than trusted: an id from another workspace falls back to this
+  // workspace's own first flow. The report itself is separately tenant-scoped.
   const selected = flows.find((flow) => flow.id === params.flowId) ?? flows[0] ?? null;
   const report = selected ? await getBotFlowAnalyticsReport(selected.id) : null;
 
