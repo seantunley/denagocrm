@@ -24,6 +24,7 @@ import {
   unacknowledgedDrift,
   staleAcknowledgements,
   ACKNOWLEDGED_DRIFT,
+  SCHEMA_FILE_COUNT,
 } from "../scripts/apply-migrations.mjs";
 import { splitSqlStatements } from "../scripts/lib/splitSqlStatements.mjs";
 
@@ -498,7 +499,7 @@ test("the missing-table check recognises both signals and nothing else", () => {
 // ── The drift probe must see the WHOLE schema ───────────────────────────────
 
 /**
- * The schema is split across seven files and the probe read one of them.
+ * The schema is split across many files and the probe read one of them.
  *
  * So the integrity check — the gate that exists to stop a recorded-but-not-applied
  * migration shipping code against a missing column — never looked at any model
@@ -525,6 +526,14 @@ test("the drift probe diffs against every schema file, not just schema.prisma", 
 
 test("every schema file is actually part of the schema the probe reads", () => {
   const files = readdirSync(join(root, "prisma")).filter((name) => name.endsWith(".prisma"));
+  // The runner's own explanation names this number. It said "seven" long after
+  // it was thirteen, and a stale figure in the explanation of a safety gate is
+  // how the gate stops being understood — so the number is held to reality here.
+  assert.equal(
+    SCHEMA_FILE_COUNT,
+    files.length,
+    `SCHEMA_FILE_COUNT and the comment beside it are stale: the schema now has ${files.length} files`,
+  );
   // If this ever drops to one, the test above stops meaning anything.
   assert.ok(files.length > 1, `expected a multi-file schema, found ${files.join(", ")}`);
   assert.ok(files.includes("schema.prisma"));

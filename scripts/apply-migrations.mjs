@@ -42,6 +42,16 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const migrationsDir = join(root, "prisma", "migrations");
 const schemaPath = join(root, "prisma");
 
+/**
+ * How many .prisma files the schema is actually split across.
+ *
+ * Exported and asserted by a test rather than left in prose: the comment on
+ * defaultRunDiff below said "seven" long after it was thirteen, and a stale
+ * number in the explanation of a safety gate is how the gate stops being
+ * understood. If this fails, update BOTH the number and the sentence.
+ */
+export const SCHEMA_FILE_COUNT = 16;
+
 // Arbitrary 32-bit constant. A session advisory lock on this key serialises
 // concurrent runs (e.g. two overlapping Vercel deploys) so they cannot apply
 // migrations simultaneously.
@@ -210,6 +220,8 @@ export const ACKNOWLEDGED_DRIFT = [
     why: "JSON column with a database default the model does not declare; raw inserts rely on it",
   })),
   ...[
+    "BotFlowOutbox",
+    "BotInboundEvent",
     "DemoVehicle",
     "IntegrationConnection",
     "Role",
@@ -341,7 +353,9 @@ export function migrationRoleProblem({ role, canCreate, unpooledConfigured }) {
  *
  * Diffs against the schema DIRECTORY, not `schema.prisma` alone.
  *
- * The schema is split across seven files, and this probe read one of them. So the
+ * The schema is split across 16 files (SCHEMA_FILE_COUNT below, which a test holds
+ * to the real number so this sentence cannot go stale), and this probe read one
+ * of them. So the
  * integrity check — the gate that exists to stop a recorded-but-not-applied
  * migration shipping code against a missing column — has never looked at any
  * model defined outside `schema.prisma`. Every bot, journey, campaign,
