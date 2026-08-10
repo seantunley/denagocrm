@@ -527,6 +527,67 @@ test("assignLead still REFUSES BY RETURN, not by throw", () => {
   );
 });
 
+test("assignLead is the ONLY place a refusal is caught, and it converts rather than drops it", () => {
+  // Found by mutation testing, which is the only reason it is here: adding
+  // `.catch(() => null)` to the lead assignee resolver passed every other test
+  // in this file. It is the single most damaging change available in this whole
+  // area — a cross-tenant assignee on a lead stops being a refusal and becomes a
+  // silent "Unassigned", the save reports success, and the audit trail records
+  // nothing about the attempt. It is also, from a distance, indistinguishable
+  // from the legitimate catch in assignLead.
+  //
+  // So the rule is not "never catch", it is "catch only where the refusal is
+  // handed on". Every consolidated call site is checked for a swallow, and the
+  // one permitted catch has to be the one that returns the refusal to the board.
+  // Matched by POSITION, not by text. The first attempt at this test compared
+  // the offending line against the permitted one and caught nothing: the swallow
+  // inside `resolveLeadAssignee` is character-for-character identical to the
+  // legitimate catch in `assignLead`, because both read the same variable with
+  // the same label. Where the catch sits is the whole difference.
+  const swallow = /resolve(?:AssignableUser|LeadAssignee|ActivityAssignee|Assignment)\s*\([^\n]*?\.catch\s*\(/g;
+
+  for (const { file, what } of CONSOLIDATED) {
+    const code = codeOf(read(file));
+    // The one function allowed to catch, if this file has it.
+    const permittedStart = code.indexOf("export async function assignLead");
+    const permittedEnd =
+      permittedStart < 0 ? -1 : code.indexOf("export async function", permittedStart + 1);
+
+    for (const match of code.matchAll(swallow)) {
+      const at = match.index ?? 0;
+      const insidePermitted =
+        permittedStart >= 0 && at > permittedStart && (permittedEnd < 0 || at < permittedEnd);
+      assert.ok(
+        insidePermitted,
+        `${what} in ${file} swallows an assignment refusal at offset ${at}. A caught refusal must be `
+          + `handed on (as assignLead does), never turned into "nobody" — that makes an attempted `
+          + `cross-tenant assignment and a deliberate Unassigned the same save, and reports success.`,
+      );
+    }
+  }
+
+  // And the one that is allowed to catch must still turn it into a refusal.
+  const leads = read("src", "app", "actions", "leads.ts");
+  const start = leads.indexOf("export async function assignLead");
+  const body = leads.slice(start, leads.indexOf("export async function", start + 1));
+  assert.match(body, /if \(!assignee\) return \{ ok: false as const/, "the caught refusal must be returned, not dropped");
+});
+
+test("resolveLeadAssignee lets the refusal through to the caller", () => {
+  // The narrow version of the sweep above, pinned to the helper both lead write
+  // paths go through. Blank means unassigned; a NAMED person who is not a member
+  // must reach the caller as a throw.
+  const code = read("src", "app", "actions", "leads.ts");
+  const start = code.indexOf("async function resolveLeadAssignee");
+  assert.ok(start > 0, "resolveLeadAssignee must exist");
+  const body = code.slice(start, code.indexOf("\n}", start));
+  assert.doesNotMatch(
+    codeOf(body),
+    /\.catch\s*\(/,
+    "createLead and updateLead must fail loudly on an unassignable person, not save the lead with nobody on it",
+  );
+});
+
 test("a test drive still names WHICH of its two people was rejected", () => {
   // Two salespeople on one booking, so a refusal that did not say which field
   // was wrong would be unactionable. The shared contract takes `label` for
