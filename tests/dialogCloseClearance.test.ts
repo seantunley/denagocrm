@@ -37,17 +37,17 @@ test("edge-to-edge form footers cancel the current Modal body padding exactly", 
 
   assert.ok(bodyPadding, "Modal body must expose a uniform padding token");
 
-  for (const path of [
-    "src/components/capture-form.tsx",
-    "src/components/LeadForm.tsx",
-    "src/components/ContactForm.tsx",
-  ]) {
-    const form = source(path);
-    const footer = form.match(/(?:variant === "dialog"|isDialog) && "([^"]+)"/)?.[1] ?? "";
+  const captureForm = source("src/components/capture-form.tsx");
+  const footer = captureForm.match(/variant === "dialog" && "([^"]+)"/)?.[1] ?? "";
 
-    assert.match(footer, new RegExp(`(?:^|\\s)-mx-${bodyPadding}(?:\\s|$)`), `${path} must cancel Modal's horizontal padding`);
-    assert.match(footer, new RegExp(`(?:^|\\s)-mb-${bodyPadding}(?:\\s|$)`), `${path} must cancel Modal's bottom padding`);
-    assert.match(footer, new RegExp(`(?:^|\\s)px-${bodyPadding}(?:\\s|$)`), `${path} must restore Modal's inner padding`);
-    assert.doesNotMatch(footer, /sm:-m[bx]-|sm:px-/, `${path} must not retain obsolete breakpoint geometry`);
+  assert.match(footer, new RegExp(`(?:^|\\s)-mx-${bodyPadding}(?:\\s|$)`));
+  assert.match(footer, new RegExp(`(?:^|\\s)-mb-${bodyPadding}(?:\\s|$)`));
+  assert.match(footer, new RegExp(`(?:^|\\s)px-${bodyPadding}(?:\\s|$)`));
+  assert.doesNotMatch(footer, /sm:-m[bx]-|sm:px-/);
+
+  for (const path of ["src/components/LeadForm.tsx", "src/components/ContactForm.tsx"]) {
+    const consumer = source(path);
+    assert.match(consumer, /<CaptureFooter variant=\{variant\}/, `${path} must use the shared footer geometry`);
+    assert.doesNotMatch(consumer, /isDialog && "sticky bottom-0/, `${path} must not duplicate dialog geometry`);
   }
 });
