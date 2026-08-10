@@ -4,141 +4,197 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
+import { DerivedCredentialCache } from "../src/lib/derivedCredentialCache";
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
-
-/**
- * The assertions below describe what the code DOES, so an explanation of the bug
- * sitting in a comment must not be mistaken for the fix.
- */
-const stripComments = (code: string) =>
-  code.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-
-/** The body of `getPageToken`, comments removed. */
-const pageTokenFn = () => {
-  const code = stripComments(src("src/lib/messenger.ts"));
-  return code.slice(
-    code.indexOf("async function getPageToken"),
-    code.indexOf("export async function sendDirectMessage"),
-  );
-};
 
 /**
  * A Meta page token is a per-tenant credential, and the send it authorises goes
  * out on that tenant's Facebook Page.
  *
- * The cache used to be one module-level slot, read BEFORE the tenant credential
- * was resolved. A warm process that had served tenant A therefore handed A's
- * page token to tenant B, and B's reply went out from A's Page to B's customer.
- * That is a cross-tenant credential leak with a customer-visible blast radius,
- * not merely a stale-cache bug.
+ * Every earlier version of this file described the cache by matching the shape of
+ * the statements inside `getPageToken` — which tested that the code had not been
+ * edited, not that it behaved. The rules now live on DerivedCredentialCache and
+ * are exercised here: a real cache, a stubbed derivation, a controlled clock, and
+ * a counter for how many times the derivation actually ran.
  */
 
-test("the Meta page-token cache is keyed by the tenant it was resolved for", () => {
-  const code = src("src/lib/messenger.ts");
-  const fn = code.slice(code.indexOf("async function getPageToken"), code.indexOf("export async function sendDirectMessage"));
+const TTL = 30 * 60 * 1000;
 
-  // A single shared slot cannot express "whose token is this".
-  assert.doesNotMatch(
-    code,
-    /let\s+cachedPageToken\s*:/,
-    "a module-level single-slot token cache cannot distinguish tenants",
-  );
-  assert.match(code, /pageTokenCache\s*=\s*new Map</, "the cache must be keyed per tenant");
+/** A cache with a clock the test moves, and a derivation it can count and vary. */
+function harness(initial = 0) {
+  let clock = initial;
+  const calls: string[] = [];
+  const cache = new DerivedCredentialCache<string>({ ttlMs: TTL, now: () => clock });
+  return {
+    cache,
+    calls,
+    advance: (ms: number) => { clock += ms; },
+    /** Derives a value that names the source it came from, so mix-ups are visible. */
+    derive: async (source: string) => { calls.push(source); return `derived(${source})`; },
+    failing: async () => null,
+  };
+}
 
-  // The lookup must be keyed, not just stored keyed.
-  assert.match(fn, /pageTokenCache\.get\(/, "the read must be per-tenant");
-  assert.match(fn, /pageTokenCache\.set\(/, "the write must be per-tenant");
+test("a second call for the same tenant is served from the cache", async () => {
+  const h = harness();
+  const first = await h.cache.resolve("tenant_a", "sysA", h.derive);
+  const second = await h.cache.resolve("tenant_a", "sysA", h.derive);
+  assert.equal(first, "derived(sysA)");
+  assert.equal(second, "derived(sysA)");
+  assert.equal(h.calls.length, 1, "the exchange must not be repeated on a hit");
 });
 
-test("the cache key and the credential lookup describe the same tenant", () => {
-  const code = src("src/lib/messenger.ts");
-  const fn = code.slice(code.indexOf("async function getPageToken"), code.indexOf("export async function sendDirectMessage"));
+test("one tenant NEVER receives another tenant's derived credential", async () => {
+  // The defect with a customer-visible blast radius: a warm process that had
+  // served tenant A handed A's page token to tenant B, and B's reply went out
+  // from A's Facebook Page to B's customer.
+  const h = harness();
+  const a = await h.cache.resolve("tenant_a", "sysA", h.derive);
+  const b = await h.cache.resolve("tenant_b", "sysB", h.derive);
+  assert.equal(a, "derived(sysA)");
+  assert.equal(b, "derived(sysB)", "tenant B must get a value derived from B's own credential");
+  assert.equal(h.calls.length, 2, "B's value cannot come from A's cached exchange");
 
-  // The whole defect was that these two could disagree: the cache answered for
-  // whoever came before, while the credential would have been resolved for the
-  // caller. Reading the tenant once and using that one value for both is what
-  // makes them impossible to separate.
-  assert.match(fn, /const tenantId = ambientTenantId\(\);/, "resolve the tenant once, up front");
-  assert.match(fn, /const cacheKey = tenantId \?\? GLOBAL_TOKEN_KEY;/, "the key must come from that value");
-  assert.match(
-    fn,
-    /resolveTenantCredential\(tenantId, "META_PAGE_ACCESS_TOKEN"\)/,
-    "the credential must be resolved for that same value, not re-read from ambient scope",
-  );
-  assert.doesNotMatch(
-    fn.slice(fn.indexOf("const cacheKey")),
-    /ambientTenantId\(\)/,
-    "re-reading ambient scope after the key is computed lets the two drift apart again",
-  );
+  // And A is still A's afterwards — the second tenant must not have overwritten
+  // the first under a shared key.
+  assert.equal(await h.cache.resolve("tenant_a", "sysA", h.derive), "derived(sysA)");
+  assert.equal(h.calls.length, 2);
+});
+
+test("rotating the source credential invalidates the derived one immediately", async () => {
+  // Not after the TTL: a hit used to short-circuit reading the source credential
+  // entirely, so a rotated system-user token kept authorising sends for another
+  // half hour.
+  const h = harness();
+  await h.cache.resolve("tenant_a", "sysA", h.derive);
+  h.advance(60_000); // well inside the TTL
+
+  const afterRotation = await h.cache.resolve("tenant_a", "sysA-rotated", h.derive);
+  assert.equal(afterRotation, "derived(sysA-rotated)");
+  assert.equal(h.calls.length, 2, "a changed source must force a fresh derivation");
+});
+
+test("disconnecting the integration drops the derived credential rather than serving it", async () => {
+  const h = harness();
+  await h.cache.resolve("tenant_a", "sysA", h.derive);
+
+  assert.equal(await h.cache.resolve("tenant_a", null, h.derive), null, "no source means no value");
+  assert.equal(h.calls.length, 1, "and no exchange is attempted");
+
+  // Reconnecting with the SAME credential must not find the old entry still
+  // sitting there — the disconnect has to have evicted it, not just refused once.
+  await h.cache.resolve("tenant_a", "sysA", h.derive);
+  assert.equal(h.calls.length, 2, "the entry must have been evicted by the disconnect");
+});
+
+test("an empty-string credential is treated as absent, not as a valid source", async () => {
+  // resolveTenantCredential can return "" for a cleared setting. Fingerprinting
+  // that would cache a value derived from nothing.
+  const h = harness();
+  await h.cache.resolve("tenant_a", "sysA", h.derive);
+  assert.equal(await h.cache.resolve("tenant_a", "", h.derive), null);
+  assert.equal(h.calls.length, 1);
+});
+
+test("the TTL still expires an entry whose source has not changed", async () => {
+  const h = harness();
+  await h.cache.resolve("tenant_a", "sysA", h.derive);
+
+  h.advance(TTL - 1);
+  await h.cache.resolve("tenant_a", "sysA", h.derive);
+  assert.equal(h.calls.length, 1, "one millisecond inside the TTL is still a hit");
+
+  h.advance(1);
+  await h.cache.resolve("tenant_a", "sysA", h.derive);
+  assert.equal(h.calls.length, 2, "exactly at the TTL the entry is stale");
+});
+
+test("a failed derivation is not cached as a value", async () => {
+  // Caching null would turn one bad Graph response into a TTL of them.
+  const h = harness();
+  assert.equal(await h.cache.resolve("tenant_a", "sysA", h.failing), null);
+  assert.equal(await h.cache.resolve("tenant_a", "sysA", h.derive), "derived(sysA)");
+  assert.equal(h.calls.length, 1);
+});
+
+test("a failed derivation does not destroy the entry it failed to replace", async () => {
+  // The previous entry is either still valid or already unreachable by the rules
+  // above; a transient Graph failure must not be a third outcome that clears it.
+  const h = harness();
+  await h.cache.resolve("tenant_a", "sysA", h.derive);
+  h.advance(TTL + 1);
+  assert.equal(await h.cache.resolve("tenant_a", "sysA", h.failing), null);
+  assert.equal(h.cache.size, 1, "the stale entry may remain; it can never be served");
+});
+
+test("the cache does not grow without bound as tenants come and go", async () => {
+  // One live credential per tenant, held for the life of the process, is a leak
+  // the TTL does not address: it bounded how long an entry was USED, not how long
+  // it was kept. Nothing but the write path is guaranteed to run.
+  const h = harness();
+  for (let i = 0; i < 50; i++) await h.cache.resolve(`tenant_${i}`, `sys_${i}`, h.derive);
+  assert.equal(h.cache.size, 50);
+
+  h.advance(TTL + 1);
+  await h.cache.resolve("tenant_new", "sys_new", h.derive);
+  assert.equal(h.cache.size, 1, "expired entries must be reclaimed, leaving only the fresh one");
+});
+
+test("reclaiming expired entries never discards a live one", async () => {
+  const h = harness();
+  await h.cache.resolve("tenant_old", "sys_old", h.derive);
+  h.advance(TTL + 1);
+  await h.cache.resolve("tenant_live", "sys_live", h.derive);
+  h.advance(TTL - 10); // tenant_live is still inside its TTL
+  await h.cache.resolve("tenant_third", "sys_third", h.derive);
+
+  const beforeCount = h.calls.length;
+  assert.equal(await h.cache.resolve("tenant_live", "sys_live", h.derive), "derived(sys_live)");
+  assert.equal(h.calls.length, beforeCount, "a live entry must survive another tenant's write");
+});
+
+test("forget() evicts one key and leaves the rest", async () => {
+  const h = harness();
+  await h.cache.resolve("tenant_a", "sysA", h.derive);
+  await h.cache.resolve("tenant_b", "sysB", h.derive);
+  h.cache.forget("tenant_a");
+  assert.equal(h.cache.size, 1);
+  assert.equal(await h.cache.resolve("tenant_b", "sysB", h.derive), "derived(sysB)");
+  assert.equal(h.calls.length, 2, "tenant B was untouched");
 });
 
 /**
- * Keying the cache by tenant answers WHOSE token it is. It does not answer
- * WHETHER the token is still the one the workspace's credential derives.
+ * The one property the behavioural tests above CANNOT reach, because it is about
+ * how the caller wires the cache up rather than what the cache does: the source
+ * credential must be read before the cache is consulted, and the tenant must be
+ * read once.
  *
- * Consulting the cache before resolving the tenant's source credential means a
- * hit short-circuits the lookup entirely, so the page token stays usable for up
- * to the full TTL after the system-user token was rotated or the integration was
- * disconnected — sending on behalf of a Page the workspace no longer authorises.
- * Resolving the source credential FIRST and fingerprinting it makes the cached
- * entry valid only while the credential it was derived from is unchanged.
+ * Both are now structural — `resolve` takes the source as an argument, so it
+ * cannot be read afterwards — but the argument can still be filled in from the
+ * wrong place, and that is what this checks.
  */
-
-test("the source credential is resolved before the cache is consulted", () => {
-  const fn = pageTokenFn();
-  const resolveAt = fn.indexOf('resolveTenantCredential(tenantId, "META_PAGE_ACCESS_TOKEN")');
-  const cacheReadAt = fn.indexOf("pageTokenCache.get(");
-  assert.ok(resolveAt > 0, "the tenant's source credential must be resolved inside getPageToken");
-  assert.ok(cacheReadAt > 0, "the cache must be read inside getPageToken");
-  assert.ok(
-    resolveAt < cacheReadAt,
-    "a cache hit must not be able to short-circuit reading the tenant's current credential",
+test("getPageToken reads the tenant once and passes the credential in", () => {
+  const code = src("src/lib/messenger.ts").replace(/^\s*\/\/.*$/gm, "");
+  const fn = code.slice(
+    code.indexOf("async function getPageToken"),
+    code.indexOf("export async function sendDirectMessage"),
   );
-});
-
-test("a cached page token is only served while its source credential is unchanged", () => {
-  const fn = pageTokenFn();
+  assert.match(fn, /const tenantId = ambientTenantId\(\);/, "the tenant is resolved once, up front");
   assert.match(
     fn,
-    /const sourceHash = sourceFingerprint\(sysToken\);/,
-    "the credential actually read this call must be fingerprinted",
+    /resolveTenantCredential\(tenantId, "META_PAGE_ACCESS_TOKEN"\)/,
+    "and the credential is looked up for THAT value, not re-read from ambient scope",
   );
-  assert.match(
-    fn,
-    /cached\s*&&\s*cached\.sourceHash === sourceHash\s*&&/,
-    "a cached entry must be rejected when the source credential no longer matches",
+  const resolveAt = fn.indexOf("pageTokenCache.resolve(");
+  assert.ok(resolveAt > fn.indexOf("resolveTenantCredential("), "the credential is read before the cache");
+  assert.doesNotMatch(
+    fn.slice(fn.indexOf("const tenantId") + 20),
+    /ambientTenantId\(\)/,
+    "reading ambient scope again lets the key and the credential describe different tenants",
   );
-  assert.match(
-    fn,
-    /pageTokenCache\.set\(cacheKey,\s*\{\s*token,\s*sourceHash,/,
-    "the fingerprint must be stored alongside the derived token, or it can never be compared",
-  );
-  // A TTL alone is what let a rotated credential keep working; it stays as a
-  // backstop but must not be the only condition.
-  assert.match(fn, /Date\.now\(\) - cached\.fetchedAt < PAGE_TOKEN_TTL_MS/, "the TTL backstop must remain");
-});
-
-test("disconnecting the integration drops the derived page token immediately", () => {
-  const fn = pageTokenFn();
-  const missing = fn.slice(fn.indexOf("if (!sysToken)"), fn.indexOf("const sourceHash"));
-  assert.ok(missing.length > 0, "getPageToken must handle a missing source credential");
-  assert.match(
-    missing,
-    /pageTokenCache\.delete\(cacheKey\)/,
-    "a disconnected integration must evict the derived token rather than serve it out of the TTL",
-  );
-  assert.match(missing, /return null;/, "no source credential means no page token");
-});
-
-test("the per-tenant cache cannot grow without bound", () => {
-  const fn = pageTokenFn();
-  // One Map slot per tenant in a long-lived process is a leak unless something
-  // reclaims them; the write path is the only place guaranteed to run.
-  assert.match(
-    fn,
-    /for \(const \[key, entry\] of pageTokenCache\)/,
-    "expired entries must be reclaimed",
-  );
-  assert.match(fn, /pageTokenCache\.delete\(key\)/, "reclaiming must actually remove the entry");
+  // The token itself is never derived inline any more, so there is no second path
+  // that could reach the Graph exchange without going through the cache's rules.
+  assert.doesNotMatch(fn, /fetch\(/, "the exchange belongs behind the cache, not beside it");
 });

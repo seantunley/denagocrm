@@ -1,4 +1,3 @@
-import crypto from "crypto";
 import { prisma } from "./db";
 import { resolveTenantCredential } from "./settings";
 import { logAudit } from "./audit";
@@ -7,6 +6,7 @@ import { createLeadRecordIfPipelineReady } from "./leadCreate";
 import { saveFile } from "./storage";
 import { resolveTenantActor } from "./tenantActor";
 import { currentTenantScope } from "./tenantScope";
+import { DerivedCredentialCache } from "./derivedCredentialCache";
 
 const GRAPH = "https://graph.facebook.com/v21.0";
 
@@ -34,49 +34,23 @@ export async function isMessengerConfigured(): Promise<boolean> {
 /**
  * The system-user token manages the page; sends need the page-scoped token.
  *
- * Tenant-keyed and fingerprint-bound already: a warm process serving tenant B
- * must not reuse tenant A's page token, and rotating or disconnecting the source
- * credential must not leave the derived token usable for the rest of the TTL.
+ * Every rule about WHOSE token this is and WHETHER it is still derivable lives in
+ * DerivedCredentialCache, where it can be exercised directly. What is left here
+ * is the part specific to Meta: which credential the page token is derived from,
+ * and how the exchange is made.
  *
- * Two residual hazards are closed here.
- *
- * The tenant was read TWICE — once for the cache key, once for the credential
- * lookup — from a scope that a concurrent request can change between the two
- * reads. Two reads of a mutable ambient value can disagree, and when they do the
- * entry is filed under one tenant and holds another's token: the same defect the
- * keying exists to prevent, just narrower. It is read once now and both uses take
- * that value.
- *
- * And nothing ever removed an entry. A long-lived process serving many tenants
- * accumulated one live page token per tenant for the life of the process, none of
- * them reachable for eviction — so the expiry bounded how long an entry was USED,
- * not how long it was held. Expired entries are now dropped on write.
+ * Note the shape. The tenant is read ONCE and feeds both the key and the
+ * credential lookup — two reads of a mutable ambient scope can disagree, and when
+ * they do the entry is filed under one tenant holding another's token. And the
+ * source credential is resolved BEFORE the cache is reachable at all, because it
+ * is an argument: a rotation or a disconnect cannot be short-circuited by a hit.
  */
 const PAGE_TOKEN_TTL_MS = 30 * 60 * 1000;
 const GLOBAL_TOKEN_KEY = " global";
-type PageTokenCacheEntry = { token: string; sourceHash: string; fetchedAt: number };
-const pageTokenCache = new Map<string, PageTokenCacheEntry>();
-const sourceFingerprint = (value: string) => crypto.createHash("sha256").update(value).digest("hex");
+const pageTokenCache = new DerivedCredentialCache<string>({ ttlMs: PAGE_TOKEN_TTL_MS });
 
-async function getPageToken(): Promise<string | null> {
-  // ONCE. Both the key and the lookup below must describe the same tenant.
-  const tenantId = ambientTenantId();
-  const cacheKey = tenantId ?? GLOBAL_TOKEN_KEY;
-
-  const sysToken = await resolveTenantCredential(tenantId, "META_PAGE_ACCESS_TOKEN");
-  if (!sysToken) {
-    // Disconnected. Serving the derived token until the TTL lapses would keep
-    // sending from a Page the workspace has just detached.
-    pageTokenCache.delete(cacheKey);
-    return null;
-  }
-
-  const sourceHash = sourceFingerprint(sysToken);
-  const cached = pageTokenCache.get(cacheKey);
-  if (cached && cached.sourceHash === sourceHash && Date.now() - cached.fetchedAt < PAGE_TOKEN_TTL_MS) {
-    return cached.token;
-  }
-
+/** Exchange a system-user token for the page-scoped one. Null on any failure. */
+async function exchangeForPageToken(sysToken: string): Promise<string | null> {
   try {
     const res = await fetch(
       `${GRAPH}/me/accounts?fields=id,access_token&access_token=${encodeURIComponent(sysToken)}`,
@@ -84,19 +58,17 @@ async function getPageToken(): Promise<string | null> {
     );
     if (!res.ok) return null;
     const json = await res.json();
-    const token: string | undefined = json.data?.[0]?.access_token;
-    if (!token) return null;
-    const now = Date.now();
-    // Drop expired entries on write so a long-lived process serving many tenants
-    // does not hold one page token per tenant for ever.
-    for (const [key, entry] of pageTokenCache) {
-      if (now - entry.fetchedAt >= PAGE_TOKEN_TTL_MS) pageTokenCache.delete(key);
-    }
-    pageTokenCache.set(cacheKey, { token, sourceHash, fetchedAt: now });
-    return token;
+    return json.data?.[0]?.access_token ?? null;
   } catch {
     return null;
   }
+}
+
+async function getPageToken(): Promise<string | null> {
+  // ONCE. Both the key and the lookup below must describe the same tenant.
+  const tenantId = ambientTenantId();
+  const sysToken = await resolveTenantCredential(tenantId, "META_PAGE_ACCESS_TOKEN");
+  return pageTokenCache.resolve(tenantId ?? GLOBAL_TOKEN_KEY, sysToken, exchangeForPageToken);
 }
 
 /** Sends a Messenger / Instagram DM (24-hour customer-service window applies). */

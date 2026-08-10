@@ -8,24 +8,21 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
 
 test("Meta page-token cache is tenant-keyed and invalidated when the source token rotates", () => {
-  // Written against identifier names (`tenantKey`, `tokenHash`, `"__global__"`),
-  // which made it a test that the function had not been RENAMED. Restated as the
-  // properties it was reaching for, so the cache can be improved without the test
-  // having to be rewritten each time. tests/metaCredentialCache.test.ts covers the
-  // same ground in detail.
+  // This used to pin the statements inside getPageToken verbatim, which made it a
+  // test that the function had not been edited. Those rules moved onto
+  // DerivedCredentialCache, where tests/metaCredentialCache.test.ts exercises them
+  // against a real cache with a controlled clock. What is worth pinning HERE is
+  // the wiring the cache cannot check for itself: that the page token goes through
+  // it at all, keyed by tenant, with the credential passed in.
   const code = src("src/lib/messenger.ts");
+  assert.match(code, /new DerivedCredentialCache<string>\(\{ ttlMs: PAGE_TOKEN_TTL_MS \}\)/);
   const fn = code.slice(
     code.indexOf("async function getPageToken"),
     code.indexOf("export async function sendDirectMessage"),
   );
-  // Keyed per tenant — a single shared slot cannot express "whose token is this".
+  assert.match(fn, /pageTokenCache\.resolve\(tenantId \?\? GLOBAL_TOKEN_KEY, sysToken,/, "keyed by tenant, credential passed in");
+  // A single shared slot cannot express "whose token is this", whatever it is called.
   assert.doesNotMatch(code, /let\s+cachedPageToken\s*:/);
-  assert.match(code, /pageTokenCache\s*=\s*new Map</);
-  assert.match(fn, /pageTokenCache\.get\(cacheKey\)/);
-  assert.match(fn, /pageTokenCache\.set\(cacheKey,/);
-  // Bound to a fingerprint of the credential read THIS call, so a rotation
-  // invalidates the derived token rather than waiting out the TTL.
-  assert.match(fn, /cached\.sourceHash === sourceHash/);
 });
 
 test("Telegram tenant resolution happens before any guarded webhook work", () => {
