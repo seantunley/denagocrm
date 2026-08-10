@@ -9,6 +9,7 @@ import { resolveFlowSnapshot } from "./flowPublishing";
 import { withTenantWrite, type TenantWriteTx } from "./tenantWrite";
 import { loadBotSession, upsertBotSessionTx, deleteBotSessionTx, botStillOwnsTx } from "./botSessionStore";
 import { recordBotFlowEventsTx, type BotFlowEventInput } from "./botFlowAnalytics";
+import { completeInboundBotEventTx, currentInboundBotClaim } from "./botInboundEvent";
 import { decideInboundAct, type BotOwnership } from "./botOwnership";
 
 export type SessionState = {
@@ -145,6 +146,11 @@ export async function advanceFlow(
     // reply already queued when staff took over mid-turn, so the bot sent one
     // more message over the person. FOR UPDATE holds the row for this transaction.
     if (!(await botStillOwnsTx(tx, tenantId, channel, key))) return;
+    // Acknowledge the provider event in the SAME transaction as the graph move.
+    // Completing it afterwards left a window where the session and outbox committed,
+    // the process died, and the redelivery then replayed the old message against an
+    // already-advanced graph — a phone number read as the answer to the next question.
+    await completeInboundBotEventTx(tx, tenantId, currentInboundBotClaim());
     // The BotSession analytics trigger uses this local transaction flag to avoid
     // treating a restart as completion/progression of the old conversation.
     if (restart) await tx.$executeRawUnsafe(`SELECT set_config('app.bot_flow_transition', 'restart', true)`);
