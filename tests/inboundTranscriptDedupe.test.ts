@@ -19,35 +19,59 @@ const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
  * also distorts what the model is answering.
  */
 
+const at = (tenantId: string, channel: string, providerId: string, ledgerEventId?: string) =>
+  ({ tenantId, channel, providerId, ledgerEventId });
+
 test("the same provider event always derives the same key", () => {
-  assert.equal(inboundCommunicationKey("whatsapp", "wamid.ABC"), "whatsapp:wamid.ABC");
   assert.equal(
-    inboundCommunicationKey("whatsapp", "wamid.ABC"),
-    inboundCommunicationKey("whatsapp", " wamid.ABC "),
+    inboundCommunicationKey(at("t1", "whatsapp", "wamid.ABC")),
+    inboundCommunicationKey(at("t1", "whatsapp", " wamid.ABC ")),
     "whitespace must not create a second identity for one message",
+  );
+  // The ledger row id is globally unique and already encodes tenant+channel+
+  // provider, so it wins when present.
+  assert.equal(inboundCommunicationKey(at("t1", "whatsapp", "wamid.ABC", "evt_1")), "inbound:evt_1");
+});
+
+test("two tenants receiving the SAME provider id do not collide", () => {
+  // Communication.dedupeKey is GLOBALLY unique. A key of `messenger:<mid>` would
+  // make the transcript's boundary stronger than the ledger's, which is
+  // tenantId + channel + providerId — so the second tenant's message would be
+  // silently swallowed as a "duplicate".
+  const tenantA = inboundCommunicationKey(at("tenant_a", "messenger", "mid123"));
+  const tenantB = inboundCommunicationKey(at("tenant_b", "messenger", "mid123"));
+  assert.notEqual(tenantA, tenantB, "the same mid on two tenant endpoints is two different messages");
+
+  // …and a redelivery inside tenant A is still the same message.
+  assert.equal(inboundCommunicationKey(at("tenant_a", "messenger", "mid123")), tenantA);
+
+  // The same holds via the ledger id, which is unique by construction.
+  assert.notEqual(
+    inboundCommunicationKey(at("tenant_a", "messenger", "mid123", "evt_a")),
+    inboundCommunicationKey(at("tenant_b", "messenger", "mid123", "evt_b")),
   );
 });
 
 test("different events, channels and attachments never collide", () => {
   const keys = [
-    inboundCommunicationKey("whatsapp", "m1"),
-    inboundCommunicationKey("whatsapp", "m2"),
-    inboundCommunicationKey("messenger", "m1"),
-    inboundCommunicationKey("instagram", "m1"),
-    inboundCommunicationKey("instagram", "m1", 0),
-    inboundCommunicationKey("instagram", "m1", 1),
+    inboundCommunicationKey(at("t1", "whatsapp", "m1")),
+    inboundCommunicationKey(at("t1", "whatsapp", "m2")),
+    inboundCommunicationKey(at("t1", "messenger", "m1")),
+    inboundCommunicationKey(at("t1", "instagram", "m1")),
+    inboundCommunicationKey(at("t1", "instagram", "m1"), 0),
+    inboundCommunicationKey(at("t1", "instagram", "m1"), 1),
   ];
   assert.equal(new Set(keys).size, keys.length, `keys collided: ${keys.join(", ")}`);
   // One provider message can produce several attachment rows; each needs its own.
-  assert.equal(inboundCommunicationKey("instagram", "m1", 0), "instagram:m1:attachment:0");
+  assert.equal(inboundCommunicationKey(at("t1", "instagram", "m1", "evt_9"), 0), "inbound:evt_9:attachment:0");
 });
 
-test("a missing provider id yields no key rather than a colliding one", () => {
-  // A key of "whatsapp:" would fold EVERY unidentified message on that channel
-  // into a single row and lose the transcript. Writing un-keyed risks a
-  // duplicate, which is the lesser failure — and it is deliberate, not an oversight.
-  assert.equal(inboundCommunicationKey("whatsapp", ""), null);
-  assert.equal(inboundCommunicationKey("whatsapp", "   "), null);
+test("no identity at all yields no key rather than a colliding one", () => {
+  // A key of "inbound::whatsapp:" would fold EVERY unidentified message into a
+  // single row and lose the transcript. Writing un-keyed risks a duplicate, which
+  // is the lesser failure — deliberate, not an oversight.
+  assert.equal(inboundCommunicationKey(at("t1", "whatsapp", "")), null);
+  assert.equal(inboundCommunicationKey(at("t1", "whatsapp", "   ")), null);
 });
 
 /**
@@ -93,7 +117,7 @@ function project(store: ReturnType<typeof fakeStore>, threadKey: string, dedupeK
 
 test("a first delivery projects a Conversation; a replay adds nothing and bumps nothing", () => {
   const store = fakeStore();
-  const key = inboundCommunicationKey("whatsapp", "wamid.ABC");
+  const key = inboundCommunicationKey(at("t1", "whatsapp", "wamid.ABC"));
 
   const first = project(store, "thread-1", key);
   assert.equal(first.inserted, true);
@@ -114,8 +138,8 @@ test("a first delivery projects a Conversation; a replay adds nothing and bumps 
 
 test("a genuinely different message still projects normally", () => {
   const store = fakeStore();
-  project(store, "thread-1", inboundCommunicationKey("whatsapp", "m1"));
-  project(store, "thread-1", inboundCommunicationKey("whatsapp", "m2"));
+  project(store, "thread-1", inboundCommunicationKey(at("t1", "whatsapp", "m1")));
+  project(store, "thread-1", inboundCommunicationKey(at("t1", "whatsapp", "m2")));
   assert.equal(store.rows.length, 2);
   assert.equal(store.conversations.get("thread-1")?.messageCount, 2);
 });
@@ -164,11 +188,17 @@ test("a replayed delivery does not notify everyone a second time", () => {
   // WhatsApp notifies right after the insert, so the condition wraps the push.
   const whatsapp = src("src/lib/whatsapp.ts");
   assert.match(whatsapp, /if \(inserted\) \{[\s\S]{0,200}sendPushToAll/, "only a first delivery may notify");
-  // The DM path notifies at the end, so it bails out before reaching it.
+  // The DM path notifies at the end, so it bails out before reaching it — and the
+  // condition is "nothing new was written", NOT "some row was a duplicate". A retry
+  // where the text already existed but a missing attachment finally landed HAS
+  // produced something the inbox should announce.
   const dm = src("src/lib/messenger.ts");
-  const guard = dm.indexOf("if (replayed) return;");
-  assert.ok(guard !== -1, "the DM path must bail out on a replay");
+  const guard = dm.indexOf("if (!insertedAny) return;");
+  assert.ok(guard !== -1, "the DM path must bail out only when it wrote nothing");
   assert.ok(dm.indexOf("sendPushToAll", guard) > guard, "and before the notification");
+  assert.doesNotMatch(dm, /replayed/, "the old any-duplicate flag must be gone");
+  // Both inserts set it, so a newly written attachment counts.
+  assert.equal((dm.match(/insertedAny = true;/g) ?? []).length, 2, "text and attachment inserts both count");
 });
 
 test("every webhook hands its provider message id to the projection", () => {

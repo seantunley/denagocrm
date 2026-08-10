@@ -4,6 +4,9 @@ import { sendPushToAll } from "./push";
 import { createLeadRecordIfPipelineReady } from "./leadCreate";
 import { resolveTenantActor } from "./tenantActor";
 import { inboundCommunicationKey, isDedupeKeyConflict } from "./inboundMessageKey";
+import { currentInboundBotEventId } from "./botInboundEvent";
+import { DEFAULT_TENANT_ID } from "./tenant";
+import { writeTenantId } from "./tenantWrite";
 import { currentTenantScope } from "./tenantScope";
 
 /**
@@ -401,7 +404,12 @@ export async function recordInboundWhatsApp(
   // bot/human ownership all hang off Conversation rows. The unique dedupeKey is
   // the replay signal instead: the first delivery takes the normal path with every
   // hook, a redelivery is refused by the index.
-  const dedupeKey = inboundCommunicationKey("whatsapp", providerMessageId ?? "");
+  const dedupeKey = inboundCommunicationKey({
+    ledgerEventId: currentInboundBotEventId(),
+    tenantId: writeTenantId() ?? DEFAULT_TENANT_ID,
+    channel: "whatsapp",
+    providerId: providerMessageId ?? "",
+  });
   let inserted = true;
   try {
     await prisma.communication.create({

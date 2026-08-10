@@ -15,16 +15,44 @@
  * Kept import-free so the rule is executable rather than pattern-matched.
  */
 
+/**
+ * How one inbound provider event is identified.
+ *
+ * `ledgerEventId` is the BotInboundEvent row id — a cuid, and therefore globally
+ * unique. Prefer it: the ledger already resolved tenant + channel + providerId
+ * into one identity, so reusing it keeps the transcript's boundary IDENTICAL to
+ * the authoritative one instead of inventing a second, weaker one.
+ */
+export type InboundIdentity = {
+  ledgerEventId?: string | null;
+  tenantId: string;
+  channel: string;
+  providerId: string;
+};
+
 /** Attachments arrive as several rows for ONE provider message, so they are indexed. */
-export function inboundCommunicationKey(channel: string, providerId: string, attachmentIndex?: number): string | null {
-  const id = String(providerId ?? "").trim();
-  // No provider id means nothing stable to key on. Return null rather than a
+export function inboundCommunicationKey(identity: InboundIdentity, attachmentIndex?: number): string | null {
+  const ledger = String(identity.ledgerEventId ?? "").trim();
+  const provider = String(identity.providerId ?? "").trim();
+
+  // Communication.dedupeKey is GLOBALLY unique, so a key of `messenger:<mid>`
+  // would make the transcript's identity boundary stronger than the ledger's —
+  // safe only if provider ids never repeat across tenant endpoints, which is
+  // exactly the assumption the rest of this architecture refuses to make. Two
+  // tenants receiving the same mid would collide, and the second tenant would
+  // silently lose the message.
+  const base = ledger
+    ? `inbound:${ledger}`
+    : provider
+    ? `inbound:${identity.tenantId}:${identity.channel}:${provider}`
+    : null;
+
+  // No identity at all means nothing stable to key on. Return null rather than a
   // colliding or empty key: an un-keyed row is a duplicate risk, but a key like
-  // "whatsapp:" would collide EVERY message on that channel into one row and lose
-  // the transcript altogether. The caller writes it un-keyed and accepts the
+  // "inbound::whatsapp:" would collide EVERY unidentified message into one row and
+  // lose the transcript altogether. The caller writes it un-keyed and accepts the
   // duplicate, which is the lesser failure.
-  if (!id) return null;
-  const base = `${channel}:${id}`;
+  if (!base) return null;
   return attachmentIndex === undefined ? base : `${base}:attachment:${attachmentIndex}`;
 }
 
