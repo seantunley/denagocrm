@@ -104,3 +104,29 @@ test("the runtime asks this module rather than testing status directly", () => {
     "suppression must not be decided by status alone — that is what conflated handoff with takeover",
   );
 });
+
+test("the inbox distinguishes a staff takeover from a bot handoff", () => {
+  // Both write status "paused", so deriving the badge from status labelled a bot
+  // handoff "Human handling" — staff left it alone believing a colleague had it
+  // while the customer waited. Nearly the opposite of the truth: a handoff is
+  // exactly the case that needs a person.
+  const loader = src("src/lib/inboxCollaboration.ts");
+  assert.match(loader, /ownership: true/, "the loader must select the ownership column");
+  assert.match(loader, /session\.ownership === "human"/, "only a staff takeover is 'human handling'");
+});
+
+test("the simulator can reach the booking template's happy path", () => {
+  // The template gates on booking_identity == "verified"; the stub never set it,
+  // so the starter always fell to its security branch and an operator testing it
+  // concluded the template was broken.
+  const stub = src("src/app/actions/flowSimulator.ts");
+  assert.match(stub, /vars\.booking_identity = "verified"/);
+  // And the variable must be discoverable to anyone hand-building a flow.
+  assert.match(src("src/components/FlowBuilder.tsx"), /booking_identity/);
+});
+
+test("the flow editor renders one AI draft panel, not two", () => {
+  const page = src("src/app/(app)/bot-builder/[id]/page.tsx");
+  const renders = page.match(/<FlowAiDraftForm\b/g) ?? [];
+  assert.equal(renders.length, 1, `expected exactly one AI draft panel, found ${renders.length}`);
+});

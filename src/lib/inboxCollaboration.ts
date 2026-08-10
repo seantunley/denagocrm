@@ -109,14 +109,25 @@ export async function collaborationForThreads(
             key: target.key,
           })),
         },
-        select: { tenantId: true, channel: true, key: true },
+        select: { tenantId: true, channel: true, key: true, ownership: true },
       })
     : [];
-  const paused = new Set(pausedSessions.map((session) => `${session.tenantId}:${session.channel}:${session.key}`));
+  // `status: "paused"` alone cannot say WHO owns the thread. Since conversation
+  // ownership landed it is written by BOTH a staff takeover (ownership 'human')
+  // and the bot's own handoff (ownership 'ai_handoff'). Deriving the badge from
+  // status therefore labelled a bot handoff "Human handling" — so staff left it
+  // alone believing a colleague had it, while the customer sat waiting. That is
+  // close to the opposite of the truth: a handoff is precisely the case that
+  // needs a person to pick it up.
+  const humanOwned = new Set(
+    pausedSessions
+      .filter((session) => session.ownership === "human")
+      .map((session) => `${session.tenantId}:${session.channel}:${session.key}`),
+  );
   const botByConversation = new Map(
     botTargets.map((target) => [
       target.conversationId,
-      paused.has(`${target.tenantId}:${target.channel}:${target.key}`) ? "human" as const : "bot" as const,
+      humanOwned.has(`${target.tenantId}:${target.channel}:${target.key}`) ? "human" as const : "bot" as const,
     ]),
   );
   const supportedConversations = new Set(botTargets.map((target) => target.conversationId));
