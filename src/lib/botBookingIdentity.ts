@@ -6,7 +6,16 @@
  * security boundary, and it should be executable by a test rather than inferred
  * from a pattern in a larger file that also talks to the database.
  */
-export type BotBookingMatch = { contactId: string | null; leadId: string | null };
+export type BotBookingMatch = {
+  contactId: string | null;
+  leadId: string | null;
+  /**
+   * The channel lookup matched MORE THAN ONE record. Set by resolvers that can
+   * tell; absent means "not known to be ambiguous", which is how the Messenger and
+   * Instagram PSID lookups behave — a PSID names one person by construction.
+   */
+  ambiguous?: boolean;
+};
 
 /**
  * The owner of a booking, or null when we cannot prove who we are talking to.
@@ -29,6 +38,11 @@ export type BotBookingMatch = { contactId: string | null; leadId: string | null 
  * softer lookup.
  */
 export function channelVerifiedOwner(match: BotBookingMatch): BotBookingMatch | null {
+  // Two records answering to one number is not proof of one person. The lookup can
+  // still pick a stable row for filing the message — an inbound message has to go
+  // somewhere — but acting on a booking needs to know WHOSE it is, and here it
+  // does not. Same answer as an unlinked channel: hand it to a person.
+  if (match.ambiguous) return null;
   return match.contactId || match.leadId ? match : null;
 }
 

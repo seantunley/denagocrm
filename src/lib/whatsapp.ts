@@ -109,23 +109,57 @@ export async function isWhatsAppConfigured(): Promise<boolean> {
   return (await waCredentials()) !== null;
 }
 
-/** Finds the contact (or open lead) a WhatsApp number belongs to. */
-export async function matchByPhone(digits: string) {
+/**
+ * Finds the contact (or open lead) a WhatsApp number belongs to.
+ *
+ * This is the CHANNEL identity the booking self-service boundary trusts — see
+ * botBookingIdentity.ts, which exists because a typed phone number is a claim and
+ * not proof. That boundary is only as good as this lookup, and this lookup had
+ * two ways to name the wrong person:
+ *
+ *   * `contains` matched the 9-digit tail ANYWHERE in the stored value, not at the
+ *     end. A field holding two numbers, an extension, or a longer string matches a
+ *     tail that is not its own.
+ *   * `take: 1` with NO `orderBy`. With more than one match Postgres returns
+ *     whichever row it likes, so the same inbound number could resolve to
+ *     different customers on different requests — and while enforcement is dormant
+ *     `withChannelTenantScope` adds no tenant predicate, so "more than one match"
+ *     includes another workspace's customer.
+ *
+ * `endsWith` is what was meant. The ordering makes the pick deterministic. And
+ * `ambiguous` reports what a single row cannot: that the number did not identify
+ * ONE person. Ordinary conversation still uses the deterministic pick — an inbound
+ * message must be filed somewhere — but an action that touches an existing booking
+ * refuses it, because "probably this customer" is not identity.
+ */
+export type PhoneMatch = { contactId: string | null; leadId: string | null; ambiguous: boolean };
+
+export async function matchByPhone(digits: string): Promise<PhoneMatch> {
   const variants = [digits, "0" + digits.slice(2), "+" + digits];
+  const tails = [...new Set(variants.map((v) => v.slice(-9)))];
   const contacts = await prisma.contact.findMany({
     where: {
-      OR: variants.flatMap((v) => [
-        { phone: { contains: v.slice(-9) } },
-        { whatsapp: { contains: v.slice(-9) } },
+      OR: tails.flatMap((tail) => [
+        { phone: { endsWith: tail } },
+        { whatsapp: { endsWith: tail } },
       ]),
     },
-    take: 1,
+    // Oldest first: stable across requests, and the original record rather than a
+    // later duplicate. `take: 2` only to detect that there IS a second one.
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    take: 2,
+    select: { id: true },
   });
-  if (contacts[0]) return { contactId: contacts[0].id, leadId: null as string | null };
-  const lead = await prisma.lead.findFirst({
-    where: { phone: { contains: digits.slice(-9) }, status: "open" },
+  if (contacts[0]) return { contactId: contacts[0].id, leadId: null, ambiguous: contacts.length > 1 };
+
+  const leads = await prisma.lead.findMany({
+    where: { phone: { endsWith: digits.slice(-9) }, status: "open" },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    take: 2,
+    select: { id: true, contactId: true },
   });
-  return { contactId: lead?.contactId ?? null, leadId: lead?.id ?? null };
+  const lead = leads[0];
+  return { contactId: lead?.contactId ?? null, leadId: lead?.id ?? null, ambiguous: leads.length > 1 };
 }
 
 /**
