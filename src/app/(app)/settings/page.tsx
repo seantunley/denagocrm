@@ -63,7 +63,7 @@ import ProfileSettingsForms from "@/components/ProfileSettingsForms";
 export default async function SettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ tab?: string }>;
+  searchParams: Promise<{ tab?: string; section?: string }>;
 }) {
   const currentUser = await requireUser();
   const isAdmin = currentUser.role === "owner";
@@ -80,7 +80,10 @@ export default async function SettingsPage({
   const visibleTabs = isAdmin
     ? SETTINGS_TABS
     : SETTINGS_TABS.filter((t) => t.key === "account");
-  const { tab: rawTab } = await searchParams;
+  const { tab: rawTab, section } = await searchParams;
+  // Deep-linkable sections inside a tab. The account menu links straight to
+  // "change password", and a <details> that arrives closed has not answered the
+  // request — the person still has to find and open it.
   const requestedTab = rawTab ?? "";
   const tab = visibleTabs.some((t) => t.key === requestedTab)
     ? requestedTab
@@ -226,7 +229,10 @@ export default async function SettingsPage({
       )}
 
       {tab === "account" && (
-        <div className="max-w-3xl space-y-6">
+        // The modal is max-w-5xl; capping the content at 3xl left a dead strip down
+        // the right of every account screen. Fields stay readable because they sit
+        // in columns, not because the container is narrow.
+        <div className="max-w-5xl space-y-6">
           <ProfileSettingsForms
             name={currentUser.name}
             email={currentUser.email}
@@ -239,7 +245,7 @@ export default async function SettingsPage({
           />
 
           <div className="card p-0 divide-y divide-border/50">
-            <details>
+            <details id="password" open={section === "password"}>
               <summary className="flex items-center justify-between gap-4 px-5 py-4 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
                 <span className="text-sm font-medium">Password</span>
                 <span className="btn-secondary btn-sm">Change</span>
