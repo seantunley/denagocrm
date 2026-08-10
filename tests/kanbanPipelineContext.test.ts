@@ -127,3 +127,63 @@ test("cards are ordered by the position the server persists", () => {
   // And the move actually writes one, or the ordering key never changes.
   assert.match(src("src/app/actions/leads.ts"), /position: await nextPosition\(stageId\)/);
 });
+
+/* ── SalesPipeline was never tenant-scoped at all ──────────────────────── */
+
+/**
+ * The review's 3.1, and the asymmetry that gives it away: the PipelineStage and
+ * Lead helpers in this very file call `tenantFilter(...)`, while every
+ * SalesPipeline path used `basePrisma` — the documented RLS BYPASS — with no
+ * tenant predicate at all.
+ *
+ * It was not only a read leak. `createPipeline` and `updatePipeline` clear the
+ * default with `UPDATE "SalesPipeline" SET "isDefault" = false WHERE "deletedAt"
+ * IS NULL`, so making a pipeline default in one workspace cleared it in EVERY
+ * other one — a silent cross-tenant write on the dependency `getDefaultPipeline`
+ * uses to create leads.
+ */
+
+test("every SalesPipeline statement carries a tenant predicate", () => {
+  const lib = src("src/lib/pipelines.ts");
+  const code = lib.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
+  // Each statement touching SalesPipeline, with the scope interpolation it uses.
+  const statements = [...code.matchAll(/(?:SELECT|INSERT INTO|UPDATE)[\s\S]{0,420}?"SalesPipeline"[\s\S]{0,420}?`/g)]
+    .map((m) => m[0]);
+  assert.ok(statements.length >= 6, `expected the SalesPipeline statements, found ${statements.length}`);
+
+  for (const statement of statements) {
+    const scoped =
+      /\$\{scope\}|\$\{writeScope\}|\$\{pipelineScope\}|"tenantId"\)/.test(statement) ||
+      /INSERT INTO "SalesPipeline"[\s\S]*"tenantId"/.test(statement);
+    assert.ok(scoped, `a SalesPipeline statement has no tenant predicate:\n${statement.slice(0, 200)}`);
+  }
+});
+
+test("the default-clear cannot reach another workspace", () => {
+  const lib = src("src/lib/pipelines.ts");
+  // The exact shape of the cross-tenant write, which must no longer exist.
+  assert.doesNotMatch(
+    lib,
+    /SET "isDefault" = false, "updatedAt" = CURRENT_TIMESTAMP WHERE "deletedAt" IS NULL`/,
+    "an unscoped default-clear wipes every other tenant's default",
+  );
+  assert.match(lib, /WHERE "deletedAt" IS NULL \$\{scope\}`/);
+  assert.match(lib, /WHERE "id" <> \$\{id\} AND "deletedAt" IS NULL \$\{scope\}`/);
+});
+
+test("a new pipeline is born owned", () => {
+  const lib = src("src/lib/pipelines.ts");
+  assert.match(lib, /INSERT INTO "SalesPipeline" \("id", "name", "description", "type", "isDefault", "tenantId"\)/);
+  assert.match(lib, /const tenantId = await actingTenantId\(\);/);
+});
+
+test("the pipeline predicate resolves the acting workspace, not the dormant scope", () => {
+  // tenantFilter() returns Prisma.empty while enforcement is dormant, which is
+  // today — fine on top of an already-scoped client, useless on basePrisma.
+  const lib = src("src/lib/pipelines.ts");
+  const fn = lib.slice(lib.indexOf("async function pipelineTenantFilter"), lib.indexOf("function tenantFilter"));
+  assert.match(fn, /await actingTenantId\(\)/);
+  assert.match(fn, /IS NULL\)`/, "the founding tenant keeps rows that predate tenancy");
+  assert.match(fn, /AND \$\{column\} = \$\{tenantId\}`/, "a second workspace gets a strict filter");
+});

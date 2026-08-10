@@ -1,6 +1,8 @@
 import crypto from "crypto";
 import { Prisma } from "@prisma/client";
 import { basePrisma } from "./db";
+import { actingTenantId } from "./actingTenant";
+import { DEFAULT_TENANT_ID } from "./tenant";
 import { currentScopeClass, writeTenantId } from "./tenantWrite";
 
 export type SalesPipelineRow = {
@@ -53,6 +55,39 @@ export type ForecastLeadRow = {
  * Dormant/system scope preserves the legacy global behaviour; a concrete tenant
  * filters the requested column; an enforcing but missing scope returns no rows.
  */
+/**
+ * SalesPipeline's own tenant predicate, resolved from the ACTING WORKSPACE.
+ *
+ * `tenantFilter` below returns Prisma.empty while enforcement is dormant — which
+ * is today — because it defers to the guard's scope. That is fine for a filter
+ * layered on top of an already-scoped client, and useless here: every SalesPipeline
+ * path uses `basePrisma`, the documented RLS BYPASS. So these queries had no tenant
+ * boundary from any direction.
+ *
+ * The consequences were not only a read leak:
+ *
+ *   - `listSalesPipelines`/`listActiveSalesPipelines`/`getDefaultPipeline` returned
+ *     other tenants' pipelines, while the STAGE query beside them was scoped —
+ *     which is the asymmetry that gives the game away;
+ *   - `createPipeline` and `updatePipeline` run `UPDATE "SalesPipeline" SET
+ *     "isDefault" = false WHERE "deletedAt" IS NULL` with no tenant predicate, so
+ *     making a pipeline default in one workspace CLEARED THE DEFAULT IN EVERY
+ *     OTHER ONE — a cross-tenant write, silent, on a foundational lead-creation
+ *     dependency;
+ *   - `createPipeline` stamped no tenantId at all, so a pipeline created from a
+ *     tenant's own UI was born tenantless.
+ *
+ * tenantId is nullable here, so the founding tenant owns the rows that predate
+ * tenancy — the same legacy rule BotFlow, Journey and Dashboard use.
+ */
+async function pipelineTenantFilter(alias = '"tenantId"') {
+  const tenantId = await actingTenantId();
+  const column = Prisma.raw(alias);
+  return tenantId === DEFAULT_TENANT_ID
+    ? Prisma.sql`AND (${column} = ${tenantId} OR ${column} IS NULL)`
+    : Prisma.sql`AND ${column} = ${tenantId}`;
+}
+
 function tenantFilter(column: '"tenantId"' | 'l."tenantId"' | 's."tenantId"') {
   const scope = currentScopeClass();
   if (scope.mode === "closed") return Prisma.sql`AND FALSE`;
@@ -64,28 +99,31 @@ function tenantFilter(column: '"tenantId"' | 'l."tenantId"' | 's."tenantId"') {
 
 export async function listSalesPipelines(activeOnly = false): Promise<SalesPipelineRow[]> {
   if (activeOnly) return listActiveSalesPipelines();
+  const scope = await pipelineTenantFilter();
   return basePrisma.$queryRaw<SalesPipelineRow[]>`
     SELECT "id", "name", "description", "type", "active", "isDefault", "createdAt", "updatedAt"
     FROM "SalesPipeline"
-    WHERE "deletedAt" IS NULL
+    WHERE "deletedAt" IS NULL ${scope}
     ORDER BY "isDefault" DESC, "name" ASC
   `;
 }
 
 export async function listActiveSalesPipelines(): Promise<SalesPipelineRow[]> {
+  const scope = await pipelineTenantFilter();
   return basePrisma.$queryRaw<SalesPipelineRow[]>`
     SELECT "id", "name", "description", "type", "active", "isDefault", "createdAt", "updatedAt"
     FROM "SalesPipeline"
-    WHERE "deletedAt" IS NULL AND "active" = true
+    WHERE "deletedAt" IS NULL AND "active" = true ${scope}
     ORDER BY "isDefault" DESC, "name" ASC
   `;
 }
 
 export async function getDefaultPipeline(): Promise<SalesPipelineRow | null> {
+  const scope = await pipelineTenantFilter();
   const rows = await basePrisma.$queryRaw<SalesPipelineRow[]>`
     SELECT "id", "name", "description", "type", "active", "isDefault", "createdAt", "updatedAt"
     FROM "SalesPipeline"
-    WHERE "deletedAt" IS NULL AND "active" = true
+    WHERE "deletedAt" IS NULL AND "active" = true ${scope}
     ORDER BY "isDefault" DESC, "createdAt" ASC
     LIMIT 1
   `;
@@ -133,13 +171,18 @@ export async function createPipeline(input: {
   isDefault?: boolean;
 }) {
   const id = crypto.randomUUID();
+  // The owner, resolved once: the insert stamps it and the default-clear is
+  // confined to it. Unconfined, making a pipeline default here cleared the
+  // default in every other tenant's workspace.
+  const tenantId = await actingTenantId();
+  const scope = await pipelineTenantFilter();
   await basePrisma.$transaction(async (tx) => {
     if (input.isDefault) {
-      await tx.$executeRaw`UPDATE "SalesPipeline" SET "isDefault" = false, "updatedAt" = CURRENT_TIMESTAMP WHERE "deletedAt" IS NULL`;
+      await tx.$executeRaw`UPDATE "SalesPipeline" SET "isDefault" = false, "updatedAt" = CURRENT_TIMESTAMP WHERE "deletedAt" IS NULL ${scope}`;
     }
     await tx.$executeRaw`
-      INSERT INTO "SalesPipeline" ("id", "name", "description", "type", "isDefault")
-      VALUES (${id}, ${input.name}, ${input.description ?? null}, ${input.type ?? "sales"}, ${input.isDefault ?? false})
+      INSERT INTO "SalesPipeline" ("id", "name", "description", "type", "isDefault", "tenantId")
+      VALUES (${id}, ${input.name}, ${input.description ?? null}, ${input.type ?? "sales"}, ${input.isDefault ?? false}, ${tenantId})
     `;
   });
   return id;
@@ -152,15 +195,16 @@ export async function updatePipeline(id: string, input: {
   active: boolean;
   isDefault: boolean;
 }) {
+  const scope = await pipelineTenantFilter();
   const current = await basePrisma.$queryRaw<Array<{ isDefault: boolean }>>`
-    SELECT "isDefault" FROM "SalesPipeline" WHERE "id" = ${id} AND "deletedAt" IS NULL LIMIT 1
+    SELECT "isDefault" FROM "SalesPipeline" WHERE "id" = ${id} AND "deletedAt" IS NULL ${scope} LIMIT 1
   `;
   if (!current[0]) throw new Error("Pipeline not found");
   if (input.isDefault && !input.active) throw new Error("The default pipeline must remain active");
   if (current[0].isDefault && !input.isDefault) {
     const other = await basePrisma.$queryRaw<Array<{ count: bigint }>>`
       SELECT COUNT(*) AS count FROM "SalesPipeline"
-      WHERE "id" <> ${id} AND "isDefault" = true AND "active" = true AND "deletedAt" IS NULL
+      WHERE "id" <> ${id} AND "isDefault" = true AND "active" = true AND "deletedAt" IS NULL ${scope}
     `;
     if (Number(other[0]?.count ?? 0) === 0) {
       throw new Error("Set another active pipeline as default before removing this default");
@@ -169,13 +213,13 @@ export async function updatePipeline(id: string, input: {
 
   await basePrisma.$transaction(async (tx) => {
     if (input.isDefault) {
-      await tx.$executeRaw`UPDATE "SalesPipeline" SET "isDefault" = false, "updatedAt" = CURRENT_TIMESTAMP WHERE "id" <> ${id} AND "deletedAt" IS NULL`;
+      await tx.$executeRaw`UPDATE "SalesPipeline" SET "isDefault" = false, "updatedAt" = CURRENT_TIMESTAMP WHERE "id" <> ${id} AND "deletedAt" IS NULL ${scope}`;
     }
     await tx.$executeRaw`
       UPDATE "SalesPipeline"
       SET "name" = ${input.name}, "description" = ${input.description ?? null}, "type" = ${input.type ?? "sales"},
         "active" = ${input.active}, "isDefault" = ${input.isDefault}, "updatedAt" = CURRENT_TIMESTAMP
-      WHERE "id" = ${id} AND "deletedAt" IS NULL
+      WHERE "id" = ${id} AND "deletedAt" IS NULL ${scope}
     `;
   });
 }
@@ -220,8 +264,12 @@ export async function addPipelineStage(input: {
 }) {
   const tenantId = writeTenantId();
   const scope = tenantFilter('"tenantId"');
+  // The pipeline this stage is being attached to must be one this workspace owns.
+  // Unscoped, a known pipeline id was enough to add a stage to another tenant's
+  // process — the acceptance gate the review names explicitly.
+  const pipelineScope = await pipelineTenantFilter();
   const pipeline = await basePrisma.$queryRaw<Array<{ active: boolean }>>`
-    SELECT "active" FROM "SalesPipeline" WHERE "id" = ${input.pipelineId} AND "deletedAt" IS NULL LIMIT 1
+    SELECT "active" FROM "SalesPipeline" WHERE "id" = ${input.pipelineId} AND "deletedAt" IS NULL ${pipelineScope} LIMIT 1
   `;
   if (!pipeline[0]) throw new Error("Pipeline not found");
   const rows = await basePrisma.$queryRaw<Array<{ nextOrder: number }>>`
@@ -302,17 +350,19 @@ export async function reorderPipelineStages(pipelineId: string, stageIds: string
 }
 
 export async function archivePipeline(id: string) {
+  const scope = await pipelineTenantFilter('p."tenantId"');
   const rows = await basePrisma.$queryRaw<Array<{ isDefault: boolean; leadCount: bigint }>>`
     SELECT p."isDefault", COUNT(l."id") AS "leadCount"
     FROM "SalesPipeline" p LEFT JOIN "Lead" l ON l."pipelineId" = p."id" AND l."deletedAt" IS NULL
-    WHERE p."id" = ${id} GROUP BY p."isDefault"
+    WHERE p."id" = ${id} ${scope} GROUP BY p."isDefault"
   `;
   if (!rows[0]) throw new Error("Pipeline not found");
   if (rows[0].isDefault) throw new Error("The default pipeline cannot be archived");
   if (Number(rows[0].leadCount) > 0) throw new Error("Move or close all leads before archiving this pipeline");
+  const writeScope = await pipelineTenantFilter();
   await basePrisma.$executeRaw`
     UPDATE "SalesPipeline" SET "active" = false, "deletedAt" = CURRENT_TIMESTAMP, "updatedAt" = CURRENT_TIMESTAMP
-    WHERE "id" = ${id}
+    WHERE "id" = ${id} ${writeScope}
   `;
 }
 
