@@ -328,6 +328,14 @@ jobs:
       - name: Inbox -- one loud conversation cannot starve the quiet ones
         run: npm run test:inbox-selection
 
+      # A source test can assert that the ledger HAS a failureCode column and that
+      # the writes share a transaction. It cannot show that any runtime path ever
+      # sets that column, that a duplicate submission finds the bot already
+      # paused, or that automation queued before a person answered never reaches
+      # the customer. Those are behaviours, and only a real database shows them.
+      - name: Inbox -- a staff reply is one durable decision
+        run: npm run test:staff-reply
+
   # -- LANE 3: migrating a database that already has data ----------------------
   #
   # Its own job and its own scratch database, so its four minutes overlap the

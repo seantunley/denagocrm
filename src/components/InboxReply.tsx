@@ -74,6 +74,29 @@ export default function InboxReply({
     setEnterSends(readEnterSends(typeof window === "undefined" ? null : window.localStorage));
   }, []);
 
+  /**
+   * One identity per COMPOSITION — not per message, and not per attempt.
+   *
+   * If a send fails ambiguously — the provider may or may not have accepted it —
+   * pressing Send again must resolve to the message already queued rather than
+   * deliver a second copy, so this cannot change on re-render or on failure. But
+   * it must not be the whole key either: a person whose send failed usually
+   * EDITS the message before retrying, and a key that ignored the text would
+   * discard the correction as a duplicate and deliver the original.
+   *
+   * So the box supplies the composition and the server folds in what is actually
+   * being sent. Same text resubmitted → same key → dedupes. Corrected text →
+   * different key → sends. This value changes only once a send is confirmed,
+   * which is what keeps two deliberately identical replies two messages.
+   */
+  const [compositionId, setCompositionId] = useState<string>("");
+  useEffect(() => {
+    if (!compositionId) setCompositionId(crypto.randomUUID());
+  }, [compositionId]);
+  useEffect(() => {
+    if (state?.ok) setCompositionId(crypto.randomUUID());
+  }, [state?.ok]);
+
   function onKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
     const intent = enterIntent(
       {
@@ -224,6 +247,7 @@ ${el.value.slice(end)}`;
         </>
       )}
       <input type="hidden" name="revalidate" value={revalidate} />
+      <input type="hidden" name="compositionId" value={compositionId} />
 
       <div className="flex items-center gap-1.5">
         <textarea
