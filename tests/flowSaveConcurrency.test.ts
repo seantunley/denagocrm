@@ -110,11 +110,37 @@ test("leaving with unsaved work warns instead of discarding it silently", () => 
   assert.match(builder, /removeEventListener\("beforeunload"/, "and it must be cleaned up");
 });
 
-test("Reset is fenced too, being another draft writer", () => {
-  // An unconditional Reset tramples newer work exactly as the old Save did.
+test("Reset is fenced too, being another draft writer — and with no way out", () => {
+  // An unconditional Reset tramples newer work exactly as the old Save did, and it
+  // is the more destructive of the two: it replaces the whole graph.
   const action = src("src/app/actions/flow.ts");
   const reset = action.slice(action.indexOf("export async function resetFlow"), action.indexOf("export async function renameFlow"));
   assert.match(reset, /updatedAt: expected/, "Reset must respect the stamp the canvas loaded");
   assert.match(reset, /conflict: true/, "and report a conflict rather than overwriting");
-  assert.match(src("src/components/FlowBuilder.tsx"), /resetFlow\(flowId, savedAt\.current\)/);
+
+  // Required, exactly as on saveFlow. An optional stamp with an unconditional
+  // `else` meant the authoritative action still permitted the overwrite, whatever
+  // the one caller happened to pass today.
+  assert.match(reset, /expectedUpdatedAt: string,/, "the fence must be required");
+  assert.doesNotMatch(reset, /botFlow\.update\(/, "no unfenced fallback path");
+  // And the same atomicity rule: the stamp handed back is the one this write made.
+  assert.match(reset, /prisma\.\$transaction\(async \(tx\) =>/);
+  assert.match(reset, /updatedAt: result\.toISOString\(\)/);
+});
+
+test("a refused Reset is not reported as a successful one", () => {
+  // The canvas awaited resetFlow and then announced "Flow reset" unconditionally.
+  // On a conflict the draft is untouched and the operator is told the opposite —
+  // the same silent loss this PR exists to close, moved up into the UI.
+  const builder = src("src/components/FlowBuilder.tsx");
+  const handler = builder.slice(builder.indexOf("const res = await resetFlow"), builder.indexOf("trigger={<button type=\"button\" className=\"btn-secondary btn-sm\"><RotateCcwIcon />"));
+  assert.match(handler, /resetFlow\(flowId, savedAt\.current\)/, "Reset must carry the stamp the canvas loaded");
+  assert.match(handler, /if \(!res\.ok\) \{/, "and must branch on the result");
+  assert.match(handler, /toast\.error\(/, "a refusal has to be visible");
+  assert.match(handler, /return;/, "and must not fall through to the success path");
+  // Without adopting the new stamp the canvas still holds the pre-Reset revision,
+  // so the very next save conflicts against a reset this same tab performed.
+  assert.match(handler, /savedAt\.current = res\.updatedAt/, "a successful Reset must advance the stamp");
+  const successAt = handler.indexOf('toast.success("Flow reset")');
+  assert.ok(successAt > handler.indexOf("savedAt.current = res.updatedAt"), "the stamp is adopted before success is announced");
 });

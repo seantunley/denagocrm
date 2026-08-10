@@ -298,7 +298,23 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt 
           </button>
         </div>
         <button type="button" onClick={onSave} className="btn-primary btn-sm"><Save className="size-4" />Save</button>
-        <ConfirmActionDialog destructive title="Reset this flow?" description="Every node, connection and unsaved change will be replaced with the default flow." confirmLabel="Reset flow" onConfirm={async () => { await resetFlow(flowId, savedAt.current); toast.success("Flow reset"); router.refresh(); }} trigger={<button type="button" className="btn-secondary btn-sm"><RotateCcwIcon />Reset</button>} />
+        <ConfirmActionDialog destructive title="Reset this flow?" description="Every node, connection and unsaved change will be replaced with the default flow." confirmLabel="Reset flow" onConfirm={async () => {
+          // Reset can be refused for exactly the reason Save can. Announcing
+          // "Flow reset" regardless is the same silent loss one level up: the
+          // operator believes the draft is back to default and keeps working.
+          const res = await resetFlow(flowId, savedAt.current);
+          if (!res.ok) {
+            setStatus("Not saved — this draft changed elsewhere");
+            toast.error(res.error ?? "Could not reset this flow.");
+            return;
+          }
+          // Adopt the revision the reset produced, or the canvas still holds the
+          // pre-Reset stamp and its next save conflicts against its own reset.
+          savedAt.current = res.updatedAt ?? savedAt.current;
+          setStatus("Saved");
+          toast.success("Flow reset");
+          router.refresh();
+        }} trigger={<button type="button" className="btn-secondary btn-sm"><RotateCcwIcon />Reset</button>} />
         <button type="button" onClick={() => setFullscreen((value) => !value)} className="btn-secondary btn-sm" title={fullscreen ? "Exit full screen" : "Full screen"}>
           {fullscreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}<span className="hidden sm:inline">{fullscreen ? "Exit" : "Full screen"}</span>
         </button>

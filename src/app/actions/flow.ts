@@ -98,23 +98,44 @@ export async function saveFlow(
 }
 
 /** Revert a flow draft to the built-in default definition. Published versions are immutable. */
-export async function resetFlow(id: string, expectedUpdatedAt?: string) {
+export async function resetFlow(
+  id: string,
+  /** The draft's `updatedAt` as it was when this canvas loaded it. Required. */
+  expectedUpdatedAt: string,
+): Promise<{ ok?: boolean; error?: string; conflict?: boolean; updatedAt?: string }> {
   await requireOwner();
-  // Reset is a draft writer too, and an unconditional one would trample newer work
-  // exactly as the old Save did. Fenced when the caller knows what it loaded.
-  const expected = expectedUpdatedAt ? new Date(expectedUpdatedAt) : null;
-  if (expected && !Number.isNaN(expected.getTime())) {
-    const written = await prisma.botFlow.updateMany({
+  // Reset is a draft writer too — the most destructive one — so it carries the
+  // same MANDATORY fence as Save. An optional stamp with an unconditional `else`
+  // left the authoritative action still able to overwrite newer work.
+  const expected = new Date(expectedUpdatedAt);
+  if (Number.isNaN(expected.getTime())) {
+    return { conflict: true, error: "This editor is out of date — reload the page before resetting." };
+  }
+
+  // Same one-transaction rule as saveFlow: the stamp handed back must be the one
+  // THIS write produced, or the canvas adopts a later writer's revision unseen.
+  const result = await prisma.$transaction(async (tx) => {
+    const written = await tx.botFlow.updateMany({
       where: { id, updatedAt: expected },
       data: { definition: JSON.stringify(DEFAULT_FLOW) },
     });
-    if (written.count !== 1) return { conflict: true as const };
-  } else {
-    await prisma.botFlow.update({ where: { id }, data: { definition: JSON.stringify(DEFAULT_FLOW) } });
+    if (written.count !== 1) return null;
+    const row = await tx.botFlow.findUnique({ where: { id }, select: { updatedAt: true } });
+    return row?.updatedAt ?? null;
+  });
+
+  if (!result) {
+    return {
+      conflict: true,
+      error: "This draft was changed somewhere else after you opened it. Reload to see the newer version — it has not been reset.",
+    };
   }
+
   revalidatePath(`/bot-builder/${id}`);
   revalidatePath("/bot-builder");
-  return { ok: true as const };
+  // Hand back the new stamp, or the canvas would still hold the pre-Reset
+  // revision and its next save would report a conflict against its own Reset.
+  return { ok: true, updatedAt: result.toISOString() };
 }
 
 export async function renameFlow(id: string, formData: FormData) {
