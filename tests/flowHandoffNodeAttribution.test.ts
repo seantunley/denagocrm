@@ -67,6 +67,29 @@ test("a mid-conversation AI escalation reports the node the customer was sitting
   assert.equal(result.endedAt, "chat");
 });
 
+test("a resumed turn reports where it ENDED, not where it was waiting", async () => {
+  // The case that makes the trigger's precedence matter. The session is parked on
+  // a capture node; the customer answers; the same turn walks capture -> message
+  // -> ai, and the AI gives up. OLD."nodeId" is the capture node, and reporting
+  // that would say the capture node hands customers off — precisely the wrong
+  // answer for a column named `handoffs` on a per-node funnel.
+  const flow: Flow = {
+    start: "askName",
+    nodes: {
+      askName: { id: "askName", type: "capture", text: "Your name?", variable: "name", next: "thanks" },
+      thanks: { id: "thanks", type: "message", text: "Thanks!", next: "support" },
+      support: { id: "support", type: "ai" },
+    },
+  };
+  const result = await runFlow(flow, { nodeId: "askName", vars: {} }, { text: "Sean" }, {
+    ...baseCtx,
+    aiReply: async () => ({ reply: "Let me get someone", handoff: true }),
+  });
+  assert.equal(result.handedOff, true);
+  assert.equal(result.endedAt, "support", "the node that gave up, not the node the turn started on");
+  assert.notEqual(result.endedAt, "askName");
+});
+
 test("a completed conversation reports where it finished", async () => {
   const flow: Flow = {
     start: "greet",
@@ -122,9 +145,12 @@ test("the trigger prefers a real node over the NULL a paused session must carry"
 
   // No flow_handoff may still be written with a bare NULL node.
   assert.doesNotMatch(body, /version_id, NULL, 'flow_handoff'/);
-  // The UPDATE path keeps OLD."nodeId" — the node the bot was waiting at is a
-  // better answer than the one it ended on — but falls back rather than to NULL.
-  assert.match(body, /COALESCE\(OLD\."nodeId", handoff_node\), 'flow_handoff'/);
+  // The node the turn ENDED on wins, including on the UPDATE path. OLD."nodeId" is
+  // only where the customer was waiting BEFORE this turn, and a turn walks the
+  // graph — see the resumed-turn test above. It stays as a fallback for a row
+  // written by a runner that predates the marker, and nothing more.
+  assert.match(body, /COALESCE\(handoff_node, OLD\."nodeId"\), 'flow_handoff'/);
+  assert.doesNotMatch(body, /COALESCE\(OLD\."nodeId", handoff_node\)/, "where the turn started is not who gave up");
 
   // CREATE OR REPLACE is inherently re-runnable, which the runner requires: it
   // opens no transaction and records a migration only after executing it.

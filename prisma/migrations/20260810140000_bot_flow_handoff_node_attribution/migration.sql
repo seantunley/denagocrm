@@ -8,10 +8,16 @@
 -- in the summary and pointed at nothing in the graph. The node that gives up on
 -- customers was invisible in the one report built to find it.
 --
--- The UPDATE path already had the answer — it reads OLD."nodeId", the node the bot
--- was waiting at. The INSERT and restart paths have no OLD row, so the runner now
--- records the node it ended on inside the stored vars, under a reserved key, the
--- same way __flow_version is already carried through this column.
+-- The runner records the node it ENDED on inside the stored vars, under a reserved
+-- key, the same way __flow_version is already carried through this column.
+--
+-- That value wins everywhere, including on the UPDATE path. OLD."nodeId" is only
+-- where the customer was waiting BEFORE this turn, and a turn walks the graph: a
+-- session parked on capture_name, answered, can run capture_name -> message ->
+-- ai_support and hand off from ai_support. Preferring OLD."nodeId" there would
+-- report capture_name as the node that gave up — precisely the wrong answer for a
+-- column named `handoffs` on a per-node funnel. OLD."nodeId" stays only as a
+-- fallback for a row written by a runner that predates the marker.
 --
 -- Two key names because the two runners serialise differently and always have:
 -- flowRun.ts stores flat vars (`__handoff_node`), flowSession.ts stores
@@ -101,7 +107,7 @@ BEGIN
 
     IF OLD."status" = 'active' AND NEW."status" = 'paused' AND NEW."nodeId" IS NULL AND version_id IS NOT NULL THEN
       INSERT INTO "BotFlowEvent" ("id","tenantId","channel","conversationKey","flowVersionId","nodeId","eventType","metadata","occurredAt")
-      VALUES ('bfe_' || md5(random()::text || clock_timestamp()::text || NEW."id" || 'handoff'), NEW."tenantId", NEW."channel", NEW."key", version_id, COALESCE(OLD."nodeId", handoff_node), 'flow_handoff', '{"source":"bot_session"}'::jsonb, CURRENT_TIMESTAMP);
+      VALUES ('bfe_' || md5(random()::text || clock_timestamp()::text || NEW."id" || 'handoff'), NEW."tenantId", NEW."channel", NEW."key", version_id, COALESCE(handoff_node, OLD."nodeId"), 'flow_handoff', '{"source":"bot_session"}'::jsonb, CURRENT_TIMESTAMP);
     END IF;
     RETURN NEW;
   END IF;
