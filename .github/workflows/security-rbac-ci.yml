@@ -312,6 +312,14 @@ jobs:
       - name: Inbox -- a staff reply is one durable decision
         run: npm run test:staff-reply
 
+      # Meta echoes every message the Page sends, including ours. The pure tests
+      # exercise the rule that tells them apart; only a real database can hold a
+      # row in the state the worker is in between Meta accepting a send and the
+      # UPDATE that records its id -- which is the window where the echo used to
+      # be written into the customer's history a second time.
+      - name: Inbox -- our own Meta echo is not recorded twice
+        run: npm run test:meta-echo
+
   # -- LANE 3: migrating a database that already has data ----------------------
   #
   # Its own job and its own scratch database, so its four minutes overlap the

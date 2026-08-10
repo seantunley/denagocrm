@@ -688,7 +688,11 @@ async function deliverClaimed(row: OutboxRow): Promise<"sent" | "retry" | "dead"
     // recorded as a delivery failure.
     await prisma.botFlowOutbox.updateMany({
       where: { id: row.id, status: { notIn: ["sent", "dead"] } },
-      data: { status: "sent", sentAt: new Date(), leaseUntil: null, lastError: null },
+      // The provider id goes on too. Without it this row is a message that WAS
+      // delivered and cannot be recognised when its echo comes back, so the one
+      // path where the lease was superseded is also the one path that duplicates
+      // the customer's history.
+      data: { status: "sent", sentAt: new Date(), leaseUntil: null, lastError: null, providerMessageId: result.providerMessageId ?? null },
     });
     await logError("bot-outbox-stale-lease", new Error("Provider accepted a send after this worker's outbox lease was superseded; recorded as sent so it is not delivered twice"), row.id).catch(() => {});
     await repairCommunicationLog({ ...row, status: "sent" }).catch(() => {});

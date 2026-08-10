@@ -9,6 +9,7 @@ import { resolveTenantActor } from "./tenantActor";
 import { currentTenantScope } from "./tenantScope";
 import { writeTenantId } from "./tenantWrite";
 import { DEFAULT_TENANT_ID } from "./tenant";
+import { decideEcho, ECHO_CONTENT_WINDOW_MS } from "./metaEcho";
 
 const GRAPH = "https://graph.facebook.com/v21.0";
 
@@ -73,41 +74,70 @@ async function getPageToken(): Promise<string | null> {
   }
 }
 
-/** Sends a Messenger / Instagram DM (24-hour customer-service window applies). */
-export async function sendDirectMessage(
-  platform: DmPlatform,
+/**
+ * The outcome of a Meta send.
+ *
+ * `providerMessageId` is Meta's own id for the accepted message, and it is the
+ * only thing that can later identify the echo of THIS send among the echoes of
+ * every message the Page has ever sent. Every sender must return it: an echo the
+ * ledger cannot recognise is written into the customer's history a second time.
+ */
+export type MetaSendResult = { ok: boolean; error?: string; providerMessageId?: string };
+
+/**
+ * Every Meta send is the same POST to the same endpoint, and the reply carries
+ * the same `message_id`. They were three separate functions each parsing their
+ * own response, and only ONE of them was ever taught to keep that id — so a
+ * plain text reply could be recognised as our own echo and the identical text
+ * sent with quick-reply chips could not, for no reason a reader could see.
+ *
+ * One call site now, so "keep the id" is not a thing a future sender can forget
+ * to do. `humanise` is the only per-sender difference: turning Meta's wording for
+ * the 24-hour window and for pending app review into something a salesperson can
+ * act on.
+ */
+async function postToSendApi(
+  message: unknown,
   recipientId: string,
-  text: string
-): Promise<{ ok: boolean; error?: string; providerMessageId?: string }> {
+  humanise: (message: string) => string = (message) => message,
+): Promise<MetaSendResult> {
   const token = await getPageToken();
   if (!token) return { ok: false, error: "Meta page token is not configured (Settings → Integrations)." };
   const res = await fetch(`${GRAPH}/me/messages?access_token=${encodeURIComponent(token)}`, {
     signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      recipient: { id: recipientId },
-      messaging_type: "RESPONSE",
-      message: { text },
-    }),
+    body: JSON.stringify({ recipient: { id: recipientId }, messaging_type: "RESPONSE", message }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => null);
-    const msg: string = err?.error?.message ?? `Send API error ${res.status}`;
-    const friendly = /24|window|outside/i.test(msg)
-      ? "Outside the 24-hour reply window — the customer must message you first."
-      : /permission|OAuth/i.test(msg)
-      ? `Meta hasn't approved messaging permissions yet (app review pending): ${msg}`
-      : msg;
-    return { ok: false, error: friendly };
+    return { ok: false, error: humanise(err?.error?.message ?? `Send API error ${res.status}`) };
   }
-  // Meta answers an accepted send with its own message id. Keeping it is what
-  // lets the echo of this very message be recognised as ours later, instead of
-  // being written into the customer's history a second time.
   const accepted = await res.json().catch(() => null);
-  const providerMessageId: string | undefined =
-    typeof accepted?.message_id === "string" ? accepted.message_id : undefined;
-  return { ok: true, providerMessageId };
+  return {
+    ok: true,
+    providerMessageId: typeof accepted?.message_id === "string" ? accepted.message_id : undefined,
+  };
+}
+
+/** Meta's send errors, in words a salesperson can act on. */
+function humaniseSendError(message: string): string {
+  if (/24|window|outside/i.test(message)) {
+    return "Outside the 24-hour reply window — the customer must message you first.";
+  }
+  if (/permission|OAuth/i.test(message)) {
+    return `Meta hasn't approved messaging permissions yet (app review pending): ${message}`;
+  }
+  return message;
+}
+
+/** Sends a Messenger / Instagram DM (24-hour customer-service window applies). */
+export async function sendDirectMessage(
+  platform: DmPlatform,
+  recipientId: string,
+  text: string
+): Promise<MetaSendResult> {
+  return postToSendApi({ text }, recipientId, humaniseSendError);
 }
 
 /** Sends a DM with tappable quick-reply chips (menu options). */
@@ -116,31 +146,19 @@ export async function sendDirectQuickReplies(
   recipientId: string,
   text: string,
   replies: { title: string; payload: string }[]
-): Promise<{ ok: boolean; error?: string }> {
-  const token = await getPageToken();
-  if (!token) return { ok: false, error: "Meta page token is not configured." };
-  const res = await fetch(`${GRAPH}/me/messages?access_token=${encodeURIComponent(token)}`, {
-    signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      recipient: { id: recipientId },
-      messaging_type: "RESPONSE",
-      message: {
-        text,
-        quick_replies: replies.slice(0, 11).map((r) => ({
-          content_type: "text",
-          title: r.title.slice(0, 20),
-          payload: r.payload.slice(0, 1000),
-        })),
-      },
-    }),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => null);
-    return { ok: false, error: err?.error?.message ?? `Send API error ${res.status}` };
-  }
-  return { ok: true };
+): Promise<MetaSendResult> {
+  return postToSendApi(
+    {
+      text,
+      quick_replies: replies.slice(0, 11).map((r) => ({
+        content_type: "text",
+        title: r.title.slice(0, 20),
+        payload: r.payload.slice(0, 1000),
+      })),
+    },
+    recipientId,
+    humaniseSendError,
+  );
 }
 
 /** Sends an image / audio / video / file attachment by URL. */
@@ -148,26 +166,12 @@ export async function sendDirectAttachment(
   platform: DmPlatform,
   recipientId: string,
   attachment: { type: "image" | "audio" | "video" | "file"; url: string }
-): Promise<{ ok: boolean; error?: string }> {
-  const token = await getPageToken();
-  if (!token) return { ok: false, error: "Meta page token is not configured (Settings → Integrations)." };
-  const res = await fetch(`${GRAPH}/me/messages?access_token=${encodeURIComponent(token)}`, {
-    signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      recipient: { id: recipientId },
-      messaging_type: "RESPONSE",
-      message: {
-        attachment: { type: attachment.type, payload: { url: attachment.url, is_reusable: false } },
-      },
-    }),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => null);
-    return { ok: false, error: err?.error?.message ?? `Send API error ${res.status}` };
-  }
-  return { ok: true };
+): Promise<MetaSendResult> {
+  return postToSendApi(
+    { attachment: { type: attachment.type, payload: { url: attachment.url, is_reusable: false } } },
+    recipientId,
+    humaniseSendError,
+  );
 }
 
 export type InboundAttachment = { type: string; url: string };
@@ -373,17 +377,63 @@ export async function recordInboundDm(
   }, "dm").catch(() => {});
 }
 
-/** Replies sent from Business Suite / the phone app arrive as echoes — file them too. */
 /**
- * Meta echoes every message the Page sends back to the webhook, including the
- * ones WE sent. Recording each echo unconditionally wrote a second outbound row
- * for a message the CRM had already logged, so one real customer message showed
- * up twice in history.
+ * Is this echo the CRM's own message coming back?
  *
- * `providerMessageId` is what tells them apart: the delivery ledger keeps the id
- * Meta returned when it accepted our send, so an echo carrying that same id is
- * demonstrably our own message coming back rather than something a colleague
- * sent from the Facebook Page inbox — which is a genuine event worth recording.
+ * The DECISION lives in lib/metaEcho.ts, where it is tested directly. What is
+ * here is the pair of lookups it needs: the exact one, keyed on the provider's
+ * own id, and the fallback for the window in which our send has been accepted by
+ * Meta but the worker has not yet written that id to the row.
+ */
+async function echoIsOurOwnSend(
+  platform: DmPlatform,
+  key: string,
+  text: string,
+  providerMessageId: string | null | undefined,
+): Promise<boolean> {
+  // Scoped, or one tenant's send would suppress another tenant's echo.
+  const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
+
+  const ledgerHasId = providerMessageId
+    ? Boolean(
+        await prisma.botFlowOutbox.findFirst({
+          where: { tenantId, providerMessageId },
+          select: { id: true },
+        }),
+      )
+    : false;
+
+  // Only fetched when the exact answer missed — which is the race, not the
+  // ordinary case.
+  const inFlight = ledgerHasId
+    ? []
+    : await prisma.botFlowOutbox.findMany({
+        where: {
+          tenantId,
+          channel: platform,
+          key,
+          // `running` IS the race; `sent` covers the worker having recorded the
+          // send before this echo was processed but with no id to record.
+          status: { in: ["running", "sent"] },
+          providerMessageId: null,
+          createdAt: { gte: new Date(Date.now() - ECHO_CONTENT_WINDOW_MS) },
+        },
+        select: { payload: true, providerMessageId: true },
+        orderBy: { createdAt: "desc" },
+        take: 20,
+      });
+
+  return decideEcho({ text, providerMessageId, ledgerHasId, inFlight }).ours;
+}
+
+/**
+ * Replies sent from Business Suite / the phone app arrive as echoes — file them.
+ *
+ * Our own sends arrive the same way and must not be filed twice; see
+ * `echoIsOurOwnSend`. An echo we cannot claim IS recorded: that is a colleague
+ * replying from the Page inbox, a genuine event the CRM has no other way of
+ * learning about, and dropping every echo would trade duplicate history for
+ * missing history.
  */
 export async function recordDmEcho(
   platform: DmPlatform,
@@ -391,13 +441,7 @@ export async function recordDmEcho(
   text: string,
   providerMessageId?: string | null,
 ) {
-  if (providerMessageId) {
-    const ours = await prisma.botFlowOutbox.findFirst({
-      where: { providerMessageId, tenantId: writeTenantId() ?? DEFAULT_TENANT_ID },
-      select: { id: true },
-    });
-    if (ours) return; // already in history, written when the send was queued
-  }
+  if (await echoIsOurOwnSend(platform, recipientId, text, providerMessageId)) return;
   const idField = platform === "instagram" ? "instagramId" : "messengerPsid";
   const contact = await prisma.contact.findFirst({ where: { [idField]: recipientId } });
   if (!contact) return;
