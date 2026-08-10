@@ -2,17 +2,13 @@
 
 import { useState, type ReactNode } from "react";
 import BrandLogo from "@/components/BrandLogo";
-import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Search,
-  Settings,
-  Trash2,
-  LogOut,
-  ChevronsUpDown,
 } from "lucide-react";
 import Nav from "@/components/Nav";
 import SidebarHelpSettings from "@/components/SidebarHelpSettings";
+import AccountMenu from "@/components/AccountMenu";
 import ClockWeather from "@/components/ClockWeather";
 import type { WeatherCity } from "@/lib/weatherCities";
 import CommandMenu, { openCommandMenu } from "@/components/CommandMenu";
@@ -20,28 +16,26 @@ import QuickActions from "@/components/QuickActions";
 import QuickCreateDialog from "@/components/QuickCreateDialog";
 import MobileCompanionNav from "@/components/MobileCompanionNav";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { logout } from "@/app/login/actions";
-import { APP_VERSION } from "@/lib/version";
 
 type ShellUser = { name: string; role: string; permissions: string[]; avatarVersion?: string | null };
 
-function initials(name: string) {
-  return name
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((p) => p[0]?.toUpperCase() ?? "")
-    .join("");
+/**
+ * Help, Settings and the account menu, as one horizontal group.
+ *
+ * These used to sit in the sidebar footer. They are workspace-level controls
+ * rather than navigation, and moving them to the top-right returns the footer's
+ * height to the nav — which is what runs out of room as modules are added.
+ */
+function AccountCluster({ user, isOwner }: { user: ShellUser; isOwner: boolean }) {
+  return (
+    <div className="flex items-center gap-1">
+      <SidebarHelpSettings isOwner={isOwner} permissions={user.permissions} compact />
+      <div className="mx-1 h-5 w-px bg-sidebar-border" aria-hidden />
+      <AccountMenu user={user} isOwner={isOwner} compact />
+    </div>
+  );
 }
 
 function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0, enabledModules, brand }: { user: ShellUser; inboxWaiting?: number; casesWaiting?: number; enabledModules?: string[]; brand?: { logoUrl: string | null; displayName: string } }) {
@@ -78,62 +72,6 @@ function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0, enabledModules
         <Nav isAdmin={isOwner} permissions={user.permissions} enabledModules={enabledModules} badges={{ "/inbox": inboxWaiting, "/cases": casesWaiting }} />
       </div>
 
-      {/* Help, Settings & user */}
-      <div className="space-y-1 border-t border-sidebar-border p-3">
-        <SidebarHelpSettings isOwner={isOwner} permissions={user.permissions} />
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-sidebar-accent">
-              <Avatar className="size-7 rounded-md">
-                {user.avatarVersion ? (
-                  <AvatarImage
-                    src={`/api/profile/avatar?v=${encodeURIComponent(user.avatarVersion)}`}
-                    alt=""
-                    className="rounded-md object-cover"
-                  />
-                ) : null}
-                <AvatarFallback className="rounded-md bg-primary/15 text-[11px] font-semibold text-primary">
-                  {initials(user.name)}
-                </AvatarFallback>
-              </Avatar>
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-[13px] font-medium text-sidebar-foreground">
-                  {user.name}
-                </p>
-                <p className="truncate text-[11px] capitalize text-muted-foreground">
-                  {user.role}
-                </p>
-              </div>
-              <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" side="top" className="w-[13.5rem]">
-            <DropdownMenuLabel className="text-muted-foreground">
-              v{APP_VERSION}
-            </DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem asChild>
-              <Link href="/settings">
-                <Settings className="size-4" />
-                Settings
-              </Link>
-            </DropdownMenuItem>
-            {isOwner && (
-              <DropdownMenuItem asChild>
-                <Link href="/trash">
-                  <Trash2 className="size-4" />
-                  Trash
-                </Link>
-              </DropdownMenuItem>
-            )}
-            <DropdownMenuSeparator />
-            <DropdownMenuItem variant="destructive" onSelect={() => logout()}>
-              <LogOut className="size-4" />
-              Sign out
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
     </div>
   );
 }
@@ -169,13 +107,27 @@ export default function AppShell({
       <QuickCreateDialog />
       <Toaster />
 
-      {/* Mobile top bar */}
+      {/* Mobile top bar. The logo stays centred, so the cluster is positioned
+          rather than laid out — a flex row would push the logo off-centre. */}
       <header className="fixed inset-x-0 top-0 z-40 flex h-12 items-center justify-center border-b border-sidebar-border bg-sidebar/90 px-4 backdrop-blur-xl lg:hidden">
         <BrandLogo
           logoUrl={brand?.logoUrl ?? null}
           alt={brand?.displayName ?? "Denago Cape Town"}
           className="h-6 w-auto object-contain"
         />
+        <div className="absolute right-2 top-1/2 -translate-y-1/2">
+          <AccountCluster user={user} isOwner={user.role === "owner"} />
+        </div>
+      </header>
+
+      {/* Desktop top bar. Sticky rather than static: these are the controls you
+          reach for from anywhere in a long page, and the sidebar footer they came
+          from was always on screen. */}
+      <header className="fixed left-60 right-0 top-0 z-30 hidden h-14 items-center gap-4 border-b border-sidebar-border bg-background/80 px-5 backdrop-blur-xl lg:flex">
+        <div className="min-w-0 flex-1">
+          <ClockWeather cities={weatherCities} />
+        </div>
+        <AccountCluster user={user} isOwner={user.role === "owner"} />
       </header>
 
       {/* Mobile drawer */}
@@ -202,11 +154,10 @@ export default function AppShell({
 
       <main className="relative lg:pl-60">
         <div className="pointer-events-none fixed inset-x-0 top-0 -z-10 h-72 bg-[radial-gradient(circle_at_65%_0%,rgba(249,115,22,.045),transparent_42%)] lg:left-60" />
-        <div className="denago-workspace mx-auto max-w-[1800px] p-3 pb-24 pt-15 sm:p-4 sm:pb-24 sm:pt-16 lg:p-5 lg:pt-4">
-          {/* Desktop-only furniture — takes real estate on phones */}
-          <div className="mb-3 hidden lg:block">
-            <ClockWeather cities={weatherCities} />
-          </div>
+        <div className="denago-workspace mx-auto max-w-[1800px] p-3 pb-24 pt-15 sm:p-4 sm:pb-24 sm:pt-16 lg:p-5 lg:pt-19">
+          {/* ClockWeather moved into the top bar — it was already desktop-only
+              furniture at the top of the page, so the bar is where it belongs
+              and the page keeps the vertical space the bar takes. */}
           {children}
         </div>
       </main>
