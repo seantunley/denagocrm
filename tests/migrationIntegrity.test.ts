@@ -21,6 +21,9 @@ import {
   executeMigrationSql,
   withSingleConnection,
   directMigrationUrlProblem,
+  unacknowledgedDrift,
+  staleAcknowledgements,
+  ACKNOWLEDGED_DRIFT,
 } from "../scripts/apply-migrations.mjs";
 import { splitSqlStatements } from "../scripts/lib/splitSqlStatements.mjs";
 
@@ -541,4 +544,84 @@ test("indexes the schema declares are actually created by a migration", () => {
   const governance = readFileSync(join(root, "prisma/governance.prisma"), "utf8");
   assert.match(governance, /@@index\(\[managerId\]\)/, "the migration must match what the schema declares");
   assert.match(governance, /@@index\(\[roleId\]\)/);
+});
+
+// ── The warning list has to be able to reach zero ───────────────────────────
+
+/**
+ * A list that cannot reach zero stops being read, and this one proved it:
+ * Team.@@index([managerId]) and UserRole.@@index([roleId]) were genuinely
+ * missing from every database and sat in the warnings unnoticed, beside entries
+ * nobody could ever clear.
+ *
+ * Acknowledging is not suppressing. Each entry is an exact statement with a
+ * recorded reason, so anything that is not literally that still reports.
+ */
+const ARTEFACT_DIFF = [
+  "-- AlterTable",
+  'ALTER TABLE "Role" ALTER COLUMN "updatedAt" DROP DEFAULT;',
+  "",
+  "-- CreateIndex",
+  'CREATE UNIQUE INDEX "StockUnit_stockNumber_key" ON "StockUnit"("stockNumber");',
+  "",
+  "-- AlterTable",
+  'ALTER TABLE "UserRole" ALTER COLUMN "tenantId" DROP DEFAULT,',
+  'ALTER COLUMN "id" DROP DEFAULT;',
+].join("\n");
+
+test("a database whose only differences are known artefacts reports nothing", () => {
+  assert.deepEqual(unacknowledgedDrift(ARTEFACT_DIFF), []);
+});
+
+test("a genuinely missing index is still reported", () => {
+  const withReal = `${ARTEFACT_DIFF}\n\n-- CreateIndex\nCREATE INDEX "Team_managerId_idx" ON "Team"("managerId");`;
+  assert.deepEqual(unacknowledgedDrift(withReal), [
+    'CREATE INDEX "Team_managerId_idx" ON "Team"("managerId")',
+  ]);
+});
+
+test("an acknowledgement matches only the exact statement it describes", () => {
+  // Same shape, different table. Acknowledging "Role.updatedAt" must not
+  // acknowledge every DROP DEFAULT anyone ever adds.
+  const other = '-- AlterTable\nALTER TABLE "SomeNewTable" ALTER COLUMN "updatedAt" DROP DEFAULT;';
+  assert.deepEqual(unacknowledgedDrift(other), [
+    'ALTER TABLE "SomeNewTable" ALTER COLUMN "updatedAt" DROP DEFAULT',
+  ]);
+
+  // And the two-column statements are matched WHOLE. Acknowledging the
+  // continuation line alone would acknowledge that fragment wherever it
+  // appeared, including under a table nobody has vetted.
+  const fragmentElsewhere = '-- AlterTable\nALTER TABLE "Unvetted" ALTER COLUMN "tenantId" DROP DEFAULT,\nALTER COLUMN "id" DROP DEFAULT;';
+  assert.equal(unacknowledgedDrift(fragmentElsewhere).length, 1);
+});
+
+test("the diff's own -- AlterTable headers do not defeat the match", () => {
+  // The statement splitter keeps the header attached, so normalisation has to
+  // strip it. Without that, every acknowledgement silently fails to match.
+  const headerless = 'ALTER TABLE "Role" ALTER COLUMN "updatedAt" DROP DEFAULT;';
+  assert.deepEqual(unacknowledgedDrift(headerless), []);
+});
+
+test("every acknowledgement records why it is permanent", () => {
+  assert.ok(ACKNOWLEDGED_DRIFT.length > 0);
+  for (const entry of ACKNOWLEDGED_DRIFT) {
+    assert.ok(entry.sql?.trim(), "an entry must name the statement it acknowledges");
+    assert.ok(
+      entry.why && entry.why.length > 20,
+      `"${entry.sql}" must record WHY it can never be cleared, or it is indistinguishable from a bug nobody fixed`,
+    );
+  }
+  // No duplicates: two entries for one statement means one of them is unread.
+  const seen = new Set(ACKNOWLEDGED_DRIFT.map((e) => e.sql.replace(/\s+/g, " ").trim()));
+  assert.equal(seen.size, ACKNOWLEDGED_DRIFT.length, "duplicate acknowledgements");
+});
+
+test("acknowledgements that stopped describing anything are reported", () => {
+  // An allowlist nobody prunes is how the next real finding gets hidden.
+  const stale = staleAcknowledgements(ARTEFACT_DIFF);
+  assert.ok(stale.length > 0, "entries absent from this small diff must be flagged");
+  assert.ok(!stale.includes('ALTER TABLE "Role" ALTER COLUMN "updatedAt" DROP DEFAULT'));
+  // Nothing is stale when the diff contains every acknowledged statement.
+  const everything = ACKNOWLEDGED_DRIFT.map((e) => e.sql).join("\n");
+  assert.deepEqual(staleAcknowledgements(everything), []);
 });

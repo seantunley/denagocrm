@@ -157,6 +157,135 @@ export function classifyDiffScript(script) {
 }
 
 /**
+ * DIFFERENCES THAT ARE PERMANENT, EXPLAINED, AND DELIBERATELY NOT REPORTED.
+ *
+ * A warning list that cannot reach zero stops being read. That is not a
+ * hypothetical either: `Team.@@index([managerId])` and `UserRole.@@index([roleId])`
+ * were genuinely missing from every database, and they sat in this list unnoticed
+ * next to entries nobody could ever clear.
+ *
+ * Every entry below is a difference `prisma migrate diff` reports and NOBODY
+ * should act on, for one of three reasons:
+ *
+ *   - PARTIAL INDEX. Prisma cannot express `WHERE` on a unique index, so it
+ *     reports the index as absent for ever. The database has a STRICTER
+ *     constraint than the schema asks for, not a weaker one.
+ *   - CLIENT-SIDE `@updatedAt`. Prisma stamps the column from the client and so
+ *     models no database default. The column HAS one, which is a safety net for
+ *     the raw-SQL inserts this repository does use (migrations, seeds,
+ *     `$executeRawUnsafe`). Dropping it to match the schema would remove that net
+ *     to satisfy a diff, not a requirement.
+ *   - DEFAULT ON A COLUMN THE APPLICATION ALWAYS SUPPLIES. Same shape: the
+ *     database is more forgiving than the model, and only raw SQL can tell.
+ *
+ * Acknowledging is NOT suppressing. An entry is an exact statement, so any drift
+ * that is not literally this — a different table, a different column, a different
+ * default — still reports. And `staleAcknowledgements` reports entries that have
+ * STOPPED appearing, so a list that drifts out of date says so instead of quietly
+ * hiding the next real finding.
+ */
+export const ACKNOWLEDGED_DRIFT = [
+  {
+    sql: 'CREATE UNIQUE INDEX "StockUnit_stockNumber_key" ON "StockUnit"("stockNumber");',
+    why: 'partial index: the database has it as ... WHERE "stockNumber" IS NOT NULL (migration 50/52, and 20260728180000 documents it)',
+  },
+  {
+    sql: 'CREATE UNIQUE INDEX "DemoVehicle_stockUnitId_key" ON "DemoVehicle"("stockUnitId");',
+    why: 'partial index: the database has it as ... WHERE "deletedAt" IS NULL (migration 20260724130000)',
+  },
+  {
+    sql: 'ALTER TABLE "AppSetting" ALTER COLUMN "id" SET DEFAULT gen_random_uuid()::text;',
+    why: "id is always supplied by the application; the diff wants a default the model does not declare",
+  },
+  {
+    sql: "ALTER TABLE \"LegalArtifact\" ALTER COLUMN \"retainUntil\" SET DEFAULT CURRENT_TIMESTAMP + INTERVAL '7 years';",
+    why: "retention is computed by the application at write time; Prisma cannot model the interval expression",
+  },
+  ...[
+    ["CampaignConversion", "metadata"],
+    ["ConversationNote", "mentions"],
+    ["MarketingTouch", "metadata"],
+  ].map(([table, column]) => ({
+    sql: `ALTER TABLE "${table}" ALTER COLUMN "${column}" DROP DEFAULT;`,
+    why: "JSON column with a database default the model does not declare; raw inserts rely on it",
+  })),
+  ...[
+    "DemoVehicle",
+    "IntegrationConnection",
+    "Role",
+    "SalesPipeline",
+    "SurveyFollowUp",
+    "Team",
+    "TenantIntegrationCredential",
+    "TestDriveBooking",
+  ].map((table) => ({
+    sql: `ALTER TABLE "${table}" ALTER COLUMN "updatedAt" DROP DEFAULT;`,
+    why: "@updatedAt is stamped client-side, so Prisma models no default; the column default is the raw-SQL safety net",
+  })),
+  // Two multi-column statements, which the diff emits across two lines each.
+  {
+    sql: 'ALTER TABLE "SurveyDistribution" ALTER COLUMN "audienceSnapshot" DROP DEFAULT, ALTER COLUMN "updatedAt" DROP DEFAULT;',
+    why: "as above: a JSON default plus a client-stamped @updatedAt",
+  },
+  {
+    sql: 'ALTER TABLE "UserRole" ALTER COLUMN "tenantId" DROP DEFAULT, ALTER COLUMN "id" DROP DEFAULT;',
+    why: "both are always supplied by the application; the defaults exist for raw-SQL inserts",
+  },
+];
+
+/**
+ * Whitespace-insensitive form, so line wrapping in the diff cannot cause a miss.
+ *
+ * `prisma migrate diff` labels each statement with a `-- AlterTable` /
+ * `-- CreateIndex` header, and the statement splitter keeps it attached. Leaving
+ * those in would make every acknowledgement fail to match — silently, since a
+ * failed match reports the drift rather than hiding it, which is the safe
+ * direction but would have kept the list unclearable for a second reason.
+ */
+function normaliseStatement(sql) {
+  return sql
+    .replace(/^\s*(--[^\n]*\n)+/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/;$/, "");
+}
+
+/** Is this statement a schema DIFFERENCE we would otherwise report? */
+function isReportableDrift(statement) {
+  return /\b(CREATE (UNIQUE )?INDEX|ALTER COLUMN)\b/i.test(statement);
+}
+
+/**
+ * The drift a human should actually look at: reportable differences minus the
+ * acknowledged ones. Statement-based rather than line-based, so a two-line
+ * `ALTER TABLE … ALTER COLUMN …, ALTER COLUMN …;` is matched as the one statement
+ * it is — matching its continuation line alone would acknowledge that fragment
+ * wherever it appeared, including under a table nobody has vetted.
+ *
+ * Pure + exported: this decides what nobody will be shown, so it is tested.
+ */
+export function unacknowledgedDrift(script, acknowledged = ACKNOWLEDGED_DRIFT) {
+  const known = new Set(acknowledged.map((entry) => normaliseStatement(entry.sql)));
+  return splitSqlStatements(script || "")
+    .map(normaliseStatement)
+    .filter((statement) => isReportableDrift(statement) && !known.has(statement));
+}
+
+/**
+ * Acknowledgements that no longer describe anything.
+ *
+ * An allowlist nobody prunes is how the next real finding gets hidden: a stale
+ * entry is a statement this file claims is expected and the database no longer
+ * produces, so the reason recorded beside it has stopped being true.
+ */
+export function staleAcknowledgements(script, acknowledged = ACKNOWLEDGED_DRIFT) {
+  const present = new Set(splitSqlStatements(script || "").map(normaliseStatement));
+  return acknowledged
+    .map((entry) => normaliseStatement(entry.sql))
+    .filter((statement) => !present.has(statement));
+}
+
+/**
  * Pin every child `prisma` invocation to the SAME direct database this runner
  * checks and locks, so apply + record + verify can never drift onto different
  * databases (the root cause of the recorded-but-not-applied outage). Pure +
@@ -531,7 +660,7 @@ export function assertSchemaObjectsPresent(childEnv, runDiff = defaultRunDiff) {
     );
   }
 
-  const { missing, otherDrift } = classifyDiffScript(script);
+  const { missing } = classifyDiffScript(script);
 
   if (missing.length) {
     console.error(
@@ -544,12 +673,25 @@ export function assertSchemaObjectsPresent(childEnv, runDiff = defaultRunDiff) {
     throw new Error("Schema integrity check failed: database is missing required tables/columns.");
   }
 
-  if (otherDrift.length) {
+  const drift = unacknowledgedDrift(script);
+  if (drift.length) {
     console.warn(
-      `integrity check: ${otherDrift.length} non-blocking schema difference(s) (indexes / column attributes) — review when convenient:`,
+      `::warning::integrity check: ${drift.length} unexplained schema difference(s) (indexes / column attributes). ` +
+        "Each is either a real gap to migrate or a permanent Prisma artefact to add to ACKNOWLEDGED_DRIFT with a reason:",
     );
-    for (const l of otherDrift) console.warn("    " + l.trim());
+    for (const statement of drift) console.warn("    " + statement + ";");
   }
+
+  // An allowlist nobody prunes is how the next real finding gets hidden.
+  const stale = staleAcknowledgements(script);
+  if (stale.length) {
+    console.warn(
+      `::warning::integrity check: ${stale.length} entr(y/ies) in ACKNOWLEDGED_DRIFT no longer describe anything ` +
+        "and should be deleted:",
+    );
+    for (const statement of stale) console.warn("    " + statement + ";");
+  }
+
   console.log("✓ Integrity check passed — all tables and columns the deployed schema needs are present.");
 }
 
