@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
+import { actingTenantId } from "@/lib/actingTenant";
 import { asActionResult, refuse } from "@/lib/actionResult";
 import type { ActionResult } from "@/lib/actionResultTypes";
 import {
@@ -75,7 +76,14 @@ async function writeLayout(userId: string, cards: string[]): Promise<void> {
     return;
   }
   try {
-    await prisma.dashboardLayout.create({ data: { userId, cards } });
+    // NOT on the 2026-08-10 audit list only because production happens to hold no
+    // unsaved-layout rows — the defect is the sibling of the Dashboard one and is
+    // fixed here for the same reason. The doc comment above already spells it
+    // out: the unique key is `(tenantId, userId)` and `tenantId` is NULL while
+    // tenancy is dormant, so the constraint does not bind and migration
+    // 20260804100000 had to carry a partial index to cover the race. Naming the
+    // acting workspace is what retires that workaround.
+    await prisma.dashboardLayout.create({ data: { tenantId: await actingTenantId(), userId, cards } });
   } catch {
     // Lost the insert race, or the row appeared between the read and the write.
     // Re-resolve and update; if it is still absent the error was something else

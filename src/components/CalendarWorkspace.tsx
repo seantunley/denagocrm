@@ -452,20 +452,25 @@ export default function CalendarWorkspace({
           }, 0)
       : 0;
 
+    // planned | done | canceled. A cancelled booking did not happen.
+    const happened = (event: CalendarWorkspaceEvent) => event.status !== "canceled";
+
     return {
       today: monthEvents.filter(
         (event) =>
           event.dateKey === todayKey && event.status === "planned",
       ).length,
       overdue: monthEvents.filter((event) => event.overdue).length,
+      // A card labelled "this month" counts what HAPPENED this month, so it must
+      // include the ones already done. Counting only `planned` meant completing a
+      // test drive REMOVED it from the month's total — do the drive, tick it off,
+      // watch the number go down — while it simultaneously appeared under
+      // "Completed". A workshop booking behaved the same way. Cancelled is the one
+      // status that genuinely did not happen.
       featured:
         mode === "workshop"
-          ? monthEvents.filter((event) => event.status === "planned").length
-          : monthEvents.filter(
-              (event) =>
-                event.type === "test_drive" &&
-                event.status === "planned",
-            ).length,
+          ? monthEvents.filter(happened).length
+          : monthEvents.filter((event) => event.type === "test_drive" && happened(event)).length,
       completed: monthEvents.filter((event) => event.status === "done")
         .length,
       openSlots,

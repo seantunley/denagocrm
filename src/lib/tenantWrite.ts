@@ -1,9 +1,12 @@
 import "server-only";
 import { basePrisma } from "./db";
-import { DEFAULT_TENANT_ID } from "./tenant";
+import { DEFAULT_TENANT_ID, decideInheritedTenant } from "./tenant";
 import { currentTenantScope } from "./tenantScope";
 import { tenantEnforcing } from "./tenantEnforcement";
 import { TenantScopeError } from "./tenantGuard";
+
+/** Transaction client for new helpers that want an explicit Prisma transaction type. */
+export type TenantWriteTx = Parameters<Parameters<typeof basePrisma.$transaction>[0]>[0];
 
 /**
  * How a tenant-owned read/write on an UNGUARDED path should behave for the CURRENT
@@ -55,6 +58,37 @@ export function writeTenantId(): string | null {
 }
 
 /**
+ * The tenantId to STAMP a RUNTIME write with, where the tenant is inherited from
+ * the record being acted on rather than from a session.
+ *
+ * `writeTenantId()` on its own is the wrong tool for a create and always has
+ * been: it answers "how should an unguarded write behave during the enforcement
+ * rollout", and it returns null while enforcement is DORMANT — which is today, in
+ * every environment. Every writer that spread it (or `activeTenantPredicate()`,
+ * or a hand-rolled mirror of `scopeArgs`) into a `create` has therefore been
+ * writing `tenantId: null`: a row invisible at the flip to the very workspace
+ * that produced it. The 2026-08-10 production audit counted 843 of them in a
+ * fortnight.
+ *
+ * This is the create-side answer, and it never invents an owner — see
+ * {@link ./tenant}.`decideInheritedTenant` for the ladder and why it is ordered
+ * that way. `writeTenantId()` is still evaluated FIRST so its fail-closed throw
+ * (enforcement on, no usable scope) happens before any fallback can paper over it.
+ *
+ * Pass the owner of the row this write descends from — `journey.tenantId`,
+ * `run.tenantId`, `competitor.tenantId`, `lead.tenantId`. Pass `null` only when
+ * there genuinely is no parent record.
+ */
+export function inheritedTenantId(recordTenantId?: string | null): string {
+  const enforcedTenantId = writeTenantId();
+  return decideInheritedTenant({
+    enforcedTenantId,
+    recordTenantId: recordTenantId ?? null,
+    ambientTenantId: currentTenantScope()?.tenantId ?? null,
+  });
+}
+
+/**
  * Run `fn` as ONE atomic transaction on the trusted bypass client (`basePrisma`),
  * handing it the transaction client and the owning tenantId. Use this to keep a
  * multi-write aggregate — a parent plus children the top-level guard would refuse
@@ -70,6 +104,10 @@ export function writeTenantId(): string | null {
  * Every write inside MUST stamp `tenantId` explicitly — bypass means the db.ts guard
  * will not do it for you, and the children share the parent's tenant so the
  * composite `(tenantId, parentId)` FKs hold.
+ *
+ * Keep this legacy callback contract broad for now: #400 needs a concrete
+ * TenantWriteTx for its own new helpers, but globally tightening every existing
+ * withTenantWrite caller belongs in a dedicated typing/refactor PR.
  */
 export async function withTenantWrite<T>(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -424,7 +424,7 @@ export async function installJourneyTemplates() {
           triggers: item.triggers,
           ...legacyTriggerPair(item.triggers),
           entryConditions: item.entryConditions,
-          definition: item.definition,
+          definition: item.definition as Prisma.InputJsonValue,
           createdById: user.id,
           tenantId,
         },

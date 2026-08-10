@@ -1,0 +1,31 @@
+/// Durable outbound chatbot message. Flow state only advances after these rows
+/// exist, so a provider timeout/serverless interruption cannot silently lose the
+/// message that explains the new state to the customer.
+model BotFlowOutbox {
+  id          String    @id @default(cuid())
+  tenantId    String
+  channel     String
+  key         String
+  batchId     String
+  sequence    Int
+  payload     Json
+  flowVersionId String?
+  contactId   String?
+  leadId      String?
+  actorId     String?
+  status      String    @default("pending") // pending | running | retry | sent | dead
+  attempts    Int       @default(0)
+  availableAt DateTime  @default(now())
+  leaseUntil  DateTime?
+  lastError   String?
+  sentAt      DateTime?
+  communicationLoggedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([tenantId, batchId, sequence])
+  @@index([tenantId, status, availableAt])
+  @@index([tenantId, channel, key, createdAt, sequence])
+  @@index([tenantId, status, communicationLoggedAt])
+  @@index([tenantId, flowVersionId, status])
+}

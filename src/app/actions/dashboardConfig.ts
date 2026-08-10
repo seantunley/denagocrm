@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { requireUser, requireOwner } from "@/lib/auth";
+import { actingTenantId } from "@/lib/actingTenant";
 import { logAudit } from "@/lib/audit";
 import { asActionResult, refuse } from "@/lib/actionResult";
 import type { ActionResult } from "@/lib/actionResultTypes";
@@ -32,9 +33,21 @@ import { defaultDashboard } from "@/lib/dashboard/store";
  * to belong to the caller.
  *
  * TENANCY. Everything goes through the scoped `prisma` client, not `basePrisma`,
- * so the tenant extension stamps `tenantId` on create and adds it to the `where`
- * on read, update and delete once enforcement is on. No `$queryRaw` and no
- * `basePrisma`, so no hand-written tenant predicate is needed or wanted here.
+ * so the tenant extension adds `tenantId` to the `where` on read, update and
+ * delete ONCE ENFORCEMENT IS ON. No `$queryRaw` and no `basePrisma`, so no
+ * hand-written tenant predicate is needed on the read side.
+ *
+ * THE CREATE SIDE IS DIFFERENT, and this comment used to get it wrong. The
+ * extension stamps NOTHING until enforcement is on — `scopeArgs` in db.ts returns
+ * its args untouched unless `tenantEnforcing()`, which is false in every
+ * environment today — so "the extension stamps tenantId on create" described a
+ * future, and every dashboard created in the meantime was written with a NULL
+ * tenant (1 of 1 on production at the 2026-08-10 audit). That is not merely
+ * invisible-at-the-flip: `@@unique([tenantId, userId, slug])` does not bind on
+ * NULL, which is why migration 20260805140000 had to carry a second, partial
+ * index to stop a double-click producing two dashboards at one address. So the
+ * creates below name the acting workspace themselves, and the real constraint
+ * starts doing its job.
  *
  * NO PERMISSION KEY, matching the layout actions. Arranging your own screens is
  * not a privileged act, and inventing a `dashboards.manage` permission would mean
@@ -216,6 +229,7 @@ export async function createDashboard(title: unknown): Promise<ActionResult> {
     const slug = await freeSlug(user.id, parsed.data);
     await prisma.dashboard.create({
       data: {
+        tenantId: await actingTenantId(),
         userId: user.id,
         slug,
         title: parsed.data,
@@ -373,6 +387,7 @@ export async function takeControl(): Promise<ActionResult> {
     try {
       await prisma.dashboard.create({
         data: {
+          tenantId: await actingTenantId(),
           userId: user.id,
           slug: seed.slug,
           title: seed.title,
