@@ -3,6 +3,7 @@ import { prisma } from "./db";
 import { resolveTenantCredential } from "./settings";
 import { logAudit } from "./audit";
 import { sendPushToAll } from "./push";
+import { inboundCommunicationKey } from "./inboundMessageKey";
 import { createLeadRecordIfPipelineReady } from "./leadCreate";
 import { saveFile } from "./storage";
 import { resolveTenantActor } from "./tenantActor";
@@ -243,7 +244,9 @@ export async function recordInboundDm(
   senderId: string,
   text: string,
   referral: Referral,
-  attachments: InboundAttachment[] = []
+  attachments: InboundAttachment[] = [],
+  /** The provider's message id (mid), so a redelivery reuses these rows. */
+  providerMessageId?: string,
 ) {
   const idField = platform === "instagram" ? "instagramId" : "messengerPsid";
   let contact = await prisma.contact.findFirst({ where: { [idField]: senderId } });
@@ -310,25 +313,32 @@ export async function recordInboundDm(
     }
   }
 
+  let replayed = false;
   const firstUser = await resolveTenantActor(); // tenant-aware (channel scope); dormant → oldest active user
   if (firstUser) {
     if (text) {
-      await prisma.communication.create({
-        data: {
+      const key = inboundCommunicationKey(platform, providerMessageId ?? "");
+      const written = await prisma.communication.createMany({
+        data: [{
           type: platform,
           direction: "inbound",
           body: text,
           contactId: contact.id,
           leadId,
           userId: firstUser.id,
-        },
+          ...(key ? { dedupeKey: key } : {}),
+        }],
+        skipDuplicates: true,
       });
+      if (key && written.count === 0) replayed = true;
     }
     // Media becomes one communication per attachment, stored permanently
-    for (const att of attachments.slice(0, 5)) {
+    for (const [index, att] of attachments.slice(0, 5).entries()) {
       const saved = await persistAttachment(att);
-      await prisma.communication.create({
-        data: {
+      const attKey = inboundCommunicationKey(platform, providerMessageId ?? "", index);
+      const wrote = await prisma.communication.createMany({
+        skipDuplicates: true,
+        data: [{
           type: platform,
           direction: "inbound",
           body: saved
@@ -345,8 +355,10 @@ export async function recordInboundDm(
           contactId: contact.id,
           leadId,
           userId: firstUser.id,
-        },
+          ...(attKey ? { dedupeKey: attKey } : {}),
+        }],
       });
+      if (attKey && wrote.count === 0) replayed = true;
     }
     const { reopenThreadOnInbound } = await import("@/lib/reopenThread");
     await reopenThreadOnInbound(contact.id, leadId, platform);
@@ -358,6 +370,9 @@ export async function recordInboundDm(
         ? "🎤 sent a voice note"
         : `sent a ${attachments[0].type}`
       : "sent a message");
+  // A redelivery must not notify everyone again — the duplicate push is the half
+  // a person actually notices.
+  if (replayed) return;
   await sendPushToAll({
     title: platform === "instagram" ? "New Instagram DM 📸" : "New Messenger message 🔵",
     body: `${contact.firstName}${contact.lastName ? ` ${contact.lastName}` : ""}: ${pushBody.slice(0, 80)}`,

@@ -3,6 +3,7 @@ import { credentialOwnerTenantId, resolveIntegrationBundleForTenant, resolveTena
 import { sendPushToAll } from "./push";
 import { createLeadRecordIfPipelineReady } from "./leadCreate";
 import { resolveTenantActor } from "./tenantActor";
+import { inboundCommunicationKey } from "./inboundMessageKey";
 import { currentTenantScope } from "./tenantScope";
 
 /**
@@ -354,7 +355,9 @@ export async function fetchWhatsAppMedia(
 export async function recordInboundWhatsApp(
   fromDigits: string,
   profileName: string | null,
-  text: string
+  text: string,
+  /** The provider's message id, so a redelivery reuses this row instead of adding one. */
+  providerMessageId?: string,
 ) {
   const match = await matchByPhone(fromDigits);
   const { contactId } = match;
@@ -391,21 +394,32 @@ export async function recordInboundWhatsApp(
   // (established by the webhook chokepoint); dormant → the oldest active user.
   const firstUser = await resolveTenantActor();
   if (!firstUser) return;
-  await prisma.communication.create({
-    data: {
+  // createMany + skipDuplicates rather than create: it tells us whether this is
+  // the first delivery or a replay, which decides the push below.
+  const dedupeKey = inboundCommunicationKey("whatsapp", providerMessageId ?? "");
+  const written = await prisma.communication.createMany({
+    data: [{
       type: "whatsapp",
       direction: "inbound",
       body: text,
       contactId,
       leadId,
       userId: firstUser.id,
-    },
+      ...(dedupeKey ? { dedupeKey } : {}),
+    }],
+    skipDuplicates: true,
   });
+  const replayed = dedupeKey !== null && written.count === 0;
+
   const { reopenThreadOnInbound } = await import("@/lib/reopenThread");
   await reopenThreadOnInbound(contactId, leadId, "whatsapp");
 
   // Notify on every inbound — WhatsApp is the primary contact channel. Opens the
   // Messages app so replies aren't lost in the CRM.
+  // A replay must not buzz every phone again. The duplicate notification is the
+  // same defect wearing a different hat, and it is the half a person actually
+  // notices.
+  if (replayed) return;
   await sendPushToAll({
     title: "New WhatsApp message 💬",
     body: `${profileName ?? "+" + fromDigits}: ${text.slice(0, 80)}`,
