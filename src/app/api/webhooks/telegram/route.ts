@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { runTelegramFlow, tgAnswerCallback } from "@/lib/telegram";
 import { tgPersistInboundFile } from "@/lib/telegramTransport";
 import { logError } from "@/lib/errorLog";
+import { inboundRetryResponse } from "@/lib/webhookRetry";
 import {
   claimInboundBotEvent,
   completeInboundBotEvent,
@@ -30,7 +31,12 @@ export async function POST(req: NextRequest) {
   };
   try { update = await req.json(); } catch { return NextResponse.json({ ok: true }); }
 
-  return withTelegramTenantScope(
+  // The leased signal below is thrown outside the inner try, so without this it
+  // leaves the route as an unhandled rejection: no ErrorLog row, a crashed
+  // invocation in the platform's eyes, and an unexplained 500 in the run of
+  // statuses Telegram sees. Answer it deliberately instead.
+  try {
+    return await withTelegramTenantScope(
     webhookSecret,
     async () => {
       const outcome = await claimInboundBotEvent("telegram", String(update.update_id ?? ""));
@@ -84,5 +90,8 @@ export async function POST(req: NextRequest) {
       await logError("telegram-webhook", "Rejected Telegram update: webhook secret did not resolve to an active tenant").catch(() => {});
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     },
-  );
+    );
+  } catch (error) {
+    return inboundRetryResponse("telegram-webhook", error);
+  }
 }

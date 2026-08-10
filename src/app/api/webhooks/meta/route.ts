@@ -11,6 +11,7 @@ import { runDmFlow } from "@/lib/flowDm";
 import { metaReceipt } from "@/lib/deliveryReceipts";
 import { applyReceipt } from "@/lib/messageReceipts";
 import { withChannelTenantScope, validateInSystemScope } from "@/lib/tenantScopeEntry";
+import { inboundRetryResponse } from "@/lib/webhookRetry";
 import { secretEquals } from "@/lib/secretCompare";
 import {
   claimInboundBotEvent,
@@ -68,6 +69,13 @@ export async function POST(req: NextRequest) {
   const objectType = (body as any).object as string | undefined;
   if (objectType === "page" || objectType === "instagram") {
     const platform: DmPlatform = objectType === "instagram" ? "instagram" : "messenger";
+    // Both retry signals below — a leased event, and a message whose handler threw
+    // — leave the batch loop, and neither was caught here, so they escaped the
+    // route as unhandled rejections. Aborting the batch is deliberate: a batch
+    // carries consecutive messages from one customer, so processing the siblings
+    // of a message we could not finish would answer the second question before the
+    // first, and the redelivery replays the whole batch in order anyway.
+    try {
     for (const entry of (body as any).entry ?? []) {
       const endpointId = String(entry.id ?? "");
       await withChannelTenantScope(platform, endpointId, async () => {
@@ -117,6 +125,9 @@ export async function POST(req: NextRequest) {
           }
         }
       }, () => console.warn(`[tenant-channel] skipped ${platform} DM: unmapped endpoint ${endpointId || "?"}`));
+    }
+    } catch (error) {
+      return inboundRetryResponse("meta-dm-webhook", error);
     }
   }
   /* eslint-enable @typescript-eslint/no-explicit-any */
