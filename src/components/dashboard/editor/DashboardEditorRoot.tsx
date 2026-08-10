@@ -33,6 +33,7 @@ import RawEditor from "./RawEditor";
 export default function DashboardEditorRoot({
   slug,
   dashboardId,
+  updatedAt,
   config,
   views,
   activeViewId,
@@ -42,6 +43,9 @@ export default function DashboardEditorRoot({
 }: {
   slug: string;
   dashboardId: string | null;
+  /** The row's revision, which every autosave is fenced against. Null until the
+   *  dashboard has been materialised — see the provider. */
+  updatedAt: string | null;
   config: DashboardConfig;
   /** The views this viewer may see, already filtered by the server. */
   views: ViewConfig[];
@@ -59,9 +63,19 @@ export default function DashboardEditorRoot({
 }) {
   return (
     <DashboardEditorProvider
+      /*
+       * One editing session per DOCUMENT. Without the key, navigating from one
+       * dashboard to another reuses this provider, and it would carry the other
+       * document's revision, undo history and already-materialised flag across —
+       * so the first save on the new dashboard would fence against a revision
+       * belonging to a different row, and undo would step into arrangements that
+       * were never on this screen.
+       */
+      key={slug}
       slug={slug}
       initialConfig={config}
       dashboardId={dashboardId}
+      initialUpdatedAt={updatedAt}
       activeViewId={activeViewId}
     >
       <Inner

@@ -117,9 +117,14 @@ test("a genuinely foreign config still clears the history", () => {
 });
 
 test("a save records its seed so the echo can be recognised", () => {
+  // Recorded when the queue reports the write ACCEPTED. Doing it when the write
+  // was merely sent would record a seed for an arrangement the server may have
+  // refused, and the echo of somebody else's config could then be mistaken for
+  // ours and quietly keep a history that belongs to a document we no longer hold.
   const provider = code(PROVIDER);
-  const save = provider.slice(provider.indexOf("committed.current = next;"));
-  const body = save.slice(0, save.indexOf("} catch"));
+  const accepted = provider.slice(provider.indexOf("onAccepted: (next, _stamp, previous) =>"));
+  const body = accepted.slice(0, accepted.indexOf("onRejected:"));
+  assert.ok(body.length > 0, "could not isolate the accepted handler");
   assert.match(body, /ownSeeds\.current\.add\(/, "without this every echo looks foreign");
 });
 

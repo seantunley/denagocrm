@@ -63,6 +63,16 @@ export type LoadedDashboard = {
   icon: string | null;
   sortOrder: number;
   config: DashboardConfig;
+  /**
+   * The row's revision, as an ISO string, or `null` for the default dashboard —
+   * which has no row and therefore no revision yet.
+   *
+   * This is the optimistic-concurrency fence the editor's autosave writes
+   * against: it sends back the revision it loaded, and the server refuses the
+   * write if the row has moved on since. An ISO string rather than a Date
+   * because it crosses the server→client boundary.
+   */
+  updatedAt: string | null;
   /** Human-readable notes about parts of the stored config that were removed. */
   dropped: string[];
 };
@@ -122,6 +132,7 @@ export const dashboardBySlug = cache(async (slug: string): Promise<LoadedDashboa
       icon: true,
       sortOrder: true,
       config: true,
+      updatedAt: true,
     },
   });
   if (!row) return null;
@@ -133,6 +144,7 @@ export const dashboardBySlug = cache(async (slug: string): Promise<LoadedDashboa
     icon: row.icon,
     sortOrder: row.sortOrder,
     config,
+    updatedAt: row.updatedAt.toISOString(),
     dropped,
   };
 });
@@ -194,6 +206,9 @@ export function defaultDashboard(): LoadedDashboard {
         },
       ],
     },
+    // No row, so no revision. `takeControl()` materialises the row on the first
+    // edit and hands back the stamp the editor's first save fences against.
+    updatedAt: null,
     dropped: [],
   };
 }

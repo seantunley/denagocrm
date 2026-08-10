@@ -162,9 +162,23 @@ test("a refused save puts the cards back where they were", () => {
    * explanation to connect it to.
    */
   const provider = PROVIDER();
-  assert.match(provider, /const previous = committed\.current;/, "the last accepted config must be kept");
   assert.match(provider, /setConfig\(previous\);/, "a failure must restore the screen, not just the record");
   assert.match(provider, /toast\.error\(/, "and say so");
+
+  /*
+   * WHICH arrangement it restores is the part that was wrong, and it is decided
+   * in lib/dashboard/saveQueue now. The rollback target is captured when a write
+   * is DISPATCHED, not when the edit was made — with two writes in flight the
+   * older snapshot put the screen two steps behind the row.
+   * tests/dashboardSaveQueue.test.ts drives that ordering.
+   */
+  const queue = src("src/lib/dashboard/saveQueue.ts");
+  assert.match(queue, /const restore = committed;/, "the last accepted config must be kept");
+  assert.match(
+    queue,
+    /options\.onRejected\?\.\(restore, outcome\.message\);/,
+    "and it is what a refusal restores",
+  );
 });
 
 test("saves are coalesced so the server sees the arrangement the user stopped on", () => {
@@ -186,12 +200,20 @@ test("a generated dashboard is materialised once, before its first write", () =>
    */
   const provider = PROVIDER();
   assert.match(provider, /const materialised = useRef<boolean>\(dashboardId !== null\);/);
-  const persist = provider.split("const persist = useCallback")[1]?.split("const update =")[0] ?? "";
-  const claim = persist.indexOf("await takeControl()");
-  const save = persist.indexOf("await saveDashboardConfig(");
+  // The write itself is the save queue's `write` callback now — everything the
+  // server round trip involves, in one place, with the ordering rules kept out
+  // of it. See lib/dashboard/saveQueue.
+  const write = provider.split("write: async (next, stamp) =>")[1]?.split("onAccepted:")[0] ?? "";
+  assert.ok(write.length > 0, "could not isolate the write callback");
+  const claim = write.indexOf("await takeControl()");
+  const save = write.indexOf("await saveDashboardConfig(");
   assert.ok(claim > -1 && save > -1, "both calls must be present");
   assert.ok(claim < save, "the row must exist before anything is written into it");
-  assert.match(persist, /materialised\.current = true;/, "and it must only happen once");
+  assert.match(write, /materialised\.current = true;/, "and it must only happen once");
+  // The row did not exist a moment ago, so the revision it was created with is
+  // the only thing the first save can fence against. Without this the first
+  // write after taking control would have to go through unfenced.
+  assert.match(write, /if \(claimed\.updatedAt\) fence = claimed\.updatedAt;/);
 });
 
 test("an edit is validated before it is persisted, with the same parser the action uses", () => {

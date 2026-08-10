@@ -11,6 +11,7 @@ import {
   type SectionConfig,
   type ViewConfig,
 } from "@/lib/dashboard/config";
+import { createSaveQueue, type SaveQueue } from "@/lib/dashboard/saveQueue";
 import { saveDashboardConfig, takeControl } from "@/app/actions/dashboardConfig";
 
 /**
@@ -38,10 +39,19 @@ import { saveDashboardConfig, takeControl } from "@/app/actions/dashboardConfig"
  * arrangement the database does not have, on the page people are most likely to
  * navigate away from without looking back.
  *
- * Saves are COALESCED. Dragging a card through four sections fires four config
- * changes in a second, and four overlapping writes of a whole JSON document is
- * both wasteful and a way to have the second-to-last one land last. A short
- * trailing debounce means the server sees the arrangement the user stopped on.
+ * Saves are COALESCED and SERIALISED. Dragging a card through four sections
+ * fires four config changes in a second, and four overlapping writes of a whole
+ * JSON document is both wasteful and a way to have the second-to-last one land
+ * last. A short trailing debounce means the server sees the arrangement the user
+ * stopped on.
+ *
+ * The debounce alone was not enough, and believing it was is what shipped a set
+ * of lost updates: it delays a write, it does not prevent a second one starting
+ * while the first is still out. Ordering now lives in lib/dashboard/saveQueue —
+ * one writer at a time, every write numbered, and an answer from a superseded
+ * write ignored outright. That module's header documents the three orderings
+ * that used to leave the screen and the row disagreeing, and
+ * tests/dashboardSaveQueue.test.ts resolves them in whichever order it likes.
  *
  * ── TAKING CONTROL ──────────────────────────────────────────────────────────
  *
@@ -117,12 +127,20 @@ export function DashboardEditorProvider({
   initialConfig,
   /** Null when this dashboard has never been saved — see "taking control". */
   dashboardId,
+  /**
+   * The row's revision when this page was rendered. Every save is fenced against
+   * it, and a successful save adopts the revision it produced. Null for a
+   * dashboard that has never been stored — `takeControl()` supplies the first
+   * one, so there is still no unfenced write.
+   */
+  initialUpdatedAt,
   activeViewId,
   children,
 }: {
   slug: string;
   initialConfig: DashboardConfig;
   dashboardId: string | null;
+  initialUpdatedAt: string | null;
   activeViewId: string | null;
   children: React.ReactNode;
 }) {
@@ -205,19 +223,134 @@ export function DashboardEditorProvider({
   const [undoDepth, setUndoDepth] = useState(0);
   const [saving, setSaving] = useState(false);
   /*
-   * Saves that have left but not landed. Not the `saving` flag: this is read
+   * Whether a write has left and not landed. Not the `saving` flag: this is read
    * inside the re-seed effect, which must see the value as it is at that
    * instant rather than as it was when the effect closed over its render.
    */
-  const inFlight = useRef(0);
+  const inFlight = useRef(false);
   const [, startTransition] = useTransition();
   const router = useRouter();
 
-  // The last arrangement the server accepted, so a refused save has somewhere to
-  // roll back to. Not state: rolling back must not itself schedule a save.
-  const committed = useRef<DashboardConfig>(initialConfig);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const materialised = useRef<boolean>(dashboardId !== null);
+
+  /*
+   * The save queue: one writer, numbered writes, superseded answers discarded.
+   *
+   * Built ONCE, by a state initialiser rather than a `useMemo`, because it is not
+   * a cache. It owns the last arrangement the server accepted and the revision
+   * the next write fences against, and React is free to throw a memo away —
+   * which would silently reset both and turn the next save into a conflict
+   * against our own previous one.
+   *
+   * One queue per DOCUMENT: the provider is keyed on `slug` by
+   * DashboardEditorRoot, so opening a different dashboard builds a new one
+   * rather than inheriting this one's revision, undo history and
+   * already-materialised flag — all of which belong to the document that has
+   * just been navigated away from.
+   *
+   * react-hooks/refs is suppressed here, and only here. The rule sees refs
+   * captured by the callbacks handed to `createSaveQueue` and a call happening in
+   * render, and cannot tell the two apart in time. `createSaveQueue` only STORES
+   * these callbacks — it invokes none of them — and every one of them runs later,
+   * from an event handler or from the completion of a write. No `.current` is
+   * read during render, which is the thing the rule exists to prevent. Building
+   * the queue in an effect instead would mean the first edit could arrive before
+   * there was anywhere to put it.
+   */
+  // eslint-disable-next-line react-hooks/refs
+  const [queue] = useState<SaveQueue<DashboardConfig>>(() =>
+    createSaveQueue<DashboardConfig>({
+      initialConfig,
+      initialStamp: initialUpdatedAt,
+      // Hold a queued arrangement back while a fresh debounce is running, or
+      // draining would chase a drag that is still in progress.
+      hold: () => timer.current !== null,
+      onBusyChange: (busy) => {
+        inFlight.current = busy;
+        setSaving(busy);
+      },
+      write: async (next, stamp) => {
+        let fence = stamp;
+        // Materialise a generated dashboard before its first write. Once, and
+        // only for a dashboard that has never been stored.
+        if (!materialised.current) {
+          const claimed = await takeControl();
+          if (claimed?.error) return { ok: false, message: claimed.error };
+          materialised.current = true;
+          // The row did not exist a moment ago, so this is the only revision
+          // the first save can fence against.
+          if (claimed.updatedAt) fence = claimed.updatedAt;
+        }
+        const result = await saveDashboardConfig(slug, next, fence);
+        if (result?.conflict) {
+          return {
+            ok: false,
+            conflict: true,
+            message: result.error ?? "This dashboard was changed somewhere else.",
+          };
+        }
+        if (result?.error) return { ok: false, message: result.error };
+        return { ok: true, stamp: result.updatedAt ?? fence };
+      },
+      onAccepted: (next, _stamp, previous) => {
+        /*
+         * Ask the server to draw again ONLY when it would draw something
+         * different — a card added, reconfigured, switched off, or moved into a
+         * section whose rule hides it. See renderSignature.
+         *
+         * The action no longer revalidates on its own, because the common save
+         * is a card moving and the client already holds every node it needs for
+         * that. Doing it unconditionally re-ran every card's queries per drag
+         * pause and remounted the card tree under the pointer, which is what put
+         * an error page in front of the user.
+         */
+        if (renderSignature(previous) !== renderSignature(next)) router.refresh();
+        // The server will echo this back via revalidatePath. Remember it so the
+        // re-seed below recognises it as ours and keeps the history.
+        const seedKey = JSON.stringify(next);
+        ownSeeds.current.add(seedKey);
+        // Bounded. An echo that never arrives — a save that changed nothing the
+        // server re-sends, a navigation before revalidation lands — would
+        // otherwise leave its key here forever. A Set preserves insertion order,
+        // so the oldest goes first.
+        while (ownSeeds.current.size > OWN_SEED_LIMIT) {
+          const oldest = ownSeeds.current.values().next().value;
+          if (oldest === undefined) break;
+          ownSeeds.current.delete(oldest);
+        }
+      },
+      /*
+       * Roll the SCREEN back, not just the record of what is saved.
+       *
+       * Leaving the failed arrangement on screen would be worse than useless:
+       * the user would believe the change took, navigate away, and come back to
+       * find it gone with no explanation. Putting the cards back where they were
+       * is the only honest response to a refusal.
+       *
+       * `previous` comes from the queue, which captured it when THIS write was
+       * dispatched — after the write before it had settled. Capturing it when the
+       * edit was made is what used to restore an arrangement two steps old and
+       * leave the screen disagreeing with the row.
+       */
+      onRejected: (previous, message) => {
+        configRef.current = previous;
+        setConfig(previous);
+        toast.error(message);
+      },
+      /*
+       * A conflict is NOT rolled back. The row holds somebody else's arrangement
+       * — neither the one on screen nor the one we would restore — so putting our
+       * last accepted config back would replace one wrong screen with another.
+       * Ask the server for the truth instead and let the re-seed effect below
+       * adopt it.
+       */
+      onConflict: (message) => {
+        toast.error(message);
+        router.refresh();
+      },
+    }),
+  );
 
   /*
    * Re-seed when the SERVER sends a different config.
@@ -233,7 +366,6 @@ export function DashboardEditorProvider({
   useEffect(() => {
     if (seenSeed.current === seed) return;
     seenSeed.current = seed;
-    committed.current = initialConfig;
 
     /*
      * A seed this editor produced is the ECHO OF ITS OWN SAVE, and re-seeding
@@ -264,7 +396,7 @@ export function DashboardEditorProvider({
      * settle it; skipping here costs at most one stale render of somebody else's
      * change, which the echo of that save corrects.
      */
-    if (inFlight.current > 0 || timer.current !== null) return;
+    if (inFlight.current || timer.current !== null) return;
 
     // A foreign config replaced the document. Undoing into arrangements from
     // before it would resurrect state the server has already discarded.
@@ -273,108 +405,81 @@ export function DashboardEditorProvider({
     setUndoDepth(0);
     configRef.current = initialConfig;
     setConfig(initialConfig);
-    // initialConfig is folded into `seed` by value.
+    /*
+     * The baseline and the revision move TOGETHER, and only here.
+     *
+     * Adopting a bare stamp — one whose arrangement we have not taken — would let
+     * the next save overwrite somebody else's work without ever raising a
+     * conflict, which is the lost update this fence exists to stop. So the reset
+     * happens on this path only: the one where the foreign arrangement is also
+     * being put on screen. It is deliberately NOT done for the echo of our own
+     * save above, whose payload can easily be older than the revision our latest
+     * write already earned.
+     */
+    queue.reset(initialConfig, initialUpdatedAt);
+    // initialConfig is folded into `seed` by value; the queue is stable per slug.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seed]);
 
   /*
-   * The arrangement waiting out the debounce, if any.
+   * The last write, on the way out.
    *
-   * Kept so it can be written on unmount. The cleanup below used to clear the
-   * timer and stop there, under a comment claiming it flushed — so an edit made
-   * within the debounce window of navigating away was simply dropped, and came
-   * back to the previous arrangement on return. That is one of the ways "I moved
-   * it and it went back" happens, and the least visible: nothing fails, the save
-   * never happens at all.
+   * The cleanup used to clear the timer and stop there, under a comment claiming
+   * it flushed — so an edit made within the debounce window of navigating away
+   * was simply dropped, and came back to the previous arrangement on return.
+   * That is one of the ways "I moved it and it went back" happens, and the least
+   * visible: nothing fails, the save never happens at all.
    */
-  const pending = useRef<DashboardConfig | null>(null);
-
   useEffect(() => {
     const slugAtMount = slug;
     return () => {
       if (timer.current) clearTimeout(timer.current);
       timer.current = null;
-      const unsaved = pending.current;
-      pending.current = null;
+      const unsaved = queue.takeQueued();
+      if (!unsaved) return;
       /*
+       * CHAINED behind anything already in flight, not fired alongside it.
+       *
+       * The write is fenced on a revision, and a write already out is about to
+       * produce a new one. Sending this at the same moment would send the
+       * revision that write is in the process of superseding, and the server
+       * would refuse it — losing precisely the edit this path exists to save.
+       * `queue.stamp()` is read when the chained call runs, so it is the
+       * revision the earlier write earned.
+       *
        * Fired without awaiting and without touching state: there is no component
        * left to tell. A refusal here is silent, which is the right trade — the
        * alternative is losing the edit outright, and the arrangement is re-read
        * from the server on the way back in either way.
        */
-      if (unsaved) void saveDashboardConfig(slugAtMount, unsaved);
+      void queue.settled().then(() => saveDashboardConfig(slugAtMount, unsaved, queue.stamp()));
     };
-  }, [slug]);
+  }, [slug, queue]);
 
+  /*
+   * Queue an arrangement and restart the debounce.
+   *
+   * All this does now is decide WHEN to write. Which arrangement wins, what a
+   * refusal restores, and whether a late answer is allowed to touch anything at
+   * all are the queue's business — see lib/dashboard/saveQueue. Keeping the two
+   * apart is the point: the debounce was never a lock, and treating it as one is
+   * how two writes of the same document ended up racing.
+   */
   const persist = useCallback(
     (next: DashboardConfig) => {
       if (timer.current) clearTimeout(timer.current);
-      pending.current = next;
+      queue.submit(next);
       timer.current = setTimeout(() => {
         timer.current = null;
-        pending.current = null;
-        const previous = committed.current;
-        setSaving(true);
-        inFlight.current += 1;
+        // A flush while a write is in flight is a no-op that leaves the
+        // arrangement queued — the running drain picks it up when that write
+        // lands. Nothing here has to check.
         startTransition(async () => {
-          try {
-            // Materialise a generated dashboard before its first write. Once,
-            // and only for a dashboard that has never been stored.
-            if (!materialised.current) {
-              const claimed = await takeControl();
-              if (claimed?.error) throw new Error(claimed.error);
-              materialised.current = true;
-            }
-            const result = await saveDashboardConfig(slug, next);
-            if (result?.error) throw new Error(result.error);
-            committed.current = next;
-
-            /*
-             * Ask the server to draw again ONLY when it would draw something
-             * different — a card added, reconfigured, switched off, or moved
-             * into a section whose rule hides it. See renderSignature.
-             *
-             * The action no longer revalidates on its own, because the common
-             * save is a card moving and the client already holds every node it
-             * needs for that. Doing it unconditionally re-ran every card's
-             * queries per drag pause and remounted the card tree under the
-             * pointer, which is what put an error page in front of the user.
-             */
-            if (renderSignature(previous) !== renderSignature(next)) router.refresh();
-            // The server will echo this back via revalidatePath. Remember it so
-            // the re-seed below recognises it as ours and keeps the history.
-            const seedKey = JSON.stringify(next);
-            ownSeeds.current.add(seedKey);
-            // Bounded. An echo that never arrives — a save that changed nothing
-            // the server re-sends, a navigation before revalidation lands —
-            // would otherwise leave its key here forever. A Set preserves
-            // insertion order, so the oldest goes first.
-            while (ownSeeds.current.size > OWN_SEED_LIMIT) {
-              const oldest = ownSeeds.current.values().next().value;
-              if (oldest === undefined) break;
-              ownSeeds.current.delete(oldest);
-            }
-          } catch (error) {
-            /*
-             * Roll the SCREEN back, not just the record of what is saved.
-             *
-             * Leaving the failed arrangement on screen would be worse than
-             * useless: the user would believe the change took, navigate away,
-             * and come back to find it gone with no explanation. Putting the
-             * cards back where they were is the only honest response to a
-             * refusal.
-             */
-            configRef.current = previous;
-            setConfig(previous);
-            toast.error(error instanceof Error ? error.message : "Could not save your dashboard.");
-          } finally {
-            inFlight.current -= 1;
-            setSaving(false);
-          }
+          await queue.flush();
         });
       }, SAVE_DEBOUNCE_MS);
     },
-    [slug, router],
+    [queue, startTransition],
   );
 
   const update = useCallback(
