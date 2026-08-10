@@ -32,6 +32,7 @@ import {
   deliveryStateForMessages,
   enqueueBotMessages,
   enqueueStaffMessage,
+  enqueueStaffReply,
   flushBotOutboxConversation,
   type OutboxPayload,
 } from "../src/lib/botOutbox";
@@ -380,28 +381,42 @@ async function main() {
       body,
       attachmentUrl: url,
     });
-  const dmPart = (body: string, url: string | null, message: OutboxPayload) =>
-    enqueueStaffMessage({
+  const dmPart = (body: string, url: string | null, message: OutboxPayload) => ({
+    message,
+    clientIdempotencyKey: dmKey(body, url),
+    body,
+    attachmentUrl: url,
+  });
+  const dmReply = (parts: ReturnType<typeof dmPart>[]) =>
+    enqueueStaffReply({
       channel: "messenger",
       key: ids.psid,
-      message,
-      clientIdempotencyKey: dmKey(body, url),
-      body,
-      attachmentUrl: url,
+      parts,
       contactId: ids.contact,
       actorId: ids.user,
     });
 
   const fileUrl = "https://example.test/brochure.pdf";
-  const part1 = await dmPart("📎 File", fileUrl, { type: "attachment", kind: "file", url: fileUrl });
-  const part2 = await dmPart("Here's the brochure.", null, { type: "text", text: "Here's the brochure." });
-  check("an attachment and its text are both accepted", part1.created && part2.created);
+  const filePart = dmPart("📎 File", fileUrl, { type: "attachment", kind: "file", url: fileUrl });
+  const textPart = dmPart("Here's the brochure.", null, { type: "text", text: "Here's the brochure." });
+  const dm = await dmReply([filePart, textPart]);
+  check(
+    "an attachment and its text are both accepted, in one operation",
+    dm.created && dm.parts.length === 2 && dm.parts.every((p) => p.outcome === "created"),
+    JSON.stringify(dm.parts.map((p) => p.outcome)),
+  );
 
   const dmRows = await basePrisma.botFlowOutbox.findMany({
     where: { tenantId: DEFAULT_TENANT_ID, key: ids.psid, origin: "staff" },
     orderBy: [{ createdAt: "asc" }, { sequence: "asc" }, { id: "asc" }],
-    select: { payload: true, communicationId: true },
+    select: { payload: true, communicationId: true, batchId: true, sequence: true },
   });
+  check(
+    "both parts share one batch and carry their order explicitly",
+    new Set(dmRows.map((row) => row.batchId)).size === 1 &&
+      dmRows.map((row) => row.sequence).join(",") === "0,1",
+    JSON.stringify(dmRows.map((row) => [row.batchId, row.sequence])),
+  );
   check(
     "the attachment is queued ahead of its caption, so it cannot arrive second",
     (dmRows[0]?.payload as { type?: string } | null)?.type === "attachment" &&
@@ -417,12 +432,17 @@ async function main() {
   // The retry after a half-succeeded submission: the SAME composition resent.
   // Neither half may be duplicated, and the text half must resolve to the row
   // that already exists rather than sending the customer a second copy.
-  const retry1 = await dmPart("📎 File", fileUrl, { type: "attachment", kind: "file", url: fileUrl });
-  const retry2 = await dmPart("Here's the brochure.", null, { type: "text", text: "Here's the brochure." });
+  const retry = await dmReply([filePart, textPart]);
   check(
     "resending the same composition duplicates neither half",
-    retry1.outcome === "duplicate" && retry2.outcome === "duplicate",
-    `${retry1.outcome} / ${retry2.outcome}`,
+    retry.outcome === "duplicate" && retry.parts.every((p) => p.outcome === "duplicate"),
+    JSON.stringify(retry.parts.map((p) => p.outcome)),
+  );
+  check(
+    "and still resolves each half to the message it duplicates",
+    retry.parts[0]?.communicationId === dm.parts[0]?.communicationId &&
+      retry.parts[1]?.communicationId === dm.parts[1]?.communicationId,
+    JSON.stringify(retry.parts.map((p) => p.communicationId)),
   );
   const dmCount = await basePrisma.botFlowOutbox.count({
     where: { tenantId: DEFAULT_TENANT_ID, key: ids.psid, origin: "staff" },
@@ -430,12 +450,31 @@ async function main() {
   check("and the customer is still owed exactly two messages", dmCount === 2, `${dmCount} rows`);
 
   // Correcting the attachment after a failure must actually send the NEW file.
-  const replacedFile = await dmPart("📎 File", "https://example.test/v2.pdf", {
-    type: "attachment",
-    kind: "file",
-    url: "https://example.test/v2.pdf",
+  // THE CASE ONE TRANSACTION MUST NOT BREAK. The person edits the caption and
+  // submits the same composition again. The attachment half is already accepted;
+  // writing every part blindly would hit its key, roll the whole thing back, and
+  // lose the correction. Only the missing half may be written.
+  const editedText = dmPart("Here's the brochure — collection is Friday.", null, {
+    type: "text",
+    text: "Here's the brochure — collection is Friday.",
   });
-  check("a corrected attachment is a different message and sends", replacedFile.created);
+  const dmCorrected = await dmReply([filePart, editedText]);
+  check(
+    "an edited half still sends when the other half is already accepted",
+    dmCorrected.outcome === "created" &&
+      dmCorrected.parts[0]?.outcome === "duplicate" &&
+      dmCorrected.parts[1]?.outcome === "created",
+    JSON.stringify(dmCorrected.parts.map((p) => p.outcome)),
+  );
+  check(
+    "and the already-accepted half is not written a second time",
+    dmCorrected.parts[0]?.communicationId === dm.parts[0]?.communicationId,
+    `${dmCorrected.parts[0]?.communicationId} vs ${dm.parts[0]?.communicationId}`,
+  );
+  const finalCount = await basePrisma.botFlowOutbox.count({
+    where: { tenantId: DEFAULT_TENANT_ID, key: ids.psid, origin: "staff" },
+  });
+  check("leaving the customer owed three messages, not four", finalCount === 3, `${finalCount} rows`);
 }
 
 main()

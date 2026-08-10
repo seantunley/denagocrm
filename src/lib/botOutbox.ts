@@ -121,6 +121,25 @@ export type StaffReplyResult = {
   outcome: "created" | "duplicate" | "conflict";
   /** Kept for readability at call sites that only care whether anything was written. */
   created: boolean;
+  /** The FIRST part's ids, which is all a single-part caller ever needs. */
+  communicationId: string | null;
+  outboxId: string | null;
+  /** One entry per requested part, in the order they were requested. */
+  parts: StaffReplyPartResult[];
+};
+
+/** One provider send: what goes out, and what the timeline shows for it. */
+export type StaffReplyPart = {
+  message: OutboxPayload;
+  /** Derived by the caller from the composition AND this part's payload. */
+  clientIdempotencyKey: string;
+  body: string;
+  attachmentUrl?: string | null;
+  attachmentType?: string | null;
+};
+
+export type StaffReplyPartResult = {
+  outcome: "created" | "duplicate";
   communicationId: string | null;
   outboxId: string | null;
 };
@@ -132,8 +151,8 @@ export type StaffReplyResult = {
  * afterwards. A provider success followed by a failed insert left the customer
  * holding a message the CRM had no record of: staff were told it failed, retried,
  * and the customer received it twice. Ordering alone does not fix that — the
- * retry has to be recognisable — so the key above stays stable across retries of
- * the same composition.
+ * retry has to be recognisable — so the key stays stable across retries of the
+ * same composition.
  *
  * But recording and queueing are not the whole act. Replying by hand is a
  * DECISION about who owns the conversation, and the parts of that decision used
@@ -144,53 +163,147 @@ export type StaffReplyResult = {
  * duplicate and returns early. The customer then gets the person's answer and the
  * bot's next scripted line after it.
  *
- * So all five commit together or none do:
+ * So all of it commits together or none of it does:
  *
  *   1. the bot is paused for this conversation — a person owns it now;
  *   2. automation output still queued for it is CANCELLED, because it was
  *      composed for a conversation the bot was still running and can otherwise
  *      be delivered after the human answer, contradicting it;
- *   3. the delivery intent is written, its unique key rejecting a duplicate
- *      before any CRM history exists for it;
- *   4. the CRM Communication is written;
+ *   3. each part's delivery intent is written, its unique key rejecting a
+ *      duplicate before any CRM history exists for it;
+ *   4. each part's CRM Communication is written;
  *   5. the two are linked, so the inbox can show what actually happened to the
- *      message rather than assuming it left.
+ *      message rather than assuming it left;
+ *   6. the trail commits with the decision it describes.
  *
  * A duplicate key therefore proves the whole decision already committed once.
+ *
+ * WHY PARTS, AND WHY ONE TRANSACTION FOR ALL OF THEM. Meta has no single call
+ * carrying a file and its caption, so an attachment and its text are two provider
+ * sends. Accepting them in two separate transactions leaves a state where the
+ * first committed and the second did not: the outbox then delivers a bare file
+ * with no explanation, and the caption arrives only if the person happens to
+ * retry. One transaction removes that state rather than making it recoverable.
+ *
+ * It also removes a subtler hazard. Two calls meant two runs of the bot-output
+ * fence, and the reply's own first part was only spared because the fence filters
+ * `origin: "bot"` — a correctness argument resting on one `where` clause, which
+ * anyone widening that filter would silently break. The fence now runs once,
+ * before any part of this reply exists.
+ *
+ * Parts are resolved BEFORE the transaction so an edited half still sends. A
+ * person whose send half-failed usually corrects the text and submits again;
+ * writing all parts blindly would hit the attachment's existing key, roll the
+ * whole thing back, and lose the correction. Already-accepted parts are reported
+ * as duplicates and only the missing ones are written.
  *
  * Delivery itself remains the outbox worker's job: the same leases, retries,
  * ordering barriers and dead-lettering the bot paths already use, rather than a
  * second parallel ledger for staff sends.
  */
-export async function enqueueStaffMessage(input: {
+export async function enqueueStaffReply(input: {
   channel: string;
   /** Provider recipient identity: WhatsApp digits, PSID, IG id. */
   key: string;
-  message: OutboxPayload;
-  clientIdempotencyKey: string;
-  body: string;
+  /** In the order the customer should receive them. */
+  parts: StaffReplyPart[];
   contactId?: string | null;
   leadId?: string | null;
   actorId: string;
-  attachmentUrl?: string | null;
-  attachmentType?: string | null;
   /** Written in the same transaction, so an accepted reply is always accounted for. */
   audit?: { action: string; summary: string; user: { id: string; name: string } };
   /** How long the person keeps the conversation after replying. */
   pauseHours?: number;
 }): Promise<StaffReplyResult> {
+  if (!input.parts.length) {
+    return { outcome: "duplicate", created: false, communicationId: null, outboxId: null, parts: [] };
+  }
+
+  const identity = (part: StaffReplyPart) => ({
+    channel: input.channel,
+    key: input.key,
+    actorId: input.actorId,
+    contactId: input.contactId,
+    leadId: input.leadId,
+    payload: part.message,
+  });
+
+  /** Rows already holding these keys, by key. */
+  const resolveExisting = async () => {
+    const rows = await prisma.botFlowOutbox.findMany({
+      where: {
+        tenantId: outboxTenantId(),
+        clientIdempotencyKey: { in: input.parts.map((part) => part.clientIdempotencyKey) },
+      },
+      select: {
+        id: true,
+        clientIdempotencyKey: true,
+        communicationId: true,
+        channel: true,
+        key: true,
+        actorId: true,
+        contactId: true,
+        leadId: true,
+        payload: true,
+      },
+    });
+    return new Map(rows.map((row) => [row.clientIdempotencyKey as string, row]));
+  };
+
+  const conflict = async (rowId: string): Promise<StaffReplyResult> => {
+    await logError(
+      "staff-reply-idempotency-conflict",
+      new Error("An idempotency key resolved to a different send"),
+      rowId,
+    ).catch(() => {});
+    return { outcome: "conflict", created: false, communicationId: null, outboxId: null, parts: [] };
+  };
+
+  let existing = await resolveExisting();
+  for (const part of input.parts) {
+    const row = existing.get(part.clientIdempotencyKey);
+    // A key is a CLAIM about identity, and this is where the claim is checked
+    // against the row it matched. Answering "already sent" without checking means
+    // that if the key ever stops covering some part of the send — a future field,
+    // a derivation change — the caller is told a different message is theirs and
+    // the real one is silently dropped.
+    if (row && !staffReplyMatchesRow(identity(part), row)) return conflict(row.id);
+  }
+
+  const pending = input.parts.filter((part) => !existing.has(part.clientIdempotencyKey));
+  const resultsFrom = (byKey: typeof existing, createdKeys: Set<string>): StaffReplyResult => {
+    const parts: StaffReplyPartResult[] = input.parts.map((part) => {
+      const row = byKey.get(part.clientIdempotencyKey);
+      return {
+        outcome: createdKeys.has(part.clientIdempotencyKey) ? "created" : "duplicate",
+        communicationId: row?.communicationId ?? null,
+        outboxId: row?.id ?? null,
+      };
+    });
+    const created = parts.some((part) => part.outcome === "created");
+    return {
+      outcome: created ? "created" : "duplicate",
+      created,
+      communicationId: parts[0]?.communicationId ?? null,
+      outboxId: parts[0]?.outboxId ?? null,
+      parts,
+    };
+  };
+
+  if (!pending.length) return resultsFrom(existing, new Set());
+
   const batchId = crypto.randomUUID();
   const createdAt = new Date();
 
   try {
-    return await withTenantWrite(async (tx, tenantId) => {
-      // 1 + 2. Ownership. Both are scoped to this tenant's conversation, and both
-      // happen before the intent exists, so a duplicate submission finding the
-      // intent already there knows they happened.
+    const written = await withTenantWrite(async (tx, tenantId) => {
+      // 1 + 2. Ownership, once for the whole reply and before any part of it
+      // exists — so a duplicate submission finding an intent already there knows
+      // these happened, and so the fence cannot reach this reply's own rows.
       //
       // Unconditional, for every channel a staff reply can go out on: a
       // BotSession is keyed by (tenant, channel, key), so pausing one that does
-      // not exist creates it already paused — which is the correct state for a
+      // not exist creates it already paused — the correct state for a
       // conversation a person has answered, whether or not a flow had reached it.
       await pauseBotSessionTx(tx, tenantId, {
         channel: input.channel,
@@ -205,59 +318,69 @@ export async function enqueueStaffMessage(input: {
       });
       await cancelPendingBotOutputTx(tx, tenantId, input.channel, input.key);
 
-      // 3. The delivery intent, FIRST of the two writes, so the unique
-      // (tenantId, clientIdempotencyKey) rejects a duplicate before any CRM
-      // history exists for it. Writing the Communication first and discovering
-      // the duplicate afterwards would commit a message the CRM claims to have
-      // sent and the outbox never queued — the very disagreement this exists to
-      // prevent.
-      const queued = await tx.botFlowOutbox.create({
-        data: {
-          tenantId,
-          channel: input.channel,
-          key: input.key,
-          batchId,
-          sequence: 0,
-          origin: "staff",
-          payload: input.message as unknown as Prisma.InputJsonValue,
-          clientIdempotencyKey: input.clientIdempotencyKey,
-          contactId: input.contactId ?? null,
-          leadId: input.leadId ?? null,
-          actorId: input.actorId,
-          createdAt,
-          availableAt: createdAt,
-          // Already logged, below, in this same transaction. Without this the
-          // delivery worker sees a sent row with an actorId and no log, and
-          // writes a SECOND Communication stamped with the bot marker — turning
-          // one staff reply into two rows, one of them attributed to the bot.
-          communicationLoggedAt: createdAt,
-        },
-        select: { id: true },
-      });
+      const links: { key: string; outboxId: string; communicationId: string }[] = [];
+      for (let index = 0; index < pending.length; index++) {
+        const part = pending[index];
+        // 3. The delivery intent, FIRST of the two writes, so the unique
+        // (tenantId, clientIdempotencyKey) rejects a duplicate before any CRM
+        // history exists for it. Writing the Communication first and discovering
+        // the duplicate afterwards would commit a message the CRM claims to have
+        // sent and the outbox never queued — the very disagreement this prevents.
+        //
+        // `sequence` is the order the customer should receive them, and the
+        // queue claims a conversation by (createdAt, sequence, id) — so a caption
+        // can never overtake the file it describes.
+        const queued = await tx.botFlowOutbox.create({
+          data: {
+            tenantId,
+            channel: input.channel,
+            key: input.key,
+            batchId,
+            sequence: index,
+            origin: "staff",
+            payload: part.message as unknown as Prisma.InputJsonValue,
+            clientIdempotencyKey: part.clientIdempotencyKey,
+            contactId: input.contactId ?? null,
+            leadId: input.leadId ?? null,
+            actorId: input.actorId,
+            createdAt,
+            availableAt: createdAt,
+            // Already logged, below, in this same transaction. Without this the
+            // delivery worker sees a sent row with an actorId and no log, and
+            // writes a SECOND Communication stamped with the bot marker —
+            // turning one staff reply into two rows, one attributed to the bot.
+            communicationLoggedAt: createdAt,
+          },
+          select: { id: true },
+        });
 
-      // 4. History.
-      const communication = await tx.communication.create({
-        data: {
-          type: input.channel,
-          direction: "outbound",
-          body: input.body,
-          attachmentUrl: input.attachmentUrl ?? null,
-          attachmentType: input.attachmentType ?? null,
-          contactId: input.contactId ?? null,
-          leadId: input.leadId ?? null,
-          userId: input.actorId,
-          tenantId,
-        },
-        select: { id: true },
-      });
+        // 4. History.
+        const communication = await tx.communication.create({
+          data: {
+            type: input.channel,
+            direction: "outbound",
+            body: part.body,
+            attachmentUrl: part.attachmentUrl ?? null,
+            attachmentType: part.attachmentType ?? null,
+            contactId: input.contactId ?? null,
+            leadId: input.leadId ?? null,
+            userId: input.actorId,
+            tenantId,
+          },
+          select: { id: true },
+        });
 
-      // 5. The link, without which the inbox can only ever show that a message
-      // exists and never whether it arrived.
-      await tx.botFlowOutbox.update({
-        where: { id: queued.id },
-        data: { communicationId: communication.id },
-      });
+        // 5. The link, without which the inbox can only ever show that a message
+        // exists and never whether it arrived.
+        await tx.botFlowOutbox.update({
+          where: { id: queued.id },
+          data: { communicationId: communication.id },
+        });
 
+        links.push({ key: part.clientIdempotencyKey, outboxId: queued.id, communicationId: communication.id });
+      }
+
+      // 6. One entry for the decision, not one per provider send.
       if (input.audit) {
         await logAuditStrict(
           {
@@ -271,67 +394,66 @@ export async function enqueueStaffMessage(input: {
         );
       }
 
-      return { outcome: "created", created: true, communicationId: communication.id, outboxId: queued.id };
+      return links;
     });
+
+    for (const link of written) {
+      existing.set(link.key, {
+        id: link.outboxId,
+        clientIdempotencyKey: link.key,
+        communicationId: link.communicationId,
+        channel: input.channel,
+        key: input.key,
+        actorId: input.actorId,
+        contactId: input.contactId ?? null,
+        leadId: input.leadId ?? null,
+        payload: input.parts.find((part) => part.clientIdempotencyKey === link.key)!.message,
+      } as never);
+    }
+    return resultsFrom(existing, new Set(written.map((link) => link.key)));
   } catch (error) {
-    // A resubmission of the same composed message, or two submissions racing.
-    // The transaction rolled back, so the winner's single copy stands alone —
-    // and because the whole decision was in that transaction, the winner also
-    // paused the bot, cancelled its backlog and wrote the trail.
+    // Two submissions racing. The transaction rolled back, so the winner's
+    // single copy stands alone — and because the whole decision was in that
+    // transaction, the winner also paused the bot, cancelled its backlog and
+    // wrote the trail.
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      const existing = await prisma.botFlowOutbox.findFirst({
-        where: { tenantId: outboxTenantId(), clientIdempotencyKey: input.clientIdempotencyKey },
-        select: {
-          id: true,
-          communicationId: true,
-          channel: true,
-          key: true,
-          actorId: true,
-          contactId: true,
-          leadId: true,
-          payload: true,
-        },
-      });
-      // The row lost the race and then vanished (deleted, or a different
-      // constraint fired). Nothing to point at, and nothing to claim about it.
-      if (!existing) return { outcome: "conflict", created: false, communicationId: null, outboxId: null };
-
-      // A key is a CLAIM about identity, and this is where the claim is checked
-      // against the row it matched. Answering "already sent" without checking
-      // means that if the key ever stops covering some part of the send — a
-      // future field, a derivation change — the caller is told a different
-      // message is theirs, and the real one is silently dropped. Verified, that
-      // becomes a visible error instead of a lost reply.
-      if (
-        !staffReplyMatchesRow(
-          {
-            channel: input.channel,
-            key: input.key,
-            actorId: input.actorId,
-            contactId: input.contactId,
-            leadId: input.leadId,
-            payload: input.message,
-          },
-          existing,
-        )
-      ) {
-        await logError(
-          "staff-reply-idempotency-conflict",
-          new Error("An idempotency key resolved to a different send"),
-          existing.id,
-        ).catch(() => {});
-        return { outcome: "conflict", created: false, communicationId: null, outboxId: null };
+      existing = await resolveExisting();
+      for (const part of input.parts) {
+        const row = existing.get(part.clientIdempotencyKey);
+        // The racer wrote something this submission cannot claim, or wrote
+        // nothing at all — either way nothing here is safe to report.
+        if (!row) return conflict("(no row after a lost race)");
+        if (!staffReplyMatchesRow(identity(part), row)) return conflict(row.id);
       }
-
-      return {
-        outcome: "duplicate",
-        created: false,
-        communicationId: existing.communicationId ?? null,
-        outboxId: existing.id,
-      };
+      return resultsFrom(existing, new Set());
     }
     throw error;
   }
+}
+
+/**
+ * The single-message form. Everything a one-part reply needs, and the shape the
+ * WhatsApp path uses — it has no attachment support, so it never has two parts.
+ */
+export async function enqueueStaffMessage(input: {
+  channel: string;
+  key: string;
+  message: OutboxPayload;
+  clientIdempotencyKey: string;
+  body: string;
+  contactId?: string | null;
+  leadId?: string | null;
+  actorId: string;
+  attachmentUrl?: string | null;
+  attachmentType?: string | null;
+  audit?: { action: string; summary: string; user: { id: string; name: string } };
+  pauseHours?: number;
+}): Promise<StaffReplyResult> {
+  const { message, clientIdempotencyKey, body, attachmentUrl, attachmentType, ...rest } = input;
+  return enqueueStaffReply({
+    ...rest,
+    parts: [{ message, clientIdempotencyKey, body, attachmentUrl, attachmentType }],
+  });
 }
 
 /**

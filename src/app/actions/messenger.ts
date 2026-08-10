@@ -7,11 +7,10 @@ import { type DmPlatform } from "@/lib/messenger";
 import { saveFile } from "@/lib/storage";
 import {
   deliveryStateForMessages,
-  enqueueStaffMessage,
+  enqueueStaffReply,
   flushBotOutboxConversation,
   type AttachmentKind,
   type OutboxPayload,
-  type StaffReplyResult,
 } from "@/lib/botOutbox";
 import { sendOutcomeMessage, staffReplyIdempotencyKey } from "@/lib/messageDelivery";
 
@@ -122,60 +121,66 @@ export async function sendDmReply(
    * An attachment and its accompanying text are two provider sends, because Meta
    * has no single call that carries both. They are therefore two queued messages
    * and two timeline rows, which is also what the customer actually receives —
-   * and it means each one is independently deduplicated, retried and reported.
-   * A retry after a half-succeeded submission resends only the half that failed.
+   * and each is independently deduplicated, retried and reported.
    *
-   * Ordering is the outbox's: rows sharing a conversation are claimed oldest
-   * first, and a failure blocks what was queued behind it, so the caption can
-   * never arrive before the file it describes.
+   * They are ACCEPTED as one operation, though. Two separate calls would leave a
+   * state where the file was queued and the caption was not: the outbox then
+   * delivers a bare attachment with no explanation, and the caption arrives only
+   * if the person happens to retry. Handing both parts to one transaction removes
+   * that state rather than making it recoverable.
+   *
+   * Ordering is the outbox's: parts share a batch and carry a sequence, and a
+   * conversation is claimed by (createdAt, sequence, id) with a failure blocking
+   * what was queued behind it — so the caption can never arrive before the file
+   * it describes.
    */
-  const outgoing: { message: OutboxPayload; body: string; url: string | null; kind: string | null }[] = [];
-  if (attachmentUrl && attachmentKind) {
-    outgoing.push({
-      message: { type: "attachment", kind: attachmentKind, url: attachmentUrl },
-      body: ATTACHMENT_BODY[attachmentKind],
-      url: attachmentUrl,
-      kind: attachmentKind,
-    });
-  }
-  if (text) outgoing.push({ message: { type: "text", text }, body: text, url: null, kind: null });
-
   const label = platform === "instagram" ? "Instagram" : "Messenger";
-  const results: StaffReplyResult[] = [];
-  for (const part of outgoing) {
-    const queued = await enqueueStaffMessage({
+  const part = (message: OutboxPayload, body: string, url: string | null, kind: string | null) => ({
+    message,
+    body,
+    attachmentUrl: url,
+    attachmentType: kind,
+    clientIdempotencyKey: staffReplyIdempotencyKey({
+      compositionId,
       channel: platform,
       key: recipientId,
-      message: part.message,
-      clientIdempotencyKey: staffReplyIdempotencyKey({
-        compositionId,
-        channel: platform,
-        key: recipientId,
-        actorId: user.id,
-        contactId,
-        leadId: null,
-        body: part.body,
-        attachmentUrl: part.url,
-      }),
-      body: part.body,
-      attachmentUrl: part.url,
-      attachmentType: part.kind,
-      contactId,
       actorId: user.id,
-      // Ownership, history, the delivery intent and the trail commit together.
-      // The second call's pause and fence are idempotent, and the fence only
-      // touches BOT-origin rows, so it can never withdraw the first part of this
-      // very reply.
-      audit: {
-        action: `${platform}.sent`,
-        summary: `${label} reply sent: “${part.body.slice(0, 60)}${part.body.length > 60 ? "…" : ""}”`,
-        user,
-      },
-    });
-    if (queued.outcome === "conflict") {
-      return { error: "This reply could not be matched to its send — reload the conversation and try again." };
-    }
-    results.push(queued);
+      contactId,
+      leadId: null,
+      body,
+      attachmentUrl: url,
+    }),
+  });
+
+  const parts = [
+    ...(attachmentUrl && attachmentKind
+      ? [
+          part(
+            { type: "attachment", kind: attachmentKind, url: attachmentUrl },
+            ATTACHMENT_BODY[attachmentKind],
+            attachmentUrl,
+            attachmentKind,
+          ),
+        ]
+      : []),
+    ...(text ? [part({ type: "text", text }, text, null, null)] : []),
+  ];
+
+  const queued = await enqueueStaffReply({
+    channel: platform,
+    key: recipientId,
+    parts,
+    contactId,
+    actorId: user.id,
+    audit: {
+      action: `${platform}.sent`,
+      summary: `${label} reply sent: “${(text || ATTACHMENT_BODY[attachmentKind ?? "file"]).slice(0, 60)}${text.length > 60 ? "…" : ""}”`,
+      user,
+    },
+  });
+
+  if (queued.outcome === "conflict") {
+    return { error: "This reply could not be matched to its send — reload the conversation and try again." };
   }
 
   // Best-effort immediate drain so the reply leaves now rather than on the next
@@ -191,7 +196,7 @@ export async function sendDmReply(
    * With two parts, the WORST outcome is the answer: an attachment that did not
    * arrive is not made acceptable by the caption that did.
    */
-  const ids = results.map((r) => r.communicationId).filter((id): id is string => Boolean(id));
+  const ids = queued.parts.map((p) => p.communicationId).filter((id): id is string => Boolean(id));
   if (!ids.length) return { ok: "Queued — sending…" };
   const states = await deliveryStateForMessages(ids);
   const outcomes = ids.map((id) => sendOutcomeMessage(states.get(id)));

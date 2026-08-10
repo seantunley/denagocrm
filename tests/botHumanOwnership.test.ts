@@ -24,8 +24,8 @@ test("staff replies take ownership on every inbox chatbot channel", () => {
   // duplicate and stops. See staffReplyDurability.test.ts for the ordering.
   const outbox = src("src/lib/botOutbox.ts");
   const staff = outbox.slice(
+    outbox.indexOf("export async function enqueueStaffReply"),
     outbox.indexOf("export async function enqueueStaffMessage"),
-    outbox.indexOf("async function cancelPendingBotOutputTx"),
   );
   assert.match(staff, /pauseBotSessionTx\(tx, tenantId, \{/);
   assert.match(staff, /channel: input\.channel,\s*\n\s*key: input\.key,/);
@@ -35,7 +35,7 @@ test("staff replies take ownership on every inbox chatbot channel", () => {
   // between accepting a message and pausing the bot that would answer over it.
   for (const path of ["src/app/actions/whatsapp.ts", "src/app/actions/messenger.ts"]) {
     const action = src(path);
-    assert.match(action, /enqueueStaffMessage\(\{/, `${path} must take ownership through the durable write`);
+    assert.match(action, /enqueueStaffReply\(\{|enqueueStaffMessage\(\{/, `${path} must take ownership through the durable write`);
     assert.doesNotMatch(
       action,
       /pauseBotConversation\(/,
