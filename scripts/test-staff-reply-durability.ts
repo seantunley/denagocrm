@@ -150,12 +150,20 @@ async function main() {
 
   const session = await basePrisma.botSession.findFirst({
     where: { tenantId: DEFAULT_TENANT_ID, channel: "whatsapp", key: ids.wa },
-    select: { status: true },
+    select: { status: true, ownership: true },
   });
   check(
     "replying pauses the bot for that conversation",
     session?.status === "paused",
     `session status: ${session?.status ?? "none"}`,
+  );
+  // Stronger than paused: nothing the customer types hands the thread back, only
+  // an explicit Return to bot. Replying by hand is the same claim Take over
+  // makes, so it has to record the same ownership.
+  check(
+    "and records that a PERSON owns it, not merely that the bot is quiet",
+    session?.ownership === "human",
+    `ownership: ${session?.ownership ?? "none"}`,
   );
 
   const botRows = await basePrisma.botFlowOutbox.findMany({

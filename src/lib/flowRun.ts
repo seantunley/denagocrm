@@ -15,14 +15,13 @@ import { enqueueBotMessagesTx } from "./botOutboxWrite";
 import { withTenantWrite } from "./tenantWrite";
 import { loadBotSession, upsertBotSessionTx, deleteBotSessionTx } from "./botSessionStore";
 import { recordBotFlowEventsTx, type BotFlowEventInput } from "./botFlowAnalytics";
+import { decideInboundAct, type BotOwnership } from "./botOwnership";
 
 export const FLOW_MARKER = "🤖 Flow";
 const FLOW_VERSION_VAR = "__flow_version";
 export async function isFlowEnabled(): Promise<boolean> { return (await getSetting("BOT_ENABLED")) === "true" && (await getSetting("BOT_FLOW_ENABLED")) === "true"; }
-const RESTART = /^\s*(menu|hi|hello|hey|start|restart|begin)\b/i;
-const isRestart = (text: string) => RESTART.test(text);
 
-type LoadedSession = { nodeId: string | null; vars: Record<string, string>; flowVersionId: string | null; status: string };
+type LoadedSession = { nodeId: string | null; vars: Record<string, string>; flowVersionId: string | null; status: string; ownership: BotOwnership };
 type ActionObservation = { nodeId: string; action: string; ok: boolean };
 
 async function loadSession(key: string): Promise<LoadedSession | null> {
@@ -32,7 +31,7 @@ async function loadSession(key: string): Promise<LoadedSession | null> {
   try { vars = JSON.parse(row.vars); } catch { /* ignore */ }
   const flowVersionId = vars[FLOW_VERSION_VAR] ?? null;
   delete vars[FLOW_VERSION_VAR];
-  return { nodeId: row.nodeId, vars, flowVersionId, status: row.status };
+  return { nodeId: row.nodeId, vars, flowVersionId, status: row.status, ownership: row.ownership };
 }
 function storedVars(vars: Record<string, string>, flowVersionId: string | null): string { return JSON.stringify({ ...vars, ...(flowVersionId ? { [FLOW_VERSION_VAR]: flowVersionId } : {}) }); }
 function handoffBody(context?: FlowHandoffContext): string {
@@ -84,10 +83,17 @@ function actionEvents(digits: string, flowVersionId: string | null, actions: Act
 export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise<boolean> {
   const match = await matchByPhone(digits);
   const existing = await loadSession(digits);
-  const restart = isRestart(input.text) && !input.choiceId;
-  // Keep restart semantics consistent with DM/Telegram: a customer can always
-  // deliberately escape a paused human-handoff session by sending menu/restart.
-  if (existing?.status === "paused" && !restart) return true;
+  // Same rule as DM/Telegram, from the same module — but `status === "paused"`
+  // could not tell a bot handoff from a staff takeover, so on WhatsApp too a
+  // customer saying "hi" to the salesperson helping them restarted the flow on
+  // top of that person. Ownership decides now.
+  const decision = decideInboundAct({
+    ownership: existing ? existing.ownership : null,
+    text: input.text,
+    hasChoiceId: Boolean(input.choiceId),
+  });
+  if (decision.act === "suppress") return true;
+  const restart = decision.act === "restart";
 
   let seed: Record<string, string> = {};
   if (!existing || restart) {
@@ -118,8 +124,8 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise
     }
     if (events.length) await recordBotFlowEventsTx(tx, tenantId, events);
 
-    if (result.handedOff) await upsertBotSessionTx(tx, tenantId, { channel: "whatsapp", key: digits, nodeId: null, vars: storedVars(session.vars, snapshot.versionId), status: "paused", expiresAt: new Date(Date.now() + 6 * 3600 * 1000) });
-    else if (result.session) await upsertBotSessionTx(tx, tenantId, { channel: "whatsapp", key: digits, nodeId: result.session.nodeId, vars: storedVars(result.session.vars, snapshot.versionId), status: "active", expiresAt: new Date(Date.now() + 24 * 3600 * 1000) });
+    if (result.handedOff) await upsertBotSessionTx(tx, tenantId, { channel: "whatsapp", key: digits, nodeId: null, vars: storedVars(session.vars, snapshot.versionId), status: "paused", ownership: "ai_handoff", expiresAt: new Date(Date.now() + 6 * 3600 * 1000) });
+    else if (result.session) await upsertBotSessionTx(tx, tenantId, { channel: "whatsapp", key: digits, nodeId: result.session.nodeId, vars: storedVars(result.session.vars, snapshot.versionId), status: "active", ownership: "bot", expiresAt: new Date(Date.now() + 24 * 3600 * 1000) });
     else await deleteBotSessionTx(tx, tenantId, "whatsapp", digits);
   });
 
@@ -128,6 +134,26 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise
 }
 
 export async function runWhatsAppBot(digits: string, input: FlowInput, opts: { voiceNote?: boolean } = {}): Promise<void> {
+  // Ownership gates EVERY route into the bot, not just the flow runner.
+  //
+  // maybeAutoReply never reads BotSession — its only brake is botShouldPause, a
+  // timestamp heuristic over the last outbound Communication, and the legacy
+  // keyword path has no brake at all. Pressing Take over writes no Communication,
+  // so that heuristic still sees the bot as the last speaker. A voice note (or
+  // any message at all when BOT_FLOW_ENABLED is off) therefore reached the AI and
+  // it answered over the salesperson — the exact thing conversation ownership
+  // exists to prevent, entered through a door the ownership check did not cover.
+  const owned = await loadSession(digits);
+  if (owned) {
+    const gate = decideInboundAct({
+      ownership: owned.ownership,
+      text: input.text,
+      // A voice note is not a typed control command, so it can never be a resume.
+      hasChoiceId: Boolean(input.choiceId) || Boolean(opts.voiceNote),
+    });
+    if (gate.act === "suppress") return;
+  }
+
   if (opts.voiceNote) { await maybeAutoReply(digits, input.text, { voiceNote: true }); return; }
   if (await isFlowEnabled()) { await runWhatsAppFlow(digits, input); return; }
   await maybeAutoReply(digits, input.text);

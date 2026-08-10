@@ -59,12 +59,16 @@ test("provider failure is recorded only when the durable message becomes termina
   assert.match(outbox, /row\.flowVersionId/);
 });
 
-test("WhatsApp restart can deliberately escape a paused human-handoff session", () => {
+test("WhatsApp escapes a BOT handoff on an explicit command, but never a staff takeover", () => {
+  // This test used to assert `existing?.status === "paused" && !restart`, which is
+  // the defect: `paused` meant both "the bot handed off" and "a person took this
+  // over", and the restart set included greetings. A customer saying "hi" to the
+  // salesperson helping them restarted the flow on top of that person.
   const code = src("src/lib/flowRun.ts");
-  const restartAt = code.indexOf("const restart = isRestart");
-  const pauseAt = code.indexOf("existing?.status === \"paused\"", restartAt);
-  assert.ok(restartAt >= 0 && pauseAt > restartAt);
-  assert.match(code, /existing\?\.status === "paused" && !restart/);
+  assert.match(code, /decideInboundAct\(/, "WhatsApp must use the shared ownership rule");
+  assert.doesNotMatch(code, /status === "paused" && !restart/, "status alone cannot decide this");
+  // The behaviour itself is proven in botOwnership.test.ts, against the rule
+  // rather than against the source of the runner that calls it.
 });
 
 test("flow-start and node-reach denominators count explicit events rather than distinct participant ids", () => {

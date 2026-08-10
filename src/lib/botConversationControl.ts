@@ -1,7 +1,7 @@
 import "server-only";
 import { prisma } from "./db";
 import { withTenantWrite } from "./tenantWrite";
-import { deleteBotSessionTx, pauseBotSessionTx } from "./botSessionStore";
+import { pauseBotSessionTx, releaseBotSessionTx } from "./botSessionStore";
 
 export type BotOwnedChannel = "whatsapp" | "messenger" | "instagram";
 export type BotConversationIdentity = { channel: BotOwnedChannel; key: string };
@@ -66,6 +66,10 @@ export async function pauseBotConversation(
     await pauseBotSessionTx(tx, tenantId, {
       channel: identity.channel,
       key: identity.key,
+      // A PERSON owns this thread now. Nothing the customer types hands it back —
+      // only resumeBotConversation below does. This is the distinction `paused`
+      // could not make, and the reason "hi" used to evict the salesperson.
+      ownership: "human",
       expiresAt: new Date(Date.now() + hours * 3600 * 1000),
     });
   });
@@ -78,6 +82,8 @@ export async function pauseBotConversation(
  */
 export async function resumeBotConversation(identity: BotConversationIdentity): Promise<void> {
   await withTenantWrite(async (tx, tenantId) => {
-    await deleteBotSessionTx(tx, tenantId, identity.channel, identity.key);
+    // The staff-release variant: a person is handing the thread back, so this is
+    // the one path allowed to discard human ownership.
+    await releaseBotSessionTx(tx, tenantId, identity.channel, identity.key);
   });
 }
