@@ -128,8 +128,17 @@ test("the builder tenant is never resolved from writeTenantId alone", () => {
   // scope, may use it directly.
   const scope = src("src/lib/flowScope.ts");
   assert.match(scope, /export function runtimeFlowTenantId\(\): string \{\s*return writeTenantId\(\) \?\? DEFAULT_TENANT_ID;/);
-  assert.match(scope, /sessionTenantId: await getActiveTenantId\(\)/, "the builder must consult the session's workspace");
   assert.match(scope, /export async function builderTenantId\(\)/);
+  // The rule moved, it did not weaken. `builderTenantId` was the first caller of
+  // "the workspace this SESSION is acting as"; the record writers fixed in the
+  // 2026-08-10 tenant-stamp work are the next ones, so the resolver now lives in
+  // lib/actingTenant.ts and this delegates rather than keeping a second copy.
+  // Both halves are asserted, so a delegation to something that does NOT consult
+  // the session still fails here.
+  assert.match(scope, /return actingTenantId\(\)/, "the builder must resolve through the shared acting-tenant resolver");
+  const acting = src("src/lib/actingTenant.ts");
+  assert.match(acting, /sessionTenantId: await getActiveTenantId\(\)/, "the builder must consult the session's workspace");
+  assert.match(acting, /enforcedTenantId: writeTenantId\(\)/, "…and an enforced scope must still win");
 
   for (const file of flowCallSites()) {
     const code = src(file);

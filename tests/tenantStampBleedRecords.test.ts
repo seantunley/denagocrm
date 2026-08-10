@@ -352,6 +352,14 @@ test("every writer this change owns names a tenant on the row it creates", () =>
       expect: /tenantId: bookingTenantId/,
       count: 1,
     },
+    // Not on the audit list — production holds no unowned rows for it — but the
+    // identical defect in the same module, and the next one to be found.
+    {
+      file: "src/app/actions/dashboard.ts",
+      model: "dashboardLayout",
+      expect: /tenantId: await actingTenantId\(\)/,
+      count: 1,
+    },
     // Runtime paths — the record being acted on.
     {
       file: "src/lib/competitors.ts",
@@ -408,10 +416,15 @@ test("the step-log tenant comes from the run, and every trace site goes through 
   assert.equal(
     (code.match(/writeStepLog\(/g) ?? []).length,
     2,
-    "writeStepLog must be reached only through its declaration and the bound logStep",
+    "writeStepLog must be reached only through its declaration and the bound updateStepLog",
+  );
+  assert.match(
+    code,
+    /const updateStepLog = \(args: Omit<StepLogArgs, "tenantId">\) =>\s*writeStepLog\(\{ \.\.\.args, tenantId: logTenantId \}\)/,
+    "the bound logger is what supplies the stamp to all thirteen sites",
   );
   assert.ok(
-    (code.match(/await logStep\(\{/g) ?? []).length >= 13,
+    (code.match(/await updateStepLog\(\{?/g) ?? []).length >= 13,
     "every trace site must go through the bound logger",
   );
 });
