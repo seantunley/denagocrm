@@ -68,3 +68,37 @@ export function retryLogPlan(
     options: { alert: false, ...(tenantId !== undefined ? { tenantId } : {}) },
   };
 }
+
+/**
+ * The leased path, end to end: resolve the owning tenant, decide the log, and
+ * produce the signal to throw.
+ *
+ * This exists because the previous version was correct at the helper and wrong at
+ * the call site. `retryLogPlan` could carry a tenant, and the WhatsApp/Messenger
+ * routes never passed one — so while enforcement is DORMANT, where
+ * `withChannelTenantScope` runs `fn()` with no scope at all, the row still filed
+ * with `tenantId = null` and the workspace's System Log still excluded it. The
+ * property was tested on the helper, which the caller did not satisfy.
+ *
+ * The resolver is injected, so a test can run the actual composition — dormant
+ * enforcement, an endpoint owned by tenant B, a leased event — rather than assert
+ * that the helper works when handed an answer nobody gives it.
+ *
+ * Only the RARE leased branch pays for the lookup; the normal path never calls it.
+ */
+export async function planLeasedRetry(
+  detail: string,
+  resolveTenant: () => Promise<string | null>,
+): Promise<{
+  signal: InboundRetryRequested;
+  log: { context: string; options: { alert: false; tenantId?: string | null } };
+}> {
+  // An unmapped endpoint genuinely has no owner. Pass undefined rather than null
+  // so logError still tries to infer one from an enforced scope, instead of being
+  // told the row is deliberately unattributed.
+  const tenantId = (await resolveTenant().catch(() => null)) ?? undefined;
+  return {
+    signal: new InboundRetryRequested("leased", detail),
+    log: retryLogPlan("leased", tenantId)!,
+  };
+}

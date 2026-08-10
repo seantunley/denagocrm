@@ -117,7 +117,7 @@ test("every webhook acks a finished event and asks for redelivery of a leased on
     // Raised through noteInboundRetry so the reason is recorded WHILE the tenant
     // scope that owns it is still entered; at the outer catch it would file
     // unattributed and the workspace's System Log excludes those.
-    assert.match(code, /if \(outcome\.status === "leased"\) throw await noteInboundRetry\([^)]*"leased"/);
+    assert.match(code, /if \(outcome\.status === "leased"\) throw await note(LeasedInbound|InboundRetry)\(/);
     // An event with no stable id cannot produce a retry-safe action key, so it is
     // refused rather than run without idempotency.
     assert.match(code, /outcome\.status === "unidentified"/);

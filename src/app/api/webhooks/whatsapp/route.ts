@@ -9,7 +9,7 @@ import { saveFile } from "@/lib/storage";
 import { runWhatsAppBot } from "@/lib/flowRun";
 import { withChannelTenantScope, validateInSystemScope } from "@/lib/tenantScopeEntry";
 import { logError } from "@/lib/errorLog";
-import { inboundRetryResponse, noteInboundRetry } from "@/lib/webhookRetry";
+import { inboundRetryResponse, noteInboundRetry, noteLeasedInbound } from "@/lib/webhookRetry";
 import { secretEquals } from "@/lib/secretCompare";
 import {
   claimInboundBotEvent,
@@ -76,7 +76,7 @@ export async function POST(req: NextRequest) {
           // redelivery and lose the message, so ask to be sent it again instead.
           // Logged HERE, inside the tenant scope that owns it. At the outer
           // boundary the scope has unwound and the row files unattributed.
-          if (outcome.status === "leased") throw await noteInboundRetry("whatsapp-webhook", "leased", `whatsapp ${String(message.id ?? "")}`);
+          if (outcome.status === "leased") throw await noteLeasedInbound("whatsapp-webhook", "whatsapp", phoneNumberId, `whatsapp ${String(message.id ?? "")}`);
           const claim = outcome.claim;
           try {
             await withInboundBotEvent(claim, async () => {

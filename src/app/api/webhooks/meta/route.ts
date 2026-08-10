@@ -11,7 +11,7 @@ import { runDmFlow } from "@/lib/flowDm";
 import { metaReceipt } from "@/lib/deliveryReceipts";
 import { applyReceipt } from "@/lib/messageReceipts";
 import { withChannelTenantScope, validateInSystemScope } from "@/lib/tenantScopeEntry";
-import { inboundRetryResponse, noteInboundRetry } from "@/lib/webhookRetry";
+import { inboundRetryResponse, noteInboundRetry, noteLeasedInbound } from "@/lib/webhookRetry";
 import { secretEquals } from "@/lib/secretCompare";
 import {
   claimInboundBotEvent,
@@ -105,7 +105,7 @@ export async function POST(req: NextRequest) {
           // redelivery and lose the message, so ask to be sent it again instead.
           // Logged HERE, inside the tenant scope that owns it. At the outer
           // boundary the scope has unwound and the row files unattributed.
-          if (outcome.status === "leased") throw await noteInboundRetry("meta-dm-webhook", "leased", `${platform} ${String(ev.message?.mid ?? "")}`);
+          if (outcome.status === "leased") throw await noteLeasedInbound("meta-dm-webhook", platform, endpointId, `${platform} ${String(ev.message?.mid ?? "")}`);
           const claim = outcome.claim;
           try {
             await withInboundBotEvent(claim, async () => {

@@ -1,9 +1,30 @@
 import "server-only";
 import { NextResponse } from "next/server";
 import { logError } from "./errorLog";
-import { InboundRetryRequested, retryLogPlan, retryResponseFor } from "./inboundRetrySignal";
+import { InboundRetryRequested, planLeasedRetry, retryLogPlan, retryResponseFor } from "./inboundRetrySignal";
+import { resolveChannelTenant, type ChannelKind } from "./channelTenant";
 
 export { InboundRetryRequested, retryLogPlan, retryResponseFor };
+
+/**
+ * Raise a leased-event redelivery request, attributed to the tenant that owns the
+ * provider endpoint it arrived on.
+ *
+ * `withChannelTenantScope` establishes NO scope while enforcement is dormant — it
+ * is `if (!tenantEnforcing()) return fn();` — so being inside the wrapper is not
+ * enough to know the owner today. The endpoint is, and `resolveChannelTenant`
+ * already maps it. Only this rare branch pays for the lookup.
+ */
+export async function noteLeasedInbound(
+  source: string,
+  channel: ChannelKind,
+  externalId: string | null | undefined,
+  detail: string,
+): Promise<InboundRetryRequested> {
+  const { signal, log } = await planLeasedRetry(detail, () => resolveChannelTenant(channel, externalId));
+  await logError(source, signal, log.context, log.options).catch(() => {});
+  return signal;
+}
 
 /**
  * Record a deliberate redelivery request WHILE its owning tenant is still known,

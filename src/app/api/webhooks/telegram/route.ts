@@ -48,6 +48,11 @@ export async function POST(req: NextRequest) {
       // redelivery and lose the update, so ask to be sent it again instead.
       // Logged HERE, inside the tenant scope that owns it. At the outer boundary
       // the scope has unwound and the row files unattributed.
+      //
+      // Telegram needs no explicit endpoint lookup: withTelegramTenantScope
+      // resolves the secret to a tenant and enters runInTenantScope for it
+      // REGARDLESS of enforcement, unlike withChannelTenantScope, which runs fn()
+      // bare while dormant. The scope here is already the owning tenant.
       if (outcome.status === "leased") throw await noteInboundRetry("telegram-webhook", "leased", `telegram ${String(update.update_id ?? "")}`);
       const claim = outcome.claim;
       try {

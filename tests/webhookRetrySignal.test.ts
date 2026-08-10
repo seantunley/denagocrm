@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { InboundRetryRequested, retryLogPlan, retryResponseFor } from "../src/lib/inboundRetrySignal";
+import { InboundRetryRequested, planLeasedRetry, retryLogPlan, retryResponseFor } from "../src/lib/inboundRetrySignal";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8").replace(/\r\n/g, "\n");
@@ -98,7 +98,7 @@ test("logError attributes to an explicitly supplied owner, and can be told not t
 test("every inbound webhook answers its retry signals deliberately", () => {
   for (const { route, source } of WEBHOOKS) {
     const code = src(route);
-    assert.match(code, /import \{ inboundRetryResponse, noteInboundRetry \} from "@\/lib\/webhookRetry";/, `${route} does not handle its retry signal`);
+    assert.match(code, /import \{ inboundRetryResponse, noteInboundRetry(, noteLeasedInbound)? \} from "@\/lib\/webhookRetry";/, `${route} does not handle its retry signal`);
     assert.match(
       code,
       new RegExp(`catch \\(error\\) \\{\\s*return inboundRetryResponse\\("${source}", error\\);`),
@@ -107,12 +107,68 @@ test("every inbound webhook answers its retry signals deliberately", () => {
   }
 });
 
+test("DORMANT enforcement, a leased event on tenant B's endpoint, end to end", async () => {
+  // The case the previous round got wrong. `retryLogPlan` could carry a tenant and
+  // the WhatsApp/Messenger routes never passed one — and withChannelTenantScope is
+  // `if (!tenantEnforcing()) return fn();`, so being inside the wrapper tells you
+  // nothing about the owner while dormant. The row still filed unattributed and
+  // the workspace's System Log still excluded it.
+  //
+  // Run the actual composition with the resolver the route supplies.
+  let lookups = 0;
+  const endpointOwnedByB = async () => { lookups++; return "tenant_b"; };
+  const { signal, log } = await planLeasedRetry("whatsapp wamid.X", endpointOwnedByB);
+
+  assert.equal(lookups, 1, "the owner must be resolved from the endpoint, not assumed");
+  assert.equal(log.options.tenantId, "tenant_b", "the ErrorLog row must belong to B");
+  assert.equal(log.options.alert, false, "expected contention must never page anyone");
+  assert.match(log.context, /leased by another attempt/);
+
+  const response = retryResponseFor(signal);
+  assert.equal(response.status, 503);
+  assert.equal(response.retryAfterSeconds, 10);
+  assert.equal(response.alreadyLogged, true, "the boundary must not file a second row");
+});
+
+test("an unmapped endpoint is not claimed for the founding tenant", async () => {
+  // No owner is a real answer. `undefined` lets logError still infer one from an
+  // enforced scope; an explicit null would assert the row is deliberately
+  // unattributed, and guessing a tenant would blame a workspace that is fine.
+  const { log } = await planLeasedRetry("whatsapp wamid.Y", async () => null);
+  assert.equal("tenantId" in log.options, false);
+  // A resolver that throws must not take the redelivery down with it.
+  const { signal } = await planLeasedRetry("whatsapp wamid.Z", async () => { throw new Error("db down"); });
+  assert.equal(retryResponseFor(signal).status, 503);
+});
+
+test("the batched routes resolve the owner from the endpoint they already have", () => {
+  // WhatsApp has phone_number_id, Meta has the entry id. Both are exactly what
+  // resolveChannelTenant maps, and both were already in scope at the throw site.
+  const wa = src("src/app/api/webhooks/whatsapp/route.ts");
+  assert.match(wa, /noteLeasedInbound\("whatsapp-webhook", "whatsapp", phoneNumberId,/);
+  const meta = src("src/app/api/webhooks/meta/route.ts");
+  assert.match(meta, /noteLeasedInbound\("meta-dm-webhook", platform, endpointId,/);
+  assert.match(src("src/lib/webhookRetry.ts"), /resolveChannelTenant\(channel, externalId\)/);
+
+  // Telegram needs no lookup: its wrapper resolves the secret and enters
+  // runInTenantScope regardless of enforcement, so the scope is already the owner.
+  const tg = src("src/app/api/webhooks/telegram/route.ts");
+  assert.match(tg, /noteInboundRetry\("telegram-webhook", "leased"/);
+  assert.match(src("src/lib/telegramTenant.ts"), /if \(tenantId\) return runInTenantScope\(\{ tenantId, system: false \}, fn\)/);
+});
+
 test("the signal is raised where the tenant is known, never at the boundary", () => {
   for (const { route, source } of WEBHOOKS) {
     const code = src(route);
-    // Raised through noteInboundRetry, which logs inside the scope. Constructing
-    // the old error directly would log at the boundary — or not at all.
-    assert.match(code, new RegExp(`throw await noteInboundRetry\\("${source}", "leased"`), `${route} raises a leased signal without logging it in scope`);
+    // Raised through a helper that records the reason where the owner is known.
+    // Constructing the old error directly would log at the boundary — or not at
+    // all. The batched routes must additionally resolve the endpoint's tenant,
+    // because their wrapper establishes no scope while enforcement is dormant.
+    assert.match(
+      code,
+      new RegExp(`throw await noteLeasedInbound\\("${source}",|throw await noteInboundRetry\\("${source}", "leased"`),
+      `${route} raises a leased signal without logging it in scope`,
+    );
     assert.doesNotMatch(code, /new InboundBotEventLeasedError\(/, `${route} still raises the un-logged signal`);
   }
 });
