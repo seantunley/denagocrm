@@ -9,12 +9,11 @@ import { saveFile } from "@/lib/storage";
 import { runWhatsAppBot } from "@/lib/flowRun";
 import { withChannelTenantScope, validateInSystemScope } from "@/lib/tenantScopeEntry";
 import { logError } from "@/lib/errorLog";
-import { inboundRetryResponse } from "@/lib/webhookRetry";
+import { inboundRetryResponse, noteInboundRetry } from "@/lib/webhookRetry";
 import { secretEquals } from "@/lib/secretCompare";
 import {
   claimInboundBotEvent,
   completeInboundBotEvent,
-  InboundBotEventLeasedError,
   retryInboundBotEvent,
   withInboundBotEvent,
 } from "@/lib/botInboundEvent";
@@ -75,7 +74,9 @@ export async function POST(req: NextRequest) {
           }
           // Leased: the attempt holding it may have died. Ack would retire Meta's
           // redelivery and lose the message, so ask to be sent it again instead.
-          if (outcome.status === "leased") throw new InboundBotEventLeasedError("whatsapp", String(message.id ?? ""));
+          // Logged HERE, inside the tenant scope that owns it. At the outer
+          // boundary the scope has unwound and the row files unattributed.
+          if (outcome.status === "leased") throw await noteInboundRetry("whatsapp-webhook", "leased", `whatsapp ${String(message.id ?? "")}`);
           const claim = outcome.claim;
           try {
             await withInboundBotEvent(claim, async () => {
@@ -121,7 +122,9 @@ export async function POST(req: NextRequest) {
           } catch (error) {
             await retryInboundBotEvent(claim, error).catch(() => {});
             await logError("whatsapp-webhook", error).catch(() => {});
-            throw error; // non-2xx makes Meta redeliver; completed siblings are skipped.
+            // Already logged, with its claim released. Rethrowing the raw error
+            // made the outer boundary log the same failure a second time.
+            throw await noteInboundRetry("whatsapp-webhook", "failed", `whatsapp ${String(message.id ?? "")}`);
           }
         }
       }, () => console.warn(`[tenant-channel] skipped WhatsApp inbound: unmapped phone_number_id ${phoneNumberId ?? "?"}`));

@@ -2,11 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { runTelegramFlow, tgAnswerCallback } from "@/lib/telegram";
 import { tgPersistInboundFile } from "@/lib/telegramTransport";
 import { logError } from "@/lib/errorLog";
-import { inboundRetryResponse } from "@/lib/webhookRetry";
+import { inboundRetryResponse, noteInboundRetry } from "@/lib/webhookRetry";
 import {
   claimInboundBotEvent,
   completeInboundBotEvent,
-  InboundBotEventLeasedError,
   retryInboundBotEvent,
   withInboundBotEvent,
 } from "@/lib/botInboundEvent";
@@ -47,7 +46,9 @@ export async function POST(req: NextRequest) {
       }
       // Leased: the attempt holding it may have died. Ack would retire Telegram's
       // redelivery and lose the update, so ask to be sent it again instead.
-      if (outcome.status === "leased") throw new InboundBotEventLeasedError("telegram", String(update.update_id ?? ""));
+      // Logged HERE, inside the tenant scope that owns it. At the outer boundary
+      // the scope has unwound and the row files unattributed.
+      if (outcome.status === "leased") throw await noteInboundRetry("telegram-webhook", "leased", `telegram ${String(update.update_id ?? "")}`);
       const claim = outcome.claim;
       try {
         await withInboundBotEvent(claim, async () => {
