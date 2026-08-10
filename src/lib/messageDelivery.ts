@@ -81,58 +81,133 @@ export function classifyDeliveryFailure(error: string): string {
 }
 
 /**
- * Failures that will fail identically on every retry.
+ * Failures a retry cannot fix.
  *
  * A malformed payload and an unreachable account are defects in what was queued,
- * not weather. `outside_window` is deliberately NOT here: Meta's 24-hour rule
- * reopens the moment the customer writes again, and the backoff can outlast a
- * short gap.
+ * not weather.
+ *
+ * `outside_window` belongs here too, and putting it in the retryable set was
+ * wrong. Meta's 24-hour rule reopens on an INBOUND CUSTOMER MESSAGE, not on the
+ * passage of time — so a backoff cannot reach it, and eight attempts over two
+ * hours is a message that was never going to arrive, dressed as one still in
+ * flight. Worse, if the window did happen to reopen, an answer composed two
+ * hours earlier would go out unannounced into a conversation that has moved on.
+ * Failing immediately tells the person the one thing they can act on: the
+ * customer has to write first.
+ *
+ * `not_configured` is deliberately NOT here. A revoked or mid-rotation
+ * credential is genuinely repairable by an operator inside the retry window, and
+ * the queue recovering by itself is worth more than failing fast — provided the
+ * person who pressed Send is told immediately, which `sendOutcomeMessage` now
+ * does.
  */
 export const PERMANENT_FAILURES = new Set([
   "invalid_payload",
   "invalid_recipient",
   "rejected_by_recipient",
+  "outside_window",
 ]);
 
 /**
- * The idempotency key for a staff reply: the COMPOSITION, plus what it says.
+ * Everything that has to be the same for two submissions to be the same send.
+ *
+ * Not just the words: a reply is addressed (channel + recipient), attributed (an
+ * actor) and filed against a record (a contact and/or a lead). Two submissions
+ * agreeing on the text while differing on any of those are different sends, and
+ * treating them as one loses the second silently.
+ */
+export type StaffReplyIdentity = {
+  compositionId: string;
+  channel: string;
+  /** Provider recipient identity: WhatsApp digits, PSID, IG id. */
+  key: string;
+  actorId: string;
+  contactId?: string | null;
+  leadId?: string | null;
+  body: string;
+  attachmentUrl?: string | null;
+};
+
+/** The identity as a stable ordered tuple — the one place its shape is decided. */
+function identityTuple(input: StaffReplyIdentity): unknown[] {
+  return [
+    input.compositionId,
+    input.channel,
+    input.key,
+    input.actorId,
+    input.contactId ?? null,
+    input.leadId ?? null,
+    input.body,
+    input.attachmentUrl ?? null,
+  ];
+}
+
+/**
+ * The idempotency key for a staff reply: the COMPOSITION, plus everything that
+ * makes it this send and not another.
  *
  * A key that identifies only the reply box gets both halves wrong. Press Send,
- * get an ambiguous failure, correct a typo and press Send again: the key is
- * unchanged, so the corrected message is discarded as a duplicate and the
- * customer receives the version with the typo — silently, reported as sent. Mint
- * a fresh key per attempt instead and the opposite happens: a submission whose
- * response was lost sends the customer a second copy, which is the failure the
- * key exists to prevent.
+ * get an ambiguous failure, correct "Yes, we have stock" to "Sorry, we don't
+ * have stock" and press Send again: the key is unchanged, so the correction is
+ * discarded as a duplicate and the customer receives the OPPOSITE of what the
+ * salesperson decided to say — reported as sent. Mint a fresh key per attempt
+ * instead and the reverse happens: a submission whose response was lost sends
+ * the customer a second copy, which is the failure the key exists to prevent.
  *
- * Binding the key to the payload as well as to the composition separates the two
- * questions. The same text resubmitted is the same message and dedupes; edited
- * text is a different message and sends. `compositionId` is what makes two
- * genuinely identical replies — "thanks!" typed twice, deliberately — still two
- * messages: it changes once a send is confirmed.
+ * Binding the key to the payload separates those two questions. The same text
+ * resubmitted is the same message and dedupes; edited text is a different
+ * message and sends. `compositionId` is what keeps two deliberately identical
+ * replies — "thanks!" typed twice — two messages: it changes once a send is
+ * confirmed.
+ *
+ * The actor and the record identity are in the key for the same reason the body
+ * is. Without them, a replayed `compositionId` from a colleague's box, or the
+ * same words to the same number filed against a DIFFERENT lead, collides with a
+ * send it is not — and the caller is told "already sent" about somebody else's
+ * message.
  *
  * Derived on the server so a client cannot get it wrong, and hashed so it is
  * bounded regardless of message length.
  */
-export function staffReplyIdempotencyKey(input: {
-  compositionId: string;
-  channel: string;
-  key: string;
-  body: string;
-  attachmentUrl?: string | null;
-}): string {
-  return crypto
-    .createHash("sha256")
-    .update(
-      JSON.stringify([
-        input.compositionId,
-        input.channel,
-        input.key,
-        input.body,
-        input.attachmentUrl ?? null,
-      ]),
-    )
-    .digest("hex");
+export function staffReplyIdempotencyKey(input: StaffReplyIdentity): string {
+  return crypto.createHash("sha256").update(JSON.stringify(identityTuple(input))).digest("hex");
+}
+
+/**
+ * Does an outbox row that already holds this key describe the SAME send?
+ *
+ * With every identity field folded into the key above, a mismatch here needs a
+ * SHA-256 collision — so this is not the primary defence, and it is not meant to
+ * be. It is the check that keeps the guarantee true if the derivation ever loses
+ * a field: a key is a claim about identity, and a claim that cannot be verified
+ * against the row it matched is one that will eventually be wrong quietly. This
+ * makes that case loud instead.
+ *
+ * The payload is compared canonically. It goes to Postgres as `jsonb`, which does
+ * NOT preserve key order, so comparing serialised forms directly would report a
+ * mismatch for two identical messages.
+ */
+export function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, v]) => v !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(",")}}`;
+}
+
+export function staffReplyMatchesRow(
+  input: { channel: string; key: string; actorId: string; contactId?: string | null; leadId?: string | null; payload: unknown },
+  row: { channel: string; key: string; actorId: string | null; contactId: string | null; leadId: string | null; payload: unknown },
+): boolean {
+  return (
+    row.channel === input.channel &&
+    row.key === input.key &&
+    row.actorId === input.actorId &&
+    row.contactId === (input.contactId ?? null) &&
+    row.leadId === (input.leadId ?? null) &&
+    canonicalJson(row.payload) === canonicalJson(input.payload)
+  );
 }
 
 export function deliveryLabel(
@@ -157,10 +232,16 @@ export function deliveryLabel(
       return { text: "Sending…", tone: "pending" };
     }
     if (state.status === "retry") {
-      // The attempt count is the honest part: "still sending" reads as a hiccup,
-      // and by the fifth attempt it is not one.
+      // The reason and the attempt count are the honest parts: "still sending"
+      // reads as a hiccup, and by the fifth attempt against a revoked credential
+      // it is not one. Failed tone, because something has already gone wrong —
+      // this is not the same as a message that has simply not left yet.
+      const reason = deliveryFailureReason(state.failureCode);
       const attempts = state.attempts && state.attempts > 1 ? ` (attempt ${state.attempts})` : "";
-      return { text: `Retrying…${attempts}`, tone: "pending" };
+      return {
+        text: reason ? `Retrying — ${reason}${attempts}` : `Retrying…${attempts}`,
+        tone: "failed",
+      };
     }
     if (state.status === "cancelled") {
       const reason = deliveryFailureReason(state.failureCode);
@@ -184,6 +265,18 @@ export function deliveryLabel(
  * message it had only written down, and including when the provider had already
  * rejected it. Reporting a send that did not happen is worse than reporting a
  * failure: it ends the person's attention on the conversation.
+ *
+ * "Queued — sending…" fixed the wording and not the defect. The reply action
+ * drains the conversation before reading this, so by the time we answer, the
+ * provider has usually already had its say — and a message WhatsApp has just
+ * refused was still being reported in green, as though it were merely in flight.
+ * The attempt count is what separates the two: zero attempts means nobody has
+ * tried yet, and anything above zero on a non-terminal row means the provider
+ * refused it at least once and the queue is going to keep asking.
+ *
+ * That distinction is the whole point. "Queued" invites the person to move on;
+ * "rejected, still retrying" invites them to look at why, which for a revoked
+ * credential or a closed reply window is the only thing that will help.
  */
 export function sendOutcomeMessage(state: DeliveryState | null | undefined): {
   ok?: string;
@@ -199,8 +292,18 @@ export function sendOutcomeMessage(state: DeliveryState | null | undefined): {
     const reason = deliveryFailureReason(state.failureCode);
     return { error: reason ? `Not sent — ${reason}.` : "Not sent." };
   }
-  // pending / running / retry. It is written down, it is owned by the worker, and
-  // it will keep trying — which is a different promise from "delivered" and has
-  // to read like one.
+  // pending / running / retry, and the provider has already refused it at least
+  // once. Still queued, but saying only that would be the original lie in a
+  // quieter voice.
+  if ((state.attempts ?? 0) > 0) {
+    const reason = deliveryFailureReason(state.failureCode);
+    return {
+      error: reason
+        ? `Not sent yet — ${reason}. Still retrying in the background.`
+        : "Not sent yet — the channel refused it. Still retrying in the background.",
+    };
+  }
+  // Written down, owned by the worker, not yet attempted. A different promise
+  // from "delivered", and it has to read like one.
   return { ok: "Queued — sending…" };
 }

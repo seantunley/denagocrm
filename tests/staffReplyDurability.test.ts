@@ -4,10 +4,13 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import {
+  canonicalJson,
   classifyDeliveryFailure,
   deliveryLabel,
+  PERMANENT_FAILURES,
   sendOutcomeMessage,
   staffReplyIdempotencyKey,
+  staffReplyMatchesRow,
 } from "../src/lib/messageDelivery";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -97,7 +100,8 @@ test("a duplicate reports what became of the message it duplicates", () => {
   // it reported success. The duplicate must resolve to the row that already
   // exists so the person is told the truth about it.
   assert.match(fn, /clientIdempotencyKey: input\.clientIdempotencyKey/, "the duplicate must be looked up by its key");
-  assert.match(fn, /communicationId: existing\?\.communicationId \?\? null/);
+  assert.match(fn, /communicationId: existing\.communicationId \?\? null/);
+  assert.match(fn, /outcome: "duplicate"/, "and must say plainly that it is a duplicate, not a fresh send");
 
   const action = shipped("src/app/actions/whatsapp.ts");
   assert.doesNotMatch(
@@ -111,7 +115,15 @@ test("a duplicate reports what became of the message it duplicates", () => {
  * The idempotency key identified the reply BOX. That is wrong in both directions.
  */
 test("the idempotency key is bound to the message, not to the reply box", () => {
-  const base = { compositionId: "c1", channel: "whatsapp", key: "27820000000", body: "hello" };
+  const base = {
+    compositionId: "c1",
+    channel: "whatsapp",
+    key: "27820000000",
+    actorId: "u1",
+    contactId: "ct1",
+    leadId: null,
+    body: "Yes, we have stock",
+  };
 
   assert.equal(
     staffReplyIdempotencyKey(base),
@@ -119,12 +131,13 @@ test("the idempotency key is bound to the message, not to the reply box", () => 
     "the same composition resubmitted unchanged must dedupe",
   );
 
-  // The failure mode a box-scoped key produced: send fails ambiguously, the
-  // person fixes a typo and presses Send again, and the correction is discarded
-  // as a duplicate — so the customer receives the version with the typo.
+  // The failure mode a box-scoped key produced, and the one that matters most:
+  // the send fails ambiguously, the person REVERSES what they were going to say,
+  // and the correction is discarded as a duplicate — so the customer receives
+  // the opposite of what the salesperson decided.
   assert.notEqual(
     staffReplyIdempotencyKey(base),
-    staffReplyIdempotencyKey({ ...base, body: "hello there" }),
+    staffReplyIdempotencyKey({ ...base, body: "Sorry, we don't have stock" }),
     "edited text is a different message and must actually send",
   );
 
@@ -138,6 +151,60 @@ test("the idempotency key is bound to the message, not to the reply box", () => 
   // A recipient or channel mix-up must never resolve to another conversation's row.
   assert.notEqual(staffReplyIdempotencyKey(base), staffReplyIdempotencyKey({ ...base, key: "27820000001" }));
   assert.notEqual(staffReplyIdempotencyKey(base), staffReplyIdempotencyKey({ ...base, channel: "messenger" }));
+
+  // A reply is also attributed and filed. Without these in the key, a replayed
+  // compositionId from a colleague's box, or the same words filed against a
+  // different lead, collides with a send it is not — and the caller is told
+  // "already sent" about somebody else's message.
+  assert.notEqual(staffReplyIdempotencyKey(base), staffReplyIdempotencyKey({ ...base, actorId: "u2" }));
+  assert.notEqual(staffReplyIdempotencyKey(base), staffReplyIdempotencyKey({ ...base, contactId: "ct2" }));
+  assert.notEqual(staffReplyIdempotencyKey(base), staffReplyIdempotencyKey({ ...base, leadId: "ld1" }));
+});
+
+/**
+ * A key is a CLAIM about identity. Answering "already sent" without checking it
+ * against the row it matched means that if the derivation ever loses a field,
+ * the caller is told a different message is theirs and the real one is dropped
+ * silently. Verified, that becomes a visible error instead of a lost reply.
+ */
+test("a key that resolves to a different send is a conflict, not a duplicate", () => {
+  const input = {
+    channel: "whatsapp",
+    key: "27820000000",
+    actorId: "u1",
+    contactId: "ct1",
+    leadId: null,
+    payload: { type: "text", text: "hello" },
+  };
+  const row = { ...input, payload: { type: "text", text: "hello" } };
+
+  assert.equal(staffReplyMatchesRow(input, row), true, "the same send must be recognised as the same send");
+
+  // jsonb does not preserve key order, so an identical payload must still match
+  // after a database round trip.
+  assert.equal(
+    staffReplyMatchesRow(input, { ...row, payload: { text: "hello", type: "text" } }),
+    true,
+    "key order must not decide whether two payloads are the same",
+  );
+
+  assert.equal(staffReplyMatchesRow(input, { ...row, payload: { type: "text", text: "goodbye" } }), false);
+  assert.equal(staffReplyMatchesRow(input, { ...row, actorId: "u2" }), false);
+  assert.equal(staffReplyMatchesRow(input, { ...row, key: "27820000001" }), false);
+  assert.equal(staffReplyMatchesRow(input, { ...row, channel: "messenger" }), false);
+  assert.equal(staffReplyMatchesRow(input, { ...row, contactId: "ct2" }), false);
+  assert.equal(staffReplyMatchesRow(input, { ...row, leadId: "ld1" }), false);
+
+  // canonicalJson underpins the payload half of that.
+  assert.equal(canonicalJson({ b: 1, a: [2, { d: 4, c: 3 }] }), canonicalJson({ a: [2, { c: 3, d: 4 }], b: 1 }));
+  assert.notEqual(canonicalJson({ a: 1 }), canonicalJson({ a: "1" }));
+
+  const outbox = shipped("src/lib/botOutbox.ts");
+  assert.match(outbox, /staffReplyMatchesRow\(/, "the duplicate path must verify, not assume");
+  assert.match(outbox, /outcome: "conflict"/, "a mismatch must be reportable as its own outcome");
+
+  const action = shipped("src/app/actions/whatsapp.ts");
+  assert.match(action, /queued\.outcome === "conflict"/, "and the action must surface it rather than claim a send");
 });
 
 test("the reply box supplies a composition, and the server derives the key", () => {
@@ -233,7 +300,9 @@ test("an outbound bubble reports delivery, not merely existence", () => {
   const outbound = { direction: "outbound", deliveredAt: null, seenAt: null };
 
   assert.deepEqual(deliveryLabel(outbound, true, { status: "pending" }), { text: "Sending…", tone: "pending" });
-  assert.deepEqual(deliveryLabel(outbound, true, { status: "retry", attempts: 3 }), { text: "Retrying… (attempt 3)", tone: "pending" });
+  // A retry is not a message in flight — the provider has already refused it.
+  // A retry is not a message in flight — the provider has already refused it.
+  assert.deepEqual(deliveryLabel(outbound, true, { status: "retry", attempts: 3 }), { text: "Retrying… (attempt 3)", tone: "failed" });
   assert.deepEqual(deliveryLabel(outbound, true, { status: "sent" }), { text: "Sent ✓", tone: "muted" });
 
   const dead = deliveryLabel(outbound, true, { status: "dead", failureCode: "invalid_recipient" });
@@ -263,8 +332,7 @@ test("the person who pressed Send is told what actually happened", () => {
   assert.deepEqual(sendOutcomeMessage({ status: "sent" }), { ok: "Sent ✓" });
   // The one that mattered: the action answered "Sent ✓" for a message it had
   // only written down, which ends the person's attention on the conversation.
-  assert.ok(sendOutcomeMessage({ status: "pending" }).ok?.startsWith("Queued"));
-  assert.ok(sendOutcomeMessage({ status: "retry" }).ok?.startsWith("Queued"));
+  assert.ok(sendOutcomeMessage({ status: "pending", attempts: 0 }).ok?.startsWith("Queued"));
   assert.ok(sendOutcomeMessage({ status: "dead", failureCode: "outside_window" }).error);
   assert.ok(sendOutcomeMessage({ status: "cancelled", failureCode: "superseded_by_human" }).error);
   assert.equal(sendOutcomeMessage({ status: "dead" }).ok, undefined);
@@ -272,6 +340,62 @@ test("the person who pressed Send is told what actually happened", () => {
   const action = shipped("src/app/actions/whatsapp.ts");
   assert.match(action, /sendOutcomeMessage\(state\)/, "the action must report the row's real state");
   assert.match(action, /deliveryStateForMessages\(\[queued\.communicationId\]\)/, "read back after the drain");
+});
+
+/**
+ * "Queued — sending…" fixed the wording and not the defect.
+ *
+ * The action drains the conversation BEFORE it reads the state, so by the time
+ * it answers, the provider has usually already had its say. A message WhatsApp
+ * has just refused — because the 24-hour window is shut, or the credential was
+ * revoked — was still being reported in green, as though it were merely in
+ * flight. The person moves on, and the customer never hears from them.
+ *
+ * The attempt count separates the two cases, and it is the only thing that can:
+ * zero means nobody has tried yet; anything above zero on a non-terminal row
+ * means the provider refused it and the queue is going to keep asking.
+ */
+test("a message the provider has already refused is not reported as merely queued", () => {
+  const refused = sendOutcomeMessage({ status: "retry", attempts: 1, failureCode: "not_configured" });
+  assert.equal(refused.ok, undefined, "a rejected message must not come back green");
+  assert.match(refused.error ?? "", /not connected/, "and must say what the channel actually objected to");
+
+  // Same for a row still marked running after a failed attempt.
+  assert.equal(sendOutcomeMessage({ status: "running", attempts: 2, failureCode: "rate_limited" }).ok, undefined);
+
+  // But a message that genuinely has not been attempted yet is not a failure,
+  // and must not be reported as one.
+  assert.ok(sendOutcomeMessage({ status: "pending", attempts: 0 }).ok);
+  assert.ok(sendOutcomeMessage({ status: "running", attempts: 0 }).ok);
+});
+
+/**
+ * Meta's 24-hour rule reopens on an INBOUND CUSTOMER MESSAGE, not on the passage
+ * of time. A backoff therefore cannot reach it: eight attempts over two hours is
+ * a message that was never going to arrive, dressed as one still in flight — and
+ * if the window did reopen, an answer composed two hours earlier would go out
+ * unannounced into a conversation that has moved on.
+ */
+test("a closed reply window fails immediately rather than retrying into silence", () => {
+  assert.ok(PERMANENT_FAILURES.has("outside_window"), "a timer cannot reopen the 24-hour window");
+  assert.ok(PERMANENT_FAILURES.has("invalid_recipient"));
+  assert.ok(PERMANENT_FAILURES.has("invalid_payload"));
+
+  // A revoked or mid-rotation credential IS repairable by an operator inside the
+  // retry window, and the queue recovering by itself is worth more than failing
+  // fast — now that the sender is told immediately either way.
+  assert.ok(!PERMANENT_FAILURES.has("not_configured"), "an operator can fix this inside the retry window");
+  assert.ok(!PERMANENT_FAILURES.has("rate_limited"));
+  assert.ok(!PERMANENT_FAILURES.has("transient_network"));
+  assert.ok(!PERMANENT_FAILURES.has("provider_error"), "an unfamiliar failure must stay recoverable");
+});
+
+test("a retrying bubble says why, and does not read like a message in flight", () => {
+  const outbound = { direction: "outbound", deliveredAt: null, seenAt: null };
+  const retrying = deliveryLabel(outbound, true, { status: "retry", attempts: 4, failureCode: "not_configured" });
+  assert.equal(retrying?.tone, "failed", "something has already gone wrong; this is not a pending send");
+  assert.match(retrying?.text ?? "", /not connected/, "the reason is the actionable part");
+  assert.match(retrying?.text ?? "", /attempt 4/, "and by the fourth attempt the count is not noise");
 });
 
 test("the outbox row and the timeline row are linked", () => {

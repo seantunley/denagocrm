@@ -34,7 +34,7 @@ import {
   enqueueStaffMessage,
   flushBotOutboxConversation,
 } from "../src/lib/botOutbox";
-import { staffReplyIdempotencyKey } from "../src/lib/messageDelivery";
+import { sendOutcomeMessage, staffReplyIdempotencyKey } from "../src/lib/messageDelivery";
 
 const SFX = Math.random().toString(16).slice(2, 10);
 let passed = 0;
@@ -71,8 +71,16 @@ const ids = {
 const composition = `comp_${SFX}`;
 const BODY = "Thanks — your unit is ready for collection.";
 
-const keyFor = (body: string) =>
-  staffReplyIdempotencyKey({ compositionId: composition, channel: "whatsapp", key: ids.wa, body });
+const keyFor = (body: string, overrides: { actorId?: string; contactId?: string | null } = {}) =>
+  staffReplyIdempotencyKey({
+    compositionId: composition,
+    channel: "whatsapp",
+    key: ids.wa,
+    actorId: overrides.actorId ?? ids.user,
+    contactId: overrides.contactId === undefined ? ids.contact : overrides.contactId,
+    leadId: null,
+    body,
+  });
 
 async function seed() {
   // The founding tenant is created by migration; make sure it is there rather
@@ -235,6 +243,39 @@ async function main() {
     `${corrected.communicationId} vs ${first.communicationId}`,
   );
 
+  // ── A key that resolves to a DIFFERENT send is a conflict ─────────────────
+  //
+  // With every identity field in the key this needs a hash collision, so it is
+  // forced here by submitting the first message's key alongside different
+  // content. The point is what happens when a key stops describing its send:
+  // answering "already sent" would discard the reply the person actually typed
+  // and attribute somebody else's message to them.
+  const conflicting = await enqueueStaffMessage({
+    channel: "whatsapp",
+    key: ids.wa,
+    message: { type: "text", text: "Sorry, we don't have stock" },
+    clientIdempotencyKey: keyFor(BODY), // the FIRST message's key, different body
+    body: "Sorry, we don't have stock",
+    contactId: ids.contact,
+    actorId: ids.user,
+  });
+  check(
+    "a key that resolves to a different send is refused, not treated as a duplicate",
+    conflicting.outcome === "conflict",
+    `outcome: ${conflicting.outcome}`,
+  );
+  check(
+    "and reports no ids, so nothing can be claimed about somebody else's message",
+    conflicting.communicationId === null && conflicting.outboxId === null,
+    JSON.stringify(conflicting),
+  );
+  const afterConflict = await basePrisma.communication.count({ where: { contactId: ids.contact } });
+  check(
+    "a conflict writes nothing",
+    afterConflict === 2,
+    `${afterConflict} rows, expected the original plus the correction`,
+  );
+
   // ── A cancelled message must not become an unclaimable queue head ─────────
   //
   // The bot rows were queued BEFORE the staff reply, so they sort ahead of it.
@@ -276,6 +317,39 @@ async function main() {
     "and the classification is acted on — one attempt, not eight",
     failedRow?.attempts === 1,
     `attempts: ${failedRow?.attempts}`,
+  );
+
+  // ── What the person is told after a real provider rejection ──────────────
+  //
+  // The action drains before it reads the state, so by the time it answers, the
+  // provider has usually already refused. Reporting that in green — "Queued —
+  // sending…" — is the original "Sent ✓" defect in a quieter voice: the person
+  // moves on and the customer never hears from them.
+  const deadState = (
+    await deliveryStateForMessages(
+      (
+        await basePrisma.botFlowOutbox.findMany({
+          where: { tenantId: DEFAULT_TENANT_ID, key: ids.deadKey },
+          select: { communicationId: true },
+        })
+      )
+        .map((row) => row.communicationId)
+        .filter((id): id is string => Boolean(id)),
+    )
+  ).size;
+  // Bot rows carry no communicationId, so there is nothing to look up — which is
+  // itself correct, and the assertion below is the one that matters.
+  check("a bot row has no timeline link to mis-report", deadState === 0);
+
+  const outcome = sendOutcomeMessage({
+    status: failedRow!.status,
+    failureCode: failedRow!.failureCode,
+    attempts: failedRow!.attempts,
+  });
+  check(
+    "a message the provider refused is reported as not sent, from the REAL row",
+    Boolean(outcome.error) && !outcome.ok,
+    JSON.stringify(outcome),
   );
 }
 

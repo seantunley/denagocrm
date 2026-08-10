@@ -5,7 +5,7 @@ import { DEFAULT_TENANT_ID } from "./tenant";
 import { withTenantWrite, writeTenantId, type TenantWriteTx } from "./tenantWrite";
 import { markBotSessionDeliveryFailedTx, pauseBotSessionTx } from "./botSessionStore";
 import { logAuditStrict } from "./audit";
-import { classifyDeliveryFailure, PERMANENT_FAILURES } from "./messageDelivery";
+import { classifyDeliveryFailure, PERMANENT_FAILURES, staffReplyMatchesRow } from "./messageDelivery";
 import type { OutMsg } from "./flow";
 import { sendWhatsAppButtons, sendWhatsAppImage, sendWhatsAppList, sendWhatsAppText } from "./whatsapp";
 import { sendDirectAttachment, sendDirectMessage, sendDirectQuickReplies } from "./messenger";
@@ -110,7 +110,16 @@ export async function enqueueBotMessages(input: {
 }
 
 export type StaffReplyResult = {
-  /** False when this exact composition was already accepted; nothing new was written. */
+  /**
+   * `created`  — this call wrote the message.
+   * `duplicate`— this exact send was already accepted; nothing new was written,
+   *              and the ids point at the message this duplicates.
+   * `conflict` — the key was already used by a DIFFERENT send. Nothing was
+   *              written and nothing is safe to report about it; the caller must
+   *              surface this rather than claim either outcome.
+   */
+  outcome: "created" | "duplicate" | "conflict";
+  /** Kept for readability at call sites that only care whether anything was written. */
   created: boolean;
   communicationId: string | null;
   outboxId: string | null;
@@ -262,7 +271,7 @@ export async function enqueueStaffMessage(input: {
         );
       }
 
-      return { created: true, communicationId: communication.id, outboxId: queued.id };
+      return { outcome: "created", created: true, communicationId: communication.id, outboxId: queued.id };
     });
   } catch (error) {
     // A resubmission of the same composed message, or two submissions racing.
@@ -272,12 +281,53 @@ export async function enqueueStaffMessage(input: {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       const existing = await prisma.botFlowOutbox.findFirst({
         where: { tenantId: outboxTenantId(), clientIdempotencyKey: input.clientIdempotencyKey },
-        select: { id: true, communicationId: true },
+        select: {
+          id: true,
+          communicationId: true,
+          channel: true,
+          key: true,
+          actorId: true,
+          contactId: true,
+          leadId: true,
+          payload: true,
+        },
       });
+      // The row lost the race and then vanished (deleted, or a different
+      // constraint fired). Nothing to point at, and nothing to claim about it.
+      if (!existing) return { outcome: "conflict", created: false, communicationId: null, outboxId: null };
+
+      // A key is a CLAIM about identity, and this is where the claim is checked
+      // against the row it matched. Answering "already sent" without checking
+      // means that if the key ever stops covering some part of the send — a
+      // future field, a derivation change — the caller is told a different
+      // message is theirs, and the real one is silently dropped. Verified, that
+      // becomes a visible error instead of a lost reply.
+      if (
+        !staffReplyMatchesRow(
+          {
+            channel: input.channel,
+            key: input.key,
+            actorId: input.actorId,
+            contactId: input.contactId,
+            leadId: input.leadId,
+            payload: input.message,
+          },
+          existing,
+        )
+      ) {
+        await logError(
+          "staff-reply-idempotency-conflict",
+          new Error("An idempotency key resolved to a different send"),
+          existing.id,
+        ).catch(() => {});
+        return { outcome: "conflict", created: false, communicationId: null, outboxId: null };
+      }
+
       return {
+        outcome: "duplicate",
         created: false,
-        communicationId: existing?.communicationId ?? null,
-        outboxId: existing?.id ?? null,
+        communicationId: existing.communicationId ?? null,
+        outboxId: existing.id,
       };
     }
     throw error;

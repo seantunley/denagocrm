@@ -48,6 +48,9 @@ export async function sendWhatsAppMessage(
       compositionId,
       channel: "whatsapp",
       key: digits,
+      actorId: user.id,
+      contactId,
+      leadId,
       body: text,
     }),
     body: text,
@@ -64,6 +67,18 @@ export async function sendWhatsAppMessage(
       user,
     },
   });
+
+  /**
+   * The key was already used by a DIFFERENT send. Nothing was written, and
+   * neither "sent" nor "queued" is a true thing to say about this submission, so
+   * neither is said. Reporting it as a duplicate would silently discard the
+   * message the person actually typed.
+   */
+  if (queued.outcome === "conflict") {
+    return {
+      error: "This reply could not be matched to its send — reload the conversation and try again.",
+    };
+  }
 
   // Best-effort immediate drain so the reply leaves now rather than on the next
   // cron tick; the worker owns retries, ordering and dead-lettering if it fails.
