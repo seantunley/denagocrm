@@ -81,6 +81,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { isStale, matchesOwnerFilter, OWNER_ANY, OWNER_UNASSIGNED } from "@/lib/kanbanRules";
 
 export type KanbanLead = {
   id: string;
@@ -107,7 +108,7 @@ export type KanbanLead = {
   nextStep?: { summary: string; when: string; overdue: boolean } | null;
 };
 
-const STALE_DAYS = 7;
+
 
 // Centre the dragged card on the cursor. Cards are grabbed by their top-left handle,
 // which otherwise floats the card up-and-right of the pointer, so what you see and
@@ -131,6 +132,8 @@ export type KanbanStage = {
   name: string;
   color: string;
   entryAction: string | null;
+  /** From the stage's own configuration; null falls back to DEFAULT_STALE_DAYS. */
+  staleAfterDays: number | null;
   automationRules: string[];
   leads: KanbanLead[];
 };
@@ -159,7 +162,7 @@ function SourceIcon({ source }: { source: string }) {
   return <PenLine className="size-3.5 text-muted-foreground" />;
 }
 
-function LeadCard({ lead, dragging, actions }: { lead: KanbanLead; dragging?: boolean; actions?: ReactNode }) {
+function LeadCard({ lead, dragging, actions, staleAfterDays = null }: { lead: KanbanLead; dragging?: boolean; actions?: ReactNode; staleAfterDays?: number | null }) {
   const opportunity = lead.title !== lead.name && lead.title !== lead.productName ? lead.title : null;
 
   return (
@@ -280,7 +283,7 @@ function LeadCard({ lead, dragging, actions }: { lead: KanbanLead; dragging?: bo
 
       <div className="mt-2.5 flex min-w-0 items-center justify-between gap-2">
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-          {(lead.ageDays ?? 0) >= STALE_DAYS && (
+          {isStale(lead.ageDays, staleAfterDays) && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <span className="flex items-center gap-1 rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-300">
@@ -478,8 +481,11 @@ function DraggableCard({
   users,
   permissions,
   actions,
+  staleAfterDays,
 }: {
   lead: KanbanLead;
+  /** This card's own stage threshold — see isStale. */
+  staleAfterDays: number | null;
   stages: KanbanStage[];
   users: { id: string; name: string }[];
   permissions: BoardPermissions;
@@ -500,6 +506,7 @@ function DraggableCard({
         >
           <LeadCard
             lead={lead}
+            staleAfterDays={staleAfterDays}
             actions={
               <LeadActionsButton
                 lead={lead}
@@ -604,6 +611,7 @@ function Column({
           <DraggableCard
             key={lead.id}
             lead={lead}
+            staleAfterDays={stage.staleAfterDays}
             stages={stages}
             users={users}
             permissions={permissions}
@@ -631,11 +639,14 @@ export default function KanbanBoard({
   products = [],
   users = [],
   permissions,
+  currentUserId = null,
 }: {
   stages: KanbanStage[];
   products?: { id: string; name: string }[];
   users?: { id: string; name: string }[];
   permissions: BoardPermissions;
+  /** The signed-in user, so "Mine" can filter by ID rather than by name. */
+  currentUserId?: string | null;
 }) {
   const router = useRouter();
   const [stages, setStages] = useState(initial);
@@ -643,7 +654,7 @@ export default function KanbanBoard({
   const [pendingTd, setPendingTd] = useState<{ lead: KanbanLead; stageId: string } | null>(null);
   const [pendingOutcome, setPendingOutcome] = useState<{ lead: KanbanLead; mode: "won" | "lost" } | null>(null);
   const [query, setQuery] = useState("");
-  const [owner, setOwner] = useState("");
+  const [owner, setOwner] = useState<string>(OWNER_ANY);
   const [attentionOnly, setAttentionOnly] = useState(false);
   const boardRef = useRef<HTMLDivElement>(null);
   const [, startTransition] = useTransition();
@@ -660,13 +671,25 @@ export default function KanbanBoard({
     useSensor(KeyboardSensor),
   );
 
-  const owners = useMemo(
-    () =>
-      Array.from(
-        new Set(stages.flatMap((stage) => stage.leads.map((lead) => lead.assignee).filter(Boolean) as string[])),
-      ).sort(),
-    [stages],
-  );
+  /**
+   * Owners as {id, name}, deduped by ID.
+   *
+   * The filter used to hold a display NAME and compare `lead.assignee === owner`.
+   * Names are labels: two people called "J. Smith" become one filter entry that
+   * matches both, and renaming somebody silently empties the filter for whoever
+   * had it applied.
+   */
+  const owners = useMemo(() => {
+    const byId = new Map<string, string>();
+    for (const stage of stages) {
+      for (const lead of stage.leads) {
+        if (lead.assignedToId) byId.set(lead.assignedToId, lead.assignee ?? "Unnamed");
+      }
+    }
+    return [...byId.entries()]
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [stages]);
 
   const visibleStages = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -680,9 +703,11 @@ export default function KanbanBoard({
             .join(" ")
             .toLowerCase()
             .includes(needle);
-        const matchesOwner = !owner || lead.assignee === owner;
+        // Filter on the ID. A display name is a label: two people called
+        // "J. Smith" collide, and a rename silently empties the filter.
+        const matchesOwner = matchesOwnerFilter(lead.assignedToId, owner);
         const needsAttention =
-          !attentionOnly || lead.noNextStep || lead.nextStep?.overdue || (lead.ageDays ?? 0) >= STALE_DAYS;
+          !attentionOnly || lead.noNextStep || lead.nextStep?.overdue || isStale(lead.ageDays, stage.staleAfterDays);
         return matchesQuery && matchesOwner && needsAttention;
       }),
     }));
@@ -718,6 +743,23 @@ export default function KanbanBoard({
     });
   }
 
+  /**
+   * Put the board back exactly as it was.
+   *
+   * The move is applied optimistically, which is right — the card should follow
+   * the pointer. But a rejected move only raised a toast, so the card STAYED in
+   * the column the server had refused to put it in. The board then showed a stage
+   * the lead is not in, until something else happened to refresh it, and every
+   * subsequent decision on that screen was made against a false position.
+   *
+   * Restoring the captured snapshot is the whole rollback: it is the state the
+   * user had, so their scroll position, filters and selection are untouched.
+   */
+  function rollbackTo(snapshot: KanbanStage[], message: string) {
+    setStages(snapshot);
+    toast.error(message);
+  }
+
   function requestMove(lead: KanbanLead, targetStageId: string) {
     const fromStage = stages.find((stage) => stage.leads.some((item) => item.id === lead.id));
     const target = stages.find((stage) => stage.id === targetStageId);
@@ -726,11 +768,18 @@ export default function KanbanBoard({
       setPendingTd({ lead, stageId: targetStageId });
       return;
     }
+    // Captured BEFORE the optimistic move, so a refusal restores what the user
+    // was looking at rather than an approximation of it.
+    const snapshot = stages;
     applyMove(lead.id, fromStage.id, targetStageId);
     startTransition(async () => {
-      await moveLead(lead.id, targetStageId).catch(() => {
-        toast.error("Couldn't move the lead");
-      });
+      try {
+        await moveLead(lead.id, targetStageId);
+      } catch (error) {
+        // moveLead throws for a refused move — no permission for this pipeline,
+        // or a stage that requires booking details. The message is the reason.
+        rollbackTo(snapshot, error instanceof Error ? error.message : "Couldn't move the lead");
+      }
     });
   }
 
@@ -749,6 +798,7 @@ export default function KanbanBoard({
     const fromStage = stages.find((stage) => stage.leads.some((item) => item.id === lead.id));
     setPendingTd(null);
     if (!fromStage) return;
+    const snapshot = stages;
     if (fromStage.id !== stageId) applyMove(lead.id, fromStage.id, stageId);
     startTransition(async () => {
       const result = await moveLeadToTestDrive(lead.id, stageId, data).catch(() => ({
@@ -760,7 +810,9 @@ export default function KanbanBoard({
           description: `${data.date} at ${data.time}${data.location ? ` · ${data.location}` : ""}`,
         });
       } else {
-        toast.error(result.error ?? "Couldn't book the test drive");
+        // Same rule: a refused booking must not leave the card in the stage the
+        // booking was the price of entry to.
+        rollbackTo(snapshot, result.error ?? "Couldn't book the test drive");
       }
     });
   }
@@ -905,10 +957,13 @@ export default function KanbanBoard({
               className="input h-10 sm:w-44"
               aria-label="Filter by owner"
             >
-              <option value="">All owners</option>
-              {owners.map((name) => (
-                <option key={name} value={name}>
-                  {name}
+              <option value={OWNER_ANY}>All owners</option>
+              {currentUserId && <option value={currentUserId}>Mine</option>}
+              <option value={OWNER_UNASSIGNED}>Unassigned</option>
+              {owners.length > 0 && <option disabled>──────────</option>}
+              {owners.map((person) => (
+                <option key={person.id} value={person.id}>
+                  {person.name}
                 </option>
               ))}
             </select>
@@ -924,12 +979,12 @@ export default function KanbanBoard({
               <CircleAlert className="size-4" />
               Needs attention
             </button>
-            {(query || owner || attentionOnly) && (
+            {(query || owner !== OWNER_ANY || attentionOnly) && (
               <button
                 type="button"
                 onClick={() => {
                   setQuery("");
-                  setOwner("");
+                  setOwner(OWNER_ANY);
                   setAttentionOnly(false);
                 }}
                 className="btn h-10 text-muted-foreground"
