@@ -72,14 +72,41 @@ export async function buildMatrix(): Promise<MatrixEntry[]> {
       witness: "name",
       victimRow: (r) => r.pipelineId,
       deleteVictimRow: (r) => r.archivePipelineId,
+      // FIND THE NEW ROW THROUGH basePrisma, NOT THROUGH listSalesPipelines().
+      //
+      // This probe used to bracket the create with two `listSalesPipelines()`
+      // calls made OUTSIDE `actor.as` and diff the ids. That was wrong in two
+      // separate ways, and #457 — which gave `listSalesPipelines` the tenant
+      // predicate it had always been missing — turned both of them from a
+      // misleading FAIL into an equally misleading SKIP:
+      //
+      //   · outside `actor.as` there is no session and no tenant scope, so
+      //     `pipelineTenantFilter()` → `actingTenantId()` → `writeTenantId()`
+      //     THROWS TenantScopeError under enforcement (fail closed, correctly)
+      //     and resolves to the FOUNDING tenant while dormant. Either way the
+      //     probe never sees the row it just created, and the whole
+      //     createViaAction is reported as "the create action itself failed" —
+      //     an accusation aimed at src/, sourced entirely from the probe.
+      //
+      //   · even inside the session it would be the wrong instrument: a row
+      //     stamped with the WRONG tenant is exactly what OWN exists to catch,
+      //     and a scoped list cannot return it, so the defect would present as
+      //     a skip rather than a failure. The read-back must not be subject to
+      //     the boundary under test.
+      //
+      // So the row is located by its unique name through the bypass client —
+      // the same ground-truth read the JobCard, ConsentRecord, Dashboard and
+      // TimelinePin OWN probes already use — and the engine then reads its
+      // tenantId column and judges it.
       createViaAction: async (actor) => {
-        const before = await pipelineLib.listSalesPipelines();
-        const seen = new Set(before.map((p) => p.id));
-        await actor.as(() =>
-          pipelines.createSalesPipeline(fd({ name: `probe-${actor.tenant.key}-${Date.now().toString(36)}`, type: "sales" })),
+        const name = `probe-${actor.tenant.key}-${Date.now().toString(36)}`;
+        await actor.as(() => pipelines.createSalesPipeline(fd({ name, type: "sales" })));
+        const { basePrisma } = await import("../../src/lib/db");
+        const rows = await basePrisma.$queryRawUnsafe<Array<{ id: string }>>(
+          `SELECT "id" FROM "SalesPipeline" WHERE "name" = $1`,
+          name,
         );
-        const after = await pipelineLib.listSalesPipelines();
-        return after.find((p) => !seen.has(p.id))?.id ?? null;
+        return rows[0]?.id ?? null;
       },
       readById: async (actor, id) => {
         // editSalesPipeline's own pre-read is the closest thing to a detail
@@ -105,17 +132,27 @@ export async function buildMatrix(): Promise<MatrixEntry[]> {
       actions: "pipelines.ts: createSalesPipelineStage / editSalesPipelineStage",
       witness: "name",
       victimRow: (r) => r.stageId,
+      // Ground-truth read-back, for the reasons written out on SalesPipeline's
+      // OWN probe above. Bracketing the create with two out-of-session
+      // `listPipelineStages()` calls made this check a SKIP under enforcement
+      // ("the action does not expose the new row's id"): with no scope
+      // established, `tenantFilter()` classifies as `closed` and appends
+      // `AND FALSE`, so the diff was always empty and the child half of the
+      // parent/child ownership rule was never actually measured at the gate.
       createViaAction: async (actor) => {
-        const before = await pipelineLib.listPipelineStages(actor.tenant.rows.pipelineId);
-        const seen = new Set(before.map((s) => s.id));
+        const name = `stage-${actor.tenant.key}-${Date.now().toString(36)}`;
         await actor.as(() =>
           pipelines.createSalesPipelineStage(
             actor.tenant.rows.pipelineId,
-            fd({ name: `stage-${Date.now().toString(36)}`, defaultProbability: "20" }),
+            fd({ name, defaultProbability: "20" }),
           ),
         );
-        const after = await pipelineLib.listPipelineStages(actor.tenant.rows.pipelineId);
-        return after.find((s) => !seen.has(s.id))?.id ?? null;
+        const { basePrisma } = await import("../../src/lib/db");
+        const rows = await basePrisma.$queryRawUnsafe<Array<{ id: string }>>(
+          `SELECT "id" FROM "PipelineStage" WHERE "name" = $1`,
+          name,
+        );
+        return rows[0]?.id ?? null;
       },
       readById: async (actor, id) => actor.as(() => pipelineLib.getPipelineStage(id)),
       updateById: async (actor, id, value) =>
