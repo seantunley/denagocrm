@@ -459,10 +459,37 @@ test("there is exactly one implementation of the acting-tenant rule", () => {
   const flowScope = shipped("src/lib/flowScope.ts");
   assert.match(flowScope, /return actingTenantId\(\)/);
   assert.ok(
-    !/decideBuilderTenant\(/.test(flowScope),
+    !/decide(?:Builder|Acting)Tenant\(/.test(flowScope),
     "flowScope must not re-derive the rule it now shares",
   );
+
+  // WHAT THE PURE RULE IS CALLED IS NOT THE INVARIANT, AND MUST NOT BE PINNED
+  // HERE. Four branches in the 2026-08-10 tenant wave each shipped this module:
+  // this one delegates to `decideBuilderTenant` in ./flowTenantScope, which has
+  // been on main since the flow-builder scoping work (#452) and is what the
+  // reconciliation PR settled on as canonical; #457/#459/#430 each carried a
+  // byte-identical `decideActingTenant` in ./actingTenantRule. Both bodies are
+  // `enforced ?? session ?? founding` and were executed against the same 36-case
+  // cross product, a 24-case enforcement x session matrix and 9 adversarial
+  // inputs with zero divergence. So an assertion on the spelling would not
+  // measure tenant safety at all — it would only decide which sibling branch
+  // turns this suite red by landing first, in whichever order the add/add
+  // conflict on this file happens to be resolved.
+  //
+  // What must hold under EITHER resolution is the shape: ONE delegation, to a rule
+  // this module IMPORTS rather than re-derives, fed by BOTH rungs. A delegation
+  // that dropped the session rung — the original defect — still fails here.
   const acting = shipped("src/lib/actingTenant.ts");
-  assert.match(acting, /decideBuilderTenant\(\{/);
+  assert.equal(
+    (acting.match(/decide(?:Builder|Acting)Tenant\(\{/g) ?? []).length,
+    1,
+    "actingTenantId must resolve through exactly one pure rule, called exactly once",
+  );
+  assert.match(
+    acting,
+    /import \{ decide(?:Builder|Acting)Tenant \} from "\.\/(?:flowTenantScope|actingTenantRule)";/,
+    "the rule must be imported — a copy defined here is the duplication this test exists to stop",
+  );
+  assert.match(acting, /enforcedTenantId: writeTenantId\(\)/);
   assert.match(acting, /sessionTenantId: await getActiveTenantId\(\)/);
 });
