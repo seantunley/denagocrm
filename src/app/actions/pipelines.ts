@@ -1,7 +1,6 @@
 "use server";
 
 import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
-import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import {
   getAccessibleLeadScope,
@@ -17,6 +16,7 @@ import {
   getOwnedPipelineRow,
   getPipelineStage,
   listPipelineStages,
+  pipelineTenantFilter,
   reorderPipelineStages,
   updateLeadForecast,
   updatePipeline,
@@ -26,7 +26,6 @@ import { logAuditStrict } from "@/lib/audit";
 import { basePrisma } from "@/lib/db";
 import { parseRands } from "@/lib/format";
 import { parsePipelineStageAction } from "@/lib/pipelineStageActions";
-import { writeTenantId } from "@/lib/tenantWrite";
 
 const str = (formData: FormData, key: string) => {
   const value = String(formData.get(key) ?? "").trim();
@@ -238,10 +237,16 @@ type LeadForecastBefore = {
 
 export async function saveLeadForecast(leadId: string, formData: FormData) {
   const user = await requireLeadAccess(leadId, "forecast.manage");
-  const tenantId = writeTenantId();
-  const tenantScope = tenantId
-    ? Prisma.sql`AND "tenantId" = ${tenantId}`
-    : Prisma.empty;
+  // `before` is not only the audit snapshot: `before.teamId` decides below whether
+  // this save needs `leads.assign`, and its absence refuses the whole action. It
+  // was scoped by `writeTenantId()`, which is NULL while enforcement is dormant —
+  // so the predicate collapsed to `Prisma.empty` and this read reached any
+  // workspace's lead by id. `requireLeadAccess` above does not close that:
+  // `activeTenantPredicate()` returns `{}` while dormant and an owner's
+  // accessible-id list is `null`, so the gate answers yes for an id in any
+  // workspace. The acting workspace's predicate, from the one builder that emits
+  // it, is the boundary.
+  const tenantScope = await pipelineTenantFilter();
   const beforeRows = await basePrisma.$queryRaw<LeadForecastBefore[]>`
     SELECT "probability", "forecastCategory", "expectedCloseDate", "estimatedCostCents", "teamId"
     FROM "Lead"

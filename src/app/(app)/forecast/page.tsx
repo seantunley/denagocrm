@@ -3,7 +3,12 @@ import { Calculator, Crosshair, HandCoins, Layers3, SlidersHorizontal, TrendingU
 import { basePrisma } from "@/lib/db";
 import { formatDate, formatDateTime, formatZAR, formatZARCompact } from "@/lib/format";
 import { getAccessibleLeadScope, hasPermission, requirePermission } from "@/lib/permissions";
-import { listActiveSalesPipelines, listForecastLeads, summarizeForecast } from "@/lib/pipelines";
+import {
+  listActiveSalesPipelines,
+  listForecastLeads,
+  pipelineTenantFilter,
+  summarizeForecast,
+} from "@/lib/pipelines";
 import { saveLeadForecast, snapshotForecast } from "@/app/actions/pipelines";
 import { EmptyState, SectionHeading, StatusPill, Surface } from "@/components/visual-system";
 import { WorkspaceHero } from "@/components/workspace-hero";
@@ -107,6 +112,13 @@ export default async function ForecastPage({
     hasPermission(user, "audit.view"),
   ]);
 
+  // This query had NO tenant predicate at all — not even a dormant one — on
+  // `basePrisma`, the RLS bypass. So the history panel listed every workspace's
+  // stored forecasts: their period, their pipeline and team names through the
+  // joins, their open and weighted revenue, their deal counts. The `scope.viewAll`
+  // filter below is a WITHIN-workspace visibility rule (whose team, whose deals)
+  // and never was a tenant boundary — an owner skips it entirely.
+  const snapshotScope = await pipelineTenantFilter('fs."tenantId"');
   const snapshotRows = await basePrisma.$queryRaw<SnapshotRow[]>`
     SELECT fs."id", fs."period", fs."pipelineId", fs."teamId", fs."userId",
       p."name" AS "pipelineName", t."name" AS "teamName", u."name" AS "userName",
@@ -116,6 +128,7 @@ export default async function ForecastPage({
     LEFT JOIN "SalesPipeline" p ON p."id" = fs."pipelineId"
     LEFT JOIN "Team" t ON t."id" = fs."teamId"
     LEFT JOIN "User" u ON u."id" = fs."userId"
+    WHERE TRUE ${snapshotScope}
     ORDER BY fs."capturedAt" DESC LIMIT 100
   `;
   const snapshots = (scope.viewAll
