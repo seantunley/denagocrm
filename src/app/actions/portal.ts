@@ -5,7 +5,7 @@ import crypto from "crypto";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { basePrisma, prisma } from "@/lib/db";
-import { currentTenantScope } from "@/lib/tenantScope";
+import { portalTenantId } from "@/lib/portalTenant";
 import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { resolveTenantActor } from "@/lib/tenantActor";
 import { sendEmail, isSmtpConfigured } from "@/lib/email";
@@ -97,15 +97,9 @@ async function firstStaffUser() {
  * The enforced scope still wins when present: it has already been validated
  * against this contact, and preferring it keeps one authority rather than two.
  */
-async function portalTenantId(contactId: string): Promise<string | null> {
-  const scoped = currentTenantScope()?.tenantId;
-  if (scoped) return scoped;
-  const rows = await basePrisma.$queryRaw<Array<{ tenantId: string | null }>>`
-    SELECT "tenantId" FROM "Contact" WHERE "id" = ${contactId} LIMIT 1`;
-  // Null only when the contact itself is unowned — a pre-tenancy row awaiting
-  // backfill. Inventing an owner here is the defect in the other direction.
-  return rows[0]?.tenantId ?? null;
-}
+// Implementation lives in @/lib/portalTenant — portalExpansion.ts needs the same
+// rule, and a second copy is how this codebase ended up with four acting-tenant
+// implementations.
 
 async function createPortalNotification(contactId: string, title: string, body: string, href?: string, kind = "info") {
   const tenantId = await portalTenantId(contactId);

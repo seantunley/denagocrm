@@ -32,16 +32,57 @@ const code = (rel: string) => src(rel).replace(/\/\*[\s\S]*?\*\//g, "").replace(
 test("every portal write inherits the contact's workspace", () => {
   const portal = code("src/app/actions/portal.ts");
 
-  // The resolver itself: enforced scope first, then the contact, never a default.
-  assert.match(portal, /async function portalTenantId\(contactId: string\): Promise<string \| null> \{/);
-  assert.match(portal, /SELECT "tenantId" FROM "Contact" WHERE "id" = \$\{contactId\} LIMIT 1/);
-  assert.doesNotMatch(portal, /portalTenantId[\s\S]{0,400}DEFAULT_TENANT_ID/, "a portal write must never invent an owner");
+  // The resolver lives in the shared module now — enforced scope first, then the
+  // contact, never a default.
+  const shared = code("src/lib/portalTenant.ts");
+  assert.match(shared, /SELECT "tenantId" FROM "Contact" WHERE "id" = \$\{contactId\} LIMIT 1/);
+  assert.doesNotMatch(shared, /DEFAULT_TENANT_ID/, "a portal write must never invent an owner");
 
   // No write may still read the ambient scope directly.
   const assignments = portal.match(/const tenantId = [^\n;]+;/g) ?? [];
   assert.ok(assignments.length >= 4, `expected the portal write sites, found ${assignments.length}`);
   for (const line of assignments) {
     assert.match(line, /await portalTenantId\(/, `a portal write still resolves its own owner:\n  ${line}`);
+  }
+});
+
+test("portalExpansion — the LIVE portal surface — inherits too", () => {
+  // This file is what the audit actually named, and the first pass of this PR
+  // missed it: the search that found portal.ts was truncated by its own `head`,
+  // and the visible subset was treated as the whole result.
+  //
+  // addPortalCaseMessage() is reachable from PortalExpansionForms.tsx, so these
+  // are live customer-facing writes, not dead code.
+  const exp = code("src/app/actions/portalExpansion.ts");
+
+  const assignments = exp.match(/const tenantId = [^\n;]+;/g) ?? [];
+  assert.ok(assignments.length >= 4, `expected the portalExpansion write sites, found ${assignments.length}`);
+  for (const line of assignments) {
+    assert.match(line, /await portalTenantId\(contact\.id\)/, `still resolving its own owner:\n  ${line}`);
+  }
+  assert.doesNotMatch(exp, /currentTenantScope\(\)/, "no portal write may read the ambient scope");
+});
+
+test("the case message names a tenant column at all, and the case update is scoped", () => {
+  const exp = code("src/app/actions/portalExpansion.ts");
+
+  // The INSERT previously listed no tenantId column whatsoever, so the row was
+  // unowned however the scope resolved — a stronger defect than a null variable.
+  assert.match(exp, /INSERT INTO "CustomerCaseMessage" \("id", "tenantId", "caseId", "contactId", "direction", "type", "body"\)/);
+
+  // The UPDATE ran on the bypass client keyed only on a caseId from the form.
+  // portalCanAccessCase() is an access check, not a tenant predicate.
+  assert.match(exp, /WHERE "id" = \$\{caseId\} AND "tenantId" IS NOT DISTINCT FROM \$\{tenantId\}/);
+});
+
+test("there is ONE portal tenant rule, not one per file", () => {
+  // Four independent copies of the acting-tenant rule is how this codebase got
+  // into merge trouble; the portal rule is not going to repeat it.
+  const shared = code("src/lib/portalTenant.ts");
+  assert.match(shared, /export async function portalTenantId\(contactId: string\): Promise<string \| null>/);
+  for (const f of ["src/app/actions/portal.ts", "src/app/actions/portalExpansion.ts"]) {
+    assert.match(code(f), /from "@\/lib\/portalTenant"/, `${f} must import the shared rule`);
+    assert.doesNotMatch(code(f), /async function portalTenantId\(/, `${f} must not define its own copy`);
   }
 });
 
