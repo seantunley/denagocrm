@@ -3,6 +3,7 @@
 import { asActionResult, refuse, type ActionResult } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
+import { actingTenantId } from "@/lib/actingTenant";
 import { customerRecordTenantId } from "@/lib/customerRecordTenant";
 import { requireQuoteAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
@@ -14,6 +15,7 @@ import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { isModuleEnabled, requireModuleEnabled } from "@/lib/modules/enabled";
 
 const MAX_FILE = 4 * 1024 * 1024;
+const QUOTE_GONE = "This quote is no longer available in this workspace.";
 
 async function attachStageDocument(
   quoteId: string,
@@ -29,6 +31,7 @@ async function attachStageDocument(
   const storedName = await saveFile(buffer, file.name || fileName, file.type || "application/pdf", tenantId);
   await prisma.document.create({
     data: {
+      tenantId,
       fileName,
       storedName,
       mimeType: file.type || "application/pdf",
@@ -48,21 +51,25 @@ function pickFile(formData: FormData): File | null {
 
 export async function markInvoiced(quoteId: string, formData: FormData) {
   return asActionResult(async () => {
-    // The whole fulfilment pipeline (invoice → deposit → schedule → deliver) is
-    // automotive-owned and drives the automotive /deliveries board. Every stage is
-    // reachable by direct POST, so gate each one server-side; throws when off.
     await requireModuleEnabled("automotive");
     const user = await requireQuoteAccess(quoteId, "deliveries.manage");
-    const quote = await prisma.quote.findUniqueOrThrow({ where: { id: quoteId }, include: { contact: true } });
+    const tenantId = await actingTenantId();
+    const quote = await prisma.quote.findFirst({
+      where: { id: quoteId, tenantId },
+      include: { contact: true },
+    });
+    if (!quote) refuse(QUOTE_GONE);
     if (quote.status !== "accepted") refuse("Only an accepted quote can be invoiced.");
     if (quote.invoicedAt) refuse("This quote has already been invoiced.");
     const file = pickFile(formData);
-    // Silently dropping an oversized upload and reporting success is the worst
-    // of these: the paperwork simply never arrives and nobody is told.
     if (!file) refuse("Choose a file to upload.");
     if (file.size > MAX_FILE) refuse("That file is larger than 4 MB.");
     await attachStageDocument(quoteId, quote.contactId, "invoice", `Invoice — Q-${quote.number}${file.name ? ` — ${file.name}` : ".pdf"}`, file, user.id, quote.tenantId);
-    await prisma.quote.update({ where: { id: quoteId }, data: { invoicedAt: new Date() } });
+    const updated = await prisma.quote.updateMany({
+      where: { id: quoteId, tenantId },
+      data: { invoicedAt: new Date() },
+    });
+    if (updated.count !== 1) refuse(QUOTE_GONE);
     await logAudit({
       action: "fulfilment.invoiced",
       summary: `Q-${quote.number} invoiced — invoice filed${quote.contact ? ` for ${contactName(quote.contact)}` : ""}`,
@@ -79,16 +86,20 @@ export async function markDepositPaid(quoteId: string, formData: FormData) {
   return asActionResult(async () => {
     await requireModuleEnabled("automotive");
     const user = await requireQuoteAccess(quoteId, "deliveries.manage");
-    const quote = await prisma.quote.findUniqueOrThrow({ where: { id: quoteId } });
+    const tenantId = await actingTenantId();
+    const quote = await prisma.quote.findFirst({ where: { id: quoteId, tenantId } });
+    if (!quote) refuse(QUOTE_GONE);
     if (!quote.invoicedAt) refuse("Invoice this quote before recording a deposit.");
     if (quote.depositPaidAt) refuse("The deposit is already recorded.");
     const file = pickFile(formData);
-    // Silently dropping an oversized upload and reporting success is the worst
-    // of these: the paperwork simply never arrives and nobody is told.
     if (!file) refuse("Choose a file to upload.");
     if (file.size > MAX_FILE) refuse("That file is larger than 4 MB.");
     await attachStageDocument(quoteId, quote.contactId, "pop", `Proof of payment — Q-${quote.number}${file.name ? ` — ${file.name}` : ".pdf"}`, file, user.id, quote.tenantId);
-    await prisma.quote.update({ where: { id: quoteId }, data: { depositPaidAt: new Date() } });
+    const updated = await prisma.quote.updateMany({
+      where: { id: quoteId, tenantId },
+      data: { depositPaidAt: new Date() },
+    });
+    if (updated.count !== 1) refuse(QUOTE_GONE);
     await logAudit({
       action: "fulfilment.deposit_paid",
       summary: `Q-${quote.number} deposit received — proof of payment filed`,
@@ -103,15 +114,14 @@ export async function markDepositPaid(quoteId: string, formData: FormData) {
 
 export async function scheduleDelivery(quoteId: string, formData: FormData) {
   return asActionResult(async () => {
-    // Scheduling a delivery is automotive-owned fulfilment (workshop activity +
-    // delivery paperwork). Reachable by direct POST regardless of the UI, so gate
-    // it server-side; throws when the automotive pack is off.
     await requireModuleEnabled("automotive");
     const user = await requireQuoteAccess(quoteId, "deliveries.manage");
-    const quote = await prisma.quote.findUniqueOrThrow({
-      where: { id: quoteId },
+    const tenantId = await actingTenantId();
+    const quote = await prisma.quote.findFirst({
+      where: { id: quoteId, tenantId },
       include: { contact: true, lead: { include: { product: true } }, items: true },
     });
+    if (!quote) refuse(QUOTE_GONE);
     if (!quote.depositPaidAt) refuse("Record the deposit before scheduling delivery.");
     if (quote.deliveryScheduledFor) refuse("Delivery is already scheduled.");
     const dateRaw = String(formData.get("date") ?? "").trim();
@@ -119,18 +129,17 @@ export async function scheduleDelivery(quoteId: string, formData: FormData) {
     const when = new Date(dateRaw);
     if (isNaN(when.getTime())) refuse("That delivery date is not valid.");
     const file = pickFile(formData);
-    // The file is optional, but a SELECTED one that is too large must not be
-    // dropped while the stage change proceeds: the user picked it, the toast says
-    // it worked, and the form is gone. Refuse before anything is committed.
     if (file && file.size > MAX_FILE) refuse("That delivery paperwork is larger than 4 MB.");
     if (file) {
       await attachStageDocument(quoteId, quote.contactId, "delivery-note", `Delivery paperwork — Q-${quote.number} — ${file.name}`, file, user.id, quote.tenantId);
     }
     const model = quote.lead?.product?.name ?? quote.items[0]?.description ?? "cart";
-    // The scheduling task says who the cart is going to; for a fleet order that
-    // is the account, which is what the driver's paperwork will also say.
     const who = quoteBillTo(quote, await loadBillToFleet(prisma, quote.fleetId)).name;
-    await prisma.quote.update({ where: { id: quoteId }, data: { deliveryScheduledFor: when } });
+    const updated = await prisma.quote.updateMany({
+      where: { id: quoteId, tenantId },
+      data: { deliveryScheduledFor: when },
+    });
+    if (updated.count !== 1) refuse(QUOTE_GONE);
     await prisma.activity.create({
       data: {
         type: "todo",
@@ -160,22 +169,14 @@ export async function scheduleDelivery(quoteId: string, formData: FormData) {
 
 export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) {
   return asActionResult(async () => {
-    // Authorise the caller BEFORE any refusal, so the rule holds everywhere
-    // without exceptions to reason about. This particular one leaks nothing about
-    // the quote — the automotive pack being off is install-wide config — but
-    // "except where the message is harmless" is precisely the judgement that goes
-    // wrong later, and it costs nothing to order it correctly.
     const user = await requireQuoteAccess(quoteId, "deliveries.manage");
-    // Delivery photos are automotive-owned paperwork; reject when the pack is off.
-    // Belt-and-braces with the automotive-gated UI on the quote page — the action
-    // is reachable by a direct POST regardless of what is rendered.
     if (!(await isModuleEnabled("automotive"))) refuse("The automotive pack is switched off.");
-    const quote = await prisma.quote.findUniqueOrThrow({ where: { id: quoteId } });
+    const tenantId = await actingTenantId();
+    const quote = await prisma.quote.findFirst({ where: { id: quoteId, tenantId } });
+    if (!quote) refuse(QUOTE_GONE);
     const files = formData.getAll("files").filter(
       (file): file is File => typeof file === "object" && (file as File).size > 0
     );
-    // The input is not `required`, so "Add delivery photos" with nothing selected
-    // used to report "Photos uploaded" having saved nothing at all.
     if (files.length === 0) refuse("Choose at least one photo.");
 
     const MAX_PHOTOS = 10;
@@ -183,10 +184,6 @@ export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) 
     if (accepted.length === 0) {
       refuse("None of those files could be used — photos must be images under 4 MB.");
     }
-    // The TOTAL, not just each file. Ten files individually under 4 MB is 40 MB,
-    // which the framework refuses before this function runs — so the per-file limit
-    // was the only one enforced and the real ceiling was invisible. Same budget the
-    // client resizes against.
     const payload = checkUploadPayload(accepted.slice(0, MAX_PHOTOS).map((file) => file.size), {
       maxPhotos: MAX_PHOTOS,
       maxPerFile: MAX_FILE,
@@ -198,9 +195,6 @@ export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) 
       await attachStageDocument(quoteId, quote.contactId, "delivery-photo", `Delivery photo — Q-${quote.number} — ${file.name}`, file, user.id, quote.tenantId);
       saved++;
     }
-    // Say what actually happened when some were dropped: "Photos uploaded" after
-    // silently discarding six of sixteen is the same lie as reporting a save that
-    // never ran, just quieter.
     const rejected = files.length - accepted.length;
     const overCap = Math.max(0, accepted.length - MAX_PHOTOS);
     const skipped = rejected + overCap;
@@ -226,21 +220,17 @@ export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) 
 
 export async function markDelivered(quoteId: string, formData: FormData): Promise<ActionResult> {
   return asActionResult(async () => {
-    // Marking delivered files delivery notes/signatures and redirects into vehicle
-    // registration — all automotive-owned. Gate server-side (throws when off) so a
-    // direct POST can't drive automotive fulfilment with the pack disabled.
     await requireModuleEnabled("automotive");
     const user = await requireQuoteAccess(quoteId, "deliveries.manage");
-    const quote = await prisma.quote.findUniqueOrThrow({
-      where: { id: quoteId },
+    const tenantId = await actingTenantId();
+    const quote = await prisma.quote.findFirst({
+      where: { id: quoteId, tenantId },
       include: { lead: true },
     });
+    if (!quote) refuse(QUOTE_GONE);
     if (!quote.deliveryScheduledFor) refuse("Schedule the delivery before marking it delivered.");
     if (quote.deliveredAt) refuse("This delivery is already marked as delivered.");
     const file = pickFile(formData);
-    // The file is optional, but a SELECTED one that is too large must not be
-    // dropped while the stage change proceeds: the user picked it, the toast says
-    // it worked, and the form is gone. Refuse before anything is committed.
     if (file && file.size > MAX_FILE) refuse("That delivery note is larger than 4 MB.");
     if (file) {
       await attachStageDocument(quoteId, quote.contactId, "delivery-note", `Delivery note — Q-${quote.number} — ${file.name}`, file, user.id, quote.tenantId);
@@ -257,11 +247,10 @@ export async function markDelivered(quoteId: string, formData: FormData): Promis
     if (signature.startsWith("data:image/png;base64,")) {
       const buffer = Buffer.from(signature.split(",")[1], "base64");
       if (buffer.length > 0 && buffer.length <= MAX_FILE) {
-        // The customer's signature on THIS quote's delivery — the quote owns it,
-        // for the same reason its invoice and delivery note do.
         deliverySignatureRef = await saveFile(buffer, `delivery-signature-Q${quote.number}.png`, "image/png", quote.tenantId);
         await prisma.document.create({
           data: {
+            tenantId: quote.tenantId,
             fileName: `Delivery signature — Q-${quote.number}`,
             storedName: deliverySignatureRef,
             mimeType: "image/png",
@@ -275,12 +264,11 @@ export async function markDelivered(quoteId: string, formData: FormData): Promis
       }
     }
 
-    await prisma.quote.update({
-      where: { id: quoteId },
+    const updated = await prisma.quote.updateMany({
+      where: { id: quoteId, tenantId },
       data: { deliveredAt: new Date(), deliveredByName, deliveryChecklist, deliverySignatureRef },
     });
-    // Keyed on the quote — delivery writes `Quote.deliveredAt`, not the lead —
-    // and `deliveredAt` is set once, so the quote id alone is the occurrence.
+    if (updated.count !== 1) refuse(QUOTE_GONE);
     if (quote.leadId) {
       await emitLeadJourneyEvent("delivered", quote.leadId, {
         occurrence: `quote:${quoteId}:delivered`,
