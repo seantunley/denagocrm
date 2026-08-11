@@ -418,6 +418,57 @@ test("moveStage delegates the swap instead of keeping a broken copy of it", () =
   assert.match(MOVE, /findUnique\(\{\s*where: \{ id \},\s*select: \{ pipelineId: true \}/);
 });
 
+test("neither stage action READS outside the boundary, not just writes inside it", () => {
+  // WHY THIS TEST EXISTS, and why it is separate from the owner gate above.
+  //
+  // Both actions run on `basePrisma`, the documented RLS bypass, and both take an
+  // id straight off a POST. The reason that is safe is #457
+  // (feat/kanban-pipeline-context), which this change is stacked on: it scopes
+  // `getDefaultPipeline()` to the acting workspace and puts `requireOwnedPipeline()`
+  // in front of `reorderPipelineStages()`. Against plain main neither of those
+  // exists — so this file must not be merged ahead of #457, and if it ever is
+  // rebased back onto a base without them, these assertions are what says so.
+  //
+  // "The write refuses eventually" is not the property being asserted here. A read
+  // that resolves before the refusal has already crossed the boundary.
+
+  // createStage: the pipeline comes from the scoped default rule, and its OWNER is
+  // read through the gate rather than by a bare id lookup beside it.
+  assert.match(CREATE, /const owner = await requireOwnedPipeline\(pipeline\.id\)/);
+  assert.doesNotMatch(
+    CREATE,
+    /salesPipeline\.findUnique/,
+    "an unscoped SalesPipeline read by id is the shape the gate replaces",
+  );
+  assert.match(settings, /import \{[^}]*requireOwnedPipeline[^}]*\} from "@\/lib\/pipelines"/);
+
+  // moveStage: the gate must sit BEFORE the stage list and before either
+  // positional refusal, or a forged id reads another workspace's ordered stage
+  // list and is told where in it that stage sits.
+  const gateAt = MOVE.indexOf("await requireOwnedPipeline(stage.pipelineId)");
+  assert.ok(gateAt > 0, "moveStage must resolve the parent pipeline through the tenant boundary");
+  for (const [what, needle] of [
+    ["the stage list", "pipelineStage.findMany"],
+    ["the position oracle", "already at the end"],
+    ["the reorder", "reorderPipelineStages(stage.pipelineId, ids)"],
+  ] as const) {
+    const at = MOVE.indexOf(needle);
+    assert.ok(at > 0, `moveStage no longer contains ${what} — the markers moved`);
+    assert.ok(gateAt < at, `${what} runs before ownership is established`);
+  }
+
+  // And the gate has to be the scoped one. An export that stopped filtering would
+  // satisfy every assertion above, so the query itself is checked here too.
+  const lib = strip(read("src/lib/pipelines.ts"));
+  const gate = lib.slice(
+    lib.indexOf("async function requireOwnedPipeline"),
+    lib.indexOf("export async function getOwnedPipelineRow"),
+  );
+  assert.match(gate, /await pipelineTenantFilter\(\)/, "the gate must build a tenant predicate");
+  assert.match(gate, /WHERE "id" = \$\{id\} AND "deletedAt" IS NULL \$\{scope\}/);
+  assert.match(gate, /throw new Error\("Pipeline not found"\)/);
+});
+
 /* ── constrained callers ───────────────────────────────────────────────────── */
 
 test("both stage actions are still owner-gated on their own entry path", () => {

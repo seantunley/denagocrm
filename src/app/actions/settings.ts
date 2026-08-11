@@ -7,7 +7,7 @@ import crypto from "crypto";
 import { basePrisma, prisma } from "@/lib/db";
 import { ciExactIdFilter } from "@/lib/ciExact";
 import { createSessionCookie, getActiveTenantId, requireUser, requireOwner } from "@/lib/auth";
-import { getDefaultPipeline, reorderPipelineStages } from "@/lib/pipelines";
+import { getDefaultPipeline, reorderPipelineStages, requireOwnedPipeline } from "@/lib/pipelines";
 import { stageTenantId } from "@/lib/pipelineTenantRule";
 import { putSetting, getSetting } from "@/lib/settings";
 import {
@@ -57,15 +57,20 @@ export async function createStage(formData: FormData) {
     if (!pipeline) {
       refuse("There is no active sales pipeline to add this stage to — create one under Settings › Pipeline first.");
     }
-    // The OWNER of that pipeline. `SalesPipelineRow` does not carry `tenantId`,
-    // so it takes a second read; #457 (feat/kanban-pipeline-context) adds
-    // `requireOwnedPipeline()`, which returns the id and the owner together and
-    // collapses these two calls into one — see the PR notes.
-    const owner = await basePrisma.salesPipeline.findUnique({
-      where: { id: pipeline.id },
-      select: { tenantId: true },
-    });
-    if (!owner) refuse("That pipeline no longer exists — reload the page.");
+    // The OWNER of that pipeline. `SalesPipelineRow` does not carry `tenantId`, so
+    // it takes a second read — and that read goes THROUGH the boundary, not beside
+    // it. This is #457's `requireOwnedPipeline()`, the same gate `addPipelineStage`
+    // and `reorderPipelineStages` use, returning the id and the owning tenant from
+    // one scoped query.
+    //
+    // `getDefaultPipeline()` above is itself tenant-scoped as of #457, so an
+    // unscoped re-read by that id would in fact only ever return a row this
+    // workspace can already see. But that is an argument about where the id came
+    // from, and it stops holding the moment anyone passes an id in. The gate makes
+    // it structural instead. It is also strictly weaker than the query that
+    // produced the id — same scope, no `active = true` — so it can only refuse if
+    // the pipeline was archived in between, which is a real race and correctly loud.
+    const owner = await requireOwnedPipeline(pipeline.id);
 
     // Next `order` WITHIN THE PIPELINE, because the unique index is
     // ("pipelineId", "order") — a global max would leave gaps that grow with
@@ -148,6 +153,28 @@ export async function moveStage(id: string, direction: "up" | "down") {
       select: { pipelineId: true },
     });
     if (!stage) refuse("That stage no longer exists — reload the page.");
+
+    // THE BOUNDARY, AND IT HAS TO BE HERE RATHER THAN AT THE WRITE.
+    //
+    // `reorderPipelineStages()` already refuses a pipeline this workspace does not
+    // own (#457, which this change is stacked on), so the WRITE below was never at
+    // risk. Everything between here and it was: `id` is a bound server-action
+    // argument, which is a POST parameter and therefore forgeable, and the reads
+    // around it run on `basePrisma` — the documented RLS bypass — so a stage id
+    // belonging to another workspace would have returned that workspace's entire
+    // ordered stage list, and the two refusals below would then have reported the
+    // stage's POSITION in it ("already at the end") before anything checked
+    // ownership. A read leak and an oracle, both upstream of the guard that would
+    // eventually have refused.
+    //
+    // The lookup above stays unscoped by necessity: `PipelineStage.tenantId` is
+    // NULL on every legacy row while enforcement is dormant, so the stage cannot
+    // answer this question about itself — the parent pipeline is what carries a
+    // real owner. It selects `pipelineId` and nothing else, and that value is used
+    // for exactly one thing: as the key to this gate. Nothing read from a row
+    // outside the boundary reaches the caller, the response, or the log.
+    await requireOwnedPipeline(stage.pipelineId);
+
     const stages = await basePrisma.pipelineStage.findMany({
       where: { pipelineId: stage.pipelineId },
       orderBy: { order: "asc" },

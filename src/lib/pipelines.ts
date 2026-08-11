@@ -118,8 +118,14 @@ export type OwnedPipeline = { id: string; tenantId: string | null; active: boole
  * point: children stamped from it (see {@link stageTenantId}) inherit the parent's
  * owner rather than the editor's, and the value is already inside the caller's
  * boundary because this is the query that established the boundary.
+ *
+ * Exported because the pipeline's shape is not edited only from this module:
+ * `createStage`/`moveStage` in src/app/actions/settings.ts are the "Add stage" and
+ * reorder controls on the settings screen and they take the same class of
+ * forgeable id. They used to reach PipelineStage rows directly, so they need the
+ * same gate rather than a second, weaker one written beside it.
  */
-async function requireOwnedPipeline(id: string, actingTenant?: string): Promise<OwnedPipeline> {
+export async function requireOwnedPipeline(id: string, actingTenant?: string): Promise<OwnedPipeline> {
   // `actingTenant` is the caller's ALREADY-RESOLVED owner, passed by the stage
   // writes so the boundary this gate applies and the stamp they derive from its
   // result come from ONE read of the principal. Omitted, the gate resolves its
