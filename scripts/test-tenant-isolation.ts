@@ -81,30 +81,39 @@ async function runMode(mode: "dormant" | "enforced", suffix: string): Promise<Mo
   try {
     /* ── Does an authenticated request actually leave a tenant scope? ──────
      *
-     * This is asked FIRST because everything else depends on the answer, and
-     * because the answer here was a surprise.
+     * ⚠ RESOLVED — THIS IS A HARNESS ARTIFACT, NOT A PRODUCT DEFECT. ⚠
      *
-     * `establishStaffTenantScope` calls `enterTenantScope()` (AsyncLocalStorage
-     * `enterWith`), and it is called from inside `getCurrentUser()` — which is
-     * wrapped in React's `cache()`. `enterWith` from an ordinary nested async
-     * function propagates to the caller perfectly well; through `cache()` it does
-     * not. So in this process, an authenticated request comes back from
-     * `getCurrentUser()` with NO tenant scope established, and the very next
-     * guarded query dies with `TenantScopeError: No tenant scope established`.
+     * DO NOT "FIX" getCurrentUser() ON THE STRENGTH OF THIS CHECK. It has
+     * already been chased down, and there is nothing wrong with the code it
+     * appears to accuse.
      *
-     * WHAT THIS DOES AND DOES NOT PROVE. It proves the propagation fails in a
-     * plain Node process. It does NOT prove the same thing happens inside Next's
-     * real request context, where `cache()` has a live React scope and may behave
-     * differently — this harness cannot tell those apart, and the difference
-     * matters enormously (if it fails there too, enforcement fails closed on
-     * every request). It is reported as its own check, and NOT counted as an
-     * isolation failure, because attributing it to the product on this evidence
-     * would be overreach.
+     * What the check observes is real: `establishStaffTenantScope` calls
+     * `enterTenantScope()` (AsyncLocalStorage `enterWith`) from inside
+     * `getCurrentUser()`, which React's `cache()` wraps — and IN THIS PROCESS
+     * the scope is gone by the time the caller resumes, so the next guarded
+     * query would die with `TenantScopeError: No tenant scope established`.
      *
-     * The suite then COMPENSATES: probes run inside the tenant scope the
-     * application itself resolved, via the application's own resolveActingTenant.
-     * Without that, every check would fail identically for one shared reason and
-     * the run would say nothing about isolation.
+     * What it does NOT observe is Next. `cache()` outside a request has no React
+     * cache scope to attach to and falls back to a different implementation;
+     * this harness runs in plain Node, with no Next request context, so it is
+     * exercising that fallback and nothing else.
+     *
+     * VERIFIED SEPARATELY, against a REAL RUNNING Next 16.2.10 request:
+     * `enterWith` inside `cache()` DOES propagate — in a route handler, in a
+     * Server Component, and across a layout→page segment boundary. All three.
+     * Written up in `docs/enterwith-request-scope-finding.md` on branch
+     * `docs/tenant-preflip-audit`.
+     *
+     * So the conclusion is the opposite of the alarming one: enforcement does
+     * NOT fail closed on every request, and `getCurrentUser()` is correct as
+     * written. The check is kept — deliberately, as a `skip` — because it is
+     * what makes the compensation below legible instead of looking like the
+     * harness quietly arranging for its own probes to pass.
+     *
+     * The compensation: probes run inside the tenant scope the application
+     * itself resolved, via the application's own `resolveActingTenant`. Without
+     * it every check would fail identically for one shared, artificial reason
+     * and the run would say nothing whatever about isolation.
      */
     const { getCurrentUser } = await import("../src/lib/auth");
     const { currentTenantScope } = await import("../src/lib/tenantScope");
@@ -124,11 +133,14 @@ async function runMode(mode: "dormant" | "enforced", suffix: string): Promise<Mo
           ? "not applicable while dormant — establishStaffTenantScope returns before entering any scope"
           : scopeSurvives
             ? "getCurrentUser() left the acting tenant in async context"
-            : "getCurrentUser() returned the user but left NO tenant scope. enterTenantScope() is called " +
-              "inside a React cache()-wrapped function and the enterWith does not propagate out of it here. " +
-              "Recorded as a skip, not a failure: this harness cannot tell whether Next's real request " +
-              "context behaves the same way, and that distinction is the whole question. VERIFY IT SEPARATELY " +
-              "— if it also fails under Next, every request fails closed the moment enforcement is on.",
+            : "HARNESS ARTIFACT — NOT A PRODUCT DEFECT, and not a thing to go and fix. enterTenantScope() " +
+              "is called inside a React cache()-wrapped getCurrentUser(), and the enterWith does not " +
+              "propagate out of it IN PLAIN NODE, which is all this process is. Checked against a real " +
+              "running Next 16.2.10 request and it DOES propagate there — route handler, Server Component, " +
+              "and across a layout→page segment boundary. See docs/enterwith-request-scope-finding.md on " +
+              "branch docs/tenant-preflip-audit. The suite compensates by re-entering the scope the app's " +
+              "own resolveActingTenant returns; that compensation exists because of THIS, and is not " +
+              "covering for anything in src/.",
     });
 
     // The SAME reusable helper another suite would import — see harness/actAs.ts.

@@ -20,20 +20,29 @@
  * resulting row meaningful.
  *
  * THE ENFORCEMENT COMPENSATION, stated plainly because it is the one place this
- * helper does more than impersonate a browser. `establishStaffTenantScope` puts
- * the resolved tenant into AsyncLocalStorage with `enterWith`, from inside
- * `getCurrentUser()` — which React's `cache()` wraps. `enterWith` from an
- * ordinary nested async function propagates to the caller; through `cache()` it
- * does not, so in a plain Node process the scope is gone by the time the action
- * body runs and the first guarded query throws `TenantScopeError`. When
- * `enforcing` is requested, this helper therefore re-establishes the scope
- * explicitly — using the tenant the application's OWN `resolveActingTenant`
- * returns, not one supplied by the caller.
+ * helper does more than impersonate a browser — and because a reader who meets
+ * it cold will reasonably suspect the harness of rigging its own results.
  *
- * Whether Next's real request context has the same problem is NOT something this
- * file can determine, and it matters a great deal: if it does, enforcement fails
- * closed on every request. The harness reports it as its own separate check
- * rather than folding it into an isolation result.
+ * `establishStaffTenantScope` puts the resolved tenant into AsyncLocalStorage
+ * with `enterWith`, from inside `getCurrentUser()` — which React's `cache()`
+ * wraps. IN A PLAIN NODE PROCESS, which is all this is, the scope is gone by the
+ * time the action body runs and the first guarded query throws
+ * `TenantScopeError`. When `enforcing` is requested, this helper therefore
+ * re-establishes the scope explicitly — using the tenant the application's OWN
+ * `resolveActingTenant` returns, never one supplied by the caller.
+ *
+ * ⚠ THE THING IT COMPENSATES FOR IS A PROPERTY OF THIS HARNESS, NOT OF THE
+ * PRODUCT. Do not read this block as evidence that `getCurrentUser()` is broken
+ * and do not "fix" it. Verified against a REAL RUNNING Next 16.2.10 request:
+ * `enterWith` inside `cache()` propagates correctly — route handler, Server
+ * Component, and across a layout→page segment boundary. Written up in
+ * `docs/enterwith-request-scope-finding.md` on branch `docs/tenant-preflip-audit`.
+ * Outside a request `cache()` has no React cache scope to attach to and takes a
+ * different path; that fallback is what this process exercises, and only that.
+ *
+ * The harness still reports the observation as its own separate check rather
+ * than folding it into an isolation result, so the compensation is visible
+ * rather than silent.
  *
  * DORMANT (the default, and today's every environment) needs none of this: the
  * scope machinery returns before entering anything, so the callback runs exactly

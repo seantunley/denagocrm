@@ -25,6 +25,45 @@
  * changed and pass whenever a leak happened to be silent, which is backwards.
  * Every verification below is a direct read through `basePrisma` (bypass), so it
  * sees the true state of the row regardless of what the action claimed.
+ *
+ * ── HOW TO KNOW A PROBE IS WORTH ANYTHING ────────────────────────────────────
+ *
+ * By WATCHING IT FAIL. Nothing else. This suite has already produced one green
+ * check that proved nothing (a PipelineStage LIST scoped by the ACTOR's own
+ * pipelineId, which could not have returned B's rows however broken the tenant
+ * boundary was) and two more that passed because the action they drove refused
+ * on a BUSINESS rule before it reached any tenant decision at all — a
+ * `retryJourneyRun` aimed at a run that was not retryable, and a `deleteById`
+ * driving `cancelJourneyRun`, which changes a status and deletes nothing, so the
+ * "is the row still there" check could not fail on it under any circumstances.
+ * All three were caught by mutation testing and by nothing else.
+ *
+ * So: BREAK THE ISOLATION IN src/, RUN THE SUITE, WATCH THE SPECIFIC CHECK GO
+ * RED, PUT src/ BACK. Commit first — an uncommitted mutation cannot be reverted
+ * with `git checkout --` if the file is untracked, and a mutation you think you
+ * reverted but did not invalidates the whole run.
+ *
+ * The four mutations that currently cover this table, and what each one proves
+ * (all run against the ENFORCED pass, since that is the gate):
+ *
+ *   M1  db.ts scopeArgs   case "where"      → args     unscoped reads
+ *         reds: JourneyRun LIST · JourneyStepLog READ/LIST · Dashboard OWN(defect)
+ *   M2  db.ts scopeArgs   create/mutation/upsert → args   unstamped writes
+ *         reds: JourneyStepLog OWN · Dashboard/Lead/ConsentRecord OWN
+ *   M3  db.ts scopeArgs   where + mutation  → args     unscoped read AND write
+ *         reds: JourneyRun UPDATE + LIST + cancel(defect) ·
+ *               JourneyStepLog READ/DELETE/LIST
+ *   M4  journeyTenant.ts  journeyTenantId() → DEFAULT_TENANT_ID
+ *       tenantPredicate.ts activeTenantPredicate() → {}
+ *       db.ts scopeArgs   case "create"     → args
+ *         reds: JourneyRun OWN · JobCard READ · Contact/Quote/JobCard DELETE
+ *
+ * M4 needs THREE simultaneous edits for a reason worth keeping: JourneyRun OWN
+ * is defended twice over — the journey engine writes `journeyTenantId()` into
+ * the row itself AND the guard stamps the same value over it — so breaking
+ * either alone leaves the probe correctly green. That is defence in depth doing
+ * its job, and a probe that went red on one edit would have been measuring less,
+ * not more.
  */
 import type { Fixture, TenantFixture } from "./seed";
 
