@@ -18,6 +18,7 @@ import { parseRands } from "@/lib/format";
 import { Prisma } from "@prisma/client";
 import { STAGE_VALUES, PRIORITY_VALUES, stageMeta } from "@/lib/workshop-constants";
 import { isModuleEnabled } from "@/lib/modules/enabled";
+import { resolveAssignableUser } from "@/lib/tenantActor";
 import {
   requireJobCardAccess,
   requireVehicleAccess,
@@ -307,8 +308,14 @@ export async function deleteJobCardItem(id: string, jobCardId: string, formData:
 export async function setJobCardTechnician(jobCardId: string, formData: FormData) {
   return asActionResult(async () => {
     await requireJobCardAccess(jobCardId, "jobcards.manage");
-    const technicianId = String(formData.get("technicianId") ?? "").trim() || null;
-    await prisma.jobCard.update({ where: { id: jobCardId }, data: { technicianId } });
+    // Authorising the JOB CARD says the caller may edit this job card. It says
+    // nothing about the person they named. `User` is a global model, so the
+    // posted id used to be stored as-is and a technician from another workspace
+    // could be put on this workshop's work — appearing on the job card, its time
+    // entries and its customer-facing paperwork. Resolved through tenant
+    // membership instead; blank still means unassigned.
+    const technician = await resolveAssignableUser(formData.get("technicianId"), "technician");
+    await prisma.jobCard.update({ where: { id: jobCardId }, data: { technicianId: technician?.id ?? null } });
     revalidatePath(`/jobcards/${jobCardId}`);
   });
 }

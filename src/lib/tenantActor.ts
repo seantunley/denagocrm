@@ -2,6 +2,8 @@ import "server-only";
 import { Prisma } from "@prisma/client";
 import { basePrisma } from "./db";
 import { currentScopeClass } from "./tenantWrite";
+import { ActionRefusal } from "./actionFailure";
+import { decideAssignment, normalizeAssigneeId } from "./assignableUser";
 
 export type TenantActor = { id: string; name: string; email: string };
 
@@ -85,6 +87,42 @@ export async function resolveTenantMemberUser(userId: string): Promise<TenantAct
     WHERE "id" = ${userId} AND "disabledAt" IS NULL
     LIMIT 1`;
   return rows[0] ?? null;
+}
+
+/**
+ * THE assignment contract: turn a posted assignee id into a person this workspace
+ * may actually assign work to, or refuse.
+ *
+ * Every "assign this record to somebody" action should come through here rather
+ * than reading the id off the form and trusting it. Three of them did trust it —
+ * a contact's owner, a help desk ticket's agent, a job card's technician — and
+ * because `User` is global, "does this user exist" was the only question being
+ * asked. It is the wrong question: a user id from an entirely different tenant
+ * answers it yes. Authorising the RECORD (which those actions all did correctly)
+ * says the caller may edit this ticket; it says nothing about whether the person
+ * they named works here.
+ *
+ * Returns the validated member, or null when the field was deliberately left
+ * blank — callers can persist `?? null` for the unassigned case and read `.name`
+ * for the audit line without a second lookup. Throws {@link ActionRefusal} when
+ * an id was submitted that does not belong to an active, non-disabled member of
+ * the current tenant, which `asActionResult` turns into a message the user
+ * actually sees. `label` names the field in that message ("owner", "agent",
+ * "technician").
+ */
+export async function resolveAssignableUser(
+  raw: unknown,
+  label: string,
+): Promise<TenantActor | null> {
+  // The membership lookup is the tenant boundary; decideAssignment is the rule
+  // applied to its answer. Both read the posted value through the SAME normaliser,
+  // so what gets looked up is always exactly what the rule then judges — a second,
+  // private notion of "blank" here is how the two halves would drift apart.
+  const userId = normalizeAssigneeId(raw);
+  const candidate = userId === null ? null : await resolveTenantMemberUser(userId);
+  const outcome = decideAssignment(raw, candidate, label);
+  if (!outcome.ok) throw new ActionRefusal(outcome.message);
+  return outcome.userId === null ? null : candidate;
 }
 
 /**

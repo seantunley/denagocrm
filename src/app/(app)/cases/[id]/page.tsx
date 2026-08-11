@@ -5,6 +5,7 @@ import {
   ArrowLeft, Paperclip, StickyNote, CircleDot, User as UserIcon, Car, X, Tag as TagIcon,
 } from "lucide-react";
 import { basePrisma } from "@/lib/db";
+import { listTenantStaff } from "@/lib/tenantActor";
 import { requireCaseReadAccess } from "@/lib/permissions";
 import {
   getTicketDetail, listMailboxes, listCannedReplies, markCustomerMessagesRead,
@@ -37,7 +38,11 @@ export default async function TicketDetailPage({ params }: { params: Promise<{ i
   const [contact, vehicle, assignees, mailboxes, canned, uploads, otherTickets] = await Promise.all([
     basePrisma.contact.findUnique({ where: { id: ticket.contactId }, select: { id: true, firstName: true, lastName: true, company: true, isCompany: true, email: true, phone: true } }),
     automotiveOn && ticket.vehicleId ? basePrisma.vehicle.findUnique({ where: { id: ticket.vehicleId }, select: { id: true, model: true, regNumber: true } }) : Promise.resolve(null),
-    basePrisma.user.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
+    // The assignee dropdown: staff of THIS workspace, not every User row on the
+    // platform. `User` is a global model, so `user.findMany` is scoped by
+    // nothing — this list was quietly showing one tenant the names of everyone
+    // who works at all the others, and offering them as ticket assignees.
+    listTenantStaff(),
     listMailboxes(),
     listCannedReplies(ticket.mailboxId),
     basePrisma.$queryRaw<Upload[]>`SELECT "id","fileName","sizeBytes","createdAt" FROM "PortalUpload" WHERE "caseId" = ${id} ORDER BY "createdAt" DESC`,
