@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { basePrisma } from "./db";
 import { actingScopeClass } from "./actingScope";
 import { currentScopeClass } from "./tenantWrite";
+import { resolveAssignment } from "./assignableUser";
 
 export type TenantActor = { id: string; name: string; email: string };
 
@@ -86,6 +87,41 @@ export async function resolveTenantMemberUser(userId: string): Promise<TenantAct
     WHERE "id" = ${userId} AND "disabledAt" IS NULL
     LIMIT 1`;
   return rows[0] ?? null;
+}
+
+/**
+ * THE assignment contract: turn a posted assignee id into a person this workspace
+ * may actually assign work to, or refuse.
+ *
+ * Every "assign this record to somebody" action should come through here rather
+ * than reading the id off the form and trusting it. Three of them did trust it —
+ * a contact's owner, a help desk ticket's agent, a job card's technician — and
+ * because `User` is global, "does this user exist" was the only question being
+ * asked. It is the wrong question: a user id from an entirely different tenant
+ * answers it yes. Authorising the RECORD (which those actions all did correctly)
+ * says the caller may edit this ticket; it says nothing about whether the person
+ * they named works here.
+ *
+ * Returns the validated member, or null when the field was deliberately left
+ * blank — callers can persist `?? null` for the unassigned case and read `.name`
+ * for the audit line without a second lookup. Throws {@link ActionRefusal} when
+ * an id was submitted that does not belong to an active, non-disabled member of
+ * the current tenant, which `asActionResult` turns into a message the user
+ * actually sees. `label` names the field in that message ("owner", "agent",
+ * "technician").
+ */
+export async function resolveAssignableUser(
+  raw: unknown,
+  label: string,
+): Promise<TenantActor | null> {
+  // Everything except the database is in `resolveAssignment`, which is where a
+  // test can execute it. What is left here is the one thing that genuinely needs
+  // a server: the TenantMember join. Keeping the composition on the far side of
+  // `server-only` meant the rule every caller leans on — a bad id THROWS, it does
+  // not come back as null — could only ever be checked by grepping for the word
+  // `throw`, and the regression that matters most looks perfectly correct to a
+  // grep.
+  return resolveAssignment(raw, label, resolveTenantMemberUser);
 }
 
 /**

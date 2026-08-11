@@ -27,6 +27,7 @@ import ResearchButton from "@/components/ResearchButton";
 import { isAiConfigured } from "@/lib/ai";
 import { isWhatsAppConfigured } from "@/lib/whatsapp";
 import { requireUser } from "@/lib/auth";
+import { listTenantStaff } from "@/lib/tenantActor";
 import { brandForTenant, teamSignoff } from "@/lib/tenantBrand";
 import { getActiveTenantId } from "@/lib/auth";
 import { isSmtpConfigured, renderTemplate, leadVars } from "@/lib/email";
@@ -69,7 +70,11 @@ export default async function LeadDetailPage({
   const alreadyViewed = !!lead.viewedAt;
   const [contacts, users, templates, smtpConfigured, audit, waConfigured, libraryDocuments, products, stages] = await Promise.all([
     prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
-    prisma.user.findMany({ orderBy: { name: "asc" } }),
+    // Feeds BOTH pickers on this page — the lead's "Assigned to" in the edit
+    // modal and the activity assignee in the Activities tab. `User` is a global
+    // model, so `prisma.user.findMany` was listing every user on the platform in
+    // both of them.
+    listTenantStaff(),
     prisma.emailTemplate.findMany({ orderBy: { name: "asc" } }),
     isSmtpConfigured(),
     prisma.auditLog.findMany({

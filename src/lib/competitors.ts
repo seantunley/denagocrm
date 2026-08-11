@@ -6,6 +6,7 @@ import { getSetting } from "./settings";
 import { logError } from "./errorLog";
 import { recordAiUsage } from "./systemHealth";
 import { safeFetchText } from "./safeFetch";
+import { inheritedTenantId } from "./tenantWrite";
 
 // CRM-native competitor monitoring. Fetch a public page, normalise to visible
 // text, hash it, and only when the hash changes do we snapshot, diff, apply
@@ -470,6 +471,15 @@ sourceType must be one of: page, pricing, product, news, blog, facebook, instagr
   const description = typeof parsed?.description === "string" ? parsed.description.trim() : "";
   const brief = await prisma.competitorBrief.create({
     data: {
+      // THE COMPETITOR OWNS ITS BRIEFS.
+      //
+      // Both brief writers are reachable from the competitor-watch CRON as well as
+      // from a server action, and the cron has no session — so there is nothing to
+      // ask but the record being researched, which is the right answer in both
+      // cases anyway. Leaving it to the db.ts guard wrote NULL, because the guard
+      // stamps nothing while enforcement is dormant: 2 of 4 unowned on production
+      // at the 2026-08-10 audit, both created after the July backfill.
+      tenantId: inheritedTenantId(competitor.tenantId),
       competitorId,
       kind: "discovery",
       headline: `Discovered ${created} source${created === 1 ? "" : "s"} to watch`,
@@ -531,6 +541,8 @@ Write the current intelligence brief.`;
 
   const brief = await prisma.competitorBrief.create({
     data: {
+      // From the competitor being researched — see discoverSources above.
+      tenantId: inheritedTenantId(competitor.tenantId),
       competitorId,
       kind: "research",
       headline,

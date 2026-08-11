@@ -298,6 +298,48 @@ export type JourneyDefinition = {
 };
 
 /**
+ * Every user id an `assign_user` step in this definition would hand a lead to.
+ *
+ * Journeys assign people, so they are an assignment surface like any form — but
+ * a stored one, which makes it the worse kind. `journeyStepExecutor` scopes the
+ * LEAD it updates (`updateMany` with `tenantId`) and then writes whatever
+ * `config.userId` says, unexamined; the builder's dropdown was fed by an
+ * unscoped `user.findMany`. So a workspace could pick a stranger out of the list
+ * once and have the engine reassign leads to them on every run afterwards, with
+ * no one present to see a refusal. The caller checks these ids against the
+ * shared contract before the definition is saved.
+ *
+ * The walk is over the RAW nested shape rather than the parsed `steps` array on
+ * purpose: `choose` and `repeat` keep their children as ordinary objects inside
+ * `config` (`options[].sequence`, `default`, `sequence`), so a definition whose
+ * only assignment lives two branches deep would be missed by a top-level scan —
+ * and "the check only covers unnested steps" is not a rule anybody would keep in
+ * their head. Matching on shape rather than on those key names also means a new
+ * kind of container cannot quietly open the hole again.
+ *
+ * Safe to run on parser output without a depth guard of its own: nesting depth
+ * and total step count are already capped by JOURNEY_LIMITS, and this is only
+ * ever called on a definition `parseJourneyDefinition` has returned.
+ */
+export function collectAssignedUserIds(value: unknown): string[] {
+  const found = new Set<string>();
+  const walk = (node: unknown) => {
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item);
+      return;
+    }
+    if (!isRecord(node)) return;
+    if (node.type === "assign_user" && isRecord(node.config)) {
+      const userId = node.config.userId;
+      if (typeof userId === "string" && userId.trim() !== "") found.add(userId.trim());
+    }
+    for (const item of Object.values(node)) walk(item);
+  };
+  walk(value);
+  return [...found];
+}
+
+/**
  * The ceilings. Every one of them exists because the cron calls this engine and
  * an unbounded definition is a denial of service against our own scheduler.
  *

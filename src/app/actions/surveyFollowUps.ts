@@ -6,7 +6,7 @@ import { basePrisma } from "@/lib/db";
 import { requirePermission } from "@/lib/permissions";
 import { requireModuleEnabled } from "@/lib/modules/enabled";
 import { getActiveTenantId } from "@/lib/auth";
-import { resolveTenantMemberUser } from "@/lib/tenantActor";
+import { resolveAssignableUser } from "@/lib/tenantActor";
 import { logAudit } from "@/lib/audit";
 
 function refresh(id?: string) {
@@ -43,14 +43,16 @@ async function loadFollowUp(id: string, tenantId: string | null) {
 export async function assignSurveyFollowUp(formData: FormData) {
   const { user, tenantId } = await recoveryContext();
   const id = String(formData.get("id") ?? "");
-  const ownerId = String(formData.get("ownerId") ?? "").trim() || null;
   await loadFollowUp(id, tenantId);
-  let ownerName = "Unassigned";
-  if (ownerId) {
-    const owner = await resolveTenantMemberUser(ownerId);
-    if (!owner) throw new Error("That owner is not an active member of this tenant");
-    ownerName = owner.name;
-  }
+  // The membership check was written out by hand here — a fourth copy, and the
+  // one that had drifted furthest: it said "this tenant" to a user who has only
+  // ever been shown the word "workspace". On the shared contract now, so the
+  // sentence and the rule both come from one place. The write below takes the
+  // RESOLVED id rather than the posted one, which matters more than usual here
+  // because it goes into raw SQL that no tenant guard inspects.
+  const owner = await resolveAssignableUser(formData.get("ownerId"), "owner");
+  const ownerId = owner?.id ?? null;
+  const ownerName = owner?.name ?? "Unassigned";
   await basePrisma.$executeRaw`
     UPDATE "SurveyFollowUp"
     SET "ownerId" = ${ownerId}, "status" = CASE WHEN "status" = 'open' THEN 'in_progress' ELSE "status" END,

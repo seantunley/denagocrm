@@ -10,7 +10,7 @@ import { restoreFlowVersionToDraft } from "@/app/actions/flowVersions";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import { EmptyState, StatusPill, Surface } from "@/components/visual-system";
 import { builderTenantId } from "@/lib/flowScope";
-import { legacyFlowTenant } from "@/lib/flowTenantScope";
+import { flowTenantWhere } from "@/lib/flowTenantScope";
 
 type VersionRow = {
   id: string;
@@ -32,7 +32,7 @@ export default async function FlowVersionsPage({ params }: { params: Promise<{ i
   await requireOwner();
   const { id } = await params;
   const tenantId = await builderTenantId();
-  const scope = legacyFlowTenant(tenantId);
+  const scope = flowTenantWhere(tenantId);
   const flow = await prisma.botFlow.findFirst({ where: { id, ...scope } });
   if (!flow) notFound();
   const versions = await basePrisma.$queryRaw<VersionRow[]>(Prisma.sql`
