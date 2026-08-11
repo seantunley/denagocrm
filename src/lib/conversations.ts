@@ -51,8 +51,24 @@ function conversationFilterTenantId(): string | null {
  *      arrived on, and finally the founding tenant.
  *
  * Never invents an owner: every rung is a fact about a real row or a real scope.
+ *
+ * RUNG 2 IS VERBATIM, INCLUDING NULL. When the thread has a subject, the subject
+ * decides — even when its answer is "I have no owner yet". Climbing past a NULL
+ * parent to the founding tenant is not a safe default here, it is a constraint
+ * violation: `Conversation(tenantId, contactId) → Contact(tenantId, id)` is a
+ * COMPOSITE foreign key, so a child claiming an owner its parent does not have
+ * cannot be inserted at all. Postgres rejects it with P2003 and the inbound
+ * message is lost.
+ *
+ * That is not hypothetical. Production is full of Contacts with a NULL tenantId
+ * — the audit counted them — and the integration seed reproduces exactly that
+ * population, which is how this surfaced.
+ *
+ * So the ladder only continues past rung 2 when there is NO subject to ask. A
+ * conversation about an unowned contact is itself unowned, and a later backfill
+ * claims the pair together, which is the only way they can stay consistent.
  */
-async function conversationTenantId(data: MessageData): Promise<string> {
+async function conversationTenantId(data: MessageData): Promise<string | null> {
   if (typeof data.tenantId === "string" && data.tenantId) return data.tenantId;
   const subject = data.contactId
     ? await basePrisma.contact.findUnique({
@@ -62,7 +78,9 @@ async function conversationTenantId(data: MessageData): Promise<string> {
     : data.leadId
       ? await basePrisma.lead.findUnique({ where: { id: data.leadId }, select: { tenantId: true } })
       : null;
-  return inheritedTenantId(subject?.tenantId ?? null);
+  // A subject that exists answers for itself, null included — see above.
+  if (subject) return subject.tenantId;
+  return inheritedTenantId(null);
 }
 
 /** Map a Communication.type to a conversation channel. */

@@ -231,7 +231,18 @@ test("the message's own owner wins over everything, so the composite FK holds", 
   assert.equal(conversation?.data.tenantId, A, "the conversation must match the message that opened it");
 });
 
-test("a conversation for a legacy unowned customer falls back to the tick's scope, never to null", async () => {
+test("a conversation for a legacy unowned customer stays unowned, because the FK says so", async () => {
+  // This test previously asserted the opposite — that an unowned subject falls
+  // back to the ambient scope "never to null". That was wrong, and the integration
+  // suite proved it: `Conversation(tenantId, contactId) → Contact(tenantId, id)` is
+  // a COMPOSITE foreign key, so a conversation claiming an owner its contact does
+  // not have cannot be inserted at all. Postgres refuses with P2003 and the inbound
+  // message is lost.
+  //
+  // Production is full of contacts with a NULL tenantId, so "never to null" was not
+  // a safe default; it was a write that fails. The subject decides, null included,
+  // and a later backfill claims the pair together — the only way they stay
+  // consistent with each other.
   reset();
   rows.lead = [{ id: "lead-9", tenantId: null }];
 
@@ -240,8 +251,18 @@ test("a conversation for a legacy unowned customer falls back to the tick's scop
   });
 
   const conversation = created.find((row) => row.model === "conversation");
-  assert.equal(conversation?.data.tenantId, B);
+  assert.equal(
+    conversation?.data.tenantId,
+    null,
+    "an unowned subject must not have an owner invented for it — the composite FK rejects the row",
+  );
 });
+
+// The ladder's rung 3 (`inheritedTenantId(null)` when there is NO subject) is
+// deliberately not pinned here: `resolveConversationId` creates nothing when it
+// has neither a contact nor a lead, so there is no row to assert on. I tried to
+// pin it and the test failed for that reason rather than a tenancy one — better
+// to say so than to assert a behaviour the function does not have.
 
 test("an existing open thread is reused rather than re-created", async () => {
   reset();
