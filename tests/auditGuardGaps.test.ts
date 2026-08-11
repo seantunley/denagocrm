@@ -145,7 +145,10 @@ test("every audit read names its tenant, and the actor list is this tenant's sta
     `${auditReads.length} AuditEvent reads but ${clauses.length} tenant clauses — one read is unscoped`,
   );
 
-  assert.match(code, /listTenantStaff\(\)/, "the actor filter must list this tenant's staff");
+  // The ACTING variant: the background one skips its TenantMember join while
+  // enforcement is dormant, so this filter would list every account on the
+  // platform in exactly the environments we run.
+  assert.match(code, /listActingTenantStaff\(\)/, "the actor filter must list this tenant's staff");
   assert.doesNotMatch(
     code,
     /FROM "User"/,
@@ -217,7 +220,7 @@ test("the edit pages' pickers are scoped to what the caller may see", () => {
   }
   for (const page of ["src/app/(app)/leads/[id]/edit/page.tsx", "src/app/(app)/contacts/[id]/edit/page.tsx"]) {
     const code = shipped(page);
-    assert.match(code, /listTenantStaff\(\)/, `${page}: the staff picker must be this tenant's staff`);
+    assert.match(code, /listActingTenantStaff\(\)/, `${page}: the staff picker must be this tenant's staff`);
     assert.doesNotMatch(
       code,
       /prisma\.user\.findMany/,

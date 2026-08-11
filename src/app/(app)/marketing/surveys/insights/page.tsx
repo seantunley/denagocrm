@@ -4,7 +4,7 @@ import { basePrisma } from "@/lib/db";
 import { requirePermission } from "@/lib/permissions";
 import { getActiveTenantId } from "@/lib/auth";
 import { loadSurveyAnalytics } from "@/lib/surveyAnalytics";
-import { listTenantStaff } from "@/lib/tenantActor";
+import { listActingTenantStaff } from "@/lib/tenantActor";
 import { MetricCard, MetricStrip, StatusPill, WorkspaceToolbar } from "@/components/visual-system";
 import MarketingPageHeader from "@/components/marketing/MarketingPageHeader";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
@@ -47,7 +47,7 @@ export default async function SurveyInsightsPage({ searchParams }: { searchParam
       ORDER BY CASE f."severity" WHEN 'critical' THEN 0 WHEN 'high' THEN 1 ELSE 2 END, f."dueAt" NULLS LAST
       LIMIT 100
     `,
-    listTenantStaff(),
+    listActingTenantStaff(),
   ]);
 
   const responseRows = rows.filter((row) => row.status === "completed").slice(0, 100);

@@ -3,7 +3,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { withTenantWrite } from "@/lib/tenantWrite";
+import { withActingTenantWrite } from "@/lib/actingScope";
 import { requireOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
@@ -33,9 +33,17 @@ export async function createProduct(formData: FormData) {
     .map((c) => c.trim())
     .filter(Boolean);
   // Atomic: product + its colours in ONE transaction, each explicitly stamped with
-  // the owning tenant (bypass path — the guard won't stamp; founding tenant when
-  // enforcement is off so nothing lands tenantless).
-  const product = await withTenantWrite(async (tx, tenantId) => {
+  // the owning tenant (bypass path — the guard won't stamp).
+  //
+  // USER-ORIGINATED: `requireOwner()` above proves a signed-in owner is doing this,
+  // and a product has no parent record — the creating workspace IS the owner. So
+  // the tenant is the ACTING workspace. `withTenantWrite` was wrong here for the
+  // reason #470 documents: it resolves `writeTenantId() ?? DEFAULT_TENANT_ID`, and
+  // `writeTenantId()` is null while enforcement is dormant, so a second workspace's
+  // catalogue was written into the founding tenant. The COLOURS take the same
+  // tenantId as the product they belong to, from the same transaction, so parent
+  // and child can never disagree.
+  const product = await withActingTenantWrite(async (tx, tenantId) => {
     const created = await tx.product.create({ data: { ...data, tenantId } });
     if (colors.length > 0) {
       await tx.productColor.createMany({

@@ -1,6 +1,7 @@
 import "server-only";
 
 import { basePrisma, prisma } from "./db";
+import { customerRecordTenantId } from "./customerRecordTenant";
 import { sendEmail } from "./email";
 import { sendSms } from "./sms";
 import { logAudit } from "./audit";
@@ -139,6 +140,7 @@ async function deliverInvite(
           body: `"${survey.title}" survey invitation sent via ${channel}.`,
           contactId: response.contactId,
           userId: actor.id,
+          tenantId: await customerRecordTenantId({ contactId: response.contactId }),
         },
       });
     }

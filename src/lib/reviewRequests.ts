@@ -1,4 +1,5 @@
 import { prisma } from "./db";
+import { customerRecordTenantId } from "./customerRecordTenant";
 import { resolveTenantActor } from "./tenantActor";
 import { resolveTenantCredential } from "./settings";
 import { currentTenantScope } from "./tenantScope";
@@ -61,6 +62,7 @@ export async function sendReviewRequest(
         }.`,
         contactId,
         userId: firstUser.id,
+        tenantId: await customerRecordTenantId({ contactId }),
       },
     });
   }

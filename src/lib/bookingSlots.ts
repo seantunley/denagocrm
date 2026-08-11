@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { prisma, basePrisma } from "./db";
 import { getSetting } from "./settings";
 import { writeTenantId } from "./tenantWrite";
+import { customerRecordTenantId } from "./customerRecordTenant";
 
 export type SlotConfig = {
   times: string[];
@@ -112,7 +113,16 @@ export async function reserveSlot(input: {
 }) {
   const config = await getSlotConfig();
   const dt = slotInstantOrThrow(input.date, input.time, config);
+  // Namespaces the advisory locks and the capacity count. Left exactly as it was:
+  // narrowing the count to a tenant would hide every pre-existing NULL-tenant
+  // booking from it and double-book the slot.
   const tenantId = writeTenantId();
+  // What the Activity row CLAIMS, which is a different question. `writeTenantId()`
+  // is null while enforcement is dormant, so every bot/portal-booked workshop
+  // activity landed unowned. The customer record it is booked for owns it — and
+  // Activity's composite keys to Contact and Lead mean nothing else is even legal.
+  // Resolved before the transaction: it reads on another connection.
+  const stampTenantId = await customerRecordTenantId({ contactId: input.contactId, leadId: input.leadId });
 
   return basePrisma.$transaction(async (tx) => {
     if (input.dedupeMarker) {
@@ -135,7 +145,7 @@ export async function reserveSlot(input: {
         note, dueDate: dt, location: input.location ?? null,
         contactId: input.contactId, leadId: input.leadId,
         assignedToId: input.assignedToId ?? input.userId, createdById: input.userId,
-        ...(tenantId ? { tenantId } : {}),
+        ...(stampTenantId ? { tenantId: stampTenantId } : {}),
       },
     });
   });

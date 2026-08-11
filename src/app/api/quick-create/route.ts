@@ -5,7 +5,7 @@ import { getAccessibleContactIds, getAccessibleVehicleIds, hasPermission, hasAny
 import { contactName } from "@/lib/format";
 import { getSetting } from "@/lib/settings";
 import { isModuleEnabled } from "@/lib/modules/enabled";
-import { listTenantStaff } from "@/lib/tenantActor";
+import { listActingTenantStaff } from "@/lib/tenantActor";
 import { fleetPicker } from "@/lib/fleetDirectory";
 import { NO_FLEET_PICKER } from "@/lib/fleetTypes";
 
@@ -74,7 +74,7 @@ export async function GET() {
     needsContacts
       ? prisma.contact.findMany({ where: scoped(contactIds), orderBy: { firstName: "asc" }, take: 500 })
       : Promise.resolve([]),
-    needsUsers ? listTenantStaff() : Promise.resolve([]),
+    needsUsers ? listActingTenantStaff() : Promise.resolve([]),
     automotiveOn && needsVehicles
       ? prisma.vehicle.findMany({
           where: scoped(vehicleIds),

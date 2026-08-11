@@ -57,7 +57,29 @@ export async function botIdentityForConversation(conversationId: string): Promis
   return conversation ? botIdentityForRecord(conversation) : null;
 }
 
-/** Pause automation because a person has taken responsibility for the thread. */
+/**
+ * Pause automation because a person has taken responsibility for the thread.
+ *
+ * USER-ORIGINATED but NOT CONVERTED — same shape as `enqueueStaffReply`, and the
+ * same reason. The only caller is `setConversationMode` in
+ * `src/app/actions/conversations.ts`, a Server Action, so a signed-in person is
+ * unambiguously doing this.
+ *
+ * It stays on `withTenantWrite` because a BotSession is keyed
+ * `(tenantId, channel, key)` and the thing that has to READ this row is the flow
+ * runtime — `botStillOwnsTx` in flowRun/flowSession, and `botMayStillSpeak` on the
+ * drain — all of which resolve their tenant from `writeTenantId() ?? DEFAULT`, i.e.
+ * the founding tenant while dormant. Pausing under the acting workspace would write
+ * a takeover the runtime cannot see: the person presses Take over, the UI confirms
+ * it, and the bot keeps answering over them on the next inbound message. Takeover
+ * silently not working is worse than takeover recorded against the wrong owner.
+ *
+ * WHAT WOULD SETTLE IT: the channel scope resolving while enforcement is dormant so
+ * the runtime readers have a real tenant (see
+ * botInboundEvent.completeInboundBotEvent) — then this write and those reads move
+ * together. Until then the staff and runtime halves of the bot stack share one
+ * wrong answer, and they have to keep sharing it.
+ */
 export async function pauseBotConversation(
   identity: BotConversationIdentity,
   hours = 7 * 24,
@@ -79,6 +101,11 @@ export async function pauseBotConversation(
  * Return responsibility to automation. We deliberately clear the old session:
  * the NEXT customer message starts from the current published flow rather than
  * resuming halfway through a stale conversation the human may have changed.
+ *
+ * USER-ORIGINATED but NOT CONVERTED, and it must move in lockstep with
+ * {@link pauseBotConversation} — see the reasoning there. Releasing under a
+ * different tenant from the one that paused would leave the pause row orphaned and
+ * the conversation stuck with the bot muted for a week.
  */
 export async function resumeBotConversation(identity: BotConversationIdentity): Promise<void> {
   await withTenantWrite(async (tx, tenantId) => {

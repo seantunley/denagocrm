@@ -4,6 +4,11 @@ import { basePrisma, prisma } from "./db";
 import { DEFAULT_TENANT_ID } from "./tenant";
 import { writeTenantId } from "./tenantWrite";
 import {
+  statisticsScopeFor,
+  statisticsScopeSql,
+  statisticsScopeWhere,
+} from "./statisticsTenantRule";
+import {
   addPeriods,
   startOfPeriod,
   startOfSastDay,
@@ -370,45 +375,23 @@ export function statisticsTenantId(explicit?: string): string {
 }
 
 /**
- * The tenant predicate for the raw SOURCE aggregates, as SQL.
+ * The tenant predicate for the raw SOURCE aggregates, as SQL — and the same rule
+ * as a Prisma `where` fragment for the change probe.
  *
- * `$queryRaw` and `basePrisma` BOTH BYPASS the tenant extension, and the
- * aggregate below uses both — raw because Prisma cannot group by a date
- * expression, and basePrisma because raw calls on the scoped client set no RLS
- * GUC at all. So the predicate the extension would have added has to be added
- * here, by hand, and this is it.
- *
- * STRICT EQUALITY for every tenant, with exactly one documented exception: the
- * FOUNDING tenant also owns the legacy `tenantId IS NULL` rows. That is not a
- * loophole, it is the platform's existing ownership rule written down —
- * `withTenantWrite()` and `repairsTenantId()` both resolve an un-owned write to
- * `DEFAULT_TENANT_ID` for the same reason, and every tenant-isolation migration
- * backfilled NULL rows to it. Source tables still carry NULL `tenantId` in
- * production because enforcement is dormant and the db.ts guard only stamps
- * under enforcement; a bare `= $1` would therefore match nothing and report a
- * live business as having zero of everything.
- *
- * The important half is the other one: NO OTHER TENANT EVER MATCHES A NULL ROW.
- * A second workspace's reports cannot absorb the founding tenant's un-owned
- * history, which is precisely the failure that matters in an off/rollback
- * deployment. Once the tenantId backfill is complete this clause matches
- * nothing and the predicate is plain strict equality.
- *
- * Written as an OR of two index-friendly terms rather than
- * `COALESCE("tenantId", …) = $1`, which is not sargable and would defeat the
- * tenant-leading indexes this feature adds.
+ * BOTH ARE ONE-LINE DELEGATIONS on purpose. The decision itself lives in
+ * `statisticsTenantRule.ts`, which imports nothing but the `Prisma` SQL tag, so a
+ * test can EXECUTE it; this file cannot be imported from `node:test` without
+ * stubbing the module loader, and a rule that can only be pattern-matched is a
+ * rule nothing proves. See that file for why a NULL `tenantId` belongs to nobody
+ * — including the founding tenant — and for the production evidence that
+ * removing the old fallback strands no rows.
  */
 function tenantSql(tenantId: string): Prisma.Sql {
-  return tenantId === DEFAULT_TENANT_ID
-    ? Prisma.sql`AND ("tenantId" = ${tenantId}::text OR "tenantId" IS NULL)`
-    : Prisma.sql`AND "tenantId" = ${tenantId}::text`;
+  return statisticsScopeSql(statisticsScopeFor({ tenantId }));
 }
 
-/** The same rule as {@link tenantSql}, as a Prisma `where` fragment. */
 function tenantWhere(tenantId: string): Record<string, unknown> {
-  return tenantId === DEFAULT_TENANT_ID
-    ? { OR: [{ tenantId }, { tenantId: null }] }
-    : { tenantId };
+  return statisticsScopeWhere(statisticsScopeFor({ tenantId }));
 }
 
 /* ─── identity ────────────────────────────────────────────────────────────── */

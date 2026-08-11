@@ -2,7 +2,7 @@ import Link from "next/link";
 import { basePrisma } from "@/lib/db";
 import { getActiveTenantId } from "@/lib/auth";
 import { tenantEnforcing } from "@/lib/tenantEnforcement";
-import { listTenantStaff } from "@/lib/tenantActor";
+import { listActingTenantStaff } from "@/lib/tenantActor";
 import { formatDateTime } from "@/lib/format";
 import { hasPermission, requirePermission } from "@/lib/permissions";
 import { PageHeader } from "@/components/page-header";
@@ -92,9 +92,9 @@ export default async function AuditPage({
     `,
     // The actor dropdown listed every User row on the platform, by name. `User` is
     // a global model with no tenantId, so no predicate would have helped — the
-    // TenantMember join is the boundary, and listTenantStaff is where it lives. It
+    // TenantMember join is the boundary, and listActingTenantStaff is where it lives. It
     // also drops disabled accounts, which the raw query did not.
-    listTenantStaff(),
+    listActingTenantStaff(),
   ]);
 
   const exportQuery = new URLSearchParams();

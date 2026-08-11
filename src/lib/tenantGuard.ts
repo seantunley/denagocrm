@@ -18,11 +18,76 @@
  */
 export const GLOBAL_MODELS: ReadonlySet<string> = new Set([
   "User",
+  // The tenant registry itself, and the user→tenant edge that IS the scope. A
+  // tenantId on either is circular: TenantMember answers "which tenant is this
+  // user in?" on the login path, BEFORE any scope exists (see
+  // NO_POLICY_BY_DESIGN in tests/rlsPolicyCoverage.test.ts for the same reason
+  // stated against RLS).
   "Tenant",
   "TenantMember",
+  // ── ErrorLog: GLOBAL, deliberately, and its nullable `tenantId` is ATTRIBUTION,
+  // not ownership. Restated here because the 2026-08-10 pre-flip audit read 1 167
+  // unowned rows as an undecided model; the decision was made, it just was not
+  // written anywhere the guard could be seen to make it.
+  //
+  // Why global. An error is raised most often on a path that HAS no tenant — a
+  // rejected webhook signature, a cron before any scope is bound, a failed boot, and
+  // tenant resolution itself failing. Scope this model and every one of those writes
+  // fails closed under enforcement: the system log goes dark exactly when the system
+  // is broken, and the one record of why would be the record that could not be
+  // written. Logging must never throw, so a tenant can never be a precondition for it.
+  //
+  // What that costs, stated plainly — and it is NOT a cross-tenant read. An earlier
+  // draft of this comment claimed a NULL-tenant row was readable from every
+  // workspace's Settings → System Log. That was wrong about the code it describes:
+  // `src/app/(app)/settings/page.tsx` queries `where: { tenantId: logTenantId }`
+  // against a resolved, non-null id, so NULL rows match NOTHING and appear in no
+  // workspace's System Log at all. (`redactUrl` still strips signing/approval/
+  // tracking URLs at the write, and the screen is still admin-only, but neither is
+  // what is doing the work here — the filter is.)
+  //
+  // The real cost runs the other way: an unattributed error is INVISIBLE to the
+  // workspace it actually affected. Whoever hit it sees an empty System Log, and the
+  // only place the row surfaces is the platform console. That is the cheaper of the
+  // two failures — the alternative loses the log entirely — but it is a
+  // discoverability cost, not a confidentiality one, and the two should not be
+  // confused when this decision is revisited.
+  //
+  // Attribution is still worth having (per-tenant error health, and the per-tenant
+  // alert throttle that stops one noisy tenant muting everyone else's first-error
+  // push), so `logError` fills `tenantId` best-effort via the same resolver every
+  // other write uses, and callers that KNOW the owner pass it explicitly. Best-effort
+  // means exactly that: a null here is a correct outcome, not a missed stamp.
   "ErrorLog",
+  // ── The three below were listed here with no stated reason until the
+  // 2026-08-10 production audit (PREFLIP-TENANT-AUDIT.md §2) counted them among
+  // the twenty tables carrying no tenantId column. They were never "neither":
+  // the guard has always declared them. What was missing is the ARGUMENT, and a
+  // declaration nobody can check is one somebody quietly reverses.
+  //
+  // Pre-authentication challenge, keyed by (purpose, normalized VIN/serial) and
+  // written by an ANONYMOUS public caller — customer portal OTP, service
+  // lookup. There is no session when the row is created, so there is no tenant
+  // to stamp; scoping it would fail closed on every public verification the
+  // moment enforcement is on. The tenant is established AFTER the code
+  // verifies, never from the challenge.
   "OtpChallenge",
+  // A passkey authenticates a PERSON, not a workspace membership, and hangs off
+  // User — which is cross-tenant by design, three lines up. WebAuthn discovery
+  // also resolves a credential before any tenant is known, so a tenant filter
+  // here would break login for the same reason it would break OtpChallenge.
   "Passkey",
+  // A device subscription belongs to a User, so its tenant is DERIVED rather
+  // than stored: pushRecipientsForCurrentScope() (src/lib/push.ts) joins
+  // PushSubscription → TenantMember → active Tenant, and returns NOTHING when
+  // the scope is `closed`. That is the fix for "a notification could reach
+  // another workspace's device", and it is already in place.
+  //
+  // A stored tenantId would be a SECOND source of truth for a fact TenantMember
+  // already owns, and it would go stale exactly when it matters — a user whose
+  // membership moves keeps a subscription row stamped with the old tenant, and
+  // the leak the column was added to prevent is the one it then causes. Left
+  // global deliberately; the join is the boundary.
   "PushSubscription",
   // Platform-console identity. Global BY DESIGN: a cross-tenant administrator that
   // carried a tenantId would be a contradiction, and scoping these would fail
@@ -32,6 +97,19 @@ export const GLOBAL_MODELS: ReadonlySet<string> = new Set([
   // Backup ledger. Backups are platform-wide (one dump of the whole database), so
   // BackupRun has no tenantId at all. Without this entry the guard would treat it
   // as tenant-scoped and fail closed on a column that deliberately does not exist.
+  //
+  // The 2026-08-10 pre-flip audit reported BackupRun as "13 of 13 rows unowned",
+  // which reads like a stamping bug and is not one. That audit asks the DATABASE,
+  // and PRODUCTION carries a `tenantId` column on this table that no migration in
+  // this repository creates and no code writes — the schema drift already recorded
+  // in 20260806180000_rls_enforce_gap. Every row is NULL because nothing has ever
+  // set it, and nothing should: a dump of the whole database has no owning tenant.
+  //
+  // Nothing to fix here, therefore, and nothing to backfill. What is outstanding is
+  // the ORPHAN COLUMN itself, which is a destructive prod-only DDL decision and
+  // deliberately not taken in passing. tests/tenantStampAuditTrail.test.ts pins the
+  // invariant that keeps the two answers consistent: while BackupRun is global, the
+  // Prisma model must carry no tenantId.
   "BackupRun",
   // RBAC design decision: the PERMISSION CATALOG (the fixed, code-defined list
   // of capability keys like `roles.manage`) is shared across every tenant —

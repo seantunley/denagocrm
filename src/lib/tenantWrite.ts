@@ -1,6 +1,6 @@
 import "server-only";
 import { basePrisma } from "./db";
-import { DEFAULT_TENANT_ID } from "./tenant";
+import { DEFAULT_TENANT_ID, decideInheritedTenant } from "./tenant";
 import { currentTenantScope } from "./tenantScope";
 import { tenantEnforcing } from "./tenantEnforcement";
 import { TenantScopeError } from "./tenantGuard";
@@ -55,6 +55,37 @@ export function writeTenantId(): string | null {
     throw new TenantScopeError("No tenant scope established for a tenant-owned write");
   }
   return s.mode === "tenant" ? s.tenantId : null;
+}
+
+/**
+ * The tenantId to STAMP a RUNTIME write with, where the tenant is inherited from
+ * the record being acted on rather than from a session.
+ *
+ * `writeTenantId()` on its own is the wrong tool for a create and always has
+ * been: it answers "how should an unguarded write behave during the enforcement
+ * rollout", and it returns null while enforcement is DORMANT — which is today, in
+ * every environment. Every writer that spread it (or `activeTenantPredicate()`,
+ * or a hand-rolled mirror of `scopeArgs`) into a `create` has therefore been
+ * writing `tenantId: null`: a row invisible at the flip to the very workspace
+ * that produced it. The 2026-08-10 production audit counted 843 of them in a
+ * fortnight.
+ *
+ * This is the create-side answer, and it never invents an owner — see
+ * {@link ./tenant}.`decideInheritedTenant` for the ladder and why it is ordered
+ * that way. `writeTenantId()` is still evaluated FIRST so its fail-closed throw
+ * (enforcement on, no usable scope) happens before any fallback can paper over it.
+ *
+ * Pass the owner of the row this write descends from — `journey.tenantId`,
+ * `run.tenantId`, `competitor.tenantId`, `lead.tenantId`. Pass `null` only when
+ * there genuinely is no parent record.
+ */
+export function inheritedTenantId(recordTenantId?: string | null): string {
+  const enforcedTenantId = writeTenantId();
+  return decideInheritedTenant({
+    enforcedTenantId,
+    recordTenantId: recordTenantId ?? null,
+    ambientTenantId: currentTenantScope()?.tenantId ?? null,
+  });
 }
 
 /**

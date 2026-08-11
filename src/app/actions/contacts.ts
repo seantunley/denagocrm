@@ -3,11 +3,12 @@
 import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { withTenantWrite } from "@/lib/tenantWrite";
+import { withActingTenantWrite } from "@/lib/actingScope";
 import { activeTenantPredicate } from "@/lib/tenantPredicate";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
 import { contactName } from "@/lib/format";
+import { resolveAssignableUser } from "@/lib/tenantActor";
 import {
   requirePermission,
   requireContactAccess,
@@ -95,7 +96,12 @@ function submittedKind(formData: FormData, current: CurrentKind): ContactKind {
   return current ? contactKind(current) : "individual";
 }
 
-function contactData(formData: FormData, kind: ContactKind, fleet: { id: string; name: string } | null) {
+function contactData(
+  formData: FormData,
+  kind: ContactKind,
+  fleet: { id: string; name: string } | null,
+  owner: { id: string } | null,
+) {
   const str = (k: string) => {
     const v = String(formData.get(k) ?? "").trim();
     return v === "" ? null : v;
@@ -131,7 +137,13 @@ function contactData(formData: FormData, kind: ContactKind, fleet: { id: string;
     postalCode: str("postalCode"),
     source: str("source"),
     notes: str("notes"),
-    ownerId: str("ownerId"),
+    // The owner arrives ALREADY resolved through tenant membership, exactly like
+    // the fleet above, because reading it straight off the form here was the
+    // defect: `User` is a global model, so a posted `ownerId` from another
+    // workspace was persisted onto this workspace's contact without anything
+    // ever looking the person up. Taking the resolved record instead of the raw
+    // field means the unvalidated value has no way back into the write.
+    ownerId: owner?.id ?? null,
     marketingOptOut: formData.get("marketingOptOut") === "on",
   };
 }
@@ -188,11 +200,14 @@ export async function createContact(formData: FormData) {
     if (requiresFleet(kind) && !fleet) {
       throw new ActionRefusal("Choose which fleet this contact belongs to");
     }
-    const data = contactData(formData, kind, fleet);
+    // Resolved through TenantMember, never trusted as posted — see the shared
+    // contract in lib/assignableUser.ts.
+    const owner = await resolveAssignableUser(formData.get("ownerId"), "owner");
+    const data = contactData(formData, kind, fleet, owner);
     if (!data.firstName) throw new ActionRefusal("Name is required");
     const tags = parseTags(formData);
     // Atomic: contact + all its tag links in ONE transaction, tenant-stamped.
-    const contact = await withTenantWrite(async (tx, tenantId) => {
+    const contact = await withActingTenantWrite(async (tx, tenantId) => {
       const c = await tx.contact.create({ data: { ...data, createdById: user.id, tenantId } });
       await syncContactTagsTx(tx, tenantId, c.id, tags);
       return c;
@@ -226,7 +241,11 @@ export async function updateContact(id: string, formData: FormData) {
     if (requiresFleet(kind) && !fleet) {
       throw new ActionRefusal("Choose which fleet this contact belongs to");
     }
-    const data = contactData(formData, kind, fleet);
+    // Same membership check as on create. An edit is the easier attack of the
+    // two: the record already exists, so a single forged field on an otherwise
+    // ordinary save was enough to hand it to somebody in another workspace.
+    const owner = await resolveAssignableUser(formData.get("ownerId"), "owner");
+    const data = contactData(formData, kind, fleet, owner);
     if (!data.firstName) throw new ActionRefusal("Name is required");
     const tags = parseTags(formData);
     // Contact fields via the scoped client (RLS scopes the row to the tenant, and
@@ -242,7 +261,11 @@ export async function updateContact(id: string, formData: FormData) {
     // not answer.
     const before = await prisma.contact.findUnique({ where: { id } });
     const contact = await prisma.contact.update({ where: { id }, data });
-    await withTenantWrite(async (tx, tenantId) => {
+    await withActingTenantWrite(async (tx, actingTenantId) => {
+      // The tags belong to the CONTACT, not to whoever is editing it. An admin
+      // editing another workspace's contact must not re-own its tag links, and a
+      // contact that predates tenancy keeps its NULL until a backfill claims it.
+      const tenantId = contact.tenantId ?? actingTenantId;
       await tx.$executeRaw`DELETE FROM "_ContactToTag" WHERE "A" = ${id}`;
       await syncContactTagsTx(tx, tenantId, id, tags);
     });

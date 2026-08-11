@@ -115,6 +115,52 @@ export function decideStaffTenantScope(
 }
 
 /**
+ * Which tenant a RUNTIME write is stamped with — a webhook, a cron tick, a
+ * scheduled journey step, anything executing with no session to ask.
+ *
+ * The sibling of {@link ./flowTenantScope}.`decideBuilderTenant`, and deliberately
+ * the same SHAPE: an ordered ladder ending at the founding tenant, so a row is
+ * never written tenantless during the pre-enforcement window. Only the middle
+ * rung differs, and that difference is the whole point — a builder request asks
+ * the SESSION which workspace it is acting as; a runtime write has no session, so
+ * it asks the RECORD IT IS ACTING ON. Neither ever invents an owner.
+ *
+ *   1. `enforcedTenantId` — `writeTenantId()`. Authoritative when enforcement is
+ *      on (and it THROWS before reaching here when enforcement is on with no
+ *      usable scope, so this ladder cannot be used to escape a fail-closed miss).
+ *      Null while enforcement is dormant, which is today, which is why every
+ *      writer that relied on it alone has been stamping NULL.
+ *   2. `recordTenantId` — the owner of the row this write is derived from: the
+ *      Journey being enrolled into, the JourneyRun whose step is being logged,
+ *      the Competitor being researched, the Lead the note is about. A child that
+ *      disagrees with its parent is worse than one that is merely unowned, so the
+ *      parent decides.
+ *   3. `ambientTenantId` — `currentTenantScope()?.tenantId`. The slice this cron
+ *      tick is sweeping: `runCronPerTenant` binds a scope even on its dormant
+ *      path, so this is a real answer today for a record that carries none.
+ *   4. The founding tenant, which is byte-for-byte today's single-tenant
+ *      behaviour and the same stand-in `runCronPerTenant` uses.
+ *
+ * PURE, so the ordering can be executed by a test rather than pattern-matched.
+ * The ordering is the thing worth testing: swap rungs 1 and 2 and a legacy
+ * NULL-tenant parent silently overrides the enforced scope; drop rung 2 and every
+ * cron-written child collapses onto the founding tenant no matter whose record it
+ * belongs to.
+ */
+export function decideInheritedTenant(input: {
+  enforcedTenantId: string | null;
+  recordTenantId?: string | null;
+  ambientTenantId?: string | null;
+}): string {
+  return (
+    input.enforcedTenantId ??
+    input.recordTenantId ??
+    input.ambientTenantId ??
+    DEFAULT_TENANT_ID
+  );
+}
+
+/**
  * True only when a Prisma write failed specifically because a `tenantId` foreign
  * key no longer resolves (the tenant was deleted concurrently) — the one case
  * recoverable by dropping the tenant and retrying. Duck-typed on the error's

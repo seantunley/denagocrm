@@ -74,7 +74,9 @@ export async function GET(req: NextRequest) {
       concurrency: 2,
       onError: async (tenantId, error) => {
         const message = error instanceof Error ? error.message : String(error);
-        await logError("signing-job-cron", error, `tenant ${tenantId}: ${message}`).catch(() => {});
+        // The tenant was already being written into the free-text context; put it in
+        // the column too, where per-tenant error health can actually read it.
+        await logError("signing-job-cron", error, `tenant ${tenantId}: ${message}`, { tenantId }).catch(() => {});
       },
     },
   );

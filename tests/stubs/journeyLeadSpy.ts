@@ -132,4 +132,8 @@ export const modules: Record<string, Record<string, unknown>> = {
     nextCommunicationWindow: () => new Date(),
   },
   "./nextStepConfig": { getNextStepScheduling: () => Promise.resolve(null) },
+  // The owning tenant of a Communication/Activity the journey writes. Real code
+  // reads the referenced Lead/Contact through basePrisma; here the spy's tables are
+  // not the point of these tests, so it answers the journey's own tenant.
+  "./customerRecordTenant": { customerRecordTenantId: () => Promise.resolve("tenant_a") },
 };

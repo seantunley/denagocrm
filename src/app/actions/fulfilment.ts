@@ -3,6 +3,7 @@
 import { asActionResult, refuse, type ActionResult } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
+import { customerRecordTenantId } from "@/lib/customerRecordTenant";
 import { requireQuoteAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { emitLeadJourneyEvent } from "@/lib/leadJourneyEvents";
@@ -139,6 +140,7 @@ export async function scheduleDelivery(quoteId: string, formData: FormData) {
         createdById: user.id,
         contactId: quote.contactId,
         leadId: quote.leadId,
+        tenantId: await customerRecordTenantId({ contactId: quote.contactId, leadId: quote.leadId }),
       },
     });
     await logAudit({

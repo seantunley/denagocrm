@@ -2,6 +2,7 @@ import { ImapFlow } from "imapflow";
 import { simpleParser, type ParsedMail } from "mailparser";
 import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
+import { customerRecordTenantId } from "./customerRecordTenant";
 import { ciExactIdFilter, ciExactIds } from "./ciExact";
 import { resolveTenantActor } from "./tenantActor";
 import { getSetting, putSetting, resolveIntegrationBundle } from "./settings";
@@ -283,6 +284,13 @@ async function fileTimelineEmail(parsed: ParsedMail, fromEmail: string, transpor
         contactId: contact?.id ?? lead?.contactId ?? null,
         leadId: lead?.id ?? null,
         userId: firstUser.id,
+        // A mailbox sweep has no session. Resolved by ID rather than from the records
+        // in hand because the contact here may be the LEAD's contact, which was never
+        // loaded — and a Communication must agree with BOTH its parents.
+        tenantId: await customerRecordTenantId({
+          contactId: contact?.id ?? lead?.contactId ?? null,
+          leadId: lead?.id ?? null,
+        }),
       },
     });
   } catch (e) {
