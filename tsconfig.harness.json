@@ -1,0 +1,14 @@
+{
+  "//": "tsx-only tsconfig for the two-tenant isolation harness (scripts/test-tenant-isolation.ts and scripts/harness/**). It extends tsconfig.scripts.json and adds runtime aliases for the three Next.js modules the SERVER ACTION layer touches. The harness's whole premise is that it drives the real actions in src/app/actions/, and those actions transitively reach next/headers (cookies -> getCurrentUser), next/navigation (redirect, which is how every access guard says no) and next/cache (revalidatePath). None of them resolve in a plain Node/tsx process. Aliasing them here — rather than importing the actions through some wrapper — keeps the code under test completely unmodified. `paths` fully REPLACES the parent's, so every mapping tsconfig.scripts.json declares is repeated.",
+  "extends": "./tsconfig.scripts.json",
+  "compilerOptions": {
+    "paths": {
+      "@/*": ["./src/*"],
+      "server-only": ["./scripts/stubs/empty-module.ts"],
+      "client-only": ["./scripts/stubs/empty-module.ts"],
+      "next/headers": ["./scripts/harness/stubs/next-headers.ts"],
+      "next/cache": ["./scripts/harness/stubs/next-cache.ts"],
+      "next/navigation": ["./scripts/harness/stubs/next-navigation.ts"]
+    }
+  }
+}

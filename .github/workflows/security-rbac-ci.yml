@@ -431,3 +431,61 @@ jobs:
           export DATABASE_URL="${DATABASE_URL%/*}/signing_upgrade"
           export DATABASE_URL_UNPOOLED="$DATABASE_URL"
           npm run test:signing-upgrade
+
+      # TWO-TENANT RUNTIME ISOLATION.
+      #
+      # Every other tenancy check in this workflow reads source text. They were
+      # all green on the day the pre-flip audit found five models 100% unowned in
+      # production and SalesPipeline never filtered by tenant at all, because a
+      # schema-shaped guardrail gives a schema-shaped guarantee. This one seeds
+      # two tenants and drives the real server actions, then asserts on the
+      # tenantId PostgreSQL actually stored.
+      #
+      # Its own scratch database, for the same reason test:signing-upgrade has
+      # one -- it creates, mutates and deletes rows deliberately -- and derived
+      # from DATABASE_URL rather than written out, so no new connection-string
+      # literal appears for the secret scanner to be told to ignore. The harness
+      # REFUSES a database whose name does not end in _test/_harness/_scratch, and
+      # refuses one that is the same database as DATABASE_URL, so the name here is
+      # load-bearing rather than decorative.
+      #
+      # It runs twice internally: the DORMANT pass records today's real exposure
+      # without failing, the ENFORCED pass is the pre-flip gate and fails the job.
+      #
+      # BLOCKING. `continue-on-error` is deliberately absent -- an advisory
+      # pre-flip gate is not a gate, and this step is expected to fail the run.
+      #
+      # It is blocking WITH A RECORDED ALLOWLIST, in scripts/harness/
+      # acknowledged.ts, because a bare blocking gate could not be satisfied
+      # today: at least one enforced failure is not an application defect and
+      # cannot be fixed anywhere in this repository. TimelinePin READ needs a
+      # DATABASE ROLE change -- the app connects as neondb_owner with
+      # rolbypassrls = true, so no RLS policy evaluates and the raw-SQL read in
+      # getTimelinePins has no boundary to enforce. Verified read-only against
+      # production; see docs/rls-role-is-the-flip-blocker.md on branch
+      # docs/tenant-preflip-audit.
+      #
+      # How the allowlist behaves, and why it cannot quietly grow:
+      #   - any failure NOT in the list fails this step;
+      #   - any entry that no longer names a currently-FAILING check -- it passes
+      #     now, or was renamed away, or became a skip -- also fails this step, so
+      #     the list cannot rot and the probe cannot be disabled to dodge it;
+      #   - every entry carries a `why` and a `fix` naming where the real fix
+      #     lives, so "when can this go?" has a checkable answer;
+      #   - the allowlisted count is printed loudly in the RESULT block on every
+      #     run, and a run with a non-zero allowlist never prints "clean".
+      #
+      # ⚠ THE ALLOWLIST MUST REACH ZERO BEFORE TENANT_ENFORCEMENT IS SWITCHED ON
+      # ANYWHERE. It is an exemption with a deadline, NOT a substitute for fixing
+      # the failures, and NOT evidence that the flip is safe. Every entry in it is
+      # a way enforcement would still leak or lose data today. Zero enforced
+      # failures and an empty allowlist are the release criterion; anything above
+      # zero means the flip is not ready, however green this step looks.
+      - name: Two-tenant runtime isolation harness
+        continue-on-error: false
+        run: |
+          admin="${DATABASE_URL%/*}/postgres"
+          psql "$admin" -c 'DROP DATABASE IF EXISTS denagocrm_harness_test'
+          psql "$admin" -c 'CREATE DATABASE denagocrm_harness_test'
+          export TENANT_HARNESS_DATABASE_URL="${DATABASE_URL%/*}/denagocrm_harness_test"
+          npm run test:tenant-isolation
