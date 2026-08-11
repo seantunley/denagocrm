@@ -2,6 +2,7 @@ import "server-only";
 import { Prisma } from "@prisma/client";
 import { basePrisma } from "./db";
 import { activeTenantPredicate } from "./tenantPredicate";
+import { tenantEnforcing } from "./tenantEnforcement";
 import { receiptFields, type Receipt } from "./deliveryReceipts";
 
 /**
@@ -32,10 +33,68 @@ import { receiptFields, type Receipt } from "./deliveryReceipts";
  * everything. The predicate is resolved ONCE here and threaded through the lookup
  * and both updates, so there is no path that forgets it.
  */
-export async function applyReceipt(receipt: Receipt): Promise<number> {
-  const tenant = activeTenantPredicate(`${receipt.channel} delivery receipt`);
+/**
+ * THE TENANT CLAUSE FOR A RECEIPT, AND WHY IT IS NOT `activeTenantPredicate` ALONE.
+ *
+ * This is the one consumer that had to be taught to TOLERATE a scope it did not
+ * previously have. `withChannelTenantScope` used to bind nothing while enforcement
+ * was dormant, so `activeTenantPredicate` returned `{}` here and a receipt matched
+ * every tenant's rows — the leak this module was written to close, still open in
+ * the only mode we run in. Now that the channel scope binds, the predicate would
+ * become strict equality on the endpoint's workspace.
+ *
+ * Strict equality is the WRONG answer while stamping is still rolling out, and
+ * silently so. `Contact.tenantId` and `Communication.tenantId` are NULL on a large
+ * share of production rows — the 2026-08-10 audit counted them — and those rows
+ * belong to the workspace whose endpoint this receipt arrived on. Filtering them
+ * out does not lose a message; it stops the ticks. Every legacy WhatsApp thread
+ * would sit on "Sent" for ever, with no error and nothing in a log, which is a
+ * failure nobody would connect to a tenancy change months later.
+ *
+ * So while DORMANT the clause is "this workspace's rows, or rows nobody has
+ * claimed yet". That is strictly narrower than the `{}` it replaces — a second
+ * tenant's OWNED rows stop matching, which is the leak — and strictly wider than
+ * equality, so the rollout does not break the feature on its way through.
+ *
+ * Under ENFORCEMENT it is exactly `activeTenantPredicate`: equality, and a throw
+ * when there is no scope. By then stamping is complete by definition, an unowned
+ * row is a bug rather than a stage, and matching one would re-open the boundary.
+ */
+type ReceiptTenant = {
+  /** Spread into a Prisma `where`. `OR` ANDs with the caller's own conditions. */
+  where: { tenantId?: string | null; OR?: Array<{ tenantId: string | null }> };
+  /** The same clause for the one lookup that has to be raw SQL. */
+  sql: Prisma.Sql;
+};
 
-  const contactId = await contactForRecipient(receipt, tenant);
+function receiptTenantScope(context: string): ReceiptTenant {
+  const predicate = activeTenantPredicate(context);
+
+  // No scope at all (dormant, unmapped endpoint) — unchanged: match everything,
+  // exactly as this path did before the channel scope started binding.
+  if (!("tenantId" in predicate)) return { where: {}, sql: Prisma.empty };
+  const tenantId = predicate.tenantId ?? null;
+
+  if (tenantEnforcing() || tenantId === null) {
+    // IS NOT DISTINCT FROM, not `=`: a scope genuinely carrying null filters on
+    // null, and `= NULL` matches nothing.
+    return {
+      where: { tenantId },
+      sql: Prisma.sql`AND "tenantId" IS NOT DISTINCT FROM ${tenantId}`,
+    };
+  }
+
+  return {
+    where: { OR: [{ tenantId }, { tenantId: null }] },
+    sql: Prisma.sql`AND ("tenantId" = ${tenantId} OR "tenantId" IS NULL)`,
+  };
+}
+
+export async function applyReceipt(receipt: Receipt): Promise<number> {
+  const scope = receiptTenantScope(`${receipt.channel} delivery receipt`);
+  const tenant = scope.where;
+
+  const contactId = await contactForRecipient(receipt, scope);
   if (!contactId) return 0;
 
   const fields = receiptFields(receipt.level, receipt.at);
@@ -93,20 +152,19 @@ export async function applyReceipt(receipt: Receipt): Promise<number> {
  */
 async function contactForRecipient(
   receipt: Receipt,
-  tenant: { tenantId?: string | null },
+  scope: ReceiptTenant,
 ): Promise<string | null> {
+  const tenant = scope.where;
   if (receipt.channel === "whatsapp") {
     // Phone numbers are stored in assorted formats, so the comparison is on digits
     // only — the same normalisation the inbound path uses to match a sender. That
     // makes this the one lookup with no unique index behind it, and therefore the
     // one that MUST carry the tenant clause.
     //
-    // IS NOT DISTINCT FROM, not `=`: tenantId is still NULL on every row until
-    // write-time stamping is enabled, and `= NULL` matches nothing.
-    const scoped =
-      "tenantId" in tenant
-        ? Prisma.sql`AND "tenantId" IS NOT DISTINCT FROM ${tenant.tenantId}`
-        : Prisma.empty;
+    // Built by receiptTenantScope so the raw lookup and the two updateMany above
+    // cannot drift apart — a contact resolved under one clause and its messages
+    // stamped under another is the disagreement this whole module exists to stop.
+    const scoped = scope.sql;
     const rows = await basePrisma.$queryRaw<Array<{ id: string }>>`
       SELECT "id" FROM "Contact"
        WHERE regexp_replace(COALESCE("whatsapp", "phone", ''), '\\D', '', 'g') = ${receipt.recipientRef}
