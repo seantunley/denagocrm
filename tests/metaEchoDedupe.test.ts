@@ -7,7 +7,12 @@ import path from "node:path";
 import { decideEcho, metaEchoDedupeKey } from "../src/lib/metaEcho";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
+// Normalise line endings before anything slices this. The ordering assertions
+// below key on a literal containing "\n", which cannot match a CRLF checkout: on
+// Windows `indexOf` returned -1, the sliced body collapsed to 19 characters, and
+// the test failed for a reason that had nothing to do with the code under test.
+// CI runs on Linux, so it passed there and only ever broke locally.
+const src = (rel: string) => readFileSync(path.join(root, rel), "utf8").replace(/\r\n/g, "\n");
 const stripComments = (code: string) =>
   code.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 const shipped = (rel: string) => stripComments(src(rel));
