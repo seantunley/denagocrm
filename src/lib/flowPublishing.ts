@@ -118,6 +118,14 @@ export async function publishFlowSnapshot(
   const issues = await validateFlowForEnabledChannels(parsed);
   if (flowErrors(issues).length) throw new FlowPublishValidationError(issues);
 
+  // USER-ORIGINATED, AND ALREADY CORRECT — nothing to convert. `withTenantWrite` is
+  // used here for its TRANSACTION only: the callback deliberately does not bind the
+  // second parameter, so the dormant-null `writeTenantId() ?? DEFAULT_TENANT_ID`
+  // this helper resolves is never read. The tenant is `builderTenantId()` above,
+  // which is the same `enforced ?? session ?? founding` ladder
+  // `withActingTenantWrite` applies. Swapping the helper would change nothing and
+  // would only invite someone to start using the shadowing parameter again —
+  // flowBuilderTenantScope.test.ts asserts it stays unbound for exactly that reason.
   return withTenantWrite(async (tx) => {
     // Re-read inside the transaction. If the draft changed between validation
     // and this point, refuse rather than publishing a different definition than

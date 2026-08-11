@@ -143,6 +143,12 @@ export async function advanceFlow(
   const result = await runFlow(snapshot.flow, { nodeId: state.nodeId, vars: state.vars }, input, ctx);
   recordBotMsgs(state, result.messages);
 
+  // BACKGROUND / RUNTIME — `withTenantWrite` deliberately, for the reasons set out
+  // at the matching transaction in flowRun.ts. `advanceFlow` is the shared turn
+  // runner behind the Messenger/Instagram/Telegram webhooks: no session, so an
+  // acting scope resolves to `global` and stamps the founding tenant regardless;
+  // and the session/outbox/analytics keys it writes are read back by the same
+  // dormant-null helper, so this cannot move without them.
   await withTenantWrite(async (tx, tenantId) => {
     // Fence the whole turn. See flowRun: guarding only the session write left the
     // reply already queued when staff took over mid-turn, so the bot sent one

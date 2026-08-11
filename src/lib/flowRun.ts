@@ -114,6 +114,24 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise
   const actions: ActionObservation[] = [];
   const result = await runFlow(snapshot.flow, session, input, buildCtx(digits, match, actions));
 
+  // BACKGROUND / RUNTIME — `withTenantWrite` deliberately. `runWhatsAppFlow` is
+  // entered from the WhatsApp webhook answering a customer; there is no session, so
+  // `withActingTenantWrite` would resolve `global` and stamp the founding tenant
+  // under a name claiming otherwise.
+  //
+  // Nor is there a record to inherit from that would help: every key this
+  // transaction touches — the BotSession, the outbox rows, the analytics events —
+  // is addressed by `(tenantId, channel, key)` and READ back by
+  // `outboxTenantId()`/`runtimeFlowTenantId()`, which are the same
+  // `writeTenantId() ?? DEFAULT_TENANT_ID` expression. Writer and readers agree
+  // today because they are all wrong in the same way. Changing this one to the
+  // record's tenant while `flushBotOutboxConversation` below and the bot-outbox
+  // cron still read the founding tenant would strand a second tenant's replies in
+  // the queue permanently — a delivery outage traded for a silent mis-ownership.
+  //
+  // WHAT WOULD SETTLE IT: the WhatsApp channel scope resolving while enforcement is
+  // dormant (see botInboundEvent.completeInboundBotEvent), so the runtime writer
+  // AND every runtime reader move to the same real tenant in one change.
   await withTenantWrite(async (tx, tenantId) => {
     // Fence the whole turn, not just the session write. The AI call above can take
     // seconds; a salesperson can press Take over during it. Guarding only the
