@@ -100,6 +100,34 @@ export async function runDefectProbes(
    * saveQuoteDraft carries the quote id INSIDE the payload rather than in the
    * URL, so a forged id here is a single edited field in a POST body. Asserted
    * on the victim's stored terms, not on the return value.
+   *
+   * ⚠ THIS PROBE IS GREEN FOR THE WRONG REASON WHILE DORMANT. DO NOT READ IT AS
+   * "saveQuoteDraft IS SAFE". It is not: the edit path locks and rewrites the
+   * quote with a bare `where: { id }` on the BYPASS client, with no tenant
+   * predicate on the lock, the read, the header update, or the QuoteItem/QuoteFee
+   * rewrite. What refuses THIS payload is a pair of unrelated BUSINESS rules:
+   *
+   *   `existing.leadId && existing.contactId !== data.contactId`
+   *       "The customer on a lead-linked quote cannot be changed." B's fixture
+   *       quote has a leadId and the payload names A's contact, so it throws
+   *       before any write. Send B's OWN contactId and the rule does not fire.
+   *   `prisma.contact.findUnique` returns nothing
+   *       by the time these probes run, the matrix DELETE check has already
+   *       soft-deleted B's fixture contact, so "That customer is no longer
+   *       available" refuses the repaired payload too.
+   *
+   * MEASURED, not inferred. Driven against a FRESHLY PLANTED live victim contact
+   * and a LEADLESS victim quote — neither rule reachable — A rewrote B's terms and
+   * wrote a QuoteItem into B's quote, and the new line came out stamped with B's
+   * tenantId, so it reads as a perfectly ordinary row of B's. Under enforcement
+   * the same call is refused. That is a live dormant-only cross-tenant write, of
+   * the same class as probes 8 and 11 and NOT fixed by the PR that added this
+   * note; it is called out in that PR's sweep for a follow-up of its own.
+   *
+   * Making this probe honest means planting its own victim quote the way probe 8
+   * does. It is left as-is here deliberately, rather than quietly turned red in a
+   * PR that does not carry the fix — but a reviewer who sees it tick must know
+   * that the tick is about two business rules and nothing else.
    */
   {
     const before = await columnOf(raw, "Quote", victim.rows.quoteId, "terms");
@@ -709,6 +737,13 @@ export async function runDefectProbes(
    * 11a IS ALSO THE CONTROL FOR 11b. Without it, "no reservation against B's
    * part" could equally mean the module is off, the job card refused, or the
    * quantity parse rejected — and would read as a pass.
+   *
+   * Measured by mutation, against this database, one edit at a time:
+   *
+   *   the whole reservePart fix reverted    BOTH go RED (18 → 20 dormant)
+   *   the tenantId STAMP dropped alone      11a RED, 11b green (18 → 19)
+   *     Which is the point of keeping 11a: the predicate on its own already stops
+   *     the forgery, so 11b alone would have signed off on rows landing unowned.
    */
   {
     const ownPart = actorA.tenant.rows.partId;
