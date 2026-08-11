@@ -19,8 +19,9 @@
  * ── Two modes, decided by who you are connected as ──────────────────────────
  *
  *   AS THE OWNER  → audits the app role from the outside: does it exist, can it
- *                   bypass, is every table granted to it, is every table
- *                   covered by a policy, will FUTURE tables be granted.
+ *                   bypass, is every table granted to it, is every RLS-enabled
+ *                   table covered by a policy that APPLIES to it, will FUTURE
+ *                   tables be granted.
  *   AS THE APP    → all of the above plus THE PROOF: with no tenant GUC set, a
  *                   tenant table must return zero rows. This is the only check
  *                   that cannot be faked by configuration looking correct.
@@ -142,7 +143,24 @@ async function main() {
 
   const noRls = tenantTables.filter((t) => !t.rowsecurity).map((t) => t.tablename);
   const notForced = tenantTables.filter((t) => t.rowsecurity && !t.forced).map((t) => t.tablename);
-  const noPolicy = tenantTables.filter((t) => t.rowsecurity && Number(t.policies) === 0).map((t) => t.tablename);
+  /**
+   * EVERY RLS-enabled table, not just the tenant-scoped ones.
+   *
+   * This was `tenantTables.filter(...)`, and the difference is a real hole rather
+   * than a tidy-up. RLS enabled with no policy denies EVERY row to a
+   * non-bypassing role — the `tenantId` column has nothing to do with it. A table
+   * with RLS on, no policy and no tenantId was therefore invisible to this audit
+   * while being exactly as much of an outage as one with a tenantId, and
+   * invisible in the database too for as long as anything connects as the owner.
+   *
+   * The by-design exclusions are dropped here as well: `TenantMember` is exempt
+   * from needing a TENANT policy (the lookup is circular — see NO_POLICY_BY_DESIGN),
+   * and it has RLS switched off entirely, which is consistent. If it ever gains
+   * RLS without a policy, that is an outage and this must say so.
+   */
+  const noPolicy = tables
+    .filter((t) => t.rowsecurity && Number(t.policies) === 0)
+    .map((t) => t.tablename);
 
   console.log(`  ${tables.length} tables in public — ${tenantTables.length} carry a tenantId`);
   if (noRls.length) fail(`${noRls.length} tenant table(s) without RLS enabled: ${sample(noRls)}`);
@@ -159,6 +177,35 @@ async function main() {
     );
   } else {
     pass("every RLS-enabled table has at least one policy");
+  }
+
+  // A POLICY THAT EXISTS IS NOT NECESSARILY A POLICY THAT APPLIES.
+  //
+  // `CREATE POLICY … TO some_role` restricts the policy to that role. Every
+  // policy in 20260727130000_rls_enforce omits the TO clause and so applies to
+  // PUBLIC — but the audit that matters is of the live catalog, not of the
+  // migration text, and a policy added by hand `TO neondb_owner` would leave the
+  // table denying everything to the app role while all the checks above stay
+  // green. `0` in polroles is the oid PostgreSQL uses for PUBLIC.
+  const roleScoped = await prisma.$queryRaw<{ tablename: string; polname: string; roles: string }[]>`
+    SELECT c.relname AS tablename,
+           p.polname,
+           array_to_string(ARRAY(SELECT pg_get_userbyid(x) FROM unnest(p.polroles) AS x), ', ') AS roles
+    FROM pg_policy p
+    JOIN pg_class c ON c.oid = p.polrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND NOT (0 = ANY(p.polroles))
+    ORDER BY c.relname, p.polname
+  `;
+  const notForAppRole = roleScoped.filter((p) => !p.roles.split(", ").includes(APP_ROLE));
+  if (notForAppRole.length) {
+    fail(
+      `${notForAppRole.length} policy/policies are restricted to roles that do not include "${APP_ROLE}" — ` +
+        `they will not apply to it, so those tables deny everything: ` +
+        sample(notForAppRole.map((p) => `${p.tablename}.${p.polname}→${p.roles}`), 6),
+    );
+  } else {
+    pass(`every policy applies to PUBLIC or names "${APP_ROLE}" — none excludes the app role`);
   }
 
   // A SEPARATE finding, reported rather than failed. A table with no tenantId
