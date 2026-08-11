@@ -203,8 +203,8 @@ test("the tenant predicate #303 added is still on the query", () => {
   const code = shipped("src/lib/permissions.ts");
   const body = bodyFrom(code, "export async function getAccessibleDocumentIds(", "\nfunction idReach(");
   assert.match(body, /basePrisma\.document\.findMany/);
-  assert.match(body, /\.\.\.documentTenantWhere\(\)/, "a basePrisma query must name its tenant");
-  assert.match(shipped("src/lib/permissions.ts"), /activeTenantPredicate\("document scope"\)/);
+  assert.match(body, /\.\.\.\(await documentTenantWhere\(\)\)/, "a basePrisma query must name its tenant");
+  assert.match(shipped("src/lib/permissions.ts"), /actingRecordPredicate\("document scope"\)/);
 });
 
 test("no other module re-derives document access from the union", () => {

@@ -1,8 +1,10 @@
 import { redirect } from "next/navigation";
+import { Prisma } from "@prisma/client";
 import { basePrisma } from "./db";
 import { requireUser, requireTenantOwner } from "./auth";
 import { requireModuleEnabled } from "./modules/enabled";
-import { activeTenantPredicate } from "./tenantPredicate";
+import { actingScopeClass } from "./actingScope";
+import { TenantScopeError } from "./tenantGuard";
 import { governingDocumentLink } from "./documents/governing";
 import {
   RBAC_INITIALIZED,
@@ -165,13 +167,19 @@ export const CUSTOMER_RECORD_WRITE_PERMISSIONS = [
 
 export async function getUserTeamIds(userId: string): Promise<string[]> {
   try {
+    const scope = await actingScopeClass();
+    if (scope.mode === "closed") return [];
+    // Reused in both UNION branches: each is an independent SELECT with exactly
+    // one table in its FROM clause (tm, then t), so the unqualified column name
+    // resolves against that branch's own table without ambiguity either time.
+    const tenantFilter = scope.mode === "tenant" ? Prisma.sql`AND "tenantId" = ${scope.tenantId}` : Prisma.empty;
     const rows = await basePrisma.$queryRaw<Array<{ teamId: string }>>`
       SELECT DISTINCT scope."teamId"
       FROM (
-        SELECT tm."teamId" FROM "TeamMember" tm WHERE tm."userId" = ${userId}
+        SELECT tm."teamId" FROM "TeamMember" tm WHERE tm."userId" = ${userId} ${tenantFilter}
         UNION
         SELECT t."id" AS "teamId" FROM "Team" t
-        WHERE t."managerId" = ${userId} AND t."active" = true AND t."deletedAt" IS NULL
+        WHERE t."managerId" = ${userId} AND t."active" = true AND t."deletedAt" IS NULL ${tenantFilter}
       ) scope
     `;
     return rows.map((row) => row.teamId);
@@ -187,23 +195,77 @@ async function scopePermissions(user: PermissionUser): Promise<Set<string> | nul
   return permissions;
 }
 
+/**
+ * The active tenant for a USER-ORIGINATED record resolve, as an explicit `where`
+ * fragment for the handful of single-record lookups below that run on
+ * `basePrisma` and so bypass RLS.
+ *
+ * `activeTenantPredicate` (tenantPredicate.ts) answers from ENFORCEMENT alone,
+ * which is `{}` while DORMANT — the mode every environment runs in today. Every
+ * canAccess* resolve step below used it, so the lookup matched ANY tenant's row
+ * by id, and a "_view_all" holder (whose id list is `null`) sailed straight
+ * through: `ids === null || ids.includes(id)` is true for an id that was never
+ * screened at all. This resolves the ACTING workspace instead — enforced scope,
+ * else the validated session workspace — so the same check that will hold once
+ * enforcement flips already holds now. See tenantActor.ts for the sibling
+ * reasoning applied to actor/staff resolution.
+ *
+ * `global` (no session-resolvable tenant) falls back to `{}`, matching today's
+ * pre-tenancy behaviour — unreachable in practice here since every caller already
+ * holds a `PermissionUser`, i.e. passed `requireUser`. `closed` throws, the same
+ * refusal `activeTenantPredicate` already gives for an enforced request with no
+ * usable scope.
+ */
+async function actingRecordPredicate(context: string): Promise<{ tenantId?: string | null }> {
+  const scope = await actingScopeClass();
+  if (scope.mode === "tenant") return { tenantId: scope.tenantId };
+  if (scope.mode === "closed") {
+    throw new TenantScopeError(
+      `${context}: tenant enforcement is on but this request has no tenant scope. ` +
+        "A global owner without a resolved tenant must use the platform console, " +
+        "not tenant-scoped data.",
+    );
+  }
+  return {};
+}
+
+/**
+ * {@link actingRecordPredicate} for a LIST query instead of a single resolve.
+ * `null` means fail closed — the caller must return an empty list, not run the
+ * query unfiltered — which is the safe answer for the `closed` case on a surface
+ * that renders a page rather than a single lookup a caller can afford to have
+ * throw. `{}` (no `tenantId` key) for `global`, same pre-tenancy fallback as
+ * above; `{ tenantId }` for a resolved workspace.
+ */
+async function actingListScope(): Promise<{ tenantId?: string } | null> {
+  const scope = await actingScopeClass();
+  if (scope.mode === "closed") return null;
+  return scope.mode === "tenant" ? { tenantId: scope.tenantId } : {};
+}
+
 /* Leads use raw SQL because teamId was introduced through an additive migration
  * and intentionally is not part of the legacy Prisma Lead model. */
 export async function getAccessibleLeadIds(user: PermissionUser): Promise<string[] | null> {
   const permissions = await scopePermissions(user);
   if (permissions === null || permissions.has("leads.view_all")) return null;
   if (!permissions.has("leads.view_owned")) return [];
+  const scope = await actingScopeClass();
+  if (scope.mode === "closed") return [];
+  const leadTenant = scope.mode === "tenant" ? Prisma.sql`AND l."tenantId" = ${scope.tenantId}` : Prisma.empty;
+  // Same reusable, unqualified fragment as getUserTeamIds — one table per branch.
+  const teamTenant = scope.mode === "tenant" ? Prisma.sql`AND "tenantId" = ${scope.tenantId}` : Prisma.empty;
   const rows = await basePrisma.$queryRaw<Array<{ id: string }>>`
     SELECT l."id"
     FROM "Lead" l
     WHERE l."deletedAt" IS NULL
+      ${leadTenant}
       AND (
         l."assignedToId" = ${user.id}
         OR l."createdById" = ${user.id}
         OR l."teamId" IN (
-          SELECT tm."teamId" FROM "TeamMember" tm WHERE tm."userId" = ${user.id}
+          SELECT tm."teamId" FROM "TeamMember" tm WHERE tm."userId" = ${user.id} ${teamTenant}
           UNION
-          SELECT t."id" FROM "Team" t WHERE t."managerId" = ${user.id} AND t."deletedAt" IS NULL
+          SELECT t."id" FROM "Team" t WHERE t."managerId" = ${user.id} AND t."deletedAt" IS NULL ${teamTenant}
         )
       )
   `;
@@ -241,7 +303,7 @@ export async function getAccessibleLeadIds(user: PermissionUser): Promise<string
  */
 export async function canAccessLead(user: PermissionUser, leadId: string): Promise<boolean> {
   const lead = await basePrisma.lead.findFirst({
-    where: { id: leadId, ...activeTenantPredicate("lead access check") },
+    where: { id: leadId, ...(await actingRecordPredicate("lead access check")) },
     select: { id: true },
   });
   if (!lead) return false;
@@ -281,10 +343,13 @@ export async function getAccessibleContactIds(user: PermissionUser): Promise<str
   const permissions = await scopePermissions(user);
   if (permissions === null || permissions.has("contacts.view_all")) return null;
   if (!permissions.has("contacts.view_owned")) return [];
+  const scope = await actingListScope();
+  if (!scope) return [];
   const leadIds = await getAccessibleLeadIds(user);
   const rows = await basePrisma.contact.findMany({
     where: {
       deletedAt: null,
+      ...scope,
       OR: [
         { ownerId: user.id },
         { createdById: user.id },
@@ -304,7 +369,7 @@ export async function getAccessibleContactIds(user: PermissionUser): Promise<str
 /** May this user reach THIS contact? Resolve-then-list — see canAccessLead. */
 export async function canAccessContact(user: PermissionUser, contactId: string): Promise<boolean> {
   const contact = await basePrisma.contact.findFirst({
-    where: { id: contactId, ...activeTenantPredicate("contact access check") },
+    where: { id: contactId, ...(await actingRecordPredicate("contact access check")) },
     select: { id: true },
   });
   if (!contact) return false;
@@ -364,7 +429,7 @@ export async function canAccessConversation(
   // scoped client is not the fix either: it would hide the row, which reads as
   // "no such conversation" and leaves the tenant check untested.
   const conversation = await basePrisma.conversation.findFirst({
-    where: { id: conversationId, ...activeTenantPredicate("conversation access check") },
+    where: { id: conversationId, ...(await actingRecordPredicate("conversation access check")) },
     select: { contactId: true, leadId: true },
   });
   if (!conversation) return false;
@@ -407,10 +472,13 @@ export async function getAccessibleQuoteIds(user: PermissionUser): Promise<strin
   const permissions = await scopePermissions(user);
   if (permissions === null || permissions.has("quotes.view_all")) return null;
   if (!permissions.has("quotes.view_owned")) return [];
+  const scope = await actingListScope();
+  if (!scope) return [];
   const [leadIds, contactIds] = await Promise.all([getAccessibleLeadIds(user), getAccessibleContactIds(user)]);
   const rows = await basePrisma.quote.findMany({
     where: {
       deletedAt: null,
+      ...scope,
       OR: [
         { createdById: user.id },
         ...(leadIds === null ? [{ leadId: { not: null } }] : leadIds.length ? [{ leadId: { in: leadIds } }] : []),
@@ -425,7 +493,7 @@ export async function getAccessibleQuoteIds(user: PermissionUser): Promise<strin
 /** May this user reach THIS quote? Resolve-then-list — see canAccessLead. */
 export async function canAccessQuote(user: PermissionUser, quoteId: string): Promise<boolean> {
   const quote = await basePrisma.quote.findFirst({
-    where: { id: quoteId, ...activeTenantPredicate("quote access check") },
+    where: { id: quoteId, ...(await actingRecordPredicate("quote access check")) },
     select: { id: true },
   });
   if (!quote) return false;
@@ -449,11 +517,14 @@ export async function getAccessibleVehicleIds(user: PermissionUser): Promise<str
   const permissions = await scopePermissions(user);
   if (permissions === null || permissions.has("vehicles.view_all")) return null;
   if (!permissions.has("vehicles.view_owned")) return [];
+  const scope = await actingListScope();
+  if (!scope) return [];
   const contactIds = await getAccessibleContactIds(user);
   if (contactIds === null) return null;
   const rows = await basePrisma.vehicle.findMany({
     where: {
       deletedAt: null,
+      ...scope,
       OR: [
         ...(contactIds.length ? [{ contactId: { in: contactIds } }, { fleet: { contactId: { in: contactIds } } }] : []),
         { jobCards: { some: { technicianId: user.id, deletedAt: null } } },
@@ -467,7 +538,7 @@ export async function getAccessibleVehicleIds(user: PermissionUser): Promise<str
 /** May this user reach THIS vehicle? Resolve-then-list — see canAccessLead. */
 export async function canAccessVehicle(user: PermissionUser, vehicleId: string): Promise<boolean> {
   const vehicle = await basePrisma.vehicle.findFirst({
-    where: { id: vehicleId, ...activeTenantPredicate("vehicle access check") },
+    where: { id: vehicleId, ...(await actingRecordPredicate("vehicle access check")) },
     select: { id: true },
   });
   if (!vehicle) return false;
@@ -496,11 +567,14 @@ export async function getAccessibleJobCardIds(user: PermissionUser): Promise<str
   const permissions = await scopePermissions(user);
   if (permissions === null || permissions.has("jobcards.view_all")) return null;
   if (!permissions.has("jobcards.view_owned")) return [];
+  const scope = await actingListScope();
+  if (!scope) return [];
   const [contactIds, vehicleIds] = await Promise.all([getAccessibleContactIds(user), getAccessibleVehicleIds(user)]);
   if (contactIds === null || vehicleIds === null) return null;
   const rows = await basePrisma.jobCard.findMany({
     where: {
       deletedAt: null,
+      ...scope,
       OR: [
         { technicianId: user.id },
         ...(contactIds.length ? [{ contactId: { in: contactIds } }] : []),
@@ -515,7 +589,7 @@ export async function getAccessibleJobCardIds(user: PermissionUser): Promise<str
 /** May this user reach THIS job card? Resolve-then-list — see canAccessLead. */
 export async function canAccessJobCard(user: PermissionUser, jobCardId: string): Promise<boolean> {
   const jobCard = await basePrisma.jobCard.findFirst({
-    where: { id: jobCardId, ...activeTenantPredicate("job card access check") },
+    where: { id: jobCardId, ...(await actingRecordPredicate("job card access check")) },
     select: { id: true },
   });
   if (!jobCard) return false;
@@ -579,7 +653,7 @@ export async function getAccessibleDocumentIds(user: PermissionUser): Promise<st
       // written by hand. Without it the `{ not: null }` arms below — reached
       // whenever a linked-record scope is unrestricted — select every
       // contact-linked document in EVERY tenant.
-      ...documentTenantWhere(),
+      ...(await documentTenantWhere()),
       // A PRE-FILTER, not the rule. This OR is the old union, kept only to bound
       // what comes back from the database: every document the precedence rule
       // admits is reachable through at least one link, so the union is a strict
@@ -631,15 +705,12 @@ function idReach(ids: string[] | null): (id: string) => boolean {
 
 /**
  * The active tenant, as an explicit predicate for a basePrisma document query.
- *
- * NO SCOPE and a scope whose tenantId is null are different facts. Collapsing
- * them with `?? null` filters on the legacy untenanted value, and since
- * establishStaffTenantScope enters no scope at all unless
- * TENANT_ENFORCEMENT=enforce — while off/monitor are the documented default and
- * rollback modes — every migrated document would have stopped matching.
+ * A thin name for {@link actingRecordPredicate} — kept as its own function
+ * because both call sites below read as "the document scope", not "the acting
+ * record predicate, applied to a document".
  */
-function documentTenantWhere(): { tenantId?: string | null } {
-  return activeTenantPredicate("document scope");
+function documentTenantWhere(): Promise<{ tenantId?: string | null }> {
+  return actingRecordPredicate("document scope");
 }
 
 /**
@@ -655,7 +726,7 @@ function documentTenantWhere(): { tenantId?: string | null } {
  */
 export async function canAccessDocument(user: PermissionUser, documentId: string): Promise<boolean> {
   const document = await basePrisma.document.findFirst({
-    where: { id: documentId, ...documentTenantWhere() },
+    where: { id: documentId, ...(await documentTenantWhere()) },
     select: { id: true },
   });
   if (!document) return false;
@@ -679,6 +750,12 @@ export async function getAccessibleCaseIds(user: PermissionUser): Promise<string
   const permissions = await scopePermissions(user);
   if (permissions === null || permissions.has("cases.view_all")) return null;
   if (!permissions.has("cases.view_owned")) return [];
+  const scope = await actingScopeClass();
+  if (scope.mode === "closed") return [];
+  // Parenthesised deliberately: AND binds tighter than OR, so appending the
+  // tenant filter after an unparenthesised OR-chain would only apply it to the
+  // LAST arm and leave the contact/vehicle arms unfiltered.
+  const caseTenant = scope.mode === "tenant" ? Prisma.sql`AND c."tenantId" = ${scope.tenantId}` : Prisma.empty;
   const [contactIds, vehicleIds] = await Promise.all([getAccessibleContactIds(user), getAccessibleVehicleIds(user)]);
   if (contactIds === null) return null;
   // vehicleIds === null means the user can see ALL vehicles, so every vehicle-linked
@@ -688,20 +765,20 @@ export async function getAccessibleCaseIds(user: PermissionUser): Promise<string
   const rows = vehicleIds === null
     ? await basePrisma.$queryRaw<Array<{ id: string }>>`
         SELECT c."id" FROM "CustomerCase" c
-        WHERE c."contactId" = ANY(${contactIds}::text[]) OR c."vehicleId" IS NOT NULL
-           OR c."assignedToId" = ${user.id}`
+        WHERE (c."contactId" = ANY(${contactIds}::text[]) OR c."vehicleId" IS NOT NULL
+           OR c."assignedToId" = ${user.id}) ${caseTenant}`
     : await basePrisma.$queryRaw<Array<{ id: string }>>`
         SELECT c."id" FROM "CustomerCase" c
-        WHERE c."contactId" = ANY(${contactIds}::text[])
+        WHERE (c."contactId" = ANY(${contactIds}::text[])
            OR (c."vehicleId" IS NOT NULL AND c."vehicleId" = ANY(${vehicleIds}::text[]))
-           OR c."assignedToId" = ${user.id}`;
+           OR c."assignedToId" = ${user.id}) ${caseTenant}`;
   return rows.map((row) => row.id);
 }
 
 /** May this user reach THIS case? Resolve-then-list — see canAccessLead. */
 export async function canAccessCase(user: PermissionUser, caseId: string): Promise<boolean> {
   const supportCase = await basePrisma.customerCase.findFirst({
-    where: { id: caseId, ...activeTenantPredicate("case access check") },
+    where: { id: caseId, ...(await actingRecordPredicate("case access check")) },
     select: { id: true },
   });
   if (!supportCase) return false;
