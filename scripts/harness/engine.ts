@@ -65,7 +65,7 @@
  * its job, and a probe that went red on one edit would have been measuring less,
  * not more.
  */
-import type { Fixture, TenantFixture } from "./seed";
+import type { TenantFixture } from "./seed";
 
 export type Verdict = "pass" | "fail" | "skip";
 

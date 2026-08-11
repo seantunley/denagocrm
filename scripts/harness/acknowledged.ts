@@ -83,8 +83,160 @@ export type AcknowledgedFailure = {
  *
  * Every entry is a known way in which enforcement would still leak or lose data.
  * Delete entries as the fixes land; never add one to make a run green.
+ *
+ * ── STATE OF PLAY, 2026-08-11 (main @ 80e7b6c8): 11 entries ──────────────────
+ *
+ * BE CLEAR ABOUT THE SHAPE OF THIS. Ten of the eleven are REAL APPLICATION
+ * DEFECTS. Only one — TimelinePin READ — is the database-role problem that
+ * genuinely cannot be fixed here. The other ten are exempted because their fixes
+ * are WRITTEN AND IN FLIGHT, not because they are acceptable:
+ *
+ *   5  SalesPipeline OWN/READ/UPDATE/DELETE/LIST → PR #457   (open, unmerged)
+ *   2  SalesPipeline UNIQUE ×2                   → PR #469   (open, unmerged)
+ *   2  Quote OWN, JobCard OWN                    → PR #459   (open, unmerged)
+ *   1  TimelinePin OWN            → branch fix/tenant-stamp-audit-trail
+ *                                   (⚠ NO PR RAISED — that is a gap, not a plan)
+ *   1  TimelinePin READ           → database role change; no code fix exists
+ *
+ * So the list should fall to 1 as those four land, and to 0 at the RLS-role
+ * cutover. If it is not falling, the ratchet has stopped ratcheting and that is
+ * the thing to escalate — not the number itself.
  */
-export const ACKNOWLEDGED_ENFORCED_FAILURES: AcknowledgedFailure[] = [];
+export const ACKNOWLEDGED_ENFORCED_FAILURES: AcknowledgedFailure[] = [
+  /* ── THE ONE THAT IS NOT AN APPLICATION DEFECT ────────────────────────────
+   *
+   * This is the entry the allowlist exists for. Everything else below is a real
+   * defect with a real fix in flight; this one cannot be fixed by any commit in
+   * this repository, which is why a bare blocking gate was not an option.
+   */
+  {
+    model: "TimelinePin",
+    check: "READ",
+    name: "read of B's row by id returns nothing",
+    why:
+      "NOT AN APPLICATION DEFECT — a DATABASE ROLE problem, and the only failure here that " +
+      "enforcement cannot reach. getTimelinePins is prisma.$queryRaw. The Prisma extension " +
+      "cannot rewrite raw SQL, so the boundary was supposed to be RLS via SET LOCAL " +
+      "app.current_tenant. Production connects as neondb_owner with rolbypassrls = true, so no " +
+      "policy ever evaluates and the SET LOCAL is inert. Verified read-only against production " +
+      "on 2026-08-11: RLS is enabled AND forced on TimelinePin, and does nothing. Flipping " +
+      "TENANT_ENFORCEMENT does not change this — it scopes model operations, not raw SQL.",
+    fix:
+      "Not a code change. Connect as a role WITHOUT BYPASSRLS, with the policies granted to it. " +
+      "Written up in docs/rls-role-is-the-flip-blocker.md on branch docs/tenant-preflip-audit, " +
+      "which sets out the cutover and names this check as the canary: it must flip from fail to " +
+      "pass with NO application change. Role work is started on branch chore/rls-app-role; see " +
+      "also docs/RLS-ROLE-CUTOVER.md. Delete this entry the day that lands.",
+  },
+
+  /* ── SalesPipeline was never tenant-isolated at all ───────────────────────
+   *
+   * Five checks, one root cause, one fix. createPipeline's INSERT column list in
+   * src/lib/pipelines.ts is ("id","name","description","type","isDefault") — no
+   * tenantId — and the reads alongside it carry no tenant predicate. This is the
+   * module the pre-flip audit found had been skipped entirely.
+   */
+  {
+    model: "SalesPipeline",
+    check: "OWN",
+    name: "create via action stamps the acting tenant",
+    why:
+      "createPipeline's raw INSERT omits tenantId entirely, so every pipeline is created " +
+      "UNOWNED and becomes invisible to its own creator at the flip.",
+    fix: "PR #457, branch feat/kanban-pipeline-context — src/lib/pipelines.ts + new src/lib/pipelineTenantRule.ts. Open, unmerged.",
+  },
+  {
+    model: "SalesPipeline",
+    check: "READ",
+    name: "read of B's row by id returns nothing",
+    why: "pipeline reads carry no tenant predicate — tenant A resolves tenant B's pipeline by id.",
+    fix: "PR #457, branch feat/kanban-pipeline-context — pipelineScopeFor() / requireOwnedPipeline() in src/lib/pipelines.ts. Open, unmerged.",
+  },
+  {
+    model: "SalesPipeline",
+    check: "UPDATE",
+    name: "update of B's row changes zero rows",
+    why: "editSalesPipeline updates by id with no ownership check — A renamed B's pipeline outright.",
+    fix: "PR #457, branch feat/kanban-pipeline-context — getOwnedPipelineRow(id) in src/app/actions/pipelines.ts. Open, unmerged.",
+  },
+  {
+    model: "SalesPipeline",
+    check: "DELETE",
+    name: "delete of B's row changes zero rows",
+    why: "archiveSalesPipeline soft-deletes by id with no ownership check — A destroyed B's pipeline.",
+    fix: "PR #457, branch feat/kanban-pipeline-context — getOwnedPipelineRow(id) in src/app/actions/pipelines.ts. Open, unmerged.",
+  },
+  {
+    model: "SalesPipeline",
+    check: "LIST",
+    name: "list never contains a B row",
+    why: "the pipeline list query has no tenant filter — B's pipelines appear in A's list.",
+    fix: "PR #457, branch feat/kanban-pipeline-context — pipelineTenantFilter() in src/lib/pipelines.ts. Open, unmerged.",
+  },
+
+  /* ── Two GLOBAL unique indexes with no tenant column ──────────────────────
+   *
+   * Not an isolation leak but a hard multi-tenancy blocker: these make a second
+   * workspace structurally impossible to set up. Schema-level, so the fix is a
+   * migration rather than a code change.
+   */
+  {
+    model: "SalesPipeline",
+    check: "UNIQUE",
+    name: "two tenants can each own a DEFAULT pipeline",
+    why:
+      "SalesPipeline_single_default_key is UNIQUE on (\"isDefault\") WHERE isDefault = true with no " +
+      "tenant column, so only ONE default pipeline may exist database-wide — and the migrations " +
+      "already seed it. A second workspace can never have a default pipeline.",
+    fix: "PR #469, branch fix/tenant-default-and-pipeline-uniques — migration 20260811090000_pipeline_uniques_per_tenant re-creates it on (\"tenantId\",\"isDefault\"). Open, unmerged.",
+  },
+  {
+    model: "SalesPipeline",
+    check: "UNIQUE",
+    name: "two tenants can each have a pipeline with the same NAME",
+    why:
+      "SalesPipeline_name_key is UNIQUE on (name) WHERE deletedAt IS NULL with no tenant column — " +
+      "if one tenant names a pipeline \"Sales\", no other tenant ever can.",
+    fix: "PR #469, branch fix/tenant-default-and-pipeline-uniques — same migration, re-creates it on (\"tenantId\",\"name\"). Open, unmerged.",
+  },
+
+  /* ── Writes the app-layer guard cannot intercept by construction ──────────
+   *
+   * All three run outside the guard's reach — raw SQL in the pin's case, the
+   * RLS-bypass client in the other two — so the guard has no `args` to rewrite
+   * and each call site has to stamp the tenant explicitly. There is deliberately
+   * no shared root-cause fix; two separate branches cover them.
+   */
+  {
+    model: "TimelinePin",
+    check: "OWN",
+    name: "create via action stamps the acting tenant",
+    why:
+      "toggleTimelinePin writes a raw INSERT ... ON CONFLICT, which the db.ts guard structurally " +
+      "cannot see (it rewrites Prisma args; raw SQL has none). tenantId is omitted, so every pin " +
+      "is created UNOWNED.",
+    fix:
+      "Branch fix/tenant-stamp-audit-trail — src/lib/timelinePins.ts (adds tenantId to the INSERT " +
+      "and the DO UPDATE SET) plus new src/lib/customerRecordTenant.ts. ⚠ NO PR HAS BEEN RAISED " +
+      "for this branch, which is why it is missing from the PR-based merge planning. Raise one.",
+  },
+  {
+    model: "Quote",
+    check: "OWN",
+    name: "create via action stamps the acting tenant",
+    why:
+      "saveQuoteDraft's new-quote path runs on basePrisma, the RLS-bypass client, so nothing " +
+      "scopes the transaction and the header plus nested items/fees inherit no tenant.",
+    fix: "PR #459, branch fix/p0-bypass-write-stamping — src/app/actions/quotes.ts stamps tenantId on the header and nested creates. Open, unmerged.",
+  },
+  {
+    model: "JobCard",
+    check: "OWN",
+    name: "create via action stamps the acting tenant",
+    why: "createJobCard runs on basePrisma for the same reason, leaving the job card and its check-in odometer row unowned.",
+    fix: "PR #459, branch fix/p0-bypass-write-stamping — src/app/actions/jobcards.ts. Same PR also fixes a cross-tenant stock claim in claimPartStock. Open, unmerged.",
+  },
+];
 
 /** The identity of a check. Same shape the run report uses to line the passes up. */
 export function acknowledgementKey(entry: {
