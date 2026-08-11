@@ -233,10 +233,19 @@ export async function startRecordSigning(
   }
 
   const pdf = await renderEnvelopePdf(envelope.doc, quoteId, jobCardId);
+  // The envelope is rendered FROM the source record, so the source record owns it —
+  // and so will the Document row and the SignatureRequest created from it below.
+  // Verbatim, NULL included: a quote written before stamping cannot confer an
+  // owner, and substituting the signer's would put the contract in a workspace the
+  // quote is not in.
+  const sourceTenantId = quoteId
+    ? (await prisma.quote.findUnique({ where: { id: quoteId }, select: { tenantId: true } }))?.tenantId ?? null
+    : (await prisma.jobCard.findUnique({ where: { id: jobCardId! }, select: { tenantId: true } }))?.tenantId ?? null;
   const storedName = await saveFile(
     pdf,
     `${envelope.title}.pdf`,
     "application/pdf",
+    sourceTenantId,
   );
 
   // The check-and-create runs in one transaction that locks the SOURCE record row

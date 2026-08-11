@@ -286,8 +286,12 @@ export async function uploadPortalFile(
     if (caseId && !(await portalCanAccessCase(caseId))) return { error: "Case not found." };
 
     const buffer = Buffer.from(await file.arrayBuffer());
-    const storedName = await saveFile(buffer, file.name, file.type);
+    // A portal request carries a customer OTP session, not a staff one, so there is
+    // no acting workspace to resolve — the CONTACT is the only honest source, and
+    // portalTenantId is already the portal's shared rule for exactly this. Resolved
+    // BEFORE the write so the object and the PortalUpload row claim one owner.
     const tenantId = await portalTenantId(contact.id);
+    const storedName = await saveFile(buffer, file.name, file.type, tenantId);
     await basePrisma.$executeRaw`
       INSERT INTO "PortalUpload" (
         "id", "tenantId", "contactId", "caseId", "vehicleId", "fileName", "storedName", "mimeType", "sizeBytes"
