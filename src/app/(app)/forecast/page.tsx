@@ -4,15 +4,18 @@ import { basePrisma } from "@/lib/db";
 import { formatDate, formatDateTime, formatZAR, formatZARCompact } from "@/lib/format";
 import { getAccessibleLeadScope, hasPermission, requirePermission } from "@/lib/permissions";
 import { listActiveSalesPipelines, listForecastLeads, summarizeForecast } from "@/lib/pipelines";
+import { forecastPickers, offeredId } from "@/lib/forecastPickerScope";
+import {
+  listActingTenantStaff,
+  listActingTenantTeamMemberships,
+  listActingTenantTeams,
+} from "@/lib/tenantActor";
 import { saveLeadForecast, snapshotForecast } from "@/app/actions/pipelines";
 import { EmptyState, SectionHeading, StatusPill, Surface } from "@/components/visual-system";
 import { WorkspaceHero } from "@/components/workspace-hero";
 
 export const dynamic = "force-dynamic";
 
-type TeamRow = { id: string; name: string };
-type UserRow = { id: string; name: string };
-type MembershipRow = { teamId: string; userId: string };
 type SnapshotRow = {
   id: string;
   period: string;
@@ -54,35 +57,53 @@ export default async function ForecastPage({
   const requestedOwnerId = typeof params.user === "string" ? params.user : null;
   const range = monthRange(typeof params.period === "string" ? params.period : undefined);
 
-  const [pipelines, allTeams, allUsers, memberships, scope] = await Promise.all([
+  // THE WORKSPACE BOUNDARY, applied here — before `scope.viewAll` is consulted at
+  // all. These three reads were `SELECT … FROM "Team"`, `SELECT … FROM "User"` and
+  // `SELECT … FROM "TeamMember"` with NO tenant predicate, on `basePrisma`, the
+  // documented RLS bypass. `viewAll` then handed the lot to the dropdowns, which
+  // made a WITHIN-workspace permission the only thing bounding a CROSS-workspace
+  // read. See src/lib/forecastPickerScope.ts for the two axes and why they are not
+  // the same one. All three resolvers classify with `actingScopeClass()`, so the
+  // boundary is real while enforcement is dormant rather than at the flip.
+  const [pipelines, workspaceTeams, workspaceStaff, workspaceMemberships, scope] = await Promise.all([
     listActiveSalesPipelines(),
-    basePrisma.$queryRaw<TeamRow[]>`
-      SELECT "id", "name" FROM "Team"
-      WHERE "active" = true AND "deletedAt" IS NULL ORDER BY "name"
-    `,
-    basePrisma.$queryRaw<UserRow[]>`SELECT "id", "name" FROM "User" ORDER BY "name"`,
-    basePrisma.$queryRaw<MembershipRow[]>`SELECT "teamId", "userId" FROM "TeamMember"`,
+    listActingTenantTeams(),
+    listActingTenantStaff(),
+    listActingTenantTeamMemberships(),
     getAccessibleLeadScope(user),
   ]);
 
-  const teams = scope.viewAll
-    ? allTeams
-    : allTeams.filter((team) => scope.teamIds.includes(team.id));
-  const visibleUserIds = new Set<string>([user.id]);
-  if (scope.viewAll) {
-    for (const item of allUsers) visibleUserIds.add(item.id);
-  } else {
-    for (const membership of memberships) {
-      if (scope.teamIds.includes(membership.teamId)) visibleUserIds.add(membership.userId);
-    }
-  }
-  const users = allUsers.filter((item) => visibleUserIds.has(item.id));
+  const { teams, users } = forecastPickers({
+    workspaceTeams,
+    workspaceStaff,
+    workspaceMemberships,
+    scope,
+  });
 
   const pipelineId = pipelines.some((pipeline) => pipeline.id === requestedPipelineId)
     ? requestedPipelineId
     : null;
-  const teamId = teams.some((team) => team.id === requestedTeamId) ? requestedTeamId : null;
-  const ownerId = users.some((item) => item.id === requestedOwnerId) ? requestedOwnerId : null;
+  // A `?team=` / `?user=` the picker would not have offered is dropped rather than
+  // passed to `listForecastLeads`, which would otherwise answer "does this id
+  // exist in some workspace" through the size of the result.
+  const teamId = offeredId(teams, requestedTeamId);
+  const ownerId = offeredId(users, requestedOwnerId);
+
+  // THE ROW EDITOR'S TEAM OPTIONS — the lead's CURRENT team first, when the
+  // picker would not otherwise contain it.
+  //
+  // A <select> whose `defaultValue` matches no option silently selects the first
+  // one, and the first one here is "No team". So a lead attached to a team the
+  // viewer cannot filter by — their own lead in a team they are not in — rendered
+  // pre-set to "No team", and saving anything else on the row cleared the team
+  // without anyone choosing to. That was always reachable; scoping the list makes
+  // it likelier. Offering the current value keeps a save a no-op unless the
+  // person actually picks something, and `saveLeadForecast` still demands
+  // `leads.assign` for a real change.
+  const teamChoices = (lead: { teamId: string | null; teamName: string | null }) =>
+    lead.teamId && !teams.some((team) => team.id === lead.teamId)
+      ? [{ id: lead.teamId, name: lead.teamName ?? "Current team" }, ...teams]
+      : teams;
 
   let leads = await listForecastLeads({
     pipelineId,
@@ -172,19 +193,44 @@ export default async function ForecastPage({
             {pipelines.map((pipeline) => <option key={pipeline.id} value={pipeline.id}>{pipeline.name}</option>)}
           </select>
         </label>
+        {/*
+          BOTH FILTERS STAY WHEN THERE IS NOTHING TO LIST.
+
+          They were unconditional selects while the lists were every Team and
+          every User row on the platform and therefore never empty. Now that they
+          are one workspace's, empty is reachable — a workspace with no teams yet,
+          or a scoped user in none of them. A control that disappears between two
+          visits reads as a bug in the forecast, and rendering an option-less
+          <select> instead is a blank box that says nothing. Disabled, with the
+          reason in it, is the same choice ActivityPanel and LeadForm already
+          make. It submits no value, which is exactly what "" meant here anyway:
+          no filter.
+        */}
         <label className="space-y-1">
           <span className="text-xs text-slate-400">Team</span>
-          <select name="team" className="input" defaultValue={teamId ?? ""}>
-            <option value="">All accessible teams</option>
-            {teams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
-          </select>
+          {teams.length === 0 ? (
+            <select className="input" disabled defaultValue="">
+              <option value="">No teams you can filter by</option>
+            </select>
+          ) : (
+            <select name="team" className="input" defaultValue={teamId ?? ""}>
+              <option value="">All accessible teams</option>
+              {teams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
+            </select>
+          )}
         </label>
         <label className="space-y-1">
           <span className="text-xs text-slate-400">Owner</span>
-          <select name="user" className="input" defaultValue={ownerId ?? ""}>
-            <option value="">All accessible owners</option>
-            {users.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-          </select>
+          {users.length === 0 ? (
+            <select className="input" disabled defaultValue="">
+              <option value="">No owners you can filter by</option>
+            </select>
+          ) : (
+            <select name="user" className="input" defaultValue={ownerId ?? ""}>
+              <option value="">All accessible owners</option>
+              {users.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select>
+          )}
         </label>
           <button className="btn-primary">Apply filters</button>
         </form>
@@ -261,13 +307,24 @@ export default async function ForecastPage({
                         </select>
                         <input name="expectedCloseDate" type="date" className="input" defaultValue={lead.expectedCloseDate?.toISOString().slice(0, 10) ?? ""} />
                         <input name="estimatedCost" className="input" placeholder="Estimated cost (R)" defaultValue={lead.estimatedCostCents != null ? lead.estimatedCostCents / 100 : ""} />
-                        {canAssign ? (
+                        {!canAssign ? (
+                          <input type="hidden" name="teamId" value={lead.teamId ?? ""} />
+                        ) : teamChoices(lead).length === 0 ? (
+                          // Nothing to move it to and nothing set on it. The field
+                          // stays and says so; the hidden input carries the current
+                          // value because a DISABLED select submits nothing, and
+                          // "nothing" is what `saveLeadForecast` reads as "no team".
+                          <>
+                            <select className="input" disabled defaultValue="">
+                              <option value="">No teams in this workspace</option>
+                            </select>
+                            <input type="hidden" name="teamId" value={lead.teamId ?? ""} />
+                          </>
+                        ) : (
                           <select name="teamId" className="input" defaultValue={lead.teamId ?? ""}>
                             <option value="">No team</option>
-                            {teams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
+                            {teamChoices(lead).map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
                           </select>
-                        ) : (
-                          <input type="hidden" name="teamId" value={lead.teamId ?? ""} />
                         )}
                         <button className="btn-primary btn-sm">Save</button>
                       </form>

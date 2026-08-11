@@ -7,6 +7,12 @@ import { resolveAssignment } from "./assignableUser";
 
 export type TenantActor = { id: string; name: string; email: string };
 
+/** A team as a picker offers it: enough to render an option and to check one. */
+export type TenantTeam = { id: string; name: string };
+
+/** Who is in which team, for a picker that widens from teams to people. */
+export type TenantTeamMembership = { teamId: string; userId: string };
+
 // Actor selection classifies the current scope exactly like every other unguarded
 // tenant-owned path — via the shared {@link currentScopeClass}. `global` → the
 // unchanged pick (dormant OR trusted system), `tenant` → a member of that tenant,
@@ -228,6 +234,99 @@ export async function listActingTenantStaff(): Promise<TenantActor[]> {
     SELECT "id", "name", "email" FROM "User"
     WHERE "disabledAt" IS NULL
     ORDER BY "name" ASC`;
+}
+
+/* ------------------------------------------------------------------------- */
+/* THE OTHER HALF OF A STAFF PICKER: TEAMS                                    */
+/*                                                                            */
+/* A forecast, a lead and a job card are attached to a PERSON or to a TEAM,   */
+/* and the two are offered side by side in the same form. `Team` carries its   */
+/* own `tenantId`, so unlike `User` it does not need a membership join — but   */
+/* it does need SOMETHING, and the /forecast pickers had nothing at all:       */
+/* `SELECT "id", "name" FROM "Team" WHERE "active" = true` on `basePrisma`.    */
+/*                                                                            */
+/* They live HERE, next to `listActingTenantStaff`, rather than beside the     */
+/* forecast queries, for one reason: they must classify the SAME WAY as the    */
+/* people picker they sit next to. A page whose owner dropdown is bounded by   */
+/* `actingScopeClass()` and whose team dropdown is bounded by something else   */
+/* has two boundaries that agree today and are free to drift, and the two      */
+/* fields are read as one control by the person using them.                    */
+/*                                                                            */
+/* STRICT EQUALITY, and nothing is stranded by it: migration                   */
+/* 20260725160000_tenant_governance_isolation backfills BOTH tables            */
+/* unconditionally (`UPDATE "Team" SET "tenantId" = 'tenant_denago_cpt' WHERE  */
+/* "tenantId" IS NULL`, and the same for "TeamMember"), so a NULL row today is */
+/* not "old", it is "created by an unknown workspace".                         */
+/*                                                                            */
+/* Each is ONE statement rather than a branch per mode. The `global` branch of */
+/* a two-branch version would be a Team query with no tenant column in it at   */
+/* all — which is exactly the shape the #458 sweep counts, and exactly the     */
+/* shape a later reader copies. Binding NULL says "no workspace restriction"   */
+/* in the same statement that says what the restriction is when there is one.  */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * The workspace restriction as a BOUND VALUE: the acting tenant, or `null` for
+ * "no restriction" (`global` — reached only with no session, which behind a
+ * `requirePermission` page cannot happen). `closed` is not representable here on
+ * purpose: it means resolve NOTHING, and every caller returns early instead.
+ */
+async function actingTeamScope(): Promise<{ closed: true } | { closed: false; tenantId: string | null }> {
+  const s = await actingScopeClass();
+  if (s.mode === "closed") return { closed: true };
+  return { closed: false, tenantId: s.mode === "tenant" ? s.tenantId : null };
+}
+
+/**
+ * {@link listActingTenantStaff} for the TEAM half of the same picker: the active
+ * teams of the workspace the signed-in person is acting in.
+ *
+ * The /forecast team dropdown listed every workspace's teams by name, and a
+ * `leads.view_all` user was shown all of them — see src/lib/forecastPickerScope.ts
+ * for why "sees every record" was never a licence to see every workspace.
+ */
+export async function listActingTenantTeams(): Promise<TenantTeam[]> {
+  const scope = await actingTeamScope();
+  if (scope.closed) return [];
+  return basePrisma.$queryRaw<TenantTeam[]>`
+    SELECT "id", "name" FROM "Team"
+    WHERE "active" = true AND "deletedAt" IS NULL
+      AND (${scope.tenantId}::text IS NULL OR "tenantId" = ${scope.tenantId})
+    ORDER BY "name" ASC`;
+}
+
+/**
+ * {@link resolveActingTenantMemberUser} for a TEAM id a signed-in person posted.
+ *
+ * The picker and the check must classify the same way, in both modes — a team
+ * dropdown scoped to one workspace is decoration if the action behind it accepts
+ * any team id that arrives. Returns null when the id is not an active team of the
+ * acting workspace, and the caller refuses.
+ */
+export async function resolveActingTenantTeam(teamId: string): Promise<TenantTeam | null> {
+  const scope = await actingTeamScope();
+  if (scope.closed) return null;
+  const rows = await basePrisma.$queryRaw<TenantTeam[]>`
+    SELECT "id", "name" FROM "Team"
+    WHERE "id" = ${teamId} AND "active" = true AND "deletedAt" IS NULL
+      AND (${scope.tenantId}::text IS NULL OR "tenantId" = ${scope.tenantId})
+    LIMIT 1`;
+  return rows[0] ?? null;
+}
+
+/**
+ * Who is in which team, within the acting workspace.
+ *
+ * Used to widen a picker from "the teams you are in" to "the people in them", so
+ * an unbounded read of it is an unbounded read of the org chart: the /forecast
+ * page selected every `TeamMember` row on the platform to do it.
+ */
+export async function listActingTenantTeamMemberships(): Promise<TenantTeamMembership[]> {
+  const scope = await actingTeamScope();
+  if (scope.closed) return [];
+  return basePrisma.$queryRaw<TenantTeamMembership[]>`
+    SELECT "teamId", "userId" FROM "TeamMember"
+    WHERE (${scope.tenantId}::text IS NULL OR "tenantId" = ${scope.tenantId})`;
 }
 
 /**
