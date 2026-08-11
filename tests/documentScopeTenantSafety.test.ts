@@ -70,15 +70,23 @@ test("EVERY soft delete and restore is tenant-scoped, not just documents", () =>
   // caller can omit it.
   const trash = shipped("src/lib/trash.ts");
   assert.doesNotMatch(trash, /opts\?:/, "an optional tenant is one a caller can forget");
-  assert.match(trash, /function activeTenantWhere\(\)/);
-  assert.match(trash, /activeTenantPredicate\(/);
+  assert.match(trash, /function actingTenantWhere\(\)/);
+  assert.match(trash, /actingScopeClass\(\)/);
 
   for (const fn of ["softDeleteRecord", "restoreRecord"]) {
     const start = trash.indexOf(`export async function ${fn}(`);
     assert.notEqual(start, -1, `${fn} is gone — was it renamed?`);
     const body = trash.slice(start, trash.indexOf("\n}", start));
     assert.match(body, /updateMany\(/, `${fn} must write conditionally, so a foreign id matches no rows`);
-    assert.match(body, /\.\.\.activeTenantWhere\(\)/, `${fn} must carry the tenant predicate`);
+    assert.match(body, /const where = await actingTenantWhere\(\);/, `${fn} must resolve the tenant predicate`);
+    // Resolved ONCE and reused on both the write and the re-read, not called
+    // twice — two calls could resolve two different answers if the ambient
+    // scope changed between them.
+    assert.equal(
+      (body.match(/\.\.\.where\b/g) ?? []).length,
+      2,
+      `${fn} must carry the SAME resolved predicate on both the write and the re-read`,
+    );
     assert.match(body, /return null;/, `${fn} must report a miss rather than pretend`);
   }
 });
@@ -92,7 +100,7 @@ test("the Trash page reads within the tenant too", () => {
   // the restore while still rendering the PII is the wrong half to fix.
   const page = shipped("src/app/(app)/trash/page.tsx");
   assert.match(page, /basePrisma\./, "still the basePrisma page this guards");
-  assert.match(page, /\.\.\.activeTenantPredicate\("Trash page"\)/, "the shared predicate must carry the tenant");
+  assert.match(page, /\.\.\.\(await actingTrashPredicate\("Trash page"\)\)/, "the shared predicate must carry the tenant");
 
   // Every query must go through that one predicate — a `where:` built inline
   // would silently opt out of it.
@@ -132,17 +140,25 @@ test("under enforcement, a scopeless request is refused rather than unscoped", a
   }
 });
 
-test("all three call sites share the one predicate", () => {
-  // Three separate copies is how one of them ends up with a different rule.
-  for (const rel of [
-    "src/lib/trash.ts",
-    "src/lib/permissions.ts",
-    "src/app/(app)/trash/page.tsx",
-  ]) {
+test("trash.ts and the Trash page share the acting-workspace predicate", () => {
+  // Two separate copies is how one of them ends up with a different rule — see
+  // actingTrashPredicate's doc comment in trash.ts for why this moved off
+  // activeTenantPredicate (enforcement-only, `{}` while DORMANT, the mode every
+  // environment runs in today — so it never actually named a tenant for either
+  // caller here, both of which are signed-in owner actions with no other
+  // per-record ownership gate in front of them).
+  //
+  // permissions.ts is NOT in this list. It is on the SAME acting-workspace
+  // predicate now (its own actingRecordPredicate, a separate PR/branch) — the
+  // two are independent copies of one small, stable ladder rather than a
+  // shared import, so this file and that one's sibling test can each land
+  // without depending on merge order. Extracting one canonical copy is a
+  // follow-up worth doing.
+  for (const rel of ["src/lib/trash.ts", "src/app/(app)/trash/page.tsx"]) {
     assert.match(
       shipped(rel),
-      /activeTenantPredicate\(/,
-      `${rel} must resolve the tenant through the shared predicate`,
+      /actingTrashPredicate\(/,
+      `${rel} must resolve the tenant through the shared acting-workspace predicate`,
     );
   }
 });
