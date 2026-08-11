@@ -61,6 +61,35 @@ type OutboxBudget = Pick<CronSliceContext, "shouldStop">;
  *
  * This mirrors exactly what `withTenantWrite` stamps on the way in, so the filter
  * and the writer always agree, including while enforcement is dormant.
+ *
+ * ── NOT CONVERTED TO THE ACTING WORKSPACE, AND WHY ─────────────────────────────
+ *
+ * `writeTenantId()` is null while enforcement is dormant, so this is the FOUNDING
+ * tenant for everyone — the #470 defect, here as well. It is not fixed one call
+ * site at a time, because this single expression is the tenant for BOTH sides of
+ * the queue:
+ *
+ *   - the STAFF side (`enqueueStaffReply` → its idempotency re-read at
+ *     `resolveExisting`, and the `withTenantWrite` that writes the row), which IS
+ *     user-originated — both callers are Server Actions behind `inbox.reply`;
+ *   - the DRAIN side (`flushBotOutbox`, `flushBotOutboxConversation`,
+ *     `claimOldest`, `earliestUnfinished`, `repairPendingCommunicationLogs`,
+ *     `deliveryStateForMessages`), which is the bot-outbox cron.
+ *
+ * Move the staff write to the acting workspace on its own and a second tenant's
+ * reply is written into tenant B while every reader still looks in tenant A: the
+ * idempotency check stops recognising its own rows (so a resubmission sends the
+ * message twice), the immediate flush finds nothing, and the cron never claims it.
+ * The reply is accepted, reported as sent, and never leaves. That is a delivery
+ * outage traded for a silent mis-ownership, which is the wrong trade even though
+ * the mis-ownership is the more insidious bug.
+ *
+ * WHAT WOULD SETTLE IT: the drain resolving a real tenant per slice — `runCronPerTenant`
+ * already loops tenants for the bot-outbox route, but binds a scope that
+ * `writeTenantId()` ignores while dormant, so every slice collapses back here. Once
+ * the drain reads the tenant it was handed, enqueue and drain can move to the
+ * acting/record tenant together, in one change, with the two-tenant harness
+ * covering send → claim → deliver end to end.
  */
 function outboxTenantId(): string {
   return writeTenantId() ?? DEFAULT_TENANT_ID;
@@ -77,7 +106,16 @@ function storedMessages(channel: string, messages: OutMsg[]): OutMsg[] {
   return out;
 }
 
-/** Legacy convenience wrapper; modern flow runners use botOutboxWrite inside their state transaction. */
+/**
+ * Legacy convenience wrapper; modern flow runners use botOutboxWrite inside their state transaction.
+ *
+ * UNREACHABLE — nothing in `src/` or `tests/` calls this (nor its namesake in
+ * botOutboxWrite.ts); every live enqueue goes through `enqueueBotMessagesTx` inside
+ * the caller's own turn transaction. Left on `withTenantWrite` rather than
+ * converted: classifying dead code as user-originated or background is a guess
+ * either way, and a converted-but-uncalled helper would read as precedent for the
+ * live runtime paths that deliberately did NOT move.
+ */
 export async function enqueueBotMessages(input: {
   channel: string;
   key: string;
@@ -300,6 +338,15 @@ export async function enqueueStaffReply(input: {
   const createdAt = new Date();
 
   try {
+    // USER-ORIGINATED but NOT CONVERTED — the one call site in this task that is
+    // classified one way and left the other. Both callers are Server Actions behind
+    // `inbox.reply` (`enqueueStaffMessage` ← whatsapp.ts, and messenger.ts), so a
+    // signed-in person is unambiguously doing this and the acting workspace is the
+    // right owner. It stays on `withTenantWrite` because the tenant it stamps has to
+    // equal the one `outboxTenantId()` reads three lines up in `resolveExisting` and
+    // the one the drain claims with; converting the write alone desynchronises them
+    // and strands the reply. The full reasoning, and what would let this move, is on
+    // `outboxTenantId` above.
     const written = await withTenantWrite(async (tx, tenantId) => {
       // 1 + 2. Ownership, once for the whole reply and before any part of it
       // exists — so a duplicate submission finding an intent already there knows
@@ -884,6 +931,19 @@ async function failDelivery(row: OutboxRow, error: string): Promise<"retry" | "d
  */
 async function botMayStillSpeak(row: OutboxRow): Promise<boolean> {
   if (row.origin !== "bot") return true; // a person's own reply is never fenced
+  // BACKGROUND / RUNTIME — `withTenantWrite` deliberately. The only callers are
+  // `deliverClaimed`, i.e. the outbox drain: the bot-outbox cron and the
+  // best-effort flush a staff action fires after enqueueing. No session on the
+  // cron path, so an acting scope resolves to `global` and stamps the founding
+  // tenant anyway.
+  //
+  // This IS the site with a record to inherit from — `row` — and it is still not
+  // converted, because `OutboxRow` does not select `tenantId` and the rows were
+  // CLAIMED by `claimOldest`/`earliestUnfinished` under `outboxTenantId()`. So the
+  // row in hand is already, by construction, a founding-tenant row: inheriting from
+  // it would restate the wrong answer with a better justification. The claim query
+  // is what has to change, and changing it means the drain must iterate tenants for
+  // real — see the note on `outboxTenantId` above.
   return withTenantWrite(async (tx, tenantId) => {
     if (await botStillOwnsTx(tx, tenantId, row.channel, row.key)) return true;
     // Withdraw this row AND anything queued behind it, inside the same

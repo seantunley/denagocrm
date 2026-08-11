@@ -7,8 +7,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma, basePrisma } from "@/lib/db";
 import { ciExactIdFilter } from "@/lib/ciExact";
-import { withTenantWrite } from "@/lib/tenantWrite";
-import { actingOwnerTenantId } from "@/lib/actingScope";
+import { actingOwnerTenantId, withActingTenantWrite } from "@/lib/actingScope";
 import { resolveAssignableUser } from "@/lib/tenantActor";
 import { logAudit } from "@/lib/audit";
 import { logError } from "@/lib/errorLog";
@@ -35,7 +34,9 @@ function slugify(value: string): string {
 async function loadCase(caseId: string) {
   return prisma.customerCase.findUnique({
     where: { id: caseId },
-    select: { id: true, number: true, status: true, contactId: true, priority: true, type: true, mailboxId: true, assignedToId: true, firstResponseAt: true },
+    // `tenantId` is selected because the reply path stamps its message with the
+    // CASE's owner rather than the replying agent's workspace — see replyToTicket.
+    select: { id: true, tenantId: true, number: true, status: true, contactId: true, priority: true, type: true, mailboxId: true, assignedToId: true, firstResponseAt: true },
   });
 }
 
@@ -122,7 +123,24 @@ export async function createTicket(formData: FormData): Promise<ActionResult> {
     const assignToMe = formData.get("assignToMe") === "on";
 
     // Atomic: the case + its opening message in ONE transaction, tenant-stamped.
-    const created = await withTenantWrite(async (tx, tenantId) => {
+    //
+    // USER-ORIGINATED, WITH A PARENT. `requireContactAccess` above proves a
+    // signed-in agent is doing this, so the acting workspace — not
+    // `withTenantWrite`'s `writeTenantId() ?? DEFAULT_TENANT_ID`, which is the
+    // founding tenant for everyone while enforcement is dormant.
+    //
+    // But the acting workspace is only the FALLBACK. `contactId` is a required FK
+    // and CustomerCase carries `@@unique([tenantId, id])`, so the ticket belongs to
+    // the workspace that owns the CUSTOMER it is about. An owner with access to
+    // another workspace's contact who opens a ticket for them must not move that
+    // ticket into their own workspace and out of the one that has to answer it.
+    // `?? tenantId` covers the legacy contact whose tenantId was never stamped.
+    const created = await withActingTenantWrite(async (tx, actingTenantId) => {
+      const contact = await tx.contact.findUnique({
+        where: { id: contactId },
+        select: { tenantId: true },
+      });
+      const tenantId = contact?.tenantId ?? actingTenantId;
       const c = await tx.customerCase.create({
         data: {
           subject,
@@ -179,7 +197,14 @@ export async function replyToTicket(caseId: string, formData: FormData): Promise
     // Atomic: append the reply + advance the case in ONE transaction (the case was
     // authorised by requireCaseAccess above). Uses the proven bypass transaction path
     // rather than a scoped array transaction, whose GUC interaction is the fragile area.
-    await withTenantWrite(async (tx, tenantId) => {
+    // USER-ORIGINATED, WITH A PARENT. A reply is a CHILD of the ticket, so it
+    // inherits the CASE's tenant, not the replying agent's workspace: an agent
+    // answering another workspace's ticket must not file the answer somewhere the
+    // ticket cannot see it. `withTenantWrite` gave every reply the founding tenant
+    // while enforcement is dormant, which is right only for the founding tenant's
+    // own tickets. `?? actingTenantId` covers a case row that predates stamping.
+    await withActingTenantWrite(async (tx, actingTenantId) => {
+      const tenantId = item.tenantId ?? actingTenantId;
       await tx.customerCaseMessage.create({
         data: { caseId, userId: user.id, direction: "staff", type: "staff", body, tenantId },
       });

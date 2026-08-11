@@ -3,7 +3,8 @@
 import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { withTenantWrite } from "@/lib/tenantWrite";
+import { withActingTenantWrite } from "@/lib/actingScope";
+import { journeyScope } from "@/lib/flowScope";
 import { requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { collectAssignedUserIds, parseConditionGroup, parseJourneyDefinition } from "@/lib/journeyTypes";
@@ -186,7 +187,17 @@ export async function createJourney(formData: FormData) {
   const data = journeyData(formData);
   await assertStepAssigneesResolve(data.definition);
   // Atomic: journey + its first version in ONE transaction, tenant-stamped.
-  const journey = await withTenantWrite(async (tx, tenantId) => {
+  //
+  // USER-ORIGINATED: `requirePermission("journeys.manage")` above proves a
+  // signed-in person is doing this, and a journey has no parent record, so the
+  // acting workspace is the owner. `withTenantWrite` resolved the FOUNDING tenant
+  // for every actor while enforcement is dormant — and a journey is not an inert
+  // record: `publishJourney` scopes its stage/segment validation by
+  // `journey.tenantId`, so a journey created in workspace B but stamped with
+  // tenant A refuses to publish against B's own stages ("no longer exists in this
+  // workspace") while looking correctly owned. The VERSION shares the journey's
+  // tenantId from the same transaction, so parent and child cannot disagree.
+  const journey = await withActingTenantWrite(async (tx, tenantId) => {
     const j = await tx.journey.create({
       data: {
         name: data.name,
@@ -432,10 +443,28 @@ export async function installJourneyTemplates() {
     },
   ];
 
+  // USER-ORIGINATED: `requirePermission("journeys.manage")` above. Templates are
+  // installed INTO the acting workspace, so both halves of this loop take that
+  // workspace — and they must take the SAME one.
+  //
+  // The existence check is scoped for that reason. It was a bare name match with
+  // no tenant predicate, and the db.ts guard adds none while enforcement is
+  // dormant, so once the founding tenant had installed the templates every OTHER
+  // workspace saw `exists` and installed NOTHING — the button reported success and
+  // did nothing at all. Reading globally while writing into one workspace is the
+  // same disagreement the write itself had, on the read side.
+  // `journeyScope()` is the existing rule for "which Journey rows does this
+  // builder's workspace own" — the same `enforced ?? session ?? founding` ladder
+  // the acting scope uses, plus the documented legacy clause (Journey.tenantId is
+  // nullable and the NULL rows are the FOUNDING tenant's, and only its). Reusing
+  // it keeps one rule rather than a second copy that can drift from it.
+  const ownScope = await journeyScope();
   for (const item of templates) {
-    const exists = await prisma.journey.findFirst({ where: { name: item.name, status: { not: "archived" } } });
+    const exists = await prisma.journey.findFirst({
+      where: { name: item.name, status: { not: "archived" }, ...ownScope },
+    });
     if (exists) continue;
-    await withTenantWrite(async (tx, tenantId) => {
+    await withActingTenantWrite(async (tx, tenantId) => {
       const tpl = await tx.journey.create({
         data: {
           name: item.name,

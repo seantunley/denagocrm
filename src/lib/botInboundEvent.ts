@@ -64,6 +64,18 @@ export async function claimInboundBotEvent(
   const stableId = providerId.trim();
   if (!stableId) return { status: "unidentified" };
 
+  // BACKGROUND / RUNTIME — keeps `withTenantWrite` deliberately. Every caller is a
+  // provider webhook (`/api/webhooks/{meta,telegram,whatsapp}`), so there is no
+  // session and `withActingTenantWrite` would resolve `global` and stamp the
+  // founding tenant anyway — the same value with a misleading name on it.
+  //
+  // There is also no RECORD to inherit from: this is the row that FIRST hears about
+  // the event, so `inheritedTenantId` has nothing to be handed. The honest owner is
+  // the tenant that owns the ENDPOINT the event arrived on, which
+  // `withChannelTenantScope` already resolves — but it resolves it only under
+  // enforcement (`if (!tenantEnforcing()) return fn()`), so while dormant no scope
+  // is bound and there is nothing to read. See the note in `completeInboundBotEvent`
+  // for what this costs and what would fix it.
   return withTenantWrite(async (tx, tenantId): Promise<InboundBotEventOutcome> => {
     const id = crypto.randomUUID();
     // `withTenantWrite` still hands back a deliberately broad `any` tx (see the
@@ -144,7 +156,31 @@ export async function completeInboundBotEventTx(
   });
 }
 
-/** Mark this exact lease complete only after all critical webhook work succeeded. */
+/**
+ * Mark this exact lease complete only after all critical webhook work succeeded.
+ *
+ * BACKGROUND / RUNTIME — `withTenantWrite` on purpose, like its two siblings above
+ * and below. Webhook-only callers, no session, nothing to inherit from: `claim`
+ * carries the row id but not the row, and the `updateMany` uses `tenantId` as a
+ * FILTER, so a wrong tenant here settles nothing rather than settling the wrong
+ * thing. That is the safe direction, and it is why these three are the least
+ * urgent of the runtime sites.
+ *
+ * THE UNDERLYING GAP, STATED PLAINLY, because it is not fixed here. Inbound events
+ * are deduplicated on `("tenantId", "channel", "providerId")`. With every tenant's
+ * events claimed under the founding tenant, two tenants whose customers produce the
+ * same provider id (a Telegram `update_id` is per-bot, not global) collide: the
+ * second tenant's event is read as a redelivery of the first tenant's and is
+ * silently acked without ever being processed. A dropped customer message, with no
+ * error anywhere.
+ *
+ * WHAT WOULD SETTLE IT: `withChannelTenantScope` binding the resolved channel
+ * tenant while enforcement is DORMANT as well as under it, so
+ * `currentTenantScope()` has a real answer here and `inheritedTenantId(null)` picks
+ * it up from the ambient rung. That is a change to the scope-entry contract for
+ * every webhook, not to this call site, so it belongs in its own PR with the
+ * channel-resolution tests that go with it.
+ */
 export async function completeInboundBotEvent(claim: InboundBotEventClaim): Promise<void> {
   const rowId = claim.rowId;
   const leaseAttempt = claim.leaseAttempt;
@@ -157,7 +193,13 @@ export async function completeInboundBotEvent(claim: InboundBotEventClaim): Prom
   });
 }
 
-/** Release only this exact failed lease so the provider retry can reclaim it. */
+/**
+ * Release only this exact failed lease so the provider retry can reclaim it.
+ *
+ * BACKGROUND / RUNTIME — `withTenantWrite` on purpose; see
+ * {@link completeInboundBotEvent} for the classification and for the channel-scope
+ * gap that a per-call-site change cannot close.
+ */
 export async function retryInboundBotEvent(
   claim: InboundBotEventClaim,
   error: unknown,

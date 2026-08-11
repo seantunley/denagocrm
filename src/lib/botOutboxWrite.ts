@@ -59,6 +59,16 @@ export async function enqueueBotMessagesTx(
   }
 }
 
+/**
+ * Own-transaction wrapper over {@link enqueueBotMessagesTx}.
+ *
+ * UNREACHABLE — nothing in `src/` or `tests/` calls it; every live caller
+ * (flowRun, flowSession, flowDm, telegram) uses the `Tx` form so the queue write
+ * commits with the graph move. Left on `withTenantWrite` rather than converted: it
+ * has no callers to classify from, and were it revived it would be revived on a
+ * runtime turn path, where `withActingTenantWrite` resolves `global` and stamps the
+ * founding tenant while merely claiming to have asked an actor.
+ */
 export async function enqueueBotMessages(input: BotOutboxWriteInput): Promise<void> {
   await withTenantWrite(async (tx, tenantId) => enqueueBotMessagesTx(tx, tenantId, input));
 }
