@@ -1,3 +1,11 @@
+import { formatDistanceToNow } from "date-fns";
+
+/** "2 hours ago" — for a byline where the exact timestamp is secondary. */
+export function formatRelativeTime(d: Date | string): string {
+  const date = typeof d === "string" ? new Date(d) : d;
+  return formatDistanceToNow(date, { addSuffix: true });
+}
+
 /** Due date, with the time when one was set (midnight = date-only). */
 export function formatDue(d: Date): string {
   const hasTime = d.getUTCHours() !== 0 || d.getUTCMinutes() !== 0;

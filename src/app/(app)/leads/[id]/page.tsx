@@ -23,7 +23,7 @@ import MarkLeadViewed from "@/components/MarkLeadViewed";
 import WhatsAppPanel from "@/components/WhatsAppPanel";
 import Tabs from "@/components/Tabs";
 import ModalTrigger from "@/components/Modal";
-import ResearchButton from "@/components/ResearchButton";
+import ResearchTabPanel from "@/components/ResearchTabPanel";
 import { isAiConfigured } from "@/lib/ai";
 import { isWhatsAppConfigured } from "@/lib/whatsapp";
 import { requireUser } from "@/lib/auth";
@@ -460,34 +460,12 @@ export default async function LeadDetailPage({
                 label: "Research",
                 count: lead.researchNotes.length,
                 content: (
-                  <div className="card space-y-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <h2 className="font-semibold">🔎 AI research</h2>
-                      <ResearchButton leadId={lead.id} configured={aiOn} />
-                    </div>
-                    {lead.researchNotes.length === 0 ? (
-                      <p className="text-sm text-slate-400">
-                        No research yet. Use the Research button to generate a briefing on this
-                        lead and the company behind the email.
-                      </p>
-                    ) : (
-                      <ul className="space-y-4">
-                        {lead.researchNotes.map((r) => (
-                          <li
-                            key={r.id}
-                            className="border-t border-slate-800 pt-4 first:border-0 first:pt-0"
-                          >
-                            <p className="text-xs text-slate-500 mb-1.5">
-                              {formatDateTime(r.createdAt)}
-                            </p>
-                            <p className="text-sm whitespace-pre-wrap leading-relaxed text-slate-200">
-                              {r.body}
-                            </p>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
+                  <ResearchTabPanel
+                    notes={lead.researchNotes}
+                    leadId={lead.id}
+                    configured={aiOn}
+                    subjectLabel="lead"
+                  />
                 ),
               },
             ]}
