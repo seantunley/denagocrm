@@ -212,6 +212,38 @@ jobs:
             exit 1
           }
 
+      # The 132 composite tenant foreign keys -- JobCardItem(tenantId, partId) ->
+      # Part(tenantId, id) and its 131 siblings -- are what actually stops a
+      # forged id crossing tenants. #479 measured it: with BOTH application
+      # tenant predicates removed from claimPartStock, the FK is what rolled the
+      # transaction back.
+      #
+      # They live only in raw migration SQL, so Prisma cannot see them and
+      # `prisma migrate diff` cannot mention them. The unit-test job runs the
+      # text half of this contract; only here is there a real catalog to check
+      # them against, and a text-only check would have missed both mutations this
+      # was proven against (a dropped constraint, and one re-added over a single
+      # column under the same name).
+      #
+      # REQUIRE_LIVE_FK_CHECK turns "no scratch database, so skip" into a
+      # failure. Without it the step could pass by never running -- which is the
+      # exact defect class this contract exists to catch, and it would be absurd
+      # for the guard to have it too.
+      #
+      # Its own scratch database, for the same reason the harness step below has
+      # one, and derived from DATABASE_URL rather than written out so no new
+      # connection-string literal appears for the secret scanner. The harness
+      # provisioner REFUSES a name not ending in _test/_harness/_scratch and
+      # refuses the database DATABASE_URL points at, so the name is load-bearing.
+      - name: Composite tenant FKs exist in the catalog, not just in the SQL
+        run: |
+          admin="${DATABASE_URL%/*}/postgres"
+          psql "$admin" -c 'DROP DATABASE IF EXISTS denagocrm_fkcontract_test'
+          psql "$admin" -c 'CREATE DATABASE denagocrm_fkcontract_test'
+          export TENANT_HARNESS_DATABASE_URL="${DATABASE_URL%/*}/denagocrm_fkcontract_test"
+          export REQUIRE_LIVE_FK_CHECK=1
+          node --import tsx --test tests/compositeTenantFkContract.test.ts
+
       - name: Migration replay-safety -- re-apply the tenant migration (must be reentrant)
         # The runner executes a migration's SQL and records it with migrate resolve
         # as SEPARATE steps; if a deploy dies between them the next run re-executes
