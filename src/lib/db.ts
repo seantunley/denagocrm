@@ -290,19 +290,21 @@ function buildClient(raw: PrismaClient) {
       },
       communication: {
         async create({ args, query }: any) {
-          let conversationId: string | null = null;
-          try {
-            const { resolveConversationId } = await import("./conversations");
-            conversationId = await resolveConversationId(args.data);
-            if (conversationId && !args.data.conversationId) args.data.conversationId = conversationId;
-          } catch {
-            conversationId = null;
-          }
+          // Threading and the tenant it forces on this row are ONE decision, taken in
+          // conversations.ts and applied to `args.data` before the INSERT. It used to
+          // be taken here, in halves, and the half that mattered was missing: the row
+          // got the thread's id and kept its SUBJECT's tenant, which the composite key
+          // `Communication(tenantId, conversationId)` refuses whenever the two differ.
+          // Not wrapped in a try — see attachToConversation for which failure is
+          // best-effort (the lookup) and which must reach the caller (a contradictory
+          // owner, where the INSERT was going to fail anyway).
+          const { attachToConversation } = await import("./conversations");
+          const conversation = await attachToConversation(args.data);
           const result = await query(args);
-          if (conversationId) {
+          if (conversation) {
             try {
               const { bumpConversation } = await import("./conversations");
-              await bumpConversation(conversationId, args.data);
+              await bumpConversation(conversation.id, args.data);
             } catch {
               /* bookkeeping is best-effort */
             }

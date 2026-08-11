@@ -4,6 +4,7 @@ import { basePrisma } from "./db";
 import { currentTenantScope } from "./tenantScope";
 import { tenantEnforcing } from "./tenantEnforcement";
 import { inheritedTenantId } from "./tenantWrite";
+import { attachedTenantId } from "./compositeTenantRules";
 
 /**
  * The tenantId the top-level guard (db.ts `scopeArgs`) will FILTER a Conversation
@@ -67,6 +68,12 @@ function conversationFilterTenantId(): string | null {
  * So the ladder only continues past rung 2 when there is NO subject to ask. A
  * conversation about an unowned contact is itself unowned, and a later backfill
  * claims the pair together, which is the only way they can stay consistent.
+ *
+ * THIS IS HALF THE RULE, AND ONLY THE CREATE HALF. It settles who owns a thread at
+ * the moment it is opened, when the message is the only thing that knows. Once the
+ * thread EXISTS the direction reverses and the thread decides — see
+ * {@link resolveConversationId}'s return value and `attachedTenantId`. Reading rung
+ * 1 as "the message always decides" is what broke note-taking on 2026-08-11.
  */
 async function conversationTenantId(data: MessageData): Promise<string | null> {
   if (typeof data.tenantId === "string" && data.tenantId) return data.tenantId;
@@ -105,6 +112,8 @@ type MessageData = {
   subject?: string | null;
   direction?: string | null;
   occurredAt?: Date;
+  /** The thread the caller has already chosen, if it chose one. */
+  conversationId?: string | null;
   /**
    * The Communication's own owner, as it will be written. Present once the guard
    * has stamped it (under enforcement) or once a caller stamps it explicitly;
@@ -114,11 +123,28 @@ type MessageData = {
 };
 
 /**
+ * The conversation a message attaches to, AND the owner that attachment obliges it
+ * to carry.
+ *
+ * The tenant travels with the id because the caller cannot write its row without it.
+ * `Communication(tenantId, conversationId) → Conversation(tenantId, id)` is a
+ * composite foreign key, so "which thread" and "whose thread" are one answer, not
+ * two — and the second used to be re-derived from the message's subject instead,
+ * which is the whole of the 2026-08-11 note-taking outage. Returning them together
+ * is what makes the wrong one unavailable.
+ */
+export type ResolvedConversation = {
+  id: string;
+  /** The thread's owner, RAW — NULL means a thread still awaiting the backfill. */
+  tenantId: string | null;
+};
+
+/**
  * Find the open conversation a new message belongs to (per contact/lead + channel),
  * creating one if none exists. Returns null for messages with no contact or lead.
  * Uses basePrisma so it never recurses through the Communication create extension.
  */
-export async function resolveConversationId(data: MessageData): Promise<string | null> {
+export async function resolveConversationId(data: MessageData): Promise<ResolvedConversation | null> {
   if (!data.contactId && !data.leadId) return null;
   const channel = channelForType(data.type);
   const filterTenantId = conversationFilterTenantId();
@@ -127,22 +153,77 @@ export async function resolveConversationId(data: MessageData): Promise<string |
     // Reuse only the acting tenant's own open conversation when a tenant is in scope.
     where: { channel, status: { not: "closed" }, ...(filterTenantId ? { tenantId: filterTenantId } : {}), ...subjectScope },
     orderBy: { lastMessageAt: "desc" },
-    select: { id: true },
+    // tenantId, because a reused thread is the one case where the message cannot
+    // decide its own owner: this row already has one and the FK says match it.
+    select: { id: true, tenantId: true },
   });
-  if (existing) return existing.id;
+  if (existing) return { id: existing.id, tenantId: existing.tenantId ?? null };
+  // Resolved only on the CREATE branch, so the extra lookup is paid once per thread
+  // rather than once per message.
+  const tenantId = await conversationTenantId(data);
   const created = await basePrisma.conversation.create({
     data: {
       channel,
       subject: data.subject ?? null,
       contactId: data.contactId ?? null,
       leadId: data.leadId ?? null,
-      // Resolved only on the CREATE branch, so the extra lookup is paid once per
-      // thread rather than once per message.
-      tenantId: await conversationTenantId(data),
+      tenantId,
     },
     select: { id: true },
   });
-  return created.id;
+  // The same value that was just written, not a re-read: the caller has to match
+  // this row, and a second query could only introduce a way for them to differ.
+  return { id: created.id, tenantId };
+}
+
+/**
+ * Put a Communication that is about to be inserted onto its conversation: the
+ * thread it belongs to, AND the owner that attachment obliges it to carry.
+ *
+ * Called by the `communication.create` hook in db.ts on the create payload itself,
+ * which it MUTATES. It is the last thing to touch `data` before the INSERT, and the
+ * two fields it sets have to reach the database together — which is the whole point
+ * of it being one function and not two.
+ *
+ * THE THREAD OWNS THE MESSAGES ON IT.
+ *
+ * Every caller stamps `tenantId` from the message's SUBJECT — the contact or lead,
+ * via `customerRecordTenantId`. That is the right answer for the subject's own
+ * composite keys and the wrong one for this row's third key,
+ * `Communication(tenantId, conversationId) → Conversation(tenantId, id)`, whenever
+ * the thread disagrees with the subject. On 2026-08-11 six production conversations
+ * predating the tenant backfill were still unowned while their leads and contacts
+ * had been claimed, so every note typed on those six records died on that
+ * constraint. The subject decides only when there is no thread yet, which is what
+ * {@link conversationTenantId} is for; from the second message onwards the thread
+ * has already decided and this row's job is to agree with it.
+ *
+ * THE CATCH COVERS THE LOOKUP AND NOTHING ELSE, deliberately. A conversation that
+ * cannot be resolved degrades to an unthreaded message: the transcript row is worth
+ * more than the projection. A tenant that cannot be resolved is the opposite — it is
+ * a decision, and swallowing it would put back the exact stamp the database is about
+ * to reject. `attachedTenantId` refuses only a genuine contradiction, where no value
+ * would have been accepted anyway.
+ *
+ * Inert under enforcement, by construction: `resolveConversationId` filters reuse to
+ * the acting tenant, so the thread it finds already carries the tenant `scopeArgs`
+ * stamped a moment earlier.
+ */
+export async function attachToConversation(data: MessageData): Promise<ResolvedConversation | null> {
+  let conversation: ResolvedConversation | null = null;
+  try {
+    conversation = await resolveConversationId(data);
+  } catch {
+    return null;
+  }
+  if (!conversation) return null;
+  if (!data.conversationId) data.conversationId = conversation.id;
+  // Guarded on the id actually being written, so a caller that supplied a thread of
+  // its own is never handed the owner of a different one.
+  if (data.conversationId === conversation.id) {
+    data.tenantId = attachedTenantId(conversation.tenantId, data.tenantId);
+  }
+  return conversation;
 }
 
 /**
