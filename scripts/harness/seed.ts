@@ -46,6 +46,37 @@ export type SeededRows = {
   journeyVersionId: string;
   journeyRunId: string;
   journeyStepLogId: string;
+  /**
+   * A run in `failed`, for the JourneyRun UPDATE probe.
+   *
+   * The `running` fixture run above CANNOT serve it. `retryJourneyRun` opens
+   * with `if (!["failed","cancelled"].includes(run.status)) throw` — so aiming
+   * the probe at a running row means the action refuses on a BUSINESS rule
+   * before it ever reaches a tenant decision, and the engine, which judges the
+   * row and not the message, records that refusal as the boundary holding. It
+   * is the same false pass the PipelineStage LIST probe was caught in, arriving
+   * from the other direction: not "the query could not have seen B's rows" but
+   * "the action never got as far as looking".
+   *
+   * Its (journeyId, entityType, entityId) triple is UNIQUE to it, because
+   * retryJourneyRun's second gate refuses a run that has been superseded by any
+   * OPEN run on the same triple — and the fixture's `running` run is open.
+   * Sharing the triple would have swapped one business-rule false pass for
+   * another.
+   */
+  journeyRunFailedId: string;
+  /**
+   * A THIRD failed run, with a failed step log of its own, so the
+   * JourneyStepLog DELETE probe has a target that JourneyRun's UPDATE probe has
+   * not already consumed — both drive `retryJourneyRun`, and it deletes the
+   * step logs of whatever run it retries. Sharing one run would leave the
+   * second probe reporting "B's row was already gone", i.e. a skip dressed as
+   * coverage.
+   */
+  journeyRunRetryId: string;
+  journeyStepLogRetryId: string;
+  /** Queued and due, so `processOneRun` will actually execute it. */
+  journeyRunQueuedId: string;
   testDriveId: string;
   partId: string;
   vehicleId: string;
@@ -138,6 +169,10 @@ async function seedTenant(key: "A" | "B", suffix: string): Promise<TenantFixture
     journeyVersionId: uid(),
     journeyRunId: uid(),
     journeyStepLogId: uid(),
+    journeyRunFailedId: uid(),
+    journeyRunRetryId: uid(),
+    journeyStepLogRetryId: uid(),
+    journeyRunQueuedId: uid(),
     testDriveId: uid(),
     partId: uid(),
     vehicleId: uid(),
@@ -360,20 +395,42 @@ async function seedBusinessRows(
     JSON.stringify({ start: "s1", nodes: { s1: { type: "message", text: key } } }),
   );
 
+  /* The journey is ACTIVE with a PUBLISHED version, and its definition is a real
+   * (if trivial) one-step script — `add_tag` with no tag configured, which the
+   * executor reports as `skipped` after touching nothing.
+   *
+   * All three properties are load-bearing and none of them is decoration:
+   *
+   *   - ACTIVE + PUBLISHED is what `enrollEntityInJourney` requires, so the
+   *     JourneyRun OWN probe can create a run through the application instead of
+   *     being skipped for want of one. JourneyRun is 6/6 unowned in production;
+   *     "no create probe supplied" is precisely the coverage hole that let that
+   *     ship.
+   *   - A PARSEABLE definition with a start step is what `processOneRun` needs
+   *     to reach `updateStepLog`, which is the only place a JourneyStepLog row
+   *     is ever written. Without it the JourneyStepLog OWN probe cannot exist.
+   *   - A step that DOES NOTHING keeps the probe about ownership. `send_email`
+   *     or `send_sms` would drag a provider into an isolation test and fail for
+   *     reasons that have nothing to do with tenancy.
+   */
+  const journeyDefinition = JSON.stringify({
+    startStepId: "probe_step",
+    steps: [{ id: "probe_step", type: "add_tag", name: "harness no-op", config: {} }],
+  });
   await exec(
-    `INSERT INTO "Journey" ("id","tenantId","name","status","updatedAt")
-     VALUES ($1,$2,$3,'draft',now())`,
+    `INSERT INTO "Journey" ("id","tenantId","name","status","activeVersion","updatedAt")
+     VALUES ($1,$2,$3,'active',1,now())`,
     rows.journeyId,
     tenantId,
     `${key} journey`,
   );
   await exec(
-    `INSERT INTO "JourneyVersion" ("id","tenantId","journeyId","version","trigger","definition","triggers","createdAt")
-     VALUES ($1,$2,$3,1,'manual',$4::jsonb,$5::jsonb,now())`,
+    `INSERT INTO "JourneyVersion" ("id","tenantId","journeyId","version","state","trigger","definition","triggers","createdAt")
+     VALUES ($1,$2,$3,1,'published','manual',$4::jsonb,$5::jsonb,now())`,
     rows.journeyVersionId,
     tenantId,
     rows.journeyId,
-    JSON.stringify({ steps: [] }),
+    journeyDefinition,
     JSON.stringify([]),
   );
   await exec(
@@ -394,6 +451,54 @@ async function seedBusinessRows(
     tenantId,
     rows.journeyRunId,
     `${key}-step`,
+  );
+
+  // Two FAILED runs, each on its own (journeyId, entityType, entityId) triple —
+  // see SeededRows for why the status and the triple both matter. `entityId` is
+  // a synthetic string rather than a real contact: nothing on the retry path
+  // resolves it, and a distinct value is the cheapest way to guarantee the
+  // superseded-run gate cannot fire.
+  for (const [runId, entitySuffix] of [
+    [rows.journeyRunFailedId, "retryprobe"],
+    [rows.journeyRunRetryId, "steplogprobe"],
+  ] as const) {
+    await exec(
+      `INSERT INTO "JourneyRun" ("id","tenantId","journeyId","journeyVersionId","status","entityType","entityId","context","idempotencyKey","lastError","updatedAt")
+       VALUES ($1,$2,$3,$4,'failed','contact',$5,$6::jsonb,$7,'seeded as failed',now())`,
+      runId,
+      tenantId,
+      rows.journeyId,
+      rows.journeyVersionId,
+      `${tenantId}-${entitySuffix}`,
+      JSON.stringify({}),
+      `harness-${runId}`,
+    );
+  }
+  // `retryJourneyRun` deletes step logs whose status is running or failed, so
+  // the target row must be one of those or the DELETE probe would pass because
+  // the deleteMany's OWN where clause excluded it — a false pass with nothing
+  // to do with tenancy.
+  await exec(
+    `INSERT INTO "JourneyStepLog" ("id","tenantId","runId","path","stepId","stepType","status")
+     VALUES ($1,$2,$3,$4,$4,'message','failed')`,
+    rows.journeyStepLogRetryId,
+    tenantId,
+    rows.journeyRunRetryId,
+    `${key}-retry-step`,
+  );
+
+  // Queued and due — `processOneRun` claims exactly this shape.
+  await exec(
+    `INSERT INTO "JourneyRun" ("id","tenantId","journeyId","journeyVersionId","status","entityType","entityId","leadId","contactId","context","idempotencyKey","nextRunAt","updatedAt")
+     VALUES ($1,$2,$3,$4,'queued','lead',$5,$5,$6,$7::jsonb,$8,now() - interval '1 minute',now())`,
+    rows.journeyRunQueuedId,
+    tenantId,
+    rows.journeyId,
+    rows.journeyVersionId,
+    rows.leadId,
+    rows.contactId,
+    JSON.stringify({}),
+    `harness-${rows.journeyRunQueuedId}`,
   );
 
   await exec(

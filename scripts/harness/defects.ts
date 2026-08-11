@@ -235,6 +235,38 @@ export async function runDefectProbes(
     await raw.$executeRawUnsafe(`DELETE FROM "Dashboard" WHERE "id" = $1`, orphanId).catch(() => 0);
   }
 
+  /* ── 5b. A STATUS CHANGE THAT DESTROYS WORK WITHOUT DELETING A ROW ──────
+   * `cancelJourneyRun` stops a live sequence dead. It leaves the row in place,
+   * so the matrix's DELETE check — which asks whether the row still exists —
+   * could never fail on it no matter how open the boundary was; a probe there
+   * would have been a guaranteed pass, which is worse than no probe. Asked here
+   * instead, against the only fact that settles it: B's run status.
+   *
+   * The target is B's QUEUED run, because cancelJourneyRun refuses anything not
+   * queued or waiting. Aimed at the running fixture row it would refuse on that
+   * business rule and read as the boundary holding.
+   */
+  {
+    const journeyRuns = await import("../../src/app/actions/journeyRuns");
+    const target = victim.rows.journeyRunQueuedId;
+    const before = await columnOf(raw, "JourneyRun", target, "status");
+    const attempt = await swallow(() => actorA.as(() => journeyRuns.cancelJourneyRun(target)));
+    const after = await columnOf(raw, "JourneyRun", target, "status");
+    out.push(
+      before === after
+        ? result("UPDATE", "JourneyRun", "A cannot cancel another tenant's queued run",
+            "pass", attempt.threw ? `refused — ${brief(attempt.error)}` : `status still ${before}`)
+        : result("UPDATE", "JourneyRun", "A cannot cancel another tenant's queued run",
+            "fail",
+            `A stopped B's live journey run: status ${JSON.stringify(before)} → ${JSON.stringify(after)}. ` +
+            `No row was deleted, so nothing that counts rows would have noticed.`),
+    );
+    await raw.$executeRawUnsafe(
+      `UPDATE "JourneyRun" SET "status" = $1, "completedAt" = NULL, "lastError" = NULL WHERE "id" = $2`,
+      before, target,
+    );
+  }
+
   /* ── 6. GLOBAL UNIQUE INDEXES THAT ONLY ONE TENANT CAN SATISFY ──────────
    * Not an isolation leak — the opposite. These are constraints with no tenant
    * column in them, so the SECOND tenant to want an ordinary thing simply

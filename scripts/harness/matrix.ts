@@ -52,6 +52,11 @@ export async function buildMatrix(): Promise<MatrixEntry[]> {
   const jobcards = await import("../../src/app/actions/jobcards");
   const privacy = await import("../../src/app/actions/privacy");
   const pipelineLib = await import("../../src/lib/pipelines");
+  const journeyTrace = await import("../../src/lib/journeyTrace");
+  const journeyRunsLib = await import("../../src/lib/journeyRuns");
+  const journeyEnrolment = await import("../../src/lib/journeyDirectEnrollment");
+  const pinLib = await import("../../src/lib/timelinePins");
+  const permissionLib = await import("../../src/lib/permissions");
 
   return [
     /* ───────────────────────────────────────────────────────────────────────
@@ -128,7 +133,7 @@ export async function buildMatrix(): Promise<MatrixEntry[]> {
       // in a URL — and it makes the tenant predicate the ONLY thing standing
       // between A and B's rows, which is the point.
       list: async (actor) =>
-        actor.as(async () => (await pipelineLib.listPipelineStages(victimPipeline)).map((s) => s.id)),
+        actor.as(async () => (await pipelineLib.listPipelineStages(victimRows().pipelineId)).map((s) => s.id)),
       gaps: "no delete action exists for a stage; moveStage and reorderPipelineStages are not driven.",
     },
 
@@ -158,7 +163,15 @@ export async function buildMatrix(): Promise<MatrixEntry[]> {
       updateById: async (actor, _id, value) =>
         actor.as(() => dashboards.renameDashboard(victimSlugFor(actor), value)),
       deleteById: async (actor) => actor.as(() => dashboards.deleteDashboard(victimSlugFor(actor))),
-      gaps: "no read-by-id or list action is exported; saveDashboardConfig and reorderDashboards are not driven.",
+      gaps:
+        "READ and LIST are DELIBERATELY LEFT UNCOVERED, and the reason is the trap this suite already " +
+        "fell into once. The only read surfaces are `dashboardBySlug` and `dashboardsForViewer` " +
+        "(src/lib/dashboard/store.ts), and both are scoped `where: { userId: user.id }`. A probe " +
+        "built on either could not return tenant B's dashboards whether or not a tenant predicate " +
+        "existed anywhere — exactly the shape of the PipelineStage LIST probe that mutation testing " +
+        "exposed as proving nothing. Two green checks would be added and zero facts. If a " +
+        "cross-user read surface ever lands (dashboard sharing), probe it then. " +
+        "saveDashboardConfig and reorderDashboards are not driven.",
     },
 
     {
@@ -185,20 +198,136 @@ export async function buildMatrix(): Promise<MatrixEntry[]> {
       // A pin is toggled by the id of the ITEM, so the cross-tenant attempt
       // targets the victim's activity — unpinning it if the guard lets it.
       deleteById: async (actor) => actor.as(() => pins.toggleActivityPin(victimActivityFor(actor), "/leads")),
-      gaps: "read/update/list are not exposed as actions; getTimelinePins (lib) is not driven.",
+      // `getTimelinePins` is what every timeline renders through, and it is RAW
+      // SQL on the scoped client — `prisma.$queryRaw` with a hand-written WHERE
+      // that names only itemId and kind. A raw query is not intercepted by the
+      // Prisma extension at all, so the app-layer tenant guard has nothing to
+      // say about it and RLS is the only remaining line. Asking for the
+      // victim's activity id (which is what a timeline URL carries) is
+      // therefore a genuine question with no second predicate to hide behind.
+      readById: async (actor) =>
+        actor.as(() => pinLib.getTimelinePins([{ kind: "activity", itemId: victimActivityFor(actor) }])),
+      gaps:
+        "no update action (a pin has no editable field) and no list action — getTimelinePins is a " +
+        "by-item lookup, which the READ probe drives; it returns no row ids, so LIST cannot be " +
+        "expressed against it without inventing one.",
     },
 
     {
       model: "JourneyRun",
       table: "JourneyRun",
-      actions: "journeyRuns.ts: cancelJourneyRun / retryJourneyRun",
+      actions: "journeyRuns.ts: retryJourneyRun; journeyDirectEnrollment.ts: enrollEntityInJourney; journeyTrace.ts: recentRunSummaries",
       witness: "status",
-      victimRow: (r) => r.journeyRunId,
+      // THE FAILED RUN, NOT THE RUNNING ONE. `retryJourneyRun` refuses anything
+      // that is not failed or cancelled, so aiming at the fixture's `running`
+      // row meant the action stopped on a business rule and the engine — which
+      // judges the row, correctly — recorded the untouched row as the boundary
+      // holding. Mutation-tested: with this row the probe goes red when the
+      // guard is removed, and with the running row it did not.
+      victimRow: (r) => r.journeyRunFailedId,
+      createViaAction: async (actor) => {
+        // The chatbot's Start Journey path, which is the only place a run is
+        // created without waiting for a real trigger to fire at a real
+        // customer. JourneyRun is 6/6 unowned in production and previously had
+        // NO create probe at all, so nothing here could have caught that.
+        const enrolment = await actor.as(() =>
+          journeyEnrolment.enrollEntityInJourney({
+            journeyId: actor.tenant.rows.journeyId,
+            entityType: "lead",
+            entityId: actor.tenant.rows.leadId,
+            eventKey: `harness-own-${Date.now().toString(36)}`,
+          }),
+        );
+        return enrolment.runId ?? null;
+      },
       updateById: async (actor, id) => actor.as(() => journeyRuns.retryJourneyRun(id)),
-      deleteById: async (actor, id) => actor.as(() => journeyRuns.cancelJourneyRun(id)),
+      // `recentRunSummaries()` has NO where clause of any kind — it is the
+      // activity screen's "every recent run" query. That makes it the ideal
+      // list probe and the exact opposite of the trap PipelineStage fell into:
+      // there is no other predicate that could be doing the filtering, so a
+      // pass can only mean the tenant predicate did it.
+      list: async (actor) => actor.as(async () => (await journeyTrace.recentRunSummaries(100)).map((r) => r.id)),
       gaps:
-        "no create probe (runJourneyOnLead needs a published journey version); " +
-        "no read or list action is exported.",
+        "DELETE is deliberately NOT probed: `cancelJourneyRun` sets status='cancelled' and JourneyRun has " +
+        "no deletedAt column, so the engine's DELETE check (which asks whether the row still exists) could " +
+        "never fail on it however broken the boundary was. It is asked as its own defect probe instead, " +
+        "asserting on the status column. runJourneyOnLead and processJourneyRuns are not driven.",
+    },
+
+    /* ───────────────────────────────────────────────────────────────────────
+     * JourneyStepLog — 6/6 unowned in production and, until now, the only model
+     * in that list with NO probe of any kind. It is the engine's own audit
+     * trail: one row per step execution, written by `updateStepLog` in
+     * lib/journeyRuns.ts, which is reached ONLY by running a journey. That is
+     * why it had no coverage — a probe for it has to actually drive the engine
+     * — and it is exactly why the gap mattered.
+     * ─────────────────────────────────────────────────────────────────────── */
+    {
+      model: "JourneyStepLog",
+      table: "JourneyStepLog",
+      actions: "lib/journeyRuns.ts: processOneRun → updateStepLog; journeyRuns.ts: retryJourneyRun; journeyTrace.ts: traceRun / recentTraceRuns",
+      witness: "status",
+      victimRow: (r) => r.journeyStepLogId,
+      deleteVictimRow: (r) => r.journeyStepLogRetryId,
+      createViaAction: async (actor) => {
+        // Run the tenant's own queued journey run one tick. `processOneRun` is
+        // the function the journeys cron and `runJourneyOnLead` both call; it
+        // claims the run, executes the step, and upserts the step log. Nothing
+        // is stubbed — the seeded step is a real `add_tag` the executor skips
+        // for want of a tag, so the write under test happens and nothing else
+        // does.
+        const { basePrisma } = await import("../../src/lib/db");
+        const before = await basePrisma.$queryRawUnsafe<Array<{ id: string }>>(
+          `SELECT "id" FROM "JourneyStepLog" WHERE "runId" = $1`,
+          actor.tenant.rows.journeyRunQueuedId,
+        );
+        const seen = new Set(before.map((r) => r.id));
+        await actor.as(() => journeyRunsLib.processOneRun(actor.tenant.rows.journeyRunQueuedId));
+        const after = await basePrisma.$queryRawUnsafe<Array<{ id: string }>>(
+          `SELECT "id" FROM "JourneyStepLog" WHERE "runId" = $1`,
+          actor.tenant.rows.journeyRunQueuedId,
+        );
+        return after.find((r) => !seen.has(r.id))?.id ?? null;
+      },
+      // A step log is never addressed by its own id — it is read as part of its
+      // run's trace, and the RUN id is what sits in the activity-screen URL. So
+      // the realistic read is "A opens the trace of B's run", and the returned
+      // steps are the rows in question.
+      readById: async (actor) =>
+        actor.as(async () => (await journeyTrace.traceRun(victimRows().journeyRunId))?.steps ?? null),
+      // Same shape one level up: `recentTraceRuns` takes a journeyId straight
+      // from the URL and includes every run's step logs. Asking for B's journey
+      // id leaves the tenant predicate as the only thing in the way.
+      list: async (actor) => {
+        const exposed = await actor.as(async () =>
+          (await journeyTrace.recentTraceRuns(victimRows().journeyId, 50)).flatMap((run) =>
+            run.steps.map((step) => ({ runId: run.id, path: step.path })),
+          ),
+        );
+        // A TraceStep carries `path`, not `id` — the row identity the trace UI
+        // uses is (runId, path), which is the model's own @@unique. The engine
+        // compares ids, so the pairs the application just handed over are
+        // translated back to ids through the bypass client. The translation
+        // reads ONLY what the app already leaked; it cannot manufacture a hit.
+        if (exposed.length === 0) return [];
+        const { basePrisma } = await import("../../src/lib/db");
+        const rows = await basePrisma.$queryRawUnsafe<Array<{ id: string }>>(
+          `SELECT "id" FROM "JourneyStepLog" WHERE ("runId", "path") IN (SELECT * FROM unnest($1::text[], $2::text[]))`,
+          exposed.map((e) => e.runId),
+          exposed.map((e) => e.path),
+        );
+        return rows.map((r) => r.id);
+      },
+      // `retryJourneyRun` opens with `journeyStepLog.deleteMany({ where: { runId,
+      // status: { in: ["running","failed"] } } })`. The id the engine hands in is
+      // the step log's; the action wants its RUN's, so the probe aims at the run
+      // that owns the seeded failed step.
+      deleteById: async (actor) => actor.as(() => journeyRuns.retryJourneyRun(victimRows().journeyRunRetryId)),
+      gaps:
+        "no update action exists — a step log is written by the engine and never edited. " +
+        "The OWN probe drives processOneRun (lib), not a server action: nothing in src/app/actions " +
+        "creates a step log except by running a journey, and runJourneyOnLead adds an event emit and " +
+        "an arbitration pass that would make a failure ambiguous.",
     },
 
     {
@@ -341,9 +470,21 @@ export async function buildMatrix(): Promise<MatrixEntry[]> {
       updateById: async (actor, id) => actor.as(() => jobcards.setJobCardStatus(id, "diagnosis")),
       deleteById: async (actor, id) =>
         actor.as(() => jobcards.deleteJobCard(id, fd({ reason: "harness cross-tenant probe" }))),
+      // THE GATE THE PAGE ITSELF USES. `/jobcards/[id]` opens with
+      // `requireJobCardReadAccess(id)`, which resolves the row through
+      // `canAccessJobCard` → `basePrisma.jobCard.findFirst({ id, ...activeTenantPredicate() })`.
+      // basePrisma is the BYPASS client, so `activeTenantPredicate()` is not
+      // defence in depth here — it is the entire boundary, and it is a plain
+      // object spread that a careless edit deletes without breaking a type.
+      // A refusal is a thrown redirect, which the engine already counts as
+      // "returned nothing".
+      readById: async (actor, id) => actor.as(() => permissionLib.requireJobCardReadAccess(id)),
       gaps:
         "the witness for UPDATE is `status` via setJobCardStatus, not `description`; " +
-        "reservePart / addJobCardItem (the forged partId paths) are not driven here — see defects.ts.",
+        "reservePart / addJobCardItem (the forged partId paths) are not driven here — see defects.ts. " +
+        "No LIST: the job-card list is built inside the page component and is not exported, and " +
+        "getAccessibleJobCardIds returns null (meaning 'no restriction') for a user holding " +
+        "jobcards.view_all, so it cannot answer a tenancy question at all.",
     },
 
     {
@@ -368,7 +509,12 @@ export async function buildMatrix(): Promise<MatrixEntry[]> {
         );
         return after.find((r) => !seen.has(r.id))?.id ?? null;
       },
-      gaps: "consent records are append-only — there is no update, delete, read-by-id or list action to drive.",
+      gaps:
+        "consent records are append-only — there is no update, delete, read-by-id or list action to drive. " +
+        "Every read of one is a NESTED include under a Contact or a Fleet (contacts/[id]/page.tsx, " +
+        "fleetRollup.ts), so the row that decides the answer is the parent Contact, not the ConsentRecord: " +
+        "a probe there would report on Contact's boundary under a ConsentRecord label. Left uncovered on " +
+        "purpose rather than covered misleadingly.",
     },
 
     {
@@ -388,20 +534,28 @@ export async function buildMatrix(): Promise<MatrixEntry[]> {
 
 /* The victim's identifiers are injected by the runner before each model runs,
  * because a probe signature only receives the acting side. Kept as module state
- * rather than threaded through every closure so the table stays readable. */
-let victimSlug = "";
-let victimActivity = "";
-let victimPipeline = "";
+ * rather than threaded through every closure so the table stays readable.
+ *
+ * The whole row set is held rather than a hand-picked few: every one of these is
+ * a handle that arrives from a URL or a form field in production, and a probe
+ * that needs one should not require a signature change to get it.
+ */
+let victim: SeededRows | null = null;
 
-export function setVictimHandles(slug: string, activityId: string, pipelineId: string): void {
-  victimSlug = slug;
-  victimActivity = activityId;
-  victimPipeline = pipelineId;
+export function setVictimHandles(rows: SeededRows): void {
+  victim = rows;
+}
+
+/** The victim's rows. Throws rather than returning "" — an empty id would make
+ *  a probe query for a row that cannot exist and report the miss as a pass. */
+function victimRows(): SeededRows {
+  if (!victim) throw new Error("setVictimHandles() was not called before the matrix ran");
+  return victim;
 }
 
 function victimSlugFor(_actor: unknown): string {
-  return victimSlug;
+  return victimRows().dashboardSlug;
 }
 function victimActivityFor(_actor: unknown): string {
-  return victimActivity;
+  return victimRows().activityId;
 }

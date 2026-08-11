@@ -140,7 +140,7 @@ async function runMode(mode: "dormant" | "enforced", suffix: string): Promise<Mo
     });
     const actorA = actorFor(fixture.a);
 
-    setVictimHandles(fixture.b.rows.dashboardSlug, fixture.b.rows.activityId, fixture.b.rows.pipelineId);
+    setVictimHandles(fixture.b.rows);
 
     // The action layer logs every unexpected failure through console.error
     // (asActionResult). Those are EXPECTED here — provoking refusals is the
