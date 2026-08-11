@@ -451,9 +451,10 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
     ? null
     : await Promise.all([getSetting("QUOTE_VALID_DAYS"), getSetting("QUOTE_TERMS")]);
 
-  // Resolved before the bypass transaction, and used for the quote and every
-  // child written inside it.
-  const tenantId = await actingTenantId();
+  // Resolved before the bypass transaction. This is the ACTOR, which is the
+  // right owner for a quote being created here and only the FALLBACK for one
+  // that already exists — see quoteTenantId in the edit path below.
+  const actingTenant = await actingTenantId();
   const result = await basePrisma.$transaction(async (tx) => {
     if (data.id) {
       // Lock the quote row FOR UPDATE and re-check editability inside the
@@ -518,16 +519,23 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
       // Inherit the hidden columns by row id, and KEEP that id — see quoteRows.
       const itemRows = itemRowsFor(normalizedItems, priorById(existing.items));
       const feeRows = feeRowsFor(normalizedFees, priorById(existing.fees));
+      // The QUOTE is the parent, so its children take ITS owner — the same
+      // invariant createQuoteRevision applies to a copied quote. Stamping the
+      // actor instead would split a quote across two workspaces whenever the
+      // editor's acting tenant differs from the quote's, and this is a
+      // `basePrisma` transaction: the RLS bypass, where no guard is left to
+      // notice a parent and child disagreeing about who owns them. The acting
+      // tenant survives only as the fallback for a quote that predates tenancy.
+      const quoteTenantId = existing.tenantId ?? actingTenant;
       await tx.quoteItem.deleteMany({ where: { quoteId: existing.id } });
       if (itemRows.length > 0) {
-        // The children belong to the same workspace as the quote they hang off.
-        // Rewriting them through the bypass client without a stamp left every
+        // Rewriting these through the bypass client without a stamp left every
         // line item and fee unowned.
-        await tx.quoteItem.createMany({ data: itemRows.map((row) => ({ ...row, quoteId: existing.id, tenantId })) });
+        await tx.quoteItem.createMany({ data: itemRows.map((row) => ({ ...row, quoteId: existing.id, tenantId: quoteTenantId })) });
       }
       await tx.quoteFee.deleteMany({ where: { quoteId: existing.id } });
       if (feeRows.length > 0) {
-        await tx.quoteFee.createMany({ data: feeRows.map((row) => ({ ...row, quoteId: existing.id, tenantId })) });
+        await tx.quoteFee.createMany({ data: feeRows.map((row) => ({ ...row, quoteId: existing.id, tenantId: quoteTenantId })) });
       }
       // The rows as PERSISTED, so the audit figure below is the one the database
       // and every screen agree on. Built from normalizedItems it silently
@@ -551,10 +559,14 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
     const itemRows = itemRowsFor(normalizedItems, new Map());
     const feeRows = feeRowsFor(normalizedFees, new Map());
     return {
+      // A brand-new quote has no prior owner, so the actor IS the parent's owner
+      // here — and the children take the same value, which is the same
+      // parent-owns-child invariant the edit path above applies to an existing
+      // quote. Nested creates inherit nothing in Prisma, hence the explicit stamp.
       quote: await tx.quote.create({
         data: {
           number,
-          tenantId,
+          tenantId: actingTenant,
           contactId: data.contactId,
           leadId: linkedLeadId,
           createdById: user.id,
@@ -562,8 +574,8 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
           terms: data.terms || defaultTerms,
           status: data.intent,
           ...cpqQuoteData,
-          items: itemRows.length > 0 ? { create: itemRows.map((row) => ({ ...row, tenantId })) } : undefined,
-          fees: feeRows.length > 0 ? { create: feeRows.map((row) => ({ ...row, tenantId })) } : undefined,
+          items: itemRows.length > 0 ? { create: itemRows.map((row) => ({ ...row, tenantId: actingTenant })) } : undefined,
+          fees: feeRows.length > 0 ? { create: feeRows.map((row) => ({ ...row, tenantId: actingTenant })) } : undefined,
         },
       }),
       itemRows,

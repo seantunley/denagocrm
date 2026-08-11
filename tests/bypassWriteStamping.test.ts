@@ -44,11 +44,50 @@ test("every quote row created through the bypass client carries its owner", () =
 
 test("quote children are stamped too, because a nested create inherits nothing", () => {
   const source = src(QUOTES);
-  // Line items and fees, whether created nested or rewritten by createMany.
-  assert.match(source, /items: itemRows\.length > 0 \? \{ create: itemRows\.map\(\(row\) => \(\{ \.\.\.row, tenantId \}\)\) \}/);
-  assert.match(source, /fees: feeRows\.length > 0 \? \{ create: feeRows\.map\(\(row\) => \(\{ \.\.\.row, tenantId \}\)\) \}/);
-  assert.match(source, /tx\.quoteItem\.createMany\(\{ data: itemRows\.map\(\(row\) => \(\{ \.\.\.row, quoteId: existing\.id, tenantId \}\)\) \}\)/);
-  assert.match(source, /tx\.quoteFee\.createMany\(\{ data: feeRows\.map\(\(row\) => \(\{ \.\.\.row, quoteId: existing\.id, tenantId \}\)\) \}\)/);
+  // A NEW quote has no prior owner, so the actor owns the parent — and the
+  // children take the SAME value, which is still parent-owns-child.
+  assert.match(source, /items: itemRows\.length > 0 \? \{ create: itemRows\.map\(\(row\) => \(\{ \.\.\.row, tenantId: actingTenant \}\)\) \}/);
+  assert.match(source, /fees: feeRows\.length > 0 \? \{ create: feeRows\.map\(\(row\) => \(\{ \.\.\.row, tenantId: actingTenant \}\)\) \}/);
+  // An EXISTING quote's replacement rows take the QUOTE's owner — see below.
+  assert.match(source, /tx\.quoteItem\.createMany\(\{ data: itemRows\.map\(\(row\) => \(\{ \.\.\.row, quoteId: existing\.id, tenantId: quoteTenantId \}\)\) \}\)/);
+  assert.match(source, /tx\.quoteFee\.createMany\(\{ data: feeRows\.map\(\(row\) => \(\{ \.\.\.row, quoteId: existing\.id, tenantId: quoteTenantId \}\)\) \}\)/);
+});
+
+test("an existing quote's children inherit the QUOTE's owner, not the editor's", () => {
+  /*
+   * saveQuoteDraft resolves the acting tenant BEFORE the transaction. That is
+   * the right owner for a quote it is about to create, and the WRONG one for a
+   * quote that already exists: the Quote is the parent, so its replacement
+   * items and fees must inherit ITS tenant — the same ownership invariant
+   * createQuoteRevision applies when it copies a quote.
+   *
+   * Stamping the actor instead splits one quote across two workspaces whenever
+   * the editor's acting tenant differs from the quote's. This runs inside a
+   * `basePrisma` transaction — the documented RLS BYPASS — so there is no guard
+   * downstream to notice a parent and child disagreeing about who owns them.
+   *
+   * The acting tenant survives only as the fallback for a pre-tenancy quote,
+   * exactly as in the revision path.
+   */
+  const source = src(QUOTES);
+  assert.match(source, /const quoteTenantId = existing\.tenantId \?\? actingTenant;/);
+
+  // The edit path's child writes, from the derivation to the re-read that ends it.
+  const editChildren = source.slice(
+    source.indexOf("const quoteTenantId ="),
+    source.indexOf("tx.quote.findUniqueOrThrow"),
+  );
+  assert.ok(editChildren.length > 0, "the edit path's child writes must be locatable");
+  assert.doesNotMatch(
+    editChildren,
+    /tenantId: actingTenant/,
+    "a replacement item or fee is stamped with the EDITOR instead of the quote",
+  );
+  assert.equal(
+    (editChildren.match(/tenantId: quoteTenantId/g) ?? []).length,
+    2,
+    "both the items and the fees must inherit the quote's owner",
+  );
 });
 
 test("a revision belongs to whoever owned the original", () => {
