@@ -13,6 +13,7 @@ import { getSetting } from "@/lib/settings";
 import { markReferralEarned } from "@/lib/referrals";
 import { hasOpenSignatureRequest } from "@/lib/quoteLock";
 import { nextQuoteNumber } from "@/lib/numbering";
+import { actingTenantId } from "@/lib/actingTenant";
 import { feeRowsFor, itemRowsFor, priorById } from "@/lib/quoteRows";
 import { emitLeadJourneyEvent } from "@/lib/leadJourneyEvents";
 import { formatZAR, contactName } from "@/lib/format";
@@ -105,11 +106,17 @@ async function createQuoteFromLeadRecord(leadId: string) {
     "Prices include VAT. Delivery arranged on acceptance. E&OE.";
   // Allocate the number and insert in ONE transaction under the advisory lock so
   // two concurrent creates can't read the same MAX(number) and collide (#11).
+  // Resolved OUTSIDE the transaction. `basePrisma` is the RLS bypass — a scoped
+  // permission check before it does NOT scope the transaction, so every row
+  // created in here has to carry its owner explicitly. Nested creates inherit
+  // nothing from the parent, so the items are stamped too.
+  const tenantId = await actingTenantId();
   const quote = await basePrisma.$transaction(async (tx) => {
     const number = await nextQuoteNumber(tx);
     return tx.quote.create({
       data: {
         number,
+        tenantId,
         leadId,
         contactId: lead.contactId,
         createdById: user.id,
@@ -119,6 +126,7 @@ async function createQuoteFromLeadRecord(leadId: string) {
           ? {
               create: [
                 {
+                  tenantId,
                   description: lead.product.name,
                   qty: 1,
                   unitPriceCents: lead.valueCents || lead.product.basePriceCents,
@@ -174,12 +182,15 @@ export async function createQuoteForContact(formData: FormData) {
   const terms =
     (await getSetting("QUOTE_TERMS")) ||
     "Prices include VAT. Delivery arranged on acceptance. E&OE.";
-  // Advisory-locked allocation + insert in one transaction (#11).
+  // Advisory-locked allocation + insert in one transaction (#11). The bypass
+  // client carries no tenant, so the row and its children are stamped here.
+  const tenantId = await actingTenantId();
   const quote = await basePrisma.$transaction(async (tx) => {
     const number = await nextQuoteNumber(tx);
     return tx.quote.create({
       data: {
         number,
+        tenantId,
         contactId,
         createdById: user.id,
         validUntil: addDays(new Date(), isNaN(validDays) ? 7 : validDays),
@@ -188,6 +199,7 @@ export async function createQuoteForContact(formData: FormData) {
           ? {
               create: [
                 {
+                  tenantId,
                   description: product.name,
                   qty: 1,
                   unitPriceCents: product.basePriceCents,
@@ -282,11 +294,13 @@ export async function createQuoteForFleet(formData: FormData) {
 
     // Advisory-locked allocation + insert in one transaction, same as every
     // other quote-creating path (#11).
+    const tenantId = await actingTenantId();
     const quote = await basePrisma.$transaction(async (tx) => {
       const number = await nextQuoteNumber(tx);
       return tx.quote.create({
         data: {
           number,
+          tenantId,
           contactId: contact.id,
           fleetId: fleet.id,
           createdById: user.id,
@@ -437,6 +451,10 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
     ? null
     : await Promise.all([getSetting("QUOTE_VALID_DAYS"), getSetting("QUOTE_TERMS")]);
 
+  // Resolved before the bypass transaction. This is the ACTOR, which is the
+  // right owner for a quote being created here and only the FALLBACK for one
+  // that already exists — see quoteTenantId in the edit path below.
+  const actingTenant = await actingTenantId();
   const result = await basePrisma.$transaction(async (tx) => {
     if (data.id) {
       // Lock the quote row FOR UPDATE and re-check editability inside the
@@ -501,13 +519,23 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
       // Inherit the hidden columns by row id, and KEEP that id — see quoteRows.
       const itemRows = itemRowsFor(normalizedItems, priorById(existing.items));
       const feeRows = feeRowsFor(normalizedFees, priorById(existing.fees));
+      // The QUOTE is the parent, so its children take ITS owner — the same
+      // invariant createQuoteRevision applies to a copied quote. Stamping the
+      // actor instead would split a quote across two workspaces whenever the
+      // editor's acting tenant differs from the quote's, and this is a
+      // `basePrisma` transaction: the RLS bypass, where no guard is left to
+      // notice a parent and child disagreeing about who owns them. The acting
+      // tenant survives only as the fallback for a quote that predates tenancy.
+      const quoteTenantId = existing.tenantId ?? actingTenant;
       await tx.quoteItem.deleteMany({ where: { quoteId: existing.id } });
       if (itemRows.length > 0) {
-        await tx.quoteItem.createMany({ data: itemRows.map((row) => ({ ...row, quoteId: existing.id })) });
+        // Rewriting these through the bypass client without a stamp left every
+        // line item and fee unowned.
+        await tx.quoteItem.createMany({ data: itemRows.map((row) => ({ ...row, quoteId: existing.id, tenantId: quoteTenantId })) });
       }
       await tx.quoteFee.deleteMany({ where: { quoteId: existing.id } });
       if (feeRows.length > 0) {
-        await tx.quoteFee.createMany({ data: feeRows.map((row) => ({ ...row, quoteId: existing.id })) });
+        await tx.quoteFee.createMany({ data: feeRows.map((row) => ({ ...row, quoteId: existing.id, tenantId: quoteTenantId })) });
       }
       // The rows as PERSISTED, so the audit figure below is the one the database
       // and every screen agree on. Built from normalizedItems it silently
@@ -531,9 +559,14 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
     const itemRows = itemRowsFor(normalizedItems, new Map());
     const feeRows = feeRowsFor(normalizedFees, new Map());
     return {
+      // A brand-new quote has no prior owner, so the actor IS the parent's owner
+      // here — and the children take the same value, which is the same
+      // parent-owns-child invariant the edit path above applies to an existing
+      // quote. Nested creates inherit nothing in Prisma, hence the explicit stamp.
       quote: await tx.quote.create({
         data: {
           number,
+          tenantId: actingTenant,
           contactId: data.contactId,
           leadId: linkedLeadId,
           createdById: user.id,
@@ -541,8 +574,8 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
           terms: data.terms || defaultTerms,
           status: data.intent,
           ...cpqQuoteData,
-          items: itemRows.length > 0 ? { create: itemRows } : undefined,
-          fees: feeRows.length > 0 ? { create: feeRows } : undefined,
+          items: itemRows.length > 0 ? { create: itemRows.map((row) => ({ ...row, tenantId: actingTenant })) } : undefined,
+          fees: feeRows.length > 0 ? { create: feeRows.map((row) => ({ ...row, tenantId: actingTenant })) } : undefined,
         },
       }),
       itemRows,
@@ -596,6 +629,8 @@ export async function createQuoteRevision(quoteId: string) {
     const validDaysRaw = await getSetting("QUOTE_VALID_DAYS");
     const validDays = validDaysRaw ? parseInt(validDaysRaw, 10) : 7;
     const validUntil = addDays(new Date(), isNaN(validDays) ? 7 : validDays);
+    // Fallback owner for a pre-tenancy original; the original's own tenant wins.
+    const actingTenant = await actingTenantId();
 
     // One transaction: lock the original FOR UPDATE so two concurrent revision
     // requests can't both spawn a revision (the loser re-reads supersededAt set and
@@ -615,9 +650,15 @@ export async function createQuoteRevision(quoteId: string) {
       if (await hasOpenSignatureRequest(tx, quoteId)) return { blocked: true as const };
 
       const number = await nextQuoteNumber(tx);
+      // A revision belongs to whoever owned the ORIGINAL, not to whoever happens
+      // to be revising it — the acting workspace is only the fallback for a row
+      // that predates tenancy. Copying without carrying this left every revision
+      // and all of its copied children unowned.
+      const tenantId = original.tenantId ?? actingTenant;
       const created = await tx.quote.create({
         data: {
           number,
+          tenantId,
           contactId: original.contactId,
           leadId: original.leadId,
           createdById: user.id,
@@ -629,6 +670,7 @@ export async function createQuoteRevision(quoteId: string) {
           revisionOfId: original.id,
           items: {
             create: original.items.map((i) => ({
+              tenantId,
               description: i.description,
               qty: i.qty,
               unitPriceCents: i.unitPriceCents,
@@ -645,6 +687,7 @@ export async function createQuoteRevision(quoteId: string) {
           },
           fees: {
             create: original.fees.map((f) => ({
+              tenantId,
               label: f.label,
               kind: f.kind,
               amountCents: f.amountCents,
@@ -663,7 +706,7 @@ export async function createQuoteRevision(quoteId: string) {
       });
       if (cfValues.length > 0) {
         await tx.customFieldValue.createMany({
-          data: cfValues.map((v) => ({ defId: v.defId, recordId: created.id, value: v.value })),
+          data: cfValues.map((v) => ({ defId: v.defId, recordId: created.id, value: v.value, tenantId })),
         });
       }
       await tx.quote.update({

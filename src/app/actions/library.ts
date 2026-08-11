@@ -2,11 +2,13 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { withTenantWrite } from "@/lib/tenantWrite";
+import { withActingTenantWrite } from "@/lib/actingScope";
 import { requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
 import { MAX_BLOB_BYTES, assertOwnedBlob } from "@/lib/storage";
+import { actingScopeClass } from "@/lib/actingScope";
+import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 
 export type UploadedFileMeta = {
   url: string;
@@ -54,7 +56,15 @@ function assertBlobUrl(url: string): void {
  */
 async function resolveUpload(file: UploadedFileMeta) {
   assertBlobUrl(file.url);
-  const owned = await assertOwnedBlob(file.url);
+  // "Ours" is not "yours". The store is ONE store shared by every workspace, so
+  // proving the object is in it says nothing about who owns it: a library manager
+  // in workspace B who has come by a blob URL from workspace A — a forwarded
+  // email, a pasted link, browser history — could register A's file into B's
+  // library and then download it through B's own authorised route. The expected
+  // owner turns the store's pathname into an ownership check.
+  const scope = await actingScopeClass();
+  const expectedTenantId = scope.mode === "tenant" ? scope.tenantId : DEFAULT_TENANT_ID;
+  const owned = await assertOwnedBlob(file.url, expectedTenantId);
   if (owned.size > MAX_BLOB_BYTES) {
     throw new Error(`That file is too large to store (limit ${Math.floor(MAX_BLOB_BYTES / (1024 * 1024))} MB).`);
   }
@@ -84,7 +94,16 @@ export async function registerLibraryDocuments(
     // owning tenant (the guard refuses a nested `versions.create`; the composite
     // (tenantId, documentId) FK ties the version to the doc). A failure creating the
     // version rolls back the orphan document.
-    await withTenantWrite(async (tx, tenantId) => {
+    //
+    // USER-ORIGINATED: `requirePermission("library.manage")` above proves a
+    // signed-in person is doing this, and the document is NEW — it has no parent to
+    // inherit from, so the uploader's workspace is the owner. `withTenantWrite`
+    // resolved `writeTenantId() ?? DEFAULT_TENANT_ID` and `writeTenantId()` is null
+    // while enforcement is dormant, so a second workspace's brochures and price
+    // lists were filed under the founding tenant. The VERSION takes the same
+    // tenantId as the document created beside it in this transaction, so the
+    // composite FK holds by construction.
+    await withActingTenantWrite(async (tx, tenantId) => {
       const doc = await tx.libraryDocument.create({ data: { name, category, tenantId } });
       await tx.libraryVersion.create({
         data: {
@@ -125,7 +144,22 @@ export async function registerLibraryVersion(
   const nextVersion = (document.versions[0]?.version ?? 0) + 1;
   // Atomic: new version + the document's updatedAt bump in ONE transaction. The doc
   // was already authorised via the scoped findUniqueOrThrow above.
-  await withTenantWrite(async (tx, tenantId) => {
+  //
+  // USER-ORIGINATED, WITH A PARENT. A version is a CHILD of the document, so it
+  // inherits the DOCUMENT's tenant, not the uploader's. That distinction is the
+  // #470 contact-tags invariant and it is load-bearing here: an owner with access
+  // to another workspace's document who uploads a revision must not re-own the
+  // revision away from the document that holds it. LibraryDocument carries
+  // `@@unique([tenantId, id])` precisely so `(tenantId, documentId)` can become a
+  // composite FK — a version whose tenant disagrees with its document breaks that
+  // FK at the enforcement flip, and until then simply hides the newest revision
+  // from the workspace that owns the document.
+  //
+  // `?? actingTenantId` covers the legacy row: LibraryDocument.tenantId is still
+  // nullable and nothing stamped it before this window, so an un-owned parent
+  // falls back to the acting workspace rather than writing a tenantless child.
+  await withActingTenantWrite(async (tx, actingTenantId) => {
+    const tenantId = document.tenantId ?? actingTenantId;
     await tx.libraryVersion.create({
       data: {
         documentId,

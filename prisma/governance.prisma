@@ -1,5 +1,15 @@
 /// Sales pipeline container. Existing PipelineStage rows are linked by the
-/// pipelineId column added in migration 45; the legacy model remains in schema.prisma.
+/// pipelineId column added in migration 52_pipelines_forecasting_rbac_audit —
+/// the same migration that creates this table, backfills every pre-existing
+/// stage to 'pipeline_default_retail' and then SETs the column NOT NULL. (This
+/// note used to say "migration 45"; 45 is 45_document_versioning and has nothing
+/// to do with pipelines. The wrong pointer is part of why the column went five
+/// migrations without ever being declared on the model.)
+///
+/// The PipelineStage model still lives in schema.prisma. Prisma runs in FOLDER
+/// mode here (`schema: "./prisma"`, see package.json prisma:generate), so every
+/// prisma/*.prisma file is one schema and the relation below crosses files
+/// legitimately — no import, no duplication.
 model SalesPipeline {
   id          String   @id @default(cuid())
   tenantId    String? // Multi-tenancy (Phase B — additive/inert): owning tenant. Each dealer configures its own pipeline stages.
@@ -11,6 +21,8 @@ model SalesPipeline {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   deletedAt   DateTime?
+
+  stages PipelineStage[]
 
   @@index([tenantId])
 }

@@ -7,8 +7,8 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma, basePrisma } from "@/lib/db";
 import { ciExactIdFilter } from "@/lib/ciExact";
-import { writeTenantId, withTenantWrite } from "@/lib/tenantWrite";
-import { DEFAULT_TENANT_ID } from "@/lib/tenant";
+import { actingOwnerTenantId, withActingTenantWrite } from "@/lib/actingScope";
+import { resolveAssignableUser } from "@/lib/tenantActor";
 import { logAudit } from "@/lib/audit";
 import { logError } from "@/lib/errorLog";
 import {
@@ -34,7 +34,9 @@ function slugify(value: string): string {
 async function loadCase(caseId: string) {
   return prisma.customerCase.findUnique({
     where: { id: caseId },
-    select: { id: true, number: true, status: true, contactId: true, priority: true, type: true, mailboxId: true, assignedToId: true, firstResponseAt: true },
+    // `tenantId` is selected because the reply path stamps its message with the
+    // CASE's owner rather than the replying agent's workspace — see replyToTicket.
+    select: { id: true, tenantId: true, number: true, status: true, contactId: true, priority: true, type: true, mailboxId: true, assignedToId: true, firstResponseAt: true },
   });
 }
 
@@ -58,9 +60,37 @@ async function bestEffort(scope: string, context: string, write: () => Promise<u
   }
 }
 
+/**
+ * The workspace that owns a helpdesk child row: the PARENT record's.
+ *
+ * `writeTenantId() ?? DEFAULT_TENANT_ID` was the previous answer, and its comment
+ * — "founding tenant when enforcement is off, so this never lands tenantless" —
+ * describes exactly the defect. `writeTenantId()` is null while enforcement is
+ * dormant, which is every environment we run, so this stamped the FOUNDING tenant
+ * onto every workspace's notifications and timeline events. Avoiding a NULL by
+ * writing a confidently wrong owner is the worse trade: a NULL is visible in an
+ * audit, a wrong owner looks correct.
+ *
+ * A notification belongs to the contact it is about; a timeline event belongs to
+ * the case it is on. Neither belongs to whoever happened to click the button, so
+ * neither may resolve an actor. Null when the parent is itself unowned — a
+ * pre-tenancy row awaiting backfill, which a later backfill claims along with its
+ * children.
+ */
+async function tenantOfContact(contactId: string): Promise<string | null> {
+  const rows = await basePrisma.$queryRaw<Array<{ tenantId: string | null }>>`
+    SELECT "tenantId" FROM "Contact" WHERE "id" = ${contactId} LIMIT 1`;
+  return rows[0]?.tenantId ?? null;
+}
+
+async function tenantOfCase(caseId: string): Promise<string | null> {
+  const rows = await basePrisma.$queryRaw<Array<{ tenantId: string | null }>>`
+    SELECT "tenantId" FROM "CustomerCase" WHERE "id" = ${caseId} LIMIT 1`;
+  return rows[0]?.tenantId ?? null;
+}
+
 async function notifyCustomer(contactId: string, title: string, body: string, href: string) {
-  // Founding tenant when enforcement is off, so this never lands tenantless.
-  const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
+  const tenantId = await tenantOfContact(contactId);
   await bestEffort("helpdesk.notify", `${title} for contact ${contactId}`, () => basePrisma.$executeRaw`
     INSERT INTO "PortalNotification" ("id","contactId","title","body","href","kind","tenantId")
     VALUES (${randomUUID()}, ${contactId}, ${title}, ${body}, ${href}, 'case', ${tenantId})`);
@@ -68,9 +98,10 @@ async function notifyCustomer(contactId: string, title: string, body: string, hr
 
 /** Append a system "event" line item to the ticket timeline. */
 async function logEvent(caseId: string, userId: string, body: string, meta: Prisma.InputJsonObject) {
+  const tenantId = await tenantOfCase(caseId);
   await bestEffort("helpdesk.event", `${body} on case ${caseId}`, () =>
     prisma.customerCaseMessage.create({
-      data: { caseId, userId, direction: "staff", type: "event", body, meta, tenantId: writeTenantId() ?? DEFAULT_TENANT_ID },
+      data: { caseId, userId, direction: "staff", type: "event", body, meta, tenantId },
     }),
   );
 }
@@ -92,7 +123,24 @@ export async function createTicket(formData: FormData): Promise<ActionResult> {
     const assignToMe = formData.get("assignToMe") === "on";
 
     // Atomic: the case + its opening message in ONE transaction, tenant-stamped.
-    const created = await withTenantWrite(async (tx, tenantId) => {
+    //
+    // USER-ORIGINATED, WITH A PARENT. `requireContactAccess` above proves a
+    // signed-in agent is doing this, so the acting workspace — not
+    // `withTenantWrite`'s `writeTenantId() ?? DEFAULT_TENANT_ID`, which is the
+    // founding tenant for everyone while enforcement is dormant.
+    //
+    // But the acting workspace is only the FALLBACK. `contactId` is a required FK
+    // and CustomerCase carries `@@unique([tenantId, id])`, so the ticket belongs to
+    // the workspace that owns the CUSTOMER it is about. An owner with access to
+    // another workspace's contact who opens a ticket for them must not move that
+    // ticket into their own workspace and out of the one that has to answer it.
+    // `?? tenantId` covers the legacy contact whose tenantId was never stamped.
+    const created = await withActingTenantWrite(async (tx, actingTenantId) => {
+      const contact = await tx.contact.findUnique({
+        where: { id: contactId },
+        select: { tenantId: true },
+      });
+      const tenantId = contact?.tenantId ?? actingTenantId;
       const c = await tx.customerCase.create({
         data: {
           subject,
@@ -149,7 +197,14 @@ export async function replyToTicket(caseId: string, formData: FormData): Promise
     // Atomic: append the reply + advance the case in ONE transaction (the case was
     // authorised by requireCaseAccess above). Uses the proven bypass transaction path
     // rather than a scoped array transaction, whose GUC interaction is the fragile area.
-    await withTenantWrite(async (tx, tenantId) => {
+    // USER-ORIGINATED, WITH A PARENT. A reply is a CHILD of the ticket, so it
+    // inherits the CASE's tenant, not the replying agent's workspace: an agent
+    // answering another workspace's ticket must not file the answer somewhere the
+    // ticket cannot see it. `withTenantWrite` gave every reply the founding tenant
+    // while enforcement is dormant, which is right only for the founding tenant's
+    // own tickets. `?? actingTenantId` covers a case row that predates stamping.
+    await withActingTenantWrite(async (tx, actingTenantId) => {
+      const tenantId = item.tenantId ?? actingTenantId;
       await tx.customerCaseMessage.create({
         data: { caseId, userId: user.id, direction: "staff", type: "staff", body, tenantId },
       });
@@ -204,7 +259,7 @@ export async function addNote(caseId: string, formData: FormData): Promise<Actio
     const body = str(formData, "body");
     if (body.length < 1) throw new ActionRefusal("Write a note before saving.");
     await prisma.customerCaseMessage.create({
-      data: { caseId, userId: user.id, direction: "staff", type: "note", body, tenantId: writeTenantId() ?? DEFAULT_TENANT_ID },
+      data: { caseId, userId: user.id, direction: "staff", type: "note", body, tenantId: await tenantOfCase(caseId) },
     });
     await logAudit({ action: "case.note_added", summary: "Added an internal note", user, entityType: "CustomerCase", entityId: caseId });
     revalidatePath(`/cases/${caseId}`);
@@ -215,10 +270,14 @@ export async function addNote(caseId: string, formData: FormData): Promise<Actio
 export async function assignTicket(caseId: string, formData: FormData): Promise<ActionResult> {
   return asActionResult(async () => {
     const user = await requireCaseAccess(caseId, "cases.assign");
-    const raw = str(formData, "assigneeId");
-    const assigneeId = raw === "" ? null : raw;
-    const assignee = assigneeId ? await basePrisma.user.findUnique({ where: { id: assigneeId }, select: { name: true } }) : null;
-    if (assigneeId && !assignee) throw new ActionRefusal("That agent no longer exists.");
+    // The old check asked `basePrisma.user.findUnique` whether the agent EXISTS.
+    // `User` is a global model, so every user on the platform passed it — the
+    // ticket, its customer's name and its whole conversation could be handed to
+    // somebody in another workspace by posting their id. Existence was never the
+    // question; membership of THIS workspace is. Refuses rather than quietly
+    // unassigning, so a rejected id cannot masquerade as "Unassigned".
+    const assignee = await resolveAssignableUser(formData.get("assigneeId"), "agent");
+    const assigneeId = assignee?.id ?? null;
 
     await prisma.customerCase.update({ where: { id: caseId }, data: { assignedToId: assigneeId, updatedAt: new Date() } });
     await logEvent(caseId, user.id, assigneeId ? `Assigned to ${assignee?.name}` : "Unassigned", { event: "assigned", to: assigneeId });
@@ -302,7 +361,7 @@ export async function addTicketTag(caseId: string, formData: FormData): Promise<
     // slug is unique PER TENANT now (@@unique([tenantId, slug])). Stamp the owning
     // tenant explicitly so this is correct with enforcement OFF too (the scoped
     // guard is dormant then and would leave tenantId NULL, violating NOT NULL).
-    const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
+    const tenantId = await actingOwnerTenantId();
     const tag = await prisma.supportTag.upsert({
       where: { tenantId_slug: { tenantId, slug } },
       update: {},
@@ -392,7 +451,7 @@ export async function saveMailbox(formData: FormData): Promise<ActionResult> {
       } else {
         // Stamp the owning tenant explicitly — tenantId is NOT NULL and the scoped
         // guard is dormant with enforcement off. slug is unique per tenant.
-        const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
+        const tenantId = await actingOwnerTenantId();
         await prisma.supportMailbox.create({ data: { ...data, slug: slugify(name), tenantId } });
       }
     });
@@ -413,7 +472,7 @@ export async function saveCannedReply(formData: FormData): Promise<ActionResult>
     if (id) {
       await prisma.cannedReply.update({ where: { id }, data: { title, body, mailboxId } });
     } else {
-      await prisma.cannedReply.create({ data: { title, body, mailboxId, createdById: user.id, tenantId: writeTenantId() ?? DEFAULT_TENANT_ID } });
+      await prisma.cannedReply.create({ data: { title, body, mailboxId, createdById: user.id, tenantId: await actingOwnerTenantId() } });
     }
     await logAudit({ action: "helpdesk.canned_saved", summary: `Saved reply ${title}`, user });
     revalidatePath("/settings/helpdesk");

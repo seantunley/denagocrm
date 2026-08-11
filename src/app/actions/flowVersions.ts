@@ -9,7 +9,7 @@ import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { writeTenantId } from "@/lib/tenantWrite";
 import { logAudit } from "@/lib/audit";
 import { builderTenantId } from "@/lib/flowScope";
-import { legacyFlowTenant } from "@/lib/flowTenantScope";
+import { flowTenantWhere } from "@/lib/flowTenantScope";
 
 type VersionRow = { id: string; version: number; definition: string };
 
@@ -28,7 +28,7 @@ export async function restoreFlowVersionToDraft(
   if (Number.isNaN(expectedUpdatedAt.getTime())) return;
   // Both the snapshot read and the draft write belong to the same workspace.
   const tenantId = await builderTenantId();
-  const scope = legacyFlowTenant(tenantId);
+  const scope = flowTenantWhere(tenantId);
 
   const rows = await basePrisma.$queryRaw<VersionRow[]>(Prisma.sql`
     SELECT "id", "version", "definition"

@@ -643,13 +643,57 @@ model PipelineStage {
   color       String  @default("#64748b")
   entryAction String? // null | book_test_drive — required workflow on stage entry
 
+  /// The five fields below have existed as COLUMNS since migration
+  /// 52_pipelines_forecasting_rbac_audit and were never declared here. Prisma
+  /// could therefore neither read nor write them, which is why `/leads` reaches
+  /// for `listPipelineStages()` raw SQL to learn a stage's pipeline, and why
+  /// `createStage` could not supply `pipelineId` at all — a NOT NULL column with
+  /// no default, so every "Add stage" submission failed. Worse, an undeclared
+  /// column is not "invisible", it is "extra": the next `prisma migrate dev`
+  /// would have written a migration DROPPING all five off a live table.
+  ///
+  /// Types are taken from that migration's DDL, not inferred:
+  ///   pipelineId         TEXT    -- nullable on add, then backfilled to
+  ///                              -- 'pipeline_default_retail' and SET NOT NULL,
+  ///                              -- so it is REQUIRED with no default
+  ///   defaultProbability INTEGER NOT NULL DEFAULT 10
+  ///   staleAfterDays     INTEGER          -- nullable, no default
+  ///   isClosed           BOOLEAN NOT NULL DEFAULT false
+  ///   closedStatus       TEXT             -- nullable, no default
+  ///
+  /// Three CHECK constraints from the same migration (52 and 79) have no Prisma
+  /// DSL equivalent and are enforced only by the database: `defaultProbability`
+  /// BETWEEN 0 AND 100, `closedStatus` IN ('won','lost') when set, and
+  /// `entryAction` IN ('book_test_drive') when set. Clamp/validate in the app —
+  /// see normalizeClosedStage() in src/lib/pipelines.ts.
+  pipelineId         String
+  defaultProbability Int     @default(10)
+  staleAfterDays     Int?
+  isClosed           Boolean @default(false)
+  closedStatus       String?
+
   // Multi-tenancy (Phase B — additive/inert): owning tenant. See Contact.tenantId.
+  // NOT derived from the acting user: a stage takes its PARENT PIPELINE's tenant,
+  // or a pipeline's stages could end up split across two owners and the composite
+  // (tenantId, id) key below would be describing a shape that does not hold. See
+  // stageTenantId() in src/lib/pipelineTenantRule.ts.
   tenantId String?
 
-  leads Lead[]
+  pipeline SalesPipeline @relation(fields: [pipelineId], references: [id])
+  leads    Lead[]
 
+  // Mirrors "PipelineStage_pipelineId_order_key" (migration 52, which dropped the
+  // older global "PipelineStage_order_key"). Ordering is unique WITHIN a pipeline,
+  // which is why a two-neighbour `order` swap needs the park-then-place two pass
+  // in reorderPipelineStages() — a straight swap collides on the first UPDATE.
+  @@unique([pipelineId, order])
+  @@index([pipelineId])
   @@index([tenantId])
   @@unique([tenantId, id])
+  // NOT declarable here: migration 79's two PARTIAL unique indexes on entryAction
+  // ("PipelineStage_tenant_pipeline_entryAction_key" and the legacy NULL-tenant
+  // twin). Prisma's DSL cannot express a WHERE clause on an index — same reason
+  // Role's partial name indexes are hand-written; see governance.prisma.
 }
 
 model Lead {

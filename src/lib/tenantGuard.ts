@@ -18,6 +18,11 @@
  */
 export const GLOBAL_MODELS: ReadonlySet<string> = new Set([
   "User",
+  // The tenant registry itself, and the user→tenant edge that IS the scope. A
+  // tenantId on either is circular: TenantMember answers "which tenant is this
+  // user in?" on the login path, BEFORE any scope exists (see
+  // NO_POLICY_BY_DESIGN in tests/rlsPolicyCoverage.test.ts for the same reason
+  // stated against RLS).
   "Tenant",
   "TenantMember",
   // ── ErrorLog: GLOBAL, deliberately, and its nullable `tenantId` is ATTRIBUTION,
@@ -54,8 +59,35 @@ export const GLOBAL_MODELS: ReadonlySet<string> = new Set([
   // other write uses, and callers that KNOW the owner pass it explicitly. Best-effort
   // means exactly that: a null here is a correct outcome, not a missed stamp.
   "ErrorLog",
+  // ── The three below were listed here with no stated reason until the
+  // 2026-08-10 production audit (PREFLIP-TENANT-AUDIT.md §2) counted them among
+  // the twenty tables carrying no tenantId column. They were never "neither":
+  // the guard has always declared them. What was missing is the ARGUMENT, and a
+  // declaration nobody can check is one somebody quietly reverses.
+  //
+  // Pre-authentication challenge, keyed by (purpose, normalized VIN/serial) and
+  // written by an ANONYMOUS public caller — customer portal OTP, service
+  // lookup. There is no session when the row is created, so there is no tenant
+  // to stamp; scoping it would fail closed on every public verification the
+  // moment enforcement is on. The tenant is established AFTER the code
+  // verifies, never from the challenge.
   "OtpChallenge",
+  // A passkey authenticates a PERSON, not a workspace membership, and hangs off
+  // User — which is cross-tenant by design, three lines up. WebAuthn discovery
+  // also resolves a credential before any tenant is known, so a tenant filter
+  // here would break login for the same reason it would break OtpChallenge.
   "Passkey",
+  // A device subscription belongs to a User, so its tenant is DERIVED rather
+  // than stored: pushRecipientsForCurrentScope() (src/lib/push.ts) joins
+  // PushSubscription → TenantMember → active Tenant, and returns NOTHING when
+  // the scope is `closed`. That is the fix for "a notification could reach
+  // another workspace's device", and it is already in place.
+  //
+  // A stored tenantId would be a SECOND source of truth for a fact TenantMember
+  // already owns, and it would go stale exactly when it matters — a user whose
+  // membership moves keeps a subscription row stamped with the old tenant, and
+  // the leak the column was added to prevent is the one it then causes. Left
+  // global deliberately; the join is the boundary.
   "PushSubscription",
   // Platform-console identity. Global BY DESIGN: a cross-tenant administrator that
   // carried a tenantId would be a contradiction, and scoping these would fail

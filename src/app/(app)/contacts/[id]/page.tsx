@@ -26,6 +26,7 @@ import { healthLabels } from "@/lib/health";
 import { recordConsent, anonymizeContact } from "@/app/actions/privacy";
 import { CONSENT_TYPES } from "@/lib/consent";
 import { brandForTenant, teamSignoff } from "@/lib/tenantBrand";
+import { listActingTenantStaff } from "@/lib/tenantActor";
 import { getActiveTenantId } from "@/lib/auth";
 import { isSmtpConfigured, renderTemplate, contactVars } from "@/lib/email";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
@@ -105,7 +106,11 @@ export default async function ContactDetailPage({
   // contactId.
   const looseDocuments = contact.documents.filter((document) => document.quoteId == null);
   const [users, templates, smtpConfigured, waConfigured, history, libraryDocuments] = await Promise.all([
-    prisma.user.findMany({ orderBy: { name: "asc" } }),
+    // The activity-assignee picker in the Activities tab. `User` is a global
+    // model, so `prisma.user.findMany` is scoped by nothing — the dropdown
+    // listed every user on the platform, and the action behind it wrote the
+    // posted id with no membership check at all (see activities.ts).
+    listActingTenantStaff(),
     prisma.emailTemplate.findMany({ orderBy: { name: "asc" } }),
     isSmtpConfigured(),
     isWhatsAppConfigured(),

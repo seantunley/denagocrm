@@ -7,6 +7,7 @@ import {
   activeWriteTokenPresent,
   dedupeByPathname,
 } from "./backupBlobs";
+import { DEFAULT_TENANT_ID } from "./tenant";
 
 /**
  * Document storage that works in both deployment modes:
@@ -46,13 +47,33 @@ const isPrivateBlobRef = (ref: string) => {
   }
 };
 
+/**
+ * Store an uploaded file and return its ref.
+ *
+ * `tenantId` namespaces the object as `uploads/<tenantId>/<uuid><ext>`, which is
+ * what lets {@link assertOwnedBlob} answer "is this yours?" rather than only "is
+ * this ours?". Callers that genuinely have no workspace — there should be none
+ * for user uploads — may omit it and get the legacy flat path, which
+ * {@link blobBelongsToTenant} then attributes to the founding tenant.
+ *
+ * The store is shared and objects are written `access: "public"` unless
+ * BLOB_PRIVATE is on, so the URL is the only secret. Namespacing does not change
+ * that; it stops a KNOWN url being re-registered by another workspace. Turning on
+ * BLOB_PRIVATE is the separate, larger half — see the PR.
+ */
 export async function saveFile(
   buffer: Buffer,
   originalName: string,
-  contentType: string
+  contentType: string,
+  tenantId?: string
 ): Promise<string> {
   const ext = path.extname(originalName).slice(0, 12);
-  const storedName = crypto.randomUUID() + ext;
+  const localName = crypto.randomUUID() + ext;
+  // Blob objects are namespaced by workspace; the LOCAL disk fallback is not.
+  // A local ref is a bare filename by contract (`isLocalRef` rejects anything
+  // containing a slash), and local storage only runs in single-workspace dev, so
+  // namespacing it would break the ref format for no isolation gain.
+  const storedName = tenantId ? `${tenantId}/${localName}` : localName;
 
   // Private mode fails CLOSED: if the flag is on we must have a private-store token,
   // otherwise we'd either write a "private" file into a public store or fall through
@@ -81,8 +102,8 @@ export async function saveFile(
   }
 
   await fs.mkdir(UPLOAD_DIR, { recursive: true });
-  await fs.writeFile(path.join(UPLOAD_DIR, storedName), buffer);
-  return storedName;
+  await fs.writeFile(path.join(UPLOAD_DIR, localName), buffer);
+  return localName;
 }
 
 /**
@@ -139,20 +160,65 @@ export type OwnedBlob = { size: number; contentType: string; pathname: string };
  * stranger's bucket with any metadata it liked, and the server would later fetch
  * it. `head()` resolves through OUR token, so an object in another store is a
  * miss, and the size it returns is the server's number rather than the caller's.
+ *
+ * OURS IS NOT YOURS. That check proves the object is in OUR store, and our store
+ * is ONE store shared by every workspace. So a library manager in workspace B who
+ * has come by a blob URL belonging to workspace A — a forwarded email, a pasted
+ * link, a screenshot, browser history — could register A's file into B's library
+ * and then download it through B's own authorised route. The vendor check proves
+ * the vendor; the store check proves the store; neither proves the owner.
+ *
+ * Pass `expectedTenantId` to close that. New uploads are written under
+ * `uploads/<tenantId>/…` (see {@link saveFile}), so the pathname the store
+ * reports is itself the ownership claim, and it comes from the store rather than
+ * from the caller.
  */
-export async function assertOwnedBlob(ref: string): Promise<OwnedBlob> {
+export async function assertOwnedBlob(ref: string, expectedTenantId?: string): Promise<OwnedBlob> {
   if (!isTrustedBlobRef(ref)) throw new Error("Refusing a storage reference that is not a Blob URL");
   const tokens = [privateToken(), publicToken()].filter((t): t is string => Boolean(t));
   if (tokens.length === 0) throw new Error("Blob storage is not configured");
   for (const token of tokens) {
     try {
       const meta = await head(ref, { token });
+      if (expectedTenantId && !blobBelongsToTenant(meta.pathname, expectedTenantId)) {
+        throw new BlobNotYoursError("Refusing a stored file that belongs to another workspace");
+      }
       return { size: meta.size, contentType: meta.contentType, pathname: meta.pathname };
-    } catch {
+    } catch (error) {
+      // A cross-tenant refusal is a verdict, not a miss — it must not fall
+      // through to "try the other store" and end up reported as "not ours".
+      if (error instanceof BlobNotYoursError) throw error;
       // Not in this store — try the other one, then refuse.
     }
   }
   throw new Error("Refusing a Blob URL that is not in our store");
+}
+
+/** Distinguishes "belongs to another workspace" from "not in our store at all". */
+export class BlobNotYoursError extends Error {}
+
+/**
+ * Does this stored object belong to `tenantId`?
+ *
+ * New objects live at `uploads/<tenantId>/<uuid><ext>`, so the answer is in the
+ * path. Legacy objects predate the namespace and have no tenant segment.
+ *
+ * LEGACY RULE, and why it is sound here rather than the unsafe rule we removed
+ * elsewhere: production has only ever had ONE tenant, so every object written
+ * before namespacing necessarily belongs to the founding tenant. That is a fact
+ * about the deployment's history, not an assumption about a NULL. It stops being
+ * true the moment a second workspace uploads anything — which is exactly when
+ * namespacing starts applying, so no un-namespaced object can ever be ambiguous.
+ */
+export function blobBelongsToTenant(pathname: string, tenantId: string): boolean {
+  const segments = pathname.split("/").filter(Boolean);
+  // uploads/<tenantId>/<file>  — the namespaced form.
+  if (segments.length >= 3 && segments[0] === "uploads") return segments[1] === tenantId;
+  // uploads/<file> — legacy, founding tenant only.
+  if (segments.length === 2 && segments[0] === "uploads") return tenantId === DEFAULT_TENANT_ID;
+  // Anything else (backups, managed paths) is not a per-tenant upload; those
+  // callers do not pass an expected tenant and never reach this.
+  return false;
 }
 
 /** A bare filename — no directory component, no traversal, not absolute. */

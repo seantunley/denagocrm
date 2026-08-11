@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { actingTenantMemberIds } from "@/lib/tenantActor";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { getActiveTenantId, requireUser } from "@/lib/auth";
 import {
@@ -91,12 +92,26 @@ export default async function SettingsPage({
     ? "overview"
     : "account";
 
+  // The team roster. `User` is a global model and this read had no filter at all,
+  // so Settings → Team showed one workspace the name, email, role and 2FA state of
+  // every person on the platform — and handed its owner the Manage controls for
+  // them. Membership comes from `TenantMember`, via the ACTING workspace: the
+  // background `listTenantStaff` skips that join while enforcement is dormant,
+  // which is every environment today, and would have left this exactly as global.
+  //
+  // Disabled members are kept, because this is an administration surface and
+  // Settings → Access needs to reactivate them — hence the membership-only list
+  // rather than the assignable-staff one.
+  const memberIds = await actingTenantMemberIds();
   const [stages, users, settings, templates] = await Promise.all([
     prisma.pipelineStage.findMany({
       orderBy: { order: "asc" },
       include: { _count: { select: { leads: true } } },
     }),
-    prisma.user.findMany({ orderBy: { createdAt: "asc" } }),
+    prisma.user.findMany({
+      where: memberIds === null ? {} : { id: { in: memberIds } },
+      orderBy: { createdAt: "asc" },
+    }),
     prisma.appSetting.findMany(),
     prisma.emailTemplate.findMany({ orderBy: { name: "asc" } }),
   ]);

@@ -10,6 +10,7 @@ import {
   type PermissionUser,
 } from "@/lib/permissions";
 import { requireUser } from "@/lib/auth";
+import { resolveAssignableUser } from "@/lib/tenantActor";
 import { logAudit } from "@/lib/audit";
 import { reserveSlot } from "@/lib/bookingSlots";
 import { ensureTimelinePin } from "@/lib/timelinePins";
@@ -24,6 +25,31 @@ const str = (formData: FormData, key: string) => {
   const value = String(formData.get(key) ?? "").trim();
   return value === "" ? null : value;
 };
+
+/**
+ * Who this activity may be assigned to — through the shared contract, not off
+ * the form.
+ *
+ * This was the half of the fix that was missing. The picker feeding these two
+ * actions is the one on the contact and lead detail pages, and BOTH ends were
+ * unscoped: the dropdown listed every `User` row on the platform, and the action
+ * behind it wrote `str(formData, "assignedToId") ?? user.id` with nothing
+ * looking the person up at all. Not even the weak "does this user exist" check
+ * the help desk had — a posted id from another workspace went straight onto this
+ * workspace's activity, and from there into its audit line, its reminder push
+ * and the assignee's own task list.
+ *
+ * Worth noting how it hid: `scheduleQuickActivity` in quickCreate.ts DID check
+ * membership before delegating here, so the quick-create path was safe while the
+ * ordinary one was not. That is exactly the divergence four private copies of a
+ * rule produce, and the reason this now has one home.
+ *
+ * Blank means "assign it to me", which is what the `?? user.id` fallback always
+ * meant and what the select's `defaultValue={currentUserId}` still submits.
+ */
+async function resolveActivityAssignee(formData: FormData) {
+  return resolveAssignableUser(formData.get("assignedToId"), "team member");
+}
 
 // Refresh the lead/contact detail pages whose overdue/pending state depends on
 // an activity, so completing/cancelling/rescheduling from ANY surface updates
@@ -81,7 +107,8 @@ export async function scheduleActivity(formData: FormData) {
   const type = str(formData, "type") ?? "todo";
   const note = str(formData, "note");
   const location = str(formData, "location");
-  const assignedToId = str(formData, "assignedToId") ?? user.id;
+  const assignee = await resolveActivityAssignee(formData);
+  const assignedToId = assignee?.id ?? user.id;
   const workshop = formData.get("workshop") === "on";
 
   let activity;
@@ -158,13 +185,14 @@ export async function scheduleActivity(formData: FormData) {
     await ensureTimelinePin("activity", activity.id, user.id);
   }
 
-  const assignee =
-    activity.assignedToId === user.id
-      ? user
-      : await prisma.user.findUnique({ where: { id: activity.assignedToId } });
+  // The name for the audit line comes from the member we ALREADY resolved. It
+  // used to come from a fresh `prisma.user.findUnique` — a global lookup, which
+  // is the very thing that could not answer the membership question and so had
+  // no business being the source of the name we then wrote down.
+  const assigneeName = assignee?.name ?? user.name;
   await logAudit({
     action: "activity.scheduled",
-    summary: `Scheduled ${activity.type}: “${summary}”${activity.location ? ` at ${activity.location}` : ""} — assigned to ${assignee?.name ?? user.name}`,
+    summary: `Scheduled ${activity.type}: “${summary}”${activity.location ? ` at ${activity.location}` : ""} — assigned to ${assigneeName}`,
     leadId,
     contactId,
     user,
@@ -427,6 +455,12 @@ export async function updateActivity(id: string, formData: FormData) {
     duePatch = { dueDate, reminderSentAt: null };
   }
 
+  // Resolved BEFORE the update rather than inline in the data object, so the
+  // refusal happens while nothing has been written yet. Reassignment is the
+  // easier of the two attacks: the activity already exists, so one forged field
+  // on an ordinary edit was enough to hand it to somebody in another workspace.
+  const assignedToId = (await resolveActivityAssignee(formData))?.id ?? user.id;
+
   const activity = await prisma.activity.update({
     where: { id },
     data: {
@@ -434,7 +468,7 @@ export async function updateActivity(id: string, formData: FormData) {
       category: formData.get("workshop") === "on" ? "workshop" : null,
       summary,
       location: str(formData, "location"),
-      assignedToId: str(formData, "assignedToId") ?? user.id,
+      assignedToId,
       ...duePatch,
     },
   });

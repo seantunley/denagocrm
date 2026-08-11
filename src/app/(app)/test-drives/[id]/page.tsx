@@ -15,7 +15,7 @@ import { prisma } from "@/lib/db";
 import { contactName, formatDateTime, inputDateTimeValue, inputDateValue } from "@/lib/format";
 import { getAccessibleQuoteIds, hasPermission } from "@/lib/permissions";
 import { requireTestDriveReadAccess } from "@/lib/testDriveAccess";
-import { listTenantStaff } from "@/lib/tenantActor";
+import { listActingTenantStaff } from "@/lib/tenantActor";
 import { testDriveStatusLabel } from "@/lib/testDriveMetrics";
 import {
   cancelTestDrive,
@@ -70,7 +70,7 @@ export default async function TestDriveDetailPage({ params }: { params: Promise<
       where: { deletedAt: null, status: { in: ["active", "maintenance", "unavailable"] } },
       orderBy: { name: "asc" },
     }),
-    listTenantStaff(),
+    listActingTenantStaff(),
     prisma.quote.findMany({
       where: { contactId: booking.contactId, deletedAt: null, ...quoteScope },
       orderBy: { createdAt: "desc" },

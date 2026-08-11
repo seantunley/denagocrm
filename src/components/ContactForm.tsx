@@ -168,16 +168,49 @@ export default function ContactForm({
         title="Ownership & origin"
         description="Route the relationship to the right person and record where it began."
       >
-        {users.length > 0 && (
-          <Field label="Responsible owner">
-            <select name="ownerId" className="input" defaultValue={defaults.ownerId ?? ""}>
+        {/*
+          The owner field is ALWAYS rendered. It used to be `users.length > 0 &&`,
+          which was harmless while the list was every User row on the platform and
+          therefore never empty. Now that it is the staff of one workspace, empty
+          is reachable — and a control that silently disappears is the worst
+          reading of it: "Responsible owner" vanishing between two visits looks
+          like the form has lost a field, or like the contact has lost its owner,
+          rather than like a team with nobody assignable in it.
+
+          Disabled rather than a <select> with no options, which is a broken-
+          looking empty box that explains nothing. Disabled submits no value,
+          which is exactly what the hidden field submitted, so the empty state
+          changes what is SHOWN and not what is SAVED: `resolveAssignableUser`
+          reads a blank `ownerId` as a deliberate "Unassigned". It carries no
+          `name` for the same reason — a name would start submitting a value that
+          no member backs.
+
+          The second way a scoped list bites is on the EDIT form: the current
+          owner may no longer be in it, and a `defaultValue` matching no option
+          makes the browser select the FIRST one, so an ordinary save would hand
+          the contact to whoever sorts first alphabetically — a wrong owner that
+          looks like a deliberate choice. Falling back to the blank option gives
+          that case somewhere honest to land, and the action refuses the id
+          anyway if it is ever posted.
+        */}
+        <Field label="Responsible owner">
+          {users.length === 0 ? (
+            <select className="input" disabled defaultValue="">
+              <option value="">No assignable team members — this contact will be left unassigned</option>
+            </select>
+          ) : (
+            <select
+              name="ownerId"
+              className="input"
+              defaultValue={users.some((user) => user.id === defaults.ownerId) ? defaults.ownerId ?? "" : ""}
+            >
               <option value="">Unassigned</option>
               {users.map((user) => (
                 <option key={user.id} value={user.id}>{user.name}</option>
               ))}
             </select>
-          </Field>
-        )}
+          )}
+        </Field>
         <Field label="Source">
           <select name="source" className="input" defaultValue={defaults.source ?? ""}>
             <option value="">Not specified</option>

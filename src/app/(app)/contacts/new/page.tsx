@@ -11,8 +11,8 @@ import ContactForm from "@/components/ContactForm";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
 import { SectionHeading, Surface } from "@/components/visual-system";
-import { prisma } from "@/lib/db";
 import { fleetPicker } from "@/lib/fleetDirectory";
+import { listActingTenantStaff } from "@/lib/tenantActor";
 import { requirePermission } from "@/lib/permissions";
 
 const nextSteps = [
@@ -24,7 +24,10 @@ const nextSteps = [
 export default async function NewContactPage() {
   await requirePermission("contacts.create");
   const [users, picker] = await Promise.all([
-    prisma.user.findMany({ orderBy: { name: "asc" } }),
+    // The owner picker: staff of THIS tenant, not every User row. `User` is a
+    // global model, so prisma.user.findMany is not tenant-scoped by anything.
+    // Same helper the edit form already uses.
+    listActingTenantStaff(),
     fleetPicker(),
   ]);
 

@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { hasAnyPermission, requireRoute } from "@/lib/permissions";
 import { prisma } from "@/lib/db";
 import { activeTenantPredicate } from "@/lib/tenantPredicate";
-import { listTenantStaff } from "@/lib/tenantActor";
+import { listActingTenantStaff } from "@/lib/tenantActor";
 import { contactName, formatDate, formatDateTime, formatZAR } from "@/lib/format";
 import { computeDue, dueColors, dueLabels } from "@/lib/serviceDue";
 import { computeWarranty, warrantyColors, warrantyLabels } from "@/lib/warranty";
@@ -96,7 +96,7 @@ export default async function FleetDetailPage({ params }: { params: Promise<{ id
       orderBy: { model: "asc" },
       take: 500,
     }),
-    listTenantStaff(),
+    listActingTenantStaff(),
   ]);
 
   const { members, activities, leads, communications, researchNotes, referrals, documents, quotes } = rollup;

@@ -6,7 +6,8 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { basePrisma, prisma } from "@/lib/db";
 import { customerRecordTenantId } from "@/lib/customerRecordTenant";
-import { currentTenantScope } from "@/lib/tenantScope";
+// The portal's own rule, shared with portalExpansion.ts since #471.
+import { portalTenantId } from "@/lib/portalTenant";
 import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { resolveTenantActor } from "@/lib/tenantActor";
 import { sendEmail, isSmtpConfigured } from "@/lib/email";
@@ -81,11 +82,29 @@ async function firstStaffUser() {
   return resolveTenantActor();
 }
 
+/**
+ * The workspace that owns a row the CUSTOMER PORTAL is writing.
+ *
+ * It is the CONTACT's workspace, never the ambient scope and never a default. A
+ * portal request carries an OTP session for a customer, not a staff session, so
+ * there is no acting workspace to resolve — the only honest source is the record
+ * the customer is acting as.
+ *
+ * The previous `currentTenantScope()?.tenantId ?? null` was correct under
+ * enforcement and null everywhere else, because no scope is entered while
+ * enforcement is dormant. Every portal case, notification and profile-change
+ * request has therefore been written tenantless, and would vanish from the
+ * workspace that must answer it the moment enforcement flips on.
+ *
+ * The enforced scope still wins when present: it has already been validated
+ * against this contact, and preferring it keeps one authority rather than two.
+ */
+// Implementation lives in @/lib/portalTenant — portalExpansion.ts needs the same
+// rule, and a second copy is how this codebase ended up with four acting-tenant
+// implementations.
+
 async function createPortalNotification(contactId: string, title: string, body: string, href?: string, kind = "info") {
-  // Every caller resolves getPortalContact()/requirePortalScope() first, which —
-  // under enforcement — enters the contact's tenant scope; ambient here matches
-  // audit.ts's actingTenantId non-user branch. Null when not enforcing (today).
-  const tenantId = currentTenantScope()?.tenantId ?? null;
+  const tenantId = await portalTenantId(contactId);
   await basePrisma.$executeRaw`
     INSERT INTO "PortalNotification" ("id", "tenantId", "contactId", "title", "body", "href", "kind")
     VALUES (${crypto.randomUUID()}, ${tenantId}, ${contactId}, ${title}, ${body}, ${href ?? null}, ${kind})
@@ -276,7 +295,7 @@ export async function submitPortalCase(formData: FormData) {
   if (vehicleId && !(await portalCanAccessVehicle(vehicleId))) throw new Error("Vehicle access denied");
 
   const id = crypto.randomUUID();
-  const tenantId = currentTenantScope()?.tenantId ?? null;
+  const tenantId = await portalTenantId(scope.viewerContactId);
   await basePrisma.$executeRaw`
     INSERT INTO "CustomerCase" ("id", "tenantId", "subject", "description", "type", "contactId", "vehicleId")
     VALUES (${id}, ${tenantId}, ${subject}, ${description}, ${type}, ${scope.viewerContactId}, ${vehicleId})
@@ -300,7 +319,7 @@ export async function submitPortalWarrantyClaim(formData: FormData) {
     data: { vehicleId, contactId: scope.viewerContactId, description, createdById: null },
   });
   const caseId = crypto.randomUUID();
-  const tenantId = currentTenantScope()?.tenantId ?? null;
+  const tenantId = await portalTenantId(scope.viewerContactId);
   await basePrisma.$executeRaw`
     INSERT INTO "CustomerCase" ("id", "tenantId", "subject", "description", "type", "priority", "contactId", "vehicleId", "warrantyClaimId")
     VALUES (${caseId}, ${tenantId}, ${"Warranty claim"}, ${description}, ${"warranty"}, ${"high"}, ${scope.viewerContactId}, ${vehicleId}, ${claim.id})
@@ -324,7 +343,7 @@ export async function requestPortalProfileChange(formData: FormData) {
   };
   const note = str(formData.get("note")) || null;
   const id = crypto.randomUUID();
-  const tenantId = currentTenantScope()?.tenantId ?? null;
+  const tenantId = await portalTenantId(scope.viewerContactId);
   await basePrisma.$executeRaw`
     INSERT INTO "PortalProfileChangeRequest" ("id", "tenantId", "contactId", "changes", "note")
     VALUES (${id}, ${tenantId}, ${scope.viewerContactId}, ${JSON.stringify(changes)}::jsonb, ${note})
@@ -340,7 +359,7 @@ export async function updatePortalPreferences(formData: FormData) {
   const smsServiceUpdates = formData.get("smsServiceUpdates") === "on";
   const emailMarketing = formData.get("emailMarketing") === "on";
 
-  const tenantId = currentTenantScope()?.tenantId ?? null;
+  const tenantId = await portalTenantId(scope.viewerContactId);
   await basePrisma.$transaction(async (tx) => {
     await tx.$executeRaw`
       INSERT INTO "PortalPreference" ("contactId", "tenantId", "emailServiceUpdates", "smsServiceUpdates", "emailMarketing", "updatedAt")
