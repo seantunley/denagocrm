@@ -4,7 +4,7 @@ import crypto from "crypto";
 import { revalidatePath } from "next/cache";
 import { basePrisma, prisma } from "@/lib/db";
 import { getPortalContact } from "@/lib/portal";
-import { portalTenantId } from "@/lib/portalTenant";
+import { portalTenantId, tenantOfCase } from "@/lib/portalTenant";
 import { resolveTenantActor } from "@/lib/tenantActor";
 import {
   portalCanAccessCase,
@@ -222,13 +222,19 @@ export async function addPortalCaseMessage(
     if (!(await portalCanAccessCase(caseId))) return { error: "Case not found." };
     const body = text(formData.get("body"));
     if (body.length < 2) return { error: "Enter a message." };
-    // The message names no tenant column at all, so it lands unowned however the
-    // scope resolves; the case UPDATE names no tenant either, and runs on the
+    // The message named no tenant column at all, so it landed unowned however the
+    // scope resolved; the case UPDATE named no tenant either, and runs on the
     // bypass client. portalCanAccessCase() above is an access check, not a tenant
-    // predicate, and it is the only thing standing between a caseId from the form
-    // post and a write. Both now carry the owner, taken from the CASE — a message
-    // and its status change belong to the thread, not to whoever posted them.
-    const tenantId = await portalTenantId(contact.id);
+    // predicate, and it is the only thing between a caseId from the form post and
+    // a write.
+    //
+    // The owner comes from the CASE, not from the viewer. `CustomerCaseMessage`
+    // has a composite FK `(tenantId, caseId) → CustomerCase(tenantId, id)`, so a
+    // reply stamped with the viewer's tenant against a still-tenantless case
+    // produces `(tenant_denago_cpt, C1)` for a parent of `(NULL, C1)` — Postgres
+    // rejects it and the customer can no longer reply at all. Production is full
+    // of exactly those cases, awaiting backfill.
+    const tenantId = await tenantOfCase(caseId);
     await basePrisma.$transaction([
       basePrisma.$executeRaw`
         INSERT INTO "CustomerCaseMessage" ("id", "tenantId", "caseId", "contactId", "direction", "type", "body")

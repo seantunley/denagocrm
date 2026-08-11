@@ -55,10 +55,18 @@ test("portalExpansion — the LIVE portal surface — inherits too", () => {
   // are live customer-facing writes, not dead code.
   const exp = code("src/app/actions/portalExpansion.ts");
 
+  // This assertion previously demanded that EVERY site resolve
+  // `portalTenantId(contact.id)` — which would have made the correct fix below
+  // (a case's children inherit the case) fail the suite. A test that forbids the
+  // right answer is worse than no test.
   const assignments = exp.match(/const tenantId = [^\n;]+;/g) ?? [];
-  assert.ok(assignments.length >= 4, `expected the portalExpansion write sites, found ${assignments.length}`);
+  assert.ok(assignments.length >= 5, `expected the portalExpansion write sites, found ${assignments.length}`);
   for (const line of assignments) {
-    assert.match(line, /await portalTenantId\(contact\.id\)/, `still resolving its own owner:\n  ${line}`);
+    assert.match(
+      line,
+      /await (portalTenantId\(contact\.id\)|tenantOfCase\(caseId\))/,
+      `a write still resolves its own owner:\n  ${line}`,
+    );
   }
   assert.doesNotMatch(exp, /currentTenantScope\(\)/, "no portal write may read the ambient scope");
 });
@@ -73,6 +81,12 @@ test("the case message names a tenant column at all, and the case update is scop
   // The UPDATE ran on the bypass client keyed only on a caseId from the form.
   // portalCanAccessCase() is an access check, not a tenant predicate.
   assert.match(exp, /WHERE "id" = \$\{caseId\} AND "tenantId" IS NOT DISTINCT FROM \$\{tenantId\}/);
+
+  // And the owner must come from the CASE, not the viewer — the composite FK
+  // (tenantId, caseId) -> CustomerCase(tenantId, id) rejects anything else, so
+  // stamping the viewer's tenant would make every still-unowned ticket
+  // unrepliable.
+  assert.match(exp, /const tenantId = await tenantOfCase\(caseId\);/);
 });
 
 test("there is ONE portal tenant rule, not one per file", () => {
@@ -104,7 +118,15 @@ test("marking messages read cannot cross a workspace boundary", () => {
 
   assert.match(fn, /FROM "CustomerCase" c/, "the update must join the owning case");
   assert.match(fn, /m\."tenantId" IS NOT DISTINCT FROM c\."tenantId"/, "message and case must agree on the owner");
-  // IS NOT DISTINCT FROM, not =, so a legacy pair that are both NULL still matches
-  // and staff do not silently lose the ability to clear old tickets.
+
+  // THE POINT, and what the first version of this test missed: child-matches-
+  // parent is satisfied by every legitimate row, so on its own it excludes
+  // nothing. The update must name the CALLER's workspace. The upstream access
+  // check does not supply one — activeTenantPredicate() returns {} while dormant,
+  // and an owner gets null from getAccessibleCaseIds().
+  assert.match(fn, /const scope = await actingScopeClass\(\);/, "the caller's workspace must be resolved");
+  assert.match(fn, /c\."tenantId" IS NULL OR c\."tenantId" = \$\{actingTenantId\}/, "the case must belong to the acting workspace");
+  assert.match(fn, /if \(scope\.mode === "closed"\) return;/, "a closed scope must touch nothing");
+
   assert.doesNotMatch(fn, /WHERE "caseId" = \$\{caseId\} AND "type" = 'customer' AND "readAt" IS NULL`/, "the unqualified update");
 });

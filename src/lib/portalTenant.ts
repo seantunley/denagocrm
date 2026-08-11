@@ -36,3 +36,28 @@ export async function portalTenantId(contactId: string): Promise<string | null> 
     SELECT "tenantId" FROM "Contact" WHERE "id" = ${contactId} LIMIT 1`;
   return rows[0]?.tenantId ?? null;
 }
+
+/**
+ * The workspace that owns a CASE — verbatim, NULL included.
+ *
+ * A message on a case, and the status change that accompanies it, belong to the
+ * CASE. Not to the customer who posted it, and not to the staff member who
+ * clicked. This distinction is not stylistic: `CustomerCaseMessage` has a
+ * composite foreign key `(tenantId, caseId) → CustomerCase(tenantId, id)`, so a
+ * message claiming any owner other than its case's is not insertable at all.
+ *
+ * That is exactly how an earlier version of this work would have broken replies
+ * to existing tickets. Production is full of tenantless cases awaiting backfill;
+ * stamping a reply with the viewer's tenant would have produced
+ * `(tenant_denago_cpt, C1)` against a parent of `(NULL, C1)` — rejected by
+ * Postgres, and the customer simply cannot reply any more.
+ *
+ * So NULL is returned as NULL. An unowned case keeps unowned children, and a
+ * later backfill claims the whole thread together, which is the only way they
+ * can stay consistent with each other.
+ */
+export async function tenantOfCase(caseId: string): Promise<string | null> {
+  const rows = await basePrisma.$queryRaw<Array<{ tenantId: string | null }>>`
+    SELECT "tenantId" FROM "CustomerCase" WHERE "id" = ${caseId} LIMIT 1`;
+  return rows[0]?.tenantId ?? null;
+}

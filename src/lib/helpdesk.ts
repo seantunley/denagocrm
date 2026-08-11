@@ -1,6 +1,7 @@
 import "server-only";
 import { Prisma } from "@prisma/client";
 import { basePrisma } from "@/lib/db";
+import { actingScopeClass } from "@/lib/actingScope";
 import { getAccessibleCaseIds, type PermissionUser } from "@/lib/permissions";
 import { statusMeta, type Folder } from "@/lib/helpdesk-constants";
 
@@ -274,6 +275,20 @@ export async function listCannedReplies(mailboxId?: string | null) {
  * disable the check in exactly the window it is needed.
  */
 export async function markCustomerMessagesRead(caseId: string) {
+  // The predicate has to name the CALLER's workspace. An earlier version of this
+  // fix only required the message and its case to agree with each other, which
+  // any legitimate row satisfies — a tenant-B message naturally has a tenant-B
+  // case — so it excluded nothing.
+  //
+  // The access check upstream does not close it either: `canAccessCase()` leans on
+  // `activeTenantPredicate()`, which returns `{}` while enforcement is dormant,
+  // and an owner or a `cases.view_all` holder gets `null` from
+  // `getAccessibleCaseIds()`, i.e. unrestricted. So a tenant-A owner opening
+  // /cases/<tenant-B-id> reached this update.
+  const scope = await actingScopeClass();
+  if (scope.mode === "closed") return;
+  const actingTenantId = scope.mode === "tenant" ? scope.tenantId : null;
+
   await basePrisma.$executeRaw`
     UPDATE "CustomerCaseMessage" m
     SET "readAt" = COALESCE(m."readAt", CURRENT_TIMESTAMP)
@@ -282,7 +297,14 @@ export async function markCustomerMessagesRead(caseId: string) {
       AND m."caseId" = ${caseId}
       AND m."type" = 'customer'
       AND m."readAt" IS NULL
-      AND m."tenantId" IS NOT DISTINCT FROM c."tenantId"`;
+      AND m."tenantId" IS NOT DISTINCT FROM c."tenantId"
+      -- The case must belong to the acting workspace. NULL is admitted only
+      -- because production's existing cases are all still unowned pending
+      -- backfill, and refusing them would leave every current ticket permanently
+      -- unread. That branch MUST be deleted once the backfill lands — it is the
+      -- same "unowned means mine" rule removed in #463, kept here only for as
+      -- long as exactly one workspace exists.
+      AND (c."tenantId" IS NULL OR c."tenantId" = ${actingTenantId})`;
 }
 
 export { statusMeta };
