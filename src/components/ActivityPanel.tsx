@@ -103,13 +103,28 @@ export default function ActivityPanel({
         </div>
         <div className="col-span-2 md:col-span-2">
           <label className="label">Assign to</label>
-          <select name="assignedToId" className="input" defaultValue={currentUserId}>
-            {users.map((u) => (
-              <option key={u.id} value={u.id}>
-                {u.name}
-              </option>
-            ))}
-          </select>
+          {/*
+            An empty staff list used to render a <select> with NO options at
+            all — a blank box with nothing in it and a defaultValue matching
+            nothing. That was invisible while the list was every User row on the
+            platform; now that it is the staff of one workspace it is reachable.
+            A disabled select says what is going on, and submits no value, which
+            is what the option-less one submitted too: scheduleActivity reads
+            blank as "assign it to me".
+          */}
+          {users.length === 0 ? (
+            <select className="input" disabled defaultValue="">
+              <option value="">No assignable team members — this will be assigned to you</option>
+            </select>
+          ) : (
+            <select name="assignedToId" className="input" defaultValue={currentUserId}>
+              {users.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
         <label className="flex items-center gap-2 text-sm text-slate-300 pb-2 cursor-pointer">
           <input type="checkbox" name="workshop" className="h-4 w-4" />
@@ -214,13 +229,37 @@ export default function ActivityPanel({
                     </div>
                     <div>
                       <label className="label">Assign to</label>
-                      <select name="assignedToId" className="input" defaultValue={a.assignedTo.id}>
-                        {users.map((u) => (
-                          <option key={u.id} value={u.id}>
-                            {u.name}
-                          </option>
-                        ))}
-                      </select>
+                      {/*
+                        Same empty state as the create form above. The extra
+                        care here is the SECOND way a scoped list bites on an
+                        edit: the current assignee may no longer be in it — they
+                        left the workspace, or were disabled — and a
+                        `defaultValue` matching no option makes the browser
+                        select the FIRST one, so an ordinary save would quietly
+                        hand the task to whoever sorts first alphabetically. The
+                        blank option gives that case somewhere honest to land.
+                        It is not offered as a name, because listing a person
+                        this workspace may not assign to is the disclosure we
+                        just removed.
+                      */}
+                      {users.length === 0 ? (
+                        <select className="input" disabled defaultValue="">
+                          <option value="">No assignable team members — this will be assigned to you</option>
+                        </select>
+                      ) : (
+                        <select
+                          name="assignedToId"
+                          className="input"
+                          defaultValue={users.some((u) => u.id === a.assignedTo.id) ? a.assignedTo.id : ""}
+                        >
+                          <option value="">Assign to me</option>
+                          {users.map((u) => (
+                            <option key={u.id} value={u.id}>
+                              {u.name}
+                            </option>
+                          ))}
+                        </select>
+                      )}
                     </div>
                     <label className="flex items-center gap-2 text-sm text-slate-300 pb-2 cursor-pointer">
                       <input

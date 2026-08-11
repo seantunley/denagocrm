@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
+import { customerRecordTenantId } from "@/lib/customerRecordTenant";
 import { resolveTenantActor } from "@/lib/tenantActor";
 import { logAudit } from "@/lib/audit";
 import { sendEmail } from "@/lib/email";
@@ -116,6 +117,7 @@ export async function notifyRecall(_prev: NotifyResult, formData: FormData): Pro
           body,
           contactId: c.id,
           userId: firstUser.id,
+          tenantId: await customerRecordTenantId({ contactId: c.id }),
         },
       });
     }

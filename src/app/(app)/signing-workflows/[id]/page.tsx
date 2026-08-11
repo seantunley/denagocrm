@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { requireOwner } from "@/lib/auth";
 import { parseGraph, blankWorkflow } from "@/lib/signflow/model";
 import { deleteSignWorkflow } from "@/app/actions/signflow";
-import { listTenantStaff } from "@/lib/tenantActor";
+import { listActingTenantStaff } from "@/lib/tenantActor";
 import SignFlowBuilder from "@/components/signflow/SignFlowBuilder";
 
 export const dynamic = "force-dynamic";
@@ -17,7 +17,7 @@ export default async function SignWorkflowEditor({ params }: { params: Promise<{
     // Scope the approval-assignee picker to THIS tenant's active, non-disabled
     // members, so a workflow can't persist another tenant's (or a disabled) user id
     // onto an ApprovalStep.
-    listTenantStaff(),
+    listActingTenantStaff(),
   ]);
   if (!wf || wf.deletedAt) notFound();
   const graph = parseGraph(wf.graphJson) ?? blankWorkflow();

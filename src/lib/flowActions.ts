@@ -6,6 +6,7 @@
 import crypto from "crypto";
 import { addDays, format } from "date-fns";
 import { prisma } from "./db";
+import { customerRecordTenantId } from "./customerRecordTenant";
 import { getDayAvailability, reserveSlot } from "./bookingSlots";
 import { createIntakeLead } from "./leadIntake";
 import { createLeadRecordIfPipelineReady } from "./leadCreate";
@@ -112,6 +113,7 @@ async function createDemo(source: string, vars: Record<string, string>, match: M
       note: appendMarker([vars.model ? `Model: ${vars.model}` : null, vars.date ? `Preferred: ${vars.date}` : null, ...fileLines(vars)], marker),
       location: vars.location || null, dueDate: new Date(), status: "planned", leadId: lead.id, contactId: who.contactId,
       assignedToId: userId, createdById: userId,
+      tenantId: await customerRecordTenantId({ contactId: who.contactId, leadId: lead.id }),
     },
   });
   return { ok: true };
@@ -179,6 +181,7 @@ export function crmActions(source: string, match: Match) {
           type: "todo", category: "workshop", summary: `Service request (${source}) — ${vars.name || "customer"}`,
           note: appendMarker([vars.service ? `Needs: ${vars.service}` : null, vars.date ? `Preferred: ${vars.date}` : null, ...fileLines(vars)], marker),
           dueDate: new Date(), status: "planned", contactId: who.contactId, leadId: who.leadId, assignedToId: userId, createdById: userId,
+          tenantId: await customerRecordTenantId({ contactId: who.contactId, leadId: who.leadId }),
         },
       });
       await sendPushToAll({ title: "New service request 🔧", body: vars.name || "Customer", url: who.contactId ? `/contacts/${who.contactId}` : "/inbox" }, "bot_handoff").catch(() => {});

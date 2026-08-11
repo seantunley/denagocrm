@@ -41,7 +41,11 @@
     "test:dm-binding": "tsx --tsconfig tsconfig.scripts.json scripts/test-dm-conversation-binding.ts",
     "test:inbox-selection": "tsx --tsconfig tsconfig.scripts.json scripts/test-inbox-thread-selection.ts",
     "test:staff-reply": "tsx --tsconfig tsconfig.scripts.json scripts/test-staff-reply-durability.ts",
-    "test:meta-echo": "tsx --tsconfig tsconfig.scripts.json scripts/test-meta-echo-dedupe.ts"
+    "test:meta-echo": "tsx --tsconfig tsconfig.scripts.json scripts/test-meta-echo-dedupe.ts",
+    "test:tenant-isolation": "tsx --tsconfig tsconfig.harness.json scripts/test-tenant-isolation.ts",
+    "harness:provision": "tsx --tsconfig tsconfig.harness.json scripts/harness/provision-only.ts",
+    "//harness:install-postgres": "embedded-postgres is NOT a dependency: it downloads ~130MB of PostgreSQL server binaries, which every `npm ci` would then pay for, including CI's -- and CI does not need it (it already runs a postgres service and sets TENANT_HARNESS_DATABASE_URL). Installed on demand instead, for local runs with no Docker.",
+    "harness:install-postgres": "npm install --no-save embedded-postgres"
   },
   "dependencies": {
     "@blocknote/core": "0.51.4",

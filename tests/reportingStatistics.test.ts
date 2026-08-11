@@ -109,7 +109,11 @@ const lead = (seed: LeadSeed): spy.Row => {
     assignedToId: null,
     valueCents: 0,
     deletedAt: null,
-    tenantId: null,
+    // OWNED by default, which is what production looks like: migration
+    // 20260722120000_tenant_people_isolation backfilled every legacy NULL and
+    // the audit of 2026-08-10 found no un-owned Lead at all. A fixture defaulting
+    // to NULL would silently test the fallback that no longer exists.
+    tenantId: TENANT,
     updatedAt: seed.createdAt,
     wonAt: null,
     lostAt: null,
@@ -543,7 +547,7 @@ test("no metric is bucketed by the change clock — not one of the four", async 
       lead({ id: "open", createdAt: ago(5) }),
     ],
     JobCard: [
-      { id: "j", tenantId: null, status: "collected", createdAt: ago(9), updatedAt: ago(4), completedAt: ago(4), deletedAt: null },
+      { id: "j", tenantId: TENANT, status: "collected", createdAt: ago(9), updatedAt: ago(4), completedAt: ago(4), deletedAt: null },
     ],
   });
   await stats.rollUpStatistics(NOW);
@@ -1057,16 +1061,29 @@ test("the aggregate names the tenant, so two workspaces' numbers cannot merge", 
   );
 });
 
-test("the founding tenant, and only the founding tenant, owns the legacy un-owned rows", async () => {
-  // Enforcement is DORMANT in every deployment today, so the db.ts guard stamps
-  // nothing and source rows still carry a NULL tenantId. A bare `= $1` would
-  // match none of them and report a live business as having zero of everything;
-  // the founding tenant's predicate therefore admits NULL as well. That is the
-  // platform's existing ownership rule (withTenantWrite, repairsTenantId), not a
-  // loophole — and the strict half is checked in the test above.
+test("an un-owned source row belongs to NOBODY — the founding tenant included", async () => {
+  // THIS ASSERTION USED TO RUN THE OTHER WAY. The founding tenant's predicate was
+  // `("tenantId" = $1 OR "tenantId" IS NULL)`, on the reasoning that enforcement
+  // is dormant, the db.ts guard stamps nothing, and a bare `= $1` would report a
+  // live business as having zero of everything.
+  //
+  // That premise expired. Both source tables were backfilled unconditionally —
+  // Lead by 20260722120000_tenant_people_isolation, JobCard by
+  // 20260722142000_tenant_workshop_isolation — so every row predating tenancy is
+  // already owned, and a NULL row TODAY was written AFTER its backfill by a live
+  // code path. It is not "old", it is "owned by an unknown workspace", which in a
+  // two-tenant world may be t2's. The read-only production audit of 2026-08-10
+  // (PREFLIP-TENANT-AUDIT.md §1) lists every table holding an un-owned row and
+  // neither Lead nor JobCard is among them: nothing is stranded by refusing it.
+  //
+  // The direction is what makes this the safe answer. Excluding an un-owned row
+  // understates one workspace's numbers and is recoverable the moment the row is
+  // stamped; including it folds an unknown workspace's revenue into the founding
+  // tenant's reports, which no later correction can detect.
   spy.reset({
     Lead: [
-      lead({ id: "legacy", createdAt: ago(1), status: "won", valueCents: 12_000, assignedToId: "u1", tenantId: null }),
+      lead({ id: "mine", createdAt: ago(1), status: "won", valueCents: 12_000, assignedToId: "u1" }),
+      lead({ id: "unowned", createdAt: ago(1), status: "won", valueCents: 500_000, assignedToId: "u1", tenantId: null }),
       lead({ id: "theirs", createdAt: ago(1), status: "won", valueCents: 999_000, assignedToId: "u1", tenantId: "t2" }),
     ],
   });
@@ -1074,16 +1091,24 @@ test("the founding tenant, and only the founding tenant, owns the legacy un-owne
   await stats.rollUpStatistics(NOW);
 
   for (const call of spy.calls.filter((call) => call.model === "$queryRaw")) {
+    const text = call.args.text as string;
     assert.match(
-      call.args.text as string,
-      /AND \("tenantId" = \?::text OR "tenantId" IS NULL\)/,
-      "the founding tenant must claim its own un-owned history",
+      text,
+      /AND "tenantId" = \?::text/,
+      "the founding tenant takes the same strict predicate as everyone else",
+    );
+    // NAMED BY COLUMN, deliberately: `"deletedAt" IS NULL` is in every one of
+    // these queries and has to be, so a bare /IS NULL/ here would fail on the
+    // soft-delete filter and blame the tenant predicate.
+    assert.ok(
+      !/"tenantId" IS NULL/.test(text),
+      `no tenant, founding included, may be handed the un-owned rows:\n${text}`,
     );
   }
   assert.equal(
     bucketsFor("deals_won", "day").reduce((sum, row) => sum + Number(row.sumCents), 0),
     12_000,
-    "the legacy row counts and the foreign one does not",
+    "only the founding tenant's own deal counts — not the un-owned one, not t2's",
   );
 });
 
@@ -1096,7 +1121,7 @@ test("a bucket is never written without a tenant, even while enforcement is dorm
   // rebuilds everything from scratch.
   spy.reset({
     Lead: [lead({ id: "a", createdAt: ago(2), status: "won", valueCents: 1_000, assignedToId: "u1" })],
-    JobCard: [{ id: "j", tenantId: null, status: "done", createdAt: ago(2), updatedAt: ago(2), completedAt: ago(2), deletedAt: null }],
+    JobCard: [{ id: "j", tenantId: TENANT, status: "done", createdAt: ago(2), updatedAt: ago(2), completedAt: ago(2), deletedAt: null }],
   });
   await stats.rollUpStatistics(NOW);
 

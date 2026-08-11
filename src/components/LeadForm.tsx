@@ -281,16 +281,36 @@ export default function LeadForm({
             ))}
           </select>
         </Field>
-        {users.length > 0 && (
-          <Field label="Assigned to">
+        {/*
+          The field STAYS when there is nobody to list.
+
+          It used to be rendered only for a non-empty list, which was harmless
+          while the list was every User row on the platform and therefore never
+          empty. Now that it is the staff of one workspace, empty is reachable —
+          and a control that silently disappears is the worst reading of it: the
+          person cannot tell an empty team from a form that has quietly dropped
+          the field, and "Assigned to" vanishing between two visits looks like
+          the lead lost its owner.
+
+          Disabled rather than an empty dropdown, because a <select> with no
+          options is a broken-looking box that says nothing. Disabled submits no
+          value, which is exactly the same thing the hidden field submitted, so
+          what happens on save is unchanged: blank means "assign to me".
+        */}
+        <Field label="Assigned to">
+          {users.length === 0 ? (
+            <select className="input" disabled defaultValue="">
+              <option value="">No assignable team members — this lead will be assigned to you</option>
+            </select>
+          ) : (
             <select name="assignedToId" className="input" defaultValue={defaults.assignedToId ?? ""}>
               <option value="">Assign to me automatically</option>
               {users.map((user) => (
                 <option key={user.id} value={user.id}>{user.name}</option>
               ))}
             </select>
-          </Field>
-        )}
+          )}
+        </Field>
         <Field label="Lead source">
           <select name="source" className="input" defaultValue={defaults.source ?? "manual"}>
             <option value="manual">Manual capture</option>

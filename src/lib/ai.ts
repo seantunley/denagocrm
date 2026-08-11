@@ -2,6 +2,7 @@ import { getSetting } from "./settings";
 import { prisma } from "./db";
 import { logError } from "./errorLog";
 import { recordAiUsage } from "./systemHealth";
+import { inheritedTenantId } from "./tenantWrite";
 
 export async function isAiConfigured(): Promise<boolean> {
   return Boolean(await getSetting("ANTHROPIC_API_KEY"));
@@ -148,7 +149,18 @@ export async function runAutoResearch(): Promise<number> {
     if ("error" in result) continue;
     const researchedAt = new Date();
     await prisma.researchNote.create({
-      data: { body: result.summary, leadId: lead.id, contactId: lead.contactId },
+      // THE LEAD OWNS ITS RESEARCH. This runs on the automations cron, so there
+      // is no session at all to resolve an acting workspace from — and the guard
+      // stamps nothing while enforcement is dormant, so the note was landing
+      // unowned (1 of 23 on production at the 2026-08-10 audit, written after the
+      // July backfill). The lead this note is about is the only thing here that
+      // knows whose it is.
+      data: {
+        tenantId: inheritedTenantId(lead.tenantId),
+        body: result.summary,
+        leadId: lead.id,
+        contactId: lead.contactId,
+      },
     });
     await prisma.lead.update({
       where: { id: lead.id },

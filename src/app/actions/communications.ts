@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
+import { customerRecordTenantId } from "@/lib/customerRecordTenant";
 import {
   CUSTOMER_RECORD_WRITE_PERMISSIONS,
   canAccessContact,
@@ -87,6 +88,10 @@ export async function addCommunication(formData: FormData) {
       contactId,
       leadId,
       userId: user.id,
+      // Communication carries composite tenant foreign keys to Contact and Lead, so
+      // the owner is the customer record's, not the session's. Without this the row
+      // lands unowned while stamping is dormant and disappears at the flip.
+      tenantId: await customerRecordTenantId({ contactId, leadId }),
     },
   });
 

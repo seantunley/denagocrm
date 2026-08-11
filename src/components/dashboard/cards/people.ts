@@ -1,6 +1,6 @@
 import "server-only";
 import { cache } from "react";
-import { prisma } from "@/lib/db";
+import { listActingTenantStaff } from "@/lib/tenantActor";
 
 /**
  * User id → display name, memoised per request.
@@ -24,12 +24,27 @@ import { prisma } from "@/lib/db";
  * anywhere never calls this at all: ./list.tsx only reaches for it when a `user`
  * column is actually on the card.
  *
- * NOTHING SENSITIVE IS FETCHED. Ids and names, which is what every record page,
- * agenda row and assignee picker in the app already shows. The people who may be
- * ASSIGNED work are not a secret; which records they are assigned is, and that
- * is decided by the row scope long before this is called.
+ * Ids and names, which is what every record page, agenda row and assignee picker
+ * in the app already shows — WITHIN A WORKSPACE. Across workspaces it is a staff
+ * directory, and this was `prisma.user.findMany` with no filter at all: `User` is
+ * a global model, so the map held every person on the platform. A dashboard only
+ * renders the names its rows point at, so nothing leaked through the cards
+ * themselves; what leaked was the possibility, and the map is the wrong place to
+ * be relying on a downstream filter for that.
+ *
+ * `listActingTenantStaff` is the acting-workspace list — the same one the
+ * assignee pickers now build from, so a name a card resolves is a name that card
+ * could have offered. It is the ACTING variant deliberately: the background
+ * `listTenantStaff` skips its TenantMember join while enforcement is dormant,
+ * which is every environment today, and would have left this exactly as
+ * unscoped as the query it replaces. A dashboard is always rendered to a
+ * signed-in person, so the session is there to resolve.
+ *
+ * An id with no entry falls back to whatever ./list.tsx shows for an unresolved
+ * user, which is the correct outcome for a row owned by somebody outside this
+ * workspace: no name.
  */
 export const userNames = cache(async (): Promise<ReadonlyMap<string, string>> => {
-  const users = await prisma.user.findMany({ select: { id: true, name: true } });
+  const users = await listActingTenantStaff();
   return new Map(users.map((user) => [user.id, user.name]));
 });

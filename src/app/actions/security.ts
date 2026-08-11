@@ -10,6 +10,7 @@ import { DEFAULT_BRAND, brandForTenant } from "@/lib/tenantBrand";
 import { encryptValue, decryptValue, putSetting } from "@/lib/settings";
 import { GOVERNANCE_TX, logAuditStrict } from "@/lib/audit";
 import { lockGovernanceAdmins } from "@/lib/governanceLock";
+import { isActingTenantMember } from "@/lib/tenantActor";
 import {
   generateTotpSecret,
   totpKeyUri,
@@ -262,9 +263,29 @@ export async function saveSessionPolicy(formData: FormData) {
   });
 }
 
+/**
+ * Every action below takes a `userId` off a form and changes THAT PERSON'S
+ * account. `requireOwner` establishes that the caller administers a workspace; it
+ * says nothing about which one the target belongs to, and `User` is a global
+ * model, so `findUniqueOrThrow({ where: { id } })` answers only "does this human
+ * exist somewhere on the platform" — the same wrong question the assignment
+ * surfaces were asking. A Server Action is a POST endpoint reachable without the
+ * screen that lists the people you may manage, so the roster was never the
+ * control. `assertManageableUser` is.
+ *
+ * Membership, not assignability: a DISABLED member must stay manageable or
+ * "Reactivate" cannot reach its own target.
+ */
+async function assertManageableUser(userId: string): Promise<void> {
+  if (!(await isActingTenantMember(userId))) {
+    throw new ActionRefusal("That person is not a member of this workspace.");
+  }
+}
+
 export async function setUserRole(userId: string, role: "owner" | "member"): Promise<ActionResult> {
   return asActionResult(async () => {
     const owner = await requireOwner();
+    await assertManageableUser(userId);
     await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { id: true } });
     const updated = await basePrisma.$transaction(async (tx) => {
       // Lock on the REQUESTED end state, not on what we read beforehand.
@@ -311,6 +332,7 @@ export async function setUserRole(userId: string, role: "owner" | "member"): Pro
 export async function ownerResetUser2fa(userId: string): Promise<ActionResult> {
   return asActionResult(async () => {
     const owner = await requireOwner();
+    await assertManageableUser(userId);
     const before = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
     await basePrisma.$transaction(async (tx) => {
       const target = await tx.user.update({
@@ -355,6 +377,7 @@ export async function revokeUserSessions(userId: string): Promise<ActionResult> 
   return asActionResult(async () => {
     const owner = await requireOwner();
     if (userId === owner.id) throw new ActionRefusal("Use sign out to end your current session");
+    await assertManageableUser(userId);
     const target = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
     await basePrisma.$transaction(async (tx) => {
       await bumpUserSessionVersion(userId, tx);
@@ -375,6 +398,7 @@ export async function setUserDisabled(userId: string, disabled: boolean): Promis
   return asActionResult(async () => {
     const owner = await requireOwner();
     if (userId === owner.id) throw new ActionRefusal("You cannot disable your own account");
+    await assertManageableUser(userId);
     const target = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
     await basePrisma.$transaction(async (tx) => {
       // Same invariant, same lock, same rule about staleness: ANY disable could

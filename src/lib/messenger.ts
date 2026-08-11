@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { decideEcho } from "./metaEcho";
 import { deleteCommunicationsAndReconcile } from "./conversations";
 import { prisma } from "./db";
+import { customerRecordTenantId } from "./customerRecordTenant";
 import { resolveTenantCredential } from "./settings";
 import { logAudit } from "./audit";
 import { sendPushToAll } from "./push";
@@ -342,6 +343,11 @@ export async function recordInboundDm(
   // something the inbox should announce.
   let insertedAny = false;
   const firstUser = await resolveTenantActor(); // tenant-aware (channel scope); dormant → oldest active user
+  // An inbound webhook has no session to inherit from, and while stamping is dormant
+  // the channel scope is not established either — so the customer record this message
+  // is filed against is what says who owns it. Resolved once for the message and every
+  // one of its attachments; they all point at the same pair.
+  const inboundTenantId = await customerRecordTenantId({ contactId: contact.id, leadId });
   if (firstUser) {
     if (text) {
       // create(), NOT createMany(): db.ts hooks communication.create to resolve
@@ -357,6 +363,7 @@ export async function recordInboundDm(
             contactId: contact.id,
             leadId,
             userId: firstUser.id,
+            tenantId: inboundTenantId,
             ...(key ? { dedupeKey: key } : {}),
           },
         });
@@ -396,6 +403,7 @@ export async function recordInboundDm(
           contactId: contact.id,
           leadId,
           userId: firstUser.id,
+          tenantId: inboundTenantId,
             ...(attKey ? { dedupeKey: attKey } : {}),
           },
         });
@@ -483,6 +491,12 @@ export async function recordDmEcho(
     // recognise this as its own message later, and what makes a redelivered
     // webhook a no-op rather than a third copy.
     messageId: providerMessageId ?? null,
+    // The echo arrives on a webhook: there is no session to act as, and the
+    // `tenantId` resolved above is the OUTBOX partition key (`?? DEFAULT_TENANT_ID`),
+    // which is the founding tenant while enforcement is dormant. A Communication is
+    // a customer record carrying a composite key to Contact, so its owner is the
+    // contact's — not the queue's, and not the founding tenant's by default.
+    tenantId: await customerRecordTenantId({ contactId: contact.id }),
   };
   /**
    * `create`, never `upsert`, and the idempotency comes from catching the

@@ -11,7 +11,7 @@ import { buildInboxThreads } from "@/lib/inboxThreads";
 import { loadInboxComms } from "@/lib/inboxQuery";
 import { deliveryStateForMessages } from "@/lib/botOutbox";
 import { collaborationForThreads } from "@/lib/inboxCollaboration";
-import { listTenantStaff } from "@/lib/tenantActor";
+import { listActingTenantStaff } from "@/lib/tenantActor";
 import { getSetting } from "@/lib/settings";
 import { formatDateTime } from "@/lib/format";
 import { EmptyState, SectionHeading, Surface } from "@/components/visual-system";
@@ -77,7 +77,7 @@ export default async function InboxPage() {
   // Staff and the reply permission are loaded once for every thread's panel.
   const [collaboration, staff, canCollaborate] = await Promise.all([
     collaborationForThreads([...threadList, ...archivedList]),
-    listTenantStaff(),
+    listActingTenantStaff(),
     hasPermission(user, "inbox.reply"),
   ]);
   const collabStaff = staff.map((person) => ({ id: person.id, name: person.name }));

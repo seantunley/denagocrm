@@ -182,7 +182,10 @@ test("the assignee must be a member of the acting tenant's staff", () => {
   // tenant exists, somebody else's.
   const code = src("src/app/actions/conversations.ts");
   const assign = code.slice(code.indexOf("export async function assignConversation"));
-  assert.match(assign, /listTenantStaff\(\)/);
+  // The ACTING list. Assignment here is a signed-in person picking a colleague,
+  // and the background list skips its membership join while enforcement is
+  // dormant — so this check would pass on every user on the platform.
+  assert.match(assign, /listActingTenantStaff\(\)/);
   assert.match(assign, /not a member of your team/i, "and be refused with a reason, not silently");
 });
 
