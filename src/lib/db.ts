@@ -295,9 +295,11 @@ function buildClient(raw: PrismaClient) {
           // be taken here, in halves, and the half that mattered was missing: the row
           // got the thread's id and kept its SUBJECT's tenant, which the composite key
           // `Communication(tenantId, conversationId)` refuses whenever the two differ.
-          // Not wrapped in a try — see attachToConversation for which failure is
-          // best-effort (the lookup) and which must reach the caller (a contradictory
-          // owner, where the INSERT was going to fail anyway).
+          // Not wrapped in a try. attachToConversation swallows exactly one failure —
+          // the search for an existing thread, which leaves the row attached to
+          // nothing and therefore safe — and refuses everything else. A catch here
+          // would put back the wider one review removed, where a refused owner became
+          // an unowned cross-tenant row instead of a failed write.
           const { attachToConversation } = await import("./conversations");
           const conversation = await attachToConversation(args.data);
           const result = await query(args);

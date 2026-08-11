@@ -72,6 +72,9 @@ class ForeignKeyViolation extends Error {
 const tables: Record<string, Row[]> = {};
 let ids = 0;
 
+/** Rows actually written. A table the fake merely touched reads as empty, not absent. */
+const count = (model: string) => (tables[model] ?? []).length;
+
 function reset() {
   for (const key of Object.keys(tables)) delete tables[key];
   ids = 0;
@@ -317,7 +320,7 @@ test("opening a NEW thread still takes the subject's owner, verbatim, including 
   assert.equal(owned.tenantId, OWNER);
 });
 
-/* ── 3. the contradiction ──────────────────────────────────────────── */
+/* ── 3. contradictions on the ATTACH path ──────────────────────────── */
 
 test("a thread and a subject in DIFFERENT workspaces refuse the write rather than launder it", async () => {
   // Genuinely contradictory, and unlike the NULL case there is no value that works:
@@ -338,10 +341,10 @@ test("a thread and a subject in DIFFERENT workspaces refuse the write rather tha
     assert.match(error.message, new RegExp(OTHER));
     return true;
   });
-  assert.equal(tables.communication, undefined, "and nothing may be written on the way to refusing");
+  assert.equal(count("communication"), 0, "and nothing may be written on the way to refusing");
 });
 
-test("a caller that supplied its own thread is never handed another thread's owner", async () => {
+test("a caller that supplied its own thread is answered about THAT thread", async () => {
   reset();
   tables.lead = [{ id: LEAD, tenantId: OWNER }];
   tables.conversation = [
@@ -355,11 +358,109 @@ test("a caller that supplied its own thread is never handed another thread's own
   assert.equal(
     written.tenantId,
     OWNER,
-    "the resolver would have found the legacy thread; its NULL must not reach a row pointing elsewhere",
+    "the search would have returned the legacy thread; a row's owner must come from the row it points at",
   );
 });
 
-/* ── 4. the defect this replaced must not come back ────────────────── */
+test("an UNSTAMPED message pointed at a foreign thread is refused, never written unowned", async () => {
+  // The weak half of the caller-supplied path: with no stamp of its own there is
+  // nothing for the composite key to reject, so the row must not be allowed to stay
+  // unstamped. It inherits the thread's owner and is then refused by its CONTACT
+  // key — the database, holding the line it exists to hold.
+  //
+  // The code-level rule deliberately does not also compare the thread with the
+  // subject. That comparison is `agreedTenantId`, which refuses `[A, NULL]` — and on
+  // this path a NULL thread beside an owned subject is exactly the pair that must
+  // still be writable. Refusing it here would put the outage back. So the attach
+  // path inherits, and cross-parent consistency stays where MATCH SIMPLE can see it:
+  // the child is never NULL, so the keys are never switched off.
+  reset();
+  tables.contact = [{ id: "contact-1", tenantId: OWNER }];
+  tables.conversation = [
+    { id: "conversation-elsewhere", channel: "note", status: "open", tenantId: OTHER, lastMessageAt: 1 },
+  ];
+
+  const data: Row = { type: "note", contactId: "contact-1", conversationId: "conversation-elsewhere", body: "x", userId: "user-1" };
+  await assert.rejects(() => saveNote(data), (error: Error & { code?: string }) => {
+    const refused =
+      error instanceof TenantParentConflictError ||
+      /Communication_tenantId_(contactId|conversationId)_fkey/.test(error.message);
+    assert.ok(refused, `refused for the wrong reason: ${error.message}`);
+    return true;
+  });
+  assert.equal(count("communication"), 0, "an unowned row spanning two workspaces is worse than no row");
+  assert.notEqual(data.tenantId, null, "and it must not have been left NULL — that is what disables both keys");
+});
+
+/* ── 4. the contradiction the CREATE path must not launder ─────────── */
+
+test("a contact and a lead in DIFFERENT workspaces refuse to open a thread at all", async () => {
+  // The laundering review caught. `conversationTenantId` used to read `contactId ?
+  // contact : lead`, stamp the new thread A, and be refused by
+  // `Conversation_tenantId_leadId_fkey`. The old broad catch swallowed that refusal
+  // and let the Communication through with tenantId NULL — which under MATCH SIMPLE
+  // switches BOTH of ITS composite checks off, so `contactId: A's, leadId: B's`
+  // became a cross-tenant row the database was no longer allowed to object to.
+  reset();
+  tables.contact = [{ id: "contact-a", tenantId: OWNER }];
+  tables.lead = [{ id: "lead-b", tenantId: OTHER }];
+
+  // Unstamped: no caller has resolved an owner before the hook, which is the shape
+  // the hook must be correct for on its own.
+  const data: Row = { type: "note", contactId: "contact-a", leadId: "lead-b", body: "x", userId: "user-1" };
+
+  const outcome = await saveNote(data).then(
+    (written) => ({ written }),
+    (error: Error) => ({ error }),
+  );
+
+  // Reported as the row itself, because "missing expected rejection" would hide the
+  // only thing worth seeing: restore the broad catch and this prints
+  // `{ tenantId: null, contactId: 'contact-a', leadId: 'lead-b' }` — an unowned row
+  // spanning two workspaces, with both of its composite checks switched off.
+  if ("written" in outcome) {
+    const { tenantId, contactId, leadId } = outcome.written;
+    // `?? null` because an absent stamp and an explicit NULL reach Postgres as the
+    // same value, and it is the value that disables both keys.
+    assert.fail(
+      `the contradiction was laundered into ${JSON.stringify({ tenantId: tenantId ?? null, contactId, leadId })}`,
+    );
+  }
+  assert.ok(
+    outcome.error instanceof TenantParentConflictError,
+    `refused for the wrong reason: ${outcome.error.message}`,
+  );
+  assert.equal(count("conversation"), 0, "no thread may be opened for a message with no owner to give it");
+  assert.equal(count("communication"), 0, "and above all, no NULL-tenant row spanning two workspaces");
+});
+
+test("the same pair is refused when it is the CONTACT that is unowned", async () => {
+  // [A, NULL] across two SUBJECTS is a contradiction — #475's rule, unchanged. Only
+  // an existing THREAD may hand a message a NULL owner, because there the NULL is
+  // the FK parent's own answer rather than a disagreement between two parents.
+  reset();
+  tables.contact = [{ id: "contact-legacy", tenantId: null }];
+  tables.lead = [{ id: LEAD, tenantId: OWNER }];
+
+  const data: Row = { type: "note", contactId: "contact-legacy", leadId: LEAD, body: "x", userId: "user-1" };
+  await assert.rejects(() => saveNote(data), TenantParentConflictError);
+  assert.equal(count("communication"), 0);
+});
+
+test("subjects that AGREE still open a thread, both of them checked", async () => {
+  // The other side of reading both parents: it must not have made the ordinary
+  // two-parent message harder to write. (That the lead is now read at all is what
+  // the two tests above measure — under `contactId ? contact : lead` neither pair
+  // was a contradiction, because the lead was never looked at.)
+  reset();
+  tables.contact = [{ id: "contact-a", tenantId: OWNER }];
+  tables.lead = [{ id: LEAD, tenantId: OWNER }];
+  const written = await saveNote({ type: "note", contactId: "contact-a", leadId: LEAD, body: "x", userId: "user-1" });
+  assert.equal((tables.conversation ?? [])[0]?.tenantId, OWNER);
+  assert.equal(written.tenantId, OWNER);
+});
+
+/* ── 5. the defects this replaced must not come back ───────────────── */
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const shipped = (rel: string) =>
@@ -383,6 +484,37 @@ test("the message's owner is inherited from the parent row, never invented", () 
   }
   // The resolver has to ASK for the column it decides on.
   assert.match(code, /select: \{ id: true, tenantId: true \}/);
+});
+
+test("the subject rule is agreedTenantId, not a fourth policy written here", () => {
+  const code = shipped("src/lib/conversations.ts");
+  assert.match(code, /return agreedTenantId\(referenced, null\)/, "one rule, imported, for contradictory parents");
+  assert.doesNotMatch(
+    code,
+    /data\.contactId\s*\?\s*await basePrisma\.contact/,
+    "`contact when both are present` silently ignores the lead and stamps a thread the lead's key then refuses",
+  );
+});
+
+test("the catch wraps the SEARCH and nothing else", () => {
+  // The laundering mechanism, pinned. A `try` around find-or-create swallows the
+  // CREATE's refusal too, and a swallowed refusal is an unowned cross-tenant row.
+  const code = shipped("src/lib/conversations.ts");
+  const start = code.indexOf("export async function attachToConversation");
+  const body = code.slice(start, code.indexOf("\n}", start));
+  assert.ok(start > -1 && body.length > 0, "attachToConversation must exist to be pinned");
+
+  assert.equal((body.match(/try \{/g) ?? []).length, 1, "one catch, or the boundary is not a boundary");
+  assert.match(
+    body,
+    /try \{\s*conversation = await findOpenConversation\(data\);\s*\} catch \{/,
+    "the try must contain the search ALONE — anything else inside it is a refusal that can be swallowed",
+  );
+  // Nothing that DECIDES an owner may sit inside the protected region.
+  const guarded = body.slice(body.indexOf("try {"), body.indexOf("} catch {"));
+  for (const decision of [/openConversation\(/, /attachedTenantId\(/, /conversationById\(/]) {
+    assert.doesNotMatch(guarded, decision, "a decision inside the catch is a decision that can be swallowed");
+  }
 });
 
 test("the create hook takes the threading decision once, and before the INSERT", () => {

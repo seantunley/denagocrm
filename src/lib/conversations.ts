@@ -4,7 +4,7 @@ import { basePrisma } from "./db";
 import { currentTenantScope } from "./tenantScope";
 import { tenantEnforcing } from "./tenantEnforcement";
 import { inheritedTenantId } from "./tenantWrite";
-import { attachedTenantId } from "./compositeTenantRules";
+import { agreedTenantId, attachedTenantId } from "./compositeTenantRules";
 
 /**
  * The tenantId the top-level guard (db.ts `scopeArgs`) will FILTER a Conversation
@@ -44,9 +44,10 @@ function conversationFilterTenantId(): string | null {
  *      the same statement. This one matters beyond tidiness: the composite FK
  *      `Communication(tenantId, conversationId) → Conversation(tenantId, id)` is
  *      violated the moment the two disagree, so the message decides.
- *   2. the CONTACT OR LEAD the thread is about, read from the row itself. A
- *      conversation with Denago Cape Town's customer belongs to Denago Cape Town
- *      whichever process happened to receive the message.
+ *   2. the CONTACT AND LEAD the thread is about — BOTH of them, read from the rows
+ *      themselves and put through `agreedTenantId`. A conversation with Denago Cape
+ *      Town's customer belongs to Denago Cape Town whichever process happened to
+ *      receive the message.
  *   3. `inheritedTenantId`'s own ladder — the enforced scope, the channel scope
  *      `withChannelTenantScope` established from the provider endpoint the message
  *      arrived on, and finally the founding tenant.
@@ -69,25 +70,46 @@ function conversationFilterTenantId(): string | null {
  * conversation about an unowned contact is itself unowned, and a later backfill
  * claims the pair together, which is the only way they can stay consistent.
  *
+ * RUNG 2 ASKS BOTH PARENTS, THROUGH THE SHARED RULE. This used to read `contactId ?
+ * contact : lead` — the contact when both were present, the lead ignored. A message
+ * carrying a contact in one workspace and a lead in another therefore opened a
+ * thread stamped with the CONTACT's tenant, which `Conversation(tenantId, leadId) →
+ * Lead(tenantId, id)` then refused. The refusal was correct and its handling was
+ * not: the caller swallowed it and wrote the Communication with a NULL tenant
+ * instead, which under MATCH SIMPLE switches BOTH of that row's composite checks
+ * off — a contradiction the database had caught, laundered into an unowned
+ * cross-tenant row it could no longer object to. That is precisely what #475 made
+ * `agreedTenantId` refuse, so this asks `agreedTenantId`, and the pair is refused
+ * here rather than discovered three statements later.
+ *
+ * NOT `customerRecordTenantId`, which wraps the same rule: its no-parent fallback is
+ * the ACTING tenant, and a conversation is opened by a webhook with no session to
+ * act as. Rungs 1 and 3 are this module's; only the policy is shared.
+ *
  * THIS IS HALF THE RULE, AND ONLY THE CREATE HALF. It settles who owns a thread at
  * the moment it is opened, when the message is the only thing that knows. Once the
  * thread EXISTS the direction reverses and the thread decides — see
- * {@link resolveConversationId}'s return value and `attachedTenantId`. Reading rung
- * 1 as "the message always decides" is what broke note-taking on 2026-08-11.
+ * {@link attachToConversation} and `attachedTenantId`. Reading rung 1 as "the
+ * message always decides" is what broke note-taking on 2026-08-11.
  */
 async function conversationTenantId(data: MessageData): Promise<string | null> {
   if (typeof data.tenantId === "string" && data.tenantId) return data.tenantId;
-  const subject = data.contactId
-    ? await basePrisma.contact.findUnique({
-        where: { id: data.contactId },
-        select: { tenantId: true },
-      })
-    : data.leadId
-      ? await basePrisma.lead.findUnique({ where: { id: data.leadId }, select: { tenantId: true } })
-      : null;
-  // A subject that exists answers for itself, null included — see above.
-  if (subject) return subject.tenantId;
-  return inheritedTenantId(null);
+  const [contact, lead] = await Promise.all([
+    data.contactId
+      ? basePrisma.contact.findUnique({ where: { id: data.contactId }, select: { tenantId: true } })
+      : null,
+    data.leadId
+      ? basePrisma.lead.findUnique({ where: { id: data.leadId }, select: { tenantId: true } })
+      : null,
+  ]);
+  // An id that resolves to no row constrains nothing, and the insert will fail on
+  // its own single-column key — the correct place for that failure to surface.
+  const referenced = [contact, lead]
+    .filter((row): row is { tenantId: string | null } => row != null)
+    .map((row) => row.tenantId);
+  if (referenced.length === 0) return inheritedTenantId(null);
+  // Verbatim when they agree, NULL included; THROWS when they do not.
+  return agreedTenantId(referenced, null);
 }
 
 /** Map a Communication.type to a conversation channel. */
@@ -140,30 +162,64 @@ export type ResolvedConversation = {
 };
 
 /**
- * Find the open conversation a new message belongs to (per contact/lead + channel),
- * creating one if none exists. Returns null for messages with no contact or lead.
- * Uses basePrisma so it never recurses through the Communication create extension.
+ * The open thread this message belongs to, if one already exists. A READ, and
+ * nothing else — see {@link attachToConversation} for why that separation is load
+ * bearing rather than tidy.
+ *
+ * `tenantId` is selected because a reused thread is the case where the message
+ * cannot decide its own owner: this row already has one and the FK says match it.
  */
-export async function resolveConversationId(data: MessageData): Promise<ResolvedConversation | null> {
+async function findOpenConversation(data: MessageData): Promise<ResolvedConversation | null> {
   if (!data.contactId && !data.leadId) return null;
-  const channel = channelForType(data.type);
   const filterTenantId = conversationFilterTenantId();
   const subjectScope = data.contactId ? { contactId: data.contactId } : { leadId: data.leadId };
   const existing = await basePrisma.conversation.findFirst({
     // Reuse only the acting tenant's own open conversation when a tenant is in scope.
-    where: { channel, status: { not: "closed" }, ...(filterTenantId ? { tenantId: filterTenantId } : {}), ...subjectScope },
+    where: {
+      channel: channelForType(data.type),
+      status: { not: "closed" },
+      ...(filterTenantId ? { tenantId: filterTenantId } : {}),
+      ...subjectScope,
+    },
     orderBy: { lastMessageAt: "desc" },
-    // tenantId, because a reused thread is the one case where the message cannot
-    // decide its own owner: this row already has one and the FK says match it.
     select: { id: true, tenantId: true },
   });
-  if (existing) return { id: existing.id, tenantId: existing.tenantId ?? null };
-  // Resolved only on the CREATE branch, so the extra lookup is paid once per thread
-  // rather than once per message.
+  return existing ? { id: existing.id, tenantId: existing.tenantId ?? null } : null;
+}
+
+/**
+ * One conversation, by the id a caller chose for itself. Read through `basePrisma`
+ * and WITHOUT a tenant predicate, the same narrow pre-scope boundary
+ * `customerRecordTenantId` uses for exactly this lookup: it runs before the row's
+ * tenant is known, so a guarded read would have nothing to scope by and, under
+ * enforcement, would fail closed on the very query that decides the scope.
+ *
+ * Reading the row raw is what makes the boundary STRONGER here, not weaker. A
+ * tenant-filtered read answers "not found" for a thread in another workspace, which
+ * teaches the caller nothing and leaves an unstamped message free to attach to it.
+ * The raw owner goes to `attachedTenantId`, which refuses the pair outright.
+ */
+async function conversationById(id: string): Promise<ResolvedConversation | null> {
+  const row = await basePrisma.conversation.findUnique({
+    where: { id },
+    select: { id: true, tenantId: true },
+  });
+  return row ? { id: row.id, tenantId: row.tenantId ?? null } : null;
+}
+
+/**
+ * Open a thread for a message that has none. A WRITE, and it DECIDES AN OWNER — so
+ * it can refuse (`TenantParentConflictError`) and its refusals must not be mistaken
+ * for a lookup that came back empty.
+ */
+async function openConversation(data: MessageData): Promise<ResolvedConversation | null> {
+  if (!data.contactId && !data.leadId) return null;
+  // Resolved only on this branch, so the extra lookup is paid once per thread rather
+  // than once per message.
   const tenantId = await conversationTenantId(data);
   const created = await basePrisma.conversation.create({
     data: {
-      channel,
+      channel: channelForType(data.type),
       subject: data.subject ?? null,
       contactId: data.contactId ?? null,
       leadId: data.leadId ?? null,
@@ -174,6 +230,15 @@ export async function resolveConversationId(data: MessageData): Promise<Resolved
   // The same value that was just written, not a re-read: the caller has to match
   // this row, and a second query could only introduce a way for them to differ.
   return { id: created.id, tenantId };
+}
+
+/**
+ * Find the open conversation a new message belongs to (per contact/lead + channel),
+ * creating one if none exists. Returns null for messages with no contact or lead.
+ * Uses basePrisma so it never recurses through the Communication create extension.
+ */
+export async function resolveConversationId(data: MessageData): Promise<ResolvedConversation | null> {
+  return (await findOpenConversation(data)) ?? (await openConversation(data));
 }
 
 /**
@@ -198,31 +263,60 @@ export async function resolveConversationId(data: MessageData): Promise<Resolved
  * {@link conversationTenantId} is for; from the second message onwards the thread
  * has already decided and this row's job is to agree with it.
  *
- * THE CATCH COVERS THE LOOKUP AND NOTHING ELSE, deliberately. A conversation that
- * cannot be resolved degrades to an unthreaded message: the transcript row is worth
- * more than the projection. A tenant that cannot be resolved is the opposite — it is
- * a decision, and swallowing it would put back the exact stamp the database is about
- * to reject. `attachedTenantId` refuses only a genuine contradiction, where no value
- * would have been accepted anyway.
+ * EXACTLY ONE FAILURE IS SWALLOWED, AND ONLY BECAUSE OF WHAT IT LEAVES BEHIND. If
+ * the search for an existing thread fails, this returns having set NOTHING: the row
+ * goes to the database with no `conversationId`, so there is no conversation key
+ * left for it to violate and its remaining keys are still checked against the
+ * subject's stamp. That is a message without a thread, which is a degradation.
  *
- * Inert under enforcement, by construction: `resolveConversationId` filters reuse to
- * the acting tenant, so the thread it finds already carries the tenant `scopeArgs`
- * stamped a moment earlier.
+ * Every other failure here is REFUSAL and must reach the caller. This wrapped
+ * find-or-create in one `try` until review caught it, and the hole was not the
+ * search — it was the CREATE inside it. An unstamped message carrying a contact in
+ * workspace A and a lead in workspace B makes `conversationTenantId` refuse; the
+ * broad catch turned that refusal into `return null`, and the Communication went on
+ * to be written with `tenantId: NULL, contactId: A's, leadId: B's` — which under
+ * MATCH SIMPLE switches BOTH composite checks off. A contradiction the rules had
+ * caught became an unowned cross-tenant row nothing could object to: the precise
+ * laundering #475 exists to prevent, reintroduced by an over-wide `catch`.
+ *
+ * So the search is caught and the two decisions are not. A conversation insert that
+ * fails for any other reason now fails the message too, and should: it is a write,
+ * the transcript row is about to point at it, and a redelivered webhook or a retried
+ * note is a better outcome than a row that silently threads nowhere.
+ *
+ * Inert under enforcement, by construction: reuse is filtered to the acting tenant,
+ * so the thread found already carries the tenant `scopeArgs` stamped a moment
+ * earlier.
  */
 export async function attachToConversation(data: MessageData): Promise<ResolvedConversation | null> {
-  let conversation: ResolvedConversation | null = null;
+  // A caller that chose its own thread is answered about THAT thread. Reading the
+  // one it actually points at is the only way to inherit or refuse honestly; using
+  // the thread the search would have found would decide this row's owner from a row
+  // it is not attached to. Deliberately not caught: unlike the search below,
+  // returning early here would leave `conversationId` set and the tenant unexamined,
+  // which is the defect this function exists to close.
+  if (data.conversationId) {
+    const chosen = await conversationById(data.conversationId);
+    // An id that matches no row: leave the stamp alone and let the plain
+    // `conversationId → Conversation(id)` key refuse the insert, which it will.
+    if (!chosen) return null;
+    data.tenantId = attachedTenantId(chosen.tenantId, data.tenantId);
+    return chosen;
+  }
+
+  let conversation: ResolvedConversation | null;
   try {
-    conversation = await resolveConversationId(data);
+    conversation = await findOpenConversation(data);
   } catch {
+    // Sets nothing — see above. This is the whole of the best-effort behaviour.
     return null;
   }
+
+  // Past this line nothing is caught: a refused owner is a decision.
+  conversation ??= await openConversation(data);
   if (!conversation) return null;
-  if (!data.conversationId) data.conversationId = conversation.id;
-  // Guarded on the id actually being written, so a caller that supplied a thread of
-  // its own is never handed the owner of a different one.
-  if (data.conversationId === conversation.id) {
-    data.tenantId = attachedTenantId(conversation.tenantId, data.tenantId);
-  }
+  data.conversationId = conversation.id;
+  data.tenantId = attachedTenantId(conversation.tenantId, data.tenantId);
   return conversation;
 }
 
