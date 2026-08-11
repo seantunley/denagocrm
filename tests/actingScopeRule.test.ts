@@ -218,10 +218,16 @@ test("installJourneyTemplates reads and writes the SAME workspace", () => {
   // unscoped read is the same disagreement, on the read side.
   const code = stripped("src/app/actions/journeys.ts");
   const install = code.slice(code.indexOf("export async function installJourneyTemplates"));
-  assert.match(install, /journeyScope\(\)/, "the dedupe read must be scoped to the acting workspace");
+  assert.match(install, /const ownScope = await journeyScope\(\);/, "the acting workspace must be resolved");
   const scopeAt = install.indexOf("journeyScope()");
   const findAt = install.indexOf("prisma.journey.findFirst");
   assert.ok(scopeAt > -1 && findAt > scopeAt, "the scope must be resolved before the check that uses it");
+  // RESOLVING it is not USING it. The first version of this test asserted only that
+  // `journeyScope()` was called, which a `where` clause that never spread the result
+  // satisfied just as happily — the unscoped read survived the check that existed to
+  // catch it. Assert the predicate reaches the query.
+  const query = install.slice(findAt, install.indexOf("if (exists) continue;"));
+  assert.match(query, /\.\.\.ownScope/, "the resolved scope must be spread into the dedupe query itself");
 });
 
 /**
