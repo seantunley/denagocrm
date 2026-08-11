@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { decideBuilderTenant, legacyFlowTenant } from "../src/lib/flowTenantScope";
+import { decideBuilderTenant, flowTenantWhere } from "../src/lib/flowTenantScope";
 import { DEFAULT_TENANT_ID } from "../src/lib/tenant";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -29,7 +29,7 @@ const B = "tenant_second_workspace";
 // ---------------------------------------------------------------------------
 
 type Row = { id: string; tenantId: string | null; name: string };
-type Where = ReturnType<typeof legacyFlowTenant>;
+type Where = ReturnType<typeof flowTenantWhere>;
 
 /** The subset of Prisma `where` semantics these scopes actually use. */
 function matches(row: Row, where: Where & { id?: string }): boolean {
@@ -40,10 +40,17 @@ function matches(row: Row, where: Where & { id?: string }): boolean {
 }
 const select = (rows: Row[], where: Where & { id?: string }) => rows.filter((row) => matches(row, where));
 
-/** Two workspaces, plus a legacy row written before anything stamped a tenant. */
+/**
+ * Two workspaces, plus an UN-OWNED row.
+ *
+ * It is no longer called "legacy", because it cannot be: migration
+ * 20260722146000_tenant_automation_isolation backfilled every BotFlow that
+ * predated tenancy, so a NULL row today was written after that date by an unknown
+ * workspace — possibly B's. Production holds none (PREFLIP-TENANT-AUDIT.md §1).
+ */
 const FLOWS: Row[] = [
   { id: "flow_a", tenantId: A, name: "Founding tenant's live flow" },
-  { id: "flow_legacy", tenantId: null, name: "Written while the guard was dormant" },
+  { id: "flow_unowned", tenantId: null, name: "Written by an unknown workspace" },
   { id: "flow_b", tenantId: B, name: "Second workspace's flow" },
 ];
 
@@ -55,29 +62,43 @@ test("DORMANT enforcement, active workspace B: B sees only B", () => {
   const tenant = decideBuilderTenant({ enforcedTenantId: null, sessionTenantId: B });
   assert.equal(tenant, B, "a dormant request must still resolve to the session's workspace");
 
-  const visible = select(FLOWS, legacyFlowTenant(tenant));
+  const visible = select(FLOWS, flowTenantWhere(tenant));
   assert.deepEqual(visible.map((f) => f.id), ["flow_b"]);
 
   // ...and cannot reach the founding tenant's flow by id, which is how every
   // editor surface addressed one.
-  assert.deepEqual(select(FLOWS, { id: "flow_a", ...legacyFlowTenant(tenant) }), []);
-  assert.deepEqual(select(FLOWS, { id: "flow_legacy", ...legacyFlowTenant(tenant) }), []);
+  assert.deepEqual(select(FLOWS, { id: "flow_a", ...flowTenantWhere(tenant) }), []);
+  assert.deepEqual(select(FLOWS, { id: "flow_unowned", ...flowTenantWhere(tenant) }), []);
   // Its own, by id, still opens.
-  assert.equal(select(FLOWS, { id: "flow_b", ...legacyFlowTenant(tenant) }).length, 1);
+  assert.equal(select(FLOWS, { id: "flow_b", ...flowTenantWhere(tenant) }).length, 1);
 });
 
-test("DORMANT enforcement, active workspace A: the founding tenant keeps the legacy rows", () => {
-  // Filtering strictly would hide every flow an existing install has — which is
-  // exactly how Publish came to be silently dead.
+test("DORMANT enforcement, active workspace A: the founding tenant gets NO un-owned rows either", () => {
+  // This assertion used to run the other way: the founding tenant also claimed
+  // `tenantId IS NULL`, because filtering strictly would have hidden every flow an
+  // existing install had. The backfill and the stamping creates between them
+  // emptied that population — production holds zero un-owned BotFlow rows — so a
+  // NULL row today is somebody else's, and A must not get it.
   const tenant = decideBuilderTenant({ enforcedTenantId: null, sessionTenantId: A });
-  assert.deepEqual(select(FLOWS, legacyFlowTenant(tenant)).map((f) => f.id), ["flow_a", "flow_legacy"]);
+  assert.deepEqual(select(FLOWS, flowTenantWhere(tenant)).map((f) => f.id), ["flow_a"]);
 });
 
 test("a session with no tenant claim still behaves exactly as it did before tenancy", () => {
   // Sessions minted before the `tid` claim existed resolve to null.
   const tenant = decideBuilderTenant({ enforcedTenantId: null, sessionTenantId: null });
   assert.equal(tenant, DEFAULT_TENANT_ID);
-  assert.deepEqual(select(FLOWS, legacyFlowTenant(tenant)).map((f) => f.id), ["flow_a", "flow_legacy"]);
+  assert.deepEqual(select(FLOWS, flowTenantWhere(tenant)).map((f) => f.id), ["flow_a"]);
+});
+
+test("the un-owned flow is reachable by NOBODY, whoever is acting", () => {
+  // Stated as a property over every workspace rather than as three expected
+  // lists, so a rule that quietly re-admitted NULL for anyone is caught.
+  for (const acting of [A, B, "tenant_third"]) {
+    const tenant = decideBuilderTenant({ enforcedTenantId: null, sessionTenantId: acting });
+    for (const row of select(FLOWS, flowTenantWhere(tenant))) {
+      assert.equal(row.tenantId, acting, `${acting} can reach ${row.id}, owned by ${String(row.tenantId)}`);
+    }
+  }
 });
 
 test("an ENFORCED scope wins over the session claim", () => {
@@ -91,16 +112,24 @@ test("a second workspace cannot publish against the founding tenant's Journey", 
   // The publication validator asked "is this Journey active?" with no tenant
   // predicate, so another tenant's active Journey satisfied the check and the flow
   // published cleanly. Journey.tenantId is nullable like BotFlow's, so it takes
-  // the same legacy rule.
+  // the same rule — strict equality, since 20260726200000_journey_tenant_isolation
+  // backfilled every legacy Journey and production holds no un-owned one.
   const JOURNEYS: Row[] = [
     { id: "j_a", tenantId: A, name: "Founding tenant's welcome journey" },
     { id: "j_b", tenantId: B, name: "Second workspace's journey" },
+    { id: "j_unowned", tenantId: null, name: "Written by an unknown workspace" },
   ];
-  const asB = legacyFlowTenant(decideBuilderTenant({ enforcedTenantId: null, sessionTenantId: B }));
+  const asB = flowTenantWhere(decideBuilderTenant({ enforcedTenantId: null, sessionTenantId: B }));
   assert.deepEqual(select(JOURNEYS, { id: "j_a", ...asB }), [], "A's Journey must not validate for B");
   assert.equal(select(JOURNEYS, { id: "j_b", ...asB }).length, 1);
   // And the picker offers only its own, so the id cannot be chosen in the first place.
   assert.deepEqual(select(JOURNEYS, asB).map((j) => j.id), ["j_b"]);
+
+  // The un-owned Journey validates for nobody — including the founding tenant,
+  // which would otherwise let A publish a flow naming a Journey that could be B's.
+  const asA = flowTenantWhere(decideBuilderTenant({ enforcedTenantId: null, sessionTenantId: A }));
+  assert.deepEqual(select(JOURNEYS, { id: "j_unowned", ...asA }), []);
+  assert.deepEqual(select(JOURNEYS, { id: "j_unowned", ...asB }), []);
 });
 
 // ---------------------------------------------------------------------------
@@ -179,7 +208,7 @@ test("no BotFlow access uses a method that cannot carry the tenant predicate", (
 });
 
 test("every BotFlow query names the tenant it is for", () => {
-  const scoped = /await flowScope\(\)|legacyFlowTenant\(/;
+  const scoped = /await flowScope\(\)|flowTenantWhere\(/;
   const unscoped: string[] = [];
   for (const file of flowCallSites()) {
     const code = src(file);
