@@ -7,6 +7,8 @@ import { requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
 import { MAX_BLOB_BYTES, assertOwnedBlob } from "@/lib/storage";
+import { actingScopeClass } from "@/lib/actingScope";
+import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 
 export type UploadedFileMeta = {
   url: string;
@@ -54,7 +56,15 @@ function assertBlobUrl(url: string): void {
  */
 async function resolveUpload(file: UploadedFileMeta) {
   assertBlobUrl(file.url);
-  const owned = await assertOwnedBlob(file.url);
+  // "Ours" is not "yours". The store is ONE store shared by every workspace, so
+  // proving the object is in it says nothing about who owns it: a library manager
+  // in workspace B who has come by a blob URL from workspace A — a forwarded
+  // email, a pasted link, browser history — could register A's file into B's
+  // library and then download it through B's own authorised route. The expected
+  // owner turns the store's pathname into an ownership check.
+  const scope = await actingScopeClass();
+  const expectedTenantId = scope.mode === "tenant" ? scope.tenantId : DEFAULT_TENANT_ID;
+  const owned = await assertOwnedBlob(file.url, expectedTenantId);
   if (owned.size > MAX_BLOB_BYTES) {
     throw new Error(`That file is too large to store (limit ${Math.floor(MAX_BLOB_BYTES / (1024 * 1024))} MB).`);
   }
