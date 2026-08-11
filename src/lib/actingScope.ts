@@ -1,10 +1,12 @@
 import "server-only";
 import { getActiveTenantId } from "./auth";
 import { basePrisma } from "./db";
+import { actingTenantId } from "./actingTenant";
 import { decideActingScope, type ActingScope } from "./actingScopeRule";
 import { DEFAULT_TENANT_ID } from "./tenant";
 import { tenantEnforcing } from "./tenantEnforcement";
 import { TenantScopeError } from "./tenantGuard";
+import { currentTenantScope, runInTenantScope } from "./tenantScope";
 import { currentScopeClass } from "./tenantWrite";
 
 export type { ActingScope };
@@ -73,6 +75,33 @@ export async function actingOwnerTenantId(): Promise<string> {
     throw new TenantScopeError("No tenant scope established for a tenant-owned write");
   }
   return scope.mode === "tenant" ? scope.tenantId : DEFAULT_TENANT_ID;
+}
+
+/**
+ * Bind the ACTING workspace as an ambient scope for one staff operation, so that
+ * everything inside it resolves the same workspace — once, not per call.
+ *
+ * The mirror of `withChannelTenantScope` on the other side of a bot conversation.
+ * The webhook binds the workspace that owns the provider ENDPOINT; this binds the
+ * workspace the person is signed into. Both halves then read the same ambient rung
+ * (see {@link ../botTenant}.`botConversationTenantId`), which is the only way the
+ * queue writer, its idempotency re-read, the takeover and the drain can be moved
+ * together instead of one at a time — the entanglement #473 stopped at.
+ *
+ * NEVER WIDENS OR REPLACES AN EXISTING SCOPE. If one is already bound — under
+ * enforcement, inside a webhook, inside a cron slice — that scope is authoritative
+ * and this is a bare `fn()`. A session must not be able to redirect work that was
+ * already scoped by something that outranks it.
+ *
+ * Resolution failure falls back to the founding tenant rather than throwing:
+ * `getActiveTenantId()` reads cookies and the session registry, which throw where
+ * there is no request at all, and those callers legitimately have no session. The
+ * founding tenant is what they resolved before this existed.
+ */
+export async function withStaffConversationScope<T>(fn: () => Promise<T>): Promise<T> {
+  if (currentTenantScope()) return fn();
+  const tenantId = await actingTenantId().catch(() => DEFAULT_TENANT_ID);
+  return runInTenantScope({ tenantId, system: false }, fn);
 }
 
 export async function withActingTenantWrite<T>(
