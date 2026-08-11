@@ -281,7 +281,7 @@ test("createStage stamps the PARENT PIPELINE's tenant, not the actor's", () => {
     /tenantId: stageTenantId\(\{\s*pipelineTenantId: owner\.tenantId/,
     "the stage's owner must be resolved from its parent pipeline",
   );
-  assert.match(settings, /import \{ stageTenantId \} from "@\/lib\/pipelineTenantRule"/);
+  assert.match(settings, /import \{[^}]*stageTenantId[^}]*\} from "@\/lib\/pipelineTenantRule"/);
 
   // The two wrong answers, each named so neither can be reintroduced as a
   // "simplification". writeTenantId() is null while enforcement is dormant — a
@@ -404,7 +404,7 @@ test("the park-then-place two pass reorderPipelineStages uses does work", () => 
 
 test("moveStage delegates the swap instead of keeping a broken copy of it", () => {
   assert.ok(MOVE.length > 0, "moveStage not found — the slice markers moved");
-  assert.match(MOVE, /await reorderPipelineStages\(stage\.pipelineId, ids\)/);
+  assert.match(MOVE, /await reorderPipelineStages\(pipeline\.id, ids\)/);
   assert.doesNotMatch(
     MOVE,
     /\$transaction\(\[/,
@@ -414,8 +414,10 @@ test("moveStage delegates the swap instead of keeping a broken copy of it", () =
 
   // And it must swap against a neighbour in the SAME pipeline. Reading every
   // stage ordered by `order` interleaves pipelines once there is more than one.
-  assert.match(MOVE, /where: \{ pipelineId: stage\.pipelineId \}/);
-  assert.match(MOVE, /findUnique\(\{\s*where: \{ id \},\s*select: \{ pipelineId: true \}/);
+  // The pipeline is the one the ownership-carrying lookup returned, so bounding the
+  // list by it and bounding it by the boundary are now the same act.
+  assert.match(MOVE, /where: \{ pipelineId: pipeline\.id \}/);
+  assert.match(MOVE, /const pipeline = await findOwnedPipelineForStage\(id\)/);
 });
 
 test("neither stage action READS outside the boundary, not just writes inside it", () => {
@@ -445,12 +447,19 @@ test("neither stage action READS outside the boundary, not just writes inside it
   // moveStage: the gate must sit BEFORE the stage list and before either
   // positional refusal, or a forged id reads another workspace's ordered stage
   // list and is told where in it that stage sits.
-  const gateAt = MOVE.indexOf("await requireOwnedPipeline(stage.pipelineId)");
+  //
+  // It must also be the FIRST thing that touches a row. #466 put the gate above
+  // the list but left an unscoped `findUnique` by the bound id above the gate, and
+  // whether that read RESOLVED then chose between a thrown Error and a refuse() —
+  // one distinguishable bit of "this id exists somewhere". The lookup and the gate
+  // are now one statement; tests/stageLookupOracle.test.ts executes the property.
+  const gateAt = MOVE.indexOf("await findOwnedPipelineForStage(id)");
   assert.ok(gateAt > 0, "moveStage must resolve the parent pipeline through the tenant boundary");
+  assert.doesNotMatch(MOVE, /pipelineStage\.findUnique/, "no unscoped stage read may precede the gate");
   for (const [what, needle] of [
     ["the stage list", "pipelineStage.findMany"],
     ["the position oracle", "already at the end"],
-    ["the reorder", "reorderPipelineStages(stage.pipelineId, ids)"],
+    ["the reorder", "reorderPipelineStages(pipeline.id, ids)"],
   ] as const) {
     const at = MOVE.indexOf(needle);
     assert.ok(at > 0, `moveStage no longer contains ${what} — the markers moved`);
@@ -462,7 +471,7 @@ test("neither stage action READS outside the boundary, not just writes inside it
   const lib = strip(read("src/lib/pipelines.ts"));
   const gate = lib.slice(
     lib.indexOf("async function requireOwnedPipeline"),
-    lib.indexOf("export async function getOwnedPipelineRow"),
+    lib.indexOf("export async function findOwnedPipelineForStage"),
   );
   assert.match(gate, /await pipelineTenantFilter\(\)/, "the gate must build a tenant predicate");
   assert.match(gate, /WHERE "id" = \$\{id\} AND "deletedAt" IS NULL \$\{scope\}/);
