@@ -341,20 +341,26 @@ const TX_CALLBACK = /\b(\w+)\.\$transaction\s*\(\s*(?:async\s+)?(?:\(\s*(\w+)|(\
 /**
  * The bypass-transaction helpers, as a CLOSED LIST of names.
  *
- * Both open their transaction on `basePrisma` and hand the callback a tenantId for
- * it to stamp with — `withTenantWrite` resolves the founding tenant,
- * `withActingTenantWrite` (#473) resolves the ACTING workspace. That is a different
- * ANSWER for the tenantId, not a different client, so a `tx` from either has the
- * same provenance: bypass, with an explicit stamp available but not applied for you.
+ * All three open their transaction on `basePrisma` and hand the callback a tenantId
+ * for it to stamp with — `withTenantWrite` resolves the founding tenant,
+ * `withActingTenantWrite` (#473) resolves the ACTING workspace,
+ * `withBotConversationWrite` resolves the workspace a bot conversation belongs to.
+ * That is a different ANSWER for the tenantId, not a different client, so a `tx`
+ * from any of them has the same provenance: bypass, with an explicit stamp
+ * available but not applied for you.
  *
- * `withActingTenantWrite` did not exist when this sweep was written, so its call
- * sites matched no span and their `tx` fell through to `unknown-client`. That was
- * the correct default — an unrecognised helper must never be assumed guarded — and
- * it is why this stays a list of names rather than a `with\w*TenantWrite` wildcard,
- * which would silently adopt the next helper someone writes before anyone had
- * decided which client it opens on.
+ * Each of the two newer ones fell through to `unknown-client` on the run that
+ * introduced it, before it was named here. That is the correct default — an
+ * unrecognised helper must never be assumed guarded — and it is why this stays a
+ * list of names rather than a `with\w*TenantWrite` wildcard, which would silently
+ * adopt the next helper someone writes before anyone had decided which client it
+ * opens on.
  */
-const TENANT_WRITE_HELPERS = ["withTenantWrite", "withActingTenantWrite"] as const;
+const TENANT_WRITE_HELPERS = [
+  "withTenantWrite",
+  "withActingTenantWrite",
+  "withBotConversationWrite",
+] as const;
 const TENANT_WRITE_CALLBACK = new RegExp(
   String.raw`\b(?:` + TENANT_WRITE_HELPERS.join("|") + String.raw`)\s*(?=[<(])`,
   "g",
