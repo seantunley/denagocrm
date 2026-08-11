@@ -9,6 +9,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 
 /**
  * Research icon on a kanban tile: opens the lead's AI research summary in the
@@ -17,9 +18,11 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 export default function ResearchPopup({
   summary,
   name,
+  toolbar = false,
 }: {
   summary: string;
   name: string;
+  toolbar?: boolean;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -35,10 +38,14 @@ export default function ResearchPopup({
               setOpen(true);
             }}
             onPointerDown={(e) => e.stopPropagation()}
-            className="flex shrink-0 items-center rounded p-0.5 text-sky-300 transition-colors hover:bg-sky-500/15"
+            className={cn(
+              "flex shrink-0 items-center rounded text-sky-300 transition-colors hover:bg-sky-500/15",
+              toolbar ? "h-7 gap-1.5 px-2 text-[10px] font-medium" : "p-0.5",
+            )}
             aria-label="AI research"
           >
             <Search className="size-3.5" />
+            {toolbar && <span>Research</span>}
           </button>
         </TooltipTrigger>
         <TooltipContent>AI research — click to read</TooltipContent>

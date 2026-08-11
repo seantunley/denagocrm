@@ -54,6 +54,28 @@ test("lead card actions share the required-action stage gate", () => {
   assert.match(boardSource, /Copy lead link/);
 });
 
+test("lead cards use one compact toolbar without hiding the salesperson", () => {
+  assert.match(boardSource, /<span>Source<\/span>/);
+  assert.match(boardSource, /<ResearchPopup[^>]+toolbar/);
+  assert.match(boardSource, /<NotesPopup[^>]+toolbar/);
+  assert.match(boardSource, /Action <ArrowUpRight/);
+  assert.equal(
+    boardSource.match(/<MoreHorizontal className=/g)?.length,
+    1,
+    "the toolbar must expose one overflow menu, not a second header ellipsis",
+  );
+  assert.match(
+    boardSource,
+    /max-w-36 break-words text-right[^>]+>[\s\S]*?\{lead\.assignee\}/,
+    "the salesperson name should wrap instead of being truncated",
+  );
+  assert.match(
+    boardSource,
+    /isStale\(lead\.ageDays, staleAfterDays\)/,
+    "the compact stage-age badge must keep the configured per-stage stale rule",
+  );
+});
+
 test("rescheduling a test drive updates the planned activity without replaying stage automations", () => {
   assert.match(leadActionsSource, /findFirst\(\{[\s\S]+type: "test_drive", status: "planned"/);
   // runLeadAutomations is retired; the Journey engine is the one automation

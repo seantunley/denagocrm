@@ -9,6 +9,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 
 /** One PINNED note to surface on a card. */
 export type PinnedNote = {
@@ -30,9 +31,11 @@ export type PinnedNote = {
 export default function NotesPopup({
   notes,
   name,
+  toolbar = false,
 }: {
   notes: PinnedNote[];
   name: string;
+  toolbar?: boolean;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -51,12 +54,16 @@ export default function NotesPopup({
               setOpen(true);
             }}
             onPointerDown={(e) => e.stopPropagation()}
-            className="flex shrink-0 items-center rounded p-0.5 text-orange-300 transition-colors hover:bg-orange-500/15"
+            className={cn(
+              "flex shrink-0 items-center rounded text-orange-300 transition-colors hover:bg-orange-500/15",
+              toolbar ? "h-7 gap-1.5 px-2 text-[10px] font-medium" : "p-0.5",
+            )}
             aria-label={
               sections.length === 1 ? "Pinned note" : `${sections.length} pinned notes`
             }
           >
             <Pin className="size-3.5 fill-current" />
+            {toolbar && <span>Pin</span>}
           </button>
         </TooltipTrigger>
         <TooltipContent

@@ -162,13 +162,23 @@ function SourceIcon({ source }: { source: string }) {
   return <PenLine className="size-3.5 text-muted-foreground" />;
 }
 
-function LeadCard({ lead, dragging, actions, staleAfterDays = null }: { lead: KanbanLead; dragging?: boolean; actions?: ReactNode; staleAfterDays?: number | null }) {
+function LeadCard({
+  lead,
+  dragging,
+  actions,
+  staleAfterDays = null,
+}: {
+  lead: KanbanLead;
+  dragging?: boolean;
+  actions?: ReactNode;
+  staleAfterDays?: number | null;
+}) {
   const opportunity = lead.title !== lead.name && lead.title !== lead.productName ? lead.title : null;
 
   return (
     <div
       className={cn(
-        "group relative overflow-hidden rounded-xl border border-border bg-card p-3.5 shadow-sm transition-all",
+        "group relative overflow-hidden rounded-xl border border-border bg-card p-3 shadow-sm transition-all",
         dragging
           ? "rotate-1 cursor-grabbing shadow-2xl ring-1 ring-primary/50"
           : "cursor-grab hover:-translate-y-px hover:border-primary/35 hover:shadow-lg hover:shadow-black/20",
@@ -177,69 +187,58 @@ function LeadCard({ lead, dragging, actions, staleAfterDays = null }: { lead: Ka
     >
       <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/15 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
 
-      <div className="flex items-start gap-2.5">
+      <div className="flex items-start gap-2">
         <GripVertical
-          className="mt-0.5 size-4 shrink-0 text-muted-foreground/35 transition-colors group-hover:text-muted-foreground"
+          className="mt-0.5 size-3.5 shrink-0 text-muted-foreground/35 transition-colors group-hover:text-muted-foreground"
           aria-hidden="true"
         />
         <div className="min-w-0 flex-1">
-          <Link
-            href={`/leads/${lead.id}`}
-            className="block truncate text-sm font-semibold leading-snug text-foreground transition-colors hover:text-primary"
-            onPointerDown={(event) => event.stopPropagation()}
-          >
-            {lead.name}
-          </Link>
-          {(lead.productName || opportunity) && (
-            <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5">
-              {lead.productName && (
-                <span className="max-w-full truncate rounded-md border border-white/[0.06] bg-white/[0.035] px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                  {lead.productName}
-                  {lead.color ? ` · ${lead.color}` : ""}
-                </span>
-              )}
-              {opportunity && <span className="truncate text-[11px] text-muted-foreground">{opportunity}</span>}
-            </div>
-          )}
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
-          {lead.isNew && (
-            <span className="inline-flex items-center rounded bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-emerald-400 ring-1 ring-emerald-500/25">
-              New
-            </span>
-          )}
-          {lead.notes?.length ? <NotesPopup notes={lead.notes} name={lead.name} /> : null}
-          {lead.research && <ResearchPopup summary={lead.research} name={lead.name} />}
-          <span title={`Source: ${lead.source}`}>
-            <SourceIcon source={lead.source} />
-          </span>
-          {actions}
-        </div>
-      </div>
-
-      <div className="mt-3 flex items-end justify-between gap-3 border-t border-border/70 pt-3">
-        <div className="min-w-0">
-          <p className="text-[9px] font-semibold uppercase tracking-[0.13em] text-muted-foreground/70">Deal value</p>
-          <div className="mt-1 flex items-center gap-1.5">
-            {lead.valueCents > 0 ? (
-              <span className="text-sm font-semibold tabular-nums text-foreground">{formatZAR(lead.valueCents)}</span>
-            ) : (
-              <span className="text-xs text-muted-foreground/50">Not estimated</span>
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+            <Link
+              href={`/leads/${lead.id}`}
+              className="break-words text-sm font-semibold leading-snug text-foreground transition-colors hover:text-primary"
+              onPointerDown={(event) => event.stopPropagation()}
+            >
+              {lead.name}
+            </Link>
+            {lead.productName && (
+              <span className="max-w-full truncate rounded-md border border-white/[0.06] bg-white/[0.035] px-1.5 py-0.5 text-[9px] font-medium leading-none text-muted-foreground">
+                {lead.productName}
+                {lead.color ? ` · ${lead.color}` : ""}
+              </span>
             )}
-            {(lead.quantity ?? 1) > 1 && (
-              <span
-                className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-bold leading-none text-amber-300 ring-1 ring-amber-500/30"
-                title={`${lead.quantity} units — bigger deal`}
-              >
-                ×{lead.quantity}
+            {lead.isNew && (
+              <span className="inline-flex items-center rounded bg-emerald-500/15 px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-wide text-emerald-400 ring-1 ring-emerald-500/25">
+                New
               </span>
             )}
           </div>
+          {opportunity && <p className="mt-0.5 truncate text-[10px] text-muted-foreground">{opportunity}</p>}
+        </div>
+      </div>
+
+      <div className="mt-2 flex min-w-0 items-center justify-between gap-2 border-t border-border/60 pt-2">
+        <div className="flex min-w-0 items-center gap-1.5">
+          {lead.valueCents > 0 ? (
+            <span className="text-sm font-semibold tabular-nums text-foreground">{formatZAR(lead.valueCents)}</span>
+          ) : (
+            <span className="text-xs text-muted-foreground/50">Not estimated</span>
+          )}
+          {(lead.quantity ?? 1) > 1 && (
+            <span
+              className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-bold leading-none text-amber-300 ring-1 ring-amber-500/30"
+              title={`${lead.quantity} units — bigger deal`}
+            >
+              ×{lead.quantity}
+            </span>
+          )}
         </div>
         {lead.assignee && (
-          <div className="flex shrink-0 items-center gap-1.5" title={`Assigned to ${lead.assignee}`}>
-            <span className="hidden max-w-20 truncate text-[10px] text-muted-foreground xl:block">{lead.assignee}</span>
-            <Avatar className="size-6">
+          <div className="flex min-w-0 shrink items-center justify-end gap-1.5" title={`Assigned to ${lead.assignee}`}>
+            <span className="max-w-36 break-words text-right text-[10px] leading-tight text-muted-foreground">
+              {lead.assignee}
+            </span>
+            <Avatar className="size-5 shrink-0">
               <AvatarFallback className="bg-primary/15 text-[8px] font-bold text-primary">
                 {initials(lead.assignee)}
               </AvatarFallback>
@@ -248,55 +247,52 @@ function LeadCard({ lead, dragging, actions, staleAfterDays = null }: { lead: Ka
         )}
       </div>
 
-      <div className="mt-3 rounded-lg border border-border/70 bg-background/30 px-2.5 py-2">
+      <div className="mt-2 flex min-w-0 items-center gap-1.5 text-[10px]">
         {lead.nextStep ? (
-          <div className="flex items-start gap-2">
+          <div className="flex min-w-0 flex-1 items-center gap-1.5 text-muted-foreground">
             <CalendarClock
-              className={cn("mt-0.5 size-3.5 shrink-0", lead.nextStep.overdue ? "text-red-300" : "text-primary")}
+              className={cn("size-3.5 shrink-0", lead.nextStep.overdue ? "text-red-300" : "text-primary")}
             />
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-[11px] font-medium text-foreground">{lead.nextStep.summary}</p>
-              <p
-                className={cn(
-                  "mt-0.5 text-[10px]",
-                  lead.nextStep.overdue ? "font-medium text-red-300" : "text-muted-foreground",
-                )}
-              >
-                {lead.nextStep.when}
-              </p>
-            </div>
+            <span
+              className={cn("truncate font-medium", lead.nextStep.overdue && "text-red-300")}
+              title={lead.nextStep.summary}
+            >
+              {lead.nextStep.summary}
+            </span>
+            <span className={cn("shrink-0", lead.nextStep.overdue && "font-medium text-red-300")}>
+              {lead.nextStep.when}
+            </span>
           </div>
         ) : (
-          <div className="flex items-center gap-2 text-[10px] text-amber-300">
-            <CircleAlert className="size-3.5" />
-            No next step scheduled
+          <div className="flex min-w-0 flex-1 items-center gap-1.5 text-amber-300">
+            <CircleAlert className="size-3.5 shrink-0" />
+            <span className="truncate">No next step</span>
           </div>
+        )}
+        {isStale(lead.ageDays, staleAfterDays) && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="flex shrink-0 items-center gap-1 rounded-md bg-amber-500/10 px-1.5 py-0.5 font-medium text-amber-300">
+                <Hourglass className="size-3" />
+                {lead.ageDays}d
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>{lead.ageDays} days in stage — move this opportunity forward or close it</TooltipContent>
+          </Tooltip>
         )}
       </div>
 
-      {lead.signing && (
-        <div className="mt-2 flex items-center gap-1.5 rounded-lg border border-amber-500/15 bg-amber-500/[0.07] px-2.5 py-2 text-[10px] font-medium text-amber-300">
-          <PenLine className="size-3.5 shrink-0" />
-          <span className="truncate">{lead.signing.label}</span>
-        </div>
-      )}
-
-      <div className="mt-2.5 flex min-w-0 items-center justify-between gap-2">
-        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-          {isStale(lead.ageDays, staleAfterDays) && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="flex items-center gap-1 rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-300">
-                  <Hourglass className="size-3" />
-                  {lead.ageDays} days in stage
-                </span>
-              </TooltipTrigger>
-              <TooltipContent>Move this opportunity forward or close it</TooltipContent>
-            </Tooltip>
+      {(lead.signing || lead.testDrive) && (
+        <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-1.5">
+          {lead.signing && (
+            <span className="flex min-w-0 items-center gap-1 rounded-md bg-amber-500/[0.07] px-1.5 py-1 text-[9px] font-medium text-amber-300 ring-1 ring-amber-500/15">
+              <PenLine className="size-3 shrink-0" />
+              <span className="truncate">{lead.signing.label}</span>
+            </span>
           )}
           {lead.testDrive && (
             <>
-              <span className="inline-flex items-center gap-1 rounded-md bg-sky-500/10 px-1.5 py-0.5 text-[11px] text-sky-300 ring-1 ring-sky-500/20">
+              <span className="inline-flex items-center gap-1 rounded-md bg-sky-500/10 px-1.5 py-1 text-[9px] text-sky-300 ring-1 ring-sky-500/20">
                 <Car className="size-3" />
                 {lead.testDrive.when}
               </span>
@@ -310,13 +306,33 @@ function LeadCard({ lead, dragging, actions, staleAfterDays = null }: { lead: Ka
             </>
           )}
         </div>
-        <Link
-          href={`/leads/${lead.id}`}
-          onPointerDown={(event) => event.stopPropagation()}
-          className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-primary hover:text-primary/80"
-        >
-          Open <ArrowUpRight className="size-3" />
-        </Link>
+      )}
+
+      <div
+        className="mt-2 flex min-w-0 items-center gap-0.5 rounded-lg border border-border/60 bg-background/35 p-1"
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="flex h-7 min-w-0 items-center gap-1.5 rounded px-2 text-[10px] font-medium text-muted-foreground">
+              <SourceIcon source={lead.source} />
+              <span>Source</span>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>Source: {lead.source}</TooltipContent>
+        </Tooltip>
+        {lead.research && <ResearchPopup summary={lead.research} name={lead.name} toolbar />}
+        {lead.notes?.length ? <NotesPopup notes={lead.notes} name={lead.name} toolbar /> : null}
+        <div className="ml-auto flex shrink-0 items-center gap-0.5">
+          <Link
+            href={`/leads/${lead.id}`}
+            className="inline-flex h-7 items-center gap-1 rounded-md bg-primary/10 px-2 text-[10px] font-semibold text-primary transition-colors hover:bg-primary/15"
+          >
+            Action <ArrowUpRight className="size-3" />
+          </Link>
+          {actions}
+        </div>
       </div>
     </div>
   );
@@ -453,8 +469,9 @@ function LeadActionsButton({
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          className="grid size-6 place-items-center rounded-md text-muted-foreground opacity-70 hover:bg-muted hover:text-foreground group-hover:opacity-100"
+          className="grid size-7 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           aria-label={`Actions for ${lead.name}`}
+          title="More lead actions"
           onPointerDown={(event) => event.stopPropagation()}
           onClick={(event) => event.stopPropagation()}
         >
