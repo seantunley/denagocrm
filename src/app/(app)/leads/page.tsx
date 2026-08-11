@@ -12,6 +12,9 @@ import { getDailyForecast } from "@/lib/weather";
 import { listTenantStaff } from "@/lib/tenantActor";
 import { getTimelinePins } from "@/lib/timelinePins";
 import { stageJourneyNames } from "@/lib/journeyStageBadges";
+import { listActiveSalesPipelines, listPipelineStages } from "@/lib/pipelines";
+import PipelineSwitcher, { ALL_PIPELINES } from "@/components/PipelineSwitcher";
+import PipelineSummary, { type PipelineSummaryRow } from "@/components/PipelineSummary";
 import KanbanBoard, { type KanbanStage } from "@/components/KanbanBoard";
 import ModalTrigger from "@/components/Modal";
 import LeadForm from "@/components/LeadForm";
@@ -27,7 +30,11 @@ type PlannedActivityRow = {
   type: string;
 };
 
-export default async function LeadsPage() {
+export default async function LeadsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ pipeline?: string }>;
+}) {
   const now = new Date();
   // A GUARD, not a render check. This is the leads surface, and it used to run on
   // whatever getCurrentUser() returned: any signed-in user — a workshop tech, a
@@ -63,8 +70,27 @@ export default async function LeadsPage() {
     hasPermission(currentUser, "leads.mark_won"),
     hasPermission(currentUser, "leads.mark_lost"),
   ]);
+  // A Kanban has ONE pipeline as its operating context. Reading every stage
+  // regardless of pipeline put a Discovery column from Sales next to a Triage
+  // column from Service, in one board, with drag between them — a move that means
+  // nothing. The selector chooses the context; "All pipelines" is deliberately a
+  // read-only summary rather than a mixed board.
+  const { pipeline: requestedPipeline } = await searchParams;
+  const pipelines = await listActiveSalesPipelines();
+  const allPipelines = requestedPipeline === ALL_PIPELINES;
+  const activePipeline = allPipelines
+    ? null
+    : pipelines.find((p) => p.id === requestedPipeline) ?? pipelines[0] ?? null;
+  // Per-stage staleAfterDays lives on the PipelineStage row and is not in the
+  // Prisma model, so it comes through the raw helper the rest of the pipeline
+  // code already uses.
+  const stageMeta = new Map(
+    (activePipeline ? await listPipelineStages(activePipeline.id) : []).map((row) => [row.id, row]),
+  );
+
   const [stages, products, contacts, users, automationRulesByStage] = await Promise.all([
     prisma.pipelineStage.findMany({
+      where: activePipeline ? { id: { in: [...stageMeta.keys()] } } : { id: { in: [] } },
       orderBy: { order: "asc" },
       include: {
         leads: {
@@ -77,7 +103,9 @@ export default async function LeadsPage() {
             deletedAt: null,
             ...(accessibleLeadIds ? { id: { in: accessibleLeadIds } } : {}),
           },
-          orderBy: { createdAt: "desc" },
+          // Position is the deliberate in-stage priority; createdAt only breaks
+          // ties for rows that have never been ordered by hand.
+          orderBy: [{ position: "asc" }, { createdAt: "desc" }],
           include: {
             product: true,
             assignedTo: true,
@@ -216,11 +244,43 @@ export default async function LeadsPage() {
   const testDriveStage =
     stages.find((stage) => stage.entryAction === "book_test_drive") ?? null;
 
+  /* The aggregated view: one row per pipeline with its open count and value.
+     Computed only when it is being shown, so the ordinary board pays nothing. */
+  const pipelineSummaries: PipelineSummaryRow[] = allPipelines
+    ? await Promise.all(
+        pipelines.map(async (pipeline) => {
+          const stageIds = (await listPipelineStages(pipeline.id)).map((row) => row.id);
+          const rows = stageIds.length
+            ? await prisma.lead.findMany({
+                where: {
+                  stageId: { in: stageIds },
+                  status: "open",
+                  deletedAt: null,
+                  ...(accessibleLeadIds ? { id: { in: accessibleLeadIds } } : {}),
+                },
+                select: { valueCents: true },
+              })
+            : [];
+          return {
+            id: pipeline.id,
+            name: pipeline.name,
+            stageCount: stageIds.length,
+            openCount: rows.length,
+            openValueCents: rows.reduce((sum, row) => sum + row.valueCents, 0),
+          };
+        }),
+      )
+    : [];
+
   const boardStages: KanbanStage[] = stages.map((stage) => ({
     id: stage.id,
     name: stage.name,
     color: stage.color,
     entryAction: stage.entryAction ?? null,
+    // The board had its own global notion of "stale". The stage already carries
+    // one, configured per stage, and a 3-day Qualification is not a 30-day
+    // Negotiation — so health comes from the configuration, not a constant.
+    staleAfterDays: stageMeta.get(stage.id)?.staleAfterDays ?? null,
     automationRules: automationRulesByStage.get(stage.id) ?? [],
     leads: stage.leads.map((lead) => {
       const nextActivity = nextActivityByLead.get(lead.id);
@@ -309,6 +369,10 @@ export default async function LeadsPage() {
         title="Leads"
         description={`${openCount} open · ${formatZAR(totalOpenValue)} in pipeline`}
       >
+        <PipelineSwitcher
+          pipelines={pipelines.map((p) => ({ id: p.id, name: p.name, isDefault: p.isDefault }))}
+          activeId={activePipeline?.id ?? null}
+        />
         <Button asChild variant="ghost" size="sm">
           <Link href="/leads/closed">
             <Trophy className="size-4" />
@@ -359,12 +423,21 @@ export default async function LeadsPage() {
           />
         </ModalTrigger>
       </PageHeader>
-      <KanbanBoard
-        stages={boardStages}
-        products={products.map((product) => ({ id: product.id, name: product.name }))}
-        users={users.map((user) => ({ id: user.id, name: user.name }))}
-        permissions={{ canChangeStage, canAssign, canManageActivities, canMarkWon, canMarkLost }}
-      />
+      {allPipelines ? (
+        /* Deliberately a SUMMARY, not a board. Mixing stages from different
+           pipelines into one draggable surface is the defect this replaces: a
+           Discovery column from Sales beside a Triage column from Service, with a
+           drag between them that means nothing. */
+        <PipelineSummary pipelines={pipelineSummaries} />
+      ) : (
+        <KanbanBoard
+          stages={boardStages}
+          products={products.map((product) => ({ id: product.id, name: product.name }))}
+          users={users.map((user) => ({ id: user.id, name: user.name }))}
+          permissions={{ canChangeStage, canAssign, canManageActivities, canMarkWon, canMarkLost }}
+          currentUserId={currentUser.id}
+        />
+      )}
     </div>
   );
 }

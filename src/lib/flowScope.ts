@@ -2,7 +2,9 @@ import "server-only";
 import { DEFAULT_TENANT_ID } from "./tenant";
 import { writeTenantId } from "./tenantWrite";
 import { actingTenantId } from "./actingTenant";
-import { legacyFlowTenant } from "./flowTenantScope";
+// `flowTenantWhere` is #463's rename of `legacyFlowTenant` — the old name became a
+// lie once the rule stopped being a legacy allowance.
+import { flowTenantWhere } from "./flowTenantScope";
 
 /**
  * The tenant a RUNTIME read is for — a webhook answering a customer.
@@ -63,8 +65,8 @@ export async function builderTenantId(): Promise<string> {
  * `update` or `delete`, which take a unique selector and cannot carry the tenant
  * predicate with it.
  */
-export async function flowScope(): Promise<ReturnType<typeof legacyFlowTenant>> {
-  return legacyFlowTenant(await builderTenantId());
+export async function flowScope(): Promise<ReturnType<typeof flowTenantWhere>> {
+  return flowTenantWhere(await builderTenantId());
 }
 
 /**
@@ -78,9 +80,9 @@ export async function flowScope(): Promise<ReturnType<typeof legacyFlowTenant>> 
  * because another tenant's active Journey satisfied the check.
  *
  * Journey.tenantId is nullable for the same reason BotFlow's is, so it takes the
- * same legacy rule: the founding tenant owns the untagged rows, a second
- * workspace sees only its own.
+ * same rule — which is now strict equality for every tenant, the founding one
+ * included. See flowTenantScope.ts.
  */
-export async function journeyScope(): Promise<ReturnType<typeof legacyFlowTenant>> {
-  return legacyFlowTenant(await builderTenantId());
+export async function journeyScope(): Promise<ReturnType<typeof flowTenantWhere>> {
+  return flowTenantWhere(await builderTenantId());
 }

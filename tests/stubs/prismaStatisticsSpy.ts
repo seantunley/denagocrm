@@ -259,12 +259,14 @@ function extract(sql: string, pattern: RegExp, what: string): RegExpMatchArray {
  * enforcement is on, which is the whole point — so its absence throws here
  * rather than quietly widening the result set.
  *
- * Two accepted shapes, and the difference between them is the fix:
- *   `("tenantId" = ? OR "tenantId" IS NULL)` — the FOUNDING tenant, which also
- *     owns the legacy un-owned rows.
- *   `"tenantId" = ?`                         — everyone else. STRICT: a second
- *     workspace can never absorb a NULL-tenant row.
- * Either way the bound tenant value is the last one.
+ * The rollup emits exactly ONE shape today: `"tenantId" = ?`, strict, for every
+ * tenant including the founding one. The permissive form
+ * `("tenantId" = ? OR "tenantId" IS NULL)` is still INTERPRETED here, and
+ * deliberately so — it is the rule the rollup used to emit, and reproducing it
+ * faithfully means reinstating it makes an un-owned row appear in somebody's
+ * BUCKET, which is the real symptom, rather than raising a complaint about
+ * unexpected SQL. `reportingStatistics.test.ts` asserts on the shape; this
+ * evaluates it. Either way the bound tenant value is the last one.
  */
 function tenantFilter(sql: string, values: any[]): (row: Row) => boolean {
   const foundingForm = /AND \("tenantId" = \?::text OR "tenantId" IS NULL\)/.test(sql);

@@ -23,6 +23,7 @@ import {
   getLeadPipeline,
   getPipelineStage,
   listPipelineStages,
+  type PipelineStageRow,
 } from "@/lib/pipelines";
 
 function leadData(formData: FormData) {
@@ -93,11 +94,36 @@ async function defaultOpenStageId() {
   return stage.id;
 }
 
-async function validateOpenStage(stageId: string) {
+/**
+ * The stage a move is targeting, or the REASON it cannot be — as a value.
+ *
+ * Next's guidance for Server Functions is explicit: "avoid using try/catch blocks
+ * and throw errors. Instead, model expected errors as return values."
+ * (node_modules/next/dist/docs/01-app/01-getting-started/10-error-handling.md,
+ * "Handling expected errors"). A stage that has been deleted, or one that is
+ * closed, is an expected outcome of dragging a card on a board somebody else may
+ * have reconfigured — not an exception.
+ *
+ * The throwing wrapper below stays for the actions that run inside
+ * `asActionResult`, which turns a refusal back into a value at the boundary.
+ */
+async function resolveOpenStage(stageId: string): Promise<{ stage: PipelineStageRow } | { error: string }> {
   const stage = await getPipelineStage(stageId);
-  if (!stage) throw new Error("Selected pipeline stage does not exist");
-  if (stage.isClosed) throw new Error("Use Mark won or Mark lost instead of creating or dragging into a closed stage");
-  return stage;
+  if (!stage) return { error: "Selected pipeline stage does not exist" };
+  if (stage.isClosed) {
+    return { error: "Use Mark won or Mark lost instead of creating or dragging into a closed stage" };
+  }
+  return { stage };
+}
+
+async function validateOpenStage(stageId: string) {
+  const resolved = await resolveOpenStage(stageId);
+  // ActionRefusal, not a bare Error: both messages are written to be READ, and
+  // `classifyFailure` shows a refusal verbatim while a bare Error is replaced
+  // with the generic "did not complete cleanly" line. saveLead already raises the
+  // identical pipeline-permission message this way.
+  if ("error" in resolved) throw new ActionRefusal(resolved.error);
+  return resolved.stage;
 }
 
 export async function createLead(formData: FormData) {
@@ -271,16 +297,33 @@ export async function updateLead(id: string, formData: FormData) {
   });
 }
 
-export async function moveLead(leadId: string, stageId: string) {
+/**
+ * Move a lead to another stage, reporting a refusal AS A VALUE.
+ *
+ * This threw. Every other action the Kanban calls — `moveLeadToTestDrive`,
+ * `assignLead`, `convertLeadToContact` — already returns `{ ok, error }`, and the
+ * board reads `result.error`; `moveLead` was the only one out of step, and the
+ * optimistic-move rollback added on this branch is the first code that tries to
+ * SHOW what it produced. Next's own guidance is the same
+ * (`node_modules/next/dist/docs/01-app/01-getting-started/10-error-handling.md`:
+ * expected errors are return values, not throws), and a permission refusal is the
+ * textbook expected error. A thrown message is also liable to reach the browser
+ * as an opaque digest in a production build, which would make the rollback toast
+ * read out a hash — but the convention and the inconsistency settle it on their
+ * own.
+ */
+export async function moveLead(leadId: string, stageId: string): Promise<{ ok: boolean; error?: string }> {
   const user = await requireLeadAccess(leadId, "leads.change_stage");
   const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
   const currentScope = await getLeadPipeline(leadId);
-  const targetStage = await validateOpenStage(stageId);
+  const resolved = await resolveOpenStage(stageId);
+  if ("error" in resolved) return { ok: false, error: resolved.error };
+  const targetStage = resolved.stage;
   if (currentScope && currentScope.pipelineId !== targetStage.pipelineId && !(await hasPermission(user, "leads.change_pipeline"))) {
-    throw new Error("You do not have permission to move leads between pipelines");
+    return { ok: false, error: "You do not have permission to move leads between pipelines" };
   }
   if (targetStage.entryAction === "book_test_drive") {
-    throw new Error("This stage requires test-drive booking details");
+    return { ok: false, error: "This stage requires test-drive booking details" };
   }
   const lead = await prisma.lead.update({
     where: { id: leadId },
@@ -319,6 +362,7 @@ export async function moveLead(leadId: string, stageId: string) {
   await emitLeadJourneyEvent("stage_entered", leadId);
   revalidatePath("/leads");
   revalidatePath("/forecast");
+  return { ok: true };
 }
 
 export async function moveLeadToTestDrive(
@@ -333,7 +377,12 @@ export async function moveLeadToTestDrive(
   const currentScope = await getLeadPipeline(leadId);
   if (!currentScope) return { ok: false, error: "Lead not found." };
   const changingStage = currentScope.stageId !== stageId;
-  const targetStage = await validateOpenStage(stageId);
+  // Same convention as everything else this function returns: a deleted or closed
+  // target stage is an expected outcome, and it reached the board as a generic
+  // "Something went wrong" only because it was thrown from here.
+  const resolved = await resolveOpenStage(stageId);
+  if ("error" in resolved) return { ok: false, error: resolved.error };
+  const targetStage = resolved.stage;
   if (
     currentScope.pipelineId !== targetStage.pipelineId &&
     !(await hasPermission(user, "leads.change_pipeline"))
