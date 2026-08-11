@@ -4,6 +4,7 @@ import crypto from "crypto";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
+import { agreedTenantId } from "@/lib/compositeTenantRules";
 import { canAccessQuote, requirePermission } from "@/lib/permissions";
 import { logAuditStrict } from "@/lib/audit";
 import { saveFile } from "@/lib/storage";
@@ -174,6 +175,16 @@ export async function createTestDriveBooking(formData: FormData) {
   const resolvedProductId = productId ?? demoVehicle?.productId ?? lead?.productId ?? null;
   const modelName = product?.name ?? demoVehicle?.name ?? lead?.title ?? "Vehicle";
   const activityId = crypto.randomUUID();
+  // Both parents are already in hand, so the owner is decided without another read.
+  // Activity's composite keys are (tenantId, contactId) and (tenantId, leadId). If
+  // the contact and the lead disagree this THROWS rather than writing NULL: a NULL
+  // tenant would switch off both composite checks and book a test drive spanning two
+  // workspaces. The lead/contact mismatch guard above catches the ordinary case; this
+  // is the database-level backstop for the case it does not.
+  const activityTenantId = agreedTenantId(
+    [contact.tenantId, ...(lead ? [lead.tenantId] : [])],
+    null,
+  );
 
   // The workspace the session is acting as. Resolved BEFORE the transaction: it
   // reads the session cookie, and doing that inside an open transaction holds a
@@ -222,6 +233,7 @@ export async function createTestDriveBooking(formData: FormData) {
         contactId,
         assignedToId: salespersonId,
         createdById: user.id,
+        tenantId: activityTenantId,
       },
     });
     return created;

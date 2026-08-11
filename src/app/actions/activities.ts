@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
+import { customerRecordTenantId } from "@/lib/customerRecordTenant";
 import {
   canAccessContact,
   canAccessLead,
@@ -171,6 +172,9 @@ export async function scheduleActivity(formData: FormData) {
         contactId,
         assignedToId,
         createdById: user.id,
+        // Activity carries composite tenant foreign keys to Lead and Contact — the
+        // customer record owns the row, and stamping anything else refuses the write.
+        tenantId: await customerRecordTenantId({ contactId, leadId }),
       },
     });
   }
@@ -223,6 +227,7 @@ async function finishActivity(id: string, note: string) {
         leadId: activity.leadId,
         contactId: activity.contactId,
         userId: user.id,
+        tenantId: await customerRecordTenantId({ contactId: activity.contactId, leadId: activity.leadId }),
       },
     });
   }
@@ -392,6 +397,7 @@ export async function scheduleFollowUp(data: {
       contactId: data.contactId ?? null,
       assignedToId: user.id,
       createdById: user.id,
+      tenantId: await customerRecordTenantId({ contactId: data.contactId, leadId: data.leadId }),
     },
   });
   await logAudit({

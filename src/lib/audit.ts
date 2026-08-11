@@ -2,6 +2,7 @@ import crypto from "crypto";
 import { headers } from "next/headers";
 import { basePrisma, prisma } from "./db";
 import { currentTenantScope } from "./tenantScope";
+import { bestEffortAgreedTenantId } from "./compositeTenantRules";
 
 export type AuditEntry = {
   action: string;
@@ -83,6 +84,17 @@ function actorType(entry: AuditEntry, actorName: string) {
  *
  * - Non-user work (cron, public token, portal, webhook) trusts only an explicit
  *   normal tenant scope. A system scope and a missing/null scope remain global.
+ *
+ *   REVIEWED against the 2026-08-10 pre-flip audit and DELIBERATELY LEFT ALONE.
+ *   The obvious "fix" for the 24 unowned AuditEvent rows is to fall back to the
+ *   staff session here, and it would be a mistake in both directions: a public
+ *   token page or the portal can be opened in a browser that also holds a CRM
+ *   cookie, and that cookie says who is SIGNED IN, not who owns the record — while
+ *   the paths that actually lose their tenant (cron, webhook) carry no cookie at
+ *   all, so the fallback yields null for them anyway. It would add misattribution
+ *   and no attribution. The remaining unowned audit rows are the ones that
+ *   genuinely have no owner: platform-admin actions, and work under a `system`
+ *   scope. Those are correct as NULL.
  * - Staff-attributed work keeps the stricter actor/session identity check so an
  *   action attributed to another user cannot inherit the cookie user's tenant.
  */
@@ -164,8 +176,12 @@ async function auditTenantId(entry: AuditEntry): Promise<string | null> {
   if (entry.leadId && lead) referenced.push(lead.tenantId);
   if (entry.contactId && contact) referenced.push(contact.tenantId);
 
-  if (referenced.length === 0) return acting;
-  return referenced.every((value) => value === referenced[0]) ? referenced[0] : null;
+  // BEST-EFFORT, and audit is the ONLY caller entitled to it. If the lead and the
+  // contact disagree, this row degrades to a NULL tenant instead of throwing —
+  // losing attribution on the log rather than failing the operation the log exists
+  // to record. `Communication` and `Activity` use the strict `agreedTenantId()`,
+  // which refuses; see compositeTenantRules.ts for why these must stay apart.
+  return bestEffortAgreedTenantId(referenced, acting);
 }
 
 /**
@@ -278,7 +294,12 @@ export async function logAudit(entry: AuditEntry): Promise<void> {
           leadId: entry.leadId ?? null,
           userId: entry.user?.id ?? null,
           userName: entry.userName ?? entry.user?.name ?? "System",
-          tenantId: await actingTenantId(entry),
+          // auditTenantId, NOT actingTenantId. This is the retry after writeAudit
+          // failed, and the likeliest reason it failed is the composite foreign key
+          // — the acting tenant did not match the referenced contact or lead. Retrying
+          // with the value that caused the failure guarantees the retry fails too, so
+          // the fallback that exists to save the timeline entry threw it away instead.
+          tenantId: await auditTenantId(entry),
         },
       });
     } catch {}

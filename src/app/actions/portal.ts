@@ -5,6 +5,8 @@ import crypto from "crypto";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { basePrisma, prisma } from "@/lib/db";
+import { customerRecordTenantId } from "@/lib/customerRecordTenant";
+// The portal's own rule, shared with portalExpansion.ts since #471.
 import { portalTenantId } from "@/lib/portalTenant";
 import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { resolveTenantActor } from "@/lib/tenantActor";
@@ -259,6 +261,9 @@ export async function requestService(
       contactId: contact.id,
       assignedToId: staff.id,
       createdById: staff.id,
+      // The portal has no staff session to inherit from — the customer whose record
+      // this is owns the row, which is also what the composite foreign key requires.
+      tenantId: await customerRecordTenantId({ contactId: contact.id }),
     },
   });
   await prisma.communication.create({
@@ -268,6 +273,7 @@ export async function requestService(
       body: `${contactName(contact)} requested a service for ${vehicleLabel}.${preferred ? ` Preferred date: ${preferred}.` : ""}${notes ? `\n\n${notes}` : ""}`,
       contactId: contact.id,
       userId: staff.id,
+      tenantId: await customerRecordTenantId({ contactId: contact.id }),
     },
   });
   await createPortalNotification(contact.id, "Service request received", `We received your service request for ${vehicleLabel}.`, "/portal#cases", "service");

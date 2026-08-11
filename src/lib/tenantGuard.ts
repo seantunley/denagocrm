@@ -25,6 +25,39 @@ export const GLOBAL_MODELS: ReadonlySet<string> = new Set([
   // stated against RLS).
   "Tenant",
   "TenantMember",
+  // ── ErrorLog: GLOBAL, deliberately, and its nullable `tenantId` is ATTRIBUTION,
+  // not ownership. Restated here because the 2026-08-10 pre-flip audit read 1 167
+  // unowned rows as an undecided model; the decision was made, it just was not
+  // written anywhere the guard could be seen to make it.
+  //
+  // Why global. An error is raised most often on a path that HAS no tenant — a
+  // rejected webhook signature, a cron before any scope is bound, a failed boot, and
+  // tenant resolution itself failing. Scope this model and every one of those writes
+  // fails closed under enforcement: the system log goes dark exactly when the system
+  // is broken, and the one record of why would be the record that could not be
+  // written. Logging must never throw, so a tenant can never be a precondition for it.
+  //
+  // What that costs, stated plainly — and it is NOT a cross-tenant read. An earlier
+  // draft of this comment claimed a NULL-tenant row was readable from every
+  // workspace's Settings → System Log. That was wrong about the code it describes:
+  // `src/app/(app)/settings/page.tsx` queries `where: { tenantId: logTenantId }`
+  // against a resolved, non-null id, so NULL rows match NOTHING and appear in no
+  // workspace's System Log at all. (`redactUrl` still strips signing/approval/
+  // tracking URLs at the write, and the screen is still admin-only, but neither is
+  // what is doing the work here — the filter is.)
+  //
+  // The real cost runs the other way: an unattributed error is INVISIBLE to the
+  // workspace it actually affected. Whoever hit it sees an empty System Log, and the
+  // only place the row surfaces is the platform console. That is the cheaper of the
+  // two failures — the alternative loses the log entirely — but it is a
+  // discoverability cost, not a confidentiality one, and the two should not be
+  // confused when this decision is revisited.
+  //
+  // Attribution is still worth having (per-tenant error health, and the per-tenant
+  // alert throttle that stops one noisy tenant muting everyone else's first-error
+  // push), so `logError` fills `tenantId` best-effort via the same resolver every
+  // other write uses, and callers that KNOW the owner pass it explicitly. Best-effort
+  // means exactly that: a null here is a correct outcome, not a missed stamp.
   "ErrorLog",
   // ── The three below were listed here with no stated reason until the
   // 2026-08-10 production audit (PREFLIP-TENANT-AUDIT.md §2) counted them among
@@ -64,6 +97,19 @@ export const GLOBAL_MODELS: ReadonlySet<string> = new Set([
   // Backup ledger. Backups are platform-wide (one dump of the whole database), so
   // BackupRun has no tenantId at all. Without this entry the guard would treat it
   // as tenant-scoped and fail closed on a column that deliberately does not exist.
+  //
+  // The 2026-08-10 pre-flip audit reported BackupRun as "13 of 13 rows unowned",
+  // which reads like a stamping bug and is not one. That audit asks the DATABASE,
+  // and PRODUCTION carries a `tenantId` column on this table that no migration in
+  // this repository creates and no code writes — the schema drift already recorded
+  // in 20260806180000_rls_enforce_gap. Every row is NULL because nothing has ever
+  // set it, and nothing should: a dump of the whole database has no owning tenant.
+  //
+  // Nothing to fix here, therefore, and nothing to backfill. What is outstanding is
+  // the ORPHAN COLUMN itself, which is a destructive prod-only DDL decision and
+  // deliberately not taken in passing. tests/tenantStampAuditTrail.test.ts pins the
+  // invariant that keeps the two answers consistent: while BackupRun is global, the
+  // Prisma model must carry no tenantId.
   "BackupRun",
   // RBAC design decision: the PERMISSION CATALOG (the fixed, code-defined list
   // of capability keys like `roles.manage`) is shared across every tenant —

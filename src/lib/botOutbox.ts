@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
+import { customerRecordTenantId } from "./customerRecordTenant";
 import { DEFAULT_TENANT_ID } from "./tenant";
 import { withTenantWrite, writeTenantId, type TenantWriteTx } from "./tenantWrite";
 import { botStillOwnsTx, pauseBotSessionTx } from "./botSessionStore";
@@ -337,6 +338,29 @@ export async function enqueueStaffReply(input: {
   const batchId = crypto.randomUUID();
   const createdAt = new Date();
 
+  /**
+   * WHO OWNS THE HISTORY ROW — the customer record, not the queue.
+   *
+   * `withTenantWrite` hands down `writeTenantId() ?? DEFAULT_TENANT_ID`, and
+   * enforcement is dormant in every environment today, so that value is the
+   * FOUNDING tenant no matter which workspace is replying. That is the right
+   * answer for the outbox row below, which only needs a stable partition key its
+   * reader (`outboxTenantId()`) agrees with. It is the WRONG answer for the
+   * Communication: that is a customer record carrying composite keys to Contact
+   * and Lead, so it must claim their tenant or Postgres refuses the insert — and
+   * stamping the founding tenant on another workspace's reply is worse than
+   * leaving it null, because it looks correct to every later query and surfaces
+   * in the wrong workspace once enforcement flips.
+   *
+   * Resolved ONCE and outside the transaction: every part of a reply points at
+   * the same contact and lead, and the parent lookups are reads that do not need
+   * to hold the write transaction open.
+   */
+  const historyTenantId = await customerRecordTenantId({
+    contactId: input.contactId,
+    leadId: input.leadId,
+  });
+
   try {
     // USER-ORIGINATED but NOT CONVERTED — the one call site in this task that is
     // classified one way and left the other. Both callers are Server Actions behind
@@ -416,7 +440,8 @@ export async function enqueueStaffReply(input: {
             contactId: input.contactId ?? null,
             leadId: input.leadId ?? null,
             userId: input.actorId,
-            tenantId,
+            // The customer record's tenant, NOT the queue's — see historyTenantId.
+            tenantId: historyTenantId,
           },
           select: { id: true },
         });
@@ -755,7 +780,10 @@ async function repairCommunicationLog(row: OutboxRow): Promise<boolean> {
   await prisma.communication.upsert({
     where: { dedupeKey },
     update: {},
-    create: { type: row.channel, direction: "outbound", subject: FLOW_MARKER, body: storedBody, contactId: row.contactId, leadId: row.leadId, userId: row.actorId, dedupeKey },
+    // `tenantForOutbox()` resolves an unowned write to DEFAULT_TENANT_ID because the
+    // outbox only needs a stable partition key. A Communication is a customer record
+    // and carries composite keys to Contact and Lead, so its owner is theirs.
+    create: { type: row.channel, direction: "outbound", subject: FLOW_MARKER, body: storedBody, contactId: row.contactId, leadId: row.leadId, userId: row.actorId, dedupeKey, tenantId: await customerRecordTenantId({ contactId: row.contactId, leadId: row.leadId }) },
   });
   await prisma.botFlowOutbox.updateMany({ where: { id: row.id, status: "sent", communicationLoggedAt: null }, data: { communicationLoggedAt: new Date() } });
   return true;
