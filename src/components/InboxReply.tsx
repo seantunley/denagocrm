@@ -33,10 +33,16 @@ export default function InboxReply({
   revalidate: string;
   aiConfigured?: boolean;
   /**
-   * Draft persistence is OPT-IN: without a conversationId the box behaves exactly
-   * as it did before. /messages renders the same component and has no
-   * conversation resolved, and a reply box that silently stopped saving would be
-   * worse than one that never claimed to.
+   * The canonical Conversation for this thread.
+   *
+   * For Messenger and Instagram it is REQUIRED to send: the server reads the
+   * delivery channel and the recipient off this row precisely so the browser
+   * cannot name them. Without it the box refuses rather than posting a reply the
+   * action will reject.
+   *
+   * Draft persistence rides on the same id but stays opt-in, and additionally
+   * needs `viewerId` — a box that saves a draft it can neither restore nor
+   * attribute is worse than one that never claimed to.
    */
   conversationId?: string | null;
   draft?: { ownerId: string; ownerName: string; body: string; updatedAt: Date } | null;
@@ -67,6 +73,29 @@ export default function InboxReply({
   useEffect(() => {
     setEnterSends(readEnterSends(typeof window === "undefined" ? null : window.localStorage));
   }, []);
+
+  /**
+   * One identity per COMPOSITION — not per message, and not per attempt.
+   *
+   * If a send fails ambiguously — the provider may or may not have accepted it —
+   * pressing Send again must resolve to the message already queued rather than
+   * deliver a second copy, so this cannot change on re-render or on failure. But
+   * it must not be the whole key either: a person whose send failed usually
+   * EDITS the message before retrying, and a key that ignored the text would
+   * discard the correction as a duplicate and deliver the original.
+   *
+   * So the box supplies the composition and the server folds in what is actually
+   * being sent. Same text resubmitted → same key → dedupes. Corrected text →
+   * different key → sends. This value changes only once a send is confirmed,
+   * which is what keeps two deliberately identical replies two messages.
+   */
+  const [compositionId, setCompositionId] = useState<string>("");
+  useEffect(() => {
+    if (!compositionId) setCompositionId(crypto.randomUUID());
+  }, [compositionId]);
+  useEffect(() => {
+    if (state?.ok) setCompositionId(crypto.randomUUID());
+  }, [state?.ok]);
 
   function onKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
     const intent = enterIntent(
@@ -104,7 +133,16 @@ ${el.value.slice(end)}`;
     el.selectionStart = el.selectionEnd = start + 1;
   }
 
-  const drafting = Boolean(conversationId);
+  // Autosave needs a viewer as much as it needs a conversation: without one the
+  // box can save a draft it will never restore and can never attribute, which is
+  // the "worse than never claiming to" case the prop note describes. /messages
+  // resolves the conversation for the send route but has no viewer, so it sends
+  // without drafting.
+  const drafting = Boolean(conversationId && viewerId);
+  // A DM cannot be sent without the conversation the server reads the channel
+  // from. Blocking here rather than letting the action refuse means nobody types
+  // a reply that was never sendable.
+  const missingConversation = channel !== "whatsapp" && !conversationId;
   // Whose draft is on the server, decided with the SAME function the action uses.
   // Deciding it again here by hand is how the client and the server come to
   // disagree about who owns a thread.
@@ -183,6 +221,15 @@ ${el.value.slice(end)}`;
           conversation. Your draft will not be saved — check with them before sending.
         </p>
       )}
+      {missingConversation && (
+        <p
+          role="status"
+          className="mb-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-200"
+        >
+          This thread is not linked to a conversation yet, so we cannot tell which account to
+          reply from. Refresh the inbox — if it persists, the conversation needs rebuilding.
+        </p>
+      )}
       {channel === "whatsapp" ? (
         <>
           <input type="hidden" name="phone" value={phone ?? ""} />
@@ -190,9 +237,17 @@ ${el.value.slice(end)}`;
           {leadId && <input type="hidden" name="leadId" value={leadId} />}
         </>
       ) : (
-        <input type="hidden" name="contactId" value={contactId ?? ""} />
+        <>
+          <input type="hidden" name="contactId" value={contactId ?? ""} />
+          {/* The conversation, and nothing else about the route. The server reads
+              the channel and the recipient off this row; no `channel` field is
+              posted, because a client that can name the channel can choose which
+              platform a dual-identity customer is answered on. */}
+          <input type="hidden" name="conversationId" value={conversationId ?? ""} />
+        </>
       )}
       <input type="hidden" name="revalidate" value={revalidate} />
+      <input type="hidden" name="compositionId" value={compositionId} />
 
       <div className="flex items-center gap-1.5">
         <textarea
@@ -207,6 +262,7 @@ ${el.value.slice(end)}`;
           // or re-render on every keystroke.
           defaultValue={restored}
           onChange={drafting ? queueDraftSave : undefined}
+          disabled={missingConversation}
         />
         <button
           type="button"
@@ -240,7 +296,7 @@ ${el.value.slice(end)}`;
             </button>
           </>
         )}
-        <button className="btn-primary btn-sm">Send</button>
+        <button className="btn-primary btn-sm" disabled={missingConversation}>Send</button>
       </div>
 
       <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">

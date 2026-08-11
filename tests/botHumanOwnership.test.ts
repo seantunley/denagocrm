@@ -17,11 +17,31 @@ test("manual pause preserves the live graph snapshot instead of overwriting it",
 });
 
 test("staff replies take ownership on every inbox chatbot channel", () => {
-  const whatsapp = src("src/app/actions/whatsapp.ts");
-  assert.match(whatsapp, /pauseBotConversation\(\{ channel: "whatsapp", key: digits \}, 12\)/);
+  // WhatsApp now takes ownership INSIDE the transaction that records the reply,
+  // rather than as a follow-up await. That is a strengthening, not a removal: an
+  // interrupted request used to be able to accept the reply and never pause the
+  // bot, and the retry could not repair it because the retry recognises the
+  // duplicate and stops. See staffReplyDurability.test.ts for the ordering.
+  const outbox = src("src/lib/botOutbox.ts");
+  const staff = outbox.slice(
+    outbox.indexOf("export async function enqueueStaffReply"),
+    outbox.indexOf("export async function enqueueStaffMessage"),
+  );
+  assert.match(staff, /pauseBotSessionTx\(tx, tenantId, \{/);
+  assert.match(staff, /channel: input\.channel,\s*\n\s*key: input\.key,/);
 
-  const meta = src("src/app/actions/messenger.ts");
-  assert.match(meta, /pauseBotConversation\(\{ channel: platform, key: recipientId \}, 12\)/);
+  // BOTH inbox reply paths now go through that write, so both take ownership in
+  // the same commit that accepts the reply — and neither can be interrupted
+  // between accepting a message and pausing the bot that would answer over it.
+  for (const path of ["src/app/actions/whatsapp.ts", "src/app/actions/messenger.ts"]) {
+    const action = src(path);
+    assert.match(action, /enqueueStaffReply\(\{|enqueueStaffMessage\(\{/, `${path} must take ownership through the durable write`);
+    assert.doesNotMatch(
+      action,
+      /pauseBotConversation\(/,
+      `${path} must not pause in a separate await the request can skip`,
+    );
+  }
 });
 
 test("flow-mode WhatsApp ownership is the BotSession, not a second timestamp heuristic", () => {

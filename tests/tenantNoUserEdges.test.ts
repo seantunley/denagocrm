@@ -230,7 +230,17 @@ for (const file of OTP_ROUTES) {
 test("src/lib/push.ts: sendPushToAll delivers only to the current tenant's devices", () => {
   const code = src("src/lib/push.ts");
   assert.match(code, /pushRecipientsForCurrentScope\s*\(/, "must select recipients via pushRecipientsForCurrentScope");
-  assert.match(code, /const\s+subs\s*=\s*await\s+pushRecipientsForCurrentScope\(\)/, "sendPushToAll must use the scoped recipient list");
+  // Recipients come from a SCOPED source: the current scope, or a tenant the
+  // caller names outright. The second exists because the first resolves to every
+  // device in the table while enforcement is dormant — a defensible rollout
+  // default, and not a filter, so anything carrying customer data must name its
+  // tenant instead of inheriting it. Neither branch may reach the table directly.
+  assert.match(
+    code,
+    /const\s+subs\s*=\s*options\.tenantId\s*\n?\s*\?\s*await\s+pushRecipientsForTenant\(options\.tenantId\)\s*\n?\s*:\s*await\s+pushRecipientsForCurrentScope\(\)/,
+    "sendPushToAll must use a scoped recipient list",
+  );
+  assert.match(code, /export async function pushRecipientsForTenant\(tenantId: string\)/);
   assert.doesNotMatch(code, /prisma\.pushSubscription\.findMany\(\s*\)/, "must not do an unfiltered findMany() in the send path");
 });
 
