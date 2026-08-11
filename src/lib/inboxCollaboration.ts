@@ -2,7 +2,8 @@ import "server-only";
 import { basePrisma } from "./db";
 import { DEFAULT_TENANT_ID } from "./tenant";
 import { botIdentityForRecord } from "./botConversationControl";
-import { threadCollaborationKey, type ThreadCollaboration, type ThreadIdentity } from "./inboxThreads";
+import { conversationIdsForThreads } from "./inboxConversations";
+import { type ThreadCollaboration, type ThreadIdentity } from "./inboxThreads";
 
 /**
  * Joining the inbox's THREADS to the Conversation rows that carry collaboration.
@@ -16,26 +17,20 @@ export async function collaborationForThreads(
   const byKey = new Map<string, ThreadCollaboration>();
   if (threads.length === 0) return byKey;
 
-  const contactIds = [...new Set(threads.map((t) => t.contactId).filter((id): id is string => Boolean(id)))];
-  const leadIds = [...new Set(threads.map((t) => t.leadId).filter((id): id is string => Boolean(id)))];
-  const channels = [...new Set(threads.map((t) => t.channel))];
-  if (contactIds.length === 0 && leadIds.length === 0) return byKey;
+  // Which Conversation each thread belongs to is decided ONCE, by the resolver the
+  // reply path also depends on. Re-deriving it here by contact + channel is how the
+  // panel and the send action came to disagree about which conversation a thread is.
+  const idByKey = await conversationIdsForThreads(threads);
+  if (idByKey.size === 0) return byKey;
 
   const conversations = await basePrisma.conversation.findMany({
-    where: {
-      channel: { in: channels },
-      OR: [
-        ...(contactIds.length ? [{ contactId: { in: contactIds } }] : []),
-        ...(leadIds.length ? [{ leadId: { in: leadIds } }] : []),
-      ],
-    },
+    where: { id: { in: [...new Set(idByKey.values())] } },
     select: {
       id: true,
       tenantId: true,
       channel: true,
       contactId: true,
       leadId: true,
-      lastMessageAt: true,
       assignedTo: { select: { id: true, name: true } },
       contact: {
         select: {
@@ -47,9 +42,6 @@ export async function collaborationForThreads(
       },
       lead: { select: { phone: true } },
     },
-    // Newest first, so when a contact has both an open and a closed conversation
-    // on one channel the live one is the one that wins the key below.
-    orderBy: { lastMessageAt: "desc" },
   });
   if (conversations.length === 0) return byKey;
 
@@ -132,9 +124,10 @@ export async function collaborationForThreads(
   );
   const supportedConversations = new Set(botTargets.map((target) => target.conversationId));
 
-  for (const conversation of conversations) {
-    const key = threadCollaborationKey(conversation);
-    if (!key || byKey.has(key)) continue;
+  const byId = new Map(conversations.map((conversation) => [conversation.id, conversation]));
+  for (const [key, conversationId] of idByKey) {
+    const conversation = byId.get(conversationId);
+    if (!conversation) continue;
     byKey.set(key, {
       conversationId: conversation.id,
       assignee: conversation.assignedTo ?? null,

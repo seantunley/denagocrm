@@ -55,7 +55,9 @@ test("outbox rows retain immutable flow-version attribution", () => {
 
 test("provider failure is recorded only when the durable message becomes terminally dead", () => {
   const outbox = src("src/lib/botOutbox.ts");
-  const deadAt = outbox.indexOf("if (row.attempts >= MAX_ATTEMPTS)");
+  // The terminal branch is reached by exhausting the retries OR by a failure
+  // class that will fail identically every time; both end in the same place.
+  const deadAt = outbox.indexOf("if (row.attempts >= MAX_ATTEMPTS ||");
   const recordAt = outbox.indexOf("eventType: \"delivery_failed\"", deadAt);
   const retryAt = outbox.indexOf("status: \"retry\"", deadAt);
   assert.ok(deadAt >= 0 && recordAt > deadAt && retryAt > recordAt);

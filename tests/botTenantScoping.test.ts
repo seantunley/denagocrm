@@ -112,7 +112,7 @@ test("a dead message stops the backlog at the failure, not the conversation for 
   // that conversation is killed in the same step, so nothing queued behind the
   // failure can overtake it — a Meta image and its split-out caption die together.
   const fail = code.slice(code.indexOf("async function failDelivery"), code.indexOf("async function deliverClaimed"));
-  assert.match(fail, /killMessageAndBacklog\(row, lastError\)/);
+  assert.match(fail, /killMessageAndBacklog\(row, lastError, failureCode\)/);
 
   const blockStart = code.indexOf("async function killMessageAndBacklog");
   const block = code.slice(blockStart, code.indexOf("\n}", blockStart));
@@ -129,7 +129,8 @@ test("a dead message stops the backlog at the failure, not the conversation for 
   // And having done that, a dead row must stop being a barrier — otherwise one
   // undeliverable message silences the bot for that customer for ever.
   const earliest = code.slice(code.indexOf("async function earliestUnfinished"), code.indexOf("async function claimOldest"));
-  assert.match(earliest, /status: \{ notIn: \["sent", "dead"\] \}/);
+  assert.match(earliest, /status: \{ notIn: FINISHED_STATUSES \}/);
+  assert.match(code, /FINISHED_STATUSES = \["sent", "dead", "cancelled"\]/);
   const claim = code.slice(code.indexOf("async function claimOldest"), code.indexOf("function retryAt"));
   assert.doesNotMatch(claim, /row\.status === "dead"/, "a dead row must no longer veto the claim");
 });
