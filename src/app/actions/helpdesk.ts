@@ -58,9 +58,37 @@ async function bestEffort(scope: string, context: string, write: () => Promise<u
   }
 }
 
+/**
+ * The workspace that owns a helpdesk child row: the PARENT record's.
+ *
+ * `writeTenantId() ?? DEFAULT_TENANT_ID` was the previous answer, and its comment
+ * — "founding tenant when enforcement is off, so this never lands tenantless" —
+ * describes exactly the defect. `writeTenantId()` is null while enforcement is
+ * dormant, which is every environment we run, so this stamped the FOUNDING tenant
+ * onto every workspace's notifications and timeline events. Avoiding a NULL by
+ * writing a confidently wrong owner is the worse trade: a NULL is visible in an
+ * audit, a wrong owner looks correct.
+ *
+ * A notification belongs to the contact it is about; a timeline event belongs to
+ * the case it is on. Neither belongs to whoever happened to click the button, so
+ * neither may resolve an actor. Null when the parent is itself unowned — a
+ * pre-tenancy row awaiting backfill, which a later backfill claims along with its
+ * children.
+ */
+async function tenantOfContact(contactId: string): Promise<string | null> {
+  const rows = await basePrisma.$queryRaw<Array<{ tenantId: string | null }>>`
+    SELECT "tenantId" FROM "Contact" WHERE "id" = ${contactId} LIMIT 1`;
+  return rows[0]?.tenantId ?? null;
+}
+
+async function tenantOfCase(caseId: string): Promise<string | null> {
+  const rows = await basePrisma.$queryRaw<Array<{ tenantId: string | null }>>`
+    SELECT "tenantId" FROM "CustomerCase" WHERE "id" = ${caseId} LIMIT 1`;
+  return rows[0]?.tenantId ?? null;
+}
+
 async function notifyCustomer(contactId: string, title: string, body: string, href: string) {
-  // Founding tenant when enforcement is off, so this never lands tenantless.
-  const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
+  const tenantId = await tenantOfContact(contactId);
   await bestEffort("helpdesk.notify", `${title} for contact ${contactId}`, () => basePrisma.$executeRaw`
     INSERT INTO "PortalNotification" ("id","contactId","title","body","href","kind","tenantId")
     VALUES (${randomUUID()}, ${contactId}, ${title}, ${body}, ${href}, 'case', ${tenantId})`);
@@ -68,9 +96,10 @@ async function notifyCustomer(contactId: string, title: string, body: string, hr
 
 /** Append a system "event" line item to the ticket timeline. */
 async function logEvent(caseId: string, userId: string, body: string, meta: Prisma.InputJsonObject) {
+  const tenantId = await tenantOfCase(caseId);
   await bestEffort("helpdesk.event", `${body} on case ${caseId}`, () =>
     prisma.customerCaseMessage.create({
-      data: { caseId, userId, direction: "staff", type: "event", body, meta, tenantId: writeTenantId() ?? DEFAULT_TENANT_ID },
+      data: { caseId, userId, direction: "staff", type: "event", body, meta, tenantId },
     }),
   );
 }

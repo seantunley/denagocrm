@@ -259,11 +259,30 @@ export async function listCannedReplies(mailboxId?: string | null) {
   });
 }
 
-/** Mark inbound customer messages as read when staff opens the ticket. */
+/**
+ * Mark inbound customer messages as read when staff opens the ticket.
+ *
+ * The `caseId` arrives from the URL, so it is caller-supplied and unvalidated
+ * here. This runs on `basePrisma` — the documented RLS bypass — with no tenant
+ * predicate, so a forged id marked ANOTHER workspace's customer messages as read.
+ * That destroys the unread signal on someone else's inbox: low severity as harm
+ * goes, but it is a cross-tenant WRITE, and it is the same shape as the forged
+ * `partId` that decremented another tenant's stock.
+ *
+ * The predicate is a join to the case's own tenant rather than an ambient scope,
+ * because the scope is null while enforcement is dormant and would silently
+ * disable the check in exactly the window it is needed.
+ */
 export async function markCustomerMessagesRead(caseId: string) {
   await basePrisma.$executeRaw`
-    UPDATE "CustomerCaseMessage" SET "readAt" = COALESCE("readAt", CURRENT_TIMESTAMP)
-    WHERE "caseId" = ${caseId} AND "type" = 'customer' AND "readAt" IS NULL`;
+    UPDATE "CustomerCaseMessage" m
+    SET "readAt" = COALESCE(m."readAt", CURRENT_TIMESTAMP)
+    FROM "CustomerCase" c
+    WHERE m."caseId" = c."id"
+      AND m."caseId" = ${caseId}
+      AND m."type" = 'customer'
+      AND m."readAt" IS NULL
+      AND m."tenantId" IS NOT DISTINCT FROM c."tenantId"`;
 }
 
 export { statusMeta };
