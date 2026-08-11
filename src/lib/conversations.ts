@@ -94,20 +94,55 @@ function conversationFilterTenantId(): string | null {
  */
 async function conversationTenantId(data: MessageData): Promise<string | null> {
   if (typeof data.tenantId === "string" && data.tenantId) return data.tenantId;
-  const [contact, lead] = await Promise.all([
-    data.contactId
-      ? basePrisma.contact.findUnique({ where: { id: data.contactId }, select: { tenantId: true } })
-      : null,
-    data.leadId
-      ? basePrisma.lead.findUnique({ where: { id: data.leadId }, select: { tenantId: true } })
-      : null,
+  const subject = await subjectAgreement([{ contactId: data.contactId, leadId: data.leadId }]);
+  // No subject resolved anything (no ids, or ids that resolve to no row — the
+  // insert will fail on its own single-column key, the right place for that
+  // failure to surface): fall back the way a session-less writer always has.
+  if (subject === NO_SUBJECT) return inheritedTenantId(null);
+  // Verbatim when the subjects agree, NULL included; subjectAgreement already
+  // THREW if they did not.
+  return subject;
+}
+
+/** Distinguishes "asked and every id was silent" from "asked and got NULL back". */
+const NO_SUBJECT = Symbol("no-subject");
+
+/**
+ * The tenant every referenced CONTACT and LEAD id agrees on — across one message,
+ * or across a message AND the conversation it is being matched against. One
+ * `id[]`-shaped argument per source; a source that supplies neither id contributes
+ * nothing and is not an error.
+ *
+ * THROWS on a genuine contradiction (two different non-null tenants), exactly the
+ * rule `agreedTenantId` states and #475 exists to enforce. Returns `NO_SUBJECT`
+ * when nothing was referenced at all, so a caller can tell "no evidence either way"
+ * from "the evidence says NULL."
+ *
+ * WHY THIS RUNS ON ATTACH, NOT ONLY ON CREATE. `conversationTenantId` (rung 2)
+ * only ever ran for a brand-new conversation — reasonably, since that is the one
+ * moment nothing else has an opinion yet. But `attachToConversation` was letting
+ * an EXISTING thread's tenant, NULL included, stand in for this check entirely:
+ * a thread awaiting backfill says nothing about whether THIS message's own
+ * contact and lead agree with each other, or with a caller-supplied thread's own
+ * subject. Contact A + Lead B on one unstamped message, aimed at any NULL-tenant
+ * thread, resolved to a NULL Communication whose contact key and lead key were
+ * BOTH switched off by that NULL — the exact laundering #475 refuses on create,
+ * reopened on attach. This is that same refusal, run again at the point it was
+ * missing.
+ */
+async function subjectAgreement(
+  sources: Array<{ contactId?: string | null; leadId?: string | null }>,
+): Promise<string | null | typeof NO_SUBJECT> {
+  const contactIds = [...new Set(sources.map((s) => s.contactId).filter((v): v is string => Boolean(v)))];
+  const leadIds = [...new Set(sources.map((s) => s.leadId).filter((v): v is string => Boolean(v)))];
+  const [contacts, leads] = await Promise.all([
+    Promise.all(contactIds.map((id) => basePrisma.contact.findUnique({ where: { id }, select: { tenantId: true } }))),
+    Promise.all(leadIds.map((id) => basePrisma.lead.findUnique({ where: { id }, select: { tenantId: true } }))),
   ]);
-  // An id that resolves to no row constrains nothing, and the insert will fail on
-  // its own single-column key — the correct place for that failure to surface.
-  const referenced = [contact, lead]
+  const referenced = [...contacts, ...leads]
     .filter((row): row is { tenantId: string | null } => row != null)
     .map((row) => row.tenantId);
-  if (referenced.length === 0) return inheritedTenantId(null);
+  if (referenced.length === 0) return NO_SUBJECT;
   // Verbatim when they agree, NULL included; THROWS when they do not.
   return agreedTenantId(referenced, null);
 }
@@ -159,6 +194,16 @@ export type ResolvedConversation = {
   id: string;
   /** The thread's owner, RAW — NULL means a thread still awaiting the backfill. */
   tenantId: string | null;
+  /**
+   * The thread's OWN subject columns, carried alongside the owner so a caller
+   * that supplied this id can be checked against what the thread actually points
+   * at — see {@link subjectAgreement}. A search that MATCHED on one of these (see
+   * {@link findOpenConversation}) does not need it re-checked; it is here so
+   * every producer of a `ResolvedConversation` has the same shape, not a subset
+   * that happens to be enough for today's caller.
+   */
+  contactId: string | null;
+  leadId: string | null;
 };
 
 /**
@@ -182,9 +227,11 @@ async function findOpenConversation(data: MessageData): Promise<ResolvedConversa
       ...subjectScope,
     },
     orderBy: { lastMessageAt: "desc" },
-    select: { id: true, tenantId: true },
+    select: { id: true, tenantId: true, contactId: true, leadId: true },
   });
-  return existing ? { id: existing.id, tenantId: existing.tenantId ?? null } : null;
+  return existing
+    ? { id: existing.id, tenantId: existing.tenantId ?? null, contactId: existing.contactId, leadId: existing.leadId }
+    : null;
 }
 
 /**
@@ -202,9 +249,9 @@ async function findOpenConversation(data: MessageData): Promise<ResolvedConversa
 async function conversationById(id: string): Promise<ResolvedConversation | null> {
   const row = await basePrisma.conversation.findUnique({
     where: { id },
-    select: { id: true, tenantId: true },
+    select: { id: true, tenantId: true, contactId: true, leadId: true },
   });
-  return row ? { id: row.id, tenantId: row.tenantId ?? null } : null;
+  return row ? { id: row.id, tenantId: row.tenantId ?? null, contactId: row.contactId, leadId: row.leadId } : null;
 }
 
 /**
@@ -227,9 +274,10 @@ async function openConversation(data: MessageData): Promise<ResolvedConversation
     },
     select: { id: true },
   });
-  // The same value that was just written, not a re-read: the caller has to match
-  // this row, and a second query could only introduce a way for them to differ.
-  return { id: created.id, tenantId };
+  // The same values that were just written, not a re-read: the caller has to
+  // match this row, and a second query could only introduce a way for them to
+  // differ.
+  return { id: created.id, tenantId, contactId: data.contactId ?? null, leadId: data.leadId ?? null };
 }
 
 /**
@@ -300,7 +348,18 @@ export async function attachToConversation(data: MessageData): Promise<ResolvedC
     // An id that matches no row: leave the stamp alone and let the plain
     // `conversationId → Conversation(id)` key refuse the insert, which it will.
     if (!chosen) return null;
-    data.tenantId = attachedTenantId(chosen.tenantId, data.tenantId);
+    // A caller-supplied id has no guarantee attached to it at all — unlike the
+    // search below, nothing has confirmed this id's own subject relates to the
+    // message's. So both are checked: the message's contact and lead agreeing
+    // with EACH OTHER, and with whatever the chosen thread itself already
+    // points at. `chosen.tenantId` being NULL is not evidence of anything by
+    // itself — a thread stamped for tenant B, whose subject the message's own
+    // ids disagree with, is exactly the case this closes.
+    const subject = await subjectAgreement([
+      { contactId: data.contactId, leadId: data.leadId },
+      { contactId: chosen.contactId, leadId: chosen.leadId },
+    ]);
+    data.tenantId = attachedTenantId(chosen.tenantId, subject === NO_SUBJECT ? data.tenantId : subject);
     return chosen;
   }
 
@@ -316,7 +375,15 @@ export async function attachToConversation(data: MessageData): Promise<ResolvedC
   conversation ??= await openConversation(data);
   if (!conversation) return null;
   data.conversationId = conversation.id;
-  data.tenantId = attachedTenantId(conversation.tenantId, data.tenantId);
+  // The search above matched THIS message's own id against the thread's stored
+  // column, so the found thread's subject already agrees with whichever of
+  // contactId/leadId the message supplied. What it never checked is the id the
+  // message DIDN'T search by — a message carrying both a contact and a lead
+  // searches by contact alone, and the lead could belong to another workspace
+  // entirely. `subjectAgreement` on the message's own ids closes that, and
+  // THROWS before anything is written if they disagree.
+  const subject = await subjectAgreement([{ contactId: data.contactId, leadId: data.leadId }]);
+  data.tenantId = attachedTenantId(conversation.tenantId, subject === NO_SUBJECT ? data.tenantId : subject);
   return conversation;
 }
 

@@ -460,6 +460,98 @@ test("subjects that AGREE still open a thread, both of them checked", async () =
   assert.equal(written.tenantId, OWNER);
 });
 
+/* ── 3b. the contradiction the second review found: a NULL thread does not */
+/*       excuse the SUBJECT from having to agree with itself ──────────── */
+
+test("an existing NULL thread does not launder a contact/lead contradiction on the message itself", async () => {
+  // The residual hole. `findOpenConversation` searches by `contactId` when one is
+  // present, so a message carrying BOTH ids is matched into an existing thread by
+  // its contact alone — the lead is never part of the WHERE clause. Before this,
+  // `attachedTenantId(conversation.tenantId, data.tenantId)` only ever asked "does
+  // the thread agree with what the CALLER already stamped" — and while dormant
+  // nothing has, so an unstamped message sailed through on the thread's NULL
+  // without its own contact and lead ever being asked whether THEY agree.
+  reset();
+  tables.contact = [{ id: "contact-a", tenantId: OWNER }];
+  tables.lead = [{ id: "lead-b", tenantId: OTHER }];
+  tables.conversation = [
+    { id: "conversation-legacy", channel: "note", status: "open", contactId: "contact-a", tenantId: null, lastMessageAt: 1 },
+  ];
+
+  // Unstamped, exactly as it reaches the hook from a caller that has not resolved
+  // an owner — the shape every one of the nineteen callers actually produces before
+  // #475/#482 stamped them, and the shape a twentieth caller could still produce.
+  const data: Row = { type: "note", contactId: "contact-a", leadId: "lead-b", body: "x", userId: "user-1" };
+
+  const outcome = await saveNote(data).then(
+    (written) => ({ written }),
+    (error: Error) => ({ error }),
+  );
+  if ("written" in outcome) {
+    const { tenantId, contactId, leadId } = outcome.written;
+    assert.fail(
+      `the contradiction was laundered into ${JSON.stringify({ tenantId: tenantId ?? null, contactId, leadId })}`,
+    );
+  }
+  assert.ok(
+    outcome.error instanceof TenantParentConflictError,
+    `refused for the wrong reason: ${outcome.error.message}`,
+  );
+  assert.equal(count("communication"), 0, "an unowned row spanning two workspaces is worse than no row");
+});
+
+test("a caller-supplied NULL thread does not launder a contradiction between ITS subject and the message's", async () => {
+  // The other half. Here the search's own WHERE clause is not involved at all — a
+  // caller can name any conversationId, and the code must not trust that its
+  // subject relates to the message's just because the id resolved to a row.
+  reset();
+  tables.contact = [{ id: "contact-b", tenantId: OTHER }]; // the THREAD's own subject
+  tables.lead = [{ id: "lead-a", tenantId: OWNER }]; // the MESSAGE's own subject
+  tables.conversation = [
+    // A legacy thread already anchored to B's contact, awaiting backfill.
+    { id: "conversation-legacy", channel: "note", status: "open", contactId: "contact-b", tenantId: null, lastMessageAt: 1 },
+  ];
+
+  const data: Row = {
+    type: "note",
+    leadId: "lead-a",
+    conversationId: "conversation-legacy",
+    body: "x",
+    userId: "user-1",
+  };
+
+  const outcome = await saveNote(data).then(
+    (written) => ({ written }),
+    (error: Error) => ({ error }),
+  );
+  if ("written" in outcome) {
+    const { tenantId, contactId, leadId } = outcome.written;
+    assert.fail(
+      `the contradiction was laundered into ${JSON.stringify({ tenantId: tenantId ?? null, contactId, leadId })}`,
+    );
+  }
+  assert.ok(
+    outcome.error instanceof TenantParentConflictError,
+    `refused for the wrong reason: ${outcome.error.message}`,
+  );
+  assert.equal(count("communication"), 0);
+});
+
+test("an existing NULL thread still accepts a message whose subject agrees with itself — the outage stays fixed", async () => {
+  // The case that must NOT start refusing: the exact shape of the 2026-08-11
+  // outage. One subject, one thread, thread unbackfilled. Nothing here
+  // contradicts anything, so the message must still be written unowned, joined to
+  // its thread, exactly as #482 first fixed it.
+  reset();
+  tables.lead = [{ id: LEAD, tenantId: OWNER }];
+  tables.conversation = [
+    { id: "conversation-legacy", channel: "note", status: "open", leadId: LEAD, tenantId: null, lastMessageAt: 1 },
+  ];
+  const written = await saveNote({ type: "note", leadId: LEAD, body: "x", userId: "user-1" });
+  assert.equal(written.conversationId, "conversation-legacy");
+  assert.equal(written.tenantId, null, "the thread has no owner yet, and the message must not invent one");
+});
+
 /* ── 5. the defects this replaced must not come back ───────────────── */
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -470,10 +562,21 @@ const shipped = (rel: string) =>
 
 test("the message's owner is inherited from the parent row, never invented", () => {
   const code = shipped("src/lib/conversations.ts");
+  // Not `data.tenantId` raw any more — the second review found that an existing
+  // thread's tenant, NULL included, was standing in for a check of its own: the
+  // message's contact and lead were never confirmed to agree with each other, or
+  // with a caller-supplied thread's own subject, before its NULL was adopted. Both
+  // attach sites now feed `subjectAgreement`'s result in, falling back to the raw
+  // stamp only when there was no subject evidence at all.
   assert.match(
     code,
-    /data\.tenantId = attachedTenantId\(conversation\.tenantId, data\.tenantId\)/,
-    "the thread's tenant is the input; anything else is a guess",
+    /data\.tenantId = attachedTenantId\(chosen\.tenantId, subject === NO_SUBJECT \? data\.tenantId : subject\)/,
+    "the caller-supplied thread must be checked against the message's OWN subject and the thread's",
+  );
+  assert.match(
+    code,
+    /data\.tenantId = attachedTenantId\(conversation\.tenantId, subject === NO_SUBJECT \? data\.tenantId : subject\)/,
+    "the found/created thread must be checked against the message's own subject",
   );
   for (const invented of [/writeTenantId\(/, /DEFAULT_TENANT_ID/, /\?\? DEFAULT_TENANT_ID/]) {
     assert.doesNotMatch(
@@ -482,8 +585,9 @@ test("the message's owner is inherited from the parent row, never invented", () 
       "resolving a stamp from the rollout state or the founding tenant collapses every workspace onto Denago while enforcement is dormant — the defect this replaced",
     );
   }
-  // The resolver has to ASK for the column it decides on.
-  assert.match(code, /select: \{ id: true, tenantId: true \}/);
+  // The resolver has to ASK for the columns it decides on — including the thread's
+  // OWN subject, now that a caller-supplied id is checked against it.
+  assert.match(code, /select: \{ id: true, tenantId: true, contactId: true, leadId: true \}/);
 });
 
 test("the subject rule is agreedTenantId, not a fourth policy written here", () => {
