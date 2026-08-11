@@ -6,7 +6,8 @@ import { prisma } from "@/lib/db";
 import { withTenantWrite } from "@/lib/tenantWrite";
 import { requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
-import { parseConditionGroup, parseJourneyDefinition } from "@/lib/journeyTypes";
+import { collectAssignedUserIds, parseConditionGroup, parseJourneyDefinition } from "@/lib/journeyTypes";
+import { resolveAssignableUser } from "@/lib/tenantActor";
 import { parseJourneyTriggers } from "@/lib/journeyTriggers";
 import { parseRunMode } from "@/lib/journeyArbitration";
 import {
@@ -159,9 +160,31 @@ async function assertTriggerReferencesResolve(tenantId: string | null, triggers:
   }
 }
 
+/**
+ * Every person an `assign_user` step names must be a member of THIS workspace.
+ *
+ * The sibling of {@link assertTriggerReferencesResolve}, and for the same
+ * reason: shape validation proves `config.userId` is a well-formed string, not
+ * that it points at somebody who works here. The difference is what a bad value
+ * does. A foreign stage id makes a journey that enrols nobody; a foreign USER id
+ * makes a journey that works — it reassigns this workspace's leads to a stranger
+ * on every run, and the run trace records it as "Lead assigned".
+ *
+ * Checked where the definition is WRITTEN rather than only where it runs. The
+ * executor has no one to refuse to: it is the cron, and its options are to skip
+ * silently or to assign wrongly. A save has a person in front of it.
+ */
+async function assertStepAssigneesResolve(definition: unknown): Promise<void> {
+  for (const userId of collectAssignedUserIds(definition)) {
+    // Throws ActionRefusal naming the field, exactly as the forms do.
+    await resolveAssignableUser(userId, "team member");
+  }
+}
+
 export async function createJourney(formData: FormData) {
   const user = await requirePermission("journeys.manage");
   const data = journeyData(formData);
+  await assertStepAssigneesResolve(data.definition);
   // Atomic: journey + its first version in ONE transaction, tenant-stamped.
   const journey = await withTenantWrite(async (tx, tenantId) => {
     const j = await tx.journey.create({
@@ -204,6 +227,7 @@ export async function createJourney(formData: FormData) {
 export async function saveJourneyDraft(journeyId: string, formData: FormData) {
   const user = await requirePermission("journeys.manage");
   const data = journeyData(formData);
+  await assertStepAssigneesResolve(data.definition);
   await prisma.$transaction(async (tx) => {
     const journey = await tx.journey.findUniqueOrThrow({
       where: { id: journeyId },
@@ -278,6 +302,11 @@ export async function publishJourney(journeyId: string) {
   parseConditionGroup(draft.entryConditions);
   parseJourneyDefinition(draft.definition);
   await assertTriggerReferencesResolve(journey.tenantId, draft.triggers);
+  // Also on publish, not only on save: a draft can be written by one build and
+  // published by another, and membership can lapse in between. Publishing is
+  // what the enrolment sweep acts on, so it is the last point at which a person
+  // can be told.
+  await assertStepAssigneesResolve(draft.definition);
 
   await prisma.$transaction([
     prisma.journeyVersion.updateMany({

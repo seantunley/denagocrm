@@ -22,26 +22,6 @@ export type { ActingScope };
  * gives — and those paths should derive their tenant from the record they are
  * acting on (`inheritedTenantId`) rather than from an absent actor.
  */
-/**
- * The workspace to STAMP on a record the acting person OWNS outright — one with no
- * parent to inherit from. Workspace configuration is the case that matters:
- * a support mailbox, a canned reply, a support tag. Those belong to the workspace
- * that created them, not to any record.
- *
- * Where a parent DOES exist, inherit from it instead. A note on a case belongs to
- * the case, not to the person typing it, so an admin acting in another workspace
- * cannot re-own it.
- *
- * Throws when the scope is `closed`, matching every other unguarded write.
- */
-export async function actingOwnerTenantId(): Promise<string> {
-  const scope = await actingScopeClass();
-  if (scope.mode === "closed") {
-    throw new TenantScopeError("No tenant scope established for a tenant-owned write");
-  }
-  return scope.mode === "tenant" ? scope.tenantId : DEFAULT_TENANT_ID;
-}
-
 export async function actingScopeClass(): Promise<ActingScope> {
   const enforcing = tenantEnforcing();
   // Skip the session lookup entirely when enforcing: the enforced scope is
@@ -75,6 +55,26 @@ export async function actingScopeClass(): Promise<ActingScope> {
  * the record being acted on. They have no session for this to resolve, and
  * inventing one is the same defect with the sign flipped.
  */
+/**
+ * The workspace to STAMP on a record the acting person OWNS outright — one with no
+ * parent to inherit from. Workspace configuration is the case that matters:
+ * a support mailbox, a canned reply, a support tag. Those belong to the workspace
+ * that created them, not to any record.
+ *
+ * Where a parent DOES exist, inherit from it instead. A note on a case belongs to
+ * the case, not to the person typing it, so an admin acting in another workspace
+ * cannot re-own it.
+ *
+ * Throws when the scope is `closed`, matching every other unguarded write.
+ */
+export async function actingOwnerTenantId(): Promise<string> {
+  const scope = await actingScopeClass();
+  if (scope.mode === "closed") {
+    throw new TenantScopeError("No tenant scope established for a tenant-owned write");
+  }
+  return scope.mode === "tenant" ? scope.tenantId : DEFAULT_TENANT_ID;
+}
+
 export async function withActingTenantWrite<T>(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   fn: (tx: any, tenantId: string) => Promise<T>,

@@ -9,6 +9,7 @@ import { prisma, basePrisma } from "@/lib/db";
 import { ciExactIdFilter } from "@/lib/ciExact";
 import { withTenantWrite } from "@/lib/tenantWrite";
 import { actingOwnerTenantId } from "@/lib/actingScope";
+import { resolveAssignableUser } from "@/lib/tenantActor";
 import { logAudit } from "@/lib/audit";
 import { logError } from "@/lib/errorLog";
 import {
@@ -244,10 +245,14 @@ export async function addNote(caseId: string, formData: FormData): Promise<Actio
 export async function assignTicket(caseId: string, formData: FormData): Promise<ActionResult> {
   return asActionResult(async () => {
     const user = await requireCaseAccess(caseId, "cases.assign");
-    const raw = str(formData, "assigneeId");
-    const assigneeId = raw === "" ? null : raw;
-    const assignee = assigneeId ? await basePrisma.user.findUnique({ where: { id: assigneeId }, select: { name: true } }) : null;
-    if (assigneeId && !assignee) throw new ActionRefusal("That agent no longer exists.");
+    // The old check asked `basePrisma.user.findUnique` whether the agent EXISTS.
+    // `User` is a global model, so every user on the platform passed it — the
+    // ticket, its customer's name and its whole conversation could be handed to
+    // somebody in another workspace by posting their id. Existence was never the
+    // question; membership of THIS workspace is. Refuses rather than quietly
+    // unassigning, so a rejected id cannot masquerade as "Unassigned".
+    const assignee = await resolveAssignableUser(formData.get("assigneeId"), "agent");
+    const assigneeId = assignee?.id ?? null;
 
     await prisma.customerCase.update({ where: { id: caseId }, data: { assignedToId: assigneeId, updatedAt: new Date() } });
     await logEvent(caseId, user.id, assigneeId ? `Assigned to ${assignee?.name}` : "Unassigned", { event: "assigned", to: assigneeId });
