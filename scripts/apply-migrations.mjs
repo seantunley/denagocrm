@@ -63,11 +63,155 @@ const MIGRATION_LOCK_KEY = 913472651;
 // turn mangle the `&` in the database URL argument.)
 const NPX = "npx";
 
-/** Migration directories with a migration.sql, ordered by their numeric prefix. */
-function orderedMigrations() {
+/**
+ * Order two migration directory names: NUMERIC PREFIX FIRST, full name to break ties.
+ *
+ * The prefix has to stay the primary key. Legacy migrations are not zero-padded
+ * (`7_push_subscriptions`, `80_tenant_integration_credentials`), so a plain
+ * lexicographic sort puts 80 before 7 — the mis-ordering described at the top of
+ * this file, and the reason this runner exists at all.
+ *
+ * THE TIE-BREAK IS THE FIX, and it closes a hazard rather than a visible bug.
+ * Prefixes are not unique: two migrations authored in the same minute on two
+ * branches both land on `20260810110000`, and this repository carries two such
+ * pairs. Subtracting equal prefixes returns 0, and `Array.prototype.sort` is
+ * stable, so the order WITHIN a colliding pair fell through to whatever
+ * `readdirSync` returned. On Linux — CI, Vercel, disaster recovery — that is
+ * filesystem order: not alphabetical, and not guaranteed to be the same on the
+ * next machine or the next checkout.
+ *
+ * Production never saw it, and only by timing: each pair was applied hours apart
+ * in separate deploys, so only one of each was ever pending in a single run. A
+ * database built FROM SCRATCH has every migration pending at once — disaster
+ * recovery, a fresh tenant database, CI, a preview branch. Neither pair on disk
+ * today is order-dependent (they touch disjoint tables), so nothing is broken;
+ * what was broken is that the runner had no opinion, and the next colliding pair
+ * gets no say in whether it is disjoint. Nondeterminism during disaster recovery
+ * is the least affordable kind.
+ *
+ * Ties are compared with `<` rather than `localeCompare`: code-unit order is the
+ * same on every machine, while locale collation depends on the ICU data the
+ * running Node was built with. Replacing filesystem nondeterminism with ICU
+ * nondeterminism would not be a fix.
+ *
+ * Pure + exported so the exact order is asserted by tests.
+ */
+export function compareMigrationNames(a, b) {
+  const byPrefix = Number.parseInt(a, 10) - Number.parseInt(b, 10);
+  if (byPrefix !== 0) return byPrefix;
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * Migration directories with a migration.sql, in a TOTAL, deterministic order.
+ * See {@link compareMigrationNames}. Exported so a test can assert on exactly the
+ * sequence the runner will apply, rather than on a re-derived copy of it.
+ */
+export function orderedMigrations() {
   return readdirSync(migrationsDir)
     .filter((name) => /^\d+_/.test(name) && existsSync(join(migrationsDir, name, "migration.sql")))
-    .sort((a, b) => Number.parseInt(a, 10) - Number.parseInt(b, 10));
+    .sort(compareMigrationNames);
+}
+
+/**
+ * Migration names grouped by the key {@link compareMigrationNames} sorts on,
+ * keeping only the keys that more than one migration claims.
+ *
+ * Keyed on the PARSED prefix, not the literal digits, because the parsed value is
+ * what the comparator ties on: `007_x` and `7_y` are different strings and the
+ * same number, so they collide while looking nothing alike.
+ *
+ * Pure + exported.
+ */
+export function prefixCollisions(names) {
+  const byPrefix = new Map();
+  for (const name of names) {
+    const prefix = String(Number.parseInt(name, 10));
+    const group = byPrefix.get(prefix);
+    if (group) group.push(name);
+    else byPrefix.set(prefix, [name]);
+  }
+  return [...byPrefix]
+    .filter(([, group]) => group.length > 1)
+    .map(([prefix, group]) => ({ prefix, names: [...group].sort() }))
+    .sort((a, b) => (a.prefix < b.prefix ? -1 : a.prefix > b.prefix ? 1 : 0));
+}
+
+/**
+ * THE COLLIDING PREFIXES THIS REPOSITORY IS STUCK WITH.
+ *
+ * A RATCHET, not an allowlist. These two pairs are already recorded in
+ * production's `_prisma_migrations`, which keys on the directory name verbatim
+ * (see `appliedNames`), so renaming one would make it look pending and re-run its
+ * SQL on every existing database while leaving a permanent phantom record behind
+ * for the old name. They cannot be fixed by renaming. Every FUTURE pair can be,
+ * because it has not been recorded anywhere yet — so a new pair is a mistake to
+ * reject at review time, not a fact to live with.
+ *
+ * {@link compareMigrationNames} already makes the order deterministic, so an entry
+ * here is not a live bug. It is a statement that two migrations were authored for
+ * the same minute, that their relative order is therefore decided by a tie-break
+ * nobody intended, and that somebody checked they do not depend on each other.
+ * The `why` records that check.
+ *
+ * The MEMBER NAMES are recorded, not just the prefix. Recording the prefix alone
+ * would let a pair quietly become a triple under an entry that already says
+ * "known".
+ */
+export const KNOWN_PREFIX_COLLISIONS = [
+  {
+    prefix: "20260810110000",
+    names: ["20260810110000_bot_session_ownership", "20260810110000_staff_reply_delivery_state"],
+    why:
+      "disjoint: bot_session_ownership only touches BotSession, staff_reply_delivery_state only " +
+      "touches BotFlowOutbox (and an FK to Communication, created in 0_init). Both are additive " +
+      "and reentrant, and neither reads or writes an object the other creates, so either order " +
+      "produces the same schema. Applied hours apart in production; already recorded there.",
+  },
+  {
+    prefix: "20260810120000",
+    names: [
+      "20260810120000_bot_flow_version_retention_fk",
+      "20260810120000_declared_indexes_that_were_never_created",
+    ],
+    why:
+      "disjoint: bot_flow_version_retention_fk only reconciles BotFlowVersion_flowId_fkey, " +
+      "declared_indexes_that_were_never_created only adds indexes to Team and UserRole (created " +
+      "in 52_pipelines_forecasting_rbac_audit). No shared table, no shared constraint. Already " +
+      "recorded in production.",
+  },
+];
+
+/**
+ * Prefix collisions that are NOT in the ratchet — i.e. newly introduced ones.
+ *
+ * A group matches only when its membership is exactly what was recorded, so
+ * adding a third migration under an already-known prefix reports rather than
+ * inheriting the existing entry's blessing.
+ *
+ * Pure + exported: this decides what a reviewer will never be shown, so it is
+ * tested.
+ */
+export function unratchetedPrefixCollisions(names, known = KNOWN_PREFIX_COLLISIONS) {
+  const recorded = new Map(known.map((entry) => [entry.prefix, entry.names.join(",")]));
+  return prefixCollisions(names)
+    .filter((group) => recorded.get(group.prefix) !== group.names.join(","))
+    .map((group) => `${group.prefix}: ${group.names.join(", ")}`);
+}
+
+/**
+ * Ratchet entries that have stopped describing a real collision — because the
+ * migrations were renamed or withdrawn, or because the group's membership
+ * changed.
+ *
+ * The same reason `staleAcknowledgements` exists: a baseline nobody prunes stops
+ * being read, and a ratchet that can only ever grow is not a ratchet. Reporting
+ * these is also what stops the list being padded with entries that never
+ * described anything.
+ */
+export function stalePrefixCollisions(names, known = KNOWN_PREFIX_COLLISIONS) {
+  const live = new Map(prefixCollisions(names).map((group) => [group.prefix, group.names.join(",")]));
+  return known.filter((entry) => live.get(entry.prefix) !== entry.names.join(",")).map((entry) => entry.prefix);
 }
 
 /**
