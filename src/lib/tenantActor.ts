@@ -1,6 +1,7 @@
 import "server-only";
 import { Prisma } from "@prisma/client";
 import { basePrisma } from "./db";
+import { actingScopeClass } from "./actingScope";
 import { currentScopeClass } from "./tenantWrite";
 
 export type TenantActor = { id: string; name: string; email: string };
@@ -97,6 +98,77 @@ export async function resolveTenantMemberUser(userId: string): Promise<TenantAct
  */
 export async function listTenantStaff(): Promise<TenantActor[]> {
   const s = actorScope();
+  if (s.mode === "closed") return [];
+  if (s.mode === "tenant") {
+    return basePrisma.$queryRaw<TenantActor[]>`
+      SELECT u."id", u."name", u."email"
+      FROM "TenantMember" m
+      JOIN "User" u ON u."id" = m."userId"
+      JOIN "Tenant" t ON t."id" = m."tenantId"
+      WHERE m."tenantId" = ${s.tenantId} AND t."active" = true AND u."disabledAt" IS NULL
+      ORDER BY u."name" ASC`;
+  }
+  return basePrisma.$queryRaw<TenantActor[]>`
+    SELECT "id", "name", "email" FROM "User"
+    WHERE "disabledAt" IS NULL
+    ORDER BY "name" ASC`;
+}
+
+/* ------------------------------------------------------------------------- */
+/* USER-ORIGINATED variants                                                   */
+/*                                                                            */
+/* The resolvers above classify with `currentScopeClass`, which maps DORMANT   */
+/* enforcement to `global`. That is right for a cron or a webhook and wrong    */
+/* for a person sitting in a workspace: while dormant, the membership join is  */
+/* skipped entirely, so an assignee is validated against the whole platform    */
+/* and a picker lists every user on it. Both only start working when           */
+/* enforcement is switched on, which is the opposite of a safety control.      */
+/*                                                                            */
+/* These variants classify with `actingScopeClass` instead, so the same code   */
+/* enforces membership today. They are deliberately SEPARATE rather than a     */
+/* change to the originals: background and token paths rely on the existing    */
+/* semantics, and there is no session there for an acting scope to resolve.    */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * {@link resolveTenantMemberUser} for an assignee a SIGNED-IN PERSON picked.
+ *
+ * Returns null — the caller refuses — when the id is not an active member of the
+ * acting workspace. Under enforcement this is identical to the original; while
+ * dormant it is the difference between checking membership and not checking it.
+ */
+export async function resolveActingTenantMemberUser(userId: string): Promise<TenantActor | null> {
+  const s = await actingScopeClass();
+  if (s.mode === "closed") return null;
+  if (s.mode === "tenant") {
+    const rows = await basePrisma.$queryRaw<TenantActor[]>`
+      SELECT u."id", u."name", u."email"
+      FROM "TenantMember" m
+      JOIN "User" u ON u."id" = m."userId"
+      JOIN "Tenant" t ON t."id" = m."tenantId"
+      WHERE m."tenantId" = ${s.tenantId} AND m."userId" = ${userId}
+        AND t."active" = true AND u."disabledAt" IS NULL
+      LIMIT 1`;
+    return rows[0] ?? null;
+  }
+  const rows = await basePrisma.$queryRaw<TenantActor[]>`
+    SELECT "id", "name", "email" FROM "User"
+    WHERE "id" = ${userId} AND "disabledAt" IS NULL
+    LIMIT 1`;
+  return rows[0] ?? null;
+}
+
+/**
+ * {@link listTenantStaff} for a picker a SIGNED-IN PERSON is looking at.
+ *
+ * A picker fixed without its check is half a fix, and a check that is inert while
+ * dormant is the other half missing — so the picker and the assignment check must
+ * classify the same way, in BOTH modes. Use this for any staff dropdown rendered
+ * to a logged-in user; keep {@link listTenantStaff} for workflow runtime lookups
+ * that run without a session.
+ */
+export async function listActingTenantStaff(): Promise<TenantActor[]> {
+  const s = await actingScopeClass();
   if (s.mode === "closed") return [];
   if (s.mode === "tenant") {
     return basePrisma.$queryRaw<TenantActor[]>`

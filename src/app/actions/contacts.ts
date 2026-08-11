@@ -3,7 +3,7 @@
 import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { withTenantWrite } from "@/lib/tenantWrite";
+import { withActingTenantWrite } from "@/lib/actingScope";
 import { activeTenantPredicate } from "@/lib/tenantPredicate";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
@@ -192,7 +192,7 @@ export async function createContact(formData: FormData) {
     if (!data.firstName) throw new ActionRefusal("Name is required");
     const tags = parseTags(formData);
     // Atomic: contact + all its tag links in ONE transaction, tenant-stamped.
-    const contact = await withTenantWrite(async (tx, tenantId) => {
+    const contact = await withActingTenantWrite(async (tx, tenantId) => {
       const c = await tx.contact.create({ data: { ...data, createdById: user.id, tenantId } });
       await syncContactTagsTx(tx, tenantId, c.id, tags);
       return c;
@@ -242,7 +242,11 @@ export async function updateContact(id: string, formData: FormData) {
     // not answer.
     const before = await prisma.contact.findUnique({ where: { id } });
     const contact = await prisma.contact.update({ where: { id }, data });
-    await withTenantWrite(async (tx, tenantId) => {
+    await withActingTenantWrite(async (tx, actingTenantId) => {
+      // The tags belong to the CONTACT, not to whoever is editing it. An admin
+      // editing another workspace's contact must not re-own its tag links, and a
+      // contact that predates tenancy keeps its NULL until a backfill claims it.
+      const tenantId = contact.tenantId ?? actingTenantId;
       await tx.$executeRaw`DELETE FROM "_ContactToTag" WHERE "A" = ${id}`;
       await syncContactTagsTx(tx, tenantId, id, tags);
     });
