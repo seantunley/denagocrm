@@ -9,7 +9,7 @@ const quickCreateDialogSource = read("src", "components", "QuickCreateDialog.tsx
 const quickCreateActionSource = read("src", "app", "actions", "quickCreate.ts");
 
 test("global quick-create metadata and writes remain tenant scoped", () => {
-  assert.match(quickCreateRouteSource, /listTenantStaff\(\)/);
+  assert.match(quickCreateRouteSource, /listActingTenantStaff\(\)/);
   assert.doesNotMatch(quickCreateRouteSource, /prisma\.user\.findMany/);
   assert.match(quickCreateDialogSource, /action=\{createQuickLead\}/);
   assert.match(quickCreateDialogSource, /action=\{createQuickContact\}/);

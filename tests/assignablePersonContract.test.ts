@@ -294,14 +294,23 @@ test("a lookup that answers with somebody ELSE is refused by the contract too", 
 test("resolveAssignableUser is ONE contract, resolved through tenant membership", () => {
   const code = read("src", "lib", "tenantActor.ts");
   assert.match(code, /export async function resolveAssignableUser\s*\(/, "the shared entry point must live in tenantActor");
-  assert.match(code, /resolveTenantMemberUser\s*\(/, "it must resolve the id through the TenantMember join");
+  assert.match(code, /resolveActingTenantMemberUser\s*\(/, "it must resolve the id through the TenantMember join");
   // The composition moved DOWN into assignableUser.ts, so what is left here is
   // the entry point handing the real join to it. What it must not do is grow a
   // second body of its own again.
+  //
+  // The lookup it hands over must be the ACTING one. Wired to the background
+  // `resolveTenantMemberUser` this contract validated nothing at all: that
+  // resolver classifies with `currentScopeClass`, which maps DORMANT enforcement
+  // — the mode every environment runs in — to `global` and skips the membership
+  // join, so every id on the platform resolved and the refusal could not fire
+  // until the enforcement flip. Every test above still passed, because they
+  // execute the rule with a lookup supplied by hand; only the wiring was wrong,
+  // which is exactly the shape of defect a wiring assertion exists to catch.
   assert.match(
     code,
-    /return resolveAssignment\(raw, label, resolveTenantMemberUser\)/,
-    "it must delegate to the executable composition, not re-implement it behind server-only",
+    /return resolveAssignment\(raw, label, resolveActingTenantMemberUser\)/,
+    "it must delegate to the executable composition, using the ACTING membership lookup",
   );
   assert.doesNotMatch(
     codeOf(code),
@@ -397,13 +406,27 @@ const PICKERS = [
 ] as const;
 
 for (const file of PICKERS) {
-  test(`${file}: staff list comes from listTenantStaff, not a global User scan`, () => {
+  test(`${file}: staff list comes from listActingTenantStaff, not a global User scan`, () => {
     const code = read(file);
-    assert.match(code, /listTenantStaff\s*\(\)/, `${file} must build its staff list via listTenantStaff`);
+    assert.match(
+      code,
+      /listActingTenantStaff\s*\(\)/,
+      `${file} must build its staff list via listActingTenantStaff`,
+    );
     assert.doesNotMatch(
       codeOf(code),
       /\buser\.findMany\s*\(/,
       `${file} must not enumerate the global User table (it is not tenant-scoped by anything)`,
+    );
+    // The background variant is the SAME query with the membership join skipped
+    // while enforcement is dormant, so a picker on it lists the whole platform
+    // today and only starts behaving after the flip. `listActingTenantStaff`
+    // contains the shorter name, so match on a boundary the acting one cannot
+    // satisfy.
+    assert.doesNotMatch(
+      codeOf(code),
+      /(?<![A-Za-z])listTenantStaff\s*\(\)/,
+      `${file} renders to a signed-in person, so it must not use the background staff list`,
     );
   });
 }

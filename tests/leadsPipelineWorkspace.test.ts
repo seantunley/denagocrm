@@ -31,7 +31,7 @@ test("lead pipeline preserves production card signals", () => {
 });
 
 test("lead board staff pickers and mutations stay inside the active tenant", () => {
-  assert.match(pageSource, /listTenantStaff\(\)/);
+  assert.match(pageSource, /listActingTenantStaff\(\)/);
   assert.doesNotMatch(pageSource, /prisma\.user\.findMany/);
   // Same intent as before — the board's assign action must check membership —
   // but asserted against the SHARED contract rather than this file's own former

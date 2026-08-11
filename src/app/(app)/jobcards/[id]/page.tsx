@@ -34,7 +34,7 @@ import {
   setComeback,
 } from "@/app/actions/jobcards";
 import { requireUser } from "@/lib/auth";
-import { listTenantStaff } from "@/lib/tenantActor";
+import { listActingTenantStaff } from "@/lib/tenantActor";
 import DocumentsPanel from "@/components/DocumentsPanel";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import SigningBlock from "@/components/SigningBlock";
@@ -153,7 +153,7 @@ export default async function JobCardDetailPage({
     // The technician dropdown: staff of THIS workspace. `User` is a global model,
     // so `prisma.user.findMany` is scoped by nothing and this select was listing
     // every user on the platform as an assignable technician.
-    listTenantStaff(),
+    listActingTenantStaff(),
     prisma.workshopBay.findMany({ where: { active: true }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }] }),
     getDefaultLabourRateCents(),
   ]);

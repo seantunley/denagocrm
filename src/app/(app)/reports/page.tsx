@@ -9,6 +9,7 @@ import {
 } from "date-fns";
 import { TrendingDown, TrendingUp } from "lucide-react";
 import { prisma, basePrisma } from "@/lib/db";
+import { listActingTenantStaff } from "@/lib/tenantActor";
 import { formatZARCompact } from "@/lib/format";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import {
@@ -422,12 +423,35 @@ export default async function ReportsPage({
   const params = await searchParams;
   const { from, to, prevFrom, prevTo } = resolveRange(params);
   const unrestricted = await hasPermission(user, "reports.view_all");
-  const [leadIds, jobCardIds, reportUserIds] = await Promise.all([
+  const [leadIds, jobCardIds, reportUserIds, staff] = await Promise.all([
     getAccessibleLeadIds(user),
     getAccessibleJobCardIds(user),
     accessibleReportUserIds(user.id, unrestricted),
+    // The "filter by team member" dropdown. This used to be
+    // `prisma.user.findMany({ where: reportUserIds === null ? {} : … })`, and the
+    // `{}` is the whole defect: `User` is a global model, so an unrestricted
+    // reader — every owner — was offered every person on the platform by name.
+    // RBAC narrowed it for RESTRICTED readers only, which is backwards: the more
+    // privileged the reader, the wider the disclosure.
+    //
+    // The acting variant, not the background one, for the reason this whole sweep
+    // exists: `listTenantStaff` skips its TenantMember join while enforcement is
+    // dormant and would have reproduced the same global list.
+    listActingTenantStaff(),
   ]);
-  const requestedUser = params.user && (reportUserIds === null || reportUserIds.includes(params.user))
+  // Two independent narrowings, and the report needs BOTH: membership of this
+  // workspace (who exists here at all) and RBAC (whose numbers this reader may
+  // see). Applied in that order so an id that passes one still has to pass the
+  // other.
+  const users = (reportUserIds === null ? staff : staff.filter((u) => reportUserIds.includes(u.id)))
+    .map((u) => ({ id: u.id, name: u.name }));
+  // The FILTER is the action behind this screen — `?user=` is submitted, and a
+  // submitted id must be judged by the same list the dropdown was built from
+  // rather than by the looser RBAC set. Otherwise a hand-typed id from another
+  // workspace still reaches `assignedToId`, and while that returns no rows today
+  // (leads are tenant-scoped), it is an unvalidated identifier flowing into a
+  // query on the strength of nobody having found a use for it yet.
+  const requestedUser = params.user && users.some((u) => u.id === params.user)
     ? params.user
     : undefined;
 
@@ -462,18 +486,13 @@ export default async function ReportsPage({
   const useBuckets =
     unrestricted && !filtered && (await statisticsReadyFor(neededMetrics, statsTenantId));
 
-  const [openLeads, users, products, allSources] = await Promise.all([
+  const [openLeads, products, allSources] = await Promise.all([
     prisma.lead.findMany({
       where: { ...leadFilter, status: "open" },
       select: {
         valueCents: true,
         stage: { select: { id: true, name: true, color: true, order: true } },
       },
-    }),
-    prisma.user.findMany({
-      where: reportUserIds === null ? {} : { id: { in: reportUserIds } },
-      orderBy: { name: "asc" },
-      select: { id: true, name: true },
     }),
     prisma.product.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
     prisma.lead.groupBy({ by: ["source"], where: leadScope }),

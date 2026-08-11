@@ -12,7 +12,7 @@ import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
 import { SectionHeading, Surface } from "@/components/visual-system";
 import { fleetPicker } from "@/lib/fleetDirectory";
-import { listTenantStaff } from "@/lib/tenantActor";
+import { listActingTenantStaff } from "@/lib/tenantActor";
 import { requirePermission } from "@/lib/permissions";
 
 const nextSteps = [
@@ -27,7 +27,7 @@ export default async function NewContactPage() {
     // The owner picker: staff of THIS tenant, not every User row. `User` is a
     // global model, so prisma.user.findMany is not tenant-scoped by anything.
     // Same helper the edit form already uses.
-    listTenantStaff(),
+    listActingTenantStaff(),
     fleetPicker(),
   ]);
 

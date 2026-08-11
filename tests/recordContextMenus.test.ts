@@ -43,7 +43,7 @@ test("contact record actions preserve the selected contact", () => {
 });
 
 test("record quick-create metadata and writes remain tenant scoped", () => {
-  assert.match(quickCreateRouteSource, /listTenantStaff\(\)/);
+  assert.match(quickCreateRouteSource, /listActingTenantStaff\(\)/);
   assert.doesNotMatch(quickCreateRouteSource, /prisma\.user\.findMany/);
   assert.match(quickCreateSource, /action=\{createQuickLead\}/);
   assert.match(quickCreateSource, /action=\{createQuickContact\}/);

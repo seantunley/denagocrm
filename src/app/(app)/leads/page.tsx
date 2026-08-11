@@ -9,7 +9,7 @@ import {
   requireAnyPermission,
 } from "@/lib/permissions";
 import { getDailyForecast } from "@/lib/weather";
-import { listTenantStaff } from "@/lib/tenantActor";
+import { listActingTenantStaff } from "@/lib/tenantActor";
 import { getTimelinePins } from "@/lib/timelinePins";
 import { stageJourneyNames } from "@/lib/journeyStageBadges";
 import { listActiveSalesPipelines, listPipelineStages } from "@/lib/pipelines";
@@ -128,7 +128,7 @@ export default async function LeadsPage({
       orderBy: { firstName: "asc" },
       take: 500,
     }),
-    listTenantStaff(),
+    listActingTenantStaff(),
     stageJourneyNames(),
   ]);
 
