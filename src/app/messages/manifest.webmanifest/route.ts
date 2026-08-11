@@ -22,9 +22,16 @@ export function GET() {
       orientation: "portrait",
       background_color: "#020617",
       theme_color: "#020617",
+      // Two maskable sizes, not one. A launcher picking by density found no
+      // maskable at 192 and fell back to the "any" icon, which it then put on
+      // its own plate — the white ring Sean saw around the installed icon. The
+      // art is full-bleed on the background colour for the same reason: a
+      // launcher masks the tile it is given, and anything it can see through
+      // becomes the plate.
       icons: [
         { src: "/icons/messages-192.png", sizes: "192x192", type: "image/png" },
         { src: "/icons/messages-512.png", sizes: "512x512", type: "image/png" },
+        { src: "/icons/messages-maskable-192.png", sizes: "192x192", type: "image/png", purpose: "maskable" },
         { src: "/icons/messages-maskable-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
       ],
       shortcuts: [
