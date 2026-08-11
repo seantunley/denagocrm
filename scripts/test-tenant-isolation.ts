@@ -32,6 +32,15 @@
  */
 import { provisionHarnessDatabase, migrateHarnessDatabase } from "./harness/testDatabase";
 import type { CheckResult } from "./harness/engine";
+// Safe as a STATIC import despite the dynamic-import discipline below: this
+// module's only import is `import type`, so it reaches nothing that builds a
+// PrismaClient. It is pure data plus three pure functions.
+import {
+  ACKNOWLEDGED_ENFORCED_FAILURES,
+  activeAcknowledgements,
+  staleAcknowledgements,
+  unacknowledgedFailures,
+} from "./harness/acknowledged";
 
 type ModeReport = { mode: "dormant" | "enforced"; results: CheckResult[] };
 
@@ -277,20 +286,96 @@ async function main() {
   section("BROKEN BY THE FLIP", brokenByFlip,
     "works today and stops working after the flip — a regression the flip would introduce.");
 
+  /* ── The gate ─────────────────────────────────────────────────────────────
+   *
+   * BLOCKING, with a recorded allowlist. Two independent ways to fail, and the
+   * second is the one that stops the list rotting — see scripts/harness/
+   * acknowledged.ts for the full reasoning.
+   *
+   *   UNACKNOWLEDGED  a failure nobody wrote down. The gate proper.
+   *   STALE           an entry that no longer names a currently-failing check —
+   *                   it passes now, or vanished, or quietly became a skip.
+   *
+   * The allowlisted count is printed on every run, in the RESULT block, whether
+   * or not the run passes. A non-zero allowlist must never read as "clean".
+   */
+  const unacknowledged = unacknowledgedFailures(enforced);
+  const stale = staleAcknowledgements(enforced);
+  const active = activeAcknowledgements(enforced);
+
+  console.log(bar("PRE-FLIP GATE"));
+
+  if (active.length) {
+    console.log(
+      `\n  ⚠ ${active.length} KNOWN FAILURE(S) ALLOWLISTED — recorded, NOT fixed, NOT clean.\n` +
+        "    Each one is a way enforcement would still leak or lose data today.\n",
+    );
+    for (const entry of active) {
+      console.log(`    ${entry.model} [${entry.check}] ${entry.name}`);
+      console.log(`      why: ${entry.why}`);
+      console.log(`      fix: ${entry.fix}\n`);
+    }
+    console.log(
+      "    THIS LIST MUST REACH ZERO BEFORE TENANT_ENFORCEMENT IS SWITCHED ON.\n" +
+        "    It is an exemption with a deadline, not a substitute for the fix.\n",
+    );
+  } else if (ACKNOWLEDGED_ENFORCED_FAILURES.length === 0) {
+    console.log("\n  allowlist is EMPTY — nothing is being exempted.\n");
+  }
+
+  if (unacknowledged.length) {
+    console.log(`\n  ✖ ${unacknowledged.length} UNACKNOWLEDGED failure(s) — these fail the build:\n`);
+    for (const r of unacknowledged) {
+      console.log(`    ${r.model} [${r.check}] ${r.name}`);
+      if (r.detail) console.log(`      ${r.detail}`);
+    }
+    console.log(
+      "\n    Fix them. If one genuinely cannot be fixed in this repository, record it in\n" +
+        "    scripts/harness/acknowledged.ts with a `why` and a `fix` saying where the real\n" +
+        "    fix lives — in a diff a reviewer can see, never by a check quietly going red.\n",
+    );
+  }
+
+  if (stale.length) {
+    console.log(`\n  ✖ ${stale.length} STALE allowlist entr(y/ies) — these also fail the build:\n`);
+    for (const { entry, reason } of stale) {
+      console.log(`    ${entry.model} [${entry.check}] ${entry.name}`);
+      console.log(`      ${reason}`);
+    }
+    console.log(
+      "\n    An allowlist nobody prunes is how the next real finding gets hidden.\n",
+    );
+  }
+
   const enforcedFails = tally(enforced).fail;
   const dormantFails = tally(dormant).fail;
   console.log(bar("RESULT"));
-  console.log(`  dormant  : ${dormantFails} finding(s) — recorded, non-fatal (this is today's live exposure)`);
-  console.log(`  enforced : ${enforcedFails} failure(s) — fatal`);
-  console.log(`  elapsed  : ${((Date.now() - started) / 1000).toFixed(1)}s\n`);
+  console.log(`  dormant     : ${dormantFails} finding(s) — recorded, non-fatal (this is today's live exposure)`);
+  console.log(`  enforced    : ${enforcedFails} failure(s)`);
+  console.log(`  allowlisted : ${active.length} — KNOWN, RECORDED, STILL BROKEN (must reach 0 before the flip)`);
+  console.log(`  blocking    : ${unacknowledged.length} unacknowledged + ${stale.length} stale`);
+  console.log(`  elapsed     : ${((Date.now() - started) / 1000).toFixed(1)}s\n`);
 
-  if (enforcedFails > 0) {
+  if (unacknowledged.length || stale.length) {
     console.error(
-      `✖ ENFORCED run failed ${enforcedFails} check(s). TENANT_ENFORCEMENT=enforce is NOT safe to flip.\n`,
+      `✖ PRE-FLIP GATE FAILED — ${unacknowledged.length} unacknowledged failure(s), ` +
+        `${stale.length} stale allowlist entr(y/ies).\n`,
     );
     process.exit(1);
   }
-  console.log("✓ ENFORCED run is clean.\n");
+
+  if (active.length) {
+    // Deliberately NOT a tick, and deliberately not the word "clean". The gate
+    // held — no new failures, no rotted entries — but the suite is still
+    // reporting known, unfixed cross-tenant leaks.
+    console.log(
+      `⚠ GATE HELD, BUT NOT CLEAN — 0 new failures, and ${active.length} known failure(s) still allowlisted.\n` +
+        "  TENANT_ENFORCEMENT=enforce is NOT safe to flip while that number is above zero.\n",
+    );
+    return;
+  }
+
+  console.log("✓ ENFORCED run is clean — 0 failures, 0 allowlisted. The gate is genuinely green.\n");
 }
 
 main().catch((error) => {
