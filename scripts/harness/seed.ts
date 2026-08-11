@@ -488,9 +488,29 @@ async function seedBusinessRows(
   );
 
   // Queued and due — `processOneRun` claims exactly this shape.
+  //
+  // TWO fixture details here are load-bearing, and BOTH of them fail silently —
+  // the run simply never executes, and the OWN probe reports "the action does
+  // not expose the new row's id", which reads as a missing feature rather than
+  // as a fixture that never ran. Both were found that way.
+  //
+  // 1. `currentStepId`. `parseCursor(run.cursor, run.currentStepId)` falls back
+  //    to a FLAT cursor on its second argument, so a null one points nowhere,
+  //    `resolveCursor` returns null, and the run is `finish()`ed as completed
+  //    having executed nothing. It is the same value `enqueueJourneyRun` writes
+  //    at enrolment (journeyEngineShared.ts).
+  //
+  // 2. `nextRunAt` IN UTC, not SQL `now()`. Every DateTime in this schema is
+  //    `TIMESTAMP(3)` — WITHOUT time zone — so Postgres `now()` writes the
+  //    SERVER'S LOCAL wall clock while Prisma sends a JS Date as UTC. On a
+  //    UTC+2 developer machine the seeded "one minute ago" landed 119 minutes
+  //    in the FUTURE relative to `nextRunAt: { lte: new Date() }`, the claim in
+  //    processOneRun matched zero rows, and the run sat at `queued` forever.
+  //    It would have looked correct on a CI box running UTC and broken only on
+  //    the machine of whoever next ran it locally.
   await exec(
-    `INSERT INTO "JourneyRun" ("id","tenantId","journeyId","journeyVersionId","status","entityType","entityId","leadId","contactId","context","idempotencyKey","nextRunAt","updatedAt")
-     VALUES ($1,$2,$3,$4,'queued','lead',$5,$5,$6,$7::jsonb,$8,now() - interval '1 minute',now())`,
+    `INSERT INTO "JourneyRun" ("id","tenantId","journeyId","journeyVersionId","status","currentStepId","entityType","entityId","leadId","contactId","context","idempotencyKey","nextRunAt","updatedAt")
+     VALUES ($1,$2,$3,$4,'queued','probe_step','lead',$5,$5,$6,$7::jsonb,$8,timezone('utc', now()) - interval '1 minute',now())`,
     rows.journeyRunQueuedId,
     tenantId,
     rows.journeyId,

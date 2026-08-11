@@ -230,11 +230,18 @@ export async function buildMatrix(): Promise<MatrixEntry[]> {
         // created without waiting for a real trigger to fire at a real
         // customer. JourneyRun is 6/6 unowned in production and previously had
         // NO create probe at all, so nothing here could have caught that.
+        // ENROL THE CONTACT, NOT THE LEAD. The journey's runMode defaults to
+        // `single`, under which arbitration DROPS an enrolment while any run is
+        // still open on the same (journey, entityType, entityId) — and the
+        // fixture keeps a `running` and a `queued` run on (journey, lead,
+        // leadId). Aimed at the lead this probe returned no id and the check
+        // reported itself as "the action does not expose the new row's id":
+        // a skip that looks like a missing feature and is really a refusal.
         const enrolment = await actor.as(() =>
           journeyEnrolment.enrollEntityInJourney({
             journeyId: actor.tenant.rows.journeyId,
-            entityType: "lead",
-            entityId: actor.tenant.rows.leadId,
+            entityType: "contact",
+            entityId: actor.tenant.rows.contactId,
             eventKey: `harness-own-${Date.now().toString(36)}`,
           }),
         );
@@ -287,7 +294,20 @@ export async function buildMatrix(): Promise<MatrixEntry[]> {
           `SELECT "id" FROM "JourneyStepLog" WHERE "runId" = $1`,
           actor.tenant.rows.journeyRunQueuedId,
         );
-        return after.find((r) => !seen.has(r.id))?.id ?? null;
+        const made = after.find((r) => !seen.has(r.id))?.id ?? null;
+        if (!made) {
+          // A run that executed nothing must not be reported as "the action
+          // does not expose an id" — that reads as a missing feature and hides
+          // a fixture that never ran. Say why, using the run's own record.
+          const [row] = await basePrisma.$queryRawUnsafe<Array<{ status: string; lastError: string | null; currentStepId: string | null; stepsExecuted: number }>>(
+            `SELECT "status","lastError","currentStepId","stepsExecuted" FROM "JourneyRun" WHERE "id" = $1`,
+            actor.tenant.rows.journeyRunQueuedId,
+          );
+          throw new Error(
+            `processOneRun wrote no step log — run is ${row?.status}, stepsExecuted=${row?.stepsExecuted}, currentStepId=${row?.currentStepId}, lastError=${row?.lastError}`,
+          );
+        }
+        return made;
       },
       // A step log is never addressed by its own id — it is read as part of its
       // run's trace, and the RUN id is what sits in the activity-screen URL. So
