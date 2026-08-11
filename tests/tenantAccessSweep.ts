@@ -338,7 +338,37 @@ const RAW_OP = /(?:\b(\w+)|\))\s*\.(\$(?:query|execute)Raw(?:Unsafe)?)\b/g;
 const UNRESOLVABLE = "(expression)";
 const GLOBAL_USER = /(?:\b(\w+)|\))\s*\.user\.(?:findMany|findFirst)\s*\(/g;
 const TX_CALLBACK = /\b(\w+)\.\$transaction\s*\(\s*(?:async\s+)?(?:\(\s*(\w+)|(\w+)\s*=>)/g;
-const TENANT_WRITE_CALLBACK = /\bwithTenantWrite\s*\(\s*(?:async\s+)?(?:\(\s*(\w+)|(\w+)\s*=>)/g;
+/**
+ * The bypass-transaction helpers, as a CLOSED LIST of names.
+ *
+ * Both open their transaction on `basePrisma` and hand the callback a tenantId for
+ * it to stamp with — `withTenantWrite` resolves the founding tenant,
+ * `withActingTenantWrite` (#473) resolves the ACTING workspace. That is a different
+ * ANSWER for the tenantId, not a different client, so a `tx` from either has the
+ * same provenance: bypass, with an explicit stamp available but not applied for you.
+ *
+ * `withActingTenantWrite` did not exist when this sweep was written, so its call
+ * sites matched no span and their `tx` fell through to `unknown-client`. That was
+ * the correct default — an unrecognised helper must never be assumed guarded — and
+ * it is why this stays a list of names rather than a `with\w*TenantWrite` wildcard,
+ * which would silently adopt the next helper someone writes before anyone had
+ * decided which client it opens on.
+ */
+const TENANT_WRITE_HELPERS = ["withTenantWrite", "withActingTenantWrite"] as const;
+const TENANT_WRITE_CALLBACK = new RegExp(
+  String.raw`\b(?:` + TENANT_WRITE_HELPERS.join("|") + String.raw`)\s*(?=[<(])`,
+  "g",
+);
+/**
+ * The callback's first parameter, matched AT the call's opening paren — which is
+ * found with `afterCallPrefix`, not by counting characters, because these helpers
+ * are also called with an explicit type argument:
+ * `withActingTenantWrite<{ id: string }>((tx, tenantId) => …)` in fleets.ts. A
+ * fixed-offset `indexOf("(")` lands inside `<{ id: string }>` there and resolves
+ * the wrong span. Failing to match here loses the span and the `tx` falls back to
+ * `unknown-client`, so this errs closed like everything else in the file.
+ */
+const CALLBACK_PARAM = /^\(\s*(?:async\s+)?(?:\(\s*(\w+)|(\w+)\s*=>)/;
 /** Raw SQL table references. Prisma raw in this codebase always quotes model tables. */
 const SQL_TABLE = /(?:FROM|INTO|UPDATE|JOIN)\s+"(\w+)"/gi;
 
@@ -393,11 +423,14 @@ function transactionSpans(structural: string): ClientSpan[] {
     pending.push({ start: m.index, open, name, receiver: m[1] });
   }
   for (const m of structural.matchAll(TENANT_WRITE_CALLBACK)) {
-    const name = m[1] ?? m[2];
+    const open = afterCallPrefix(structural, m.index + m[0].length);
+    if (structural[open] !== "(") continue; // not a call — an import, a reference
+    const param = CALLBACK_PARAM.exec(structural.slice(open, open + 200));
+    const name = param?.[1] ?? param?.[2];
+    // No inline callback here: the helper's own declaration (`fn: (tx, …) => …`),
+    // or a callback passed by reference. Nothing to bind a `tx` name to, so no span.
     if (!name) continue;
-    const open = structural.indexOf("(", m.index + "withTenantWrite".length - 1);
-    if (open === -1) continue;
-    // withTenantWrite runs its callback on basePrisma and hands back a tenantId for
+    // These helpers run their callback on basePrisma and hand back a tenantId for
     // the caller to stamp. Bypass with an explicit stamp available — still bypass.
     pending.push({ start: m.index, open, name, receiver: null });
   }

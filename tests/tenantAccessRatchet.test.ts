@@ -24,9 +24,10 @@ const BASELINE = path.join(root, "tests/fixtures/tenant-access-baseline.json");
  *
  * WHAT IT DETECTS — statically, by client provenance:
  *   bypass-read / bypass-write   `basePrisma` (or a `tx` from a basePrisma
- *                                transaction, or from withTenantWrite) touching a
- *                                tenant-owned model without naming a tenant in the
- *                                call's own arguments.
+ *                                transaction, or from withTenantWrite /
+ *                                withActingTenantWrite) touching a tenant-owned
+ *                                model without naming a tenant in the call's own
+ *                                arguments.
  *   bypass-raw                   `basePrisma` raw SQL on a tenant-owned table with no
  *                                tenant predicate. It sets app.bypass_rls, so neither
  *                                the guard nor RLS bounds it.
@@ -64,13 +65,77 @@ const BASELINE = path.join(root, "tests/fixtures/tenant-access-baseline.json");
  * So: a NEW finding fails with its file and line, and a FIXED one also fails, asking
  * for the baseline to be lowered. `UPDATE_TENANT_BASELINE=1` records a deliberate
  * change and — see nextBaseline — is physically unable to record an increase.
+ *
+ * A new finding that is NOT going to be fixed therefore cannot be recorded by
+ * re-running the updater. It has to be written by hand into `ACKNOWLEDGED` below,
+ * with the reasoning, where it shows up in review as prose rather than as an integer
+ * nobody can distinguish from the inherited debt around it.
  */
 
 const { findings, stats } = sweep(root, GLOBAL_MODELS);
 const current = tally(findings);
-const baseline: Record<string, number> = existsSync(BASELINE)
+const stored: Record<string, number> = existsSync(BASELINE)
   ? JSON.parse(readFileSync(BASELINE, "utf8"))
   : {};
+
+/**
+ * DELIBERATE, HAND-WRITTEN ADDITIONS to the baseline — the only way a number may go
+ * up, and it is not a machine.
+ *
+ * The fixture is machine-written and `nextBaseline` can only lower it. That is the
+ * whole mechanism, so a genuinely new finding cannot be recorded by re-running the
+ * updater, and must not be: `UPDATE_TENANT_BASELINE=1` on a branch that introduced
+ * one refuses the entire write.
+ *
+ * This is the other door and it is deliberately narrow. It is source, so it appears
+ * in the diff as prose rather than as one more integer in a 200-line JSON file where
+ * no reviewer can tell a deliberate acceptance from the 190 lines of inherited debt
+ * around it, and every entry has to say why next to the number it excuses. Three
+ * rules keep it from becoming an exemption list, all enforced below:
+ *
+ *   - it is a CEILING, never a floor. An entry above what the sweep actually finds
+ *     is slack a future finding can hide in, so an over-large entry fails.
+ *   - it cannot SHADOW the fixture. A key already in the JSON must be ratcheted
+ *     there, not overridden here.
+ *   - the updater never folds these into the fixture, so the number can never drift
+ *     away from the comment that justifies it.
+ */
+const ACKNOWLEDGED: Record<string, number> = {
+  /**
+   * #466's `createStage` / `moveStage` in src/app/actions/settings.ts. Three reads
+   * of PipelineStage on `basePrisma`, and they are NOT the same case as each other.
+   *
+   * TWO ARE CONTAINED. settings.ts:81 (`aggregate` for the next `order`) and
+   * settings.ts:178 (`findMany` of the sibling stages) both run AFTER
+   * `requireOwnedPipeline()` and are bounded by the `pipelineId` that gate just
+   * proved this workspace owns. They are unscoped on purpose: `PipelineStage`
+   * inherits its owner from its parent pipeline, and a guarded read scoped to the
+   * ACTING tenant returns nothing whenever the actor's workspace is not the
+   * pipeline's — which is order 0, which is a duplicate-key collision on
+   * ("pipelineId", "order"). The parent is the boundary here and the gate is where
+   * it is applied.
+   *
+   * ONE IS NOT, AND IS AN OPEN FINDING. settings.ts:151 —
+   * `basePrisma.pipelineStage.findUnique({ where: { id }, select: { pipelineId } })`
+   * — runs BEFORE `requireOwnedPipeline()`, on an `id` that is a bound server-action
+   * argument and therefore forgeable. Its value does not escape (it is used only as
+   * the key to the gate that then refuses), but the OUTCOME does: a stage id that
+   * exists in another workspace reaches the gate and fails with `throw new Error`,
+   * which `asActionResult` renders as a generic message plus a reference, while an
+   * id that exists nowhere hits `refuse("That stage no longer exists")` and renders
+   * verbatim. Two distinguishable answers is a one-bit cross-workspace existence
+   * oracle on stage ids. Narrow — it needs an id you already hold — but real, and
+   * the read itself does cross the boundary.
+   *
+   * Recorded rather than fixed because the fix is a change to #466's production
+   * code (bounding the lookup through its parent pipeline in one query, so the gate
+   * and the read are the same statement) and this PR changes nothing under src/.
+   * It is called out in the PR body so it is picked up rather than absorbed.
+   */
+  "src/app/actions/settings.ts::bypass-read::PipelineStage": 3,
+};
+
+const baseline: Record<string, number> = { ...stored, ...ACKNOWLEDGED };
 
 // The ONLY writer. It cannot raise a number (nextBaseline takes min and refuses on
 // any increase), so it is safe here even though module scope runs before assertions —
@@ -79,7 +144,14 @@ const baseline: Record<string, number> = existsSync(BASELINE)
 const update = process.env.UPDATE_TENANT_BASELINE
   ? nextBaseline(baseline, current)
   : null;
-if (update?.ok) writeFileSync(BASELINE, `${JSON.stringify(update.baseline, null, 2)}\n`);
+if (update?.ok) {
+  // Acknowledgements stay in source. Writing them into the fixture would separate
+  // each number from the paragraph that justifies it, and the next reader would find
+  // a bare integer indistinguishable from inherited debt.
+  const written = { ...update.baseline };
+  for (const key of Object.keys(ACKNOWLEDGED)) delete written[key];
+  writeFileSync(BASELINE, `${JSON.stringify(written, null, 2)}\n`);
+}
 
 // One-time creation of a fixture that does not exist yet. Refuses to run when one
 // does, so it can never be used to launder an increase into the baseline.
@@ -111,8 +183,11 @@ test("no NEW tenant access outside the guard", () => {
 });
 
 test("the baseline only ever goes down", () => {
+  // Over the FIXTURE, not the merged view: an acknowledgement that has dropped is a
+  // different repair with a different instruction, and pointing the updater at one
+  // would never clear it (the updater deliberately does not write them).
   const fixed: string[] = [];
-  for (const [key, allowed] of Object.entries(baseline)) {
+  for (const [key, allowed] of Object.entries(stored)) {
     const count = current[key] ?? 0;
     if (count < allowed) fixed.push(`${key}  (baseline ${allowed}, now ${count})`);
   }
@@ -124,6 +199,32 @@ test("the baseline only ever goes down", () => {
       "(If the whole list is here, the scanner broke rather than the debt being fixed —\n" +
       "check that src/ still parses and that the patterns still match.)\n  " +
       fixed.join("\n  "),
+  );
+});
+
+test("an acknowledgement is a ceiling, cannot shadow the fixture, and cannot rot", () => {
+  const shadowed = Object.keys(ACKNOWLEDGED).filter((key) => key in stored);
+  assert.deepEqual(
+    shadowed.sort(),
+    [],
+    "These are already ratcheted in the fixture. Lower them there rather than\n" +
+      "overriding them from source, or the two numbers disagree and the higher wins:\n  " +
+      shadowed.join("\n  "),
+  );
+
+  const slack: string[] = [];
+  for (const [key, allowed] of Object.entries(ACKNOWLEDGED)) {
+    const count = current[key] ?? 0;
+    if (count < allowed) slack.push(`${key}  (acknowledged ${allowed}, now ${count})`);
+  }
+  assert.deepEqual(
+    slack.sort(),
+    [],
+    "An acknowledgement is a ceiling on a KNOWN set of sites, and these now sit above\n" +
+      "what the sweep finds. The gap is room for a new finding to arrive unnoticed.\n" +
+      "Lower the number in ACKNOWLEDGED — or delete the entry and its comment if the\n" +
+      "sites are gone, which is the outcome it exists to make visible:\n  " +
+      slack.join("\n  "),
   );
 });
 
@@ -220,6 +321,32 @@ test("tx provenance decides, not the identifier `tx`", () => {
       "await withTenantWrite(async (tx, tenantId) => { await tx.quote.update({ where: { id, tenantId }, data: { total: 1 } }); });",
     ),
     [],
+  );
+  // withActingTenantWrite (#473) opens on basePrisma too — it resolves a different
+  // ANSWER for the tenantId (the acting workspace, not the founding tenant), which is
+  // not a different client. Before it was recognised, every call site fell through to
+  // `unknown-client`: fail-closed, so nothing was hidden, but the wrong category and
+  // it moved two sites off their real `bypass-write` entries.
+  assert.deepEqual(kindsOf(`await withActingTenantWrite(async (tx, tenantId) => { ${body} });`), ["bypass-write"]);
+  assert.deepEqual(
+    kindsOf(
+      "await withActingTenantWrite(async (tx, tenantId) => { await tx.quote.update({ where: { id, tenantId }, data: { total: 1 } }); });",
+    ),
+    [],
+  );
+  // …including with an explicit type argument, which is how fleets.ts calls it. The
+  // old fixed-offset `indexOf("(")` lands INSIDE `<{ id: string }>` on this shape.
+  assert.deepEqual(
+    kindsOf("const f = await withActingTenantWrite<{ id: string }>((tx, tenantId) => tx.quote.create({ data: { total: 1 } }));"),
+    ["bypass-write"],
+  );
+  // The helper's own declaration is not a call site and must bind no `tx`.
+  assert.deepEqual(
+    kindsOf(
+      "export async function withActingTenantWrite<T>(fn: (tx: any, tenantId: string) => Promise<T>): Promise<T> { return null as never; }\n" +
+        `export async function apply(tx: TenantWriteTx) { ${body} }`,
+    ),
+    ["unknown-client"],
   );
   // Provenance we cannot see: a tx handed in from another file. Fail closed.
   assert.deepEqual(kindsOf(`export async function apply(tx: TenantWriteTx) { ${body} }`), ["unknown-client"]);
