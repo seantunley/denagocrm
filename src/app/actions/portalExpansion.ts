@@ -4,7 +4,7 @@ import crypto from "crypto";
 import { revalidatePath } from "next/cache";
 import { basePrisma, prisma } from "@/lib/db";
 import { getPortalContact } from "@/lib/portal";
-import { currentTenantScope } from "@/lib/tenantScope";
+import { portalTenantId, tenantOfCase } from "@/lib/portalTenant";
 import { resolveTenantActor } from "@/lib/tenantActor";
 import {
   portalCanAccessCase,
@@ -56,7 +56,7 @@ export async function submitProfileChange(
     // Multi-tenancy readiness: portalUser() -> getPortalContact() already
     // entered the tenant scope (under enforcement); ambient read here, null
     // when not enforcing (today) — matches audit.ts's non-user branch.
-    const tenantId = currentTenantScope()?.tenantId ?? null;
+    const tenantId = await portalTenantId(contact.id);
     await basePrisma.$executeRaw`
       INSERT INTO "PortalProfileChangeRequest" ("id", "tenantId", "contactId", "changes", "note")
       VALUES (${crypto.randomUUID()}, ${tenantId}, ${contact.id}, ${JSON.stringify(changes)}::jsonb, ${text(formData.get("note")) || null})
@@ -90,7 +90,7 @@ export async function updatePortalPreferences(
     const marketingEmail = formData.get("marketingEmail") === "on";
     const smsServiceUpdates = formData.get("smsServiceUpdates") === "on";
 
-    const tenantId = currentTenantScope()?.tenantId ?? null;
+    const tenantId = await portalTenantId(contact.id);
     await basePrisma.$executeRaw`
       INSERT INTO "PortalPreference" (
         "contactId", "tenantId", "serviceReminders", "portalNotifications", "marketingEmail",
@@ -176,7 +176,7 @@ export async function createPortalCase(
     const mailboxId = mailboxes[0]?.id ?? null;
     // Multi-tenancy readiness: ambient tenant, entered by portalUser() ->
     // getPortalContact() above (under enforcement); null when not enforcing.
-    const tenantId = currentTenantScope()?.tenantId ?? null;
+    const tenantId = await portalTenantId(contact.id);
     await basePrisma.$executeRaw`
       INSERT INTO "CustomerCase" (
         "id", "tenantId", "subject", "description", "type", "priority", "source", "contactId", "vehicleId", "assignedToId",
@@ -222,10 +222,23 @@ export async function addPortalCaseMessage(
     if (!(await portalCanAccessCase(caseId))) return { error: "Case not found." };
     const body = text(formData.get("body"));
     if (body.length < 2) return { error: "Enter a message." };
+    // The message named no tenant column at all, so it landed unowned however the
+    // scope resolved; the case UPDATE named no tenant either, and runs on the
+    // bypass client. portalCanAccessCase() above is an access check, not a tenant
+    // predicate, and it is the only thing between a caseId from the form post and
+    // a write.
+    //
+    // The owner comes from the CASE, not from the viewer. `CustomerCaseMessage`
+    // has a composite FK `(tenantId, caseId) → CustomerCase(tenantId, id)`, so a
+    // reply stamped with the viewer's tenant against a still-tenantless case
+    // produces `(tenant_denago_cpt, C1)` for a parent of `(NULL, C1)` — Postgres
+    // rejects it and the customer can no longer reply at all. Production is full
+    // of exactly those cases, awaiting backfill.
+    const tenantId = await tenantOfCase(caseId);
     await basePrisma.$transaction([
       basePrisma.$executeRaw`
-        INSERT INTO "CustomerCaseMessage" ("id", "caseId", "contactId", "direction", "type", "body")
-        VALUES (${crypto.randomUUID()}, ${caseId}, ${contact.id}, 'customer', 'customer', ${body})
+        INSERT INTO "CustomerCaseMessage" ("id", "tenantId", "caseId", "contactId", "direction", "type", "body")
+        VALUES (${crypto.randomUUID()}, ${tenantId}, ${caseId}, ${contact.id}, 'customer', 'customer', ${body})
       `,
       basePrisma.$executeRaw`
         UPDATE "CustomerCase" SET "status" = CASE
@@ -233,7 +246,8 @@ export async function addPortalCaseMessage(
             WHEN "status" = 'waiting_customer' THEN 'waiting_internal'
             ELSE "status" END,
           "lastReplyAt" = CURRENT_TIMESTAMP, "lastReplyBy" = 'customer',
-          "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = ${caseId}
+          "updatedAt" = CURRENT_TIMESTAMP
+        WHERE "id" = ${caseId} AND "tenantId" IS NOT DISTINCT FROM ${tenantId}
       `,
     ]);
     const rows = await basePrisma.$queryRaw<Array<{ number: bigint }>>`
@@ -273,7 +287,7 @@ export async function uploadPortalFile(
 
     const buffer = Buffer.from(await file.arrayBuffer());
     const storedName = await saveFile(buffer, file.name, file.type);
-    const tenantId = currentTenantScope()?.tenantId ?? null;
+    const tenantId = await portalTenantId(contact.id);
     await basePrisma.$executeRaw`
       INSERT INTO "PortalUpload" (
         "id", "tenantId", "contactId", "caseId", "vehicleId", "fileName", "storedName", "mimeType", "sizeBytes"
