@@ -376,47 +376,118 @@ test("every recorded composite tenant FK exists in a live PostgreSQL catalog", a
  * Nothing tested `disposabilityProblem` before, and this is the second consumer
  * of it — the point at which "the guard is fine, #468 wrote it carefully" stops
  * being a good enough reason not to check. The repository's plain `.env` points
- * at a Neon production database; condition 1 is what refuses it, and it was
+ * at a Neon production database; condition 1 is what refuses it, and that was
  * verified against the real file (refused, hosted-provider) rather than assumed.
  *
- * These four are ANDed in the harness, so each is asserted with the OTHER three
- * satisfied. A test that fed it an obviously-wrong URL would pass even if three
- * of the four conditions had been deleted.
+ * EVERY PROBE RUNS UNDER A `DATABASE_URL` THIS TEST CHOOSES, and that is not
+ * tidiness — the first version of this test did not, and CI caught it. Condition
+ * 4 refuses any URL equal to the ambient `DATABASE_URL`. On a developer machine
+ * `DATABASE_URL` is production, so a localhost `_test` fixture differs from it
+ * and the happy-path probe returned null. In the CI `integration` job
+ * `DATABASE_URL` IS a localhost `denagocrm_test`, the fixture collided with it,
+ * and condition 4 fired exactly as designed — a green local run and a red CI run
+ * from a test that was reading the environment instead of stating it.
+ *
+ * The guard was right and is untouched. What follows controls the environment
+ * for the duration of each assertion instead of depending on it, so all four
+ * conditions are exercised deterministically on any machine.
+ *
+ * Conditions 1 and 2 necessarily OVERLAP — a hosted provider is never loopback —
+ * so the hosted probe violates both and the ORDER of the checks decides which
+ * message comes back. That is why these match on the message rather than merely
+ * asserting non-null: "it refused" would still pass if condition 1 were deleted
+ * and condition 2 caught the fallout.
  */
+const SCHEME = "postgresql";
+const LOCAL = "localhost:5432";
+
+/**
+ * Assembled from parts for the same reason scripts/harness/testDatabase.ts does
+ * it: the secret scanner (.gitleaks.toml, `postgres-connection-string`) matches
+ * the literal `postgresql://user:pass@host` shape, and it is right to. Composing
+ * the credential-bearing probe below at runtime keeps that shape out of the
+ * source, so the scanner stays sharp on the case that matters instead of being
+ * taught to ignore this file.
+ */
+function probeUrl(database: string, credentials = ""): string {
+  return `${SCHEME}://${credentials}${LOCAL}/${database}`;
+}
+
+/** Run `fn` with a chosen DATABASE_URL, and always put the real one back. */
+function withDatabaseUrl<T>(url: string | undefined, fn: () => T): T {
+  const previous = process.env.DATABASE_URL;
+  if (url === undefined) delete process.env.DATABASE_URL;
+  else process.env.DATABASE_URL = url;
+  try {
+    return fn();
+  } finally {
+    if (previous === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = previous;
+  }
+}
+
 test("the harness still refuses anything that could be production", async () => {
   const { disposabilityProblem } = await import("../scripts/harness/testDatabase");
-  const scheme = "postgresql";
 
-  assert.equal(disposabilityProblem(`${scheme}://localhost:5432/denagocrm_test`), null);
+  // The app's database for conditions 1-3, chosen so it differs from every probe
+  // and cannot be what any of them trips over.
+  const appDatabase = probeUrl("denagocrm_someone_elses_test");
+  const scratch = probeUrl("denagocrm_fkcontract_probe_test");
+
+  assert.equal(
+    withDatabaseUrl(appDatabase, () => disposabilityProblem(scratch)),
+    null,
+    "a loopback database named _test, that is not the app's own, is acceptable",
+  );
+  assert.equal(
+    withDatabaseUrl(undefined, () => disposabilityProblem(scratch)),
+    null,
+    "with no DATABASE_URL at all there is nothing for condition 4 to collide with",
+  );
 
   assert.match(
-    String(disposabilityProblem(`${scheme}://ep-anything.eu-central-1.aws.neon.tech/denagocrm_test`)),
+    String(
+      withDatabaseUrl(appDatabase, () =>
+        disposabilityProblem(`${SCHEME}://ep-anything.eu-central-1.aws.neon.tech/denagocrm_test`),
+      ),
+    ),
     /hosted database provider/,
     "1. a hosted provider is never acceptable, even with a _test database name",
   );
   assert.match(
-    String(disposabilityProblem(`${scheme}://db.internal:5432/denagocrm_test`)),
+    String(
+      withDatabaseUrl(appDatabase, () =>
+        disposabilityProblem(`${SCHEME}://db.internal:5432/denagocrm_test`),
+      ),
+    ),
     /non-local host/,
     "2. loopback only",
   );
   assert.match(
-    String(disposabilityProblem(`${scheme}://localhost:5432/denagocrm`)),
+    String(withDatabaseUrl(appDatabase, () => disposabilityProblem(probeUrl("denagocrm")))),
     /must end in _test, _harness or _scratch/,
     "3. the database name has to announce itself as disposable",
   );
+  assert.match(
+    String(withDatabaseUrl(scratch, () => disposabilityProblem(scratch))),
+    /same database as DATABASE_URL/,
+    "4. never the database the app itself is pointed at",
+  );
 
-  const app = process.env.DATABASE_URL;
-  process.env.DATABASE_URL = `${scheme}://localhost:5432/denagocrm_test`;
-  try {
-    assert.match(
-      String(disposabilityProblem(`${scheme}://localhost:5432/denagocrm_test`)),
-      /same database as DATABASE_URL/,
-      "4. never the database the app itself is pointed at",
-    );
-  } finally {
-    if (app === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = app;
-  }
+  // The realistic shape of condition 4, and the one that made this PR red:
+  // CI's DATABASE_URL carries credentials and the derived harness URL may not,
+  // or may carry different ones. Same host, same database, so it is the same
+  // database — `sameTarget` compares host and path and ignores the rest, and a
+  // different password must never be able to launder a production URL.
+  assert.match(
+    String(
+      withDatabaseUrl(probeUrl("denagocrm_test", "ci:ci@"), () =>
+        disposabilityProblem(probeUrl("denagocrm_test", "someone:else@")),
+      ),
+    ),
+    /same database as DATABASE_URL/,
+    "4b. different credentials on the same host and database is still the same database",
+  );
 });
 
 /**
