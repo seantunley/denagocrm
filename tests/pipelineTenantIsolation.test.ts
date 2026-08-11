@@ -146,25 +146,82 @@ test("a stage is visible to exactly the workspace its pipeline belongs to", () =
 test("pipelines.ts builds its predicate from the rule and holds no second copy", () => {
   const lib = strip(src("src/lib/pipelines.ts"));
   const filter = lib.slice(lib.indexOf("async function pipelineTenantFilter"), lib.indexOf("export type OwnedPipeline"));
-  assert.match(filter, /pipelineScopeSql\(pipelineScopeFor\(\{ actingTenantId: await actingTenantId\(\) \}\), alias\)/);
+  // ONE construction of the predicate, from the shared rule. The async seam
+  // resolves the principal and hands it to the synchronous builder; callers that
+  // already hold a resolved owner call the builder directly.
+  assert.match(filter, /pipelineScopeSql\(pipelineScopeFor\(\{ actingTenantId: tenantId \}\), alias\)/);
+  assert.match(filter, /return pipelineScopeFilter\(await actingTenantId\(\), alias\)/);
+  assert.equal(
+    (filter.match(/pipelineScopeSql\(/g) ?? []).length,
+    1,
+    "the predicate must be built in exactly one place",
+  );
   // No hand-rolled predicate may survive beside the shared one.
   assert.doesNotMatch(filter, /Prisma\.sql/, "the SQL must come from pipelineScopeSql");
   assert.doesNotMatch(lib, /IS NULL\)`/, "the unowned-row fallback must not be reintroduced");
   assert.doesNotMatch(lib, /DEFAULT_TENANT_ID/, "ownership is the acting tenant, not the founding one");
 });
 
+test("no pipeline operation resolves the acting tenant twice", () => {
+  /*
+   * `actingTenantId()` is a SECURITY PRINCIPAL. Every function here that needs it
+   * as a value — to stamp a new row, to derive a stage's owner — used to resolve
+   * it once for that value and then call `pipelineTenantFilter()`, which resolved
+   * it a second time to build the SQL scope.
+   *
+   * It is unlikely to change inside one request, and there is no benefit to
+   * asking twice: at best the second read is wasted, and if the two ever
+   * disagreed the row would be stamped with one tenant while the statement that
+   * writes it is scoped to another. These run on `basePrisma` — the RLS bypass —
+   * so nothing downstream would catch the split.
+   *
+   * The insert value and the SQL scope must come from ONE resolution, threaded.
+   */
+  const lib = strip(src("src/lib/pipelines.ts"));
+  // `to` omitted means "to the end of the file" — captureForecastSnapshot is last.
+  const bodies = (from: string, to?: string) =>
+    lib.slice(lib.indexOf(from), to === undefined ? undefined : lib.indexOf(to));
+
+  const operations: Array<[string, string?]> = [
+    ["export async function createPipeline", "export async function updatePipeline"],
+    ["export async function addPipelineStage", "export async function updatePipelineStage"],
+    ["export async function updatePipelineStage", "export async function reorderPipelineStages"],
+    ["export async function archivePipeline", "export async function listForecastLeads"],
+    ["export async function captureForecastSnapshot"],
+  ];
+  for (const [from, to] of operations) {
+    assert.ok(lib.includes(from), `${from} must be locatable`);
+    if (to !== undefined) {
+      assert.ok(lib.indexOf(to) > lib.indexOf(from), `${to} must follow ${from}`);
+    }
+    const body = bodies(from, to);
+    assert.ok(body.length > 0, `${from} must have a body`);
+    const resolves = (body.match(/await actingTenantId\(\)/g) ?? []).length;
+    assert.equal(resolves, 1, `${from} resolves the acting tenant ${resolves} times, expected exactly 1`);
+    // A second resolution also hides inside the async seam, so these must take
+    // the predicate from the synchronous builder or from the gate they pass it to.
+    assert.doesNotMatch(
+      body,
+      /await pipelineTenantFilter\(/,
+      `${from} re-resolves the principal through pipelineTenantFilter`,
+    );
+  }
+});
+
 test("every PipelineStage write resolves its parent through the tenant boundary", () => {
   const lib = strip(src("src/lib/pipelines.ts"));
   const slice = (from: string, to: string) => lib.slice(lib.indexOf(from), lib.indexOf(to));
 
+  // The gate may be handed the caller's already-resolved owner, so the id is
+  // asserted as the FIRST argument rather than the only one.
   const add = slice("export async function addPipelineStage", "export async function updatePipelineStage");
-  assert.match(add, /await requireOwnedPipeline\(input\.pipelineId\)/);
+  assert.match(add, /await requireOwnedPipeline\(input\.pipelineId[,)]/);
   assert.match(add, /stageTenantId\(\{ pipelineTenantId: pipeline\.tenantId/, "the stamp is the parent's owner");
   assert.doesNotMatch(add, /const tenantId = writeTenantId\(\)/, "writeTenantId is null while dormant");
   assert.match(add, /INSERT INTO "PipelineStage" \([\s\S]*"tenantId"/, "the insert stamps it");
 
   const update = slice("export async function updatePipelineStage", "export async function reorderPipelineStages");
-  assert.match(update, /await requireOwnedPipeline\(current\[0\]\.pipelineId\)/);
+  assert.match(update, /await requireOwnedPipeline\(current\[0\]\.pipelineId[,)]/);
   assert.match(update, /"tenantId" = \$\{stageTenantId\(\{ pipelineTenantId: pipeline\.tenantId/);
 
   const reorder = slice("export async function reorderPipelineStages", "export async function archivePipeline");
@@ -196,6 +253,6 @@ test("no pipeline row is loaded by id alone in the pipeline actions", () => {
   // The forecast snapshot takes a pipelineId from the same untrusted form post.
   const lib = strip(src("src/lib/pipelines.ts"));
   const capture = lib.slice(lib.indexOf("export async function captureForecastSnapshot"));
-  assert.match(capture, /if \(input\.pipelineId\) await requireOwnedPipeline\(input\.pipelineId\)/);
+  assert.match(capture, /if \(input\.pipelineId\) await requireOwnedPipeline\(input\.pipelineId[,)]/);
   assert.match(capture, /"opportunityCount", "tenantId"/, "the snapshot must not be born unowned");
 });

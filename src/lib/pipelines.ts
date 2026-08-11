@@ -77,7 +77,33 @@ export type ForecastLeadRow = {
  * concrete tenant ids. This function is only the seam that turns it into SQL.
  */
 async function pipelineTenantFilter(alias: '"tenantId"' | 'p."tenantId"' = '"tenantId"') {
-  return pipelineScopeSql(pipelineScopeFor({ actingTenantId: await actingTenantId() }), alias);
+  return pipelineScopeFilter(await actingTenantId(), alias);
+}
+
+/**
+ * The same predicate, for an owner the caller has ALREADY resolved.
+ *
+ * `pipelineTenantFilter` above is the right shape for a function that needs the
+ * boundary once and nothing else. It is the wrong shape wherever one operation
+ * needs the tenant as a VALUE as well — `createPipeline` stamps it onto the new
+ * row, `addPipelineStage` passes it to {@link stageTenantId} — or needs the
+ * predicate twice under different column aliases, as `archivePipeline` does.
+ *
+ * Those callers used to call `actingTenantId()` for the value and then let
+ * `pipelineTenantFilter` resolve it a SECOND time for the SQL. Two reads of a
+ * security principal to serve one statement is not a benefit under any
+ * condition: at best the two agree and the second read was wasted, and if they
+ * ever disagree the row is stamped with one tenant while the statement is
+ * scoped to another — precisely the parent/child ownership split these
+ * functions exist to prevent, and unrecoverable on `basePrisma`, which is the
+ * documented RLS bypass with no guard behind it.
+ *
+ * So the principal is resolved once, at the top of the operation, and threaded.
+ * This is synchronous on purpose: it takes an owner rather than going and
+ * finding one, so a caller cannot accidentally re-resolve through it.
+ */
+function pipelineScopeFilter(tenantId: string, alias: '"tenantId"' | 'p."tenantId"' = '"tenantId"') {
+  return pipelineScopeSql(pipelineScopeFor({ actingTenantId: tenantId }), alias);
 }
 
 /** A pipeline as its OWNER row: the id, the owning tenant, and whether it is live. */
@@ -93,8 +119,12 @@ export type OwnedPipeline = { id: string; tenantId: string | null; active: boole
  * owner rather than the editor's, and the value is already inside the caller's
  * boundary because this is the query that established the boundary.
  */
-async function requireOwnedPipeline(id: string): Promise<OwnedPipeline> {
-  const scope = await pipelineTenantFilter();
+async function requireOwnedPipeline(id: string, actingTenant?: string): Promise<OwnedPipeline> {
+  // `actingTenant` is the caller's ALREADY-RESOLVED owner, passed by the stage
+  // writes so the boundary this gate applies and the stamp they derive from its
+  // result come from ONE read of the principal. Omitted, the gate resolves its
+  // own — correct for callers that need nothing but the refusal.
+  const scope = actingTenant === undefined ? await pipelineTenantFilter() : pipelineScopeFilter(actingTenant);
   const rows = await basePrisma.$queryRaw<OwnedPipeline[]>`
     SELECT "id", "tenantId", "active" FROM "SalesPipeline"
     WHERE "id" = ${id} AND "deletedAt" IS NULL ${scope}
@@ -204,11 +234,13 @@ export async function createPipeline(input: {
   isDefault?: boolean;
 }) {
   const id = crypto.randomUUID();
-  // The owner, resolved once: the insert stamps it and the default-clear is
-  // confined to it. Unconfined, making a pipeline default here cleared the
-  // default in every other tenant's workspace.
+  // The owner, resolved once and ACTUALLY once: the insert stamps this value and
+  // the default-clear is confined to a predicate built from the same value.
+  // Unconfined, making a pipeline default here cleared the default in every
+  // other tenant's workspace; built from a second `actingTenantId()` the comment
+  // said "once" while the code read the principal twice.
   const tenantId = await actingTenantId();
-  const scope = await pipelineTenantFilter();
+  const scope = pipelineScopeFilter(tenantId);
   await basePrisma.$transaction(async (tx) => {
     if (input.isDefault) {
       await tx.$executeRaw`UPDATE "SalesPipeline" SET "isDefault" = false, "updatedAt" = CURRENT_TIMESTAMP WHERE "deletedAt" IS NULL ${scope}`;
@@ -299,13 +331,16 @@ export async function addPipelineStage(input: {
   // The pipeline this stage is being attached to must be one this workspace owns.
   // Unscoped, a known pipeline id was enough to add a stage to another tenant's
   // process — the acceptance gate the review names explicitly.
-  const pipeline = await requireOwnedPipeline(input.pipelineId);
+  // The acting workspace, resolved ONCE: it bounds the parent lookup below and
+  // is the value handed to stageTenantId, rather than being read again there.
+  const actingTenant = await actingTenantId();
+  const pipeline = await requireOwnedPipeline(input.pipelineId, actingTenant);
   // The stage's owner is the PIPELINE's owner. It used to be `writeTenantId()`,
   // which is null while enforcement is dormant, so every stage created since the
   // 20260722130000 backfill was born unowned and would go invisible to its own
   // workspace at the flip — the parent was moved onto `actingTenantId()` and the
   // child was left behind.
-  const tenantId = stageTenantId({ pipelineTenantId: pipeline.tenantId, actingTenantId: await actingTenantId() });
+  const tenantId = stageTenantId({ pipelineTenantId: pipeline.tenantId, actingTenantId: actingTenant });
   const rows = await basePrisma.$queryRaw<Array<{ nextOrder: number }>>`
     SELECT COALESCE(MAX("order"), -1) + 1 AS "nextOrder"
     FROM "PipelineStage"
@@ -351,7 +386,8 @@ export async function updatePipelineStage(id: string, input: {
   // `tenantFilter` is Prisma.empty while enforcement is dormant, so the lookup
   // above reaches every workspace's stages. The pipeline the stage hangs off is
   // what carries a real boundary — resolve it, and refuse if it is not ours.
-  const pipeline = await requireOwnedPipeline(current[0].pipelineId);
+  const actingTenant = await actingTenantId();
+  const pipeline = await requireOwnedPipeline(current[0].pipelineId, actingTenant);
   await assertEntryActionAvailable(current[0].pipelineId, input.entryAction, id);
   await basePrisma.$executeRaw`
     UPDATE "PipelineStage"
@@ -359,7 +395,7 @@ export async function updatePipelineStage(id: string, input: {
       "defaultProbability" = ${Math.max(0, Math.min(100, input.defaultProbability))},
       "staleAfterDays" = ${input.staleAfterDays ?? null}, "isClosed" = ${closed.isClosed},
       "closedStatus" = ${closed.closedStatus}, "entryAction" = ${input.entryAction ?? null},
-      "tenantId" = ${stageTenantId({ pipelineTenantId: pipeline.tenantId, actingTenantId: await actingTenantId() })}
+      "tenantId" = ${stageTenantId({ pipelineTenantId: pipeline.tenantId, actingTenantId: actingTenant })}
     WHERE "id" = ${id} AND "pipelineId" = ${pipeline.id} ${scope}
   `;
 }
@@ -392,7 +428,13 @@ export async function reorderPipelineStages(pipelineId: string, stageIds: string
 }
 
 export async function archivePipeline(id: string) {
-  const scope = await pipelineTenantFilter('p."tenantId"');
+  // ONE resolution for both statements. These are a check and the write it
+  // authorises: scoping them by two independently-resolved principals means the
+  // row whose default/lead-count was cleared for archiving is not necessarily
+  // the row the UPDATE then reaches. The two aliases differ only because the
+  // read joins Lead and the write does not.
+  const actingTenant = await actingTenantId();
+  const scope = pipelineScopeFilter(actingTenant, 'p."tenantId"');
   const rows = await basePrisma.$queryRaw<Array<{ isDefault: boolean; leadCount: bigint }>>`
     SELECT p."isDefault", COUNT(l."id") AS "leadCount"
     FROM "SalesPipeline" p LEFT JOIN "Lead" l ON l."pipelineId" = p."id" AND l."deletedAt" IS NULL
@@ -401,7 +443,7 @@ export async function archivePipeline(id: string) {
   if (!rows[0]) throw new Error("Pipeline not found");
   if (rows[0].isDefault) throw new Error("The default pipeline cannot be archived");
   if (Number(rows[0].leadCount) > 0) throw new Error("Move or close all leads before archiving this pipeline");
-  const writeScope = await pipelineTenantFilter();
+  const writeScope = pipelineScopeFilter(actingTenant);
   await basePrisma.$executeRaw`
     UPDATE "SalesPipeline" SET "active" = false, "deletedAt" = CURRENT_TIMESTAMP, "updatedAt" = CURRENT_TIMESTAMP
     WHERE "id" = ${id} ${writeScope}
@@ -495,8 +537,10 @@ export async function captureForecastSnapshot(input: {
   // the caller's workspace. And the snapshot itself was inserted with NO tenantId
   // at all — a row born unowned, on a table the 20260725160000 backfill has
   // already claimed, so nothing else would ever pick it up.
-  if (input.pipelineId) await requireOwnedPipeline(input.pipelineId);
+  // Resolved once and used for both: the boundary the pipelineId is checked
+  // against, and the owner stamped onto the snapshot row.
   const tenantId = await actingTenantId();
+  if (input.pipelineId) await requireOwnedPipeline(input.pipelineId, tenantId);
   const leads = await listForecastLeads(input);
   const summary = summarizeForecast(leads);
   await basePrisma.$executeRaw`
