@@ -9,11 +9,18 @@ import {
   migrateHarnessDatabase,
 } from "../scripts/harness/testDatabase";
 import {
+  compareMigrationNames,
+  orderedMigrations,
+  prefixCollisions,
+} from "../scripts/apply-migrations.mjs";
+import {
   CATALOG_FK_QUERY,
   catalogFromRows,
   catalogProblem,
   collectCompositeTenantFks,
   fkKey,
+  migrationOrder,
+  orderedMigrationDirs,
   scanMigrationSql,
   stripSqlComments,
   toBaseline,
@@ -127,6 +134,36 @@ const REMOVED_BY_DESIGN: Record<string, string> = {};
  * regeneration cannot make them disappear quietly. Deleting a line here is a
  * deliberate act with the harness result staring back at whoever does it.
  */
+/**
+ * CONSTRAINTS THAT ARE PRESENT BUT `NOT VALID`, RECORDED AS A KNOWN STATE.
+ *
+ * `NOT VALID` means PostgreSQL enforces the constraint on every INSERT and
+ * UPDATE from the moment it is added, but did NOT re-check rows already there.
+ * So the defence is live for new writes — which is the whole forged-id path —
+ * while "does this table already contain cross-tenant rows?" stays unanswered.
+ *
+ * Recorded rather than merely counted so a future `VALIDATE CONSTRAINT` is
+ * visible instead of silent, and so a NEW not-valid entrant cannot slip in
+ * unnoticed among 132 others.
+ *
+ * Confirmed identical in two independent places: a database built from empty by
+ * this repository's migrations, and a read-only check against PRODUCTION
+ * (132 recorded, 132 live, none missing, none extra). Both constraints #479
+ * proved load-bearing — JobCardItem_tenantId_partId_fkey and
+ * Quote_tenantId_revisionOfId_fkey — are VALID in production.
+ */
+const KNOWN_NOT_VALID: Record<string, string> = {
+  "ConversationDraft.ConversationDraft_tenantId_conversationId_fkey":
+    "Added NOT VALID by 20260808120000_inbox_collaboration, which postdates " +
+    "20260727180000_validate_composite_fks — so it missed the sweep that validated the rest " +
+    "rather than being deliberately excluded. Drafts written before it was added were never " +
+    "re-checked.",
+  "ConversationNote.ConversationNote_tenantId_conversationId_fkey":
+    "Same migration, same reason. Its own migration comment records the hazard it was added " +
+    "for: a stamped note pointing at a NULL-tenant conversation, the shape that broke lead " +
+    "creation on 2026-08-07.",
+};
+
 const PROVEN_LOAD_BEARING: Record<string, string> = {
   "JobCardItem.JobCardItem_tenantId_partId_fkey":
     "#479: with BOTH application tenant predicates removed from claimPartStock, this " +
@@ -353,16 +390,48 @@ test("every recorded composite tenant FK exists in a live PostgreSQL catalog", a
         "that took production down on 2026-07-22.",
     );
 
-    // Reported, never asserted on. Almost all of these were added NOT VALID, so
-    // historical rows were never re-checked — and that is fine for this guard:
-    // a NOT VALID foreign key still enforces every INSERT and UPDATE from the
-    // moment it exists, which is the path a forged id takes. Printing the count
-    // keeps the distinction visible instead of letting "valid" quietly become
-    // something this file is assumed to have checked.
-    const unvalidated = Object.keys(baseline).filter((key) => catalog.get(key)?.validated === false);
+    // VALIDATION STATE IS RECORDED, NOT JUST PRINTED.
+    //
+    // A NOT VALID foreign key still enforces every INSERT and UPDATE from the
+    // moment it exists — which is the path a forged id takes, so this is not a
+    // hole in the defence and none of these fail the run for being NOT VALID.
+    // What it does mean is that rows written BEFORE the constraint were never
+    // re-checked, so "are there already cross-tenant rows here?" is unanswered
+    // for exactly these two tables.
+    //
+    // Recorded in both directions so neither is silent: a new NOT VALID entrant
+    // has to be acknowledged, and a VALIDATE CONSTRAINT that fixes one has to be
+    // written down rather than quietly changing what this file is understood to
+    // have checked.
+    const unvalidated = Object.keys(baseline)
+      .filter((key) => catalog.get(key)?.validated === false)
+      .sort();
+    const validatedNow = Object.keys(KNOWN_NOT_VALID).filter(
+      (key) => catalog.get(key)?.validated === true,
+    );
+
+    assert.deepEqual(
+      unvalidated.filter((key) => !(key in KNOWN_NOT_VALID)),
+      [],
+      "NOT VALID composite tenant FKs that are not recorded as such:\n\n" +
+        unvalidated.filter((key) => !(key in KNOWN_NOT_VALID)).map((k) => `  ${k}`).join("\n") +
+        "\n\nThese enforce new writes but were never checked against existing rows, so nobody has\n" +
+        "established whether cross-tenant rows are already there. Either run VALIDATE CONSTRAINT,\n" +
+        "or record it in KNOWN_NOT_VALID with the reason it is acceptable.",
+    );
+    assert.deepEqual(
+      validatedNow,
+      [],
+      "Good news — these are no longer NOT VALID, so their historical rows have now been\n" +
+        "checked:\n\n" +
+        validatedNow.map((k) => `  ${k}`).join("\n") +
+        "\n\nRemove them from KNOWN_NOT_VALID so the record says what is actually true and they\n" +
+        "cannot quietly go back.",
+    );
+
     log(
       `  composite FK contract: ${Object.keys(baseline).length} recorded, all present; ` +
-        `${unvalidated.length} are NOT VALID (enforced on write, historical rows unchecked)`,
+        `${unvalidated.length} NOT VALID as recorded (enforced on write, historical rows unchecked)`,
     );
   } finally {
     await prisma.$disconnect();
@@ -497,6 +566,89 @@ test("the harness still refuses anything that could be production", async () => 
  * silently returns fewer constraints turns every check above into a tautology —
  * so these run on synthetic SQL, not on whatever happens to be in prisma/.
  */
+
+/**
+ * ══ THE REPLAY ORDER IS PART OF THE ANSWER ════════════════════════════════
+ *
+ * This scanner does not list migrations, it REPLAYS them — adds, constraint
+ * drops and table drops resolved against each other — so the recorded set is a
+ * function of the order. If that order can differ from the one production
+ * applies, the two can disagree about what exists.
+ *
+ * The failure is silent in the direction that matters. Suppose a colliding
+ * prefix pair where one migration adds a composite FK and the other replaces it.
+ * Production, using the runner's total order, finishes holding the constraint. A
+ * scanner sorting on the numeric prefix alone can replay the pair the other way
+ * and finish without it — so it never enters the baseline. Nothing goes red:
+ * the live check asserts recorded ⊆ catalog, and a constraint in the catalog
+ * that was never recorded is not a failure. The defence just never joins the
+ * ratchet, and can be dropped later with nothing watching.
+ */
+
+test("the scanner sorts with the runner's own comparator, not a copy of it", () => {
+  // Identity, not agreement. Two implementations that agree today are still two
+  // implementations; #465 exists because the runner's ordering rule needed
+  // fixing, and anything that re-derived it would not have been fixed with it.
+  assert.equal(
+    migrationOrder,
+    compareMigrationNames,
+    "compositeTenantFkScan must sort by the function scripts/apply-migrations.mjs exports, " +
+      "so the replay order cannot drift from the order production applies.",
+  );
+});
+
+test("equal numeric prefixes are broken deterministically, in the runner's direction", () => {
+  // The real colliding pair on main, handed over in the WRONG order so a stable
+  // sort cannot accidentally look correct.
+  const reversed = [
+    "20260810110000_staff_reply_delivery_state",
+    "20260810110000_bot_session_ownership",
+  ];
+  const lexical = [
+    "20260810110000_bot_session_ownership",
+    "20260810110000_staff_reply_delivery_state",
+  ];
+
+  assert.deepEqual([...reversed].sort(migrationOrder), lexical, "the scanner's order");
+  assert.deepEqual([...reversed].sort(compareMigrationNames), lexical, "the runner's order");
+
+  // Why the prefix-only sort this file originally used was wrong, stated so it
+  // cannot come back by accident: subtracting equal prefixes returns 0, Array
+  // .prototype.sort is stable, and the pair therefore keeps whatever order
+  // readdirSync happened to give — filesystem order on Linux.
+  assert.deepEqual(
+    [...reversed].sort((a, b) => Number.parseInt(a, 10) - Number.parseInt(b, 10)),
+    reversed,
+    "a prefix-only comparator does not order a colliding pair at all — it preserves the input",
+  );
+});
+
+test("the scanner walks exactly the migrations the runner will apply", () => {
+  // Pins the FILTER as well as the comparator. orderedMigrationDirs takes a
+  // directory from its caller and so cannot simply call orderedMigrations(),
+  // which resolves its own; this is what stops the two definitions of "a
+  // migration directory" drifting apart.
+  //
+  // NOT sufficient on its own, which is why the two tests above exist. Reverting
+  // to the prefix-only comparator was mutation-tested and left THIS assertion
+  // green: readdirSync returns alphabetical order on NTFS, so the broken sort
+  // reproduces the right answer on the machine most likely to run it, and only
+  // misbehaves on Linux — CI, Vercel, disaster recovery. A behavioural test of
+  // an ordering bug is only as good as the filesystem it ran on.
+  assert.deepEqual(orderedMigrationDirs(MIGRATIONS), orderedMigrations());
+});
+
+test("the colliding-prefix case this guards is real, not imagined", () => {
+  // Without this, every assertion above stays green while proving nothing the
+  // day the last colliding pair leaves the repository — and the ordering rule
+  // would then be untested at exactly the moment someone is free to simplify it.
+  const collisions = prefixCollisions(orderedMigrations());
+  assert.ok(
+    collisions.length > 0,
+    "No colliding numeric prefixes remain on main. The ordering rule above is now untestable " +
+      "against real data — either restore a synthetic pair here or delete these tests knowingly.",
+  );
+});
 
 test("the scanner finds composite tenant FKs in every syntax the migrations use", () => {
   const sql = [

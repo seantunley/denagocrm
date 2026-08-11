@@ -32,6 +32,7 @@
  */
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { compareMigrationNames } from "../scripts/apply-migrations.mjs";
 
 export type CompositeTenantFk = {
   /** Table the constraint is ON. */
@@ -278,15 +279,58 @@ export function scanMigrationSql(sql: string): FkEvent[] {
 /**
  * Migration directories in the order the repository's own runner applies them.
  *
- * NUMERIC, not lexical, and the same filter as orderedMigrations() in
- * scripts/apply-migrations.mjs. Prisma's lexical order would run `10_…` before
- * `4_…`; using it here would replay drops and adds against each other in an
- * order production never sees.
+ * THE COMPARATOR IS IMPORTED, NOT RE-DERIVED. That is the entire point, and the
+ * first version of this file got it wrong in a way that would have made the
+ * guard blind to exactly what it was built to protect.
+ *
+ * Ordering has to be NUMERIC — Prisma's lexical order runs `10_…` before `4_…`
+ * and dies on "relation Quote does not exist". But numeric ALONE is not a total
+ * order: prefixes collide (two migrations authored in the same minute on two
+ * branches), `main` already carries such pairs, and that is why #465 added a
+ * lexical tie-break to `compareMigrationNames`. Subtracting equal prefixes
+ * returns 0, `Array.prototype.sort` is stable, and the order within a colliding
+ * pair then falls through to whatever `readdirSync` returned — filesystem order
+ * on Linux, which is neither alphabetical nor stable across machines.
+ *
+ * WHY THAT MATTERS HERE SPECIFICALLY, AND WHY THE DANGEROUS DIRECTION IS THE
+ * QUIET ONE. This scanner does not merely list migrations; it REPLAYS adds,
+ * constraint drops and table drops against each other, so the final set depends
+ * on the order. Take a colliding pair where one migration adds a composite FK
+ * and the other drops or replaces it. Production applies them in deterministic
+ * lexical order and finishes holding the constraint. A scanner sorting on the
+ * prefix alone could replay them the other way round and finish WITHOUT it — so
+ * the constraint never enters the recorded baseline at all.
+ *
+ * Nothing goes red at that point. The live-catalog check asserts that every
+ * RECORDED constraint exists in PostgreSQL; a constraint that exists in
+ * PostgreSQL but was never recorded is not a failure. The new defence simply
+ * never joins the ratchet, and can be dropped later with nothing noticing. An
+ * under-reporting scanner is silent by construction, which is why it must not be
+ * possible for these two orderings to differ.
+ *
+ * So `compareMigrationNames` comes from the runner itself. Its own docblock says
+ * it is "pure + exported so the exact order is asserted by tests" — a re-derived
+ * copy was never the intended reading of that, and two copies of an ordering
+ * rule is two things that can drift. The FILTER is still expressed here, because
+ * this function takes a directory the caller names; that duplication is pinned
+ * by a test asserting this returns exactly `orderedMigrations()` for the real
+ * directory, so a drift in either part fails the build.
  */
+/**
+ * The runner's comparator, re-exported under the name this module sorts by.
+ *
+ * Re-exported ON PURPOSE so a test can assert FUNCTION IDENTITY —
+ * `migrationOrder === compareMigrationNames` — rather than merely that the two
+ * agree on some sample. Sampled agreement is what a re-derived copy looks like
+ * right up until the day it stops being one; identity cannot drift without the
+ * assertion failing on the spot.
+ */
+export const migrationOrder = compareMigrationNames;
+
 export function orderedMigrationDirs(migrationsDir: string): string[] {
   return readdirSync(migrationsDir)
     .filter((n) => /^\d+_/.test(n) && existsSync(join(migrationsDir, n, "migration.sql")))
-    .sort((a, b) => Number.parseInt(a, 10) - Number.parseInt(b, 10));
+    .sort(migrationOrder);
 }
 
 /**
