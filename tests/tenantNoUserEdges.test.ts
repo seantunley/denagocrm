@@ -135,13 +135,18 @@ test("src/lib/signing/approvals.ts: staff assignee validated via resolveTenantMe
   assert.match(code, /email:\s*null/, "fail-closed branch must return a null email (no notification)");
 });
 
+// Two staff lists, two resolvers, and the difference is whether a session exists
+// to resolve. The workflow EDITOR is a page a person is looking at, so it uses the
+// acting list and is scoped today; autoEnvelope's staffMap is the workflow RUNTIME
+// and has no actor, so it keeps the background list — the same reason
+// signing/approvals.ts keeps `resolveTenantMemberUser` above.
 const STAFF_PICKERS = [
-  "src/app/(app)/signing-workflows/[id]/page.tsx",
-  "src/lib/signing/autoEnvelope.ts",
+  { file: "src/app/(app)/signing-workflows/[id]/page.tsx", fn: "listActingTenantStaff" },
+  { file: "src/lib/signing/autoEnvelope.ts", fn: "listTenantStaff" },
 ] as const;
-for (const file of STAFF_PICKERS) {
+for (const { file, fn } of STAFF_PICKERS) {
   test(`${file}: staff list scoped to the current tenant (active, non-disabled members)`, () => {
-    assert.match(src(file), /listTenantStaff\s*\(/, `${file} must build its staff list via listTenantStaff`);
+    assert.match(src(file), new RegExp(`(?<![A-Za-z])${fn}\\s*\\(`), `${file} must build its staff list via ${fn}`);
   });
 }
 
