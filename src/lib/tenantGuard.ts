@@ -32,11 +32,21 @@ export const GLOBAL_MODELS: ReadonlySet<string> = new Set([
   // is broken, and the one record of why would be the record that could not be
   // written. Logging must never throw, so a tenant can never be a precondition for it.
   //
-  // What that costs, stated plainly. A NULL-tenant row is readable from every
-  // workspace's Settings → System Log, so an unattributed error's message and stack
-  // are visible cross-tenant. That is bounded — `redactUrl` strips signing/approval/
-  // tracking URLs at the write, and the screen is admin-only — and it is the cheaper
-  // of the two failures. The alternative loses the log.
+  // What that costs, stated plainly — and it is NOT a cross-tenant read. An earlier
+  // draft of this comment claimed a NULL-tenant row was readable from every
+  // workspace's Settings → System Log. That was wrong about the code it describes:
+  // `src/app/(app)/settings/page.tsx` queries `where: { tenantId: logTenantId }`
+  // against a resolved, non-null id, so NULL rows match NOTHING and appear in no
+  // workspace's System Log at all. (`redactUrl` still strips signing/approval/
+  // tracking URLs at the write, and the screen is still admin-only, but neither is
+  // what is doing the work here — the filter is.)
+  //
+  // The real cost runs the other way: an unattributed error is INVISIBLE to the
+  // workspace it actually affected. Whoever hit it sees an empty System Log, and the
+  // only place the row surfaces is the platform console. That is the cheaper of the
+  // two failures — the alternative loses the log entirely — but it is a
+  // discoverability cost, not a confidentiality one, and the two should not be
+  // confused when this decision is revisited.
   //
   // Attribution is still worth having (per-tenant error health, and the per-tenant
   // alert throttle that stops one noisy tenant muting everyone else's first-error

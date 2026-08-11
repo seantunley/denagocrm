@@ -57,6 +57,13 @@ export type CustomerRecordRefs = Partial<
  * An id that resolves to no row is skipped: it constrains nothing here, and the
  * insert will fail on its own single-column foreign key, which is the correct place
  * for that failure to surface.
+ *
+ * THROWS `TenantParentConflictError` when the resolved parents disagree — a contact
+ * in one workspace and a lead in another. Callers do not need to catch it: there is
+ * no owner that row could truthfully claim, and the alternative (a NULL tenant)
+ * disables the composite foreign keys that would otherwise refuse it. Letting it
+ * propagate fails the write, which is the intended outcome. `AuditLog` is the single
+ * exception and uses `bestEffortAgreedTenantId` directly — see compositeTenantRules.
  */
 export async function customerRecordTenantId(refs: CustomerRecordRefs): Promise<string | null> {
   const wanted = (Object.keys(PARENT_READERS) as Array<keyof typeof PARENT_READERS>)

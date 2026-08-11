@@ -37,23 +37,109 @@ const shipped = (rel: string) =>
 
 const require_ = createRequire(import.meta.url);
 
+/** Every .ts/.tsx file under a directory, repo-relative. */
+const walk = (dir: string): string[] => {
+  const { readdirSync, statSync } = require_("node:fs") as typeof import("node:fs");
+  return readdirSync(path.join(root, dir)).flatMap((entry) => {
+    const rel = `${dir}/${entry}`;
+    return statSync(path.join(root, rel)).isDirectory()
+      ? walk(rel)
+      : /\.tsx?$/.test(entry)
+        ? [rel]
+        : [];
+  });
+};
+
 /* ────────────────────────────────────────────────────────────────────────────
  * 1. The pure rules
  * ──────────────────────────────────────────────────────────────────────────── */
 
 const rules = require_("../src/lib/compositeTenantRules.ts") as typeof import("../src/lib/compositeTenantRules");
 
-test("a row takes the tenant its parents agree on, and NULL when they do not", () => {
+/**
+ * The rule, one row per case. `agreed` is what the OPERATIONAL rule must answer;
+ * `"refuse"` means it must throw rather than return anything at all.
+ */
+const RULE_TABLE: ReadonlyArray<{
+  what: string;
+  referenced: Array<string | null>;
+  fallback: string | null;
+  agreed: string | null | "refuse";
+}> = [
   // Nothing referenced: nothing constrains the row, so the acting tenant stands.
-  assert.equal(rules.agreedTenantId([], "t_a"), "t_a");
-  assert.equal(rules.agreedTenantId(["t_a", "t_a"], null), "t_a");
-  // A parent that is itself unstamped: the composite key is MATCH SIMPLE, so NULL
+  { what: "no referenced parent", referenced: [], fallback: "t_a", agreed: "t_a" },
+  // A parent that is itself unstamped. The composite key is MATCH SIMPLE, so NULL
   // is the only value that satisfies it. Claiming `t_a` here is the 2026-08-07
   // production failure — three refused lead creations and two duplicate leads.
-  assert.equal(rules.agreedTenantId([null], "t_a"), null);
-  // Two parents that disagree cannot both be satisfied by one value.
-  assert.equal(rules.agreedTenantId(["t_a", "t_b"], "t_a"), null);
-  assert.equal(rules.agreedTenantId(["t_a", null], "t_a"), null);
+  // This is the TRANSITION case and it must keep working.
+  { what: "one unstamped parent", referenced: [null], fallback: "t_a", agreed: null },
+  { what: "two unstamped parents", referenced: [null, null], fallback: "t_a", agreed: null },
+  { what: "one owned parent", referenced: ["t_a"], fallback: null, agreed: "t_a" },
+  { what: "two parents that agree", referenced: ["t_a", "t_a"], fallback: null, agreed: "t_a" },
+  // The two contradictions. Returning NULL here is what this rule used to do, and
+  // NULL switches off BOTH composite foreign keys (MATCH SIMPLE) — so the detected
+  // contradiction became an unowned row spanning two workspaces that the database
+  // could no longer object to. There is no value that is true, so there is no write.
+  { what: "two parents in different workspaces", referenced: ["t_a", "t_b"], fallback: "t_a", agreed: "refuse" },
+  { what: "one owned parent and one unstamped", referenced: ["t_a", null], fallback: "t_a", agreed: "refuse" },
+];
+
+test("the operational rule answers agreement and REFUSES contradiction", () => {
+  for (const row of RULE_TABLE) {
+    if (row.agreed === "refuse") {
+      assert.throws(
+        () => rules.agreedTenantId(row.referenced, row.fallback),
+        rules.TenantParentConflictError,
+        `${row.what}: must refuse, not launder the contradiction into NULL`,
+      );
+      continue;
+    }
+    assert.equal(rules.agreedTenantId(row.referenced, row.fallback), row.agreed, row.what);
+  }
+});
+
+test("the audit rule agrees everywhere except contradiction, where it degrades to NULL", () => {
+  // AuditLog's deliberate exception: losing attribution on the log beats failing
+  // the operation the log exists to record. Nothing else may use this.
+  for (const row of RULE_TABLE) {
+    const expected = row.agreed === "refuse" ? null : row.agreed;
+    assert.equal(rules.bestEffortAgreedTenantId(row.referenced, row.fallback), expected, row.what);
+    // And it never throws — that is the whole point of it existing.
+    assert.doesNotThrow(() => rules.bestEffortAgreedTenantId(row.referenced, row.fallback));
+  }
+});
+
+test("MUTATION CONTROL: reinstating return-NULL-on-disagreement goes red", () => {
+  // The pre-2026-08-11 implementation, verbatim. If this passes the table above,
+  // the table does not actually pin the fix and the regression can walk back in.
+  const reinstated = (referenced: Array<string | null>, fallback: string | null) => {
+    if (referenced.length === 0) return fallback;
+    const first = referenced[0];
+    return referenced.every((value) => value === first) ? first : null;
+  };
+
+  let caught = 0;
+  for (const row of RULE_TABLE) {
+    if (row.agreed !== "refuse") {
+      // Everything the fixed rule ANSWERS, the old one answered identically — so the
+      // difference below is located exactly at the contradictions and nowhere else.
+      assert.equal(reinstated(row.referenced, row.fallback), row.agreed, row.what);
+      continue;
+    }
+    // The old rule silently returns NULL where the fixed one refuses...
+    assert.equal(reinstated(row.referenced, row.fallback), null, row.what);
+    // ...so the assertion the real test makes must fail against it.
+    assert.throws(
+      () =>
+        assert.throws(
+          () => reinstated(row.referenced, row.fallback),
+          rules.TenantParentConflictError,
+        ),
+      `${row.what}: the old rule must NOT satisfy the refusal assertion`,
+    );
+    caught++;
+  }
+  assert.equal(caught, 2, "both contradiction rows must be discriminating");
 });
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -144,11 +230,34 @@ test("a child of an UNSTAMPED parent stays unstamped rather than failing the wri
   assert.equal(await parentTenant.customerRecordTenantId({ contactId: "c_fresh" }), null);
 });
 
-test("parents that disagree yield NULL, not one of them", async () => {
+test("a row pointing into two workspaces is REFUSED, not written unowned", async () => {
+  // The resolver must propagate the refusal rather than absorbing it. Returning NULL
+  // here would write `tenantId=NULL, contactId=A's, leadId=B's` — and a NULL tenant
+  // stops MATCH SIMPLE checking either composite key, so the one constraint that
+  // would have caught a row spanning two workspaces is disabled by the value chosen
+  // to satisfy it. `addCommunication()` authorises contactId and leadId
+  // independently and then hands both here, so this is the backstop.
   acting = "tenant_a";
   db.contacts.set("c_a", { tenantId: "tenant_a" });
   db.leads.set("l_b", { tenantId: "tenant_b" });
-  assert.equal(await parentTenant.customerRecordTenantId({ contactId: "c_a", leadId: "l_b" }), null);
+  await assert.rejects(
+    () => parentTenant.customerRecordTenantId({ contactId: "c_a", leadId: "l_b" }),
+    rules.TenantParentConflictError,
+  );
+});
+
+test("a partially-backfilled parent set is refused too", async () => {
+  // One parent owned, one still unstamped. NULL would disable the composite check
+  // against the OWNED parent; `tenant_a` would violate the key against the unowned
+  // one. Neither is safe, so the write does not happen. (Both parents unstamped is
+  // a different case and still resolves to NULL — see the rule table.)
+  acting = "tenant_a";
+  db.contacts.set("c_owned_a", { tenantId: "tenant_a" });
+  db.leads.set("l_unstamped", { tenantId: null });
+  await assert.rejects(
+    () => parentTenant.customerRecordTenantId({ contactId: "c_owned_a", leadId: "l_unstamped" }),
+    rules.TenantParentConflictError,
+  );
 });
 
 test("with nothing referenced the acting tenant decides — including a cron's", async () => {
@@ -269,6 +378,45 @@ function argumentObject(source: string, from: number): string {
  */
 const STAMPED_MODELS = ["communication", "activity"] as const;
 
+/**
+ * The `data:` value out of a create/upsert argument object, brackets balanced, so a
+ * nested object or a ternary comes back whole and a sibling key (`select`, `where`)
+ * never leaks in.
+ */
+function dataExpression(args: string): string {
+  const key = args.search(/\bdata\s*:/);
+  if (key === -1) return "";
+  const start = args.indexOf(":", key) + 1;
+  let depth = 0;
+  for (let i = start; i < args.length; i += 1) {
+    const ch = args[i];
+    if (ch === "{" || ch === "[" || ch === "(") depth += 1;
+    else if (ch === "}" || ch === "]" || ch === ")") {
+      if (depth === 0) return args.slice(start, i);
+      depth -= 1;
+    } else if (ch === "," && depth === 0) return args.slice(start, i);
+  }
+  return args.slice(start);
+}
+
+/**
+ * The names that ARE the payload in a `data:` expression — not every name mentioned
+ * in it. Only two shapes carry the payload: the expression is the variable itself
+ * (including as a ternary branch), or the variable is spread into a new object.
+ * Anything else in there — a condition, a property lookup, a helper call — is not
+ * what gets written, and treating it as if it were makes this guard accept writes
+ * that stamp nothing.
+ */
+function payloadNames(dataExpr: string): string[] {
+  const names = new Set<string>();
+  for (const spread of dataExpr.matchAll(/\.\.\.\s*([A-Za-z_$][\w$]*)/g)) names.add(spread[1]);
+  for (const branch of dataExpr.split(/[?:]/)) {
+    const bare = branch.trim();
+    if (/^[A-Za-z_$][\w$]*$/.test(bare)) names.add(bare);
+  }
+  return [...names];
+}
+
 function unstampedWrites(rel: string): string[] {
   const source = shipped(rel);
   const missing: string[] = [];
@@ -276,12 +424,30 @@ function unstampedWrites(rel: string): string[] {
   for (const match of source.matchAll(call)) {
     const args = argumentObject(source, match.index + match[0].length - 1);
     if (/\btenantId\b/.test(args)) continue;
-    // `{ data: activityData }` — the payload is built above; follow the name.
-    const indirect = args.match(/data:\s*([A-Za-z_$][\w$]*)\s*[,}]/);
-    if (indirect) {
-      const decl = source.indexOf(`const ${indirect[1]} =`);
-      if (decl !== -1 && /\btenantId\b/.test(argumentObject(source, decl))) continue;
+    /**
+     * The payload is built above and referred to by name. Follow EVERY name the
+     * `data:` expression mentions, not just a bare identifier: a write is equally
+     * stamped whether it says `data: row`, `data: cond ? { ...row, k } : row`, or
+     * `data: { ...row }`, and reading the last two as unstamped would be a false
+     * alarm that teaches the next person to weaken this guard.
+     *
+     * Still narrow in the way that matters: only names appearing in this write's own
+     * `data:` expression are followed, and only to a `const <name> = { … }` holding
+     * `tenantId`. An unstamped write cannot borrow another write's variable, and it
+     * cannot borrow an unrelated NAME either — following every identifier in the
+     * expression accepted `data: decision.dedupeKey ? … : data` on the strength of
+     * `const decision = decideEcho({ tenantId, … })`, which stamps nothing. Verified
+     * by deleting the real stamp and watching this go red.
+     */
+    let stamped = false;
+    for (const name of payloadNames(dataExpression(args))) {
+      const decl = source.indexOf(`const ${name} =`);
+      if (decl !== -1 && /\btenantId\b/.test(argumentObject(source, decl))) {
+        stamped = true;
+        break;
+      }
     }
+    if (stamped) continue;
     missing.push(`${rel}: ${match[1]}.${match[2]} at index ${match.index}`);
   }
   return missing;
@@ -325,17 +491,6 @@ test("every Communication and Activity write names its owning tenant", () => {
 test("the writer list is the whole list", () => {
   // A file that starts writing Communication or Activity and is not listed above
   // would be unguarded, and the guard would still be green. Keep them in step.
-  const walk = (dir: string): string[] => {
-    const { readdirSync, statSync } = require_("node:fs") as typeof import("node:fs");
-    return readdirSync(path.join(root, dir)).flatMap((entry) => {
-      const rel = `${dir}/${entry}`;
-      return statSync(path.join(root, rel)).isDirectory()
-        ? walk(rel)
-        : /\.tsx?$/.test(entry)
-          ? [rel]
-          : [];
-    });
-  };
   const call = new RegExp(`\\.(${STAMPED_MODELS.join("|")})\\.(create|upsert)\\(`);
   const writers = walk("src").filter((rel) => call.test(shipped(rel)));
   const unlisted = writers.filter((rel) => !CUSTOMER_RECORD_WRITERS.includes(rel as never));
@@ -374,6 +529,58 @@ test("ErrorLog is global on purpose, and its attribution shares one resolver", (
     /getActiveTenantId|PLATFORM_SESSION_COOKIE/,
     "errorLog must not keep its own copy of the resolution order",
   );
+});
+
+test("an unattributed ErrorLog row is invisible to every workspace, not visible to all of them", () => {
+  // This pins a FACT the prose got backwards. The claim used to be that a NULL-tenant
+  // row is readable from every workspace's System Log — a cross-tenant leak, offered
+  // as the accepted cost of ErrorLog being global. The code never did that: the read
+  // matches an exact, resolved tenant id, so NULL rows match nothing and surface only
+  // in the platform console. The real cost is discoverability, not confidentiality.
+  const settings = shipped("src/app/(app)/settings/page.tsx");
+  assert.match(
+    settings,
+    /errorLog\.findMany\(\{\s*where:\s*\{\s*tenantId:\s*logTenantId\s*\}/,
+    "the System Log must read by exact tenant id",
+  );
+  // An `OR` reaching for null rows, or the filter going away, is the regression.
+  assert.doesNotMatch(
+    settings,
+    /errorLog\.findMany\(\{\s*(orderBy|take|\})/,
+    "the System Log must never read ErrorLog unfiltered",
+  );
+  assert.doesNotMatch(
+    settings,
+    /tenantId:\s*\{\s*in:\s*\[[^\]]*null/,
+    "NULL-tenant errors belong to the platform console, not to a workspace",
+  );
+});
+
+test("audit's forgiving conflict policy is a SEPARATE function, and only audit uses it", () => {
+  // The whole point of two functions is that nobody reunifies them by accident.
+  // `agreedTenantId` refuses a contradiction; `bestEffortAgreedTenantId` degrades to
+  // NULL and is audit's exception alone. If an operational writer ever picks up the
+  // forgiving one, a Communication or Activity can again be written unowned across
+  // two workspaces with both composite keys disabled.
+  assert.equal(typeof rules.agreedTenantId, "function");
+  assert.equal(typeof rules.bestEffortAgreedTenantId, "function");
+
+  // audit.ts is the ONE file entitled to it.
+  assert.match(shipped("src/lib/audit.ts"), /bestEffortAgreedTenantId\(referenced, acting\)/);
+
+  // The operational resolver every Communication/Activity writer goes through must
+  // use the strict rule.
+  const record = shipped("src/lib/customerRecordTenant.ts");
+  assert.match(record, /return agreedTenantId\(referenced, null\)/);
+  assert.doesNotMatch(record, /bestEffortAgreedTenantId/);
+
+  // And nothing outside audit.ts may import it.
+  // `shipped`, not `read`: customerRecordTenant.ts NAMES the audit exception in its
+  // doc comment so the next reader knows it exists. Documenting a rule is not using it.
+  const offenders = walk("src")
+    .filter((rel) => rel !== "src/lib/audit.ts" && rel !== "src/lib/compositeTenantRules.ts")
+    .filter((rel) => /bestEffortAgreedTenantId/.test(shipped(rel)));
+  assert.deepEqual(offenders, [], "only audit may use the best-effort conflict policy");
 });
 
 test("BackupRun is global, so the Prisma model must carry no tenantId", () => {

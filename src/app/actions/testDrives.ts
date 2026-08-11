@@ -160,8 +160,11 @@ export async function createTestDriveBooking(formData: FormData) {
   const modelName = product?.name ?? demoVehicle?.name ?? lead?.title ?? "Vehicle";
   const activityId = crypto.randomUUID();
   // Both parents are already in hand, so the owner is decided without another read.
-  // Activity's composite keys are (tenantId, contactId) and (tenantId, leadId): a
-  // contact and a lead that disagree can only be satisfied by NULL.
+  // Activity's composite keys are (tenantId, contactId) and (tenantId, leadId). If
+  // the contact and the lead disagree this THROWS rather than writing NULL: a NULL
+  // tenant would switch off both composite checks and book a test drive spanning two
+  // workspaces. The lead/contact mismatch guard above catches the ordinary case; this
+  // is the database-level backstop for the case it does not.
   const activityTenantId = agreedTenantId(
     [contact.tenantId, ...(lead ? [lead.tenantId] : [])],
     null,

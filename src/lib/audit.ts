@@ -2,7 +2,7 @@ import crypto from "crypto";
 import { headers } from "next/headers";
 import { basePrisma, prisma } from "./db";
 import { currentTenantScope } from "./tenantScope";
-import { agreedTenantId } from "./compositeTenantRules";
+import { bestEffortAgreedTenantId } from "./compositeTenantRules";
 
 export type AuditEntry = {
   action: string;
@@ -176,7 +176,12 @@ async function auditTenantId(entry: AuditEntry): Promise<string | null> {
   if (entry.leadId && lead) referenced.push(lead.tenantId);
   if (entry.contactId && contact) referenced.push(contact.tenantId);
 
-  return agreedTenantId(referenced, acting);
+  // BEST-EFFORT, and audit is the ONLY caller entitled to it. If the lead and the
+  // contact disagree, this row degrades to a NULL tenant instead of throwing —
+  // losing attribution on the log rather than failing the operation the log exists
+  // to record. `Communication` and `Activity` use the strict `agreedTenantId()`,
+  // which refuses; see compositeTenantRules.ts for why these must stay apart.
+  return bestEffortAgreedTenantId(referenced, acting);
 }
 
 /**
