@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { updateLead } from "@/app/actions/leads";
 import { getAccessibleContactIds, requireLeadAccess } from "@/lib/permissions";
-import { listTenantStaff } from "@/lib/tenantActor";
+import { listActingTenantStaff } from "@/lib/tenantActor";
 import LeadForm from "@/components/LeadForm";
 import { contactName } from "@/lib/format";
 
@@ -33,7 +33,7 @@ export default async function EditLeadPage({
       orderBy: { firstName: "asc" },
       take: 500,
     }),
-    listTenantStaff(),
+    listActingTenantStaff(),
   ]);
   if (!lead) notFound();
 

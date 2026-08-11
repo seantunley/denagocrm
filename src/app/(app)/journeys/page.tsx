@@ -3,7 +3,7 @@ import { Activity, Workflow } from "lucide-react";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { leadOptionLabels } from "@/lib/leadOption";
-import { listTenantStaff } from "@/lib/tenantActor";
+import { listActingTenantStaff } from "@/lib/tenantActor";
 import { requireRoute, getAccessibleLeadIds } from "@/lib/permissions";
 import { formatDateTime } from "@/lib/format";
 import JourneyBuilder, { type JourneyBuilderDefaults } from "@/components/JourneyBuilder";
@@ -124,7 +124,7 @@ export default async function JourneysPage() {
     // than submitted: a name picked out of another workspace here becomes a
     // journey that reassigns leads to them on every run. Refused on save now
     // too — see assertStepAssigneesResolve in actions/journeys.ts.
-    listTenantStaff(),
+    listActingTenantStaff(),
     prisma.emailTemplate.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
     prisma.tag.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
     prisma.segment.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),

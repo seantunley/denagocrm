@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireConversationAccess } from "@/lib/permissions";
-import { listTenantStaff } from "@/lib/tenantActor";
+import { listActingTenantStaff } from "@/lib/tenantActor";
 import { logAudit } from "@/lib/audit";
 import { markConversationRead } from "@/lib/conversations";
 import { asActionResult, refuse, type ActionResult } from "@/lib/actionResult";
@@ -30,7 +30,7 @@ export async function assignConversation(
 
     let assigneeName: string | null = null;
     if (userId) {
-      const staff = await listTenantStaff();
+      const staff = await listActingTenantStaff();
       const member = staff.find((person) => person.id === userId);
       if (!member) refuse("That person is not a member of your team.");
       assigneeName = member.name;
@@ -105,7 +105,7 @@ export async function addConversationNote(
     const clean = body.trim();
     if (!clean) refuse("Write something before saving the note.");
 
-    const staff = await listTenantStaff();
+    const staff = await listActingTenantStaff();
     const staffIds = new Set(staff.map((person) => person.id));
     const named = [...new Set(mentions)].filter((id) => staffIds.has(id));
 

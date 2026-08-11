@@ -5,7 +5,7 @@ import {
   ArrowLeft, Paperclip, StickyNote, CircleDot, User as UserIcon, Car, X, Tag as TagIcon,
 } from "lucide-react";
 import { basePrisma } from "@/lib/db";
-import { listTenantStaff } from "@/lib/tenantActor";
+import { listActingTenantStaff } from "@/lib/tenantActor";
 import { requireCaseReadAccess } from "@/lib/permissions";
 import {
   getTicketDetail, listMailboxes, listCannedReplies, markCustomerMessagesRead,
@@ -42,7 +42,7 @@ export default async function TicketDetailPage({ params }: { params: Promise<{ i
     // platform. `User` is a global model, so `user.findMany` is scoped by
     // nothing — this list was quietly showing one tenant the names of everyone
     // who works at all the others, and offering them as ticket assignees.
-    listTenantStaff(),
+    listActingTenantStaff(),
     listMailboxes(),
     listCannedReplies(ticket.mailboxId),
     basePrisma.$queryRaw<Upload[]>`SELECT "id","fileName","sizeBytes","createdAt" FROM "PortalUpload" WHERE "caseId" = ${id} ORDER BY "createdAt" DESC`,

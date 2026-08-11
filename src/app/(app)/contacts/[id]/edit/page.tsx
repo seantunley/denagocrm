@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { updateContact } from "@/app/actions/contacts";
 import { requireContactAccess } from "@/lib/permissions";
-import { listTenantStaff } from "@/lib/tenantActor";
+import { listActingTenantStaff } from "@/lib/tenantActor";
 import ContactForm from "@/components/ContactForm";
 import { fleetPicker } from "@/lib/fleetDirectory";
 import { contactName } from "@/lib/format";
@@ -31,7 +31,7 @@ export default async function EditContactPage({
     }),
     // The owner picker: staff of THIS tenant, not every User row. `User` is a
     // global model, so prisma.user.findMany is not tenant-scoped by anything.
-    listTenantStaff(),
+    listActingTenantStaff(),
     fleetPicker(),
   ]);
   if (!contact) notFound();

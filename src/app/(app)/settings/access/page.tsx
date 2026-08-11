@@ -1,6 +1,7 @@
 import { Plus } from "lucide-react";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { basePrisma } from "@/lib/db";
+import { actingTenantMemberIds } from "@/lib/tenantActor";
 import { getActiveTenantId } from "@/lib/auth";
 import { tenantEnforcing } from "@/lib/tenantEnforcement";
 import { hasPermission, requireAnyPermission } from "@/lib/permissions";
@@ -55,15 +56,27 @@ export default async function AccessSettingsPage() {
   const enforcing = tenantEnforcing();
   const activeTenantId = await getActiveTenantId();
 
-  const users = await basePrisma.$queryRaw<UserRow[]>`
-    SELECT u."id", u."name", u."email", u."role", u."disabledAt", u."lastLoginAt", u."failedLoginCount"
-    FROM "User" u
-    WHERE (NOT ${enforcing}::boolean OR EXISTS (
-      SELECT 1 FROM "TenantMember" tm
-      WHERE tm."userId" = u."id" AND tm."tenantId" = ${activeTenantId}
-    ))
-    ORDER BY u."disabledAt" NULLS FIRST, u."name"
-  `;
+  // The user list was `NOT enforcing OR EXISTS (membership)`, which is the defect
+  // this whole sweep is about, in one clause: while enforcement is DORMANT — every
+  // environment today — the membership half is never evaluated, so this screen
+  // listed every person on the platform with their last login, failed-login count
+  // and role, and offered Disable, Reactivate and "Revoke sessions" for each. The
+  // membership check that was supposed to prevent that only starts running after
+  // the flip, which is the opposite of a safety control.
+  //
+  // `actingTenantMemberIds()` resolves the workspace the OWNER IS ACTUALLY IN,
+  // from their session while dormant and from the enforced scope once it is on, so
+  // the same filter applies in both modes. Disabled members stay listed: this is
+  // where they are reactivated, and the query still sorts them last.
+  const memberIds = await actingTenantMemberIds();
+  const users = memberIds !== null && memberIds.length === 0
+    ? []
+    : await basePrisma.$queryRaw<UserRow[]>`
+        SELECT u."id", u."name", u."email", u."role", u."disabledAt", u."lastLoginAt", u."failedLoginCount"
+        FROM "User" u
+        WHERE (${memberIds === null}::boolean OR u."id" = ANY(${memberIds ?? []}::text[]))
+        ORDER BY u."disabledAt" NULLS FIRST, u."name"
+      `;
   const teams = canViewTeams
     ? await basePrisma.$queryRaw<TeamRow[]>`
         SELECT "id", "name", "description", "active", "managerId"

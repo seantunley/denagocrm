@@ -21,7 +21,7 @@ import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { prisma } from "@/lib/db";
-import { listTenantStaff } from "@/lib/tenantActor";
+import { listActingTenantStaff } from "@/lib/tenantActor";
 import { fleetPicker } from "@/lib/fleetDirectory";
 import { NO_FLEET_PICKER } from "@/lib/fleetTypes";
 import { contactName, formatDate } from "@/lib/format";
@@ -98,7 +98,7 @@ export default async function ContactsPage({
     // The owner picker inside the create dialog: staff of THIS tenant. `User` is
     // a global model, so prisma.user.findMany is not tenant-scoped by anything —
     // the dropdown was offering every user on the platform as a contact owner.
-    canCreate ? listTenantStaff() : Promise.resolve([]),
+    canCreate ? listActingTenantStaff() : Promise.resolve([]),
     canCreate ? fleetPicker() : Promise.resolve(NO_FLEET_PICKER),
   ]);
 

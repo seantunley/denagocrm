@@ -27,7 +27,7 @@ import ResearchButton from "@/components/ResearchButton";
 import { isAiConfigured } from "@/lib/ai";
 import { isWhatsAppConfigured } from "@/lib/whatsapp";
 import { requireUser } from "@/lib/auth";
-import { listTenantStaff } from "@/lib/tenantActor";
+import { listActingTenantStaff } from "@/lib/tenantActor";
 import { brandForTenant, teamSignoff } from "@/lib/tenantBrand";
 import { getActiveTenantId } from "@/lib/auth";
 import { isSmtpConfigured, renderTemplate, leadVars } from "@/lib/email";
@@ -74,7 +74,7 @@ export default async function LeadDetailPage({
     // modal and the activity assignee in the Activities tab. `User` is a global
     // model, so `prisma.user.findMany` was listing every user on the platform in
     // both of them.
-    listTenantStaff(),
+    listActingTenantStaff(),
     prisma.emailTemplate.findMany({ orderBy: { name: "asc" } }),
     isSmtpConfigured(),
     prisma.auditLog.findMany({

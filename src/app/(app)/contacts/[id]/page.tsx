@@ -26,7 +26,7 @@ import { healthLabels } from "@/lib/health";
 import { recordConsent, anonymizeContact } from "@/app/actions/privacy";
 import { CONSENT_TYPES } from "@/lib/consent";
 import { brandForTenant, teamSignoff } from "@/lib/tenantBrand";
-import { listTenantStaff } from "@/lib/tenantActor";
+import { listActingTenantStaff } from "@/lib/tenantActor";
 import { getActiveTenantId } from "@/lib/auth";
 import { isSmtpConfigured, renderTemplate, contactVars } from "@/lib/email";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
@@ -110,7 +110,7 @@ export default async function ContactDetailPage({
     // model, so `prisma.user.findMany` is scoped by nothing — the dropdown
     // listed every user on the platform, and the action behind it wrote the
     // posted id with no membership check at all (see activities.ts).
-    listTenantStaff(),
+    listActingTenantStaff(),
     prisma.emailTemplate.findMany({ orderBy: { name: "asc" } }),
     isSmtpConfigured(),
     isWhatsAppConfigured(),
