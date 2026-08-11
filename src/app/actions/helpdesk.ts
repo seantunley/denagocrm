@@ -7,8 +7,8 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma, basePrisma } from "@/lib/db";
 import { ciExactIdFilter } from "@/lib/ciExact";
-import { writeTenantId, withTenantWrite } from "@/lib/tenantWrite";
-import { DEFAULT_TENANT_ID } from "@/lib/tenant";
+import { withTenantWrite } from "@/lib/tenantWrite";
+import { actingOwnerTenantId } from "@/lib/actingScope";
 import { logAudit } from "@/lib/audit";
 import { logError } from "@/lib/errorLog";
 import {
@@ -233,7 +233,7 @@ export async function addNote(caseId: string, formData: FormData): Promise<Actio
     const body = str(formData, "body");
     if (body.length < 1) throw new ActionRefusal("Write a note before saving.");
     await prisma.customerCaseMessage.create({
-      data: { caseId, userId: user.id, direction: "staff", type: "note", body, tenantId: writeTenantId() ?? DEFAULT_TENANT_ID },
+      data: { caseId, userId: user.id, direction: "staff", type: "note", body, tenantId: await tenantOfCase(caseId) },
     });
     await logAudit({ action: "case.note_added", summary: "Added an internal note", user, entityType: "CustomerCase", entityId: caseId });
     revalidatePath(`/cases/${caseId}`);
@@ -331,7 +331,7 @@ export async function addTicketTag(caseId: string, formData: FormData): Promise<
     // slug is unique PER TENANT now (@@unique([tenantId, slug])). Stamp the owning
     // tenant explicitly so this is correct with enforcement OFF too (the scoped
     // guard is dormant then and would leave tenantId NULL, violating NOT NULL).
-    const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
+    const tenantId = await actingOwnerTenantId();
     const tag = await prisma.supportTag.upsert({
       where: { tenantId_slug: { tenantId, slug } },
       update: {},
@@ -421,7 +421,7 @@ export async function saveMailbox(formData: FormData): Promise<ActionResult> {
       } else {
         // Stamp the owning tenant explicitly — tenantId is NOT NULL and the scoped
         // guard is dormant with enforcement off. slug is unique per tenant.
-        const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
+        const tenantId = await actingOwnerTenantId();
         await prisma.supportMailbox.create({ data: { ...data, slug: slugify(name), tenantId } });
       }
     });
@@ -442,7 +442,7 @@ export async function saveCannedReply(formData: FormData): Promise<ActionResult>
     if (id) {
       await prisma.cannedReply.update({ where: { id }, data: { title, body, mailboxId } });
     } else {
-      await prisma.cannedReply.create({ data: { title, body, mailboxId, createdById: user.id, tenantId: writeTenantId() ?? DEFAULT_TENANT_ID } });
+      await prisma.cannedReply.create({ data: { title, body, mailboxId, createdById: user.id, tenantId: await actingOwnerTenantId() } });
     }
     await logAudit({ action: "helpdesk.canned_saved", summary: `Saved reply ${title}`, user });
     revalidatePath("/settings/helpdesk");
