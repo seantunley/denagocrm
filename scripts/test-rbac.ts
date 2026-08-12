@@ -14,6 +14,9 @@ import {
   type PermissionUser,
 } from "../src/lib/permissions";
 import { getAccessibleActivityIds } from "../src/lib/activityAccess";
+import { DEFAULT_TENANT_ID } from "../src/lib/tenant";
+import { runInTenantScope } from "../src/lib/tenantScope";
+import { __setTenantEnforcingForTests } from "../src/lib/tenantEnforcement";
 
 const prisma = new PrismaClient();
 
@@ -86,85 +89,85 @@ async function main() {
         (gen_random_uuid()::text, ${ids.outsider}, 'role_technician')
     `;
     await prisma.$executeRaw`
-      INSERT INTO "Team" ("id", "name", "active", "managerId")
-      VALUES (${ids.team}, ${`RBAC team ${suffix}`}, true, ${ids.salesUser})
+      INSERT INTO "Team" ("id", "tenantId", "name", "active", "managerId")
+      VALUES (${ids.team}, ${DEFAULT_TENANT_ID}, ${`RBAC team ${suffix}`}, true, ${ids.salesUser})
     `;
     await prisma.$executeRaw`
-      INSERT INTO "TeamMember" ("id", "teamId", "userId", "isManager") VALUES
-        (${`rbac-membership-a-${suffix}`}, ${ids.team}, ${ids.salesUser}, true),
-        (${`rbac-membership-b-${suffix}`}, ${ids.team}, ${ids.teammate}, false)
+      INSERT INTO "TeamMember" ("id", "tenantId", "teamId", "userId", "isManager") VALUES
+        (${`rbac-membership-a-${suffix}`}, ${DEFAULT_TENANT_ID}, ${ids.team}, ${ids.salesUser}, true),
+        (${`rbac-membership-b-${suffix}`}, ${DEFAULT_TENANT_ID}, ${ids.team}, ${ids.teammate}, false)
     `;
     await prisma.$executeRaw`
       INSERT INTO "PipelineStage" (
-        "id", "name", "order", "color", "pipelineId", "defaultProbability", "isClosed"
+        "id", "tenantId", "name", "order", "color", "pipelineId", "defaultProbability", "isClosed"
       ) VALUES (
-        ${ids.stage}, ${`RBAC stage ${suffix}`}, 900000, '#64748b',
+        ${ids.stage}, ${DEFAULT_TENANT_ID}, ${`RBAC stage ${suffix}`}, 900000, '#64748b',
         'pipeline_default_retail', 10, false
       )
     `;
 
     await prisma.contact.createMany({
       data: [
-        { id: ids.contactOwn, firstName: "Own Contact", ownerId: ids.salesUser, createdById: ids.salesUser },
-        { id: ids.contactTeam, firstName: "Team Contact", ownerId: ids.teammate, createdById: ids.teammate },
-        { id: ids.contactOutside, firstName: "Outside Contact", ownerId: ids.outsider, createdById: ids.outsider },
+        { id: ids.contactOwn, tenantId: DEFAULT_TENANT_ID, firstName: "Own Contact", ownerId: ids.salesUser, createdById: ids.salesUser },
+        { id: ids.contactTeam, tenantId: DEFAULT_TENANT_ID, firstName: "Team Contact", ownerId: ids.teammate, createdById: ids.teammate },
+        { id: ids.contactOutside, tenantId: DEFAULT_TENANT_ID, firstName: "Outside Contact", ownerId: ids.outsider, createdById: ids.outsider },
       ],
     });
 
     await prisma.lead.createMany({
       data: [
-        { id: ids.leadOwn, title: "Own lead", name: "Own Contact", stageId: ids.stage, contactId: ids.contactOwn, assignedToId: ids.salesUser, createdById: ids.salesUser },
-        { id: ids.leadTeam, title: "Team lead", name: "Team Contact", stageId: ids.stage, contactId: ids.contactTeam, assignedToId: ids.teammate, createdById: ids.teammate },
-        { id: ids.leadOutside, title: "Outside lead", name: "Outside Contact", stageId: ids.stage, contactId: ids.contactOutside, assignedToId: ids.outsider, createdById: ids.outsider },
+        { id: ids.leadOwn, tenantId: DEFAULT_TENANT_ID, title: "Own lead", name: "Own Contact", stageId: ids.stage, contactId: ids.contactOwn, assignedToId: ids.salesUser, createdById: ids.salesUser },
+        { id: ids.leadTeam, tenantId: DEFAULT_TENANT_ID, title: "Team lead", name: "Team Contact", stageId: ids.stage, contactId: ids.contactTeam, assignedToId: ids.teammate, createdById: ids.teammate },
+        { id: ids.leadOutside, tenantId: DEFAULT_TENANT_ID, title: "Outside lead", name: "Outside Contact", stageId: ids.stage, contactId: ids.contactOutside, assignedToId: ids.outsider, createdById: ids.outsider },
       ],
     });
     await prisma.$executeRaw`UPDATE "Lead" SET "teamId" = ${ids.team} WHERE "id" = ${ids.leadTeam}`;
 
     await prisma.quote.createMany({
       data: [
-        { id: ids.quoteOwn, number: baseNumber, contactId: ids.contactOwn, leadId: ids.leadOwn, createdById: ids.salesUser },
-        { id: ids.quoteTeam, number: baseNumber + 1, contactId: ids.contactTeam, leadId: ids.leadTeam, createdById: ids.teammate },
-        { id: ids.quoteOutside, number: baseNumber + 2, contactId: ids.contactOutside, leadId: ids.leadOutside, createdById: ids.outsider },
+        { id: ids.quoteOwn, tenantId: DEFAULT_TENANT_ID, number: baseNumber, contactId: ids.contactOwn, leadId: ids.leadOwn, createdById: ids.salesUser },
+        { id: ids.quoteTeam, tenantId: DEFAULT_TENANT_ID, number: baseNumber + 1, contactId: ids.contactTeam, leadId: ids.leadTeam, createdById: ids.teammate },
+        { id: ids.quoteOutside, tenantId: DEFAULT_TENANT_ID, number: baseNumber + 2, contactId: ids.contactOutside, leadId: ids.leadOutside, createdById: ids.outsider },
       ],
     });
 
     await prisma.vehicle.createMany({
       data: [
-        { id: ids.vehicleOwn, model: "Own cart", contactId: ids.contactOwn },
-        { id: ids.vehicleTeam, model: "Team cart", contactId: ids.contactTeam },
-        { id: ids.vehicleOutside, model: "Outside cart", contactId: ids.contactOutside },
+        { id: ids.vehicleOwn, tenantId: DEFAULT_TENANT_ID, model: "Own cart", contactId: ids.contactOwn },
+        { id: ids.vehicleTeam, tenantId: DEFAULT_TENANT_ID, model: "Team cart", contactId: ids.contactTeam },
+        { id: ids.vehicleOutside, tenantId: DEFAULT_TENANT_ID, model: "Outside cart", contactId: ids.contactOutside },
       ],
     });
 
     await prisma.jobCard.createMany({
       data: [
-        { id: ids.jobOwn, number: baseNumber + 10, description: "Own service", vehicleId: ids.vehicleOwn, contactId: ids.contactOwn, technicianId: ids.salesUser },
-        { id: ids.jobTeam, number: baseNumber + 11, description: "Team service", vehicleId: ids.vehicleTeam, contactId: ids.contactTeam, technicianId: ids.teammate },
-        { id: ids.jobOutside, number: baseNumber + 12, description: "Outside service", vehicleId: ids.vehicleOutside, contactId: ids.contactOutside, technicianId: ids.outsider },
+        { id: ids.jobOwn, tenantId: DEFAULT_TENANT_ID, number: baseNumber + 10, description: "Own service", vehicleId: ids.vehicleOwn, contactId: ids.contactOwn, technicianId: ids.salesUser },
+        { id: ids.jobTeam, tenantId: DEFAULT_TENANT_ID, number: baseNumber + 11, description: "Team service", vehicleId: ids.vehicleTeam, contactId: ids.contactTeam, technicianId: ids.teammate },
+        { id: ids.jobOutside, tenantId: DEFAULT_TENANT_ID, number: baseNumber + 12, description: "Outside service", vehicleId: ids.vehicleOutside, contactId: ids.contactOutside, technicianId: ids.outsider },
       ],
     });
 
     await prisma.document.createMany({
       data: [
-        { id: ids.documentOwn, fileName: "own.pdf", storedName: `${ids.documentOwn}.pdf`, mimeType: "application/pdf", sizeBytes: 1, contactId: ids.contactOwn, quoteId: ids.quoteOwn, uploadedById: ids.salesUser },
-        { id: ids.documentTeam, fileName: "team.pdf", storedName: `${ids.documentTeam}.pdf`, mimeType: "application/pdf", sizeBytes: 1, vehicleId: ids.vehicleTeam, jobCardId: ids.jobTeam, uploadedById: ids.teammate },
-        { id: ids.documentOutside, fileName: "outside.pdf", storedName: `${ids.documentOutside}.pdf`, mimeType: "application/pdf", sizeBytes: 1, contactId: ids.contactOutside, uploadedById: ids.outsider },
+        { id: ids.documentOwn, tenantId: DEFAULT_TENANT_ID, fileName: "own.pdf", storedName: `${ids.documentOwn}.pdf`, mimeType: "application/pdf", sizeBytes: 1, contactId: ids.contactOwn, quoteId: ids.quoteOwn, uploadedById: ids.salesUser },
+        { id: ids.documentTeam, tenantId: DEFAULT_TENANT_ID, fileName: "team.pdf", storedName: `${ids.documentTeam}.pdf`, mimeType: "application/pdf", sizeBytes: 1, vehicleId: ids.vehicleTeam, jobCardId: ids.jobTeam, uploadedById: ids.teammate },
+        { id: ids.documentOutside, tenantId: DEFAULT_TENANT_ID, fileName: "outside.pdf", storedName: `${ids.documentOutside}.pdf`, mimeType: "application/pdf", sizeBytes: 1, contactId: ids.contactOutside, uploadedById: ids.outsider },
       ],
     });
 
     await prisma.activity.createMany({
       data: [
-        { id: ids.activityOwn, summary: "Own follow-up", dueDate: new Date(), leadId: ids.leadOwn, assignedToId: ids.salesUser, createdById: ids.salesUser },
-        { id: ids.activityTeam, summary: "Team follow-up", dueDate: new Date(), contactId: ids.contactTeam, assignedToId: ids.teammate, createdById: ids.teammate },
-        { id: ids.activityOutside, summary: "Outside follow-up", dueDate: new Date(), contactId: ids.contactOutside, assignedToId: ids.outsider, createdById: ids.outsider },
+        { id: ids.activityOwn, tenantId: DEFAULT_TENANT_ID, summary: "Own follow-up", dueDate: new Date(), leadId: ids.leadOwn, assignedToId: ids.salesUser, createdById: ids.salesUser },
+        { id: ids.activityTeam, tenantId: DEFAULT_TENANT_ID, summary: "Team follow-up", dueDate: new Date(), contactId: ids.contactTeam, assignedToId: ids.teammate, createdById: ids.teammate },
+        { id: ids.activityOutside, tenantId: DEFAULT_TENANT_ID, summary: "Outside follow-up", dueDate: new Date(), contactId: ids.contactOutside, assignedToId: ids.outsider, createdById: ids.outsider },
       ],
     });
 
     await prisma.$executeRaw`
-      INSERT INTO "CustomerCase" ("id", "contactId", "vehicleId", "type", "subject", "description") VALUES
-        (${ids.caseOwn}, ${ids.contactOwn}, ${ids.vehicleOwn}, 'support', 'Own case', 'Own case details'),
-        (${ids.caseTeam}, ${ids.contactTeam}, ${ids.vehicleTeam}, 'support', 'Team case', 'Team case details'),
-        (${ids.caseOutside}, ${ids.contactOutside}, ${ids.vehicleOutside}, 'support', 'Outside case', 'Outside case details')
+      INSERT INTO "CustomerCase" ("id", "tenantId", "contactId", "vehicleId", "type", "subject", "description") VALUES
+        (${ids.caseOwn}, ${DEFAULT_TENANT_ID}, ${ids.contactOwn}, ${ids.vehicleOwn}, 'support', 'Own case', 'Own case details'),
+        (${ids.caseTeam}, ${DEFAULT_TENANT_ID}, ${ids.contactTeam}, ${ids.vehicleTeam}, 'support', 'Team case', 'Team case details'),
+        (${ids.caseOutside}, ${DEFAULT_TENANT_ID}, ${ids.contactOutside}, ${ids.vehicleOutside}, 'support', 'Outside case', 'Outside case details')
     `;
 
     const scopedUser: PermissionUser = {
@@ -183,7 +186,28 @@ async function main() {
     assert.equal(permissionList.includes("contacts.view_owned"), true);
     assert.equal(permissionList.includes("vehicles.view_owned"), true);
 
-    const scopes = {
+    // INSIDE A RESOLVED WORKSPACE, because that is the only state these run in.
+    //
+    // This script used to call the helpers with no scope at all, which resolved
+    // to `global` — and `global` used to mean "no tenant predicate". So every
+    // assertion below was answered by an UNFILTERED query, and the fixtures were
+    // seeded with no tenant to match. An unresolvable scope is now a refusal
+    // (`global` covers a stale or AMBIGUOUS session, not merely a sessionless
+    // cron), so a script that never establishes one was exercising the fail-open
+    // path and nothing else.
+    //
+    // Enforcement is switched on for the assertions specifically. While dormant,
+    // `actingScopeClass()` takes its answer from the SESSION — and
+    // `dormantSessionTenantId()` deliberately swallows the "outside a request
+    // scope" error and returns null, so no script can ever resolve a workspace
+    // that way. Under enforcement the ambient scope is authoritative, which is
+    // the only handle a script has. Seeding stays outside it, so the fixtures are
+    // written exactly as before.
+    //
+    // The own/team/outside distinctions this file exists to check are unchanged;
+    // they are simply no longer answered by an unbounded query.
+    __setTenantEnforcingForTests(true);
+    const scopes = await runInTenantScope({ tenantId: DEFAULT_TENANT_ID, system: false }, async () => ({
       leads: await getAccessibleLeadIds(scopedUser),
       contacts: await getAccessibleContactIds(scopedUser),
       quotes: await getAccessibleQuoteIds(scopedUser),
@@ -192,7 +216,7 @@ async function main() {
       documents: await getAccessibleDocumentIds(scopedUser),
       cases: await getAccessibleCaseIds(scopedUser),
       activities: await getAccessibleActivityIds(scopedUser),
-    };
+    }));
 
     for (const [label, accessible, own, team, outside] of [
       ["leads", scopes.leads, ids.leadOwn, ids.leadTeam, ids.leadOutside],
@@ -211,6 +235,9 @@ async function main() {
 
     console.log("Platform-wide RBAC integration tests passed.");
   } finally {
+    // Always hand enforcement back, even if an assertion threw — the cleanup
+    // below writes through the guarded client.
+    __setTenantEnforcingForTests(null);
     await prisma.$executeRaw`DELETE FROM "CustomerCase" WHERE "id" IN (${ids.caseOwn}, ${ids.caseTeam}, ${ids.caseOutside})`;
     await prisma.activity.deleteMany({ where: { id: { in: [ids.activityOwn, ids.activityTeam, ids.activityOutside] } } });
     await prisma.document.deleteMany({ where: { id: { in: [ids.documentOwn, ids.documentTeam, ids.documentOutside] } } });
