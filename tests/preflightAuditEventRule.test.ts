@@ -84,15 +84,79 @@ test("the split classifies by actorType, and unknown actor types fail closed", (
   assert.match(body, /GROUP BY "actorType"/, "the split must be driven by the actor, not by the entity");
   // The `else` arm is the fail-closed one: anything not explicitly listed as
   // global — including a NULL actorType — counts as attributable and blocks.
+  // Fail-closed by STRUCTURE: only an explicit membership test routes a row to
+  // `global`, and it exits immediately. Everything else — including an
+  // unrecognised type and a NULL one — falls through to the legacy/attributable
+  // path below, so a new actor classification cannot exempt itself by existing.
   assert.match(
     body,
-    /includes\(type\)\s*\)\s*\{[\s\S]*?global \+= n;[\s\S]*?\}\s*else\s*\{[\s\S]*?attributable \+= n;/,
-    "an unrecognised actor type must be treated as attributable, never waved through as global",
+    /includes\(type\)\s*\)\s*\{[\s\S]*?global \+=[\s\S]*?continue;\s*\}/,
+    "membership in the global list must be the ONLY route to `global`, and must exit there",
+  );
+  assert.doesNotMatch(
+    body,
+    /else[\s\S]{0,80}global \+=/,
+    "no fall-through branch may add to `global` — that is how an unknown type would get waved through",
   );
   assert.match(
     body,
     /row\.actorType \?\? "\(none\)"/,
     "a NULL actorType must fall into the attributable branch rather than matching a global name",
+  );
+});
+
+test("the legacy exemption is bounded by BOTH a past cutoff and a count ratchet", () => {
+  // The exemption exists only because `AuditEvent_no_update` /
+  // `AuditEvent_no_delete` refuse the repair — the rows are unfixable, not
+  // merely unfixed. Two independent bounds keep that from becoming "ignore NULL
+  // AuditEvents":
+  //
+  //   cutoff  — in the PAST, so nothing new can drift underneath it
+  //   ratchet — the set is 18 and, because DELETE is refused too, it cannot
+  //             shrink either; it is frozen in both directions
+  //
+  // Together these are as tight as pinning the 18 ids, without a wall of UUIDs
+  // that would rot the first time anyone reformats the file.
+  const cutoff = /LEGACY_AUDIT_CUTOFF = new Date\("([^"]+)"\)/.exec(CODE);
+  assert.ok(cutoff, "the exemption must be anchored to an explicit cutoff, not left open-ended");
+  const when = new Date(cutoff[1]);
+  assert.ok(
+    when.getTime() < Date.parse("2026-08-12T00:00:00Z"),
+    "the cutoff must stay in the past — a future or rolling one would exempt new regressions",
+  );
+  assert.ok(
+    when.getTime() > Date.parse("2026-08-07T14:00:23Z"),
+    "the cutoff must sit after the newest known legacy row, or that row is not actually covered",
+  );
+
+  assert.match(CODE, /LEGACY_AUDIT_MAX = 18/, "the known set is 18; changing it needs a reason, not a nudge");
+  assert.match(
+    CODE,
+    /if \(split\.legacy > LEGACY_AUDIT_MAX\) \{[\s\S]*?failures\.push/,
+    "more legacy rows than known means the exemption stopped describing its set — that must FAIL, not widen",
+  );
+  assert.match(
+    CODE,
+    /\} else if \(split\.legacy > 0\) \{[\s\S]*?warnings\.push/,
+    "the known immutable set warns rather than blocks",
+  );
+});
+
+test("anything newer than the cutoff is still counted as attributable and still fails", () => {
+  const fn = CODE.slice(CODE.indexOf("async function auditEventNullSplit"));
+  const body = fn.slice(0, fn.indexOf("\n}\n") + 1);
+  // The split must key `attributable` off the RECENT bucket only. If it summed
+  // both buckets the exemption would be inert; if it summed neither, a live
+  // regression would be silently reclassified as legacy.
+  assert.match(
+    body,
+    /legacy \+= legacyCount;[\s\S]*?if \(recentCount > 0\) \{[\s\S]*?attributable \+= recentCount;/,
+    "a post-cutoff tenantless audit row must remain a hard failure",
+  );
+  assert.match(
+    body,
+    /COUNT\(\*\) FILTER \(WHERE "createdAt" >= /,
+    "the recent bucket must be computed in SQL, not inferred from a total",
   );
 });
 
