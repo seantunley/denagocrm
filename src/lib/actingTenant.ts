@@ -1,6 +1,7 @@
 import "server-only";
 import { writeTenantId } from "./tenantWrite";
 import { getActiveTenantId } from "./auth";
+import { currentTenantScope } from "./tenantScope";
 import { decideBuilderTenant } from "./flowTenantScope";
 import { TenantScopeError } from "./tenantGuard";
 
@@ -40,7 +41,8 @@ import { TenantScopeError } from "./tenantGuard";
  * workspace's record under the first, which is precisely the "confident, wrong
  * owner" this comment warns about four lines above.
  *
- * ORDER — enforced scope, then the session's workspace, then a refusal.
+ * ORDER — enforced scope, then an explicitly BOUND ambient workspace, then
+ * the session's workspace, then a refusal.
  * The rule itself is {@link ./flowTenantScope}.`decideBuilderTenant`, which is
  * pure and is executed by `tests/flowBuilderTenantScope.test.ts` rather than
  * pattern-matched. THERE IS EXACTLY ONE COPY OF IT, deliberately: resolving from
@@ -64,7 +66,22 @@ import { TenantScopeError } from "./tenantGuard";
  */
 export async function actingTenantId(): Promise<string> {
   const enforcedTenantId = writeTenantId();
-  const sessionTenantId = await getActiveTenantId();
+  // AN EXPLICITLY BOUND WORKSPACE COUNTS, IN BOTH MODES.
+  //
+  // `writeTenantId()` is null while enforcement is dormant even when an ambient
+  // scope IS bound, so this used to ignore a workspace that had been established
+  // deliberately. That was invisible while the last rung silently answered "the
+  // founding tenant" and there was only one; the moment the fallback became a
+  // refusal, `enqueueStaffReplyInWorkspace` — which runs inside the scope
+  // `withStaffConversationScope` binds — started throwing with the workspace
+  // sitting right there in the ambient store. The two-tenant harness caught it.
+  //
+  // Ranked above the session deliberately: a bound scope is the more specific
+  // statement. The webhook binds the workspace that owns the provider endpoint,
+  // and the inbox binds the one the person is signed into; in both cases the
+  // work belongs to the bound workspace, not to whatever the session resolves.
+  const ambientTenantId = currentTenantScope()?.tenantId ?? null;
+  const sessionTenantId = ambientTenantId ?? (await getActiveTenantId());
   // THE FOUNDING-TENANT FALLBACK IS NOW UNREACHABLE, deliberately.
   //
   // `decideBuilderTenant` ends `?? DEFAULT_TENANT_ID`, and that last rung is
