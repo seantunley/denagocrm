@@ -3,7 +3,6 @@ import { getActiveTenantId } from "./auth";
 import { basePrisma } from "./db";
 import { actingTenantId } from "./actingTenant";
 import { decideActingScope, type ActingScope } from "./actingScopeRule";
-import { DEFAULT_TENANT_ID } from "./tenant";
 import { tenantEnforcing } from "./tenantEnforcement";
 import { TenantScopeError } from "./tenantGuard";
 import { currentTenantScope, runInTenantScope } from "./tenantScope";
@@ -141,14 +140,30 @@ export async function actingOwnerTenantId(): Promise<string> {
  * and this is a bare `fn()`. A session must not be able to redirect work that was
  * already scoped by something that outranks it.
  *
- * Resolution failure falls back to the founding tenant rather than throwing:
- * `getActiveTenantId()` reads cookies and the session registry, which throw where
- * there is no request at all, and those callers legitimately have no session. The
- * founding tenant is what they resolved before this existed.
+ * RESOLUTION FAILURE IS NOT CAUGHT. This used to end
+ * `.catch(() => DEFAULT_TENANT_ID)`, on the reasoning that `getActiveTenantId()`
+ * reads cookies and throws where there is no request at all, and those callers
+ * legitimately have no session.
+ *
+ * That swallowed the refusal `actingTenantId()` exists to make, and did it on a
+ * path that is explicitly user-originated: `pauseBotConversation` and
+ * `resumeBotConversation` are Server Actions a signed-in person triggers, and
+ * `enqueueStaffReply` binds through here before writing the pause, the outbox
+ * row and the reply decision. So a stale or ambiguous staff session was turned
+ * into the FOUNDING tenant, and in the outbox path that tenant chooses the
+ * BotSession/outbox partition and the ambient provider context — one workspace's
+ * action executed under another's, which is the whole thing this change exists
+ * to stop.
+ *
+ * The sessionless callers the catch was defending are already handled by the
+ * line above: work that arrives properly scoped — a webhook, a cron slice, a
+ * channel drain — returns early and never reaches the resolver. What is left is
+ * a caller with no ambient scope AND no resolvable session, and there is no
+ * correct workspace to invent for it.
  */
 export async function withStaffConversationScope<T>(fn: () => Promise<T>): Promise<T> {
   if (currentTenantScope()) return fn();
-  const tenantId = await actingTenantId().catch(() => DEFAULT_TENANT_ID);
+  const tenantId = await actingTenantId();
   return runInTenantScope({ tenantId, system: false }, fn);
 }
 
