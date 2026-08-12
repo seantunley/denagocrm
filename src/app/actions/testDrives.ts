@@ -4,11 +4,18 @@ import crypto from "crypto";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
+import { agreedTenantId } from "@/lib/compositeTenantRules";
 import { canAccessQuote, requirePermission } from "@/lib/permissions";
 import { logAuditStrict } from "@/lib/audit";
 import { saveFile } from "@/lib/storage";
-import { resolveTenantMemberUser } from "@/lib/tenantActor";
+// main's imports: `resolveAssignableUser` is the assignment CONTRACT that
+// replaced the bare `resolveTenantMemberUser` lookup — it refuses a posted
+// assignee who is not a member of the acting workspace instead of returning
+// null for the caller to ignore, which is why the refusal helpers come with it.
+import { resolveAssignableUser } from "@/lib/tenantActor";
 import { actingTenantId } from "@/lib/actingTenant";
+import { ActionRefusal } from "@/lib/actionFailure";
+import { assignmentRefusalMessage } from "@/lib/assignableUser";
 import {
   assertTestDriveCustomerAccess,
   requireTestDriveManageAccess,
@@ -116,9 +123,22 @@ async function assertDemoVehicleAvailable(args: {
   if (overlap) throw new Error(`The demo vehicle is already booked on ${overlap.reference}`);
 }
 
+/**
+ * A test drive names TWO people, and which of them was rejected is the whole
+ * content of the message — hence the `label`, which the shared contract already
+ * takes for exactly this reason. Only the private copy of the membership rule is
+ * gone; the distinction it drew is not.
+ *
+ * The one thing this adds over `resolveAssignableUser` is that a BLANK id is an
+ * error rather than "deliberately unassigned". Everywhere else a cleared picker
+ * legitimately means nobody; here both fields name a person, and the copy this
+ * replaces refused a blank id too. Callers already guarantee it — the optional
+ * second salesperson is guarded by a ternary — so this is the guard staying shut,
+ * not a new one.
+ */
 async function requireAssignableStaff(userId: string, label: string) {
-  const member = await resolveTenantMemberUser(userId);
-  if (!member) throw new Error(`${label} is not an active member of this workspace`);
+  const member = await resolveAssignableUser(userId, label);
+  if (!member) throw new ActionRefusal(assignmentRefusalMessage(label));
   return member;
 }
 
@@ -140,9 +160,9 @@ export async function createTestDriveBooking(formData: FormData) {
   const [contact, lead, salesperson, accompanying, demoVehicle, product] = await Promise.all([
     prisma.contact.findFirst({ where: { id: contactId, deletedAt: null } }),
     leadId ? prisma.lead.findFirst({ where: { id: leadId, deletedAt: null } }) : null,
-    requireAssignableStaff(salespersonId, "Salesperson"),
+    requireAssignableStaff(salespersonId, "salesperson"),
     accompanyingSalespersonId
-      ? requireAssignableStaff(accompanyingSalespersonId, "Accompanying salesperson")
+      ? requireAssignableStaff(accompanyingSalespersonId, "accompanying salesperson")
       : null,
     demoVehicleId ? prisma.demoVehicle.findFirst({ where: { id: demoVehicleId, deletedAt: null } }) : null,
     productId ? prisma.product.findFirst({ where: { id: productId, deletedAt: null } }) : null,
@@ -159,6 +179,16 @@ export async function createTestDriveBooking(formData: FormData) {
   const resolvedProductId = productId ?? demoVehicle?.productId ?? lead?.productId ?? null;
   const modelName = product?.name ?? demoVehicle?.name ?? lead?.title ?? "Vehicle";
   const activityId = crypto.randomUUID();
+  // Both parents are already in hand, so the owner is decided without another read.
+  // Activity's composite keys are (tenantId, contactId) and (tenantId, leadId). If
+  // the contact and the lead disagree this THROWS rather than writing NULL: a NULL
+  // tenant would switch off both composite checks and book a test drive spanning two
+  // workspaces. The lead/contact mismatch guard above catches the ordinary case; this
+  // is the database-level backstop for the case it does not.
+  const activityTenantId = agreedTenantId(
+    [contact.tenantId, ...(lead ? [lead.tenantId] : [])],
+    null,
+  );
 
   // The workspace the session is acting as. Resolved BEFORE the transaction: it
   // reads the session cookie, and doing that inside an open transaction holds a
@@ -207,6 +237,7 @@ export async function createTestDriveBooking(formData: FormData) {
         contactId,
         assignedToId: salespersonId,
         createdById: user.id,
+        tenantId: activityTenantId,
       },
     });
     return created;
@@ -240,9 +271,9 @@ export async function updateTestDriveBooking(id: string, formData: FormData) {
   await assertDemoVehicleAvailable({ demoVehicleId, start: scheduledStart, end: expectedReturnAt, excludeBookingId: id });
 
   await Promise.all([
-    requireAssignableStaff(salespersonId, "Salesperson"),
+    requireAssignableStaff(salespersonId, "salesperson"),
     accompanyingSalespersonId
-      ? requireAssignableStaff(accompanyingSalespersonId, "Accompanying salesperson")
+      ? requireAssignableStaff(accompanyingSalespersonId, "accompanying salesperson")
       : Promise.resolve(null),
   ]);
 
@@ -522,7 +553,10 @@ export async function uploadTestDriveAsset(id: string, kind: string, formData: F
   if (!(file instanceof File) || file.size === 0) throw new Error("Choose a file to upload");
   if (file.size > 10 * 1024 * 1024) throw new Error("Files must be 10 MB or smaller");
   if (!ALLOWED_ASSET_TYPES.has(file.type)) throw new Error("Use PDF, JPG, PNG or WebP files");
-  const storedName = await saveFile(Buffer.from(await file.arrayBuffer()), file.name, file.type);
+  // A licence scan or condition photo is evidence about THIS booking, so the
+  // booking owns it — and TestDriveAsset carries a composite (tenantId, bookingId)
+  // key holding the row to the same answer.
+  const storedName = await saveFile(Buffer.from(await file.arrayBuffer()), file.name, file.type, booking.tenantId);
   const asset = await prisma.testDriveAsset.create({
     data: {
       bookingId: id,

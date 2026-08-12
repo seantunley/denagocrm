@@ -72,6 +72,28 @@ const FREE_MAIL = new Set([
  * returns a short synopsis of the company (from the domain) and, where
  * findable, the person. Uses the bigger model + web search — pennies per
  * lookup, run on demand only.
+ *
+ * Directs the model at LinkedIn and the other social platforms explicitly,
+ * same shape as discoverSources() in competitors.ts (the codebase's other
+ * web-search research path). Left to a generic "search the web" instruction,
+ * the model didn't reliably check LinkedIn for a person's current role, and
+ * even when it found a clear, direct answer it still hedged ("might be tied
+ * to X") — the prompt now tells it to state a directly-sourced fact as fact,
+ * and reserve hedging for genuinely weak or ambiguous evidence.
+ *
+ * max_uses raised from 4 to 8 (matching discoverSources' maxUses: 8) — four
+ * searches wasn't enough room for a company search, a LinkedIn search for the
+ * person, and a confirming pass. Timeout raised to match (90s is the existing
+ * budget discoverSources already runs its 8-search pass inside on this
+ * platform).
+ *
+ * The briefing is now three labeled lines (Company:/Role:/Fit:) instead of
+ * free prose, so the UI can render it as a structured card (see
+ * ResearchBriefing.tsx) instead of one undifferentiated paragraph. Every
+ * caller still just stores `summary` as-is — parsing is done at RENDER time,
+ * tolerantly (unlabeled text, including every note written before this
+ * change, falls back to a plain paragraph), so this needed no migration and
+ * no backfill.
  */
 export async function aiResearch(input: {
   name: string;
@@ -85,7 +107,7 @@ export async function aiResearch(input: {
   try {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
-      signal: AbortSignal.timeout(45000),
+      signal: AbortSignal.timeout(90000),
       headers: {
         "Content-Type": "application/json",
         "x-api-key": apiKey,
@@ -94,9 +116,15 @@ export async function aiResearch(input: {
       body: JSON.stringify({
         model: "claude-sonnet-5",
         max_tokens: 700,
-        tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 4 }],
+        tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 8 }],
         system:
-          "You research sales leads for Denago Cape Town, a South African electric golf-cart dealership. Search the web, then write a tight briefing (max ~120 words, plain text, short lines): what the company does, size/locale if findable, the person's role if findable, and one line on why they might want an electric cart (estate, lodge, farm, resort...). If you find nothing reliable, say exactly that in one line. Never fabricate. No preamble.",
+          "You research sales leads for Denago Cape Town, a South African electric golf-cart dealership. Search the web before writing anything — specifically check the person's LinkedIn profile (search their name plus the company, or plus \"South Africa\" if no company is known) for their current role and employer, and check the company's own website and public social profiles (Facebook, Instagram, X/Twitter) for what it does and its size/locale. LinkedIn is usually the most reliable source for a person's current role — search for it directly rather than relying on whatever a generic web search happens to surface.\n\n" +
+          "Then respond with up to three lines, EXACTLY in this order, each on its own line, each starting with its label and a colon:\n" +
+          "Company: what it does, and size/locale if findable — one line\n" +
+          "Role: the person's role and employer, stated plainly if confirmed — one line\n" +
+          "Fit: why they might want an electric cart (estate, lodge, farm, resort...) — one line\n" +
+          "Omit a label entirely if you genuinely found nothing for it — do not write \"Company: not found\". If you found nothing at all for any of the three, respond with exactly one line: No reliable information found.\n\n" +
+          "STATE WHAT YOU FOUND PLAINLY. When a LinkedIn profile or the company's own page directly confirms a role or fact, say it as fact — \"is the CEO of X\", never \"might be tied to X\" or \"possibly works at X\" — because the source said so directly, not because you're certain in the abstract. Reserve hedging (\"appears to be\", \"likely\") for evidence that is genuinely indirect, stale, or where more than one person shares this name and you can't tell which one is the lead. Never fabricate. No preamble, no other text outside the labeled lines.",
         messages: [
           {
             role: "user",
@@ -104,7 +132,7 @@ export async function aiResearch(input: {
               corporate
                 ? `Company domain to research: ${corporate}`
                 : "Personal email — research the person (South Africa) only if confidently identifiable."
-            }`,
+            }\nCheck LinkedIn for "${input.name}"${corporate ? ` at the company on ${corporate}` : " (South Africa)"} to confirm their role.`,
           },
         ],
       }),

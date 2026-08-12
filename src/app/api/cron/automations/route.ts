@@ -168,7 +168,10 @@ export async function GET(req: NextRequest) {
       minStartBudgetMs: MIN_START_BUDGET_MS,
       concurrency: 2,
       rotationWindowMs: 15 * 60 * 1000,
-      onError: (tenantId, error) => logError(`automations-tenant:${tenantId}`, error),
+      // The failing tenant is known here, so it goes in the COLUMN and not only in
+      // the scope string. `onError` fires outside that tenant's scope, so nothing
+      // downstream can infer it — this is the only place it can be recorded.
+      onError: (tenantId, error) => logError(`automations-tenant:${tenantId}`, error, undefined, { tenantId }),
     });
   } finally {
     await runGlobalMaintenance();

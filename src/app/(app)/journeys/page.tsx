@@ -3,6 +3,7 @@ import { Activity, Workflow } from "lucide-react";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { leadOptionLabels } from "@/lib/leadOption";
+import { listActingTenantStaff } from "@/lib/tenantActor";
 import { requireRoute, getAccessibleLeadIds } from "@/lib/permissions";
 import { formatDateTime } from "@/lib/format";
 import JourneyBuilder, { type JourneyBuilderDefaults } from "@/components/JourneyBuilder";
@@ -118,7 +119,12 @@ export default async function JourneysPage() {
       },
     }),
     prisma.pipelineStage.findMany({ orderBy: { order: "asc" }, select: { id: true, name: true } }),
-    prisma.user.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
+    // The builder's "Assign lead" step picker. `User` is a global model, so
+    // `prisma.user.findMany` is scoped by nothing, and this one is stored rather
+    // than submitted: a name picked out of another workspace here becomes a
+    // journey that reassigns leads to them on every run. Refused on save now
+    // too — see assertStepAssigneesResolve in actions/journeys.ts.
+    listActingTenantStaff(),
     prisma.emailTemplate.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
     prisma.tag.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
     prisma.segment.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),

@@ -1,19 +1,28 @@
 import "server-only";
-import { DEFAULT_TENANT_ID } from "./tenant";
-import { writeTenantId } from "./tenantWrite";
+// main's imports, not this branch's: `legacyFlowTenant` was renamed to
+// `flowTenantWhere` by #463 (the old name became a lie once the rule stopped
+// being a legacy allowance), and the runtime tenant now comes from
+// `botConversationTenantId` rather than `writeTenantId() ?? DEFAULT_TENANT_ID`,
+// which resolved to the founding tenant while enforcement is dormant.
+import { botConversationTenantId } from "./botTenant";
 import { actingTenantId } from "./actingTenant";
-import { legacyFlowTenant } from "./flowTenantScope";
+import { flowTenantWhere } from "./flowTenantScope";
 
 /**
  * The tenant a RUNTIME read is for — a webhook answering a customer.
  *
- * There is no session here, so the channel scope (or the founding tenant while
- * enforcement is dormant) is all there is, and that is correct: `resolveFlowSnapshot`
- * is entered through `withChannelTenantScope`, which already resolved the tenant
- * from the provider endpoint the message arrived on.
+ * There is no session here, so the channel scope is all there is, and that is
+ * correct: `resolveFlowSnapshot` is entered through `withChannelTenantScope`, which
+ * resolves the tenant from the provider endpoint the message arrived on — and now
+ * BINDS it while enforcement is dormant too, which is what makes this a real answer
+ * rather than the founding tenant for everyone. Delegated to
+ * {@link ../botTenant}.`botConversationTenantId` so the flow snapshot a turn runs is
+ * chosen by the same workspace expression that claims its inbound event and queues
+ * its reply: a turn must not answer with tenant A's published flow and file the
+ * conversation under tenant B.
  */
 export function runtimeFlowTenantId(): string {
-  return writeTenantId() ?? DEFAULT_TENANT_ID;
+  return botConversationTenantId();
 }
 
 /**
@@ -63,8 +72,8 @@ export async function builderTenantId(): Promise<string> {
  * `update` or `delete`, which take a unique selector and cannot carry the tenant
  * predicate with it.
  */
-export async function flowScope(): Promise<ReturnType<typeof legacyFlowTenant>> {
-  return legacyFlowTenant(await builderTenantId());
+export async function flowScope(): Promise<ReturnType<typeof flowTenantWhere>> {
+  return flowTenantWhere(await builderTenantId());
 }
 
 /**
@@ -78,9 +87,9 @@ export async function flowScope(): Promise<ReturnType<typeof legacyFlowTenant>> 
  * because another tenant's active Journey satisfied the check.
  *
  * Journey.tenantId is nullable for the same reason BotFlow's is, so it takes the
- * same legacy rule: the founding tenant owns the untagged rows, a second
- * workspace sees only its own.
+ * same rule — which is now strict equality for every tenant, the founding one
+ * included. See flowTenantScope.ts.
  */
-export async function journeyScope(): Promise<ReturnType<typeof legacyFlowTenant>> {
-  return legacyFlowTenant(await builderTenantId());
+export async function journeyScope(): Promise<ReturnType<typeof flowTenantWhere>> {
+  return flowTenantWhere(await builderTenantId());
 }

@@ -37,47 +37,41 @@ export function validateInSystemScope<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 /**
- * Establish the request's tenant SCOPE at an authenticated chokepoint (Phase C,
- * step 2). Seeds the AsyncLocalStorage scope the db.ts guard consumes.
+ * Establish the request's tenant SCOPE at the authenticated staff chokepoint.
  *
- * DORMANT: every function here returns immediately unless `tenantEnforcing()` is
- * true (always false today), so with enforcement off there is ZERO added work on
- * the hot path — no tenant resolution, no store mutation. When enforcement flips
- * on (per environment, step 5), these establish the scope so downstream DB access
- * is confined to the caller's tenant, and a request that can't resolve one fails
- * closed at the db layer.
- */
-
-/**
- * Staff/app surface. Called from `getCurrentUser()` with the already-resolved user
- * id, the session's `tid` claim, and whether the principal is the GLOBAL `owner` —
- * resolves the user's sole active tenant and honours the claim exactly as
- * `getActiveTenantId()` does, but WITHOUT re-entering `getCurrentUser` (which would
- * recurse).
+ * This scope now exists in dormant mode too when the validated session resolves a
+ * workspace. That does NOT turn the db.ts tenant guard on — `scopeArgs` still keeps
+ * its documented dormant behaviour until TENANT_ENFORCEMENT=enforce. What it does
+ * give us is a trustworthy ambient answer for the explicit `basePrisma` predicates
+ * used by record-level authorization (`activeTenantPredicate`). Those predicates
+ * are the boundary in front of bypass transactions, so letting the scope disappear
+ * while dormant made `requireQuoteAccess`, `requireLeadAccess`, `requireJobCardAccess`
+ * and their siblings authorize a foreign id before an otherwise unguarded write.
  *
- * Returns `{ ok }`. Under enforcement:
- *   - a valid acting tenant resolves → enter that tenant's scope, `ok:true`;
- *   - none resolves (tid absent/mismatched, membership removed, tenant suspended, or
- *     a second active membership made it ambiguous):
- *       · NON-OWNER → `ok:false` — the caller MUST fail the whole authentication, not
- *         just leave a null scope, so a stale/ambiguous session can't still pass
- *         `requireUser`/role/owner checks or trigger global side effects (unchanged);
- *       · OWNER → `ok:true` with NO scope established AT ALL (the OWNER ESCAPE HATCH —
- *         never a `system` scope). The global owner proceeds so the platform console
- *         (basePrisma reads) works, while every tenant-scoped CRM query still fails
- *         closed at the db guard for lack of a scope. The (app) layout redirects such
- *         an owner to the console to fix their tenancy.
- * When enforcement is off it always returns `{ ok: true }` (dormant — no rejection,
- * no scope, no DB read).
+ * In other words: dormant still means "do not globally switch the ORM guard on";
+ * it no longer means "forget which workspace an authenticated person is acting in".
  */
 export async function establishStaffTenantScope(
   userId: string,
   tid: string | null,
   isOwner: boolean,
 ): Promise<{ ok: boolean }> {
-  if (!tenantEnforcing()) return { ok: true };
+  // Resolve the exact same validated membership/claim pair in both modes. This is
+  // the authenticated chokepoint, so unlike cron/webhook work there is a real
+  // actor to ask. Background paths never call this function.
   const sole = await resolveActingTenant(userId);
   const tenantId = honoredTenantClaim(tid, sole);
+
+  if (!tenantEnforcing()) {
+    // Compatibility while the rollout is dormant: failure to resolve a workspace
+    // does NOT reject a previously-valid session and does NOT invent a founding-
+    // tenant owner. It simply leaves no scope, exactly as before. A successfully
+    // resolved workspace, however, is bound so explicit basePrisma predicates can
+    // enforce the real user-facing boundary today.
+    if (tenantId) enterTenantScope({ tenantId, system: false });
+    return { ok: true };
+  }
+
   const decision = decideStaffTenantScope(true, tenantId, isOwner);
   // enterTenantId === null means enter NO scope — either the owner escape hatch or a
   // fail-closed miss; we NEVER enter a `system` scope for a user-facing request.
@@ -141,16 +135,47 @@ export async function withTokenTenantScope<T>(
  * is called once per event inside the entry/change loop — each event runs in its own
  * resolved tenant scope.
  *
- * DORMANT when off: runs `fn()` directly — byte-for-byte the pre-tenancy path, no
- * channel lookup, no ALS overhead.
+ * RESOLVED — IN EITHER MODE: `fn` runs INSIDE the resolved tenant scope (reliable
+ * `runInTenantScope`, never `enterWith`), so every downstream read/write/actor pick
+ * can name that tenant; the scope reverts when `fn` returns.
  *
- * ENFORCING: resolves the owning tenant via `resolveChannelTenant` (basePrisma,
- * active-tenant JOIN). If the endpoint is unknown / disabled / points at a suspended
- * or deleted tenant, it runs `onUnresolved()` WITHOUT running `fn` — an unmapped
- * inbound event is skipped (fail closed), never processed against the wrong tenant or
- * unscoped. Otherwise `fn` runs INSIDE the resolved tenant scope (reliable
- * `runInTenantScope`), so every downstream read/write/actor pick is confined to that
- * tenant; the scope reverts when `fn` returns.
+ * IT BINDS WHILE ENFORCEMENT IS DORMANT TOO, AND THAT IS THE POINT. This used to be
+ * `if (!tenantEnforcing()) return fn();` — it resolved nothing and bound nothing in
+ * the only mode any environment actually runs in. So the whole bot runtime fell back
+ * to `writeTenantId() ?? DEFAULT_TENANT_ID` and claimed every tenant's inbound events
+ * under the FOUNDING tenant. `BotInboundEvent` deduplicates on
+ * `("tenantId","channel","providerId")`, so two tenants whose customers produce the
+ * same provider id collided and the second tenant's message was silently acked as a
+ * redelivery of the first tenant's — a lost customer message with no error anywhere.
+ * `withTelegramTenantScope` has always bound regardless of enforcement, and
+ * `runCronPerTenant` binds on its dormant path for the same reason: a queue that
+ * works in one mode and is broken in the other is not working.
+ *
+ * Binding is safe because the db.ts guard only READS the scope inside its enforcement
+ * branch (`scopeArgs` returns its args untouched while dormant), so no query is
+ * narrowed by this. What DOES change is that the helpers which consult the ambient
+ * scope in BOTH modes — `inheritedTenantId`'s ambient rung, and therefore
+ * `botConversationTenantId`; the per-tenant credential lookups in whatsapp.ts /
+ * messenger.ts; `activeTenantPredicate` in the receipt path — now get the endpoint's
+ * real owner instead of nothing. That is the intent: a receipt for tenant B stops
+ * being applied across every tenant's messages, and B's replies go out over B's own
+ * provider credentials rather than whoever's are configured globally.
+ *
+ * UNRESOLVED — unknown endpoint, `disabledAt` set, suspended or deleted tenant:
+ *
+ *   - ENFORCING → `onUnresolved()` WITHOUT running `fn`, unchanged. An unmapped
+ *     inbound event is skipped rather than processed against the wrong tenant.
+ *   - DORMANT → `fn()` with NO scope, which is byte-for-byte what this whole helper
+ *     did before. This is deliberate and it is the one place the two modes differ.
+ *     `ChannelIdentity` is enforcement-prep data that no environment is required to
+ *     have backfilled yet, so failing closed on it while dormant would silently drop
+ *     live customer traffic on every install whose endpoints are not mapped — and
+ *     losing messages is the defect being fixed here, not an acceptable cost of
+ *     fixing it. An install with no mappings therefore behaves exactly as it does
+ *     today, and starts being scoped the moment its endpoints are mapped.
+ *
+ * The lookup itself is one indexed row on `basePrisma`, and it is now paid on the
+ * dormant path as well — the deliberate cost of the scope existing at all.
  */
 export async function withChannelTenantScope<T>(
   channel: ChannelKind,
@@ -158,8 +183,7 @@ export async function withChannelTenantScope<T>(
   fn: () => Promise<T>,
   onUnresolved: () => T | Promise<T>,
 ): Promise<T> {
-  if (!tenantEnforcing()) return fn();
   const tenantId = await resolveChannelTenant(channel, externalId);
-  if (!tenantId) return onUnresolved();
-  return runInTenantScope({ tenantId, system: false }, fn);
+  if (tenantId) return runInTenantScope({ tenantId, system: false }, fn);
+  return tenantEnforcing() ? onUnresolved() : fn();
 }

@@ -5,8 +5,10 @@ import { Check, Loader2, Plus, Settings2, Trash2, Code2, Undo2, Users } from "lu
 import { cn } from "@/lib/utils";
 import type { CardConfig, DashboardConfig, ViewConfig } from "@/lib/dashboard/config";
 import { LIMITS, slugify } from "@/lib/dashboard/config";
+// Union: the publish control this branch adds, plus main's card-tree lookup.
 import { toast } from "sonner";
 import { setDashboardShared } from "@/app/actions/dashboardConfig";
+import { findCardInTree } from "@/lib/dashboard/cardTree";
 import { DashboardEditorProvider, useEditor, newId } from "./EditorProvider";
 import DashboardCanvas, { type CardSlots } from "./DashboardCanvas";
 import CardPicker, { type EditorAccess } from "./CardPicker";
@@ -35,6 +37,7 @@ import RawEditor from "./RawEditor";
 export default function DashboardEditorRoot({
   slug,
   dashboardId,
+  updatedAt,
   config,
   views,
   activeViewId,
@@ -46,6 +49,9 @@ export default function DashboardEditorRoot({
 }: {
   slug: string;
   dashboardId: string | null;
+  /** The row's revision, which every autosave is fenced against. Null until the
+   *  dashboard has been materialised — see the provider. */
+  updatedAt: string | null;
   config: DashboardConfig;
   /** The views this viewer may see, already filtered by the server. */
   views: ViewConfig[];
@@ -75,9 +81,19 @@ export default function DashboardEditorRoot({
 }) {
   return (
     <DashboardEditorProvider
+      /*
+       * One editing session per DOCUMENT. Without the key, navigating from one
+       * dashboard to another reuses this provider, and it would carry the other
+       * document's revision, undo history and already-materialised flag across —
+       * so the first save on the new dashboard would fence against a revision
+       * belonging to a different row, and undo would step into arrangements that
+       * were never on this screen.
+       */
+      key={slug}
       slug={slug}
       initialConfig={config}
       dashboardId={dashboardId}
+      initialUpdatedAt={updatedAt}
       activeViewId={activeViewId}
     >
       <Inner
@@ -158,7 +174,11 @@ function Inner({
   const shown = editing ? config.views : views;
   const active = shown.find((view) => view.id === localViewId) ?? shown[0] ?? null;
 
-  const builderCard = builderCardId ? findCard(config, builderCardId) : null;
+  // findCardInTree, not a local search: the settings button the canvas offers is
+  // now drawn for DESCENDANTS of a container, not only its immediate children,
+  // so a lookup that stopped one level short would open an empty dialog on
+  // exactly the cards that button was added to reach.
+  const builderCard = builderCardId ? findCardInTree(config, builderCardId) : null;
 
   return (
     <div className="space-y-4">
@@ -436,23 +456,3 @@ function needsSetup(card: CardConfig): boolean {
   return card.type !== "builtin" && card.type !== "heading";
 }
 
-function findCard(config: DashboardConfig, id: string): CardConfig | null {
-  for (const view of config.views) {
-    for (const section of view.sections) {
-      const found = search(section.cards, id);
-      if (found) return found;
-    }
-  }
-  return null;
-}
-
-function search(cards: CardConfig[], id: string): CardConfig | null {
-  for (const card of cards) {
-    if (card.id === id) return card;
-    if (card.type === "grid" || card.type === "stack") {
-      const found = search(card.cards, id);
-      if (found) return found;
-    }
-  }
-  return null;
-}

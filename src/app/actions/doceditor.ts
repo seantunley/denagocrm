@@ -17,6 +17,7 @@ import {
   type BuilderRecordKind,
 } from "@/lib/docbuilder/recordBinding";
 import { saveFile } from "@/lib/storage";
+import { actingOwnerTenantId } from "@/lib/actingScope";
 
 const BASE = "/settings/documents/builder";
 
@@ -164,10 +165,22 @@ export async function generateDocEditorDocument(formData: FormData) {
     });
     if (!result) refuse("Could not build that document — check the template.");
 
+    // A generated document is a rendering OF the record it is bound to, so that
+    // record owns it — the same record the Document row below is filed against.
+    // With no binding at all (a template generated against nothing) there is no
+    // parent, and the acting workspace answers instead.
+    const boundTenantId = result.quoteId
+      ? (await prisma.quote.findUnique({ where: { id: result.quoteId }, select: { tenantId: true } }))?.tenantId ?? null
+      : result.jobCardId
+        ? (await prisma.jobCard.findUnique({ where: { id: result.jobCardId }, select: { tenantId: true } }))?.tenantId ?? null
+        : result.contactId
+          ? (await prisma.contact.findUnique({ where: { id: result.contactId }, select: { tenantId: true } }))?.tenantId ?? null
+          : await actingOwnerTenantId();
     const storedName = await saveFile(
       result.buffer,
       `${result.title}.pdf`,
       "application/pdf",
+      boundTenantId,
     );
     const document = await prisma.document.create({
       data: {

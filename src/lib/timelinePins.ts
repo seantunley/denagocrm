@@ -3,12 +3,37 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import { customerRecordTenantId } from "@/lib/customerRecordTenant";
 
 export type TimelinePinKind =
   | "communication"
   | "activity"
   | "contact_note"
   | "lead_note";
+
+/**
+ * A pin is written by RAW SQL, and raw SQL is invisible to the db.ts tenant guard
+ * — the guard rewrites Prisma `args`, and there are none here. So the INSERT is
+ * the only place `tenantId` can be set, and until now it did not set it: every one
+ * of the seven TimelinePin rows on production is unowned, and would vanish from
+ * its own workspace the moment enforcement is switched on.
+ *
+ * The owner is derived from THE ITEM BEING PINNED rather than from the session.
+ * `itemId` is a polymorphic pointer with no foreign key (see the model comment in
+ * schema.prisma), and `kind` is what says which table it points into — so the pin
+ * inherits the tenant of the thing it is a pin ON, which is exactly what it means.
+ * A pin whose item cannot be resolved is left unowned rather than guessed at.
+ */
+const PIN_ITEM_REF: Record<TimelinePinKind, "communicationId" | "activityId" | "contactId" | "leadId"> = {
+  communication: "communicationId",
+  activity: "activityId",
+  contact_note: "contactId",
+  lead_note: "leadId",
+};
+
+function pinTenantId(kind: TimelinePinKind, itemId: string): Promise<string | null> {
+  return customerRecordTenantId({ [PIN_ITEM_REF[kind]]: itemId });
+}
 
 export type TimelinePin = {
   kind: TimelinePinKind;
@@ -62,6 +87,9 @@ export async function toggleTimelinePin(
   itemId: string,
   userId: string,
 ): Promise<{ pinned: boolean; pinnedAt: Date | null }> {
+  // Resolved BEFORE the transaction opens: it is a read on another connection, and
+  // an unpin never reaches the INSERT that needs it.
+  const tenantId = await pinTenantId(kind, itemId);
   return prisma.$transaction(async (tx) => {
     const existing = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
       SELECT "id"
@@ -81,14 +109,15 @@ export async function toggleTimelinePin(
     const pinnedAt = new Date();
     await tx.$executeRaw(Prisma.sql`
       INSERT INTO "TimelinePin" (
-        "id", "kind", "itemId", "pinnedAt", "pinnedById"
+        "id", "kind", "itemId", "pinnedAt", "pinnedById", "tenantId"
       )
       VALUES (
-        ${randomUUID()}, ${kind}, ${itemId}, ${pinnedAt}, ${userId}
+        ${randomUUID()}, ${kind}, ${itemId}, ${pinnedAt}, ${userId}, ${tenantId}
       )
       ON CONFLICT ("kind", "itemId") DO UPDATE SET
         "pinnedAt" = EXCLUDED."pinnedAt",
-        "pinnedById" = EXCLUDED."pinnedById"
+        "pinnedById" = EXCLUDED."pinnedById",
+        "tenantId" = EXCLUDED."tenantId"
     `);
 
     return { pinned: true, pinnedAt };
@@ -106,12 +135,13 @@ export async function ensureTimelinePin(
   itemId: string,
   userId: string,
 ): Promise<void> {
+  const tenantId = await pinTenantId(kind, itemId);
   await prisma.$executeRaw(Prisma.sql`
     INSERT INTO "TimelinePin" (
-      "id", "kind", "itemId", "pinnedAt", "pinnedById"
+      "id", "kind", "itemId", "pinnedAt", "pinnedById", "tenantId"
     )
     VALUES (
-      ${randomUUID()}, ${kind}, ${itemId}, ${new Date()}, ${userId}
+      ${randomUUID()}, ${kind}, ${itemId}, ${new Date()}, ${userId}, ${tenantId}
     )
     ON CONFLICT ("kind", "itemId") DO NOTHING
   `);

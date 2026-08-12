@@ -14,7 +14,7 @@ import ConfirmDelete from "@/components/ConfirmDelete";
 import WhatsAppPanel from "@/components/WhatsAppPanel";
 import Tabs from "@/components/Tabs";
 import CopyButton from "@/components/CopyButton";
-import ResearchButton from "@/components/ResearchButton";
+import ResearchTabPanel from "@/components/ResearchTabPanel";
 import { isAiConfigured } from "@/lib/ai";
 import { ensureReferralCode } from "@/lib/referrals";
 import { redeemReferral } from "@/app/actions/referrals";
@@ -26,6 +26,7 @@ import { healthLabels } from "@/lib/health";
 import { recordConsent, anonymizeContact } from "@/app/actions/privacy";
 import { CONSENT_TYPES } from "@/lib/consent";
 import { brandForTenant, teamSignoff } from "@/lib/tenantBrand";
+import { listActingTenantStaff } from "@/lib/tenantActor";
 import { getActiveTenantId } from "@/lib/auth";
 import { isSmtpConfigured, renderTemplate, contactVars } from "@/lib/email";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
@@ -105,7 +106,11 @@ export default async function ContactDetailPage({
   // contactId.
   const looseDocuments = contact.documents.filter((document) => document.quoteId == null);
   const [users, templates, smtpConfigured, waConfigured, history, libraryDocuments] = await Promise.all([
-    prisma.user.findMany({ orderBy: { name: "asc" } }),
+    // The activity-assignee picker in the Activities tab. `User` is a global
+    // model, so `prisma.user.findMany` is scoped by nothing — the dropdown
+    // listed every user on the platform, and the action behind it wrote the
+    // posted id with no membership check at all (see activities.ts).
+    listActingTenantStaff(),
     prisma.emailTemplate.findMany({ orderBy: { name: "asc" } }),
     isSmtpConfigured(),
     isWhatsAppConfigured(),
@@ -364,34 +369,12 @@ export default async function ContactDetailPage({
                 label: "Research",
                 count: contact.researchNotes.length,
                 content: (
-                  <div className="card space-y-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <h2 className="font-semibold">🔎 AI research</h2>
-                      <ResearchButton contactId={contact.id} configured={aiOn} />
-                    </div>
-                    {contact.researchNotes.length === 0 ? (
-                      <p className="text-sm text-slate-400">
-                        No research yet. Use the Research button to generate a briefing on this
-                        customer and the company behind the email.
-                      </p>
-                    ) : (
-                      <ul className="space-y-4">
-                        {contact.researchNotes.map((r) => (
-                          <li
-                            key={r.id}
-                            className="border-t border-slate-800 pt-4 first:border-0 first:pt-0"
-                          >
-                            <p className="text-xs text-slate-500 mb-1.5">
-                              {formatDateTime(r.createdAt)}
-                            </p>
-                            <p className="text-sm whitespace-pre-wrap leading-relaxed text-slate-200">
-                              {r.body}
-                            </p>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
+                  <ResearchTabPanel
+                    notes={contact.researchNotes}
+                    contactId={contact.id}
+                    configured={aiOn}
+                    subjectLabel="customer"
+                  />
                 ),
               },
               ...(marketingOn ? [{

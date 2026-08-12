@@ -10,7 +10,7 @@ import {
   requireAnyPermission,
 } from "@/lib/permissions";
 import { accessibleTestDriveWhere } from "@/lib/testDriveAccess";
-import { listTenantStaff } from "@/lib/tenantActor";
+import { listActingTenantStaff } from "@/lib/tenantActor";
 import { calculateTestDriveMetrics, testDriveStatusLabel } from "@/lib/testDriveMetrics";
 import { buttonVariants } from "@/components/ui/button";
 import { TestDriveBookingTrigger } from "@/components/test-drives/TestDriveBookingTrigger";
@@ -93,7 +93,7 @@ export default async function TestDrivesPage({ searchParams }: { searchParams: P
     prisma.lead.findMany({ where: { deletedAt: null, ...leadScope, status: "open" }, orderBy: { createdAt: "desc" }, take: 500, select: { id: true, title: true, name: true, contactId: true, productId: true } }),
     prisma.demoVehicle.findMany({ where: { deletedAt: null, status: "active" }, orderBy: { name: "asc" } }),
     prisma.product.findMany({ where: { deletedAt: null, active: true }, orderBy: { name: "asc" }, select: { id: true, name: true } }),
-    listTenantStaff(),
+    listActingTenantStaff(),
   ]);
 
   const metrics = calculateTestDriveMetrics({

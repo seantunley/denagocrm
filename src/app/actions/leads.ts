@@ -11,7 +11,11 @@ import { softDeleteRecord } from "@/lib/trash";
 import { createLeadRecord } from "@/lib/leadCreate";
 import { triggerSurvey } from "@/lib/surveys";
 import { removeTimelinePin } from "@/lib/timelinePins";
-import { resolveTenantMemberUser } from "@/lib/tenantActor";
+import { customerRecordTenantId } from "@/lib/customerRecordTenant";
+// `resolveAssignableUser` is the consolidated contract from #460/#467 — it
+// supersedes the direct `resolveTenantMemberUser` call this branch was written
+// against, and it is the one that enforces membership while dormant.
+import { resolveAssignableUser } from "@/lib/tenantActor";
 import {
   hasPermission,
   requireLeadAccess,
@@ -23,6 +27,7 @@ import {
   getLeadPipeline,
   getPipelineStage,
   listPipelineStages,
+  type PipelineStageRow,
 } from "@/lib/pipelines";
 
 function leadData(formData: FormData) {
@@ -46,11 +51,12 @@ function leadData(formData: FormData) {
   };
 }
 
-async function requireAssignableUser(userId: string) {
-  const assignee = await resolveTenantMemberUser(userId);
-  if (!assignee) throw new Error("That team member is no longer available.");
-  return assignee;
-}
+/**
+ * The word this file uses for an assignee when refusing one. `resolveAssignableUser`
+ * builds the sentence from it, so "team member" here is the same noun the pipeline
+ * already uses in its own copy ("That team member is no longer available.").
+ */
+const ASSIGNEE_LABEL = "team member";
 
 async function nextPosition(stageId: string) {
   const max = await prisma.lead.aggregate({
@@ -60,14 +66,29 @@ async function nextPosition(stageId: string) {
   return (max._max.position ?? 0) + 1;
 }
 
+/**
+ * Resolve the posted assignee through tenant membership and hand back the id
+ * that may actually be written.
+ *
+ * The check used to live in `buildTitle`, of all places, as this file's own
+ * private copy of the membership rule — a fourth implementation of something
+ * that now has one home. Two things changed with it. The rule is the shared
+ * contract, so it cannot drift away from the other three; and the caller writes
+ * what came BACK rather than what was posted, so the unvalidated value has no
+ * route into the update at all. It also no longer hides inside a function whose
+ * job is to name the lead.
+ */
+async function resolveLeadAssignee(assignedToId: string | null): Promise<string | null> {
+  const assignee = await resolveAssignableUser(assignedToId, ASSIGNEE_LABEL);
+  return assignee?.id ?? null;
+}
+
 async function buildTitle(data: {
   name: string;
   productId: string | null;
   color: string | null;
   contactId?: string | null;
-  assignedToId?: string | null;
 }) {
-  if (data.assignedToId) await requireAssignableUser(data.assignedToId);
   if (data.contactId) {
     const contact = await prisma.contact.findUnique({
       where: { id: data.contactId },
@@ -93,11 +114,36 @@ async function defaultOpenStageId() {
   return stage.id;
 }
 
-async function validateOpenStage(stageId: string) {
+/**
+ * The stage a move is targeting, or the REASON it cannot be — as a value.
+ *
+ * Next's guidance for Server Functions is explicit: "avoid using try/catch blocks
+ * and throw errors. Instead, model expected errors as return values."
+ * (node_modules/next/dist/docs/01-app/01-getting-started/10-error-handling.md,
+ * "Handling expected errors"). A stage that has been deleted, or one that is
+ * closed, is an expected outcome of dragging a card on a board somebody else may
+ * have reconfigured — not an exception.
+ *
+ * The throwing wrapper below stays for the actions that run inside
+ * `asActionResult`, which turns a refusal back into a value at the boundary.
+ */
+async function resolveOpenStage(stageId: string): Promise<{ stage: PipelineStageRow } | { error: string }> {
   const stage = await getPipelineStage(stageId);
-  if (!stage) throw new Error("Selected pipeline stage does not exist");
-  if (stage.isClosed) throw new Error("Use Mark won or Mark lost instead of creating or dragging into a closed stage");
-  return stage;
+  if (!stage) return { error: "Selected pipeline stage does not exist" };
+  if (stage.isClosed) {
+    return { error: "Use Mark won or Mark lost instead of creating or dragging into a closed stage" };
+  }
+  return { stage };
+}
+
+async function validateOpenStage(stageId: string) {
+  const resolved = await resolveOpenStage(stageId);
+  // ActionRefusal, not a bare Error: both messages are written to be READ, and
+  // `classifyFailure` shows a refusal verbatim while a bare Error is replaced
+  // with the generic "did not complete cleanly" line. saveLead already raises the
+  // identical pipeline-permission message this way.
+  if ("error" in resolved) throw new ActionRefusal(resolved.error);
+  return resolved.stage;
 }
 
 export async function createLead(formData: FormData) {
@@ -112,6 +158,10 @@ export async function createLead(formData: FormData) {
     if (data.assignedToId !== user.id && !(await hasPermission(user, "leads.assign"))) {
       throw new ActionRefusal("You do not have permission to assign leads to another user");
     }
+    // Permission first (may this caller assign to somebody else at all), then
+    // membership (is that somebody a member of THIS workspace) — the same order
+    // the file already used, now answered by the shared contract.
+    data.assignedToId = await resolveLeadAssignee(data.assignedToId);
 
     let contactTookNotesFromNewLead = false;
     const generatedTitle = await buildTitle(data);
@@ -219,17 +269,27 @@ export async function updateLead(id: string, formData: FormData) {
     const data = leadData(formData);
     if (!data.name) throw new ActionRefusal("Name is required");
     const before = await prisma.lead.findUniqueOrThrow({ where: { id } });
+    // `getLeadPipeline` is now bounded by the acting workspace, so null means "not
+    // this workspace's lead" as well as "no such lead". It must REFUSE rather than
+    // fall through: the check it feeds is `!(await hasPermission(…, "leads.change_pipeline"))`,
+    // and a null that skipped it would turn scoping the read into a way past the
+    // permission. `moveLeadToTestDrive` already refused; these two now match it.
     const beforePipeline = await getLeadPipeline(id);
+    if (!beforePipeline) throw new ActionRefusal("Lead not found");
     const targetStage = await validateOpenStage(data.stageId);
 
     if (before.assignedToId !== data.assignedToId && !(await hasPermission(user, "leads.assign"))) {
       throw new ActionRefusal("You do not have permission to reassign this lead");
     }
+    // An edit is the easier of the two attacks: the lead already exists, so a
+    // single forged field on an otherwise ordinary save was all it took. The
+    // spread below writes `data`, so the resolved id has to land back on it.
+    data.assignedToId = await resolveLeadAssignee(data.assignedToId);
     if (before.stageId !== data.stageId) {
       if (!(await hasPermission(user, "leads.change_stage"))) {
         throw new ActionRefusal("You do not have permission to change the lead stage");
       }
-      if (beforePipeline && beforePipeline.pipelineId !== targetStage.pipelineId && !(await hasPermission(user, "leads.change_pipeline"))) {
+      if (beforePipeline.pipelineId !== targetStage.pipelineId && !(await hasPermission(user, "leads.change_pipeline"))) {
         throw new ActionRefusal("You do not have permission to move leads between pipelines");
       }
     }
@@ -271,16 +331,37 @@ export async function updateLead(id: string, formData: FormData) {
   });
 }
 
-export async function moveLead(leadId: string, stageId: string) {
+/**
+ * Move a lead to another stage, reporting a refusal AS A VALUE.
+ *
+ * This threw. Every other action the Kanban calls — `moveLeadToTestDrive`,
+ * `assignLead`, `convertLeadToContact` — already returns `{ ok, error }`, and the
+ * board reads `result.error`; `moveLead` was the only one out of step, and the
+ * optimistic-move rollback added on this branch is the first code that tries to
+ * SHOW what it produced. Next's own guidance is the same
+ * (`node_modules/next/dist/docs/01-app/01-getting-started/10-error-handling.md`:
+ * expected errors are return values, not throws), and a permission refusal is the
+ * textbook expected error. A thrown message is also liable to reach the browser
+ * as an opaque digest in a production build, which would make the rollback toast
+ * read out a hash — but the convention and the inconsistency settle it on their
+ * own.
+ */
+export async function moveLead(leadId: string, stageId: string): Promise<{ ok: boolean; error?: string }> {
   const user = await requireLeadAccess(leadId, "leads.change_stage");
   const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
+  // Same refusal as `updateLead` and `moveLeadToTestDrive`, for the same reason: a
+  // lead outside the acting workspace no longer resolves, and a null that fell
+  // through would SKIP the cross-pipeline permission check rather than fail it.
   const currentScope = await getLeadPipeline(leadId);
-  const targetStage = await validateOpenStage(stageId);
-  if (currentScope && currentScope.pipelineId !== targetStage.pipelineId && !(await hasPermission(user, "leads.change_pipeline"))) {
-    throw new Error("You do not have permission to move leads between pipelines");
+  if (!currentScope) return { ok: false, error: "Lead not found." };
+  const resolved = await resolveOpenStage(stageId);
+  if ("error" in resolved) return { ok: false, error: resolved.error };
+  const targetStage = resolved.stage;
+  if (currentScope.pipelineId !== targetStage.pipelineId && !(await hasPermission(user, "leads.change_pipeline"))) {
+    return { ok: false, error: "You do not have permission to move leads between pipelines" };
   }
   if (targetStage.entryAction === "book_test_drive") {
-    throw new Error("This stage requires test-drive booking details");
+    return { ok: false, error: "This stage requires test-drive booking details" };
   }
   const lead = await prisma.lead.update({
     where: { id: leadId },
@@ -293,7 +374,7 @@ export async function moveLead(leadId: string, stageId: string) {
     leadId,
     contactId: lead.contactId,
     user,
-    before: { stageId: before.stageId, position: before.position, pipelineId: currentScope?.pipelineId },
+    before: { stageId: before.stageId, position: before.position, pipelineId: currentScope.pipelineId },
     after: { stageId, position: lead.position, pipelineId: targetStage.pipelineId },
   });
   const pipelineStages = await listPipelineStages(targetStage.pipelineId);
@@ -319,6 +400,7 @@ export async function moveLead(leadId: string, stageId: string) {
   await emitLeadJourneyEvent("stage_entered", leadId);
   revalidatePath("/leads");
   revalidatePath("/forecast");
+  return { ok: true };
 }
 
 export async function moveLeadToTestDrive(
@@ -333,7 +415,12 @@ export async function moveLeadToTestDrive(
   const currentScope = await getLeadPipeline(leadId);
   if (!currentScope) return { ok: false, error: "Lead not found." };
   const changingStage = currentScope.stageId !== stageId;
-  const targetStage = await validateOpenStage(stageId);
+  // Same convention as everything else this function returns: a deleted or closed
+  // target stage is an expected outcome, and it reached the board as a generic
+  // "Something went wrong" only because it was thrown from here.
+  const resolved = await resolveOpenStage(stageId);
+  if ("error" in resolved) return { ok: false, error: resolved.error };
+  const targetStage = resolved.stage;
   if (
     currentScope.pipelineId !== targetStage.pipelineId &&
     !(await hasPermission(user, "leads.change_pipeline"))
@@ -355,6 +442,17 @@ export async function moveLeadToTestDrive(
   }
 
   const position = await nextPosition(stageId);
+  // Resolved BEFORE the transaction opens, deliberately. Inside it the lead row is
+  // locked by the update, and recordTenantId reads on a different connection —
+  // asking for the same row there would block on the lock this transaction holds.
+  // Both parents are consulted: the composite keys are (tenantId, leadId) AND
+  // (tenantId, contactId), so a lead and a contact that disagree must yield NULL
+  // rather than a value that fails one of them and rolls the booking back.
+  const linkedContact = await prisma.lead.findUnique({
+    where: { id: leadId },
+    select: { contactId: true },
+  });
+  const activityTenantId = await customerRecordTenantId({ leadId, contactId: linkedContact?.contactId });
   const lead = await prisma.$transaction(async (tx) => {
     const updated = await tx.lead.update({
       where: { id: leadId },
@@ -374,6 +472,7 @@ export async function moveLeadToTestDrive(
       contactId: updated.contactId,
       assignedToId: updated.assignedToId ?? user.id,
       createdById: user.id,
+      tenantId: activityTenantId,
     };
     const existing = await tx.activity.findFirst({
       where: { leadId, type: "test_drive", status: "planned" },
@@ -409,7 +508,14 @@ export async function moveLeadToTestDrive(
 
 export async function assignLead(leadId: string, assignedToId: string) {
   const user = await requireLeadAccess(leadId, "leads.assign");
-  const assignee = await requireAssignableUser(assignedToId).catch(() => null);
+  // Same shared contract as everywhere else, but this call site RETURNS its
+  // refusal rather than throwing it, and that difference is deliberate: the
+  // kanban board assigns by drag, catches the result and shows `error` in a
+  // toast, so a throw here would surface as "Something went wrong" instead of
+  // the reason. The catch keeps that shape — and keeps the exact sentence the
+  // board has always shown — while the membership question itself is no longer
+  // answered by a private copy of the rule.
+  const assignee = await resolveAssignableUser(assignedToId, ASSIGNEE_LABEL).catch(() => null);
   if (!assignee) return { ok: false as const, error: "That team member is no longer available." };
 
   const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });

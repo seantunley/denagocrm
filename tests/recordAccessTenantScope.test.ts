@@ -65,13 +65,35 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
     if (request === "next/navigation") {
       return { redirect: () => { throw new Error("redirect"); } };
     }
+    // The real actingScopeClass() sources its session half from getActiveTenantId(),
+    // which reads real cookies() — unavailable outside a live Next.js request. This
+    // suite's only way to say "the request is acting as tenant X" is already
+    // runInTenantScope's ALS, for BOTH enforced and dormant-with-a-scope cases, so
+    // the stub feeds that ambient value into the SAME real decideActingScope the
+    // shipped code runs — only the session source is swapped, not the decision.
+    if (request === "./actingScope") {
+      return {
+        actingScopeClass: async () => {
+          const enforcing = tenantEnforcing();
+          const ambient = enforcing ? null : currentTenantScope();
+          return decideActingScope({
+            enforcing,
+            enforcedScope: currentScopeClass(),
+            sessionTenantId: ambient ? ambient.tenantId : null,
+          });
+        },
+      };
+    }
   }
   return realLoad.call(this, request, parent, isMain);
 } as Loader;
 
 const require_ = createRequire(import.meta.url);
+const { tenantEnforcing } = require_("../src/lib/tenantEnforcement.ts") as typeof import("../src/lib/tenantEnforcement");
+const { currentScopeClass } = require_("../src/lib/tenantWrite.ts") as typeof import("../src/lib/tenantWrite");
+const { decideActingScope } = require_("../src/lib/actingScopeRule.ts") as typeof import("../src/lib/actingScopeRule");
 const permissions = require_("../src/lib/permissions.ts") as typeof import("../src/lib/permissions");
-const { runInTenantScope } = require_("../src/lib/tenantScope.ts") as typeof import("../src/lib/tenantScope");
+const { runInTenantScope, currentTenantScope } = require_("../src/lib/tenantScope.ts") as typeof import("../src/lib/tenantScope");
 const { __setTenantEnforcingForTests } =
   require_("../src/lib/tenantEnforcement.ts") as typeof import("../src/lib/tenantEnforcement");
 const { TenantScopeError } = require_("../src/lib/tenantGuard.ts") as typeof import("../src/lib/tenantGuard");
@@ -213,16 +235,34 @@ for (const entry of HELPERS) {
     });
   });
 
-  test(`${entry.helper}: with enforcement off and no scope, nothing changes`, async () => {
-    // The DEFAULT mode in every environment today. `establishStaffTenantScope`
-    // enters no scope at all unless TENANT_ENFORCEMENT=enforce, so the predicate
-    // is `{}` and the helper must behave exactly as it did before this change.
-    // A fix that quietly filtered on `tenantId: null` here would empty the app.
+  test(`${entry.helper}: a session that resolves NO workspace is refused, not unscoped`, async () => {
+    // THIS TEST USED TO ASSERT THE OPPOSITE, and the opposite was a fail-open.
+    //
+    // It read "with enforcement off and no scope, nothing changes" and required
+    // FOREIGN to be reachable, on the reasoning that dormant enforcement means
+    // the pre-tenancy behaviour and `{}` is not a filter. The flaw is what
+    // `global` actually covers. `actingScopeClass()` answers `global` whenever
+    // the SESSION cannot be resolved to one workspace — not only for a cron with
+    // no session at all. That includes a claim minted before `tid` existed, a
+    // claim gone stale after a membership was removed, and a claim that is
+    // AMBIGUOUS because the user holds two or more active memberships, which
+    // `honoredTenantClaim()` deliberately drops to null rather than guess at.
+    //
+    // So this asserted that a signed-in person in an ambiguous membership state
+    // may read any tenant's record by id. Every helper here sits in front of a
+    // write. The exceptional session state is exactly when the boundary has to
+    // hold, so an unresolvable scope now refuses.
+    //
+    // Nothing is lost for ordinary use: a session that resolves its sole active
+    // tenant takes the `tenant` branch, which the tests above cover.
     seed();
     spy.setPermissions([entry.viewAll]);
-    assert.equal(await ask(entry.helper, USER, SHARED), true);
-    assert.equal(await ask(entry.helper, USER, FOREIGN), true, "no scope is not a filter");
-    assert.equal(await ask(entry.helper, USER, GHOST), false, "…but a row that does not exist still is not there");
+    await assert.rejects(
+      () => ask(entry.helper, USER, SHARED),
+      TenantScopeError,
+      "an unresolvable session must refuse rather than answer from an unfiltered query",
+    );
+    await assert.rejects(() => ask(entry.helper, USER, FOREIGN), TenantScopeError);
   });
 
   test(`${entry.helper}: under enforcement a scopeless caller is refused, not unscoped`, async () => {
@@ -292,7 +332,7 @@ test("no canAccess* helper may answer from the id list alone", () => {
   // Local zero-argument wrappers that just return the shared predicate count as
   // naming the tenant — `documentTenantWhere()` is one, and inlining it would
   // only make the document scope and the document check drift apart.
-  const wrappers = [...code.matchAll(/function (\w+)\(\)[^\n]*\{\s*return activeTenantPredicate\(/g)].map(
+  const wrappers = [...code.matchAll(/function (\w+)\(\)[^\n]*\{\s*return actingRecordPredicate\(/g)].map(
     (match) => match[1],
   );
   assert.ok(
@@ -337,7 +377,7 @@ test("no canAccess* helper may answer from the id list alone", () => {
     );
 
     const predicate = new RegExp(
-      `activeTenantPredicate\\(|(?:${wrappers.length ? wrappers.join("|") : "\\0"})\\(\\)`,
+      `actingRecordPredicate\\(|(?:${wrappers.length ? wrappers.join("|") : "\\0"})\\(\\)`,
     );
     assert.match(
       body,
@@ -372,11 +412,48 @@ test("no canAccess* helper may answer from the id list alone", () => {
 });
 
 test("every helper's predicate says which check it came from", () => {
-  // `activeTenantPredicate` throws under enforcement without a scope, and the
+  // `actingRecordPredicate` throws under enforcement without a scope, and the
   // context string is the whole error message. Seven helpers sharing one label
   // would produce an exception nobody can locate.
   const code = shipped("src/lib/permissions.ts");
-  const contexts = [...code.matchAll(/activeTenantPredicate\("([^"]+)"\)/g)].map((match) => match[1]);
+  const contexts = [...code.matchAll(/actingRecordPredicate\("([^"]+)"\)/g)].map((match) => match[1]);
   assert.ok(contexts.length >= 7, `expected a context per helper, found ${contexts.length}`);
   assert.equal(new Set(contexts).size, contexts.length, `duplicate predicate contexts: ${contexts.join(", ")}`);
 });
+
+/**
+ * THE VIEW_OWNED PATH, on an unresolvable session.
+ *
+ * The first fail-closed pass put its guard INSIDE the `view_all` branch of
+ * getAccessibleLeadIds and getAccessibleCaseIds. A `view_owned` holder walked
+ * straight past it into the raw SQL with both tenant fragments built as
+ * `Prisma.empty` — no predicate at all. For cases the `assignedToId = user.id`
+ * arm then matched that person's tickets in EVERY workspace.
+ *
+ * Caught in review, not by the tests, because every test written for that pass
+ * exercised `view_all`. These drive the other permission shape.
+ */
+for (const [helper, owned] of [
+  ["getAccessibleLeadIds", "leads.view_owned"],
+  ["getAccessibleCaseIds", "cases.view_owned"],
+] as const) {
+  test(`${helper}: a view_owned holder with no resolvable workspace gets nothing`, async () => {
+    seed();
+    spy.setPermissions([owned]);
+    // No runInTenantScope: the stub resolves `global`, which is what a stale or
+    // ambiguous membership claim produces on a real request.
+    const ids = await (permissions[helper] as (u: typeof USER) => Promise<string[] | null>)(USER);
+    assert.deepEqual(ids, [], "an unresolvable session must reach no rows, and must not answer `null`");
+  });
+
+  test(`${helper}: a view_owned holder WITH a workspace still gets their rows`, async () => {
+    // The other half — a fix that simply returned [] everywhere would pass the
+    // test above and break the product.
+    seed();
+    spy.setPermissions([owned]);
+    await runInTenantScope({ tenantId: A, system: false }, async () => {
+      const ids = await (permissions[helper] as (u: typeof USER) => Promise<string[] | null>)(USER);
+      assert.ok(Array.isArray(ids), "a resolved workspace still resolves a list");
+    });
+  });
+}

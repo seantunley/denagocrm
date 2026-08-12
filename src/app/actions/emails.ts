@@ -3,6 +3,7 @@
 import { asActionResult, refuse } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
+import { customerRecordTenantId } from "@/lib/customerRecordTenant";
 import { putSetting } from "@/lib/settings";
 import { requireOwner } from "@/lib/auth";
 import {
@@ -115,6 +116,7 @@ export async function sendEmailAction(
       leadId,
       contactId,
       userId: user.id,
+      tenantId: await customerRecordTenantId({ contactId, leadId }),
     },
   });
   await logAudit({

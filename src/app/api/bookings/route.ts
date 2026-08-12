@@ -125,11 +125,27 @@ export async function POST(req: NextRequest) {
     vehicle?.model ?? b.model ?? (vehicles.length === 1 ? vehicles[0].model : null);
   const summary = `Service ${b.time} — ${b.name}${vehicleHint ? ` (${vehicleHint})` : ""}`;
 
-  // The tenant to STAMP every row with (and namespace the slot capacity by). The
-  // writes below run on `basePrisma` for the row lock, so the db.ts guard does NOT
-  // scope or stamp them — we do it explicitly. null under dormant/system → unstamped,
-  // single-namespace, exactly the pre-tenancy behaviour.
+  // The tenant to NAMESPACE the slot capacity by. The writes below run on
+  // `basePrisma` for the row lock, so the db.ts guard does NOT scope them — we do it
+  // explicitly. null under dormant/system → single-namespace, exactly the pre-tenancy
+  // behaviour. Deliberately NOT used as the stamp any more: see below.
   const writeTid = writeTenantId();
+
+  // The tenant to STAMP the rows with, which is NOT the same question.
+  //
+  // `writeTenantId()` returns null whenever enforcement is dormant — always, today —
+  // so every contact, job card and activity this endpoint created landed unowned and
+  // would vanish from the workspace at the flip. The owner is not unknown, though:
+  // the API key that authenticated this request belongs to exactly one tenant, and
+  // `establishTenantScopeFromId` above discards that fact while dormant. Take it from
+  // the key. A legacy global key still resolves null, so unregistered callers keep
+  // writing exactly what they write today — nothing is invented.
+  //
+  // The capacity namespace stays on `writeTid` on purpose. Narrowing the count to a
+  // tenant would make every pre-existing NULL-tenant booking invisible to it, and the
+  // slot would be double-booked — a stamping change must not quietly become a
+  // capacity change.
+  const stampTid = writeTid ?? auth.tenantId;
 
   // Everything that WRITES runs in ONE transaction, and the slot capacity is
   // claimed FIRST. Previously the contact and job card were created before the
@@ -153,12 +169,19 @@ export async function POST(req: NextRequest) {
             phone: b.phone,
             source: "website",
             notes: `Created from an online service booking for ${b.date} at ${b.time}.`,
-            ...(writeTid ? { tenantId: writeTid } : {}),
+            ...(stampTid ? { tenantId: stampTid } : {}),
           },
         });
         contactId = created.id;
         createdContact = true;
       }
+
+      // Everything below points at that contact through a COMPOSITE tenant foreign
+      // key, so it must claim the contact's tenant — not the key's. A pre-existing
+      // contact that is still unstamped cannot host a stamped job card or activity:
+      // PostgreSQL refuses the insert and the customer's booking 500s. New contact →
+      // the tenant we just gave it; existing contact → whatever it already has.
+      const rowTid = contact ? contact.tenantId : stampTid;
 
       let jobCardNumber: number | null = null;
       if (vehicle && contactId) {
@@ -171,7 +194,7 @@ export async function POST(req: NextRequest) {
             }`,
             vehicleId: vehicle.id,
             contactId,
-            ...(writeTid ? { tenantId: writeTid } : {}),
+            ...(rowTid ? { tenantId: rowTid } : {}),
           },
         });
         jobCardNumber = jc.number;
@@ -194,7 +217,7 @@ export async function POST(req: NextRequest) {
           contactId,
           assignedToId: firstUser.id,
           createdById: firstUser.id,
-          ...(writeTid ? { tenantId: writeTid } : {}),
+          ...(rowTid ? { tenantId: rowTid } : {}),
         },
       });
       return { activityId: activity.id, contactId, jobCardNumber, createdContact };

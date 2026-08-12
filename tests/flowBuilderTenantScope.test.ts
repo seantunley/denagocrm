@@ -3,11 +3,20 @@ import { test } from "node:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { decideBuilderTenant, legacyFlowTenant } from "../src/lib/flowTenantScope";
+import { decideBuilderTenant, flowTenantWhere } from "../src/lib/flowTenantScope";
 import { DEFAULT_TENANT_ID } from "../src/lib/tenant";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
+/**
+ * Source with comments removed, for the assertions that say "this code must NOT
+ * do X". A `doesNotMatch` over raw text cannot tell code from prose, so a
+ * comment recording WHY the old shape was wrong — which is exactly the comment
+ * a fix like this should leave behind — fails the guard that the fix satisfies.
+ * The same masking as documentScopeTenantSafety.test.ts and its siblings.
+ */
+const code = (rel: string) =>
+  src(rel).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 
 /**
  * The runtime resolver has scoped its BotFlow reads since #402. The BUILDER never
@@ -29,7 +38,7 @@ const B = "tenant_second_workspace";
 // ---------------------------------------------------------------------------
 
 type Row = { id: string; tenantId: string | null; name: string };
-type Where = ReturnType<typeof legacyFlowTenant>;
+type Where = ReturnType<typeof flowTenantWhere>;
 
 /** The subset of Prisma `where` semantics these scopes actually use. */
 function matches(row: Row, where: Where & { id?: string }): boolean {
@@ -40,10 +49,17 @@ function matches(row: Row, where: Where & { id?: string }): boolean {
 }
 const select = (rows: Row[], where: Where & { id?: string }) => rows.filter((row) => matches(row, where));
 
-/** Two workspaces, plus a legacy row written before anything stamped a tenant. */
+/**
+ * Two workspaces, plus an UN-OWNED row.
+ *
+ * It is no longer called "legacy", because it cannot be: migration
+ * 20260722146000_tenant_automation_isolation backfilled every BotFlow that
+ * predated tenancy, so a NULL row today was written after that date by an unknown
+ * workspace — possibly B's. Production holds none (PREFLIP-TENANT-AUDIT.md §1).
+ */
 const FLOWS: Row[] = [
   { id: "flow_a", tenantId: A, name: "Founding tenant's live flow" },
-  { id: "flow_legacy", tenantId: null, name: "Written while the guard was dormant" },
+  { id: "flow_unowned", tenantId: null, name: "Written by an unknown workspace" },
   { id: "flow_b", tenantId: B, name: "Second workspace's flow" },
 ];
 
@@ -55,29 +71,43 @@ test("DORMANT enforcement, active workspace B: B sees only B", () => {
   const tenant = decideBuilderTenant({ enforcedTenantId: null, sessionTenantId: B });
   assert.equal(tenant, B, "a dormant request must still resolve to the session's workspace");
 
-  const visible = select(FLOWS, legacyFlowTenant(tenant));
+  const visible = select(FLOWS, flowTenantWhere(tenant));
   assert.deepEqual(visible.map((f) => f.id), ["flow_b"]);
 
   // ...and cannot reach the founding tenant's flow by id, which is how every
   // editor surface addressed one.
-  assert.deepEqual(select(FLOWS, { id: "flow_a", ...legacyFlowTenant(tenant) }), []);
-  assert.deepEqual(select(FLOWS, { id: "flow_legacy", ...legacyFlowTenant(tenant) }), []);
+  assert.deepEqual(select(FLOWS, { id: "flow_a", ...flowTenantWhere(tenant) }), []);
+  assert.deepEqual(select(FLOWS, { id: "flow_unowned", ...flowTenantWhere(tenant) }), []);
   // Its own, by id, still opens.
-  assert.equal(select(FLOWS, { id: "flow_b", ...legacyFlowTenant(tenant) }).length, 1);
+  assert.equal(select(FLOWS, { id: "flow_b", ...flowTenantWhere(tenant) }).length, 1);
 });
 
-test("DORMANT enforcement, active workspace A: the founding tenant keeps the legacy rows", () => {
-  // Filtering strictly would hide every flow an existing install has — which is
-  // exactly how Publish came to be silently dead.
+test("DORMANT enforcement, active workspace A: the founding tenant gets NO un-owned rows either", () => {
+  // This assertion used to run the other way: the founding tenant also claimed
+  // `tenantId IS NULL`, because filtering strictly would have hidden every flow an
+  // existing install had. The backfill and the stamping creates between them
+  // emptied that population — production holds zero un-owned BotFlow rows — so a
+  // NULL row today is somebody else's, and A must not get it.
   const tenant = decideBuilderTenant({ enforcedTenantId: null, sessionTenantId: A });
-  assert.deepEqual(select(FLOWS, legacyFlowTenant(tenant)).map((f) => f.id), ["flow_a", "flow_legacy"]);
+  assert.deepEqual(select(FLOWS, flowTenantWhere(tenant)).map((f) => f.id), ["flow_a"]);
 });
 
 test("a session with no tenant claim still behaves exactly as it did before tenancy", () => {
   // Sessions minted before the `tid` claim existed resolve to null.
   const tenant = decideBuilderTenant({ enforcedTenantId: null, sessionTenantId: null });
   assert.equal(tenant, DEFAULT_TENANT_ID);
-  assert.deepEqual(select(FLOWS, legacyFlowTenant(tenant)).map((f) => f.id), ["flow_a", "flow_legacy"]);
+  assert.deepEqual(select(FLOWS, flowTenantWhere(tenant)).map((f) => f.id), ["flow_a"]);
+});
+
+test("the un-owned flow is reachable by NOBODY, whoever is acting", () => {
+  // Stated as a property over every workspace rather than as three expected
+  // lists, so a rule that quietly re-admitted NULL for anyone is caught.
+  for (const acting of [A, B, "tenant_third"]) {
+    const tenant = decideBuilderTenant({ enforcedTenantId: null, sessionTenantId: acting });
+    for (const row of select(FLOWS, flowTenantWhere(tenant))) {
+      assert.equal(row.tenantId, acting, `${acting} can reach ${row.id}, owned by ${String(row.tenantId)}`);
+    }
+  }
 });
 
 test("an ENFORCED scope wins over the session claim", () => {
@@ -91,16 +121,24 @@ test("a second workspace cannot publish against the founding tenant's Journey", 
   // The publication validator asked "is this Journey active?" with no tenant
   // predicate, so another tenant's active Journey satisfied the check and the flow
   // published cleanly. Journey.tenantId is nullable like BotFlow's, so it takes
-  // the same legacy rule.
+  // the same rule — strict equality, since 20260726200000_journey_tenant_isolation
+  // backfilled every legacy Journey and production holds no un-owned one.
   const JOURNEYS: Row[] = [
     { id: "j_a", tenantId: A, name: "Founding tenant's welcome journey" },
     { id: "j_b", tenantId: B, name: "Second workspace's journey" },
+    { id: "j_unowned", tenantId: null, name: "Written by an unknown workspace" },
   ];
-  const asB = legacyFlowTenant(decideBuilderTenant({ enforcedTenantId: null, sessionTenantId: B }));
+  const asB = flowTenantWhere(decideBuilderTenant({ enforcedTenantId: null, sessionTenantId: B }));
   assert.deepEqual(select(JOURNEYS, { id: "j_a", ...asB }), [], "A's Journey must not validate for B");
   assert.equal(select(JOURNEYS, { id: "j_b", ...asB }).length, 1);
   // And the picker offers only its own, so the id cannot be chosen in the first place.
   assert.deepEqual(select(JOURNEYS, asB).map((j) => j.id), ["j_b"]);
+
+  // The un-owned Journey validates for nobody — including the founding tenant,
+  // which would otherwise let A publish a flow naming a Journey that could be B's.
+  const asA = flowTenantWhere(decideBuilderTenant({ enforcedTenantId: null, sessionTenantId: A }));
+  assert.deepEqual(select(JOURNEYS, { id: "j_unowned", ...asA }), []);
+  assert.deepEqual(select(JOURNEYS, { id: "j_unowned", ...asB }), []);
 });
 
 // ---------------------------------------------------------------------------
@@ -123,11 +161,15 @@ function flowCallSites(): string[] {
 
 test("the builder tenant is never resolved from writeTenantId alone", () => {
   // writeTenantId() answers a different question — how an UNGUARDED WRITE behaves
-  // during the enforcement rollout — and is null while dormant. Only the runtime
-  // resolver, which has no session and is entered through the channel's tenant
-  // scope, may use it directly.
+  // during the enforcement rollout — and is null while dormant. NEITHER resolver
+  // may use it alone now: the runtime one used to, on the grounds that it is
+  // entered through the channel's tenant scope, but that scope bound nothing while
+  // dormant so the "channel tenant" was the founding tenant for every workspace.
+  // It delegates to the shared bot-conversation expression, whose middle rung is
+  // the ambient scope the channel entry now actually binds.
   const scope = src("src/lib/flowScope.ts");
-  assert.match(scope, /export function runtimeFlowTenantId\(\): string \{\s*return writeTenantId\(\) \?\? DEFAULT_TENANT_ID;/);
+  assert.match(scope, /export function runtimeFlowTenantId\(\): string \{\s*return botConversationTenantId\(\);/);
+  assert.doesNotMatch(code("src/lib/flowScope.ts"), /writeTenantId\(\) \?\? DEFAULT_TENANT_ID/, "the dormant-null fallback must not come back");
   assert.match(scope, /export async function builderTenantId\(\)/);
   // The rule moved, it did not weaken. `builderTenantId` was the first caller of
   // "the workspace this SESSION is acting as"; the record writers fixed in the
@@ -137,8 +179,22 @@ test("the builder tenant is never resolved from writeTenantId alone", () => {
   // the session still fails here.
   assert.match(scope, /return actingTenantId\(\)/, "the builder must resolve through the shared acting-tenant resolver");
   const acting = src("src/lib/actingTenant.ts");
-  assert.match(acting, /sessionTenantId: await getActiveTenantId\(\)/, "the builder must consult the session's workspace");
-  assert.match(acting, /enforcedTenantId: writeTenantId\(\)/, "…and an enforced scope must still win");
+  // On the value, not one inline expression: the session is now read into a
+  // named const so the resolver can refuse when neither rung resolves, before
+  // the pure rule's founding-tenant fallback can be taken. A delegation that
+  // stopped consulting the session still fails both halves of this.
+  // `getActiveTenantIdIfRequest` is `getActiveTenantId` with one behaviour
+  // added: "there is no request at all" answers null instead of throwing,
+  // which is a fact about the caller and not about the tenant. Either name
+  // satisfies this rule; dropping the session rung entirely still fails it.
+  assert.match(acting, /await getActiveTenantId(IfRequest)?\(\)/, "the builder must consult the session's workspace");
+  assert.match(acting, /sessionTenantId \}\)|sessionTenantId,/, "…and must hand it to the rule");
+  assert.match(acting, /const enforcedTenantId = writeTenantId\(\);/, "…and an enforced scope must still be read");
+  assert.match(
+    acting,
+    /decideBuilderTenant\(\{ enforcedTenantId, sessionTenantId \}\)/,
+    "…and must still win, by being the first rung handed to the rule",
+  );
 
   for (const file of flowCallSites()) {
     const code = src(file);
@@ -188,7 +244,7 @@ test("no BotFlow access uses a method that cannot carry the tenant predicate", (
 });
 
 test("every BotFlow query names the tenant it is for", () => {
-  const scoped = /await flowScope\(\)|legacyFlowTenant\(/;
+  const scoped = /await flowScope\(\)|flowTenantWhere\(/;
   const unscoped: string[] = [];
   for (const file of flowCallSites()) {
     const code = src(file);

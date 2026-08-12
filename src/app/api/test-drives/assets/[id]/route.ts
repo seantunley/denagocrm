@@ -29,7 +29,7 @@ export async function GET(
 
   const inline = /^(image\/(png|jpe?g|webp)|application\/pdf)$/i.test(asset.mimeType);
   try {
-    const buffer = await readFile(asset.storedName);
+    const buffer = await readFile(asset.storedName, asset.tenantId);
     return new NextResponse(new Uint8Array(buffer), {
       headers: {
         "Content-Type": inline ? asset.mimeType : "application/octet-stream",

@@ -1,9 +1,17 @@
 import "server-only";
 import { Prisma } from "@prisma/client";
 import { basePrisma } from "./db";
+import { actingScopeClass } from "./actingScope";
 import { currentScopeClass } from "./tenantWrite";
+import { resolveAssignment } from "./assignableUser";
 
 export type TenantActor = { id: string; name: string; email: string };
+
+/** A team as a picker offers it: enough to render an option and to check one. */
+export type TenantTeam = { id: string; name: string };
+
+/** Who is in which team, for a picker that widens from teams to people. */
+export type TenantTeamMembership = { teamId: string; userId: string };
 
 // Actor selection classifies the current scope exactly like every other unguarded
 // tenant-owned path — via the shared {@link currentScopeClass}. `global` → the
@@ -88,6 +96,50 @@ export async function resolveTenantMemberUser(userId: string): Promise<TenantAct
 }
 
 /**
+ * THE assignment contract: turn a posted assignee id into a person this workspace
+ * may actually assign work to, or refuse.
+ *
+ * Every "assign this record to somebody" action should come through here rather
+ * than reading the id off the form and trusting it. Three of them did trust it —
+ * a contact's owner, a help desk ticket's agent, a job card's technician — and
+ * because `User` is global, "does this user exist" was the only question being
+ * asked. It is the wrong question: a user id from an entirely different tenant
+ * answers it yes. Authorising the RECORD (which those actions all did correctly)
+ * says the caller may edit this ticket; it says nothing about whether the person
+ * they named works here.
+ *
+ * Returns the validated member, or null when the field was deliberately left
+ * blank — callers can persist `?? null` for the unassigned case and read `.name`
+ * for the audit line without a second lookup. Throws {@link ActionRefusal} when
+ * an id was submitted that does not belong to an active, non-disabled member of
+ * the ACTING workspace, which `asActionResult` turns into a message the user
+ * actually sees. `label` names the field in that message ("owner", "agent",
+ * "technician").
+ *
+ * The lookup is {@link resolveActingTenantMemberUser}, NOT the background
+ * {@link resolveTenantMemberUser}, and the difference is the whole point. The
+ * background resolver classifies with `currentScopeClass`, which maps DORMANT
+ * enforcement — the mode every environment runs in today — to `global` and skips
+ * the TenantMember join entirely. Wired that way, this contract validated
+ * NOTHING: every id on the platform resolved, so the refusal it exists to
+ * produce could not fire until enforcement was switched on. A control that only
+ * starts working after the flip is not a control.
+ */
+export async function resolveAssignableUser(
+  raw: unknown,
+  label: string,
+): Promise<TenantActor | null> {
+  // Everything except the database is in `resolveAssignment`, which is where a
+  // test can execute it. What is left here is the one thing that genuinely needs
+  // a server: the TenantMember join. Keeping the composition on the far side of
+  // `server-only` meant the rule every caller leans on — a bad id THROWS, it does
+  // not come back as null — could only ever be checked by grepping for the word
+  // `throw`, and the regression that matters most looks perfectly correct to a
+  // grep.
+  return resolveAssignment(raw, label, resolveActingTenantMemberUser);
+}
+
+/**
  * The list of users eligible to be an approval assignee / staff selection: active,
  * non-disabled members of the current tenant scope. Via {@link actorScope}: dormant
  * or an explicit `system` scope → all active, non-disabled users; enforcement with
@@ -111,4 +163,226 @@ export async function listTenantStaff(): Promise<TenantActor[]> {
     SELECT "id", "name", "email" FROM "User"
     WHERE "disabledAt" IS NULL
     ORDER BY "name" ASC`;
+}
+
+/* ------------------------------------------------------------------------- */
+/* USER-ORIGINATED variants                                                   */
+/*                                                                            */
+/* The resolvers above classify with `currentScopeClass`, which maps DORMANT   */
+/* enforcement to `global`. That is right for a cron or a webhook and wrong    */
+/* for a person sitting in a workspace: while dormant, the membership join is  */
+/* skipped entirely, so an assignee is validated against the whole platform    */
+/* and a picker lists every user on it. Both only start working when           */
+/* enforcement is switched on, which is the opposite of a safety control.      */
+/*                                                                            */
+/* These variants classify with `actingScopeClass` instead, so the same code   */
+/* enforces membership today. They are deliberately SEPARATE rather than a     */
+/* change to the originals: background and token paths rely on the existing    */
+/* semantics, and there is no session there for an acting scope to resolve.    */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * {@link resolveTenantMemberUser} for an assignee a SIGNED-IN PERSON picked.
+ *
+ * Returns null — the caller refuses — when the id is not an active member of the
+ * acting workspace. Under enforcement this is identical to the original; while
+ * dormant it is the difference between checking membership and not checking it.
+ */
+export async function resolveActingTenantMemberUser(userId: string): Promise<TenantActor | null> {
+  const s = await actingScopeClass();
+  // `global` REFUSES here, like `closed`. See the note on actingTeamScope: a
+  // `global` scope is not only "a cron with no session", it is also a signed-in
+  // session that cannot be resolved to ONE workspace — stale, or ambiguous
+  // across two active memberships. Falling through to the platform-wide lookup
+  // below meant this contract validated nothing in exactly that state, which is
+  // the whole thing it exists to prevent: any user id on the platform resolved,
+  // so a posted assignee from another workspace was accepted.
+  if (s.mode !== "tenant") return null;
+  const rows = await basePrisma.$queryRaw<TenantActor[]>`
+    SELECT u."id", u."name", u."email"
+    FROM "TenantMember" m
+    JOIN "User" u ON u."id" = m."userId"
+    JOIN "Tenant" t ON t."id" = m."tenantId"
+    WHERE m."tenantId" = ${s.tenantId} AND m."userId" = ${userId}
+      AND t."active" = true AND u."disabledAt" IS NULL
+    LIMIT 1`;
+  return rows[0] ?? null;
+}
+
+/**
+ * {@link listTenantStaff} for a picker a SIGNED-IN PERSON is looking at.
+ *
+ * A picker fixed without its check is half a fix, and a check that is inert while
+ * dormant is the other half missing — so the picker and the assignment check must
+ * classify the same way, in BOTH modes. Use this for any staff dropdown rendered
+ * to a logged-in user; keep {@link listTenantStaff} for workflow runtime lookups
+ * that run without a session.
+ */
+export async function listActingTenantStaff(): Promise<TenantActor[]> {
+  const s = await actingScopeClass();
+  // An empty picker, not the whole platform. `global` covers a signed-in session
+  // that cannot be resolved to one workspace (stale, or ambiguous across two
+  // active memberships), and the old fallback listed EVERY user on the platform
+  // by name and email to a person in that state — then let one be picked, since
+  // resolveActingTenantMemberUser had the same hole. An empty dropdown is a
+  // visible, harmless failure; a dropdown of other tenants' staff is not.
+  if (s.mode !== "tenant") return [];
+  return basePrisma.$queryRaw<TenantActor[]>`
+    SELECT u."id", u."name", u."email"
+    FROM "TenantMember" m
+    JOIN "User" u ON u."id" = m."userId"
+    JOIN "Tenant" t ON t."id" = m."tenantId"
+    WHERE m."tenantId" = ${s.tenantId} AND t."active" = true AND u."disabledAt" IS NULL
+    ORDER BY u."name" ASC`;
+}
+
+/* ------------------------------------------------------------------------- */
+/* THE OTHER HALF OF A STAFF PICKER: TEAMS                                    */
+/*                                                                            */
+/* A forecast, a lead and a job card are attached to a PERSON or to a TEAM,   */
+/* and the two are offered side by side in the same form. `Team` carries its   */
+/* own `tenantId`, so unlike `User` it does not need a membership join — but   */
+/* it does need SOMETHING, and the /forecast pickers had nothing at all:       */
+/* `SELECT "id", "name" FROM "Team" WHERE "active" = true` on `basePrisma`.    */
+/*                                                                            */
+/* They live HERE, next to `listActingTenantStaff`, rather than beside the     */
+/* forecast queries, for one reason: they must classify the SAME WAY as the    */
+/* people picker they sit next to. A page whose owner dropdown is bounded by   */
+/* `actingScopeClass()` and whose team dropdown is bounded by something else   */
+/* has two boundaries that agree today and are free to drift, and the two      */
+/* fields are read as one control by the person using them.                    */
+/*                                                                            */
+/* STRICT EQUALITY, and nothing is stranded by it: migration                   */
+/* 20260725160000_tenant_governance_isolation backfills BOTH tables            */
+/* unconditionally (`UPDATE "Team" SET "tenantId" = 'tenant_denago_cpt' WHERE  */
+/* "tenantId" IS NULL`, and the same for "TeamMember"), so a NULL row today is */
+/* not "old", it is "created by an unknown workspace".                         */
+/*                                                                            */
+/* Each is ONE statement rather than a branch per mode. The `global` branch of */
+/* a two-branch version would be a Team query with no tenant column in it at   */
+/* all — which is exactly the shape the #458 sweep counts, and exactly the     */
+/* shape a later reader copies. Binding NULL says "no workspace restriction"   */
+/* in the same statement that says what the restriction is when there is one.  */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * The workspace restriction as a BOUND VALUE: the acting tenant, or `closed`.
+ *
+ * There is no longer an unrestricted answer. This used to return
+ * `tenantId: null` for `global` — "no restriction" — on the reasoning that
+ * `global` is reached only with no session, which behind a `requirePermission`
+ * page cannot happen. That reasoning is wrong, and it is the same wrong
+ * reasoning that was in permissions.ts and trash.ts: `actingScopeClass()`
+ * answers `global` whenever a session cannot be resolved to ONE workspace, and
+ * the case that makes it ordinary rather than exotic is a user holding two or
+ * more active memberships, which `honoredTenantClaim()` deliberately drops to
+ * null rather than guess at. So a signed-in person absolutely can reach this
+ * with `global`, and a null tenantId here disables the team filter entirely.
+ */
+async function actingTeamScope(): Promise<{ closed: true } | { closed: false; tenantId: string }> {
+  const s = await actingScopeClass();
+  if (s.mode !== "tenant") return { closed: true };
+  return { closed: false, tenantId: s.tenantId };
+}
+
+/**
+ * {@link listActingTenantStaff} for the TEAM half of the same picker: the active
+ * teams of the workspace the signed-in person is acting in.
+ *
+ * The /forecast team dropdown listed every workspace's teams by name, and a
+ * `leads.view_all` user was shown all of them — see src/lib/forecastPickerScope.ts
+ * for why "sees every record" was never a licence to see every workspace.
+ */
+export async function listActingTenantTeams(): Promise<TenantTeam[]> {
+  const scope = await actingTeamScope();
+  if (scope.closed) return [];
+  return basePrisma.$queryRaw<TenantTeam[]>`
+    SELECT "id", "name" FROM "Team"
+    WHERE "active" = true AND "deletedAt" IS NULL
+      AND (${scope.tenantId}::text IS NULL OR "tenantId" = ${scope.tenantId})
+    ORDER BY "name" ASC`;
+}
+
+/**
+ * {@link resolveActingTenantMemberUser} for a TEAM id a signed-in person posted.
+ *
+ * The picker and the check must classify the same way, in both modes — a team
+ * dropdown scoped to one workspace is decoration if the action behind it accepts
+ * any team id that arrives. Returns null when the id is not an active team of the
+ * acting workspace, and the caller refuses.
+ */
+export async function resolveActingTenantTeam(teamId: string): Promise<TenantTeam | null> {
+  const scope = await actingTeamScope();
+  if (scope.closed) return null;
+  const rows = await basePrisma.$queryRaw<TenantTeam[]>`
+    SELECT "id", "name" FROM "Team"
+    WHERE "id" = ${teamId} AND "active" = true AND "deletedAt" IS NULL
+      AND (${scope.tenantId}::text IS NULL OR "tenantId" = ${scope.tenantId})
+    LIMIT 1`;
+  return rows[0] ?? null;
+}
+
+/**
+ * Who is in which team, within the acting workspace.
+ *
+ * Used to widen a picker from "the teams you are in" to "the people in them", so
+ * an unbounded read of it is an unbounded read of the org chart: the /forecast
+ * page selected every `TeamMember` row on the platform to do it.
+ */
+export async function listActingTenantTeamMemberships(): Promise<TenantTeamMembership[]> {
+  const scope = await actingTeamScope();
+  if (scope.closed) return [];
+  return basePrisma.$queryRaw<TenantTeamMembership[]>`
+    SELECT "teamId", "userId" FROM "TeamMember"
+    WHERE (${scope.tenantId}::text IS NULL OR "tenantId" = ${scope.tenantId})`;
+}
+
+/**
+ * Membership of the acting workspace, DISABLED MEMBERS INCLUDED — for the
+ * screens and actions that ADMINISTER people rather than assign work to them.
+ *
+ * Everything above deliberately drops disabled accounts, because you must not
+ * hand live work or a live approval token to a suspended login. An administration
+ * surface needs the opposite: Settings → Access lists disabled members precisely
+ * so an owner can reactivate them, and a "Reactivate" button that cannot find its
+ * own target is not a safer button, it is a broken one. So the filter here is
+ * membership and nothing else.
+ *
+ * `null` means "no membership restriction applies" — the `global` branch, reached
+ * only with no session at all, which for these screens cannot happen behind
+ * `requireOwner`. It is returned rather than a list of every id so a caller cannot
+ * mistake "unscoped" for "a workspace that happens to contain everyone". An empty
+ * array is the fail-closed answer and is genuinely empty.
+ */
+export async function actingTenantMemberIds(): Promise<string[] | null> {
+  const s = await actingScopeClass();
+  // `[]`, not `null`. `null` means "no membership restriction applies", and
+  // isActingTenantMember turns that into true for ANY user id — so an
+  // unresolvable session could administer anybody on the platform: change their
+  // role, reset their second factor, disable them. `global` is not "no session"
+  // (see actingTeamScope); it is also a stale or ambiguous one.
+  if (s.mode !== "tenant") return [];
+  const rows = await basePrisma.$queryRaw<Array<{ userId: string }>>`
+    SELECT m."userId"
+    FROM "TenantMember" m
+    JOIN "Tenant" t ON t."id" = m."tenantId"
+    WHERE m."tenantId" = ${s.tenantId} AND t."active" = true`;
+  return rows.map((row) => row.userId);
+}
+
+/**
+ * May the acting workspace administer this person at all?
+ *
+ * The guard for every action that takes a `userId` off a form and changes that
+ * person's account — role, 2FA, disablement, sessions. All of them proved only
+ * that the User row existed, which for a GLOBAL table is not a question worth
+ * asking: an owner of one workspace could post another workspace's user id and
+ * disable them, reset their second factor, or promote them.
+ *
+ * Built on {@link actingTenantMemberIds} so there is ONE membership rule for the
+ * management surfaces rather than a second one that agrees with it today.
+ */
+export async function isActingTenantMember(userId: string): Promise<boolean> {
+  const ids = await actingTenantMemberIds();
+  return ids === null || ids.includes(userId);
 }

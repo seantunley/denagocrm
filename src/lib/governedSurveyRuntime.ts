@@ -1,6 +1,7 @@
 import "server-only";
 
 import { basePrisma, prisma } from "./db";
+import { customerRecordTenantId } from "./customerRecordTenant";
 import { currentTenantScope } from "./tenantScope";
 import { resolveTenantActor } from "./tenantActor";
 import { createSurveyDistribution } from "./surveyDistributionQueue";
@@ -152,6 +153,7 @@ export async function submitFrozenSurveyResponse(token: string, supplied: Record
           body: summarise(response.snapshot.questions, answers, score),
           contactId: response.contactId,
           userId: actor.id,
+          tenantId: await customerRecordTenantId({ contactId: response.contactId }),
         },
       });
     }

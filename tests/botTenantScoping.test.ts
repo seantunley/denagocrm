@@ -55,6 +55,7 @@ test("every chatbot conversation query names the tenant that owns it", () => {
   // Models whose natural key repeats across tenants.
   const models = new Set(["botFlowOutbox", "botFlowPublication", "botSession"]);
   const offenders: string[] = [];
+  const discovery: string[] = [];
 
   for (const rel of ["src/lib/botOutbox.ts", "src/lib/flowPublishing.ts", "src/lib/botSessionStore.ts"]) {
     const code = src(rel);
@@ -67,6 +68,18 @@ test("every chatbot conversation query names the tenant that owns it", () => {
       // EXCEPT one row, so it still has to name the tenant. blockLaterMessages is
       // exactly that shape, and it marks rows dead.
       if (call.where && /\bid:\s*(?!\{)/.test(call.where)) continue;
+      // The cron sweep's two DISCOVERY reads. They spread `...scope`, which is the
+      // slice's own workspace under enforcement and EVERY workspace on the dormant
+      // single sweep — deliberately, because the runtime writes a webhook's replies
+      // under the workspace that owns its provider endpoint and a sweep narrowed to
+      // the founding tenant would never claim anybody else's. They are exempt only
+      // because they SELECT identity and act on nothing; the claim, the kill and
+      // the delivery that follow are bound per conversation. Both facts are pinned
+      // below, so this exemption cannot quietly widen.
+      if (call.where && /\.\.\.scope\b/.test(call.where)) {
+        discovery.push(`${rel}:${call.line} ${call.model}.${call.op}`);
+        continue;
+      }
       offenders.push(`${rel}:${call.line} ${call.model}.${call.op}`);
     }
   }
@@ -76,6 +89,30 @@ test("every chatbot conversation query names the tenant that owns it", () => {
     [],
     "These queries match other tenants' conversations while enforcement is dormant:\n  " + offenders.join("\n  "),
   );
+  assert.equal(
+    discovery.length,
+    2,
+    `exactly two cross-workspace discovery reads are sanctioned, found:\n  ${discovery.join("\n  ")}`,
+  );
+});
+
+test("the cross-workspace sweep binds each conversation before it touches anything", () => {
+  // The compensating control for the exemption above, and the thing that makes the
+  // difference between "discovers across workspaces" and "acts across workspaces".
+  const code = src("src/lib/botOutbox.ts");
+  const start = code.indexOf("export async function flushBotOutbox(");
+  assert.ok(start > -1, "flushBotOutbox is missing");
+  const body = code.slice(start);
+
+  // The tenant comes off the ROW, not off the ambient scope the sweep is running in.
+  assert.match(body, /select: \{ tenantId: true, channel: true, key: true \}/);
+  assert.match(
+    body,
+    /runInTenantScope\(\{ tenantId, system: false \}, \(\) =>\s*drainConversation\(/,
+    "each conversation must be drained inside its own workspace's scope",
+  );
+  // And the sweep only widens on the slice the runner told it is unscoped.
+  assert.match(body, /sliceTenantId === null \? \{\} : \{ tenantId: outboxTenantId\(\) \}/);
 });
 
 test("the parser actually finds the queries it is supposed to guard", () => {
@@ -112,7 +149,7 @@ test("a dead message stops the backlog at the failure, not the conversation for 
   // that conversation is killed in the same step, so nothing queued behind the
   // failure can overtake it — a Meta image and its split-out caption die together.
   const fail = code.slice(code.indexOf("async function failDelivery"), code.indexOf("async function deliverClaimed"));
-  assert.match(fail, /killMessageAndBacklog\(row, lastError\)/);
+  assert.match(fail, /killMessageAndBacklog\(row, lastError, failureCode\)/);
 
   const blockStart = code.indexOf("async function killMessageAndBacklog");
   const block = code.slice(blockStart, code.indexOf("\n}", blockStart));
@@ -129,7 +166,8 @@ test("a dead message stops the backlog at the failure, not the conversation for 
   // And having done that, a dead row must stop being a barrier — otherwise one
   // undeliverable message silences the bot for that customer for ever.
   const earliest = code.slice(code.indexOf("async function earliestUnfinished"), code.indexOf("async function claimOldest"));
-  assert.match(earliest, /status: \{ notIn: \["sent", "dead"\] \}/);
+  assert.match(earliest, /status: \{ notIn: FINISHED_STATUSES \}/);
+  assert.match(code, /FINISHED_STATUSES = \["sent", "dead", "cancelled"\]/);
   const claim = code.slice(code.indexOf("async function claimOldest"), code.indexOf("function retryAt"));
   assert.doesNotMatch(claim, /row\.status === "dead"/, "a dead row must no longer veto the claim");
 });

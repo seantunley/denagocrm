@@ -79,6 +79,16 @@ export type LoadedDashboard = {
   icon: string | null;
   sortOrder: number;
   config: DashboardConfig;
+  /**
+   * The row's revision, as an ISO string, or `null` for the default dashboard —
+   * which has no row and therefore no revision yet.
+   *
+   * This is the optimistic-concurrency fence the editor's autosave writes
+   * against: it sends back the revision it loaded, and the server refuses the
+   * write if the row has moved on since. An ISO string rather than a Date
+   * because it crosses the server→client boundary.
+   */
+  updatedAt: string | null;
   /** Human-readable notes about parts of the stored config that were removed. */
   dropped: string[];
 };
@@ -182,31 +192,30 @@ export const dashboardBySlug = cache(async (slug: string): Promise<LoadedDashboa
    * screen could be displaced by something somebody else published over it,
    * intermittently, which is the worst possible way for that to behave.
    */
+  // BOTH selects carry `userId` AND `updatedAt`. This branch added `userId`
+  // (the return distinguishes somebody else's published dashboard from your own
+  // to render it read-only) and main added `updatedAt`; the return block below
+  // reads both, so either one missing from either query is a type error at best
+  // and a wrong `shared` flag at worst.
+  const SELECT = {
+    id: true,
+    slug: true,
+    title: true,
+    icon: true,
+    sortOrder: true,
+    config: true,
+    userId: true,
+    updatedAt: true,
+  } as const;
   const row =
     (await prisma.dashboard.findFirst({
       where: { userId: user.id, slug: path },
-    select: {
-      id: true,
-      slug: true,
-      title: true,
-      icon: true,
-      sortOrder: true,
-        config: true,
-        userId: true,
-      },
+      select: SELECT,
     })) ??
     (await prisma.dashboard.findFirst({
       // Same rule as the switcher: published HERE, not published anywhere.
       where: { slug: path, ...sharedInTenant(await viewerTenantId()) },
-      select: {
-        id: true,
-        slug: true,
-        title: true,
-        icon: true,
-        sortOrder: true,
-        config: true,
-        userId: true,
-      },
+      select: SELECT,
     }));
   if (!row) return null;
   const { config, dropped } = parseConfig(row.config);
@@ -220,6 +229,7 @@ export const dashboardBySlug = cache(async (slug: string): Promise<LoadedDashboa
     // render read-only rather than letting a viewer edit the author's copy.
     shared: row.userId !== user.id,
     config,
+    updatedAt: row.updatedAt.toISOString(),
     dropped,
   };
 });
@@ -284,6 +294,9 @@ export function defaultDashboard(): LoadedDashboard {
         },
       ],
     },
+    // No row, so no revision. `takeControl()` materialises the row on the first
+    // edit and hands back the stamp the editor's first save fences against.
+    updatedAt: null,
     dropped: [],
   };
 }

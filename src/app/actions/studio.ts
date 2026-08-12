@@ -186,7 +186,10 @@ export async function finalizeDocInstance(id: string): Promise<{ ok: boolean; er
   try {
     const html = await renderInstanceHtml({ title: doc.title, contentJson: doc.contentJson });
     const pdf = await htmlToPdf(html);
-    const storedName = await saveFile(pdf, `${doc.title}.pdf`, "application/pdf");
+    // The finalised PDF is the DocInstance made permanent, so it belongs to that
+    // instance — the row was already fetched and authorized by
+    // requireDocInstanceAccess, so its owner costs nothing to honour.
+    const storedName = await saveFile(pdf, `${doc.title}.pdf`, "application/pdf", doc.tenantId);
     const pdfDoc = await prisma.document.create({
       data: {
         fileName: `${doc.title}.pdf`,

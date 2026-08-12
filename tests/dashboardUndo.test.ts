@@ -44,10 +44,14 @@ test("a refused edit is not recorded", () => {
   const provider = code(PROVIDER);
   const fn = provider.slice(provider.indexOf("const update = useCallback"));
   const body = fn.slice(0, fn.indexOf("[persist]"));
-  const rejectAt = body.indexOf("return current;");
+  const rejectAt = body.indexOf("toast.error(checked.error);");
   const recordAt = body.indexOf("history.current = [");
   assert.ok(rejectAt !== -1 && recordAt !== -1);
   assert.ok(rejectAt < recordAt, "the invalid-config early return must come first");
+  // A no-op change must not be recorded either — dragover fires on every pointer
+  // movement and most of those leave the arrangement exactly as it was.
+  const noopAt = body.indexOf("if (next === current) return;");
+  assert.ok(noopAt !== -1 && noopAt < recordAt, "a change that changed nothing must not record");
 });
 
 test("history is bounded", () => {
@@ -92,12 +96,14 @@ test("the echo of this editor's own save does NOT clear the history", () => {
   const body = effect.slice(0, effect.indexOf("}, [seed]"));
 
   assert.match(body, /ownSeeds\.current\.has\(seed\)/, "an echo of our own save must be recognised");
-  assert.match(body, /if \(!isOwnEcho\)/, "only a foreign config may clear the history");
 
-  const guardAt = body.indexOf("if (!isOwnEcho)");
+  const guardAt = body.indexOf("if (ownSeeds.current.has(seed))");
   const clearAt = body.indexOf("history.current = []");
   assert.ok(guardAt !== -1 && clearAt !== -1, "both the guard and the clear must exist");
   assert.ok(guardAt < clearAt, "an unconditional clear defeats the feature");
+  // The echo branch leaves rather than falling through — it must reach neither
+  // the clear nor the re-seed below it.
+  assert.match(body.slice(guardAt, clearAt), /return;/, "the echo must return early");
 });
 
 test("a genuinely foreign config still clears the history", () => {
@@ -111,9 +117,14 @@ test("a genuinely foreign config still clears the history", () => {
 });
 
 test("a save records its seed so the echo can be recognised", () => {
+  // Recorded when the queue reports the write ACCEPTED. Doing it when the write
+  // was merely sent would record a seed for an arrangement the server may have
+  // refused, and the echo of somebody else's config could then be mistaken for
+  // ours and quietly keep a history that belongs to a document we no longer hold.
   const provider = code(PROVIDER);
-  const save = provider.slice(provider.indexOf("committed.current = next;"));
-  const body = save.slice(0, save.indexOf("} catch"));
+  const accepted = provider.slice(provider.indexOf("onAccepted: (next, _stamp, previous) =>"));
+  const body = accepted.slice(0, accepted.indexOf("onRejected:"));
+  assert.ok(body.length > 0, "could not isolate the accepted handler");
   assert.match(body, /ownSeeds\.current\.add\(/, "without this every echo looks foreign");
 });
 

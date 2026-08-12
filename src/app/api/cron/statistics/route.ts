@@ -62,7 +62,9 @@ export async function GET(req: NextRequest) {
       minStartBudgetMs: MIN_START_BUDGET_MS,
       concurrency: 2,
       rotationWindowMs: 15 * 60 * 1000,
-      onError: (tenantId, error) => logError(`statistics-rollup:${tenantId}`, error),
+      // Attribute to the failing tenant: `onError` runs outside its scope, so this is
+      // the only point at which the owner of the failure is still known.
+      onError: (tenantId, error) => logError(`statistics-rollup:${tenantId}`, error, undefined, { tenantId }),
     });
     const dormant = runs.length === 1 && runs[0].tenantId === null ? runs[0] : null;
     if (dormant?.status === "ok") return NextResponse.json({ ok: true, ...dormant.result });

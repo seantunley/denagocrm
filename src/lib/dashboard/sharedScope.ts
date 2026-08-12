@@ -1,4 +1,7 @@
-import { legacyFlowTenant } from "@/lib/flowTenantScope";
+// `flowTenantWhere` is #463's rename of `legacyFlowTenant`: the old name became
+// a lie once the rule stopped being a legacy allowance. Same function, and the
+// reasoning below is unchanged.
+import { flowTenantWhere } from "@/lib/flowTenantScope";
 
 /**
  * `where` fragment for a dashboard PUBLISHED to a given workspace.
@@ -16,7 +19,7 @@ import { legacyFlowTenant } from "@/lib/flowTenantScope";
  * WHOSE ROWS COUNT is not this module's rule to invent. `Dashboard.tenantId` is
  * nullable — rows predate tenancy and nothing stamped them while the guard was
  * dormant — so the founding tenant owns the untagged ones and a second workspace
- * sees only its own. That is `legacyFlowTenant`, which has been on main since
+ * sees only its own. That is `flowTenantWhere`, which has been on main since
  * #452 and is what BotFlow, Journey and statistics.ts already apply. This file
  * carried its own copy of it, which is one more place for the rule to drift: get
  * the legacy clause wrong here and every dashboard an existing install has
@@ -35,5 +38,5 @@ export function sharedInTenant(tenantId: string): {
   OR?: Array<{ tenantId: string | null }>;
   tenantId?: string;
 } {
-  return { sharedAt: { not: null }, ...legacyFlowTenant(tenantId) };
+  return { sharedAt: { not: null }, ...flowTenantWhere(tenantId) };
 }

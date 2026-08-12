@@ -182,7 +182,10 @@ test("the assignee must be a member of the acting tenant's staff", () => {
   // tenant exists, somebody else's.
   const code = src("src/app/actions/conversations.ts");
   const assign = code.slice(code.indexOf("export async function assignConversation"));
-  assert.match(assign, /listTenantStaff\(\)/);
+  // The ACTING list. Assignment here is a signed-in person picking a colleague,
+  // and the background list skips its membership join while enforcement is
+  // dormant — so this check would pass on every user on the platform.
+  assert.match(assign, /listActingTenantStaff\(\)/);
   assert.match(assign, /not a member of your team/i, "and be refused with a reason, not silently");
 });
 
@@ -313,10 +316,14 @@ test("a collision stops autosaving rather than retrying", () => {
   assert.match(queue, /if \(result\.collision\) setBlocked\(result\.collision\)/);
 });
 
-test("draft persistence is opt-in, so /messages keeps working unchanged", () => {
-  // The same reply box renders in the Messages PWA, which resolves no
-  // conversation. Without the guard it would autosave against `undefined`.
+test("draft persistence needs a conversation AND a viewer, not just a conversation", () => {
+  // The same reply box renders in the Messages PWA. It used to resolve no
+  // conversation at all, so `Boolean(conversationId)` was enough; now it resolves
+  // one (a DM reply cannot be sent without it) but still passes no viewerId. On
+  // the old condition that box would autosave a draft it can neither restore nor
+  // attribute — saved under a name it does not know, never shown back to the
+  // person who wrote it.
   const code = src("src/components/InboxReply.tsx");
-  assert.match(code, /const drafting = Boolean\(conversationId\)/);
+  assert.match(code, /const drafting = Boolean\(conversationId && viewerId\)/);
   assert.match(code, /onChange=\{drafting \? queueDraftSave : undefined\}/);
 });

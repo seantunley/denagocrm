@@ -19,7 +19,7 @@ test("bot sessions are database-unique by tenant, channel and participant", () =
 
 test("shared channel transitions commit outbox rows and BotSession in one tenant transaction", () => {
   const code = src("src/lib/flowSession.ts");
-  assert.match(code, /withTenantWrite\(async \(tx, tenantId\) => \{/);
+  assert.match(code, /withBotConversationWrite\(async \(tx, tenantId\) => \{/);
   assert.match(code, /await persistMessages\(result\.messages, tx, tenantId(, snapshot\.versionId)?\)/);
   assert.match(code, /await upsertBotSessionTx\(tx, tenantId/);
   assert.match(code, /await deleteBotSessionTx\(tx, tenantId, channel, key\)/);
@@ -27,7 +27,7 @@ test("shared channel transitions commit outbox rows and BotSession in one tenant
 
 test("WhatsApp commits its durable batch and session position atomically before delivery", () => {
   const code = src("src/lib/flowRun.ts");
-  const tx = code.indexOf("await withTenantWrite(async (tx, tenantId)");
+  const tx = code.indexOf("await withBotConversationWrite(async (tx, tenantId)");
   const enqueue = code.indexOf("await enqueueBotMessagesTx(tx, tenantId", tx);
   const session = code.indexOf("await upsertBotSessionTx(tx, tenantId", enqueue);
   const flush = code.indexOf('await flushBotOutboxConversation("whatsapp", digits)', session);
@@ -52,14 +52,23 @@ test("outbox preserves order behind retry and terminal dead-letter barriers", ()
 
   const worker = src("src/lib/botOutbox.ts");
   assert.match(worker, /orderBy: \[\{ createdAt: "asc" \}, \{ sequence: "asc" \}, \{ id: "asc" \}\]/);
-  assert.match(worker, /if \(outcome !== "sent"\) break/);
+  // A failure stops the drain so nothing overtakes it. A CANCELLED row does not:
+  // it was withdrawn on purpose, and the person's own reply may be queued behind
+  // it — stopping there would silence the takeover that caused the cancellation.
+  assert.match(worker, /if \(outcome !== "sent" && outcome !== "cancelled"\) break/);
   // The barrier is applied AT the failure — the whole existing backlog dies with
   // the message it was queued behind, so nothing overtakes it.
   assert.match(worker, /Blocked by earlier failed message/);
+  // #425 made the barrier atomic and renamed it; the property is unchanged.
+  assert.match(worker, /killMessageAndBacklog\(row, lastError, failureCode\)/);
   // It is not applied for ever. See botTenantScoping.test.ts for why a dead row
   // must stop being a barrier once the backlog has been killed: leaving it as one
   // silenced the bot for that customer permanently, with no reaper.
-  assert.match(worker, /status: \{ notIn: \["sent", "dead"\] \}/);
+  // `cancelled` joins them: automation output withdrawn when a person took the
+  // conversation over is equally finished, and leaving it in the queue would make
+  // it an unclaimable head — the same permanent silence, by another route.
+  assert.match(worker, /FINISHED_STATUSES = \["sent", "dead", "cancelled"\]/);
+  assert.match(worker, /status: \{ notIn: FINISHED_STATUSES \}/);
 });
 
 test("outbox lease completion is fenced by the claim generation", () => {
@@ -93,5 +102,10 @@ test("bot outbox recovery runs every five minutes", () => {
   assert.ok(vercel.crons.some((cron) => cron.path === "/api/cron/bot-outbox" && cron.schedule === "*/5 * * * *"));
   const route = src("src/app/api/cron/bot-outbox/route.ts");
   assert.match(route, /runCronPerTenant/);
-  assert.match(route, /flushBotOutbox\(50, budget\)/);
+  // The slice's tenant is PASSED THROUGH, not discarded. Dropping it is what made
+  // the dormant sweep drain the founding tenant's queue and nobody else's — and now
+  // that the runtime writes a webhook's replies under the workspace that owns its
+  // provider endpoint, that would strand every other workspace's queue for ever.
+  assert.match(route, /runCronPerTenant\(async \(tenantId, budget\)/, "the slice tenant must not be discarded");
+  assert.match(route, /flushBotOutbox\(50, budget, tenantId\)/);
 });

@@ -41,7 +41,16 @@ const CHECK_ONLY = process.argv.includes("--check");
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const migrationsDir = join(root, "prisma", "migrations");
 const schemaPath = join(root, "prisma");
-const schemaFile = join(schemaPath, "schema.prisma");
+
+/**
+ * How many .prisma files the schema is actually split across.
+ *
+ * Exported and asserted by a test rather than left in prose: the comment on
+ * defaultRunDiff below said "seven" long after it was thirteen, and a stale
+ * number in the explanation of a safety gate is how the gate stops being
+ * understood. If this fails, update BOTH the number and the sentence.
+ */
+export const SCHEMA_FILE_COUNT = 16;
 
 // Arbitrary 32-bit constant. A session advisory lock on this key serialises
 // concurrent runs (e.g. two overlapping Vercel deploys) so they cannot apply
@@ -54,11 +63,155 @@ const MIGRATION_LOCK_KEY = 913472651;
 // turn mangle the `&` in the database URL argument.)
 const NPX = "npx";
 
-/** Migration directories with a migration.sql, ordered by their numeric prefix. */
-function orderedMigrations() {
+/**
+ * Order two migration directory names: NUMERIC PREFIX FIRST, full name to break ties.
+ *
+ * The prefix has to stay the primary key. Legacy migrations are not zero-padded
+ * (`7_push_subscriptions`, `80_tenant_integration_credentials`), so a plain
+ * lexicographic sort puts 80 before 7 — the mis-ordering described at the top of
+ * this file, and the reason this runner exists at all.
+ *
+ * THE TIE-BREAK IS THE FIX, and it closes a hazard rather than a visible bug.
+ * Prefixes are not unique: two migrations authored in the same minute on two
+ * branches both land on `20260810110000`, and this repository carries two such
+ * pairs. Subtracting equal prefixes returns 0, and `Array.prototype.sort` is
+ * stable, so the order WITHIN a colliding pair fell through to whatever
+ * `readdirSync` returned. On Linux — CI, Vercel, disaster recovery — that is
+ * filesystem order: not alphabetical, and not guaranteed to be the same on the
+ * next machine or the next checkout.
+ *
+ * Production never saw it, and only by timing: each pair was applied hours apart
+ * in separate deploys, so only one of each was ever pending in a single run. A
+ * database built FROM SCRATCH has every migration pending at once — disaster
+ * recovery, a fresh tenant database, CI, a preview branch. Neither pair on disk
+ * today is order-dependent (they touch disjoint tables), so nothing is broken;
+ * what was broken is that the runner had no opinion, and the next colliding pair
+ * gets no say in whether it is disjoint. Nondeterminism during disaster recovery
+ * is the least affordable kind.
+ *
+ * Ties are compared with `<` rather than `localeCompare`: code-unit order is the
+ * same on every machine, while locale collation depends on the ICU data the
+ * running Node was built with. Replacing filesystem nondeterminism with ICU
+ * nondeterminism would not be a fix.
+ *
+ * Pure + exported so the exact order is asserted by tests.
+ */
+export function compareMigrationNames(a, b) {
+  const byPrefix = Number.parseInt(a, 10) - Number.parseInt(b, 10);
+  if (byPrefix !== 0) return byPrefix;
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * Migration directories with a migration.sql, in a TOTAL, deterministic order.
+ * See {@link compareMigrationNames}. Exported so a test can assert on exactly the
+ * sequence the runner will apply, rather than on a re-derived copy of it.
+ */
+export function orderedMigrations() {
   return readdirSync(migrationsDir)
     .filter((name) => /^\d+_/.test(name) && existsSync(join(migrationsDir, name, "migration.sql")))
-    .sort((a, b) => Number.parseInt(a, 10) - Number.parseInt(b, 10));
+    .sort(compareMigrationNames);
+}
+
+/**
+ * Migration names grouped by the key {@link compareMigrationNames} sorts on,
+ * keeping only the keys that more than one migration claims.
+ *
+ * Keyed on the PARSED prefix, not the literal digits, because the parsed value is
+ * what the comparator ties on: `007_x` and `7_y` are different strings and the
+ * same number, so they collide while looking nothing alike.
+ *
+ * Pure + exported.
+ */
+export function prefixCollisions(names) {
+  const byPrefix = new Map();
+  for (const name of names) {
+    const prefix = String(Number.parseInt(name, 10));
+    const group = byPrefix.get(prefix);
+    if (group) group.push(name);
+    else byPrefix.set(prefix, [name]);
+  }
+  return [...byPrefix]
+    .filter(([, group]) => group.length > 1)
+    .map(([prefix, group]) => ({ prefix, names: [...group].sort() }))
+    .sort((a, b) => (a.prefix < b.prefix ? -1 : a.prefix > b.prefix ? 1 : 0));
+}
+
+/**
+ * THE COLLIDING PREFIXES THIS REPOSITORY IS STUCK WITH.
+ *
+ * A RATCHET, not an allowlist. These two pairs are already recorded in
+ * production's `_prisma_migrations`, which keys on the directory name verbatim
+ * (see `appliedNames`), so renaming one would make it look pending and re-run its
+ * SQL on every existing database while leaving a permanent phantom record behind
+ * for the old name. They cannot be fixed by renaming. Every FUTURE pair can be,
+ * because it has not been recorded anywhere yet — so a new pair is a mistake to
+ * reject at review time, not a fact to live with.
+ *
+ * {@link compareMigrationNames} already makes the order deterministic, so an entry
+ * here is not a live bug. It is a statement that two migrations were authored for
+ * the same minute, that their relative order is therefore decided by a tie-break
+ * nobody intended, and that somebody checked they do not depend on each other.
+ * The `why` records that check.
+ *
+ * The MEMBER NAMES are recorded, not just the prefix. Recording the prefix alone
+ * would let a pair quietly become a triple under an entry that already says
+ * "known".
+ */
+export const KNOWN_PREFIX_COLLISIONS = [
+  {
+    prefix: "20260810110000",
+    names: ["20260810110000_bot_session_ownership", "20260810110000_staff_reply_delivery_state"],
+    why:
+      "disjoint: bot_session_ownership only touches BotSession, staff_reply_delivery_state only " +
+      "touches BotFlowOutbox (and an FK to Communication, created in 0_init). Both are additive " +
+      "and reentrant, and neither reads or writes an object the other creates, so either order " +
+      "produces the same schema. Applied hours apart in production; already recorded there.",
+  },
+  {
+    prefix: "20260810120000",
+    names: [
+      "20260810120000_bot_flow_version_retention_fk",
+      "20260810120000_declared_indexes_that_were_never_created",
+    ],
+    why:
+      "disjoint: bot_flow_version_retention_fk only reconciles BotFlowVersion_flowId_fkey, " +
+      "declared_indexes_that_were_never_created only adds indexes to Team and UserRole (created " +
+      "in 52_pipelines_forecasting_rbac_audit). No shared table, no shared constraint. Already " +
+      "recorded in production.",
+  },
+];
+
+/**
+ * Prefix collisions that are NOT in the ratchet — i.e. newly introduced ones.
+ *
+ * A group matches only when its membership is exactly what was recorded, so
+ * adding a third migration under an already-known prefix reports rather than
+ * inheriting the existing entry's blessing.
+ *
+ * Pure + exported: this decides what a reviewer will never be shown, so it is
+ * tested.
+ */
+export function unratchetedPrefixCollisions(names, known = KNOWN_PREFIX_COLLISIONS) {
+  const recorded = new Map(known.map((entry) => [entry.prefix, entry.names.join(",")]));
+  return prefixCollisions(names)
+    .filter((group) => recorded.get(group.prefix) !== group.names.join(","))
+    .map((group) => `${group.prefix}: ${group.names.join(", ")}`);
+}
+
+/**
+ * Ratchet entries that have stopped describing a real collision — because the
+ * migrations were renamed or withdrawn, or because the group's membership
+ * changed.
+ *
+ * The same reason `staleAcknowledgements` exists: a baseline nobody prunes stops
+ * being read, and a ratchet that can only ever grow is not a ratchet. Reporting
+ * these is also what stops the list being padded with entries that never
+ * described anything.
+ */
+export function stalePrefixCollisions(names, known = KNOWN_PREFIX_COLLISIONS) {
+  const live = new Map(prefixCollisions(names).map((group) => [group.prefix, group.names.join(",")]));
+  return known.filter((entry) => live.get(entry.prefix) !== entry.names.join(",")).map((entry) => entry.prefix);
 }
 
 /**
@@ -158,6 +311,137 @@ export function classifyDiffScript(script) {
 }
 
 /**
+ * DIFFERENCES THAT ARE PERMANENT, EXPLAINED, AND DELIBERATELY NOT REPORTED.
+ *
+ * A warning list that cannot reach zero stops being read. That is not a
+ * hypothetical either: `Team.@@index([managerId])` and `UserRole.@@index([roleId])`
+ * were genuinely missing from every database, and they sat in this list unnoticed
+ * next to entries nobody could ever clear.
+ *
+ * Every entry below is a difference `prisma migrate diff` reports and NOBODY
+ * should act on, for one of three reasons:
+ *
+ *   - PARTIAL INDEX. Prisma cannot express `WHERE` on a unique index, so it
+ *     reports the index as absent for ever. The database has a STRICTER
+ *     constraint than the schema asks for, not a weaker one.
+ *   - CLIENT-SIDE `@updatedAt`. Prisma stamps the column from the client and so
+ *     models no database default. The column HAS one, which is a safety net for
+ *     the raw-SQL inserts this repository does use (migrations, seeds,
+ *     `$executeRawUnsafe`). Dropping it to match the schema would remove that net
+ *     to satisfy a diff, not a requirement.
+ *   - DEFAULT ON A COLUMN THE APPLICATION ALWAYS SUPPLIES. Same shape: the
+ *     database is more forgiving than the model, and only raw SQL can tell.
+ *
+ * Acknowledging is NOT suppressing. An entry is an exact statement, so any drift
+ * that is not literally this — a different table, a different column, a different
+ * default — still reports. And `staleAcknowledgements` reports entries that have
+ * STOPPED appearing, so a list that drifts out of date says so instead of quietly
+ * hiding the next real finding.
+ */
+export const ACKNOWLEDGED_DRIFT = [
+  {
+    sql: 'CREATE UNIQUE INDEX "StockUnit_stockNumber_key" ON "StockUnit"("stockNumber");',
+    why: 'partial index: the database has it as ... WHERE "stockNumber" IS NOT NULL (migration 50/52, and 20260728180000 documents it)',
+  },
+  {
+    sql: 'CREATE UNIQUE INDEX "DemoVehicle_stockUnitId_key" ON "DemoVehicle"("stockUnitId");',
+    why: 'partial index: the database has it as ... WHERE "deletedAt" IS NULL (migration 20260724130000)',
+  },
+  {
+    sql: 'ALTER TABLE "AppSetting" ALTER COLUMN "id" SET DEFAULT gen_random_uuid()::text;',
+    why: "id is always supplied by the application; the diff wants a default the model does not declare",
+  },
+  {
+    sql: "ALTER TABLE \"LegalArtifact\" ALTER COLUMN \"retainUntil\" SET DEFAULT CURRENT_TIMESTAMP + INTERVAL '7 years';",
+    why: "retention is computed by the application at write time; Prisma cannot model the interval expression",
+  },
+  ...[
+    ["CampaignConversion", "metadata"],
+    ["ConversationNote", "mentions"],
+    ["MarketingTouch", "metadata"],
+  ].map(([table, column]) => ({
+    sql: `ALTER TABLE "${table}" ALTER COLUMN "${column}" DROP DEFAULT;`,
+    why: "JSON column with a database default the model does not declare; raw inserts rely on it",
+  })),
+  ...[
+    "BotFlowOutbox",
+    "BotInboundEvent",
+    "DemoVehicle",
+    "IntegrationConnection",
+    "Role",
+    "SalesPipeline",
+    "SurveyFollowUp",
+    "Team",
+    "TenantIntegrationCredential",
+    "TestDriveBooking",
+  ].map((table) => ({
+    sql: `ALTER TABLE "${table}" ALTER COLUMN "updatedAt" DROP DEFAULT;`,
+    why: "@updatedAt is stamped client-side, so Prisma models no default; the column default is the raw-SQL safety net",
+  })),
+  // Two multi-column statements, which the diff emits across two lines each.
+  {
+    sql: 'ALTER TABLE "SurveyDistribution" ALTER COLUMN "audienceSnapshot" DROP DEFAULT, ALTER COLUMN "updatedAt" DROP DEFAULT;',
+    why: "as above: a JSON default plus a client-stamped @updatedAt",
+  },
+  {
+    sql: 'ALTER TABLE "UserRole" ALTER COLUMN "tenantId" DROP DEFAULT, ALTER COLUMN "id" DROP DEFAULT;',
+    why: "both are always supplied by the application; the defaults exist for raw-SQL inserts",
+  },
+];
+
+/**
+ * Whitespace-insensitive form, so line wrapping in the diff cannot cause a miss.
+ *
+ * `prisma migrate diff` labels each statement with a `-- AlterTable` /
+ * `-- CreateIndex` header, and the statement splitter keeps it attached. Leaving
+ * those in would make every acknowledgement fail to match — silently, since a
+ * failed match reports the drift rather than hiding it, which is the safe
+ * direction but would have kept the list unclearable for a second reason.
+ */
+function normaliseStatement(sql) {
+  return sql
+    .replace(/^\s*(--[^\n]*\n)+/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/;$/, "");
+}
+
+/** Is this statement a schema DIFFERENCE we would otherwise report? */
+function isReportableDrift(statement) {
+  return /\b(CREATE (UNIQUE )?INDEX|ALTER COLUMN)\b/i.test(statement);
+}
+
+/**
+ * The drift a human should actually look at: reportable differences minus the
+ * acknowledged ones. Statement-based rather than line-based, so a two-line
+ * `ALTER TABLE … ALTER COLUMN …, ALTER COLUMN …;` is matched as the one statement
+ * it is — matching its continuation line alone would acknowledge that fragment
+ * wherever it appeared, including under a table nobody has vetted.
+ *
+ * Pure + exported: this decides what nobody will be shown, so it is tested.
+ */
+export function unacknowledgedDrift(script, acknowledged = ACKNOWLEDGED_DRIFT) {
+  const known = new Set(acknowledged.map((entry) => normaliseStatement(entry.sql)));
+  return splitSqlStatements(script || "")
+    .map(normaliseStatement)
+    .filter((statement) => isReportableDrift(statement) && !known.has(statement));
+}
+
+/**
+ * Acknowledgements that no longer describe anything.
+ *
+ * An allowlist nobody prunes is how the next real finding gets hidden: a stale
+ * entry is a statement this file claims is expected and the database no longer
+ * produces, so the reason recorded beside it has stopped being true.
+ */
+export function staleAcknowledgements(script, acknowledged = ACKNOWLEDGED_DRIFT) {
+  const present = new Set(splitSqlStatements(script || "").map(normaliseStatement));
+  return acknowledged
+    .map((entry) => normaliseStatement(entry.sql))
+    .filter((statement) => !present.has(statement));
+}
+
+/**
  * Pin every child `prisma` invocation to the SAME direct database this runner
  * checks and locks, so apply + record + verify can never drift onto different
  * databases (the root cause of the recorded-but-not-applied outage). Pure +
@@ -208,11 +492,36 @@ export function migrationRoleProblem({ role, canCreate, unpooledConfigured }) {
   );
 }
 
-/** Default schema-diff probe: `prisma migrate diff` (DB → deployed schema). */
+/**
+ * Default schema-diff probe: `prisma migrate diff` (DB → deployed schema).
+ *
+ * Diffs against the schema DIRECTORY, not `schema.prisma` alone.
+ *
+ * The schema is split across 16 files (SCHEMA_FILE_COUNT below, which a test holds
+ * to the real number so this sentence cannot go stale), and this probe read one
+ * of them. So the
+ * integrity check — the gate that exists to stop a recorded-but-not-applied
+ * migration shipping code against a missing column — has never looked at any
+ * model defined outside `schema.prisma`. Every bot, journey, campaign,
+ * governance, dashboard and integration table was outside the only check that
+ * would have caught a missing one.
+ *
+ * It also made the schema unable to express a relation that crosses files: a
+ * relation field in `schema.prisma` pointing at a model defined elsewhere is
+ * unresolvable when only that file is parsed, and the probe fails to parse the
+ * very model it is checking. A parse failure here BLOCKS the deploy (correctly —
+ * a gate that cannot answer must not wave things through), so the split was
+ * quietly costing us referential integrity we would otherwise have declared.
+ *
+ * Directory form measured against a fully-migrated database before this changed:
+ * zero blocking differences, so no deploy that passes today starts failing. It
+ * reports eighteen more NON-blocking ones, which are warnings and are the point —
+ * see the pull request for the three that turned out to be real missing indexes.
+ */
 function defaultRunDiff(childEnv) {
   return capture(
     NPX,
-    ["prisma", "migrate", "diff", "--from-url", childEnv.DATABASE_URL, "--to-schema-datamodel", schemaFile, "--script"],
+    ["prisma", "migrate", "diff", "--from-url", childEnv.DATABASE_URL, "--to-schema-datamodel", schemaPath, "--script"],
     childEnv,
   );
 }
@@ -509,7 +818,7 @@ export function assertSchemaObjectsPresent(childEnv, runDiff = defaultRunDiff) {
     );
   }
 
-  const { missing, otherDrift } = classifyDiffScript(script);
+  const { missing } = classifyDiffScript(script);
 
   if (missing.length) {
     console.error(
@@ -522,12 +831,25 @@ export function assertSchemaObjectsPresent(childEnv, runDiff = defaultRunDiff) {
     throw new Error("Schema integrity check failed: database is missing required tables/columns.");
   }
 
-  if (otherDrift.length) {
+  const drift = unacknowledgedDrift(script);
+  if (drift.length) {
     console.warn(
-      `integrity check: ${otherDrift.length} non-blocking schema difference(s) (indexes / column attributes) — review when convenient:`,
+      `::warning::integrity check: ${drift.length} unexplained schema difference(s) (indexes / column attributes). ` +
+        "Each is either a real gap to migrate or a permanent Prisma artefact to add to ACKNOWLEDGED_DRIFT with a reason:",
     );
-    for (const l of otherDrift) console.warn("    " + l.trim());
+    for (const statement of drift) console.warn("    " + statement + ";");
   }
+
+  // An allowlist nobody prunes is how the next real finding gets hidden.
+  const stale = staleAcknowledgements(script);
+  if (stale.length) {
+    console.warn(
+      `::warning::integrity check: ${stale.length} entr(y/ies) in ACKNOWLEDGED_DRIFT no longer describe anything ` +
+        "and should be deleted:",
+    );
+    for (const statement of stale) console.warn("    " + statement + ";");
+  }
+
   console.log("✓ Integrity check passed — all tables and columns the deployed schema needs are present.");
 }
 

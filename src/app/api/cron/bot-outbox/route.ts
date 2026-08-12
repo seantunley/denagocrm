@@ -18,16 +18,23 @@ export async function GET(req: NextRequest) {
   });
   if (!budget.ok) return NextResponse.json({ ok: false, skipped: budget.reason }, { status: 503 });
 
-  const runs = await runCronPerTenant(async (_tenantId, budget) => {
+  // The slice's tenant is PASSED THROUGH now instead of being discarded. Under
+  // enforcement it is the workspace this slice fans out for; on the dormant single
+  // sweep it is null, which tells the drain to cover every workspace and bind each
+  // conversation's own tenant. Dropping it was what made the dormant drain the
+  // founding tenant's queue and nobody else's.
+  const runs = await runCronPerTenant(async (tenantId, budget) => {
     if (budget.shouldStop(4_000)) return { skipped: "deadline" as const };
-    return flushBotOutbox(50, budget);
+    return flushBotOutbox(50, budget, tenantId);
   },
     {
       maxRuntimeMs: budget.remainingMs,
       minStartBudgetMs: 4_000,
       concurrency: 2,
       onError: async (tenantId, error) => {
-        await logError("bot-outbox-cron", error, `tenant ${tenantId}`).catch(() => {});
+        // The tenant was already being written into the free-text context; put it in
+        // the column too, where per-tenant error health can actually read it.
+        await logError("bot-outbox-cron", error, `tenant ${tenantId}`, { tenantId }).catch(() => {});
       },
     },
   );

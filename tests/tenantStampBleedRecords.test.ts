@@ -206,8 +206,8 @@ test("a conversation opened by an inbound message is owned by the customer it is
   // actually opened. Enforcement is dormant, so `writeTenantId()` is null and the
   // guard stamps nothing — and this write is on `basePrisma` anyway, which
   // bypasses the guard entirely.
-  const id = await conversations.resolveConversationId({ contactId: "contact-1", type: "whatsapp" });
-  assert.equal(id, "conversation-1");
+  const resolved = await conversations.resolveConversationId({ contactId: "contact-1", type: "whatsapp" });
+  assert.equal(resolved?.id, "conversation-1");
 
   const conversation = created.find((row) => row.model === "conversation");
   assert.ok(conversation, "the conversation must have been created");
@@ -231,7 +231,18 @@ test("the message's own owner wins over everything, so the composite FK holds", 
   assert.equal(conversation?.data.tenantId, A, "the conversation must match the message that opened it");
 });
 
-test("a conversation for a legacy unowned customer falls back to the tick's scope, never to null", async () => {
+test("a conversation for a legacy unowned customer stays unowned, because the FK says so", async () => {
+  // This test previously asserted the opposite — that an unowned subject falls
+  // back to the ambient scope "never to null". That was wrong, and the integration
+  // suite proved it: `Conversation(tenantId, contactId) → Contact(tenantId, id)` is
+  // a COMPOSITE foreign key, so a conversation claiming an owner its contact does
+  // not have cannot be inserted at all. Postgres refuses with P2003 and the inbound
+  // message is lost.
+  //
+  // Production is full of contacts with a NULL tenantId, so "never to null" was not
+  // a safe default; it was a write that fails. The subject decides, null included,
+  // and a later backfill claims the pair together — the only way they stay
+  // consistent with each other.
   reset();
   rows.lead = [{ id: "lead-9", tenantId: null }];
 
@@ -240,16 +251,26 @@ test("a conversation for a legacy unowned customer falls back to the tick's scop
   });
 
   const conversation = created.find((row) => row.model === "conversation");
-  assert.equal(conversation?.data.tenantId, B);
+  assert.equal(
+    conversation?.data.tenantId,
+    null,
+    "an unowned subject must not have an owner invented for it — the composite FK rejects the row",
+  );
 });
+
+// The ladder's rung 3 (`inheritedTenantId(null)` when there is NO subject) is
+// deliberately not pinned here: `resolveConversationId` creates nothing when it
+// has neither a contact nor a lead, so there is no row to assert on. I tried to
+// pin it and the test failed for that reason rather than a tenancy one — better
+// to say so than to assert a behaviour the function does not have.
 
 test("an existing open thread is reused rather than re-created", async () => {
   reset();
   rows.contact = [{ id: "contact-1", tenantId: B }];
   rows.conversation = [{ id: "existing", channel: "whatsapp", contactId: "contact-1" }];
 
-  const id = await conversations.resolveConversationId({ contactId: "contact-1", type: "whatsapp" });
-  assert.equal(id, "existing");
+  const resolved = await conversations.resolveConversationId({ contactId: "contact-1", type: "whatsapp" });
+  assert.equal(resolved?.id, "existing");
   assert.equal(created.length, 0, "the tenant lookup must not have turned a reuse into a create");
 });
 
@@ -459,10 +480,58 @@ test("there is exactly one implementation of the acting-tenant rule", () => {
   const flowScope = shipped("src/lib/flowScope.ts");
   assert.match(flowScope, /return actingTenantId\(\)/);
   assert.ok(
-    !/decideBuilderTenant\(/.test(flowScope),
+    !/decide(?:Builder|Acting)Tenant\(/.test(flowScope),
     "flowScope must not re-derive the rule it now shares",
   );
+
+  // WHAT THE PURE RULE IS CALLED IS NOT THE INVARIANT, AND MUST NOT BE PINNED
+  // HERE. Four branches in the 2026-08-10 tenant wave each shipped this module:
+  // this one delegates to `decideBuilderTenant` in ./flowTenantScope, which has
+  // been on main since the flow-builder scoping work (#452) and is what the
+  // reconciliation PR settled on as canonical; #457/#459/#430 each carried a
+  // byte-identical `decideActingTenant` in ./actingTenantRule. Both bodies are
+  // `enforced ?? session ?? founding` and were executed against the same 36-case
+  // cross product, a 24-case enforcement x session matrix and 9 adversarial
+  // inputs with zero divergence. So an assertion on the spelling would not
+  // measure tenant safety at all — it would only decide which sibling branch
+  // turns this suite red by landing first, in whichever order the add/add
+  // conflict on this file happens to be resolved.
+  //
+  // What must hold under EITHER resolution is the shape: ONE delegation, to a rule
+  // this module IMPORTS rather than re-derives, fed by BOTH rungs. A delegation
+  // that dropped the session rung — the original defect — still fails here.
   const acting = shipped("src/lib/actingTenant.ts");
-  assert.match(acting, /decideBuilderTenant\(\{/);
-  assert.match(acting, /sessionTenantId: await getActiveTenantId\(\)/);
+  assert.equal(
+    (acting.match(/decide(?:Builder|Acting)Tenant\(\{/g) ?? []).length,
+    1,
+    "actingTenantId must resolve through exactly one pure rule, called exactly once",
+  );
+  assert.match(
+    acting,
+    /import \{ decide(?:Builder|Acting)Tenant \} from "\.\/(?:flowTenantScope|actingTenantRule)";/,
+    "the rule must be imported — a copy defined here is the duplication this test exists to stop",
+  );
+  // BOTH RUNGS MUST STILL FEED THE RULE. Asserted on the values rather than on
+  // one inline expression: they are now read into named consts so the resolver
+  // can refuse when BOTH are empty, before the pure rule's `?? DEFAULT_TENANT_ID`
+  // last rung can be taken. The original defect — a delegation that dropped the
+  // session rung — still fails here, because the session read and its use as
+  // `sessionTenantId` are both required.
+  assert.match(acting, /writeTenantId\(\)/, "the enforced rung must still be read");
+  // `getActiveTenantIdIfRequest` is `getActiveTenantId` with one behaviour
+  // added: "there is no request at all" answers null instead of throwing,
+  // which is a fact about the caller and not about the tenant. Either name
+  // satisfies this rule; dropping the session rung entirely still fails it.
+  assert.match(acting, /await getActiveTenantId(IfRequest)?\(\)/, "the session rung must still be read");
+  assert.match(
+    acting,
+    /decide(?:Builder|Acting)Tenant\(\{ enforcedTenantId, sessionTenantId \}\)/,
+    "both rungs must be handed to the pure rule",
+  );
+  // And the founding-tenant fallback must stay unreachable from here.
+  assert.match(
+    acting,
+    /if \(!enforcedTenantId && !sessionTenantId\) \{[\s\S]*throw new TenantScopeError/,
+    "an unresolvable session must refuse rather than fall through to the founding tenant",
+  );
 });

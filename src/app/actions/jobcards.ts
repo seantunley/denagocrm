@@ -8,6 +8,7 @@ import { addMonths } from "date-fns";
 import { prisma, basePrisma } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
 import { nextJobCardNumber } from "@/lib/numbering";
+import { actingTenantId } from "@/lib/actingTenant";
 import { sendReviewRequest } from "@/lib/reviewRequests";
 import { triggerSurvey } from "@/lib/surveys";
 import { CLOSED_REQUEST_STATUSES } from "@/lib/signing/status";
@@ -17,6 +18,7 @@ import { parseRands } from "@/lib/format";
 import { Prisma } from "@prisma/client";
 import { STAGE_VALUES, PRIORITY_VALUES, stageMeta } from "@/lib/workshop-constants";
 import { isModuleEnabled } from "@/lib/modules/enabled";
+import { resolveAssignableUser } from "@/lib/tenantActor";
 import {
   requireJobCardAccess,
   requireVehicleAccess,
@@ -60,7 +62,9 @@ export async function uploadJobCardPhotos(jobCardId: string, formData: FormData)
     let saved = 0;
     for (const file of accepted.slice(0, MAX_PHOTOS)) {
       const buf = Buffer.from(await file.arrayBuffer());
-      const storedName = await saveFile(buf, file.name || "checkin.jpg", file.type);
+      // A condition photo is evidence about THIS job card, so the job card owns it —
+      // not the technician's session, which can be a different workspace's admin.
+      const storedName = await saveFile(buf, file.name || "checkin.jpg", file.type, jobCard.tenantId);
       await prisma.document.create({
         data: {
           fileName: `Check-in photo — job card #${jobCard.number} — ${file.name}`,
@@ -118,7 +122,10 @@ export async function saveCheckinAnnotation(formData: FormData) {
   }
 
   const buf = Buffer.from(await image.arrayBuffer());
-  const storedName = await saveFile(buf, `annotated-${doc.id}.${ext}`, image.type);
+  // The flattened markup is a derivative of the photo it annotates, so it belongs
+  // exactly where that Document already does — a mismatch would leave the original
+  // and its markup in two different workspaces' prefixes.
+  const storedName = await saveFile(buf, `annotated-${doc.id}.${ext}`, image.type, doc.tenantId);
   const previous = doc.annotatedStoredName;
 
   await prisma.document.update({
@@ -157,11 +164,15 @@ export async function createJobCard(formData: FormData) {
 
   // Allocate the number and insert in ONE transaction under the advisory lock so
   // two concurrent job-card creates can't collide on the unique number (#11).
+  // basePrisma is the RLS bypass: authorising the vehicle above did not scope
+  // this transaction, so both rows carry their owner explicitly.
+  const tenantId = await actingTenantId();
   const jobCard = await basePrisma.$transaction(async (tx) => {
     const number = await nextJobCardNumber(tx);
     const jc = await tx.jobCard.create({
       data: {
         number,
+        tenantId,
         vehicleId,
         contactId: vehicle.contactId,
         description,
@@ -171,7 +182,7 @@ export async function createJobCard(formData: FormData) {
     });
     if (jc.kmIn != null) {
       await tx.mileageLog.create({
-        data: { vehicleId, km: jc.kmIn, note: `Job card #${jc.number} check-in` },
+        data: { tenantId, vehicleId, km: jc.kmIn, note: `Job card #${jc.number} check-in` },
       });
     }
     return jc;
@@ -198,17 +209,32 @@ async function claimPartStock(
   tx: Prisma.TransactionClient,
   partId: string,
   qty: number,
+  tenantId: string,
 ): Promise<{ ok: true } | { ok: false; available: number; name: string }> {
   // Lock (and fetch) only a LIVE part — a trashed part must not be consumed via a
   // known id. basePrisma transactions aren't soft-delete filtered, so the
   // deletedAt IS NULL predicate is explicit here.
-  await tx.$executeRaw`SELECT id FROM "Part" WHERE id = ${partId} AND "deletedAt" IS NULL FOR UPDATE`;
-  const part = await tx.part.findFirst({ where: { id: partId, deletedAt: null }, select: { name: true, stockQty: true } });
+  //
+  // And only a part THIS WORKSPACE OWNS. This runs on the bypass client, so
+  // authorising the job card said nothing about the part: a forged partId
+  // locked, counted and DECREMENTED another tenant's stock. The tenant predicate
+  // has to be on the lock, the read, the reservation aggregate and the
+  // decrement — a filtered read in front of an unfiltered update is not a
+  // boundary, it is a race.
+  await tx.$executeRaw`SELECT id FROM "Part" WHERE id = ${partId} AND "deletedAt" IS NULL AND "tenantId" = ${tenantId} FOR UPDATE`;
+  const part = await tx.part.findFirst({
+    where: { id: partId, deletedAt: null, tenantId },
+    select: { name: true, stockQty: true },
+  });
   if (!part) return { ok: false, available: 0, name: "part" };
-  const agg = await tx.partReservation.aggregate({ where: { partId, status: "active" }, _sum: { qty: true } });
+  const agg = await tx.partReservation.aggregate({ where: { partId, status: "active", tenantId }, _sum: { qty: true } });
   const available = part.stockQty - (agg._sum.qty ?? 0);
   if (qty > available) return { ok: false, available: Math.max(0, available), name: part.name };
-  await tx.part.update({ where: { id: partId }, data: { stockQty: { decrement: qty } } });
+  const claimed = await tx.part.updateMany({
+    where: { id: partId, deletedAt: null, tenantId },
+    data: { stockQty: { decrement: qty } },
+  });
+  if (claimed.count !== 1) return { ok: false, available: 0, name: part.name };
   return { ok: true };
 }
 
@@ -231,12 +257,15 @@ export async function addJobCardItem(jobCardId: string, formData: FormData) {
     if (qty == null) throw new ActionRefusal("Enter a valid quantity.");
 
     // Claim stock (locked, oversell-checked) and create the line in one transaction.
+    const tenantId = await actingTenantId();
     const outcome = await basePrisma.$transaction(async (tx) => {
       if (isPart && partId) {
-        const claim = await claimPartStock(tx, partId, qty);
+        // The part must belong to this workspace — the job card's authorisation
+        // says nothing about a partId that arrived in the same form post.
+        const claim = await claimPartStock(tx, partId, qty, tenantId);
         if (!claim.ok) return claim;
       }
-      await tx.jobCardItem.create({ data: { jobCardId, kind, description, qty, unitPriceCents, partId } });
+      await tx.jobCardItem.create({ data: { tenantId, jobCardId, kind, description, qty, unitPriceCents, partId } });
       return { ok: true as const };
     });
     if (!outcome.ok) throw new ActionRefusal(`Only ${outcome.available} × ${outcome.name} in stock.`);
@@ -254,14 +283,17 @@ export async function deleteJobCardItem(id: string, jobCardId: string, formData:
     // line AND restore its stock in ONE transaction so the two can't diverge (the
     // old code did them separately and swallowed the restore's errors). updateMany
     // won't throw if the part is gone, so a missing part doesn't block the delete.
+    const tenantId = await actingTenantId();
     const item = await basePrisma.$transaction(async (tx) => {
-      const owned = await tx.jobCardItem.findFirst({ where: { id, jobCardId } });
+      const owned = await tx.jobCardItem.findFirst({ where: { id, jobCardId, tenantId } });
       if (!owned) return null;
       await tx.jobCardItem.delete({ where: { id: owned.id } });
       if (owned.partId && owned.kind === "part") {
         const inc = Math.round(owned.qty);
         if (inc > 0) {
-          await tx.part.updateMany({ where: { id: owned.partId }, data: { stockQty: { increment: inc } } });
+          // Restoring stock is a decrement in reverse and needs the same guard:
+          // a bare part id here would credit another tenant's stock.
+          await tx.part.updateMany({ where: { id: owned.partId, tenantId }, data: { stockQty: { increment: inc } } });
         }
       }
       return owned;
@@ -281,8 +313,14 @@ export async function deleteJobCardItem(id: string, jobCardId: string, formData:
 export async function setJobCardTechnician(jobCardId: string, formData: FormData) {
   return asActionResult(async () => {
     await requireJobCardAccess(jobCardId, "jobcards.manage");
-    const technicianId = String(formData.get("technicianId") ?? "").trim() || null;
-    await prisma.jobCard.update({ where: { id: jobCardId }, data: { technicianId } });
+    // Authorising the JOB CARD says the caller may edit this job card. It says
+    // nothing about the person they named. `User` is a global model, so the
+    // posted id used to be stored as-is and a technician from another workspace
+    // could be put on this workshop's work — appearing on the job card, its time
+    // entries and its customer-facing paperwork. Resolved through tenant
+    // membership instead; blank still means unassigned.
+    const technician = await resolveAssignableUser(formData.get("technicianId"), "technician");
+    await prisma.jobCard.update({ where: { id: jobCardId }, data: { technicianId: technician?.id ?? null } });
     revalidatePath(`/jobcards/${jobCardId}`);
   });
 }
@@ -516,7 +554,7 @@ export async function uploadCheckoutPhotos(jobCardId: string, formData: FormData
     let saved = 0;
     for (const file of accepted.slice(0, MAX_PHOTOS)) {
       const buf = Buffer.from(await file.arrayBuffer());
-      const storedName = await saveFile(buf, file.name || "checkout.jpg", file.type);
+      const storedName = await saveFile(buf, file.name || "checkout.jpg", file.type, jobCard.tenantId);
       await prisma.document.create({
         data: {
           fileName: `Check-out photo — job card #${jobCard.number} — ${file.name}`,
@@ -579,7 +617,7 @@ export async function uploadInspectionPhoto(itemId: string, jobCardId: string, f
     // Verify the item belongs to the authorized job card BEFORE saving a file, so a
     // wrong item id can't attach a photo to another job card's inspection (or leave
     // an orphaned blob).
-    const owned = await prisma.jobCardInspectionItem.findFirst({ where: { id: itemId, jobCardId }, select: { id: true } });
+    const owned = await prisma.jobCardInspectionItem.findFirst({ where: { id: itemId, jobCardId }, select: { id: true, tenantId: true } });
     if (!owned) refuse("That item is not on this job card — reload the page.");
     const file = formData.get("file");
     if (!(file instanceof File) || file.size === 0) refuse("Choose a photo to upload.");
@@ -589,7 +627,10 @@ export async function uploadInspectionPhoto(itemId: string, jobCardId: string, f
     if (file.size > 4 * 1024 * 1024) refuse("That photo is larger than 4 MB.");
     if (!file.type.startsWith("image/")) refuse("That file is not an image.");
     const buf = Buffer.from(await file.arrayBuffer());
-    const storedName = await saveFile(buf, file.name || "inspection.jpg", file.type);
+    // The inspection ITEM owns its photo. That row was already fetched to prove it
+    // belongs to the authorized job card, so its owner comes free and is the same
+    // one the composite (tenantId, jobCardId) key holds it to.
+    const storedName = await saveFile(buf, file.name || "inspection.jpg", file.type, owned.tenantId);
     await prisma.jobCardInspectionItem.update({ where: { id: itemId }, data: { photoStoredName: storedName } });
     revalidatePath(`/jobcards/${jobCardId}`);
   });
@@ -665,19 +706,41 @@ export async function reservePart(jobCardId: string, formData: FormData) {
     const partId = String(formData.get("partId") ?? "").trim();
     if (!partId) refuse("Choose a part to reserve.");
     const qty = Math.max(1, parseInt(String(formData.get("qty") ?? "1"), 10) || 1);
+    // The SIBLING of the forged-partId decrement #459 closed in claimPartStock:
+    // same forged id, same form post, different entry point. Reserving does not
+    // move stock, so it left no decrement to notice — it just earmarked another
+    // workshop's parts, and their available quantity fell with nothing on their
+    // side to explain it.
+    //
+    // This one runs on the SCOPED client rather than the bypass one, which is
+    // exactly why it stayed open: the db.ts guard returns its args UNTOUCHED
+    // while enforcement is dormant, so "scoped" scopes nothing in any environment
+    // we run, and raw SQL is never rewritten by the extension at all. So the same
+    // shape claimPartStock uses, explicitly — tenant predicate on the lock, on the
+    // read, on the reservation aggregate, and on the write.
+    //
+    // The write is a `create`, so its predicate is the STAMP. That is not a weaker
+    // check than claimPartStock's count-checked updateMany: a create cannot
+    // silently match zero rows, and stamping is what ARMS the two composite foreign
+    // keys PartReservation already has — (tenantId, partId) → Part(tenantId, id)
+    // and (tenantId, jobCardId) → JobCard(tenantId, id). Leaving tenantId NULL,
+    // which is what the unstamped create did, satisfies both trivially (MATCH
+    // SIMPLE), so the row that crossed the boundary was also the row the database
+    // had been told not to check.
+    const tenantId = await actingTenantId();
     // Never reserve more than is actually available. Lock the part row so two
     // concurrent reservations can't both pass the availability check (oversell).
     const outcome = await prisma.$transaction(async (tx) => {
       // Lock + fetch a LIVE part only — a trashed part must not be reservable by id.
-      await tx.$executeRaw`SELECT id FROM "Part" WHERE id = ${partId} AND "deletedAt" IS NULL FOR UPDATE`;
-      const part = await tx.part.findFirst({ where: { id: partId, deletedAt: null }, select: { name: true, stockQty: true } });
+      await tx.$executeRaw`SELECT id FROM "Part" WHERE id = ${partId} AND "deletedAt" IS NULL AND "tenantId" = ${tenantId} FOR UPDATE`;
+      const part = await tx.part.findFirst({ where: { id: partId, deletedAt: null, tenantId }, select: { name: true, stockQty: true } });
       if (!part) return { ok: false as const };
-      const agg = await tx.partReservation.aggregate({ where: { partId, status: "active" }, _sum: { qty: true } });
+      const agg = await tx.partReservation.aggregate({ where: { partId, status: "active", tenantId }, _sum: { qty: true } });
       const reserved = agg._sum.qty ?? 0;
       if (reserved + qty > part.stockQty) {
         return { ok: false as const, over: true, available: Math.max(0, part.stockQty - reserved), name: part.name };
       }
-      await tx.partReservation.create({ data: { jobCardId, partId, qty } });
+      await tx.partReservation.create({ data: { jobCardId, partId, qty, tenantId } });
       return { ok: true as const, name: part.name };
     });
     if (!outcome.ok) {
@@ -721,13 +784,18 @@ export async function consumeReservation(reservationId: string, jobCardId: strin
     // direct stock claim could lock the part, no longer see this (now-consumed)
     // reservation in the availability calc, claim the "freed" stock, and both paths
     // decrement into negative stock. Locking the part serializes the two.
+    const tenantId = await actingTenantId();
     const outcome = await prisma.$transaction(async (tx) => {
       const reservation = await tx.partReservation.findUnique({ where: { id: reservationId } });
       if (!reservation || reservation.jobCardId !== jobCardId || reservation.status !== "active") {
         return { ok: false as const, why: "stale" as const };
       }
-      await tx.$executeRaw`SELECT id FROM "Part" WHERE id = ${reservation.partId} AND "deletedAt" IS NULL FOR UPDATE`;
-      const part = await tx.part.findFirst({ where: { id: reservation.partId, deletedAt: null }, select: { name: true, priceCents: true, stockQty: true } });
+      // The same tenant predicate claimPartStock puts on its lock and read. The
+      // reservation is already bound to the authorised job card, but its partId is
+      // a bare column — and a reservation planted before reservePart stamped and
+      // scoped (above) can still point at another workspace's part.
+      await tx.$executeRaw`SELECT id FROM "Part" WHERE id = ${reservation.partId} AND "deletedAt" IS NULL AND "tenantId" = ${tenantId} FOR UPDATE`;
+      const part = await tx.part.findFirst({ where: { id: reservation.partId, deletedAt: null, tenantId }, select: { name: true, priceCents: true, stockQty: true } });
       if (!part) return { ok: false as const, why: "part-gone" as const };
       // Claim the reservation FIRST, under the part lock. Only the request that
       // flips active→consumed proceeds — a second waiter (whose reservation was
@@ -744,9 +812,19 @@ export async function consumeReservation(reservationId: string, jobCardId: strin
         throw new ActionRefusal(`Only ${Math.max(0, part.stockQty)} × ${part.name} physically in stock — can't consume ${reservation.qty}.`);
       }
       await tx.jobCardItem.create({
-        data: { jobCardId, kind: "part", description: part.name, qty: reservation.qty, unitPriceCents: part.priceCents, partId: reservation.partId },
+        data: { tenantId, jobCardId, kind: "part", description: part.name, qty: reservation.qty, unitPriceCents: part.priceCents, partId: reservation.partId },
       });
-      await tx.part.update({ where: { id: reservation.partId }, data: { stockQty: { decrement: reservation.qty } } });
+      const decremented = await tx.part.updateMany({
+        where: { id: reservation.partId, tenantId },
+        data: { stockQty: { decrement: reservation.qty } },
+      });
+      // The count check claimPartStock has and this path did not. updateMany does
+      // not throw on a zero-row match, so a part this workspace does not own
+      // committed the reservation as consumed and filed a job-card line for stock
+      // that never moved. Throw so all three roll back together.
+      if (decremented.count !== 1) {
+        throw new ActionRefusal("That part no longer exists — the reservation cannot be consumed.");
+      }
       return { ok: true as const };
     });
     // The transaction's verdict was previously DISCARDED, so a stale, already
@@ -792,6 +870,7 @@ export async function applyServicePackage(jobCardId: string, formData: FormData)
     if (!packageId) refuse("Choose a service package.");
     const pkg = await prisma.servicePackage.findUnique({ where: { id: packageId }, include: { items: true } });
     if (!pkg) refuse("That service package no longer exists.");
+    const tenantId = await actingTenantId();
     // Apply every line + its stock claim in ONE transaction. Each part is claimed
     // under a row lock with an availability check (stock minus active reservations),
     // so the package can't oversell; insufficient stock on ANY part rolls the whole
@@ -801,12 +880,12 @@ export async function applyServicePackage(jobCardId: string, formData: FormData)
         if (item.partId && item.kind === "part") {
           const dec = Math.round(item.qty);
           if (dec > 0) {
-            const claim = await claimPartStock(tx, item.partId, dec);
+            const claim = await claimPartStock(tx, item.partId, dec, tenantId);
             if (!claim.ok) return claim;
           }
         }
         await tx.jobCardItem.create({
-          data: { jobCardId, kind: item.kind, description: item.description, qty: item.qty, unitPriceCents: item.unitPriceCents, partId: item.partId },
+          data: { tenantId, jobCardId, kind: item.kind, description: item.description, qty: item.qty, unitPriceCents: item.unitPriceCents, partId: item.partId },
         });
       }
       return { ok: true as const };

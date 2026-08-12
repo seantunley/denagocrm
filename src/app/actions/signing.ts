@@ -26,7 +26,11 @@ export async function saveMySignature(
     return { error: "Invalid signature image." };
   }
   const buf = Buffer.from(signatureDataUrl.split(",")[1], "base64");
-  const ref = await saveFile(buf, `dealer-signature-${user.id}.png`, "image/png");
+  // Reusable and PERSONAL: this is stored on the User row and stamped onto whatever
+  // that person later countersigns, so the User owns it — same reasoning as the
+  // profile photo in settings.ts. Deliberately NOT the acting workspace: one
+  // signature would then exist under as many prefixes as the person has workspaces.
+  const ref = await saveFile(buf, `dealer-signature-${user.id}.png`, "image/png", user.tenantId);
   await prisma.user.update({ where: { id: user.id }, data: { drawnSignatureRef: ref } });
   await logAudit({
     action: "user.signature_saved",

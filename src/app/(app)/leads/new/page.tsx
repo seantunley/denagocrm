@@ -14,6 +14,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { SectionHeading, Surface } from "@/components/visual-system";
 import { prisma } from "@/lib/db";
 import { contactName } from "@/lib/format";
+import { listActingTenantStaff } from "@/lib/tenantActor";
 import { requirePermission } from "@/lib/permissions";
 
 const leadJourney = [
@@ -32,7 +33,11 @@ export default async function NewLeadPage() {
     }),
     prisma.pipelineStage.findMany({ orderBy: { order: "asc" } }),
     prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
-    prisma.user.findMany({ orderBy: { name: "asc" } }),
+    // The "Assigned to" dropdown: staff of THIS workspace. `User` is a global
+    // model, so `prisma.user.findMany` is scoped by nothing — this list was
+    // showing one workspace the names of everyone who works at all the others,
+    // and offering them as the owner of a new lead.
+    listActingTenantStaff(),
   ]);
 
   return (

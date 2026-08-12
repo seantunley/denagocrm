@@ -46,16 +46,39 @@ test("the canvas lays out from local config, never from the server's copy", () =
   );
 });
 
-test("the reorder happens on drag-over, not on drop", () => {
+test("the drop position is previewed on drag-over and committed on drop", () => {
+  /*
+   * REVERSED, ON EVIDENCE. This rule used to be the opposite: the real move was
+   * applied on every dragover so the arrangement reflowed live, on the reasoning
+   * that the gap you drop into should be the gap you can see.
+   *
+   * The reasoning was right and the mechanism was what crashed the page. Two
+   * cards can swap forever: drag A over B and A takes B's index, so the pointer,
+   * which has not moved, is over B again and the next dragover moves A back.
+   * dnd-kit re-measures its droppables whenever the item list changes IN VALUE,
+   * from a layout effect, and enough of those in one commit passes React's
+   * nested-update limit - thrown during commit, so the route's error boundary
+   * turned it into an error page. The captured stack named it:
+   *
+   *     at useDroppableMeasuring.useCallback[measureDroppableContainers]
+   *     at SortableContext.useIsomorphicLayoutEffect
+   *     at commitHookLayoutEffects
+   *
+   * So the gap you can see is now a MARKER, and the document changes once, on
+   * the drop. tests/dashboardDropPreview.test.ts checks that the position the
+   * marker promises is the position the drop delivers.
+   */
   const canvas = CANVAS();
   assert.match(canvas, /function onDragOver\(event: DragOverEvent\)/, "must handle drag-over");
   assert.match(canvas, /onDragOver=\{onDragOver\}/, "and wire it to the context");
-  // onDragEnd must do nothing but clear the active card. A reorder there means
-  // the grid does not reflow under the pointer and the drop target is invisible.
-  assert.match(
-    canvas,
-    /onDragEnd=\{\(_event: DragEndEvent\) => setActiveId\(null\)\}/,
-    "drop must only end the drag; the move already happened on drag-over",
+  assert.match(canvas, /onDragEnd=\{onDragEnd\}/, "and commit on the drop");
+
+  const over = canvas.split("function onDragOver")[1]?.split("\n  }")[0] ?? "";
+  assert.ok(over.length > 0, "could not isolate the drag-over handler");
+  assert.doesNotMatch(
+    over,
+    /update(View|Section|Card)?\(/,
+    "dragging over something must not edit the document",
   );
 });
 
@@ -74,8 +97,18 @@ test("no size-uniform sorting strategy is used", () => {
 });
 
 test("drop targets are re-measured continuously", () => {
-  // The DOM genuinely reorders here, so rects captured at drag-start go stale
-  // the moment the first swap happens. Symptom: works for one swap, then fights.
+  /*
+   * The reason changed, the requirement did not.
+   *
+   * It used to be that the DOM reordered under the pointer, so rects captured
+   * at drag-start went stale on the first swap. Nothing reorders during a drag
+   * now - see the preview note above - but cards still resize on their own as
+   * streamed data resolves, and a card that grew after drag-start would
+   * otherwise be targeted at the size it used to be.
+   *
+   * It is also much cheaper than it was: re-measuring is triggered by the item
+   * list changing, and that list is now still for the whole gesture.
+   */
   const canvas = CANVAS();
   assert.match(
     canvas,
@@ -88,26 +121,35 @@ test("an emptied section is still a drop target", () => {
   // Its own id goes in the sortable list. Without it, a section you emptied can
   // never be filled again — there is nothing left inside it to drop onto, and
   // the section becomes dead space that only deleting can clear.
+  // The list is memoised now (dnd-kit compares it by identity), so the rule is
+  // checked on what goes INTO it rather than on an inline array literal.
+  const canvas = CANVAS();
+  assert.match(canvas, /items=\{sortableItems\}/);
   assert.match(
-    CANVAS(),
-    /items=\{\[\.\.\.cards\.map\(\(card\) => card\.id\), section\.id\]\}/,
+    canvas,
+    /\[\.\.\.\(JSON\.parse\(cardIdKey\) as string\[\]\), section\.id\]/,
     "the section id must be a droppable, or an empty group cannot be refilled",
   );
 });
 
 test("a card can be dragged between sections, not just within one", () => {
   const canvas = CANVAS();
-  // Anchored on the full declaration: "const activeCard" is a PREFIX of
-  // "const activeCardId", which appears earlier and would slice the body away.
-  const over = canvas.split("function onDragOver")[1]?.split("const activeCard =")[0] ?? "";
-  assert.ok(over.length > 0, "could not isolate the drag-over handler");
-  assert.match(over, /if \(from\.id === toSection\.id\)/, "the within-section case must be handled");
-  assert.match(over, /splice\(insertAt, 0, moving\)/, "the cross-section case must insert");
-  assert.match(
-    over,
-    /overId === toSection\.id\s*\?\s*toSection\.cards\.length/,
-    "dropping onto an empty section must append to it",
-  );
+  /*
+   * The move itself lives in lib/dashboard/canvasMove, where it can be executed
+   * rather than grepped - tests/dashboardCanvasMove.test.ts covers the
+   * within-section, cross-section and empty-section cases against real configs,
+   * and tests/dashboardDropPreview.test.ts sweeps every card over every target.
+   *
+   * It moved out because computing it in the handler was a bug of its own: the
+   * indices came from the `view` prop and were applied inside the state updater
+   * to `current`, and dragover fires faster than React renders, so those were
+   * routinely different documents. What is checked here is that the canvas still
+   * delegates, and still does no index arithmetic of its own.
+   */
+  const end = canvas.split("function onDragEnd")[1]?.split("\n  }")[0] ?? "";
+  assert.ok(end.length > 0, "could not isolate the drop handler");
+  assert.match(end, /moveCardInView\(current, activeCardId, overId\)/, "must delegate the move");
+  assert.doesNotMatch(end, /splice|findIndex/, "no index arithmetic in the canvas");
 });
 
 /* ── saving ───────────────────────────────────────────────────────── */
@@ -120,9 +162,23 @@ test("a refused save puts the cards back where they were", () => {
    * explanation to connect it to.
    */
   const provider = PROVIDER();
-  assert.match(provider, /const previous = committed\.current;/, "the last accepted config must be kept");
   assert.match(provider, /setConfig\(previous\);/, "a failure must restore the screen, not just the record");
   assert.match(provider, /toast\.error\(/, "and say so");
+
+  /*
+   * WHICH arrangement it restores is the part that was wrong, and it is decided
+   * in lib/dashboard/saveQueue now. The rollback target is captured when a write
+   * is DISPATCHED, not when the edit was made — with two writes in flight the
+   * older snapshot put the screen two steps behind the row.
+   * tests/dashboardSaveQueue.test.ts drives that ordering.
+   */
+  const queue = src("src/lib/dashboard/saveQueue.ts");
+  assert.match(queue, /const restore = committed;/, "the last accepted config must be kept");
+  assert.match(
+    queue,
+    /options\.onRejected\?\.\(restore, outcome\.message\);/,
+    "and it is what a refusal restores",
+  );
 });
 
 test("saves are coalesced so the server sees the arrangement the user stopped on", () => {
@@ -144,12 +200,20 @@ test("a generated dashboard is materialised once, before its first write", () =>
    */
   const provider = PROVIDER();
   assert.match(provider, /const materialised = useRef<boolean>\(dashboardId !== null\);/);
-  const persist = provider.split("const persist = useCallback")[1]?.split("const update =")[0] ?? "";
-  const claim = persist.indexOf("await takeControl()");
-  const save = persist.indexOf("await saveDashboardConfig(");
+  // The write itself is the save queue's `write` callback now — everything the
+  // server round trip involves, in one place, with the ordering rules kept out
+  // of it. See lib/dashboard/saveQueue.
+  const write = provider.split("write: async (next, stamp) =>")[1]?.split("onAccepted:")[0] ?? "";
+  assert.ok(write.length > 0, "could not isolate the write callback");
+  const claim = write.indexOf("await takeControl()");
+  const save = write.indexOf("await saveDashboardConfig(");
   assert.ok(claim > -1 && save > -1, "both calls must be present");
   assert.ok(claim < save, "the row must exist before anything is written into it");
-  assert.match(persist, /materialised\.current = true;/, "and it must only happen once");
+  assert.match(write, /materialised\.current = true;/, "and it must only happen once");
+  // The row did not exist a moment ago, so the revision it was created with is
+  // the only thing the first save can fence against. Without this the first
+  // write after taking control would have to go through unfenced.
+  assert.match(write, /if \(claimed\.updatedAt\) fence = claimed\.updatedAt;/);
 });
 
 test("an edit is validated before it is persisted, with the same parser the action uses", () => {
@@ -157,7 +221,11 @@ test("an edit is validated before it is persisted, with the same parser the acti
   // user has made three more edits and has no idea which one was rejected.
   const provider = PROVIDER();
   assert.match(provider, /const checked = parseConfigStrict\(next\);/, "must validate locally");
-  assert.match(provider, /if \(!checked\.ok\) \{\s*toast\.error\(checked\.error\);\s*return current;/, "and refuse the change, showing the parser's own message");
+  assert.match(
+    provider,
+    /if \(!checked\.ok\) \{\s*toast\.error\(checked\.error\);\s*return;/,
+    "and refuse the change, showing the parser's own message",
+  );
 });
 
 test("a re-render with an unchanged server config does not clobber a live edit", () => {
@@ -170,16 +238,36 @@ test("a re-render with an unchanged server config does not clobber a live edit",
   assert.match(provider, /if \(seenSeed\.current === seed\) return;/, "and no-op when unchanged");
 });
 
-test("card edits reach cards inside containers", () => {
-  // A hand-rolled walk that forgot to descend into `grid`/`stack` would make
-  // editing a nested card silently do nothing — the dialog would close, the
-  // change would be gone, and nothing would report an error.
+test("every walk over the card tree is delegated, not re-rolled here", () => {
+  /*
+   * This file cannot execute the provider, so the walks it used to own could only
+   * ever be matched from source — and a walk that silently fails to descend into
+   * `grid`/`stack` is the exact bug that deserves running instead. They now live
+   * in lib/dashboard/cardTree, which has no React in it and IS executed, by
+   * dashboardCardTree.test.ts.
+   *
+   * What is left to pin here is the delegation itself: a hand-rolled walk added
+   * back into this file would be untestable again, and would make editing or
+   * deleting a nested card silently do nothing — the dialog closes, the change is
+   * gone, and nothing reports an error.
+   */
   const provider = PROVIDER();
-  for (const fn of ["mapCardTree", "filterCardTree"]) {
-    const body = provider.split(`function ${fn}`)[1]?.slice(0, 400) ?? "";
-    assert.match(body, /type === "grid" \|\| .*type === "stack"/, `${fn} must recurse into containers`);
-    assert.match(body, new RegExp(`${fn}\\(`), `${fn} must call itself`);
+  assert.match(
+    provider,
+    /import \{[\s\S]*?\} from "@\/lib\/dashboard\/cardTree";/,
+    "the tree walks must come from the module a test can run",
+  );
+  for (const fn of ["mapCards", "filterCards", "reorderInTree", "liftFromContainer"]) {
+    assert.match(provider, new RegExp(`\\b${fn}\\b`), `${fn} must be the one from cardTree`);
+    assert.ok(
+      !provider.includes(`function ${fn}`),
+      `${fn} must not be redefined here, where nothing can execute it`,
+    );
   }
+  assert.ok(
+    !/function \w*CardTree\(/.test(provider),
+    "a new tree walk in this file would be a walk no test can run",
+  );
 });
 
 /* ── what edit mode has to be able to reach ───────────────────────── */

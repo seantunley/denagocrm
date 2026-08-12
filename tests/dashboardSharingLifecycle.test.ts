@@ -157,6 +157,11 @@ function model(name: string) {
       const row: Row = {
         id: `${name}-${seq}`,
         createdAt: new Date(2026, 0, seq),
+        // Prisma fills this from `@updatedAt` on every create, so the double has
+        // to as well: `dashboardBySlug` selects it and calls `.toISOString()` on
+        // it. Without it the load throws on a row this fake happily "wrote",
+        // which reads as a product bug and is not one.
+        updatedAt: new Date(2026, 0, seq),
         tenantId: null,
         sharedAt: null,
         sharedById: null,
@@ -329,7 +334,17 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
   // while dormant, and is the reason every create was unowned — is real.
   if (from(parent, "src/lib/tenantWrite.ts") && request === "./db") return { basePrisma: {} };
   if (from(parent, "src/lib/actingTenant.ts") && request === "./auth") {
-    return { getActiveTenantId: () => authModule.getActiveTenantId() };
+    // BOTH names. actingTenant.ts reads the session through
+    // `getActiveTenantIdIfRequest` — `getActiveTenantId` with "there is no
+    // request at all" answering null instead of throwing, which is a fact about
+    // the caller rather than the tenant. Stubbing only the old name left the
+    // real one in place, so every dashboard write here resolved no workspace and
+    // was refused, which is correct behaviour reached for an entirely
+    // artificial reason.
+    return {
+      getActiveTenantId: () => authModule.getActiveTenantId(),
+      getActiveTenantIdIfRequest: () => authModule.getActiveTenantId(),
+    };
   }
 
   if (request === "@/lib/db") return { prisma: db, basePrisma: db };

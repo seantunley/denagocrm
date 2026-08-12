@@ -254,7 +254,11 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
   // to somebody else's outage would be far worse than filing one without an
   // external attestation. The certificate says which of the two happened.
   const stamp = await requestTrustedTimestamp(Buffer.from(hash, "hex"));
-  const storedName = await saveFile(pdf, `${req.title} (signed).pdf`, "application/pdf");
+  // The sealed contract belongs to the REQUEST it completes, verbatim. Completion
+  // runs from the signer's own tokened request and from the recovery worker, and
+  // neither has a staff session to resolve a workspace from — the request is the
+  // only thing here that knows whose document this is.
+  const storedName = await saveFile(pdf, `${req.title} (signed).pdf`, "application/pdf", req.tenantId);
 
   const firstSigner = req.recipients.find((r) => r.status === "signed" && r.role !== "viewer");
   const signerName = firstSigner?.signedName || firstSigner?.name || "Customer";

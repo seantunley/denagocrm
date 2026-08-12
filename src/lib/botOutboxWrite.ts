@@ -1,7 +1,8 @@
 import crypto from "crypto";
 import { Prisma } from "@prisma/client";
 import type { OutMsg } from "./flow";
-import { withTenantWrite, type TenantWriteTx } from "./tenantWrite";
+import { withBotConversationWrite } from "./botTenant";
+import { type TenantWriteTx } from "./tenantWrite";
 
 export type BotOutboxWriteInput = {
   channel: string;
@@ -59,6 +60,16 @@ export async function enqueueBotMessagesTx(
   }
 }
 
+/**
+ * Own-transaction wrapper over {@link enqueueBotMessagesTx}.
+ *
+ * UNREACHABLE — nothing in `src/` or `tests/` calls it; every live caller
+ * (flowRun, flowSession, flowDm, telegram) uses the `Tx` form so the queue write
+ * commits with the graph move. It moves to `withBotConversationWrite` with the rest
+ * of the queue anyway: were it revived it would be revived on a runtime turn path,
+ * and a row stamped with a workspace `outboxTenantId()` does not claim with is a row
+ * nothing can ever deliver.
+ */
 export async function enqueueBotMessages(input: BotOutboxWriteInput): Promise<void> {
-  await withTenantWrite(async (tx, tenantId) => enqueueBotMessagesTx(tx, tenantId, input));
+  await withBotConversationWrite(async (tx, tenantId) => enqueueBotMessagesTx(tx, tenantId, input));
 }

@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { asActionResult, refuse } from "@/lib/actionResult";
 import { prisma } from "@/lib/db";
-import { withTenantWrite } from "@/lib/tenantWrite";
+import { withActingTenantWrite } from "@/lib/actingScope";
 import { activeTenantPredicate } from "@/lib/tenantPredicate";
 import { logAudit } from "@/lib/audit";
 import { requirePermission, requireVehicleAccess, requireContactAccess } from "@/lib/permissions";
@@ -53,12 +53,21 @@ export async function createFleet(formData: FormData) {
   // tenant — which is no longer true: the fleet page, the fleets list and the
   // contact form's fleet picker all name the tenant now, so an unstamped fleet
   // would become invisible to its own workspace the moment enforcement is turned
-  // on. withTenantWrite resolves the active tenant, or DEFAULT_TENANT_ID during
-  // the pre-enforcement window, and never writes a tenantless row.
-  // The generic is stated rather than inferred: `tx` is `any` (withTenantWrite
-  // cannot name a transaction client type), so the callback's return type infers
-  // as `unknown` and `fleet.id` below does not typecheck.
-  const fleet = await withTenantWrite<{ id: string }>((tx, tenantId) =>
+  // on.
+  //
+  // USER-ORIGINATED: `requirePermission` above proves a signed-in person is doing
+  // this, and a fleet has no parent record to inherit from — the creator's
+  // workspace IS the owner. So this takes the ACTING workspace, not
+  // `withTenantWrite`: that resolves `writeTenantId() ?? DEFAULT_TENANT_ID`, and
+  // `writeTenantId()` is null while enforcement is dormant (every environment we
+  // run), so it stamped the FOUNDING tenant onto a second workspace's fleets. The
+  // fleet page, the fleets list and the contact form's fleet picker all name the
+  // tenant now, so that fleet becomes invisible to the workspace that created it
+  // the moment enforcement is turned on — while looking correctly owned until then.
+  // The generic is stated rather than inferred: `tx` is `any` (the helper cannot
+  // name a transaction client type), so the callback's return type infers as
+  // `unknown` and `fleet.id` below does not typecheck.
+  const fleet = await withActingTenantWrite<{ id: string }>((tx, tenantId) =>
     tx.fleet.create({
       data: {
         name,

@@ -12,7 +12,7 @@ import { runFlow, type FlowInput, type FlowSession, type FlowCtx, type FlowHando
 import { resolveFlowSnapshot } from "./flowPublishing";
 import { flushBotOutboxConversation } from "./botOutbox";
 import { enqueueBotMessagesTx } from "./botOutboxWrite";
-import { withTenantWrite } from "./tenantWrite";
+import { withBotConversationWrite } from "./botTenant";
 import { loadBotSession, upsertBotSessionTx, deleteBotSessionTx, botStillOwnsTx } from "./botSessionStore";
 import { recordBotFlowEventsTx, type BotFlowEventInput } from "./botFlowAnalytics";
 import { completeInboundBotEventTx, currentInboundBotClaim } from "./botInboundEvent";
@@ -114,7 +114,18 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise
   const actions: ActionObservation[] = [];
   const result = await runFlow(snapshot.flow, session, input, buildCtx(digits, match, actions));
 
-  await withTenantWrite(async (tx, tenantId) => {
+  // RUNTIME — {@link botTenant}.`withBotConversationWrite`. `runWhatsAppFlow` is
+  // entered from the WhatsApp webhook answering a customer, inside the channel scope
+  // `withChannelTenantScope` established from the phone-number id the message
+  // arrived on — which now binds while enforcement is dormant as well.
+  //
+  // Every key this transaction touches — the BotSession, the outbox rows, the
+  // analytics events, the inbound-event lease — is addressed by
+  // `(tenantId, channel, key)` and READ BACK by `botConversationTenantId()`. Writer
+  // and readers therefore still resolve one expression, which is the invariant that
+  // let them move at all: they used to agree on the founding tenant because they
+  // were all wrong in the same way, and they now agree on the endpoint's real owner.
+  await withBotConversationWrite(async (tx, tenantId) => {
     // Fence the whole turn, not just the session write. The AI call above can take
     // seconds; a salesperson can press Take over during it. Guarding only the
     // session update meant ownership was correctly kept while THIS turn's reply
