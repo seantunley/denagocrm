@@ -422,9 +422,46 @@ const txMs = (name: string, fallback: number) => {
   return Number.isFinite(raw) && raw > 0 ? raw : fallback;
 };
 
+/**
+ * THE ROLE THE APPLICATION CONNECTS AS — `APP_DATABASE_URL` when set, otherwise
+ * `DATABASE_URL` exactly as before.
+ *
+ * WHY THIS IS NOT IN schema.prisma. RLS is only a boundary when the connecting
+ * role cannot step over it, and `neondb_owner` carries BYPASSRLS — so every
+ * policy on all 120 forced tables has been evaluated exactly never. The fix is
+ * to connect as `crm_app` (NOSUPERUSER NOBYPASSRLS), verified against production
+ * 2026-08-12: with no tenant set, `Contact` returns 0 rows; with
+ * `app.bypass_rls='on'`, 18.
+ *
+ * `DATABASE_URL` cannot simply be repointed. It is owned by the Neon–Vercel
+ * integration, which offers no edit and re-syncs it — and, more importantly,
+ * SUBSTITUTES A DIFFERENT VALUE PER DEPLOYMENT so each preview gets its own Neon
+ * branch. Hardcoding a production string over that is the 2026-07-24 incident
+ * again: previews sharing the live database, which is what preview-database.yml
+ * exists to prevent.
+ *
+ * So the override is applied HERE, at the one client construction, with a
+ * fallback — rather than in `schema.prisma`, where `env()` takes no fallback and
+ * every environment would have to define the new name or fail to boot:
+ *
+ *   production  APP_DATABASE_URL set   → crm_app, RLS enforced
+ *   preview     unset                  → the integration's per-branch URL
+ *   CI / local  unset                  → DATABASE_URL, unchanged
+ *
+ * `directUrl` is deliberately untouched: migrations run through
+ * `DATABASE_URL_UNPOOLED` as the owner, because `crm_app` has no DDL rights.
+ * Operator scripts that build their own PrismaClient also keep reading
+ * `DATABASE_URL` and so keep running as the owner — which is correct for them,
+ * and avoids the failure where a script returns zero rows with no error.
+ */
+const appDatabaseUrl = process.env.APP_DATABASE_URL?.trim() || undefined;
+
 const _rawPrisma =
   globalForPrisma._rawPrisma ??
   new PrismaClient({
+    // Omitted entirely when unset — passing `datasourceUrl: undefined` is not the
+    // same as not passing it, and the schema's own `url` must remain in force.
+    ...(appDatabaseUrl ? { datasourceUrl: appDatabaseUrl } : {}),
     transactionOptions: {
       maxWait: txMs("PRISMA_TX_MAX_WAIT_MS", 10_000),
       timeout: txMs("PRISMA_TX_TIMEOUT_MS", 20_000),
