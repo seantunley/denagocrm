@@ -114,20 +114,28 @@ function NodeCard({ data }: NodeProps) {
 
       {n.type === "choice" ? (
         <div className="pb-1">
-          {n.options.map((o, i) => (
+          {n.options.map((o) => (
             <div key={o.id} className="relative px-3 py-1 text-[11px] text-slate-400 border-t border-slate-800">
               {o.label}
-              <Handle type="source" position={Position.Right} id={`opt:${o.id}`} style={{ top: `${100 + i * 26}px`, background: meta.handle }} />
+              {/* NO `top`. Every handle here sits inside its own `relative` row,
+                  so an absolute `top` resolves against THAT ROW, not the card —
+                  and these were card-relative offsets, which threw each dot
+                  roughly its own value below its row and outside the card,
+                  taking its edge's anchor with it. Left alone, React Flow
+                  centres the handle in its positioning parent, which is exactly
+                  the row the label is in — and that is the only form that
+                  survives a wrapped label or a taller summary block. */}
+              <Handle type="source" position={Position.Right} id={`opt:${o.id}`} style={{ background: meta.handle }} />
             </div>
           ))}
         </div>
       ) : n.type === "condition" ? (
         <div className="pb-1">
           <div className="relative border-t border-slate-800 px-3 py-1 text-[11px] text-emerald-300">Yes
-            <Handle type="source" position={Position.Right} id="true" style={{ top: "92px", background: "#34d399" }} />
+            <Handle type="source" position={Position.Right} id="true" style={{ background: "#34d399" }} />
           </div>
           <div className="relative border-t border-slate-800 px-3 py-1 text-[11px] text-red-300">No
-            <Handle type="source" position={Position.Right} id="false" style={{ top: "118px", background: "#f87171" }} />
+            <Handle type="source" position={Position.Right} id="false" style={{ background: "#f87171" }} />
           </div>
         </div>
       ) : n.type === "ai" ? (
@@ -139,10 +147,10 @@ function NodeCard({ data }: NodeProps) {
         // apparently-linear booking flow whose failure branch was invisible.
         <div className="pb-1">
           <div className="relative border-t border-slate-800 px-3 py-1 text-[11px] text-emerald-300">Done
-            <Handle type="source" position={Position.Right} id="out" style={{ top: "92px", background: "#34d399" }} />
+            <Handle type="source" position={Position.Right} id="out" style={{ background: "#34d399" }} />
           </div>
           <div className="relative border-t border-slate-800 px-3 py-1 text-[11px] text-amber-300">If it fails
-            <Handle type="source" position={Position.Right} id="failure" style={{ top: "118px", background: "#fbbf24" }} />
+            <Handle type="source" position={Position.Right} id="failure" style={{ background: "#fbbf24" }} />
           </div>
           {/* The inspector offers this on slots, but the edge builder draws it from
               the DATA — and the AI drafter, the shipped templates and reusable
@@ -152,7 +160,7 @@ function NodeCard({ data }: NodeProps) {
               So it appears whenever THIS node actually carries the route. */}
           {(n.type === "slots" || Boolean((n as { unavailableNext?: string }).unavailableNext)) && (
             <div className="relative border-t border-slate-800 px-3 py-1 text-[11px] text-slate-400">If none available
-              <Handle type="source" position={Position.Right} id="unavailable" style={{ top: "144px", background: "#94a3b8" }} />
+              <Handle type="source" position={Position.Right} id="unavailable" style={{ background: "#94a3b8" }} />
             </div>
           )}
         </div>
