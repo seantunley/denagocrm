@@ -303,6 +303,9 @@ export async function startRecordSigning(
           quoteId,
           jobCardId,
           contactId: envelope.contactId,
+          // What the comment on sourceTenantId above already promised — "and so
+          // will the Document row" — but never actually did.
+          tenantId: sourceTenantId,
           tag: "for-signing",
           uploadedById: user.id,
         },

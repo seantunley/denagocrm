@@ -291,6 +291,13 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
             data: {
               fileName: `${req.title} (signed).pdf`, storedName, mimeType: "application/pdf", sizeBytes: pdf.length,
               quoteId: req.quoteId, jobCardId: req.jobCardId, contactId: req.contactId, tag: "signed", uploadedById: uploaderId,
+              // The request owns the signed contract, exactly as it owns the blob
+              // (`saveFile(…, req.tenantId)` above) and the safe-delete and
+              // recipient lookups below. Omitting it here left the ONE document a
+              // signature exists to produce with no owner — invisible under RLS to
+              // the workspace whose customer signed it, and unrepairable through
+              // the app because USING hides the row from UPDATE too.
+              tenantId: req.tenantId,
             },
           })
         : null;

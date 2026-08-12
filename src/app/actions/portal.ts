@@ -391,7 +391,8 @@ export async function uploadPortalDocument(formData: FormData) {
   const buffer = Buffer.from(await value.arrayBuffer());
   // Same rule as portalExpansion's uploadPortalFile: a customer OTP session has no
   // acting workspace, so the contact the document is filed against decides.
-  const storedName = await saveFile(buffer, value.name, value.type, await portalTenantId(scope.viewerContactId));
+  const tenantId = await portalTenantId(scope.viewerContactId);
+  const storedName = await saveFile(buffer, value.name, value.type, tenantId);
   const doc = await prisma.document.create({
     data: {
       fileName: value.name,
@@ -400,6 +401,10 @@ export async function uploadPortalDocument(formData: FormData) {
       sizeBytes: value.size,
       contactId: scope.viewerContactId,
       vehicleId,
+      // The contact decides the row as well as the blob prefix. A portal upload is
+      // the one path with no staff session at all, so leaving this unset could not
+      // be corrected by any ambient scope later.
+      tenantId,
       tag: "portal-upload",
       uploadedById: staff.id,
     },

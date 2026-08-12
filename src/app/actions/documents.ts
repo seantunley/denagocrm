@@ -86,7 +86,13 @@ export async function uploadDocument(formData: FormData) {
 
   const buffer = Buffer.from(await file.arrayBuffer());
   const mimeType = file.type || "application/octet-stream";
-  const storedName = await saveFile(buffer, file.name, mimeType, await uploadTargetTenantId(target));
+  // ONE resolution, used for BOTH the blob prefix and the row. It used to be
+  // computed inline for `saveFile` only, so the blob was filed under the right
+  // workspace while the Document row that points at it was written with
+  // `tenantId: null` — `scopeArgs` injects nothing while enforcement is dormant,
+  // so an omitted tenantId is a null, not a default.
+  const tenantId = await uploadTargetTenantId(target);
+  const storedName = await saveFile(buffer, file.name, mimeType, tenantId);
 
   const doc = await prisma.document.create({
     data: {
@@ -94,6 +100,7 @@ export async function uploadDocument(formData: FormData) {
       storedName,
       mimeType,
       sizeBytes: file.size,
+      tenantId,
       // Only the single authorized target — never trust the other id fields.
       contactId: target.kind === "contact" ? target.contactId : null,
       vehicleId: target.kind === "vehicle" ? target.vehicleId : null,
@@ -278,13 +285,15 @@ export async function uploadRepoDocument(formData: FormData) {
   const mimeType = file.type || "application/octet-stream";
   // A repository upload is filed against no contact, vehicle, job card or quote —
   // there is genuinely no parent to inherit from, so the acting workspace owns it.
-  const storedName = await saveFile(Buffer.from(await file.arrayBuffer()), file.name, mimeType, await actingOwnerTenantId());
+  const tenantId = await actingOwnerTenantId();
+  const storedName = await saveFile(Buffer.from(await file.arrayBuffer()), file.name, mimeType, tenantId);
   await prisma.document.create({
     data: {
       fileName: file.name,
       storedName,
       mimeType,
       sizeBytes: file.size,
+      tenantId,
       tag: String(formData.get("tag") ?? "").trim() || null,
       uploadedById: user.id,
     },
@@ -314,6 +323,9 @@ export async function replaceDocument(id: string, formData: FormData) {
       vehicleId: old.vehicleId,
       jobCardId: old.jobCardId,
       quoteId: old.quoteId,
+      // Same workspace as the version it replaces — the reasoning above applies
+      // to the row exactly as it does to the blob prefix.
+      tenantId: old.tenantId,
       tag: old.tag,
       uploadedById: user.id,
     },
