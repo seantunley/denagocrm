@@ -25,6 +25,9 @@ import { basePrisma, prisma } from "../src/lib/db";
 import { loadInboxComms, MESSAGES_PER_THREAD, THREAD_PAGE_SIZE } from "../src/lib/inboxQuery";
 import { buildInboxThreads } from "../src/lib/inboxThreads";
 import { awaitingReplyCount } from "../src/lib/inboxCount";
+import { DEFAULT_TENANT_ID } from "../src/lib/tenant";
+import { runInTenantScope } from "../src/lib/tenantScope";
+import { __setTenantEnforcingForTests } from "../src/lib/tenantEnforcement";
 
 const SFX = Math.random().toString(16).slice(2, 10);
 let passed = 0;
@@ -78,7 +81,7 @@ async function seed() {
 
   for (const contactId of contactIds()) {
     await basePrisma.contact.create({
-      data: { id: contactId, firstName: contactId, whatsapp: `27${contactId.slice(-9)}`, createdById: ids.user },
+      data: { id: contactId, tenantId: DEFAULT_TENANT_ID, firstName: contactId, whatsapp: `27${contactId.slice(-9)}`, createdById: ids.user },
     });
   }
 
@@ -93,6 +96,9 @@ async function seed() {
     for (let m = 0; m < 3; m++) {
       quietRows.push({
         type: "whatsapp",
+        // Stamped: the badge query runs through the GUARDED client, so under the
+        // resolved scope below an unowned row would simply not be counted.
+        tenantId: DEFAULT_TENANT_ID,
         // The newest message of each quiet thread is an unopened inbound one, so
         // each is a thread the sidebar badge must count.
         direction: m === 2 ? "inbound" : "outbound",
@@ -109,6 +115,7 @@ async function seed() {
   // The dominant conversation: every message newer than every quiet one.
   const loudRows = Array.from({ length: LOUD_MESSAGES }, (_, m) => ({
     type: "whatsapp",
+    tenantId: DEFAULT_TENANT_ID,
     direction: m % 2 === 0 ? "inbound" : ("outbound" as string),
     // Read, so the badge count below is exactly the quiet threads and the loud
     // one cannot mask an off-by-one.
@@ -177,12 +184,23 @@ async function main() {
   );
 
   // And the sidebar badge, which asked the same question through the same slice.
-  const unread = await awaitingReplyCount({
-    id: ids.user,
-    name: "Inbox tester",
-    email: `${ids.user}@example.test`,
-    role: "owner",
-  });
+  // In a resolved workspace, as a signed-in request is. Called bare, this
+  // resolved to `global` — which used to mean "no tenant predicate", so the
+  // badge counted through an unfiltered query. `global` is now a refusal (it
+  // covers a stale or ambiguous SESSION, not just a sessionless cron), and a
+  // script cannot resolve a workspace from a session it does not have, so the
+  // ambient scope under enforcement is the only handle. Seeding stays outside.
+  __setTenantEnforcingForTests(true);
+  const unread = await runInTenantScope(
+    { tenantId: DEFAULT_TENANT_ID, system: false },
+    () =>
+      awaitingReplyCount({
+        id: ids.user,
+        name: "Inbox tester",
+        email: `${ids.user}@example.test`,
+        role: "owner",
+      }),
+  ).finally(() => __setTenantEnforcingForTests(null));
   check(
     "the unread badge counts quiet threads the loud one would have buried",
     unread >= QUIET_THREADS,
