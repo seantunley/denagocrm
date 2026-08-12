@@ -26,6 +26,7 @@ import { logAuditStrict } from "@/lib/audit";
 import { basePrisma } from "@/lib/db";
 import { parseRands } from "@/lib/format";
 import { parsePipelineStageAction } from "@/lib/pipelineStageActions";
+import { resolveActingTenantMemberUser, resolveActingTenantTeam } from "@/lib/tenantActor";
 
 const str = (formData: FormData, key: string) => {
   const value = String(formData.get(key) ?? "").trim();
@@ -295,8 +296,26 @@ export async function snapshotForecast(formData: FormData) {
   const requestedTeamId = str(formData, "teamId");
   const requestedUserId = str(formData, "userId");
 
-  const teamId = requestedTeamId;
-  let userId = requestedUserId;
+  // THE WORKSPACE CHECK, AND THEN THE VISIBILITY ONE. Two axes, in that order.
+  //
+  // These two ids come off the /forecast form, so they are whatever was posted.
+  // Nothing checked which workspace they belonged to, and the `!scope.viewAll`
+  // block below never could: it asks whether the caller may see beyond their own
+  // records, which a `leads.view_all` holder and every owner skip entirely. So an
+  // owner could snapshot with another workspace's team or user id — and the ids
+  // are KEPT, on ForecastSnapshot, where the history panel renders them back
+  // through joins as that workspace's team name and that person's name.
+  //
+  // The same resolvers the pickers are built from, so the check and the list it
+  // came from cannot disagree: both classify with `actingScopeClass()`, which
+  // enforces membership while enforcement is dormant.
+  const team = requestedTeamId ? await resolveActingTenantTeam(requestedTeamId) : null;
+  if (requestedTeamId && !team) throw new Error("That team is not in this workspace");
+  const owner = requestedUserId ? await resolveActingTenantMemberUser(requestedUserId) : null;
+  if (requestedUserId && !owner) throw new Error("That person is not a member of this workspace");
+
+  const teamId = team?.id ?? null;
+  let userId = owner?.id ?? null;
   if (!scope.viewAll) {
     if (teamId && !scope.teamIds.includes(teamId)) {
       throw new Error("You cannot snapshot a team outside your access scope");

@@ -284,8 +284,30 @@ export async function getPipelineStage(stageId: string): Promise<PipelineStageRo
   return rows[0] ?? null;
 }
 
+/**
+ * WHICH PIPELINE, STAGE AND TEAM A LEAD IS CURRENTLY IN — through the tenant
+ * boundary, or nothing.
+ *
+ * The answer decides a PERMISSION: all three callers in src/app/actions/leads.ts
+ * compare `pipelineId` against the stage being moved to and demand
+ * `leads.change_pipeline` when they differ. Its only boundary was `tenantFilter`,
+ * which is `Prisma.empty` while enforcement is dormant — i.e. in every environment
+ * we run — on `basePrisma`, the documented RLS bypass. So a lead id from any
+ * workspace resolved here, and the row it returned went into this workspace's
+ * permission decision and its audit `before`.
+ *
+ * `pipelineTenantFilter()` is the same predicate the rest of this module's forecast
+ * statements take, resolved from the ACTING workspace, so it is a real boundary in
+ * the mode we are actually in rather than one that starts working at the flip.
+ *
+ * A `null` now means "not this workspace's lead" as well as "no such lead", and
+ * the callers must treat it as a REFUSAL rather than skipping the check it feeds —
+ * `moveLeadToTestDrive` always did; `updateLead` and `moveLead` were changed to
+ * match, because "could not resolve the lead" silently satisfying a permission
+ * gate is the failure this scoping would otherwise introduce.
+ */
 export async function getLeadPipeline(leadId: string): Promise<{ pipelineId: string; stageId: string; teamId: string | null } | null> {
-  const scope = tenantFilter('"tenantId"');
+  const scope = await pipelineTenantFilter();
   const rows = await basePrisma.$queryRaw<Array<{ pipelineId: string; stageId: string; teamId: string | null }>>`
     SELECT "pipelineId", "stageId", "teamId"
     FROM "Lead"
