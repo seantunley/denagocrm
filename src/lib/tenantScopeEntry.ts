@@ -135,20 +135,47 @@ export async function withTokenTenantScope<T>(
  * is called once per event inside the entry/change loop — each event runs in its own
  * resolved tenant scope.
  *
- * DORMANT when off: runs `fn()` directly — byte-for-byte the pre-tenancy path, no
- * channel lookup, no ALS overhead.
+ * RESOLVED — IN EITHER MODE: `fn` runs INSIDE the resolved tenant scope (reliable
+ * `runInTenantScope`, never `enterWith`), so every downstream read/write/actor pick
+ * can name that tenant; the scope reverts when `fn` returns.
  *
- * ENFORCING: resolves the owning tenant via `resolveChannelTenant` (basePrisma,
- * active-tenant JOIN). If the endpoint is unknown / disabled / points at a suspended
- * or deleted tenant, it runs `onUnresolved()` WITHOUT running `fn` — an unmapped
- * inbound event is skipped (fail closed), never processed against the wrong tenant or
- * unscoped. Otherwise `fn` runs INSIDE the resolved tenant scope (reliable
- * `runInTenantScope`), so every downstream read/write/actor pick is confined to that
- * tenant; the scope reverts when `fn` returns.
+ * IT BINDS WHILE ENFORCEMENT IS DORMANT TOO, AND THAT IS THE POINT. This used to be
+ * `if (!tenantEnforcing()) return fn();` — it resolved nothing and bound nothing in
+ * the only mode any environment actually runs in. So the whole bot runtime fell back
+ * to `writeTenantId() ?? DEFAULT_TENANT_ID` and claimed every tenant's inbound events
+ * under the FOUNDING tenant. `BotInboundEvent` deduplicates on
+ * `("tenantId","channel","providerId")`, so two tenants whose customers produce the
+ * same provider id collided and the second tenant's message was silently acked as a
+ * redelivery of the first tenant's — a lost customer message with no error anywhere.
+ * `withTelegramTenantScope` has always bound regardless of enforcement, and
+ * `runCronPerTenant` binds on its dormant path for the same reason: a queue that
+ * works in one mode and is broken in the other is not working.
  *
- * #489 changes this function on its own branch so resolved channel tenants bind in
- * dormant mode too. Keep that change when restacking: staff and channel chokepoints
- * solve the same ambient-scope problem for different principals.
+ * Binding is safe because the db.ts guard only READS the scope inside its enforcement
+ * branch (`scopeArgs` returns its args untouched while dormant), so no query is
+ * narrowed by this. What DOES change is that the helpers which consult the ambient
+ * scope in BOTH modes — `inheritedTenantId`'s ambient rung, and therefore
+ * `botConversationTenantId`; the per-tenant credential lookups in whatsapp.ts /
+ * messenger.ts; `activeTenantPredicate` in the receipt path — now get the endpoint's
+ * real owner instead of nothing. That is the intent: a receipt for tenant B stops
+ * being applied across every tenant's messages, and B's replies go out over B's own
+ * provider credentials rather than whoever's are configured globally.
+ *
+ * UNRESOLVED — unknown endpoint, `disabledAt` set, suspended or deleted tenant:
+ *
+ *   - ENFORCING → `onUnresolved()` WITHOUT running `fn`, unchanged. An unmapped
+ *     inbound event is skipped rather than processed against the wrong tenant.
+ *   - DORMANT → `fn()` with NO scope, which is byte-for-byte what this whole helper
+ *     did before. This is deliberate and it is the one place the two modes differ.
+ *     `ChannelIdentity` is enforcement-prep data that no environment is required to
+ *     have backfilled yet, so failing closed on it while dormant would silently drop
+ *     live customer traffic on every install whose endpoints are not mapped — and
+ *     losing messages is the defect being fixed here, not an acceptable cost of
+ *     fixing it. An install with no mappings therefore behaves exactly as it does
+ *     today, and starts being scoped the moment its endpoints are mapped.
+ *
+ * The lookup itself is one indexed row on `basePrisma`, and it is now paid on the
+ * dormant path as well — the deliberate cost of the scope existing at all.
  */
 export async function withChannelTenantScope<T>(
   channel: ChannelKind,
@@ -156,8 +183,7 @@ export async function withChannelTenantScope<T>(
   fn: () => Promise<T>,
   onUnresolved: () => T | Promise<T>,
 ): Promise<T> {
-  if (!tenantEnforcing()) return fn();
   const tenantId = await resolveChannelTenant(channel, externalId);
-  if (!tenantId) return onUnresolved();
-  return runInTenantScope({ tenantId, system: false }, fn);
+  if (tenantId) return runInTenantScope({ tenantId, system: false }, fn);
+  return tenantEnforcing() ? onUnresolved() : fn();
 }

@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import { prisma } from "./db";
-import { DEFAULT_TENANT_ID } from "./tenant";
-import { writeTenantId, type TenantWriteTx } from "./tenantWrite";
+import { botConversationTenantId } from "./botTenant";
+import { type TenantWriteTx } from "./tenantWrite";
 import type { BotOwnership } from "./botOwnership";
 
 export type StoredBotSession = {
@@ -21,13 +21,17 @@ function readOwnership(value: unknown): BotOwnership {
 }
 
 /**
- * Resolve the exact tenant namespace used by the write helper as well. Dormant /
- * trusted-system operation belongs to the founding tenant; enforcement with a
- * real tenant uses that tenant; a lost/null non-system scope fails closed inside
- * writeTenantId rather than choosing an arbitrary matching participant row.
+ * Resolve the exact tenant namespace used by the write helper as well.
+ *
+ * {@link botConversationTenantId}, not `writeTenantId() ?? DEFAULT_TENANT_ID`: the
+ * runtime's turn transaction, the takeover controls and this read must all name the
+ * same workspace, or a takeover recorded by a person is invisible to the webhook
+ * that answers their customer next — the bot keeps talking over them. A lost/null
+ * non-system scope still fails closed inside `writeTenantId` rather than choosing an
+ * arbitrary matching participant row.
  */
 function sessionTenantId(): string {
-  return writeTenantId() ?? DEFAULT_TENANT_ID;
+  return botConversationTenantId();
 }
 
 /** Session identity is tenant + channel + participant, on reads and writes. */

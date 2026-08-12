@@ -389,7 +389,9 @@ export async function uploadPortalDocument(formData: FormData) {
   const staff = await firstStaffUser();
   if (!staff) throw new Error("No staff account is available to file the document");
   const buffer = Buffer.from(await value.arrayBuffer());
-  const storedName = await saveFile(buffer, value.name, value.type);
+  // Same rule as portalExpansion's uploadPortalFile: a customer OTP session has no
+  // acting workspace, so the contact the document is filed against decides.
+  const storedName = await saveFile(buffer, value.name, value.type, await portalTenantId(scope.viewerContactId));
   const doc = await prisma.document.create({
     data: {
       fileName: value.name,

@@ -176,7 +176,7 @@ test("the provider event is acknowledged in the same transaction as the graph mo
   // CRM action idempotency cannot help; the damage is in the graph position.
   for (const rel of ["src/lib/flowRun.ts", "src/lib/flowSession.ts"]) {
     const code = src(rel);
-    const tx = code.indexOf("await withTenantWrite(async (tx, tenantId)");
+    const tx = code.indexOf("await withBotConversationWrite(async (tx, tenantId)");
     const complete = code.indexOf("completeInboundBotEventTx(tx, tenantId", tx);
     const session = code.indexOf("upsertBotSessionTx(tx, tenantId", tx);
     assert.ok(tx >= 0, `${rel}: must open a tenant write transaction`);

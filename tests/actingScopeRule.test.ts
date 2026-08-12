@@ -231,45 +231,72 @@ test("installJourneyTemplates reads and writes the SAME workspace", () => {
 });
 
 /**
- * THE SITES THAT ARE USER-ORIGINATED AND DELIBERATELY DID NOT MOVE.
+ * THE SITES THAT WERE ENTANGLED, AND MOVED TOGETHER.
  *
- * The bot stack resolves ONE tenant for both halves of a conversation: staff writes
- * (`enqueueStaffReply`, `pauseBotConversation`) and the runtime/drain reads that
- * have to see them (`outboxTenantId`, `botStillOwnsTx`, `claimOldest`) are all
- * `writeTenantId() ?? DEFAULT_TENANT_ID`. They agree today because they are wrong
- * together. Converting the staff half alone writes a reply — or a takeover — into a
- * workspace nothing reads: the reply never leaves the queue, and the bot keeps
- * talking over the person who took the thread.
+ * This replaces the pin #473 left here. The bot stack resolves ONE tenant for both
+ * halves of a conversation: staff writes (`enqueueStaffReply`,
+ * `pauseBotConversation`) and the runtime/drain reads that have to see them
+ * (`outboxTenantId`, `botStillOwnsTx`, `claimOldest`) were all
+ * `writeTenantId() ?? DEFAULT_TENANT_ID`. They agreed because they were wrong
+ * together, and converting either half alone writes a reply — or a takeover — into
+ * a workspace nothing reads.
  *
- * So this pins the CURRENT state as deliberate. When the drain learns its tenant,
- * this test should be deleted in the same commit that moves both halves — failing
- * here is the prompt to check that the readers moved too, not to add an exception.
+ * They now resolve ONE expression, `botConversationTenantId`. The assertion is
+ * therefore the mirror image of the old pin: every one of these files must go
+ * through it, and NONE of them may reach for a second answer. `withTenantWrite`
+ * would put the dormant-null value back, and `withActingTenantWrite` would answer
+ * the staff half differently from the runtime half — the two ways this comes apart.
  */
-test("the entangled bot writes stay on withTenantWrite until their readers move", () => {
-  for (const file of ["src/lib/botOutbox.ts", "src/lib/botConversationControl.ts"]) {
+const BOT_CONVERSATION_FILES = [
+  "src/lib/botOutbox.ts",
+  "src/lib/botOutboxWrite.ts",
+  "src/lib/botConversationControl.ts",
+  "src/lib/botInboundEvent.ts",
+  "src/lib/botSessionStore.ts",
+  "src/lib/flowRun.ts",
+  "src/lib/flowSession.ts",
+  "src/lib/flowScope.ts",
+];
+
+test("every bot conversation site resolves ONE workspace expression", () => {
+  for (const file of BOT_CONVERSATION_FILES) {
+    const source = stripped(file);
     assert.match(
-      stripped(file),
-      /\bwithTenantWrite\(/,
-      `${file} must not be converted in isolation — its readers resolve the same dormant-null tenant`,
+      source,
+      /botConversationTenantId|withBotConversationWrite/,
+      `${file} must resolve the shared bot-conversation workspace, not a private answer`,
     );
     assert.doesNotMatch(
-      stripped(file),
+      source,
+      /\bwithTenantWrite\(/,
+      `${file} would restore the dormant-null founding tenant its siblings no longer use`,
+    );
+    assert.doesNotMatch(
+      source,
       /withActingTenantWrite\(/,
-      `${file} would strand a second tenant's messages: written to the acting workspace, read from the founding one`,
+      `${file} would answer the staff half differently from the runtime half`,
     );
   }
 });
 
-test("the runtime turn paths stay on withTenantWrite — they have no actor to ask", () => {
-  // A webhook has no session, so withActingTenantWrite resolves `global` and stamps
-  // the founding tenant anyway — the same value with a name claiming it asked.
-  for (const file of ["src/lib/flowRun.ts", "src/lib/flowSession.ts", "src/lib/botInboundEvent.ts"]) {
-    assert.doesNotMatch(
-      stripped(file),
-      /withActingTenantWrite\(/,
-      `${file} is entered from a provider webhook — there is no acting workspace to resolve`,
-    );
-  }
+test("the shared expression is the ambient ladder, not a fourth copy of the rule", () => {
+  // Rung 2 of `inheritedTenantId` is `currentTenantScope()?.tenantId` — the channel
+  // scope at a webhook, the acting workspace at the inbox, the row's own tenant on
+  // the drain. Re-deriving it here would be a rule that exists twice, which is a
+  // rule that gets fixed once.
+  const botTenant = stripped("src/lib/botTenant.ts");
+  assert.match(botTenant, /return inheritedTenantId\(null\);/);
+  assert.doesNotMatch(botTenant, /DEFAULT_TENANT_ID/, "the founding fallback belongs to the ladder, not to a copy of it");
+});
+
+test("the staff half binds its workspace and never replaces one that outranks it", () => {
+  const actingScope = stripped("src/lib/actingScope.ts");
+  const start = actingScope.indexOf("export async function withStaffConversationScope");
+  assert.ok(start > -1, "withStaffConversationScope is missing");
+  const body = actingScope.slice(start, actingScope.indexOf("export async function withActingTenantWrite"));
+  // An enforced scope, a webhook scope or a cron slice all outrank a session.
+  assert.match(body, /if \(currentTenantScope\(\)\) return fn\(\);/, "an existing scope must win");
+  assert.match(body, /runInTenantScope\(\{ tenantId, system: false \}/, "and it is never a system scope");
 });
 
 test("publishFlowSnapshot resolves its own tenant and must not start shadowing it", () => {

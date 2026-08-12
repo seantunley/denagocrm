@@ -187,6 +187,10 @@ test("no pipeline operation resolves the acting tenant twice", () => {
     ["export async function addPipelineStage", "export async function updatePipelineStage"],
     ["export async function updatePipelineStage", "export async function reorderPipelineStages"],
     ["export async function archivePipeline", "export async function listForecastLeads"],
+    // The forecast write: one resolution bounds BOTH the team it may attach and
+    // the lead it may reach. Two could disagree, and there is no guard behind
+    // basePrisma to notice a lead scoped to one workspace taking another's team.
+    ["export async function updateLeadForecast", "export async function captureForecastSnapshot"],
     ["export async function captureForecastSnapshot"],
   ];
   for (const [from, to] of operations) {
@@ -228,10 +232,18 @@ test("every PipelineStage write resolves its parent through the tenant boundary"
   assert.match(reorder, /await requireOwnedPipeline\(pipelineId\)/);
 
   // requireOwnedPipeline must itself be scoped, or every caller above is theatre.
-  const gate = slice("async function requireOwnedPipeline", "export async function getOwnedPipelineRow");
+  const gate = slice("async function requireOwnedPipeline", "export async function findOwnedPipelineForStage");
   assert.match(gate, /await pipelineTenantFilter\(\)/);
   assert.match(gate, /WHERE "id" = \$\{id\} AND "deletedAt" IS NULL \$\{scope\}/);
   assert.match(gate, /if \(!pipeline\) throw new Error\("Pipeline not found"\)/);
+
+  // The same gate keyed by a STAGE id. It exists so that a lookup by a forgeable
+  // stage id and the ownership check on the result are ONE statement — see
+  // tests/stageLookupOracle.test.ts — so it must be scoped by the same rule.
+  const byStage = slice("export async function findOwnedPipelineForStage", "export async function getOwnedPipelineRow");
+  assert.match(byStage, /JOIN "SalesPipeline" p ON p\."id" = s\."pipelineId"/, "the boundary is on the PARENT");
+  assert.match(byStage, /WHERE s\."id" = \$\{stageId\} AND p\."deletedAt" IS NULL \$\{scope\}/);
+  assert.match(byStage, /pipelineTenantFilter\('p\."tenantId"'\)/);
 });
 
 test("no pipeline row is loaded by id alone in the pipeline actions", () => {

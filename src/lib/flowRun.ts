@@ -12,7 +12,7 @@ import { runFlow, type FlowInput, type FlowSession, type FlowCtx, type FlowHando
 import { resolveFlowSnapshot } from "./flowPublishing";
 import { flushBotOutboxConversation } from "./botOutbox";
 import { enqueueBotMessagesTx } from "./botOutboxWrite";
-import { withTenantWrite } from "./tenantWrite";
+import { withBotConversationWrite } from "./botTenant";
 import { loadBotSession, upsertBotSessionTx, deleteBotSessionTx, botStillOwnsTx } from "./botSessionStore";
 import { recordBotFlowEventsTx, type BotFlowEventInput } from "./botFlowAnalytics";
 import { completeInboundBotEventTx, currentInboundBotClaim } from "./botInboundEvent";
@@ -114,25 +114,18 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise
   const actions: ActionObservation[] = [];
   const result = await runFlow(snapshot.flow, session, input, buildCtx(digits, match, actions));
 
-  // BACKGROUND / RUNTIME — `withTenantWrite` deliberately. `runWhatsAppFlow` is
-  // entered from the WhatsApp webhook answering a customer; there is no session, so
-  // `withActingTenantWrite` would resolve `global` and stamp the founding tenant
-  // under a name claiming otherwise.
+  // RUNTIME — {@link botTenant}.`withBotConversationWrite`. `runWhatsAppFlow` is
+  // entered from the WhatsApp webhook answering a customer, inside the channel scope
+  // `withChannelTenantScope` established from the phone-number id the message
+  // arrived on — which now binds while enforcement is dormant as well.
   //
-  // Nor is there a record to inherit from that would help: every key this
-  // transaction touches — the BotSession, the outbox rows, the analytics events —
-  // is addressed by `(tenantId, channel, key)` and READ back by
-  // `outboxTenantId()`/`runtimeFlowTenantId()`, which are the same
-  // `writeTenantId() ?? DEFAULT_TENANT_ID` expression. Writer and readers agree
-  // today because they are all wrong in the same way. Changing this one to the
-  // record's tenant while `flushBotOutboxConversation` below and the bot-outbox
-  // cron still read the founding tenant would strand a second tenant's replies in
-  // the queue permanently — a delivery outage traded for a silent mis-ownership.
-  //
-  // WHAT WOULD SETTLE IT: the WhatsApp channel scope resolving while enforcement is
-  // dormant (see botInboundEvent.completeInboundBotEvent), so the runtime writer
-  // AND every runtime reader move to the same real tenant in one change.
-  await withTenantWrite(async (tx, tenantId) => {
+  // Every key this transaction touches — the BotSession, the outbox rows, the
+  // analytics events, the inbound-event lease — is addressed by
+  // `(tenantId, channel, key)` and READ BACK by `botConversationTenantId()`. Writer
+  // and readers therefore still resolve one expression, which is the invariant that
+  // let them move at all: they used to agree on the founding tenant because they
+  // were all wrong in the same way, and they now agree on the endpoint's real owner.
+  await withBotConversationWrite(async (tx, tenantId) => {
     // Fence the whole turn, not just the session write. The AI call above can take
     // seconds; a salesperson can press Take over during it. Guarding only the
     // session update meant ownership was correctly kept while THIS turn's reply

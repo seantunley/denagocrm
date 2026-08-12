@@ -67,9 +67,9 @@ test("the manual WhatsApp reply records and queues before it delivers", () => {
  */
 test("ownership, history and delivery intent are one transaction", () => {
   const fn = staffFn();
-  assert.match(fn, /withTenantWrite\(async \(tx, tenantId\)/, "everything shares one transaction");
+  assert.match(fn, /withBotConversationWrite\(async \(tx, tenantId\)/, "everything shares one transaction");
 
-  const txAt = fn.indexOf("withTenantWrite(async (tx, tenantId)");
+  const txAt = fn.indexOf("withBotConversationWrite(async (tx, tenantId)");
   const pauseAt = fn.indexOf("pauseBotSessionTx(tx", txAt);
   const cancelAt = fn.indexOf("cancelPendingBotOutputTx(tx", txAt);
   const outboxAt = fn.indexOf("tx.botFlowOutbox.create", txAt);

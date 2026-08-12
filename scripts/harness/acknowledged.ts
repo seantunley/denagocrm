@@ -6,18 +6,24 @@
  * The enforced pass is the pre-flip gate, and it is BLOCKING: the workflow step
  * runs with `continue-on-error: false`, so a failure genuinely fails the run.
  *
- * That is only honest if the gate can actually be satisfied, and today it cannot
- * be. At least one enforced failure is not an application defect and cannot be
- * fixed anywhere in this repository — `TimelinePin` READ needs a DATABASE ROLE
- * change, because the application connects as a `BYPASSRLS` role and therefore
- * no RLS policy ever evaluates (see the entry below). Making the step blocking
- * with no allowlist would paint CI permanently red for a reason no commit here
- * can clear, and a permanently red check is one everybody learns to scroll past.
- * Leaving it advisory would mean it is not a gate at all.
+ * That is only honest if the gate can actually be satisfied. For most of this
+ * work it could not be: one enforced failure was not an application defect and
+ * could not be fixed anywhere in this repository — `TimelinePin` READ needed a
+ * DATABASE ROLE change, because the harness (like production) connected as a
+ * role with the BYPASSRLS attribute and therefore no RLS policy ever evaluated.
+ * Making the step blocking with no allowlist would have painted CI permanently
+ * red for a reason no commit here could clear, and a permanently red check is
+ * one everybody learns to scroll past. Leaving it advisory would have meant it
+ * was not a gate at all.
  *
  * So: BLOCKING, with a recorded allowlist. Every failure that is NOT in the list
  * below fails the build. The list is the whole of the exemption, and it is
  * visible, attributed, and counted out loud on every single run.
+ *
+ * THE LIST IS NOW EMPTY — the harness connects as a NOSUPERUSER NOBYPASSRLS role
+ * and that last entry became provably false. The machinery stays exactly as it
+ * is. It was not scaffolding for one known problem; it is what stops the NEXT
+ * one arriving as a check that quietly went red.
  *
  * ── THIS IS NOT A SUBSTITUTE FOR FIXING THEM ─────────────────────────────────
  *
@@ -84,54 +90,50 @@ export type AcknowledgedFailure = {
  * Every entry is a known way in which enforcement would still leak or lose data.
  * Delete entries as the fixes land; never add one to make a run green.
  *
- * ── STATE OF PLAY, 2026-08-11: 1 entry ───────────────────────────────────────
+ * ── STATE OF PLAY, 2026-08-11: 0 entries ─────────────────────────────────────
  *
- * The ratchet ratcheted. This list stood at ELEVEN on 2026-08-11 morning — ten
- * real application defects with fixes in flight, plus the database-role problem.
- * All ten application fixes have now merged to main and every one of those checks
- * passes in the enforced run, so their entries are deleted:
+ * The ratchet reached zero. This list stood at ELEVEN on 2026-08-11 morning —
+ * ten real application defects with fixes in flight, plus the database-role
+ * problem. All ten application fixes merged to main and every one of those
+ * checks passes in the enforced run:
  *
  *   5  SalesPipeline OWN/READ/UPDATE/DELETE/LIST → PR #457   MERGED — now passing
  *   2  SalesPipeline UNIQUE ×2                   → PR #469   MERGED — now passing
  *   2  Quote OWN, JobCard OWN                    → PR #459   MERGED — now passing
  *   1  TimelinePin OWN                           → PR #475   MERGED — now passing
  *
- * WHAT IS LEFT IS THE ONE THAT WAS NEVER A CODE PROBLEM. TimelinePin READ is the
- * BYPASSRLS database role, it cannot be fixed by any commit in this repository,
- * and it is the documented canary for the RLS-role cutover: it must flip from
- * fail to pass with NO application change. Until it does, this gate is NOT green
- * and TENANT_ENFORCEMENT must not be switched on.
+ * THE ELEVENTH WAS THE ONE THAT WAS NEVER A CODE PROBLEM, and it is now gone
+ * too. `TimelinePin [READ]` was the BYPASSRLS database role: `getTimelinePins`
+ * is `prisma.$queryRaw`, a Prisma extension cannot rewrite raw SQL, and the only
+ * remaining boundary was an RLS policy that no role was ever subject to. It was
+ * unfixable by any commit in this repository — and it was ALSO unfixable by the
+ * harness, which connected as the scratch server's bootstrap SUPERUSER and so
+ * reproduced production's exemption exactly.
  *
- * ⚠ ONE ENTRY IS NOT ZERO. The list falling to 1 is the ratchet working, not the
- * finish line. If it stops falling — or if it grows — that is the thing to
- * escalate, not the number itself.
+ * The harness now connects as a NOSUPERUSER NOBYPASSRLS role
+ * (scripts/harness/restrictedRole.ts), created by running the shipped
+ * prisma/rls/app-role.sql — the same file the production cutover runs. Under
+ * that role the policy evaluates, and the check flipped from fail to pass with
+ * NO application change, which is precisely the proof this entry demanded:
+ *
+ *   before (owner/superuser)     enforced: 48 passed, 1 failed, 25 not covered
+ *   after  (restricted role)     enforced: 49 passed, 0 failed, 25 not covered
+ *
+ * ⚠ AN EMPTY LIST IS NOT A CUTOVER. What is proven is that the policies, the
+ * grants and the application's SET LOCAL are correct under a non-bypassing role,
+ * on a database built from this repository's migrations. PRODUCTION STILL
+ * CONNECTS AS `neondb_owner`. Until DATABASE_URL is repointed there, every policy
+ * in production remains inert regardless of what this file says — the gate being
+ * green is a statement about the code, and the cutover is a statement about the
+ * environment. docs/RLS-ROLE-CUTOVER.md is the second one, and it is a runbook
+ * somebody has to execute.
  */
 export const ACKNOWLEDGED_ENFORCED_FAILURES: AcknowledgedFailure[] = [
-  /* ── THE ONE THAT IS NOT AN APPLICATION DEFECT ────────────────────────────
-   *
-   * This is the entry the allowlist exists for. Everything else below is a real
-   * defect with a real fix in flight; this one cannot be fixed by any commit in
-   * this repository, which is why a bare blocking gate was not an option.
-   */
-  {
-    model: "TimelinePin",
-    check: "READ",
-    name: "read of B's row by id returns nothing",
-    why:
-      "NOT AN APPLICATION DEFECT — a DATABASE ROLE problem, and the only failure here that " +
-      "enforcement cannot reach. getTimelinePins is prisma.$queryRaw. The Prisma extension " +
-      "cannot rewrite raw SQL, so the boundary was supposed to be RLS via SET LOCAL " +
-      "app.current_tenant. Production connects as neondb_owner with rolbypassrls = true, so no " +
-      "policy ever evaluates and the SET LOCAL is inert. Verified read-only against production " +
-      "on 2026-08-11: RLS is enabled AND forced on TimelinePin, and does nothing. Flipping " +
-      "TENANT_ENFORCEMENT does not change this — it scopes model operations, not raw SQL.",
-    fix:
-      "Not a code change. Connect as a role WITHOUT BYPASSRLS, with the policies granted to it. " +
-      "Written up in docs/rls-role-is-the-flip-blocker.md on branch docs/tenant-preflip-audit, " +
-      "which sets out the cutover and names this check as the canary: it must flip from fail to " +
-      "pass with NO application change. Role work is started on branch chore/rls-app-role; see " +
-      "also docs/RLS-ROLE-CUTOVER.md. Delete this entry the day that lands.",
-  },
+  /* Empty, and the two functions below are what keep it honest: a new failure
+   * with no entry fails the build (it cannot arrive quietly), and an entry whose
+   * check is not currently failing ALSO fails the build (it cannot outlive what
+   * it exempted). Adding one back means writing down what the defect is and
+   * where the real fix lives, in a diff a reviewer can see. */
 ];
 
 /** The identity of a check. Same shape the run report uses to line the passes up. */

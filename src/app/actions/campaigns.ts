@@ -62,12 +62,17 @@ async function audienceLabel(criteria: SegmentCriteria, tenantId: string): Promi
 
 export async function uploadCampaignImage(formData: FormData): Promise<string | null> {
   const user = await requirePermission("campaigns.manage");
-  if (!(await tenantIdFor(user.id))) return null;
+  // A campaign image is uploaded from the composer BEFORE any campaign exists, so
+  // there is no parent record to inherit from — the workspace the author is acting
+  // in owns it. That workspace was already resolved and REQUIRED here (the action
+  // refuses without one), so namespacing costs nothing and invents nothing.
+  const tenantId = await tenantIdFor(user.id);
+  if (!tenantId) return null;
   const file = formData.get("file") as File | null;
   if (!file || !file.type.startsWith("image/")) return null;
   if (file.size > 5 * 1024 * 1024) return null;
   const buf = Buffer.from(await file.arrayBuffer());
-  return saveFile(buf, file.name, file.type);
+  return saveFile(buf, file.name, file.type, tenantId);
 }
 
 export async function previewAudience(formData: FormData): Promise<{ count: number }> {

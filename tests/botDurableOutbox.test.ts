@@ -19,7 +19,7 @@ test("bot sessions are database-unique by tenant, channel and participant", () =
 
 test("shared channel transitions commit outbox rows and BotSession in one tenant transaction", () => {
   const code = src("src/lib/flowSession.ts");
-  assert.match(code, /withTenantWrite\(async \(tx, tenantId\) => \{/);
+  assert.match(code, /withBotConversationWrite\(async \(tx, tenantId\) => \{/);
   assert.match(code, /await persistMessages\(result\.messages, tx, tenantId(, snapshot\.versionId)?\)/);
   assert.match(code, /await upsertBotSessionTx\(tx, tenantId/);
   assert.match(code, /await deleteBotSessionTx\(tx, tenantId, channel, key\)/);
@@ -27,7 +27,7 @@ test("shared channel transitions commit outbox rows and BotSession in one tenant
 
 test("WhatsApp commits its durable batch and session position atomically before delivery", () => {
   const code = src("src/lib/flowRun.ts");
-  const tx = code.indexOf("await withTenantWrite(async (tx, tenantId)");
+  const tx = code.indexOf("await withBotConversationWrite(async (tx, tenantId)");
   const enqueue = code.indexOf("await enqueueBotMessagesTx(tx, tenantId", tx);
   const session = code.indexOf("await upsertBotSessionTx(tx, tenantId", enqueue);
   const flush = code.indexOf('await flushBotOutboxConversation("whatsapp", digits)', session);
@@ -102,5 +102,10 @@ test("bot outbox recovery runs every five minutes", () => {
   assert.ok(vercel.crons.some((cron) => cron.path === "/api/cron/bot-outbox" && cron.schedule === "*/5 * * * *"));
   const route = src("src/app/api/cron/bot-outbox/route.ts");
   assert.match(route, /runCronPerTenant/);
-  assert.match(route, /flushBotOutbox\(50, budget\)/);
+  // The slice's tenant is PASSED THROUGH, not discarded. Dropping it is what made
+  // the dormant sweep drain the founding tenant's queue and nobody else's — and now
+  // that the runtime writes a webhook's replies under the workspace that owns its
+  // provider endpoint, that would strand every other workspace's queue for ever.
+  assert.match(route, /runCronPerTenant\(async \(tenantId, budget\)/, "the slice tenant must not be discarded");
+  assert.match(route, /flushBotOutbox\(50, budget, tenantId\)/);
 });

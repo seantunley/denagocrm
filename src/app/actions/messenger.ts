@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { canAccessContact, requirePermission } from "@/lib/permissions";
 import { type DmPlatform } from "@/lib/messenger";
 import { saveFile } from "@/lib/storage";
+import { customerRecordTenantId } from "@/lib/customerRecordTenant";
 import {
   deliveryStateForMessages,
   enqueueStaffReply,
@@ -109,7 +110,16 @@ export async function sendDmReply(
     // Taken from the BYTES, before they are stored anywhere, so it is the same
     // on every submission of the same file.
     fileDigest = attachmentDigest(buffer);
-    attachmentUrl = await saveFile(buffer, file.name || "attachment", attachmentContentType);
+    // The CONTACT this reply is addressed to owns the attachment — the same record
+    // the Communication rows queued below claim, via the same rule. Not the
+    // sender's session: a staff member replying into another workspace's thread
+    // would otherwise file that thread's media under their own prefix.
+    attachmentUrl = await saveFile(
+      buffer,
+      file.name || "attachment",
+      attachmentContentType,
+      await customerRecordTenantId({ contactId }),
+    );
     attachmentKind = ATTACH_KIND(file.type || "");
     /**
      * ASKED, NOT MINTED.

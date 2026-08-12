@@ -6,6 +6,7 @@ import { prisma } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
 import { saveFile } from "@/lib/storage";
+import { actingOwnerTenantId } from "@/lib/actingScope";
 import { DOC_DEFS, defaultTemplate, mergeTemplate, isDocKey } from "@/lib/docTemplates";
 import {
   requirePermission,
@@ -53,6 +54,30 @@ async function authorizeUploadTarget(
   return { user: await requirePermission("documents.upload"), target: { kind: "none" } };
 }
 
+/**
+ * The workspace that owns a file filed against ONE authorized parent record — the
+ * parent's own `tenantId`, verbatim, NULL included.
+ *
+ * The parent is the single record `authorizeUploadTarget` proved access to, so
+ * this reads exactly the row the caller is already entitled to read. `kind:"none"`
+ * (a repository upload filed against nothing) has no parent at all, and the acting
+ * workspace answers for it instead — the one case where the actor decides.
+ */
+async function uploadTargetTenantId(target: UploadTarget): Promise<string | null> {
+  switch (target.kind) {
+    case "contact":
+      return (await prisma.contact.findUnique({ where: { id: target.contactId }, select: { tenantId: true } }))?.tenantId ?? null;
+    case "vehicle":
+      return (await prisma.vehicle.findUnique({ where: { id: target.vehicleId }, select: { tenantId: true } }))?.tenantId ?? null;
+    case "jobCard":
+      return (await prisma.jobCard.findUnique({ where: { id: target.jobCardId }, select: { tenantId: true } }))?.tenantId ?? null;
+    case "quote":
+      return (await prisma.quote.findUnique({ where: { id: target.quoteId }, select: { tenantId: true } }))?.tenantId ?? null;
+    case "none":
+      return actingOwnerTenantId();
+  }
+}
+
 export async function uploadDocument(formData: FormData) {
   const { user, target } = await authorizeUploadTarget(formData);
   const file = formData.get("file");
@@ -61,7 +86,7 @@ export async function uploadDocument(formData: FormData) {
 
   const buffer = Buffer.from(await file.arrayBuffer());
   const mimeType = file.type || "application/octet-stream";
-  const storedName = await saveFile(buffer, file.name, mimeType);
+  const storedName = await saveFile(buffer, file.name, mimeType, await uploadTargetTenantId(target));
 
   const doc = await prisma.document.create({
     data: {
@@ -200,7 +225,11 @@ export async function uploadTemplateLogo(id: string, formData: FormData) {
   const file = formData.get("file");
   if (!(file instanceof File) || file.size === 0) return;
   if (file.size > 2 * 1024 * 1024 || !file.type.startsWith("image/")) return;
-  const url = await saveFile(Buffer.from(await file.arrayBuffer()), file.name || "logo.png", file.type);
+  // The logo belongs to the TEMPLATE it is being put on, and the template row was
+  // already fetched and authorized above. Not the acting workspace: an owner
+  // editing another workspace's template would otherwise write that workspace's
+  // artwork under their own prefix.
+  const url = await saveFile(Buffer.from(await file.arrayBuffer()), file.name || "logo.png", file.type, rec.tenantId);
   const config = { ...mergeTemplate(rec.docType, rec.config), logoUrl: url };
   await prisma.docTemplateRecord.update({ where: { id }, data: { config: config as object } });
   await logAudit({ action: "doctemplate.logo", summary: `Replaced the logo on template “${rec.name}”`, user });
@@ -247,7 +276,9 @@ export async function uploadRepoDocument(formData: FormData) {
   if (!(file instanceof File) || file.size === 0) return;
   if (file.size > MAX_SIZE) throw new Error("File exceeds 25 MB limit");
   const mimeType = file.type || "application/octet-stream";
-  const storedName = await saveFile(Buffer.from(await file.arrayBuffer()), file.name, mimeType);
+  // A repository upload is filed against no contact, vehicle, job card or quote —
+  // there is genuinely no parent to inherit from, so the acting workspace owns it.
+  const storedName = await saveFile(Buffer.from(await file.arrayBuffer()), file.name, mimeType, await actingOwnerTenantId());
   await prisma.document.create({
     data: {
       fileName: file.name,
@@ -269,7 +300,10 @@ export async function replaceDocument(id: string, formData: FormData) {
   if (file.size > MAX_SIZE) throw new Error("File exceeds 25 MB limit");
   const old = await prisma.document.findUniqueOrThrow({ where: { id } });
   const mimeType = file.type || old.mimeType;
-  const storedName = await saveFile(Buffer.from(await file.arrayBuffer()), file.name || old.fileName, mimeType);
+  // A new VERSION of an existing document belongs where the document already does.
+  // Taking the acting workspace here would split a version chain across two
+  // prefixes, so the old versions stop resolving for whoever ends up owning it.
+  const storedName = await saveFile(Buffer.from(await file.arrayBuffer()), file.name || old.fileName, mimeType, old.tenantId);
   const next = await prisma.document.create({
     data: {
       fileName: file.name || old.fileName,

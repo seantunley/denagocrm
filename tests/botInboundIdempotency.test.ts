@@ -27,7 +27,7 @@ test("the inbound event fence is tenant and channel scoped", () => {
   assert.match(migration, /FORCE ROW LEVEL SECURITY/);
 
   const helper = src("src/lib/botInboundEvent.ts");
-  assert.match(helper, /withTenantWrite/);
+  assert.match(helper, /withBotConversationWrite/);
   assert.match(helper, /ON CONFLICT \("tenantId", "channel", "providerId"\) DO UPDATE/);
   assert.match(helper, /"BotInboundEvent"\."status" <> 'completed'/);
   assert.match(helper, /"leaseUntil" IS NULL OR "BotInboundEvent"\."leaseUntil" < NOW\(\)/);
