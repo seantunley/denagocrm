@@ -32,18 +32,72 @@ const CHECK_DEPLOY = args.includes("--deploy");
 const TRUNK = process.env.TRUNK_BRANCH || "main";
 
 /**
+ * PULL REQUESTS WHOSE WORK REACHED THE TRUNK THROUGH A DIFFERENT PULL REQUEST.
+ *
+ * The only way a stranded PR may stop being reported, and it is deliberately
+ * narrow — the same shape as ACKNOWLEDGED in tests/tenantAccessRatchet.test.ts,
+ * for the same reason: an exception belongs in source as prose that names its
+ * replacement, where review can see it, not as a silenced alarm.
+ *
+ * WHY THIS IS NEEDED AT ALL. Recovering a stranded stack means merging its work
+ * again from a fresh branch. Under a SQUASH workflow that produces a new commit,
+ * so the original PR's head never becomes an ancestor of the trunk and its own
+ * merge commit never will either — the two things this file checks. The work is
+ * on main; the bookkeeping cannot show it. Without a record here the guard would
+ * report those PRs as lost forever, and a check that cries wolf is one people
+ * switch off, which is exactly the gap it exists to close.
+ *
+ * AN ENTRY IS NOT A WAIVER. It only redirects the question: the replacement PR
+ * must ITSELF have landed, checked the same way as any other. If a recovery is
+ * reverted, or was never merged, the original goes straight back to `stranded`.
+ * So this cannot excuse work that is genuinely missing — it can only point at
+ * where the work actually went.
+ *
+ * 2026-08-12: #478, #491 and #492 were merged with their base set to the branch
+ * below them rather than main — the exact failure this file was written for,
+ * caught by this file. Their work was re-landed on main by #498, #499 and #500
+ * respectively, verified by content at the time (each PR's signature test file
+ * present on main, and #492's scoped `updateMany` in place with no unscoped
+ * write left).
+ */
+export const RECOVERED_BY = {
+  478: 498,
+  491: 499,
+  492: 500,
+};
+
+/**
  * Classify one merged pull request.
  *
  * Pure, so the rule is testable without a repository or a network. `landed` is
- * supplied by the caller (a git ancestry check) rather than computed here.
+ * supplied by the caller (a git ancestry check) rather than computed here, and
+ * so is `recoveryLanded` — whether the replacement named in {@link RECOVERED_BY}
+ * has itself reached the trunk. `undefined` means "no replacement recorded".
  */
-export function classifyMerged(pr, landed) {
+export function classifyMerged(pr, landed, recoveryLanded) {
   if (!pr.headRefOid) {
     // Nothing to trace. Reported rather than assumed fine, because "cannot tell"
     // is not "is fine".
     return { number: pr.number, status: "unverifiable", base: pr.baseRefName };
   }
   if (landed) return { number: pr.number, status: "landed", base: pr.baseRefName };
+  const recoveredBy = RECOVERED_BY[pr.number];
+  if (recoveredBy !== undefined && recoveryLanded) {
+    // Reported as its own status rather than folded into `landed`, so the run
+    // still says out loud that this PR did not ship under its own number.
+    return { number: pr.number, status: "recovered", base: pr.baseRefName, recoveredBy };
+  }
+  if (recoveredBy !== undefined) {
+    return {
+      number: pr.number,
+      status: "stranded",
+      base: pr.baseRefName,
+      title: pr.title,
+      reason:
+        `recorded as recovered by #${recoveredBy}, but #${recoveredBy} has not reached ${TRUNK} either — ` +
+        "the replacement must land before the original counts as shipped",
+    };
+  }
   return {
     number: pr.number,
     status: "stranded",
@@ -140,15 +194,36 @@ function main() {
   // I got this wrong in both directions before settling here. A guard that
   // reports work as lost when it is not gets switched off, and then the real
   // one goes unnoticed.
-  const results = merged.map((pr) =>
-    classifyMerged(pr, isAncestor(pr.headRefOid, ref) || isAncestor(pr.mergeCommit?.oid, ref)),
+  // Landedness is worked out ONCE per pull request and then reused, because a
+  // recovery record has to ask the same question of the replacement PR. Asking
+  // it a second way would let the two answers disagree.
+  const landedByNumber = new Map(
+    merged.map((pr) => [
+      pr.number,
+      Boolean(pr.headRefOid) && (isAncestor(pr.headRefOid, ref) || isAncestor(pr.mergeCommit?.oid, ref)),
+    ]),
   );
+  const results = merged.map((pr) => {
+    const recoveredBy = RECOVERED_BY[pr.number];
+    // A replacement outside the window is not assumed to have landed — it is
+    // simply unknown, which leaves the original reported. `--limit` shrinking
+    // must never turn a stranded PR green.
+    const recoveryLanded = recoveredBy === undefined ? undefined : landedByNumber.get(recoveredBy) === true;
+    return classifyMerged(pr, landedByNumber.get(pr.number), recoveryLanded);
+  });
   const stranded = results.filter((r) => r.status === "stranded");
+  const recovered = results.filter((r) => r.status === "recovered");
   const unverifiable = results.filter((r) => r.status === "unverifiable");
 
   console.log(`Checked ${results.length} merged pull request(s) against ${ref}.`);
   console.log(`  landed:       ${results.filter((r) => r.status === "landed").length}`);
   console.log(`  stranded:     ${stranded.length}`);
+  if (recovered.length) {
+    // Printed, not swallowed: these did not ship under their own number, and the
+    // next person reading a release list should be told where they went.
+    console.log(`  recovered:    ${recovered.length} (re-landed by another pull request)`);
+    for (const pr of recovered) console.log(`      #${pr.number} → shipped by #${pr.recoveredBy}`);
+  }
   if (unverifiable.length) console.log(`  unverifiable: ${unverifiable.length} (no merge commit recorded)`);
 
   if (SHOW_OPEN) {

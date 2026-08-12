@@ -9,6 +9,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ResearchBriefingView } from "@/components/ResearchBriefing";
 
 /**
  * Research icon on a kanban tile: opens the lead's AI research summary in the
@@ -49,15 +50,20 @@ export default function ResearchPopup({
           className="max-h-[85vh] overflow-y-auto sm:max-w-xl"
           onPointerDown={(e) => e.stopPropagation()}
         >
-          <DialogHeader>
+          <DialogHeader className="border-b border-slate-800 pb-3">
             <DialogTitle className="flex items-center gap-2">
-              <Search className="size-4 text-primary" />
-              Research — {name}
+              <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-sky-500/15 text-sky-300">
+                <Search className="size-3.5" />
+              </span>
+              <span>
+                AI research
+                <span className="block text-xs font-normal text-slate-400">{name}</span>
+              </span>
             </DialogTitle>
           </DialogHeader>
-          <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground/90">
-            {summary}
-          </p>
+          <div className="pt-1">
+            <ResearchBriefingView text={summary} />
+          </div>
         </ResponsiveDialogContent>
       </Dialog>
     </>
