@@ -69,14 +69,45 @@ async function requestContext() {
   }
 }
 
-function actorType(entry: AuditEntry, actorName: string) {
+/**
+ * `system` IS A CATCH-ALL, NOT A CLAIM ABOUT SCOPE — hence `system_global`.
+ *
+ * Everything below the explicit checks falls through to `system`: no
+ * `entry.user`, and an actor name that matched none of the patterns. That is not
+ * the same statement as "this ran under a global system scope", and the
+ * difference matters the moment anything downstream tries to use `system` as
+ * evidence of one.
+ *
+ * Production proves it. Of the five tenantless `system` audit events, two carry
+ * REAL PERSON NAMES — "Sean Tunley" and "Gavin Tagg" on `signing.signed`. Those
+ * are people signing documents inside a specific workspace. They landed in
+ * `system` only because a signer is not an `entry.user` and a human name matches
+ * neither /customer|portal/ nor /automation|journey|cron|worker/.
+ * `remindVehicleService` is the same shape: it acts on one vehicle and one
+ * contact, passes `userName: "System"`, and would be classified identically.
+ *
+ * So a preflight that exempts `system` from the tenantless check would wave
+ * through exactly the regression it exists to catch — a tenant-specific write
+ * that LOST its scope — while looking like it was being careful.
+ *
+ * `system_global` is the durable classification that actually carries the claim:
+ * emitted only when the write really is running under a system scope, which is a
+ * deliberate bypass and genuinely has no owning workspace. It also lines up with
+ * attribution: `actingTenantId` returns null for exactly that case, so
+ * `system_global` and a null tenant are produced by the same condition, rather
+ * than one being inferred from the other after the fact.
+ *
+ * A missing scope entirely stays `system` and stays a failure. That is the
+ * lost-scope case, and it should be loud.
+ */
+function actorType(entry: AuditEntry, actorName: string, globalScope: boolean) {
   // An explicit classification always wins — a non-User principal (platform admin)
   // sets `user` for attribution but must not be recorded as a CRM user.
   if (entry.actorType) return entry.actorType;
   if (entry.user) return "user";
   if (/customer|portal/i.test(actorName)) return "customer";
   if (/automation|journey|cron|worker/i.test(actorName)) return "automation";
-  return "system";
+  return globalScope ? "system_global" : "system";
 }
 
 /**
@@ -157,9 +188,41 @@ async function actingTenantId(entry: AuditEntry): Promise<string | null> {
  * that the record it describes does not belong to is simply wrong, and the
  * constraint is what noticed.
  */
-async function auditTenantId(entry: AuditEntry): Promise<string | null> {
+/**
+ * THE CONCESSION IS `AuditLog`'s ALONE, so it is no longer charged to `AuditEvent`.
+ *
+ * Everything above describes a constraint that exists on ONE of the two tables
+ * this module writes. `AuditLog` carries the composite key
+ * `(tenantId, contactId)` / `(tenantId, leadId)`; `AuditEvent` carries no foreign
+ * key of any kind — not to Lead, not to Contact, not to Tenant. Confirmed against
+ * every migration: `AuditEvent` has zero FOREIGN KEY definitions.
+ *
+ * This used to return one value that both writes shared, so whenever the
+ * references disagreed — or `actingTenantId` could not resolve one — the NULL
+ * that `AuditLog` needed to stay insertable was also stamped on `AuditEvent`,
+ * which nothing was constraining. The comment above already draws the
+ * distinction ("`AuditEvent` … carries no such key and keeps the full record
+ * either way"); the tenant column was the one part of the record it did not
+ * actually keep.
+ *
+ * That was invisible while every query bypassed RLS. Under enforcement the
+ * tenant column decides whether a row EXISTS: `AuditEvent`'s policy is the
+ * standard `bypass_rls OR "tenantId" = current_setting(...)`, with no NULL
+ * escape hatch, so a null-tenant event is invisible to every workspace
+ * including the one that caused it. Production is carrying 24 such rows across
+ * Lead, Tenant, SignatureRequest, Contact, TestDriveBooking and quote events —
+ * and they are the UNUSUAL operations, the ones where the references disagreed,
+ * which is precisely the set an investigation would go looking for.
+ *
+ * So: `log` keeps the best-effort value the composite key requires, `event`
+ * keeps the acting tenant unconditionally. Same audit, same content; the stream
+ * simply stops discarding attribution it was never required to discard.
+ */
+type AuditTenantIds = { event: string | null; log: string | null };
+
+async function auditTenantIds(entry: AuditEntry): Promise<AuditTenantIds> {
   const acting = await actingTenantId(entry);
-  if (!entry.leadId && !entry.contactId) return acting;
+  if (!entry.leadId && !entry.contactId) return { event: acting, log: acting };
 
   const [lead, contact] = await Promise.all([
     entry.leadId
@@ -181,7 +244,9 @@ async function auditTenantId(entry: AuditEntry): Promise<string | null> {
   // losing attribution on the log rather than failing the operation the log exists
   // to record. `Communication` and `Activity` use the strict `agreedTenantId()`,
   // which refuses; see compositeTenantRules.ts for why these must stay apart.
-  return bestEffortAgreedTenantId(referenced, acting);
+  //
+  // `event` is NOT degraded: no key constrains it, so there is nothing to concede to.
+  return { event: acting, log: bestEffortAgreedTenantId(referenced, acting) };
 }
 
 /**
@@ -236,7 +301,15 @@ async function writeAudit(entry: AuditEntry, tx?: AuditTx) {
     : sanitizeAuditValue(entry.metadata) as Record<string, unknown>;
   const fields = entry.changedFields ?? changedFields(safeBefore, safeAfter);
   const actorName = entry.userName ?? entry.user?.name ?? "System";
-  const tenantId = await auditTenantId(entry);
+  // Two values, not one: only `log` may be degraded to NULL, and only because
+  // AuditLog's composite key demands it. See auditTenantIds.
+  const tenantIds = await auditTenantIds(entry);
+  // Read ONCE, here, and pass it down — the same observation that makes
+  // `actingTenantId` return null for non-user work is the one that justifies
+  // `system_global`, so they must not be able to disagree. Reading the scope
+  // again inside actorType would let an intervening scope change produce a row
+  // claiming global attribution with a tenant on it, or the reverse.
+  const systemScope = currentTenantScope()?.system === true;
 
   const write = async (candidate: AuditTx) => {
     // Both clients' transactions expose the same `$executeRaw` and
@@ -251,7 +324,7 @@ async function writeAudit(entry: AuditEntry, tx?: AuditTx) {
         "summary", "beforeJson", "afterJson", "changedFieldsJson", "source", "ipAddress",
         "userAgent", "correlationId", "metadata"
       ) VALUES (
-        ${crypto.randomUUID()}, ${tenantId}, ${entry.user?.id ?? null}, ${actorName}, ${actorType(entry, actorName)},
+        ${crypto.randomUUID()}, ${tenantIds.event}, ${entry.user?.id ?? null}, ${actorName}, ${actorType(entry, actorName, systemScope)},
         ${entry.action}, ${entityType}, ${entityId}, ${entry.summary},
         ${safeBefore == null ? null : JSON.stringify(safeBefore)}::jsonb,
         ${safeAfter == null ? null : JSON.stringify(safeAfter)}::jsonb,
@@ -269,7 +342,7 @@ async function writeAudit(entry: AuditEntry, tx?: AuditTx) {
         leadId: entry.leadId ?? null,
         userId: entry.user?.id ?? null,
         userName: actorName,
-        tenantId,
+        tenantId: tenantIds.log,
       },
     });
   };
@@ -294,12 +367,14 @@ export async function logAudit(entry: AuditEntry): Promise<void> {
           leadId: entry.leadId ?? null,
           userId: entry.user?.id ?? null,
           userName: entry.userName ?? entry.user?.name ?? "System",
-          // auditTenantId, NOT actingTenantId. This is the retry after writeAudit
+          // The `log` value, NOT the acting tenant. This is the retry after writeAudit
           // failed, and the likeliest reason it failed is the composite foreign key
           // — the acting tenant did not match the referenced contact or lead. Retrying
           // with the value that caused the failure guarantees the retry fails too, so
           // the fallback that exists to save the timeline entry threw it away instead.
-          tenantId: await auditTenantId(entry),
+          // (This row is an AuditLog, so it is the constrained side; `event` would be
+          // wrong here for the same reason `log` is right.)
+          tenantId: (await auditTenantIds(entry)).log,
         },
       });
     } catch {}

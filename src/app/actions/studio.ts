@@ -198,6 +198,8 @@ export async function finalizeDocInstance(id: string): Promise<{ ok: boolean; er
         sizeBytes: pdf.length,
         contactId: doc.contactId,
         quoteId: doc.quoteId,
+        // The instance owns the row exactly as it owns the blob prefix above.
+        tenantId: doc.tenantId,
         tag: "generated-pdf",
         uploadedById: user.id,
       },

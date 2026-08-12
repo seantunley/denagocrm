@@ -191,6 +191,8 @@ export async function generateDocEditorDocument(formData: FormData) {
         quoteId: result.quoteId,
         jobCardId: result.jobCardId,
         contactId: result.contactId,
+        // Same workspace the blob was filed under, three lines above.
+        tenantId: boundTenantId,
         tag: "generated-pdf",
         uploadedById: user.id,
       },

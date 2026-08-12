@@ -80,7 +80,6 @@
   "src/app/actions/recordSigning.ts::bypass-read::Quote": 1,
   "src/app/actions/recordSigning.ts::bypass-read::SignatureRecipient": 1,
   "src/app/actions/recordSigning.ts::bypass-read::SignatureRequest": 2,
-  "src/app/actions/recordSigning.ts::bypass-write::Document": 1,
   "src/app/actions/recordSigning.ts::bypass-write::Quote": 1,
   "src/app/actions/recordSigning.ts::bypass-write::SignatureRecipient": 1,
   "src/app/actions/recordSigning.ts::bypass-write::SignatureRequest": 2,

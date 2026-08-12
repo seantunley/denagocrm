@@ -73,6 +73,8 @@ export async function uploadJobCardPhotos(jobCardId: string, formData: FormData)
           sizeBytes: file.size,
           contactId: jobCard.contactId,
           jobCardId,
+          // The job card owns the row for the same reason it owns the blob above.
+          tenantId: jobCard.tenantId,
           tag: "checkin-photo",
           uploadedById: user.id,
         },
@@ -563,6 +565,8 @@ export async function uploadCheckoutPhotos(jobCardId: string, formData: FormData
           sizeBytes: file.size,
           contactId: jobCard.contactId,
           jobCardId,
+          // The job card owns the row for the same reason it owns the blob above.
+          tenantId: jobCard.tenantId,
           tag: "checkout-photo",
           uploadedById: user.id,
         },
