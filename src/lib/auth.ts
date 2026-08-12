@@ -349,3 +349,35 @@ export async function getActiveTenantId(): Promise<string | null> {
   const sole = await resolveActingTenant(user.id);
   return honoredTenantClaim(session?.tid ?? null, sole);
 }
+
+/**
+ * {@link getActiveTenantId}, but "there is no request at all" answers `null`
+ * instead of throwing.
+ *
+ * `cookies()` throws outside a request, which is a fact about the CALLER, not
+ * about the tenant: a cron tick, a queue drain or a script has no session to
+ * read, and that is simply "no session", not a failure to determine one. Every
+ * user-originated resolver needs this distinction, and each was making it
+ * separately — `actingScopeClass` had a private copy while `actingTenantId`
+ * had none at all, so the same absent session produced `global` through one
+ * and an unhandled Next.js error through the other.
+ *
+ * Catch ONLY Next's documented missing-request error. A real failure while a
+ * request DOES exist — session resolution, malformed state, a database error —
+ * still propagates: silently turning those into "no tenant" would widen access
+ * at the exact moment the tenant decision became uncertain.
+ */
+export async function getActiveTenantIdIfRequest(): Promise<string | null> {
+  try {
+    return await getActiveTenantId();
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      (error.message.includes("next-dynamic-api-wrong-context") ||
+        error.message.includes("outside a request scope"))
+    ) {
+      return null;
+    }
+    throw error;
+  }
+}

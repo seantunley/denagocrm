@@ -1,6 +1,6 @@
 import "server-only";
 import { writeTenantId } from "./tenantWrite";
-import { getActiveTenantId } from "./auth";
+import { getActiveTenantIdIfRequest } from "./auth";
 import { currentTenantScope } from "./tenantScope";
 import { decideBuilderTenant } from "./flowTenantScope";
 import { TenantScopeError } from "./tenantGuard";
@@ -81,7 +81,7 @@ export async function actingTenantId(): Promise<string> {
   // and the inbox binds the one the person is signed into; in both cases the
   // work belongs to the bound workspace, not to whatever the session resolves.
   const ambientTenantId = currentTenantScope()?.tenantId ?? null;
-  const sessionTenantId = ambientTenantId ?? (await getActiveTenantId());
+  const sessionTenantId = ambientTenantId ?? (await getActiveTenantIdIfRequest());
   // THE FOUNDING-TENANT FALLBACK IS NOW UNREACHABLE, deliberately.
   //
   // `decideBuilderTenant` ends `?? DEFAULT_TENANT_ID`, and that last rung is

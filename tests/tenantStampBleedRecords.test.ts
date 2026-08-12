@@ -518,7 +518,11 @@ test("there is exactly one implementation of the acting-tenant rule", () => {
   // session rung — still fails here, because the session read and its use as
   // `sessionTenantId` are both required.
   assert.match(acting, /writeTenantId\(\)/, "the enforced rung must still be read");
-  assert.match(acting, /await getActiveTenantId\(\)/, "the session rung must still be read");
+  // `getActiveTenantIdIfRequest` is `getActiveTenantId` with one behaviour
+  // added: "there is no request at all" answers null instead of throwing,
+  // which is a fact about the caller and not about the tenant. Either name
+  // satisfies this rule; dropping the session rung entirely still fails it.
+  assert.match(acting, /await getActiveTenantId(IfRequest)?\(\)/, "the session rung must still be read");
   assert.match(
     acting,
     /decide(?:Builder|Acting)Tenant\(\{ enforcedTenantId, sessionTenantId \}\)/,

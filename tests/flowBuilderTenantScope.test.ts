@@ -174,7 +174,11 @@ test("the builder tenant is never resolved from writeTenantId alone", () => {
   // named const so the resolver can refuse when neither rung resolves, before
   // the pure rule's founding-tenant fallback can be taken. A delegation that
   // stopped consulting the session still fails both halves of this.
-  assert.match(acting, /await getActiveTenantId\(\)/, "the builder must consult the session's workspace");
+  // `getActiveTenantIdIfRequest` is `getActiveTenantId` with one behaviour
+  // added: "there is no request at all" answers null instead of throwing,
+  // which is a fact about the caller and not about the tenant. Either name
+  // satisfies this rule; dropping the session rung entirely still fails it.
+  assert.match(acting, /await getActiveTenantId(IfRequest)?\(\)/, "the builder must consult the session's workspace");
   assert.match(acting, /sessionTenantId \}\)|sessionTenantId,/, "…and must hand it to the rule");
   assert.match(acting, /const enforcedTenantId = writeTenantId\(\);/, "…and an enforced scope must still be read");
   assert.match(

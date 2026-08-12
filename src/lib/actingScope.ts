@@ -1,5 +1,5 @@
 import "server-only";
-import { getActiveTenantId } from "./auth";
+import { getActiveTenantIdIfRequest } from "./auth";
 import { basePrisma } from "./db";
 import { actingTenantId } from "./actingTenant";
 import { decideActingScope, type ActingScope } from "./actingScopeRule";
@@ -22,20 +22,6 @@ export type { ActingScope };
  * silently converting those failures to `global` would widen access at the exact
  * moment the tenant decision became uncertain.
  */
-async function dormantSessionTenantId(): Promise<string | null> {
-  try {
-    return await getActiveTenantId();
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      (error.message.includes("next-dynamic-api-wrong-context") ||
-        error.message.includes("outside a request scope"))
-    ) {
-      return null;
-    }
-    throw error;
-  }
-}
 
 /**
  * The scope a USER-ORIGINATED operation acts in — the server shell around
@@ -54,7 +40,7 @@ export async function actingScopeClass(): Promise<ActingScope> {
   const enforcing = tenantEnforcing();
   // Skip the session lookup entirely when enforcing: the enforced scope is
   // authoritative and a session must never widen it.
-  const sessionTenantId = enforcing ? null : await dormantSessionTenantId();
+  const sessionTenantId = enforcing ? null : await getActiveTenantIdIfRequest();
   return decideActingScope({
     enforcing,
     enforcedScope: currentScopeClass(),

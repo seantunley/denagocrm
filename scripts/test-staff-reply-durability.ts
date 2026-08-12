@@ -28,6 +28,7 @@
  */
 import { basePrisma, prisma } from "../src/lib/db";
 import { DEFAULT_TENANT_ID } from "../src/lib/tenant";
+import { runInTenantScope } from "../src/lib/tenantScope";
 import {
   deliveryStateForMessages,
   enqueueBotMessages,
@@ -331,7 +332,17 @@ async function main() {
 
   // The person takes the conversation over. No staff message is queued here —
   // Take over is a claim of ownership on its own, and the fence must hold for it.
-  await pauseBotConversation({ channel: "whatsapp", key: ids.fenceKey }, 12);
+  // IN THE WORKSPACE, as a signed-in Server Action is. `pauseBotConversation`
+  // binds through `withStaffConversationScope`, which resolves the acting
+  // workspace from the SESSION — and a script has no request, so there is none
+  // to read. It used to fall back to the founding tenant, which is what made
+  // this script pass without ever establishing a workspace; that fallback is
+  // gone, because it also turned a stale or ambiguous real session into the
+  // founding tenant. Binding the scope here is what a real caller does, and the
+  // fixtures above are already stamped with this same tenant.
+  await runInTenantScope({ tenantId: DEFAULT_TENANT_ID, system: false }, () =>
+    pauseBotConversation({ channel: "whatsapp", key: ids.fenceKey }, 12),
+  );
   const owned = await basePrisma.botSession.findFirst({
     where: { tenantId: DEFAULT_TENANT_ID, channel: "whatsapp", key: ids.fenceKey },
     select: { ownership: true },
@@ -488,13 +499,17 @@ async function main() {
     attachmentUrl: url,
   });
   const dmReply = (parts: ReturnType<typeof dmPart>[]) =>
-    enqueueStaffReply({
-      channel: "messenger",
-      key: ids.psid,
-      parts,
-      contactId: ids.contact,
-      actorId: ids.user,
-    });
+    // Same reason as the pause above: bound, because a script has no session for
+    // withStaffConversationScope to resolve one from.
+    runInTenantScope({ tenantId: DEFAULT_TENANT_ID, system: false }, () =>
+      enqueueStaffReply({
+        channel: "messenger",
+        key: ids.psid,
+        parts,
+        contactId: ids.contact,
+        actorId: ids.user,
+      }),
+    );
 
   // The same file, uploaded twice: identical BYTES, different storage names —
   // which is what saveFile actually produces on a resubmission.
