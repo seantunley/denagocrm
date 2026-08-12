@@ -166,8 +166,13 @@ async function accessibleReportUserIds(userId: string, unrestricted: boolean): P
   // disagree with its own Team about tenancy — belt and suspenders, same as the
   // lock/read/write style used elsewhere for a bypass-client raw query.
   const scope = await actingScopeClass();
-  if (scope.mode === "closed") return [userId];
-  const tenantFilter = scope.mode === "tenant" ? Prisma.sql`AND tm."tenantId" = ${scope.tenantId}` : Prisma.empty;
+  // Just this reader, for anything that is not a resolved workspace. `global`
+  // is a signed-in session that could not be resolved to one — stale, or
+  // ambiguous across two active memberships — and it used to fall through to
+  // `Prisma.empty`, so the people-filter listed teammates from every workspace.
+  // `[userId]` is the same answer this already gives a person with no teams.
+  if (scope.mode !== "tenant") return [userId];
+  const tenantFilter = Prisma.sql`AND tm."tenantId" = ${scope.tenantId}`;
   const rows = await basePrisma.$queryRaw<Array<{ id: string }>>`
     SELECT DISTINCT u."id"
     FROM "User" u

@@ -318,9 +318,22 @@ test("the acting resolvers exist and classify with the acting scope", () => {
   for (const fn of ["resolveActingTenantMemberUser", "listActingTenantStaff"]) {
     const start = actor.indexOf(`export async function ${fn}`);
     assert.ok(start > -1, `${fn} is missing`);
-    const body = actor.slice(start, start + 400);
+    // To the end of the function, not a fixed 400-character window. The window
+    // measured comment length as much as code: adding an explanatory note above
+    // the query pushed the TenantMember join out of range and failed this for a
+    // reason that had nothing to do with the rule.
+    const end = actor.indexOf("\n}", start);
+    assert.ok(end > start, `${fn}: could not find the end of the function`);
+    const body = actor.slice(start, end);
     assert.match(body, /await actingScopeClass\(\)/, `${fn} must classify with the acting scope`);
     assert.match(body, /TenantMember/, `${fn} must join TenantMember in tenant mode`);
+    // The whole point of the acting variants: an unresolvable session is a
+    // refusal, never the platform-wide fallback the background variants keep.
+    assert.match(
+      body,
+      /if \(s\.mode !== "tenant"\) return (null|\[\]);/,
+      `${fn} must refuse anything that is not a resolved workspace`,
+    );
   }
 
   // The originals must be LEFT ALONE — background and token paths rely on them.

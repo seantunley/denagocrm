@@ -126,7 +126,11 @@ test("marking messages read cannot cross a workspace boundary", () => {
   // and an owner gets null from getAccessibleCaseIds().
   assert.match(fn, /const scope = await actingScopeClass\(\);/, "the caller's workspace must be resolved");
   assert.match(fn, /c\."tenantId" IS NULL OR c\."tenantId" = \$\{actingTenantId\}/, "the case must belong to the acting workspace");
-  assert.match(fn, /if \(scope\.mode === "closed"\) return;/, "a closed scope must touch nothing");
+  // Stronger than the `=== "closed"` this used to assert. `global` must return
+  // too: it is not only a sessionless cron, it is also a signed-in session that
+  // could not be resolved to one workspace — stale, or ambiguous across two
+  // active memberships. A request with no workspace has no business writing.
+  assert.match(fn, /if \(scope\.mode !== "tenant"\) return;/, "anything but a resolved workspace must touch nothing");
 
   assert.doesNotMatch(fn, /WHERE "caseId" = \$\{caseId\} AND "type" = 'customer' AND "readAt" IS NULL`/, "the unqualified update");
 });

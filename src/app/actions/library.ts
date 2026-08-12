@@ -63,7 +63,15 @@ async function resolveUpload(file: UploadedFileMeta) {
   // library and then download it through B's own authorised route. The expected
   // owner turns the store's pathname into an ownership check.
   const scope = await actingScopeClass();
-  const expectedTenantId = scope.mode === "tenant" ? scope.tenantId : DEFAULT_TENANT_ID;
+  // No founding-tenant fallback. `global` is a session that could not be
+  // resolved to a workspace, and defaulting to DEFAULT_TENANT_ID pointed the
+  // ownership check at the FOUNDING tenant's namespace — so a caller in that
+  // state was refused their own workspace's blobs and accepted the founding
+  // tenant's, which is the opposite of what this check exists to do.
+  if (scope.mode !== "tenant") {
+    throw new Error("No workspace is attached to this sign-in — sign out and back in to add library files.");
+  }
+  const expectedTenantId = scope.tenantId;
   const owned = await assertOwnedBlob(file.url, expectedTenantId);
   if (owned.size > MAX_BLOB_BYTES) {
     throw new Error(`That file is too large to store (limit ${Math.floor(MAX_BLOB_BYTES / (1024 * 1024))} MB).`);

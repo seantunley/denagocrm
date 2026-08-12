@@ -286,8 +286,14 @@ export async function markCustomerMessagesRead(caseId: string) {
   // `getAccessibleCaseIds()`, i.e. unrestricted. So a tenant-A owner opening
   // /cases/<tenant-B-id> reached this update.
   const scope = await actingScopeClass();
-  if (scope.mode === "closed") return;
-  const actingTenantId = scope.mode === "tenant" ? scope.tenantId : null;
+  // `global` returns too, not just `closed`. It is a signed-in session that
+  // could not be resolved to one workspace (stale, or ambiguous across two
+  // memberships), and passing null below left `c."tenantId" = NULL` — never
+  // true — so the only rows it could still touch were the legacy unowned ones.
+  // Marking another workspace's backlog read is not a disclosure, but it is a
+  // write from a request that has no workspace, which is the thing being closed.
+  if (scope.mode !== "tenant") return;
+  const actingTenantId = scope.tenantId;
 
   await basePrisma.$executeRaw`
     UPDATE "CustomerCaseMessage" m

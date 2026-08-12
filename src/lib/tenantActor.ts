@@ -190,21 +190,21 @@ export async function listTenantStaff(): Promise<TenantActor[]> {
  */
 export async function resolveActingTenantMemberUser(userId: string): Promise<TenantActor | null> {
   const s = await actingScopeClass();
-  if (s.mode === "closed") return null;
-  if (s.mode === "tenant") {
-    const rows = await basePrisma.$queryRaw<TenantActor[]>`
-      SELECT u."id", u."name", u."email"
-      FROM "TenantMember" m
-      JOIN "User" u ON u."id" = m."userId"
-      JOIN "Tenant" t ON t."id" = m."tenantId"
-      WHERE m."tenantId" = ${s.tenantId} AND m."userId" = ${userId}
-        AND t."active" = true AND u."disabledAt" IS NULL
-      LIMIT 1`;
-    return rows[0] ?? null;
-  }
+  // `global` REFUSES here, like `closed`. See the note on actingTeamScope: a
+  // `global` scope is not only "a cron with no session", it is also a signed-in
+  // session that cannot be resolved to ONE workspace — stale, or ambiguous
+  // across two active memberships. Falling through to the platform-wide lookup
+  // below meant this contract validated nothing in exactly that state, which is
+  // the whole thing it exists to prevent: any user id on the platform resolved,
+  // so a posted assignee from another workspace was accepted.
+  if (s.mode !== "tenant") return null;
   const rows = await basePrisma.$queryRaw<TenantActor[]>`
-    SELECT "id", "name", "email" FROM "User"
-    WHERE "id" = ${userId} AND "disabledAt" IS NULL
+    SELECT u."id", u."name", u."email"
+    FROM "TenantMember" m
+    JOIN "User" u ON u."id" = m."userId"
+    JOIN "Tenant" t ON t."id" = m."tenantId"
+    WHERE m."tenantId" = ${s.tenantId} AND m."userId" = ${userId}
+      AND t."active" = true AND u."disabledAt" IS NULL
     LIMIT 1`;
   return rows[0] ?? null;
 }
@@ -220,20 +220,20 @@ export async function resolveActingTenantMemberUser(userId: string): Promise<Ten
  */
 export async function listActingTenantStaff(): Promise<TenantActor[]> {
   const s = await actingScopeClass();
-  if (s.mode === "closed") return [];
-  if (s.mode === "tenant") {
-    return basePrisma.$queryRaw<TenantActor[]>`
-      SELECT u."id", u."name", u."email"
-      FROM "TenantMember" m
-      JOIN "User" u ON u."id" = m."userId"
-      JOIN "Tenant" t ON t."id" = m."tenantId"
-      WHERE m."tenantId" = ${s.tenantId} AND t."active" = true AND u."disabledAt" IS NULL
-      ORDER BY u."name" ASC`;
-  }
+  // An empty picker, not the whole platform. `global` covers a signed-in session
+  // that cannot be resolved to one workspace (stale, or ambiguous across two
+  // active memberships), and the old fallback listed EVERY user on the platform
+  // by name and email to a person in that state — then let one be picked, since
+  // resolveActingTenantMemberUser had the same hole. An empty dropdown is a
+  // visible, harmless failure; a dropdown of other tenants' staff is not.
+  if (s.mode !== "tenant") return [];
   return basePrisma.$queryRaw<TenantActor[]>`
-    SELECT "id", "name", "email" FROM "User"
-    WHERE "disabledAt" IS NULL
-    ORDER BY "name" ASC`;
+    SELECT u."id", u."name", u."email"
+    FROM "TenantMember" m
+    JOIN "User" u ON u."id" = m."userId"
+    JOIN "Tenant" t ON t."id" = m."tenantId"
+    WHERE m."tenantId" = ${s.tenantId} AND t."active" = true AND u."disabledAt" IS NULL
+    ORDER BY u."name" ASC`;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -266,15 +266,23 @@ export async function listActingTenantStaff(): Promise<TenantActor[]> {
 /* ------------------------------------------------------------------------- */
 
 /**
- * The workspace restriction as a BOUND VALUE: the acting tenant, or `null` for
- * "no restriction" (`global` — reached only with no session, which behind a
- * `requirePermission` page cannot happen). `closed` is not representable here on
- * purpose: it means resolve NOTHING, and every caller returns early instead.
+ * The workspace restriction as a BOUND VALUE: the acting tenant, or `closed`.
+ *
+ * There is no longer an unrestricted answer. This used to return
+ * `tenantId: null` for `global` — "no restriction" — on the reasoning that
+ * `global` is reached only with no session, which behind a `requirePermission`
+ * page cannot happen. That reasoning is wrong, and it is the same wrong
+ * reasoning that was in permissions.ts and trash.ts: `actingScopeClass()`
+ * answers `global` whenever a session cannot be resolved to ONE workspace, and
+ * the case that makes it ordinary rather than exotic is a user holding two or
+ * more active memberships, which `honoredTenantClaim()` deliberately drops to
+ * null rather than guess at. So a signed-in person absolutely can reach this
+ * with `global`, and a null tenantId here disables the team filter entirely.
  */
-async function actingTeamScope(): Promise<{ closed: true } | { closed: false; tenantId: string | null }> {
+async function actingTeamScope(): Promise<{ closed: true } | { closed: false; tenantId: string }> {
   const s = await actingScopeClass();
-  if (s.mode === "closed") return { closed: true };
-  return { closed: false, tenantId: s.mode === "tenant" ? s.tenantId : null };
+  if (s.mode !== "tenant") return { closed: true };
+  return { closed: false, tenantId: s.tenantId };
 }
 
 /**
@@ -348,8 +356,12 @@ export async function listActingTenantTeamMemberships(): Promise<TenantTeamMembe
  */
 export async function actingTenantMemberIds(): Promise<string[] | null> {
   const s = await actingScopeClass();
-  if (s.mode === "closed") return [];
-  if (s.mode === "global") return null;
+  // `[]`, not `null`. `null` means "no membership restriction applies", and
+  // isActingTenantMember turns that into true for ANY user id — so an
+  // unresolvable session could administer anybody on the platform: change their
+  // role, reset their second factor, disable them. `global` is not "no session"
+  // (see actingTeamScope); it is also a stale or ambiguous one.
+  if (s.mode !== "tenant") return [];
   const rows = await basePrisma.$queryRaw<Array<{ userId: string }>>`
     SELECT m."userId"
     FROM "TenantMember" m
