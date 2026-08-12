@@ -329,9 +329,28 @@ async function main() {
   );
 }
 
+/**
+ * EXIT CODES — 1 and 2 mean different things, and CI depends on the difference.
+ *
+ *   0  every check ran and every check passed.
+ *   1  every check RAN; some found bad data. Expected, and data-dependent.
+ *   2  the script could not complete — a query blew up, a table or column was
+ *      missing, the DB was unreachable. THE GATE ITSELF IS BROKEN.
+ *
+ * These used to both be 1, which is how this script sat broken for its entire
+ * life while the test suite stayed green: an abort at line 105 and a clean run
+ * reporting three bad rows were indistinguishable to anything automated.
+ *
+ * CI asserts `!= 2` rather than `== 0`, deliberately. The integration database is
+ * seeded and then written to by the security/RBAC/integrity suites with
+ * enforcement OFF, so its fixtures ARE tenantless and section 5 legitimately
+ * reports them — requiring 0 there would assert something about CI's fixtures,
+ * not about this gate. `!= 2` asserts the thing that actually regressed: that the
+ * script still reaches its own summary.
+ */
 main()
   .catch((e) => {
     console.error(e);
-    process.exit(1);
+    process.exit(2);
   })
   .finally(() => basePrisma.$disconnect());
