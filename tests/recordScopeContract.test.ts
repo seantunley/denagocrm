@@ -59,16 +59,23 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
       usablePermissions: (set: Set<string>) => set,
     };
   }
-  // This contract is about the null/[]/[id…] shape, not tenant scoping, so no
-  // ALS/session fixture exists here to feed the real actingScopeClass() — and
-  // its session half calls cookies(), unavailable outside a live request. Fixed
-  // at "global" (no resolvable tenant), which is exactly what unfiltered
-  // pre-tenancy behaviour already meant: actingListScope() returns `{}` for it,
-  // so this file's queries stay exactly as unfiltered as before the predicate
-  // was added. See recordAccessTenantScope.test.ts for the fixture that DOES
-  // drive tenant scoping through this same seam.
+  // This contract is about the []/[id…] shape, not tenant scoping, so no
+  // ALS/session fixture exists here to feed the real actingScopeClass() — its
+  // session half calls cookies(), unavailable outside a live request.
+  //
+  // Pinned to a RESOLVED tenant, not "global". It used to be "global" on the
+  // reasoning that an unresolved scope reproduced the old unfiltered behaviour
+  // and so kept this file's queries neutral. That is no longer true and was
+  // never a good idea: "global" is now a refusal (see actingListScope), because
+  // it covers a signed-in session that cannot be resolved to one workspace —
+  // stale, or ambiguous across memberships — not merely a sessionless cron.
+  // Pinning it here would have made every helper answer `[]` and every
+  // assertion below pass for the wrong reason.
+  //
+  // See recordAccessTenantScope.test.ts for the fixture that drives real
+  // two-tenant scoping through this same seam.
   if (request === "./actingScope" && from.endsWith("permissions.ts")) {
-    return { actingScopeClass: async () => ({ mode: "global" }) };
+    return { actingScopeClass: async () => ({ mode: "tenant", tenantId: "tenant-a" }) };
   }
   return realLoad.call(this, request, parent, isMain);
 } as Loader;
@@ -111,27 +118,49 @@ test("no view permission is answered [] — not null, and without reading the ta
   }
 });
 
-test("a *.view_all holder is answered null — unrestricted, no query", async () => {
+/**
+ * `view_all` and `owner` USED to be answered `null` — "unrestricted, and it
+ * costs no query". Both assertions are now wrong, and they were wrong in the
+ * dangerous direction.
+ *
+ * `null` from these helpers means NO FILTER to every caller: the pages spell it
+ * `ids ? { id: { in: ids } } : {}`. "Unrestricted within my workspace" is not
+ * "unrestricted", and answering `null` handed a `view_all` holder every
+ * workspace's rows the moment a second tenant exists. So view-all now
+ * MATERIALISES the acting workspace's ids — which does cost one query, and that
+ * query is the point.
+ */
+test("a *.view_all holder gets the acting workspace's ids, not an unrestricted null", async () => {
   for (const helper of HELPERS) {
     grant(helper.all);
     spy.reset();
-    assert.equal(await helper.run(), null, `${helper.name}: view_all means no filter`);
-    assert.equal(spy.calls.length, 0, `${helper.name}: an unrestricted answer needs no query`);
+    const result = await helper.run();
+    assert.notEqual(result, null, `${helper.name}: null means "no filter" to every caller — never for view_all`);
+    assert.ok(Array.isArray(result), `${helper.name}: view_all must resolve to a real id list`);
+    assert.ok(spy.calls.length > 0, `${helper.name}: bounding the list to this workspace requires the query`);
   }
 });
 
-test("an owner is answered null for every scope", async () => {
+test("an owner is scoped to their workspace too, not answered unrestricted", async () => {
   // An owner short-circuits ahead of RBAC entirely, so the permission set is
   // empty here on purpose: role alone has to carry the answer. The helpers take
   // the user, not HELPERS' bound USER, so they are driven directly.
+  //
+  // Being an owner says WHO you are, never WHOSE data you may see — the same
+  // distinction that made requireOwner() insufficient on the Trash page.
   held = new Set();
-  spy.reset();
-  assert.equal(await permissions.getAccessibleLeadIds(OWNER), null);
-  assert.equal(await permissions.getAccessibleContactIds(OWNER), null);
-  assert.equal(await permissions.getAccessibleQuoteIds(OWNER), null);
-  assert.equal(await permissions.getAccessibleVehicleIds(OWNER), null);
-  assert.equal(await permissions.getAccessibleJobCardIds(OWNER), null);
-  assert.equal(spy.calls.length, 0, "an owner's scope costs no queries");
+  for (const run of [
+    permissions.getAccessibleLeadIds,
+    permissions.getAccessibleContactIds,
+    permissions.getAccessibleQuoteIds,
+    permissions.getAccessibleVehicleIds,
+    permissions.getAccessibleJobCardIds,
+  ]) {
+    spy.reset();
+    const result = await run(OWNER);
+    assert.notEqual(result, null, "an owner is still bounded by their acting workspace");
+    assert.ok(Array.isArray(result));
+  }
 });
 
 test("an uninitialised or unavailable RBAC snapshot is answered [] , never null", async () => {
@@ -178,7 +207,13 @@ test("activities inherit their scope and refuse without the activities keys", as
   assert.equal(spy.calls.length, 0, "the refusal is decided from permissions");
 
   grant("activities.view", "leads.view_all", "contacts.view_all");
-  spy.reset([[{ id: "act-1" }]]);
+  // THREE queued results, not one. The spy's queue is FIFO and shared across
+  // models, and `view_all` now materialises the workspace's ids instead of
+  // short-circuiting to `null`, so this path issues a lead query and a contact
+  // query (Promise.all, in that order) BEFORE the activity query. Seeding one
+  // result left the activity query empty and the assertion failing for a reason
+  // that had nothing to do with activities.
+  spy.reset([[{ id: "lead-1" }], [{ id: "contact-1" }], [{ id: "act-1" }]]);
   const scoped = await activityAccess.getAccessibleActivityIds(USER);
   assert.deepEqual(scoped, ["act-1"]);
   const query = spy.calls.find((call) => call.model === "activity");

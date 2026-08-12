@@ -61,20 +61,41 @@ function delegate(model: TrashModel, client: any = basePrisma): any {
  * follow-up worth doing; this one is small and has been kept identical on
  * purpose rather than duplicated carelessly.
  */
-export async function actingTrashPredicate(context: string): Promise<{ tenantId?: string | null }> {
+export async function actingTrashPredicate(context: string): Promise<{ tenantId: string }> {
   const scope = await actingScopeClass();
   if (scope.mode === "tenant") return { tenantId: scope.tenantId };
-  if (scope.mode === "closed") {
-    throw new TenantScopeError(
-      `${context}: tenant enforcement is on but this request has no tenant scope. ` +
-        "A global owner without a resolved tenant must use the platform console, " +
-        "not tenant-scoped data.",
-    );
-  }
-  return {};
+  // `global` IS A REFUSAL HERE, not a background job.
+  //
+  // This originally returned `{}` for `global` on the reasoning that global
+  // means "cron / webhook / queue drain, which has no session". That is wrong
+  // for THIS predicate, and it fails open in precisely the states that need it
+  // most. While enforcement is DORMANT — every environment today —
+  // `actingScopeClass()` answers `global` whenever the session cannot resolve a
+  // tenant at all: a session minted before the `tid` claim existed, a claim gone
+  // stale after a membership was removed or a tenant suspended, and — the one
+  // that matters — a claim that became AMBIGUOUS because the user holds two or
+  // more active memberships, which `honoredTenantClaim()` deliberately drops to
+  // null rather than guess at.
+  //
+  // So `requireOwner()` could succeed, tenant resolution could come back
+  // ambiguous, and this returned no predicate at all — handing an unfiltered
+  // `basePrisma` query every workspace's deleted records, and letting a restore
+  // resurrect another tenant's data by id. The exceptional session state is
+  // exactly when a boundary must hold.
+  //
+  // There is no legitimate sessionless caller to keep `{}` for: `purgeTrash()`
+  // is the genuine platform-wide operation and deliberately does not come
+  // through here, and every other caller is a signed-in staff action. So the
+  // only honest answers are a real tenant or a refusal.
+  throw new TenantScopeError(
+    `${context}: this request has no resolvable workspace, so it cannot read or ` +
+      "change trashed records. A global owner without a resolved tenant must use " +
+      "the platform console; a session that cannot resolve one — stale, or ambiguous " +
+      "across several memberships — must sign in again.",
+  );
 }
 
-function actingTenantWhere(): Promise<{ tenantId?: string | null }> {
+function actingTenantWhere(): Promise<{ tenantId: string }> {
   return actingTrashPredicate("softDeleteRecord/restoreRecord");
 }
 
