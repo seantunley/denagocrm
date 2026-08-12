@@ -94,14 +94,35 @@ export async function actingScopeClass(): Promise<ActingScope> {
  * the case, not to the person typing it, so an admin acting in another workspace
  * cannot re-own it.
  *
- * Throws when the scope is `closed`, matching every other unguarded write.
+ * Throws for ANYTHING that is not a resolved workspace — `closed` and `global`
+ * alike. There is no founding-tenant fallback any more.
+ *
+ * WHY THE FALLBACK HAD TO GO. This returned DEFAULT_TENANT_ID for `global`, on
+ * the reasoning that `global` means a background path with no session. It does
+ * not only mean that: `actingScopeClass()` answers `global` whenever a SESSION
+ * cannot be resolved to one workspace — a claim minted before `tid` existed, one
+ * gone stale after a membership changed, or one that is AMBIGUOUS because the
+ * person holds two or more active memberships.
+ *
+ * So a signed-in person in any of those states created a record and it was
+ * stamped with the FOUNDING tenant. That is the failure this codebase's own
+ * actingTenant.ts calls out as the worse direction, and it is exactly right: an
+ * unowned row is visibly unfinished and can be backfilled, while a row stamped
+ * with a confident, wrong owner reads as correct to every later query, appears
+ * in the wrong workspace, and nothing ever flags it.
+ *
+ * Harmless while one workspace existed, because the guess was always right.
+ * Not harmless with two.
  */
 export async function actingOwnerTenantId(): Promise<string> {
   const scope = await actingScopeClass();
-  if (scope.mode === "closed") {
-    throw new TenantScopeError("No tenant scope established for a tenant-owned write");
+  if (scope.mode !== "tenant") {
+    throw new TenantScopeError(
+      "No workspace is attached to this sign-in, so there is nobody to own this record. " +
+        "Sign out and back in; if you belong to more than one workspace, sign in to the one you mean to work in.",
+    );
   }
-  return scope.mode === "tenant" ? scope.tenantId : DEFAULT_TENANT_ID;
+  return scope.tenantId;
 }
 
 /**
@@ -136,10 +157,17 @@ export async function withActingTenantWrite<T>(
   fn: (tx: any, tenantId: string) => Promise<T>,
 ): Promise<T> {
   const scope = await actingScopeClass();
-  if (scope.mode === "closed") {
-    throw new TenantScopeError("No tenant scope established for a tenant-owned write");
+  // Same rule as actingOwnerTenantId, and for the same reason: this hands the
+  // callback a tenantId that every row created inside the transaction is stamped
+  // with, so a founding-tenant fallback here files a whole operation — parent
+  // and children together — under the wrong workspace.
+  if (scope.mode !== "tenant") {
+    throw new TenantScopeError(
+      "No workspace is attached to this sign-in, so there is nobody to own this record. " +
+        "Sign out and back in; if you belong to more than one workspace, sign in to the one you mean to work in.",
+    );
   }
-  const tenantId = scope.mode === "tenant" ? scope.tenantId : DEFAULT_TENANT_ID;
+  const tenantId = scope.tenantId;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (basePrisma as any).$transaction((tx: any) => fn(tx, tenantId));
 }

@@ -511,6 +511,23 @@ test("there is exactly one implementation of the acting-tenant rule", () => {
     /import \{ decide(?:Builder|Acting)Tenant \} from "\.\/(?:flowTenantScope|actingTenantRule)";/,
     "the rule must be imported — a copy defined here is the duplication this test exists to stop",
   );
-  assert.match(acting, /enforcedTenantId: writeTenantId\(\)/);
-  assert.match(acting, /sessionTenantId: await getActiveTenantId\(\)/);
+  // BOTH RUNGS MUST STILL FEED THE RULE. Asserted on the values rather than on
+  // one inline expression: they are now read into named consts so the resolver
+  // can refuse when BOTH are empty, before the pure rule's `?? DEFAULT_TENANT_ID`
+  // last rung can be taken. The original defect — a delegation that dropped the
+  // session rung — still fails here, because the session read and its use as
+  // `sessionTenantId` are both required.
+  assert.match(acting, /writeTenantId\(\)/, "the enforced rung must still be read");
+  assert.match(acting, /await getActiveTenantId\(\)/, "the session rung must still be read");
+  assert.match(
+    acting,
+    /decide(?:Builder|Acting)Tenant\(\{ enforcedTenantId, sessionTenantId \}\)/,
+    "both rungs must be handed to the pure rule",
+  );
+  // And the founding-tenant fallback must stay unreachable from here.
+  assert.match(
+    acting,
+    /if \(!enforcedTenantId && !sessionTenantId\) \{[\s\S]*throw new TenantScopeError/,
+    "an unresolvable session must refuse rather than fall through to the founding tenant",
+  );
 });
