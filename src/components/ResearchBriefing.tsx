@@ -9,22 +9,43 @@ type ParsedBriefing =
  * Role:, Fit: — instead of free prose, so this can render a structured card
  * instead of one undifferentiated paragraph.
  *
- * Tolerant on purpose: text with none of the three labels falls back to
- * `structured: false` rather than guessing at a shape. That covers every
- * research note written before this format existed, and anything the model
- * drifts on, without a migration or a backfill.
+ * STRUCTURED MODE IS ALL-OR-NOTHING, and that is the whole safety property.
+ *
+ * The first version switched to structured mode as soon as ONE line matched a
+ * label, then silently dropped every line that did not. So this:
+ *
+ *     Company: Example Estates, Stellenbosch
+ *     Current role appears to be Managing Director.
+ *     Fit: Large estate with internal transport needs
+ *
+ * rendered as Company + Fit, and the role sentence vanished from the screen
+ * with nothing to indicate anything was missing. Partial format drift is
+ * exactly what this tolerance exists to absorb — this is generated text — so
+ * the lenient path was discarding content precisely when it was needed. It also
+ * reached backwards: an old free-form note that happens to contain one
+ * "Company: ..." line would be read as structured and have all its other prose
+ * hidden.
+ *
+ * So every non-empty line must conform before the structured view is used.
+ * Anything else renders verbatim, which is the honest fallback and the one the
+ * component always claimed to have.
  */
 function parseBriefing(text: string): ParsedBriefing {
   const fields: Partial<Record<"company" | "role" | "fit", string>> = {};
-  let matchedAny = false;
-  for (const rawLine of text.split("\n")) {
+  const lines = text.split("\n").filter((line) => line.trim().length > 0);
+  if (lines.length === 0) return { structured: false };
+
+  for (const rawLine of lines) {
     const match = rawLine.trim().match(/^(Company|Role|Fit):\s*(.+)$/i);
-    if (!match) continue;
-    matchedAny = true;
+    // ONE non-conforming line disqualifies the whole briefing. Losing the
+    // structured card is a cosmetic cost; losing a sentence of research is not.
+    if (!match) return { structured: false };
     const key = match[1].toLowerCase() as "company" | "role" | "fit";
+    // A repeated label would otherwise overwrite silently — same class of
+    // content loss, so it disqualifies too.
+    if (fields[key] !== undefined) return { structured: false };
     fields[key] = match[2].trim();
   }
-  if (!matchedAny) return { structured: false };
   return {
     structured: true,
     company: fields.company ?? null,
@@ -32,6 +53,9 @@ function parseBriefing(text: string): ParsedBriefing {
     fit: fields.fit ?? null,
   };
 }
+
+/** Exported for tests — the parser is the part with a safety property. */
+export const __parseBriefingForTests = parseBriefing;
 
 const ROWS = [
   { key: "company" as const, label: "Company", icon: Building2 },
