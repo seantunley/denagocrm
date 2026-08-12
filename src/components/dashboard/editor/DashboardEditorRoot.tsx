@@ -1,10 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Check, Loader2, Plus, Settings2, Trash2, Code2, Undo2 } from "lucide-react";
+import { useEffect, useState, useTransition } from "react";
+import { Check, Loader2, Plus, Settings2, Trash2, Code2, Undo2, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { CardConfig, DashboardConfig, ViewConfig } from "@/lib/dashboard/config";
 import { LIMITS, slugify } from "@/lib/dashboard/config";
+// Union: the publish control this branch adds, plus main's card-tree lookup.
+import { toast } from "sonner";
+import { setDashboardShared } from "@/app/actions/dashboardConfig";
 import { findCardInTree } from "@/lib/dashboard/cardTree";
 import { DashboardEditorProvider, useEditor, newId } from "./EditorProvider";
 import DashboardCanvas, { type CardSlots } from "./DashboardCanvas";
@@ -40,6 +43,8 @@ export default function DashboardEditorRoot({
   activeViewId,
   slots,
   canEdit,
+  shared,
+  canPublish,
   access,
 }: {
   slug: string;
@@ -53,12 +58,24 @@ export default function DashboardEditorRoot({
   activeViewId: string | null;
   slots: CardSlots;
   /**
-   * False for a dashboard the viewer may look at but not change. There is no
-   * such case today — dashboards are personal — but the editor must not be the
-   * thing that assumes so, because the first shared dashboard would then arrive
-   * fully editable by everyone who could open it.
+   * False for a dashboard the viewer may look at but not change — which is now
+   * a real case: a dashboard published to the workspace belongs to whoever wrote
+   * it, and editing it here would edit the author's copy for everybody.
    */
   canEdit: boolean;
+  /** Already published to the workspace. */
+  shared: boolean;
+  /**
+   * The owner of THIS workspace decides what it sees.
+   *
+   * Deliberately not named `isOwner`, and deliberately not the platform role. It
+   * used to be both, and that hid the control from the provisioned owner of every
+   * workspace but the founding one — the exact people the feature exists for. The
+   * server resolves `isTenantOwner()`, the same predicate `setDashboardShared`
+   * enforces, and hands down the ANSWER rather than an input the client would have
+   * to re-derive.
+   */
+  canPublish: boolean;
   /** Resolved once on the server and handed down — see CardPicker's doc comment. */
   access: EditorAccess;
 }) {
@@ -80,10 +97,13 @@ export default function DashboardEditorRoot({
       activeViewId={activeViewId}
     >
       <Inner
+        slug={slug}
         views={views}
         activeViewId={activeViewId}
         slots={slots}
         canEdit={canEdit}
+        shared={shared}
+        canPublish={canPublish}
         access={access}
       />
     </DashboardEditorProvider>
@@ -91,19 +111,29 @@ export default function DashboardEditorRoot({
 }
 
 function Inner({
+  slug,
   views,
   activeViewId,
   slots,
   canEdit,
+  shared,
+  canPublish,
   access,
 }: {
+  slug: string;
   views: ViewConfig[];
   activeViewId: string | null;
   slots: CardSlots;
   canEdit: boolean;
+  shared: boolean;
+  canPublish: boolean;
   access: EditorAccess;
 }) {
   const { config, editing, setEditing, saving, update, updateView, undo, canUndo } = useEditor();
+  // Optimistic, so the button reflects the click immediately; the server action
+  // is the authority and a refusal puts it back.
+  const [isShared, setIsShared] = useState(shared);
+  const [sharing, startShare] = useTransition();
 
   /*
    * Ctrl/Cmd+Z while editing.
@@ -217,6 +247,60 @@ function Inner({
           >
             <Code2 className="size-3.5" />
             Code
+          </button>
+        )}
+
+        {/*
+            A dashboard somebody else published. Say so plainly rather than just
+            hiding the Customise button: a screen with no edit controls and no
+            explanation reads as a permissions bug.
+        */}
+        {shared && (
+          <span className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground">
+            <Users className="size-3.5" />
+            Shared with you — view only
+          </span>
+        )}
+
+        {/*
+            Publishing is a WORKSPACE-OWNER act, and separate from editing: it
+            changes what the whole workspace sees, not what this person sees.
+            Shown only on your own dashboard, because ownDashboard refuses
+            anything else anyway and offering a control that always fails is worse
+            than not offering it.
+
+            `canPublish` is the server's answer from `isTenantOwner()`, not the
+            platform role. It was the platform role, and the effect was that the
+            owner of tenant B — the only person who could ever publish a tenant-B
+            dashboard, because ownDashboard scopes to the caller's own rows —
+            never saw the button at all.
+        */}
+        {canEdit && canPublish && (
+          <button
+            type="button"
+            disabled={sharing}
+            onClick={() =>
+              startShare(async () => {
+                const result = await setDashboardShared(slug, !isShared).catch(() => ({
+                  error: "Could not change sharing.",
+                }));
+                if (result?.error) toast.error(result.error);
+                else {
+                  setIsShared(!isShared);
+                  toast.success("Sharing updated.");
+                }
+              })
+            }
+            aria-pressed={isShared}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors disabled:opacity-50",
+              isShared
+                ? "border-primary/40 bg-primary/10 text-primary"
+                : "border-border text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <Users className="size-3.5" />
+            {isShared ? "Shared with workspace" : "Share with workspace"}
           </button>
         )}
 

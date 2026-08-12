@@ -1,8 +1,11 @@
 import "server-only";
+// main's imports, not this branch's: `legacyFlowTenant` was renamed to
+// `flowTenantWhere` by #463 (the old name became a lie once the rule stopped
+// being a legacy allowance), and the runtime tenant now comes from
+// `botConversationTenantId` rather than `writeTenantId() ?? DEFAULT_TENANT_ID`,
+// which resolved to the founding tenant while enforcement is dormant.
 import { botConversationTenantId } from "./botTenant";
 import { actingTenantId } from "./actingTenant";
-// `flowTenantWhere` is #463's rename of `legacyFlowTenant` — the old name became a
-// lie once the rule stopped being a legacy allowance.
 import { flowTenantWhere } from "./flowTenantScope";
 
 /**

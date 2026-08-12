@@ -1,0 +1,211 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+/**
+ * Source with CRLF normalised.
+ *
+ * This repo stores CRLF, so an anchor written with a bare newline silently never
+ * matches — which reads as a missing guard rather than a broken test.
+ */
+const read = (rel: string) =>
+  readFileSync(join(process.cwd(), rel), "utf8").replace(/\r\n/g, "\n");
+
+/** …and with comments stripped, so a rule cannot be satisfied by prose about it. */
+const code = (rel: string) =>
+  read(rel)
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+
+const STORE = "src/lib/dashboard/store.ts";
+const ACTION = "src/app/actions/dashboardConfig.ts";
+const SCREEN = "src/components/dashboard/DashboardScreen.tsx";
+const MIGRATION = "prisma/migrations/20260809120000_dashboard_sharing/migration.sql";
+
+/**
+ * OWNER BUILDS, STAFF VIEW.
+ *
+ * Dashboards were personal — every query scoped to the session user, and the
+ * editor carried a comment noting that the first shared dashboard would arrive
+ * fully editable by everyone who could open it unless something stopped it.
+ * This is that something.
+ */
+
+// ── who may publish ─────────────────────────────────────────────────────────
+
+test("only the owner OF THIS WORKSPACE can publish a dashboard", () => {
+  // `requireOwner()` was the wrong gate and the name says why: `role === "owner"`
+  // is a property of the PLATFORM. Under it the provisioned owner of tenant B
+  // could not publish tenant B's own dashboard, and the one account that passed
+  // would find nothing to publish — `ownDashboard()` scopes to the caller's own
+  // rows. Publishing to your own workspace is tenant-local administration, which
+  // is exactly what requireTenantOwner() is for.
+  //
+  // Executed, not just matched: tests/dashboardSharingLifecycle.test.ts runs the
+  // real gate for a tenant-B owner and for tenant-B staff.
+  const actions = code(ACTION);
+  const fn = actions.slice(actions.indexOf("export async function setDashboardShared"));
+  const body = fn.slice(0, fn.indexOf("\n}\n") + 2);
+  assert.match(body, /requireTenantOwner\(\)/, "everyone builds; the workspace's owner publishes");
+  assert.doesNotMatch(body, /requireOwner\(\)/, "the platform role locks out every other workspace");
+});
+
+test("the UI asks the same question the gate does", () => {
+  // Qualifying the server action alone is not enough: the button would still have
+  // vanished for the very person entitled to press it, and an absent control
+  // produces no refusal anybody can report. `viewer.role === "owner"` was the
+  // predicate; it is now the server's `isTenantOwner()` answer.
+  const screen = code(SCREEN);
+  assert.match(screen, /isTenantOwner\(\)/, "the screen must resolve tenant ownership, not the role");
+  assert.doesNotMatch(screen, /role === "owner"/, "the platform role is not the question");
+  assert.match(screen, /canPublish=\{canPublish\}/);
+
+  const editor = code("src/components/dashboard/editor/DashboardEditorRoot.tsx");
+  assert.match(editor, /\{canEdit && canPublish && \(/, "the Share control hangs off the resolved answer");
+  assert.doesNotMatch(editor, /isOwner/, "no client-side re-derivation of who owns the workspace");
+});
+
+test("an owner can only publish their OWN dashboard", () => {
+  // An owner publishing somebody else's private dashboard to the company would
+  // be a surprising amount of power behind a toggle, and nobody asked for it.
+  const actions = code(ACTION);
+  const fn = actions.slice(actions.indexOf("export async function setDashboardShared"));
+  const body = fn.slice(0, fn.indexOf("\n}\n") + 2);
+  assert.match(body, /ownDashboard\(user\.id, slug\)/);
+});
+
+test("unpublishing keeps the record of who published", () => {
+  // The trail of who exposed something to the whole workspace should not vanish
+  // with the flag that did it.
+  const actions = code(ACTION);
+  const fn = actions.slice(actions.indexOf("export async function setDashboardShared"));
+  const body = fn.slice(0, fn.indexOf("\n}\n") + 2);
+  const unpublish = body.slice(body.indexOf(": {"));
+  assert.match(unpublish, /sharedAt: null/);
+  assert.doesNotMatch(unpublish, /sharedById: null/, "sharedById must survive unpublishing");
+});
+
+test("publishing and unpublishing are both audited", () => {
+  const actions = code(ACTION);
+  const fn = actions.slice(actions.indexOf("export async function setDashboardShared"));
+  const body = fn.slice(0, fn.indexOf("\n}\n") + 2);
+  assert.match(body, /logAudit\(/);
+  assert.match(body, /dashboard\.shared/);
+  assert.match(body, /dashboard\.unshared/);
+});
+
+// ── what a viewer gets ──────────────────────────────────────────────────────
+
+test("a shared dashboard renders read-only", () => {
+  // Editing it would edit the AUTHOR's copy, for everybody who can see it.
+  const screen = code(SCREEN);
+  assert.match(screen, /canEdit=\{!dashboard\.shared\}/);
+});
+
+test("the viewer is told it is shared, not just denied the controls", () => {
+  // A screen with no edit controls and no explanation reads as a permissions bug.
+  const root = read("src/components/dashboard/editor/DashboardEditorRoot.tsx");
+  assert.match(root, /Shared with you/);
+});
+
+test("a viewer's own dashboard wins over a shared one at the same address", () => {
+  // Both can legitimately be called "sales". A single OR query would return
+  // whichever row the planner reached first, so a person's own screen could be
+  // displaced by something published over it — intermittently, which is the
+  // worst way for that to behave.
+  const store = code(STORE);
+  const fn = store.slice(store.indexOf("dashboardBySlug"));
+  const body = fn.slice(0, fn.indexOf("parseConfig"));
+  const ownAt = body.indexOf("userId: user.id");
+  const sharedAt = body.indexOf("sharedInTenant(");
+  assert.ok(ownAt !== -1 && sharedAt !== -1, "both lookups must exist");
+  assert.ok(ownAt < sharedAt, "the viewer's own dashboard must be looked up first");
+});
+
+test("the switcher lists published dashboards alongside your own", () => {
+  const store = code(STORE);
+  assert.match(store, /OR: \[\{ userId: user\.id \}, sharedInTenant\(tenantId\)\]/);
+  assert.match(store, /shared: row\.userId !== user\.id/, "each entry must know whose it is");
+});
+
+// ── what sharing must NOT do ────────────────────────────────────────────────
+
+test("sharing never widens access to data", () => {
+  // A shared dashboard is a LAYOUT. Every card re-runs its own permission and
+  // module checks against whoever is looking, so two people opening the same
+  // dashboard can legitimately see different cards. If this ever stops being
+  // true, a published layout becomes a way to read other people's records.
+  const renderer = code("src/components/dashboard/cards/builtin.tsx");
+  assert.match(renderer, /canSeeCard\(/, "per-viewer card gating must survive");
+
+  const actions = code(ACTION);
+  const fn = actions.slice(actions.indexOf("export async function setDashboardShared"));
+  const body = fn.slice(0, fn.indexOf("\n}\n") + 2);
+  assert.doesNotMatch(body, /permission|grant|access/i, "publishing must not touch permissions");
+});
+
+test("the query names the tenant itself; the scoped client does not supply one", () => {
+  // This test used to assert the OPPOSITE — that a hand-written tenantId here
+  // would be a second, drifting answer, because the scoped prisma client decides
+  // the boundary for every model. That reasoning was wrong in the one mode that
+  // matters, and db.ts says so plainly:
+  //
+  //     if (!tenantEnforcing()) return args;   // always, today
+  //
+  // So while enforcement is dormant there is no boundary to inherit, and a bare
+  // `sharedAt: { not: null }` matched every tenant's published dashboards.
+  const store = code(STORE);
+  const fn = store.slice(store.indexOf("dashboardsForViewer"));
+  const body = fn.slice(0, fn.indexOf("orderBy"));
+  assert.match(body, /sharedInTenant\(tenantId\)/, "the published predicate must be tenant-qualified");
+  assert.doesNotMatch(body, /sharedAt: \{ not: null \}/, "an unqualified one matches every tenant");
+});
+
+// ── the migration ───────────────────────────────────────────────────────────
+
+test("the migration is additive and inert on application", () => {
+  // Nothing becomes visible to anyone until an owner publishes: NULL is private,
+  // and every existing row is NULL.
+  // Comments stripped, and NOT NULL checked per ADD COLUMN rather than across
+  // the whole file: the partial index legitimately contains "IS NOT NULL", which
+  // is a predicate, not a column constraint.
+  const sql = read(MIGRATION).replace(/^\s*--.*$/gm, "");
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS "sharedAt"/);
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS "sharedById"/);
+
+  for (const statement of sql.split(";")) {
+    if (!/ADD COLUMN/i.test(statement)) continue;
+    assert.doesNotMatch(
+      statement,
+      /NOT NULL/i,
+      "a NOT NULL column on an existing table needs a default and a backfill",
+    );
+  }
+  assert.doesNotMatch(sql, /DROP |DELETE |UPDATE /i, "additive only");
+});
+
+test("the shared lookup is indexed, and only over published rows", () => {
+  // The switcher asks this on every page load. Published dashboards are the rare
+  // case, so a partial index stays small and keeps writes to private dashboards
+  // off it entirely.
+  const sql = read(MIGRATION);
+  assert.match(sql, /CREATE INDEX IF NOT EXISTS "Dashboard_tenantId_sharedAt_idx"/);
+  assert.match(sql, /WHERE "sharedAt" IS NOT NULL/);
+  // tenantId leads, matching the table's existing indexes — the tenant extension
+  // puts it in every where clause, so an index starting elsewhere is unusable.
+  assert.match(sql, /\("tenantId", "sharedAt"\)/);
+});
+
+test("the sharing columns are on Dashboard, not DashboardLayout", () => {
+  // They landed on the wrong model first, because both models have an identical
+  // `createdAt` line and the first match won.
+  const schema = read("prisma/dashboards.prisma");
+  const dashboard = schema.slice(schema.indexOf("model Dashboard {"));
+  const body = dashboard.slice(0, dashboard.indexOf("\n}"));
+  assert.match(body, /sharedAt/);
+
+  const layout = schema.slice(schema.indexOf("model DashboardLayout {"));
+  const layoutBody = layout.slice(0, layout.indexOf("\n}"));
+  assert.doesNotMatch(layoutBody, /sharedAt/, "DashboardLayout must not have them");
+});

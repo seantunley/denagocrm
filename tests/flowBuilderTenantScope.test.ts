@@ -8,6 +8,15 @@ import { DEFAULT_TENANT_ID } from "../src/lib/tenant";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
+/**
+ * Source with comments removed, for the assertions that say "this code must NOT
+ * do X". A `doesNotMatch` over raw text cannot tell code from prose, so a
+ * comment recording WHY the old shape was wrong — which is exactly the comment
+ * a fix like this should leave behind — fails the guard that the fix satisfies.
+ * The same masking as documentScopeTenantSafety.test.ts and its siblings.
+ */
+const code = (rel: string) =>
+  src(rel).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 
 /**
  * The runtime resolver has scoped its BotFlow reads since #402. The BUILDER never
@@ -160,7 +169,7 @@ test("the builder tenant is never resolved from writeTenantId alone", () => {
   // the ambient scope the channel entry now actually binds.
   const scope = src("src/lib/flowScope.ts");
   assert.match(scope, /export function runtimeFlowTenantId\(\): string \{\s*return botConversationTenantId\(\);/);
-  assert.doesNotMatch(scope, /writeTenantId\(\) \?\? DEFAULT_TENANT_ID/, "the dormant-null fallback must not come back");
+  assert.doesNotMatch(code("src/lib/flowScope.ts"), /writeTenantId\(\) \?\? DEFAULT_TENANT_ID/, "the dormant-null fallback must not come back");
   assert.match(scope, /export async function builderTenantId\(\)/);
   // The rule moved, it did not weaken. `builderTenantId` was the first caller of
   // "the workspace this SESSION is acting as"; the record writers fixed in the

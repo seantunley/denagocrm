@@ -95,31 +95,40 @@ model DashboardLayout {
 /// whole degradation story for a config written by an older or newer release —
 /// one fewer card, never a home screen that fails to render.
 model Dashboard {
-  id        String  @id @default(cuid())
-  tenantId  String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
+  id         String    @id @default(cuid())
+  tenantId   String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   /// The owning user. A bare id rather than a Prisma @relation, matching
   /// DashboardLayout and every other domain model here — a relation field would
   /// mean editing the shared schema.prisma to add the back-reference.
-  userId    String
+  userId     String
   /// URL segment, unique per user. Always the output of `slugify`, so it is safe
   /// in a path; the create action resolves a collision with a numeric suffix
   /// rather than refusing, because "you already have a dashboard called Sales" is
   /// a message about a detail the user never chose to care about.
-  slug      String
-  title     String
+  slug       String
+  title      String
   /// A lucide icon name for the switcher, checked against the render-time
   /// allowlist rather than here — an icon that was renamed upstream must cost the
   /// user an icon, not a dashboard.
-  icon      String?
+  icon       String?
   /// Position in the dashboard switcher. Duplicated values are legal and simply
   /// fall back to the creation order; only `reorderDashboards` renumbers, and it
   /// rewrites the whole set, so there is no gap to keep tidy.
-  sortOrder Int      @default(0)
+  sortOrder  Int       @default(0)
   /// A DashboardConfig. See the model doc above for why it is a blob and where
   /// its shape is defined.
-  config    Json
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  config     Json
+  /// When this dashboard was published to the rest of the tenant. NULL means
+  /// private, which is every dashboard until an owner deliberately shares one.
+  ///
+  /// A timestamp rather than a boolean because "shared since when" is the
+  /// question an access review asks, and it costs nothing to be able to answer.
+  sharedAt   DateTime?
+  /// Who published it. Kept after unpublishing, so the record of who exposed
+  /// something to the whole workspace does not vanish with the flag.
+  sharedById String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
   /// One dashboard per address per user per tenant.
   ///
@@ -139,7 +148,6 @@ model Dashboard {
   /// the moment tenantId is populated — at which point this constraint takes
   /// over. Both are needed, each for a different period.
   @@unique([tenantId, userId, slug])
-
   /// The list query: every dashboard belonging to one user, in switcher order.
   ///
   /// Not served by the unique index above, which orders by slug — the switcher

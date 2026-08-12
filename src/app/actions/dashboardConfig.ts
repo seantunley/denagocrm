@@ -4,8 +4,12 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+// Union: main trimmed to `requireUser`, this branch needs `requireTenantOwner`
+// for publishing (only an owner may expose a dashboard to the workspace) and
+// `logAudit` to record who did it.
+import { requireUser, requireTenantOwner } from "@/lib/auth";
 import { actingTenantId } from "@/lib/actingTenant";
+import { logAudit } from "@/lib/audit";
 import { asActionResult, refuse } from "@/lib/actionResult";
 import type { ActionResult } from "@/lib/actionResultTypes";
 import {
@@ -544,4 +548,74 @@ export async function takeControl(): Promise<DashboardSaveResult> {
   });
 
   return stamp ? { ...result, updatedAt: (stamp as Date).toISOString() } : result;
+}
+
+/**
+ * Publish a dashboard to the rest of the tenant, or take it back.
+ *
+ * OWNER OF THIS WORKSPACE, not owner of the platform. Everyone can build their
+ * own dashboards; deciding what the whole workspace sees is a different act — but
+ * it is a TENANT-LOCAL one. `requireOwner()` was the wrong gate and said so in the
+ * name: `role === "owner"` is a property of the platform, and under it the
+ * provisioned owner of tenant B could not publish a dashboard to tenant B. The
+ * only person who could was somebody outside their workspace entirely, whose
+ * `ownDashboard()` lookup would then find nothing to publish. So the feature was
+ * reachable by exactly one account on the whole platform and by nobody it was
+ * built for.
+ *
+ * `requireTenantOwner()` is the predicate this needs and the one routeAccess.ts
+ * spells out for the same distinction ("a surface that shows one workspace its
+ * OWN data wants `tenantOwner`"): the platform owner, or `Tenant.ownerUserId` for
+ * the ACTIVE workspace, resolved live from the row rather than from a JWT claim.
+ * The UI asks `isTenantOwner()` — the same predicate, boolean — so the button and
+ * this gate cannot disagree.
+ *
+ * `ownDashboard` still applies, so an owner can only publish something that is
+ * THEIRS. That is deliberate rather than incidental: an owner publishing another
+ * person's private dashboard to the company would be a surprising amount of
+ * power hiding behind a toggle, and nobody asked for it. It is also the second
+ * half of the tenant boundary — a platform owner acting in workspace A cannot
+ * reach into B's rows, because a row that is not theirs does not resolve.
+ *
+ * WHAT SHARING DOES NOT DO is grant access to data. A shared dashboard is a
+ * layout, and every card re-runs its own permission and module checks against
+ * whoever is looking — `renderCard` and the loaders in lib/dashboard/cards.tsx
+ * decide that per request. Two people opening the same shared dashboard can
+ * legitimately see different cards, and a card the viewer may not see simply
+ * does not render for them. Publishing a layout can therefore never widen
+ * anybody's access to records.
+ */
+export async function setDashboardShared(
+  slug: unknown,
+  shared: unknown,
+): Promise<ActionResult> {
+  return asActionResult(async () => {
+    const user = await requireTenantOwner();
+    const row = await ownDashboard(user.id, slug);
+    const publish = shared === true;
+
+    await prisma.dashboard.update({
+      where: { id: row.id },
+      // sharedById is KEPT when unpublishing, so the record of who exposed
+      // something to the whole workspace does not vanish with the flag.
+      data: publish
+        ? { sharedAt: new Date(), sharedById: user.id }
+        : { sharedAt: null },
+    });
+
+    await logAudit({
+      action: publish ? "dashboard.shared" : "dashboard.unshared",
+      summary: publish
+        ? `Published dashboard "${row.title}" to the workspace`
+        : `Stopped sharing dashboard "${row.title}"`,
+      user,
+    });
+
+    revalidateSwitcher();
+    return {
+      success: publish
+        ? `"${row.title}" is now visible to everyone in this workspace.`
+        : `"${row.title}" is private again.`,
+    };
+  });
 }

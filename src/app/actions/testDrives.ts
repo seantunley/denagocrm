@@ -8,6 +8,10 @@ import { agreedTenantId } from "@/lib/compositeTenantRules";
 import { canAccessQuote, requirePermission } from "@/lib/permissions";
 import { logAuditStrict } from "@/lib/audit";
 import { saveFile } from "@/lib/storage";
+// main's imports: `resolveAssignableUser` is the assignment CONTRACT that
+// replaced the bare `resolveTenantMemberUser` lookup — it refuses a posted
+// assignee who is not a member of the acting workspace instead of returning
+// null for the caller to ignore, which is why the refusal helpers come with it.
 import { resolveAssignableUser } from "@/lib/tenantActor";
 import { actingTenantId } from "@/lib/actingTenant";
 import { ActionRefusal } from "@/lib/actionFailure";

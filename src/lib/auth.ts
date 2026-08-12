@@ -129,23 +129,56 @@ export async function requireOwner() {
 }
 
 /**
+ * "Is the caller the owner of the workspace they are ACTING IN?" — as a boolean,
+ * for a UI that has to decide whether to render a control.
+ *
+ * The same predicate `requireTenantOwner()` enforces, factored out so the button
+ * and the gate cannot drift. That drift is not hypothetical: a screen that renders
+ * an owner-only control the action then refuses is a bug report, and a screen that
+ * HIDES a control the action would have allowed is worse — the person entitled to
+ * press it has no way to discover it exists, and nothing anywhere reports a
+ * refusal. Both come from the UI re-deriving the rule (`user.role === "owner"`),
+ * so it does not get to.
+ *
+ * Tenant ownership is a ROW (`Tenant.ownerUserId`), not a claim in the JWT, so a
+ * non-platform-owner costs one read. `getCurrentUser` and `getActiveTenantId` are
+ * request-memoised, and the platform owner short-circuits before the query.
+ *
+ * `basePrisma` deliberately, exactly as the `rg` mint site below does: Tenant is a
+ * tenant-scoped model, so the guarded client would fail closed reading the very
+ * row that decides the scope.
+ *
+ * FAILS CLOSED. No session, no resolvable active tenant, or a Tenant row whose
+ * `ownerUserId` is null (provisioned before the column existed) all answer false.
+ */
+export async function isTenantOwner(): Promise<boolean> {
+  const user = await getCurrentUser();
+  if (!user) return false;
+  if (user.role === "owner") return true;
+  const tenantId = await getActiveTenantId();
+  if (!tenantId) return false;
+  const tenant = await basePrisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { ownerUserId: true },
+  });
+  return tenant?.ownerUserId != null && tenant.ownerUserId === user.id;
+}
+
+/**
  * Require that the caller is either the global platform owner OR the
  * provisioned owner of their active tenant (the earliest-joined TenantMember,
  * which is always the account createTenant() set up and then disabled until
  * activation). Use this in pages and actions that are tenant-specific but not
  * platform-global — a tenant owner must be able to manage their own integration
- * credentials without needing the global owner role.
+ * credentials, or publish a dashboard to their own workspace, without needing the
+ * global owner role.
+ *
+ * `requireUser()` runs FIRST so an unauthenticated caller is sent to /login rather
+ * than bounced to "/" as though they were merely unentitled.
  */
 export async function requireTenantOwner() {
   const user = await requireUser();
-  if (user.role === "owner") return user;
-  const tenantId = await getActiveTenantId();
-  if (!tenantId) redirect("/");
-  const tenant = await basePrisma.tenant.findUnique({
-    where: { id: tenantId },
-    select: { ownerUserId: true },
-  });
-  if (tenant?.ownerUserId !== user.id) redirect("/");
+  if (!(await isTenantOwner())) redirect("/");
   return user;
 }
 
