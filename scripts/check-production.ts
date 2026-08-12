@@ -89,7 +89,7 @@ function readCompositeTenantFks(): CompositeFk[] {
  * cron slice both run inside a bound tenant scope, so a NULL there is a real gap
  * and should fail — this list stays as short as the evidence supports.
  */
-const GLOBAL_AUDIT_ACTOR_TYPES = ["platform_admin", "system"] as const;
+const GLOBAL_AUDIT_ACTOR_TYPES = ["platform_admin", "system_global"] as const;
 
 /**
  * Split the tenantless AuditEvent rows into the ones that should have carried a
@@ -264,7 +264,9 @@ async function main() {
       if (split.attributable > 0) {
         failures.push(
           `${split.attributable} AuditEvent row(s) have tenantId IS NULL with an ATTRIBUTABLE actor ` +
-            `(${split.attributableTypes.join(", ")}) — a signed-in person acted and the event lost its workspace`,
+            `(${split.attributableTypes.join(", ")}) — work that belongs to a workspace lost it. ` +
+            `Note that bare "system" is the catch-all arm of actorType, not a scope claim: a signer or a ` +
+            `record-specific reminder lands there too. Genuinely global work is "system_global".`,
         );
       }
       if (split.global > 0) {

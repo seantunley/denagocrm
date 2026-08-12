@@ -31,15 +31,30 @@ const SOURCE = readFileSync(
 /** Strip comments so prose can never satisfy an assertion. */
 const CODE = SOURCE.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 
-test("the global-actor list is exactly platform_admin and system", () => {
+test("the global-actor list is exactly platform_admin and system_global", () => {
   const decl = /GLOBAL_AUDIT_ACTOR_TYPES\s*=\s*\[([^\]]*)\]/.exec(CODE);
   assert.ok(decl, "GLOBAL_AUDIT_ACTOR_TYPES must exist — it is the whole rule");
   const listed = [...decl[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
   assert.deepEqual(
     listed,
-    ["platform_admin", "system"],
-    "widening this list silently converts real lost-attribution failures into warnings; " +
-      "`customer` and `automation` both run inside a bound tenant scope and must keep failing",
+    ["platform_admin", "system_global"],
+    "widening this list silently converts real lost-attribution failures into warnings",
+  );
+  // THE ONE THAT MATTERS. Bare `system` is the CATCH-ALL arm of actorType — no
+  // entry.user and an actor name matching none of the patterns — so it is not
+  // evidence of a global scope. Two of production's five tenantless `system`
+  // events carry real person names ("Sean Tunley", "Gavin Tagg" on
+  // signing.signed): people signing inside one workspace. remindVehicleService
+  // is the same shape. Exempting `system` would wave through precisely the
+  // regression this check exists to catch — a tenant-specific write that LOST
+  // its scope — while looking careful about it.
+  assert.ok(
+    !listed.includes("system"),
+    "bare `system` is a fallback, not a scope claim: exempting it hides lost-scope writes",
+  );
+  assert.ok(
+    !listed.includes("customer") && !listed.includes("automation"),
+    "a portal request and a cron slice both run inside a bound tenant scope, so a NULL there is a real gap",
   );
 });
 
