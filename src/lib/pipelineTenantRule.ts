@@ -121,3 +121,74 @@ export function stageTenantId(input: {
   void input.actingTenantId;
   return input.pipelineTenantId;
 }
+
+/**
+ * THE ONE SENTENCE for a stage id this workspace cannot act on.
+ *
+ * It is a constant rather than two string literals because the two cases it covers
+ * MUST NOT be told apart, and two literals drift:
+ *
+ *   - the stage does not exist;
+ *   - the stage exists, in somebody else's workspace.
+ *
+ * `moveStage` used to answer those differently. It resolved the stage on an
+ * unscoped read first and only then called the ownership gate, so a foreign id got
+ * as far as `throw new Error("Pipeline not found")` — which `asActionResult`
+ * renders as the generic "did not complete cleanly" plus a reference code — while
+ * an id that existed nowhere was refused one line earlier and rendered verbatim.
+ * The read's VALUE never escaped; the BRANCH did, and one distinguishable bit is
+ * all an existence oracle needs. `resolveStageParent` below removes the branch by
+ * making both cases the same empty result, and this is what the caller is told in
+ * either case.
+ *
+ * Deliberately the "no longer exists" wording rather than something hedged: for a
+ * workspace that cannot reach the row, that is not a lie, and any sentence that
+ * hinted at "exists, but not yours" would hand back the bit this exists to remove.
+ */
+export const UNREACHABLE_STAGE_MESSAGE = "That stage no longer exists — reload the page.";
+
+/**
+ * One row of the stage → parent-pipeline join, as the database holds it.
+ *
+ * `PipelineStage` cannot answer the ownership question about itself: its own
+ * `tenantId` is NULL on every row written while enforcement was dormant, so a
+ * predicate on it would refuse legitimate work. The parent pipeline is what carries
+ * a real owner, which is why the boundary is applied to the JOINED row.
+ */
+export type StageParentRow = {
+  stageId: string;
+  pipelineId: string;
+  /** `SalesPipeline.tenantId` — the owner that decides this. */
+  pipelineTenantId: string | null;
+  pipelineActive: boolean;
+  /** `SalesPipeline.deletedAt IS NOT NULL`. Archived parents are not reachable. */
+  pipelineDeleted: boolean;
+};
+
+/**
+ * Resolve a stage id to its OWNING pipeline, or to nothing.
+ *
+ * The reference implementation of the single statement
+ * `findOwnedPipelineForStage()` runs, so a test can drive real rows from two
+ * workspaces through the same decision the database applies, rather than asserting
+ * that a `${scope}` appears somewhere in a query.
+ *
+ * The property that matters is not "tenant B's stage is refused" — the old code
+ * refused it too, eventually. It is that a stage id from another workspace and a
+ * stage id from nowhere produce the SAME value here: `null`. There is no third
+ * answer for a caller to measure.
+ */
+export function resolveStageParent(
+  stageId: string,
+  rows: readonly StageParentRow[],
+  scope: PipelineScope,
+): { id: string; tenantId: string | null; active: boolean } | null {
+  const row = rows.find(
+    (candidate) =>
+      candidate.stageId === stageId &&
+      !candidate.pipelineDeleted &&
+      pipelineRowVisible(candidate.pipelineTenantId, scope),
+  );
+  if (!row) return null;
+  return { id: row.pipelineId, tenantId: row.pipelineTenantId, active: row.pipelineActive };
+}

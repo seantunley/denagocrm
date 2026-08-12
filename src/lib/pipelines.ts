@@ -142,6 +142,56 @@ export async function requireOwnedPipeline(id: string, actingTenant?: string): P
 }
 
 /**
+ * The same gate, keyed by a STAGE id: resolve the stage's owning pipeline, or
+ * nothing. ONE statement, carrying the ownership predicate itself.
+ *
+ * WHY THIS IS NOT `findUnique` FOLLOWED BY {@link requireOwnedPipeline}. That is
+ * what `moveStage` used to do, and the two-step shape leaks a bit even when the
+ * value it reads never escapes:
+ *
+ *   - a stage id owned by ANOTHER workspace resolves on the unscoped read, reaches
+ *     the gate, and fails with `throw new Error("Pipeline not found")` — rendered
+ *     by asActionResult as the generic sentence plus a reference code;
+ *   - a stage id that exists NOWHERE fails at the `if (!stage) refuse(…)` one line
+ *     earlier — rendered verbatim.
+ *
+ * Two distinguishable responses to the same question is a one-bit cross-workspace
+ * existence oracle on stage ids. Folding the lookup into the gate collapses both to
+ * an empty result set, so the caller has one branch to render and there is no
+ * second outcome to compare it against.
+ *
+ * Returns `null` rather than throwing on purpose: the caller refuses ONCE, with the
+ * one sentence `UNREACHABLE_STAGE_MESSAGE` in pipelineTenantRule.ts, and a refusal
+ * logs nothing — so the two cases share the response AND the (empty) log. A throw
+ * here would have to be caught and flattened by every caller to get the same
+ * guarantee, which is a rule held in prose instead of in the type.
+ *
+ * The boundary is on the PARENT, matching {@link stageTenantId}: `PipelineStage`
+ * carries a NULL `tenantId` on every row written while enforcement was dormant, so
+ * a predicate on the stage's own column would refuse legitimate work; the pipeline
+ * is the row with a real owner. Strictly stronger than what it replaces —
+ * `requireOwnedPipeline` applies exactly this predicate to exactly this pipeline,
+ * one statement later.
+ */
+export async function findOwnedPipelineForStage(
+  stageId: string,
+  actingTenant?: string,
+): Promise<OwnedPipeline | null> {
+  const scope =
+    actingTenant === undefined
+      ? await pipelineTenantFilter('p."tenantId"')
+      : pipelineScopeFilter(actingTenant, 'p."tenantId"');
+  const rows = await basePrisma.$queryRaw<OwnedPipeline[]>`
+    SELECT p."id", p."tenantId", p."active"
+    FROM "PipelineStage" s
+    JOIN "SalesPipeline" p ON p."id" = s."pipelineId"
+    WHERE s."id" = ${stageId} AND p."deletedAt" IS NULL ${scope}
+    LIMIT 1
+  `;
+  return rows[0] ?? null;
+}
+
+/**
  * The full pipeline row for an audit `before` snapshot, scoped to the caller.
  *
  * The unscoped `SELECT * FROM "SalesPipeline" WHERE "id" = $1` this replaces was
