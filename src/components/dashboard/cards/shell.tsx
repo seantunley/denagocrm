@@ -114,7 +114,18 @@ export function CardShell({
       </SectionCard>
     );
   }
-  // Same as SectionCard above: fills a cell that was made taller, no-op otherwise.
+  /*
+   * Panel classes copied from SectionCard, `h-full` included, so the two are
+   * pixel-identical.
+   *
+   * `h-full` is NOT what makes a card with `rows: 2` tall — believing it was is
+   * the bug this file was part of. `height: 100%` needs a containing block with a
+   * definite height, and a placement box carrying only `min-height` has
+   * `height: auto`, so it resolved to `auto` and the panel stayed short inside a
+   * tall empty box. The minimum is handed to the panel directly now; see
+   * CARD_MIN_HEIGHT in ./placement.ts. This stays for the layouts where the cell
+   * IS definite and stretching is wanted.
+   */
   return (
     <div className="flex h-full min-w-0 flex-col rounded-xl border border-border bg-card p-4 shadow-sm">
       {children}
@@ -161,86 +172,12 @@ export function CouldNotLoad({ title }: { title?: string }) {
 
 /* ── placement ────────────────────────────────────────────────────── */
 
-/**
- * Column spans as STATIC class names, for the same reason DashboardGrid.tsx
- * spells its own out: Tailwind scans source TEXT, so a computed
- * `lg:col-span-${n}` is never generated into the stylesheet and the card
- * silently renders one column wide.
+/*
+ * The span, height and column tables live in ./placement.ts.
  *
- * Indexed by the container's column count FIRST, so the clamp is baked into the
- * table rather than applied at the call site — a card asking for four columns
- * inside a two-column grid gets the full row instead of overflowing it. The
- * breakpoint each span takes effect at matches the breakpoint its grid actually
- * gains that column at (see GRID_COLUMNS_CLASS), so nothing spans more columns
- * than exist at any width.
+ * They are pure strings with no React in them, and they were moved out so a test
+ * can IMPORT them: this file reaches `server-only` through SectionCard, so
+ * anything importing it outside Next throws. A test that cannot import a class
+ * name can only grep for it, and grepping is what let two broken versions of the
+ * card-height mechanism ship green. See the note at the top of ./placement.ts.
  */
-export const SPAN_IN_GRID: Record<2 | 3 | 4, Record<1 | 2 | 3 | 4, string>> = {
-  2: {
-    1: "sm:col-span-1",
-    2: "sm:col-span-2",
-    3: "sm:col-span-2",
-    4: "sm:col-span-2",
-  },
-  3: {
-    1: "sm:col-span-1",
-    2: "sm:col-span-2",
-    3: "sm:col-span-2 lg:col-span-3",
-    4: "sm:col-span-2 lg:col-span-3",
-  },
-  4: {
-    1: "sm:col-span-1",
-    2: "sm:col-span-2",
-    3: "sm:col-span-2 lg:col-span-3",
-    4: "sm:col-span-2 lg:col-span-4",
-  },
-};
-
-/**
- * Row spans as STATIC class names, for exactly the reason the column table above
- * spells its own out: Tailwind scans source TEXT, so a computed `row-span-${n}`
- * never reaches the stylesheet and the card silently stays one row tall.
- *
- * Only applied from `sm:` upward. On a phone every card is full width and
- * stacked, so a card asking for three rows would just be a tall box with a lot
- * of empty space in it — and the row heights it would be spanning belong to
- * cards that are no longer beside it.
- *
- * A grid only has rows to span if its rows are a known height, which is what
- * `auto-rows-*` on the container provides — see GRID_ROWS_CLASS. Without that a
- * row is as tall as its tallest card and spanning two of them means nothing.
- */
-export const ROW_SPAN_CLASS: Record<1 | 2 | 3 | 4, string> = {
-  1: "",
-  2: "sm:row-span-2",
-  3: "sm:row-span-3",
-  4: "sm:row-span-4",
-};
-
-/**
- * Give the grid a base row height so a row span means something.
- *
- * Without this, rows are sized by their tallest card and a two-row card is
- * simply itself. `auto-rows-[minmax(0,auto)]` is the browser default and is NOT
- * what is wanted; a fixed minimum lets a taller card claim real extra space
- * while a normal card still grows past the minimum if its content needs to.
- */
-export const GRID_ROWS_CLASS = "sm:auto-rows-[minmax(11rem,auto)]";
-
-/** One column on a phone, always — a two-column card grid at 380px is unreadable. */
-export const GRID_COLUMNS_CLASS: Record<2 | 3 | 4, string> = {
-  2: "grid-cols-1 sm:grid-cols-2",
-  3: "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3",
-  4: "grid-cols-1 sm:grid-cols-2 lg:grid-cols-4",
-};
-
-/**
- * A span inside a HORIZONTAL stack, where there is no column grid to span — the
- * children share the row in proportion instead. Static strings again; an
- * arbitrary `grow-[${n}]` would not exist in the stylesheet.
- */
-export const STACK_GROW: Record<1 | 2 | 3 | 4, string> = {
-  1: "grow",
-  2: "grow-[2]",
-  3: "grow-[3]",
-  4: "grow-[4]",
-};

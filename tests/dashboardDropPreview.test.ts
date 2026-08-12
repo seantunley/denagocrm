@@ -618,7 +618,10 @@ test("the marker takes the same shape as the card it stands in for", () => {
   const fn = canvas.slice(canvas.indexOf("function DropMarker"));
   const body = fn.slice(0, fn.indexOf("\n}"));
   assert.match(body, /CARD_SPAN\[card\.span\]/, "the marker must match the card's width");
-  assert.match(body, /CARD_ROWS\[card\.rows \?\? 1\]/, "…and its height");
+  // CARD_MIN_HEIGHT, not CARD_ROWS. The rule is unchanged — the marker must take
+  // the height of the card it stands in for — but height is no longer a grid row
+  // span, so the class that gives a card its height is the one to match.
+  assert.match(body, /CARD_MIN_HEIGHT\[card\.rows \?\? 1\]/, "…and its height");
 
   // It has to be given the card to do that, which means threading it down.
   assert.match(canvas, /<DropMarker key="drop-marker" card=\{activeCard\} height=\{activeHeight\} \/>/);

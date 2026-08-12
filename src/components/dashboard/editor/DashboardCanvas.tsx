@@ -40,6 +40,7 @@ import {
 import type { CardConfig, SectionConfig, ViewConfig } from "@/lib/dashboard/config";
 import { isContainerCard } from "@/lib/dashboard/cardTree";
 import { useEditor, newId } from "./EditorProvider";
+import { CARD_MIN_HEIGHT } from "../cards/placement";
 import ContainerContents, { cardLabel } from "./ContainerContents";
 
 /**
@@ -677,25 +678,23 @@ function SectionBlock({
         items={sortableItems}
         strategy={NO_TRANSFORM}
       >
-        {/* auto-rows gives the grid a base row height, without which a row is
-            simply as tall as its tallest card and "span two rows" means
-            nothing. A minimum rather than a fixed height, so an ordinary card
-            still grows past it when its content needs to. */}
-        <div
-          className={cn(
-            "grid items-start gap-4",
-            // ONLY when something in this section actually spans rows.
-            //
-            // Applied unconditionally it forced EVERY row to 11rem, so a row of
-            // short stat tiles reserved 176px and left a large blank gap under
-            // it. The base row height exists solely to give a row span something
-            // to span; where nothing spans, the grid should size to its content
-            // exactly as it did before.
-            section.cards.some((entry) => (entry.rows ?? 1) > 1) &&
-              "sm:auto-rows-[minmax(11rem,auto)]",
-            VIEW_COLUMNS[section.columnSpan],
-          )}
-        >
+        {/* The section grid is told NOTHING about height — no auto-rows, no row
+            minimum.
+
+            main had reached this from the other end: `auto-rows` applied only
+            when some card in the section spans rows. That is narrower than
+            applying it always, but it is still a MINIMUM ON EVERY ROW of any
+            section that contains one tall card — which is the blank-gap report.
+            Height belongs to the one card that asked for it, so it lives on the
+            card (CARD_MIN_HEIGHT in cards/placement.ts) and the grid keeps
+            sizing to its content. With the row minimum gone there is nothing
+            left for a row span to span, which is why placement.ts drops the
+            row-span classes rather than keeping both mechanisms.
+
+            Children are main's `withDropMarker`, not a plain map: it renders the
+            same SortableCards and additionally places the drop indicator, so
+            taking the map here would have silently removed the drag marker. */}
+        <div className={cn("grid items-start gap-4", VIEW_COLUMNS[section.columnSpan])}>
           {withDropMarker}
           {editing && (
             <button
@@ -753,7 +752,12 @@ function DropMarker({ card, height }: { card: CardConfig | undefined; height: nu
          * wider than one column, by a different route than before.
          */
         card ? CARD_SPAN[card.span] : undefined,
-        card ? CARD_ROWS[card.rows ?? 1] : undefined,
+        // CARD_MIN_HEIGHT, not the removed CARD_ROWS. The marker has to stand in
+        // for the card at its real size, and height is no longer a row span — so
+        // the class that gives a card its height is the one that gives the marker
+        // the same height. Left on CARD_ROWS this referenced a symbol placement.ts
+        // no longer exports.
+        card ? CARD_MIN_HEIGHT[card.rows ?? 1] : undefined,
       )}
     >
       <span className="rounded-md bg-primary px-2 py-1 text-[11px] font-semibold text-primary-foreground shadow-sm">
@@ -770,19 +774,6 @@ const CARD_SPAN: Record<1 | 2 | 3 | 4, string> = {
   2: "sm:col-span-2",
   3: "sm:col-span-2 lg:col-span-3",
   4: "sm:col-span-2 lg:col-span-4",
-};
-
-/**
- * Height, in grid rows. Static strings for the same reason as the widths above.
- *
- * From `sm:` upward only: on a phone the grid is a single column and every card
- * is full width, so spanning rows would just leave a tall empty box.
- */
-const CARD_ROWS: Record<1 | 2 | 3 | 4, string> = {
-  1: "",
-  2: "sm:row-span-2",
-  3: "sm:row-span-3",
-  4: "sm:row-span-4",
 };
 
 function SortableCard({
@@ -830,6 +821,19 @@ function SortableCard({
 
   // Not in edit mode and nothing to draw — the card's own rules hid it, or it
   // had no rows. Either way it takes up no space.
+  /*
+   * Nothing to draw takes up no space.
+   *
+   * `node === undefined` used to be the whole test: a card the server drew
+   * nothing for had no slot at all. Streaming changed that - a card whose
+   * visibility is decidable up front now ALWAYS gets a slot, holding an element
+   * that may resolve to nothing once its query returns. The slot exists, this
+   * guard stops firing, and the grid reserves a cell for a card that draws
+   * nothing: the blank gaps between rows.
+   *
+   * The undefined case still matters (a card with no slot at all). The case that
+   * can only be known AFTER it resolves is handled by `empty:hidden` below.
+   */
   if (!editing && node === undefined) return null;
 
   return (
@@ -837,24 +841,27 @@ function SortableCard({
       ref={setNodeRef}
       className={cn(
         "relative min-w-0",
+        // A card that resolved to nothing must not hold a grid cell open. Only
+        // outside edit mode: while editing, an empty card is still something to
+        // select and configure, so it keeps its placeholder.
+        !editing && "empty:hidden",
         CARD_SPAN[card.span],
-        CARD_ROWS[card.rows ?? 1],
         /*
-         * A card that claimed extra rows must FILL them, or it claims the space
-         * and leaves it blank - which looks like a layout bug.
+         * Height, and ONLY when the panel is this box's direct child.
          *
-         * SELF-STRETCH IS THE PART THAT DOES THE WORK, and h-full alone was
-         * silently useless without it. The grid is `items-start`, so an item does
-         * not stretch to its row: its height IS its content height, and h-full on
-         * it resolves to 100% of that, which is nothing. The item has to opt out
-         * of the start alignment before any height can be inherited at all.
+         * CARD_MIN_HEIGHT is a `[&>*]:min-h-` rule — it hands the minimum to the
+         * children of whatever wears it. Outside edit mode the panel is the sole
+         * child, so this is the right element and the box, still `height: auto`,
+         * comes out exactly as tall as the card. Applying a plain `min-h-` here
+         * instead was the previous attempt: the box grew, the panel did not, and
+         * the difference showed as blank page under a short card.
          *
-         * flex-col so the panel below can fill this box in turn. The chain has to
-         * be unbroken from grid cell to visible card: wrapper -> content div ->
-         * CardShell/SectionCard. A gap anywhere in it and the card stays short
-         * inside a tall cell, which is the exact bug this feature claims to fix.
+         * While editing there are two children — the drag chrome and the wrapper
+         * below — so the rule moves down to the wrapper. Applying it here as well
+         * would stretch the chrome, which is absolutely positioned over the card:
+         * a 22rem invisible overlay swallowing clicks meant for the card.
          */
-        card.rows && card.rows > 1 ? "sm:h-full sm:self-stretch sm:flex sm:flex-col" : undefined,
+        !editing && CARD_MIN_HEIGHT[card.rows ?? 1],
         editing && "rounded-xl ring-1 ring-dashed ring-border",
         /*
          * OUT OF THE FLOW WHILE IT IS BEING DRAGGED, so the marker can take its
@@ -930,17 +937,34 @@ function SortableCard({
         />
       )}
 
-      {/* The middle link in the height chain. min-h-0 because a flex child
-          otherwise refuses to shrink below its content, which would break
-          scrolling inside a card shorter than what it holds. */}
-      <div
-        className={cn(
-          editing && "pointer-events-none select-none",
-          card.rows && card.rows > 1 && "sm:min-h-0 sm:flex-1",
-        )}
-      >
-        {node ?? <CardPlaceholder card={card} />}
-      </div>
+      {/* BOTH SIDES OF THIS ARE NEEDED, and they are about different things.
+          main added the container listing above; this is the height chain.
+
+          Outside edit mode the node is rendered DIRECTLY, with no wrapper.
+          `:empty` only matches an element with no child nodes at all, so an
+          intermediate div would keep the wrapper non-empty and defeat the
+          collapse above. The wrapper is only needed while editing, to stop
+          clicks reaching the card underneath the drag chrome.
+
+          Being the panel's direct parent, this is where the height minimum has
+          to go in this mode. It has no height of its own, so it is exactly as
+          tall as the card it wraps, and the card is as tall as it was asked to
+          be. A card is therefore the same size while you are arranging it as it
+          is once you press Done, which is the whole point of one layout in two
+          modes.
+
+          main's version of this wrapper carried `sm:min-h-0 sm:flex-1` for a
+          multi-row card, which is the middle link of the row-span chain that no
+          longer exists — with the grid row minimum gone there is no cell height
+          to fill, so a flex-1 child would stretch to nothing. CARD_MIN_HEIGHT
+          replaces it. */}
+      {editing ? (
+        <div className={cn("pointer-events-none select-none", CARD_MIN_HEIGHT[card.rows ?? 1])}>
+          {node ?? <CardPlaceholder card={card} />}
+        </div>
+      ) : (
+        node
+      )}
     </div>
   );
 }

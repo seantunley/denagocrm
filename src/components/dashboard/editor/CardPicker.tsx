@@ -492,7 +492,7 @@ function firstGroupableKey(source: SourceDef, sets: EditorAccessSets): string | 
 /*
  * Static class strings only. Tailwind scans source TEXT, so a computed
  * `w-${n}/4` is never generated into the stylesheet and the sketch collapses to
- * nothing — the same rule DashboardGrid and cards/shell.tsx spell out for column
+ * nothing — the same rule DashboardGrid and cards/placement.ts spell out for column
  * spans, and it bites harder here because a missing preview looks like a design
  * choice rather than a bug.
  */
