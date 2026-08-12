@@ -62,7 +62,9 @@ export async function uploadJobCardPhotos(jobCardId: string, formData: FormData)
     let saved = 0;
     for (const file of accepted.slice(0, MAX_PHOTOS)) {
       const buf = Buffer.from(await file.arrayBuffer());
-      const storedName = await saveFile(buf, file.name || "checkin.jpg", file.type);
+      // A condition photo is evidence about THIS job card, so the job card owns it —
+      // not the technician's session, which can be a different workspace's admin.
+      const storedName = await saveFile(buf, file.name || "checkin.jpg", file.type, jobCard.tenantId);
       await prisma.document.create({
         data: {
           fileName: `Check-in photo — job card #${jobCard.number} — ${file.name}`,
@@ -120,7 +122,10 @@ export async function saveCheckinAnnotation(formData: FormData) {
   }
 
   const buf = Buffer.from(await image.arrayBuffer());
-  const storedName = await saveFile(buf, `annotated-${doc.id}.${ext}`, image.type);
+  // The flattened markup is a derivative of the photo it annotates, so it belongs
+  // exactly where that Document already does — a mismatch would leave the original
+  // and its markup in two different workspaces' prefixes.
+  const storedName = await saveFile(buf, `annotated-${doc.id}.${ext}`, image.type, doc.tenantId);
   const previous = doc.annotatedStoredName;
 
   await prisma.document.update({
@@ -549,7 +554,7 @@ export async function uploadCheckoutPhotos(jobCardId: string, formData: FormData
     let saved = 0;
     for (const file of accepted.slice(0, MAX_PHOTOS)) {
       const buf = Buffer.from(await file.arrayBuffer());
-      const storedName = await saveFile(buf, file.name || "checkout.jpg", file.type);
+      const storedName = await saveFile(buf, file.name || "checkout.jpg", file.type, jobCard.tenantId);
       await prisma.document.create({
         data: {
           fileName: `Check-out photo — job card #${jobCard.number} — ${file.name}`,
@@ -612,7 +617,7 @@ export async function uploadInspectionPhoto(itemId: string, jobCardId: string, f
     // Verify the item belongs to the authorized job card BEFORE saving a file, so a
     // wrong item id can't attach a photo to another job card's inspection (or leave
     // an orphaned blob).
-    const owned = await prisma.jobCardInspectionItem.findFirst({ where: { id: itemId, jobCardId }, select: { id: true } });
+    const owned = await prisma.jobCardInspectionItem.findFirst({ where: { id: itemId, jobCardId }, select: { id: true, tenantId: true } });
     if (!owned) refuse("That item is not on this job card — reload the page.");
     const file = formData.get("file");
     if (!(file instanceof File) || file.size === 0) refuse("Choose a photo to upload.");
@@ -622,7 +627,10 @@ export async function uploadInspectionPhoto(itemId: string, jobCardId: string, f
     if (file.size > 4 * 1024 * 1024) refuse("That photo is larger than 4 MB.");
     if (!file.type.startsWith("image/")) refuse("That file is not an image.");
     const buf = Buffer.from(await file.arrayBuffer());
-    const storedName = await saveFile(buf, file.name || "inspection.jpg", file.type);
+    // The inspection ITEM owns its photo. That row was already fetched to prove it
+    // belongs to the authorized job card, so its owner comes free and is the same
+    // one the composite (tenantId, jobCardId) key holds it to.
+    const storedName = await saveFile(buf, file.name || "inspection.jpg", file.type, owned.tenantId);
     await prisma.jobCardInspectionItem.update({ where: { id: itemId }, data: { photoStoredName: storedName } });
     revalidatePath(`/jobcards/${jobCardId}`);
   });

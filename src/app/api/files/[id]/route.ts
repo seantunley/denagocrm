@@ -33,7 +33,13 @@ export async function GET(
   const inline = SAFE_INLINE.test(doc.mimeType);
 
   try {
-    const buffer = await readFile(doc.storedName);
+    // The stored object must belong to the same workspace as the row pointing at
+    // it. Record-level access is not the same question: this route serves any
+    // Document the caller may see, and the ref on that row is only trustworthy
+    // while nothing can put another workspace's object there. `doc.tenantId` is
+    // passed verbatim — a document written before stamping is NULL and asserts
+    // nothing, which is exactly today's behaviour, so no existing download changes.
+    const buffer = await readFile(doc.storedName, doc.tenantId);
     return new NextResponse(new Uint8Array(buffer), {
       headers: {
         "Content-Type": inline ? doc.mimeType : "application/octet-stream",

@@ -177,7 +177,7 @@ test("an attachment redelivery does not persist a second permanent object", () =
   const code = src("src/lib/messenger.ts");
   const loop = code.slice(code.indexOf("for (const [index, att]"), code.indexOf("reopenThreadOnInbound"));
   const check = loop.indexOf("findUnique({ where: { dedupeKey: attKey }");
-  const persist = loop.indexOf("await persistAttachment(att)");
+  const persist = loop.indexOf("await persistAttachment(att,");
   assert.ok(check !== -1, "the attachment key must be checked");
   assert.ok(check < persist, "and checked BEFORE anything permanent is written");
 });

@@ -482,7 +482,11 @@ export async function updateOwnAvatar(
     return { error: "That file is not a supported JPG, PNG or WebP image." };
   }
   const extension = mimeType === "image/jpeg" ? ".jpg" : mimeType === "image/png" ? ".png" : ".webp";
-  const nextRef = await saveFile(buffer, `profile${extension}`, mimeType);
+  // A profile photo belongs to the USER row it is stored on, verbatim — not to
+  // whichever workspace they happened to be acting in when they uploaded it, which
+  // would move the same person's photo between prefixes as they switch workspaces.
+  // A global owner has no tenantId, and null is the honest answer for them.
+  const nextRef = await saveFile(buffer, `profile${extension}`, mimeType, user.tenantId);
   try {
     await prisma.user.update({
       where: { id: user.id },
