@@ -54,7 +54,6 @@
   "src/app/actions/portalAdmin.ts::bypass-write::Contact": 1,
   "src/app/actions/portalExpansion.ts::bypass-raw::CustomerCase": 2,
   "src/app/actions/portalExpansion.ts::bypass-raw::PortalNotification": 1,
-  "src/app/actions/portalExpansion.ts::bypass-raw::SupportMailbox": 1,
   "src/app/actions/privacy.ts::bypass-raw::Contact": 1,
   "src/app/actions/privacy.ts::bypass-read::CustomerCase": 1,
   "src/app/actions/privacy.ts::bypass-read::Lead": 1,
