@@ -92,33 +92,80 @@ function readCompositeTenantFks(): CompositeFk[] {
 const GLOBAL_AUDIT_ACTOR_TYPES = ["platform_admin", "system_global"] as const;
 
 /**
- * Split the tenantless AuditEvent rows into the ones that should have carried a
- * workspace and the ones that legitimately could not.
+ * THE 18 LEGACY ROWS CANNOT BE REPAIRED, SO THE GATE MUST STOP DEMANDING IT.
+ *
+ * `AuditEvent` has `AuditEvent_no_update` and `AuditEvent_no_delete` — BEFORE
+ * triggers running `prevent_audit_event_mutation()`, which refuse every UPDATE
+ * and DELETE with `AuditEvent is append-only`. That is the correct guarantee for
+ * an audit stream: history that can be edited afterwards is not evidence. The
+ * backfill script tried and the database refused, exactly as designed.
+ *
+ * So a check that fails on ANY tenantless attributable audit row can never pass,
+ * no matter what anyone does — and a gate that can never pass gets ignored,
+ * which is worse than not having one.
+ *
+ * The cutoff makes it passable WITHOUT making it toothless. Rows that predate it
+ * are the known, immutable, finite set; rows at or after it mean the producer
+ * regressed and must block. It sits after the newest legacy row
+ * (2026-08-07T14:00:23Z) and days in the past, so nothing new can drift in
+ * underneath it.
+ *
+ * Deliberately NOT suspending the triggers for a "scoped repair". Disabling the
+ * integrity guarantee on live audit data to make a checker green inverts what
+ * the checker is for.
+ */
+const LEGACY_AUDIT_CUTOFF = new Date("2026-08-08T00:00:00.000Z");
+
+/**
+ * A ratchet, not a budget. The legacy set is 18 and can only ever SHRINK — the
+ * table is append-only so nothing can be added below a cutoff that is already in
+ * the past. If this count ever rises, the cutoff is wrong or rows are arriving
+ * with a backdated `createdAt`, and either way the exemption has stopped meaning
+ * what it says. Fail rather than widen.
+ */
+const LEGACY_AUDIT_MAX = 18;
+
+/**
+ * Split the tenantless AuditEvent rows three ways: legitimately global,
+ * immutable legacy, and a live producer regression.
  */
 async function auditEventNullSplit(): Promise<{
   attributable: number;
+  legacy: number;
   global: number;
   attributableTypes: string[];
 }> {
-  const rows = await basePrisma.$queryRaw<{ actorType: string | null; count: bigint }[]>`
-    SELECT "actorType", COUNT(*)::bigint AS count
+  // FILTERed aggregates rather than grouping on the expression: repeating a bound
+  // parameter in both the SELECT list and the GROUP BY makes Postgres treat them
+  // as different expressions and reject the column (42803).
+  const rows = await basePrisma.$queryRaw<
+    { actorType: string | null; legacyCount: bigint; recentCount: bigint }[]
+  >`
+    SELECT "actorType",
+           COUNT(*) FILTER (WHERE "createdAt" <  ${LEGACY_AUDIT_CUTOFF})::bigint AS "legacyCount",
+           COUNT(*) FILTER (WHERE "createdAt" >= ${LEGACY_AUDIT_CUTOFF})::bigint AS "recentCount"
     FROM "AuditEvent" WHERE "tenantId" IS NULL
     GROUP BY "actorType"
   `;
   let attributable = 0;
+  let legacy = 0;
   let global = 0;
   const attributableTypes = new Set<string>();
   for (const row of rows) {
-    const n = Number(row.count);
     const type = row.actorType ?? "(none)";
+    const legacyCount = Number(row.legacyCount);
+    const recentCount = Number(row.recentCount);
     if ((GLOBAL_AUDIT_ACTOR_TYPES as readonly string[]).includes(type)) {
-      global += n;
-    } else {
-      attributable += n;
+      global += legacyCount + recentCount;
+      continue;
+    }
+    legacy += legacyCount;
+    if (recentCount > 0) {
+      attributable += recentCount;
       attributableTypes.add(type);
     }
   }
-  return { attributable, global, attributableTypes: [...attributableTypes].sort() };
+  return { attributable, legacy, global, attributableTypes: [...attributableTypes].sort() };
 }
 
 async function main() {
@@ -273,6 +320,24 @@ async function main() {
         warnings.push(
           `${split.global} AuditEvent row(s) have tenantId IS NULL from platform/system actors ` +
             `(${GLOBAL_AUDIT_ACTOR_TYPES.join(", ")}) — expected global attribution, not a blocker`,
+        );
+      }
+      if (split.legacy > LEGACY_AUDIT_MAX) {
+        // The ratchet. AuditEvent is append-only and the cutoff is in the past,
+        // so this set can only shrink — a rise means the cutoff is wrong or rows
+        // are arriving backdated, and the exemption has stopped meaning what it
+        // says. Widening the number to match would be the whole failure mode.
+        failures.push(
+          `${split.legacy} legacy AuditEvent row(s) predate ${LEGACY_AUDIT_CUTOFF.toISOString()} but only ` +
+            `${LEGACY_AUDIT_MAX} are known — an append-only table cannot grow below a past cutoff, so this ` +
+            `exemption is no longer describing the set it was written for`,
+        );
+      } else if (split.legacy > 0) {
+        warnings.push(
+          `${split.legacy} AuditEvent row(s) have tenantId IS NULL and predate ` +
+            `${LEGACY_AUDIT_CUTOFF.toISOString()} — IMMUTABLE legacy. The append-only triggers ` +
+            `(prevent_audit_event_mutation) refuse UPDATE, so these cannot be repaired and are not a blocker. ` +
+            `They will be invisible in the audit log once enforcement is on. Anything NEWER still fails.`,
         );
       }
       continue;
