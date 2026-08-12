@@ -70,7 +70,33 @@ const AUDIT_ENTITY_TABLE: Record<string, string> = {
   JobCard: "JobCard",
 };
 
+/**
+ * AUDITEVENT CANNOT BE BACKFILLED, AND MUST NOT BE.
+ *
+ * `AuditEvent_no_update` (BEFORE UPDATE, FOR EACH ROW, `prevent_audit_event_mutation()`)
+ * refuses every UPDATE unconditionally, with `AuditEvent is append-only`. Its
+ * sibling `AuditEvent_no_delete` does the same for DELETE. That is the correct
+ * guarantee for an append-only audit stream and it is doing exactly its job:
+ * this script tried to rewrite history and the database said no.
+ *
+ * The first version of this script planned 18 AuditEvent updates alongside the
+ * Document and the UserSession, and because all 20 shared ONE transaction the
+ * trigger rolled the whole thing back — including the two rows that would have
+ * succeeded. Nothing was half-applied, which is the one thing that had to hold.
+ *
+ * Suspending the trigger for a "scoped repair" is available and is the wrong
+ * trade: disabling an integrity guarantee on live audit data to make a checker
+ * green inverts what the checker is for.
+ *
+ * So these rows stay as they are. They are finite (18), historical, and #507
+ * stopped the producer that made them — the preflight's job is to accept a
+ * bounded immutable legacy set and keep failing on anything NEWER, not to demand
+ * a write the database is built to refuse. That rule is a separate change.
+ */
+const AUDIT_EVENT_IS_APPEND_ONLY = true;
+
 async function planAuditEvents() {
+  if (AUDIT_EVENT_IS_APPEND_ONLY) return;
   const rows = await basePrisma.$queryRaw<
     { id: string; actorType: string | null; entityType: string | null; entityId: string | null }[]
   >`
