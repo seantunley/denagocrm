@@ -10,7 +10,44 @@ import { Prisma } from "@prisma/client";
  * is a pure function of its arguments — no session, no request context — so
  * `tests/pipelineTenantIsolation.test.ts` can drive it with two concrete tenant ids
  * and assert that tenant B's row is unreachable from tenant A.
+ *
+ * ─── WHICH TABLES THIS GOVERNS ─────────────────────────────────────────────
+ *
+ * `SalesPipeline` and `PipelineStage` were the first two. The FORECAST family is
+ * now here as well, because it is read by the same module through the same raw
+ * `basePrisma` statements and had no boundary of its own:
+ *
+ *   `Lead`             — the forecast opportunity list AND the totals derived
+ *                        from it (`listForecastLeads` → `summarizeForecast`)
+ *   `ForecastSnapshot` — those totals once PERSISTED, and the history list
+ *   `Team`             — the team a lead's forecast may be attached to
+ *
+ * Strict equality is safe on every one of them for the same measured reason it is
+ * safe on the two originals — each was backfilled UNCONDITIONALLY, so no legacy
+ * unowned row exists to be stranded:
+ *
+ *   `Lead`             20260722120000_tenant_people_isolation, and again by
+ *                      20260809200000_lead_external_id_tenant_scope
+ *   `Team`             20260725160000_tenant_governance_isolation
+ *   `ForecastSnapshot` 20260725160000_tenant_governance_isolation
+ *
+ * and each has a live writer that stamps a real owner rather than the dormant
+ * `writeTenantId()` null: teams through `createTeam` in accessControl.ts, which
+ * refuses outright without an active tenant, and snapshots through
+ * `captureForecastSnapshot` in pipelines.ts, which stamps `actingTenantId()`.
  */
+
+/**
+ * The column the predicate names, as a CLOSED SET of literals.
+ *
+ * Spliced with `Prisma.raw` — so it must never widen to `string`. The bare form is
+ * for single-table statements; the prefixed forms name the alias each joined query
+ * gives the table that actually carries the boundary (`p` SalesPipeline, `l` Lead,
+ * `fs` ForecastSnapshot). Naming the wrong side of a join is the failure this type
+ * exists to prevent: the forecast query joins SalesPipeline, PipelineStage, User and
+ * Team onto Lead, and only `l."tenantId"` bounds which deals are summed.
+ */
+export type TenantScopeAlias = '"tenantId"' | 'p."tenantId"' | 'l."tenantId"' | 'fs."tenantId"';
 
 /** The resolved read/write boundary for one caller's SalesPipeline queries. */
 export type PipelineScope = {
@@ -86,7 +123,7 @@ export function pipelineRowVisible(rowTenantId: string | null, scope: PipelineSc
  * above so the SQL cannot drift from the rule. `alias` names the column and is
  * spliced with `Prisma.raw`, so it is a closed set of literals, never user input.
  */
-export function pipelineScopeSql(scope: PipelineScope, alias: '"tenantId"' | 'p."tenantId"' = '"tenantId"'): Prisma.Sql {
+export function pipelineScopeSql(scope: PipelineScope, alias: TenantScopeAlias = '"tenantId"'): Prisma.Sql {
   const column = Prisma.raw(alias);
   return scope.includeUnowned
     ? Prisma.sql`AND (${column} = ${scope.tenantId} OR ${column} IS NULL)`

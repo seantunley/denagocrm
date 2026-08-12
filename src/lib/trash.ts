@@ -1,7 +1,8 @@
 import { subDays } from "date-fns";
 import { Prisma } from "@prisma/client";
 import { basePrisma } from "./db";
-import { activeTenantPredicate } from "./tenantPredicate";
+import { actingScopeClass } from "./actingScope";
+import { TenantScopeError } from "./tenantGuard";
 import { deleteFile } from "./storage";
 import { type CustomEntity } from "./customFields";
 
@@ -40,16 +41,41 @@ function delegate(model: TrashModel, client: any = basePrisma): any {
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
 /**
- * The active tenant. Every trash model carries `tenantId`, and delegate() runs
- * on basePrisma — which BYPASSES the RLS extension — so the predicate has to be
- * written by hand at each write.
+ * The active tenant for a USER-ORIGINATED trash operation. Every trash model
+ * carries `tenantId`, and delegate() runs on basePrisma — which BYPASSES the RLS
+ * extension — so the predicate has to be written by hand at each write.
  *
  * Resolved here rather than passed in, because a parameter is a thing a caller
  * can get wrong: six callers reached these helpers and only one thought about
  * tenancy. Taking the decision away from them is the fix.
+ *
+ * ACTING scope (`actingScopeClass()`), not `activeTenantPredicate` — every
+ * caller here is a signed-in owner's server action (`requireOwner()` /
+ * `requireXAccess()`), and `activeTenantPredicate` answers from ENFORCEMENT
+ * alone, which is `{}` while DORMANT — the mode every environment runs in
+ * today. Under that predicate `restoreFromTrash` had no per-record ownership
+ * gate in front of it at all (`requireOwner()` says WHO, never WHOSE), so any
+ * owner could restore another tenant's soft-deleted row by id, resurrecting
+ * data that tenant deliberately deleted. See permissions.ts's
+ * actingRecordPredicate for the identical ladder; a shared copy of it is a
+ * follow-up worth doing; this one is small and has been kept identical on
+ * purpose rather than duplicated carelessly.
  */
-function activeTenantWhere(): { tenantId?: string | null } {
-  return activeTenantPredicate("softDeleteRecord/restoreRecord");
+export async function actingTrashPredicate(context: string): Promise<{ tenantId?: string | null }> {
+  const scope = await actingScopeClass();
+  if (scope.mode === "tenant") return { tenantId: scope.tenantId };
+  if (scope.mode === "closed") {
+    throw new TenantScopeError(
+      `${context}: tenant enforcement is on but this request has no tenant scope. ` +
+        "A global owner without a resolved tenant must use the platform console, " +
+        "not tenant-scoped data.",
+    );
+  }
+  return {};
+}
+
+function actingTenantWhere(): Promise<{ tenantId?: string | null }> {
+  return actingTrashPredicate("softDeleteRecord/restoreRecord");
 }
 
 /**
@@ -88,12 +114,13 @@ export async function softDeleteRecord(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   tx?: any,
 ) {
+  const where = await actingTenantWhere();
   const rows = await delegate(model, tx).updateMany({
-    where: { id, ...activeTenantWhere() },
+    where: { id, ...where },
     data: { deletedAt: new Date(), deleteReason: reason, deletedByName: userName },
   });
   if (rows.count === 0) return null;
-  return delegate(model, tx).findFirst({ where: { id, ...activeTenantWhere() } });
+  return delegate(model, tx).findFirst({ where: { id, ...where } });
 }
 
 /**
@@ -105,12 +132,13 @@ export async function softDeleteRecord(
  * that did not happen.
  */
 export async function restoreRecord(model: TrashModel, id: string) {
+  const where = await actingTenantWhere();
   const rows = await delegate(model).updateMany({
-    where: { id, ...activeTenantWhere() },
+    where: { id, ...where },
     data: { deletedAt: null, deleteReason: null, deletedByName: null },
   });
   if (rows.count === 0) return null;
-  return delegate(model).findFirst({ where: { id, ...activeTenantWhere() } });
+  return delegate(model).findFirst({ where: { id, ...where } });
 }
 
 /** Permanently removes trash older than the retention window. Returns count purged. */

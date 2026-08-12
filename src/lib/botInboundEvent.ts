@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { withTenantWrite, type TenantWriteTx } from "./tenantWrite";
+import { withBotConversationWrite } from "./botTenant";
+import { type TenantWriteTx } from "./tenantWrite";
 
 export type InboundBotEventClaim = { rowId: string | null; leaseAttempt: number | null };
 
@@ -64,23 +65,28 @@ export async function claimInboundBotEvent(
   const stableId = providerId.trim();
   if (!stableId) return { status: "unidentified" };
 
-  // BACKGROUND / RUNTIME — keeps `withTenantWrite` deliberately. Every caller is a
-  // provider webhook (`/api/webhooks/{meta,telegram,whatsapp}`), so there is no
-  // session and `withActingTenantWrite` would resolve `global` and stamp the
-  // founding tenant anyway — the same value with a misleading name on it.
+  // THE DEDUPE KEY'S TENANT, AND WHY IT IS NOT `withTenantWrite` ANY MORE.
   //
-  // There is also no RECORD to inherit from: this is the row that FIRST hears about
-  // the event, so `inheritedTenantId` has nothing to be handed. The honest owner is
-  // the tenant that owns the ENDPOINT the event arrived on, which
-  // `withChannelTenantScope` already resolves — but it resolves it only under
-  // enforcement (`if (!tenantEnforcing()) return fn()`), so while dormant no scope
-  // is bound and there is nothing to read. See the note in `completeInboundBotEvent`
-  // for what this costs and what would fix it.
-  return withTenantWrite(async (tx, tenantId): Promise<InboundBotEventOutcome> => {
+  // This is the row that FIRST hears about a provider event, so there is no record
+  // to inherit from; the honest owner is the tenant that owns the ENDPOINT the event
+  // arrived on. `withChannelTenantScope` resolves exactly that, and now BINDS it
+  // while enforcement is dormant as well as under it, so
+  // `botConversationTenantId()` picks it up from the ambient rung.
+  //
+  // It matters here more than anywhere else in the bot stack, because the tenant is
+  // half of a UNIQUENESS constraint rather than merely an owner column: the upsert
+  // below conflicts on `("tenantId","channel","providerId")`. While every tenant's
+  // events were claimed under the founding tenant, two tenants whose customers
+  // produced the same provider id — a Telegram `update_id` is per-bot, a Meta mid is
+  // per-page, neither is global — collided on that key. The second tenant's genuine
+  // customer message matched the first tenant's completed row, was read as a
+  // redelivery, and was acked without ever being processed. No error, no retry, no
+  // trace: the message simply never existed as far as that workspace was concerned.
+  return withBotConversationWrite(async (tx, tenantId): Promise<InboundBotEventOutcome> => {
     const id = crypto.randomUUID();
-    // `withTenantWrite` still hands back a deliberately broad `any` tx (see the
-    // note on its contract), so the row shape is stated as an annotation rather
-    // than a type argument an untyped call cannot accept.
+    // `withBotConversationWrite` still hands back a deliberately broad `any` tx
+    // (see the note on its contract), so the row shape is stated as an annotation
+    // rather than a type argument an untyped call cannot accept.
     const rows: Array<{ id: string; attempts: number }> = await tx.$queryRawUnsafe(
       `INSERT INTO "BotInboundEvent"
          ("id", "tenantId", "channel", "providerId", "status", "attempts", "leaseUntil", "createdAt", "updatedAt")
@@ -159,33 +165,16 @@ export async function completeInboundBotEventTx(
 /**
  * Mark this exact lease complete only after all critical webhook work succeeded.
  *
- * BACKGROUND / RUNTIME — `withTenantWrite` on purpose, like its two siblings above
- * and below. Webhook-only callers, no session, nothing to inherit from: `claim`
- * carries the row id but not the row, and the `updateMany` uses `tenantId` as a
- * FILTER, so a wrong tenant here settles nothing rather than settling the wrong
- * thing. That is the safe direction, and it is why these three are the least
- * urgent of the runtime sites.
- *
- * THE UNDERLYING GAP, STATED PLAINLY, because it is not fixed here. Inbound events
- * are deduplicated on `("tenantId", "channel", "providerId")`. With every tenant's
- * events claimed under the founding tenant, two tenants whose customers produce the
- * same provider id (a Telegram `update_id` is per-bot, not global) collide: the
- * second tenant's event is read as a redelivery of the first tenant's and is
- * silently acked without ever being processed. A dropped customer message, with no
- * error anywhere.
- *
- * WHAT WOULD SETTLE IT: `withChannelTenantScope` binding the resolved channel
- * tenant while enforcement is DORMANT as well as under it, so
- * `currentTenantScope()` has a real answer here and `inheritedTenantId(null)` picks
- * it up from the ambient rung. That is a change to the scope-entry contract for
- * every webhook, not to this call site, so it belongs in its own PR with the
- * channel-resolution tests that go with it.
+ * RUNTIME — {@link botConversationTenantId}, the same expression the claim above
+ * used, because `tenantId` here is a FILTER on the row that claim wrote. The two
+ * must name the same workspace or a completed event is never marked complete and
+ * the provider redelivers it for ever.
  */
 export async function completeInboundBotEvent(claim: InboundBotEventClaim): Promise<void> {
   const rowId = claim.rowId;
   const leaseAttempt = claim.leaseAttempt;
   if (!rowId || leaseAttempt == null) return;
-  await withTenantWrite(async (tx, tenantId) => {
+  await withBotConversationWrite(async (tx, tenantId) => {
     await tx.botInboundEvent.updateMany({
       where: { id: rowId, tenantId, status: "running", attempts: leaseAttempt },
       data: { status: "completed", completedAt: new Date(), leaseUntil: null, lastError: null },
@@ -196,9 +185,8 @@ export async function completeInboundBotEvent(claim: InboundBotEventClaim): Prom
 /**
  * Release only this exact failed lease so the provider retry can reclaim it.
  *
- * BACKGROUND / RUNTIME — `withTenantWrite` on purpose; see
- * {@link completeInboundBotEvent} for the classification and for the channel-scope
- * gap that a per-call-site change cannot close.
+ * RUNTIME — {@link botConversationTenantId}; see {@link completeInboundBotEvent}
+ * for why the settle paths must resolve exactly what the claim resolved.
  */
 export async function retryInboundBotEvent(
   claim: InboundBotEventClaim,
@@ -208,7 +196,7 @@ export async function retryInboundBotEvent(
   const leaseAttempt = claim.leaseAttempt;
   if (!rowId || leaseAttempt == null) return;
   const message = (error instanceof Error ? error.message : String(error)).slice(0, 1000);
-  await withTenantWrite(async (tx, tenantId) => {
+  await withBotConversationWrite(async (tx, tenantId) => {
     await tx.botInboundEvent.updateMany({
       where: { id: rowId, tenantId, status: "running", attempts: leaseAttempt },
       data: { status: "retry", leaseUntil: null, lastError: message },

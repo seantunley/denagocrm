@@ -5,6 +5,7 @@ import { Check, Loader2, Plus, Settings2, Trash2, Code2, Undo2 } from "lucide-re
 import { cn } from "@/lib/utils";
 import type { CardConfig, DashboardConfig, ViewConfig } from "@/lib/dashboard/config";
 import { LIMITS, slugify } from "@/lib/dashboard/config";
+import { findCardInTree } from "@/lib/dashboard/cardTree";
 import { DashboardEditorProvider, useEditor, newId } from "./EditorProvider";
 import DashboardCanvas, { type CardSlots } from "./DashboardCanvas";
 import CardPicker, { type EditorAccess } from "./CardPicker";
@@ -129,7 +130,11 @@ function Inner({
   const shown = editing ? config.views : views;
   const active = shown.find((view) => view.id === localViewId) ?? shown[0] ?? null;
 
-  const builderCard = builderCardId ? findCard(config, builderCardId) : null;
+  // findCardInTree, not a local search: the settings button the canvas offers is
+  // now drawn for DESCENDANTS of a container, not only its immediate children,
+  // so a lookup that stopped one level short would open an empty dialog on
+  // exactly the cards that button was added to reach.
+  const builderCard = builderCardId ? findCardInTree(config, builderCardId) : null;
 
   return (
     <div className="space-y-4">
@@ -353,23 +358,3 @@ function needsSetup(card: CardConfig): boolean {
   return card.type !== "builtin" && card.type !== "heading";
 }
 
-function findCard(config: DashboardConfig, id: string): CardConfig | null {
-  for (const view of config.views) {
-    for (const section of view.sections) {
-      const found = search(section.cards, id);
-      if (found) return found;
-    }
-  }
-  return null;
-}
-
-function search(cards: CardConfig[], id: string): CardConfig | null {
-  for (const card of cards) {
-    if (card.id === id) return card;
-    if (card.type === "grid" || card.type === "stack") {
-      const found = search(card.cards, id);
-      if (found) return found;
-    }
-  }
-  return null;
-}

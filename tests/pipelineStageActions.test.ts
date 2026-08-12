@@ -64,8 +64,16 @@ test("pipeline action audit reads do not bypass tenant scope", () => {
     pipelineActionsSource,
     /SELECT \* FROM "PipelineStage" WHERE "id" = \$\{id\}/,
   );
-  assert.match(pipelineActionsSource, /const tenantId = writeTenantId\(\)/);
-  assert.match(pipelineActionsSource, /Prisma\.sql`AND "tenantId" = \$\{tenantId\}`/);
+  // The `before` read is still scoped, and now by something that is NOT EMPTY in
+  // the mode we run in. `writeTenantId()` returns null while enforcement is
+  // dormant, so `tenantId ? Prisma.sql`AND "tenantId" = ${tenantId}` :
+  // Prisma.empty` resolved to NO PREDICATE on `basePrisma` — this read reached any
+  // workspace's lead by id, and its result feeds both the audit `before` snapshot
+  // and the `leads.assign` decision beside it. See tests/forecastTenantScope.test.ts.
+  assert.doesNotMatch(pipelineActionsSource, /const tenantId = writeTenantId\(\)/);
+  assert.doesNotMatch(pipelineActionsSource, /Prisma\.sql`AND "tenantId" = \$\{tenantId\}`/);
+  assert.doesNotMatch(pipelineActionsSource, /const tenantScope = tenantId$/m);
+  assert.match(pipelineActionsSource, /const tenantScope = await pipelineTenantFilter\(\);/);
   assert.match(
     pipelineActionsSource,
     /FROM "Lead"[\s\S]+WHERE "id" = \$\{leadId\} AND "deletedAt" IS NULL \$\{tenantScope\}/,

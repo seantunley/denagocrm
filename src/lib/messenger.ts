@@ -193,7 +193,14 @@ const ATTACHMENT_EXT: Record<string, string> = {
  * and keep a permanent link. Returns null if the download fails.
  */
 async function persistAttachment(
-  att: InboundAttachment
+  att: InboundAttachment,
+  /**
+   * The owner of the customer record this attachment is being filed against —
+   * the SAME value the Communication row claims, resolved once by the caller.
+   * An inbound webhook has no session, and while stamping is dormant the channel
+   * scope is not established either, so the contact is the only honest source.
+   */
+  tenantId: string | null,
 ): Promise<{ url: string; type: string } | null> {
   try {
     const res = await fetch(att.url, { cache: "no-store", signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS) });
@@ -222,7 +229,7 @@ async function persistAttachment(
     const buf = Buffer.concat(chunks);
     const kind = ["image", "audio", "video", "file"].includes(att.type) ? att.type : "file";
     const contentType = res.headers.get("content-type") ?? "application/octet-stream";
-    const url = await saveFile(buf, `dm-${kind}${ATTACHMENT_EXT[kind]}`, contentType);
+    const url = await saveFile(buf, `dm-${kind}${ATTACHMENT_EXT[kind]}`, contentType, tenantId);
     return { url, type: kind };
   } catch {
     return null;
@@ -383,7 +390,7 @@ export async function recordInboundDm(
       if (attKey && (await prisma.communication.findUnique({ where: { dedupeKey: attKey }, select: { id: true } }))) {
         continue;
       }
-      const saved = await persistAttachment(att);
+      const saved = await persistAttachment(att, inboundTenantId);
       try {
         await prisma.communication.create({
           data: {

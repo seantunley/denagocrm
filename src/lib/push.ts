@@ -156,7 +156,12 @@ export async function sendPushToAll(
       try {
         await webpush.sendNotification(
           { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
-          JSON.stringify(payload),
+          // `kind` travels WITH the notification. The service worker is shared by
+          // both installed apps, so it is the only thing that can tell a chat
+          // notification from a backup failure at display time — and therefore
+          // which icon belongs on it. Everything else about the payload is
+          // unchanged; a worker that does not understand `kind` ignores it.
+          JSON.stringify({ ...payload, kind }),
           // Without this the request inherits Node's default (no timeout), so a
           // push service that accepts the connection and never answers holds the
           // request open — and sendPushToAll is awaited inside cron and action

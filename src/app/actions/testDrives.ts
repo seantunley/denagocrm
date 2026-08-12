@@ -549,7 +549,10 @@ export async function uploadTestDriveAsset(id: string, kind: string, formData: F
   if (!(file instanceof File) || file.size === 0) throw new Error("Choose a file to upload");
   if (file.size > 10 * 1024 * 1024) throw new Error("Files must be 10 MB or smaller");
   if (!ALLOWED_ASSET_TYPES.has(file.type)) throw new Error("Use PDF, JPG, PNG or WebP files");
-  const storedName = await saveFile(Buffer.from(await file.arrayBuffer()), file.name, file.type);
+  // A licence scan or condition photo is evidence about THIS booking, so the
+  // booking owns it — and TestDriveAsset carries a composite (tenantId, bookingId)
+  // key holding the row to the same answer.
+  const storedName = await saveFile(Buffer.from(await file.arrayBuffer()), file.name, file.type, booking.tenantId);
   const asset = await prisma.testDriveAsset.create({
     data: {
       bookingId: id,

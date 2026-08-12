@@ -170,16 +170,36 @@ test("a re-render with an unchanged server config does not clobber a live edit",
   assert.match(provider, /if \(seenSeed\.current === seed\) return;/, "and no-op when unchanged");
 });
 
-test("card edits reach cards inside containers", () => {
-  // A hand-rolled walk that forgot to descend into `grid`/`stack` would make
-  // editing a nested card silently do nothing — the dialog would close, the
-  // change would be gone, and nothing would report an error.
+test("every walk over the card tree is delegated, not re-rolled here", () => {
+  /*
+   * This file cannot execute the provider, so the walks it used to own could only
+   * ever be matched from source — and a walk that silently fails to descend into
+   * `grid`/`stack` is the exact bug that deserves running instead. They now live
+   * in lib/dashboard/cardTree, which has no React in it and IS executed, by
+   * dashboardCardTree.test.ts.
+   *
+   * What is left to pin here is the delegation itself: a hand-rolled walk added
+   * back into this file would be untestable again, and would make editing or
+   * deleting a nested card silently do nothing — the dialog closes, the change is
+   * gone, and nothing reports an error.
+   */
   const provider = PROVIDER();
-  for (const fn of ["mapCardTree", "filterCardTree"]) {
-    const body = provider.split(`function ${fn}`)[1]?.slice(0, 400) ?? "";
-    assert.match(body, /type === "grid" \|\| .*type === "stack"/, `${fn} must recurse into containers`);
-    assert.match(body, new RegExp(`${fn}\\(`), `${fn} must call itself`);
+  assert.match(
+    provider,
+    /import \{[\s\S]*?\} from "@\/lib\/dashboard\/cardTree";/,
+    "the tree walks must come from the module a test can run",
+  );
+  for (const fn of ["mapCards", "filterCards", "reorderInTree", "liftFromContainer"]) {
+    assert.match(provider, new RegExp(`\\b${fn}\\b`), `${fn} must be the one from cardTree`);
+    assert.ok(
+      !provider.includes(`function ${fn}`),
+      `${fn} must not be redefined here, where nothing can execute it`,
+    );
   }
+  assert.ok(
+    !/function \w*CardTree\(/.test(provider),
+    "a new tree walk in this file would be a walk no test can run",
+  );
 });
 
 /* ── what edit mode has to be able to reach ───────────────────────── */

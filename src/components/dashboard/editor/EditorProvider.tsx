@@ -10,6 +10,12 @@ import {
   type ViewConfig,
 } from "@/lib/dashboard/config";
 import { saveDashboardConfig, takeControl } from "@/app/actions/dashboardConfig";
+import {
+  filterCards,
+  liftFromContainer,
+  mapCards,
+  reorderInTree,
+} from "@/lib/dashboard/cardTree";
 
 /**
  * The editing session: one working copy of the config, and one way to save it.
@@ -64,6 +70,10 @@ type EditorState = {
   updateSection: (sectionId: string, change: (section: SectionConfig) => SectionConfig) => void;
   updateCard: (cardId: string, change: (card: CardConfig) => CardConfig) => void;
   removeCard: (cardId: string) => void;
+  /** Move a card one place earlier or later among its siblings, at any depth. */
+  moveCard: (cardId: string, direction: -1 | 1) => void;
+  /** Lift a card out of the container it sits in, to just after that container. */
+  liftCard: (cardId: string) => void;
   /** Step back one change. No-op when there is nothing to step back to. */
   undo: () => void;
   /** Whether there is anything to undo, so the control can disable itself. */
@@ -311,6 +321,33 @@ export function DashboardEditorProvider({
     [update],
   );
 
+  /*
+   * Reordering and un-nesting, for cards the drag cannot reach.
+   *
+   * A card inside a grid or stack is drawn by that container on the SERVER, so
+   * the editor has no sortable node for it and drag can only ever reorder the
+   * top level. That left the children of a container with no way to be moved,
+   * reordered or taken back out — a card dragged into a group was effectively
+   * stuck there.
+   *
+   * These two operate on the CONFIG rather than on the rendered nodes, so they
+   * work identically at any depth. Like every other walk the editor performs
+   * they live in lib/dashboard/cardTree, which is what lets a test execute them:
+   * a hand-rolled walk that forgot to descend would silently do nothing for
+   * exactly the cards this exists to reach, and this file cannot be imported by
+   * the test process at all.
+   */
+  const moveCard = useCallback(
+    (cardId: string, direction: -1 | 1) =>
+      update((current) => reorderInTree(current, cardId, direction)),
+    [update],
+  );
+
+  const liftCard = useCallback(
+    (cardId: string) => update((current) => liftFromContainer(current, cardId)),
+    [update],
+  );
+
   /**
    * Step back one change.
    *
@@ -340,6 +377,8 @@ export function DashboardEditorProvider({
         updateSection,
         updateCard,
         removeCard,
+        moveCard,
+        liftCard,
         undo,
         canUndo: undoDepth > 0,
         activeViewId,
@@ -348,66 +387,6 @@ export function DashboardEditorProvider({
       {children}
     </EditorContext.Provider>
   );
-}
-
-/* ── walking the card tree ────────────────────────────────────────── */
-
-/*
- * Cards nest, so every edit to a card has to reach into containers as well as
- * into sections. These two are the only places that recursion is written, which
- * is deliberate: a second hand-rolled walk that forgot to descend into `grid`
- * would make editing a card inside a container silently do nothing.
- */
-
-function mapCardTree(cards: CardConfig[], change: (card: CardConfig) => CardConfig): CardConfig[] {
-  return cards.map((card) => {
-    const mapped = change(card);
-    if (mapped.type === "grid" || mapped.type === "stack") {
-      return { ...mapped, cards: mapCardTree(mapped.cards, change) };
-    }
-    return mapped;
-  });
-}
-
-function filterCardTree(cards: CardConfig[], keep: (card: CardConfig) => boolean): CardConfig[] {
-  return cards.filter(keep).map((card) => {
-    if (card.type === "grid" || card.type === "stack") {
-      return { ...card, cards: filterCardTree(card.cards, keep) };
-    }
-    return card;
-  });
-}
-
-export function mapCards(
-  config: DashboardConfig,
-  change: (card: CardConfig) => CardConfig,
-): DashboardConfig {
-  return {
-    ...config,
-    views: config.views.map((view) => ({
-      ...view,
-      sections: view.sections.map((section) => ({
-        ...section,
-        cards: mapCardTree(section.cards, change),
-      })),
-    })),
-  };
-}
-
-export function filterCards(
-  config: DashboardConfig,
-  keep: (card: CardConfig) => boolean,
-): DashboardConfig {
-  return {
-    ...config,
-    views: config.views.map((view) => ({
-      ...view,
-      sections: view.sections.map((section) => ({
-        ...section,
-        cards: filterCardTree(section.cards, keep),
-      })),
-    })),
-  };
 }
 
 /**

@@ -8,6 +8,7 @@ import { transcribeVoice } from "@/lib/transcribe";
 import { saveFile } from "@/lib/storage";
 import { runWhatsAppBot } from "@/lib/flowRun";
 import { withChannelTenantScope, validateInSystemScope } from "@/lib/tenantScopeEntry";
+import { resolveChannelTenant } from "@/lib/channelTenant";
 import { logError } from "@/lib/errorLog";
 import { inboundRetryResponse, noteInboundRetry, noteLeasedInbound } from "@/lib/webhookRetry";
 import { secretEquals } from "@/lib/secretCompare";
@@ -103,7 +104,18 @@ export async function POST(req: NextRequest) {
                   const dl = await fetchWhatsAppMedia(media.id).catch(() => null);
                   if (dl) {
                     const ext = dl.contentType.includes("pdf") ? "pdf" : dl.contentType.includes("png") ? "png" : dl.contentType.split("/")[1]?.slice(0, 4) || "bin";
-                    fileUrl = await saveFile(dl.buffer, `whatsapp.${ext}`, dl.contentType).catch(() => undefined);
+                    // The media arrives BEFORE recordInboundWhatsApp has matched or
+                    // created a customer record, so there is no parent row to
+                    // inherit from yet — and no session either. What there IS is the
+                    // business phone number the customer messaged: OUR endpoint,
+                    // whose owning workspace ChannelIdentity states outright. That
+                    // is the same discriminator withChannelTenantScope resolves
+                    // above, asked directly because the scope is not entered while
+                    // enforcement is dormant. Null (an unregistered number on a
+                    // single-tenant install) stays null — the legacy flat path,
+                    // exactly where this file lands today.
+                    const channelTenantId = await resolveChannelTenant("whatsapp", phoneNumberId);
+                    fileUrl = await saveFile(dl.buffer, `whatsapp.${ext}`, dl.contentType, channelTenantId).catch(() => undefined);
                   }
                 }
                 await recordInboundWhatsApp(from, profileName, `📎 ${caption || "[file]"}`, String(message.id ?? ""));

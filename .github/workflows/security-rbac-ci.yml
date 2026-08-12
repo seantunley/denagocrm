@@ -212,6 +212,38 @@ jobs:
             exit 1
           }
 
+      # The 132 composite tenant foreign keys -- JobCardItem(tenantId, partId) ->
+      # Part(tenantId, id) and its 131 siblings -- are what actually stops a
+      # forged id crossing tenants. #479 measured it: with BOTH application
+      # tenant predicates removed from claimPartStock, the FK is what rolled the
+      # transaction back.
+      #
+      # They live only in raw migration SQL, so Prisma cannot see them and
+      # `prisma migrate diff` cannot mention them. The unit-test job runs the
+      # text half of this contract; only here is there a real catalog to check
+      # them against, and a text-only check would have missed both mutations this
+      # was proven against (a dropped constraint, and one re-added over a single
+      # column under the same name).
+      #
+      # REQUIRE_LIVE_FK_CHECK turns "no scratch database, so skip" into a
+      # failure. Without it the step could pass by never running -- which is the
+      # exact defect class this contract exists to catch, and it would be absurd
+      # for the guard to have it too.
+      #
+      # Its own scratch database, for the same reason the harness step below has
+      # one, and derived from DATABASE_URL rather than written out so no new
+      # connection-string literal appears for the secret scanner. The harness
+      # provisioner REFUSES a name not ending in _test/_harness/_scratch and
+      # refuses the database DATABASE_URL points at, so the name is load-bearing.
+      - name: Composite tenant FKs exist in the catalog, not just in the SQL
+        run: |
+          admin="${DATABASE_URL%/*}/postgres"
+          psql "$admin" -c 'DROP DATABASE IF EXISTS denagocrm_fkcontract_test'
+          psql "$admin" -c 'CREATE DATABASE denagocrm_fkcontract_test'
+          export TENANT_HARNESS_DATABASE_URL="${DATABASE_URL%/*}/denagocrm_fkcontract_test"
+          export REQUIRE_LIVE_FK_CHECK=1
+          node --import tsx --test tests/compositeTenantFkContract.test.ts
+
       - name: Migration replay-safety -- re-apply the tenant migration (must be reentrant)
         # The runner executes a migration's SQL and records it with migrate resolve
         # as SEPARATE steps; if a deploy dies between them the next run re-executes
@@ -449,6 +481,19 @@ jobs:
       # refuses one that is the same database as DATABASE_URL, so the name here is
       # load-bearing rather than decorative.
       #
+      # BOTH PASSES CONNECT AS A ROLE THAT CANNOT BYPASS ROW LEVEL SECURITY.
+      # The harness creates it after migrating, by executing the SHIPPED
+      # prisma/rls/app-role.sql (see scripts/harness/restrictedRole.ts), and
+      # points DATABASE_URL at it while leaving DATABASE_URL_UNPOOLED on the
+      # owner -- the same split production uses. This needs the service's
+      # bootstrap account to be able to CREATE ROLE, which POSTGRES_USER is.
+      #
+      # Before that, the harness connected as that bootstrap account, which is a
+      # SUPERUSER and therefore exempt from every policy on every table. FORCE
+      # ROW LEVEL SECURITY was live on 120 tables throughout and never evaluated
+      # once -- reproducing production's own exemption exactly, and making the
+      # RLS half of the boundary untestable.
+      #
       # It runs twice internally: the DORMANT pass records today's real exposure
       # without failing, the ENFORCED pass is the pre-flip gate and fails the job.
       #
@@ -456,14 +501,16 @@ jobs:
       # pre-flip gate is not a gate, and this step is expected to fail the run.
       #
       # It is blocking WITH A RECORDED ALLOWLIST, in scripts/harness/
-      # acknowledged.ts, because a bare blocking gate could not be satisfied
-      # today: at least one enforced failure is not an application defect and
-      # cannot be fixed anywhere in this repository. TimelinePin READ needs a
-      # DATABASE ROLE change -- the app connects as neondb_owner with
-      # rolbypassrls = true, so no RLS policy evaluates and the raw-SQL read in
-      # getTimelinePins has no boundary to enforce. Verified read-only against
-      # production; see docs/rls-role-is-the-flip-blocker.md on branch
-      # docs/tenant-preflip-audit.
+      # acknowledged.ts. That list is now EMPTY. It could not be, until the role
+      # change above: TimelinePin READ was an enforced failure that no commit in
+      # this repository could fix, because getTimelinePins is prisma.$queryRaw --
+      # a Prisma extension cannot rewrite raw SQL, so RLS was the only boundary
+      # left, and RLS does nothing for a BYPASSRLS role. Under the restricted
+      # role that check passes, with no application change.
+      #
+      # AN EMPTY ALLOWLIST IS NOT A CUTOVER. Production still connects as
+      # neondb_owner, so its policies are still inert whatever this job says.
+      # See docs/RLS-ROLE-CUTOVER.md -- it is a runbook somebody has to execute.
       #
       # How the allowlist behaves, and why it cannot quietly grow:
       #   - any failure NOT in the list fails this step;

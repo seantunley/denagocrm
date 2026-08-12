@@ -178,7 +178,20 @@ function sameTarget(a: string, b: string): boolean {
   }
 }
 
-function assertDisposable(url: string, source: string): void {
+/**
+ * Exported so that EVERY url the harness will dial goes through the same four
+ * conditions, including the restricted-role one built in restrictedRole.ts. That
+ * url differs from the provisioned one only in its credentials, which is exactly
+ * the kind of "it is obviously the same database" reasoning this module refuses
+ * to do in its head.
+ *
+ * WHEN it is called matters as much as that it is called. Condition 4 compares
+ * against `process.env.DATABASE_URL`, so it only means anything while that is
+ * still the AMBIENT value — once the harness has repointed it at its own scratch
+ * database, condition 4 is comparing the url with itself and always passes. The
+ * restricted url is therefore checked BEFORE that assignment, not after.
+ */
+export function assertDisposable(url: string, source: string): void {
   const problem = disposabilityProblem(url);
   if (problem) {
     throw new Error(`\n✖ TENANT ISOLATION HARNESS REFUSED TO START (${source})\n\n  ${problem}\n`);

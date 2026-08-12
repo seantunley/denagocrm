@@ -187,6 +187,10 @@ test("no pipeline operation resolves the acting tenant twice", () => {
     ["export async function addPipelineStage", "export async function updatePipelineStage"],
     ["export async function updatePipelineStage", "export async function reorderPipelineStages"],
     ["export async function archivePipeline", "export async function listForecastLeads"],
+    // The forecast write: one resolution bounds BOTH the team it may attach and
+    // the lead it may reach. Two could disagree, and there is no guard behind
+    // basePrisma to notice a lead scoped to one workspace taking another's team.
+    ["export async function updateLeadForecast", "export async function captureForecastSnapshot"],
     ["export async function captureForecastSnapshot"],
   ];
   for (const [from, to] of operations) {
