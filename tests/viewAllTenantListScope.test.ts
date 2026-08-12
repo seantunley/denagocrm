@@ -15,6 +15,27 @@ function body(name: string, nextName: string): string {
   return code.slice(start, end);
 }
 
+/**
+ * WHY THE TENANT IS SPELLED OUT AND NOT SPREAD.
+ *
+ * These queries first carried the tenant as `...scope` / `${leadTenant}` /
+ * `${caseTenant}`, which is identical at runtime — the guard above each one has
+ * already narrowed the scope to a real workspace. It is NOT identical to the
+ * tenant-access sweep (tests/tenantAccessSweep.ts), which reads the call site
+ * and matches a closed list of identifiers that carry a tenant. It cannot see
+ * into a spread or a `Prisma.sql` fragment, so every one of these reads counted
+ * as an unscoped bypass call and the ratchet failed with seven new findings.
+ *
+ * The ratchet is deliberately unable to record an increase: `nextBaseline` only
+ * lowers, and `ACKNOWLEDGED` may not shadow a key already in the fixture — and
+ * all seven keys were already there. So the number cannot go up, by design; the
+ * call has to name its tenant. That is what the sweep asks for and it is the
+ * clearer form anyway.
+ *
+ * Keep it literal. Collapsing these back to a spread is a silent regression:
+ * the behaviour is unchanged, the ratchet goes red, and the reason is three
+ * files away.
+ */
 const findManyHelpers = [
   ["getAccessibleContactIds", "canAccessContact", "contacts.view_all", "contact"],
   ["getAccessibleQuoteIds", "canAccessQuote", "quotes.view_all", "quote"],
@@ -36,7 +57,11 @@ for (const [helper, next, permission, model] of findManyHelpers) {
     );
     assert.match(src, /if \(!isTenantListScope\(scope\)\) return null;/, "only a genuinely global scope may return null");
     assert.match(src, new RegExp(`basePrisma\\.${model}\\.findMany`), "tenant view_all must materialise tenant-owned ids");
-    assert.match(src, /where: \{ deletedAt: null, \.\.\.scope \}/, "the all-ids query must carry the acting tenant");
+    assert.match(
+      src,
+      /where: \{ deletedAt: null, tenantId: scope\.tenantId \}/,
+      "the all-ids query must carry the acting tenant, named so the access sweep can see it",
+    );
   });
 }
 
@@ -47,7 +72,11 @@ test("getAccessibleLeadIds: tenant view_all returns explicit tenant lead ids", (
   assert.ok(scopeAt >= 0 && scopeAt < unrestrictedAt);
   assert.doesNotMatch(src, /if \(permissions === null \|\| permissions\.has\("leads\.view_all"\)\) return null/);
   assert.match(src, /if \(scope\.mode === "global"\) return null;/);
-  assert.match(src, /SELECT l\."id"[\s\S]*WHERE l\."deletedAt" IS NULL \$\{leadTenant\}/);
+  assert.match(
+    src,
+    /SELECT l\."id"[\s\S]*WHERE l\."deletedAt" IS NULL AND l\."tenantId" = \$\{scope\.tenantId\}/,
+    "the tenant predicate must be in the statement text, not hidden in a fragment",
+  );
 });
 
 test("getAccessibleCaseIds: tenant view_all returns explicit tenant case ids", () => {
@@ -57,5 +86,9 @@ test("getAccessibleCaseIds: tenant view_all returns explicit tenant case ids", (
   assert.ok(scopeAt >= 0 && scopeAt < unrestrictedAt);
   assert.doesNotMatch(src, /if \(permissions === null \|\| permissions\.has\("cases\.view_all"\)\) return null/);
   assert.match(src, /if \(scope\.mode === "global"\) return null;/);
-  assert.match(src, /SELECT c\."id" FROM "CustomerCase" c WHERE TRUE \$\{caseTenant\}/);
+  assert.match(
+    src,
+    /SELECT c\."id" FROM "CustomerCase" c WHERE c\."tenantId" = \$\{scope\.tenantId\}/,
+    "the tenant predicate must be in the statement text, not hidden in a fragment",
+  );
 });

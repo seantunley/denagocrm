@@ -180,10 +180,14 @@ export async function getAccessibleLeadIds(user: PermissionUser): Promise<string
 
   if (permissions === null || permissions.has("leads.view_all")) {
     if (scope.mode === "global") return null;
+    // The predicate is written out rather than interpolated via `leadTenant`:
+    // `scope.mode` is narrowed to "tenant" by the guard above, so this is the
+    // same SQL — but a fragment carries the tenant past the access sweep, which
+    // reads the statement text.
     const rows = await basePrisma.$queryRaw<Array<{ id: string }>>`
       SELECT l."id"
       FROM "Lead" l
-      WHERE l."deletedAt" IS NULL ${leadTenant}
+      WHERE l."deletedAt" IS NULL AND l."tenantId" = ${scope.tenantId}
     `;
     return rows.map((row) => row.id);
   }
@@ -253,7 +257,12 @@ export async function getAccessibleContactIds(user: PermissionUser): Promise<str
   if (permissions === null || permissions.has("contacts.view_all")) {
     if (!isTenantListScope(scope)) return null;
     const rows = await basePrisma.contact.findMany({
-      where: { deletedAt: null, ...scope },
+      // `tenantId: scope.tenantId` rather than `...scope`: isTenantListScope has
+      // already narrowed this to a real workspace, so the two are identical at
+      // runtime — but a spread hides the predicate from the tenant-access sweep,
+      // which reads the call site and cannot see through it. Naming it is what
+      // the sweep asks for, and it is the honest form here anyway.
+      where: { deletedAt: null, tenantId: scope.tenantId },
       select: { id: true },
     });
     return rows.map((row) => row.id);
@@ -355,7 +364,12 @@ export async function getAccessibleQuoteIds(user: PermissionUser): Promise<strin
   if (permissions === null || permissions.has("quotes.view_all")) {
     if (!isTenantListScope(scope)) return null;
     const rows = await basePrisma.quote.findMany({
-      where: { deletedAt: null, ...scope },
+      // `tenantId: scope.tenantId` rather than `...scope`: isTenantListScope has
+      // already narrowed this to a real workspace, so the two are identical at
+      // runtime — but a spread hides the predicate from the tenant-access sweep,
+      // which reads the call site and cannot see through it. Naming it is what
+      // the sweep asks for, and it is the honest form here anyway.
+      where: { deletedAt: null, tenantId: scope.tenantId },
       select: { id: true },
     });
     return rows.map((row) => row.id);
@@ -411,7 +425,12 @@ export async function getAccessibleVehicleIds(user: PermissionUser): Promise<str
   if (permissions === null || permissions.has("vehicles.view_all")) {
     if (!isTenantListScope(scope)) return null;
     const rows = await basePrisma.vehicle.findMany({
-      where: { deletedAt: null, ...scope },
+      // `tenantId: scope.tenantId` rather than `...scope`: isTenantListScope has
+      // already narrowed this to a real workspace, so the two are identical at
+      // runtime — but a spread hides the predicate from the tenant-access sweep,
+      // which reads the call site and cannot see through it. Naming it is what
+      // the sweep asks for, and it is the honest form here anyway.
+      where: { deletedAt: null, tenantId: scope.tenantId },
       select: { id: true },
     });
     return rows.map((row) => row.id);
@@ -468,7 +487,12 @@ export async function getAccessibleJobCardIds(user: PermissionUser): Promise<str
   if (permissions === null || permissions.has("jobcards.view_all")) {
     if (!isTenantListScope(scope)) return null;
     const rows = await basePrisma.jobCard.findMany({
-      where: { deletedAt: null, ...scope },
+      // `tenantId: scope.tenantId` rather than `...scope`: isTenantListScope has
+      // already narrowed this to a real workspace, so the two are identical at
+      // runtime — but a spread hides the predicate from the tenant-access sweep,
+      // which reads the call site and cannot see through it. Naming it is what
+      // the sweep asks for, and it is the honest form here anyway.
+      where: { deletedAt: null, tenantId: scope.tenantId },
       select: { id: true },
     });
     return rows.map((row) => row.id);
@@ -529,7 +553,12 @@ export async function getAccessibleDocumentIds(user: PermissionUser): Promise<st
   if (permissions === null || permissions.has("documents.view_all")) {
     if (!isTenantListScope(scope)) return null;
     const rows = await basePrisma.document.findMany({
-      where: { deletedAt: null, ...scope },
+      // `tenantId: scope.tenantId` rather than `...scope`: isTenantListScope has
+      // already narrowed this to a real workspace, so the two are identical at
+      // runtime — but a spread hides the predicate from the tenant-access sweep,
+      // which reads the call site and cannot see through it. Naming it is what
+      // the sweep asks for, and it is the honest form here anyway.
+      where: { deletedAt: null, tenantId: scope.tenantId },
       select: { id: true },
     });
     return rows.map((row) => row.id);
@@ -623,8 +652,11 @@ export async function getAccessibleCaseIds(user: PermissionUser): Promise<string
 
   if (permissions === null || permissions.has("cases.view_all")) {
     if (scope.mode === "global") return null;
+    // Written out rather than interpolated via `caseTenant` — same SQL, but the
+    // access sweep reads the statement and cannot see into a fragment. The
+    // `WHERE TRUE` placeholder goes with it.
     const rows = await basePrisma.$queryRaw<Array<{ id: string }>>`
-      SELECT c."id" FROM "CustomerCase" c WHERE TRUE ${caseTenant}
+      SELECT c."id" FROM "CustomerCase" c WHERE c."tenantId" = ${scope.tenantId}
     `;
     return rows.map((row) => row.id);
   }

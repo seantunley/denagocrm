@@ -140,9 +140,33 @@ test("the precedence rule is a pure module a test can actually run", () => {
   assert.doesNotMatch(source, /server-only/);
 });
 
-test("the document scope decides per DOCUMENT, not per link", () => {
+/**
+ * The PRECEDENCE half of getAccessibleDocumentIds — from the `view_owned` gate
+ * to the end of the function.
+ *
+ * Anchored here rather than at the top of the function because the function now
+ * opens with a `view_all` branch that legitimately does the opposite of
+ * everything below: it returns every document in the acting workspace, so it
+ * selects `id` alone and returns `rows.map(...)` straight out. That branch is
+ * not ranking anything, so the precedence rules must not be asserted against
+ * it — and scanning the whole function meant the first `select: {` found was
+ * that branch's, and the forbidden "return the union unfiltered" shape matched
+ * its perfectly correct return.
+ *
+ * Both assertions below are unchanged in force; they are just pointed at the
+ * code they were always about.
+ */
+function precedenceHalf(): string {
   const code = shipped("src/lib/permissions.ts");
   const body = bodyFrom(code, "export async function getAccessibleDocumentIds(", "\nfunction idReach(");
+  const gate = 'if (!permissions.has("documents.view_owned")) return [];';
+  const start = body.indexOf(gate);
+  assert.notEqual(start, -1, "the view_owned gate is gone — was getAccessibleDocumentIds restructured?");
+  return body.slice(start);
+}
+
+test("the document scope decides per DOCUMENT, not per link", () => {
+  const body = precedenceHalf();
 
   assert.match(body, /governingDocumentLink\(row\)/, "the governing link must decide");
   assert.match(body, /reachable\[link\.kind\]\(link\.id\)/, "…and it is that link's id that is checked");
@@ -161,9 +185,7 @@ test("the scope reads the link columns it has to rank", () => {
   // `select: { id: true }` was enough for a union answered entirely in SQL.
   // Precedence is decided per row, so the ranking columns have to come back —
   // and a missing one silently demotes that link to "absent".
-  const code = shipped("src/lib/permissions.ts");
-  const body = bodyFrom(code, "export async function getAccessibleDocumentIds(", "\nfunction idReach(");
-  const select = bodyFrom(body, "select: {", "}");
+  const select = bodyFrom(precedenceHalf(), "select: {", "}");
   for (const column of ["id", "uploadedById", "quoteId", "jobCardId", "vehicleId", "contactId"]) {
     assert.match(select, new RegExp(`\\b${column}: true`), `the scope must select ${column}`);
   }
