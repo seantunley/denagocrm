@@ -706,19 +706,41 @@ export async function reservePart(jobCardId: string, formData: FormData) {
     const partId = String(formData.get("partId") ?? "").trim();
     if (!partId) refuse("Choose a part to reserve.");
     const qty = Math.max(1, parseInt(String(formData.get("qty") ?? "1"), 10) || 1);
+    // The SIBLING of the forged-partId decrement #459 closed in claimPartStock:
+    // same forged id, same form post, different entry point. Reserving does not
+    // move stock, so it left no decrement to notice — it just earmarked another
+    // workshop's parts, and their available quantity fell with nothing on their
+    // side to explain it.
+    //
+    // This one runs on the SCOPED client rather than the bypass one, which is
+    // exactly why it stayed open: the db.ts guard returns its args UNTOUCHED
+    // while enforcement is dormant, so "scoped" scopes nothing in any environment
+    // we run, and raw SQL is never rewritten by the extension at all. So the same
+    // shape claimPartStock uses, explicitly — tenant predicate on the lock, on the
+    // read, on the reservation aggregate, and on the write.
+    //
+    // The write is a `create`, so its predicate is the STAMP. That is not a weaker
+    // check than claimPartStock's count-checked updateMany: a create cannot
+    // silently match zero rows, and stamping is what ARMS the two composite foreign
+    // keys PartReservation already has — (tenantId, partId) → Part(tenantId, id)
+    // and (tenantId, jobCardId) → JobCard(tenantId, id). Leaving tenantId NULL,
+    // which is what the unstamped create did, satisfies both trivially (MATCH
+    // SIMPLE), so the row that crossed the boundary was also the row the database
+    // had been told not to check.
+    const tenantId = await actingTenantId();
     // Never reserve more than is actually available. Lock the part row so two
     // concurrent reservations can't both pass the availability check (oversell).
     const outcome = await prisma.$transaction(async (tx) => {
       // Lock + fetch a LIVE part only — a trashed part must not be reservable by id.
-      await tx.$executeRaw`SELECT id FROM "Part" WHERE id = ${partId} AND "deletedAt" IS NULL FOR UPDATE`;
-      const part = await tx.part.findFirst({ where: { id: partId, deletedAt: null }, select: { name: true, stockQty: true } });
+      await tx.$executeRaw`SELECT id FROM "Part" WHERE id = ${partId} AND "deletedAt" IS NULL AND "tenantId" = ${tenantId} FOR UPDATE`;
+      const part = await tx.part.findFirst({ where: { id: partId, deletedAt: null, tenantId }, select: { name: true, stockQty: true } });
       if (!part) return { ok: false as const };
-      const agg = await tx.partReservation.aggregate({ where: { partId, status: "active" }, _sum: { qty: true } });
+      const agg = await tx.partReservation.aggregate({ where: { partId, status: "active", tenantId }, _sum: { qty: true } });
       const reserved = agg._sum.qty ?? 0;
       if (reserved + qty > part.stockQty) {
         return { ok: false as const, over: true, available: Math.max(0, part.stockQty - reserved), name: part.name };
       }
-      await tx.partReservation.create({ data: { jobCardId, partId, qty } });
+      await tx.partReservation.create({ data: { jobCardId, partId, qty, tenantId } });
       return { ok: true as const, name: part.name };
     });
     if (!outcome.ok) {
@@ -768,8 +790,12 @@ export async function consumeReservation(reservationId: string, jobCardId: strin
       if (!reservation || reservation.jobCardId !== jobCardId || reservation.status !== "active") {
         return { ok: false as const, why: "stale" as const };
       }
-      await tx.$executeRaw`SELECT id FROM "Part" WHERE id = ${reservation.partId} AND "deletedAt" IS NULL FOR UPDATE`;
-      const part = await tx.part.findFirst({ where: { id: reservation.partId, deletedAt: null }, select: { name: true, priceCents: true, stockQty: true } });
+      // The same tenant predicate claimPartStock puts on its lock and read. The
+      // reservation is already bound to the authorised job card, but its partId is
+      // a bare column — and a reservation planted before reservePart stamped and
+      // scoped (above) can still point at another workspace's part.
+      await tx.$executeRaw`SELECT id FROM "Part" WHERE id = ${reservation.partId} AND "deletedAt" IS NULL AND "tenantId" = ${tenantId} FOR UPDATE`;
+      const part = await tx.part.findFirst({ where: { id: reservation.partId, deletedAt: null, tenantId }, select: { name: true, priceCents: true, stockQty: true } });
       if (!part) return { ok: false as const, why: "part-gone" as const };
       // Claim the reservation FIRST, under the part lock. Only the request that
       // flips active→consumed proceeds — a second waiter (whose reservation was
@@ -788,10 +814,17 @@ export async function consumeReservation(reservationId: string, jobCardId: strin
       await tx.jobCardItem.create({
         data: { tenantId, jobCardId, kind: "part", description: part.name, qty: reservation.qty, unitPriceCents: part.priceCents, partId: reservation.partId },
       });
-      await tx.part.updateMany({
+      const decremented = await tx.part.updateMany({
         where: { id: reservation.partId, tenantId },
         data: { stockQty: { decrement: reservation.qty } },
       });
+      // The count check claimPartStock has and this path did not. updateMany does
+      // not throw on a zero-row match, so a part this workspace does not own
+      // committed the reservation as consumed and filed a job-card line for stock
+      // that never moved. Throw so all three roll back together.
+      if (decremented.count !== 1) {
+        throw new ActionRefusal("That part no longer exists — the reservation cannot be consumed.");
+      }
       return { ok: true as const };
     });
     // The transaction's verdict was previously DISCARDED, so a stale, already

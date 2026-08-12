@@ -1,11 +1,10 @@
 import { differenceInCalendarDays, addDays } from "date-fns";
 import { ArchiveRestore, Trash2 } from "lucide-react";
 import { basePrisma } from "@/lib/db";
-import { activeTenantPredicate } from "@/lib/tenantPredicate";
 import { requireOwner } from "@/lib/auth";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { restoreFromTrash } from "@/app/actions/trash";
-import { TRASH_RETENTION_DAYS, type TrashModel } from "@/lib/trash";
+import { TRASH_RETENTION_DAYS, actingTrashPredicate, type TrashModel } from "@/lib/trash";
 import { contactName, formatDateTime } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
 import {
@@ -50,9 +49,13 @@ export default async function TrashPage() {
   // which tenant it belongs to, so there is nothing to filter on. `?? null`
   // would filter on the legacy untenanted value and show an empty Trash page
   // to every migrated tenant.
+  // ACTING scope, not activeTenantPredicate: this page runs behind
+  // requireOwner() alone, no per-record ownership gate, so activeTenantPredicate
+  // answering `{}` while dormant (today's mode everywhere) meant every owner
+  // saw every OTHER tenant's trash. See lib/trash.ts's actingTrashPredicate.
   const notNull = {
     deletedAt: { not: null },
-    ...activeTenantPredicate("Trash page"),
+    ...(await actingTrashPredicate("Trash page")),
   } as const;
   const [automotiveOn, commerceOn] = await Promise.all([
     isModuleEnabled("automotive"),

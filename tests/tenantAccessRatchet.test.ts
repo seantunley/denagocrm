@@ -102,37 +102,41 @@ const stored: Record<string, number> = existsSync(BASELINE)
  */
 const ACKNOWLEDGED: Record<string, number> = {
   /**
-   * #466's `createStage` / `moveStage` in src/app/actions/settings.ts. Three reads
-   * of PipelineStage on `basePrisma`, and they are NOT the same case as each other.
+   * #466's `createStage` / `moveStage` in src/app/actions/settings.ts. TWO reads of
+   * PipelineStage on `basePrisma`, both CONTAINED — the `aggregate` for the next
+   * `order` in `createStage`, and the `findMany` of the sibling stages in
+   * `moveStage`. Each runs AFTER an ownership gate and is bounded by a `pipelineId`
+   * that gate proved this workspace owns.
    *
-   * TWO ARE CONTAINED. settings.ts:81 (`aggregate` for the next `order`) and
-   * settings.ts:178 (`findMany` of the sibling stages) both run AFTER
-   * `requireOwnedPipeline()` and are bounded by the `pipelineId` that gate just
-   * proved this workspace owns. They are unscoped on purpose: `PipelineStage`
-   * inherits its owner from its parent pipeline, and a guarded read scoped to the
-   * ACTING tenant returns nothing whenever the actor's workspace is not the
-   * pipeline's — which is order 0, which is a duplicate-key collision on
-   * ("pipelineId", "order"). The parent is the boundary here and the gate is where
-   * it is applied.
+   * They are unscoped on purpose: `PipelineStage` inherits its owner from its parent
+   * pipeline, and a guarded read scoped to the ACTING tenant returns nothing
+   * whenever the actor's workspace is not the pipeline's — which is order 0, which
+   * is a duplicate-key collision on ("pipelineId", "order"). The parent is the
+   * boundary here, and the gate is where it is applied.
    *
-   * ONE IS NOT, AND IS AN OPEN FINDING. settings.ts:151 —
-   * `basePrisma.pipelineStage.findUnique({ where: { id }, select: { pipelineId } })`
-   * — runs BEFORE `requireOwnedPipeline()`, on an `id` that is a bound server-action
-   * argument and therefore forgeable. Its value does not escape (it is used only as
-   * the key to the gate that then refuses), but the OUTCOME does: a stage id that
-   * exists in another workspace reaches the gate and fails with `throw new Error`,
-   * which `asActionResult` renders as a generic message plus a reference, while an
-   * id that exists nowhere hits `refuse("That stage no longer exists")` and renders
-   * verbatim. Two distinguishable answers is a one-bit cross-workspace existence
-   * oracle on stage ids. Narrow — it needs an id you already hold — but real, and
-   * the read itself does cross the boundary.
+   * WAS 3. The third — `basePrisma.pipelineStage.findUnique({ where: { id },
+   * select: { pipelineId } })` at what was settings.ts:151 — ran BEFORE
+   * `requireOwnedPipeline()`, on an `id` that is a bound server-action argument and
+   * therefore forgeable. Its VALUE did not escape; its OUTCOME did. A stage id
+   * belonging to another workspace resolved, reached the gate, and failed by
+   * `throw new Error("Pipeline not found")`, which asActionResult renders as a
+   * generic message plus a reference code; a stage id that existed nowhere failed
+   * one line earlier at `refuse(…)` and rendered verbatim. Two distinguishable
+   * answers is a one-bit cross-workspace existence oracle on stage ids.
    *
-   * Recorded rather than fixed because the fix is a change to #466's production
-   * code (bounding the lookup through its parent pipeline in one query, so the gate
-   * and the read are the same statement) and this PR changes nothing under src/.
-   * It is called out in the PR body so it is picked up rather than absorbed.
+   * #458 recorded it here rather than fixing it, because the fix was a change to
+   * #466's production code and that PR changed nothing under src/. It has now been
+   * made: `findOwnedPipelineForStage()` in src/lib/pipelines.ts resolves the stage
+   * through a JOIN onto "SalesPipeline" carrying the acting workspace's predicate,
+   * so an unowned id and an absent id are the same empty result and the caller gets
+   * one refusal either way. tests/stageLookupOracle.test.ts executes both cases
+   * through the real `classifyFailure` and asserts the outcomes are deep-equal.
+   *
+   * The number came down with the finding. It is NOT slack to spend: an entry above
+   * what the sweep finds is room for a new finding to arrive unnoticed, which is
+   * what the ceiling test below exists to catch.
    */
-  "src/app/actions/settings.ts::bypass-read::PipelineStage": 3,
+  "src/app/actions/settings.ts::bypass-read::PipelineStage": 2,
 };
 
 const baseline: Record<string, number> = { ...stored, ...ACKNOWLEDGED };

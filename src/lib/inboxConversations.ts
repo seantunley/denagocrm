@@ -77,12 +77,14 @@ export async function conversationIdsForThreads(
     const key = threadCollaborationKey(thread);
     if (!key || byKey.has(key)) continue;
     if (!CHANNELS_REQUIRING_CONVERSATION.has(thread.channel)) continue;
-    const id = await resolveConversationId({
+    // Only the id here: this maps threads to conversations for the reply box, and
+    // writes no row that has to match the thread's owner.
+    const conversation = await resolveConversationId({
       contactId: thread.contactId,
       leadId: thread.leadId,
       type: thread.channel,
     });
-    if (id) byKey.set(key, id);
+    if (conversation) byKey.set(key, conversation.id);
   }
   return byKey;
 }

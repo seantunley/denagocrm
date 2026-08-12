@@ -1,0 +1,1982 @@
+{
+  "Activity.Activity_tenantId_contactId_fkey": {
+    "table": "Activity",
+    "constraint": "Activity_tenantId_contactId_fkey",
+    "columns": [
+      "tenantId",
+      "contactId"
+    ],
+    "references": {
+      "table": "Contact",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "Activity.Activity_tenantId_leadId_fkey": {
+    "table": "Activity",
+    "constraint": "Activity_tenantId_leadId_fkey",
+    "columns": [
+      "tenantId",
+      "leadId"
+    ],
+    "references": {
+      "table": "Lead",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "ApprovalStep.ApprovalStep_tenantId_requestId_fkey": {
+    "table": "ApprovalStep",
+    "constraint": "ApprovalStep_tenantId_requestId_fkey",
+    "columns": [
+      "tenantId",
+      "requestId"
+    ],
+    "references": {
+      "table": "SignatureRequest",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "AuditLog.AuditLog_tenantId_contactId_fkey": {
+    "table": "AuditLog",
+    "constraint": "AuditLog_tenantId_contactId_fkey",
+    "columns": [
+      "tenantId",
+      "contactId"
+    ],
+    "references": {
+      "table": "Contact",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "AuditLog.AuditLog_tenantId_leadId_fkey": {
+    "table": "AuditLog",
+    "constraint": "AuditLog_tenantId_leadId_fkey",
+    "columns": [
+      "tenantId",
+      "leadId"
+    ],
+    "references": {
+      "table": "Lead",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "BatteryCheck.BatteryCheck_tenantId_jobCardId_fkey": {
+    "table": "BatteryCheck",
+    "constraint": "BatteryCheck_tenantId_jobCardId_fkey",
+    "columns": [
+      "tenantId",
+      "jobCardId"
+    ],
+    "references": {
+      "table": "JobCard",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "BatteryCheck.BatteryCheck_tenantId_vehicleId_fkey": {
+    "table": "BatteryCheck",
+    "constraint": "BatteryCheck_tenantId_vehicleId_fkey",
+    "columns": [
+      "tenantId",
+      "vehicleId"
+    ],
+    "references": {
+      "table": "Vehicle",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "Campaign.Campaign_tenantId_productId_fkey": {
+    "table": "Campaign",
+    "constraint": "Campaign_tenantId_productId_fkey",
+    "columns": [
+      "tenantId",
+      "productId"
+    ],
+    "references": {
+      "table": "Product",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "Campaign.Campaign_tenantId_segmentId_fkey": {
+    "table": "Campaign",
+    "constraint": "Campaign_tenantId_segmentId_fkey",
+    "columns": [
+      "tenantId",
+      "segmentId"
+    ],
+    "references": {
+      "table": "Segment",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "CampaignRecipient.CampaignRecipient_tenantId_campaignId_fkey": {
+    "table": "CampaignRecipient",
+    "constraint": "CampaignRecipient_tenantId_campaignId_fkey",
+    "columns": [
+      "tenantId",
+      "campaignId"
+    ],
+    "references": {
+      "table": "Campaign",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "CampaignRecipient.CampaignRecipient_tenantId_contactId_fkey": {
+    "table": "CampaignRecipient",
+    "constraint": "CampaignRecipient_tenantId_contactId_fkey",
+    "columns": [
+      "tenantId",
+      "contactId"
+    ],
+    "references": {
+      "table": "Contact",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "CannedReply.CannedReply_tenantId_mailboxId_fkey": {
+    "table": "CannedReply",
+    "constraint": "CannedReply_tenantId_mailboxId_fkey",
+    "columns": [
+      "tenantId",
+      "mailboxId"
+    ],
+    "references": {
+      "table": "SupportMailbox",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "Communication.Communication_tenantId_contactId_fkey": {
+    "table": "Communication",
+    "constraint": "Communication_tenantId_contactId_fkey",
+    "columns": [
+      "tenantId",
+      "contactId"
+    ],
+    "references": {
+      "table": "Contact",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "Communication.Communication_tenantId_conversationId_fkey": {
+    "table": "Communication",
+    "constraint": "Communication_tenantId_conversationId_fkey",
+    "columns": [
+      "tenantId",
+      "conversationId"
+    ],
+    "references": {
+      "table": "Conversation",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "Communication.Communication_tenantId_leadId_fkey": {
+    "table": "Communication",
+    "constraint": "Communication_tenantId_leadId_fkey",
+    "columns": [
+      "tenantId",
+      "leadId"
+    ],
+    "references": {
+      "table": "Lead",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "CompetitorBrief.CompetitorBrief_tenantId_competitorId_fkey": {
+    "table": "CompetitorBrief",
+    "constraint": "CompetitorBrief_tenantId_competitorId_fkey",
+    "columns": [
+      "tenantId",
+      "competitorId"
+    ],
+    "references": {
+      "table": "Competitor",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "CompetitorChange.CompetitorChange_tenantId_competitorId_fkey": {
+    "table": "CompetitorChange",
+    "constraint": "CompetitorChange_tenantId_competitorId_fkey",
+    "columns": [
+      "tenantId",
+      "competitorId"
+    ],
+    "references": {
+      "table": "Competitor",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "CompetitorChange.CompetitorChange_tenantId_sourceId_fkey": {
+    "table": "CompetitorChange",
+    "constraint": "CompetitorChange_tenantId_sourceId_fkey",
+    "columns": [
+      "tenantId",
+      "sourceId"
+    ],
+    "references": {
+      "table": "CompetitorSource",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "CompetitorSnapshot.CompetitorSnapshot_tenantId_competitorId_fkey": {
+    "table": "CompetitorSnapshot",
+    "constraint": "CompetitorSnapshot_tenantId_competitorId_fkey",
+    "columns": [
+      "tenantId",
+      "competitorId"
+    ],
+    "references": {
+      "table": "Competitor",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "CompetitorSnapshot.CompetitorSnapshot_tenantId_sourceId_fkey": {
+    "table": "CompetitorSnapshot",
+    "constraint": "CompetitorSnapshot_tenantId_sourceId_fkey",
+    "columns": [
+      "tenantId",
+      "sourceId"
+    ],
+    "references": {
+      "table": "CompetitorSource",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "CompetitorSource.CompetitorSource_tenantId_competitorId_fkey": {
+    "table": "CompetitorSource",
+    "constraint": "CompetitorSource_tenantId_competitorId_fkey",
+    "columns": [
+      "tenantId",
+      "competitorId"
+    ],
+    "references": {
+      "table": "Competitor",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "ConsentRecord.ConsentRecord_tenantId_contactId_fkey": {
+    "table": "ConsentRecord",
+    "constraint": "ConsentRecord_tenantId_contactId_fkey",
+    "columns": [
+      "tenantId",
+      "contactId"
+    ],
+    "references": {
+      "table": "Contact",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "Conversation.Conversation_tenantId_contactId_fkey": {
+    "table": "Conversation",
+    "constraint": "Conversation_tenantId_contactId_fkey",
+    "columns": [
+      "tenantId",
+      "contactId"
+    ],
+    "references": {
+      "table": "Contact",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "Conversation.Conversation_tenantId_leadId_fkey": {
+    "table": "Conversation",
+    "constraint": "Conversation_tenantId_leadId_fkey",
+    "columns": [
+      "tenantId",
+      "leadId"
+    ],
+    "references": {
+      "table": "Lead",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "ConversationDraft.ConversationDraft_tenantId_conversationId_fkey": {
+    "table": "ConversationDraft",
+    "constraint": "ConversationDraft_tenantId_conversationId_fkey",
+    "columns": [
+      "tenantId",
+      "conversationId"
+    ],
+    "references": {
+      "table": "Conversation",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "ConversationNote.ConversationNote_tenantId_conversationId_fkey": {
+    "table": "ConversationNote",
+    "constraint": "ConversationNote_tenantId_conversationId_fkey",
+    "columns": [
+      "tenantId",
+      "conversationId"
+    ],
+    "references": {
+      "table": "Conversation",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "CustomDocVersion.CustomDocVersion_tenantId_templateId_fkey": {
+    "table": "CustomDocVersion",
+    "constraint": "CustomDocVersion_tenantId_templateId_fkey",
+    "columns": [
+      "tenantId",
+      "templateId"
+    ],
+    "references": {
+      "table": "CustomDocTemplate",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "CustomFieldValue.CustomFieldValue_tenantId_defId_fkey": {
+    "table": "CustomFieldValue",
+    "constraint": "CustomFieldValue_tenantId_defId_fkey",
+    "columns": [
+      "tenantId",
+      "defId"
+    ],
+    "references": {
+      "table": "CustomFieldDef",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "CustomerCase.CustomerCase_tenantId_contactId_fkey": {
+    "table": "CustomerCase",
+    "constraint": "CustomerCase_tenantId_contactId_fkey",
+    "columns": [
+      "tenantId",
+      "contactId"
+    ],
+    "references": {
+      "table": "Contact",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "CustomerCase.CustomerCase_tenantId_mailboxId_fkey": {
+    "table": "CustomerCase",
+    "constraint": "CustomerCase_tenantId_mailboxId_fkey",
+    "columns": [
+      "tenantId",
+      "mailboxId"
+    ],
+    "references": {
+      "table": "SupportMailbox",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "CustomerCase.CustomerCase_tenantId_vehicleId_fkey": {
+    "table": "CustomerCase",
+    "constraint": "CustomerCase_tenantId_vehicleId_fkey",
+    "columns": [
+      "tenantId",
+      "vehicleId"
+    ],
+    "references": {
+      "table": "Vehicle",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "CustomerCaseMessage.CustomerCaseMessage_tenantId_caseId_fkey": {
+    "table": "CustomerCaseMessage",
+    "constraint": "CustomerCaseMessage_tenantId_caseId_fkey",
+    "columns": [
+      "tenantId",
+      "caseId"
+    ],
+    "references": {
+      "table": "CustomerCase",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "CustomerCaseMessage.CustomerCaseMessage_tenantId_contactId_fkey": {
+    "table": "CustomerCaseMessage",
+    "constraint": "CustomerCaseMessage_tenantId_contactId_fkey",
+    "columns": [
+      "tenantId",
+      "contactId"
+    ],
+    "references": {
+      "table": "Contact",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "CustomerCaseTag.CustomerCaseTag_tenantId_caseId_fkey": {
+    "table": "CustomerCaseTag",
+    "constraint": "CustomerCaseTag_tenantId_caseId_fkey",
+    "columns": [
+      "tenantId",
+      "caseId"
+    ],
+    "references": {
+      "table": "CustomerCase",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "CustomerCaseTag.CustomerCaseTag_tenantId_tagId_fkey": {
+    "table": "CustomerCaseTag",
+    "constraint": "CustomerCaseTag_tenantId_tagId_fkey",
+    "columns": [
+      "tenantId",
+      "tagId"
+    ],
+    "references": {
+      "table": "SupportTag",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "DocBuilderTemplate.DocBuilderTemplate_tenantId_defaultWorkflowId_fkey": {
+    "table": "DocBuilderTemplate",
+    "constraint": "DocBuilderTemplate_tenantId_defaultWorkflowId_fkey",
+    "columns": [
+      "tenantId",
+      "defaultWorkflowId"
+    ],
+    "references": {
+      "table": "SignWorkflow",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "DocBuilderVersion.DocBuilderVersion_tenantId_templateId_fkey": {
+    "table": "DocBuilderVersion",
+    "constraint": "DocBuilderVersion_tenantId_templateId_fkey",
+    "columns": [
+      "tenantId",
+      "templateId"
+    ],
+    "references": {
+      "table": "DocBuilderTemplate",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "DocInstance.DocInstance_tenantId_contactId_fkey": {
+    "table": "DocInstance",
+    "constraint": "DocInstance_tenantId_contactId_fkey",
+    "columns": [
+      "tenantId",
+      "contactId"
+    ],
+    "references": {
+      "table": "Contact",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "DocInstance.DocInstance_tenantId_leadId_fkey": {
+    "table": "DocInstance",
+    "constraint": "DocInstance_tenantId_leadId_fkey",
+    "columns": [
+      "tenantId",
+      "leadId"
+    ],
+    "references": {
+      "table": "Lead",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "DocInstance.DocInstance_tenantId_quoteId_fkey": {
+    "table": "DocInstance",
+    "constraint": "DocInstance_tenantId_quoteId_fkey",
+    "columns": [
+      "tenantId",
+      "quoteId"
+    ],
+    "references": {
+      "table": "Quote",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "DocInstance.DocInstance_tenantId_templateId_fkey": {
+    "table": "DocInstance",
+    "constraint": "DocInstance_tenantId_templateId_fkey",
+    "columns": [
+      "tenantId",
+      "templateId"
+    ],
+    "references": {
+      "table": "CustomDocTemplate",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "Document.Document_tenantId_contactId_fkey": {
+    "table": "Document",
+    "constraint": "Document_tenantId_contactId_fkey",
+    "columns": [
+      "tenantId",
+      "contactId"
+    ],
+    "references": {
+      "table": "Contact",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "Document.Document_tenantId_jobCardId_fkey": {
+    "table": "Document",
+    "constraint": "Document_tenantId_jobCardId_fkey",
+    "columns": [
+      "tenantId",
+      "jobCardId"
+    ],
+    "references": {
+      "table": "JobCard",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "Document.Document_tenantId_quoteId_fkey": {
+    "table": "Document",
+    "constraint": "Document_tenantId_quoteId_fkey",
+    "columns": [
+      "tenantId",
+      "quoteId"
+    ],
+    "references": {
+      "table": "Quote",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "Document.Document_tenantId_replacedById_fkey": {
+    "table": "Document",
+    "constraint": "Document_tenantId_replacedById_fkey",
+    "columns": [
+      "tenantId",
+      "replacedById"
+    ],
+    "references": {
+      "table": "Document",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "Document.Document_tenantId_vehicleId_fkey": {
+    "table": "Document",
+    "constraint": "Document_tenantId_vehicleId_fkey",
+    "columns": [
+      "tenantId",
+      "vehicleId"
+    ],
+    "references": {
+      "table": "Vehicle",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "Fleet.Fleet_tenantId_contactId_fkey": {
+    "table": "Fleet",
+    "constraint": "Fleet_tenantId_contactId_fkey",
+    "columns": [
+      "tenantId",
+      "contactId"
+    ],
+    "references": {
+      "table": "Contact",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "GoodsReceipt.GoodsReceipt_tenantId_purchaseOrderId_fkey": {
+    "table": "GoodsReceipt",
+    "constraint": "GoodsReceipt_tenantId_purchaseOrderId_fkey",
+    "columns": [
+      "tenantId",
+      "purchaseOrderId"
+    ],
+    "references": {
+      "table": "PurchaseOrder",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "GoodsReceiptLine.GoodsReceiptLine_tenantId_goodsReceiptId_fkey": {
+    "table": "GoodsReceiptLine",
+    "constraint": "GoodsReceiptLine_tenantId_goodsReceiptId_fkey",
+    "columns": [
+      "tenantId",
+      "goodsReceiptId"
+    ],
+    "references": {
+      "table": "GoodsReceipt",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "GoodsReceiptLine.GoodsReceiptLine_tenantId_purchaseOrderLineId_fkey": {
+    "table": "GoodsReceiptLine",
+    "constraint": "GoodsReceiptLine_tenantId_purchaseOrderLineId_fkey",
+    "columns": [
+      "tenantId",
+      "purchaseOrderLineId"
+    ],
+    "references": {
+      "table": "PurchaseOrderLine",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "GoodsReceiptLine.GoodsReceiptLine_tenantId_stockUnitId_fkey": {
+    "table": "GoodsReceiptLine",
+    "constraint": "GoodsReceiptLine_tenantId_stockUnitId_fkey",
+    "columns": [
+      "tenantId",
+      "stockUnitId"
+    ],
+    "references": {
+      "table": "StockUnit",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "JobCard.JobCard_tenantId_bayId_fkey": {
+    "table": "JobCard",
+    "constraint": "JobCard_tenantId_bayId_fkey",
+    "columns": [
+      "tenantId",
+      "bayId"
+    ],
+    "references": {
+      "table": "WorkshopBay",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "JobCard.JobCard_tenantId_comebackOfId_fkey": {
+    "table": "JobCard",
+    "constraint": "JobCard_tenantId_comebackOfId_fkey",
+    "columns": [
+      "tenantId",
+      "comebackOfId"
+    ],
+    "references": {
+      "table": "JobCard",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "JobCard.JobCard_tenantId_contactId_fkey": {
+    "table": "JobCard",
+    "constraint": "JobCard_tenantId_contactId_fkey",
+    "columns": [
+      "tenantId",
+      "contactId"
+    ],
+    "references": {
+      "table": "Contact",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "JobCard.JobCard_tenantId_vehicleId_fkey": {
+    "table": "JobCard",
+    "constraint": "JobCard_tenantId_vehicleId_fkey",
+    "columns": [
+      "tenantId",
+      "vehicleId"
+    ],
+    "references": {
+      "table": "Vehicle",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "JobCardApproval.JobCardApproval_tenantId_jobCardId_fkey": {
+    "table": "JobCardApproval",
+    "constraint": "JobCardApproval_tenantId_jobCardId_fkey",
+    "columns": [
+      "tenantId",
+      "jobCardId"
+    ],
+    "references": {
+      "table": "JobCard",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "JobCardInspectionItem.JobCardInspectionItem_tenantId_jobCardId_fkey": {
+    "table": "JobCardInspectionItem",
+    "constraint": "JobCardInspectionItem_tenantId_jobCardId_fkey",
+    "columns": [
+      "tenantId",
+      "jobCardId"
+    ],
+    "references": {
+      "table": "JobCard",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "JobCardItem.JobCardItem_tenantId_jobCardId_fkey": {
+    "table": "JobCardItem",
+    "constraint": "JobCardItem_tenantId_jobCardId_fkey",
+    "columns": [
+      "tenantId",
+      "jobCardId"
+    ],
+    "references": {
+      "table": "JobCard",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "JobCardItem.JobCardItem_tenantId_partId_fkey": {
+    "table": "JobCardItem",
+    "constraint": "JobCardItem_tenantId_partId_fkey",
+    "columns": [
+      "tenantId",
+      "partId"
+    ],
+    "references": {
+      "table": "Part",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "JobCardTimeEntry.JobCardTimeEntry_tenantId_jobCardId_fkey": {
+    "table": "JobCardTimeEntry",
+    "constraint": "JobCardTimeEntry_tenantId_jobCardId_fkey",
+    "columns": [
+      "tenantId",
+      "jobCardId"
+    ],
+    "references": {
+      "table": "JobCard",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "Lead.Lead_tenantId_contactId_fkey": {
+    "table": "Lead",
+    "constraint": "Lead_tenantId_contactId_fkey",
+    "columns": [
+      "tenantId",
+      "contactId"
+    ],
+    "references": {
+      "table": "Contact",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "Lead.Lead_tenantId_productId_fkey": {
+    "table": "Lead",
+    "constraint": "Lead_tenantId_productId_fkey",
+    "columns": [
+      "tenantId",
+      "productId"
+    ],
+    "references": {
+      "table": "Product",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "Lead.Lead_tenantId_stageId_fkey": {
+    "table": "Lead",
+    "constraint": "Lead_tenantId_stageId_fkey",
+    "columns": [
+      "tenantId",
+      "stageId"
+    ],
+    "references": {
+      "table": "PipelineStage",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "LegalArtifact.LegalArtifact_request_fkey": {
+    "table": "LegalArtifact",
+    "constraint": "LegalArtifact_request_fkey",
+    "columns": [
+      "tenantId",
+      "requestId"
+    ],
+    "references": {
+      "table": "SignatureRequest",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "LegalArtifact.LegalArtifact_tenantId_documentId_fkey": {
+    "table": "LegalArtifact",
+    "constraint": "LegalArtifact_tenantId_documentId_fkey",
+    "columns": [
+      "tenantId",
+      "documentId"
+    ],
+    "references": {
+      "table": "Document",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "LegalArtifactValidation.LegalArtifactValidation_tenantId_artifactId_fkey": {
+    "table": "LegalArtifactValidation",
+    "constraint": "LegalArtifactValidation_tenantId_artifactId_fkey",
+    "columns": [
+      "tenantId",
+      "artifactId"
+    ],
+    "references": {
+      "table": "LegalArtifact",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "LibraryVersion.LibraryVersion_tenantId_documentId_fkey": {
+    "table": "LibraryVersion",
+    "constraint": "LibraryVersion_tenantId_documentId_fkey",
+    "columns": [
+      "tenantId",
+      "documentId"
+    ],
+    "references": {
+      "table": "LibraryDocument",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "MileageLog.MileageLog_tenantId_vehicleId_fkey": {
+    "table": "MileageLog",
+    "constraint": "MileageLog_tenantId_vehicleId_fkey",
+    "columns": [
+      "tenantId",
+      "vehicleId"
+    ],
+    "references": {
+      "table": "Vehicle",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "PartReservation.PartReservation_tenantId_jobCardId_fkey": {
+    "table": "PartReservation",
+    "constraint": "PartReservation_tenantId_jobCardId_fkey",
+    "columns": [
+      "tenantId",
+      "jobCardId"
+    ],
+    "references": {
+      "table": "JobCard",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "PartReservation.PartReservation_tenantId_partId_fkey": {
+    "table": "PartReservation",
+    "constraint": "PartReservation_tenantId_partId_fkey",
+    "columns": [
+      "tenantId",
+      "partId"
+    ],
+    "references": {
+      "table": "Part",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "PortalAccessGrant.PortalAccessGrant_tenantId_fleetId_fkey": {
+    "table": "PortalAccessGrant",
+    "constraint": "PortalAccessGrant_tenantId_fleetId_fkey",
+    "columns": [
+      "tenantId",
+      "fleetId"
+    ],
+    "references": {
+      "table": "Fleet",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "PortalAccessGrant.PortalAccessGrant_tenantId_grantedContactId_fkey": {
+    "table": "PortalAccessGrant",
+    "constraint": "PortalAccessGrant_tenantId_grantedContactId_fkey",
+    "columns": [
+      "tenantId",
+      "grantedContactId"
+    ],
+    "references": {
+      "table": "Contact",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "PortalAccessGrant.PortalAccessGrant_tenantId_viewerContactId_fkey": {
+    "table": "PortalAccessGrant",
+    "constraint": "PortalAccessGrant_tenantId_viewerContactId_fkey",
+    "columns": [
+      "tenantId",
+      "viewerContactId"
+    ],
+    "references": {
+      "table": "Contact",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "PortalNotification.PortalNotification_tenantId_contactId_fkey": {
+    "table": "PortalNotification",
+    "constraint": "PortalNotification_tenantId_contactId_fkey",
+    "columns": [
+      "tenantId",
+      "contactId"
+    ],
+    "references": {
+      "table": "Contact",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "PortalPreference.PortalPreference_tenantId_contactId_fkey": {
+    "table": "PortalPreference",
+    "constraint": "PortalPreference_tenantId_contactId_fkey",
+    "columns": [
+      "tenantId",
+      "contactId"
+    ],
+    "references": {
+      "table": "Contact",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "PortalProfileChangeRequest.PortalProfileChangeRequest_tenantId_contactId_fkey": {
+    "table": "PortalProfileChangeRequest",
+    "constraint": "PortalProfileChangeRequest_tenantId_contactId_fkey",
+    "columns": [
+      "tenantId",
+      "contactId"
+    ],
+    "references": {
+      "table": "Contact",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "PortalUpload.PortalUpload_tenantId_caseId_fkey": {
+    "table": "PortalUpload",
+    "constraint": "PortalUpload_tenantId_caseId_fkey",
+    "columns": [
+      "tenantId",
+      "caseId"
+    ],
+    "references": {
+      "table": "CustomerCase",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "PortalUpload.PortalUpload_tenantId_contactId_fkey": {
+    "table": "PortalUpload",
+    "constraint": "PortalUpload_tenantId_contactId_fkey",
+    "columns": [
+      "tenantId",
+      "contactId"
+    ],
+    "references": {
+      "table": "Contact",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "PortalUpload.PortalUpload_tenantId_vehicleId_fkey": {
+    "table": "PortalUpload",
+    "constraint": "PortalUpload_tenantId_vehicleId_fkey",
+    "columns": [
+      "tenantId",
+      "vehicleId"
+    ],
+    "references": {
+      "table": "Vehicle",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "ProductColor.ProductColor_tenantId_productId_fkey": {
+    "table": "ProductColor",
+    "constraint": "ProductColor_tenantId_productId_fkey",
+    "columns": [
+      "tenantId",
+      "productId"
+    ],
+    "references": {
+      "table": "Product",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "PurchaseOrderLine.PurchaseOrderLine_tenantId_productId_fkey": {
+    "table": "PurchaseOrderLine",
+    "constraint": "PurchaseOrderLine_tenantId_productId_fkey",
+    "columns": [
+      "tenantId",
+      "productId"
+    ],
+    "references": {
+      "table": "Product",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "PurchaseOrderLine.PurchaseOrderLine_tenantId_purchaseOrderId_fkey": {
+    "table": "PurchaseOrderLine",
+    "constraint": "PurchaseOrderLine_tenantId_purchaseOrderId_fkey",
+    "columns": [
+      "tenantId",
+      "purchaseOrderId"
+    ],
+    "references": {
+      "table": "PurchaseOrder",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "Quote.Quote_tenantId_contactId_fkey": {
+    "table": "Quote",
+    "constraint": "Quote_tenantId_contactId_fkey",
+    "columns": [
+      "tenantId",
+      "contactId"
+    ],
+    "references": {
+      "table": "Contact",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "Quote.Quote_tenantId_leadId_fkey": {
+    "table": "Quote",
+    "constraint": "Quote_tenantId_leadId_fkey",
+    "columns": [
+      "tenantId",
+      "leadId"
+    ],
+    "references": {
+      "table": "Lead",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "Quote.Quote_tenantId_revisionOfId_fkey": {
+    "table": "Quote",
+    "constraint": "Quote_tenantId_revisionOfId_fkey",
+    "columns": [
+      "tenantId",
+      "revisionOfId"
+    ],
+    "references": {
+      "table": "Quote",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "QuoteFee.QuoteFee_tenantId_quoteId_fkey": {
+    "table": "QuoteFee",
+    "constraint": "QuoteFee_tenantId_quoteId_fkey",
+    "columns": [
+      "tenantId",
+      "quoteId"
+    ],
+    "references": {
+      "table": "Quote",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "QuoteItem.QuoteItem_tenantId_productId_fkey": {
+    "table": "QuoteItem",
+    "constraint": "QuoteItem_tenantId_productId_fkey",
+    "columns": [
+      "tenantId",
+      "productId"
+    ],
+    "references": {
+      "table": "Product",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "QuoteItem.QuoteItem_tenantId_quoteId_fkey": {
+    "table": "QuoteItem",
+    "constraint": "QuoteItem_tenantId_quoteId_fkey",
+    "columns": [
+      "tenantId",
+      "quoteId"
+    ],
+    "references": {
+      "table": "Quote",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "Referral.Referral_tenantId_contactId_fkey": {
+    "table": "Referral",
+    "constraint": "Referral_tenantId_contactId_fkey",
+    "columns": [
+      "tenantId",
+      "contactId"
+    ],
+    "references": {
+      "table": "Contact",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "Referral.Referral_tenantId_leadId_fkey": {
+    "table": "Referral",
+    "constraint": "Referral_tenantId_leadId_fkey",
+    "columns": [
+      "tenantId",
+      "leadId"
+    ],
+    "references": {
+      "table": "Lead",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "Referral.Referral_tenantId_referrerId_fkey": {
+    "table": "Referral",
+    "constraint": "Referral_tenantId_referrerId_fkey",
+    "columns": [
+      "tenantId",
+      "referrerId"
+    ],
+    "references": {
+      "table": "Contact",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "ResearchNote.ResearchNote_tenantId_contactId_fkey": {
+    "table": "ResearchNote",
+    "constraint": "ResearchNote_tenantId_contactId_fkey",
+    "columns": [
+      "tenantId",
+      "contactId"
+    ],
+    "references": {
+      "table": "Contact",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "ResearchNote.ResearchNote_tenantId_leadId_fkey": {
+    "table": "ResearchNote",
+    "constraint": "ResearchNote_tenantId_leadId_fkey",
+    "columns": [
+      "tenantId",
+      "leadId"
+    ],
+    "references": {
+      "table": "Lead",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "ServicePackageItem.ServicePackageItem_tenantId_packageId_fkey": {
+    "table": "ServicePackageItem",
+    "constraint": "ServicePackageItem_tenantId_packageId_fkey",
+    "columns": [
+      "tenantId",
+      "packageId"
+    ],
+    "references": {
+      "table": "ServicePackage",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "ServiceRecord.ServiceRecord_tenantId_jobCardId_fkey": {
+    "table": "ServiceRecord",
+    "constraint": "ServiceRecord_tenantId_jobCardId_fkey",
+    "columns": [
+      "tenantId",
+      "jobCardId"
+    ],
+    "references": {
+      "table": "JobCard",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "ServiceRecord.ServiceRecord_tenantId_vehicleId_fkey": {
+    "table": "ServiceRecord",
+    "constraint": "ServiceRecord_tenantId_vehicleId_fkey",
+    "columns": [
+      "tenantId",
+      "vehicleId"
+    ],
+    "references": {
+      "table": "Vehicle",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "ServiceReminderLog.ServiceReminderLog_tenantId_vehicleId_fkey": {
+    "table": "ServiceReminderLog",
+    "constraint": "ServiceReminderLog_tenantId_vehicleId_fkey",
+    "columns": [
+      "tenantId",
+      "vehicleId"
+    ],
+    "references": {
+      "table": "Vehicle",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "SignatureEvent.SignatureEvent_tenantId_requestId_fkey": {
+    "table": "SignatureEvent",
+    "constraint": "SignatureEvent_tenantId_requestId_fkey",
+    "columns": [
+      "tenantId",
+      "requestId"
+    ],
+    "references": {
+      "table": "SignatureRequest",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "SignatureField.SignatureField_tenantId_recipientId_fkey": {
+    "table": "SignatureField",
+    "constraint": "SignatureField_tenantId_recipientId_fkey",
+    "columns": [
+      "tenantId",
+      "recipientId"
+    ],
+    "references": {
+      "table": "SignatureRecipient",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "SignatureField.SignatureField_tenantId_requestId_fkey": {
+    "table": "SignatureField",
+    "constraint": "SignatureField_tenantId_requestId_fkey",
+    "columns": [
+      "tenantId",
+      "requestId"
+    ],
+    "references": {
+      "table": "SignatureRequest",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "SignatureFieldResponse.SignatureFieldResponse_tenantId_fieldId_fkey": {
+    "table": "SignatureFieldResponse",
+    "constraint": "SignatureFieldResponse_tenantId_fieldId_fkey",
+    "columns": [
+      "tenantId",
+      "fieldId"
+    ],
+    "references": {
+      "table": "SignatureField",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "SignatureFieldResponse.SignatureFieldResponse_tenantId_recipientId_fkey": {
+    "table": "SignatureFieldResponse",
+    "constraint": "SignatureFieldResponse_tenantId_recipientId_fkey",
+    "columns": [
+      "tenantId",
+      "recipientId"
+    ],
+    "references": {
+      "table": "SignatureRecipient",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "SignatureRecipient.SignatureRecipient_tenantId_requestId_fkey": {
+    "table": "SignatureRecipient",
+    "constraint": "SignatureRecipient_tenantId_requestId_fkey",
+    "columns": [
+      "tenantId",
+      "requestId"
+    ],
+    "references": {
+      "table": "SignatureRequest",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "SignatureRequest.SignatureRequest_tenantId_contactId_fkey": {
+    "table": "SignatureRequest",
+    "constraint": "SignatureRequest_tenantId_contactId_fkey",
+    "columns": [
+      "tenantId",
+      "contactId"
+    ],
+    "references": {
+      "table": "Contact",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "SignatureRequest.SignatureRequest_tenantId_documentId_fkey": {
+    "table": "SignatureRequest",
+    "constraint": "SignatureRequest_tenantId_documentId_fkey",
+    "columns": [
+      "tenantId",
+      "documentId"
+    ],
+    "references": {
+      "table": "Document",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "SignatureRequest.SignatureRequest_tenantId_jobCardId_fkey": {
+    "table": "SignatureRequest",
+    "constraint": "SignatureRequest_tenantId_jobCardId_fkey",
+    "columns": [
+      "tenantId",
+      "jobCardId"
+    ],
+    "references": {
+      "table": "JobCard",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "SignatureRequest.SignatureRequest_tenantId_quoteId_fkey": {
+    "table": "SignatureRequest",
+    "constraint": "SignatureRequest_tenantId_quoteId_fkey",
+    "columns": [
+      "tenantId",
+      "quoteId"
+    ],
+    "references": {
+      "table": "Quote",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "SignatureRequest.SignatureRequest_tenantId_templateId_fkey": {
+    "table": "SignatureRequest",
+    "constraint": "SignatureRequest_tenantId_templateId_fkey",
+    "columns": [
+      "tenantId",
+      "templateId"
+    ],
+    "references": {
+      "table": "DocBuilderTemplate",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "SigningIdentityChallenge.SigningIdentityChallenge_recipient_fkey": {
+    "table": "SigningIdentityChallenge",
+    "constraint": "SigningIdentityChallenge_recipient_fkey",
+    "columns": [
+      "tenantId",
+      "recipientId"
+    ],
+    "references": {
+      "table": "SignatureRecipient",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "SigningJob.SigningJob_request_fkey": {
+    "table": "SigningJob",
+    "constraint": "SigningJob_request_fkey",
+    "columns": [
+      "tenantId",
+      "requestId"
+    ],
+    "references": {
+      "table": "SignatureRequest",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "StockEvent.StockEvent_tenantId_leadId_fkey": {
+    "table": "StockEvent",
+    "constraint": "StockEvent_tenantId_leadId_fkey",
+    "columns": [
+      "tenantId",
+      "leadId"
+    ],
+    "references": {
+      "table": "Lead",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "StockEvent.StockEvent_tenantId_purchaseOrderId_fkey": {
+    "table": "StockEvent",
+    "constraint": "StockEvent_tenantId_purchaseOrderId_fkey",
+    "columns": [
+      "tenantId",
+      "purchaseOrderId"
+    ],
+    "references": {
+      "table": "PurchaseOrder",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "StockEvent.StockEvent_tenantId_quoteId_fkey": {
+    "table": "StockEvent",
+    "constraint": "StockEvent_tenantId_quoteId_fkey",
+    "columns": [
+      "tenantId",
+      "quoteId"
+    ],
+    "references": {
+      "table": "Quote",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "StockEvent.StockEvent_tenantId_stockUnitId_fkey": {
+    "table": "StockEvent",
+    "constraint": "StockEvent_tenantId_stockUnitId_fkey",
+    "columns": [
+      "tenantId",
+      "stockUnitId"
+    ],
+    "references": {
+      "table": "StockUnit",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "StockReservation.StockReservation_tenantId_leadId_fkey": {
+    "table": "StockReservation",
+    "constraint": "StockReservation_tenantId_leadId_fkey",
+    "columns": [
+      "tenantId",
+      "leadId"
+    ],
+    "references": {
+      "table": "Lead",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "StockReservation.StockReservation_tenantId_quoteId_fkey": {
+    "table": "StockReservation",
+    "constraint": "StockReservation_tenantId_quoteId_fkey",
+    "columns": [
+      "tenantId",
+      "quoteId"
+    ],
+    "references": {
+      "table": "Quote",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "StockReservation.StockReservation_tenantId_stockUnitId_fkey": {
+    "table": "StockReservation",
+    "constraint": "StockReservation_tenantId_stockUnitId_fkey",
+    "columns": [
+      "tenantId",
+      "stockUnitId"
+    ],
+    "references": {
+      "table": "StockUnit",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "StockUnit.StockUnit_tenantId_productId_fkey": {
+    "table": "StockUnit",
+    "constraint": "StockUnit_tenantId_productId_fkey",
+    "columns": [
+      "tenantId",
+      "productId"
+    ],
+    "references": {
+      "table": "Product",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "StockUnit.StockUnit_tenantId_purchaseOrderId_fkey": {
+    "table": "StockUnit",
+    "constraint": "StockUnit_tenantId_purchaseOrderId_fkey",
+    "columns": [
+      "tenantId",
+      "purchaseOrderId"
+    ],
+    "references": {
+      "table": "PurchaseOrder",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "StockUnit.StockUnit_tenantId_purchaseOrderLineId_fkey": {
+    "table": "StockUnit",
+    "constraint": "StockUnit_tenantId_purchaseOrderLineId_fkey",
+    "columns": [
+      "tenantId",
+      "purchaseOrderLineId"
+    ],
+    "references": {
+      "table": "PurchaseOrderLine",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "StockUnit.StockUnit_tenantId_reservedForLeadId_fkey": {
+    "table": "StockUnit",
+    "constraint": "StockUnit_tenantId_reservedForLeadId_fkey",
+    "columns": [
+      "tenantId",
+      "reservedForLeadId"
+    ],
+    "references": {
+      "table": "Lead",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "StockUnit.StockUnit_tenantId_soldQuoteId_fkey": {
+    "table": "StockUnit",
+    "constraint": "StockUnit_tenantId_soldQuoteId_fkey",
+    "columns": [
+      "tenantId",
+      "soldQuoteId"
+    ],
+    "references": {
+      "table": "Quote",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "SurveyResponse.SurveyResponse_tenantId_contactId_fkey": {
+    "table": "SurveyResponse",
+    "constraint": "SurveyResponse_tenantId_contactId_fkey",
+    "columns": [
+      "tenantId",
+      "contactId"
+    ],
+    "references": {
+      "table": "Contact",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "SurveyResponse.SurveyResponse_tenantId_jobCardId_fkey": {
+    "table": "SurveyResponse",
+    "constraint": "SurveyResponse_tenantId_jobCardId_fkey",
+    "columns": [
+      "tenantId",
+      "jobCardId"
+    ],
+    "references": {
+      "table": "JobCard",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "SurveyResponse.SurveyResponse_tenantId_leadId_fkey": {
+    "table": "SurveyResponse",
+    "constraint": "SurveyResponse_tenantId_leadId_fkey",
+    "columns": [
+      "tenantId",
+      "leadId"
+    ],
+    "references": {
+      "table": "Lead",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "SurveyResponse.SurveyResponse_tenantId_surveyId_fkey": {
+    "table": "SurveyResponse",
+    "constraint": "SurveyResponse_tenantId_surveyId_fkey",
+    "columns": [
+      "tenantId",
+      "surveyId"
+    ],
+    "references": {
+      "table": "Survey",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "Vehicle.Vehicle_tenantId_contactId_fkey": {
+    "table": "Vehicle",
+    "constraint": "Vehicle_tenantId_contactId_fkey",
+    "columns": [
+      "tenantId",
+      "contactId"
+    ],
+    "references": {
+      "table": "Contact",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "Vehicle.Vehicle_tenantId_fleetId_fkey": {
+    "table": "Vehicle",
+    "constraint": "Vehicle_tenantId_fleetId_fkey",
+    "columns": [
+      "tenantId",
+      "fleetId"
+    ],
+    "references": {
+      "table": "Fleet",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "Vehicle.Vehicle_tenantId_productId_fkey": {
+    "table": "Vehicle",
+    "constraint": "Vehicle_tenantId_productId_fkey",
+    "columns": [
+      "tenantId",
+      "productId"
+    ],
+    "references": {
+      "table": "Product",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "WarrantyClaim.WarrantyClaim_tenantId_contactId_fkey": {
+    "table": "WarrantyClaim",
+    "constraint": "WarrantyClaim_tenantId_contactId_fkey",
+    "columns": [
+      "tenantId",
+      "contactId"
+    ],
+    "references": {
+      "table": "Contact",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "WarrantyClaim.WarrantyClaim_tenantId_jobCardId_fkey": {
+    "table": "WarrantyClaim",
+    "constraint": "WarrantyClaim_tenantId_jobCardId_fkey",
+    "columns": [
+      "tenantId",
+      "jobCardId"
+    ],
+    "references": {
+      "table": "JobCard",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "WarrantyClaim.WarrantyClaim_tenantId_vehicleId_fkey": {
+    "table": "WarrantyClaim",
+    "constraint": "WarrantyClaim_tenantId_vehicleId_fkey",
+    "columns": [
+      "tenantId",
+      "vehicleId"
+    ],
+    "references": {
+      "table": "Vehicle",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  }
+}

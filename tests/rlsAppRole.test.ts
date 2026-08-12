@@ -110,12 +110,73 @@ test("CI executes the shipped script, not a second copy of what it should do", (
   const suite = read("scripts/test-rls-restricted.ts");
   assert.match(suite, /path\.join\(process\.cwd\(\), "prisma", "rls", "app-role\.sql"\)/);
   assert.match(suite, /replaceAll\("crm_app", ROLE\)/, "only the role name is substituted");
-  assert.match(suite, /"prisma", "db", "execute", "--url"/, "run the same way a migration is run");
+  // Run the same way a migration is run — which now means the migration runner's
+  // OWN dollar-quote-aware splitter, in this process, rather than spawning
+  // `npx prisma db execute`. The SQL and its order are identical; the spawn is
+  // not, and it is what made this suite unrunnable on Windows (npx cannot be
+  // started with execFileSync). app-role.sql is mostly `DO $$ … $$`, so the
+  // splitter is load-bearing rather than incidental.
+  assert.match(suite, /splitSqlStatements/, "run the same way a migration is run");
+  assert.doesNotMatch(
+    suite,
+    /execFileSync\(\s*"npx"/,
+    "no npx spawn — it cannot be execFile'd on Windows, and the splitter makes it unnecessary",
+  );
   assert.match(
     suite,
     /a table created after the grants is still readable \(ALTER DEFAULT PRIVILEGES\)/,
     "…and prove the future-table rule, which is the part production would have found",
   );
+});
+
+test("the harness drives the application through a role that cannot bypass RLS", () => {
+  // THE CANARY. `TimelinePin [READ]` is `prisma.$queryRaw` — no Prisma extension
+  // can rewrite raw SQL, so RLS is the only boundary left, and RLS is inert for a
+  // BYPASSRLS role. The harness used to connect as the scratch server's bootstrap
+  // SUPERUSER, which reproduced production's exemption exactly and made that check
+  // unfixable from inside this repository. These assertions are what stop it
+  // quietly going back.
+  const role = read("scripts/harness/restrictedRole.ts");
+  // `\s` already matches newlines; no dotAll flag, which this tsconfig's target
+  // does not allow (TS1501).
+  assert.match(role, /"prisma",\s*"rls",\s*"app-role\.sql"/, "runs the SHIPPED role script");
+  assert.match(role, /replaceAll\("crm_app", HARNESS_APP_ROLE\)/, "only the role name is substituted");
+  assert.match(
+    role,
+    /rolsuper \|\| attrs\.rolbypassrls/,
+    "refuses to proceed with a role that can step over a policy",
+  );
+
+  const harness = read("scripts/test-tenant-isolation.ts");
+  // The two urls, and which is which. Migrations keep the owner exactly as
+  // production keeps DATABASE_URL_UNPOOLED on neondb_owner.
+  assert.match(harness, /process\.env\.DATABASE_URL = appUrl/);
+  assert.match(harness, /process\.env\.DATABASE_URL_UNPOOLED = db\.url/);
+  // The four-condition disposability guard must still be applied to the url the
+  // application will actually dial, and BEFORE DATABASE_URL is repointed — after
+  // it, condition 4 compares the url with itself and cannot fail.
+  const guard = harness.indexOf("assertDisposable(appUrl");
+  const assign = harness.indexOf("process.env.DATABASE_URL = appUrl");
+  assert.ok(guard > 0, "the restricted url goes through assertDisposable");
+  assert.ok(guard < assign, "…while DATABASE_URL is still ambient, or condition 4 means nothing");
+  // The role is created AFTER the migrations: GRANT ON ALL TABLES is a loop over
+  // what exists, so a role granted against an empty schema is granted nothing.
+  assert.ok(
+    harness.indexOf("migrateHarnessDatabase(db.url") < harness.indexOf("createRestrictedRole(db.url"),
+    "the role is created after the migrations, or GRANT ON ALL TABLES covers nothing",
+  );
+});
+
+test("the allowlist is empty, and the machinery that keeps it honest is not", () => {
+  // The list reached zero when the canary flipped. What must NOT follow is the
+  // ratchet being deleted as no-longer-needed — it is what stops the NEXT
+  // isolation failure arriving as a check that quietly went red.
+  const code = read("scripts/harness/acknowledged.ts");
+  assert.match(code, /export function unacknowledgedFailures/);
+  assert.match(code, /export function staleAcknowledgements/);
+  assert.match(code, /export function activeAcknowledgements/);
+  const runner = read("scripts/test-tenant-isolation.ts");
+  assert.match(runner, /unacknowledged\.length \|\| stale\.length/, "both still fail the build");
 });
 
 test("the audit script only reads", () => {

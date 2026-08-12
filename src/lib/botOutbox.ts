@@ -1,9 +1,11 @@
 import crypto from "crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
+import { withStaffConversationScope } from "./actingScope";
+import { botConversationTenantId, withBotConversationWrite } from "./botTenant";
 import { customerRecordTenantId } from "./customerRecordTenant";
-import { DEFAULT_TENANT_ID } from "./tenant";
-import { withTenantWrite, writeTenantId, type TenantWriteTx } from "./tenantWrite";
+import { runInTenantScope } from "./tenantScope";
+import { type TenantWriteTx } from "./tenantWrite";
 import { botStillOwnsTx, pauseBotSessionTx } from "./botSessionStore";
 import { logAuditStrict } from "./audit";
 import { classifyDeliveryFailure, PERMANENT_FAILURES, staffReplyMatchesRow } from "./messageDelivery";
@@ -21,6 +23,14 @@ import type { CronSliceContext } from "./tenantCron";
 const FLOW_MARKER = "🤖 Flow";
 const MAX_ATTEMPTS = 8;
 const LEASE_MS = 5 * 60 * 1000;
+
+/**
+ * Joins `(tenantId, channel, key)` into one dedupe-able conversation identity for
+ * the sweep below. A control character no provider id, channel name or tenant id
+ * can contain, so the parts cannot run together — a `+` or a `:` would let a key
+ * ending in one collide with the next conversation along.
+ */
+const SEPARATOR = String.fromCharCode(0);
 
 type OutboxRow = {
   id: string;
@@ -60,40 +70,45 @@ type OutboxBudget = Pick<CronSliceContext, "shouldStop">;
  * from the row — so an unscoped claim could deliver one tenant's message from
  * another tenant's WhatsApp number, or kill their queue.
  *
- * This mirrors exactly what `withTenantWrite` stamps on the way in, so the filter
+ * This mirrors exactly what the write helper stamps on the way in, so the filter
  * and the writer always agree, including while enforcement is dormant.
  *
- * ── NOT CONVERTED TO THE ACTING WORKSPACE, AND WHY ─────────────────────────────
+ * ── BOTH SIDES OF THE QUEUE MOVED HERE, TOGETHER ───────────────────────────────
  *
- * `writeTenantId()` is null while enforcement is dormant, so this is the FOUNDING
- * tenant for everyone — the #470 defect, here as well. It is not fixed one call
- * site at a time, because this single expression is the tenant for BOTH sides of
- * the queue:
+ * This one expression is the tenant for BOTH sides, which is precisely why #473
+ * could not convert either of them alone:
  *
  *   - the STAFF side (`enqueueStaffReply` → its idempotency re-read at
- *     `resolveExisting`, and the `withTenantWrite` that writes the row), which IS
+ *     `resolveExisting`, and the transaction that writes the row), which IS
  *     user-originated — both callers are Server Actions behind `inbox.reply`;
  *   - the DRAIN side (`flushBotOutbox`, `flushBotOutboxConversation`,
  *     `claimOldest`, `earliestUnfinished`, `repairPendingCommunicationLogs`,
  *     `deliveryStateForMessages`), which is the bot-outbox cron.
  *
- * Move the staff write to the acting workspace on its own and a second tenant's
- * reply is written into tenant B while every reader still looks in tenant A: the
- * idempotency check stops recognising its own rows (so a resubmission sends the
- * message twice), the immediate flush finds nothing, and the cron never claims it.
- * The reply is accepted, reported as sent, and never leaves. That is a delivery
- * outage traded for a silent mis-ownership, which is the wrong trade even though
- * the mis-ownership is the more insidious bug.
+ * Move the staff write on its own and a second tenant's reply is written into
+ * workspace B while every reader still looks in workspace A: the idempotency check
+ * stops recognising its own rows (so a resubmission sends the message twice), the
+ * immediate flush finds nothing, and the cron never claims it. The reply is
+ * accepted, reported as sent, and never leaves.
  *
- * WHAT WOULD SETTLE IT: the drain resolving a real tenant per slice — `runCronPerTenant`
- * already loops tenants for the bot-outbox route, but binds a scope that
- * `writeTenantId()` ignores while dormant, so every slice collapses back here. Once
- * the drain reads the tenant it was handed, enqueue and drain can move to the
- * acting/record tenant together, in one change, with the two-tenant harness
- * covering send → claim → deliver end to end.
+ * So they moved in one change, onto ONE expression they all share —
+ * {@link ./botTenant}.`botConversationTenantId`, whose middle rung is the AMBIENT
+ * scope. What makes that rung a real answer rather than nothing:
+ *
+ *   - at a webhook, `withChannelTenantScope` binds the workspace that owns the
+ *     provider endpoint, now while enforcement is dormant as well as under it;
+ *   - at the inbox, `withStaffConversationScope` binds the acting workspace;
+ *   - on the cron, `flushBotOutbox`'s dormant sweep binds each conversation's OWN
+ *     tenant, read off its rows, before draining it — so a workspace whose replies
+ *     are not the founding tenant's is drained rather than stranded, and
+ *     `sendProvider` resolves that workspace's provider credentials instead of
+ *     whoever's happen to be configured globally.
+ *
+ * Writer and readers agreed before because they were all wrong in the same way.
+ * They agree now because they ask the same question.
  */
 function outboxTenantId(): string {
-  return writeTenantId() ?? DEFAULT_TENANT_ID;
+  return botConversationTenantId();
 }
 
 function storedMessages(channel: string, messages: OutMsg[]): OutMsg[] {
@@ -112,10 +127,10 @@ function storedMessages(channel: string, messages: OutMsg[]): OutMsg[] {
  *
  * UNREACHABLE — nothing in `src/` or `tests/` calls this (nor its namesake in
  * botOutboxWrite.ts); every live enqueue goes through `enqueueBotMessagesTx` inside
- * the caller's own turn transaction. Left on `withTenantWrite` rather than
- * converted: classifying dead code as user-originated or background is a guess
- * either way, and a converted-but-uncalled helper would read as precedent for the
- * live runtime paths that deliberately did NOT move.
+ * the caller's own turn transaction. It moves to `withBotConversationWrite` with the
+ * rest of the queue anyway: an outbox row that names a different workspace from the
+ * one `outboxTenantId()` claims with is unclaimable, so leaving dead code on the old
+ * helper would leave a loaded gun for whoever revives it.
  */
 export async function enqueueBotMessages(input: {
   channel: string;
@@ -130,7 +145,7 @@ export async function enqueueBotMessages(input: {
   const batchId = crypto.randomUUID();
   const createdAt = new Date();
   const messages = storedMessages(input.channel, input.messages);
-  await withTenantWrite(async (tx, tenantId) => {
+  await withBotConversationWrite(async (tx, tenantId) => {
     for (let sequence = 0; sequence < messages.length; sequence++) {
       await tx.botFlowOutbox.create({
         data: {
@@ -244,7 +259,7 @@ export type StaffReplyPartResult = {
  * ordering barriers and dead-lettering the bot paths already use, rather than a
  * second parallel ledger for staff sends.
  */
-export async function enqueueStaffReply(input: {
+export type StaffReplyInput = {
   channel: string;
   /** Provider recipient identity: WhatsApp digits, PSID, IG id. */
   key: string;
@@ -257,7 +272,22 @@ export async function enqueueStaffReply(input: {
   audit?: { action: string; summary: string; user: { id: string; name: string } };
   /** How long the person keeps the conversation after replying. */
   pauseHours?: number;
-}): Promise<StaffReplyResult> {
+};
+
+export async function enqueueStaffReply(input: StaffReplyInput): Promise<StaffReplyResult> {
+  // ONE workspace for the whole decision, resolved ONCE and bound for it.
+  //
+  // The idempotency re-read, the queue write, the bot pause, the backlog
+  // cancellation and the trail all have to name the same workspace — that is what
+  // makes a duplicate key proof that the whole decision already committed. Resolving
+  // the acting workspace independently at each of them would cost a session lookup
+  // per statement and, worse, could disagree between them if the session changed
+  // mid-request. Binding it here is also what lets the immediate flush that follows
+  // claim what this just wrote.
+  return withStaffConversationScope(() => enqueueStaffReplyInWorkspace(input));
+}
+
+async function enqueueStaffReplyInWorkspace(input: StaffReplyInput): Promise<StaffReplyResult> {
   if (!input.parts.length) {
     return { outcome: "duplicate", created: false, communicationId: null, outboxId: null, parts: [] };
   }
@@ -362,16 +392,17 @@ export async function enqueueStaffReply(input: {
   });
 
   try {
-    // USER-ORIGINATED but NOT CONVERTED — the one call site in this task that is
-    // classified one way and left the other. Both callers are Server Actions behind
-    // `inbox.reply` (`enqueueStaffMessage` ← whatsapp.ts, and messenger.ts), so a
-    // signed-in person is unambiguously doing this and the acting workspace is the
-    // right owner. It stays on `withTenantWrite` because the tenant it stamps has to
-    // equal the one `outboxTenantId()` reads three lines up in `resolveExisting` and
-    // the one the drain claims with; converting the write alone desynchronises them
-    // and strands the reply. The full reasoning, and what would let this move, is on
-    // `outboxTenantId` above.
-    const written = await withTenantWrite(async (tx, tenantId) => {
+    // USER-ORIGINATED, and CONVERTED — with `outboxTenantId()` and the drain, not
+    // ahead of them. Both callers are Server Actions behind `inbox.reply`
+    // (`enqueueStaffMessage` ← whatsapp.ts, and messenger.ts), so a signed-in person
+    // is unambiguously doing this and the acting workspace is the right owner.
+    //
+    // The tenant this stamps has to equal the one `outboxTenantId()` read above in
+    // `resolveExisting` and the one the drain claims with — so it resolves the SAME
+    // expression rather than a parallel one. The whole body runs inside
+    // `withStaffConversationScope`, which binds the acting workspace once (and never
+    // over a scope that already exists), so all three read it off the same rung.
+    const written = await withBotConversationWrite(async (tx, tenantId) => {
       // 1 + 2. Ownership, once for the whole reply and before any part of it
       // exists — so a duplicate submission finding an intent already there knows
       // these happened, and so the fence cannot reach this reply's own rows.
@@ -959,20 +990,16 @@ async function failDelivery(row: OutboxRow, error: string): Promise<"retry" | "d
  */
 async function botMayStillSpeak(row: OutboxRow): Promise<boolean> {
   if (row.origin !== "bot") return true; // a person's own reply is never fenced
-  // BACKGROUND / RUNTIME — `withTenantWrite` deliberately. The only callers are
-  // `deliverClaimed`, i.e. the outbox drain: the bot-outbox cron and the
-  // best-effort flush a staff action fires after enqueueing. No session on the
-  // cron path, so an acting scope resolves to `global` and stamps the founding
-  // tenant anyway.
+  // RUNTIME — `withBotConversationWrite`, the same expression that CLAIMED this row
+  // in `claimOldest`/`earliestUnfinished`. That agreement is the point: the session
+  // this locks FOR UPDATE has to be the session belonging to the workspace whose
+  // queue produced the row, or the fence checks a stranger's ownership and lets the
+  // bot speak over a person who has taken the conversation over.
   //
-  // This IS the site with a record to inherit from — `row` — and it is still not
-  // converted, because `OutboxRow` does not select `tenantId` and the rows were
-  // CLAIMED by `claimOldest`/`earliestUnfinished` under `outboxTenantId()`. So the
-  // row in hand is already, by construction, a founding-tenant row: inheriting from
-  // it would restate the wrong answer with a better justification. The claim query
-  // is what has to change, and changing it means the drain must iterate tenants for
-  // real — see the note on `outboxTenantId` above.
-  return withTenantWrite(async (tx, tenantId) => {
+  // It is now a real per-workspace answer on every path into here: the cron drain
+  // binds each conversation's own tenant before draining it, and the immediate flush
+  // after a staff reply inherits the workspace `withStaffConversationScope` bound.
+  return withBotConversationWrite(async (tx, tenantId) => {
     if (await botStillOwnsTx(tx, tenantId, row.channel, row.key)) return true;
     // Withdraw this row AND anything queued behind it, inside the same
     // transaction that observed the takeover — so the next claim cannot pick up
@@ -1033,11 +1060,29 @@ async function deliverClaimed(row: OutboxRow): Promise<"sent" | "retry" | "dead"
   return "sent";
 }
 
-/** Immediate best-effort drain for the conversation that just produced output. */
+/**
+ * Immediate best-effort drain for the conversation that just produced output.
+ *
+ * Wrapped in `withStaffConversationScope` because two of its callers are Server
+ * Actions firing this straight after `enqueueStaffReply`: without it the reply is
+ * written into the acting workspace and this flush looks for it in the founding
+ * one, which is the "accepted, reported sent, never leaves" failure #473 refused to
+ * ship. Every other caller — the webhook turn runners, the cron sweep below — is
+ * already inside a bound scope, where this is a bare call.
+ */
 export async function flushBotOutboxConversation(
   channel: string,
   key: string,
   limit = 20,
+  budget?: OutboxBudget,
+): Promise<BotOutboxRun> {
+  return withStaffConversationScope(() => drainConversation(channel, key, limit, budget));
+}
+
+async function drainConversation(
+  channel: string,
+  key: string,
+  limit: number,
   budget?: OutboxBudget,
 ): Promise<BotOutboxRun> {
   const stats: BotOutboxRun = { sent: 0, retried: 0, dead: 0, cancelled: 0, repairedLogs: 0 };
@@ -1054,10 +1099,22 @@ export async function flushBotOutboxConversation(
   return stats;
 }
 
-/** Repair sent messages whose provider delivery succeeded but CRM logging did not. */
-async function repairPendingCommunicationLogs(limit: number, budget?: OutboxBudget): Promise<number> {
+/**
+ * Repair sent messages whose provider delivery succeeded but CRM logging did not.
+ *
+ * `scope` is the same predicate the due-conversation query uses: the slice's own
+ * workspace under enforcement, EVERY workspace on the dormant single-sweep path.
+ * Narrowing it to `outboxTenantId()` unconditionally would leave a non-founding
+ * workspace's sent rows permanently unlogged while dormant, which is a message the
+ * customer received and the CRM has no record of.
+ */
+async function repairPendingCommunicationLogs(
+  limit: number,
+  scope: { tenantId?: string },
+  budget?: OutboxBudget,
+): Promise<number> {
   const rows = await prisma.botFlowOutbox.findMany({
-    where: { tenantId: outboxTenantId(), status: "sent", communicationLoggedAt: null },
+    where: { ...scope, status: "sent", communicationLoggedAt: null },
     orderBy: { sentAt: "asc" },
     take: limit,
   }) as OutboxRow[];
@@ -1073,28 +1130,71 @@ async function repairPendingCommunicationLogs(limit: number, budget?: OutboxBudg
   return repaired;
 }
 
-/** Per-tenant cron drain. Conversation ordering is preserved by claimOldest(). */
-export async function flushBotOutbox(limit = 50, budget?: OutboxBudget): Promise<BotOutboxRun> {
+/**
+ * Per-slice cron drain. Conversation ordering is preserved by claimOldest().
+ *
+ * `sliceTenantId` is what `runCronPerTenant` handed this slice, and the two shapes
+ * are not interchangeable:
+ *
+ *   - a CONCRETE tenant (the enforcing fan-out) → drain that workspace only. The
+ *     runner has already bound its scope, so `outboxTenantId()` agrees with it.
+ *   - `null` (the dormant single sweep) → drain EVERY workspace, binding each
+ *     conversation's OWN tenant — read off its rows — before draining it.
+ *
+ * The second case is the half of this change that stops it trading one bug for
+ * another. The runtime now writes a webhook's replies under the workspace that owns
+ * the provider endpoint, so a dormant sweep still filtering on `outboxTenantId()` —
+ * the founding tenant, because that is the stand-in `runCronPerTenant` binds —
+ * would leave every other workspace's queue unclaimed for ever: replies accepted,
+ * retries never attempted, nothing anywhere to see. Taking the tenant from the row
+ * is also what lets `sendProvider` resolve THAT workspace's provider credentials,
+ * so a message can no longer go out over another tenant's WhatsApp number.
+ *
+ * Omitting the argument keeps the previous behaviour — the ambient workspace only —
+ * so a caller that is already scoped is unaffected.
+ */
+export async function flushBotOutbox(
+  limit = 50,
+  budget?: OutboxBudget,
+  sliceTenantId?: string | null,
+): Promise<BotOutboxRun> {
   const stats: BotOutboxRun = { sent: 0, retried: 0, dead: 0, cancelled: 0, repairedLogs: 0 };
   if (budget?.shouldStop(4_000)) return stats;
-  stats.repairedLogs = await repairPendingCommunicationLogs(Math.min(limit, 25), budget);
+
+  // `null` is the dormant sweep and means "every workspace"; `undefined` is a caller
+  // that did not say, and keeps the ambient answer it had before.
+  const scope = sliceTenantId === null ? {} : { tenantId: outboxTenantId() };
+
+  stats.repairedLogs = await repairPendingCommunicationLogs(Math.min(limit, 25), scope, budget);
   if (budget?.shouldStop(4_000)) return stats;
 
   const due = await prisma.botFlowOutbox.findMany({
-    where: { tenantId: outboxTenantId(), status: { notIn: FINISHED_STATUSES }, availableAt: { lte: new Date() } },
+    where: { ...scope, status: { notIn: FINISHED_STATUSES }, availableAt: { lte: new Date() } },
     orderBy: [{ createdAt: "asc" }, { sequence: "asc" }],
     take: limit * 2,
-    select: { channel: true, key: true },
+    // `tenantId` is selected even when the sweep is already narrowed to one
+    // workspace, so the per-conversation drain below binds the same way in both
+    // modes rather than only on the path someone remembered to special-case.
+    select: { tenantId: true, channel: true, key: true },
   });
 
-  const conversations = [...new Set(due.map((row) => `${row.channel}\u0000${row.key}`))];
+  const conversations = [...new Set(due.map((row) => [row.tenantId, row.channel, row.key].join(SEPARATOR)))];
   let remaining = limit;
   for (const conversation of conversations) {
     if (remaining <= 0 || budget?.shouldStop(4_000)) break;
-    const split = conversation.indexOf("\u0000");
-    const channel = conversation.slice(0, split);
-    const key = conversation.slice(split + 1);
-    const run = await flushBotOutboxConversation(channel, key, remaining, budget);
+    const first = conversation.indexOf(SEPARATOR);
+    const second = conversation.indexOf(SEPARATOR, first + SEPARATOR.length);
+    const tenantId = conversation.slice(0, first);
+    const channel = conversation.slice(first + SEPARATOR.length, second);
+    // The REST of the string, not up to a third separator: a provider key is opaque
+    // and nothing promises it cannot contain one, and a truncated key would drain
+    // the wrong conversation rather than fail.
+    const key = conversation.slice(second + SEPARATOR.length);
+    // Bound per conversation, so every reader inside — the claim, the ownership
+    // fence, the credential lookup — names the workspace that owns these rows.
+    const run = await runInTenantScope({ tenantId, system: false }, () =>
+      drainConversation(channel, key, remaining, budget),
+    );
     stats.sent += run.sent;
     stats.retried += run.retried;
     stats.dead += run.dead;

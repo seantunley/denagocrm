@@ -247,6 +247,8 @@ export async function markDelivered(quoteId: string, formData: FormData): Promis
     if (signature.startsWith("data:image/png;base64,")) {
       const buffer = Buffer.from(signature.split(",")[1], "base64");
       if (buffer.length > 0 && buffer.length <= MAX_FILE) {
+        // The customer's signature on THIS quote's delivery — the quote owns it,
+        // for the same reason its invoice and delivery note do.
         deliverySignatureRef = await saveFile(buffer, `delivery-signature-Q${quote.number}.png`, "image/png", quote.tenantId);
         await prisma.document.create({
           data: {

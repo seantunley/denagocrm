@@ -65,13 +65,35 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
     if (request === "next/navigation") {
       return { redirect: () => { throw new Error("redirect"); } };
     }
+    // The real actingScopeClass() sources its session half from getActiveTenantId(),
+    // which reads real cookies() — unavailable outside a live Next.js request. This
+    // suite's only way to say "the request is acting as tenant X" is already
+    // runInTenantScope's ALS, for BOTH enforced and dormant-with-a-scope cases, so
+    // the stub feeds that ambient value into the SAME real decideActingScope the
+    // shipped code runs — only the session source is swapped, not the decision.
+    if (request === "./actingScope") {
+      return {
+        actingScopeClass: async () => {
+          const enforcing = tenantEnforcing();
+          const ambient = enforcing ? null : currentTenantScope();
+          return decideActingScope({
+            enforcing,
+            enforcedScope: currentScopeClass(),
+            sessionTenantId: ambient ? ambient.tenantId : null,
+          });
+        },
+      };
+    }
   }
   return realLoad.call(this, request, parent, isMain);
 } as Loader;
 
 const require_ = createRequire(import.meta.url);
+const { tenantEnforcing } = require_("../src/lib/tenantEnforcement.ts") as typeof import("../src/lib/tenantEnforcement");
+const { currentScopeClass } = require_("../src/lib/tenantWrite.ts") as typeof import("../src/lib/tenantWrite");
+const { decideActingScope } = require_("../src/lib/actingScopeRule.ts") as typeof import("../src/lib/actingScopeRule");
 const permissions = require_("../src/lib/permissions.ts") as typeof import("../src/lib/permissions");
-const { runInTenantScope } = require_("../src/lib/tenantScope.ts") as typeof import("../src/lib/tenantScope");
+const { runInTenantScope, currentTenantScope } = require_("../src/lib/tenantScope.ts") as typeof import("../src/lib/tenantScope");
 const { __setTenantEnforcingForTests } =
   require_("../src/lib/tenantEnforcement.ts") as typeof import("../src/lib/tenantEnforcement");
 const { TenantScopeError } = require_("../src/lib/tenantGuard.ts") as typeof import("../src/lib/tenantGuard");
@@ -292,7 +314,7 @@ test("no canAccess* helper may answer from the id list alone", () => {
   // Local zero-argument wrappers that just return the shared predicate count as
   // naming the tenant — `documentTenantWhere()` is one, and inlining it would
   // only make the document scope and the document check drift apart.
-  const wrappers = [...code.matchAll(/function (\w+)\(\)[^\n]*\{\s*return activeTenantPredicate\(/g)].map(
+  const wrappers = [...code.matchAll(/function (\w+)\(\)[^\n]*\{\s*return actingRecordPredicate\(/g)].map(
     (match) => match[1],
   );
   assert.ok(
@@ -337,7 +359,7 @@ test("no canAccess* helper may answer from the id list alone", () => {
     );
 
     const predicate = new RegExp(
-      `activeTenantPredicate\\(|(?:${wrappers.length ? wrappers.join("|") : "\\0"})\\(\\)`,
+      `actingRecordPredicate\\(|(?:${wrappers.length ? wrappers.join("|") : "\\0"})\\(\\)`,
     );
     assert.match(
       body,
@@ -372,11 +394,11 @@ test("no canAccess* helper may answer from the id list alone", () => {
 });
 
 test("every helper's predicate says which check it came from", () => {
-  // `activeTenantPredicate` throws under enforcement without a scope, and the
+  // `actingRecordPredicate` throws under enforcement without a scope, and the
   // context string is the whole error message. Seven helpers sharing one label
   // would produce an exception nobody can locate.
   const code = shipped("src/lib/permissions.ts");
-  const contexts = [...code.matchAll(/activeTenantPredicate\("([^"]+)"\)/g)].map((match) => match[1]);
+  const contexts = [...code.matchAll(/actingRecordPredicate\("([^"]+)"\)/g)].map((match) => match[1]);
   assert.ok(contexts.length >= 7, `expected a context per helper, found ${contexts.length}`);
   assert.equal(new Set(contexts).size, contexts.length, `duplicate predicate contexts: ${contexts.join(", ")}`);
 });
