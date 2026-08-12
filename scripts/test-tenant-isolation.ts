@@ -74,6 +74,7 @@ async function runMode(mode: "dormant" | "enforced", suffix: string): Promise<Mo
   const { runModelChecks } = await import("./harness/engine");
   const { buildMatrix, setVictimHandles } = await import("./harness/matrix");
   const { runDefectProbes } = await import("./harness/defects");
+  const { runBotChannelProbes } = await import("./harness/botChannel");
   const { basePrisma } = await import("../src/lib/db");
   const { runAsSession } = await import("./harness/actingSession");
   const { actAsStaff } = await import("./harness/actAs");
@@ -184,6 +185,12 @@ async function runMode(mode: "dormant" | "enforced", suffix: string): Promise<Mo
         );
       }
       results.push(...(await runDefectProbes(actorA, fixture.b, basePrisma as never, mode === "enforced")));
+      // Driven through the CHANNEL scope rather than a staff session: a provider
+      // webhook has no cookie, so the endpoint is the only thing that says whose
+      // message this is.
+      results.push(
+        ...(await runBotChannelProbes(fixture.a, fixture.b, basePrisma as never, mode === "enforced")),
+      );
     } finally {
       console.error = realError;
       if (swallowed.length) {

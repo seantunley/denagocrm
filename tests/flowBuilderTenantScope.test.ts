@@ -152,11 +152,15 @@ function flowCallSites(): string[] {
 
 test("the builder tenant is never resolved from writeTenantId alone", () => {
   // writeTenantId() answers a different question — how an UNGUARDED WRITE behaves
-  // during the enforcement rollout — and is null while dormant. Only the runtime
-  // resolver, which has no session and is entered through the channel's tenant
-  // scope, may use it directly.
+  // during the enforcement rollout — and is null while dormant. NEITHER resolver
+  // may use it alone now: the runtime one used to, on the grounds that it is
+  // entered through the channel's tenant scope, but that scope bound nothing while
+  // dormant so the "channel tenant" was the founding tenant for every workspace.
+  // It delegates to the shared bot-conversation expression, whose middle rung is
+  // the ambient scope the channel entry now actually binds.
   const scope = src("src/lib/flowScope.ts");
-  assert.match(scope, /export function runtimeFlowTenantId\(\): string \{\s*return writeTenantId\(\) \?\? DEFAULT_TENANT_ID;/);
+  assert.match(scope, /export function runtimeFlowTenantId\(\): string \{\s*return botConversationTenantId\(\);/);
+  assert.doesNotMatch(scope, /writeTenantId\(\) \?\? DEFAULT_TENANT_ID/, "the dormant-null fallback must not come back");
   assert.match(scope, /export async function builderTenantId\(\)/);
   // The rule moved, it did not weaken. `builderTenantId` was the first caller of
   // "the workspace this SESSION is acting as"; the record writers fixed in the

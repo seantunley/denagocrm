@@ -1,6 +1,5 @@
 import "server-only";
-import { DEFAULT_TENANT_ID } from "./tenant";
-import { writeTenantId } from "./tenantWrite";
+import { botConversationTenantId } from "./botTenant";
 import { actingTenantId } from "./actingTenant";
 // `flowTenantWhere` is #463's rename of `legacyFlowTenant` — the old name became a
 // lie once the rule stopped being a legacy allowance.
@@ -9,13 +8,18 @@ import { flowTenantWhere } from "./flowTenantScope";
 /**
  * The tenant a RUNTIME read is for — a webhook answering a customer.
  *
- * There is no session here, so the channel scope (or the founding tenant while
- * enforcement is dormant) is all there is, and that is correct: `resolveFlowSnapshot`
- * is entered through `withChannelTenantScope`, which already resolved the tenant
- * from the provider endpoint the message arrived on.
+ * There is no session here, so the channel scope is all there is, and that is
+ * correct: `resolveFlowSnapshot` is entered through `withChannelTenantScope`, which
+ * resolves the tenant from the provider endpoint the message arrived on — and now
+ * BINDS it while enforcement is dormant too, which is what makes this a real answer
+ * rather than the founding tenant for everyone. Delegated to
+ * {@link ../botTenant}.`botConversationTenantId` so the flow snapshot a turn runs is
+ * chosen by the same workspace expression that claims its inbound event and queues
+ * its reply: a turn must not answer with tenant A's published flow and file the
+ * conversation under tenant B.
  */
 export function runtimeFlowTenantId(): string {
-  return writeTenantId() ?? DEFAULT_TENANT_ID;
+  return botConversationTenantId();
 }
 
 /**

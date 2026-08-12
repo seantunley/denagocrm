@@ -1,6 +1,7 @@
 import "server-only";
 import { prisma } from "./db";
-import { withTenantWrite } from "./tenantWrite";
+import { withStaffConversationScope } from "./actingScope";
+import { withBotConversationWrite } from "./botTenant";
 import { pauseBotSessionTx, releaseBotSessionTx } from "./botSessionStore";
 
 export type BotOwnedChannel = "whatsapp" | "messenger" | "instagram";
@@ -60,41 +61,42 @@ export async function botIdentityForConversation(conversationId: string): Promis
 /**
  * Pause automation because a person has taken responsibility for the thread.
  *
- * USER-ORIGINATED but NOT CONVERTED — same shape as `enqueueStaffReply`, and the
- * same reason. The only caller is `setConversationMode` in
- * `src/app/actions/conversations.ts`, a Server Action, so a signed-in person is
- * unambiguously doing this.
+ * USER-ORIGINATED, and now CONVERTED — with its readers, not ahead of them. The
+ * only caller is `setConversationMode` in `src/app/actions/conversations.ts`, a
+ * Server Action, so a signed-in person is unambiguously doing this.
  *
- * It stays on `withTenantWrite` because a BotSession is keyed
- * `(tenantId, channel, key)` and the thing that has to READ this row is the flow
- * runtime — `botStillOwnsTx` in flowRun/flowSession, and `botMayStillSpeak` on the
- * drain — all of which resolve their tenant from `writeTenantId() ?? DEFAULT`, i.e.
- * the founding tenant while dormant. Pausing under the acting workspace would write
- * a takeover the runtime cannot see: the person presses Take over, the UI confirms
- * it, and the bot keeps answering over them on the next inbound message. Takeover
- * silently not working is worse than takeover recorded against the wrong owner.
+ * #473 left it on `withTenantWrite` because a BotSession is keyed
+ * `(tenantId, channel, key)` and the thing that READS this row is the flow runtime —
+ * `botStillOwnsTx` in flowRun/flowSession, and `botMayStillSpeak` on the drain — all
+ * of which resolved `writeTenantId() ?? DEFAULT`, i.e. the founding tenant while
+ * dormant. Pausing under the acting workspace ALONE would have written a takeover
+ * the runtime cannot see: the person presses Take over, the UI confirms it, and the
+ * bot keeps answering over them on the next inbound message.
  *
- * WHAT WOULD SETTLE IT: the channel scope resolving while enforcement is dormant so
- * the runtime readers have a real tenant (see
- * botInboundEvent.completeInboundBotEvent) — then this write and those reads move
- * together. Until then the staff and runtime halves of the bot stack share one
- * wrong answer, and they have to keep sharing it.
+ * Both sides now resolve one expression, {@link ../botTenant}.`botConversationTenantId`
+ * — the ambient workspace, bound by `withChannelTenantScope` at the webhook and by
+ * `withStaffConversationScope` here — so the pause and the ownership check cannot
+ * land in different workspaces. `withStaffConversationScope` deliberately never
+ * replaces a scope that is already bound, so this can only ever ADD the acting
+ * workspace where nothing outranked it.
  */
 export async function pauseBotConversation(
   identity: BotConversationIdentity,
   hours = 7 * 24,
 ): Promise<void> {
-  await withTenantWrite(async (tx, tenantId) => {
-    await pauseBotSessionTx(tx, tenantId, {
-      channel: identity.channel,
-      key: identity.key,
-      // A PERSON owns this thread now. Nothing the customer types hands it back —
-      // only resumeBotConversation below does. This is the distinction `paused`
-      // could not make, and the reason "hi" used to evict the salesperson.
-      ownership: "human",
-      expiresAt: new Date(Date.now() + hours * 3600 * 1000),
-    });
-  });
+  await withStaffConversationScope(() =>
+    withBotConversationWrite(async (tx, tenantId) => {
+      await pauseBotSessionTx(tx, tenantId, {
+        channel: identity.channel,
+        key: identity.key,
+        // A PERSON owns this thread now. Nothing the customer types hands it back —
+        // only resumeBotConversation below does. This is the distinction `paused`
+        // could not make, and the reason "hi" used to evict the salesperson.
+        ownership: "human",
+        expiresAt: new Date(Date.now() + hours * 3600 * 1000),
+      });
+    }),
+  );
 }
 
 /**
@@ -102,15 +104,17 @@ export async function pauseBotConversation(
  * the NEXT customer message starts from the current published flow rather than
  * resuming halfway through a stale conversation the human may have changed.
  *
- * USER-ORIGINATED but NOT CONVERTED, and it must move in lockstep with
- * {@link pauseBotConversation} — see the reasoning there. Releasing under a
- * different tenant from the one that paused would leave the pause row orphaned and
- * the conversation stuck with the bot muted for a week.
+ * USER-ORIGINATED, and CONVERTED IN LOCKSTEP with {@link pauseBotConversation} —
+ * see the reasoning there. Releasing under a different workspace from the one that
+ * paused would leave the pause row orphaned and the conversation stuck with the bot
+ * muted for a week, which is why these two can only ever move together.
  */
 export async function resumeBotConversation(identity: BotConversationIdentity): Promise<void> {
-  await withTenantWrite(async (tx, tenantId) => {
-    // The staff-release variant: a person is handing the thread back, so this is
-    // the one path allowed to discard human ownership.
-    await releaseBotSessionTx(tx, tenantId, identity.channel, identity.key);
-  });
+  await withStaffConversationScope(() =>
+    withBotConversationWrite(async (tx, tenantId) => {
+      // The staff-release variant: a person is handing the thread back, so this is
+      // the one path allowed to discard human ownership.
+      await releaseBotSessionTx(tx, tenantId, identity.channel, identity.key);
+    }),
+  );
 }

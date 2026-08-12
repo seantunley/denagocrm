@@ -245,7 +245,7 @@ test("every part of a reply is accepted in one transaction", () => {
   assert.equal((fn.match(/logAuditStrict\(/g) ?? []).length, 1, "one entry for the decision, not one per send");
 
   // The per-part writes are INSIDE that transaction.
-  const txAt = fn.indexOf("withTenantWrite(async (tx, tenantId)");
+  const txAt = fn.indexOf("withBotConversationWrite(async (tx, tenantId)");
   const loopAt = fn.indexOf("for (let index = 0; index < pending.length", txAt);
   assert.ok(txAt >= 0 && loopAt > txAt, "each part's rows must be written inside the one transaction");
   assert.match(fn.slice(loopAt), /tx\.botFlowOutbox\.create/);
@@ -276,7 +276,7 @@ test("an already-accepted part does not block the rest of the reply", () => {
   );
 
   const resolveAt = fn.indexOf("await resolveExisting()");
-  const txAt = fn.indexOf("withTenantWrite(async (tx, tenantId)");
+  const txAt = fn.indexOf("withBotConversationWrite(async (tx, tenantId)");
   assert.ok(resolveAt >= 0 && txAt > resolveAt, "parts must be resolved BEFORE the transaction");
   assert.match(fn, /const pending = input\.parts\.filter\(\(part\) => !existing\.has\(part\.clientIdempotencyKey\)\)/);
   assert.match(fn, /if \(!pending\.length\) return resultsFrom\(existing, new Set\(\)\)/, "nothing missing means nothing to write");
