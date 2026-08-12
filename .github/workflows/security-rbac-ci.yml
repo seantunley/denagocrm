@@ -449,6 +449,19 @@ jobs:
       # refuses one that is the same database as DATABASE_URL, so the name here is
       # load-bearing rather than decorative.
       #
+      # BOTH PASSES CONNECT AS A ROLE THAT CANNOT BYPASS ROW LEVEL SECURITY.
+      # The harness creates it after migrating, by executing the SHIPPED
+      # prisma/rls/app-role.sql (see scripts/harness/restrictedRole.ts), and
+      # points DATABASE_URL at it while leaving DATABASE_URL_UNPOOLED on the
+      # owner -- the same split production uses. This needs the service's
+      # bootstrap account to be able to CREATE ROLE, which POSTGRES_USER is.
+      #
+      # Before that, the harness connected as that bootstrap account, which is a
+      # SUPERUSER and therefore exempt from every policy on every table. FORCE
+      # ROW LEVEL SECURITY was live on 120 tables throughout and never evaluated
+      # once -- reproducing production's own exemption exactly, and making the
+      # RLS half of the boundary untestable.
+      #
       # It runs twice internally: the DORMANT pass records today's real exposure
       # without failing, the ENFORCED pass is the pre-flip gate and fails the job.
       #
@@ -456,14 +469,16 @@ jobs:
       # pre-flip gate is not a gate, and this step is expected to fail the run.
       #
       # It is blocking WITH A RECORDED ALLOWLIST, in scripts/harness/
-      # acknowledged.ts, because a bare blocking gate could not be satisfied
-      # today: at least one enforced failure is not an application defect and
-      # cannot be fixed anywhere in this repository. TimelinePin READ needs a
-      # DATABASE ROLE change -- the app connects as neondb_owner with
-      # rolbypassrls = true, so no RLS policy evaluates and the raw-SQL read in
-      # getTimelinePins has no boundary to enforce. Verified read-only against
-      # production; see docs/rls-role-is-the-flip-blocker.md on branch
-      # docs/tenant-preflip-audit.
+      # acknowledged.ts. That list is now EMPTY. It could not be, until the role
+      # change above: TimelinePin READ was an enforced failure that no commit in
+      # this repository could fix, because getTimelinePins is prisma.$queryRaw --
+      # a Prisma extension cannot rewrite raw SQL, so RLS was the only boundary
+      # left, and RLS does nothing for a BYPASSRLS role. Under the restricted
+      # role that check passes, with no application change.
+      #
+      # AN EMPTY ALLOWLIST IS NOT A CUTOVER. Production still connects as
+      # neondb_owner, so its policies are still inert whatever this job says.
+      # See docs/RLS-ROLE-CUTOVER.md -- it is a runbook somebody has to execute.
       #
       # How the allowlist behaves, and why it cannot quietly grow:
       #   - any failure NOT in the list fails this step;

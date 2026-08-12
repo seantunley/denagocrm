@@ -24,13 +24,28 @@
  *     that flipping TENANT_ENFORCEMENT=enforce in production would leak or lose
  *     data, and it exits non-zero.
  *
+ * BOTH RUNS CONNECT AS A ROLE THAT CANNOT BYPASS ROW LEVEL SECURITY, which is
+ * what makes the RLS half of the boundary real here rather than notional. The
+ * harness used to connect as the scratch server's bootstrap superuser — exempt
+ * from every policy, exactly as production's `neondb_owner` is exempt via
+ * `rolbypassrls` — so FORCE ROW LEVEL SECURITY was live on 120 tables and never
+ * evaluated once. Migrations still run as the owner (DATABASE_URL_UNPOOLED); the
+ * application runs as the restricted role (DATABASE_URL). See
+ * scripts/harness/restrictedRole.ts and docs/RLS-ROLE-CUTOVER.md.
+ *
  * SAFETY: this creates two tenants and then deliberately attempts cross-tenant
  * reads, updates and deletes. It provisions its OWN throwaway database and
  * refuses to start against anything that is not demonstrably disposable — see
  * scripts/harness/testDatabase.ts. It never reads DATABASE_URL unless that URL
  * is itself a local *_test database and NODE_ENV=test.
  */
-import { provisionHarnessDatabase, migrateHarnessDatabase } from "./harness/testDatabase";
+import { provisionHarnessDatabase, migrateHarnessDatabase, assertDisposable } from "./harness/testDatabase";
+import {
+  HARNESS_APP_ROLE,
+  restrictedRoleUrl,
+  createRestrictedRole,
+  auditRestrictedRole,
+} from "./harness/restrictedRole";
 import type { CheckResult } from "./harness/engine";
 // Safe as a STATIC import despite the dynamic-import discipline below: this
 // module's only import is `import type`, so it reaches nothing that builds a
@@ -216,12 +231,41 @@ async function main() {
     return;
   }
 
+  /* ── THE APPLICATION CONNECTS AS A ROLE THAT CANNOT BYPASS RLS ────────────
+   *
+   * Everything this suite reported before this existed was a statement about
+   * the APPLICATION guard and nothing else. The harness connected as the
+   * scratch server's bootstrap account, which is a SUPERUSER — exempt from
+   * every row-level policy on every table, the same exemption `neondb_owner`
+   * carries in production via `rolbypassrls`. FORCE ROW LEVEL SECURITY was
+   * live on 120 tables throughout and not one policy was ever evaluated.
+   *
+   * That is why `TimelinePin [READ]` failed here in precisely the way it fails
+   * in production: `getTimelinePins` is `prisma.$queryRaw`, a Prisma extension
+   * cannot rewrite raw SQL, and the only remaining boundary was an RLS policy
+   * that no role was ever subject to.
+   *
+   * Two urls now, mirroring production exactly:
+   *
+   *   DATABASE_URL           the restricted role — what the app runs as
+   *   DATABASE_URL_UNPOOLED  the owner — what migrations run as
+   *
+   * The url is DERIVED and GUARDED HERE, two lines before DATABASE_URL is
+   * reassigned, and that ordering is load-bearing: condition 4 of
+   * disposabilityProblem() is "never the database the app itself is configured
+   * to use", which can only mean anything while DATABASE_URL is still the
+   * ambient value. Checked after the assignment it would be comparing the url
+   * with itself. The role itself is created after the migrations — see below.
+   */
+  const appUrl = restrictedRoleUrl(db.url);
+  assertDisposable(appUrl, `restricted app role "${HARNESS_APP_ROLE}"`);
+
   // Set BEFORE any module that builds a PrismaClient is imported. src/lib/db.ts
   // constructs its client at module scope from the ambient DATABASE_URL, so a
   // static import of anything reaching it would bind the wrong database — or, in
   // a checkout that has a .env, PRODUCTION. Every import below is dynamic for
   // this reason and the order is load-bearing.
-  process.env.DATABASE_URL = db.url;
+  process.env.DATABASE_URL = appUrl;
   process.env.DATABASE_URL_UNPOOLED = db.url;
   // NODE_ENV is typed readonly; assigned through the record so the harness looks
   // like a test process to the code under test (__setTenantEnforcingForTests
@@ -239,6 +283,49 @@ async function main() {
 
   const started = Date.now();
   await migrateHarnessDatabase(db.url, (m) => console.log(m));
+
+  /* AFTER the migrations, and that is not arbitrary: `GRANT … ON ALL TABLES` is
+   * a loop over the tables that exist at the instant it runs, so a role created
+   * against an empty schema is granted nothing at all. */
+  await createRestrictedRole(db.url, (m) => console.log(m));
+
+  /* ── What the restricted role can and cannot see, from the LIVE CATALOG ────
+   *
+   * Printed before the run rather than after it, because both findings change
+   * how the results below should be read. A table with RLS enabled and NO
+   * policy returns zero rows to a non-bypassing role — silently, and invisibly
+   * for as long as anything connects as the owner. A table with no grant is a
+   * `permission denied`. Either one would make a check fail here for a reason
+   * that has nothing to do with tenant isolation, and both are things
+   * production has too.
+   *
+   * NOT FIXED BY WIDENING THE GRANT. The role has SELECT/INSERT/UPDATE/DELETE
+   * and deliberately nothing else; anything reported here is a cutover risk to
+   * carry to the runbook, not a number to make go away.
+   */
+  const audit = await auditRestrictedRole(db.url);
+  console.log(
+    `  rls audit : ${audit.tables} tables, ${audit.rlsEnabled} with RLS enabled; ` +
+      `future tables granted: ${audit.futureTablesGranted ? "yes" : "NO"}`,
+  );
+  if (audit.rlsWithoutPolicy.length) {
+    console.log(
+      `  ⚠ ${audit.rlsWithoutPolicy.length} table(s) have RLS ENABLED and NO POLICY — they return zero rows\n` +
+        `    to the app role no matter what GUC is set: ${audit.rlsWithoutPolicy.join(", ")}`,
+    );
+  }
+  if (audit.ungranted.length) {
+    console.log(
+      `  ⚠ ${audit.ungranted.length} table(s) the app role cannot fully use (permission denied):\n` +
+        audit.ungranted.map((u) => `    ${u.table} (${u.missing})`).join("\n"),
+    );
+  }
+  if (audit.truncatable.length) {
+    console.log(
+      `  ⚠ ${audit.truncatable.length} table(s) grant TRUNCATE to the app role — TRUNCATE ignores row policies: ` +
+        audit.truncatable.join(", "),
+    );
+  }
 
   const suffix = Date.now().toString(36);
   const reports: ModeReport[] = [];
