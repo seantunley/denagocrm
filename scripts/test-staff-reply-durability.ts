@@ -28,6 +28,7 @@
  */
 import { basePrisma, prisma } from "../src/lib/db";
 import { DEFAULT_TENANT_ID } from "../src/lib/tenant";
+import { runInTenantScope } from "../src/lib/tenantScope";
 import {
   deliveryStateForMessages,
   enqueueBotMessages,
@@ -648,7 +649,21 @@ async function main() {
   check("and it is a fresh credential, not the stored one", attemptUrl !== queueTimeUrl);
 }
 
-main()
+// THE WHOLE RUN, IN A WORKSPACE — as every real caller of these entry points is.
+//
+// enqueueStaffMessage, enqueueStaffReply, pauseBotConversation,
+// resumeBotConversation and flushBotOutboxConversation all bind through
+// withStaffConversationScope, which resolves the acting workspace from the
+// SESSION. A script has no request, so there is none to read; that used to fall
+// back to the founding tenant, which is the only reason this file passed without
+// ever establishing a workspace. The fallback is gone, because it also turned a
+// stale or ambiguous REAL session into the founding tenant.
+//
+// Bound once here rather than at each call: several of these entry points reach
+// the scope indirectly (enqueueStaffMessage delegates to enqueueStaffReply), so
+// wrapping call sites one at a time just moves the next failure further down the
+// file. The fixtures this script seeds are already stamped with this tenant.
+runInTenantScope({ tenantId: DEFAULT_TENANT_ID, system: false }, main)
   .then(async () => {
     await cleanup();
     console.log(`\n${passed} passed, ${failed} failed`);

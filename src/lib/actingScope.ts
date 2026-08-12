@@ -1,9 +1,8 @@
 import "server-only";
-import { getActiveTenantId } from "./auth";
+import { getActiveTenantIdIfRequest } from "./auth";
 import { basePrisma } from "./db";
 import { actingTenantId } from "./actingTenant";
 import { decideActingScope, type ActingScope } from "./actingScopeRule";
-import { DEFAULT_TENANT_ID } from "./tenant";
 import { tenantEnforcing } from "./tenantEnforcement";
 import { TenantScopeError } from "./tenantGuard";
 import { currentTenantScope, runInTenantScope } from "./tenantScope";
@@ -23,20 +22,6 @@ export type { ActingScope };
  * silently converting those failures to `global` would widen access at the exact
  * moment the tenant decision became uncertain.
  */
-async function dormantSessionTenantId(): Promise<string | null> {
-  try {
-    return await getActiveTenantId();
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      (error.message.includes("next-dynamic-api-wrong-context") ||
-        error.message.includes("outside a request scope"))
-    ) {
-      return null;
-    }
-    throw error;
-  }
-}
 
 /**
  * The scope a USER-ORIGINATED operation acts in — the server shell around
@@ -55,7 +40,7 @@ export async function actingScopeClass(): Promise<ActingScope> {
   const enforcing = tenantEnforcing();
   // Skip the session lookup entirely when enforcing: the enforced scope is
   // authoritative and a session must never widen it.
-  const sessionTenantId = enforcing ? null : await dormantSessionTenantId();
+  const sessionTenantId = enforcing ? null : await getActiveTenantIdIfRequest();
   return decideActingScope({
     enforcing,
     enforcedScope: currentScopeClass(),
@@ -94,14 +79,35 @@ export async function actingScopeClass(): Promise<ActingScope> {
  * the case, not to the person typing it, so an admin acting in another workspace
  * cannot re-own it.
  *
- * Throws when the scope is `closed`, matching every other unguarded write.
+ * Throws for ANYTHING that is not a resolved workspace — `closed` and `global`
+ * alike. There is no founding-tenant fallback any more.
+ *
+ * WHY THE FALLBACK HAD TO GO. This returned DEFAULT_TENANT_ID for `global`, on
+ * the reasoning that `global` means a background path with no session. It does
+ * not only mean that: `actingScopeClass()` answers `global` whenever a SESSION
+ * cannot be resolved to one workspace — a claim minted before `tid` existed, one
+ * gone stale after a membership changed, or one that is AMBIGUOUS because the
+ * person holds two or more active memberships.
+ *
+ * So a signed-in person in any of those states created a record and it was
+ * stamped with the FOUNDING tenant. That is the failure this codebase's own
+ * actingTenant.ts calls out as the worse direction, and it is exactly right: an
+ * unowned row is visibly unfinished and can be backfilled, while a row stamped
+ * with a confident, wrong owner reads as correct to every later query, appears
+ * in the wrong workspace, and nothing ever flags it.
+ *
+ * Harmless while one workspace existed, because the guess was always right.
+ * Not harmless with two.
  */
 export async function actingOwnerTenantId(): Promise<string> {
   const scope = await actingScopeClass();
-  if (scope.mode === "closed") {
-    throw new TenantScopeError("No tenant scope established for a tenant-owned write");
+  if (scope.mode !== "tenant") {
+    throw new TenantScopeError(
+      "No workspace is attached to this sign-in, so there is nobody to own this record. " +
+        "Sign out and back in; if you belong to more than one workspace, sign in to the one you mean to work in.",
+    );
   }
-  return scope.mode === "tenant" ? scope.tenantId : DEFAULT_TENANT_ID;
+  return scope.tenantId;
 }
 
 /**
@@ -120,14 +126,30 @@ export async function actingOwnerTenantId(): Promise<string> {
  * and this is a bare `fn()`. A session must not be able to redirect work that was
  * already scoped by something that outranks it.
  *
- * Resolution failure falls back to the founding tenant rather than throwing:
- * `getActiveTenantId()` reads cookies and the session registry, which throw where
- * there is no request at all, and those callers legitimately have no session. The
- * founding tenant is what they resolved before this existed.
+ * RESOLUTION FAILURE IS NOT CAUGHT. This used to end
+ * `.catch(() => DEFAULT_TENANT_ID)`, on the reasoning that `getActiveTenantId()`
+ * reads cookies and throws where there is no request at all, and those callers
+ * legitimately have no session.
+ *
+ * That swallowed the refusal `actingTenantId()` exists to make, and did it on a
+ * path that is explicitly user-originated: `pauseBotConversation` and
+ * `resumeBotConversation` are Server Actions a signed-in person triggers, and
+ * `enqueueStaffReply` binds through here before writing the pause, the outbox
+ * row and the reply decision. So a stale or ambiguous staff session was turned
+ * into the FOUNDING tenant, and in the outbox path that tenant chooses the
+ * BotSession/outbox partition and the ambient provider context — one workspace's
+ * action executed under another's, which is the whole thing this change exists
+ * to stop.
+ *
+ * The sessionless callers the catch was defending are already handled by the
+ * line above: work that arrives properly scoped — a webhook, a cron slice, a
+ * channel drain — returns early and never reaches the resolver. What is left is
+ * a caller with no ambient scope AND no resolvable session, and there is no
+ * correct workspace to invent for it.
  */
 export async function withStaffConversationScope<T>(fn: () => Promise<T>): Promise<T> {
   if (currentTenantScope()) return fn();
-  const tenantId = await actingTenantId().catch(() => DEFAULT_TENANT_ID);
+  const tenantId = await actingTenantId();
   return runInTenantScope({ tenantId, system: false }, fn);
 }
 
@@ -136,10 +158,17 @@ export async function withActingTenantWrite<T>(
   fn: (tx: any, tenantId: string) => Promise<T>,
 ): Promise<T> {
   const scope = await actingScopeClass();
-  if (scope.mode === "closed") {
-    throw new TenantScopeError("No tenant scope established for a tenant-owned write");
+  // Same rule as actingOwnerTenantId, and for the same reason: this hands the
+  // callback a tenantId that every row created inside the transaction is stamped
+  // with, so a founding-tenant fallback here files a whole operation — parent
+  // and children together — under the wrong workspace.
+  if (scope.mode !== "tenant") {
+    throw new TenantScopeError(
+      "No workspace is attached to this sign-in, so there is nobody to own this record. " +
+        "Sign out and back in; if you belong to more than one workspace, sign in to the one you mean to work in.",
+    );
   }
-  const tenantId = scope.mode === "tenant" ? scope.tenantId : DEFAULT_TENANT_ID;
+  const tenantId = scope.tenantId;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (basePrisma as any).$transaction((tx: any) => fn(tx, tenantId));
 }
