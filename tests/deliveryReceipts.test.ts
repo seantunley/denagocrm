@@ -146,15 +146,51 @@ test("every query in the receipt path names its tenant", () => {
     3,
     "both updateMany calls and the psid/ig lookup must spread the predicate",
   );
-  assert.match(code, /contactForRecipient\(receipt, tenant\)/, "the lookup takes it explicitly");
+  assert.match(code, /contactForRecipient\(receipt, scope\)/, "the lookup takes it explicitly");
+  // The `where` fragment and the raw-SQL fragment come from ONE resolution, so a
+  // contact resolved under one clause can never have its messages stamped under
+  // another — which is the disagreement this whole module exists to stop.
+  assert.match(code, /const scope = receiptTenantScope\(/);
+  assert.match(code, /const tenant = scope\.where;/);
+});
+
+/**
+ * WHY THE DORMANT CLAUSE IS WIDER THAN EQUALITY, AND WHY THAT IS NOT A HOLE.
+ *
+ * `withChannelTenantScope` now binds the endpoint's workspace while enforcement is
+ * dormant, so `activeTenantPredicate` here went from `{}` — match every tenant,
+ * the leak this module was written to close — to strict equality. Equality is the
+ * wrong answer mid-rollout and silently so: Contact and Communication still carry
+ * NULL tenants on a large share of production rows, and those rows belong to the
+ * workspace whose endpoint the receipt arrived on. Filtering them out loses no
+ * message; it stops the ticks, for ever, with nothing in a log.
+ *
+ * So dormant is "this workspace, or nobody's yet" — strictly narrower than the
+ * `{}` it replaces, because a SECOND tenant's owned rows stop matching. Enforcing
+ * is equality, unchanged, because by then an unowned row is a bug not a stage.
+ */
+test("the receipt clause is exact under enforcement and tolerates unowned rows while dormant", () => {
+  const code = src("src/lib/messageReceipts.ts");
+  const resolver = code.slice(
+    code.indexOf("function receiptTenantScope"),
+    code.indexOf("export async function applyReceipt"),
+  );
+  // No scope at all is still "match everything" — an unmapped endpoint behaves
+  // exactly as this path did before the channel scope started binding.
+  assert.match(resolver, /if \(!\("tenantId" in predicate\)\) return \{ where: \{\}, sql: Prisma\.empty \};/);
+  assert.match(resolver, /if \(tenantEnforcing\(\) \|\| tenantId === null\)/, "enforcement takes the exact branch");
+  assert.match(resolver, /sql: Prisma\.sql`AND "tenantId" IS NOT DISTINCT FROM \$\{tenantId\}`/);
+  assert.match(resolver, /where: \{ OR: \[\{ tenantId \}, \{ tenantId: null \}\] \}/, "dormant tolerates unowned rows");
+  assert.match(resolver, /AND \("tenantId" = \$\{tenantId\} OR "tenantId" IS NULL\)/, "…and the raw clause agrees");
 });
 
 test("the phone lookup — the one with no unique index — carries a tenant clause", () => {
   const code = src("src/lib/messageReceipts.ts");
   const lookup = code.slice(code.indexOf("async function contactForRecipient"));
-  assert.match(lookup, /IS NOT DISTINCT FROM \$\{tenant\.tenantId\}/,
-    "and uses IS NOT DISTINCT FROM, because tenantId is still NULL everywhere");
-  assert.doesNotMatch(lookup, /"tenantId" = \$\{/, "`= NULL` matches nothing");
+  // Built by receiptTenantScope rather than inline, so the widened and exact
+  // branches cannot diverge between this lookup and the updates it feeds.
+  assert.match(lookup, /const scoped = scope\.sql;/);
+  assert.match(lookup, /\$\{scoped\}/, "and it must actually reach the query");
   assert.match(lookup, /ORDER BY "id"/, "deterministic within a tenant");
 });
 

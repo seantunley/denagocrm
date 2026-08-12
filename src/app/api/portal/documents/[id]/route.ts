@@ -28,7 +28,7 @@ export async function GET(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
   try {
-    const bytes = await readFile(document.storedName);
+    const bytes = await readFile(document.storedName, document.tenantId);
     return new NextResponse(new Uint8Array(bytes), {
       headers: {
         "content-type": "application/octet-stream",

@@ -40,7 +40,7 @@ test("the document scope query names its tenant", () => {
   assert.ok(body.length > 0, "the slice ran backwards");
   assert.match(body, /basePrisma\.document\.findMany/, "still the basePrisma query this guards");
   assert.match(body, /documentTenantWhere\(\)/, "a basePrisma query must carry an explicit tenant predicate");
-  assert.match(shipped("src/lib/permissions.ts"), /activeTenantPredicate\("document scope"\)/);
+  assert.match(shipped("src/lib/permissions.ts"), /actingRecordPredicate\("document scope"\)/);
 });
 
 test("access to ONE document is decided by resolving that document", () => {
@@ -140,20 +140,19 @@ test("under enforcement, a scopeless request is refused rather than unscoped", a
   }
 });
 
-test("trash.ts and the Trash page share the acting-workspace predicate", () => {
-  // Two separate copies is how one of them ends up with a different rule — see
-  // actingTrashPredicate's doc comment in trash.ts for why this moved off
-  // activeTenantPredicate (enforcement-only, `{}` while DORMANT, the mode every
-  // environment runs in today — so it never actually named a tenant for either
-  // caller here, both of which are signed-in owner actions with no other
-  // per-record ownership gate in front of them).
+test("every user-originated scope resolves through an acting-workspace predicate", () => {
+  // Separate copies are how one of them ends up with a different rule — see
+  // actingTrashPredicate's doc comment in trash.ts for why all of these moved
+  // off activeTenantPredicate (enforcement-only, so `{}` while DORMANT, the
+  // mode every environment runs in today — it never actually named a tenant
+  // for any of these callers, which are signed-in staff actions).
   //
-  // permissions.ts is NOT in this list. It is on the SAME acting-workspace
-  // predicate now (its own actingRecordPredicate, a separate PR/branch) — the
-  // two are independent copies of one small, stable ladder rather than a
-  // shared import, so this file and that one's sibling test can each land
-  // without depending on merge order. Extracting one canonical copy is a
-  // follow-up worth doing.
+  // All three surfaces are covered now. trash.ts and the Trash page take
+  // `actingTrashPredicate`; permissions.ts takes its own
+  // `actingRecordPredicate`. They are two independent copies of one small,
+  // stable ladder rather than a shared import, which is what let them land as
+  // separate PRs in either order. Extracting one canonical copy is a follow-up
+  // worth doing, and this test is what would catch the two drifting apart.
   for (const rel of ["src/lib/trash.ts", "src/app/(app)/trash/page.tsx"]) {
     assert.match(
       shipped(rel),
@@ -161,6 +160,11 @@ test("trash.ts and the Trash page share the acting-workspace predicate", () => {
       `${rel} must resolve the tenant through the shared acting-workspace predicate`,
     );
   }
+  assert.match(
+    shipped("src/lib/permissions.ts"),
+    /actingRecordPredicate\(/,
+    "permissions.ts must resolve the DOCUMENT scope through the acting-tenant predicate, not the enforcement-only one",
+  );
 });
 
 test("a missing scope is not treated as the untenanted tenant", () => {

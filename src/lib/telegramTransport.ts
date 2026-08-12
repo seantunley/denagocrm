@@ -122,7 +122,15 @@ export async function tgPersistInboundFile(
     const buffer = await readBounded(fileRes);
     if (!buffer) return null;
     const mimeType = hintedMimeType || fileRes.headers.get("content-type") || "application/octet-stream";
-    return saveFile(buffer, fileName, mimeType);
+    // No parent record yet (the flow decides what to do with the file afterwards)
+    // and no session — but Telegram is the one channel whose chokepoint enters a
+    // REAL tenant scope even while enforcement is dormant: withTelegramTenantScope
+    // resolves the per-tenant webhook secret and runs the whole update inside that
+    // workspace's scope. So the scope IS the owner here, and reading it invents
+    // nothing. Its other branch (a founding-tenant secret on a single-tenant
+    // install) enters no scope, and null keeps the legacy flat path this file
+    // lands on today.
+    return saveFile(buffer, fileName, mimeType, currentTenantScope()?.tenantId ?? null);
   } catch {
     return null;
   }

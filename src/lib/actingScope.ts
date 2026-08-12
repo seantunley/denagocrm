@@ -1,13 +1,42 @@
 import "server-only";
 import { getActiveTenantId } from "./auth";
 import { basePrisma } from "./db";
+import { actingTenantId } from "./actingTenant";
 import { decideActingScope, type ActingScope } from "./actingScopeRule";
 import { DEFAULT_TENANT_ID } from "./tenant";
 import { tenantEnforcing } from "./tenantEnforcement";
 import { TenantScopeError } from "./tenantGuard";
+import { currentTenantScope, runInTenantScope } from "./tenantScope";
 import { currentScopeClass } from "./tenantWrite";
 
 export type { ActingScope };
+
+/**
+ * `getActiveTenantId()` is a request helper: outside a live Next request its
+ * `cookies()` call deliberately throws. That is the correct signal for cron,
+ * scripts and integration tests — there simply is no session whose workspace
+ * could narrow the operation — so those callers remain `global`, exactly as the
+ * acting-scope contract says background work should.
+ *
+ * Catch ONLY Next's documented missing-request error. Any real failure while a
+ * request exists (DB/session resolution, malformed state, etc.) still propagates;
+ * silently converting those failures to `global` would widen access at the exact
+ * moment the tenant decision became uncertain.
+ */
+async function dormantSessionTenantId(): Promise<string | null> {
+  try {
+    return await getActiveTenantId();
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      (error.message.includes("next-dynamic-api-wrong-context") ||
+        error.message.includes("outside a request scope"))
+    ) {
+      return null;
+    }
+    throw error;
+  }
+}
 
 /**
  * The scope a USER-ORIGINATED operation acts in — the server shell around
@@ -26,7 +55,7 @@ export async function actingScopeClass(): Promise<ActingScope> {
   const enforcing = tenantEnforcing();
   // Skip the session lookup entirely when enforcing: the enforced scope is
   // authoritative and a session must never widen it.
-  const sessionTenantId = enforcing ? null : await getActiveTenantId();
+  const sessionTenantId = enforcing ? null : await dormantSessionTenantId();
   return decideActingScope({
     enforcing,
     enforcedScope: currentScopeClass(),
@@ -73,6 +102,33 @@ export async function actingOwnerTenantId(): Promise<string> {
     throw new TenantScopeError("No tenant scope established for a tenant-owned write");
   }
   return scope.mode === "tenant" ? scope.tenantId : DEFAULT_TENANT_ID;
+}
+
+/**
+ * Bind the ACTING workspace as an ambient scope for one staff operation, so that
+ * everything inside it resolves the same workspace — once, not per call.
+ *
+ * The mirror of `withChannelTenantScope` on the other side of a bot conversation.
+ * The webhook binds the workspace that owns the provider ENDPOINT; this binds the
+ * workspace the person is signed into. Both halves then read the same ambient rung
+ * (see {@link ../botTenant}.`botConversationTenantId`), which is the only way the
+ * queue writer, its idempotency re-read, the takeover and the drain can be moved
+ * together instead of one at a time — the entanglement #473 stopped at.
+ *
+ * NEVER WIDENS OR REPLACES AN EXISTING SCOPE. If one is already bound — under
+ * enforcement, inside a webhook, inside a cron slice — that scope is authoritative
+ * and this is a bare `fn()`. A session must not be able to redirect work that was
+ * already scoped by something that outranks it.
+ *
+ * Resolution failure falls back to the founding tenant rather than throwing:
+ * `getActiveTenantId()` reads cookies and the session registry, which throw where
+ * there is no request at all, and those callers legitimately have no session. The
+ * founding tenant is what they resolved before this existed.
+ */
+export async function withStaffConversationScope<T>(fn: () => Promise<T>): Promise<T> {
+  if (currentTenantScope()) return fn();
+  const tenantId = await actingTenantId().catch(() => DEFAULT_TENANT_ID);
+  return runInTenantScope({ tenantId, system: false }, fn);
 }
 
 export async function withActingTenantWrite<T>(

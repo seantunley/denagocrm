@@ -8,8 +8,10 @@ import {
   subMonths,
 } from "date-fns";
 import { TrendingDown, TrendingUp } from "lucide-react";
+import { Prisma } from "@prisma/client";
 import { prisma, basePrisma } from "@/lib/db";
 import { listActingTenantStaff } from "@/lib/tenantActor";
+import { actingScopeClass } from "@/lib/actingScope";
 import { formatZARCompact } from "@/lib/format";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import {
@@ -160,12 +162,18 @@ async function accessibleReportUserIds(userId: string, unrestricted: boolean): P
   if (unrestricted) return null;
   const teamIds = await getUserTeamIds(userId);
   if (teamIds.length === 0) return [userId];
+  // getUserTeamIds is already tenant-scoped, but a TeamMember row could still
+  // disagree with its own Team about tenancy — belt and suspenders, same as the
+  // lock/read/write style used elsewhere for a bypass-client raw query.
+  const scope = await actingScopeClass();
+  if (scope.mode === "closed") return [userId];
+  const tenantFilter = scope.mode === "tenant" ? Prisma.sql`AND tm."tenantId" = ${scope.tenantId}` : Prisma.empty;
   const rows = await basePrisma.$queryRaw<Array<{ id: string }>>`
     SELECT DISTINCT u."id"
     FROM "User" u
     WHERE u."id" = ${userId}
        OR u."id" IN (
-         SELECT tm."userId" FROM "TeamMember" tm WHERE tm."teamId" = ANY(${teamIds}::text[])
+         SELECT tm."userId" FROM "TeamMember" tm WHERE tm."teamId" = ANY(${teamIds}::text[]) ${tenantFilter}
        )
   `;
   return rows.map((row) => row.id);

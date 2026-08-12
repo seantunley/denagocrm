@@ -59,6 +59,17 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
       usablePermissions: (set: Set<string>) => set,
     };
   }
+  // This contract is about the null/[]/[id…] shape, not tenant scoping, so no
+  // ALS/session fixture exists here to feed the real actingScopeClass() — and
+  // its session half calls cookies(), unavailable outside a live request. Fixed
+  // at "global" (no resolvable tenant), which is exactly what unfiltered
+  // pre-tenancy behaviour already meant: actingListScope() returns `{}` for it,
+  // so this file's queries stay exactly as unfiltered as before the predicate
+  // was added. See recordAccessTenantScope.test.ts for the fixture that DOES
+  // drive tenant scoping through this same seam.
+  if (request === "./actingScope" && from.endsWith("permissions.ts")) {
+    return { actingScopeClass: async () => ({ mode: "global" }) };
+  }
   return realLoad.call(this, request, parent, isMain);
 } as Loader;
 

@@ -206,8 +206,8 @@ test("a conversation opened by an inbound message is owned by the customer it is
   // actually opened. Enforcement is dormant, so `writeTenantId()` is null and the
   // guard stamps nothing — and this write is on `basePrisma` anyway, which
   // bypasses the guard entirely.
-  const id = await conversations.resolveConversationId({ contactId: "contact-1", type: "whatsapp" });
-  assert.equal(id, "conversation-1");
+  const resolved = await conversations.resolveConversationId({ contactId: "contact-1", type: "whatsapp" });
+  assert.equal(resolved?.id, "conversation-1");
 
   const conversation = created.find((row) => row.model === "conversation");
   assert.ok(conversation, "the conversation must have been created");
@@ -269,8 +269,8 @@ test("an existing open thread is reused rather than re-created", async () => {
   rows.contact = [{ id: "contact-1", tenantId: B }];
   rows.conversation = [{ id: "existing", channel: "whatsapp", contactId: "contact-1" }];
 
-  const id = await conversations.resolveConversationId({ contactId: "contact-1", type: "whatsapp" });
-  assert.equal(id, "existing");
+  const resolved = await conversations.resolveConversationId({ contactId: "contact-1", type: "whatsapp" });
+  assert.equal(resolved?.id, "existing");
   assert.equal(created.length, 0, "the tenant lookup must not have turned a reuse into a create");
 });
 
