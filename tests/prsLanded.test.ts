@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { classifyMerged, classifyOpen, classifyDeployment } from "../scripts/check-prs-landed.mjs";
+import { classifyMerged, classifyOpen, classifyDeployment, RECOVERED_BY } from "../scripts/check-prs-landed.mjs";
 
 /**
  * The check that would have caught 2026-08-07.
@@ -101,5 +101,64 @@ test("a deployment still running is NOT judged", () => {
   for (const state of ["in_progress", "queued", "pending", undefined]) {
     assert.equal(classifyDeployment(state).ok, true, `${state} must not fail the check`);
     assert.match(classifyDeployment(state).reason, /not judged/);
+  }
+});
+
+/**
+ * RECOVERY RECORDS — the one way a stranded pull request may stop being
+ * reported, and the ways it may not.
+ *
+ * Recovering a stranded stack means re-landing its work from a fresh branch.
+ * Under a squash workflow that is a new commit, so the original PR's head never
+ * becomes an ancestor of the trunk and neither does its own merge commit — the
+ * two things this file checks. The work is on main and the bookkeeping cannot
+ * show it, so without a record the guard reports those PRs as lost forever. A
+ * check that cries wolf is one people switch off.
+ *
+ * The danger is obvious, so it is pinned here: a record must not be able to
+ * excuse work that is genuinely missing.
+ */
+test("a recorded recovery counts only when the replacement itself landed", () => {
+  const pr = { number: 478, title: "Gate the stage reorder", baseRefName: "fix/stage-lookup-inside-the-gate", headRefOid: "abc" };
+  const result = classifyMerged(pr, false, true);
+  assert.equal(result.status, "recovered");
+  assert.equal(result.recoveredBy, 498, "the report must name where the work actually went");
+});
+
+test("a recovery that has NOT landed leaves the original stranded", () => {
+  // THE ANTI-WAIVER. An entry redirects the question; it never answers it. If
+  // the replacement is reverted or was never merged, the original is still
+  // missing and must still be reported.
+  const pr = { number: 478, title: "Gate the stage reorder", baseRefName: "fix/stage-lookup-inside-the-gate", headRefOid: "abc" };
+  const result = classifyMerged(pr, false, false);
+  assert.equal(result.status, "stranded");
+  assert.match(result.reason, /#498 has not reached/, "the reason must say the replacement is the missing part");
+});
+
+test("a recovery record cannot rescue a pull request that has no record", () => {
+  // Only the enumerated numbers are redirected. Everything else is unaffected,
+  // whatever the caller passes for the recovery argument.
+  const pr = { number: 999, title: "Unrelated", baseRefName: "some/branch", headRefOid: "abc" };
+  assert.equal(classifyMerged(pr, false, true).status, "stranded");
+  assert.equal(classifyMerged(pr, false, undefined).status, "stranded");
+});
+
+test("a landed pull request is never reclassified by a recovery record", () => {
+  // Landing under its own number always wins, so a stale record cannot mask a
+  // PR that shipped normally.
+  const pr = { number: 478, title: "Gate the stage reorder", baseRefName: "main", headRefOid: "abc" };
+  assert.equal(classifyMerged(pr, true, false).status, "landed");
+});
+
+test("the recovery table stays small and self-describing", () => {
+  // A growing table is the smell this guard exists to catch: it would mean
+  // stranding PRs routinely and recording it rather than fixing the merges.
+  // Deliberately tight, so adding one is a decision somebody has to argue for.
+  assert.ok(
+    Object.keys(RECOVERED_BY).length <= 5,
+    `${Object.keys(RECOVERED_BY).length} recovery records — if this is growing, fix the merge process, not the guard`,
+  );
+  for (const [stranded, recovery] of Object.entries(RECOVERED_BY)) {
+    assert.ok(Number(recovery) > Number(stranded), `#${recovery} must be NEWER than the #${stranded} it replaces`);
   }
 });
