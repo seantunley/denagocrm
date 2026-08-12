@@ -461,7 +461,17 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
       // transaction (including an open signing request) so a concurrent send /
       // signing-start / revision can't turn it non-editable between the read and
       // the header+items+fees rewrite below.
-      await tx.$executeRaw`SELECT id FROM "Quote" WHERE id = ${data.id} FOR UPDATE`;
+      //
+      // The tenant predicate is on the LOCK, the READ and the UPDATE below, not
+      // just on one of them. `requireQuoteAccess` above authorised the id, but
+      // it leans on `activeTenantPredicate()`, which is `{}` while enforcement is
+      // dormant — so it says nothing about ownership today. This runs on
+      // `basePrisma`, the documented bypass, so nothing else was going to.
+      //
+      // Measured, not assumed: driven from workspace A against a live quote of
+      // B's, this path rewrote B's terms and wrote a QuoteItem into B's quote
+      // stamped with B's tenant, so the row read as an ordinary one of theirs.
+      await tx.$executeRaw`SELECT id FROM "Quote" WHERE id = ${data.id} AND "tenantId" = ${actingTenant} FOR UPDATE`;
       // The existing rows ride along with the editability check rather than
       // costing two more round trips. Every row is replaced below, so anything
       // the editor does not send is lost unless it is carried across — kind,
@@ -473,8 +483,8 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
       // queries inside the transaction they pushed it past Prisma's 5s
       // interactive-transaction budget on a high-latency database, and the save
       // failed with P2028 instead of committing.
-      const existing = await tx.quote.findUnique({
-        where: { id: data.id },
+      const existing = await tx.quote.findFirst({
+        where: { id: data.id, tenantId: actingTenant },
         include: { items: true, fees: true },
       });
       if (
@@ -506,8 +516,13 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
         await requireContactAccess(data.contactId, "quotes.edit");
       }
 
-      await tx.quote.update({
-        where: { id: existing.id },
+      // updateMany + count check, not update(): existing was already read back
+      // tenant-scoped above, so this is belt on top of braces — but a plain
+      // update() throws Prisma's own not-found error on a zero-row match rather
+      // than the refusal this action returns everywhere else, and every other
+      // write in this transaction earns its predicate the same way.
+      const updated = await tx.quote.updateMany({
+        where: { id: existing.id, tenantId: actingTenant },
         data: {
           contactId: data.contactId,
           validUntil,
@@ -516,6 +531,11 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
           ...cpqQuoteData,
         },
       });
+      // Every predicate above narrowed to a row that resolved as A's; this is
+      // the point they all existed to protect, and a concurrent delete/purge
+      // between the read and here is the only way it legitimately trips.
+      if (updated.count !== 1) return null;
+
       // Inherit the hidden columns by row id, and KEEP that id — see quoteRows.
       const itemRows = itemRowsFor(normalizedItems, priorById(existing.items));
       const feeRows = feeRowsFor(normalizedFees, priorById(existing.fees));

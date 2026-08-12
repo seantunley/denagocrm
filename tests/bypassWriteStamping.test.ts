@@ -147,3 +147,42 @@ test("the owner is resolved from the acting workspace, not the dormant scope", (
     assert.doesNotMatch(code, /writeTenantId\(\) \?\? DEFAULT_TENANT_ID/, `${file} uses the dormant fallback`);
   }
 });
+
+/**
+ * saveQuoteDraft's edit path is the busiest write in this file and was the one
+ * left out when P0-2 was first fixed: it locked and rewrote an existing quote by
+ * a bare `id`, on `basePrisma`. `requireQuoteAccess` authorised the id, but its
+ * `activeTenantPredicate()` is `{}` while dormant, so it said nothing about
+ * ownership. Driven live, workspace A rewrote workspace B's terms and wrote a
+ * QuoteItem into B's quote stamped with B's own tenant, so the row read as an
+ * ordinary one of theirs — the harness's Quote OWN probe was passing for the
+ * wrong reason until this landed. The real proof is the two-tenant harness
+ * (scripts/harness/, Quote FORGERY); this pins the source shape alongside it.
+ */
+test("editing a quote is scoped on the lock, the read, and the write — all three", () => {
+  const source = src(QUOTES);
+  const start = source.indexOf("export async function saveQuoteDraft");
+  const end = source.indexOf("\nexport async function", start + 1);
+  const fn = source.slice(start, end === -1 ? undefined : end);
+
+  assert.match(
+    fn,
+    /SELECT id FROM "Quote" WHERE id = \$\{data\.id\} AND "tenantId" = \$\{actingTenant\} FOR UPDATE/,
+    "the row lock must carry the tenant predicate, not just the id"
+  );
+  assert.match(
+    fn,
+    /tx\.quote\.findFirst\(\{\s*where: \{ id: data\.id, tenantId: actingTenant \}/,
+    "the re-read inside the transaction must be tenant-filtered — findUnique cannot be"
+  );
+  assert.match(
+    fn,
+    /tx\.quote\.updateMany\(\{\s*where: \{ id: existing\.id, tenantId: actingTenant \}/,
+    "the rewrite must be an updateMany scoped by tenant, not update() by bare id"
+  );
+  assert.match(
+    fn,
+    /if \(updated\.count !== 1\) return null;/,
+    "a zero-row match (foreign quote) must refuse, not silently proceed"
+  );
+});
