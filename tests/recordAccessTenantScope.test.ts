@@ -420,3 +420,40 @@ test("every helper's predicate says which check it came from", () => {
   assert.ok(contexts.length >= 7, `expected a context per helper, found ${contexts.length}`);
   assert.equal(new Set(contexts).size, contexts.length, `duplicate predicate contexts: ${contexts.join(", ")}`);
 });
+
+/**
+ * THE VIEW_OWNED PATH, on an unresolvable session.
+ *
+ * The first fail-closed pass put its guard INSIDE the `view_all` branch of
+ * getAccessibleLeadIds and getAccessibleCaseIds. A `view_owned` holder walked
+ * straight past it into the raw SQL with both tenant fragments built as
+ * `Prisma.empty` — no predicate at all. For cases the `assignedToId = user.id`
+ * arm then matched that person's tickets in EVERY workspace.
+ *
+ * Caught in review, not by the tests, because every test written for that pass
+ * exercised `view_all`. These drive the other permission shape.
+ */
+for (const [helper, owned] of [
+  ["getAccessibleLeadIds", "leads.view_owned"],
+  ["getAccessibleCaseIds", "cases.view_owned"],
+] as const) {
+  test(`${helper}: a view_owned holder with no resolvable workspace gets nothing`, async () => {
+    seed();
+    spy.setPermissions([owned]);
+    // No runInTenantScope: the stub resolves `global`, which is what a stale or
+    // ambiguous membership claim produces on a real request.
+    const ids = await (permissions[helper] as (u: typeof USER) => Promise<string[] | null>)(USER);
+    assert.deepEqual(ids, [], "an unresolvable session must reach no rows, and must not answer `null`");
+  });
+
+  test(`${helper}: a view_owned holder WITH a workspace still gets their rows`, async () => {
+    // The other half — a fix that simply returned [] everywhere would pass the
+    // test above and break the product.
+    seed();
+    spy.setPermissions([owned]);
+    await runInTenantScope({ tenantId: A, system: false }, async () => {
+      const ids = await (permissions[helper] as (u: typeof USER) => Promise<string[] | null>)(USER);
+      assert.ok(Array.isArray(ids), "a resolved workspace still resolves a list");
+    });
+  });
+}

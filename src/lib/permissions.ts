@@ -196,23 +196,21 @@ async function actingListScope(): Promise<{ tenantId: string } | null> {
 export async function getAccessibleLeadIds(user: PermissionUser): Promise<string[] | null> {
   const permissions = await scopePermissions(user);
   const scope = await actingScopeClass();
-  if (scope.mode === "closed") return [];
-  const leadTenant = scope.mode === "tenant"
-    ? Prisma.sql`AND l."tenantId" = ${scope.tenantId}`
-    : Prisma.empty;
-  const teamTenant = scope.mode === "tenant"
-    ? Prisma.sql`AND "tenantId" = ${scope.tenantId}`
-    : Prisma.empty;
+  // AT THE TOP, BEFORE ANY BRANCH. This first read `if (scope.mode === "closed")
+  // return []`, and the `!== "tenant"` guard sat inside the view_all branch
+  // below — so a view_OWNED holder walked straight past it into the raw SQL
+  // with both fragments built as `Prisma.empty`, i.e. no tenant predicate at
+  // all. `[]`, not `null`: null from this helper means UNRESTRICTED to every
+  // caller. Neither `closed` nor `global` may reach a query here.
+  if (scope.mode !== "tenant") return [];
+  // No ternary any more: the guard above narrows `scope` to a real workspace, so
+  // there is no branch left in which these could be empty.
+  const leadTenant = Prisma.sql`AND l."tenantId" = ${scope.tenantId}`;
+  const teamTenant = Prisma.sql`AND "tenantId" = ${scope.tenantId}`;
 
   if (permissions === null || permissions.has("leads.view_all")) {
-    // `[]`, not `null`. `null` from this helper means UNRESTRICTED, so returning
-    // it for an unresolvable session was a fail-open: a stale or ambiguous
-    // membership claim (see actingListScope) would have handed a view_all holder
-    // every workspace's leads. Nothing accessible is the honest answer.
-    if (scope.mode !== "tenant") return [];
     // The predicate is written out rather than interpolated via `leadTenant`:
-    // `scope.mode` is narrowed to "tenant" by the guard above, so this is the
-    // same SQL — but a fragment carries the tenant past the access sweep, which
+    // same SQL, but a fragment carries the tenant past the access sweep, which
     // reads the statement text.
     const rows = await basePrisma.$queryRaw<Array<{ id: string }>>`
       SELECT l."id"
@@ -670,15 +668,14 @@ export async function requireDocumentAccess(
 export async function getAccessibleCaseIds(user: PermissionUser): Promise<string[] | null> {
   const permissions = await scopePermissions(user);
   const scope = await actingScopeClass();
-  if (scope.mode === "closed") return [];
-  const caseTenant = scope.mode === "tenant"
-    ? Prisma.sql`AND c."tenantId" = ${scope.tenantId}`
-    : Prisma.empty;
+  // AT THE TOP — same defect as getAccessibleLeadIds had. A view_OWNED caller
+  // used to walk past the view_all guard into the raw SQL with `caseTenant` as
+  // `Prisma.empty`, and the `assignedToId = user.id` arm then matched that
+  // person's cases in EVERY workspace.
+  if (scope.mode !== "tenant") return [];
+  const caseTenant = Prisma.sql`AND c."tenantId" = ${scope.tenantId}`;
 
   if (permissions === null || permissions.has("cases.view_all")) {
-    // `[]`, not `null` — same reasoning as getAccessibleLeadIds above: `null`
-    // means unrestricted, which is a fail-open for an unresolvable session.
-    if (scope.mode !== "tenant") return [];
     // Written out rather than interpolated via `caseTenant` — same SQL, but the
     // access sweep reads the statement and cannot see into a fragment. The
     // `WHERE TRUE` placeholder goes with it.
