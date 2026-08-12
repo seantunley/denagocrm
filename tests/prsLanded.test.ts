@@ -132,6 +132,10 @@ test("a recovery that has NOT landed leaves the original stranded", () => {
   const pr = { number: 478, title: "Gate the stage reorder", baseRefName: "fix/stage-lookup-inside-the-gate", headRefOid: "abc" };
   const result = classifyMerged(pr, false, false);
   assert.equal(result.status, "stranded");
+  // Asserted present before matching, rather than cast: `reason` is genuinely
+  // optional on the returned shape (a landed result has none), and a cast would
+  // hide a future refactor that stopped setting it here.
+  assert.ok(result.reason, "a stranded result must explain itself");
   assert.match(result.reason, /#498 has not reached/, "the reason must say the replacement is the missing part");
 });
 
