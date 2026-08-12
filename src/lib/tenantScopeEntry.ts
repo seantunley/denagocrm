@@ -37,47 +37,41 @@ export function validateInSystemScope<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 /**
- * Establish the request's tenant SCOPE at an authenticated chokepoint (Phase C,
- * step 2). Seeds the AsyncLocalStorage scope the db.ts guard consumes.
+ * Establish the request's tenant SCOPE at the authenticated staff chokepoint.
  *
- * DORMANT: every function here returns immediately unless `tenantEnforcing()` is
- * true (always false today), so with enforcement off there is ZERO added work on
- * the hot path — no tenant resolution, no store mutation. When enforcement flips
- * on (per environment, step 5), these establish the scope so downstream DB access
- * is confined to the caller's tenant, and a request that can't resolve one fails
- * closed at the db layer.
- */
-
-/**
- * Staff/app surface. Called from `getCurrentUser()` with the already-resolved user
- * id, the session's `tid` claim, and whether the principal is the GLOBAL `owner` —
- * resolves the user's sole active tenant and honours the claim exactly as
- * `getActiveTenantId()` does, but WITHOUT re-entering `getCurrentUser` (which would
- * recurse).
+ * This scope now exists in dormant mode too when the validated session resolves a
+ * workspace. That does NOT turn the db.ts tenant guard on — `scopeArgs` still keeps
+ * its documented dormant behaviour until TENANT_ENFORCEMENT=enforce. What it does
+ * give us is a trustworthy ambient answer for the explicit `basePrisma` predicates
+ * used by record-level authorization (`activeTenantPredicate`). Those predicates
+ * are the boundary in front of bypass transactions, so letting the scope disappear
+ * while dormant made `requireQuoteAccess`, `requireLeadAccess`, `requireJobCardAccess`
+ * and their siblings authorize a foreign id before an otherwise unguarded write.
  *
- * Returns `{ ok }`. Under enforcement:
- *   - a valid acting tenant resolves → enter that tenant's scope, `ok:true`;
- *   - none resolves (tid absent/mismatched, membership removed, tenant suspended, or
- *     a second active membership made it ambiguous):
- *       · NON-OWNER → `ok:false` — the caller MUST fail the whole authentication, not
- *         just leave a null scope, so a stale/ambiguous session can't still pass
- *         `requireUser`/role/owner checks or trigger global side effects (unchanged);
- *       · OWNER → `ok:true` with NO scope established AT ALL (the OWNER ESCAPE HATCH —
- *         never a `system` scope). The global owner proceeds so the platform console
- *         (basePrisma reads) works, while every tenant-scoped CRM query still fails
- *         closed at the db guard for lack of a scope. The (app) layout redirects such
- *         an owner to the console to fix their tenancy.
- * When enforcement is off it always returns `{ ok: true }` (dormant — no rejection,
- * no scope, no DB read).
+ * In other words: dormant still means "do not globally switch the ORM guard on";
+ * it no longer means "forget which workspace an authenticated person is acting in".
  */
 export async function establishStaffTenantScope(
   userId: string,
   tid: string | null,
   isOwner: boolean,
 ): Promise<{ ok: boolean }> {
-  if (!tenantEnforcing()) return { ok: true };
+  // Resolve the exact same validated membership/claim pair in both modes. This is
+  // the authenticated chokepoint, so unlike cron/webhook work there is a real
+  // actor to ask. Background paths never call this function.
   const sole = await resolveActingTenant(userId);
   const tenantId = honoredTenantClaim(tid, sole);
+
+  if (!tenantEnforcing()) {
+    // Compatibility while the rollout is dormant: failure to resolve a workspace
+    // does NOT reject a previously-valid session and does NOT invent a founding-
+    // tenant owner. It simply leaves no scope, exactly as before. A successfully
+    // resolved workspace, however, is bound so explicit basePrisma predicates can
+    // enforce the real user-facing boundary today.
+    if (tenantId) enterTenantScope({ tenantId, system: false });
+    return { ok: true };
+  }
+
   const decision = decideStaffTenantScope(true, tenantId, isOwner);
   // enterTenantId === null means enter NO scope — either the owner escape hatch or a
   // fail-closed miss; we NEVER enter a `system` scope for a user-facing request.
