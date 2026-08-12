@@ -21,10 +21,12 @@ async function attachStageDocument(
   tag: string,
   fileName: string,
   file: File,
-  userId: string
+  userId: string,
+  /** The QUOTE's owner, verbatim — this paperwork is the quote's, not the clerk's. */
+  tenantId: string | null,
 ) {
   const buffer = Buffer.from(await file.arrayBuffer());
-  const storedName = await saveFile(buffer, file.name || fileName, file.type || "application/pdf");
+  const storedName = await saveFile(buffer, file.name || fileName, file.type || "application/pdf", tenantId);
   await prisma.document.create({
     data: {
       fileName,
@@ -59,7 +61,7 @@ export async function markInvoiced(quoteId: string, formData: FormData) {
     // of these: the paperwork simply never arrives and nobody is told.
     if (!file) refuse("Choose a file to upload.");
     if (file.size > MAX_FILE) refuse("That file is larger than 4 MB.");
-    await attachStageDocument(quoteId, quote.contactId, "invoice", `Invoice — Q-${quote.number}${file.name ? ` — ${file.name}` : ".pdf"}`, file, user.id);
+    await attachStageDocument(quoteId, quote.contactId, "invoice", `Invoice — Q-${quote.number}${file.name ? ` — ${file.name}` : ".pdf"}`, file, user.id, quote.tenantId);
     await prisma.quote.update({ where: { id: quoteId }, data: { invoicedAt: new Date() } });
     await logAudit({
       action: "fulfilment.invoiced",
@@ -85,7 +87,7 @@ export async function markDepositPaid(quoteId: string, formData: FormData) {
     // of these: the paperwork simply never arrives and nobody is told.
     if (!file) refuse("Choose a file to upload.");
     if (file.size > MAX_FILE) refuse("That file is larger than 4 MB.");
-    await attachStageDocument(quoteId, quote.contactId, "pop", `Proof of payment — Q-${quote.number}${file.name ? ` — ${file.name}` : ".pdf"}`, file, user.id);
+    await attachStageDocument(quoteId, quote.contactId, "pop", `Proof of payment — Q-${quote.number}${file.name ? ` — ${file.name}` : ".pdf"}`, file, user.id, quote.tenantId);
     await prisma.quote.update({ where: { id: quoteId }, data: { depositPaidAt: new Date() } });
     await logAudit({
       action: "fulfilment.deposit_paid",
@@ -122,7 +124,7 @@ export async function scheduleDelivery(quoteId: string, formData: FormData) {
     // it worked, and the form is gone. Refuse before anything is committed.
     if (file && file.size > MAX_FILE) refuse("That delivery paperwork is larger than 4 MB.");
     if (file) {
-      await attachStageDocument(quoteId, quote.contactId, "delivery-note", `Delivery paperwork — Q-${quote.number} — ${file.name}`, file, user.id);
+      await attachStageDocument(quoteId, quote.contactId, "delivery-note", `Delivery paperwork — Q-${quote.number} — ${file.name}`, file, user.id, quote.tenantId);
     }
     const model = quote.lead?.product?.name ?? quote.items[0]?.description ?? "cart";
     // The scheduling task says who the cart is going to; for a fleet order that
@@ -193,7 +195,7 @@ export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) 
 
     let saved = 0;
     for (const file of accepted.slice(0, MAX_PHOTOS)) {
-      await attachStageDocument(quoteId, quote.contactId, "delivery-photo", `Delivery photo — Q-${quote.number} — ${file.name}`, file, user.id);
+      await attachStageDocument(quoteId, quote.contactId, "delivery-photo", `Delivery photo — Q-${quote.number} — ${file.name}`, file, user.id, quote.tenantId);
       saved++;
     }
     // Say what actually happened when some were dropped: "Photos uploaded" after
@@ -241,7 +243,7 @@ export async function markDelivered(quoteId: string, formData: FormData): Promis
     // it worked, and the form is gone. Refuse before anything is committed.
     if (file && file.size > MAX_FILE) refuse("That delivery note is larger than 4 MB.");
     if (file) {
-      await attachStageDocument(quoteId, quote.contactId, "delivery-note", `Delivery note — Q-${quote.number} — ${file.name}`, file, user.id);
+      await attachStageDocument(quoteId, quote.contactId, "delivery-note", `Delivery note — Q-${quote.number} — ${file.name}`, file, user.id, quote.tenantId);
     }
 
     const deliveredByName = String(formData.get("deliveredByName") ?? "").trim() || null;
@@ -255,7 +257,9 @@ export async function markDelivered(quoteId: string, formData: FormData): Promis
     if (signature.startsWith("data:image/png;base64,")) {
       const buffer = Buffer.from(signature.split(",")[1], "base64");
       if (buffer.length > 0 && buffer.length <= MAX_FILE) {
-        deliverySignatureRef = await saveFile(buffer, `delivery-signature-Q${quote.number}.png`, "image/png");
+        // The customer's signature on THIS quote's delivery — the quote owns it,
+        // for the same reason its invoice and delivery note do.
+        deliverySignatureRef = await saveFile(buffer, `delivery-signature-Q${quote.number}.png`, "image/png", quote.tenantId);
         await prisma.document.create({
           data: {
             fileName: `Delivery signature — Q-${quote.number}`,

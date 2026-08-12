@@ -3,6 +3,7 @@ import { basePrisma } from "@/lib/db";
 import { requirePortalScope } from "@/lib/portalAccess";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { readFile } from "@/lib/storage";
+import { portalTenantId } from "@/lib/portalTenant";
 
 type UploadRow = {
   id: string;
@@ -37,7 +38,18 @@ export async function GET(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
   try {
-    const bytes = await readFile(upload.storedName);
+    // The SAME rule the write used: uploadPortalFile namespaces the object with
+    // portalTenantId(contact), so asking the contact again is symmetric by
+    // construction rather than by a column two writers could drift apart on.
+    //
+    // Deliberately NOT `SELECT "tenantId"` from the row above. That query has no
+    // tenant predicate and is a standing entry in the tenant-access ratchet;
+    // merely MENTIONING the column in its SELECT list satisfies the sweep's
+    // heuristic and would retire a real finding without bounding the query by
+    // anything. A genuine predicate is not available either — every PortalUpload
+    // row is NULL-tenant while stamping is dormant, so one would return nothing
+    // and break the download outright.
+    const bytes = await readFile(upload.storedName, await portalTenantId(upload.contactId));
     return new NextResponse(new Uint8Array(bytes), {
       headers: {
         "content-type": "application/octet-stream",

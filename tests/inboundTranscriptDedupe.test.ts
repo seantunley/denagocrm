@@ -160,7 +160,11 @@ test("the insert stays create(), because createMany has no Conversation hook", (
   const hook = db.slice(db.indexOf("communication: {"), db.indexOf("});", db.indexOf("communication: {")));
   assert.match(hook, /async create\(/, "the Conversation projection hangs off create");
   assert.doesNotMatch(hook, /async createMany\(/, "…and there is no createMany equivalent");
-  assert.match(hook, /resolveConversationId/);
+  // `attachToConversation` is `resolveConversationId` plus the tenant that
+  // attachment forces onto the row — the two were split across this hook and the
+  // resolver, and the split is what broke notes on threads awaiting the tenant
+  // backfill (2026-08-11). Same door, one name; the assertion is unchanged in intent.
+  assert.match(hook, /attachToConversation/);
   assert.match(hook, /bumpConversation/);
   for (const rel of ["src/lib/whatsapp.ts", "src/lib/messenger.ts"]) {
     const code = src(rel);
@@ -177,7 +181,7 @@ test("an attachment redelivery does not persist a second permanent object", () =
   const code = src("src/lib/messenger.ts");
   const loop = code.slice(code.indexOf("for (const [index, att]"), code.indexOf("reopenThreadOnInbound"));
   const check = loop.indexOf("findUnique({ where: { dedupeKey: attKey }");
-  const persist = loop.indexOf("await persistAttachment(att)");
+  const persist = loop.indexOf("await persistAttachment(att,");
   assert.ok(check !== -1, "the attachment key must be checked");
   assert.ok(check < persist, "and checked BEFORE anything permanent is written");
 });

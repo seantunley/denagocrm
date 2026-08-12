@@ -269,7 +269,13 @@ export async function updateLead(id: string, formData: FormData) {
     const data = leadData(formData);
     if (!data.name) throw new ActionRefusal("Name is required");
     const before = await prisma.lead.findUniqueOrThrow({ where: { id } });
+    // `getLeadPipeline` is now bounded by the acting workspace, so null means "not
+    // this workspace's lead" as well as "no such lead". It must REFUSE rather than
+    // fall through: the check it feeds is `!(await hasPermission(…, "leads.change_pipeline"))`,
+    // and a null that skipped it would turn scoping the read into a way past the
+    // permission. `moveLeadToTestDrive` already refused; these two now match it.
     const beforePipeline = await getLeadPipeline(id);
+    if (!beforePipeline) throw new ActionRefusal("Lead not found");
     const targetStage = await validateOpenStage(data.stageId);
 
     if (before.assignedToId !== data.assignedToId && !(await hasPermission(user, "leads.assign"))) {
@@ -283,7 +289,7 @@ export async function updateLead(id: string, formData: FormData) {
       if (!(await hasPermission(user, "leads.change_stage"))) {
         throw new ActionRefusal("You do not have permission to change the lead stage");
       }
-      if (beforePipeline && beforePipeline.pipelineId !== targetStage.pipelineId && !(await hasPermission(user, "leads.change_pipeline"))) {
+      if (beforePipeline.pipelineId !== targetStage.pipelineId && !(await hasPermission(user, "leads.change_pipeline"))) {
         throw new ActionRefusal("You do not have permission to move leads between pipelines");
       }
     }
@@ -343,11 +349,15 @@ export async function updateLead(id: string, formData: FormData) {
 export async function moveLead(leadId: string, stageId: string): Promise<{ ok: boolean; error?: string }> {
   const user = await requireLeadAccess(leadId, "leads.change_stage");
   const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
+  // Same refusal as `updateLead` and `moveLeadToTestDrive`, for the same reason: a
+  // lead outside the acting workspace no longer resolves, and a null that fell
+  // through would SKIP the cross-pipeline permission check rather than fail it.
   const currentScope = await getLeadPipeline(leadId);
+  if (!currentScope) return { ok: false, error: "Lead not found." };
   const resolved = await resolveOpenStage(stageId);
   if ("error" in resolved) return { ok: false, error: resolved.error };
   const targetStage = resolved.stage;
-  if (currentScope && currentScope.pipelineId !== targetStage.pipelineId && !(await hasPermission(user, "leads.change_pipeline"))) {
+  if (currentScope.pipelineId !== targetStage.pipelineId && !(await hasPermission(user, "leads.change_pipeline"))) {
     return { ok: false, error: "You do not have permission to move leads between pipelines" };
   }
   if (targetStage.entryAction === "book_test_drive") {
@@ -364,7 +374,7 @@ export async function moveLead(leadId: string, stageId: string): Promise<{ ok: b
     leadId,
     contactId: lead.contactId,
     user,
-    before: { stageId: before.stageId, position: before.position, pipelineId: currentScope?.pipelineId },
+    before: { stageId: before.stageId, position: before.position, pipelineId: currentScope.pipelineId },
     after: { stageId, position: lead.position, pipelineId: targetStage.pipelineId },
   });
   const pipelineStages = await listPipelineStages(targetStage.pipelineId);

@@ -4,8 +4,6 @@
   "src/app/(app)/cases/[id]/page.tsx::bypass-read::CustomerCase": 1,
   "src/app/(app)/cases/[id]/page.tsx::bypass-read::Vehicle": 1,
   "src/app/(app)/forecast/page.tsx::bypass-raw::ForecastSnapshot": 1,
-  "src/app/(app)/forecast/page.tsx::bypass-raw::Team": 1,
-  "src/app/(app)/forecast/page.tsx::bypass-raw::TeamMember": 1,
   "src/app/(app)/leads/page.tsx::scoped-raw::Activity": 2,
   "src/app/(app)/leads/page.tsx::scoped-raw::TimelinePin": 1,
   "src/app/(app)/reports/page.tsx::bypass-raw::TeamMember": 1,

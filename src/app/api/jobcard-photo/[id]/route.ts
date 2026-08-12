@@ -38,7 +38,10 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   }
 
   try {
-    const buffer = await readFile(ref);
+    // Both refs this route can serve — the original photo and the flattened
+    // markup — are written under the Document's own owner, so one expectation
+    // covers the pair.
+    const buffer = await readFile(ref, doc.tenantId);
     return new NextResponse(new Uint8Array(buffer), {
       headers: {
         "Content-Type": mimeType,

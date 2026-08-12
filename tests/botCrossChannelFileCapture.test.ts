@@ -47,7 +47,14 @@ test("Telegram resolves file ids to bounded persisted storage before flow execut
   const transport = src("src/lib/telegramTransport.ts");
   assert.match(transport, /INBOUND_FILE_MAX_BYTES = 20 \* 1024 \* 1024/);
   assert.match(transport, /getFile/);
-  assert.match(transport, /saveFile\(buffer, fileName, mimeType\)/);
+  // …and the persisted object is namespaced by the workspace whose bot received
+  // it. withTelegramTenantScope resolves the per-tenant webhook secret and runs
+  // the whole update inside that scope — even while enforcement is dormant — so
+  // the ambient scope is a real owner here rather than a stand-in for one.
+  assert.match(
+    transport,
+    /saveFile\(buffer, fileName, mimeType, currentTenantScope\(\)\?\.tenantId \?\? null\)/,
+  );
   assert.match(transport, /total > INBOUND_FILE_MAX_BYTES/);
 
   const webhook = src("src/app/api/webhooks/telegram/route.ts");

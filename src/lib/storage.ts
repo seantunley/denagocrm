@@ -52,9 +52,20 @@ const isPrivateBlobRef = (ref: string) => {
  *
  * `tenantId` namespaces the object as `uploads/<tenantId>/<uuid><ext>`, which is
  * what lets {@link assertOwnedBlob} answer "is this yours?" rather than only "is
- * this ours?". Callers that genuinely have no workspace — there should be none
- * for user uploads — may omit it and get the legacy flat path, which
- * {@link blobBelongsToTenant} then attributes to the founding tenant.
+ * this ours?".
+ *
+ * WHO TO PASS. The record the upload BELONGS TO, where there is one — a job-card
+ * photo belongs to the job card, a quote's invoice to the quote, a portal upload
+ * to the contact — and its `tenantId` VERBATIM. Only where there is genuinely no
+ * parent does the ACTING workspace decide (`actingOwnerTenantId()`).
+ *
+ * NULL IS AN ANSWER, which is why the parameter takes it rather than only
+ * `undefined`. Production is full of rows written before stamping, and a parent
+ * that is itself unowned cannot confer an owner: substituting one would be the
+ * `?? DEFAULT_TENANT_ID` defect that #463 removed, in a new place. An unowned
+ * parent yields the legacy flat path, which {@link blobBelongsToTenant} attributes
+ * to the founding tenant — the same object, in the same place, as before this
+ * change. Nothing is invented and nothing moves.
  *
  * The store is shared and objects are written `access: "public"` unless
  * BLOB_PRIVATE is on, so the URL is the only secret. Namespacing does not change
@@ -65,7 +76,7 @@ export async function saveFile(
   buffer: Buffer,
   originalName: string,
   contentType: string,
-  tenantId?: string
+  tenantId?: string | null
 ): Promise<string> {
   const ext = path.extname(originalName).slice(0, 12);
   const localName = crypto.randomUUID() + ext;
@@ -173,14 +184,14 @@ export type OwnedBlob = { size: number; contentType: string; pathname: string };
  * reports is itself the ownership claim, and it comes from the store rather than
  * from the caller.
  */
-export async function assertOwnedBlob(ref: string, expectedTenantId?: string): Promise<OwnedBlob> {
+export async function assertOwnedBlob(ref: string, expectedTenantId?: string | null): Promise<OwnedBlob> {
   if (!isTrustedBlobRef(ref)) throw new Error("Refusing a storage reference that is not a Blob URL");
   const tokens = [privateToken(), publicToken()].filter((t): t is string => Boolean(t));
   if (tokens.length === 0) throw new Error("Blob storage is not configured");
   for (const token of tokens) {
     try {
       const meta = await head(ref, { token });
-      if (expectedTenantId && !blobBelongsToTenant(meta.pathname, expectedTenantId)) {
+      if (!ownedByExpected(meta.pathname, expectedTenantId)) {
         throw new BlobNotYoursError("Refusing a stored file that belongs to another workspace");
       }
       return { size: meta.size, contentType: meta.contentType, pathname: meta.pathname };
@@ -219,6 +230,21 @@ export function blobBelongsToTenant(pathname: string, tenantId: string): boolean
   // Anything else (backups, managed paths) is not a per-tenant upload; those
   // callers do not pass an expected tenant and never reach this.
   return false;
+}
+
+/**
+ * {@link blobBelongsToTenant} with the "caller made no claim" case folded in, so
+ * the two enforcement points ({@link assertOwnedBlob} and {@link readFile}'s
+ * private branch) cannot drift on the one decision that matters.
+ *
+ * Absent expectation → true. That is the pre-existing behaviour, and it is the
+ * honest one: an unowned record has no owner to compare against, and inventing
+ * the viewer's would refuse a legitimate download rather than prevent an illicit
+ * one. See {@link readFile}.
+ */
+function ownedByExpected(pathname: string, expectedTenantId?: string | null): boolean {
+  if (!expectedTenantId) return true;
+  return blobBelongsToTenant(pathname, expectedTenantId);
 }
 
 /** A bare filename — no directory component, no traversal, not absolute. */
@@ -291,7 +317,29 @@ async function streamToBuffer(stream: ReadableStream<Uint8Array>, cap = MAX_BLOB
   return Buffer.concat(chunks);
 }
 
-export async function readFile(ref: string): Promise<Buffer> {
+/**
+ * Read a stored object.
+ *
+ * `expectedTenantId` is the OTHER HALF of {@link saveFile}'s namespace. A
+ * namespaced write with an unvalidated read is half a fix: the object now says
+ * whose it is, and nothing asks. Pass the owner of the RECORD the ref came off —
+ * `doc.tenantId`, `asset.tenantId`, `upload.tenantId` — and a ref pointing at
+ * another workspace's object is refused with {@link BlobNotYoursError}.
+ *
+ * NULL/UNDEFINED MEANS "NO CLAIM TO CHECK", not "any owner will do". Most rows in
+ * production are still unowned, and a record that does not know its own workspace
+ * cannot say who its file belongs to; asserting one from the viewer's session
+ * instead would refuse legitimate downloads the moment a second workspace exists.
+ * So an unowned record reads exactly as it does today, and an OWNED one is
+ * checked — the check strengthens by itself as stamping and backfill land, with
+ * no second pass over these routes.
+ *
+ * Both branches are covered deliberately. The private-store branch returns bytes
+ * WITHOUT reaching assertOwnedBlob — reaching that store proves the STORE, which
+ * is the exact distinction #474 was about — so it is checked here, against the
+ * pathname it is about to fetch, before it fetches it.
+ */
+export async function readFile(ref: string, expectedTenantId?: string | null): Promise<Buffer> {
   if (!isBlobRef(ref)) return fs.readFile(path.join(UPLOAD_DIR, ref));
 
   // Authenticated read from the private store first (blobs written there); fall
@@ -300,9 +348,19 @@ export async function readFile(ref: string): Promise<Buffer> {
   if (privateToken()) {
     try {
       const pathname = new URL(ref).pathname.replace(/^\/+/, "");
+      // The pathname IS the object's location, so checking it before the get is
+      // checking the object we are about to read: a ref naming another
+      // workspace's prefix cannot be made to yield ours, and one naming ours
+      // cannot yield theirs. The catch below rethrows the refusal rather than
+      // treating it as a miss — falling through to the public branch would
+      // re-ask for the same forbidden object and report it as "not ours".
+      if (!ownedByExpected(pathname, expectedTenantId)) {
+        throw new BlobNotYoursError("Refusing a stored file that belongs to another workspace");
+      }
       const result = await get(pathname, { access: "private", token: privateToken() });
       if (result?.stream) return await streamToBuffer(result.stream);
     } catch (error) {
+      if (error instanceof BlobNotYoursError) throw error;
       // A miss means "try the public path". The cap is NOT a miss — swallowing it
       // here would re-download the same oversized object over the public route.
       if (error instanceof BlobTooLargeError) throw error;
@@ -313,7 +371,7 @@ export async function readFile(ref: string): Promise<Buffer> {
   // hostname match does not, every Vercel store shares that suffix — and yields
   // an authoritative size, so an oversized object is refused before a byte of it
   // is fetched rather than after it is already in memory.
-  const meta = await assertOwnedBlob(ref);
+  const meta = await assertOwnedBlob(ref, expectedTenantId);
   if (meta.size > MAX_BLOB_BYTES) {
     throw new BlobTooLargeError(`Blob is ${meta.size} bytes, over the ${MAX_BLOB_BYTES}-byte read limit`);
   }

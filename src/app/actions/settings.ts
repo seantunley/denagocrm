@@ -7,8 +7,13 @@ import crypto from "crypto";
 import { basePrisma, prisma } from "@/lib/db";
 import { ciExactIdFilter } from "@/lib/ciExact";
 import { createSessionCookie, getActiveTenantId, requireUser, requireOwner } from "@/lib/auth";
-import { getDefaultPipeline, reorderPipelineStages, requireOwnedPipeline } from "@/lib/pipelines";
-import { stageTenantId } from "@/lib/pipelineTenantRule";
+import {
+  findOwnedPipelineForStage,
+  getDefaultPipeline,
+  reorderPipelineStages,
+  requireOwnedPipeline,
+} from "@/lib/pipelines";
+import { stageTenantId, UNREACHABLE_STAGE_MESSAGE } from "@/lib/pipelineTenantRule";
 import { putSetting, getSetting } from "@/lib/settings";
 import {
   WEATHER_CITIES_KEY,
@@ -148,45 +153,60 @@ export async function renameStage(id: string, formData: FormData) {
 export async function moveStage(id: string, direction: "up" | "down") {
   return asActionResult(async () => {
     await requireOwner();
-    const stage = await basePrisma.pipelineStage.findUnique({
-      where: { id },
-      select: { pipelineId: true },
-    });
-    if (!stage) refuse("That stage no longer exists — reload the page.");
-
-    // THE BOUNDARY, AND IT HAS TO BE HERE RATHER THAN AT THE WRITE.
+    // THE LOOKUP AND THE GATE ARE ONE STATEMENT. THAT IS THE WHOLE FIX.
     //
     // `reorderPipelineStages()` already refuses a pipeline this workspace does not
-    // own (#457, which this change is stacked on), so the WRITE below was never at
-    // risk. Everything between here and it was: `id` is a bound server-action
-    // argument, which is a POST parameter and therefore forgeable, and the reads
-    // around it run on `basePrisma` — the documented RLS bypass — so a stage id
-    // belonging to another workspace would have returned that workspace's entire
-    // ordered stage list, and the two refusals below would then have reported the
+    // own (#457), so the WRITE below was never at risk. Everything upstream of it
+    // was: `id` is a bound server-action argument, which is a POST parameter and
+    // therefore forgeable, and the reads around it run on `basePrisma` — the
+    // documented RLS bypass — so a stage id belonging to another workspace returned
+    // that workspace's entire ordered stage list and the refusals below reported the
     // stage's POSITION in it ("already at the end") before anything checked
-    // ownership. A read leak and an oracle, both upstream of the guard that would
-    // eventually have refused.
+    // ownership. #466 closed that by putting the gate here, above the list.
     //
-    // The lookup above stays unscoped by necessity: `PipelineStage.tenantId` is
-    // NULL on every legacy row while enforcement is dormant, so the stage cannot
-    // answer this question about itself — the parent pipeline is what carries a
-    // real owner. It selects `pipelineId` and nothing else, and that value is used
-    // for exactly one thing: as the key to this gate. Nothing read from a row
-    // outside the boundary reaches the caller, the response, or the log.
-    await requireOwnedPipeline(stage.pipelineId);
+    // What #466 left, and #458's sweep then named, is one bit finer. The lookup was
+    // still an unscoped `findUnique` by that forgeable id, sitting BEFORE the gate,
+    // and the comment that used to stand here argued it was contained because
+    // "nothing read from a row outside the boundary reaches the caller, the
+    // response, or the log". True of the VALUE. False of the BRANCH:
+    //
+    //   - a stage id owned by another workspace RESOLVED, so control reached
+    //     `requireOwnedPipeline`, which fails by `throw new Error("Pipeline not
+    //     found")` — rendered by asActionResult as the generic sentence and a
+    //     reference code;
+    //   - a stage id that existed NOWHERE failed one line earlier at `refuse(…)`,
+    //     which renders verbatim.
+    //
+    // Two distinguishable answers to "is there such a stage?" is a one-bit
+    // cross-workspace existence oracle. Narrow — the caller must already hold an id
+    // — and real, and a comment about where the value went could never have fixed
+    // it, because the value was never what was being read.
+    //
+    // So the read now carries the ownership predicate itself: one JOIN through
+    // "SalesPipeline", scoped to the acting workspace, in which "not yours" and
+    // "not there" are the same empty result. ONE refusal, ONE sentence, and a
+    // refusal logs nothing — so the two cases share the response and the log.
+    const pipeline = await findOwnedPipelineForStage(id);
+    if (!pipeline) refuse(UNREACHABLE_STAGE_MESSAGE);
 
+    // Bounded by a `pipelineId` the statement above proved this workspace owns —
+    // the same containment argument as the `aggregate` in createStage, and it holds
+    // here for the same reason: the parent is the boundary, and it has been applied.
     const stages = await basePrisma.pipelineStage.findMany({
-      where: { pipelineId: stage.pipelineId },
+      where: { pipelineId: pipeline.id },
       orderBy: { order: "asc" },
       select: { id: true },
     });
     const index = stages.findIndex((row) => row.id === id);
     const swapWith = direction === "up" ? index - 1 : index + 1;
-    if (index < 0) refuse("That stage no longer exists — reload the page.");
+    // Only reachable if the stage was deleted between the two reads. The SAME
+    // sentence as the unresolvable case above, from the same constant, so a race
+    // cannot become a third distinguishable answer either.
+    if (index < 0) refuse(UNREACHABLE_STAGE_MESSAGE);
     if (swapWith < 0 || swapWith >= stages.length) refuse("That stage is already at the end.");
     const ids = stages.map((row) => row.id);
     [ids[index], ids[swapWith]] = [ids[swapWith], ids[index]];
-    await reorderPipelineStages(stage.pipelineId, ids);
+    await reorderPipelineStages(pipeline.id, ids);
     revalidatePath("/settings");
     revalidatePath("/leads");
   });
@@ -462,7 +482,11 @@ export async function updateOwnAvatar(
     return { error: "That file is not a supported JPG, PNG or WebP image." };
   }
   const extension = mimeType === "image/jpeg" ? ".jpg" : mimeType === "image/png" ? ".png" : ".webp";
-  const nextRef = await saveFile(buffer, `profile${extension}`, mimeType);
+  // A profile photo belongs to the USER row it is stored on, verbatim — not to
+  // whichever workspace they happened to be acting in when they uploaded it, which
+  // would move the same person's photo between prefixes as they switch workspaces.
+  // A global owner has no tenantId, and null is the honest answer for them.
+  const nextRef = await saveFile(buffer, `profile${extension}`, mimeType, user.tenantId);
   try {
     await prisma.user.update({
       where: { id: user.id },
