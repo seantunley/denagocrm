@@ -116,10 +116,13 @@ export const CUSTOMER_RECORD_WRITE_PERMISSIONS = [
 export async function getUserTeamIds(userId: string): Promise<string[]> {
   try {
     const scope = await actingScopeClass();
-    if (scope.mode === "closed") return [];
-    const tenantFilter = scope.mode === "tenant"
-      ? Prisma.sql`AND "tenantId" = ${scope.tenantId}`
-      : Prisma.empty;
+    // Neither `closed` nor `global` may run this unfiltered. `global` used to
+    // fall through to `Prisma.empty` — no predicate — which for an unresolvable
+    // session (stale claim, or ambiguous across memberships) returned every
+    // workspace's teams, and those ids then widen the lead scope and the reports
+    // people-filter built on top of them.
+    if (scope.mode !== "tenant") return [];
+    const tenantFilter = Prisma.sql`AND "tenantId" = ${scope.tenantId}`;
     const rows = await basePrisma.$queryRaw<Array<{ teamId: string }>>`
       SELECT DISTINCT scope."teamId"
       FROM (
@@ -142,28 +145,51 @@ async function scopePermissions(user: PermissionUser): Promise<Set<string> | nul
   return permissions;
 }
 
-/** Resolve the acting workspace for a bypass-client single-record lookup. */
-async function actingRecordPredicate(context: string): Promise<{ tenantId?: string | null }> {
+/**
+ * Resolve the acting workspace for a bypass-client single-record lookup.
+ *
+ * `global` IS A REFUSAL, not a background job — see the long note on
+ * {@link actingListScope}. Every caller here holds a `PermissionUser`, so a
+ * session exists by construction; `global` means that session could not be
+ * resolved to a workspace, and answering `{}` there hands an unfiltered
+ * `basePrisma` lookup any tenant's record by id.
+ */
+async function actingRecordPredicate(context: string): Promise<{ tenantId: string }> {
   const scope = await actingScopeClass();
   if (scope.mode === "tenant") return { tenantId: scope.tenantId };
-  if (scope.mode === "closed") {
-    throw new TenantScopeError(
-      `${context}: tenant enforcement is on but this request has no tenant scope. ` +
-        "A global owner without a resolved tenant must use the platform console, not tenant-scoped data.",
-    );
-  }
-  return {};
+  throw new TenantScopeError(
+    `${context}: this request has no resolvable workspace. A global owner without a ` +
+      "resolved tenant must use the platform console; a session that cannot resolve one — " +
+      "stale, or ambiguous across several memberships — must sign in again.",
+  );
 }
 
-/** Resolve the acting workspace for a bypass-client list query. */
-async function actingListScope(): Promise<{ tenantId?: string } | null> {
+/**
+ * Resolve the acting workspace for a bypass-client list query. `null` means
+ * fail closed: the caller returns an empty list rather than querying.
+ *
+ * WHY `global` IS NOT `{}` ANY MORE. This returned `{}` — no filter — on the
+ * reasoning that `global` means "cron / webhook / queue drain, which has no
+ * session and predates tenancy". That is wrong for these helpers and it failed
+ * OPEN in exactly the states that most need a boundary.
+ *
+ * While enforcement is DORMANT — every environment today — `actingScopeClass()`
+ * answers `global` whenever the session cannot be resolved to a tenant at all:
+ * a session minted before the `tid` claim existed, a claim gone stale after a
+ * membership was removed or a tenant suspended, and — the one that matters —
+ * a claim that became AMBIGUOUS because the user holds two or more active
+ * memberships, which `honoredTenantClaim()` deliberately drops to null rather
+ * than guess at. The moment a second workspace exists, that last case is
+ * ordinary, not exotic.
+ *
+ * So a signed-in person in any of those states got no predicate at all, and
+ * these lists back nearly every screen in the product. There is no legitimate
+ * sessionless caller to preserve `{}` for: every one of these helpers takes a
+ * `PermissionUser`, which only exists downstream of `requireUser`. Fail closed.
+ */
+async function actingListScope(): Promise<{ tenantId: string } | null> {
   const scope = await actingScopeClass();
-  if (scope.mode === "closed") return null;
-  return scope.mode === "tenant" ? { tenantId: scope.tenantId } : {};
-}
-
-function isTenantListScope(scope: { tenantId?: string }): scope is { tenantId: string } {
-  return typeof scope.tenantId === "string" && scope.tenantId.length > 0;
+  return scope.mode === "tenant" ? { tenantId: scope.tenantId } : null;
 }
 
 /* Leads use raw SQL because teamId is additive and not part of the legacy Prisma Lead model. */
@@ -179,7 +205,11 @@ export async function getAccessibleLeadIds(user: PermissionUser): Promise<string
     : Prisma.empty;
 
   if (permissions === null || permissions.has("leads.view_all")) {
-    if (scope.mode === "global") return null;
+    // `[]`, not `null`. `null` from this helper means UNRESTRICTED, so returning
+    // it for an unresolvable session was a fail-open: a stale or ambiguous
+    // membership claim (see actingListScope) would have handed a view_all holder
+    // every workspace's leads. Nothing accessible is the honest answer.
+    if (scope.mode !== "tenant") return [];
     // The predicate is written out rather than interpolated via `leadTenant`:
     // `scope.mode` is narrowed to "tenant" by the guard above, so this is the
     // same SQL — but a fragment carries the tenant past the access sweep, which
@@ -255,9 +285,8 @@ export async function getAccessibleContactIds(user: PermissionUser): Promise<str
   if (!scope) return [];
 
   if (permissions === null || permissions.has("contacts.view_all")) {
-    if (!isTenantListScope(scope)) return null;
     const rows = await basePrisma.contact.findMany({
-      // `tenantId: scope.tenantId` rather than `...scope`: isTenantListScope has
+      // `tenantId: scope.tenantId` rather than `...scope`: actingListScope has
       // already narrowed this to a real workspace, so the two are identical at
       // runtime — but a spread hides the predicate from the tenant-access sweep,
       // which reads the call site and cannot see through it. Naming it is what
@@ -362,9 +391,8 @@ export async function getAccessibleQuoteIds(user: PermissionUser): Promise<strin
   if (!scope) return [];
 
   if (permissions === null || permissions.has("quotes.view_all")) {
-    if (!isTenantListScope(scope)) return null;
     const rows = await basePrisma.quote.findMany({
-      // `tenantId: scope.tenantId` rather than `...scope`: isTenantListScope has
+      // `tenantId: scope.tenantId` rather than `...scope`: actingListScope has
       // already narrowed this to a real workspace, so the two are identical at
       // runtime — but a spread hides the predicate from the tenant-access sweep,
       // which reads the call site and cannot see through it. Naming it is what
@@ -423,9 +451,8 @@ export async function getAccessibleVehicleIds(user: PermissionUser): Promise<str
   if (!scope) return [];
 
   if (permissions === null || permissions.has("vehicles.view_all")) {
-    if (!isTenantListScope(scope)) return null;
     const rows = await basePrisma.vehicle.findMany({
-      // `tenantId: scope.tenantId` rather than `...scope`: isTenantListScope has
+      // `tenantId: scope.tenantId` rather than `...scope`: actingListScope has
       // already narrowed this to a real workspace, so the two are identical at
       // runtime — but a spread hides the predicate from the tenant-access sweep,
       // which reads the call site and cannot see through it. Naming it is what
@@ -485,9 +512,8 @@ export async function getAccessibleJobCardIds(user: PermissionUser): Promise<str
   if (!scope) return [];
 
   if (permissions === null || permissions.has("jobcards.view_all")) {
-    if (!isTenantListScope(scope)) return null;
     const rows = await basePrisma.jobCard.findMany({
-      // `tenantId: scope.tenantId` rather than `...scope`: isTenantListScope has
+      // `tenantId: scope.tenantId` rather than `...scope`: actingListScope has
       // already narrowed this to a real workspace, so the two are identical at
       // runtime — but a spread hides the predicate from the tenant-access sweep,
       // which reads the call site and cannot see through it. Naming it is what
@@ -551,9 +577,8 @@ export async function getAccessibleDocumentIds(user: PermissionUser): Promise<st
   if (!scope) return [];
 
   if (permissions === null || permissions.has("documents.view_all")) {
-    if (!isTenantListScope(scope)) return null;
     const rows = await basePrisma.document.findMany({
-      // `tenantId: scope.tenantId` rather than `...scope`: isTenantListScope has
+      // `tenantId: scope.tenantId` rather than `...scope`: actingListScope has
       // already narrowed this to a real workspace, so the two are identical at
       // runtime — but a spread hides the predicate from the tenant-access sweep,
       // which reads the call site and cannot see through it. Naming it is what
@@ -651,7 +676,9 @@ export async function getAccessibleCaseIds(user: PermissionUser): Promise<string
     : Prisma.empty;
 
   if (permissions === null || permissions.has("cases.view_all")) {
-    if (scope.mode === "global") return null;
+    // `[]`, not `null` — same reasoning as getAccessibleLeadIds above: `null`
+    // means unrestricted, which is a fail-open for an unresolvable session.
+    if (scope.mode !== "tenant") return [];
     // Written out rather than interpolated via `caseTenant` — same SQL, but the
     // access sweep reads the statement and cannot see into a fragment. The
     // `WHERE TRUE` placeholder goes with it.

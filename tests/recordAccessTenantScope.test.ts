@@ -235,16 +235,34 @@ for (const entry of HELPERS) {
     });
   });
 
-  test(`${entry.helper}: with enforcement off and no scope, nothing changes`, async () => {
-    // The DEFAULT mode in every environment today. `establishStaffTenantScope`
-    // enters no scope at all unless TENANT_ENFORCEMENT=enforce, so the predicate
-    // is `{}` and the helper must behave exactly as it did before this change.
-    // A fix that quietly filtered on `tenantId: null` here would empty the app.
+  test(`${entry.helper}: a session that resolves NO workspace is refused, not unscoped`, async () => {
+    // THIS TEST USED TO ASSERT THE OPPOSITE, and the opposite was a fail-open.
+    //
+    // It read "with enforcement off and no scope, nothing changes" and required
+    // FOREIGN to be reachable, on the reasoning that dormant enforcement means
+    // the pre-tenancy behaviour and `{}` is not a filter. The flaw is what
+    // `global` actually covers. `actingScopeClass()` answers `global` whenever
+    // the SESSION cannot be resolved to one workspace — not only for a cron with
+    // no session at all. That includes a claim minted before `tid` existed, a
+    // claim gone stale after a membership was removed, and a claim that is
+    // AMBIGUOUS because the user holds two or more active memberships, which
+    // `honoredTenantClaim()` deliberately drops to null rather than guess at.
+    //
+    // So this asserted that a signed-in person in an ambiguous membership state
+    // may read any tenant's record by id. Every helper here sits in front of a
+    // write. The exceptional session state is exactly when the boundary has to
+    // hold, so an unresolvable scope now refuses.
+    //
+    // Nothing is lost for ordinary use: a session that resolves its sole active
+    // tenant takes the `tenant` branch, which the tests above cover.
     seed();
     spy.setPermissions([entry.viewAll]);
-    assert.equal(await ask(entry.helper, USER, SHARED), true);
-    assert.equal(await ask(entry.helper, USER, FOREIGN), true, "no scope is not a filter");
-    assert.equal(await ask(entry.helper, USER, GHOST), false, "…but a row that does not exist still is not there");
+    await assert.rejects(
+      () => ask(entry.helper, USER, SHARED),
+      TenantScopeError,
+      "an unresolvable session must refuse rather than answer from an unfiltered query",
+    );
+    await assert.rejects(() => ask(entry.helper, USER, FOREIGN), TenantScopeError);
   });
 
   test(`${entry.helper}: under enforcement a scopeless caller is refused, not unscoped`, async () => {

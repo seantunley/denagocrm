@@ -55,7 +55,13 @@ for (const [helper, next, permission, model] of findManyHelpers) {
       new RegExp(`if \\(permissions === null \\|\\| permissions\\.has\\(\\\"${permission.replace(".", "\\.")}\\\"\\)\\) return null`),
       "view_all must not short-circuit to an unfiltered caller",
     );
-    assert.match(src, /if \(!isTenantListScope\(scope\)\) return null;/, "only a genuinely global scope may return null");
+    // Was: /if \(!isTenantListScope\(scope\)\) return null;/ — "only a genuinely
+    // global scope may return null". That branch is gone, and so is the idea
+    // behind it. `null` means UNRESTRICTED to every caller, and an unresolvable
+    // session (stale claim, or ambiguous across memberships) is not a licence to
+    // read every workspace. actingListScope() now answers null-the-refusal for
+    // anything that is not a resolved tenant, and the helper turns that into [].
+    assert.match(src, /if \(!scope\) return \[\];/, "an unresolvable scope must deny, never open");
     assert.match(src, new RegExp(`basePrisma\\.${model}\\.findMany`), "tenant view_all must materialise tenant-owned ids");
     assert.match(
       src,
@@ -71,7 +77,8 @@ test("getAccessibleLeadIds: tenant view_all returns explicit tenant lead ids", (
   const unrestrictedAt = src.indexOf('permissions.has("leads.view_all")');
   assert.ok(scopeAt >= 0 && scopeAt < unrestrictedAt);
   assert.doesNotMatch(src, /if \(permissions === null \|\| permissions\.has\("leads\.view_all"\)\) return null/);
-  assert.match(src, /if \(scope\.mode === "global"\) return null;/);
+  // `[]`, not `null`: null means unrestricted to every caller of this helper.
+  assert.match(src, /if \(scope\.mode !== "tenant"\) return \[\];/, "an unresolvable scope must deny, never open");
   assert.match(
     src,
     /SELECT l\."id"[\s\S]*WHERE l\."deletedAt" IS NULL AND l\."tenantId" = \$\{scope\.tenantId\}/,
@@ -85,7 +92,8 @@ test("getAccessibleCaseIds: tenant view_all returns explicit tenant case ids", (
   const unrestrictedAt = src.indexOf('permissions.has("cases.view_all")');
   assert.ok(scopeAt >= 0 && scopeAt < unrestrictedAt);
   assert.doesNotMatch(src, /if \(permissions === null \|\| permissions\.has\("cases\.view_all"\)\) return null/);
-  assert.match(src, /if \(scope\.mode === "global"\) return null;/);
+  // `[]`, not `null`: null means unrestricted to every caller of this helper.
+  assert.match(src, /if \(scope\.mode !== "tenant"\) return \[\];/, "an unresolvable scope must deny, never open");
   assert.match(
     src,
     /SELECT c\."id" FROM "CustomerCase" c WHERE c\."tenantId" = \$\{scope\.tenantId\}/,
