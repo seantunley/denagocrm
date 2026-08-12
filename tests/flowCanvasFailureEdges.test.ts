@@ -156,3 +156,38 @@ test("deleting a node clears every edge that pointed at it, not just the success
   assert.match(builder, /if \(routed\.failureNext === removedId\) cleared\.failureNext = undefined;/);
   assert.match(builder, /if \(routed\.unavailableNext === removedId\) cleared\.unavailableNext = undefined;/);
 });
+
+test("no handle inside a row carries a card-relative offset", () => {
+  /*
+   * THE VISUAL BUG, stated as a rule.
+   *
+   * Every branch handle on a node card lives inside its own `relative` row, so
+   * an absolute `top` on the handle resolves against THAT ROW — not the card.
+   * The offsets were card-relative (`92px`, `118px`, `144px`, `100 + i*26`), so
+   * each dot was thrown roughly its own value BELOW its row and landed outside
+   * the card, dragging its edge's anchor into empty canvas with it. On screen it
+   * read as two loose coloured dots floating under the node and an edge starting
+   * from nowhere.
+   *
+   * Left alone, React Flow centres a handle in its positioning parent, which is
+   * exactly the row holding the label. That is also the only form that survives a
+   * wrapped option label or a taller summary block; a fixed pixel offset is wrong
+   * again the moment any row above it changes height, which is why this is a rule
+   * rather than six corrected numbers.
+   */
+  const src = readFileSync(
+    path.join(path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."), "src/components/FlowBuilder.tsx"),
+    "utf8",
+  );
+
+  const handles = src.match(/<Handle[^>]*>/g) ?? [];
+  assert.ok(handles.length >= 6, `expected the branch handles, found ${handles.length}`);
+
+  const offenders = handles.filter((h) => /\btop:\s*[`"']?\$?\{?\s*\d/.test(h));
+  assert.deepEqual(
+    offenders,
+    [],
+    "a handle sets an absolute top; inside its relative row that is measured from the ROW, " +
+      "so any card-relative value puts the dot outside the card:\n" + offenders.join("\n"),
+  );
+});
