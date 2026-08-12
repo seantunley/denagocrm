@@ -22,10 +22,12 @@ import {
   useSortable,
   type SortingStrategy,
 } from "@dnd-kit/sortable";
-import { GripVertical, Plus, Settings2, Trash2, X, Check, Eye } from "lucide-react";
+import { Eye, GripVertical, Plus, Settings2, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { CardConfig, SectionConfig, ViewConfig } from "@/lib/dashboard/config";
+import { isContainerCard } from "@/lib/dashboard/cardTree";
 import { useEditor, newId } from "./EditorProvider";
+import ContainerContents, { cardLabel } from "./ContainerContents";
 
 /**
  * The dashboard as the user sees it, in both modes.
@@ -408,7 +410,7 @@ function SortableCard({
   node: React.ReactNode;
   onConfigure: (cardId: string) => void;
 }) {
-  const { editing, removeCard } = useEditor();
+  const { editing, removeCard, moveCard, liftCard } = useEditor();
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, isDragging } = useSortable({
     id: card.id,
     disabled: !editing,
@@ -476,6 +478,30 @@ function SortableCard({
         </div>
       )}
 
+      {/*
+          A container draws its children on the SERVER, so the editor has no
+          sortable node for any of them: drag can only ever reorder the top level,
+          and a card inside a group had no settings button, no remove, and no way
+          back out. It was reachable only by editing the raw JSON.
+
+          ContainerContents lists them - DESCENDANTS, not just children, so a card
+          two containers down is reachable too. Every row gets the same three
+          actions this card has plus a lift, and they act on the CONFIG rather
+          than on rendered nodes, so they work at any depth without a second grid
+          implementation.
+      */}
+      {editing && isContainerCard(card) && (
+        <ContainerContents
+          cards={card.cards}
+          actions={{
+            onConfigure,
+            onMove: moveCard,
+            onLift: liftCard,
+            onRemove: removeCard,
+          }}
+        />
+      )}
+
       {/* The middle link in the height chain. min-h-0 because a flex child
           otherwise refuses to shrink below its content, which would break
           scrolling inside a card shorter than what it holds. */}
@@ -516,13 +542,6 @@ function CardPlaceholder({ card }: { card: CardConfig }) {
       </p>
     </div>
   );
-}
-
-/** A human name for a card, for drag overlays, labels and screen readers. */
-export function cardLabel(card: CardConfig): string {
-  if (card.title) return card.title;
-  if (card.type === "builtin") return card.card.replace(/-/g, " ");
-  return card.type;
 }
 
 function hasDrawn(section: SectionConfig, slots: CardSlots): boolean {

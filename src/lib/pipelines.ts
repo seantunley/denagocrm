@@ -2,7 +2,12 @@ import crypto from "crypto";
 import { Prisma } from "@prisma/client";
 import { basePrisma } from "./db";
 import { actingTenantId } from "./actingTenant";
-import { pipelineScopeFor, pipelineScopeSql, stageTenantId } from "./pipelineTenantRule";
+import {
+  pipelineScopeFor,
+  pipelineScopeSql,
+  stageTenantId,
+  type TenantScopeAlias,
+} from "./pipelineTenantRule";
 import { currentScopeClass, writeTenantId } from "./tenantWrite";
 
 export type SalesPipelineRow = {
@@ -75,8 +80,15 @@ export type ForecastLeadRow = {
  * The decision itself — STRICT equality, with no "NULL means the founding tenant"
  * fallback — lives in {@link pipelineScopeFor}, which a test executes with two
  * concrete tenant ids. This function is only the seam that turns it into SQL.
+ *
+ * EXPORTED for the two forecast statements that do not live in this file: the
+ * audit `before` read in src/app/actions/pipelines.ts and the snapshot-history
+ * query in /forecast/page.tsx. Both were scoped by nothing (`writeTenantId()`,
+ * null while dormant; and in the history's case, no predicate at all), and both
+ * take this one rather than growing a predicate of their own — a rule that exists
+ * twice is a rule that gets fixed once.
  */
-async function pipelineTenantFilter(alias: '"tenantId"' | 'p."tenantId"' = '"tenantId"') {
+export async function pipelineTenantFilter(alias: TenantScopeAlias = '"tenantId"') {
   return pipelineScopeFilter(await actingTenantId(), alias);
 }
 
@@ -102,7 +114,7 @@ async function pipelineTenantFilter(alias: '"tenantId"' | 'p."tenantId"' = '"ten
  * This is synchronous on purpose: it takes an owner rather than going and
  * finding one, so a caller cannot accidentally re-resolve through it.
  */
-function pipelineScopeFilter(tenantId: string, alias: '"tenantId"' | 'p."tenantId"' = '"tenantId"') {
+function pipelineScopeFilter(tenantId: string, alias: TenantScopeAlias = '"tenantId"') {
   return pipelineScopeSql(pipelineScopeFor({ actingTenantId: tenantId }), alias);
 }
 
@@ -139,6 +151,56 @@ export async function requireOwnedPipeline(id: string, actingTenant?: string): P
   const pipeline = rows[0];
   if (!pipeline) throw new Error("Pipeline not found");
   return pipeline;
+}
+
+/**
+ * The same gate, keyed by a STAGE id: resolve the stage's owning pipeline, or
+ * nothing. ONE statement, carrying the ownership predicate itself.
+ *
+ * WHY THIS IS NOT `findUnique` FOLLOWED BY {@link requireOwnedPipeline}. That is
+ * what `moveStage` used to do, and the two-step shape leaks a bit even when the
+ * value it reads never escapes:
+ *
+ *   - a stage id owned by ANOTHER workspace resolves on the unscoped read, reaches
+ *     the gate, and fails with `throw new Error("Pipeline not found")` — rendered
+ *     by asActionResult as the generic sentence plus a reference code;
+ *   - a stage id that exists NOWHERE fails at the `if (!stage) refuse(…)` one line
+ *     earlier — rendered verbatim.
+ *
+ * Two distinguishable responses to the same question is a one-bit cross-workspace
+ * existence oracle on stage ids. Folding the lookup into the gate collapses both to
+ * an empty result set, so the caller has one branch to render and there is no
+ * second outcome to compare it against.
+ *
+ * Returns `null` rather than throwing on purpose: the caller refuses ONCE, with the
+ * one sentence `UNREACHABLE_STAGE_MESSAGE` in pipelineTenantRule.ts, and a refusal
+ * logs nothing — so the two cases share the response AND the (empty) log. A throw
+ * here would have to be caught and flattened by every caller to get the same
+ * guarantee, which is a rule held in prose instead of in the type.
+ *
+ * The boundary is on the PARENT, matching {@link stageTenantId}: `PipelineStage`
+ * carries a NULL `tenantId` on every row written while enforcement was dormant, so
+ * a predicate on the stage's own column would refuse legitimate work; the pipeline
+ * is the row with a real owner. Strictly stronger than what it replaces —
+ * `requireOwnedPipeline` applies exactly this predicate to exactly this pipeline,
+ * one statement later.
+ */
+export async function findOwnedPipelineForStage(
+  stageId: string,
+  actingTenant?: string,
+): Promise<OwnedPipeline | null> {
+  const scope =
+    actingTenant === undefined
+      ? await pipelineTenantFilter('p."tenantId"')
+      : pipelineScopeFilter(actingTenant, 'p."tenantId"');
+  const rows = await basePrisma.$queryRaw<OwnedPipeline[]>`
+    SELECT p."id", p."tenantId", p."active"
+    FROM "PipelineStage" s
+    JOIN "SalesPipeline" p ON p."id" = s."pipelineId"
+    WHERE s."id" = ${stageId} AND p."deletedAt" IS NULL ${scope}
+    LIMIT 1
+  `;
+  return rows[0] ?? null;
 }
 
 /**
@@ -478,19 +540,48 @@ export async function archivePipeline(id: string) {
   `;
 }
 
+/**
+ * The open deals a forecast is built from — the LIST on /forecast and, through
+ * {@link summarizeForecast}, the TOTALS both that page and every stored snapshot
+ * report.
+ *
+ * Its only boundary used to be `tenantFilter`, which is `Prisma.empty` while
+ * enforcement is dormant — i.e. in every environment we run — on a `basePrisma`
+ * statement, which is the documented RLS bypass. So the query had no tenant
+ * predicate from any direction, and the `pipelineId` filter was the only thing
+ * that ever narrowed it: pick a pipeline and you saw one workspace's deals by
+ * accident; leave it on "All pipelines", which is the default, and you summed
+ * every workspace's open pipeline into one number.
+ *
+ * That is a worse failure than a foreign record appearing in a list, because
+ * nothing on screen looks foreign. A total is not inspectable — an open-pipeline
+ * figure that includes another dealer's deals reads exactly like a good month.
+ * And `captureForecastSnapshot` PERSISTS it, so the wrong number outlives the bug.
+ *
+ * `actingTenant` is the caller's ALREADY-RESOLVED owner. `captureForecastSnapshot`
+ * passes it so the workspace the snapshot is stamped with and the workspace whose
+ * deals it totals come from ONE reading of the principal — two readings could
+ * disagree and stamp tenant A's row with tenant B's revenue. Omitted, this
+ * resolves its own, which is right for the page render.
+ */
 export async function listForecastLeads(input: {
   pipelineId?: string | null;
   teamId?: string | null;
   userId?: string | null;
   closeFrom?: Date | null;
   closeTo?: Date | null;
-}): Promise<ForecastLeadRow[]> {
+}, actingTenant?: string): Promise<ForecastLeadRow[]> {
   const pipelineId = input.pipelineId ?? null;
   const teamId = input.teamId ?? null;
   const userId = input.userId ?? null;
   const closeFrom = input.closeFrom ?? null;
   const closeTo = input.closeTo ?? null;
-  const scope = tenantFilter('l."tenantId"');
+  // `l."tenantId"` and not `p.`/`s.`: the joined pipeline and stage are already
+  // the lead's own, so scoping either of those would bound the JOIN and not the
+  // set of deals being summed.
+  const scope = actingTenant === undefined
+    ? await pipelineTenantFilter('l."tenantId"')
+    : pipelineScopeFilter(actingTenant, 'l."tenantId"');
   return basePrisma.$queryRaw<ForecastLeadRow[]>`
     SELECT l."id", l."title", l."name", l."status", l."valueCents", l."estimatedCostCents",
       l."probability", l."forecastCategory", l."expectedCloseDate", l."pipelineId", p."name" AS "pipelineName",
@@ -533,13 +624,21 @@ export async function updateLeadForecast(leadId: string, input: {
   estimatedCostCents?: number | null;
   teamId?: string | null;
 }) {
-  writeTenantId();
-  const leadScope = tenantFilter('"tenantId"');
+  // ONE resolution for the team check and the write it authorises. `writeTenantId()`
+  // — which this replaces — is null while dormant, so `tenantFilter` was empty and
+  // the UPDATE reached any workspace's lead by id; `actingTenantId()` still calls
+  // `writeTenantId()` internally, so the fail-closed throw under enforcement is
+  // unchanged.
+  const tenantId = await actingTenantId();
+  const leadScope = pipelineScopeFilter(tenantId);
   const allowed = new Set(["pipeline", "best_case", "commit", "closed", "omitted"]);
   if (!allowed.has(input.forecastCategory)) throw new Error("Invalid forecast category");
   if (input.teamId) {
+    // The team must be one THIS workspace owns. Unscoped, a team id from the
+    // forecast form attached another workspace's team to this lead — a pointer
+    // across the boundary written into a row that then reports under both.
     const team = await basePrisma.$queryRaw<Array<{ id: string }>>`
-      SELECT "id" FROM "Team" WHERE "id" = ${input.teamId} AND "active" = true AND "deletedAt" IS NULL LIMIT 1
+      SELECT "id" FROM "Team" WHERE "id" = ${input.teamId} AND "active" = true AND "deletedAt" IS NULL ${leadScope} LIMIT 1
     `;
     if (!team[0]) throw new Error("Selected team is not active");
   }
@@ -567,9 +666,16 @@ export async function captureForecastSnapshot(input: {
   // already claimed, so nothing else would ever pick it up.
   // Resolved once and used for both: the boundary the pipelineId is checked
   // against, and the owner stamped onto the snapshot row.
+  // The same resolution ALSO bounds the deals being totalled. `listForecastLeads`
+  // was called with no pipelineId whenever the snapshot was taken with "All
+  // pipelines" selected — the default — and its own scope was `tenantFilter`,
+  // empty while dormant. So the row stamped with THIS tenant recorded the open,
+  // weighted, commit and best-case value of EVERY workspace, and kept it: the
+  // snapshot is persisted, so the wrong total survives the fix that stops new
+  // ones being written.
   const tenantId = await actingTenantId();
   if (input.pipelineId) await requireOwnedPipeline(input.pipelineId, tenantId);
-  const leads = await listForecastLeads(input);
+  const leads = await listForecastLeads(input, tenantId);
   const summary = summarizeForecast(leads);
   await basePrisma.$executeRaw`
     INSERT INTO "ForecastSnapshot" (
