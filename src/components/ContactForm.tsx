@@ -1,3 +1,29 @@
+"use client";
+
+/**
+ * A CLIENT component, like every one of its six sibling capture forms
+ * (LeadForm, PartForm, ProductForm, VehicleForm, StockUnitForm,
+ * StockPurchaseOrderForm).
+ *
+ * It was the one that never carried the directive, and that was not a
+ * deliberate difference — it is the only consumer of `capture-form` that ran on
+ * the server, so it was the only one passing `icon={MessageSquareText}` (a
+ * FUNCTION) across the server→client boundary into `CaptureSection`. React
+ * refuses that: "Functions cannot be passed directly to Client Components".
+ * Six of those errors were thrown on every render of a contact page, one per
+ * CaptureSection.
+ *
+ * Nothing here needs a server: no `await`, no database, no `server-only`
+ * import, and all four of its children (SaveForm, DuplicateGuard,
+ * ContactKindFields, ContactSubmitButton) are already client components.
+ * QuickCreateDialog — itself a client component — already imports this file, so
+ * it was in the client bundle regardless; the directive only makes that
+ * consistent, rather than depending on which parent happened to pull it in.
+ *
+ * The `action` prop stays a server action, which is allowed to cross the
+ * boundary and is exactly what the sibling forms already do.
+ */
+
 import type { ActionResult } from "@/lib/actionResultTypes";
 import { SaveForm } from "@/components/SaveForm";
 import {
