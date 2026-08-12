@@ -629,7 +629,10 @@ export async function createQuoteRevision(quoteId: string) {
     const validDaysRaw = await getSetting("QUOTE_VALID_DAYS");
     const validDays = validDaysRaw ? parseInt(validDaysRaw, 10) : 7;
     const validUntil = addDays(new Date(), isNaN(validDays) ? 7 : validDays);
-    // Fallback owner for a pre-tenancy original; the original's own tenant wins.
+    // The ACTING workspace, and here it is a PREDICATE, not just a fallback owner.
+    // `actingTenantId()` resolves the validated session workspace while enforcement
+    // is dormant, which `writeTenantId()` does not — dormant is every environment
+    // we run, so this is the only value that names the right workspace today.
     const actingTenant = await actingTenantId();
 
     // One transaction: lock the original FOR UPDATE so two concurrent revision
@@ -638,10 +641,21 @@ export async function createQuoteRevision(quoteId: string) {
     // data — items with discount/tax/cost/optional/selected/sort, fees, tax mode and
     // deposit (the old copy dropped everything but description/qty/price/product/
     // colour, #10) — then supersede the original. All commit together.
+    //
+    // AND ONLY A QUOTE THIS WORKSPACE OWNS. This is a `basePrisma` transaction —
+    // the RLS bypass — and `requireQuoteAccess` above authorises the quote against
+    // an access LIST whose tenant predicate is inert while enforcement is dormant,
+    // so it said nothing about which workspace the row belongs to. Without the
+    // predicate below, an admin in workspace A could revise workspace B's quote and
+    // the copy was the smaller half of the damage: superseding the ORIGINAL makes it
+    // read-only to its owner and kills its live signing link, and DELETES NOTHING,
+    // so nothing that counts rows would ever have noticed. The predicate has to be
+    // on the lock, the read AND the supersede — a filtered read in front of an
+    // unfiltered update is not a boundary, it is a race (#459).
     const revision = await basePrisma.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT id FROM "Quote" WHERE id = ${quoteId} FOR UPDATE`;
-      const original = await tx.quote.findUnique({
-        where: { id: quoteId },
+      await tx.$executeRaw`SELECT id FROM "Quote" WHERE id = ${quoteId} AND "tenantId" = ${actingTenant} FOR UPDATE`;
+      const original = await tx.quote.findFirst({
+        where: { id: quoteId, tenantId: actingTenant },
         include: { items: true, fees: true },
       });
       if (!original || original.deletedAt || original.supersededAt || original.signedAt) return null;
@@ -654,6 +668,12 @@ export async function createQuoteRevision(quoteId: string) {
       // to be revising it — the acting workspace is only the fallback for a row
       // that predates tenancy. Copying without carrying this left every revision
       // and all of its copied children unowned.
+      //
+      // The read above now proves the two are the SAME workspace, so this is a
+      // second layer rather than the boundary. It is kept in the inherit-from-the
+      // -parent form deliberately: that is the rule for a child row, and writing
+      // `actingTenant` here would read as "the reviser owns the copy", which is
+      // the mistake this line exists to prevent.
       const tenantId = original.tenantId ?? actingTenant;
       const created = await tx.quote.create({
         data: {
@@ -709,10 +729,21 @@ export async function createQuoteRevision(quoteId: string) {
           data: cfValues.map((v) => ({ defId: v.defId, recordId: created.id, value: v.value, tenantId })),
         });
       }
-      await tx.quote.update({
-        where: { id: original.id },
+      // THE ROW BEING CHANGED CARRIES THE PREDICATE. `update({ where: { id } })`
+      // on the bypass client would supersede whatever row that id names; the
+      // authorisation and the read that happened earlier are not a boundary on
+      // THIS write. updateMany + a count check, so the boundary is expressed on
+      // the statement that does the damage and a zero-row match is loud.
+      const superseded = await tx.quote.updateMany({
+        where: { id: original.id, tenantId: actingTenant, deletedAt: null, supersededAt: null, signedAt: null },
         data: { supersededAt: new Date(), signToken: null, signLinkCreatedAt: null, reminderSentAt: null },
       });
+      // THROW, not return: the revision and every child row it copied are already
+      // written in this transaction, and returning would commit them beside an
+      // original that was never superseded — two live quotes for one deal.
+      if (superseded.count !== 1) {
+        throw new ActionRefusal("Could not create the revision — reload and try again.");
+      }
       return { id: created.id, number: created.number, originalNumber: original.number, leadId: original.leadId, contactId: original.contactId };
     });
 

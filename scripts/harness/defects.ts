@@ -100,6 +100,34 @@ export async function runDefectProbes(
    * saveQuoteDraft carries the quote id INSIDE the payload rather than in the
    * URL, so a forged id here is a single edited field in a POST body. Asserted
    * on the victim's stored terms, not on the return value.
+   *
+   * ⚠ THIS PROBE IS GREEN FOR THE WRONG REASON WHILE DORMANT. DO NOT READ IT AS
+   * "saveQuoteDraft IS SAFE". It is not: the edit path locks and rewrites the
+   * quote with a bare `where: { id }` on the BYPASS client, with no tenant
+   * predicate on the lock, the read, the header update, or the QuoteItem/QuoteFee
+   * rewrite. What refuses THIS payload is a pair of unrelated BUSINESS rules:
+   *
+   *   `existing.leadId && existing.contactId !== data.contactId`
+   *       "The customer on a lead-linked quote cannot be changed." B's fixture
+   *       quote has a leadId and the payload names A's contact, so it throws
+   *       before any write. Send B's OWN contactId and the rule does not fire.
+   *   `prisma.contact.findUnique` returns nothing
+   *       by the time these probes run, the matrix DELETE check has already
+   *       soft-deleted B's fixture contact, so "That customer is no longer
+   *       available" refuses the repaired payload too.
+   *
+   * MEASURED, not inferred. Driven against a FRESHLY PLANTED live victim contact
+   * and a LEADLESS victim quote — neither rule reachable — A rewrote B's terms and
+   * wrote a QuoteItem into B's quote, and the new line came out stamped with B's
+   * tenantId, so it reads as a perfectly ordinary row of B's. Under enforcement
+   * the same call is refused. That is a live dormant-only cross-tenant write, of
+   * the same class as probes 8 and 11 and NOT fixed by the PR that added this
+   * note; it is called out in that PR's sweep for a follow-up of its own.
+   *
+   * Making this probe honest means planting its own victim quote the way probe 8
+   * does. It is left as-is here deliberately, rather than quietly turned red in a
+   * PR that does not carry the fix — but a reviewer who sees it tick must know
+   * that the tick is about two business rules and nothing else.
    */
   {
     const before = await columnOf(raw, "Quote", victim.rows.quoteId, "terms");
@@ -344,13 +372,20 @@ export async function runDefectProbes(
    *
    * #459 proved this by asserting on SOURCE TEXT. This asserts on the four
    * PERSISTED tenantId columns, read back through the bypass client.
+   *
+   * IT IS ALSO THE CONTROL FOR PROBE 8, which is why `ownRevisionWorked` leaves
+   * this block. Probe 8 renders a verdict on a revision that does NOT appear, and
+   * "no revision appeared" only means something once the identical call has been
+   * shown to produce one on a quote the actor genuinely owns.
    */
+  let ownRevisionWorked = false;
   {
     const planted = await plantQuoteWithChildren(
       raw, actorA.tenant.tenantId, "own", actorA.tenant.rows.contactId, actorA.tenant.rows.leadId,
     );
     const attempt = await swallow(() => actorA.as(() => quotes.createQuoteRevision(planted.quoteId)));
     const revisionId = await revisionOf(raw, planted.quoteId);
+    ownRevisionWorked = revisionId != null;
 
     if (!revisionId) {
       out.push(result("OWN", "Quote", "a revision and every child row it copies carry the tenant",
@@ -389,21 +424,52 @@ export async function runDefectProbes(
    * `createQuoteRevision` returns null for a deleted original — so a probe aimed
    * there would be refused on a BUSINESS rule and read as the boundary holding.
    *
-   * REACHABILITY IS MEASURED FIRST, and it is what gives "no revision was
-   * created" a meaning. That outcome has two completely opposite causes:
+   * "NO REVISION WAS CREATED" IS THE HARD CASE, because it has two opposite
+   * causes and the probe has to be able to tell them apart:
    *
-   *   the access gate refused    the boundary held before any stamp was chosen.
-   *                              This is the enforced-mode answer, and a pass.
-   *   the gate let A through,    the copy was attempted and the DATABASE threw
-   *   and the write failed       it out. The composite FK
-   *                              `Quote_tenantId_revisionOfId_fkey` requires a
-   *                              revision to carry its original's tenant, so
-   *                              this happens precisely when the code stamps
-   *                              the ACTING workspace — the defect. A FAILURE.
+   *   the action refused        `createQuoteRevision` now reads the original
+   *                             under `tenantId = actingTenant`, so B's quote
+   *                             resolves to nothing and the call returns before
+   *                             a tenant is ever chosen. THE BOUNDARY HELD.
+   *   the copy was attempted    the code stamped the ACTING workspace and the
+   *   and the DATABASE threw    composite FK `Quote_tenantId_revisionOfId_fkey`
+   *   it out                    — which requires a revision to carry its
+   *                             ORIGINAL's tenant — rejected it. A FAILURE.
    *
-   * Without the distinction the mutation that swaps `original.tenantId ??
-   * actingTenant` for `actingTenant` shows up as a SKIP rather than a failure,
-   * which the gate does not act on. Confirmed by running exactly that mutation.
+   * IT IS SETTLED BY A CONTROL, NOT BY THE ERROR TEXT, and not by reachability
+   * either. Probe 7 above drives the identical call against a quote A genuinely
+   * owns; `ownRevisionWorked` says whether that produced a revision. Only once it
+   * has can "nothing appeared here" mean anything, and if it has not, this probe
+   * says SKIP rather than claiming a pass it did not earn.
+   *
+   * Reachability is still measured, and it is still worth printing: while dormant
+   * `canAccessQuote` filters on `activeTenantPredicate`, which is `{}` with no
+   * scope established, so A CAN reach B's quote through the access gate. Recording
+   * that keeps the report honest about WHICH layer refused — the tenant predicate
+   * inside the transaction, not the permission check in front of it.
+   *
+   * ⚠ WHAT A GREEN TICK HERE DOES AND DOES NOT CERTIFY. Two layers now defend
+   * this, and the outer one shadows the inner. With the read predicate in place,
+   * the `original.tenantId ?? actingTenant` stamp is unreachable for a foreign
+   * quote, so the mutation that swaps it for a bare `actingTenant` no longer shows
+   * up here at all — the read returns nothing and the stamp is never evaluated.
+   * That is not this probe going soft: it is the same honest position probe 9
+   * takes below. What is asserted is the OUTCOME — B's original is not superseded
+   * (8a) and no copy of B's quote exists (8b) — which is the fact worth having,
+   * and the only one an outcome-based probe can honestly claim.
+   *
+   * Measured by mutation, against this database, one edit at a time:
+   *
+   *   the whole createQuoteRevision fix reverted    8a goes RED (18 → 19 dormant)
+   *   predicate off the supersede updateMany alone  stays green — the read
+   *     returns null for B's quote and the call bails before the update.
+   *   predicate off the lock and read alone         stays green — the copy runs,
+   *     then the count-checked updateMany matches zero rows and THROWS, rolling
+   *     the revision and every child row back with it.
+   *
+   * So each layer shadows the other, and only losing both is visible here. Both
+   * are kept for that reason, and because a check in front of an unguarded write
+   * is a race, not a boundary (#459).
    */
   {
     const planted = await plantQuoteWithChildren(
@@ -429,35 +495,48 @@ export async function runDefectProbes(
             "fail", `A superseded B's quote (supersededAt = ${superseded}) — it is now read-only to its owner`),
     );
 
-    /* 8b. And if a revision WAS created, it belongs to B. */
-    const inheritName = "a revision of another tenant's quote is not re-owned by the acting workspace";
-    if (!revisionId && !reachable) {
-      out.push(result("FORGERY", "Quote", inheritName, "pass",
-        `A cannot reach B's quote in this mode, so the access gate refused before any tenant was chosen — ` +
-        `${attempt.threw ? brief(attempt.error) : "the action declined"}`));
-    } else if (!revisionId) {
-      out.push(result("FORGERY", "Quote", inheritName, "fail",
-        `A COULD reach B's quote, drove createQuoteRevision, and NO revision row exists. On correct code ` +
-        `that call produces a revision carrying B's tenant. A copy that cannot be written at all means the ` +
-        `tenant the code chose was rejected by the database — Quote_tenantId_revisionOfId_fkey requires a ` +
-        `revision to carry its ORIGINAL's tenant, so it is rejected exactly when the ACTING workspace is ` +
-        `stamped instead. ${attempt.threw ? brief(attempt.error) : "the action returned without creating one"}`));
-    } else {
+    /* 8b. AND NO COPY OF B'S QUOTE MAY EXIST AT ALL.
+     *
+     * #479 asked the narrower question — if a revision was made, was it re-owned?
+     * — because the copy itself read as tolerable: a revision carrying B's tenant
+     * is at least B's row. It is not tolerable. It is a live draft sitting in a
+     * workspace that never asked for it, made by somebody with no business there,
+     * and the only reason to accept it was that the code could not then tell the
+     * difference. It can now, so this asks the whole question.
+     *
+     * The narrower question is still ANSWERED, in the failure detail — a copy that
+     * came out owned by the ACTING workspace is a different and worse fact than one
+     * that came out owned by B, and the report should say which happened.
+     */
+    const inheritName = "a revision attempt cannot copy another tenant's quote";
+    if (revisionId) {
       const stolen = await misownedRows(raw, victim.tenantId, [
         ["Quote", "id", revisionId],
         ["QuoteItem", "quoteId", revisionId],
         ["QuoteFee", "quoteId", revisionId],
         ["CustomFieldValue", "recordId", revisionId],
       ]);
-      out.push(
+      out.push(result("FORGERY", "Quote", inheritName, "fail",
         stolen.length === 0
-          ? result("FORGERY", "Quote", "a revision of another tenant's quote is not re-owned by the acting workspace",
-              "pass", `the revision and its ${planted.childCount} copied child row(s) stayed with ${victim.tenantId}`)
-          : result("FORGERY", "Quote", "a revision of another tenant's quote is not re-owned by the acting workspace",
-              "fail",
-              `A revised B's quote and the copy came out owned by the ACTING workspace: ${stolen.join("; ")}. ` +
-              `Revising is not a transfer of ownership.`),
-      );
+          ? `A copied B's quote: revision ${revisionId} and its ${planted.childCount} child row(s) exist. They ` +
+            `carry ${victim.tenantId}, so nothing was RE-OWNED — but A had no business making the copy, and it ` +
+            `is now a live draft in B's workspace that B did not create.`
+          : `A revised B's quote and the copy came out owned by the ACTING workspace: ${stolen.join("; ")}. ` +
+            `Revising is not a transfer of ownership.`));
+    } else if (!ownRevisionWorked) {
+      out.push(result("FORGERY", "Quote", inheritName, "skip",
+        `no revision of B's quote exists, but the CONTROL did not run either — probe 7 drove the same call ` +
+        `on a quote A genuinely owns and got no revision from it, so this call never reaches the copy and ` +
+        `"nothing was created" says nothing about tenancy. ` +
+        `${attempt.threw ? brief(attempt.error) : "the action declined"}`));
+    } else {
+      out.push(result("FORGERY", "Quote", inheritName, "pass",
+        `no copy of B's quote exists. The control holds — the identical call DID produce a revision on a ` +
+        `quote A owns — so the path reaches the copy and was refused here on the tenant predicate, ` +
+        `${reachable
+          ? "NOT by the access gate, which let A read B's quote in this mode"
+          : "with the access gate also refusing ahead of it"}. ` +
+        `${attempt.threw ? brief(attempt.error) : "the action declined"}`));
     }
     await dropPlantedQuote(raw, planted, revisionId);
   }
@@ -634,14 +713,69 @@ export async function runDefectProbes(
 
   /* ── 11. THE RESERVATION PATH, WHICH TAKES THE SAME FORGED id ───────────
    * `reservePart` earmarks stock without consuming it, and it takes `partId`
-   * from the form exactly as `addJobCardItem` does. It runs on the SCOPED client
-   * rather than the bypass one, so the boundary here is the db.ts guard and not
-   * an explicit predicate — which means the two paths fail in different modes
-   * and the pair is worth reporting separately.
+   * from the form exactly as `addJobCardItem` does. It is the SIBLING of the
+   * decrement #459 fixed in claimPartStock — same forged id, same form post,
+   * different entry point — and #459 did not reach it.
    *
-   * Judged on whether a PartReservation row against B's part exists afterwards.
+   * It also fails in a DIFFERENT MODE, which is why the pair is reported
+   * separately. claimPartStock runs on the bypass client, so it always needed an
+   * explicit predicate. reservePart runs on the SCOPED client, where it LOOKS
+   * guarded — and is not, because `scopeArgs` returns its args untouched unless
+   * `tenantEnforcing()`, which is false in every environment we run. Dormant, a
+   * "scoped" query is an unscoped one; that is the whole shape of this class.
+   *
+   * TWO CHECKS, because the two halves fail independently:
+   *
+   *   11a  A reservation A creates carries A's tenant. Nothing stamped it: the
+   *        scoped client does not stamp while dormant, so the row landed with
+   *        tenantId NULL — invisible to its own workshop at the flip, AND, worse,
+   *        trivially satisfying both composite FKs PartReservation carries
+   *        (MATCH SIMPLE treats a NULL key as met), so the database had been told
+   *        not to check the very row that crossed the boundary.
+   *   11b  A cannot reserve B's part at all.
+   *
+   * 11a IS ALSO THE CONTROL FOR 11b. Without it, "no reservation against B's
+   * part" could equally mean the module is off, the job card refused, or the
+   * quantity parse rejected — and would read as a pass.
+   *
+   * Measured by mutation, against this database, one edit at a time:
+   *
+   *   the whole reservePart fix reverted    BOTH go RED (18 → 20 dormant)
+   *   the tenantId STAMP dropped alone      11a RED, 11b green (18 → 19)
+   *     Which is the point of keeping 11a: the predicate on its own already stops
+   *     the forgery, so 11b alone would have signed off on rows landing unowned.
    */
   {
+    const ownPart = actorA.tenant.rows.partId;
+    const ownCard = actorA.tenant.rows.jobCardId;
+    const ownBefore = await reservationRows(raw, ownPart, ownCard);
+    const control = await swallow(() =>
+      actorA.as(() => jobcards.reservePart(ownCard, fd({ partId: ownPart, qty: "1" }))),
+    );
+    const ownAfter = await reservationRows(raw, ownPart, ownCard);
+    const created = ownAfter.filter((r) => !ownBefore.some((b) => b.id === r.id));
+    const ownName = "a reservation A creates carries the acting tenant";
+    if (created.length === 0) {
+      out.push(result("OWN", "PartReservation", ownName, "skip",
+        `A's reservation of A's OWN part created no row, so nothing was measured — ` +
+        `${control.threw ? brief(control.error) : "the action returned without creating one"}`));
+    } else {
+      const misowned = created.filter((r) => r.v !== actorA.tenant.tenantId);
+      out.push(
+        misowned.length === 0
+          ? result("OWN", "PartReservation", ownName, "pass",
+              `PartReservation ${created[0].id} stamped ${actorA.tenant.tenantId}`)
+          : result("OWN", "PartReservation", ownName, "fail",
+              `${misowned.map((r) => `${r.id} is owned by ${r.v === null ? "NOBODY (tenantId NULL)" : r.v}`).join("; ")}, ` +
+              `expected ${actorA.tenant.tenantId}. An unstamped reservation is invisible to its own workshop ` +
+              `after the flip, and its NULL tenantId disarms both composite FKs the row carries.`),
+      );
+    }
+    const pathWorks = created.length > 0;
+    await raw.$executeRawUnsafe(
+      `DELETE FROM "PartReservation" WHERE "id" = ANY($1::text[])`, created.map((r) => r.id),
+    ).catch(() => 0);
+
     const before = await countRows(raw,
       `SELECT count(*) AS n FROM "PartReservation" WHERE "partId" = $1`, victim.rows.partId);
     const attempt = await swallow(() =>
@@ -652,14 +786,20 @@ export async function runDefectProbes(
     const after = await countRows(raw,
       `SELECT count(*) AS n FROM "PartReservation" WHERE "partId" = $1`, victim.rows.partId);
     const name = "a forged partId cannot reserve another tenant's stock";
-    out.push(
-      after === before
-        ? result("FORGERY", "PartReservation", name, "pass",
-            attempt.threw ? `refused — ${brief(attempt.error)}` : "no reservation was created")
-        : result("FORGERY", "PartReservation", name, "fail",
-            `A earmarked B's stock: ${after - before} PartReservation row(s) now hold B's part against A's ` +
-            `job card, so B's available quantity drops with nothing on B's side to explain it`),
-    );
+    if (!pathWorks) {
+      out.push(result("FORGERY", "PartReservation", name, "skip",
+        `the control reservation on A's OWN part created nothing, so this call never reaches the reservation ` +
+        `write and "no reservation against B's part" would prove nothing`));
+    } else {
+      out.push(
+        after === before
+          ? result("FORGERY", "PartReservation", name, "pass",
+              attempt.threw ? `refused — ${brief(attempt.error)}` : "no reservation was created")
+          : result("FORGERY", "PartReservation", name, "fail",
+              `A earmarked B's stock: ${after - before} PartReservation row(s) now hold B's part against A's ` +
+              `job card, so B's available quantity drops with nothing on B's side to explain it`),
+      );
+    }
     await raw.$executeRawUnsafe(
       `DELETE FROM "PartReservation" WHERE "partId" = $1 AND "jobCardId" = $2`,
       victim.rows.partId, actorA.tenant.rows.jobCardId,
@@ -667,6 +807,28 @@ export async function runDefectProbes(
   }
 
   return out;
+}
+
+/**
+ * Active reservations on `partId` against `jobCardId`, id + stored tenantId,
+ * read through the BYPASS client.
+ *
+ * Through a scoped client a wrongly-owned — or unowned — row is invisible BY
+ * DEFINITION, so the probe that exists to catch a bad stamp would report it as
+ * "no row was created". That mistake has already produced false results in this
+ * harness three times; see revisionOf() for the same warning.
+ */
+async function reservationRows(
+  raw: Raw,
+  partId: string,
+  jobCardId: string,
+): Promise<Array<{ id: string; v: string | null }>> {
+  return raw.$queryRawUnsafe(
+    `SELECT "id", "tenantId"::text AS v FROM "PartReservation"
+     WHERE "partId" = $1 AND "jobCardId" = $2 AND "status" = 'active'`,
+    partId,
+    jobCardId,
+  );
 }
 
 type PlantedQuote = { quoteId: string; defId: string; childCount: number };
