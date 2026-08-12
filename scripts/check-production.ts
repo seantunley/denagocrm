@@ -102,18 +102,28 @@ async function main() {
     } else {
       // disabledAt is a raw-SQL-managed security column absent from the Prisma
       // User model, so fetch the owner (and its membership) via raw SQL.
+      //
+      // There is NO `User."deletedAt"`. This query used to select one, and every
+      // "active user" query below used to filter on one, which made this script
+      // abort at THIS LINE with `42703 column u.deletedAt does not exist` — so it
+      // has never once completed against production, and sections 5 and 8 (the
+      // NULL-tenantId sweep and the composite-FK sweep, i.e. the two checks the
+      // enforcement cutover actually gates on) have never run at all.
+      //
+      // A user is deactivated by `disabledAt`, not soft-deleted. The 60-day-trash
+      // convention that holds elsewhere in this codebase does not apply to User,
+      // so "active" here means `disabledAt IS NULL` and nothing more.
       const ownerRows = await basePrisma.$queryRaw<
         {
           id: string;
           role: string;
           tenantId: string | null;
           disabledAt: Date | null;
-          deletedAt: Date | null;
           passwordHash: string | null;
           hasMembership: boolean;
         }[]
       >`
-        SELECT u."id", u."role", u."tenantId", u."disabledAt", u."deletedAt", u."passwordHash",
+        SELECT u."id", u."role", u."tenantId", u."disabledAt", u."passwordHash",
           EXISTS(
             SELECT 1 FROM "TenantMember" tm
             WHERE tm."userId" = u."id" AND tm."tenantId" = ${DEFAULT_TENANT_ID}
@@ -126,7 +136,6 @@ async function main() {
         failures.push(`Founding tenant ownerUserId "${foundingTenant.ownerUserId}" does not exist in User`);
       } else {
         if (owner.disabledAt !== null) failures.push(`Founding owner ${owner.id} is disabled (disabledAt set) — cannot sign in`);
-        if (owner.deletedAt !== null) failures.push(`Founding owner ${owner.id} is soft-deleted (deletedAt set)`);
         if (owner.role !== "owner") failures.push(`Founding owner ${owner.id} has role "${owner.role}", expected "owner"`);
         if (owner.tenantId !== DEFAULT_TENANT_ID) {
           failures.push(`Founding owner ${owner.id} has User.tenantId "${owner.tenantId}", expected "${DEFAULT_TENANT_ID}"`);
@@ -153,13 +162,12 @@ async function main() {
     );
   }
 
-  // ── 4. No orphaned active users (active = not disabled, not deleted) ────────
+  // ── 4. No orphaned active users (active = not disabled; User has no soft-delete) ─
   const orphanedUsers = await basePrisma.$queryRaw<{ id: string; email: string }[]>`
     SELECT u."id", u."email"
     FROM "User" u
     LEFT JOIN "TenantMember" tm ON tm."userId" = u."id"
     WHERE u."disabledAt" IS NULL
-      AND u."deletedAt" IS NULL
       AND tm."userId" IS NULL
   `;
   if (orphanedUsers.length > 0) {
@@ -229,7 +237,7 @@ async function main() {
   const usersWithoutTenantId = await rawCount(
     basePrisma.$queryRaw<CountRow[]>`
       SELECT COUNT(*)::bigint AS count FROM "User"
-      WHERE "tenantId" IS NULL AND "disabledAt" IS NULL AND "deletedAt" IS NULL
+      WHERE "tenantId" IS NULL AND "disabledAt" IS NULL
     `,
   );
   if (usersWithoutTenantId > 0) {
@@ -245,16 +253,36 @@ async function main() {
   //    the DB's own constraint state. Matches Postgres MATCH SIMPLE: a row is skipped
   //    when EITHER FK column is NULL, so a null-tenant child is not double-flagged
   //    (section 5 already reports those).
-  const fkDefs = readCompositeTenantFks();
-  console.log(`Checking ${fkDefs.length} composite tenant FK(s) for cross-tenant / dangling refs…`);
-  if (fkDefs.length < 120) {
-    // The parser expects 130 composite FKs (verified against the migrations). A
-    // shortfall means the regex missed definitions and would silently under-check —
-    // surface it instead of passing a partial sweep.
+  const parsedFks = readCompositeTenantFks();
+  if (parsedFks.length < 120) {
+    // A shortfall means the regex missed definitions and would silently
+    // under-check — surface it instead of passing a partial sweep.
     failures.push(
-      `Composite-FK diagnostic parsed only ${fkDefs.length} FKs (expected 130) — parser/coverage is broken, not a clean bill of health`,
+      `Composite-FK diagnostic parsed only ${parsedFks.length} FKs (expected 130+) — parser/coverage is broken, not a clean bill of health`,
     );
   }
+
+  // RETIRED TABLES MUST BE DROPPED FROM THE SWEEP. The parser reads EVERY
+  // migration, including ones whose tables a later migration deleted, so it
+  // resurrects FK definitions for relations that no longer exist. Today that is
+  // AutomationRule/AutomationLog, dropped by 20260802120000_retire_automation_rules
+  // — querying them threw `42P01 relation does not exist` and aborted the sweep,
+  // which is the second reason this script has never reached its own summary.
+  //
+  // Filter against the CURRENT schema (the DMMF), not against the live database.
+  // Filtering on what the database happens to contain would also silently skip a
+  // table that OUGHT to exist and doesn't — real migration drift, of exactly the
+  // kind that caused the 2026-07-22 login outage — turning the one signal worth
+  // having into a shrug. A table absent from the schema is retired (skip it); a
+  // table present in the schema and absent from the database still raises.
+  const liveModels = new Set(Prisma.dmmf.datamodel.models.map((m) => m.dbName ?? m.name));
+  const fkDefs = parsedFks.filter((fk) => liveModels.has(fk.child) && liveModels.has(fk.parent));
+  const retired = [...new Set(parsedFks.filter((fk) => !fkDefs.includes(fk)).map((fk) => fk.child))];
+  if (retired.length > 0) {
+    console.log(`Skipping ${retired.length} retired table(s) no longer in the schema: ${retired.join(", ")}`);
+  }
+
+  console.log(`Checking ${fkDefs.length} composite tenant FK(s) for cross-tenant / dangling refs…`);
   for (const fk of fkDefs) {
     const rows = await basePrisma.$queryRawUnsafe<CountRow[]>(
       `SELECT COUNT(*)::bigint AS count FROM "${fk.child}" c
@@ -277,7 +305,7 @@ async function main() {
   const active = await basePrisma.tenant.count({ where: { active: true } });
   const activeUserCount = await rawCount(
     basePrisma.$queryRaw<CountRow[]>`
-      SELECT COUNT(*)::bigint AS count FROM "User" WHERE "disabledAt" IS NULL AND "deletedAt" IS NULL
+      SELECT COUNT(*)::bigint AS count FROM "User" WHERE "disabledAt" IS NULL
     `,
   );
   console.log(`\nProduction preflight — ${active}/${total} active tenants, ${activeUserCount} active users\n`);
@@ -301,9 +329,28 @@ async function main() {
   );
 }
 
+/**
+ * EXIT CODES — 1 and 2 mean different things, and CI depends on the difference.
+ *
+ *   0  every check ran and every check passed.
+ *   1  every check RAN; some found bad data. Expected, and data-dependent.
+ *   2  the script could not complete — a query blew up, a table or column was
+ *      missing, the DB was unreachable. THE GATE ITSELF IS BROKEN.
+ *
+ * These used to both be 1, which is how this script sat broken for its entire
+ * life while the test suite stayed green: an abort at line 105 and a clean run
+ * reporting three bad rows were indistinguishable to anything automated.
+ *
+ * CI asserts `!= 2` rather than `== 0`, deliberately. The integration database is
+ * seeded and then written to by the security/RBAC/integrity suites with
+ * enforcement OFF, so its fixtures ARE tenantless and section 5 legitimately
+ * reports them — requiring 0 there would assert something about CI's fixtures,
+ * not about this gate. `!= 2` asserts the thing that actually regressed: that the
+ * script still reaches its own summary.
+ */
 main()
   .catch((e) => {
     console.error(e);
-    process.exit(1);
+    process.exit(2);
   })
   .finally(() => basePrisma.$disconnect());

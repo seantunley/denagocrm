@@ -272,6 +272,33 @@ jobs:
         # transitions, the atomic OTP gate, and soft-delete on findUnique.
         run: npm run test:integrity
 
+      - name: Prove the production preflight is EXECUTABLE
+        # check-production.ts is the gate the enforcement cutover opens with, and
+        # it was broken for its entire life without anything noticing: it aborted
+        # on `42703 column u.deletedAt does not exist` before ever reaching the
+        # NULL-tenantId sweep or the composite-FK sweep — the only two checks the
+        # cutover actually depends on — while this workflow stayed green
+        # throughout. Nothing here ran it.
+        #
+        # Asserts `!= 2`, NOT `== 0`. See the exit-code contract at the bottom of
+        # the script: 1 means every check ran and some found bad data, 2 means the
+        # script could not complete. This database is seeded and then written to
+        # by the steps above with enforcement off, so its fixtures are legitimately
+        # tenantless and section 5 will report them; demanding 0 would assert
+        # something about CI's fixtures rather than about the gate. 2 is the
+        # regression: another nonexistent column in a raw query, or the FK parser
+        # reaching for a retired relation.
+        run: |
+          set +e
+          npx tsx scripts/check-production.ts
+          code=$?
+          set -e
+          if [ "$code" -eq 2 ]; then
+            echo "::error::check-production.ts aborted before completing its checks — the enforcement gate is not executable"
+            exit 1
+          fi
+          echo "preflight ran to completion (exit $code)"
+
       - name: Run tenant-guard integration tests
         # The db.ts tenant guard with enforcement enabled -- cross-tenant
         # read/update/delete refusal, write stamping, fail-closed on no scope,
