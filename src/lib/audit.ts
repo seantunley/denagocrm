@@ -69,14 +69,45 @@ async function requestContext() {
   }
 }
 
-function actorType(entry: AuditEntry, actorName: string) {
+/**
+ * `system` IS A CATCH-ALL, NOT A CLAIM ABOUT SCOPE — hence `system_global`.
+ *
+ * Everything below the explicit checks falls through to `system`: no
+ * `entry.user`, and an actor name that matched none of the patterns. That is not
+ * the same statement as "this ran under a global system scope", and the
+ * difference matters the moment anything downstream tries to use `system` as
+ * evidence of one.
+ *
+ * Production proves it. Of the five tenantless `system` audit events, two carry
+ * REAL PERSON NAMES — "Sean Tunley" and "Gavin Tagg" on `signing.signed`. Those
+ * are people signing documents inside a specific workspace. They landed in
+ * `system` only because a signer is not an `entry.user` and a human name matches
+ * neither /customer|portal/ nor /automation|journey|cron|worker/.
+ * `remindVehicleService` is the same shape: it acts on one vehicle and one
+ * contact, passes `userName: "System"`, and would be classified identically.
+ *
+ * So a preflight that exempts `system` from the tenantless check would wave
+ * through exactly the regression it exists to catch — a tenant-specific write
+ * that LOST its scope — while looking like it was being careful.
+ *
+ * `system_global` is the durable classification that actually carries the claim:
+ * emitted only when the write really is running under a system scope, which is a
+ * deliberate bypass and genuinely has no owning workspace. It also lines up with
+ * attribution: `actingTenantId` returns null for exactly that case, so
+ * `system_global` and a null tenant are produced by the same condition, rather
+ * than one being inferred from the other after the fact.
+ *
+ * A missing scope entirely stays `system` and stays a failure. That is the
+ * lost-scope case, and it should be loud.
+ */
+function actorType(entry: AuditEntry, actorName: string, globalScope: boolean) {
   // An explicit classification always wins — a non-User principal (platform admin)
   // sets `user` for attribution but must not be recorded as a CRM user.
   if (entry.actorType) return entry.actorType;
   if (entry.user) return "user";
   if (/customer|portal/i.test(actorName)) return "customer";
   if (/automation|journey|cron|worker/i.test(actorName)) return "automation";
-  return "system";
+  return globalScope ? "system_global" : "system";
 }
 
 /**
@@ -273,6 +304,12 @@ async function writeAudit(entry: AuditEntry, tx?: AuditTx) {
   // Two values, not one: only `log` may be degraded to NULL, and only because
   // AuditLog's composite key demands it. See auditTenantIds.
   const tenantIds = await auditTenantIds(entry);
+  // Read ONCE, here, and pass it down — the same observation that makes
+  // `actingTenantId` return null for non-user work is the one that justifies
+  // `system_global`, so they must not be able to disagree. Reading the scope
+  // again inside actorType would let an intervening scope change produce a row
+  // claiming global attribution with a tenant on it, or the reverse.
+  const systemScope = currentTenantScope()?.system === true;
 
   const write = async (candidate: AuditTx) => {
     // Both clients' transactions expose the same `$executeRaw` and
@@ -287,7 +324,7 @@ async function writeAudit(entry: AuditEntry, tx?: AuditTx) {
         "summary", "beforeJson", "afterJson", "changedFieldsJson", "source", "ipAddress",
         "userAgent", "correlationId", "metadata"
       ) VALUES (
-        ${crypto.randomUUID()}, ${tenantIds.event}, ${entry.user?.id ?? null}, ${actorName}, ${actorType(entry, actorName)},
+        ${crypto.randomUUID()}, ${tenantIds.event}, ${entry.user?.id ?? null}, ${actorName}, ${actorType(entry, actorName, systemScope)},
         ${entry.action}, ${entityType}, ${entityId}, ${entry.summary},
         ${safeBefore == null ? null : JSON.stringify(safeBefore)}::jsonb,
         ${safeAfter == null ? null : JSON.stringify(safeAfter)}::jsonb,

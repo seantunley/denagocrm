@@ -65,6 +65,33 @@ test("the logAudit fallback also writes an AuditLog, so it too takes `log`", () 
   );
 });
 
+test("`system_global` is emitted only under a real system scope, and `system` still exists", () => {
+  // `system` is the CATCH-ALL arm of actorType — no entry.user and an
+  // unrecognised actor name — so it is not evidence of a global scope. Two of
+  // production's five tenantless `system` events carry real person names
+  // ("Sean Tunley", "Gavin Tagg" on signing.signed): people signing inside one
+  // workspace. Anything downstream that exempts `system` from a tenantless check
+  // would wave through a tenant-specific write that LOST its scope.
+  assert.match(
+    CODE,
+    /return globalScope \? "system_global" : "system";/,
+    "the global classification must be conditional on the scope, not on the name falling through",
+  );
+  assert.match(
+    CODE,
+    /const systemScope = currentTenantScope\(\)\?\.system === true;/,
+    "`system_global` must be derived from the actual bound scope",
+  );
+  // Read once and passed down: the same observation that makes actingTenantId
+  // return null for non-user work must be the one that justifies system_global,
+  // or a row could claim global attribution while carrying a tenant.
+  assert.match(
+    CODE,
+    /actorType\(entry, actorName, systemScope\)/,
+    "the scope must be read once and threaded in, not re-read inside actorType",
+  );
+});
+
 test("no caller resolves a single shared audit tenant any more", () => {
   assert.doesNotMatch(
     CODE,
