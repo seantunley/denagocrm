@@ -302,6 +302,54 @@ export async function uploadRepoDocument(formData: FormData) {
   revalidatePath("/settings/documents");
 }
 
+/**
+ * The workspace a REPLACEMENT version belongs to.
+ *
+ * Preserving `old.tenantId` is the rule for an owned document, and it is the
+ * right one: a new version belongs where the document already does, and taking
+ * the acting workspace would split a version chain across two prefixes.
+ *
+ * But preserving it VERBATIM propagates NULL, and production is known to hold a
+ * live tenantless Document (found by the #506 preflight run). Replacing that one
+ * before the backfill lands would mint another tenantless row — so "stop
+ * producing tenantless Documents" would not actually be true, and the structural
+ * test cannot see it: `tenantId: old.tenantId` satisfies "the field is present"
+ * while carrying null at runtime.
+ *
+ * So: preserve a real owner, and resolve one only for the legacy-null case, from
+ * the parent record this document is already filed against — the same rule
+ * `uploadTargetTenantId` applies to a first upload, deliberately, rather than a
+ * second one that could disagree with it. `requireDocumentAccess` has already
+ * authorised the caller for this document, and document access is the union of
+ * its linked records, so the parent read is one the caller is entitled to.
+ *
+ * Falls back to the acting workspace only when there is no parent either — a
+ * repository document, where the actor genuinely decides. That throws rather
+ * than returning null if the session cannot be resolved, which is the correct
+ * direction: refusing a replacement beats minting another unowned row.
+ */
+async function replacementOwnerTenantId(old: {
+  tenantId: string | null;
+  contactId: string | null;
+  vehicleId: string | null;
+  jobCardId: string | null;
+  quoteId: string | null;
+}): Promise<string> {
+  if (old.tenantId) return old.tenantId;
+  const target: UploadTarget = old.contactId
+    ? { kind: "contact", contactId: old.contactId }
+    : old.vehicleId
+      ? { kind: "vehicle", vehicleId: old.vehicleId }
+      : old.jobCardId
+        ? { kind: "jobCard", jobCardId: old.jobCardId }
+        : old.quoteId
+          ? { kind: "quote", quoteId: old.quoteId }
+          : { kind: "none" };
+  // The parent may itself be tenantless (the same backfill covers it), so the
+  // acting workspace is the last rung rather than a second source of null.
+  return (await uploadTargetTenantId(target)) ?? (await actingOwnerTenantId());
+}
+
 export async function replaceDocument(id: string, formData: FormData) {
   const user = await requireDocumentAccess(id, "documents.manage");
   const file = formData.get("file");
@@ -312,7 +360,9 @@ export async function replaceDocument(id: string, formData: FormData) {
   // A new VERSION of an existing document belongs where the document already does.
   // Taking the acting workspace here would split a version chain across two
   // prefixes, so the old versions stop resolving for whoever ends up owning it.
-  const storedName = await saveFile(Buffer.from(await file.arrayBuffer()), file.name || old.fileName, mimeType, old.tenantId);
+  // One value for the blob AND the row, as everywhere else in this change.
+  const tenantId = await replacementOwnerTenantId(old);
+  const storedName = await saveFile(Buffer.from(await file.arrayBuffer()), file.name || old.fileName, mimeType, tenantId);
   const next = await prisma.document.create({
     data: {
       fileName: file.name || old.fileName,
@@ -324,8 +374,9 @@ export async function replaceDocument(id: string, formData: FormData) {
       jobCardId: old.jobCardId,
       quoteId: old.quoteId,
       // Same workspace as the version it replaces — the reasoning above applies
-      // to the row exactly as it does to the blob prefix.
-      tenantId: old.tenantId,
+      // to the row exactly as it does to the blob prefix. NOT `old.tenantId`
+      // verbatim: see replacementOwnerTenantId.
+      tenantId,
       tag: old.tag,
       uploadedById: user.id,
     },

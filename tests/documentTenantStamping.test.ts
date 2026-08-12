@@ -41,7 +41,23 @@ function walk(dir: string, out: string[] = []): string[] {
 
 /** Strip comments so an explanatory mention of tenantId cannot satisfy the check. */
 function code(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  // CRLF first. Without it `\n}\n` never matches on a Windows checkout, the
+  // function-body slices below come back EMPTY, and every doesNotMatch passes
+  // vacuously — a guard that reports success while inspecting nothing.
+  return src
+    .replace(/\r\n/g, "\n")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+}
+
+/** A top-level function's body: from its declaration to the first column-0 `}`. */
+function bodyOf(src: string, declaration: string): string {
+  const at = src.indexOf(declaration);
+  assert.notEqual(at, -1, `could not find ${declaration} — re-point this test rather than deleting it`);
+  const fn = src.slice(at);
+  const end = fn.indexOf("\n}\n");
+  assert.notEqual(end, -1, `could not find the end of ${declaration}`);
+  return fn.slice(0, end + 1);
 }
 
 /** The `data: { … }` object of a create call, brace-matched from the call site. */
@@ -91,5 +107,49 @@ test("every document.create stamps tenantId", () => {
     offenders,
     [],
     `document.create without tenantId writes a row that vanishes under RLS and cannot be repaired through the app:\n  ${offenders.join("\n  ")}`,
+  );
+});
+
+/**
+ * PRESENCE IS NOT THE SAME AS NON-NULL, and the test above only checks presence.
+ *
+ * `replaceDocument` used to write `tenantId: old.tenantId`, which satisfies "the
+ * field is there" while carrying null at runtime for any legacy row — and
+ * production is known to hold exactly one such live Document. Replacing it
+ * before the backfill would have minted a second tenantless row, so the stated
+ * property of this change ("no new tenantless Documents") would have been false
+ * in the one window it most needed to be true.
+ *
+ * Structural rather than executed, deliberately and with the limitation stated:
+ * the value only goes null against a specific production row, so there is no
+ * unit-level input that reproduces it. What CAN be pinned is that the nullable
+ * field is never handed to the create unguarded.
+ */
+test("replaceDocument resolves an owner instead of propagating a null one", () => {
+  const src = code(readFileSync(join(ROOT, "app", "actions", "documents.ts"), "utf8"));
+  const body = bodyOf(src, "export async function replaceDocument");
+  assert.ok(body.includes("prisma.document.create"), "the slice must actually cover the create it is guarding");
+
+  assert.doesNotMatch(
+    body,
+    /tenantId:\s*old\.tenantId\b/,
+    "old.tenantId is nullable — passing it straight through re-mints a tenantless Document from a legacy one",
+  );
+  assert.doesNotMatch(
+    body,
+    /saveFile\([\s\S]*?\bold\.tenantId\b[\s\S]*?\)/,
+    "the blob prefix must use the same resolved owner as the row, not the nullable field",
+  );
+  assert.match(
+    body,
+    /replacementOwnerTenantId\(old\)/,
+    "the replacement owner must be resolved through the helper that falls back to the parent record",
+  );
+
+  // The helper itself must actually END at a non-null value, not merely exist.
+  assert.match(
+    bodyOf(src, "async function replacementOwnerTenantId"),
+    /\?\?\s*\(await actingOwnerTenantId\(\)\)/,
+    "a parent that is itself tenantless must not become a second source of null",
   );
 });
