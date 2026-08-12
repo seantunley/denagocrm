@@ -66,6 +66,61 @@ function readCompositeTenantFks(): CompositeFk[] {
   return out;
 }
 
+/**
+ * Actor classifications whose AuditEvent rows are LEGITIMATELY tenantless.
+ *
+ * Section 5's blanket rule — every tenant-scoped model with a NULL tenant is a
+ * hard failure — is right for records. It is wrong for the audit stream, and the
+ * two positions could not coexist once #507 established the semantics:
+ *
+ *   - `user`            a signed-in person acted. `actingTenantId` resolves a
+ *                       workspace, so a NULL means the event LOST it. Real
+ *                       failure; those are the 13 rows #507 fixed the producer for.
+ *   - `platform_admin`  a platform action ACROSS tenants. There is no owning
+ *                       workspace to record.
+ *   - `system`          work under a system scope, which is a deliberate bypass.
+ *
+ * Stamping the platform/system rows with the founding tenant purely to satisfy
+ * this checker would turn genuinely global events into one workspace's events —
+ * inventing attribution, which is exactly what `audit.ts`'s own comment argues
+ * against. So they are reported, and they do not block.
+ *
+ * `customer` and `automation` are deliberately NOT here. A portal request and a
+ * cron slice both run inside a bound tenant scope, so a NULL there is a real gap
+ * and should fail — this list stays as short as the evidence supports.
+ */
+const GLOBAL_AUDIT_ACTOR_TYPES = ["platform_admin", "system"] as const;
+
+/**
+ * Split the tenantless AuditEvent rows into the ones that should have carried a
+ * workspace and the ones that legitimately could not.
+ */
+async function auditEventNullSplit(): Promise<{
+  attributable: number;
+  global: number;
+  attributableTypes: string[];
+}> {
+  const rows = await basePrisma.$queryRaw<{ actorType: string | null; count: bigint }[]>`
+    SELECT "actorType", COUNT(*)::bigint AS count
+    FROM "AuditEvent" WHERE "tenantId" IS NULL
+    GROUP BY "actorType"
+  `;
+  let attributable = 0;
+  let global = 0;
+  const attributableTypes = new Set<string>();
+  for (const row of rows) {
+    const n = Number(row.count);
+    const type = row.actorType ?? "(none)";
+    if ((GLOBAL_AUDIT_ACTOR_TYPES as readonly string[]).includes(type)) {
+      global += n;
+    } else {
+      attributable += n;
+      attributableTypes.add(type);
+    }
+  }
+  return { attributable, global, attributableTypes: [...attributableTypes].sort() };
+}
+
 async function main() {
   const failures: string[] = [];
   const warnings: string[] = [];
@@ -204,6 +259,22 @@ async function main() {
     const where = hasDeletedAt ? `"tenantId" IS NULL AND "deletedAt" IS NULL` : `"tenantId" IS NULL`;
     const n = await countTable(table, where);
     if (n === 0) continue;
+    if (table === "AuditEvent") {
+      const split = await auditEventNullSplit();
+      if (split.attributable > 0) {
+        failures.push(
+          `${split.attributable} AuditEvent row(s) have tenantId IS NULL with an ATTRIBUTABLE actor ` +
+            `(${split.attributableTypes.join(", ")}) — a signed-in person acted and the event lost its workspace`,
+        );
+      }
+      if (split.global > 0) {
+        warnings.push(
+          `${split.global} AuditEvent row(s) have tenantId IS NULL from platform/system actors ` +
+            `(${GLOBAL_AUDIT_ACTOR_TYPES.join(", ")}) — expected global attribution, not a blocker`,
+        );
+      }
+      continue;
+    }
     if (sharedNullable) {
       // Legitimate shared/system rows — informational, never a failure.
       warnings.push(`${n} ${table} row(s) have tenantId IS NULL (shared/system rows — expected)`);
