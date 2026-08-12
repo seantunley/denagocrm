@@ -1,0 +1,312 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+
+import { decideEcho, metaEchoDedupeKey } from "../src/lib/metaEcho";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+// Normalise line endings before anything slices this. The ordering assertions
+// below key on a literal containing "\n", which cannot match a CRLF checkout: on
+// Windows `indexOf` returned -1, the sliced body collapsed to 19 characters, and
+// the test failed for a reason that had nothing to do with the code under test.
+// CI runs on Linux, so it passed there and only ever broke locally.
+const src = (rel: string) => readFileSync(path.join(root, rel), "utf8").replace(/\r\n/g, "\n");
+const stripComments = (code: string) =>
+  code.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+const shipped = (rel: string) => stripComments(src(rel));
+
+/**
+ * Meta echoes every message the Page sends back to the webhook, including the
+ * ones we sent. Recording each echo unconditionally wrote a second outbound row
+ * for a message already in history, so one exchange showed up twice.
+ *
+ * The echo of OUR send is told apart by the id Meta returned when it accepted
+ * it. We learn that id from the response to our own send, and Meta dispatches
+ * the echo the moment it accepts, so the echo can be handled BEFORE the worker
+ * commits the id — one database round trip of ambiguity.
+ *
+ * Nothing is guessed in that window. Every echo the ledger cannot already claim
+ * is RECORDED, carrying its provider id, and the duplicate is reconciled away
+ * afterwards by whichever side commits second.
+ */
+
+const TENANT = "tenant_denago_cpt";
+
+test("an echo whose id the ledger already holds is dropped, not written", () => {
+  const decision = decideEcho({ tenantId: TENANT, providerMessageId: "mid.1", ledgerHasId: true });
+  assert.equal(decision.action, "drop");
+  assert.equal(decision.reason, "already-in-ledger");
+});
+
+test("an echo the ledger cannot claim is recorded, keyed by its provider id", () => {
+  const decision = decideEcho({ tenantId: TENANT, providerMessageId: "mid.colleague", ledgerHasId: false });
+  assert.equal(decision.action, "record");
+  assert.equal(decision.dedupeKey, metaEchoDedupeKey(TENANT, "mid.colleague"));
+});
+
+/**
+ * THE CASE THAT MADE THE PREVIOUS DESIGN UNSOUND.
+ *
+ * The fallback compared the echo's TEXT against in-flight rows and dropped a
+ * match. So a colleague sending "Thanks" from Business Suite while the CRM
+ * happened to be sending "Thanks" lost their message permanently — and canned
+ * replies ("Thanks", "Perfect", "Yes") are exactly the ones staff send by hand
+ * and exactly the ones that collide. Missing history is worse than a duplicate,
+ * because nobody can see that it is missing.
+ */
+
+test("a colleague's identical text is RECORDED, not absorbed by our in-flight send", () => {
+  // We are sending "Thanks" right now; the id is not committed yet. Their echo
+  // arrives with an id of its own. There is nothing here to compare text with,
+  // by construction — the decision cannot see the message body at all.
+  const decision = decideEcho({ tenantId: TENANT, providerMessageId: "mid.theirs", ledgerHasId: false });
+  assert.equal(decision.action, "record", "a colleague's reply must survive whatever we are sending");
+  assert.equal(decision.dedupeKey, metaEchoDedupeKey(TENANT, "mid.theirs"));
+});
+
+test("the decision never sees message content, so it cannot be lost to a coincidence", () => {
+  const shape = shipped("src/lib/metaEcho.ts");
+  assert.doesNotMatch(shape, /outboundTextOf/, "the text comparison is gone, not merely narrowed");
+  assert.doesNotMatch(shape, /inFlight/, "and so is the in-flight content scan");
+  // decideEcho's whole input, so a future edit cannot quietly reintroduce a body.
+  const fn = shape.slice(shape.indexOf("export function decideEcho"), shape.indexOf("}", shape.indexOf("return {\n    action: \"record\",")));
+  assert.doesNotMatch(fn, /text/, "no message body may reach this decision");
+});
+
+test("an echo with no provider id is recorded and kept", () => {
+  // It cannot be correlated in either direction, so it can never be reconciled.
+  // Keeping it is the same trade taken deliberately: a duplicate is visible and
+  // survivable, a silently discarded customer-facing message is neither.
+  const decision = decideEcho({ tenantId: TENANT, providerMessageId: null, ledgerHasId: false });
+  assert.equal(decision.action, "record");
+  assert.equal(decision.dedupeKey, null);
+  assert.equal(decision.reason, "uncorrelatable");
+});
+
+test("the dedupe key is tenant-scoped, because the constraint is global", () => {
+  // Communication.dedupeKey is unique across the whole table. Two tenants must
+  // never collide on it, whatever a provider does with its ids.
+  assert.notEqual(metaEchoDedupeKey("tenant_a", "mid.1"), metaEchoDedupeKey("tenant_b", "mid.1"));
+  assert.match(metaEchoDedupeKey("tenant_a", "mid.1"), /^meta-echo:tenant_a:mid\.1$/);
+});
+
+/**
+ * THE TWO CLEANUPS. Either side may commit second, so both do the same removal.
+ */
+
+test("the webhook re-reads the ledger after writing, and removes its own row", () => {
+  const messenger = src("src/lib/messenger.ts");
+  const fn = messenger.slice(messenger.indexOf("export async function recordDmEcho"));
+  // Written first — the row exists even if this process dies before the recheck.
+  const write = fn.indexOf("prisma.communication.create");
+  const recheck = fn.indexOf("if (await ledgerHoldsProviderId(tenantId, providerMessageId))");
+  assert.ok(write > 0 && recheck > write, "the re-check must come after the write, not instead of it");
+  assert.match(fn.slice(recheck), /deleteCommunicationsAndReconcile\(\{ id: written\.id \}\)/);
+  // And the row it deletes is the one it just wrote — never a lookalike.
+  assert.doesNotMatch(fn.slice(recheck), /body:|text/, "the cleanup addresses one id, not a resemblance");
+});
+
+/**
+ * THE SIDE EFFECTS OF THE SPECULATIVE WRITE.
+ *
+ * The guarded client intercepts `Communication.create` — and only create — to
+ * attach the row to its conversation and roll that conversation's counters
+ * forward. Nothing intercepts a delete. So a speculative row removed with a bare
+ * deleteMany leaves the transcript correct and the projection one message ahead
+ * for ever, and Conversation is what the inbox reads for ordering, pagination
+ * and "who is waiting on us".
+ */
+
+test("the echo is written with create, so it threads and counts like any message", () => {
+  const messenger = shipped("src/lib/messenger.ts");
+  const fn = messenger.slice(messenger.indexOf("export async function recordDmEcho"));
+  assert.match(fn, /await prisma\.communication\.create\(\{/);
+  // An upsert is NOT equivalent: it bypasses the create hook, so the row lands
+  // with a null conversationId — outside every conversation-scoped query while
+  // looking perfectly fine on the timeline.
+  assert.doesNotMatch(fn, /prisma\.communication\.upsert/, "upsert skips the threading hook");
+  // Idempotency comes from the unique key instead.
+  assert.match(fn, /error\.code === "P2002"/);
+});
+
+test("both cleanups reconcile the conversation, not just the row", () => {
+  const messenger = shipped("src/lib/messenger.ts");
+  assert.match(messenger, /deleteCommunicationsAndReconcile\(\{ id: written\.id \}\)/);
+  assert.doesNotMatch(
+    messenger.slice(messenger.indexOf("export async function recordDmEcho")),
+    /prisma\.communication\.deleteMany/,
+    "a bare delete leaves the projection ahead of the transcript",
+  );
+  const outbox = shipped("src/lib/botOutbox.ts");
+  const reconcile = outbox.slice(outbox.indexOf("async function reconcileProviderEcho"));
+  assert.match(reconcile.slice(0, 900), /deleteCommunicationsAndReconcile\(\{ dedupeKey: metaEchoDedupeKey\(tenantId, providerMessageId\) \}\)/);
+  assert.doesNotMatch(reconcile.slice(0, 900), /communication\.deleteMany/);
+});
+
+test("the conversation is RECOMPUTED, because an increment has no inverse", () => {
+  const conversations = shipped("src/lib/conversations.ts");
+  assert.match(conversations, /export async function recomputeConversationDerivedState/);
+  assert.match(conversations, /export async function deleteCommunicationsAndReconcile/);
+
+  // Every field the projection carries has to come back, not just the count:
+  // decrementing alone leaves a projection that is tidy and factually wrong.
+  const sql = conversations.slice(conversations.indexOf("const RECOMPUTE_SQL"), conversations.indexOf("async function lockAndRecompute"));
+  for (const field of ["messageCount", "lastMessageAt", "lastDirection", "lastInboundAt", "firstResponseAt"]) {
+    assert.match(sql, new RegExp(`"${field}"`), `${field} must be restored, not left behind`);
+  }
+  // `unread` means "nobody has opened the inbound messages" and is cleared
+  // explicitly; deriving it here would let a cleanup silently mark a thread read.
+  assert.doesNotMatch(sql, /unread/, "unread is not derived state");
+
+  // The recompute runs AFTER the delete, or it sees the row it is removing.
+  const remove = conversations.slice(conversations.indexOf("export async function deleteCommunicationsAndReconcile"));
+  assert.ok(
+    remove.indexOf("recomputeConversationDerivedState") > remove.indexOf("deleteMany"),
+    "the recomputation must see the world without those rows",
+  );
+});
+
+/**
+ * THE TWO WRITERS HAVE TO COMPOSE.
+ *
+ * A new message used to report itself with an INCREMENT while the cleanup wrote
+ * an ABSOLUTE snapshot, and the two do not compose in either order: the snapshot
+ * either misses an insert that then increments on top of it, or includes one that
+ * then increments again. A lock around the cleanup alone fixes neither, because
+ * the INSERT and its bookkeeping are separate operations and no lock spans them.
+ */
+
+test("there is exactly ONE way the projection is written, and it is absolute", () => {
+  const conversations = shipped("src/lib/conversations.ts");
+  // No relative arithmetic anywhere: an increment beside an absolute write is the
+  // defect, whichever function it lives in.
+  assert.doesNotMatch(conversations, /increment:/, "a relative write cannot compose with an absolute one");
+  assert.doesNotMatch(conversations, /decrement:/);
+
+  // Both writers go through the same fenced recompute.
+  assert.match(conversations, /async function lockAndRecompute\(/);
+  for (const writer of ["recomputeConversationDerivedState", "bumpConversation"]) {
+    const start = conversations.indexOf(`export async function ${writer}(`);
+    assert.ok(start > 0, `${writer} must exist`);
+    const body = conversations.slice(start, conversations.indexOf("\n}", start));
+    assert.match(body, /lockAndRecompute\(tx, conversationId, tenantId\)/, `${writer} must use the fenced recompute`);
+    assert.match(body, /basePrisma\.\$transaction\(/, `${writer} must hold the lock for the whole read-then-write`);
+  }
+});
+
+test("the fence is a row lock taken BEFORE anything is read", () => {
+  const conversations = shipped("src/lib/conversations.ts");
+  const fn = conversations.slice(conversations.indexOf("async function lockAndRecompute"));
+  const body = fn.slice(0, fn.indexOf("\n}"));
+  assert.match(body, /SELECT id FROM "Conversation" WHERE id = \$\{conversationId\} FOR UPDATE/);
+  assert.ok(
+    body.indexOf("FOR UPDATE") < body.indexOf("RECOMPUTE_SQL"),
+    "the lock must precede the read, or the snapshot it protects is already taken",
+  );
+});
+
+test("unread is still written on inbound — it is state, not a derivation", () => {
+  // Nothing about the messages says whether a person has LOOKED at them, so a
+  // recompute cannot produce it and must not clear it.
+  const conversations = shipped("src/lib/conversations.ts");
+  const bump = conversations.slice(conversations.indexOf("export async function bumpConversation"));
+  assert.match(bump.slice(0, 900), /msg\.direction === "inbound"/);
+  assert.match(bump.slice(0, 900), /data: \{ unread: true \}/);
+});
+
+test("the worker removes the echo only after the id is committed", () => {
+  const outbox = shipped("src/lib/botOutbox.ts");
+  assert.match(outbox, /async function reconcileProviderEcho\(/);
+  assert.match(outbox, /deleteCommunicationsAndReconcile\(\{ dedupeKey: metaEchoDedupeKey\(tenantId, providerMessageId\) \}\)/);
+
+  // BOTH sent paths reconcile, and both do it AFTER their own id write. The
+  // superseded-lease path commits the id in a second statement, so reconciling
+  // before it would look while the webhook could still legitimately record one.
+  const deliver = outbox.slice(outbox.indexOf("async function deliverClaimed"));
+  const body = deliver.slice(0, deliver.indexOf('\n  return "sent";\n}') + 20);
+  const idWrites = [...body.matchAll(/providerMessageId: result\.providerMessageId \?\? null/g)].map((m) => m.index!);
+  const reconciles = [...body.matchAll(/await reconcileProviderEcho\(/g)].map((m) => m.index!);
+  assert.equal(idWrites.length, 2, "both sent paths must record the id");
+  assert.equal(reconciles.length, 2, "and both must reconcile");
+  assert.ok(reconciles[0] > idWrites[1], "the superseded-lease reconcile follows its own id write");
+  assert.ok(reconciles[1] > idWrites[0], "and the ordinary one follows its own");
+});
+
+test("a failed delivery reconciles nothing", () => {
+  // There is no proof of ownership without an accepted send, so an echo must not
+  // be removed on the strength of an attempt.
+  const outbox = shipped("src/lib/botOutbox.ts");
+  const fail = outbox.slice(outbox.indexOf("async function failDelivery"), outbox.indexOf("async function reconcileProviderEcho"));
+  assert.doesNotMatch(fail, /reconcileProviderEcho/);
+});
+
+/**
+ * EVERY Meta send must keep the id, not just the plain-text one.
+ *
+ * The senders were three functions posting to the same endpoint and each parsing
+ * its own response, and only the text one was taught to keep `message_id`. So a
+ * plain reply could be recognised as our own echo and the identical text sent
+ * with quick-reply chips could not — for no reason a reader could see. One call
+ * site now, so it is not something a future sender can forget.
+ */
+
+test("every Meta send goes through one call site that keeps the provider id", () => {
+  const messenger = shipped("src/lib/messenger.ts");
+  assert.match(messenger, /async function postToSendApi\(/);
+  assert.match(messenger, /providerMessageId: typeof accepted\?\.message_id === "string"/);
+  for (const sender of ["sendDirectMessage", "sendDirectQuickReplies", "sendDirectAttachment"]) {
+    const start = messenger.indexOf(`export async function ${sender}(`);
+    assert.ok(start > 0, `${sender} must exist`);
+    const body = messenger.slice(start, messenger.indexOf("\n}", start));
+    assert.match(body, /MetaSendResult/, `${sender} must be able to return the id`);
+    assert.match(body, /postToSendApi\(/, `${sender} must not parse its own response`);
+    assert.doesNotMatch(body, /await fetch\(/, `${sender} must not have a second, forgettable call site`);
+  }
+});
+
+test("the ledger stores the id on BOTH paths that mark a row sent", () => {
+  const outbox = shipped("src/lib/botOutbox.ts");
+  const writes = [...outbox.matchAll(/status: "sent", sentAt: new Date\(\)[^}]*/g)].map((m) => m[0]);
+  assert.ok(writes.length >= 2, `expected the normal and superseded-lease paths, found ${writes.length}`);
+  for (const write of writes) {
+    // The superseded-lease path is the one that was missed: a message that WAS
+    // delivered, recorded without its id, and therefore duplicated when its echo
+    // arrived — with nothing able to reconcile it away afterwards.
+    assert.match(write, /providerMessageId: result\.providerMessageId \?\? null/);
+  }
+  const schema = src("prisma/bot-outbox.prisma");
+  assert.match(schema, /providerMessageId String\?/);
+  assert.match(schema, /@@index\(\[tenantId, providerMessageId\]\)/);
+});
+
+test("the webhook hands the echo its provider id", () => {
+  const route = shipped("src/app/api/webhooks/meta/route.ts");
+  assert.match(route, /recordDmEcho\(platform, String\(ev\.recipient\?\.id \?\? ""\), text, ev\.message\?\.mid/);
+});
+
+test("the echo lookups are tenant-scoped", () => {
+  // Without this one tenant's send suppresses another tenant's echo — the two
+  // Pages are different businesses replying to different customers.
+  const messenger = src("src/lib/messenger.ts");
+  assert.match(messenger, /async function ledgerHoldsProviderId\(tenantId: string, providerMessageId: string\)/);
+  const lookup = messenger.slice(messenger.indexOf("async function ledgerHoldsProviderId"));
+  assert.match(lookup.slice(0, 400), /where: \{ tenantId, providerMessageId \}/);
+  const fn = messenger.slice(
+    messenger.indexOf("export async function recordDmEcho"),
+    messenger.indexOf("export async function recordDmEcho") + 900,
+  );
+  assert.match(fn, /const tenantId = writeTenantId\(\) \?\? DEFAULT_TENANT_ID;/);
+});
+
+test("the echo row carries the provider id on the timeline too", () => {
+  // Not only in the dedupe key: the id is the thing that correlates this row to
+  // a receipt or a failure later, and a key is not a queryable identity.
+  const messenger = shipped("src/lib/messenger.ts");
+  const fn = messenger.slice(messenger.indexOf("export async function recordDmEcho"));
+  assert.match(fn, /messageId: providerMessageId \?\? null/);
+  // And the unique key, so Meta redelivering the webhook is a no-op rather than
+  // a third copy of the customer's message.
+  assert.match(fn, /decision\.dedupeKey \? \{ \.\.\.data, dedupeKey: decision\.dedupeKey \} : data/);
+});

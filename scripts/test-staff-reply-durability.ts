@@ -1,0 +1,680 @@
+/**
+ * A STAFF REPLY IS ONE DECISION, AND IT EITHER HAPPENED OR IT DID NOT.
+ *
+ * The source tests can assert that the ledger has a `failureCode` column and that
+ * the writes share a transaction. They cannot show that any runtime path ever
+ * SETS that column, or that a duplicate submission finds the bot already paused,
+ * or that automation output queued before a person answered never reaches the
+ * customer. Those are behaviours, and a real database is the only thing that can
+ * demonstrate them.
+ *
+ * What this proves, in order:
+ *
+ *   1. replying takes the conversation over — the BotSession is paused and the
+ *      bot's unsent backlog is withdrawn, in the same commit as the reply;
+ *   2. the timeline row and the delivery record are linked, so the inbox can
+ *      report what became of the message instead of assuming it left;
+ *   3. a resubmission of the same composition writes nothing and resolves to the
+ *      message it duplicates;
+ *   4. an EDITED resubmission is a different message and actually sends — the
+ *      failure a box-scoped idempotency key produced, which delivered the typo;
+ *   5. a cancelled message does not become an unclaimable queue head, which would
+ *      silence the conversation for ever;
+ *   6. a permanent failure is classified, stored, and acted on — one attempt, not
+ *      eight.
+ *
+ * SAFETY: refuses to run outside NODE_ENV=test on a *_test database, and removes
+ * every row it creates.
+ */
+import { basePrisma, prisma } from "../src/lib/db";
+import { DEFAULT_TENANT_ID } from "../src/lib/tenant";
+import { runInTenantScope } from "../src/lib/tenantScope";
+import {
+  deliveryStateForMessages,
+  enqueueBotMessages,
+  enqueueStaffMessage,
+  enqueueStaffReply,
+  flushBotOutboxConversation,
+  type OutboxPayload,
+} from "../src/lib/botOutbox";
+import { attachmentDigest, sendOutcomeMessage, staffReplyIdempotencyKey } from "../src/lib/messageDelivery";
+import { attachmentUrlForDelivery, verifyOutboundMediaToken } from "../src/lib/outboundMedia";
+import { pauseBotConversation } from "../src/lib/botConversationControl";
+
+const SFX = Math.random().toString(16).slice(2, 10);
+let passed = 0;
+let failed = 0;
+
+function check(name: string, ok: boolean, detail = "") {
+  if (ok) {
+    passed++;
+    console.log(`  ok   ${name}`);
+  } else {
+    failed++;
+    console.log(`  FAIL ${name}${detail ? ` — ${detail}` : ""}`);
+  }
+}
+
+function guardEnvironment() {
+  if (process.env.NODE_ENV !== "test") throw new Error("Refusing to run outside NODE_ENV=test");
+  const name = (process.env.DATABASE_URL ?? "").split("/").pop()?.split("?")[0] ?? "";
+  if (!/_test$/.test(name)) {
+    throw new Error(`Refusing to run against database "${name}" — the name must end in _test`);
+  }
+}
+
+const ids = {
+  user: `u_staff_${SFX}`,
+  contact: `c_staff_${SFX}`,
+  /** The customer's WhatsApp identity — the conversation key. */
+  wa: `2782${SFX.replace(/\D/g, "").padEnd(7, "1").slice(0, 7)}`,
+  /** A channel no adapter supports, so a send fails permanently without a network call. */
+  deadChannel: `nosuch_${SFX}`,
+  deadKey: `k_${SFX}`,
+  /** The same customer's Messenger identity, for the attachment path. */
+  psid: `psid_${SFX}`,
+  /** A conversation of its own for the takeover fence, so nothing else blocks its drain. */
+  fenceKey: `2782${SFX.replace(/\D/g, "").padEnd(7, "2").slice(0, 7)}9`,
+};
+
+const composition = `comp_${SFX}`;
+const BODY = "Thanks — your unit is ready for collection.";
+
+const keyFor = (body: string, overrides: { actorId?: string; contactId?: string | null } = {}) =>
+  staffReplyIdempotencyKey({
+    compositionId: composition,
+    channel: "whatsapp",
+    key: ids.wa,
+    actorId: overrides.actorId ?? ids.user,
+    contactId: overrides.contactId === undefined ? ids.contact : overrides.contactId,
+    leadId: null,
+    body,
+  });
+
+async function seed() {
+  // The founding tenant is created by migration; make sure it is there rather
+  // than assuming, since every write below is stamped with it.
+  await basePrisma.tenant.upsert({
+    where: { id: DEFAULT_TENANT_ID },
+    update: {},
+    create: { id: DEFAULT_TENANT_ID, name: "Founding", slug: DEFAULT_TENANT_ID, active: true },
+  });
+  await basePrisma.user.create({
+    data: {
+      id: ids.user,
+      name: "Reply tester",
+      email: `${ids.user}@example.test`,
+      passwordHash: "x",
+      role: "admin",
+      tenantId: DEFAULT_TENANT_ID,
+    },
+  });
+  await basePrisma.contact.create({
+    data: {
+      id: ids.contact,
+      firstName: "Staff",
+      whatsapp: ids.wa,
+      messengerPsid: ids.psid,
+      createdById: ids.user,
+      tenantId: DEFAULT_TENANT_ID,
+    },
+  });
+}
+
+async function cleanup() {
+  await basePrisma.botFlowOutbox.deleteMany({
+    where: { OR: [{ key: ids.wa }, { key: ids.deadKey }, { key: ids.psid }, { key: ids.fenceKey }] },
+  });
+  await basePrisma.botSession.deleteMany({
+    where: { key: { in: [ids.wa, ids.deadKey, ids.psid, ids.fenceKey] } },
+  });
+  await basePrisma.communication.deleteMany({ where: { contactId: ids.contact } });
+  // AuditEvent is append-only at the DATABASE level — a trigger refuses DELETE.
+  // That is the point of an audit trail and this test does not get to be an
+  // exception, so the one row it writes is left behind. It is attributed to a
+  // per-run actor id, so it can never be confused with another run's, and the
+  // database this may only run against is disposable by construction.
+  //
+  // The legacy AuditLog table has no such trigger but does hold an FK to Contact,
+  // so it has to go before the contact does.
+  await basePrisma.auditLog.deleteMany({ where: { contactId: ids.contact } });
+  await basePrisma.contact.deleteMany({ where: { id: ids.contact } });
+  await basePrisma.user.deleteMany({ where: { id: ids.user } });
+}
+
+const reply = (body: string) =>
+  enqueueStaffMessage({
+    channel: "whatsapp",
+    key: ids.wa,
+    message: { type: "text", text: body },
+    clientIdempotencyKey: keyFor(body),
+    body,
+    contactId: ids.contact,
+    actorId: ids.user,
+    audit: {
+      action: "whatsapp.sent",
+      summary: `WhatsApp sent to +${ids.wa}`,
+      user: { id: ids.user, name: "Reply tester" },
+    },
+  });
+
+async function main() {
+  guardEnvironment();
+  await seed();
+
+  // ── The bot is mid-conversation with this customer ────────────────────────
+  await enqueueBotMessages({
+    channel: "whatsapp",
+    key: ids.wa,
+    messages: [{ type: "text", text: "bot line 1" }, { type: "text", text: "bot line 2" }],
+    contactId: ids.contact,
+  });
+
+  // ── A person answers ──────────────────────────────────────────────────────
+  const first = await reply(BODY);
+  check("the reply is accepted and recorded", first.created && Boolean(first.communicationId));
+
+  const session = await basePrisma.botSession.findFirst({
+    where: { tenantId: DEFAULT_TENANT_ID, channel: "whatsapp", key: ids.wa },
+    select: { status: true, ownership: true },
+  });
+  check(
+    "replying pauses the bot for that conversation",
+    session?.status === "paused",
+    `session status: ${session?.status ?? "none"}`,
+  );
+  // Stronger than paused: nothing the customer types hands the thread back, only
+  // an explicit Return to bot. Replying by hand is the same claim Take over
+  // makes, so it has to record the same ownership.
+  check(
+    "and records that a PERSON owns it, not merely that the bot is quiet",
+    session?.ownership === "human",
+    `ownership: ${session?.ownership ?? "none"}`,
+  );
+
+  const botRows = await basePrisma.botFlowOutbox.findMany({
+    where: { tenantId: DEFAULT_TENANT_ID, key: ids.wa, origin: "bot" },
+    select: { status: true, failureCode: true },
+  });
+  check(
+    "the bot's unsent backlog is withdrawn, not left to arrive after the human answer",
+    botRows.length === 2 && botRows.every((row) => row.status === "cancelled"),
+    JSON.stringify(botRows),
+  );
+  check(
+    "and it says why it will never be sent",
+    botRows.every((row) => row.failureCode === "superseded_by_human"),
+    JSON.stringify(botRows),
+  );
+
+  const staffRow = await basePrisma.botFlowOutbox.findFirst({
+    where: { tenantId: DEFAULT_TENANT_ID, key: ids.wa, origin: "staff" },
+    select: { id: true, status: true, communicationId: true, communicationLoggedAt: true },
+  });
+  check(
+    "the person's own reply is NOT cancelled with the bot's",
+    staffRow?.status === "pending",
+    `staff row status: ${staffRow?.status ?? "none"}`,
+  );
+  check(
+    "the delivery record and the timeline row are linked",
+    Boolean(staffRow?.communicationId) && staffRow?.communicationId === first.communicationId,
+    `outbox.communicationId=${staffRow?.communicationId} communication=${first.communicationId}`,
+  );
+  check(
+    "the reply is pre-stamped as logged, so the worker cannot log it again as bot output",
+    Boolean(staffRow?.communicationLoggedAt),
+  );
+
+  const audits = await basePrisma.auditEvent.count({ where: { actorUserId: ids.user } });
+  check("the trail committed with the decision it describes", audits === 1, `${audits} audit rows`);
+
+  // The inbox can now answer the question it could not before.
+  const state = (await deliveryStateForMessages([first.communicationId!])).get(first.communicationId!);
+  check(
+    "the inbox can see the message has not been delivered yet",
+    state?.status === "pending",
+    `delivery state: ${JSON.stringify(state)}`,
+  );
+
+  // ── The same composition, resubmitted ─────────────────────────────────────
+  const again = await reply(BODY);
+  check("a resubmission of the same message writes nothing new", !again.created);
+  check(
+    "and resolves to the message it duplicates, so the person can be told its real state",
+    again.communicationId === first.communicationId,
+    `${again.communicationId} vs ${first.communicationId}`,
+  );
+  const afterDuplicate = await basePrisma.communication.count({ where: { contactId: ids.contact } });
+  check("the customer's history still holds exactly one copy", afterDuplicate === 1, `${afterDuplicate} rows`);
+
+  // ── The person corrects a typo and sends again ────────────────────────────
+  //
+  // The failure a box-scoped key produced: the key was unchanged, so the
+  // correction was discarded as a duplicate and the customer received the
+  // original. The corrected text must be a different message.
+  const corrected = await reply(`${BODY} See you at 9.`);
+  check("an edited resubmission is a different message and actually sends", corrected.created);
+  check(
+    "the correction is its own timeline row",
+    corrected.communicationId !== first.communicationId,
+    `${corrected.communicationId} vs ${first.communicationId}`,
+  );
+
+  // ── A key that resolves to a DIFFERENT send is a conflict ─────────────────
+  //
+  // With every identity field in the key this needs a hash collision, so it is
+  // forced here by submitting the first message's key alongside different
+  // content. The point is what happens when a key stops describing its send:
+  // answering "already sent" would discard the reply the person actually typed
+  // and attribute somebody else's message to them.
+  const conflicting = await enqueueStaffMessage({
+    channel: "whatsapp",
+    key: ids.wa,
+    message: { type: "text", text: "Sorry, we don't have stock" },
+    clientIdempotencyKey: keyFor(BODY), // the FIRST message's key, different body
+    body: "Sorry, we don't have stock",
+    contactId: ids.contact,
+    actorId: ids.user,
+  });
+  check(
+    "a key that resolves to a different send is refused, not treated as a duplicate",
+    conflicting.outcome === "conflict",
+    `outcome: ${conflicting.outcome}`,
+  );
+  check(
+    "and reports no ids, so nothing can be claimed about somebody else's message",
+    conflicting.communicationId === null && conflicting.outboxId === null,
+    JSON.stringify(conflicting),
+  );
+  const afterConflict = await basePrisma.communication.count({ where: { contactId: ids.contact } });
+  check(
+    "a conflict writes nothing",
+    afterConflict === 2,
+    `${afterConflict} rows, expected the original plus the correction`,
+  );
+
+  // ── A cancelled message must not become an unclaimable queue head ─────────
+  //
+  // The bot rows were queued BEFORE the staff reply, so they sort ahead of it.
+  // If `cancelled` did not count as finished, the conversation's queue head
+  // would be a row that can never be claimed and nothing would ever send again.
+  const queueHead = await basePrisma.botFlowOutbox.findFirst({
+    where: { tenantId: DEFAULT_TENANT_ID, key: ids.wa, status: { notIn: ["sent", "dead", "cancelled"] } },
+    orderBy: [{ createdAt: "asc" }, { sequence: "asc" }, { id: "asc" }],
+    select: { origin: true },
+  });
+  check(
+    "a cancelled message does not block the queue behind it",
+    queueHead?.origin === "staff",
+    `queue head origin: ${queueHead?.origin ?? "none"}`,
+  );
+
+  // ── ZERO BOT MESSAGES AFTER TAKEOVER, WHATEVER THE BOT WAS DOING ─────────
+  //
+  // Cancelling the pending queue at takeover does not prove this property, which
+  // is why it is tested separately. Two states survive that cancel:
+  //
+  //   a) a flow turn that STARTED before takeover and commits after it — the AI
+  //      call takes seconds, and the person presses Take over during it;
+  //   b) a row a worker had already CLAIMED, which takeover deliberately does not
+  //      touch because its lease belongs to that worker.
+  //
+  // Both must end with the bot silent. Its own conversation, so the assertion is
+  // about the fence and not about whatever else is queued: a staff reply sitting
+  // ahead in the queue would block the drain before it ever reached these rows.
+  await enqueueBotMessages({
+    channel: "whatsapp",
+    key: ids.fenceKey,
+    messages: [{ type: "text", text: "in flight when the person took over" }, { type: "text", text: "and the line after it" }],
+    contactId: ids.contact,
+  });
+
+  // The person takes the conversation over. No staff message is queued here —
+  // Take over is a claim of ownership on its own, and the fence must hold for it.
+  await pauseBotConversation({ channel: "whatsapp", key: ids.fenceKey }, 12);
+  const owned = await basePrisma.botSession.findFirst({
+    where: { tenantId: DEFAULT_TENANT_ID, channel: "whatsapp", key: ids.fenceKey },
+    select: { ownership: true },
+  });
+  check("taking over records that a person owns the conversation", owned?.ownership === "human", `ownership: ${owned?.ownership}`);
+
+  // (b) One row was already CLAIMED when that happened — the state takeover
+  // cannot withdraw — and its worker then died, leaving the lease to expire.
+  const inFlight = await basePrisma.botFlowOutbox.findFirst({
+    where: { tenantId: DEFAULT_TENANT_ID, key: ids.fenceKey, origin: "bot" },
+    orderBy: { sequence: "asc" },
+    select: { id: true, status: true },
+  });
+  check(
+    "a claimed row survives takeover's cancel, exactly as designed",
+    inFlight?.status === "cancelled" || inFlight?.status === "pending",
+    `status: ${inFlight?.status}`,
+  );
+  await basePrisma.botFlowOutbox.updateMany({
+    where: { id: inFlight!.id },
+    data: { status: "running", attempts: 1, leaseUntil: new Date(Date.now() - 60_000), failureCode: null },
+  });
+
+  // The drain runs. Nothing here may reach the provider.
+  const afterTakeover = await flushBotOutboxConversation("whatsapp", ids.fenceKey);
+  const fenceRows = await basePrisma.botFlowOutbox.findMany({
+    where: { tenantId: DEFAULT_TENANT_ID, key: ids.fenceKey, origin: "bot" },
+    select: { status: true, failureCode: true },
+  });
+  check(
+    "a bot message claimed before takeover is withdrawn at the delivery gate, not sent",
+    fenceRows.every((row) => row.status === "cancelled"),
+    JSON.stringify(fenceRows),
+  );
+  check(
+    "and says it was superseded by a person, not that it failed",
+    fenceRows.every((row) => row.failureCode === "superseded_by_human"),
+    JSON.stringify(fenceRows),
+  );
+  check(
+    "the drain reports it as cancelled rather than delivered",
+    afterTakeover.cancelled >= 1 && afterTakeover.sent === 0,
+    JSON.stringify(afterTakeover),
+  );
+  // "None are marked sent" is too weak on its own — this environment has no
+  // provider credentials, so nothing could be delivered even unfenced. The
+  // property is that the provider was never CALLED, and a provider-derived
+  // failure code is the evidence that it was: without the fence these rows come
+  // back `retry` / `not_configured`, which only a real send attempt produces.
+  const botSent = await basePrisma.botFlowOutbox.count({
+    where: { tenantId: DEFAULT_TENANT_ID, key: ids.fenceKey, origin: "bot", status: "sent" },
+  });
+  check("ZERO bot-origin messages were sent after the takeover", botSent === 0, `${botSent} bot messages sent`);
+  check(
+    "and none of them reached the provider at all",
+    fenceRows.every((row) => row.failureCode === "superseded_by_human"),
+    `a provider-derived failure code means the send was attempted: ${JSON.stringify(fenceRows)}`,
+  );
+
+  // The fence is about OWNERSHIP, not about silencing a conversation: the
+  // person's own replies elsewhere are untouched.
+  const staffStillQueued = await basePrisma.botFlowOutbox.count({
+    where: { tenantId: DEFAULT_TENANT_ID, key: ids.wa, origin: "staff", status: { notIn: ["cancelled", "dead"] } },
+  });
+  check("the person's own replies are not cancelled with the bot's", staffStillQueued > 0, `${staffStillQueued} staff rows live`);
+
+  // ── A permanent failure is classified, stored and ACTED ON ────────────────
+  //
+  // An unsupported channel fails identically on every attempt, so spending eight
+  // of them over two hours is pure delay. This is the runtime path that writes
+  // failureCode; without it the column was decoration.
+  await enqueueBotMessages({
+    channel: ids.deadChannel,
+    key: ids.deadKey,
+    messages: [{ type: "text", text: "undeliverable" }],
+  });
+  const run = await flushBotOutboxConversation(ids.deadChannel, ids.deadKey);
+  const failedRow = await basePrisma.botFlowOutbox.findFirst({
+    where: { tenantId: DEFAULT_TENANT_ID, key: ids.deadKey },
+    select: { status: true, failureCode: true, attempts: true, lastError: true },
+  });
+  check("a permanently undeliverable message is dead-lettered", run.dead === 1 && failedRow?.status === "dead", JSON.stringify({ run, failedRow }));
+  check(
+    "the failure is classified on the row, not merely logged",
+    failedRow?.failureCode === "invalid_payload",
+    `failureCode: ${failedRow?.failureCode}`,
+  );
+  check(
+    "and the classification is acted on — one attempt, not eight",
+    failedRow?.attempts === 1,
+    `attempts: ${failedRow?.attempts}`,
+  );
+
+  // ── What the person is told after a real provider rejection ──────────────
+  //
+  // The action drains before it reads the state, so by the time it answers, the
+  // provider has usually already refused. Reporting that in green — "Queued —
+  // sending…" — is the original "Sent ✓" defect in a quieter voice: the person
+  // moves on and the customer never hears from them.
+  const deadState = (
+    await deliveryStateForMessages(
+      (
+        await basePrisma.botFlowOutbox.findMany({
+          where: { tenantId: DEFAULT_TENANT_ID, key: ids.deadKey },
+          select: { communicationId: true },
+        })
+      )
+        .map((row) => row.communicationId)
+        .filter((id): id is string => Boolean(id)),
+    )
+  ).size;
+  // Bot rows carry no communicationId, so there is nothing to look up — which is
+  // itself correct, and the assertion below is the one that matters.
+  check("a bot row has no timeline link to mis-report", deadState === 0);
+
+  const outcome = sendOutcomeMessage({
+    status: failedRow!.status,
+    failureCode: failedRow!.failureCode,
+    attempts: failedRow!.attempts,
+  });
+  check(
+    "a message the provider refused is reported as not sent, from the REAL row",
+    Boolean(outcome.error) && !outcome.ok,
+    JSON.stringify(outcome),
+  );
+
+  // ── A DM attachment and its caption ──────────────────────────────────────
+  //
+  // Meta has no single call carrying both, so they are two queued messages. The
+  // failure this replaces: the file was sent, the text send failed, the person
+  // retried, and the customer received the ATTACHMENT TWICE because neither
+  // provider call was recognisable as one that had already succeeded.
+  const dmComposition = `dm_${SFX}`;
+  // Keyed on the BYTES, exactly as the action does. saveFile mints a fresh
+  // random storage name per upload, so keying on the URL made a resubmission of
+  // the same file derive a different key and queue the attachment twice. Passing
+  // a fixed URL on both attempts — which the earlier version of this test did —
+  // proves the queue primitive while bypassing that instability entirely.
+  const dmKey = (body: string, digest: string | null) =>
+    staffReplyIdempotencyKey({
+      compositionId: dmComposition,
+      channel: "messenger",
+      key: ids.psid,
+      actorId: ids.user,
+      contactId: ids.contact,
+      leadId: null,
+      body,
+      attachmentDigest: digest,
+    });
+  const dmPart = (body: string, url: string | null, message: OutboxPayload, digest: string | null) => ({
+    message,
+    clientIdempotencyKey: dmKey(body, digest),
+    body,
+    attachmentUrl: url,
+  });
+  const dmReply = (parts: ReturnType<typeof dmPart>[]) =>
+    enqueueStaffReply({
+      channel: "messenger",
+      key: ids.psid,
+      parts,
+      contactId: ids.contact,
+      actorId: ids.user,
+    });
+
+  // The same file, uploaded twice: identical BYTES, different storage names —
+  // which is what saveFile actually produces on a resubmission.
+  const fileBytes = Buffer.from(`brochure-${SFX}`);
+  const fileDigest = attachmentDigest(fileBytes);
+  // PRIVATE blob refs on purpose. This is the case the relay exists for — a
+  // public URL needs no signing and would not exercise the expiry at all — and
+  // it is what a deployment with BLOB_PRIVATE actually stores.
+  const upload1 = `https://abc.private.blob.vercel-storage.com/${SFX}-a.pdf`;
+  const upload2 = `https://abc.private.blob.vercel-storage.com/${SFX}-b.pdf`;
+  const filePartAt = (ref: string) =>
+    dmPart("📎 File", ref, { type: "attachment", kind: "file", ref, contentType: "application/pdf", digest: fileDigest }, fileDigest);
+
+  const filePart = filePartAt(upload1);
+  const textPart = dmPart("Here's the brochure.", null, { type: "text", text: "Here's the brochure." }, null);
+  const dm = await dmReply([filePart, textPart]);
+  check(
+    "an attachment and its text are both accepted, in one operation",
+    dm.created && dm.parts.length === 2 && dm.parts.every((p) => p.outcome === "created"),
+    JSON.stringify(dm.parts.map((p) => p.outcome)),
+  );
+
+  const dmRows = await basePrisma.botFlowOutbox.findMany({
+    where: { tenantId: DEFAULT_TENANT_ID, key: ids.psid, origin: "staff" },
+    orderBy: [{ createdAt: "asc" }, { sequence: "asc" }, { id: "asc" }],
+    select: { payload: true, communicationId: true, batchId: true, sequence: true },
+  });
+  check(
+    "both parts share one batch and carry their order explicitly",
+    new Set(dmRows.map((row) => row.batchId)).size === 1 &&
+      dmRows.map((row) => row.sequence).join(",") === "0,1",
+    JSON.stringify(dmRows.map((row) => [row.batchId, row.sequence])),
+  );
+  check(
+    "the attachment is queued ahead of its caption, so it cannot arrive second",
+    (dmRows[0]?.payload as { type?: string } | null)?.type === "attachment" &&
+      (dmRows[1]?.payload as { type?: string } | null)?.type === "text",
+    JSON.stringify(dmRows.map((row) => (row.payload as { type?: string } | null)?.type)),
+  );
+  check(
+    "each half has its own timeline row, as the customer receives them",
+    dmRows.length === 2 && new Set(dmRows.map((row) => row.communicationId)).size === 2,
+    JSON.stringify(dmRows.map((row) => row.communicationId)),
+  );
+
+  // The retry after a half-succeeded submission: the SAME composition resent.
+  // Neither half may be duplicated, and the text half must resolve to the row
+  // that already exists rather than sending the customer a second copy.
+  // The retry re-uploads: a NEW storage URL for the SAME bytes. This is the case
+  // the old fixed-URL test could not reach.
+  const retry = await dmReply([filePartAt(upload2), textPart]);
+  check(
+    "resending the same composition duplicates neither half",
+    retry.outcome === "duplicate" && retry.parts.every((p) => p.outcome === "duplicate"),
+    JSON.stringify(retry.parts.map((p) => p.outcome)),
+  );
+  check(
+    "and still resolves each half to the message it duplicates",
+    retry.parts[0]?.communicationId === dm.parts[0]?.communicationId &&
+      retry.parts[1]?.communicationId === dm.parts[1]?.communicationId,
+    JSON.stringify(retry.parts.map((p) => p.communicationId)),
+  );
+  const dmCount = await basePrisma.botFlowOutbox.count({
+    where: { tenantId: DEFAULT_TENANT_ID, key: ids.psid, origin: "staff" },
+  });
+  check("and the customer is still owed exactly two messages", dmCount === 2, `${dmCount} rows`);
+
+  // Correcting the attachment after a failure must actually send the NEW file.
+  // THE CASE ONE TRANSACTION MUST NOT BREAK. The person edits the caption and
+  // submits the same composition again. The attachment half is already accepted;
+  // writing every part blindly would hit its key, roll the whole thing back, and
+  // lose the correction. Only the missing half may be written.
+  const editedText = dmPart(
+    "Here's the brochure — collection is Friday.",
+    null,
+    { type: "text", text: "Here's the brochure — collection is Friday." },
+    null,
+  );
+  const dmCorrected = await dmReply([filePartAt(`https://abc.private.blob.vercel-storage.com/${SFX}-c.pdf`), editedText]);
+  check(
+    "an edited half still sends when the other half is already accepted",
+    dmCorrected.outcome === "created" &&
+      dmCorrected.parts[0]?.outcome === "duplicate" &&
+      dmCorrected.parts[1]?.outcome === "created",
+    JSON.stringify(dmCorrected.parts.map((p) => p.outcome)),
+  );
+  check(
+    "and the already-accepted half is not written a second time",
+    dmCorrected.parts[0]?.communicationId === dm.parts[0]?.communicationId,
+    `${dmCorrected.parts[0]?.communicationId} vs ${dm.parts[0]?.communicationId}`,
+  );
+  const finalCount = await basePrisma.botFlowOutbox.count({
+    where: { tenantId: DEFAULT_TENANT_ID, key: ids.psid, origin: "staff" },
+  });
+  check("leaving the customer owed three messages, not four", finalCount === 3, `${finalCount} rows`);
+
+  // ── A DURABLE QUEUE CANNOT HOLD AN EXPIRING CREDENTIAL ────────────────────
+  //
+  // The relay URL Meta fetches is a short-lived bearer credential for a
+  // customer's file, and the reply action used to mint one when the person
+  // pressed Send and store it IN the payload. So after a worker outage, a paused
+  // drain, a deployment or a backlog longer than the TTL, the row survived
+  // perfectly and its attachment had been dead for an hour — retried until it
+  // dead-lettered, for a message nothing was wrong with.
+  //
+  // Reading it back from the DATABASE is the point. A source test can see what
+  // the action writes; only the stored row shows what a worker picking it up
+  // tomorrow will actually have to work with.
+  const storedAttachment = await basePrisma.botFlowOutbox.findFirst({
+    where: { tenantId: DEFAULT_TENANT_ID, key: ids.psid, origin: "staff" },
+    orderBy: [{ createdAt: "asc" }, { sequence: "asc" }],
+    select: { id: true, payload: true, createdAt: true },
+  });
+  const stored = storedAttachment?.payload as
+    | { type?: string; ref?: string; url?: string; contentType?: string }
+    | null;
+  check("the queued attachment holds a durable ref", stored?.type === "attachment" && stored?.ref === upload1, JSON.stringify(stored));
+  check("and no URL at all — nothing stored can expire", stored?.url === undefined, JSON.stringify(stored));
+  check("and the content type it must be served back as", stored?.contentType === "application/pdf", stored?.contentType);
+
+  // Age the row far beyond the relay TTL, exactly as an outage would, then ask
+  // for the URL the worker would use on its NEXT attempt.
+  const sixHoursAgo = new Date(Date.now() - 6 * 3600_000);
+  await basePrisma.botFlowOutbox.update({
+    where: { id: storedAttachment!.id },
+    data: { createdAt: sixHoursAgo, availableAt: sixHoursAgo },
+  });
+  const aged = await basePrisma.botFlowOutbox.findUnique({
+    where: { id: storedAttachment!.id },
+    select: { payload: true, createdAt: true },
+  });
+  const agedPayload = aged!.payload as { ref: string; contentType?: string };
+  const secret = "durability-probe-secret";
+  const origin = "https://crm.example.test";
+  // What the OLD code would have delivered: the URL minted when it was queued.
+  const queueTimeUrl = attachmentUrlForDelivery(agedPayload, {
+    secret,
+    origin,
+    now: aged!.createdAt.getTime(),
+  });
+  check(
+    "a URL minted when the row was queued is dead by now",
+    verifyOutboundMediaToken(queueTimeUrl!.split("/").pop()!, secret) === null,
+  );
+  // What the worker does now, from the same stored row.
+  const attemptUrl = attachmentUrlForDelivery(agedPayload, { secret, origin });
+  const claim = attemptUrl ? verifyOutboundMediaToken(attemptUrl.split("/").pop()!, secret) : null;
+  check("but the row still yields a valid URL on this attempt", claim !== null);
+  check("pointing at the same bytes", claim?.ref === upload1, claim?.ref);
+  check("served as what it is", claim?.contentType === "application/pdf", claim?.contentType);
+  check("and it is a fresh credential, not the stored one", attemptUrl !== queueTimeUrl);
+}
+
+// THE WHOLE RUN, IN A WORKSPACE — as every real caller of these entry points is.
+//
+// enqueueStaffMessage, enqueueStaffReply, pauseBotConversation,
+// resumeBotConversation and flushBotOutboxConversation all bind through
+// withStaffConversationScope, which resolves the acting workspace from the
+// SESSION. A script has no request, so there is none to read; that used to fall
+// back to the founding tenant, which is the only reason this file passed without
+// ever establishing a workspace. The fallback is gone, because it also turned a
+// stale or ambiguous REAL session into the founding tenant.
+//
+// Bound once here rather than at each call: several of these entry points reach
+// the scope indirectly (enqueueStaffMessage delegates to enqueueStaffReply), so
+// wrapping call sites one at a time just moves the next failure further down the
+// file. The fixtures this script seeds are already stamped with this tenant.
+runInTenantScope({ tenantId: DEFAULT_TENANT_ID, system: false }, main)
+  .then(async () => {
+    await cleanup();
+    console.log(`\n${passed} passed, ${failed} failed`);
+    if (failed > 0) process.exitCode = 1;
+  })
+  .catch(async (error) => {
+    await cleanup().catch(() => {});
+    console.error(error);
+    process.exitCode = 1;
+  })
+  .finally(async () => {
+    await prisma.$disconnect().catch(() => {});
+    await basePrisma.$disconnect();
+  });

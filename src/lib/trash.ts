@@ -1,7 +1,8 @@
 import { subDays } from "date-fns";
 import { Prisma } from "@prisma/client";
 import { basePrisma } from "./db";
-import { activeTenantPredicate } from "./tenantPredicate";
+import { actingScopeClass } from "./actingScope";
+import { TenantScopeError } from "./tenantGuard";
 import { deleteFile } from "./storage";
 import { type CustomEntity } from "./customFields";
 
@@ -40,16 +41,62 @@ function delegate(model: TrashModel, client: any = basePrisma): any {
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
 /**
- * The active tenant. Every trash model carries `tenantId`, and delegate() runs
- * on basePrisma — which BYPASSES the RLS extension — so the predicate has to be
- * written by hand at each write.
+ * The active tenant for a USER-ORIGINATED trash operation. Every trash model
+ * carries `tenantId`, and delegate() runs on basePrisma — which BYPASSES the RLS
+ * extension — so the predicate has to be written by hand at each write.
  *
  * Resolved here rather than passed in, because a parameter is a thing a caller
  * can get wrong: six callers reached these helpers and only one thought about
  * tenancy. Taking the decision away from them is the fix.
+ *
+ * ACTING scope (`actingScopeClass()`), not `activeTenantPredicate` — every
+ * caller here is a signed-in owner's server action (`requireOwner()` /
+ * `requireXAccess()`), and `activeTenantPredicate` answers from ENFORCEMENT
+ * alone, which is `{}` while DORMANT — the mode every environment runs in
+ * today. Under that predicate `restoreFromTrash` had no per-record ownership
+ * gate in front of it at all (`requireOwner()` says WHO, never WHOSE), so any
+ * owner could restore another tenant's soft-deleted row by id, resurrecting
+ * data that tenant deliberately deleted. See permissions.ts's
+ * actingRecordPredicate for the identical ladder; a shared copy of it is a
+ * follow-up worth doing; this one is small and has been kept identical on
+ * purpose rather than duplicated carelessly.
  */
-function activeTenantWhere(): { tenantId?: string | null } {
-  return activeTenantPredicate("softDeleteRecord/restoreRecord");
+export async function actingTrashPredicate(context: string): Promise<{ tenantId: string }> {
+  const scope = await actingScopeClass();
+  if (scope.mode === "tenant") return { tenantId: scope.tenantId };
+  // `global` IS A REFUSAL HERE, not a background job.
+  //
+  // This originally returned `{}` for `global` on the reasoning that global
+  // means "cron / webhook / queue drain, which has no session". That is wrong
+  // for THIS predicate, and it fails open in precisely the states that need it
+  // most. While enforcement is DORMANT — every environment today —
+  // `actingScopeClass()` answers `global` whenever the session cannot resolve a
+  // tenant at all: a session minted before the `tid` claim existed, a claim gone
+  // stale after a membership was removed or a tenant suspended, and — the one
+  // that matters — a claim that became AMBIGUOUS because the user holds two or
+  // more active memberships, which `honoredTenantClaim()` deliberately drops to
+  // null rather than guess at.
+  //
+  // So `requireOwner()` could succeed, tenant resolution could come back
+  // ambiguous, and this returned no predicate at all — handing an unfiltered
+  // `basePrisma` query every workspace's deleted records, and letting a restore
+  // resurrect another tenant's data by id. The exceptional session state is
+  // exactly when a boundary must hold.
+  //
+  // There is no legitimate sessionless caller to keep `{}` for: `purgeTrash()`
+  // is the genuine platform-wide operation and deliberately does not come
+  // through here, and every other caller is a signed-in staff action. So the
+  // only honest answers are a real tenant or a refusal.
+  throw new TenantScopeError(
+    `${context}: this request has no resolvable workspace, so it cannot read or ` +
+      "change trashed records. A global owner without a resolved tenant must use " +
+      "the platform console; a session that cannot resolve one — stale, or ambiguous " +
+      "across several memberships — must sign in again.",
+  );
+}
+
+function actingTenantWhere(): Promise<{ tenantId: string }> {
+  return actingTrashPredicate("softDeleteRecord/restoreRecord");
 }
 
 /**
@@ -88,12 +135,13 @@ export async function softDeleteRecord(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   tx?: any,
 ) {
+  const where = await actingTenantWhere();
   const rows = await delegate(model, tx).updateMany({
-    where: { id, ...activeTenantWhere() },
+    where: { id, ...where },
     data: { deletedAt: new Date(), deleteReason: reason, deletedByName: userName },
   });
   if (rows.count === 0) return null;
-  return delegate(model, tx).findFirst({ where: { id, ...activeTenantWhere() } });
+  return delegate(model, tx).findFirst({ where: { id, ...where } });
 }
 
 /**
@@ -105,12 +153,13 @@ export async function softDeleteRecord(
  * that did not happen.
  */
 export async function restoreRecord(model: TrashModel, id: string) {
+  const where = await actingTenantWhere();
   const rows = await delegate(model).updateMany({
-    where: { id, ...activeTenantWhere() },
+    where: { id, ...where },
     data: { deletedAt: null, deleteReason: null, deletedByName: null },
   });
   if (rows.count === 0) return null;
-  return delegate(model).findFirst({ where: { id, ...activeTenantWhere() } });
+  return delegate(model).findFirst({ where: { id, ...where } });
 }
 
 /** Permanently removes trash older than the retention window. Returns count purged. */

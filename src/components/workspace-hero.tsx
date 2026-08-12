@@ -1,6 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
-import { Surface } from "@/components/visual-system";
+import { Eyebrow, Surface } from "@/components/visual-system";
 import { cn } from "@/lib/utils";
 
 export type WorkspaceStat = {
@@ -19,6 +19,23 @@ const STAT_TONES = {
   danger: "text-red-300",
 };
 
+const HERO_TONES = {
+  primary: {
+    surface: "border-primary/15 bg-gradient-to-br from-primary/[0.12] via-card to-card",
+    glow: "bg-primary/10",
+    icon: "border-primary/20 bg-primary/10 text-primary",
+    eyebrow: "text-primary",
+    activeBorder: "border-primary",
+  },
+  marketing: {
+    surface: "border-fuchsia-400/15 bg-gradient-to-br from-fuchsia-500/[0.1] via-card to-card",
+    glow: "bg-fuchsia-400/10",
+    icon: "border-fuchsia-400/20 bg-fuchsia-400/10 text-fuchsia-300",
+    eyebrow: "text-fuchsia-300",
+    activeBorder: "border-fuchsia-300",
+  },
+};
+
 export function WorkspaceHero({
   icon: Icon,
   eyebrow,
@@ -26,6 +43,8 @@ export function WorkspaceHero({
   description,
   actions,
   stats = [],
+  navigation,
+  tone = "primary",
   className,
 }: {
   icon: LucideIcon;
@@ -34,20 +53,24 @@ export function WorkspaceHero({
   description: ReactNode;
   actions?: ReactNode;
   stats?: WorkspaceStat[];
+  navigation?: ReactNode;
+  tone?: keyof typeof HERO_TONES;
   className?: string;
 }) {
+  const theme = HERO_TONES[tone];
+
   return (
-    <Surface className={cn("relative overflow-hidden border-primary/15 bg-gradient-to-br from-primary/[0.12] via-card to-card", className)}>
-      <div className="pointer-events-none absolute -right-24 -top-28 size-72 rounded-full bg-primary/10 blur-3xl" />
+    <Surface data-tone={tone} className={cn("relative overflow-hidden", theme.surface, className)}>
+      <div className={cn("pointer-events-none absolute -right-24 -top-28 size-72 rounded-full blur-3xl", theme.glow)} />
       <div className="relative p-3.5 sm:px-4 sm:py-3.5">
         <div className="flex flex-col gap-2.5 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex min-w-0 items-start gap-2.5 sm:items-center">
-            <span className="grid size-9 shrink-0 place-items-center rounded-lg border border-primary/20 bg-primary/10 text-primary shadow-sm sm:size-8">
+            <span className={cn("grid size-9 shrink-0 place-items-center rounded-lg border shadow-sm sm:size-8", theme.icon)}>
               <Icon className="size-4" />
             </span>
             <div className="min-w-0 xl:flex xl:items-center xl:gap-4">
               <div className="shrink-0">
-                <p className="text-[9px] font-semibold uppercase tracking-[0.18em] text-primary">{eyebrow}</p>
+                <Eyebrow className={theme.eyebrow}>{eyebrow}</Eyebrow>
                 <h1 className="mt-0.5 text-lg font-semibold tracking-[-0.04em] text-foreground">{title}</h1>
               </div>
               <p className="mt-1 max-w-2xl text-xs leading-[1.125rem] text-muted-foreground xl:mt-0 xl:max-w-xl">{description}</p>
@@ -67,11 +90,16 @@ export function WorkspaceHero({
             {stats.map((stat, index) => {
               const StatIcon = stat.icon;
               return <div key={index} className="min-w-0 bg-background/55 px-2.5 py-1.5 backdrop-blur-sm">
-                <p className="flex items-center gap-1.5 truncate text-[9px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">{StatIcon ? <StatIcon className="size-3 shrink-0" /> : null}{stat.label}</p>
+                <p className="flex items-center gap-1.5 truncate text-[10px] font-medium tracking-[0.02em] text-muted-foreground">{StatIcon ? <StatIcon className="size-3 shrink-0" /> : null}{stat.label}</p>
                 <p className={cn("mt-0.5 text-sm font-semibold tracking-[-0.03em] tabular-nums", STAT_TONES[stat.tone ?? "default"])}>{stat.value}</p>
                 {stat.detail ? <p className="truncate text-[9px] leading-4 text-muted-foreground/80">{stat.detail}</p> : null}
               </div>;
             })}
+          </div>
+        ) : null}
+        {navigation ? (
+          <div data-slot="workspace-navigation" data-active-border={theme.activeBorder} className="-mx-3.5 -mb-3.5 mt-2.5 border-t border-border/70 px-2.5 sm:-mx-4 sm:px-3">
+            {navigation}
           </div>
         ) : null}
       </div>

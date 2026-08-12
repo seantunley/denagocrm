@@ -1,10 +1,12 @@
-import { prisma } from "@/lib/db";
 import { accessibleInboxWhere, requireAnyPermission } from "@/lib/permissions";
 import AutoRefresh from "@/components/AutoRefresh";
 import Tabs from "@/components/Tabs";
 import SocialThreadList from "@/components/SocialThreadList";
 import InstallAppButton from "@/components/InstallAppButton";
 import { buildInboxThreads } from "@/lib/inboxThreads";
+import { loadInboxComms } from "@/lib/inboxQuery";
+import { conversationIdsForThreads } from "@/lib/inboxConversations";
+import { deliveryStateForMessages } from "@/lib/botOutbox";
 
 export const metadata = { title: "Chats — Denago Messages" };
 
@@ -14,15 +16,26 @@ export default async function MessagesChatsPage() {
   // Scope to the contacts/leads this user may see; {} for view_all users.
   const scopeWhere = await accessibleInboxWhere(user);
 
-  const comms = await prisma.communication.findMany({
-    where: { type: { in: ["whatsapp", "messenger", "instagram"] }, ...scopeWhere, archivedAt: null },
-    orderBy: { occurredAt: "desc" },
-    take: 400,
-    include: { contact: true, lead: true },
-  });
+  // Same thread-first selection as the full Inbox: mobile must not see a
+  // different set of conversations than the desktop queue.
+  const comms = await loadInboxComms(scopeWhere);
 
   const threads = buildInboxThreads(comms);
+  // Resolved BEFORE the reply boxes render, not when Send is pressed: a Messenger
+  // or Instagram reply is delivered on the channel this row names, so without it
+  // the box has nothing to post and refuses. The full inbox gets the same ids via
+  // its collaboration payload.
+  const conversations = await conversationIdsForThreads(threads);
   const unread = threads.filter((t) => t.unread).length;
+
+  // Mobile must not be a lower-safety messaging path: if a reply did not reach
+  // the customer, the surface most likely to be used on the road is the one that
+  // most needs to say so.
+  const delivery = await deliveryStateForMessages(
+    threads.flatMap((thread) =>
+      thread.messages.filter((message) => message.direction === "outbound").map((message) => message.id),
+    ),
+  );
 
   return (
     <div className="space-y-4">
@@ -44,8 +57,10 @@ export default async function MessagesChatsPage() {
             count: unread,
             content: (
               <SocialThreadList
+                delivery={delivery}
                 list={threads}
                 empty="No conversations yet. WhatsApp chats appear once the number is connected; Messenger and Instagram DMs flow once Meta approves messaging."
+                conversations={conversations}
                 revalidate="/messages"
               />
             ),
@@ -56,8 +71,10 @@ export default async function MessagesChatsPage() {
             count: threads.filter((t) => t.channel === "whatsapp" && t.unread).length,
             content: (
               <SocialThreadList
+                delivery={delivery}
                 list={threads.filter((t) => t.channel === "whatsapp")}
                 empty="No WhatsApp conversations yet."
+                conversations={conversations}
                 revalidate="/messages"
               />
             ),
@@ -68,8 +85,10 @@ export default async function MessagesChatsPage() {
             count: threads.filter((t) => t.channel === "messenger" && t.unread).length,
             content: (
               <SocialThreadList
+                delivery={delivery}
                 list={threads.filter((t) => t.channel === "messenger")}
                 empty="No Messenger conversations yet."
+                conversations={conversations}
                 revalidate="/messages"
               />
             ),
@@ -80,8 +99,10 @@ export default async function MessagesChatsPage() {
             count: threads.filter((t) => t.channel === "instagram" && t.unread).length,
             content: (
               <SocialThreadList
+                delivery={delivery}
                 list={threads.filter((t) => t.channel === "instagram")}
                 empty="No Instagram DMs yet."
+                conversations={conversations}
                 revalidate="/messages"
               />
             ),

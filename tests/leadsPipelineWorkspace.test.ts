@@ -31,10 +31,15 @@ test("lead pipeline preserves production card signals", () => {
 });
 
 test("lead board staff pickers and mutations stay inside the active tenant", () => {
-  assert.match(pageSource, /listTenantStaff\(\)/);
+  assert.match(pageSource, /listActingTenantStaff\(\)/);
   assert.doesNotMatch(pageSource, /prisma\.user\.findMany/);
-  assert.match(leadActionsSource, /resolveTenantMemberUser\(userId\)/);
-  assert.match(leadActionsSource, /requireAssignableUser\(assignedToId\)/);
+  // Same intent as before — the board's assign action must check membership —
+  // but asserted against the SHARED contract rather than this file's own former
+  // copy of it. `resolveTenantMemberUser` is the raw lookup underneath;
+  // `resolveAssignableUser` is the lookup plus the refusal rule, and going
+  // through it is what stops the four copies drifting apart again.
+  assert.match(leadActionsSource, /resolveAssignableUser\(assignedToId, ASSIGNEE_LABEL\)/);
+  assert.doesNotMatch(leadActionsSource, /\bresolveTenantMemberUser\s*\(/);
 });
 
 test("lead card actions share the required-action stage gate", () => {

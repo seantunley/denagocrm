@@ -1,9 +1,15 @@
 import { prisma } from "./db";
+import { customerRecordTenantId } from "./customerRecordTenant";
 import { credentialOwnerTenantId, resolveIntegrationBundleForTenant, resolveTenantCredential } from "./settings";
 import { sendPushToAll } from "./push";
 import { createLeadRecordIfPipelineReady } from "./leadCreate";
 import { resolveTenantActor } from "./tenantActor";
+import { inboundCommunicationKey, isDedupeKeyConflict } from "./inboundMessageKey";
+import { currentInboundBotEventId } from "./botInboundEvent";
+import { DEFAULT_TENANT_ID } from "./tenant";
+import { writeTenantId } from "./tenantWrite";
 import { currentTenantScope } from "./tenantScope";
+import { distinctIdentities } from "./botBookingIdentity";
 
 /**
  * Every outbound call is bounded. Node fetch has NO default timeout, so an
@@ -109,23 +115,87 @@ export async function isWhatsAppConfigured(): Promise<boolean> {
   return (await waCredentials()) !== null;
 }
 
-/** Finds the contact (or open lead) a WhatsApp number belongs to. */
-export async function matchByPhone(digits: string) {
+/**
+ * Finds the contact (or open lead) a WhatsApp number belongs to.
+ *
+ * This is the CHANNEL identity the booking self-service boundary trusts — see
+ * botBookingIdentity.ts, which exists because a typed phone number is a claim and
+ * not proof. That boundary is only as good as this lookup, and this lookup had
+ * two ways to name the wrong person:
+ *
+ *   * `contains` matched the 9-digit tail ANYWHERE in the stored value, not at the
+ *     end. A field holding two numbers, an extension, or a longer string matches a
+ *     tail that is not its own.
+ *   * `take: 1` with NO `orderBy`. With more than one match Postgres returns
+ *     whichever row it likes, so the same inbound number could resolve to
+ *     different customers on different requests — and while enforcement is dormant
+ *     `withChannelTenantScope` adds no tenant predicate, so "more than one match"
+ *     includes another workspace's customer.
+ *
+ * `endsWith` is what was meant. The ordering makes the pick deterministic. And
+ * `ambiguous` reports what a single row cannot: that the number did not identify
+ * ONE person. Ordinary conversation still uses the deterministic pick — an inbound
+ * message must be filed somewhere — but an action that touches an existing booking
+ * refuses it, because "probably this customer" is not identity.
+ *
+ * Ambiguity is counted ACROSS both tables. Returning as soon as a Contact matched
+ * meant one Contact and one unrelated open Lead on the same number read as
+ * unambiguous, and that is two people. A Lead pointing AT a matched Contact is the
+ * same person, so identities collapse on contactId rather than on row count.
+ *
+ * Which is exactly why the candidate query cannot be truncated to two rows. Rows
+ * are not identities: two Leads both pointing at the matched Contact fill both
+ * slots and are ONE person, hiding a third row that is somebody else. The query
+ * takes a generous bound instead, and REACHING that bound is itself ambiguous —
+ * at that point the lookup cannot prove the number names one person, which is the
+ * same answer as proving it names two.
+ *
+ * Known limitation: CRM phone fields are free-form, so `082 123 4567` still does
+ * not match the digit tail. That predates this change — `contains` also required a
+ * contiguous run — and fixing it properly means comparing normalised digits, which
+ * needs a stored normalised column to stay indexable. Worth doing; not this.
+ */
+export type PhoneMatch = { contactId: string | null; leadId: string | null; ambiguous: boolean };
+
+/**
+ * How many candidate rows the identity lookup considers before giving up on
+ * proving uniqueness. Rows are `{ id, contactId }`, so this is a runaway guard
+ * against pathological data, not a page size — a phone tail matching this many
+ * records is a data problem, and answering "one person" from a truncated set
+ * would be a guess.
+ */
+const CANDIDATE_LIMIT = 50;
+
+export async function matchByPhone(digits: string): Promise<PhoneMatch> {
   const variants = [digits, "0" + digits.slice(2), "+" + digits];
-  const contacts = await prisma.contact.findMany({
-    where: {
-      OR: variants.flatMap((v) => [
-        { phone: { contains: v.slice(-9) } },
-        { whatsapp: { contains: v.slice(-9) } },
-      ]),
-    },
-    take: 1,
-  });
-  if (contacts[0]) return { contactId: contacts[0].id, leadId: null as string | null };
-  const lead = await prisma.lead.findFirst({
-    where: { phone: { contains: digits.slice(-9) }, status: "open" },
-  });
-  return { contactId: lead?.contactId ?? null, leadId: lead?.id ?? null };
+  const tails = [...new Set(variants.map((v) => v.slice(-9)))];
+  // Both tables, always. Stopping at the first matching Contact could not see an
+  // unrelated open Lead on the same number, and that is a second person.
+  // Oldest first: stable across requests, and the original record rather than a
+  // later duplicate. Rows are {id, contactId} only, so the bound is a runaway
+  // guard rather than a page size — see CANDIDATE_LIMIT.
+  const [contacts, leads] = await Promise.all([
+    prisma.contact.findMany({
+      where: { OR: tails.flatMap((tail) => [{ phone: { endsWith: tail } }, { whatsapp: { endsWith: tail } }]) },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      take: CANDIDATE_LIMIT,
+      select: { id: true },
+    }),
+    prisma.lead.findMany({
+      where: { phone: { endsWith: digits.slice(-9) }, status: "open" },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      take: CANDIDATE_LIMIT,
+      select: { id: true, contactId: true },
+    }),
+  ]);
+
+  // Hitting the bound means candidates were dropped, so uniqueness cannot be
+  // proved — fail closed rather than answer from a truncated set.
+  const truncated = contacts.length >= CANDIDATE_LIMIT || leads.length >= CANDIDATE_LIMIT;
+  const ambiguous = truncated || distinctIdentities(contacts, leads) > 1;
+  if (contacts[0]) return { contactId: contacts[0].id, leadId: null, ambiguous };
+  const lead = leads[0];
+  return { contactId: lead?.contactId ?? null, leadId: lead?.id ?? null, ambiguous };
 }
 
 /**
@@ -354,7 +424,9 @@ export async function fetchWhatsAppMedia(
 export async function recordInboundWhatsApp(
   fromDigits: string,
   profileName: string | null,
-  text: string
+  text: string,
+  /** The provider's message id, so a redelivery reuses this row instead of adding one. */
+  providerMessageId?: string,
 ) {
   const match = await matchByPhone(fromDigits);
   const { contactId } = match;
@@ -391,24 +463,57 @@ export async function recordInboundWhatsApp(
   // (established by the webhook chokepoint); dormant → the oldest active user.
   const firstUser = await resolveTenantActor();
   if (!firstUser) return;
-  await prisma.communication.create({
-    data: {
-      type: "whatsapp",
-      direction: "inbound",
-      body: text,
-      contactId,
-      leadId,
-      userId: firstUser.id,
-    },
+  // create(), NOT createMany(): db.ts extends communication.create to resolve and
+  // attach the Conversation and then bump its counters, unread flag and
+  // last-inbound timestamp. There is no createMany hook, so batching would file
+  // messages with no Conversation at all — and assignment, notes, drafts and
+  // bot/human ownership all hang off Conversation rows. The unique dedupeKey is
+  // the replay signal instead: the first delivery takes the normal path with every
+  // hook, a redelivery is refused by the index.
+  const dedupeKey = inboundCommunicationKey({
+    ledgerEventId: currentInboundBotEventId(),
+    tenantId: writeTenantId() ?? DEFAULT_TENANT_ID,
+    channel: "whatsapp",
+    providerId: providerMessageId ?? "",
   });
+  let inserted = true;
+  try {
+    await prisma.communication.create({
+      data: {
+        type: "whatsapp",
+        direction: "inbound",
+        body: text,
+        contactId,
+        leadId,
+        userId: firstUser.id,
+        // The dedupe key above falls back to DEFAULT_TENANT_ID because it only has to
+        // be STABLE. Ownership is a different standard and must never be invented:
+        // the customer record decides, or nobody does.
+        tenantId: await customerRecordTenantId({ contactId, leadId }),
+        ...(dedupeKey ? { dedupeKey } : {}),
+      },
+    });
+  } catch (error) {
+    if (!dedupeKey || !isDedupeKeyConflict(error)) throw error;
+    inserted = false;
+  }
+
+  // Notify immediately after the row lands, BEFORE the other fallible work below.
+  // "The transcript row already existed" is not the same fact as "the notification
+  // already went out", and ordering it here is what keeps them close enough to be
+  // honest: the only way to reach this on a replay is a genuine duplicate insert.
+  if (inserted) {
+    await sendPushToAll({
+      title: "New WhatsApp message 💬",
+      body: `${profileName ?? "+" + fromDigits}: ${text.slice(0, 80)}`,
+      url: "/messages",
+    }, "whatsapp").catch(() => {});
+  }
+
   const { reopenThreadOnInbound } = await import("@/lib/reopenThread");
   await reopenThreadOnInbound(contactId, leadId, "whatsapp");
 
   // Notify on every inbound — WhatsApp is the primary contact channel. Opens the
   // Messages app so replies aren't lost in the CRM.
-  await sendPushToAll({
-    title: "New WhatsApp message 💬",
-    body: `${profileName ?? "+" + fromDigits}: ${text.slice(0, 80)}`,
-    url: "/messages",
-  }, "whatsapp").catch(() => {});
+
 }

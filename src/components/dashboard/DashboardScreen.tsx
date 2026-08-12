@@ -93,6 +93,8 @@ export default async function DashboardScreen({
       <DashboardEditorRoot
         slug={dashboard.slug}
         dashboardId={dashboard.id}
+        // The revision the editor fences its autosave against.
+        updatedAt={dashboard.updatedAt}
         config={dashboard.config}
         views={views}
         activeViewId={active?.id ?? null}

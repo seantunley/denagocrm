@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
 import {
   DndContext,
   DragOverlay,
@@ -9,24 +10,38 @@ import {
   MouseSensor,
   TouchSensor,
   closestCenter,
+  pointerWithin,
+  useDroppable,
   useSensor,
   useSensors,
+  type CollisionDetection,
   type DragEndEvent,
   type DragOverEvent,
   type DragStartEvent,
+  type Modifier,
 } from "@dnd-kit/core";
+import { getEventCoordinates } from "@dnd-kit/utilities";
 import {
   SortableContext,
-  arrayMove,
   sortableKeyboardCoordinates,
   useSortable,
   type SortingStrategy,
 } from "@dnd-kit/sortable";
-import { GripVertical, Plus, Settings2, Trash2, X, Check, Eye } from "lucide-react";
+import { Eye, GripVertical, Plus, Settings2, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  dropPreview,
+  insertionTargetInSection,
+  layoutWithMarker,
+  moveCardInView,
+  nearestId,
+  type DropPreview,
+} from "@/lib/dashboard/canvasMove";
 import type { CardConfig, SectionConfig, ViewConfig } from "@/lib/dashboard/config";
+import { isContainerCard } from "@/lib/dashboard/cardTree";
 import { useEditor, newId } from "./EditorProvider";
 import { CARD_MIN_HEIGHT } from "../cards/placement";
+import ContainerContents, { cardLabel } from "./ContainerContents";
 
 /**
  * The dashboard as the user sees it, in both modes.
@@ -51,17 +66,61 @@ import { CARD_MIN_HEIGHT } from "../cards/placement";
  *
  * ── THE DRAG RULES ARE INHERITED, NOT REDISCOVERED ──────────────────────────
  *
- * Four things, all of which were bugs in the first grid and are fixed here by
- * construction: the layout is driven by LOCAL state so a drop moves something
- * immediately; the reorder happens on drag-OVER so the gap you are dropping into
- * is the gap you can see; no sorting strategy is used because the cards are
- * different sizes and transform-based previews send them to visibly wrong
- * places; and droppables are re-measured continuously because the DOM genuinely
- * reorders under the pointer.
+ * Three of these were bugs in the first grid and are fixed here by construction:
+ * the layout is driven by LOCAL state, so a drop moves something immediately; no
+ * sorting strategy and no layout animation, because the cards are different
+ * sizes and transform-based previews send them to visibly wrong places; and
+ * droppables are re-measured continuously, because a card can still resize on
+ * its own as streamed data resolves.
+ *
+ * The fourth was REVERSED, on evidence. It used to read: the reorder happens on
+ * drag-over, so the gap you are dropping into is the gap you can see. The intent
+ * was right and the mechanism crashed the page - two cards can swap forever,
+ * because taking the other one's index puts it back under a pointer that has not
+ * moved. See `dropPreview` in lib/dashboard/canvasMove for the captured stack.
+ *
+ * So a drag moves a MARKER and changes nothing else; the document is edited
+ * once, on the drop. The gap you can see is now drawn rather than reflowed into
+ * existence, which is a clearer answer to the same question.
  */
+
+/** Module-level so the snapshot is referentially stable across renders. */
+const subscribeToNothing = () => () => {};
+const getDocumentBody = () => document.body;
 
 const NO_TRANSFORM: SortingStrategy = () => null;
 const MEASURE_ALWAYS = { droppable: { strategy: MeasuringStrategy.Always } };
+
+/**
+ * Keep the drag label under the cursor.
+ *
+ * By default an overlay is placed at the DRAGGED ELEMENT's position, moved by
+ * the pointer's delta — which is right when the overlay is a copy of the
+ * element, and wrong here, where it is a small label standing in for a card that
+ * can be most of the screen wide. Grab a wide card by its handle, at its
+ * top-right, and the label is drawn at the card's top-LEFT: hundreds of pixels
+ * from the pointer, and it stays that far away for the whole drag. Reported as
+ * the label not following the cursor.
+ *
+ * Centring it on the pointer is what people expect from something they are
+ * carrying, and it matters more here than usual: the card itself does not move
+ * any more, so this label is the only thing that says a drag is happening at
+ * all.
+ *
+ * Written out rather than taken from @dnd-kit/modifiers, which is a dependency
+ * this project does not have and would be a package for one twelve-line
+ * function.
+ */
+const snapToCursor: Modifier = ({ activatorEvent, draggingNodeRect, transform }) => {
+  if (!draggingNodeRect || !activatorEvent) return transform;
+  const grabbedAt = getEventCoordinates(activatorEvent);
+  if (!grabbedAt) return transform;
+  return {
+    ...transform,
+    x: transform.x + grabbedAt.x - draggingNodeRect.left - draggingNodeRect.width / 2,
+    y: transform.y + grabbedAt.y - draggingNodeRect.top - draggingNodeRect.height / 2,
+  };
+};
 
 const VIEW_COLUMNS: Record<1 | 2 | 3 | 4, string> = {
   1: "grid-cols-1",
@@ -95,6 +154,56 @@ export default function DashboardCanvas({
 }) {
   const { editing, updateView } = useEditor();
   const [activeId, setActiveId] = useState<string | null>(null);
+  /*
+   * Where the card would land, so the destination is visible BEFORE the drop.
+   *
+   * This is the whole of what changes during a drag. The document does not: see
+   * `dropPreview` for why reordering it under the pointer was what produced the
+   * error page.
+   */
+  const [preview, setPreview] = useState<DropPreview | null>(null);
+  /** The dragged card's measured height, so the marker can match it exactly. */
+  const [activeHeight, setActiveHeight] = useState<number | null>(null);
+  /*
+   * The last thing the pointer was over, so a drop that lands outside every
+   * droppable still goes where the marker promised. dnd-kit reports `over` as
+   * null in that case, and dropping a card into nothing should not silently
+   * undo the whole gesture.
+   */
+  const lastOverId = useRef<string | null>(null);
+
+  /*
+   * THE DRAG LABEL HAS TO ESCAPE THE PAGE WRAPPER.
+   *
+   * globals.css gives every direct child of `.denago-workspace` the
+   * `workspace-enter` entry animation, with `animation-fill-mode: both`. That
+   * fill mode is what keeps the animation's final frame applied FOREVER after it
+   * finishes — and its final frame is `transform: translateY(0)`.
+   *
+   * A transform other than `none` makes an element the containing block for
+   * every `position: fixed` descendant. dnd-kit's overlay is position:fixed with
+   * `top`/`left` taken from viewport-space rects, so those coordinates were
+   * being resolved against the page wrapper's box instead of the viewport: the
+   * label came out displaced by the wrapper's own offset, constantly, for the
+   * whole drag. It followed the pointer perfectly and never arrived at it.
+   *
+   * Which is why two rounds of arithmetic on the overlay changed nothing — both
+   * were correct inside a coordinate space that was already wrong.
+   *
+   * A portal to `document.body` puts it outside the transformed ancestor
+   * entirely. React context still reaches it, so it remains a child of the
+   * DndContext as far as dnd-kit is concerned. This is also why the app's
+   * dialogs and popovers are unaffected: Radix portals them already, and
+   * DragOverlay is the one piece of fixed-position UI here that does not.
+   *
+   * Read through useSyncExternalStore rather than set from an effect. It is the
+   * shape React provides for a value that simply does not exist on the server: a
+   * server snapshot of null, a client snapshot of document.body, and a
+   * subscribe that never fires because the body never changes. Setting state in
+   * an effect would do the same job by triggering a second render, which is what
+   * react-hooks/set-state-in-effect is there to catch.
+   */
+  const overlayHost = useSyncExternalStore(subscribeToNothing, getDocumentBody, () => null);
 
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 8 } }),
@@ -110,12 +219,141 @@ export default function DashboardCanvas({
    */
   const sections = editing ? view.sections : view.sections.filter((s) => hasDrawn(s, slots));
 
-  function findSectionOf(cardId: string): SectionConfig | undefined {
-    return view.sections.find((section) => section.cards.some((card) => card.id === cardId));
-  }
+  const cardIds = useMemo(
+    () => new Set(view.sections.flatMap((section) => section.cards).map((card) => card.id)),
+    [view.sections],
+  );
+
+  /*
+   * WHAT IS UNDER THE POINTER, not what is nearest the dragged thing.
+   *
+   * `closestCenter` measures from the centre of the dragged item to the centre
+   * of each droppable. That works for a list of same-sized rows and badly for
+   * this: cards here span one to four columns and vary in height, so the nearest
+   * centre is regularly not the card the pointer is over — a wide card's centre
+   * can be closer than the narrow card being pointed at. Combined with a drag
+   * overlay that is a small label rather than the card itself, the measurement
+   * was being taken from something the user could not see, and the card landed
+   * somewhere they had not aimed. That is the "erratic" report.
+   *
+   * `pointerWithin` asks the only question the user is actually asking: what am I
+   * holding this over?
+   *
+   * CARDS BEAT SECTIONS. A section's droppable covers its cards, so the pointer
+   * is inside both and the section frequently wins on centre distance — which
+   * would send the card to the end of the section every time it passed over one.
+   * Cards are therefore preferred, and a section is only the answer when the
+   * pointer is in its empty space. That is also what makes an emptied section
+   * fillable again.
+   *
+   * `closestCenter` remains the fallback, for the keyboard sensor, which has no
+   * pointer for `pointerWithin` to test.
+   */
+  const collisionDetection = useCallback<CollisionDetection>(
+    (args) => {
+      const within = pointerWithin(args);
+      const overCard = within.filter((collision) => cardIds.has(String(collision.id)));
+      if (overCard.length > 0) return overCard;
+
+      const pointer = args.pointerCoordinates;
+      if (!pointer) {
+        // The keyboard sensor, which has no pointer for any of the below.
+        const closest = closestCenter(args);
+        const closestCard = closest.filter((collision) => cardIds.has(String(collision.id)));
+        return closestCard.length > 0 ? closestCard : closest;
+      }
+
+      const rectOf = (id: string) => args.droppableRects.get(id);
+
+      /*
+       * Not over a card. Find the GROUP first, then the place within it.
+       *
+       * Over a group but not a card happens constantly - groups have padding,
+       * they hold an "Add a card" button, the grid is `items-start` so short
+       * cards leave empty space under them inside their own row, and a group
+       * stretches to its tallest column. And the pointer is often inside nothing
+       * at all: the gap between two groups, the page margin, the strip past the
+       * last column.
+       *
+       * Falling back to dnd-kit's closestCenter for that measured from the
+       * DRAGGED CARD's rectangle rather than the pointer, and for a card
+       * spanning half the screen those are nowhere near each other - which is
+       * why the marker kept appearing in a group nobody was pointing at.
+       */
+      const sectionId =
+        within.map((collision) => String(collision.id)).find((id) => !cardIds.has(id)) ??
+        nearestId(
+          view.sections.map((entry) => entry.id),
+          rectOf,
+          pointer,
+        );
+      if (!sectionId) return [];
+
+      const section = view.sections.find((entry) => entry.id === sectionId);
+      const activeCardId = String(args.active.id);
+      const siblings = section?.cards.filter((card) => card.id !== activeCardId) ?? [];
+      return [
+        {
+          id: insertionTargetInSection(
+            siblings.map((card) => card.id),
+            rectOf,
+            pointer,
+            sectionId,
+          ),
+        },
+      ];
+    },
+    [cardIds, view.sections],
+  );
+
+  /*
+   * One drag is one undo step.
+   *
+   * Dragover fires on every pointer movement, so a drag across a section made
+   * fifteen changes and left fifteen entries on a twenty-five entry undo stack.
+   * The id is minted per drag and handed to every change it causes; the provider
+   * folds them into the single step that reverses the whole motion.
+   */
+  const dragGesture = useRef<string | null>(null);
 
   function onDragStart(event: DragStartEvent) {
+    dragGesture.current = `drag-${String(event.active.id)}-${Date.now()}`;
+    /*
+     * The card's real height, so the marker can be the same size.
+     *
+     * A card's span says how many COLUMNS it takes; nothing says how tall it is,
+     * because that comes from its content. The marker matched the width and was
+     * its own 5rem tall, so the row it joined came out shorter than the row the
+     * card left, and everything below moved by the difference. A drag log showed
+     * a 96px step: an 80px marker where a 280px card had been.
+     *
+     * Measured once, at the start, from the rect dnd-kit already took.
+     */
+    setActiveHeight(event.active.rect.current.initial?.height ?? null);
     setActiveId(String(event.active.id));
+  }
+
+  function endDrag() {
+    dragGesture.current = null;
+    lastOverId.current = null;
+    setActiveId(null);
+    setActiveHeight(null);
+    setPreview(null);
+  }
+
+  /**
+   * Commit the move, once, on the drop.
+   *
+   * The whole gesture is one change to the document, one save and one undo step.
+   * It used to be one of each per pointer movement.
+   */
+  function onDragEnd(event: DragEndEvent) {
+    const activeCardId = String(event.active.id);
+    const overId = event.over ? String(event.over.id) : lastOverId.current;
+    const gesture = dragGesture.current ?? undefined;
+    endDrag();
+    if (!overId || overId === activeCardId) return;
+    updateView(view.id, (current) => moveCardInView(current, activeCardId, overId), gesture);
   }
 
   /*
@@ -125,6 +363,10 @@ export default function DashboardCanvas({
    * `over` may be a card in another section, or the section itself when it is
    * empty. Both have to move the dragged card into that section, or a section
    * that has been emptied becomes impossible to fill again.
+   *
+   * The move itself is `moveCardInView`, which derives every index from the view
+   * it is handed. It used to be computed half here and half inside the state
+   * updater, from two different copies of the document — see that file's note.
    */
   function onDragOver(event: DragOverEvent) {
     const { active, over } = event;
@@ -133,52 +375,15 @@ export default function DashboardCanvas({
     const overId = String(over.id);
     if (activeCardId === overId) return;
 
-    const from = findSectionOf(activeCardId);
-    if (!from) return;
-    const toSection =
-      view.sections.find((section) => section.id === overId) ?? findSectionOf(overId);
-    if (!toSection) return;
-
-    updateView(view.id, (current) => {
-      const moving = from.cards.find((card) => card.id === activeCardId);
-      if (!moving) return current;
-
-      if (from.id === toSection.id) {
-        const fromIndex = from.cards.findIndex((card) => card.id === activeCardId);
-        const toIndex = from.cards.findIndex((card) => card.id === overId);
-        if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return current;
-        return {
-          ...current,
-          sections: current.sections.map((section) =>
-            section.id === from.id
-              ? { ...section, cards: arrayMove(section.cards, fromIndex, toIndex) }
-              : section,
-          ),
-        };
-      }
-
-      // Dropped over the section itself (it is empty) → append. Over a card →
-      // take that card's place, so the drop lands where the gap opened.
-      const insertAt =
-        overId === toSection.id
-          ? toSection.cards.length
-          : Math.max(0, toSection.cards.findIndex((card) => card.id === overId));
-
-      return {
-        ...current,
-        sections: current.sections.map((section) => {
-          if (section.id === from.id) {
-            return { ...section, cards: section.cards.filter((card) => card.id !== activeCardId) };
-          }
-          if (section.id === toSection.id) {
-            const next = [...section.cards];
-            next.splice(insertAt, 0, moving);
-            return { ...section, cards: next };
-          }
-          return section;
-        }),
-      };
-    });
+    lastOverId.current = overId;
+    const next = dropPreview(view, activeCardId, overId);
+    // Only when it actually moved. Dragover fires on every pointer movement and
+    // most of those events point at the same place as the last one.
+    setPreview((current) =>
+      current && next && current.sectionId === next.sectionId && current.index === next.index
+        ? current
+        : next,
+    );
   }
 
   const activeCard = activeId
@@ -188,12 +393,12 @@ export default function DashboardCanvas({
   return (
     <DndContext
       sensors={sensors}
-      collisionDetection={closestCenter}
+      collisionDetection={collisionDetection}
       measuring={MEASURE_ALWAYS}
       onDragStart={onDragStart}
       onDragOver={onDragOver}
-      onDragEnd={(_event: DragEndEvent) => setActiveId(null)}
-      onDragCancel={() => setActiveId(null)}
+      onDragEnd={onDragEnd}
+      onDragCancel={endDrag}
     >
       <div className={cn("grid items-start gap-4", VIEW_COLUMNS[view.columns])}>
         {sections.map((section) => (
@@ -202,6 +407,10 @@ export default function DashboardCanvas({
             view={view}
             section={section}
             slots={slots}
+            activeId={activeId}
+            activeCard={activeCard}
+            activeHeight={activeHeight}
+            dropAt={preview && preview.sectionId === section.id ? preview.index : null}
             onConfigure={onConfigure}
             onAddCard={onAddCard}
           />
@@ -226,14 +435,41 @@ export default function DashboardCanvas({
         )}
       </div>
 
-      <DragOverlay dropAnimation={null}>
-        {activeCard ? (
-          <div className="flex cursor-grabbing items-center gap-2 rounded-lg border border-primary/40 bg-card px-3 py-2 text-xs font-medium text-foreground shadow-lg">
-            <GripVertical className="size-3.5 text-muted-foreground" />
-            {cardLabel(activeCard)}
-          </div>
-        ) : null}
-      </DragOverlay>
+      {/*
+          SHRINK THE OVERLAY TO THE LABEL. Without this the label still is not
+          where the pointer is, even with the modifier above.
+
+          dnd-kit sizes and positions its overlay wrapper from the ACTIVE NODE's
+          rect - `width: rect.width, height: rect.height` in PositionedOverlay -
+          so the wrapper is a whole CARD wide and tall, and this label sits in
+          its top-left corner. Centring that wrapper on the pointer therefore
+          puts the label half a card up and to the left of it: a constant offset,
+          hundreds of pixels for a wide card, which reads as following the cursor
+          from a distance and never catching up.
+
+          `style` is spread last in PositionedOverlay's own style object, so auto
+          wins over the measured width and height. The wrapper then hugs the
+          label, the modifier centres the label itself, and `dragOverlay.rect` -
+          which is measured from this node - becomes the label's size rather than
+          the card's.
+      */}
+      {overlayHost
+        ? createPortal(
+            <DragOverlay
+              dropAnimation={null}
+              modifiers={[snapToCursor]}
+              style={{ width: "auto", height: "auto" }}
+            >
+              {activeCard ? (
+                <div className="flex cursor-grabbing items-center gap-2 rounded-lg border border-primary/40 bg-card px-3 py-2 text-xs font-medium text-foreground shadow-lg">
+                  <GripVertical className="size-3.5 text-muted-foreground" />
+                  {cardLabel(activeCard)}
+                </div>
+              ) : null}
+            </DragOverlay>,
+            overlayHost,
+          )
+        : null}
     </DndContext>
   );
 }
@@ -244,29 +480,123 @@ function SectionBlock({
   view,
   section,
   slots,
+  activeId,
+  activeCard,
+  activeHeight,
+  dropAt,
   onConfigure,
   onAddCard,
 }: {
   view: ViewConfig;
   section: SectionConfig;
   slots: CardSlots;
+  /** The card being dragged anywhere on the canvas, or null. */
+  activeId: string | null;
+  /** The card being dragged, so the marker can take its exact shape. */
+  activeCard: CardConfig | undefined;
+  /** Its measured height in pixels, or null when nothing is being dragged. */
+  activeHeight: number | null;
+  /**
+   * Where the marker goes in this group, counted over its cards WITHOUT the
+   * dragged one — or null when the card would not land here.
+   */
+  dropAt: number | null;
   onConfigure: (cardId: string) => void;
   onAddCard: (sectionId: string) => void;
 }) {
   const { editing, updateSection, updateView } = useEditor();
+  /*
+   * THE GROUP IS A DROP TARGET IN ITS OWN RIGHT, and until now it only claimed
+   * to be.
+   *
+   * Its id was listed in the SortableContext below, under a comment saying that
+   * is what keeps an emptied group fillable — but SortableContext only declares
+   * which items SORT. A droppable exists where useDroppable is called, and it
+   * never was, so the group had no registered rectangle at all: nothing could
+   * ever collide with it, an emptied group genuinely could not be refilled, and
+   * every "the pointer is over a group" branch was unreachable code.
+   *
+   * The visible symptom was the marker landing nowhere near the pointer. With no
+   * group to collide with, a pointer that was not directly over a card fell
+   * through to dnd-kit's closestCenter, which measures from the DRAGGED CARD's
+   * rectangle rather than the pointer — and for a card spanning half the screen
+   * those are nowhere near each other.
+   */
+  const { setNodeRef: setSectionRef } = useDroppable({ id: section.id, disabled: !editing });
+
   // Same rule as the read-only path: in normal use a section with nothing drawn
   // leaves no empty box, because a heading over nothing reads as a failure.
   const drawn = section.cards.filter((card) => slots[card.id] !== undefined);
-  if (!editing && drawn.length === 0) return null;
-
   const cards = editing ? section.cards : drawn;
+  /*
+   * Identity is load-bearing here - dnd-kit compares this array BY IDENTITY to
+   * decide whether the list has changed. See the note on the SortableContext
+   * below.
+   *
+   * Keyed on the ids as JSON rather than on the card objects: every edit
+   * rebuilds the config, so an array of cards would be a new dependency on
+   * every render and the memo would never hold. JSON rather than a joined
+   * string because a card id can come from the raw editor and may contain any
+   * character, including whatever separator was picked.
+   */
+  const cardIdKey = JSON.stringify(cards.map((card) => card.id));
+  const sortableItems = useMemo(
+    () => [...(JSON.parse(cardIdKey) as string[]), section.id],
+    [cardIdKey, section.id],
+  );
+
+  /*
+   * The cards, with a marker inserted where the dragged one would land.
+   *
+   * ONE CELL LEAVES, ONE CELL ARRIVES. The dragged card is taken out of the
+   * flow (see `hidden` in SortableCard) and the marker takes a cell, so the
+   * count is unchanged for the whole gesture.
+   *
+   * That is not cosmetic. The marker was an EXTRA cell before, so drawing it
+   * pushed every following card along - which re-measured them, which chose a
+   * different target, which moved the marker, which shifted the cards again.
+   * A drag log caught it directly: the first card's top moved 290 -> 158 ->
+   * 108 across three consecutive events while the pointer barely moved. You
+   * were aiming at something that moved because you aimed at it.
+   *
+   * `dropAt` counts the cards WITHOUT the dragged one, which is now also the
+   * list actually occupying cells, so the two agree by construction.
+   *
+   * A marker past the last slot lands at the end, which is what "dropped in the
+   * empty space below the cards" means.
+   */
+  const byId = new Map(cards.map((card) => [card.id, card]));
+  const withDropMarker = layoutWithMarker(
+    cards.map((card) => card.id),
+    activeId,
+    dropAt,
+  ).map((entry) =>
+    entry.kind === "marker" ? (
+      <DropMarker key="drop-marker" card={activeCard} height={activeHeight} />
+    ) : (
+      <SortableCard
+        key={entry.id}
+        card={byId.get(entry.id)!}
+        node={slots[entry.id]}
+        onConfigure={onConfigure}
+      />
+    ),
+  );
+
+  // AFTER the hooks, deliberately. A hook below a conditional return is a
+  // different number of hooks on the render where the condition flips, and React
+  // ends that with "Rendered more hooks than during the previous render".
+  if (!editing && drawn.length === 0) return null;
 
   return (
     <section
+      ref={setSectionRef}
       className={cn(
         "min-w-0 space-y-3",
         SECTION_SPAN[section.columnSpan],
         editing && "rounded-xl border border-dashed border-border/70 p-3",
+        // Which group is being dropped into, while it is being dropped into.
+        dropAt !== null && "border-solid border-primary/60 bg-primary/[0.03]",
       )}
     >
       {(section.title || editing) && (
@@ -275,10 +605,14 @@ function SectionBlock({
             <input
               value={section.title ?? ""}
               onChange={(event) =>
-                updateSection(section.id, (current) => ({
-                  ...current,
-                  title: event.target.value || undefined,
-                }))
+                updateSection(
+                  section.id,
+                  (current) => ({ ...current, title: event.target.value || undefined }),
+                  // Typing a name is one edit, not one per keystroke. Without
+                  // this a ten-character name filled half the undo stack and
+                  // pushed everything before it off the end.
+                  `title-${section.id}`,
+                )
               }
               placeholder="Group name (optional)"
               aria-label="Group name"
@@ -330,25 +664,38 @@ function SectionBlock({
       )}
 
       <SortableContext
-        // The section id is in the list so an EMPTY section is still a drop
-        // target. Without it a section you emptied can never be filled again.
-        items={[...cards.map((card) => card.id), section.id]}
+        /*
+         * The section id is in the list so an EMPTY section is still a drop
+         * target. Without it a section you emptied can never be filled again.
+         *
+         * Memoised because dnd-kit compares this array BY IDENTITY, in several
+         * places, to decide whether the list has changed — `previousItems !==
+         * items` gates its layout-animation decision, and a ref is reconciled
+         * against it on every commit. A fresh array each render made that
+         * comparison permanently true, so it was answering "the list just
+         * changed" continuously, for a list that had not changed at all.
+         */
+        items={sortableItems}
         strategy={NO_TRANSFORM}
       >
-        {/* The section grid is told NOTHING about height - no auto-rows, no row
-            minimum. `auto-rows` set a minimum for EVERY row in the section, so
-            one tall card made every other row tall too, which was the blank-gap
-            report. Height belongs to the one card that asked for it; see
-            CARD_MIN_HEIGHT in cards/placement.ts. */}
+        {/* The section grid is told NOTHING about height — no auto-rows, no row
+            minimum.
+
+            main had reached this from the other end: `auto-rows` applied only
+            when some card in the section spans rows. That is narrower than
+            applying it always, but it is still a MINIMUM ON EVERY ROW of any
+            section that contains one tall card — which is the blank-gap report.
+            Height belongs to the one card that asked for it, so it lives on the
+            card (CARD_MIN_HEIGHT in cards/placement.ts) and the grid keeps
+            sizing to its content. With the row minimum gone there is nothing
+            left for a row span to span, which is why placement.ts drops the
+            row-span classes rather than keeping both mechanisms.
+
+            Children are main's `withDropMarker`, not a plain map: it renders the
+            same SortableCards and additionally places the drop indicator, so
+            taking the map here would have silently removed the drag marker. */}
         <div className={cn("grid items-start gap-4", VIEW_COLUMNS[section.columnSpan])}>
-          {cards.map((card) => (
-            <SortableCard
-              key={card.id}
-              card={card}
-              node={slots[card.id]}
-              onConfigure={onConfigure}
-            />
-          ))}
+          {withDropMarker}
           {editing && (
             <button
               type="button"
@@ -362,6 +709,61 @@ function SectionBlock({
         </div>
       </SortableContext>
     </section>
+  );
+}
+
+/**
+ * Where the card will land.
+ *
+ * The one thing that moves during a drag, and the answer to "you cannot see
+ * where it is going to slot in, so it is a guess". It used to be answered by
+ * reflowing the whole arrangement under the pointer, which said the same thing
+ * far less clearly and is what produced the error page - see `dropPreview`.
+ */
+function DropMarker({ card, height }: { card: CardConfig | undefined; height: number | null }) {
+  return (
+    <div
+      aria-hidden
+      /*
+       * The card's measured height, so the row it joins is the height of the row
+       * the card left. A span says how many COLUMNS a card takes and nothing
+       * about how tall it is - that comes from its content - so matching the
+       * span alone still moved everything below by the difference. A drag log
+       * showed a 96px step: an 80px marker where a 280px card had been.
+       *
+       * min-height rather than height, because the row can legitimately be
+       * taller than the card was if something else in it is.
+       */
+      style={height ? { minHeight: height } : undefined}
+      className={cn(
+        "flex min-h-20 items-center justify-center rounded-xl border-2 border-dashed border-primary bg-primary/10",
+        /*
+         * THE SAME SHAPE AS THE CARD IT STANDS IN FOR.
+         *
+         * Taking the dragged card out of the flow and putting a marker in its
+         * place only holds the layout still if the two occupy the same cells.
+         * The marker was always one column; cards here span one, two or three.
+         * So replacing a three-column card with a one-column marker re-packed
+         * every card after it, and a drag log caught exactly that - the same
+         * card's left edge flipping 314 -> 897 -> 314 between consecutive
+         * drag-over events, in a grid whose columns are 567 wide.
+         *
+         * Which put the layout back to moving under the pointer for anything
+         * wider than one column, by a different route than before.
+         */
+        card ? CARD_SPAN[card.span] : undefined,
+        // CARD_MIN_HEIGHT, not the removed CARD_ROWS. The marker has to stand in
+        // for the card at its real size, and height is no longer a row span — so
+        // the class that gives a card its height is the one that gives the marker
+        // the same height. Left on CARD_ROWS this referenced a symbol placement.ts
+        // no longer exports.
+        card ? CARD_MIN_HEIGHT[card.rows ?? 1] : undefined,
+      )}
+    >
+      <span className="rounded-md bg-primary px-2 py-1 text-[11px] font-semibold text-primary-foreground shadow-sm">
+        Drops here
+      </span>
+    </div>
   );
 }
 
@@ -383,10 +785,38 @@ function SortableCard({
   node: React.ReactNode;
   onConfigure: (cardId: string) => void;
 }) {
-  const { editing, removeCard } = useEditor();
+  const { editing, removeCard, moveCard, liftCard } = useEditor();
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, isDragging } = useSortable({
     id: card.id,
     disabled: !editing,
+    /*
+     * NO LAYOUT ANIMATION. This is the other half of "no transforms", and its
+     * absence is what put an error page in front of the user.
+     *
+     * The strategy above is already NO_TRANSFORM, because these cards are
+     * different sizes and transform-based previews send them to visibly wrong
+     * places. But `animateLayoutChanges` is a SEPARATE mechanism, defaulted on,
+     * and it survived that: on every index change useSortable's
+     * `useDerivedTransform` measures the card, computes a FLIP delta and calls
+     * setState from a LAYOUT effect, with a second effect that immediately sets
+     * it back to null. That is two renders per index change, from the commit
+     * phase.
+     *
+     * Reordering happens on dragover, so during a drag the index changes as fast
+     * as the pointer moves, and droppables are re-measured continuously. Enough
+     * of those pairs nest in one commit to pass React's limit, and React reports
+     * it as "Maximum update depth exceeded" — thrown during commit, so the
+     * route's error boundary catches it and shows an error page. The captured
+     * stack named this hook directly:
+     *
+     *     at useDerivedTransform.useIsomorphicLayoutEffect (@dnd-kit/sortable)
+     *     at commitHookLayoutEffects
+     *
+     * Nothing is lost by refusing it. The transform it produces is never read —
+     * this component does not apply `transform` or `transition` to anything, by
+     * the same decision that set NO_TRANSFORM.
+     */
+    animateLayoutChanges: () => false,
   });
 
   // Not in edit mode and nothing to draw — the card's own rules hid it, or it
@@ -433,7 +863,23 @@ function SortableCard({
          */
         !editing && CARD_MIN_HEIGHT[card.rows ?? 1],
         editing && "rounded-xl ring-1 ring-dashed ring-border",
-        isDragging && "opacity-30",
+        /*
+         * OUT OF THE FLOW WHILE IT IS BEING DRAGGED, so the marker can take its
+         * cell and the cell count stays the same for the whole gesture.
+         *
+         * It used to stay in place, dimmed, which meant the marker was an EXTRA
+         * cell: drawing it pushed every following card along, which re-measured
+         * them, which chose a different target, which moved the marker. A drag
+         * log caught it — the first card's top moved 290 -> 158 -> 108 across
+         * three consecutive events while the pointer barely moved.
+         *
+         * `hidden` rather than unmounting: this element holds useSortable's ref,
+         * and pulling it out mid-drag takes the drag's own node with it. Display
+         * none costs it its rectangle, which is fine — it is excluded from the
+         * insertion maths by id anyway, and what the user is carrying is drawn
+         * by the overlay.
+         */
+        isDragging && "hidden",
       )}
     >
       {editing && (
@@ -468,6 +914,32 @@ function SortableCard({
       )}
 
       {/*
+          A container draws its children on the SERVER, so the editor has no
+          sortable node for any of them: drag can only ever reorder the top level,
+          and a card inside a group had no settings button, no remove, and no way
+          back out. It was reachable only by editing the raw JSON.
+
+          ContainerContents lists them - DESCENDANTS, not just children, so a card
+          two containers down is reachable too. Every row gets the same three
+          actions this card has plus a lift, and they act on the CONFIG rather
+          than on rendered nodes, so they work at any depth without a second grid
+          implementation.
+      */}
+      {editing && isContainerCard(card) && (
+        <ContainerContents
+          cards={card.cards}
+          actions={{
+            onConfigure,
+            onMove: moveCard,
+            onLift: liftCard,
+            onRemove: removeCard,
+          }}
+        />
+      )}
+
+      {/* BOTH SIDES OF THIS ARE NEEDED, and they are about different things.
+          main added the container listing above; this is the height chain.
+
           Outside edit mode the node is rendered DIRECTLY, with no wrapper.
           `:empty` only matches an element with no child nodes at all, so an
           intermediate div would keep the wrapper non-empty and defeat the
@@ -475,12 +947,17 @@ function SortableCard({
           clicks reaching the card underneath the drag chrome.
 
           Being the panel's direct parent, this is where the height minimum has
-          to go in this mode — see the note on the box above. It has no height of
-          its own, so it is exactly as tall as the card it wraps, and the card is
-          as tall as it was asked to be. A card is therefore the same size while
-          you are arranging it as it is once you press Done, which is the whole
-          point of one layout in two modes.
-      */}
+          to go in this mode. It has no height of its own, so it is exactly as
+          tall as the card it wraps, and the card is as tall as it was asked to
+          be. A card is therefore the same size while you are arranging it as it
+          is once you press Done, which is the whole point of one layout in two
+          modes.
+
+          main's version of this wrapper carried `sm:min-h-0 sm:flex-1` for a
+          multi-row card, which is the middle link of the row-span chain that no
+          longer exists — with the grid row minimum gone there is no cell height
+          to fill, so a flex-1 child would stretch to nothing. CARD_MIN_HEIGHT
+          replaces it. */}
       {editing ? (
         <div className={cn("pointer-events-none select-none", CARD_MIN_HEIGHT[card.rows ?? 1])}>
           {node ?? <CardPlaceholder card={card} />}
@@ -517,13 +994,6 @@ function CardPlaceholder({ card }: { card: CardConfig }) {
       </p>
     </div>
   );
-}
-
-/** A human name for a card, for drag overlays, labels and screen readers. */
-export function cardLabel(card: CardConfig): string {
-  if (card.title) return card.title;
-  if (card.type === "builtin") return card.card.replace(/-/g, " ");
-  return card.type;
 }
 
 function hasDrawn(section: SectionConfig, slots: CardSlots): boolean {

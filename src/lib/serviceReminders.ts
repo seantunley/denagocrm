@@ -1,4 +1,5 @@
 import { prisma } from "./db";
+import { customerRecordTenantId } from "./customerRecordTenant";
 import { resolveTenantActor } from "./tenantActor";
 import { getSetting } from "./settings";
 import { sendEmail, renderTemplate } from "./email";
@@ -72,6 +73,7 @@ export async function runServiceReminders(): Promise<number> {
         body: `[Service reminder]\n\n${renderTemplate(template.body, vars)}`,
         contactId: vehicle.contactId,
         userId: firstUser!.id,
+        tenantId: await customerRecordTenantId({ contactId: vehicle.contactId }),
       },
     });
     await logAudit({
@@ -166,6 +168,7 @@ export async function remindVehicleService(
         body,
         contactId: vehicle.contactId,
         userId: firstUser.id,
+        tenantId: await customerRecordTenantId({ contactId: vehicle.contactId }),
       },
     });
   }

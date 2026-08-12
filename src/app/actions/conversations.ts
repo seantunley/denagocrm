@@ -3,29 +3,21 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireConversationAccess } from "@/lib/permissions";
-import { listTenantStaff } from "@/lib/tenantActor";
+import { listActingTenantStaff } from "@/lib/tenantActor";
 import { logAudit } from "@/lib/audit";
 import { markConversationRead } from "@/lib/conversations";
 import { asActionResult, refuse, type ActionResult } from "@/lib/actionResult";
 import { type DraftCollision } from "@/lib/conversationDraft";
 import { claimConversationDraft, discardOwnConversationDraft } from "@/lib/conversationDraftStore";
+import {
+  botIdentityForConversation,
+  pauseBotConversation,
+  resumeBotConversation,
+} from "@/lib/botConversationControl";
 
 /**
- * Shared-inbox collaboration: assignment, staff notes, reply drafts.
- *
- * Rebuilt from PR #17, which never reached main. Two things are deliberately
- * different from the original.
- *
- * EVERY ACTION IS GUARDED PER CONVERSATION. The original checked only that the
- * caller held an inbox permission, then trusted the conversation id it was given
- * — so a user scoped to their own contacts could assign, note or draft on any
- * thread in the business by naming its id. The list query has always been
- * scoped; the actions were not. `requireConversationAccess` is the per-record
- * guard the other entities already had (requireLeadAccess, requireQuoteAccess…)
- * and the inbox did not.
- *
- * REFUSALS ARE VALUES. These return ActionResult so the reason arrives in the
- * browser instead of being digested into a generic failure — see lib/actionResult.
+ * Shared-inbox collaboration: assignment, staff notes, reply drafts and explicit
+ * human/bot ownership. Every mutation is guarded per conversation.
  */
 
 /** Assign a conversation to a member of staff, or clear the assignment. */
@@ -36,13 +28,9 @@ export async function assignConversation(
   return asActionResult(async () => {
     const actor = await requireConversationAccess(conversationId, "inbox.reply");
 
-    // The assignee must be someone in THIS tenant's staff. Without this the id
-    // travels straight from the client into assignedToId, which the FK would
-    // happily satisfy with any User row in the database — including, once a
-    // second tenant exists, one belonging to somebody else.
     let assigneeName: string | null = null;
     if (userId) {
-      const staff = await listTenantStaff();
+      const staff = await listActingTenantStaff();
       const member = staff.find((person) => person.id === userId);
       if (!member) refuse("That person is not a member of your team.");
       assigneeName = member.name;
@@ -68,6 +56,44 @@ export async function assignConversation(
   });
 }
 
+/**
+ * Choose who owns the next inbound turn.
+ *
+ * `human`: pause the SAME BotSession the runtime checks, preserving its current
+ * graph snapshot in case staff later need it for diagnosis. The explicit pause
+ * lasts seven days unless staff return the thread to automation sooner.
+ *
+ * `bot`: clear the paused/stale session. The next customer message deliberately
+ * starts a fresh conversation on the current published flow rather than jumping
+ * back into a graph step that the human may have superseded while talking.
+ */
+export async function setConversationBotMode(
+  conversationId: string,
+  mode: "human" | "bot",
+): Promise<ActionResult> {
+  return asActionResult(async () => {
+    const actor = await requireConversationAccess(conversationId, "inbox.reply");
+    const identity = await botIdentityForConversation(conversationId);
+    if (!identity) refuse("Automation control is not available for this conversation.");
+
+    if (mode === "human") await pauseBotConversation(identity);
+    else await resumeBotConversation(identity);
+
+    await logAudit({
+      action: mode === "human" ? "conversation.bot_paused" : "conversation.bot_resumed",
+      summary: mode === "human"
+        ? "Human took ownership of a customer conversation; chatbot paused"
+        : "Conversation returned to chatbot; next inbound starts a fresh published flow",
+      entityType: "Conversation",
+      entityId: conversationId,
+      user: actor,
+    });
+    revalidatePath("/inbox");
+    revalidatePath("/messages");
+    return { success: mode === "human" ? "You have taken over — chatbot paused" : "Returned to chatbot" };
+  });
+}
+
 /** Add a staff-only note. Never sent to the customer. */
 export async function addConversationNote(
   conversationId: string,
@@ -77,13 +103,9 @@ export async function addConversationNote(
   return asActionResult(async () => {
     const actor = await requireConversationAccess(conversationId, "inbox.reply");
     const clean = body.trim();
-    // Refused rather than silently ignored: the original returned early on an
-    // empty note, so the form reported a save that never happened.
     if (!clean) refuse("Write something before saving the note.");
 
-    // Only real teammates may be mentioned, so `mentions` cannot be used to
-    // probe for user ids or to address a notification outside the tenant.
-    const staff = await listTenantStaff();
+    const staff = await listActingTenantStaff();
     const staffIds = new Set(staff.map((person) => person.id));
     const named = [...new Set(mentions)].filter((id) => staffIds.has(id));
 
@@ -109,9 +131,7 @@ export type DraftSaveResult = ActionResult & { collision?: DraftCollision };
 
 /**
  * Save the in-progress reply, taking ownership.
- *
- * If a colleague is actively drafting, reports the collision instead of
- * overwriting, so the UI can warn before two replies go to one customer.
+ * If a colleague is actively drafting, report the collision instead of overwriting.
  */
 export async function saveConversationDraft(
   conversationId: string,
@@ -119,15 +139,8 @@ export async function saveConversationDraft(
 ): Promise<DraftSaveResult> {
   return asActionResult(async () => {
     const actor = await requireConversationAccess(conversationId, "inbox.reply");
-
-    // ONE statement decides and writes. This used to read, decide in JavaScript,
-    // then upsert — three steps two people can interleave, so both passed the
-    // check and the second overwrote the first with no warning to either. See
-    // lib/conversationDraftStore.ts.
     const claim = await claimConversationDraft(conversationId, actor.id, body);
     if (!claim.ok) {
-      // NOT a refusal: nothing is wrong with what the user typed, and the caller
-      // needs the owner's name to say who is already replying.
       return {
         collision: claim.collision,
         error: `${claim.collision.ownerName} is already replying to this conversation.`,
@@ -137,13 +150,10 @@ export async function saveConversationDraft(
   }) as Promise<DraftSaveResult>;
 }
 
-/** Discard the draft — e.g. once the reply has been sent. */
+/** Discard the signed-in user's own draft. */
 export async function discardConversationDraft(conversationId: string): Promise<ActionResult> {
   return asActionResult(async () => {
     const actor = await requireConversationAccess(conversationId, "inbox.reply");
-    // Scoped to the actor's OWN draft. The send-success path calls this
-    // unconditionally, and a plain delete would clobber the teammate's draft that
-    // the claim just went to the trouble of protecting.
     await discardOwnConversationDraft(conversationId, actor.id);
     return {};
   });

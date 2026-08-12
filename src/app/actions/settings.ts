@@ -6,8 +6,21 @@ import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { basePrisma, prisma } from "@/lib/db";
 import { ciExactIdFilter } from "@/lib/ciExact";
-import { createSessionCookie, requireUser, requireOwner } from "@/lib/auth";
+import { createSessionCookie, getActiveTenantId, requireUser, requireOwner } from "@/lib/auth";
+import {
+  findOwnedPipelineForStage,
+  getDefaultPipeline,
+  reorderPipelineStages,
+  requireOwnedPipeline,
+} from "@/lib/pipelines";
+import { stageTenantId, UNREACHABLE_STAGE_MESSAGE } from "@/lib/pipelineTenantRule";
 import { putSetting, getSetting } from "@/lib/settings";
+import {
+  WEATHER_CITIES_KEY,
+  parseWeatherCities,
+  serialiseWeatherCities,
+  type WeatherCity,
+} from "@/lib/weatherCities";
 import { isManagedSecret, isRegeneratable, keepBlankSubmit } from "@/lib/settingsSecrets";
 import { setNextStepScheduling } from "@/lib/nextStepConfig";
 import { PUSH_KINDS } from "@/lib/push";
@@ -24,17 +37,76 @@ import {
 
 // ---- Pipeline stages ----
 
+/**
+ * A stage cannot exist outside a pipeline.
+ *
+ * `PipelineStage."pipelineId"` is NOT NULL with no default — migration
+ * 52_pipelines_forecasting_rbac_audit adds it nullable, backfills every existing
+ * row to 'pipeline_default_retail' and then SETs NOT NULL. The create this
+ * replaces supplied no `pipelineId` at all, so every "Add stage" submission on
+ * this screen failed with a not-null violation. It could not have supplied one
+ * either: the column was never declared on the Prisma model, so there was no
+ * field to pass. That is fixed in prisma/schema.prisma in the same change.
+ *
+ * WHICH pipeline is not a new rule invented here — `getDefaultPipeline()` is the
+ * existing active/default choice (`isDefault DESC, createdAt ASC`, active and
+ * undeleted), the same one the leads board and forecast already resolve.
+ */
 export async function createStage(formData: FormData) {
   return asActionResult(async () => {
     await requireOwner();
     const name = String(formData.get("name") ?? "").trim();
     if (!name) refuse("Give the stage a name.");
-    const max = await prisma.pipelineStage.aggregate({ _max: { order: true } });
-    await prisma.pipelineStage.create({
+
+    const pipeline = await getDefaultPipeline();
+    if (!pipeline) {
+      refuse("There is no active sales pipeline to add this stage to — create one under Settings › Pipeline first.");
+    }
+    // The OWNER of that pipeline. `SalesPipelineRow` does not carry `tenantId`, so
+    // it takes a second read — and that read goes THROUGH the boundary, not beside
+    // it. This is #457's `requireOwnedPipeline()`, the same gate `addPipelineStage`
+    // and `reorderPipelineStages` use, returning the id and the owning tenant from
+    // one scoped query.
+    //
+    // `getDefaultPipeline()` above is itself tenant-scoped as of #457, so an
+    // unscoped re-read by that id would in fact only ever return a row this
+    // workspace can already see. But that is an argument about where the id came
+    // from, and it stops holding the moment anyone passes an id in. The gate makes
+    // it structural instead. It is also strictly weaker than the query that
+    // produced the id — same scope, no `active = true` — so it can only refuse if
+    // the pipeline was archived in between, which is a real race and correctly loud.
+    const owner = await requireOwnedPipeline(pipeline.id);
+
+    // Next `order` WITHIN THE PIPELINE, because the unique index is
+    // ("pipelineId", "order") — a global max would leave gaps that grow with
+    // every other pipeline's stages. Read on `basePrisma` and bounded by
+    // `pipelineId`: the parent is the boundary here, and a guarded read scoped to
+    // the ACTING tenant would return nothing (hence order 0, hence a duplicate-key
+    // collision) whenever the actor's workspace is not the pipeline's.
+    const max = await basePrisma.pipelineStage.aggregate({
+      where: { pipelineId: pipeline.id },
+      _max: { order: true },
+    });
+
+    // The stage takes its PARENT PIPELINE's tenant, never the acting user's —
+    // PR #457's rule, reused verbatim rather than restated. The write goes through
+    // `basePrisma` for that reason: under enforcement the guarded client's
+    // stampCreate() overwrites `data.tenantId` with the ACTING scope (see
+    // tenantGuard.ts), which is exactly the answer this must not produce.
+    await basePrisma.pipelineStage.create({
       data: {
         name,
         color: String(formData.get("color") ?? "#64748b"),
         order: (max._max.order ?? -1) + 1,
+        pipelineId: pipeline.id,
+        tenantId: stageTenantId({
+          pipelineTenantId: owner.tenantId,
+          // Ignored by design — passed so the wrong answer stays expressible and a
+          // test can prove it is not the one chosen. `getActiveTenantId()` is null
+          // for sessions minted before the `tid` claim existed, which is equally
+          // irrelevant for the same reason.
+          actingTenantId: (await getActiveTenantId()) ?? "",
+        }),
       },
     });
     revalidatePath("/settings");
@@ -56,18 +128,85 @@ export async function renameStage(id: string, formData: FormData) {
   });
 }
 
+/**
+ * Reorder one stage against its neighbour.
+ *
+ * The two-statement `order` swap this replaces COULD NOT SUCCEED. `order` is
+ * unique per pipeline — "PipelineStage_pipelineId_order_key", a plain
+ * `CREATE UNIQUE INDEX` from migration 52, therefore NOT DEFERRABLE — so the
+ * first UPDATE inside the transaction put two rows of the same pipeline on the
+ * same order value and Postgres raised a duplicate-key violation right there.
+ * Being inside one `$transaction` does not help: only a DEFERRABLE constraint
+ * postpones the check to COMMIT, and an index-backed unique cannot be deferred.
+ * That is precisely why `reorderPipelineStages()` parks the whole list at
+ * 1000+i and only then places it at i — two passes, never a transient collision.
+ * So: delegate to it, exactly as the sibling `moveStage` in
+ * src/app/actions/pipelines.ts already does, instead of keeping a second and
+ * broken copy of the same manoeuvre.
+ *
+ * It also swapped against the wrong neighbour. Reading EVERY stage ordered by
+ * `order` mixes pipelines, so with more than one pipeline the "neighbour" could
+ * belong to a different process entirely. The list is now bounded to the moving
+ * stage's own pipeline — which the model can finally express, because
+ * `pipelineId` is declared on it as of this change.
+ */
 export async function moveStage(id: string, direction: "up" | "down") {
   return asActionResult(async () => {
     await requireOwner();
-    const stages = await prisma.pipelineStage.findMany({ orderBy: { order: "asc" } });
-    const index = stages.findIndex((stage) => stage.id === id);
+    // THE LOOKUP AND THE GATE ARE ONE STATEMENT. THAT IS THE WHOLE FIX.
+    //
+    // `reorderPipelineStages()` already refuses a pipeline this workspace does not
+    // own (#457), so the WRITE below was never at risk. Everything upstream of it
+    // was: `id` is a bound server-action argument, which is a POST parameter and
+    // therefore forgeable, and the reads around it run on `basePrisma` — the
+    // documented RLS bypass — so a stage id belonging to another workspace returned
+    // that workspace's entire ordered stage list and the refusals below reported the
+    // stage's POSITION in it ("already at the end") before anything checked
+    // ownership. #466 closed that by putting the gate here, above the list.
+    //
+    // What #466 left, and #458's sweep then named, is one bit finer. The lookup was
+    // still an unscoped `findUnique` by that forgeable id, sitting BEFORE the gate,
+    // and the comment that used to stand here argued it was contained because
+    // "nothing read from a row outside the boundary reaches the caller, the
+    // response, or the log". True of the VALUE. False of the BRANCH:
+    //
+    //   - a stage id owned by another workspace RESOLVED, so control reached
+    //     `requireOwnedPipeline`, which fails by `throw new Error("Pipeline not
+    //     found")` — rendered by asActionResult as the generic sentence and a
+    //     reference code;
+    //   - a stage id that existed NOWHERE failed one line earlier at `refuse(…)`,
+    //     which renders verbatim.
+    //
+    // Two distinguishable answers to "is there such a stage?" is a one-bit
+    // cross-workspace existence oracle. Narrow — the caller must already hold an id
+    // — and real, and a comment about where the value went could never have fixed
+    // it, because the value was never what was being read.
+    //
+    // So the read now carries the ownership predicate itself: one JOIN through
+    // "SalesPipeline", scoped to the acting workspace, in which "not yours" and
+    // "not there" are the same empty result. ONE refusal, ONE sentence, and a
+    // refusal logs nothing — so the two cases share the response and the log.
+    const pipeline = await findOwnedPipelineForStage(id);
+    if (!pipeline) refuse(UNREACHABLE_STAGE_MESSAGE);
+
+    // Bounded by a `pipelineId` the statement above proved this workspace owns —
+    // the same containment argument as the `aggregate` in createStage, and it holds
+    // here for the same reason: the parent is the boundary, and it has been applied.
+    const stages = await basePrisma.pipelineStage.findMany({
+      where: { pipelineId: pipeline.id },
+      orderBy: { order: "asc" },
+      select: { id: true },
+    });
+    const index = stages.findIndex((row) => row.id === id);
     const swapWith = direction === "up" ? index - 1 : index + 1;
-    if (index < 0) refuse("That stage no longer exists — reload the page.");
+    // Only reachable if the stage was deleted between the two reads. The SAME
+    // sentence as the unresolvable case above, from the same constant, so a race
+    // cannot become a third distinguishable answer either.
+    if (index < 0) refuse(UNREACHABLE_STAGE_MESSAGE);
     if (swapWith < 0 || swapWith >= stages.length) refuse("That stage is already at the end.");
-    await prisma.$transaction([
-      prisma.pipelineStage.update({ where: { id: stages[index].id }, data: { order: stages[swapWith].order } }),
-      prisma.pipelineStage.update({ where: { id: stages[swapWith].id }, data: { order: stages[index].order } }),
-    ]);
+    const ids = stages.map((row) => row.id);
+    [ids[index], ids[swapWith]] = [ids[swapWith], ids[index]];
+    await reorderPipelineStages(pipeline.id, ids);
     revalidatePath("/settings");
     revalidatePath("/leads");
   });
@@ -343,7 +482,11 @@ export async function updateOwnAvatar(
     return { error: "That file is not a supported JPG, PNG or WebP image." };
   }
   const extension = mimeType === "image/jpeg" ? ".jpg" : mimeType === "image/png" ? ".png" : ".webp";
-  const nextRef = await saveFile(buffer, `profile${extension}`, mimeType);
+  // A profile photo belongs to the USER row it is stored on, verbatim — not to
+  // whichever workspace they happened to be acting in when they uploaded it, which
+  // would move the same person's photo between prefixes as they switch workspaces.
+  // A global owner has no tenantId, and null is the honest answer for them.
+  const nextRef = await saveFile(buffer, `profile${extension}`, mimeType, user.tenantId);
   try {
     await prisma.user.update({
       where: { id: user.id },
@@ -462,5 +605,39 @@ export async function saveNotificationPrefs(formData: FormData) {
     const disabled = PUSH_KINDS.map((kind) => kind.id).filter((id) => !enabled.has(id));
     await putSetting("PUSH_DISABLED_KINDS", disabled.join(","));
     revalidatePath("/settings");
+  });
+}
+
+// ---- Clock / weather cities ----
+
+/**
+ * The cities in the dashboard clock/weather strip, per tenant.
+ *
+ * OWNER ONLY, and tenant-scoped twice over. `requireOwner` decides who may
+ * write, and `putSetting` resolves WHICH tenant from the request scope — it
+ * throws rather than guessing when there is none, so a caller cannot reach
+ * another tenant's list even by direct POST.
+ *
+ * Validation lives in lib/weatherCities.ts and runs on the way IN as well as on
+ * the way out, so a write cannot store something a read would reject. A bad
+ * timezone matters more than it looks: the clock would show a confidently wrong
+ * time rather than fail visibly.
+ */
+export async function saveWeatherCities(cities: unknown): Promise<ActionResult> {
+  return asActionResult(async () => {
+    await requireOwner();
+
+    if (!Array.isArray(cities)) refuse("Could not read that list of cities.");
+    const cleaned = parseWeatherCities(serialiseWeatherCities(cities as WeatherCity[]));
+
+    // Only refuse when something was offered and NONE of it survived. An empty
+    // list is a legitimate choice — somebody may want the strip bare.
+    if (cities.length > 0 && cleaned.length === 0) {
+      refuse("None of those cities were valid. Check the timezone and coordinates.");
+    }
+
+    await putSetting(WEATHER_CITIES_KEY, serialiseWeatherCities(cleaned));
+    // The strip renders in the (app) layout, so every signed-in page shows it.
+    revalidatePath("/", "layout");
   });
 }

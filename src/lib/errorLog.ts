@@ -1,53 +1,27 @@
 import { basePrisma } from "./db";
 import { redactUrl } from "./redactUrl";
-import { currentTenantScope } from "./tenantScope";
+import { actingTenantId } from "./actingTenant";
 
 /**
  * Best-effort owning tenant for an error.
  *
- * A `system` scope means trusted cross-tenant work (backups, some cron) — that is
- * genuinely not one tenant's error, so it stays null rather than being attributed
- * to whichever tenant happened to be in scope. Anything that throws here is
- * swallowed: attribution must never be able to break logging.
+ * ErrorLog is a GLOBAL model (see GLOBAL_MODELS in ./tenantGuard for the decision
+ * and what it costs): this column is ATTRIBUTION, so that per-tenant error health
+ * and the per-tenant first-error alert throttle have something to key on. A null is
+ * a correct outcome here, not a missed stamp — an error raised before any tenant is
+ * known belongs to nobody, and inventing an owner would make a healthy workspace
+ * look broken.
+ *
+ * The resolution order is the shared one ({@link actingTenantId}): an established
+ * scope, `system` and platform-console requests deliberately unattributed, then the
+ * acting staff session. Shared rather than restated so error attribution and record
+ * ownership cannot drift apart — this file used to carry its own copy, and a copy
+ * is a thing that goes stale silently. Anything that throws is swallowed:
+ * attribution must never be able to break logging.
  */
 async function tenantForError(): Promise<string | null> {
   try {
-    const scope = currentTenantScope();
-    // A `system` scope is trusted cross-tenant work (backups, some cron). That is
-    // genuinely not one tenant's error, so it stays unattributed rather than being
-    // blamed on whichever tenant happened to be in scope.
-    if (scope?.system) return null;
-    if (scope?.tenantId) return scope.tenantId;
-  } catch {
-    /* fall through to the session */
-  }
-
-  // No scope. This is the NORMAL case while tenant enforcement is dormant: the
-  // scope helpers deliberately no-op when `tenantEnforcing()` is false, so without
-  // a fallback EVERY error would be unattributed until enforcement ships, and
-  // per-tenant error health would be permanently empty.
-  //
-  // But the fallback must NOT fire on a PLATFORM request. The CRM session cookie is
-  // scoped to "/", so it is sent to /platform too — meaning a platform admin who
-  // also happens to be signed into the CRM would have platform-global failures
-  // blamed on whichever tenant their CRM account belongs to. That is a wrong
-  // attribution, not a missing one, which is worse: it makes a healthy tenant look
-  // broken. A platform request is identified by its own cookie, which the CRM never
-  // sets.
-  try {
-    const { cookies } = await import("next/headers");
-    const { PLATFORM_SESSION_COOKIE } = await import("./platformSession");
-    const store = await cookies();
-    if (store.get(PLATFORM_SESSION_COOKIE)) return null;
-  } catch {
-    // No request context at all (cron, build) — nothing to attribute to anyway.
-    return null;
-  }
-
-  // A genuine CRM request: attribute to the acting staff session's tenant.
-  try {
-    const { getActiveTenantId } = await import("./auth");
-    return await getActiveTenantId();
+    return await actingTenantId();
   } catch {
     return null;
   }
@@ -59,10 +33,26 @@ async function tenantForError(): Promise<string | null> {
  * fires at most once per 30 minutes PER TENANT so a crash-loop can't melt your
  * phone — and so one tenant's error storm cannot silence another tenant's alert.
  */
+export type LogErrorOptions = {
+  /**
+   * Attribute to this tenant instead of inferring one. For a caller that KNOWS
+   * the owner — an inbound webhook, which has no staff session to fall back to.
+   */
+  tenantId?: string | null;
+  /**
+   * Whether this may raise the first-error push. Default true. Set false for an
+   * EXPECTED, self-healing condition: a lease contention is the system working,
+   * and while enforcement is dormant `sendPushToAll` has no scope to narrow to,
+   * so it would notify every subscription on the install.
+   */
+  alert?: boolean;
+};
+
 export async function logError(
   scope: string,
   err: unknown,
-  context?: string
+  context?: string,
+  options?: LogErrorOptions,
 ): Promise<void> {
   try {
     // EVERY string that lands in ErrorLog goes through redactUrl first. The
@@ -75,7 +65,7 @@ export async function logError(
       err instanceof Error ? err.message : typeof err === "string" ? err : JSON.stringify(err);
     const message = redactUrl(raw);
     const stack = err instanceof Error && err.stack ? redactUrl(err.stack).slice(0, 4000) : undefined;
-    const tenantId = await tenantForError();
+    const tenantId = options?.tenantId !== undefined ? options.tenantId : await tenantForError();
 
     await basePrisma.errorLog.create({
       data: {
@@ -91,6 +81,7 @@ export async function logError(
     // first-error alert for every other tenant — the alert would simply never
     // fire for them, silently. Unattributed errors (tenantId null) throttle as
     // their own bucket rather than joining an arbitrary tenant's.
+    if (options?.alert === false) return;
     const recent = await basePrisma.errorLog.count({
       where: {
         createdAt: { gte: new Date(Date.now() - 30 * 60 * 1000) },

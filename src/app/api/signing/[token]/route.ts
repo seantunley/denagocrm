@@ -201,7 +201,16 @@ async function handleSign(token: string, req: Request): Promise<Response> {
       let value = field.value;
       if (["signature", "initials", "stamp"].includes(fieldRow.kind)) {
         const image = decodeSignaturePng(value);
-        const ref = await saveFile(image, `${fieldRow.kind}-${recipient.id}-${fieldRow.id}.png`, "image/png");
+        // The signature image belongs to the request being signed. There is no
+        // session at all here — the caller is a customer holding a signing token —
+        // so the RECIPIENT row the token resolved to is the owner, and it is
+        // already the tenant every other query on this route is keyed by.
+        const ref = await saveFile(
+          image,
+          `${fieldRow.kind}-${recipient.id}-${fieldRow.id}.png`,
+          "image/png",
+          recipient.tenantId,
+        );
         savedRefs.push(ref);
         value = ref;
         if (fieldRow.kind === "signature" && !signatureRef) signatureRef = ref;

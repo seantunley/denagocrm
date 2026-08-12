@@ -1,30 +1,15 @@
 import "server-only";
 import { basePrisma } from "./db";
-import { threadCollaborationKey, type ThreadCollaboration, type ThreadIdentity } from "./inboxThreads";
+import { DEFAULT_TENANT_ID } from "./tenant";
+import { botIdentityForRecord } from "./botConversationControl";
+import { conversationIdsForThreads } from "./inboxConversations";
+import { type ThreadCollaboration, type ThreadIdentity } from "./inboxThreads";
 
 /**
  * Joining the inbox's THREADS to the Conversation rows that carry collaboration.
- *
- * The inbox renders threads grouped from Communication rows (buildInboxThreads),
- * while assignment and notes live on Conversation. Both group the same way — one
- * per contact-or-lead per channel — so the two can be matched, but the thread's
- * identity is a composed string and the conversation's is a cuid, and nothing
- * connects them except this agreement.
- *
- * That agreement is the fragile part, so `threadCollaborationKey` exists to state
- * it once, and a test builds a real thread through buildInboxThreads and asserts
- * the keys match. If either side's grouping changes, that test fails rather than
- * the inbox quietly showing every thread as unassigned.
- */
-
-/**
- * Load assignment and notes for the given threads, in one query per table.
- *
- * basePrisma: the caller has ALREADY scoped which threads exist (the inbox page
- * resolves accessibleInboxWhere before grouping), so these look up rows for
- * contacts and leads the user is established to be allowed. Going back through
- * the scoped client would re-filter on a tenant scope that is not yet stamped and
- * return nothing.
+ * Both the inbox and the chatbot ownership controls address the same underlying
+ * contact-or-lead + channel conversation; this loader makes that relationship
+ * explicit instead of asking the browser to rediscover it with one request per row.
  */
 export async function collaborationForThreads(
   threads: ThreadIdentity[],
@@ -32,30 +17,31 @@ export async function collaborationForThreads(
   const byKey = new Map<string, ThreadCollaboration>();
   if (threads.length === 0) return byKey;
 
-  const contactIds = [...new Set(threads.map((t) => t.contactId).filter((id): id is string => Boolean(id)))];
-  const leadIds = [...new Set(threads.map((t) => t.leadId).filter((id): id is string => Boolean(id)))];
-  const channels = [...new Set(threads.map((t) => t.channel))];
-  if (contactIds.length === 0 && leadIds.length === 0) return byKey;
+  // Which Conversation each thread belongs to is decided ONCE, by the resolver the
+  // reply path also depends on. Re-deriving it here by contact + channel is how the
+  // panel and the send action came to disagree about which conversation a thread is.
+  const idByKey = await conversationIdsForThreads(threads);
+  if (idByKey.size === 0) return byKey;
 
   const conversations = await basePrisma.conversation.findMany({
-    where: {
-      channel: { in: channels },
-      OR: [
-        ...(contactIds.length ? [{ contactId: { in: contactIds } }] : []),
-        ...(leadIds.length ? [{ leadId: { in: leadIds } }] : []),
-      ],
-    },
+    where: { id: { in: [...new Set(idByKey.values())] } },
     select: {
       id: true,
+      tenantId: true,
       channel: true,
       contactId: true,
       leadId: true,
-      lastMessageAt: true,
       assignedTo: { select: { id: true, name: true } },
+      contact: {
+        select: {
+          whatsapp: true,
+          phone: true,
+          messengerPsid: true,
+          instagramId: true,
+        },
+      },
+      lead: { select: { phone: true } },
     },
-    // Newest first, so when a contact has both an open and a closed conversation
-    // on one channel the live one is the one that wins the key below.
-    orderBy: { lastMessageAt: "desc" },
   });
   if (conversations.length === 0) return byKey;
 
@@ -94,13 +80,62 @@ export async function collaborationForThreads(
     ]),
   );
 
-  for (const conversation of conversations) {
-    const key = threadCollaborationKey(conversation);
-    if (!key || byKey.has(key)) continue; // first (newest) wins
+  const botTargets = conversations.flatMap((conversation) => {
+    const identity = botIdentityForRecord(conversation);
+    return identity
+      ? [{
+          conversationId: conversation.id,
+          tenantId: conversation.tenantId ?? DEFAULT_TENANT_ID,
+          ...identity,
+        }]
+      : [];
+  });
+  const pausedSessions = botTargets.length
+    ? await basePrisma.botSession.findMany({
+        where: {
+          status: "paused",
+          expiresAt: { gt: new Date() },
+          OR: botTargets.map((target) => ({
+            tenantId: target.tenantId,
+            channel: target.channel,
+            key: target.key,
+          })),
+        },
+        select: { tenantId: true, channel: true, key: true, ownership: true },
+      })
+    : [];
+  // `status: "paused"` alone cannot say WHO owns the thread. Since conversation
+  // ownership landed it is written by BOTH a staff takeover (ownership 'human')
+  // and the bot's own handoff (ownership 'ai_handoff'). Deriving the badge from
+  // status therefore labelled a bot handoff "Human handling" — so staff left it
+  // alone believing a colleague had it, while the customer sat waiting. That is
+  // close to the opposite of the truth: a handoff is precisely the case that
+  // needs a person to pick it up.
+  const humanOwned = new Set(
+    pausedSessions
+      .filter((session) => session.ownership === "human")
+      .map((session) => `${session.tenantId}:${session.channel}:${session.key}`),
+  );
+  const botByConversation = new Map(
+    botTargets.map((target) => [
+      target.conversationId,
+      humanOwned.has(`${target.tenantId}:${target.channel}:${target.key}`) ? "human" as const : "bot" as const,
+    ]),
+  );
+  const supportedConversations = new Set(botTargets.map((target) => target.conversationId));
+
+  const byId = new Map(conversations.map((conversation) => [conversation.id, conversation]));
+  for (const [key, conversationId] of idByKey) {
+    const conversation = byId.get(conversationId);
+    if (!conversation) continue;
     byKey.set(key, {
       conversationId: conversation.id,
       assignee: conversation.assignedTo ?? null,
       notes: notesByConversation.get(conversation.id) ?? [],
+      bot: {
+        supported: supportedConversations.has(conversation.id),
+        mode: botByConversation.get(conversation.id) ?? "bot",
+      },
       draft: draftByConversation.get(conversation.id) ?? null,
     });
   }

@@ -7,7 +7,8 @@ import { formatDateTime } from "@/lib/format";
 import { threadCollaborationKey, type InboxThread, type ThreadCollaboration } from "@/lib/inboxThreads";
 import ConversationCollab from "@/components/ConversationCollab";
 import { EmptyState, StatusPill } from "@/components/visual-system";
-import { RECEIPT_CHANNELS, receiptLabel } from "@/lib/deliveryReceipts";
+import { RECEIPT_CHANNELS } from "@/lib/deliveryReceipts";
+import { deliveryLabel, type DeliveryState } from "@/lib/messageDelivery";
 
 export const CHANNEL_META: Record<string, { label: string; icon: React.ReactNode }> = {
   whatsapp: {
@@ -32,19 +33,33 @@ export default function SocialThreadList({
   empty,
   revalidate = "/inbox",
   collaboration,
+  conversations,
   staff = [],
   canCollaborate = false,
   viewerId,
+  delivery,
 }: {
   list: InboxThread[];
   empty: string;
   revalidate?: string;
   /** Assignment and notes per thread key. Absent → the panel is not rendered. */
   collaboration?: Map<string, ThreadCollaboration>;
+  /**
+   * Conversation id per thread key, for callers that resolve the conversation
+   * without the rest of the collaboration payload. A Messenger or Instagram reply
+   * needs it: the server reads the delivery channel off that row.
+   */
+  conversations?: Map<string, string>;
   staff?: { id: string; name: string }[];
   canCollaborate?: boolean;
   /** The signed-in user, so the reply box can tell their own draft from a colleague's. */
   viewerId?: string | null;
+  /**
+   * How far each outbound message actually got, by Communication id. Absent for
+   * messages sent before the durable queue existed — and for those the label
+   * falls back to the receipt alone, which is all that was ever known about them.
+   */
+  delivery?: Map<string, DeliveryState>;
 }) {
   if (list.length === 0) {
     return <EmptyState icon={MessageCircle} title="No conversations here" description={empty} className="max-w-4xl" />;
@@ -59,6 +74,9 @@ export default function SocialThreadList({
         const initials = thread.name.split(/\s+/).slice(0, 2).map((part) => part[0]?.toUpperCase() ?? "").join("");
         const collabKey = threadCollaborationKey(thread);
         const collab = collabKey ? collaboration?.get(collabKey) : undefined;
+        // Both sources are the same resolver's answer, so either will do; the
+        // collaboration payload simply already carries it where it is loaded.
+        const conversationId = collab?.conversationId ?? (collabKey ? conversations?.get(collabKey) : null) ?? null;
 
         return (
           <RowModal
@@ -123,14 +141,26 @@ export default function SocialThreadList({
                     {(!message.attachmentUrl || (message.body && !message.body.startsWith("🖼") && !message.body.startsWith("🎤") && !message.body.startsWith("🎬") && !message.body.startsWith("📎"))) && message.body}
                   </div>
                   {(() => {
-                    // Under the bubble, and only on our own messages: a receipt
-                    // says what the CUSTOMER did with what we sent.
-                    const label = receiptLabel(message, RECEIPT_CHANNELS.has(thread.channel));
-                    return label ? (
-                      <p className="ml-auto mt-0.5 pr-1 text-right text-[10px] text-muted-foreground">
-                        {label === "Seen" ? "Seen ✓✓" : label === "Delivered" ? "Delivered ✓✓" : "Sent ✓"}
-                      </p>
-                    ) : null;
+                    // Under the bubble, and only on our own messages. Two things
+                    // are being reported: whether the message reached the channel
+                    // at all (the outbox) and what the CUSTOMER did with it (the
+                    // receipt). Showing only the second is how a rejected message
+                    // came to read "Sent ✓".
+                    const label = deliveryLabel(
+                      message,
+                      RECEIPT_CHANNELS.has(thread.channel),
+                      delivery?.get(message.id),
+                    );
+                    if (!label) return null;
+                    const tone =
+                      label.tone === "failed"
+                        ? "text-red-400"
+                        : label.tone === "pending"
+                          ? "text-amber-300"
+                          : "text-muted-foreground";
+                    return (
+                      <p className={`ml-auto mt-0.5 pr-1 text-right text-[10px] ${tone}`}>{label.text}</p>
+                    );
                   })()}
                   </div>
                 ))}
@@ -141,7 +171,7 @@ export default function SocialThreadList({
                   handover context is what you want to have read before typing. */}
               {collab ? <ConversationCollab collaboration={collab} staff={staff} canAct={canCollaborate} /> : null}
 
-              {thread.archived ? <p className="mt-3 text-xs text-muted-foreground">Archived — restore this conversation to reply.</p> : <InboxReply channel={thread.channel} contactId={thread.contactId} leadId={thread.leadId} phone={thread.phone} revalidate={revalidate} conversationId={collab?.conversationId ?? null} draft={collab?.draft ?? null} viewerId={viewerId} />}
+              {thread.archived ? <p className="mt-3 text-xs text-muted-foreground">Archived — restore this conversation to reply.</p> : <InboxReply channel={thread.channel} contactId={thread.contactId} leadId={thread.leadId} phone={thread.phone} revalidate={revalidate} conversationId={conversationId} draft={collab?.draft ?? null} viewerId={viewerId} />}
             </div>
           </RowModal>
         );

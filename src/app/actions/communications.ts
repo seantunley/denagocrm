@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
+import { customerRecordTenantId } from "@/lib/customerRecordTenant";
 import {
   CUSTOMER_RECORD_WRITE_PERMISSIONS,
   canAccessContact,
@@ -53,17 +54,6 @@ export async function addCommunication(formData: FormData) {
     (file as File).size <= 4 * 1024 * 1024;
   if (!body && !hasFile) return;
 
-  let attachmentUrl: string | null = null;
-  if (hasFile && (file as File).type.startsWith("image/")) {
-    const { saveFile } = await import("@/lib/storage");
-    const f = file as File;
-    attachmentUrl = await saveFile(
-      Buffer.from(await f.arrayBuffer()),
-      f.name || "note.png",
-      f.type,
-    );
-  }
-
   // Access-check the client-supplied links BEFORE writing: without this a user
   // could attach a communication to any contact/lead id they cannot otherwise
   // see. Each supplied id must be individually accessible (owners pass through).
@@ -73,6 +63,30 @@ export async function addCommunication(formData: FormData) {
     throw new Error("Contact access denied");
   if (leadId && !(await canAccessLead(user, leadId)))
     throw new Error("Lead access denied");
+
+  // ONE owner for the row and its image, resolved once. The attachment belongs to
+  // the customer record the note is filed against, exactly as the Communication
+  // does — a note's photo cannot belong to a different workspace from the note.
+  //
+  // The upload MOVED to here, after the access checks. It used to run before them,
+  // so an unauthorised caller wrote a blob and only then was refused: an orphan
+  // object, written by someone with no right to the record it was aimed at. It
+  // also had to move to be namespaced at all — the owner is not known until the
+  // links are resolved, and resolving it from the session instead is the defect
+  // customerRecordTenantId exists to prevent.
+  const tenantId = await customerRecordTenantId({ contactId, leadId });
+
+  let attachmentUrl: string | null = null;
+  if (hasFile && (file as File).type.startsWith("image/")) {
+    const { saveFile } = await import("@/lib/storage");
+    const f = file as File;
+    attachmentUrl = await saveFile(
+      Buffer.from(await f.arrayBuffer()),
+      f.name || "note.png",
+      f.type,
+      tenantId,
+    );
+  }
 
   const occurredAtRaw = str("occurredAt");
   const communication = await prisma.communication.create({
@@ -87,6 +101,11 @@ export async function addCommunication(formData: FormData) {
       contactId,
       leadId,
       userId: user.id,
+      // Communication carries composite tenant foreign keys to Contact and Lead, so
+      // the owner is the customer record's, not the session's. Without this the row
+      // lands unowned while stamping is dormant and disappears at the flip.
+      // Resolved above, so the row and its attachment cannot disagree.
+      tenantId,
     },
   });
 

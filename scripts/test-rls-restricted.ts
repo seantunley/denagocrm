@@ -1,8 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
 import { PrismaClient } from "@prisma/client";
 import {
   basePrisma,
@@ -102,19 +100,25 @@ async function main() {
     if (!source.includes("crm_app")) {
       throw new Error(`${scriptPath} no longer mentions crm_app — the substitution below is stale`);
     }
-    const tmpPath = path.join(os.tmpdir(), `app-role-${SFX}.sql`);
-    fs.writeFileSync(tmpPath, source.replaceAll("crm_app", ROLE), "utf8");
-    try {
-      // `prisma db execute` runs a multi-statement script over the simple
-      // protocol — the same mechanism scripts/apply-migrations.mjs uses to apply
-      // a migration.sql, so a file it can run is a file the migration runner can.
-      execFileSync(
-        "npx",
-        ["prisma", "db", "execute", "--url", process.env.DATABASE_URL as string, "--file", tmpPath],
-        { stdio: "inherit" },
-      );
-    } finally {
-      fs.rmSync(tmpPath, { force: true });
+
+    // Executed by THIS process, through the migration runner's own splitter,
+    // rather than by spawning `npx prisma db execute`.
+    //
+    // Same SQL, same order, one fewer moving part — and it makes the suite
+    // runnable on Windows, where `npx` cannot be started with execFileSync (no
+    // PATHEXT handling without a shell). scripts/harness/testDatabase.ts
+    // documents that same limitation for the migration runner and works around
+    // it the same way. Before this, a developer on Windows could not run the one
+    // suite that proves the role their whole cutover depends on.
+    //
+    // The splitter is doing real work: app-role.sql is mostly `DO $$ … $$`
+    // blocks, and $executeRawUnsafe carries exactly one statement per round trip,
+    // so a naive split on ";" would cut the PL/pgSQL bodies in half.
+    const { splitSqlStatements } = (await import(
+      new URL("./lib/splitSqlStatements.mjs", import.meta.url).href
+    )) as { splitSqlStatements: (sql: string) => string[] };
+    for (const statement of splitSqlStatements(source.replaceAll("crm_app", ROLE))) {
+      await basePrisma.$executeRawUnsafe(statement);
     }
 
     // The script deliberately creates the role with a password nobody knows, so

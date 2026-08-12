@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
+import { actingTenantId } from "@/lib/actingTenant";
 import { asActionResult, refuse } from "@/lib/actionResult";
 import type { ActionResult } from "@/lib/actionResultTypes";
 import {
@@ -31,9 +32,21 @@ import { defaultDashboard } from "@/lib/dashboard/store";
  * to belong to the caller.
  *
  * TENANCY. Everything goes through the scoped `prisma` client, not `basePrisma`,
- * so the tenant extension stamps `tenantId` on create and adds it to the `where`
- * on read, update and delete once enforcement is on. No `$queryRaw` and no
- * `basePrisma`, so no hand-written tenant predicate is needed or wanted here.
+ * so the tenant extension adds `tenantId` to the `where` on read, update and
+ * delete ONCE ENFORCEMENT IS ON. No `$queryRaw` and no `basePrisma`, so no
+ * hand-written tenant predicate is needed on the read side.
+ *
+ * THE CREATE SIDE IS DIFFERENT, and this comment used to get it wrong. The
+ * extension stamps NOTHING until enforcement is on — `scopeArgs` in db.ts returns
+ * its args untouched unless `tenantEnforcing()`, which is false in every
+ * environment today — so "the extension stamps tenantId on create" described a
+ * future, and every dashboard created in the meantime was written with a NULL
+ * tenant (1 of 1 on production at the 2026-08-10 audit). That is not merely
+ * invisible-at-the-flip: `@@unique([tenantId, userId, slug])` does not bind on
+ * NULL, which is why migration 20260805140000 had to carry a second, partial
+ * index to stop a double-click producing two dashboards at one address. So the
+ * creates below name the acting workspace themselves, and the real constraint
+ * starts doing its job.
  *
  * NO PERMISSION KEY, matching the layout actions. Arranging your own screens is
  * not a privileged act, and inventing a `dashboards.manage` permission would mean
@@ -49,6 +62,26 @@ import { defaultDashboard } from "@/lib/dashboard/store";
  * MESSAGE reach the user ("unknown card type 'guage'") instead of a config that
  * saves successfully with their card quietly missing.
  */
+
+/* ── what a fenced write reports back ─────────────────────────────── */
+
+/**
+ * An `ActionResult` plus the two things an optimistically-concurrent writer
+ * needs: the revision its write produced, and whether it was refused because the
+ * row had already moved on.
+ *
+ * `conflict` is separate from `error` because the two call for different
+ * responses. An ordinary refusal — an invalid config — means the arrangement on
+ * screen is wrong and should go back to the last one the server took. A conflict
+ * means the row holds SOMEBODY ELSE'S arrangement, which is neither the one on
+ * screen nor the one we would roll back to, so rolling back would replace one
+ * wrong screen with another.
+ */
+export type DashboardSaveResult = ActionResult & {
+  conflict?: boolean;
+  /** The row's `updatedAt` after this write. Present only on success. */
+  updatedAt?: string;
+};
 
 /* ── input shapes ─────────────────────────────────────────────────── */
 
@@ -101,7 +134,9 @@ async function ownDashboard(userId: string, slug: unknown) {
   if (!parsed.success) refuse("That dashboard could not be found.");
   const row = await prisma.dashboard.findFirst({
     where: { userId, slug: slugify(parsed.data) },
-    select: { id: true, slug: true, title: true, sortOrder: true, config: true },
+    // `updatedAt` is the optimistic-concurrency fence every config write is
+    // conditioned on. See saveDashboardConfig.
+    select: { id: true, slug: true, title: true, sortOrder: true, config: true, updatedAt: true },
   });
   if (!row) refuse("That dashboard could not be found.");
   return row;
@@ -215,6 +250,7 @@ export async function createDashboard(title: unknown): Promise<ActionResult> {
     const slug = await freeSlug(user.id, parsed.data);
     await prisma.dashboard.create({
       data: {
+        tenantId: await actingTenantId(),
         userId: user.id,
         slug,
         title: parsed.data,
@@ -328,18 +364,108 @@ export async function reorderDashboards(slugs: unknown): Promise<ActionResult> {
  * broken parts, would tell them their dashboard saved and then quietly show them
  * less of it than they built.
  */
-export async function saveDashboardConfig(slug: unknown, config: unknown): Promise<ActionResult> {
-  return asActionResult(async () => {
+export async function saveDashboardConfig(
+  slug: unknown,
+  config: unknown,
+  /**
+   * The row's `updatedAt` as it was when this editor last saw the server accept
+   * something. REQUIRED — there is deliberately no unfenced path, because an
+   * optional stamp lets a caller opt out of the one invariant this enforces.
+   */
+  expectedUpdatedAt: unknown,
+): Promise<DashboardSaveResult> {
+  // The new stamp and the conflict flag travel out through these rather than
+  // through the body's return value: `asActionResult` is typed to ActionResult,
+  // and widening that shared type for one action's needs would put `conflict` and
+  // `updatedAt` on every action result in the platform.
+  let written: Date | null = null;
+  let conflict = false;
+
+  const result = await asActionResult(async () => {
     const user = await requireUser();
     const row = await ownDashboard(user.id, slug);
-    await prisma.dashboard.update({
-      where: { id: row.id },
-      data: { config: validated(config) },
+
+    const expected = new Date(typeof expectedUpdatedAt === "string" ? expectedUpdatedAt : "");
+    if (Number.isNaN(expected.getTime())) {
+      conflict = true;
+      refuse("This editor is out of date — reload the page before saving.");
+    }
+
+    /*
+     * THE FENCE, and why it is one transaction.
+     *
+     * This used to be a plain `update({ where: { id } })`: blind
+     * last-writer-wins. The editor autosaves on a debounce and had no
+     * serialisation of its own, so two writes of the whole document could be in
+     * flight at once — and whichever reached the row last won, which was
+     * routinely the OLDER edit. Two tabs on the same dashboard lost work the
+     * same way, silently, with neither side told.
+     *
+     * The conditional write and the read of the revision it produced have to be
+     * ONE transaction. As two statements another legitimate writer could land
+     * between them, and this editor would adopt THEIR stamp without ever having
+     * seen their arrangement — its next save would then overwrite their work
+     * without a conflict. The same lost update in a narrower window.
+     */
+    const stamp = await prisma.$transaction(async (tx) => {
+      const count = await tx.dashboard.updateMany({
+        where: { id: row.id, updatedAt: expected },
+        // Called right here rather than hoisted to a local, so `validated()`
+        // remains the ONE door every config goes through on its way to the
+        // column — a rule tests/dashboardStore.test.ts checks by reading this
+        // file, and one a local variable would quietly step around. It refuses
+        // by throwing, which aborts the transaction before anything is written.
+        data: { config: validated(config) },
+      });
+      if (count.count !== 1) return null;
+      // Read INSIDE the transaction, so it is the revision this write produced.
+      // The updateMany above holds the row lock until commit.
+      const fresh = await tx.dashboard.findUnique({
+        where: { id: row.id },
+        select: { updatedAt: true },
+      });
+      return fresh?.updatedAt ?? null;
     });
-    // The page only — the switcher shows titles, and this changes none of them.
-    revalidatePath("/");
+
+    if (!stamp) {
+      conflict = true;
+      refuse(
+        "This dashboard was changed somewhere else after you opened it. Reload to see the newer version — your change has not been saved.",
+      );
+    }
+    written = stamp;
+    /*
+     * NO REVALIDATION HERE, deliberately. This used to call revalidatePath("/").
+     *
+     * A config save is usually a card moving, and the client is already holding
+     * every rendered card node and the whole config — it needs nothing from the
+     * server to draw the new arrangement. Revalidating re-ran the entire home
+     * screen, every card's queries included, on every autosave: a 17-to-23
+     * second round trip in development, once per pause in a drag. Worse, the new
+     * RSC payload REMOUNTS the card tree, so every dnd-kit droppable
+     * unregistered and registered again mid-gesture — enough dispatches in one
+     * commit, under StrictMode's double-invoked effects, to pass React's
+     * nested-update limit and throw "Maximum update depth exceeded" into the
+     * route's error boundary. That was the error page after heavy dragging.
+     *
+     * Navigation stays correct without it: this page is dynamic — it reads the
+     * session and the database on every request — and `staleTimes.dynamic`
+     * defaults to 0, so it is not held in the client cache and a return visit
+     * refetches it regardless.
+     *
+     * What the client cannot do for itself is produce a node for a card that has
+     * just been ADDED or reconfigured. It asks for that itself, with
+     * router.refresh(), when lib/dashboard/renderSignature says the server would
+     * now draw something different. Moving a card is not that.
+     */
     return { success: "Dashboard saved." };
   });
+
+  if (conflict) return { ...result, conflict: true };
+  // Hand back the stamp this write produced, so the next save fences against it.
+  // Without it the editor would still hold the revision it loaded and its second
+  // save would conflict with its own first one.
+  return written ? { ...result, updatedAt: (written as Date).toISOString() } : result;
 }
 
 /**
@@ -359,19 +485,43 @@ export async function saveDashboardConfig(slug: unknown, config: unknown): Promi
  * 20260805140000 turns the second insert into a constraint violation rather than
  * a duplicate "home" — which is exactly why that index exists.
  */
-export async function takeControl(): Promise<ActionResult> {
-  return asActionResult(async () => {
+export async function takeControl(): Promise<DashboardSaveResult> {
+  let stamp: Date | null = null;
+
+  const result = await asActionResult(async () => {
     const user = await requireUser();
     const count = await ownCount(user.id);
+    const seed = defaultDashboard();
+
+    /**
+     * The revision of the row this call guarantees exists.
+     *
+     * The editor's FIRST save has to fence against something, and until this
+     * moment there was no row to take a stamp from. Handing it back here is what
+     * keeps every write fenced — without it the first save after materialising
+     * would have to be allowed through unfenced, which is the hole the fence
+     * exists to close.
+     */
+    const stampNow = async () => {
+      const row = await prisma.dashboard.findFirst({
+        where: { userId: user.id, slug: seed.slug },
+        select: { updatedAt: true },
+      });
+      stamp = row?.updatedAt ?? null;
+    };
+
     // Already taken control. Not a refusal: the caller's intent — "make sure a
     // real row exists" — is already satisfied, and telling them otherwise would
     // turn a harmless double-click into an error message.
-    if (count > 0) return {};
+    if (count > 0) {
+      await stampNow();
+      return {};
+    }
     refuseIfFull(count);
-    const seed = defaultDashboard();
     try {
       await prisma.dashboard.create({
         data: {
+          tenantId: await actingTenantId(),
           userId: user.id,
           slug: seed.slug,
           title: seed.title,
@@ -386,7 +536,12 @@ export async function takeControl(): Promise<ActionResult> {
       // swallowed.
       if ((await ownCount(user.id)) === 0) refuse("Could not set up your dashboard.");
     }
+    // Read after the create OR after losing the race, so the caller gets the
+    // winner's stamp either way rather than none.
+    await stampNow();
     revalidateSwitcher();
     return { success: "Dashboard ready to edit." };
   });
+
+  return stamp ? { ...result, updatedAt: (stamp as Date).toISOString() } : result;
 }

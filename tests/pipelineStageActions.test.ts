@@ -64,8 +64,16 @@ test("pipeline action audit reads do not bypass tenant scope", () => {
     pipelineActionsSource,
     /SELECT \* FROM "PipelineStage" WHERE "id" = \$\{id\}/,
   );
-  assert.match(pipelineActionsSource, /const tenantId = writeTenantId\(\)/);
-  assert.match(pipelineActionsSource, /Prisma\.sql`AND "tenantId" = \$\{tenantId\}`/);
+  // The `before` read is still scoped, and now by something that is NOT EMPTY in
+  // the mode we run in. `writeTenantId()` returns null while enforcement is
+  // dormant, so `tenantId ? Prisma.sql`AND "tenantId" = ${tenantId}` :
+  // Prisma.empty` resolved to NO PREDICATE on `basePrisma` — this read reached any
+  // workspace's lead by id, and its result feeds both the audit `before` snapshot
+  // and the `leads.assign` decision beside it. See tests/forecastTenantScope.test.ts.
+  assert.doesNotMatch(pipelineActionsSource, /const tenantId = writeTenantId\(\)/);
+  assert.doesNotMatch(pipelineActionsSource, /Prisma\.sql`AND "tenantId" = \$\{tenantId\}`/);
+  assert.doesNotMatch(pipelineActionsSource, /const tenantScope = tenantId$/m);
+  assert.match(pipelineActionsSource, /const tenantScope = await pipelineTenantFilter\(\);/);
   assert.match(
     pipelineActionsSource,
     /FROM "Lead"[\s\S]+WHERE "id" = \$\{leadId\} AND "deletedAt" IS NULL \$\{tenantScope\}/,
@@ -73,10 +81,17 @@ test("pipeline action audit reads do not bypass tenant scope", () => {
 });
 
 test("lead relation ids are validated even when a custom title is supplied", () => {
-  assert.match(leadActionsSource, /resolveTenantMemberUser\(userId\)/);
-  assert.match(
-    leadActionsSource,
-    /if \(data\.assignedToId\) await requireAssignableUser\(data\.assignedToId\)/,
+  // The assignee check moved OUT of buildTitle and onto the shared contract, so
+  // it is asserted where it now lives: on both write paths, with the resolved id
+  // assigned back onto `data` (which is what the update spreads). Blank still
+  // means unassigned — resolveAssignableUser handles that itself, which is what
+  // the old `if (data.assignedToId)` was for.
+  assert.match(leadActionsSource, /resolveAssignableUser\(assignedToId, ASSIGNEE_LABEL\)/);
+  assert.doesNotMatch(leadActionsSource, /\bresolveTenantMemberUser\s*\(/);
+  assert.equal(
+    leadActionsSource.match(/data\.assignedToId = await resolveLeadAssignee\(data\.assignedToId\)/g)?.length,
+    2,
+    "both createLead and updateLead must resolve the assignee before writing it",
   );
   assert.match(leadActionsSource, /That contact is not available in this workspace/);
   assert.match(leadActionsSource, /That product is not available in this workspace/);

@@ -1,6 +1,7 @@
 import { Smartphone, Monitor, LogOut, ShieldOff } from "lucide-react";
 import { requireOwner } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { actingTenantMemberIds } from "@/lib/tenantActor";
 import { formatDateTime } from "@/lib/format";
 import { revokeSession, revokeAllForUser } from "@/app/actions/sessions";
 import { Button } from "@/components/ui/button";
@@ -48,7 +49,17 @@ function ago(d: Date): string {
 export default async function SessionsPage() {
   await requireOwner();
 
+  // Sessions & devices is a per-PERSON view, and `User` is a global model, so an
+  // unfiltered `findMany` showed one workspace's owner every other workspace's
+  // staff — with their live device list, IP addresses and sign-in times, and a
+  // "Sign out all" button next to each. That is a denial-of-service control over
+  // strangers, handed out by a page that reads as a local audit screen.
+  //
+  // Membership of the ACTING workspace, disabled members included: a disabled
+  // account is exactly the one an owner comes here to confirm is signed out.
+  const memberIds = await actingTenantMemberIds();
   const users = await prisma.user.findMany({
+    where: memberIds === null ? {} : { id: { in: memberIds } },
     orderBy: { name: "asc" },
     include: {
       sessions: {

@@ -1,4 +1,5 @@
 import { prisma } from "./db";
+import { customerRecordTenantId } from "./customerRecordTenant";
 import { getSetting } from "./settings";
 import { sendWhatsAppText, uploadWhatsAppMedia, sendWhatsAppAudioId, matchByPhone } from "./whatsapp";
 import { sendPushToAll } from "./push";
@@ -102,12 +103,15 @@ export async function botShouldPause(contactId: string | null, leadId: string | 
 }
 
 async function buildHistory(contactId: string | null, leadId: string | null, digits: string): Promise<BotMsg[]> {
+  // Fetch newest first so `take: 16` means the most recent conversation window,
+  // then restore chronological order before passing it to the model.
   const comms = await prisma.communication.findMany({
     where: { type: "whatsapp", OR: whereOr(contactId, leadId, digits) },
-    orderBy: { occurredAt: "asc" },
+    orderBy: { occurredAt: "desc" },
     take: 16,
   });
   return comms
+    .reverse()
     .map((c) => ({ role: (c.direction === "inbound" ? "user" : "assistant") as "user" | "assistant", content: cleanBody(c.body) }))
     .filter((m) => m.content);
 }
@@ -124,6 +128,8 @@ async function logOutbound(reply: string, subject: string, contactId: string | n
       contactId,
       leadId,
       userId: firstUser.id,
+      // A webhook has no session; the customer record it is replying to is the owner.
+      tenantId: await customerRecordTenantId({ contactId, leadId }),
     },
   });
 }

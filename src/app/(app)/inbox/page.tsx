@@ -1,13 +1,17 @@
 import { ExternalLink, Inbox, MessageSquare, Star } from "lucide-react";
-import { prisma, basePrisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { basePrisma } from "@/lib/db";
+import { activeTenantPredicate } from "@/lib/tenantPredicate";
+import { getActiveTenantId, requireUser } from "@/lib/auth";
+import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { accessibleInboxWhere, hasPermission } from "@/lib/permissions";
 import AutoRefresh from "@/components/AutoRefresh";
 import Tabs from "@/components/Tabs";
 import SocialThreadList from "@/components/SocialThreadList";
 import { buildInboxThreads } from "@/lib/inboxThreads";
+import { loadInboxComms } from "@/lib/inboxQuery";
+import { deliveryStateForMessages } from "@/lib/botOutbox";
 import { collaborationForThreads } from "@/lib/inboxCollaboration";
-import { listTenantStaff } from "@/lib/tenantActor";
+import { listActingTenantStaff } from "@/lib/tenantActor";
 import { getSetting } from "@/lib/settings";
 import { formatDateTime } from "@/lib/format";
 import { EmptyState, SectionHeading, Surface } from "@/components/visual-system";
@@ -17,34 +21,63 @@ export const metadata = { title: "Social inbox — DenagoCRM" };
 
 export default async function InboxPage() {
   const user = await requireUser();
+  // The workspace this person is signed in to, resolved identically whether
+  // tenant enforcement is off, observing or on.
+  const workspaceTenantId = (await getActiveTenantId()) ?? DEFAULT_TENANT_ID;
   const scopeWhere = await accessibleInboxWhere(user);
   const channelWhere = { type: { in: ["whatsapp", "messenger", "instagram"] } };
   const [activeComms, archivedComms, reviews, placeId] = await Promise.all([
-    prisma.communication.findMany({
-      where: { ...channelWhere, ...scopeWhere, archivedAt: null },
-      orderBy: { occurredAt: "desc" },
-      take: 400,
-      include: { contact: true, lead: true },
+    // Threads are chosen by their own recency, then their messages are loaded —
+    // so a busy conversation can no longer evict a quiet one from the queue.
+    loadInboxComms({ ...channelWhere, ...scopeWhere }, { archived: false }),
+    loadInboxComms({ ...channelWhere, ...scopeWhere }, { archived: true }),
+    // Reviews are tenant-owned. This read runs on the bypass client, so the
+    // predicate the RLS extension would have added has to be added by hand.
+    //
+    // `activeTenantPredicate` alone is NOT enough, and the reason is the mode
+    // this actually ships in. It returns `{}` while enforcement is dormant —
+    // correct as a general rule, because filtering on a tenant nobody told us
+    // about would hide legacy rows written before the column existed. But an
+    // unscoped read is not a migration mechanism: it means that for the whole
+    // dormant period — which is every day until enforcement is switched on —
+    // this page shows every workspace's reviews to every workspace.
+    //
+    // The migration beside this change backfills every tenantless review onto
+    // the founding tenant, so there are no legacy rows left for a filter to
+    // hide. That is what makes filtering safe here, and it is why the two must
+    // land together.
+    //
+    // So the tenant comes from the SESSION — the workspace this person is signed
+    // in to — which is resolved the same way in every enforcement mode.
+    // activeTenantPredicate is still spread last, so under enforcement the
+    // established scope wins and the scopeless-owner case still throws rather
+    // than quietly widening to every tenant.
+    basePrisma.googleReview.findMany({
+      where: { tenantId: workspaceTenantId, ...activeTenantPredicate("inbox Google reviews") },
+      orderBy: { publishedAt: "desc" },
+      take: 10,
     }),
-    prisma.communication.findMany({
-      where: { ...channelWhere, ...scopeWhere, archivedAt: { not: null } },
-      orderBy: { occurredAt: "desc" },
-      take: 400,
-      include: { contact: true, lead: true },
-    }),
-    basePrisma.googleReview.findMany({ orderBy: { publishedAt: "desc" }, take: 10 }),
     getSetting("GOOGLE_PLACE_ID"),
   ]);
 
   const threadList = buildInboxThreads(activeComms);
   const archivedList = buildInboxThreads(archivedComms);
 
+  // What actually became of each outbound message. Without this the bubbles can
+  // only report the customer's side, so anything still queued or permanently
+  // rejected renders identically to a message that was delivered.
+  const delivery = await deliveryStateForMessages(
+    [...threadList, ...archivedList].flatMap((thread) =>
+      thread.messages.filter((message) => message.direction === "outbound").map((message) => message.id),
+    ),
+  );
+
   // Assignment and notes for the threads already resolved above — so the join
   // inherits their scoping rather than asking about conversations of its own.
   // Staff and the reply permission are loaded once for every thread's panel.
   const [collaboration, staff, canCollaborate] = await Promise.all([
     collaborationForThreads([...threadList, ...archivedList]),
-    listTenantStaff(),
+    listActingTenantStaff(),
     hasPermission(user, "inbox.reply"),
   ]);
   const collabStaff = staff.map((person) => ({ id: person.id, name: person.name }));
@@ -120,12 +153,12 @@ export default async function InboxPage() {
 
       <Tabs
         tabs={[
-          { key: "all", label: "All", count: unread, content: <SocialThreadList collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList} empty="No conversations yet. Messages appear here as soon as a connected customer channel receives one." /> },
-          { key: "whatsapp", label: "WhatsApp", count: threadList.filter((thread) => thread.channel === "whatsapp" && thread.unread).length, content: <SocialThreadList collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "whatsapp")} empty="No WhatsApp conversations yet. Connect the WhatsApp Business number in Settings → Integrations." /> },
-          { key: "messenger", label: "Messenger", count: threadList.filter((thread) => thread.channel === "messenger" && thread.unread).length, content: <SocialThreadList collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "messenger")} empty="No Messenger conversations yet." /> },
-          { key: "instagram", label: "Instagram", count: threadList.filter((thread) => thread.channel === "instagram" && thread.unread).length, content: <SocialThreadList collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "instagram")} empty="No Instagram DMs yet. They appear once the Instagram account and Meta messaging permissions are connected." /> },
+          { key: "all", label: "All", count: unread, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList} empty="No conversations yet. Messages appear here as soon as a connected customer channel receives one." /> },
+          { key: "whatsapp", label: "WhatsApp", count: threadList.filter((thread) => thread.channel === "whatsapp" && thread.unread).length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "whatsapp")} empty="No WhatsApp conversations yet. Connect the WhatsApp Business number in Settings → Integrations." /> },
+          { key: "messenger", label: "Messenger", count: threadList.filter((thread) => thread.channel === "messenger" && thread.unread).length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "messenger")} empty="No Messenger conversations yet." /> },
+          { key: "instagram", label: "Instagram", count: threadList.filter((thread) => thread.channel === "instagram" && thread.unread).length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "instagram")} empty="No Instagram DMs yet. They appear once the Instagram account and Meta messaging permissions are connected." /> },
           { key: "reviews", label: "Google Reviews", count: reviews.length, content: reviewsPanel },
-          { key: "archived", label: "Archived", count: archivedList.length, content: <SocialThreadList collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={archivedList} empty="Nothing archived. Archive finished or test conversations to keep the active queue focused." /> },
+          { key: "archived", label: "Archived", count: archivedList.length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={archivedList} empty="Nothing archived. Archive finished or test conversations to keep the active queue focused." /> },
         ]}
       />
     </div>

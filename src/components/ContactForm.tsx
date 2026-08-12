@@ -1,4 +1,29 @@
-import type { LucideIcon } from "lucide-react";
+"use client";
+
+/**
+ * A CLIENT component, like every one of its six sibling capture forms
+ * (LeadForm, PartForm, ProductForm, VehicleForm, StockUnitForm,
+ * StockPurchaseOrderForm).
+ *
+ * It was the one that never carried the directive, and that was not a
+ * deliberate difference — it is the only consumer of `capture-form` that ran on
+ * the server, so it was the only one passing `icon={MessageSquareText}` (a
+ * FUNCTION) across the server→client boundary into `CaptureSection`. React
+ * refuses that: "Functions cannot be passed directly to Client Components".
+ * Six of those errors were thrown on every render of a contact page, one per
+ * CaptureSection.
+ *
+ * Nothing here needs a server: no `await`, no database, no `server-only`
+ * import, and all four of its children (SaveForm, DuplicateGuard,
+ * ContactKindFields, ContactSubmitButton) are already client components.
+ * QuickCreateDialog — itself a client component — already imports this file, so
+ * it was in the client bundle regardless; the directive only makes that
+ * consistent, rather than depending on which parent happened to pull it in.
+ *
+ * The `action` prop stays a server action, which is allowed to cross the
+ * boundary and is exactly what the sibling forms already do.
+ */
+
 import type { ActionResult } from "@/lib/actionResultTypes";
 import { SaveForm } from "@/components/SaveForm";
 import {
@@ -12,6 +37,12 @@ import {
 import DuplicateGuard from "@/components/DuplicateGuard";
 import ContactSubmitButton from "@/components/ContactSubmitButton";
 import ContactKindFields from "@/components/ContactKindFields";
+import {
+  CaptureField as Field,
+  CaptureFooter,
+  CaptureHero,
+  CaptureSection as FormSection,
+} from "@/components/capture-form";
 import { NO_FLEET_PICKER, type FleetPicker } from "@/lib/fleetTypes";
 import { contactKind } from "@/lib/contactKind";
 import { cn } from "@/lib/utils";
@@ -39,53 +70,6 @@ type ContactDefaults = {
 };
 
 type ContactFormVariant = "compact" | "dialog" | "page";
-
-function FormSection({
-  icon: Icon,
-  title,
-  description,
-  children,
-}: {
-  icon: LucideIcon;
-  title: string;
-  description: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
-      <div className="flex items-start gap-3 border-b border-border bg-muted/20 px-4 py-4 sm:px-5">
-        <span className="grid size-9 shrink-0 place-items-center rounded-xl border border-primary/20 bg-primary/10 text-primary">
-          <Icon className="size-[18px]" />
-        </span>
-        <div className="min-w-0">
-          <h2 className="font-semibold tracking-tight text-foreground">{title}</h2>
-          <p className="mt-0.5 text-xs leading-5 text-muted-foreground">{description}</p>
-        </div>
-      </div>
-      <div className="grid gap-4 p-4 sm:grid-cols-2 sm:p-5">{children}</div>
-    </section>
-  );
-}
-
-function Field({
-  label,
-  hint,
-  wide = false,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  wide?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className={cn("min-w-0", wide && "sm:col-span-2")}>
-      <label className="label">{label}</label>
-      {children}
-      {hint && <p className="mt-1.5 text-[11px] leading-4 text-muted-foreground">{hint}</p>}
-    </div>
-  );
-}
 
 export default function ContactForm({
   action,
@@ -130,21 +114,12 @@ export default function ContactForm({
       )}
     >
       {(isPage || isDialog) && (
-        <div className="relative overflow-hidden rounded-2xl border border-white/[0.08] bg-[linear-gradient(135deg,rgba(234,88,12,.12),rgba(255,255,255,.015)_55%)] p-4 sm:p-5">
-          <div className="pointer-events-none absolute -right-12 -top-16 size-40 rounded-full bg-primary/10 blur-3xl" />
-          <div className="relative flex items-start gap-3">
-            <span className="grid size-10 shrink-0 place-items-center rounded-2xl border border-primary/20 bg-primary/10 text-primary">
-              <UserRound className="size-5" />
-            </span>
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">Customer profile</p>
-              <p className="mt-1 text-sm font-medium text-foreground">Start with the details you know.</p>
-              <p className="mt-1 max-w-xl text-xs leading-5 text-muted-foreground">
-                Only a name is required. Contact, location and ownership details make follow-up and future service much easier.
-              </p>
-            </div>
-          </div>
-        </div>
+        <CaptureHero
+          icon={UserRound}
+          eyebrow="Customer profile"
+          title="Start with the details you know."
+          description="Only a name is required. Contact, location and ownership details make follow-up and future service much easier."
+        />
       )}
 
       <FormSection
@@ -219,16 +194,49 @@ export default function ContactForm({
         title="Ownership & origin"
         description="Route the relationship to the right person and record where it began."
       >
-        {users.length > 0 && (
-          <Field label="Responsible owner">
-            <select name="ownerId" className="input" defaultValue={defaults.ownerId ?? ""}>
+        {/*
+          The owner field is ALWAYS rendered. It used to be `users.length > 0 &&`,
+          which was harmless while the list was every User row on the platform and
+          therefore never empty. Now that it is the staff of one workspace, empty
+          is reachable — and a control that silently disappears is the worst
+          reading of it: "Responsible owner" vanishing between two visits looks
+          like the form has lost a field, or like the contact has lost its owner,
+          rather than like a team with nobody assignable in it.
+
+          Disabled rather than a <select> with no options, which is a broken-
+          looking empty box that explains nothing. Disabled submits no value,
+          which is exactly what the hidden field submitted, so the empty state
+          changes what is SHOWN and not what is SAVED: `resolveAssignableUser`
+          reads a blank `ownerId` as a deliberate "Unassigned". It carries no
+          `name` for the same reason — a name would start submitting a value that
+          no member backs.
+
+          The second way a scoped list bites is on the EDIT form: the current
+          owner may no longer be in it, and a `defaultValue` matching no option
+          makes the browser select the FIRST one, so an ordinary save would hand
+          the contact to whoever sorts first alphabetically — a wrong owner that
+          looks like a deliberate choice. Falling back to the blank option gives
+          that case somewhere honest to land, and the action refuses the id
+          anyway if it is ever posted.
+        */}
+        <Field label="Responsible owner">
+          {users.length === 0 ? (
+            <select className="input" disabled defaultValue="">
+              <option value="">No assignable team members — this contact will be left unassigned</option>
+            </select>
+          ) : (
+            <select
+              name="ownerId"
+              className="input"
+              defaultValue={users.some((user) => user.id === defaults.ownerId) ? defaults.ownerId ?? "" : ""}
+            >
               <option value="">Unassigned</option>
               {users.map((user) => (
                 <option key={user.id} value={user.id}>{user.name}</option>
               ))}
             </select>
-          </Field>
-        )}
+          )}
+        </Field>
         <Field label="Source">
           <select name="source" className="input" defaultValue={defaults.source ?? ""}>
             <option value="">Not specified</option>
@@ -330,16 +338,9 @@ export default function ContactForm({
 
       <DuplicateGuard />
 
-      <div
-        className={cn(
-          "flex items-center justify-between gap-4 rounded-2xl border border-border bg-card p-3 shadow-sm",
-          isPage && "sticky bottom-[calc(5.25rem+env(safe-area-inset-bottom))] z-20 sm:static sm:p-4",
-          isDialog && "sticky bottom-0 z-20 -mx-4 -mb-4 rounded-b-none border-x-0 border-b-0 bg-[#111412]/95 px-4 backdrop-blur-xl",
-        )}
-      >
-        <p className="hidden text-xs text-muted-foreground sm:block">Fields marked * are required.</p>
+      <CaptureFooter variant={variant} requiredNote="Fields marked * are required.">
         <ContactSubmitButton label={submitLabel} />
-      </div>
+      </CaptureFooter>
     </SaveForm>
   );
 }

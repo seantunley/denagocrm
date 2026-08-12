@@ -135,13 +135,18 @@ test("src/lib/signing/approvals.ts: staff assignee validated via resolveTenantMe
   assert.match(code, /email:\s*null/, "fail-closed branch must return a null email (no notification)");
 });
 
+// Two staff lists, two resolvers, and the difference is whether a session exists
+// to resolve. The workflow EDITOR is a page a person is looking at, so it uses the
+// acting list and is scoped today; autoEnvelope's staffMap is the workflow RUNTIME
+// and has no actor, so it keeps the background list — the same reason
+// signing/approvals.ts keeps `resolveTenantMemberUser` above.
 const STAFF_PICKERS = [
-  "src/app/(app)/signing-workflows/[id]/page.tsx",
-  "src/lib/signing/autoEnvelope.ts",
+  { file: "src/app/(app)/signing-workflows/[id]/page.tsx", fn: "listActingTenantStaff" },
+  { file: "src/lib/signing/autoEnvelope.ts", fn: "listTenantStaff" },
 ] as const;
-for (const file of STAFF_PICKERS) {
+for (const { file, fn } of STAFF_PICKERS) {
   test(`${file}: staff list scoped to the current tenant (active, non-disabled members)`, () => {
-    assert.match(src(file), /listTenantStaff\s*\(/, `${file} must build its staff list via listTenantStaff`);
+    assert.match(src(file), new RegExp(`(?<![A-Za-z])${fn}\\s*\\(`), `${file} must build its staff list via ${fn}`);
   });
 }
 
@@ -179,8 +184,23 @@ test("src/app/api/bookings/route.ts: stamps the write tenant + namespaces slot c
   assert.match(code, /const\s+writeTid\s*=\s*writeTenantId\(\)/, "must resolve the write tenant once");
   // the resolved tenant is threaded into the slot capacity claim (per-tenant slots)
   assert.match(code, /claimSlotCapacity\([^)]*writeTid/, "must pass the write tenant to claimSlotCapacity");
+
+  // STAMPING is a different question from NAMESPACING, and the 2026-08-10 audit is
+  // why. `writeTenantId()` is null while enforcement is dormant, so stamping from
+  // it alone wrote every online booking — contact, job card and activity — with no
+  // owner at all. The API key that authenticated the request names exactly one
+  // tenant, so that is the fallback; a legacy global key still resolves null and
+  // nothing is invented.
+  assert.match(code, /const\s+stampTid\s*=\s*writeTid\s*\?\?\s*auth\.tenantId/, "a new row takes the API key's tenant when the scope is dormant");
+  // …and the capacity count must NOT be narrowed the same way: every pre-existing
+  // NULL-tenant booking would become invisible to it and the slot double-booked.
+  assert.doesNotMatch(code, /claimSlotCapacity\([^)]*stampTid/, "capacity must stay on writeTid");
+  // A row pointing at an EXISTING contact must claim that contact's tenant, not the
+  // key's: the composite (tenantId, contactId) key refuses anything else and the
+  // customer's booking would 500.
+  assert.match(code, /const\s+rowTid\s*=\s*contact\s*\?\s*contact\.tenantId\s*:\s*stampTid/, "children follow the contact they point at");
   // every tenant-owned create is stamped (contact, job card, activity → 3 sites)
-  const stamps = code.match(/tenantId:\s*writeTid/g) ?? [];
+  const stamps = code.match(/tenantId:\s*(stampTid|rowTid)/g) ?? [];
   assert.ok(stamps.length >= 3, `every created row must be stamped with the tenant (found ${stamps.length}, expected ≥3)`);
 });
 
@@ -215,7 +235,17 @@ for (const file of OTP_ROUTES) {
 test("src/lib/push.ts: sendPushToAll delivers only to the current tenant's devices", () => {
   const code = src("src/lib/push.ts");
   assert.match(code, /pushRecipientsForCurrentScope\s*\(/, "must select recipients via pushRecipientsForCurrentScope");
-  assert.match(code, /const\s+subs\s*=\s*await\s+pushRecipientsForCurrentScope\(\)/, "sendPushToAll must use the scoped recipient list");
+  // Recipients come from a SCOPED source: the current scope, or a tenant the
+  // caller names outright. The second exists because the first resolves to every
+  // device in the table while enforcement is dormant — a defensible rollout
+  // default, and not a filter, so anything carrying customer data must name its
+  // tenant instead of inheriting it. Neither branch may reach the table directly.
+  assert.match(
+    code,
+    /const\s+subs\s*=\s*options\.tenantId\s*\n?\s*\?\s*await\s+pushRecipientsForTenant\(options\.tenantId\)\s*\n?\s*:\s*await\s+pushRecipientsForCurrentScope\(\)/,
+    "sendPushToAll must use a scoped recipient list",
+  );
+  assert.match(code, /export async function pushRecipientsForTenant\(tenantId: string\)/);
   assert.doesNotMatch(code, /prisma\.pushSubscription\.findMany\(\s*\)/, "must not do an unfiltered findMany() in the send path");
 });
 

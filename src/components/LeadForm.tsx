@@ -1,9 +1,8 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState } from "react";
 import { SaveForm } from "@/components/SaveForm";
 import type { ActionResult } from "@/lib/actionResultTypes";
-import type { LucideIcon } from "lucide-react";
 import {
   BadgeDollarSign,
   CircleUserRound,
@@ -15,6 +14,12 @@ import {
 } from "lucide-react";
 import DuplicateGuard from "@/components/DuplicateGuard";
 import LeadSubmitButton from "@/components/LeadSubmitButton";
+import {
+  CaptureField as Field,
+  CaptureFooter,
+  CaptureHero,
+  CaptureSection as FormSection,
+} from "@/components/capture-form";
 import { cn } from "@/lib/utils";
 
 export type LeadFormProduct = {
@@ -41,53 +46,6 @@ type LeadDefaults = {
 };
 
 type LeadFormVariant = "compact" | "dialog" | "page";
-
-function FormSection({
-  icon: Icon,
-  title,
-  description,
-  children,
-}: {
-  icon: LucideIcon;
-  title: string;
-  description: string;
-  children: ReactNode;
-}) {
-  return (
-    <section className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
-      <div className="flex items-start gap-3 border-b border-border bg-muted/20 px-4 py-4 sm:px-5">
-        <span className="grid size-9 shrink-0 place-items-center rounded-xl border border-primary/20 bg-primary/10 text-primary">
-          <Icon className="size-[18px]" />
-        </span>
-        <div className="min-w-0">
-          <h2 className="font-semibold tracking-tight text-foreground">{title}</h2>
-          <p className="mt-0.5 text-xs leading-5 text-muted-foreground">{description}</p>
-        </div>
-      </div>
-      <div className="grid gap-4 p-4 sm:grid-cols-2 sm:p-5">{children}</div>
-    </section>
-  );
-}
-
-function Field({
-  label,
-  hint,
-  wide = false,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  wide?: boolean;
-  children: ReactNode;
-}) {
-  return (
-    <div className={cn("min-w-0", wide && "sm:col-span-2")}>
-      <label className="label">{label}</label>
-      {children}
-      {hint && <p className="mt-1.5 text-[11px] leading-4 text-muted-foreground">{hint}</p>}
-    </div>
-  );
-}
 
 function formatPreviewValue(raw: string) {
   const numeric = Number(raw.replace(/\s/g, "").replace(",", "."));
@@ -176,32 +134,17 @@ export default function LeadForm({
       )}
     >
       {(isPage || isDialog) && (
-        <div className="relative overflow-hidden rounded-2xl border border-white/[0.08] bg-[linear-gradient(135deg,rgba(234,88,12,.13),rgba(255,255,255,.015)_58%)] p-4 sm:p-5">
-          <div className="pointer-events-none absolute -right-12 -top-16 size-40 rounded-full bg-primary/10 blur-3xl" />
-          <div className="relative flex items-start gap-3">
-            <span className="grid size-10 shrink-0 place-items-center rounded-2xl border border-primary/20 bg-primary/10 text-primary">
-              <Sparkles className="size-5" />
-            </span>
-            <div className="min-w-0 flex-1">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">Opportunity snapshot</p>
-              <p className="mt-1 truncate text-sm font-semibold text-foreground">{snapshot.customer}</p>
-              <div className="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-3">
-                <div className="rounded-xl border border-white/[0.07] bg-black/10 px-3 py-2">
-                  <span className="block text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">Interest</span>
-                  <span className="mt-1 block truncate font-medium text-foreground">{snapshot.interest}</span>
-                </div>
-                <div className="rounded-xl border border-white/[0.07] bg-black/10 px-3 py-2">
-                  <span className="block text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">Pipeline</span>
-                  <span className="mt-1 block truncate font-medium text-foreground">{stage?.name ?? "Choose stage"}</span>
-                </div>
-                <div className="col-span-2 rounded-xl border border-white/[0.07] bg-black/10 px-3 py-2 sm:col-span-1">
-                  <span className="block text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">Estimated value</span>
-                  <span className="mt-1 block truncate font-medium text-foreground">{snapshot.value}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+        <CaptureHero
+          icon={Sparkles}
+          eyebrow="Opportunity snapshot"
+          title={snapshot.customer}
+          description="Capture the essentials now; the team can refine the opportunity as the conversation develops."
+          summary={[
+            { label: "Interest", value: snapshot.interest },
+            { label: "Pipeline", value: stage?.name ?? "Choose stage" },
+            { label: "Estimated value", value: snapshot.value },
+          ]}
+        />
       )}
 
       <FormSection
@@ -338,16 +281,36 @@ export default function LeadForm({
             ))}
           </select>
         </Field>
-        {users.length > 0 && (
-          <Field label="Assigned to">
+        {/*
+          The field STAYS when there is nobody to list.
+
+          It used to be rendered only for a non-empty list, which was harmless
+          while the list was every User row on the platform and therefore never
+          empty. Now that it is the staff of one workspace, empty is reachable —
+          and a control that silently disappears is the worst reading of it: the
+          person cannot tell an empty team from a form that has quietly dropped
+          the field, and "Assigned to" vanishing between two visits looks like
+          the lead lost its owner.
+
+          Disabled rather than an empty dropdown, because a <select> with no
+          options is a broken-looking box that says nothing. Disabled submits no
+          value, which is exactly the same thing the hidden field submitted, so
+          what happens on save is unchanged: blank means "assign to me".
+        */}
+        <Field label="Assigned to">
+          {users.length === 0 ? (
+            <select className="input" disabled defaultValue="">
+              <option value="">No assignable team members — this lead will be assigned to you</option>
+            </select>
+          ) : (
             <select name="assignedToId" className="input" defaultValue={defaults.assignedToId ?? ""}>
               <option value="">Assign to me automatically</option>
               {users.map((user) => (
                 <option key={user.id} value={user.id}>{user.name}</option>
               ))}
             </select>
-          </Field>
-        )}
+          )}
+        </Field>
         <Field label="Lead source">
           <select name="source" className="input" defaultValue={defaults.source ?? "manual"}>
             <option value="manual">Manual capture</option>
@@ -389,16 +352,9 @@ export default function LeadForm({
 
       <DuplicateGuard />
 
-      <div
-        className={cn(
-          "flex items-center justify-between gap-4 rounded-2xl border border-border bg-card p-3 shadow-sm",
-          isPage && "sticky bottom-[calc(5.25rem+env(safe-area-inset-bottom))] z-20 sm:static sm:p-4",
-          isDialog && "sticky bottom-0 z-20 -mx-4 -mb-4 rounded-b-none border-x-0 border-b-0 bg-[#111412]/95 px-4 backdrop-blur-xl",
-        )}
-      >
-        <p className="hidden text-xs text-muted-foreground sm:block">Customer name and pipeline stage are required.</p>
+      <CaptureFooter variant={variant} requiredNote="Customer name and pipeline stage are required.">
         <LeadSubmitButton label={submitLabel} />
-      </div>
+      </CaptureFooter>
     </SaveForm>
   );
 }
