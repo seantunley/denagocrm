@@ -8,7 +8,6 @@ import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
 import { MAX_BLOB_BYTES, assertOwnedBlob } from "@/lib/storage";
 import { actingScopeClass } from "@/lib/actingScope";
-import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 
 export type UploadedFileMeta = {
   url: string;
