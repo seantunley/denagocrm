@@ -134,3 +134,42 @@ test("marking messages read cannot cross a workspace boundary", () => {
 
   assert.doesNotMatch(fn, /WHERE "caseId" = \$\{caseId\} AND "type" = 'customer' AND "readAt" IS NULL`/, "the unqualified update");
 });
+
+test("a portal case is filed against ITS OWN workspace's mailbox", () => {
+  /*
+   * `SupportMailbox` is unique on (tenantId, slug), not on slug. So the moment a
+   * second workspace exists there are two rows with slug 'support', and
+   *
+   *     SELECT "id" FROM "SupportMailbox" WHERE "slug" = 'support' LIMIT 1
+   *
+   * returned whichever one the planner reached first. A case raised through
+   * workspace B's portal could then be filed against workspace A's mailbox: the
+   * case row carries B's tenantId while its mailboxId points into A. That is a
+   * cross-tenant reference on a live record, and it breaks the composite FK at
+   * the enforcement flip.
+   *
+   * `IS NOT DISTINCT FROM` rather than `=`, because the case's tenant is null
+   * while enforcement is dormant and `= NULL` matches nothing in SQL — which
+   * would have silently stopped attaching any mailbox at all.
+   */
+  const src = readFileSync(
+    path.join(path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."), "src/app/actions/portalExpansion.ts"),
+    "utf8",
+  );
+  const fn = src.slice(src.indexOf("export async function createPortalCase"));
+  assert.ok(fn.length > 0, "createPortalCase is gone — was it renamed?");
+
+  const mailbox = fn.slice(fn.indexOf('FROM "SupportMailbox"'));
+  assert.ok(mailbox.length > 0, "the mailbox lookup is gone — was it changed?");
+  assert.match(
+    mailbox.slice(0, 200),
+    /"tenantId" IS NOT DISTINCT FROM \$\{tenantId\}/,
+    "the mailbox must be chosen from the case's own workspace, not by LIMIT 1 across all of them",
+  );
+
+  // Order matters: the tenant has to be resolved BEFORE the lookup that uses it.
+  assert.ok(
+    fn.indexOf("const tenantId = await portalTenantId(") < fn.indexOf('FROM "SupportMailbox"'),
+    "the case's workspace must be resolved before the mailbox is chosen with it",
+  );
+});

@@ -170,13 +170,31 @@ export async function createPortalCase(
     // globally-first user, ignoring which tenant this portal contact belongs
     // to) — reuse the same resolver portal.ts's firstStaffUser() already wraps.
     const staff = await resolveTenantActor();
-    const mailboxes = await basePrisma.$queryRaw<Array<{ id: string }>>`
-      SELECT "id" FROM "SupportMailbox" WHERE "slug" = 'support' LIMIT 1
-    `;
-    const mailboxId = mailboxes[0]?.id ?? null;
     // Multi-tenancy readiness: ambient tenant, entered by portalUser() ->
     // getPortalContact() above (under enforcement); null when not enforcing.
+    //
+    // RESOLVED BEFORE THE MAILBOX, because the mailbox lookup needs it.
     const tenantId = await portalTenantId(contact.id);
+    // `SupportMailbox` is unique on (tenantId, slug), NOT on slug — so once a
+    // second workspace exists there are two rows with slug 'support' and this
+    // `LIMIT 1` returned whichever one the planner happened to reach first.
+    // A portal case raised by workspace B could then be filed against workspace
+    // A's mailbox: the case carries B's tenantId while `mailboxId` points into
+    // A, which is a cross-tenant reference that also breaks the composite FK at
+    // the enforcement flip.
+    //
+    // Scoped to the case's own owner. While dormant `tenantId` may be null, and
+    // `"tenantId" = NULL` matches nothing in SQL — so `IS NOT DISTINCT FROM`
+    // instead, which matches a legacy unowned mailbox for a legacy unowned
+    // case and keeps this working exactly as it does today. Production's single
+    // mailbox is already stamped tenant_denago_cpt, so the ordinary path is the
+    // equality one.
+    const mailboxes = await basePrisma.$queryRaw<Array<{ id: string }>>`
+      SELECT "id" FROM "SupportMailbox"
+      WHERE "slug" = 'support' AND "tenantId" IS NOT DISTINCT FROM ${tenantId}
+      LIMIT 1
+    `;
+    const mailboxId = mailboxes[0]?.id ?? null;
     await basePrisma.$executeRaw`
       INSERT INTO "CustomerCase" (
         "id", "tenantId", "subject", "description", "type", "priority", "source", "contactId", "vehicleId", "assignedToId",
