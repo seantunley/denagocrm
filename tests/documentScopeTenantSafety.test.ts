@@ -40,7 +40,7 @@ test("the document scope query names its tenant", () => {
   assert.ok(body.length > 0, "the slice ran backwards");
   assert.match(body, /basePrisma\.document\.findMany/, "still the basePrisma query this guards");
   assert.match(body, /documentTenantWhere\(\)/, "a basePrisma query must carry an explicit tenant predicate");
-  assert.match(shipped("src/lib/permissions.ts"), /activeTenantPredicate\("document scope"\)/);
+  assert.match(shipped("src/lib/permissions.ts"), /actingRecordPredicate\("document scope"\)/);
 });
 
 test("access to ONE document is decided by resolving that document", () => {
@@ -132,19 +132,27 @@ test("under enforcement, a scopeless request is refused rather than unscoped", a
   }
 });
 
-test("all three call sites share the one predicate", () => {
+test("trash.ts and the Trash page still share the enforcement-only predicate", () => {
   // Three separate copies is how one of them ends up with a different rule.
-  for (const rel of [
-    "src/lib/trash.ts",
-    "src/lib/permissions.ts",
-    "src/app/(app)/trash/page.tsx",
-  ]) {
+  // permissions.ts is deliberately NOT in this list any more: its document
+  // scope is user-originated (a signed-in person's own read/write), and
+  // activeTenantPredicate answers from enforcement alone — `{}` while DORMANT,
+  // the mode every environment runs in today — so it never actually named a
+  // tenant here. See actingRecordPredicate's doc comment in permissions.ts.
+  // trash.ts / the Trash page are unaudited for the same gap and are left as
+  // they were; they are a known follow-up, not a claim that they are safe.
+  for (const rel of ["src/lib/trash.ts", "src/app/(app)/trash/page.tsx"]) {
     assert.match(
       shipped(rel),
       /activeTenantPredicate\(/,
       `${rel} must resolve the tenant through the shared predicate`,
     );
   }
+  assert.match(
+    shipped("src/lib/permissions.ts"),
+    /actingRecordPredicate\(/,
+    "permissions.ts must resolve the DOCUMENT scope through the acting-tenant predicate, not the enforcement-only one",
+  );
 });
 
 test("a missing scope is not treated as the untenanted tenant", () => {

@@ -12,6 +12,33 @@ import { currentScopeClass } from "./tenantWrite";
 export type { ActingScope };
 
 /**
+ * `getActiveTenantId()` is a request helper: outside a live Next request its
+ * `cookies()` call deliberately throws. That is the correct signal for cron,
+ * scripts and integration tests — there simply is no session whose workspace
+ * could narrow the operation — so those callers remain `global`, exactly as the
+ * acting-scope contract says background work should.
+ *
+ * Catch ONLY Next's documented missing-request error. Any real failure while a
+ * request exists (DB/session resolution, malformed state, etc.) still propagates;
+ * silently converting those failures to `global` would widen access at the exact
+ * moment the tenant decision became uncertain.
+ */
+async function dormantSessionTenantId(): Promise<string | null> {
+  try {
+    return await getActiveTenantId();
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      (error.message.includes("next-dynamic-api-wrong-context") ||
+        error.message.includes("outside a request scope"))
+    ) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+/**
  * The scope a USER-ORIGINATED operation acts in — the server shell around
  * {@link decideActingScope}.
  *
@@ -28,7 +55,7 @@ export async function actingScopeClass(): Promise<ActingScope> {
   const enforcing = tenantEnforcing();
   // Skip the session lookup entirely when enforcing: the enforced scope is
   // authoritative and a session must never widen it.
-  const sessionTenantId = enforcing ? null : await getActiveTenantId();
+  const sessionTenantId = enforcing ? null : await dormantSessionTenantId();
   return decideActingScope({
     enforcing,
     enforcedScope: currentScopeClass(),
