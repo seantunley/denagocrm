@@ -35,6 +35,7 @@ type BackupResult = {
   databaseBackupsPruned?: number;
   trashPurgeSkipped?: boolean;
   purgedTrash?: number;
+  prunedErrorLog?: number;
   error?: string;
   assets?: { referenced?: number; created?: number; existing?: number; skipped?: number; failed?: number };
 };
