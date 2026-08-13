@@ -3,7 +3,7 @@
 import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { withActingTenantWrite } from "@/lib/actingScope";
+import { withActingTenantWrite, withActingStaffScope } from "@/lib/actingScope";
 import { activeTenantPredicate } from "@/lib/tenantPredicate";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
@@ -223,7 +223,21 @@ export async function createContact(formData: FormData) {
   });
 }
 
+/**
+ * Bound with {@link withActingStaffScope} because this action reads the tenant scope
+ * SYNCHRONOUSLY (inheritedTenantId / activeTenantPredicate / writeTenantId), and a
+ * sync reader cannot recover a missing scope the way an awaited one can.
+ *
+ * A Server Action has no React request store, so #513's holder is never filled, and
+ * `enterWith` inside the auth chokepoint does not reach the frame that called it —
+ * the action body therefore runs with no ambient scope and the sync reader throws.
+ * Binding an ENCLOSING frame here is the only shape that reaches it.
+ */
 export async function updateContact(id: string, formData: FormData) {
+  return withActingStaffScope(() => updateContactInScope(id, formData));
+}
+
+async function updateContactInScope(id: string, formData: FormData) {
   return asActionResult(async () => {
     const user = await requireContactAccess(id, "contacts.edit");
     // The record's CURRENT type columns, read inside the caller's own tenant.

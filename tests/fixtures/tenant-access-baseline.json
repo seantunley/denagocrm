@@ -168,6 +168,7 @@
   "src/lib/quoteLock.ts::bypass-raw::Quote": 1,
   "src/lib/quoteLock.ts::bypass-read::Quote": 1,
   "src/lib/quoteLock.ts::unknown-client::SignatureRequest": 1,
+  "src/lib/scopeRecovery.ts::bypass-read::UserSession": 1,
   "src/lib/securityRunbook.ts::bypass-read::AppSetting": 1,
   "src/lib/signing/blobReferences.ts::bypass-read::Document": 1,
   "src/lib/signing/blobReferences.ts::bypass-read::SignatureRequest": 1,

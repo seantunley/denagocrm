@@ -1,4 +1,5 @@
 "use server";
+import { withActingStaffScope } from "@/lib/actingScope";
 
 import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
@@ -338,7 +339,21 @@ type LeadForecastBefore = {
   teamId: string | null;
 };
 
+/**
+ * Bound with {@link withActingStaffScope} because this action reads the tenant scope
+ * SYNCHRONOUSLY (inheritedTenantId / activeTenantPredicate / writeTenantId), and a
+ * sync reader cannot recover a missing scope the way an awaited one can.
+ *
+ * A Server Action has no React request store, so #513's holder is never filled, and
+ * `enterWith` inside the auth chokepoint does not reach the frame that called it —
+ * the action body therefore runs with no ambient scope and the sync reader throws.
+ * Binding an ENCLOSING frame here is the only shape that reaches it.
+ */
 export async function saveLeadForecast(leadId: string, formData: FormData) {
+  return withActingStaffScope(() => saveLeadForecastInScope(leadId, formData));
+}
+
+async function saveLeadForecastInScope(leadId: string, formData: FormData) {
   const user = await requireLeadAccess(leadId, "forecast.manage");
   // `before` is not only the audit snapshot: `before.teamId` decides below whether
   // this save needs `leads.assign`, and its absence refuses the whole action. It

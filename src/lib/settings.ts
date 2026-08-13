@@ -152,6 +152,34 @@ export function storedSettingValue(key: string, value: string): string {
  *                                    legitimately read pre-scope config wrap it in
  *                                    validateInSystemScope/withSystemScope.
  */
+/**
+ * {@link settingsOwnerTenantId}, but able to RECOVER a missing scope.
+ *
+ * A Server Action reaches here with no ambient scope: React `cache()` has no request
+ * store there, so #513's holder is never filled, and `enterWith` inside the auth
+ * chokepoint does not reach the frame that called it. The sync version therefore
+ * throws `No tenant scope established for AppSetting` in any action that reads a
+ * setting — which is most of them, since AI keys, SMTP, signing and integration
+ * credentials all live here. It was the third failure uncovered while fixing
+ * "Research" (see RESEARCH-ACTION-SCOPE-DIAGNOSIS.md).
+ *
+ * Recovering HERE fixes the whole class in one place, instead of wrapping every
+ * action that happens to read a setting. Safe for the same reason as every other
+ * recovery in this codebase: it runs ONLY when there is no scope at all — today an
+ * outright throw — so the choice is the acting session's own workspace or an error,
+ * never a different workspace. A present scope, including `system`, is honoured
+ * exactly as before and never re-derived.
+ */
+async function settingsOwnerTenantIdOrRecover(): Promise<string> {
+  if (!tenantEnforcing()) return DEFAULT_TENANT_ID;
+  const scope = currentTenantScope();
+  if (scope) return settingsOwnerTenantId();
+  const { recoverStaffScopeFromSession } = await import("./scopeRecovery");
+  const recovered = await recoverStaffScopeFromSession();
+  if (recovered?.tenantId) return recovered.tenantId;
+  throw new TenantScopeError("No tenant scope established for AppSetting");
+}
+
 function settingsOwnerTenantId(): string {
   if (!tenantEnforcing()) return DEFAULT_TENANT_ID;
   const scope = currentTenantScope();
@@ -162,7 +190,7 @@ function settingsOwnerTenantId(): string {
 }
 
 export async function getSetting(key: string): Promise<string | null> {
-  const tenantId = settingsOwnerTenantId();
+  const tenantId = await settingsOwnerTenantIdOrRecover();
   // basePrisma + explicit compound key: deterministic and RLS-safe (bypass is set,
   // and we've already pinned the exact tenantId — never an ambient/unqualified read).
   const row = await basePrisma.appSetting.findUnique({
@@ -185,7 +213,7 @@ export type SettingsTx = Parameters<Parameters<typeof basePrisma.$transaction>[0
 
 export async function putSetting(key: string, value: string, tx?: SettingsTx): Promise<void> {
   const stored = storedSettingValue(key, value);
-  const tenantId = settingsOwnerTenantId();
+  const tenantId = await settingsOwnerTenantIdOrRecover();
   await (tx ?? basePrisma).appSetting.upsert({
     where: { tenantId_key: { tenantId, key } },
     update: { value: stored },

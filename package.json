@@ -46,7 +46,8 @@
     "test:tenant-isolation": "tsx --tsconfig tsconfig.harness.json scripts/test-tenant-isolation.ts",
     "harness:provision": "tsx --tsconfig tsconfig.harness.json scripts/harness/provision-only.ts",
     "//harness:install-postgres": "embedded-postgres is NOT a dependency: it downloads ~130MB of PostgreSQL server binaries, which every `npm ci` would then pay for, including CI's -- and CI does not need it (it already runs a postgres service and sets TENANT_HARNESS_DATABASE_URL). Installed on demand instead, for local runs with no Docker.",
-    "harness:install-postgres": "npm install --no-save embedded-postgres"
+    "harness:install-postgres": "npm install --no-save embedded-postgres",
+    "test:action-scope": "tsx --tsconfig tsconfig.scripts.json scripts/test-action-tenant-scope.ts"
   },
   "dependencies": {
     "@blocknote/core": "0.51.4",

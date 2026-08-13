@@ -1,4 +1,5 @@
 "use server";
+import { withActingStaffScope } from "@/lib/actingScope";
 
 
 import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
@@ -14,7 +15,21 @@ import { GOVERNANCE_TX, logAudit } from "@/lib/audit";
 
 const text = (formData: FormData, key: string) => String(formData.get(key) ?? "").trim();
 
+/**
+ * Bound with {@link withActingStaffScope} because this action reads the tenant scope
+ * SYNCHRONOUSLY (inheritedTenantId / activeTenantPredicate / writeTenantId), and a
+ * sync reader cannot recover a missing scope the way an awaited one can.
+ *
+ * A Server Action has no React request store, so #513's holder is never filled, and
+ * `enterWith` inside the auth chokepoint does not reach the frame that called it —
+ * the action body therefore runs with no ambient scope and the sync reader throws.
+ * Binding an ENCLOSING frame here is the only shape that reaches it.
+ */
 export async function grantPortalAccess(formData: FormData) {
+  return withActingStaffScope(() => grantPortalAccessInScope(formData));
+}
+
+async function grantPortalAccessInScope(formData: FormData) {
   return asActionResult(async () => {
     const user = await requirePermission("portal_access.manage");
     const viewerContactId = text(formData, "viewerContactId");

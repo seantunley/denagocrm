@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { asActionResult, refuse } from "@/lib/actionResult";
 import { prisma } from "@/lib/db";
-import { withActingTenantWrite } from "@/lib/actingScope";
+import { withActingTenantWrite, withActingStaffScope } from "@/lib/actingScope";
 import { activeTenantPredicate } from "@/lib/tenantPredicate";
 import { logAudit } from "@/lib/audit";
 import { requirePermission, requireVehicleAccess, requireContactAccess } from "@/lib/permissions";
@@ -41,7 +41,21 @@ function optional(formData: FormData, key: string): string | null {
   return String(formData.get(key) ?? "").trim() || null;
 }
 
+/**
+ * Bound with {@link withActingStaffScope} because this action reads the tenant scope
+ * SYNCHRONOUSLY (inheritedTenantId / activeTenantPredicate / writeTenantId), and a
+ * sync reader cannot recover a missing scope the way an awaited one can.
+ *
+ * A Server Action has no React request store, so #513's holder is never filled, and
+ * `enterWith` inside the auth chokepoint does not reach the frame that called it —
+ * the action body therefore runs with no ambient scope and the sync reader throws.
+ * Binding an ENCLOSING frame here is the only shape that reaches it.
+ */
 export async function createFleet(formData: FormData) {
+  return withActingStaffScope(() => createFleetInScope(formData));
+}
+
+async function createFleetInScope(formData: FormData) {
   const user = await requirePermission("fleets.manage");
   const name = String(formData.get("name") ?? "").trim();
   if (!name) throw new Error("Give the fleet a name");
