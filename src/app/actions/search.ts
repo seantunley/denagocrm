@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { contactName } from "@/lib/format";
+import { SEARCH_HITS_PER_TYPE, MIN_SEARCH_TERM, type SearchHit } from "@/lib/recordSearch";
 import {
   getAccessibleContactIds,
   getAccessibleJobCardIds,
@@ -45,20 +46,12 @@ import {
  * way to read records you cannot open.
  */
 
-export type SearchHit = {
-  id: string;
-  /** What the row is, for the group heading and the icon. */
-  type: "contact" | "lead" | "quote" | "vehicle" | "jobcard";
-  label: string;
-  sublabel: string;
-  href: string;
-};
-
-/** Per type. The palette is a shortlist; /search is the list. */
-const PER_TYPE = 5;
-
-/** Below this a search is mostly noise, and every keystroke is a round trip. */
-export const MIN_SEARCH_TERM = 2;
+/**
+ * The type, the minimum term and the per-type cap live in `@/lib/recordSearch`,
+ * NOT here. A `"use server"` module may only export async functions — every other
+ * export becomes a client-callable endpoint, so Next refuses the file. That is a
+ * build-time rule `tsc` cannot see, and it is how this shipped red.
+ */
 
 export async function searchRecords(rawTerm: string): Promise<SearchHit[]> {
   return withActingStaffScope(async () => {
@@ -100,7 +93,7 @@ export async function searchRecords(rawTerm: string): Promise<SearchHit[]> {
             },
             select: { id: true, firstName: true, lastName: true, company: true, isCompany: true, email: true, phone: true },
             orderBy: { updatedAt: "desc" },
-            take: PER_TYPE,
+            take: SEARCH_HITS_PER_TYPE,
           }),
       empty(leadIds)
         ? []
@@ -111,7 +104,7 @@ export async function searchRecords(rawTerm: string): Promise<SearchHit[]> {
             },
             select: { id: true, title: true, name: true, stage: { select: { name: true } } },
             orderBy: { updatedAt: "desc" },
-            take: PER_TYPE,
+            take: SEARCH_HITS_PER_TYPE,
           }),
       empty(quoteIds)
         ? []
@@ -133,7 +126,7 @@ export async function searchRecords(rawTerm: string): Promise<SearchHit[]> {
               contact: { select: { firstName: true, lastName: true, company: true, isCompany: true } },
             },
             orderBy: { updatedAt: "desc" },
-            take: PER_TYPE,
+            take: SEARCH_HITS_PER_TYPE,
           }),
       // Vehicles and job cards belong to the automotive pack. Searching them for a
       // workspace that has it switched off would surface a record they have no
@@ -156,7 +149,7 @@ export async function searchRecords(rawTerm: string): Promise<SearchHit[]> {
             // the model does not carry is a compile error here and would have been
             // a runtime one in raw SQL.
             orderBy: { createdAt: "desc" },
-            take: PER_TYPE,
+            take: SEARCH_HITS_PER_TYPE,
           }),
       !automotiveOn || empty(jobCardIds)
         ? []
@@ -172,7 +165,7 @@ export async function searchRecords(rawTerm: string): Promise<SearchHit[]> {
               contact: { select: { firstName: true, lastName: true, company: true, isCompany: true } },
             },
             orderBy: { updatedAt: "desc" },
-            take: PER_TYPE,
+            take: SEARCH_HITS_PER_TYPE,
           }),
     ]);
 

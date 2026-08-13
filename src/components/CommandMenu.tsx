@@ -24,7 +24,10 @@ import {
 import { buildNav } from "@/components/nav-config";
 import { isPathEnabled } from "@/lib/modules/registry";
 import { SETTINGS_NAV_GROUPS, settingsHref, settingsItemEnabled } from "@/lib/settings-navigation";
-import { MIN_SEARCH_TERM, searchRecords, type SearchHit } from "@/app/actions/search";
+import { searchRecords } from "@/app/actions/search";
+// The constants and the type come from a plain module, not the action: a
+// "use server" file may only export async functions.
+import { MIN_SEARCH_TERM, SEARCH_GROUPS, type SearchHit } from "@/lib/recordSearch";
 
 export function openCommandMenu() {
   window.dispatchEvent(new Event("denago:open-command"));
@@ -52,6 +55,15 @@ export default function CommandMenu({
    * against the term now in the box drops the loser instead of showing it.
    */
   const latest = useRef("");
+  /**
+   * Whether the palette is open, readable from the keydown listener.
+   *
+   * That listener is registered once, so it closes over the FIRST render's
+   * `open`. A ref is the value it can read without re-registering the listener on
+   * every toggle.
+   */
+  const openRef = useRef(false);
+  openRef.current = open;
   const enabledSet = enabledModules ? new Set(enabledModules) : undefined;
   const { topLinks, groups } = buildNav(isAdmin, permissions, enabledSet);
   const granted = new Set(permissions);
@@ -74,10 +86,14 @@ export default function CommandMenu({
     const onKey = (event: KeyboardEvent) => {
       if ((event.key === "k" || event.key === "K") && (event.metaKey || event.ctrlKey)) {
         event.preventDefault();
-        setOpen((current) => !current);
+        // Through the one open/close function, reading the current value from a
+        // ref. The functional `setOpen(c => !c)` that was here toggled the dialog
+        // WITHOUT the reset, so ⌘K-to-close was a third way to leave a stale
+        // search behind — the same hole as `go()`, by a different route.
+        setPaletteOpen(!openRef.current);
       }
     };
-    const onOpen = () => setOpen(true);
+    const onOpen = () => setPaletteOpen(true);
     document.addEventListener("keydown", onKey);
     window.addEventListener("denago:open-command", onOpen);
     return () => {
@@ -132,7 +148,12 @@ export default function CommandMenu({
   }
 
   function go(href: string) {
-    setOpen(false);
+    // THROUGH setPaletteOpen, not setOpen. Closing directly skipped the reset, so
+    // selecting anything — a record, a page, a setting — left the previous search
+    // in the box, and the next open showed yesterday's results before a key was
+    // pressed. The reset belongs to "the palette closed", and there must be only
+    // one way to say that.
+    setPaletteOpen(false);
     router.push(href);
   }
 
@@ -144,22 +165,15 @@ export default function CommandMenu({
     jobcard: Wrench,
   } as const;
 
-  const RECORD_GROUP = {
-    contact: "Customers",
-    lead: "Leads",
-    quote: "Quotes",
-    vehicle: "Vehicles",
-    jobcard: "Job cards",
-  } as const;
-
   const searchable = term.trim().length >= MIN_SEARCH_TERM;
   // DERIVED, not cleared in an effect: a term too short to search shows nothing,
   // without a render pass whose only job is to empty a list.
   const visibleHits = searchable ? hits : [];
 
-  const grouped = (["contact", "lead", "quote", "vehicle", "jobcard"] as const)
-    .map((type) => ({ type, rows: visibleHits.filter((hit) => hit.type === type) }))
-    .filter((group) => group.rows.length > 0);
+  const grouped = SEARCH_GROUPS.map((group) => ({
+    ...group,
+    rows: visibleHits.filter((hit) => hit.type === group.type),
+  })).filter((group) => group.rows.length > 0);
 
   return (
     <CommandDialog open={open} onOpenChange={setPaletteOpen} title="Command menu" description="Search and navigate">
@@ -179,7 +193,7 @@ export default function CommandMenu({
         {/* RECORDS FIRST. Somebody typing a name wants the customer, not the page
             whose title happens to share a letter with it. */}
         {grouped.map((group) => (
-          <CommandGroup key={group.type} heading={RECORD_GROUP[group.type]}>
+          <CommandGroup key={group.type} heading={group.heading}>
             {group.rows.map((hit) => {
               const Icon = RECORD_ICON[hit.type];
               return (

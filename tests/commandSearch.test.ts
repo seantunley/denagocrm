@@ -40,7 +40,9 @@ test("the palette searches records, not just navigation", () => {
 test("record hits are rendered above the navigation groups", () => {
   // Somebody typing a name wants the customer, not the page whose title happens
   // to share a letter with it.
-  const records = menuCode.indexOf("RECORD_GROUP[group.type]");
+  // The headings moved into `SEARCH_GROUPS` when the shared module was extracted,
+  // so the marker is the group render itself rather than the old lookup table.
+  const records = menuCode.indexOf("heading={group.heading}");
   const quickActions = menuCode.indexOf('heading="Quick actions"');
   const settings = menuCode.indexOf('heading="Settings"');
   assert.ok(records >= 0, "records must be rendered");
@@ -72,6 +74,42 @@ test("a failed lookup leaves the palette usable as a menu", () => {
   const catchBlock = menuCode.slice(menuCode.indexOf(".catch("), menuCode.indexOf(".finally("));
   assert.ok(catchBlock.includes("setHits([])"), "a failure clears results");
   assert.ok(!catchBlock.includes("setOpen"), "and must not close the palette");
+});
+
+test("every close path clears the search, not just the dialog's own", () => {
+  // The reset lived in one function and TWO other paths bypassed it: `go()` closed
+  // with `setOpen(false)` after selecting anything, and the Cmd-K toggle flipped
+  // `setOpen` directly. Either way the next open showed the previous search
+  // before a key was pressed.
+  //
+  // Asserted as an ABSENCE: `setOpen` may be called in exactly one place, inside
+  // the function that owns the reset. Anything else is a fourth route waiting to
+  // be added.
+  const calls = (menuCode.match(/setOpen\(/g) ?? []).length;
+  assert.equal(calls, 1, "setOpen must be called only by setPaletteOpen");
+  const owner = menuCode.slice(menuCode.indexOf("function setPaletteOpen("));
+  assert.ok(owner.indexOf("setOpen(next)") < owner.indexOf("}"), "and that one call is the owner's");
+
+  assert.match(menuCode, /function go\(href: string\) \{\s+setPaletteOpen\(false\);/);
+  assert.match(menuCode, /setPaletteOpen\(!openRef\.current\)/, "the shortcut toggles through the same path");
+  assert.match(menuCode, /const onOpen = \(\) => setPaletteOpen\(true\)/);
+});
+
+test("the keyboard shortcut reads a ref, not a stale closure", () => {
+  // The listener is registered once, so it closes over the first render's `open`.
+  assert.match(menuCode, /const openRef = useRef\(false\)/);
+  assert.match(menuCode, /openRef\.current = open/);
+});
+
+test("nothing but an async function is exported from the action module", () => {
+  // A "use server" module may export ONLY async functions; every other export
+  // becomes a client-callable endpoint and Next refuses the file. `tsc` cannot
+  // see that rule — this shipped a red build once for exactly this.
+  const exports = [...shipped("src/app/actions/search.ts").matchAll(/^export\s+(\w+)/gm)].map((m) => m[1]);
+  assert.deepEqual(exports, ["async"], `unexpected exports from a "use server" module: ${exports.join(", ")}`);
+  // The shared constant and type therefore live in a plain module both sides import.
+  assert.match(menuCode, /from "@\/lib\/recordSearch"/);
+  assert.match(shipped("src/app/actions/search.ts"), /from "@\/lib\/recordSearch"/);
 });
 
 test("there is still a way to reach everything the palette does not show", () => {
