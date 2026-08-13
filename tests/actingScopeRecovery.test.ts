@@ -39,7 +39,7 @@ test("it recovers a MISSING scope rather than refusing", () => {
   const body = actingScopeClassBody();
   assert.match(
     body,
-    /await getCurrentUser\(\)/,
+    /await restoreStaffScopeFromSession\(\)/,
     "the point of use must be able to establish the scope itself, instead of depending " +
       "on whichever caller happened to run first in this execution context",
   );
@@ -76,7 +76,7 @@ test("it keys on `closed`, never on `global`", () => {
 test("recovery cannot widen: it only ever runs when there is no scope at all", () => {
   const body = actingScopeClassBody();
   const guard = body.indexOf('enforcedScope.mode === "closed"');
-  const call = body.indexOf("await getCurrentUser()");
+  const call = body.indexOf("await restoreStaffScopeFromSession()");
   assert.ok(guard !== -1 && call > guard, "the getCurrentUser call must sit INSIDE the closed guard");
   // A resolved scope — narrower, or system — is read once and left alone.
   assert.match(body, /let enforcedScope = currentScopeClass\(\);/);
@@ -88,8 +88,8 @@ test("a failure to resolve still fails closed", () => {
   // and decideActingScope refuses exactly as it did before. What must NOT happen is
   // this throwing something other than the caller's own TenantScopeError.
   assert.match(
-    body,
-    /await getCurrentUser\(\)\.catch\(\(\) => null\)/,
+    CODE,
+    /async function restoreStaffScopeFromSession\(\)[\s\S]*?catch \{[\s\S]*?return false;/,
     "resolution failure must leave the scope absent, not raise a different error",
   );
   assert.doesNotMatch(body, /DEFAULT_TENANT_ID/, "never invent a workspace here");

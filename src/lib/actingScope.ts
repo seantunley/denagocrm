@@ -1,5 +1,7 @@
 import "server-only";
-import { getActiveTenantIdIfRequest, getCurrentUser } from "./auth";
+import { getActiveTenantIdIfRequest } from "./auth";
+import { SESSION_COOKIE, verifySession } from "./session";
+import { establishStaffTenantScope } from "./tenantScopeEntry";
 import { basePrisma } from "./db";
 import { actingTenantId } from "./actingTenant";
 import { decideActingScope, type ActingScope } from "./actingScopeRule";
@@ -36,6 +38,44 @@ export type { ActingScope };
  * gives — and those paths should derive their tenant from the record they are
  * acting on (`inheritedTenantId`) rather than from an absent actor.
  */
+/**
+ * Re-establish the staff tenant scope from the session cookie, WITHOUT going
+ * through `getCurrentUser()`.
+ *
+ * The signed JWT is the source for `sub`, `tid` and `role`; it is verified here,
+ * so none of the three is caller-supplied. The revocation, disabled-account and
+ * session-version checks are deliberately NOT repeated: they are `getCurrentUser`'s
+ * job, they have already run for any authenticated request that reached this
+ * point, and re-running them is precisely what would re-enter the memoised promise
+ * and hang. This function only RECOVERS a scope that the same validated session
+ * already earned — it cannot grant one to a session that never had it, because
+ * `establishStaffTenantScope` still resolves the membership itself and still
+ * refuses when there is none.
+ *
+ * Returns false on anything unexpected, leaving the scope absent and the caller
+ * failing closed exactly as before.
+ */
+async function restoreStaffScopeFromSession(): Promise<boolean> {
+  try {
+    const { cookies } = await import("next/headers");
+    const store = await cookies();
+    const token = store.get(SESSION_COOKIE)?.value;
+    if (!token) return false;
+    const session = await verifySession(token);
+    if (!session) return false;
+    const { ok } = await establishStaffTenantScope(
+      session.sub,
+      session.tid ?? null,
+      session.role === "owner",
+    );
+    return ok;
+  } catch {
+    // No request, no cookie store, a malformed token: all of them mean "no scope
+    // to recover", which is the state we were already in.
+    return false;
+  }
+}
+
 export async function actingScopeClass(): Promise<ActingScope> {
   const enforcing = tenantEnforcing();
   // Skip the session lookup entirely when enforcing: the enforced scope is
@@ -65,10 +105,8 @@ export async function actingScopeClass(): Promise<ActingScope> {
   // parameter. Each fix repaired one caller and left the next one to find in
   // production. So resolve it at the point of USE.
   //
-  // `getCurrentUser()` is `cache()`d — no extra query on a request that already
-  // called it — and post-#517 it re-enters the scope in OUR context. If it
-  // resolves nothing (no session at all, a genuinely tenantless owner) the scope
-  // stays absent and `decideActingScope` refuses exactly as before.
+  // If nothing resolves — no session at all, a genuinely tenantless owner — the
+  // scope stays absent and `decideActingScope` refuses exactly as before.
   //
   // THIS DOES NOT WIDEN ANYTHING, and that distinction is the whole safety
   // argument. It runs only when there is NO scope; an existing scope — including a
@@ -83,8 +121,25 @@ export async function actingScopeClass(): Promise<ActingScope> {
   // what I wrote first — would have done exactly the wrong thing twice over: never
   // fired on the failure this exists for, and replaced a trusted cross-tenant
   // scope with the acting user's tenant on backups, trash and audit.
+  //
+  // AND IT MUST NOT GO THROUGH `getCurrentUser()`, which is what #518 did.
+  //
+  // `getCurrentUser()` awaits a `cache()`d promise. Re-entering it while that
+  // promise is still pending returns THE SAME PENDING PROMISE, so the second call
+  // awaits something that cannot settle until the first one returns — and
+  // `logError` reaches this function through `actingTenantId`, so an error raised
+  // during session resolution took exactly that route. That is a DEADLOCK, not an
+  // exception: the request hangs, the error boundary renders, and nothing is ever
+  // written to ErrorLog. It matches what production showed after #518 shipped —
+  // an error page with no logged stack, while the two failures before it logged
+  // full stacks.
+  //
+  // So call the CHOKEPOINT directly instead. `establishStaffTenantScope` is the
+  // same function `getCurrentUser` uses to establish the scope, it reads through
+  // `basePrisma`, and it never touches the memoised promise — so this cannot
+  // re-enter anything.
   if (enforcing && enforcedScope.mode === "closed") {
-    await getCurrentUser().catch(() => null);
+    await restoreStaffScopeFromSession();
     enforcedScope = currentScopeClass();
   }
 
