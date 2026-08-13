@@ -31,6 +31,7 @@ import {
 } from "@/lib/pipelines";
 import {
   CLEAR_VERDICT,
+  MIN_OVERRIDE_REASON,
   describeUnmet,
   evaluateStageMove,
   parseStageCriteria,
@@ -305,6 +306,38 @@ export async function updateLead(id: string, formData: FormData) {
       }
     }
 
+    // THE SAME RULES ON THE OTHER DOOR.
+    //
+    // The lead edit form carries a stage picker, so a rule enforced only in
+    // `moveLead` would be walked around by opening the lead and choosing the
+    // stage from a dropdown. A gate that the product itself offers a way past is
+    // not a gate.
+    //
+    // No override path here, deliberately: an override has to be RECORDED with a
+    // reason, and this form has nowhere to type one. Somebody entitled to
+    // override is told where the door with a lock on it is, rather than being
+    // handed a quiet one. `warn` still passes, and its unmet clauses ride into
+    // the audit below.
+    let stageGateVerdict = CLEAR_VERDICT;
+    if (before.stageId !== data.stageId) {
+      const gated = await gateStageMove({
+        leadId: id,
+        user,
+        currentScope: beforePipeline,
+        targetStage,
+      });
+      if ("error" in gated) throw new ActionRefusal(gated.error);
+      stageGateVerdict = gated.verdict;
+      if (!stageGateVerdict.allowed) {
+        throw new ActionRefusal(refusalSentence(stageGateVerdict, targetStage.name));
+      }
+      if (stageGateVerdict.requiresReason) {
+        throw new ActionRefusal(
+          `${refusalSentence(stageGateVerdict, targetStage.name)} Move it on the pipeline board to record a reason.`,
+        );
+      }
+    }
+
     const generatedTitle = await buildTitle(data);
     const title = String(formData.get("title") ?? "").trim() || generatedTitle;
 
@@ -333,6 +366,19 @@ export async function updateLead(id: string, formData: FormData) {
       user,
       before,
       after: lead,
+      // A `warn` gate let this through and named what was missing. Recorded on
+      // the same terms as the board's own move, so "which deals moved without
+      // meeting the rule" is one question with one answer, whichever screen the
+      // move came from.
+      ...(stageGateVerdict.unmet.length > 0
+        ? {
+            metadata: {
+              gateDirection: stageGateVerdict.direction,
+              gateMode: stageGateVerdict.mode,
+              gateUnmet: stageGateVerdict.unmet.map(describeUnmet),
+            },
+          }
+        : {}),
     });
     if (before.stageId !== data.stageId) await emitLeadJourneyEvent("stage_entered", id);
     revalidatePath("/leads");
@@ -341,15 +387,6 @@ export async function updateLead(id: string, formData: FormData) {
     return { redirectTo: `/leads/${id}` };
   });
 }
-
-/**
- * How long an override reason must be to count as one.
- *
- * Ten characters, matching the lost-reason input the outcome dialog already
- * demands. Short enough not to be busywork, long enough that "ok" and "." do not
- * satisfy an audit trail somebody will read back in six months.
- */
-const MIN_OVERRIDE_REASON = 10;
 
 /**
  * Read one direction's gate off a stage row.
@@ -573,7 +610,11 @@ export async function moveLead(
   await emitLeadJourneyEvent("stage_entered", leadId);
   revalidatePath("/leads");
   revalidatePath("/forecast");
-  return { ok: true };
+  // The verdict rides along on SUCCESS too, not only on refusal. A `warn` gate
+  // allows the move and its whole purpose is to say what was missing — returning
+  // a bare `{ ok: true }` made that unsayable, so the warning existed in the
+  // audit trail and nowhere the person could see it.
+  return { ok: true, gate: verdict };
 }
 
 export async function moveLeadToTestDrive(

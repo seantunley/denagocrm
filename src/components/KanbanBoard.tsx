@@ -21,6 +21,7 @@ import {
   type Modifier,
 } from "@dnd-kit/core";
 import {
+  AlertTriangle,
   ArrowUpRight,
   CalendarClock,
   CalendarPlus,
@@ -82,6 +83,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { isStale, matchesOwnerFilter, OWNER_ANY, OWNER_UNASSIGNED } from "@/lib/kanbanRules";
+// Pure module — one import, from a file with none — so the board and the server
+// describe an unmet criterion with the SAME sentence. A second copy of this
+// wording here is how the refusal and the warning start disagreeing.
+import { MIN_OVERRIDE_REASON, describeUnmet, type StageGateVerdict } from "@/lib/stageGate";
 
 export type KanbanLead = {
   id: string;
@@ -652,6 +657,13 @@ export default function KanbanBoard({
   const [stages, setStages] = useState(initial);
   const [activeLead, setActiveLead] = useState<KanbanLead | null>(null);
   const [pendingTd, setPendingTd] = useState<{ lead: KanbanLead; stageId: string } | null>(null);
+  /** A move the server will accept once a reason is typed — see requestMove. */
+  const [pendingGate, setPendingGate] = useState<{
+    lead: KanbanLead;
+    stageId: string;
+    stageName: string;
+    verdict: StageGateVerdict;
+  } | null>(null);
   const [pendingOutcome, setPendingOutcome] = useState<{ lead: KanbanLead; mode: "won" | "lost" } | null>(null);
   const [query, setQuery] = useState("");
   const [owner, setOwner] = useState<string>(OWNER_ANY);
@@ -760,7 +772,7 @@ export default function KanbanBoard({
     toast.error(message);
   }
 
-  function requestMove(lead: KanbanLead, targetStageId: string) {
+  function requestMove(lead: KanbanLead, targetStageId: string, overrideReason?: string) {
     const fromStage = stages.find((stage) => stage.leads.some((item) => item.id === lead.id));
     const target = stages.find((stage) => stage.id === targetStageId);
     if (!fromStage || !target || fromStage.id === targetStageId) return;
@@ -778,12 +790,48 @@ export default function KanbanBoard({
       // confirmTestDrive below already reads. The `.catch` is for the move never
       // reaching the server at all; the board must not keep a card in a column
       // the server never accepted, whichever way the attempt ended.
-      const result = await moveLead(lead.id, targetStageId).catch(() => ({
-        ok: false as const,
-        error: "Couldn't move the lead",
-      }));
-      if (!result.ok) rollbackTo(snapshot, result.error ?? "Couldn't move the lead");
+      const result = await moveLead(lead.id, targetStageId, overrideReason ? { overrideReason } : undefined).catch(
+        // The same SHAPE as the action's own result, `gate` included. Without it
+        // the union has a member with no `gate`, and every read of it has to be
+        // guarded — a transport failure has no verdict, which is exactly what
+        // `undefined` says.
+        () => ({ ok: false as const, error: "Couldn't move the lead", gate: undefined }),
+      );
+
+      // A STAGE RULE ASKING FOR A REASON IS A QUESTION, NOT A FAILURE.
+      //
+      // The server answers `{ ok: false, gate: { requiresReason: true } }` with no
+      // `error`, because it is not refusing — it is asking. Without this branch
+      // the board read the falsy `ok`, rolled back and said "Couldn't move the
+      // lead", so a stage set to "ask for a reason" could not be entered at all,
+      // and an owner could never move a lead past their own blocking rule (owners
+      // hold every permission, so a block always resolves to the override path
+      // for them).
+      if (!result.ok && result.gate?.requiresReason) {
+        setStages(snapshot);
+        setPendingGate({ lead, stageId: targetStageId, stageName: target.name, verdict: result.gate });
+        return;
+      }
+      if (!result.ok) {
+        rollbackTo(snapshot, result.error ?? "Couldn't move the lead");
+        return;
+      }
+      // A `warn` gate lets the move through and exists to say what was missing.
+      // Reported here rather than swallowed, or the warning lives only in the
+      // audit trail — which is the one place the person who moved the card will
+      // not look.
+      if (result.gate?.mode === "warn" && result.gate.unmet.length > 0) {
+        toast.warning(`Moved, but ${result.gate.unmet.map(describeUnmet).join("; ")}.`);
+      }
     });
+  }
+
+  /** Retry the move the server asked a reason for, this time carrying it. */
+  function confirmGateOverride(reason: string) {
+    if (!pendingGate) return;
+    const { lead, stageId } = pendingGate;
+    setPendingGate(null);
+    requestMove(lead, stageId, reason);
   }
 
   function onDragEnd(event: DragEndEvent) {
@@ -1085,8 +1133,100 @@ export default function KanbanBoard({
           onCancel={() => setPendingOutcome(null)}
           onConfirm={confirmOutcome}
         />
+        <StageRuleReasonDialog
+          key={pendingGate ? `${pendingGate.lead.id}-${pendingGate.stageId}` : "gate-closed"}
+          pending={pendingGate}
+          onCancel={() => setPendingGate(null)}
+          onConfirm={confirmGateOverride}
+        />
       </DndContext>
     </>
+  );
+}
+
+/**
+ * The move the server will accept once somebody says why.
+ *
+ * Opened when a verdict comes back with `requiresReason` — a stage set to "ask
+ * for a reason", or a `block` a holder of `leads.override_stage_rules` (or the
+ * owner, who holds everything) is allowed to pass. It is NOT a refusal dialog:
+ * the server has already decided the move may proceed, and is asking for the
+ * record it will keep.
+ *
+ * The unmet criteria are listed rather than summarised, because the reason being
+ * typed is meant to answer them, and it is written to `AuditEvent`, which cannot
+ * be edited afterwards.
+ */
+function StageRuleReasonDialog({
+  pending,
+  onCancel,
+  onConfirm,
+}: {
+  pending: { lead: KanbanLead; stageId: string; stageName: string; verdict: StageGateVerdict } | null;
+  onCancel: () => void;
+  onConfirm: (reason: string) => void;
+}) {
+  const [reason, setReason] = useState("");
+  const enough = reason.trim().length >= MIN_OVERRIDE_REASON;
+
+  return (
+    <Dialog open={!!pending} onOpenChange={(open) => !open && onCancel()}>
+      <ResponsiveDialogContent className="sm:max-w-md">
+        {pending && (
+          <>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <AlertTriangle className="size-4 text-amber-400" />
+                {pending.verdict.mode === "block" ? "Override the stage rule?" : "Why is this moving now?"}
+              </DialogTitle>
+              <DialogDescription>
+                <span className="font-medium text-foreground">{pending.lead.name}</span>
+                {pending.verdict.direction === "exit"
+                  ? " does not meet the rule for leaving this stage"
+                  : ` does not meet the rule for entering ${pending.stageName}`}
+                {pending.verdict.mode === "block"
+                  ? " — you can move it anyway because of your role, and the reason is recorded."
+                  : " — record why it is moving anyway."}
+              </DialogDescription>
+            </DialogHeader>
+
+            <ul className="space-y-1 rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-200">
+              {pending.verdict.unmet.map((unmet, index) => (
+                <li key={index}>⚠ {describeUnmet(unmet)}</li>
+              ))}
+            </ul>
+
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">Reason</label>
+              <input
+                value={reason}
+                onChange={(event) => setReason(event.target.value)}
+                className="input"
+                autoFocus
+                placeholder="e.g. Quote is being drafted, customer confirmed by phone"
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && enough) onConfirm(reason.trim());
+                }}
+              />
+              <span className="mt-1 block text-[11px] text-muted-foreground">
+                {enough
+                  ? "Recorded against this lead's history."
+                  : `At least ${MIN_OVERRIDE_REASON} characters — this goes into the audit trail.`}
+              </span>
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={onCancel}>
+                Cancel
+              </Button>
+              <Button type="button" disabled={!enough} onClick={() => onConfirm(reason.trim())}>
+                Move anyway
+              </Button>
+            </div>
+          </>
+        )}
+      </ResponsiveDialogContent>
+    </Dialog>
   );
 }
 

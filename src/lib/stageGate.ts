@@ -239,6 +239,19 @@ const VALUELESS: ReadonlySet<ConditionOperator> = new Set(["is_empty", "is_not_e
 export const MAX_STAGE_CRITERIA = 5;
 
 /**
+ * How long an override reason must be to count as one.
+ *
+ * Ten characters, matching the lost-reason input the outcome dialog already
+ * demands. Short enough not to be busywork, long enough that "ok" and "." do not
+ * satisfy an audit trail somebody will read back in six months.
+ *
+ * Lives HERE, not in the action, so the dialog's disabled button and the
+ * server's refusal use ONE number. The server stays the authority — a POST that
+ * skips the dialog meets the same bar — and the dialog only saves a round trip.
+ */
+export const MIN_OVERRIDE_REASON = 10;
+
+/**
  * What the evaluator reads. Flat, JSON-safe, and IDENTICAL on both sides.
  *
  * Derived facts, not lead columns, are the whole point: "has a quote attached"

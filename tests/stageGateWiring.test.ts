@@ -157,6 +157,85 @@ test("a blocked move is recorded, because a refusal log is how a bad rule is fou
   assert.ok(/logAudit\(\{/.test(before), "a refusal should use the best-effort logger");
 });
 
+/* ── the board can actually USE the modes the settings screen offers ─────── */
+
+const board = src("src/components/KanbanBoard.tsx");
+const boardCode = board.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
+test("a verdict asking for a reason opens a dialog rather than a failure toast", () => {
+  // The server answers `{ ok: false, gate: { requiresReason: true } }` with NO
+  // error, because it is asking rather than refusing. The board read the falsy
+  // `ok`, rolled back and said "Couldn't move the lead" — so a stage set to "ask
+  // for a reason" could not be entered at all, and an OWNER could never move a
+  // lead past their own blocking rule, owners holding every permission and so
+  // always resolving to the override path.
+  assert.match(
+    boardCode,
+    /if \(!result\.ok && result\.gate\?\.requiresReason\) \{/,
+    "the board must recognise a reason request",
+  );
+  const branch = boardCode.slice(boardCode.indexOf("if (!result.ok && result.gate?.requiresReason)"));
+  assert.ok(branch.indexOf("setPendingGate(") < branch.indexOf("}"), "it must open the dialog");
+  // And it must NOT go through rollbackTo, which toasts an error.
+  const upToClose = branch.slice(0, branch.indexOf("return;"));
+  assert.ok(!upToClose.includes("rollbackTo("), "asking for a reason is not an error");
+});
+
+test("the retry carries the reason back to the same action", () => {
+  assert.match(
+    boardCode,
+    /moveLead\(lead\.id, targetStageId, overrideReason \? \{ overrideReason \} : undefined\)/,
+    "the retry must pass the reason through",
+  );
+  assert.match(boardCode, /function confirmGateOverride\(reason: string\)/);
+  assert.match(boardCode, /requestMove\(lead, stageId, reason\)/, "confirming must re-run the move");
+});
+
+test("a warning names what was missing, on screen and not only in the audit", () => {
+  // `moveLead` returns its verdict on SUCCESS too. Without that a `warn` gate's
+  // whole purpose — saying what is missing — reached the audit trail and nowhere
+  // the person who moved the card would look.
+  assert.match(src("src/app/actions/leads.ts"), /return \{ ok: true, gate: verdict \};/);
+  assert.match(boardCode, /result\.gate\?\.mode === "warn" && result\.gate\.unmet\.length > 0/);
+  assert.match(boardCode, /toast\.warning\(/, "a warning is a warning, not an error");
+});
+
+test("the board and the server describe an unmet criterion with one function", () => {
+  // A second copy of this wording is how the refusal and the warning start
+  // disagreeing about the same rule.
+  assert.match(board, /import \{[^}]*describeUnmet[^}]*\} from "@\/lib\/stageGate"/s);
+  assert.ok(!/function describeUnmet/.test(board), "the board must not restate it");
+  // The reason length lives in the pure module for the same reason: the dialog's
+  // disabled button and the server's refusal must use one number.
+  assert.match(board, /MIN_OVERRIDE_REASON/);
+  assert.match(src("src/lib/stageGate.ts"), /export const MIN_OVERRIDE_REASON = 10;/);
+  assert.ok(
+    !/const MIN_OVERRIDE_REASON = \d+/.test(src("src/app/actions/leads.ts")),
+    "the action must import the shared value, not declare its own",
+  );
+});
+
+test("the edit form's stage picker is gated too", () => {
+  // LeadForm carries a stageId select, so a rule enforced only in `moveLead`
+  // would be walked around by opening the lead and choosing the stage from a
+  // dropdown. A gate the product offers a way past is not a gate.
+  const leads = src("src/app/actions/leads.ts");
+  const updateLead = leads.slice(
+    leads.indexOf("export async function updateLead("),
+    leads.indexOf("async function gateStageMove("),
+  );
+  assert.ok(updateLead.includes("gateStageMove("), "updateLead must run the same gate");
+  const code = updateLead.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  assert.ok(code.includes("refusalSentence("), "and refuse with the same sentence");
+  // No override path on this screen: an override must be RECORDED with a reason,
+  // and this form has nowhere to type one.
+  assert.ok(!code.includes("overrideReason"), "the edit form must not offer a quiet override");
+  assert.ok(
+    code.includes("requiresReason"),
+    "a move needing a reason must be refused here, not silently allowed",
+  );
+});
+
 /* ── authoring: the settings path cannot silently destroy a rule ─────────── */
 
 const pipelineActions = src("src/app/actions/pipelines.ts");
