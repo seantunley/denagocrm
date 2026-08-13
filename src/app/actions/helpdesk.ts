@@ -118,10 +118,7 @@ async function logEvent(caseId: string, userId: string, body: string, meta: Pris
  * Binding an ENCLOSING frame here is the only shape that reaches it.
  */
 export async function createTicket(formData: FormData): Promise<ActionResult> {
-  return withActingStaffScope(() => createTicketInScope(formData));
-}
-
-async function createTicketInScope(formData: FormData): Promise<ActionResult> {
+  return withActingStaffScope(async () => {
   return asActionResult(async () => {
     const contactId = str(formData, "contactId");
     const user = await requireContactAccess(contactId, "cases.create");
@@ -189,6 +186,7 @@ async function createTicketInScope(formData: FormData): Promise<ActionResult> {
     });
     revalidatePath("/cases");
     return { redirectTo: `/cases/${created.id}` };
+  });
   });
 }
 

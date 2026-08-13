@@ -35,19 +35,7 @@ function productData(formData: FormData) {
  * Binding an ENCLOSING frame here is the only shape that reaches it.
  */
 export async function createProduct(formData: FormData) {
-  // THE OWNER CHECK STAYS IN THE EXPORTED ACTION, not in a delegate.
-  //
-  // tests/actionAuthGates.test.ts requires it, and the requirement is right: a
-  // Server Action is an untrusted POST entry point, so the gate must be visible on
-  // the entry point itself rather than one hop away where a later refactor can drop
-  // it. Bind the scope first, then gate inside it.
   return withActingStaffScope(async () => {
-    await requireOwner();
-    return createProductInScope(formData);
-  });
-}
-
-async function createProductInScope(formData: FormData) {
   await requireOwner();
   const data = productData(formData);
   if (!data.name) throw new Error("Product name is required");
@@ -77,6 +65,7 @@ async function createProductInScope(formData: FormData) {
   });
   revalidatePath("/products");
   redirect(`/products/${product.id}`);
+  });
 }
 
 export async function updateProduct(id: string, formData: FormData) {
