@@ -96,16 +96,7 @@ export async function registerLibraryDocuments(
   nameOverride: string | null,
   files: UploadedFileMeta[]
 ) {
-  return withActingStaffScope(() =>
-    registerLibraryDocumentsInScope(category, nameOverride, files),
-  );
-}
-
-async function registerLibraryDocumentsInScope(
-  category: string | null,
-  nameOverride: string | null,
-  files: UploadedFileMeta[]
-) {
+  return withActingStaffScope(async () => {
   const user = await requirePermission("library.manage");
   if (files.length === 0) return;
   // Resolve every upload through our own store BEFORE writing any of them, so a
@@ -155,6 +146,7 @@ async function registerLibraryDocumentsInScope(
     user,
   });
   revalidatePath("/library");
+  });
 }
 
 export async function registerLibraryVersion(

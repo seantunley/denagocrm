@@ -1,7 +1,6 @@
 "use server";
 import { withActingStaffScope } from "@/lib/actingScope";
 
-
 import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
 import crypto from "crypto";
 import { Prisma } from "@prisma/client";
@@ -26,10 +25,7 @@ const text = (formData: FormData, key: string) => String(formData.get(key) ?? ""
  * Binding an ENCLOSING frame here is the only shape that reaches it.
  */
 export async function grantPortalAccess(formData: FormData) {
-  return withActingStaffScope(() => grantPortalAccessInScope(formData));
-}
-
-async function grantPortalAccessInScope(formData: FormData) {
+  return withActingStaffScope(async () => {
   return asActionResult(async () => {
     const user = await requirePermission("portal_access.manage");
     const viewerContactId = text(formData, "viewerContactId");
@@ -110,6 +106,7 @@ async function grantPortalAccessInScope(formData: FormData) {
       entityId: id,
     });
     revalidatePath("/settings/portal-access");
+  });
   });
 }
 

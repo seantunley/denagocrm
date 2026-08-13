@@ -52,10 +52,7 @@ function optional(formData: FormData, key: string): string | null {
  * Binding an ENCLOSING frame here is the only shape that reaches it.
  */
 export async function createFleet(formData: FormData) {
-  return withActingStaffScope(() => createFleetInScope(formData));
-}
-
-async function createFleetInScope(formData: FormData) {
+  return withActingStaffScope(async () => {
   const user = await requirePermission("fleets.manage");
   const name = String(formData.get("name") ?? "").trim();
   if (!name) throw new Error("Give the fleet a name");
@@ -97,6 +94,7 @@ async function createFleetInScope(formData: FormData) {
   );
   await logAudit({ action: "fleet.created", summary: `Created fleet "${name}"`, user });
   redirect(`/fleets/${fleet.id}`);
+  });
 }
 
 export async function updateFleet(id: string, formData: FormData) {

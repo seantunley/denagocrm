@@ -234,10 +234,7 @@ export async function createContact(formData: FormData) {
  * Binding an ENCLOSING frame here is the only shape that reaches it.
  */
 export async function updateContact(id: string, formData: FormData) {
-  return withActingStaffScope(() => updateContactInScope(id, formData));
-}
-
-async function updateContactInScope(id: string, formData: FormData) {
+  return withActingStaffScope(async () => {
   return asActionResult(async () => {
     const user = await requireContactAccess(id, "contacts.edit");
     // The record's CURRENT type columns, read inside the caller's own tenant.
@@ -294,6 +291,7 @@ async function updateContactInScope(id: string, formData: FormData) {
     revalidatePath("/contacts");
     revalidatePath(`/contacts/${id}`);
     return { redirectTo: `/contacts/${id}` };
+  });
   });
 }
 

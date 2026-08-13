@@ -262,10 +262,7 @@ export async function createQuoteForContact(formData: FormData) {
  * Binding an ENCLOSING frame here is the only shape that reaches it.
  */
 export async function createQuoteForFleet(formData: FormData) {
-  return withActingStaffScope(() => createQuoteForFleetInScope(formData));
-}
-
-async function createQuoteForFleetInScope(formData: FormData) {
+  return withActingStaffScope(async () => {
   return asActionResult(async () => {
     // The PERMISSION gate comes before any refusal, deliberately: a refusal is a
     // reply, and replying to an unauthorised caller — even with "choose a fleet" —
@@ -338,6 +335,7 @@ async function createQuoteForFleetInScope(formData: FormData) {
     revalidatePath("/quotes");
     return { redirectTo: `/quotes?edit=${quote.id}` };
   });
+  });
 }
 
 /**
@@ -356,10 +354,7 @@ async function createQuoteForFleetInScope(formData: FormData) {
  * Binding an ENCLOSING frame here is the only shape that reaches it.
  */
 export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraftResult> {
-  return withActingStaffScope(() => saveQuoteDraftInScope(input));
-}
-
-async function saveQuoteDraftInScope(input: QuoteDraftInput): Promise<QuoteDraftResult> {
+  return withActingStaffScope(async () => {
   const parsed = quoteDraftSchema.safeParse(input);
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Check the quote details." };
@@ -670,6 +665,7 @@ async function saveQuoteDraftInScope(input: QuoteDraftInput): Promise<QuoteDraft
       updatedAt: saved.updatedAt.toISOString(),
     },
   };
+  });
 }
 
 /**
@@ -683,10 +679,7 @@ async function saveQuoteDraftInScope(input: QuoteDraftInput): Promise<QuoteDraft
  * Binding an ENCLOSING frame here is the only shape that reaches it.
  */
 export async function createQuoteRevision(quoteId: string) {
-  return withActingStaffScope(() => createQuoteRevisionInScope(quoteId));
-}
-
-async function createQuoteRevisionInScope(quoteId: string) {
+  return withActingStaffScope(async () => {
   return asActionResult(async () => {
     const user = await requireQuoteAccess(quoteId, "quotes.edit");
     const validDaysRaw = await getSetting("QUOTE_VALID_DAYS");
@@ -827,6 +820,7 @@ async function createQuoteRevisionInScope(quoteId: string) {
     // Landing on the read-only record meant a second navigation before any work
     // could start — the same reason createQuoteFromLead opens the editor.
     return { redirectTo: `/quotes?edit=${revision.id}` };
+  });
   });
 }
 

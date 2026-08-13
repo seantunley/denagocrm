@@ -350,10 +350,7 @@ type LeadForecastBefore = {
  * Binding an ENCLOSING frame here is the only shape that reaches it.
  */
 export async function saveLeadForecast(leadId: string, formData: FormData) {
-  return withActingStaffScope(() => saveLeadForecastInScope(leadId, formData));
-}
-
-async function saveLeadForecastInScope(leadId: string, formData: FormData) {
+  return withActingStaffScope(async () => {
   const user = await requireLeadAccess(leadId, "forecast.manage");
   // `before` is not only the audit snapshot: `before.teamId` decides below whether
   // this save needs `leads.assign`, and its absence refuses the whole action. It
@@ -404,6 +401,7 @@ async function saveLeadForecastInScope(leadId: string, formData: FormData) {
   revalidatePath("/forecast");
   revalidatePath("/leads");
   revalidatePath(`/leads/${leadId}`);
+  });
 }
 
 export async function snapshotForecast(formData: FormData) {
