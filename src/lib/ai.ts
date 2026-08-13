@@ -104,8 +104,28 @@ export async function aiResearch(input: {
   const domain = input.email?.split("@")[1]?.toLowerCase();
   const corporate = domain && !FREE_MAIL.has(domain) ? domain : null;
 
-  try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
+  /**
+   * SERVER-SIDE WEB SEARCH DOES NOT ALWAYS FINISH IN ONE RESPONSE.
+   *
+   * With `max_uses: 8` the model runs a multi-step search, and the API may end a
+   * response with `stop_reason: "pause_turn"` — the turn is incomplete, the
+   * content so far is `server_tool_use` / `web_search_tool_result` blocks, and
+   * there is NO text block yet. The documented continuation is to send the
+   * conversation back with that assistant turn appended so the model resumes.
+   *
+   * We did not. We read "no text block" as failure and showed the user "No
+   * usable research came back", discarding a search that was simply mid-flight.
+   * That is why research regressed when the search tool was added: the old
+   * single-shot call always returned text in one response, so the case never
+   * arose.
+   *
+   * `messages` therefore grows as the turn continues, rather than being rebuilt.
+   */
+  const messages: { role: string; content: unknown }[] = [];
+  let stopReason: string | null = null;
+
+  const callApi = async (body: unknown) =>
+    fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       signal: AbortSignal.timeout(90000),
       headers: {
@@ -113,7 +133,11 @@ export async function aiResearch(input: {
         "x-api-key": apiKey,
         "anthropic-version": "2023-06-01",
       },
-      body: JSON.stringify({
+      body: JSON.stringify(body),
+    });
+
+  try {
+    const requestBody = {
         model: "claude-sonnet-5",
         max_tokens: 700,
         tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 8 }],
@@ -125,31 +149,68 @@ export async function aiResearch(input: {
           "Fit: why they might want an electric cart (estate, lodge, farm, resort...) — one line\n" +
           "Omit a label entirely if you genuinely found nothing for it — do not write \"Company: not found\". If you found nothing at all for any of the three, respond with exactly one line: No reliable information found.\n\n" +
           "STATE WHAT YOU FOUND PLAINLY. When a LinkedIn profile or the company's own page directly confirms a role or fact, say it as fact — \"is the CEO of X\", never \"might be tied to X\" or \"possibly works at X\" — because the source said so directly, not because you're certain in the abstract. Reserve hedging (\"appears to be\", \"likely\") for evidence that is genuinely indirect, stale, or where more than one person shares this name and you can't tell which one is the lead. Never fabricate. No preamble, no other text outside the labeled lines.",
-        messages: [
-          {
-            role: "user",
-            content: `Lead: ${input.name}${input.email ? ` <${input.email}>` : ""}\n${
-              corporate
-                ? `Company domain to research: ${corporate}`
-                : "Personal email — research the person (South Africa) only if confidently identifiable."
-            }\nCheck LinkedIn for "${input.name}"${corporate ? ` at the company on ${corporate}` : " (South Africa)"} to confirm their role.`,
-          },
-        ],
-      }),
+    };
+
+    // The opening turn. It lives in `messages` — NOT in `requestBody` — because
+    // every call spreads `{ ...requestBody, messages }`, so a copy left behind in
+    // the body would be silently replaced by this array and the continuation
+    // would resend a conversation the prompt had fallen out of.
+    messages.push({
+      role: "user",
+      content: `Lead: ${input.name}${input.email ? ` <${input.email}>` : ""}\n${
+        corporate
+          ? `Company domain to research: ${corporate}`
+          : "Personal email — research the person (South Africa) only if confidently identifiable."
+      }\nCheck LinkedIn for "${input.name}"${corporate ? ` at the company on ${corporate}` : " (South Africa)"} to confirm their role.`,
     });
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      await logError("ai-research", `Anthropic API ${res.status}`, text.slice(0, 300));
-      return { error: `Research failed (${res.status}).` };
+    // Bounded: a paused turn is resumed at most this many times. The cap exists
+    // so a model that keeps pausing cannot spin — and each pass carries the same
+    // 90s timeout, so the ceiling is wall-clock as well as count.
+    const MAX_CONTINUATIONS = 4;
+    let summary = "";
+
+    for (let attempt = 0; attempt <= MAX_CONTINUATIONS; attempt++) {
+      const res = await callApi({ ...requestBody, messages });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        await logError("ai-research", `Anthropic API ${res.status}`, text.slice(0, 300));
+        return { error: `Research failed (${res.status}).` };
+      }
+      const json = await res.json();
+      void recordAiUsage(json.usage);
+      stopReason = json.stop_reason ?? null;
+
+      summary = (json.content ?? [])
+        .filter((b: { type: string }) => b.type === "text")
+        .map((b: { text: string }) => b.text)
+        .join("\n")
+        .trim();
+
+      // Only a paused turn is worth resuming. Any other stop_reason means the
+      // model is done and whatever text exists is the answer.
+      if (stopReason !== "pause_turn") break;
+
+      // Resume by appending the assistant turn verbatim — the search results it
+      // already gathered are IN that content, so rebuilding or trimming it would
+      // throw away the work the pause exists to preserve.
+      messages.push({ role: "assistant", content: json.content });
     }
-    const json = await res.json();
-    void recordAiUsage(json.usage);
-    const summary = (json.content ?? [])
-      .filter((b: { type: string }) => b.type === "text")
-      .map((b: { text: string }) => b.text)
-      .join("\n")
-      .trim();
-    if (!summary) return { error: "No usable research came back." };
+
+    if (!summary) {
+      // This used to return silently, which is why a live regression left no
+      // trace: the System Log had nothing, so there was no way to tell a paused
+      // turn from an empty one. stop_reason is the whole diagnosis.
+      await logError(
+        "ai-research",
+        `No text block in response (stop_reason=${stopReason ?? "unknown"})`,
+        stopReason === "pause_turn"
+          ? `Still paused after ${MAX_CONTINUATIONS} continuations — the search did not converge.`
+          : stopReason === "max_tokens"
+            ? "max_tokens was consumed by search results before any prose was written; raise max_tokens or lower max_uses."
+            : "",
+      );
+      return { error: "No usable research came back." };
+    }
     return { summary: summary.slice(0, 2000) };
   } catch (err) {
     await logError("ai-research", err);
