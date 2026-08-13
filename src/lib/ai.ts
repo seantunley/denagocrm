@@ -153,18 +153,35 @@ export async function aiResearch(input: {
         // budget is never the binding constraint, and it costs nothing when
         // unused because output is billed on what is actually produced.
         max_tokens: 16000,
-        // `_20260209`, not `_20250305`: this variant filters search results in a
-        // sandbox BEFORE they reach the context, which is both more accurate and
-        // more token-efficient — the two things that were wrong here.
-        tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 8 }],
+        // DELIBERATELY THE BASIC SEARCH TOOL, NOT `_20260209`.
+        //
+        // The `_20260209` variant filters results in a code sandbox before they
+        // reach the context, which sounds strictly better and measured worse
+        // here: the model spent its turn writing Python to probe the result
+        // shape (`print(type(r))`), burned three rounds on the harness, and then
+        // answered "No reliable information found." while holding 29 results.
+        // This task needs the model to READ a handful of pages and synthesise
+        // them, and the basic tool puts them straight into context where it can.
+        tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 8 }],
         system:
-          "You research sales leads for Denago Cape Town, a South African electric golf-cart dealership. Search the web before writing anything — specifically check the person's LinkedIn profile (search their name plus the company, or plus \"South Africa\" if no company is known) for their current role and employer, and check the company's own website and public social profiles (Facebook, Instagram, X/Twitter) for what it does and its size/locale. LinkedIn is usually the most reliable source for a person's current role — search for it directly rather than relying on whatever a generic web search happens to surface.\n\n" +
+          "You research sales leads for Denago Cape Town, a South African electric golf-cart dealership.\n\n" +
+          "SEARCH HARD BEFORE YOU CONCLUDE ANYTHING. Work several angles, not one or two: the person's name plus LinkedIn, the name plus \"South Africa\", the name plus any employer you turn up, and the company's own website and public social profiles (Facebook, Instagram, X/Twitter). LinkedIn is usually the most reliable source for a current role — search for it directly rather than relying on whatever a generic web search happens to surface. Two searches is not a search.\n\n" +
+          // THE OLD PROMPT TALKED ITSELF OUT OF THE ANSWER, AND THIS MODEL OBEYED.
+          //
+          // It said to research the person "only if confidently identifiable" and
+          // offered "No reliable information found." as the out. For a common
+          // name that made bailing the COMPLIANT reply — measured: two searches,
+          // eighteen results in hand, and it answered with the one-liner. The
+          // July note on the same contact instead named the prominent match and
+          // said so. Closing the hatch and demanding attribution restored it:
+          // six searches, and the full Hungry Lion / Digicloud briefing.
+          "WHEN SEVERAL PEOPLE SHARE THE NAME, REPORT THE BEST-EVIDENCED ONE — do not discard the research. Name the most prominent public match, say plainly that it is a name match rather than a confirmed identity, and give the evidence so the salesperson can judge for themselves. Throwing away a strong public match because you cannot prove it is the same person is the failure to avoid here; inventing detail is the other. You avoid both the same way: attribute. Say what the source is and what it actually supports.\n\n" +
           "Then respond with up to three lines, EXACTLY in this order, each on its own line, each starting with its label and a colon:\n" +
           "Company: what it does, how big it is, where it operates, and anything else that helps someone walk into the conversation informed\n" +
           "Role: the person's role and employer, stated plainly if confirmed, plus prior roles or other ventures if you found them\n" +
           "Fit: why they might want an electric cart (estate, lodge, farm, resort...), and how to approach them\n" +
           "BE THOROUGH. Each label takes as much detail as you actually found — several sentences is right when the sources support it, and a research note that reads as thin or obvious is a failed one. What you must NOT do is put a line break inside a label's text: each label is one line, however long, because a stray newline breaks the card this renders into. Never pad with filler to reach a length — depth comes from what you found, not from wordcount.\n" +
-          "Omit a label entirely if you genuinely found nothing for it — do not write \"Company: not found\". If you found nothing at all for any of the three, respond with exactly one line: No reliable information found.\n\n" +
+          "Omit a label entirely if you genuinely found nothing for it — do not write \"Company: not found\". Use \"No reliable information found.\" ONLY if the searches genuinely returned nothing usable about anyone of this name: it is the last resort, not the safe default.\n\n" +
           "STATE WHAT YOU FOUND PLAINLY. When a LinkedIn profile or the company's own page directly confirms a role or fact, say it as fact — \"is the CEO of X\", never \"might be tied to X\" or \"possibly works at X\" — because the source said so directly, not because you're certain in the abstract. Reserve hedging (\"appears to be\", \"likely\") for evidence that is genuinely indirect, stale, or where more than one person shares this name and you can't tell which one is the lead. Never fabricate. No preamble, no other text outside the labeled lines.",
     };
 
@@ -197,10 +214,22 @@ export async function aiResearch(input: {
       void recordAiUsage(json.usage);
       stopReason = json.stop_reason ?? null;
 
+      // JOINED WITH "", NOT "\n" — THE BLOCKS ARE ONE SENTENCE, NOT ONE LINE EACH.
+      //
+      // Web search returns CITED text, so the model's prose arrives split at every
+      // citation boundary: `"…joined the Shoprite Group in 2001"`, `", having
+      // earlier "`, `"worked at Compaq in London"`. Joining those with a newline
+      // inserts a line break mid-sentence — measured on a real response, one
+      // three-line briefing became FORTY-THREE lines.
+      //
+      // That is not cosmetic. ResearchBriefing only renders its Company/Role/Fit
+      // card when EVERY line matches a label, so the fragments dropped it to the
+      // verbatim fallback and displayed prose shredded mid-clause. Same response,
+      // joined with "": 3 lines, card renders.
       summary = (json.content ?? [])
         .filter((b: { type: string }) => b.type === "text")
         .map((b: { text: string }) => b.text)
-        .join("\n")
+        .join("")
         .trim();
 
       // Only a paused turn is worth resuming. Any other stop_reason means the
