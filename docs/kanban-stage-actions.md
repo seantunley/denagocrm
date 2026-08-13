@@ -1,6 +1,7 @@
 # Stage actions: giving a rule a remedy
 
-**Status:** design proposal, nothing built.
+**Status:** BUILT in PR #527. This document is the design it was built from; the
+notes below record where the build differed from the proposal.
 **Date:** 2026-08-13
 **Baseline:** assumes PR #527 (`feat/stage-gates`) has landed — `src/lib/stageGate.ts`,
 the `entryCriteria`/`exitCriteria`/`entryGateMode`/`exitGateMode` columns, the reason
@@ -190,6 +191,23 @@ The other compatibility points, each a real decision:
 
 ---
 
+## 5a. What the build changed from this proposal
+
+Three things, recorded here rather than left for the next reader to spot:
+
+- **`remedyAddresses` compares by FIELD only**, not by field-operator-value. A
+  remedy that books a test drive helps whether the rule asked for one or two, and
+  refusing to offer help for a rule the remedy moves closer to satisfying would be
+  the wrong way round. §8.1's "offer both in sequence" is still unbuilt.
+- **The picker is a SEARCH, not a list.** §6 called "link a contact" the cheapest
+  remedy because the lead page already has a contact `<select>`. That select
+  renders every contact, which is fine on a page loaded for one lead and wrong on
+  a board — it would ship the whole customer table on every render. It gained a
+  small debounced search action instead, which is the honest cost.
+- **The settings picker is now generated from `PIPELINE_STAGE_ACTIONS`.** The one
+  option was written out by hand in three places, which is exactly how a second
+  action gets added everywhere except the screen that configures it.
+
 ## 6. Which remedies to build — and which are free
 
 The five candidates, with what each would cost. **The conditions are all expressible
@@ -199,7 +217,7 @@ the card again".
 | Remedy | Criterion it satisfies | Dialog | Cost |
 | --- | --- | --- | --- |
 | **Book a test drive** | `activity.testDriveCount ≥ 1` | exists | **built** |
-| **Link a contact** | `contact.linked is true` | a contact picker | **lowest** — the picker exists on the lead page |
+| **Link a contact** | `contact.linked is true` | a contact picker | **BUILT** — needed a search action, not the lead page's select |
 | **Attach a quote** | `quote.count ≥ 1` | the quote builder, in a modal | medium — it is a big form, and it already opens as a modal elsewhere |
 | **Send the quote** | `quote.sentCount ≥ 1` | reuse the existing send flow | medium |
 | **Get it signed** | `signature.completedCount ≥ 1` | signing is asynchronous — see below | **highest, and probably wrong** |
