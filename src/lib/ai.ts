@@ -285,7 +285,23 @@ export async function aiResearch(input: {
       // briefing with no labels at all ("No reliable information found.")
       // is left exactly as written.
       const labelStart = summary.search(/(?:Company|Role|Fit):/i);
-      if (labelStart > 0) summary = summary.slice(labelStart).trim();
+      if (labelStart > 0) {
+        // LOGGED ONLY WHEN IT IS BIG ENOUGH TO BE RESEARCH RATHER THAN NARRATION.
+        //
+        // The model prefixes a one-line "I'll research this lead…" on most calls,
+        // so logging every strip would file a row per research run and bury real
+        // errors in the System Log — the opposite of diagnosable. A LONG prefix is
+        // a different thing: it means this is cutting actual prose, and that is
+        // worth a row precisely because the discarded text is gone from the note.
+        if (labelStart > 200) {
+          await logError(
+            "ai-research",
+            "Discarded a long prefix before the first label",
+            `${labelStart} chars dropped: ${summary.slice(0, 160)}…`,
+          );
+        }
+        summary = summary.slice(labelStart).trim();
+      }
 
       // Only a paused turn is worth resuming. Any other stop_reason means the
       // model is done and whatever text exists is the answer.
@@ -331,6 +347,35 @@ export async function aiResearch(input: {
             : "",
       );
       return { error: "No usable research came back." };
+    }
+    // A BAIL IS A SUCCESSFUL RESPONSE, WHICH IS EXACTLY WHY IT NEEDS A ROW.
+    //
+    // "No reliable information found." returns HTTP 200 with a summary, so it is
+    // saved and nothing is logged — and that is the shape the 2026-08-13
+    // regression took: Research quietly gave up on every lead, and the only way
+    // anybody found out was opening a contact and reading the note. There is no
+    // error to catch here; the whole point is that the model answered.
+    //
+    // One row per bail. Bails should be rare — if they are not, that IS the
+    // finding, and the System Log is where it should show up.
+    if (/^no reliable information found\.?$/i.test(summary.trim())) {
+      await logError(
+        "ai-research",
+        "Research found nothing and bailed",
+        `Lead: ${input.name}${corporate ? ` (${corporate})` : " (no corporate domain)"}. ` +
+          `stop_reason=${stopReason ?? "unknown"}. Repeated bails mean the prompt or the search is regressing, not that every lead is unknown.`,
+      );
+    }
+
+    // The cap is a backstop, so reaching it is itself the news: a briefing that
+    // long means whole labelled sections were dropped from what gets saved, and
+    // the note on screen gives no hint that anything is missing.
+    if (summary.length > MAX_SUMMARY_CHARS) {
+      await logError(
+        "ai-research",
+        "Briefing exceeded the summary ceiling and was trimmed",
+        `${summary.length} chars trimmed to ${MAX_SUMMARY_CHARS}; trailing labelled sections were dropped.`,
+      );
     }
     return { summary: capSummary(summary) };
   } catch (err) {
