@@ -92,11 +92,36 @@ test("a failure to resolve still fails closed", () => {
   // this throwing something other than the caller's own TenantScopeError.
   assert.match(
     RECOVERY_CODE,
-    /export async function recoverStaffScopeFromSession\(\)[\s\S]*?catch \{[\s\S]*?return null;/,
+    /export async function recoverStaffScopeFromSession\(\)[\s\S]*?catch \([\s\S]*?return null;/,
     "resolution failure must leave the scope absent, not raise a different error",
   );
   assert.doesNotMatch(body, /DEFAULT_TENANT_ID/, "never invent a workspace here");
   assert.doesNotMatch(RECOVERY_CODE, /DEFAULT_TENANT_ID/, "never invent a workspace here either");
+});
+
+test("the swallowed CAUSE is logged, and cannot recurse through logError", () => {
+  // Failing closed is right; failing closed silently is what made this expensive.
+  // The caller refuses with TenantScopeError, so the SYMPTOM was logged while the
+  // real cause — a DB failure, a bad secret — was discarded one frame down.
+  assert.match(RECOVERY_CODE, /logError\(/, "an unexpected failure must leave a row behind");
+
+  // THE RECURSION GUARD IS LOAD-BEARING, not stylistic. logError otherwise infers
+  // the tenant via actingTenantId() → actingScopeClass() → this very function, so
+  // an error here would call itself without bound. Passing tenantId explicitly
+  // short-circuits that inference.
+  assert.match(
+    RECOVERY_CODE,
+    /\{\s*tenantId:\s*null\s*\}/,
+    "logError must be given an explicit tenantId — inferring it recurses back into this function",
+  );
+
+  // And the ordinary sessionless paths — cron, queue drains, scripts — must stay
+  // silent, or this files a row on every background pass and buries the real ones.
+  assert.match(
+    RECOVERY_CODE,
+    /next-dynamic-api-wrong-context|outside a request scope/,
+    "a missing request context is expected and must not be logged",
+  );
 });
 
 test("the recovery revalidates the session in full, so it is not an auth path", () => {
