@@ -13,7 +13,7 @@ import { tenantObserving, tenantEnforcing, mayRetryTenantlessSession } from "./t
 import { honoredTenantClaim, resolveLoginTenant } from "./tenant";
 import { ensureFoundingMembership } from "./provisioning";
 import { establishStaffTenantScope, validateInSystemScope } from "./tenantScopeEntry";
-import { withTenant, withSystemScope } from "./tenantScope";
+import { withTenant, withSystemScope, enterTenantScope } from "./tenantScope";
 import {
   verifySession,
   signFreshSession,
@@ -29,7 +29,7 @@ import {
  * The cache is request-scoped, so role/account/password changes still take
  * effect on the very next request.
  */
-export const getCurrentUser = cache(async () => {
+const resolveCurrentUser = cache(async () => {
   // Phase C: session/account validation reads tenant-scoped infrastructure
   // (UserSession, security state) BEFORE the user's tenant is known. Run it in a
   // trusted `system` scope CONFINED to this callback, so (a) the guard doesn't
@@ -80,8 +80,47 @@ export const getCurrentUser = cache(async () => {
     validated.user.role === "owner",
   );
   if (!established.ok) return null;
-  return validated.user;
+  return { user: validated.user, scope: established.scope };
 });
+
+/**
+ * THE SCOPE IS RE-ENTERED ON EVERY CALL, AND THIS WRAPPER IS NOT CACHED.
+ *
+ * That is the whole point of it existing. `resolveCurrentUser` is `cache()`d, so
+ * its body runs EXACTLY ONCE per request — in whichever execution context happened
+ * to take the miss. Establishing the scope inside that body therefore binds it to
+ * that one context, and every caller that takes the HIT gets the user with no
+ * scope attached to where THEY are running.
+ *
+ * That single fact has now caused two production failures:
+ *
+ *   2026-08-12 — the layout took the miss, the page took the hit, and every
+ *     signed-in page fell closed and redirected an owner to /platform/login.
+ *   2026-08-13 — a Server Action took the miss (where React `cache()` has no
+ *     request store at all, so #513's holder could not be filled either) and the
+ *     post-action re-render took the hit. "Research" on a contact died with
+ *     `contact access check: this request has no resolvable workspace`.
+ *
+ * #513 addressed the first by adding a request-keyed carrier. It could not
+ * address the second, because that carrier is only WRITTEN when the body runs.
+ * Re-entering here fixes the class rather than the two instances: it does not
+ * matter which context ran the body, because the scope is re-established in the
+ * caller's own context every single time.
+ *
+ * It costs nothing. The resolved scope is already in hand — no query, no await —
+ * and `enterTenantScope` is two assignments.
+ *
+ * The db.ts guard is deliberately NOT relaxed to compensate, and `actingScopeClass`
+ * still refuses to fall back to the session under enforcement. Making the scope
+ * reliably present is the fix; widening what happens when it is absent would only
+ * make the next gap silent instead of loud.
+ */
+export async function getCurrentUser() {
+  const resolved = await resolveCurrentUser();
+  if (!resolved) return null;
+  if (resolved.scope) enterTenantScope(resolved.scope);
+  return resolved.user;
+}
 
 export async function requireUser() {
   const user = await getCurrentUser();
