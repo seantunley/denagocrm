@@ -490,48 +490,66 @@ export async function moveLead(
     return { ok: false, error: message, gate: verdict };
   }
 
-  const lead = await prisma.lead.update({
-    where: { id: leadId },
-    data: { stageId, position: await nextPosition(stageId), stageEnteredAt: new Date() },
-    include: { stage: true },
-  });
-  await logAuditStrict({
-    action: "lead.stage_changed",
-    summary: `Moved “${lead.title}” to ${lead.stage.name}`,
-    leadId,
-    contactId: lead.contactId,
-    user,
-    before: { stageId: before.stageId, position: before.position, pipelineId: currentScope.pipelineId },
-    after: { stageId, position: lead.position, pipelineId: targetStage.pipelineId },
-    // A clean move carries nothing extra; a move that went through despite a rule
-    // carries what the rule wanted. `logAuditStrict` routes to AuditEvent, the
-    // only model with metadata and the only one whose triggers refuse UPDATE and
-    // DELETE — an override you can edit afterwards is not a record of anything.
-    ...(verdict.unmet.length > 0
-      ? { metadata: { gateDirection: verdict.direction, gateMode: verdict.mode, gateUnmet: verdict.unmet.map(describeUnmet) } }
-      : {}),
-  });
-  if (verdict.requiresReason) {
-    // A SEPARATE, differently-named event, not a footnote on the move. "Who has
-    // been waving rules through" is a question somebody will ask, and it should
-    // be answerable by reading one action name rather than by filtering every
-    // stage change for a metadata key.
-    await logAuditStrict({
-      action: "lead.stage_gate_overridden",
-      summary: `Moved “${lead.title}” into ${lead.stage.name} without ${verdict.unmet.map(describeUnmet).join("; ")} — reason: “${overrideReason}”`,
-      leadId,
-      contactId: lead.contactId,
-      user,
-      before: { stageId: before.stageId },
-      after: { stageId },
-      metadata: {
-        direction: verdict.direction,
-        mode: verdict.mode,
-        unmet: verdict.unmet,
-        reason: overrideReason,
-      },
+  // THE MOVE AND ITS MANDATORY RECORD COMMIT TOGETHER, OR NEITHER DOES.
+  //
+  // These were three separate awaits: update, then `lead.stage_changed`, then
+  // `lead.stage_gate_overridden`. A strict audit throws on failure, so either
+  // audit failing left the lead ALREADY MOVED while the action reported an
+  // error — the person retries, against a lead that is now in the target stage.
+  // Worse for the override: the whole point of it is that waving a rule through
+  // is recorded, and the recording was the part that could be lost.
+  //
+  // `logAuditStrict`'s own doc says this is what the `tx` parameter is for, and
+  // `deleteLead` below already uses the pattern. Resolved BEFORE the transaction
+  // opens: `nextPosition` reads the target column, and asking for it inside
+  // would query on a different connection while this transaction holds locks.
+  // Same reasoning, spelled out at length, in `moveLeadToTestDrive`.
+  const position = await nextPosition(stageId);
+  const lead = await prisma.$transaction(async (tx) => {
+    const moved = await tx.lead.update({
+      where: { id: leadId },
+      data: { stageId, position, stageEnteredAt: new Date() },
+      include: { stage: true },
     });
-  }
+    await logAuditStrict({
+      action: "lead.stage_changed",
+      summary: `Moved “${moved.title}” to ${moved.stage.name}`,
+      leadId,
+      contactId: moved.contactId,
+      user,
+      before: { stageId: before.stageId, position: before.position, pipelineId: currentScope.pipelineId },
+      after: { stageId, position: moved.position, pipelineId: targetStage.pipelineId },
+      // A clean move carries nothing extra; a move that went through despite a
+      // rule carries what the rule wanted. `logAuditStrict` routes to AuditEvent,
+      // the only model with metadata and the only one whose triggers refuse
+      // UPDATE and DELETE — an override you can edit afterwards is not a record.
+      ...(verdict.unmet.length > 0
+        ? { metadata: { gateDirection: verdict.direction, gateMode: verdict.mode, gateUnmet: verdict.unmet.map(describeUnmet) } }
+        : {}),
+    }, tx);
+    if (verdict.requiresReason) {
+      // A SEPARATE, differently-named event, not a footnote on the move. "Who has
+      // been waving rules through" is a question somebody will ask, and it should
+      // be answerable by reading one action name rather than by filtering every
+      // stage change for a metadata key.
+      await logAuditStrict({
+        action: "lead.stage_gate_overridden",
+        summary: `Moved “${moved.title}” into ${moved.stage.name} without ${verdict.unmet.map(describeUnmet).join("; ")} — reason: “${overrideReason}”`,
+        leadId,
+        contactId: moved.contactId,
+        user,
+        before: { stageId: before.stageId },
+        after: { stageId },
+        metadata: {
+          direction: verdict.direction,
+          mode: verdict.mode,
+          unmet: verdict.unmet,
+          reason: overrideReason,
+        },
+      }, tx);
+    }
+    return moved;
+  }, GOVERNANCE_TX);
   const pipelineStages = await listPipelineStages(targetStage.pipelineId);
   const testDriveStage = pipelineStages.find((stage) => stage.entryAction === "book_test_drive");
   if (testDriveStage && targetStage.order < testDriveStage.order) {

@@ -324,12 +324,27 @@ export function unmetCriteria(
 }
 
 /**
+ * How strict each mode is. `block` outranks `reason` outranks `warn`.
+ *
+ * This exists because BOTH gates have to be evaluated before either can answer.
+ * The first version returned the first failure it met, and the gates are checked
+ * exit-first — so a failing `warn` on the source stage returned "allowed, with a
+ * toast" and the target's failing `block` was never looked at. A blocking rule
+ * could be bypassed by leaving a warning rule behind you. A `reason` exit gate
+ * masked a `block` entry gate the same way, once a reason was supplied.
+ */
+const MODE_RANK: Record<StageGateMode, number> = { off: 0, warn: 1, reason: 2, block: 3 };
+
+/**
  * THE decision for one move.
  *
- * Both gates are considered, and the EXIT gate is checked first: leaving a stage
- * without meeting its exit rule is a statement about work not finished here,
- * which is the more useful message when both fail. Only one verdict is produced
- * either way — a person fixing a move wants the next thing to do, not a list.
+ * EVERY applicable gate is evaluated, and the STRICTEST failure decides. Ties go
+ * to the EXIT gate, because leaving a stage with work unfinished is the more
+ * useful thing to say when both fail at the same severity.
+ *
+ * Only one verdict comes out — a person fixing a move wants the next thing to
+ * do, not a list — but "one verdict" now means "the strictest one", not "the
+ * first one seen".
  */
 export function evaluateStageMove(input: {
   from: { stageId: string; order: number; exit: StageGate } | null;
@@ -353,27 +368,34 @@ export function evaluateStageMove(input: {
   if (samePipeline && from) gates.push({ direction: "exit", gate: from.exit });
   gates.push({ direction: "entry", gate: to.entry });
 
+  // COLLECT FIRST, DECIDE AFTER. Returning from inside this loop is what let a
+  // lenient gate answer for a strict one — see MODE_RANK.
+  const failures: Array<{ direction: "entry" | "exit"; mode: StageGateMode; unmet: UnmetCriterion[] }> = [];
   for (const { direction, gate } of gates) {
     if (gate.mode === "off") continue;
     if (!gate.criteria || gate.criteria.conditions.length === 0) continue;
     if (evaluateConditions(asEvaluable(gate.criteria), facts as unknown as Record<string, unknown>)) continue;
-
-    const unmet = unmetCriteria(gate, facts);
-    if (gate.mode === "warn") {
-      // Proceeds. The caller names the unmet clauses in a toast and audits them.
-      return { allowed: true, requiresReason: false, direction, mode: "warn", unmet };
-    }
-    if (gate.mode === "reason") {
-      return { allowed: true, requiresReason: true, direction, mode: "reason", unmet };
-    }
-    // block — an override holder gets the `reason` path rather than a refusal,
-    // so the escape hatch is always an AUDITED one rather than a silent bypass.
-    return canOverride
-      ? { allowed: true, requiresReason: true, direction, mode: "block", unmet }
-      : { allowed: false, requiresReason: false, direction, mode: "block", unmet };
+    failures.push({ direction, mode: gate.mode, unmet: unmetCriteria(gate, facts) });
   }
+  if (failures.length === 0) return CLEAR_VERDICT;
 
-  return CLEAR_VERDICT;
+  // Strictest wins. `>` rather than `>=` keeps the FIRST entry on a tie, and
+  // `gates` is ordered exit-then-entry, so an equal-severity tie reports the exit.
+  const worst = failures.reduce((a, b) => (MODE_RANK[b.mode] > MODE_RANK[a.mode] ? b : a));
+  const { direction, mode, unmet } = worst;
+
+  if (mode === "warn") {
+    // Proceeds. The caller names the unmet clauses in a toast and audits them.
+    return { allowed: true, requiresReason: false, direction, mode, unmet };
+  }
+  if (mode === "reason") {
+    return { allowed: true, requiresReason: true, direction, mode, unmet };
+  }
+  // block — an override holder gets the `reason` path rather than a refusal,
+  // so the escape hatch is always an AUDITED one rather than a silent bypass.
+  return canOverride
+    ? { allowed: true, requiresReason: true, direction, mode, unmet }
+    : { allowed: false, requiresReason: false, direction, mode, unmet };
 }
 
 /**

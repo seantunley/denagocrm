@@ -29,6 +29,16 @@ const moveLead = leads.slice(
   leads.indexOf("export async function moveLeadToTestDrive("),
 );
 
+/**
+ * `moveLead` with comments stripped.
+ *
+ * Every POSITIONAL assertion below uses this rather than the raw text. This file
+ * documents the defects it guards against, in prose, inside the very function it
+ * is measuring — so a naive indexOf("lead.stage_changed") finds the sentence
+ * explaining the fix before it finds the call. Twice now.
+ */
+const moveLeadCode = moveLead.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
 /** The gate helper lives above `moveLead`, so it is sliced separately. */
 const gateHelper = leads.slice(
   leads.indexOf("async function gateStageMove("),
@@ -48,19 +58,43 @@ test("the gate runs after access control, not instead of it", () => {
 });
 
 test("the gate runs before the write, not after it", () => {
-  const gate = moveLead.indexOf("gateStageMove(");
-  const update = moveLead.indexOf("prisma.lead.update(");
+  const gate = moveLeadCode.indexOf("gateStageMove(");
+  const update = moveLeadCode.indexOf("tx.lead.update(");
+  assert.ok(gate >= 0 && update >= 0, "moveLead lost the gate or the write");
   assert.ok(update > gate, "the stage write must not happen before the gate decides");
+});
+
+test("the move and its mandatory audits commit together", () => {
+  // These were three separate awaits — update, stage_changed, stage_gate_overridden
+  // — and a strict audit THROWS on failure. So either audit failing left the lead
+  // already moved while the action reported an error, and the override could be
+  // lost while the move it excuses stood. The override event is the entire point
+  // of allowing an override at all.
+  const tx = moveLeadCode.indexOf("prisma.$transaction(");
+  const update = moveLeadCode.indexOf("tx.lead.update(");
+  const changed = moveLeadCode.indexOf("lead.stage_changed");
+  const overridden = moveLeadCode.indexOf("lead.stage_gate_overridden");
+  assert.ok(tx >= 0, "the move must open a transaction");
+  for (const [name, at] of [["the update", update], ["stage_changed", changed], ["the override event", overridden]] as const) {
+    assert.ok(at > tx, `${name} must be inside the transaction`);
+  }
+  // Both audits must be written ON the transaction, not beside it.
+  const body = moveLeadCode.slice(tx, moveLeadCode.indexOf("}, GOVERNANCE_TX);"));
+  assert.equal(
+    [...body.matchAll(/\}, tx\);/g)].length,
+    2,
+    "both strict audits must be handed the transaction",
+  );
 });
 
 test("a refused move writes nothing", () => {
   // The refusal returns before the update. Asserted as a shape rather than a
   // string: every `return { ok: false` in the gate section has to come before
   // the first write.
-  const update = moveLead.indexOf("prisma.lead.update(");
-  const refusals = [...moveLead.matchAll(/return \{ ok: false/g)].map((m) => m.index ?? -1);
+  const update = moveLeadCode.indexOf("tx.lead.update(");
+  const refusals = [...moveLeadCode.matchAll(/return \{ ok: false/g)].map((m) => m.index ?? -1);
   assert.ok(refusals.length > 0);
-  const gate = moveLead.indexOf("gateStageMove(");
+  const gate = moveLeadCode.indexOf("gateStageMove(");
   const gateRefusals = refusals.filter((index) => index > gate);
   assert.ok(gateRefusals.length >= 2, "expected the broken-rule and blocked refusals");
   for (const index of gateRefusals) assert.ok(index < update, "a gate refusal must return before the write");
@@ -106,9 +140,10 @@ test("an override is audited as its own event, not a footnote on the move", () =
   // `logAudit` (best-effort) is right for a refusal and wrong for an override:
   // AuditEvent's triggers refuse UPDATE and DELETE, and an override you can edit
   // afterwards is not a record of anything.
-  const overrideBlock = moveLead.slice(moveLead.indexOf("lead.stage_gate_overridden") - 400);
+  const at = moveLeadCode.indexOf("lead.stage_gate_overridden");
+  const preceding = moveLeadCode.slice(0, at);
   assert.ok(
-    overrideBlock.indexOf("logAuditStrict") < overrideBlock.indexOf("lead.stage_gate_overridden"),
+    preceding.lastIndexOf("logAuditStrict(") > preceding.lastIndexOf("logAudit({"),
     "the override event must be written with logAuditStrict",
   );
 });

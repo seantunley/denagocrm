@@ -243,6 +243,86 @@ test("the exit gate is reported when both fail", () => {
   assert.equal(verdict.direction, "exit");
 });
 
+/* ── the strictest failure decides, whichever gate it is on ─────────────── */
+
+test("a failing WARN on the way out cannot wave through a BLOCK on the way in", () => {
+  // THE BYPASS. Gates are checked exit-first, and the first version returned the
+  // first failure it found — so a warning rule on the source stage answered for
+  // a blocking rule on the target, and the block was never evaluated. Leaving a
+  // warning behind you was enough to walk through a locked door.
+  const verdict = move({
+    exit: gate("warn", {
+      logic: "and",
+      conditions: [{ field: "contact.linked", operator: "equals", value: "true" }],
+    }),
+    entry: gate("block"),
+    facts: facts({ contactLinked: false, quotes: 0 }),
+  });
+  assert.equal(verdict.allowed, false, "the block must decide");
+  assert.equal(verdict.mode, "block");
+  assert.equal(verdict.direction, "entry");
+  assert.deepEqual(verdict.unmet.map((u) => u.field), ["quote.count"]);
+});
+
+test("a failing REASON on the way out cannot wave through a BLOCK on the way in", () => {
+  // The same hole one rank up: supply a reason for the exit gate and the target's
+  // block was skipped entirely.
+  const verdict = move({
+    exit: gate("reason", {
+      logic: "and",
+      conditions: [{ field: "contact.linked", operator: "equals", value: "true" }],
+    }),
+    entry: gate("block"),
+    facts: facts({ contactLinked: false, quotes: 0 }),
+  });
+  assert.equal(verdict.allowed, false);
+  assert.equal(verdict.mode, "block");
+  assert.equal(verdict.direction, "entry");
+});
+
+test("the strictest gate decides in either direction", () => {
+  // Exhaustive over the nine failing combinations, so no ordering assumption
+  // survives here again. Both gates fail; the strictest mode must come back, and
+  // an equal-severity tie goes to the exit.
+  const strictness = { warn: 1, reason: 2, block: 3 } as const;
+  const failsContact: StageCriteriaGroup = {
+    logic: "and",
+    conditions: [{ field: "contact.linked", operator: "equals", value: "true" }],
+  };
+  for (const exitMode of ["warn", "reason", "block"] as const) {
+    for (const entryMode of ["warn", "reason", "block"] as const) {
+      const verdict = move({
+        exit: gate(exitMode, failsContact),
+        entry: gate(entryMode),
+        facts: facts({ contactLinked: false, quotes: 0 }),
+      });
+      const expected = strictness[exitMode] >= strictness[entryMode] ? exitMode : entryMode;
+      assert.equal(verdict.mode, expected, `exit=${exitMode} entry=${entryMode} must resolve to ${expected}`);
+      assert.equal(
+        verdict.direction,
+        strictness[exitMode] >= strictness[entryMode] ? "exit" : "entry",
+        `exit=${exitMode} entry=${entryMode} reported the wrong gate`,
+      );
+      assert.equal(verdict.allowed, expected !== "block");
+    }
+  }
+});
+
+test("a satisfied lenient gate does not suppress a failing strict one", () => {
+  // The mirror of the bypass: the exit gate PASSES, so it contributes no failure
+  // and must not shadow the entry gate either.
+  const verdict = move({
+    exit: gate("warn", {
+      logic: "and",
+      conditions: [{ field: "contact.linked", operator: "equals", value: "true" }],
+    }),
+    entry: gate("block"),
+    facts: facts({ contactLinked: true, quotes: 0 }),
+  });
+  assert.equal(verdict.allowed, false);
+  assert.equal(verdict.direction, "entry");
+});
+
 test("the entry gate speaks when the exit gate is satisfied", () => {
   const verdict = move({
     exit: gate("block", {

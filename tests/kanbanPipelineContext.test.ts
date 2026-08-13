@@ -172,7 +172,15 @@ test("cards are ordered by the position the server persists", () => {
   const page = src("src/app/(app)/leads/page.tsx");
   assert.match(page, /orderBy: \[\{ position: "asc" \}, \{ createdAt: "desc" \}\]/);
   // And the move actually writes one, or the ordering key never changes.
-  assert.match(src("src/app/actions/leads.ts"), /position: await nextPosition\(stageId\)/);
+  //
+  // `nextPosition` is now resolved into a local BEFORE the move's transaction
+  // opens rather than awaited inline in the `data` object — it reads the target
+  // column, and asking for it inside would query on a second connection while
+  // the transaction holds locks. The property is unchanged: the move computes a
+  // position and writes it.
+  const actions = src("src/app/actions/leads.ts");
+  assert.match(actions, /const position = await nextPosition\(stageId\);/);
+  assert.match(actions, /data: \{ stageId, position, stageEnteredAt: new Date\(\) \}/);
 });
 
 /* ── SalesPipeline was never tenant-scoped at all ──────────────────────── */
