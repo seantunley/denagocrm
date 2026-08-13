@@ -229,6 +229,16 @@ test("the test-drive path is gated too, and can carry a reason", () => {
   assert.ok(code.includes("gateStageMove("), "the booking path must run the gate");
   assert.ok(code.includes("MIN_OVERRIDE_REASON"), "and enforce the reason length itself");
   assert.ok(code.includes("lead.stage_gate_overridden"), "an override here is audited like any other");
+  // INSIDE the transaction that moves the lead and books the drive. Written
+  // after it, a failing strict audit left the lead moved AND the booking created
+  // while the action reported an error — the same partial success fixed for
+  // ordinary moves, reintroduced here when the gate was added to this path.
+  const tx = code.indexOf("prisma.$transaction(");
+  const override = code.indexOf("lead.stage_gate_overridden");
+  const txEnd = code.indexOf("}, GOVERNANCE_TX);");
+  assert.ok(tx >= 0 && txEnd > tx, "the booking must run in a transaction with audit-sized limits");
+  assert.ok(override > tx && override < txEnd, "the override record must commit with the move and the booking");
+  assert.match(code.slice(tx, txEnd), /\}, tx\);/, "and be written ON that transaction");
   // Only when the stage actually changes: rescheduling a booking on the stage the
   // lead already sits in is not a transition, and gates never judge residency.
   assert.match(code, /if \(changingStage\) \{\s+const gated = await gateStageMove/);

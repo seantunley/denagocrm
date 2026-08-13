@@ -731,8 +731,33 @@ export async function moveLeadToTestDrive(
     } else {
       await tx.activity.create({ data: activityData });
     }
+    // INSIDE the transaction, with `tx`. Written after the move and the booking
+    // but committed with them: a strict audit throws on failure, and outside this
+    // block that left the lead moved AND the test drive booked while the action
+    // reported an error — the same partial success that was fixed for ordinary
+    // moves, reintroduced on this path when the gate was added to it.
+    //
+    // The override record is the entire justification for allowing an override,
+    // so it is the one thing that must not be the part that goes missing.
+    if (verdict.requiresReason) {
+      await logAuditStrict({
+        action: "lead.stage_gate_overridden",
+        summary: `Moved “${updated.title}” into ${updated.stage.name} without ${verdict.unmet.map(describeUnmet).join("; ")} — reason: “${options?.overrideReason?.trim() ?? ""}”`,
+        leadId,
+        contactId: updated.contactId,
+        user,
+        after: { stageId },
+        metadata: {
+          direction: verdict.direction,
+          mode: verdict.mode,
+          unmet: verdict.unmet,
+          reason: options?.overrideReason?.trim() ?? "",
+          via: "test_drive_booking",
+        },
+      }, tx);
+    }
     return updated;
-  });
+  }, GOVERNANCE_TX);
 
   await logAudit({
     action: "lead.test_drive_booked",
@@ -747,25 +772,6 @@ export async function moveLeadToTestDrive(
     contactId: lead.contactId,
     user,
   });
-  if (verdict.requiresReason) {
-    // Same event, same logger and the same reasoning as `moveLead`: an override
-    // is a separate, append-only record, not a footnote on the booking.
-    await logAuditStrict({
-      action: "lead.stage_gate_overridden",
-      summary: `Moved “${lead.title}” into ${lead.stage.name} without ${verdict.unmet.map(describeUnmet).join("; ")} — reason: “${options?.overrideReason?.trim() ?? ""}”`,
-      leadId,
-      contactId: lead.contactId,
-      user,
-      after: { stageId },
-      metadata: {
-        direction: verdict.direction,
-        mode: verdict.mode,
-        unmet: verdict.unmet,
-        reason: options?.overrideReason?.trim() ?? "",
-        via: "test_drive_booking",
-      },
-    });
-  }
   if (changingStage) await emitLeadJourneyEvent("stage_entered", leadId);
   revalidatePath("/leads");
   revalidatePath("/calendar");
