@@ -318,6 +318,24 @@ jobs:
         # leakage, not just RLS primitives.
         run: npm run test:tenant-e2e
 
+      # THE 2026-08-12 LOCKOUT, AS A TEST.
+      #
+      # Every tenant test above establishes scope by calling runInTenantScope
+      # itself and driving functions in-process. None of them renders a page. So
+      # when TENANT_ENFORCEMENT went to `enforce` in production, all of them were
+      # green while every signed-in page redirected to /platform/login: the layout
+      # took the cache() MISS on getCurrentUser and bound the scope in ITS async
+      # context, the page took the HIT and never ran the body, and the page's
+      # queries found no scope at all.
+      #
+      # This step boots a REAL PRODUCTION BUILD and fetches `/` over HTTP with a
+      # real session cookie, because the two things that made the outage invisible
+      # were (a) nothing rendered a page and (b) the one probe that did ran on the
+      # dev server, where React schedules server segments differently. It builds
+      # rather than reusing, so what is served is what a deploy would serve.
+      - name: Enforced mode -- a signed-in page still renders (the lockout guard)
+        run: npm run test:enforced-render
+
       # This existed as an npm script and in validate:security, and CI never ran it
       # -- so the guard that the platform can never be left with zero active admins
       # was only ever exercised by somebody remembering to run it by hand.
