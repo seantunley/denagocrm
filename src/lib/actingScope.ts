@@ -1,5 +1,5 @@
 import "server-only";
-import { getActiveTenantIdIfRequest } from "./auth";
+import { getActiveTenantIdIfRequest, getCurrentUser } from "./auth";
 import { basePrisma } from "./db";
 import { actingTenantId } from "./actingTenant";
 import { decideActingScope, type ActingScope } from "./actingScopeRule";
@@ -41,9 +41,56 @@ export async function actingScopeClass(): Promise<ActingScope> {
   // Skip the session lookup entirely when enforcing: the enforced scope is
   // authoritative and a session must never widen it.
   const sessionTenantId = enforcing ? null : await getActiveTenantIdIfRequest();
+  let enforcedScope = currentScopeClass();
+
+  // ESTABLISH THE SCOPE HERE IF NOBODY ELSE DID, RATHER THAN REFUSING.
+  //
+  // Under enforcement this function reads the ambient scope and NOTHING else, so
+  // it is only correct if some caller upstream established that scope in THIS
+  // execution context. On 2026-08-13 that assumption failed twice on the same
+  // click — "Research" on a contact — with:
+  //
+  //     TenantScopeError: contact access check: this request has no resolvable
+  //     workspace.                              context: POST /contacts/<id>
+  //
+  // #517 made `getCurrentUser()` re-enter the scope on every call instead of once
+  // inside its memoised body. That was a real defect and the fix stands, but it
+  // did not fix this, for a reason I should have checked before shipping it:
+  // THIS PATH NEVER CALLS `getCurrentUser()`. `canAccessContact(user, id)` is
+  // handed its `user` as an argument, so nothing in its execution context ever
+  // re-enters anything, and `enterWith` from a sibling branch is not visible here.
+  //
+  // Chasing "which caller forgot" is the loop we have been in since the flip:
+  // layout vs page, action vs re-render, and now a helper that takes the user as a
+  // parameter. Each fix repaired one caller and left the next one to find in
+  // production. So resolve it at the point of USE.
+  //
+  // `getCurrentUser()` is `cache()`d — no extra query on a request that already
+  // called it — and post-#517 it re-enters the scope in OUR context. If it
+  // resolves nothing (no session at all, a genuinely tenantless owner) the scope
+  // stays absent and `decideActingScope` refuses exactly as before.
+  //
+  // THIS DOES NOT WIDEN ANYTHING, and that distinction is the whole safety
+  // argument. It runs only when there is NO scope; an existing scope — including a
+  // narrower one, and including `system` — is left untouched and still wins. The
+  // value it recovers comes from `establishStaffTenantScope`, the same chokepoint
+  // that would have set it, from the same validated session. It re-derives what
+  // was lost; it never overrides what is present.
+  //
+  // `closed`, NOT `global`. Under enforcement `currentScopeClass()` answers
+  // `closed` for "no scope established" and reserves `global` for a DELIBERATE
+  // system bypass (`scope.system === true`). Keying this on `global` — which is
+  // what I wrote first — would have done exactly the wrong thing twice over: never
+  // fired on the failure this exists for, and replaced a trusted cross-tenant
+  // scope with the acting user's tenant on backups, trash and audit.
+  if (enforcing && enforcedScope.mode === "closed") {
+    await getCurrentUser().catch(() => null);
+    enforcedScope = currentScopeClass();
+  }
+
   return decideActingScope({
     enforcing,
-    enforcedScope: currentScopeClass(),
+    enforcedScope,
     sessionTenantId,
   });
 }
