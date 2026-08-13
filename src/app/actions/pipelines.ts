@@ -23,12 +23,14 @@ import {
   updateLeadForecast,
   updatePipeline,
   updatePipelineStage,
+  type StageCriteriaWrite,
 } from "@/lib/pipelines";
 import { UNREACHABLE_STAGE_MESSAGE } from "@/lib/pipelineTenantRule";
 import { logAuditStrict } from "@/lib/audit";
 import { basePrisma } from "@/lib/db";
 import { parseRands } from "@/lib/format";
 import { parsePipelineStageAction } from "@/lib/pipelineStageActions";
+import { parseStageCriteria, parseStageGateMode } from "@/lib/stageGate";
 import { resolveActingTenantMemberUser, resolveActingTenantTeam } from "@/lib/tenantActor";
 
 const str = (formData: FormData, key: string) => {
@@ -40,6 +42,12 @@ const int = (formData: FormData, key: string, fallback = 0) => {
   const value = parseInt(String(formData.get(key) ?? ""), 10);
   return Number.isFinite(value) ? value : fallback;
 };
+
+/** See the note at its call site in `editSalesPipelineStage`. */
+function criteriaFrom(formData: FormData, key: "entryCriteria" | "exitCriteria"): StageCriteriaWrite {
+  if (!formData.has(key)) return { keep: true };
+  return { set: parseStageCriteria(str(formData, key)) };
+}
 
 function validDateInput(raw: string | null) {
   if (!raw) return null;
@@ -198,6 +206,19 @@ export async function editSalesPipelineStage(id: string, formData: FormData) {
       isClosed: bool(formData, "isClosed"),
       closedStatus: str(formData, "closedStatus"),
       entryAction: parsePipelineStageAction(str(formData, "entryAction")),
+      // Parsed HERE, not inside updatePipelineStage: `parseStageCriteria` throws a
+      // human sentence, and this is the layer wrapped in `asActionResult` that can
+      // turn one into a refusal toast. Thrown from inside the raw UPDATE it would
+      // surface as a generic failure, on the one error the author can actually fix.
+      //
+      // A field the form did not post means the editor showed that rule READ-ONLY
+      // (see StageRulesEditor), so the column is left exactly as it is. An EMPTY
+      // posted value is different and means "cleared" — the distinction is the
+      // difference between renaming a stage and destroying its rule.
+      entryCriteria: criteriaFrom(formData, "entryCriteria"),
+      exitCriteria: criteriaFrom(formData, "exitCriteria"),
+      entryGateMode: parseStageGateMode(str(formData, "entryGateMode")),
+      exitGateMode: parseStageGateMode(str(formData, "exitGateMode")),
     };
     await updatePipelineStage(id, after);
     await logAuditStrict({

@@ -9,6 +9,7 @@ import {
   type TenantScopeAlias,
 } from "./pipelineTenantRule";
 import { currentScopeClass, writeTenantId } from "./tenantWrite";
+import type { StageCriteriaGroup, StageGateMode } from "./stageGate";
 
 export type SalesPipelineRow = {
   id: string;
@@ -32,6 +33,18 @@ export type PipelineStageRow = {
   isClosed: boolean;
   closedStatus: string | null;
   entryAction: string | null;
+  /**
+   * Stage gates. Typed as `unknown` rather than `StageCriteriaGroup` on purpose:
+   * these come back from a raw `SELECT` of a JSONB column, so what arrives is
+   * whatever is stored, not whatever the type claims. Callers put them through
+   * `parseStageCriteria`, which is the only thing that turns stored JSON into a
+   * rule. Declaring the parsed type here would be asserting a validation this
+   * query does not perform.
+   */
+  entryCriteria: unknown;
+  exitCriteria: unknown;
+  entryGateMode: string;
+  exitGateMode: string;
 };
 
 export type ForecastLeadRow = {
@@ -265,7 +278,8 @@ export async function listPipelineStages(pipelineId: string): Promise<PipelineSt
   const scope = tenantFilter('"tenantId"');
   return basePrisma.$queryRaw<PipelineStageRow[]>`
     SELECT "id", "name", "order", "color", "pipelineId", "defaultProbability",
-      "staleAfterDays", "isClosed", "closedStatus", "entryAction"
+      "staleAfterDays", "isClosed", "closedStatus", "entryAction",
+      "entryCriteria", "exitCriteria", "entryGateMode", "exitGateMode"
     FROM "PipelineStage"
     WHERE "pipelineId" = ${pipelineId} ${scope}
     ORDER BY "order" ASC
@@ -276,7 +290,8 @@ export async function getPipelineStage(stageId: string): Promise<PipelineStageRo
   const scope = tenantFilter('"tenantId"');
   const rows = await basePrisma.$queryRaw<PipelineStageRow[]>`
     SELECT "id", "name", "order", "color", "pipelineId", "defaultProbability",
-      "staleAfterDays", "isClosed", "closedStatus", "entryAction"
+      "staleAfterDays", "isClosed", "closedStatus", "entryAction",
+      "entryCriteria", "exitCriteria", "entryGateMode", "exitGateMode"
     FROM "PipelineStage"
     WHERE "id" = ${stageId} ${scope}
     LIMIT 1
@@ -454,6 +469,27 @@ export async function addPipelineStage(input: {
   return id;
 }
 
+/** Replace a stage's criteria with this value, or leave the column untouched. */
+export type StageCriteriaWrite = { set: StageCriteriaGroup | null } | { keep: true };
+
+/**
+ * The right-hand side of one criteria assignment.
+ *
+ * `keep` compiles to the column assigning to ITSELF, which is a no-op inside the
+ * same UPDATE and keeps this a single statement — the alternative, branching
+ * into two different UPDATEs, would put the tenant predicate in two places.
+ *
+ * `Prisma.raw` is safe here and only here: the column name is one of two
+ * literals chosen by this function's own caller in this file, never a value that
+ * came from a request. The criteria themselves stay a bound parameter, cast to
+ * jsonb because a JS object handed to a raw statement arrives as text and
+ * Postgres will not coerce text to jsonb on assignment.
+ */
+function criteriaAssignment(column: "entryCriteria" | "exitCriteria", write: StageCriteriaWrite) {
+  if ("keep" in write) return Prisma.raw(`"${column}"`);
+  return Prisma.sql`${write.set ? JSON.stringify(write.set) : null}::jsonb`;
+}
+
 export async function updatePipelineStage(id: string, input: {
   name: string;
   color: string;
@@ -462,6 +498,30 @@ export async function updatePipelineStage(id: string, input: {
   isClosed: boolean;
   closedStatus?: string | null;
   entryAction?: string | null;
+  /**
+   * Stage gates, ALREADY PARSED by the caller.
+   *
+   * `parseStageCriteria` throws a human sentence, and the caller is a server
+   * action wrapped in `asActionResult`, which turns that into a refusal toast.
+   * Parsing here instead would throw from inside a raw UPDATE, past the layer
+   * that knows how to report it. So this function takes a value it can only
+   * store, and validation stays where the person who typed it can be told.
+   *
+   * REQUIRED, not optional, and that is the whole point of spelling them out.
+   * This statement writes every column it names, so an optional field defaulting
+   * to "off"/NULL would mean any caller that forgot one SILENTLY DELETED a rule
+   * the workspace had authored. Required makes forgetting a compile error.
+   *
+   * `{ keep: true }` is the third answer, and it exists for one real case: a
+   * stored rule the editor cannot express — hand-written `or`, or a nested group
+   * — is shown READ-ONLY, so the form posts no value for it. Without a way to say
+   * "leave this alone", renaming such a stage would quietly destroy its rule,
+   * which is the same silent-write-loss class the trash sweep was just fixed for.
+   */
+  entryCriteria: StageCriteriaWrite;
+  exitCriteria: StageCriteriaWrite;
+  entryGateMode: StageGateMode;
+  exitGateMode: StageGateMode;
 }) {
   writeTenantId();
   const scope = tenantFilter('"tenantId"');
@@ -485,6 +545,10 @@ export async function updatePipelineStage(id: string, input: {
       "defaultProbability" = ${Math.max(0, Math.min(100, input.defaultProbability))},
       "staleAfterDays" = ${input.staleAfterDays ?? null}, "isClosed" = ${closed.isClosed},
       "closedStatus" = ${closed.closedStatus}, "entryAction" = ${input.entryAction ?? null},
+      "entryCriteria" = ${criteriaAssignment("entryCriteria", input.entryCriteria)},
+      "exitCriteria" = ${criteriaAssignment("exitCriteria", input.exitCriteria)},
+      "entryGateMode" = ${input.entryGateMode},
+      "exitGateMode" = ${input.exitGateMode},
       "tenantId" = ${stageTenantId({ pipelineTenantId: pipeline.tenantId, actingTenantId: actingTenant })}
     WHERE "id" = ${id} AND "pipelineId" = ${pipeline.id} ${scope}
   `;

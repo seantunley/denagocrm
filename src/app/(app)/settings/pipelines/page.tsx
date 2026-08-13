@@ -17,8 +17,45 @@ import { SettingsWorkspace } from "@/components/settings-workspace";
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
 import { PIPELINE_STAGE_ACTION_META } from "@/lib/pipelineStageActions";
 import { stageJourneyNames } from "@/lib/journeyStageBadges";
+import StageRulesEditor from "@/components/StageRulesEditor";
+import {
+  parseStageCriteria,
+  parseStageGateMode,
+  type StageCriteriaGroup,
+} from "@/lib/stageGate";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * Read a stored criteria document for the EDITOR.
+ *
+ * Lenient where the move path is strict, on purpose. `moveLead` refuses a move it
+ * cannot read a rule for, because acting on a rule you do not understand is
+ * worse than not moving. This page is the one place a broken rule can be FIXED,
+ * so it must render rather than throw — a settings screen that crashes on the
+ * rule you came to repair is a dead end.
+ *
+ * The shape is passed through unparsed on failure, with `readOnly` set, so
+ * `StageRulesEditor` shows it verbatim and posts nothing — which leaves the
+ * column untouched instead of destroying a rule while renaming a stage.
+ */
+function readCriteria(stored: unknown): { criteria: StageCriteriaGroup | null; readOnly: boolean } {
+  try {
+    return { criteria: parseStageCriteria(stored), readOnly: false };
+  } catch {
+    // Unreadable, but still a rule somebody wrote — a field this build no longer
+    // offers, or an operator paired with a type that no longer accepts it.
+    return { criteria: isGroupish(stored) ? (stored as StageCriteriaGroup) : null, readOnly: true };
+  }
+}
+
+function isGroupish(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    Array.isArray((value as { conditions?: unknown }).conditions)
+  );
+}
 
 export default async function PipelineSettingsPage() {
   await requirePermission("pipelines.manage");
@@ -201,6 +238,18 @@ export default async function PipelineSettingsPage() {
                             : "The lead moves immediately; configurable automations can still run afterward."}
                         </span>
                       </label>
+                      <StageRulesEditor
+                        direction="entry"
+                        stageName={stage.name}
+                        {...readCriteria(stage.entryCriteria)}
+                        defaultMode={parseStageGateMode(stage.entryGateMode)}
+                      />
+                      <StageRulesEditor
+                        direction="exit"
+                        stageName={stage.name}
+                        {...readCriteria(stage.exitCriteria)}
+                        defaultMode={parseStageGateMode(stage.exitGateMode)}
+                      />
                     </SaveForm>
                     </details>
                   </div>

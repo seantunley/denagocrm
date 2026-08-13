@@ -116,7 +116,16 @@ test("a refused move is a return value, not a throw", () => {
     actions.indexOf("export async function moveLeadToTestDrive("),
   );
   assert.ok(moveLead.length > 0, "moveLead must still exist");
-  assert.match(moveLead, /Promise<\{ ok: boolean; error\?: string \}>/, "the signature says so");
+  // `gate?: StageGateVerdict` joined this in the stage-gates change. It is
+  // additive and does not weaken the property under test: a refusal is still a
+  // returned `{ ok: false }`, and the verdict rides along so the board can open
+  // the reason dialog because the SERVER asked it to. The `ok`/`error` pair is
+  // still asserted exactly.
+  assert.match(
+    moveLead,
+    /Promise<\{ ok: boolean; error\?: string; gate\?: StageGateVerdict \}>/,
+    "the signature says so",
+  );
   assert.match(moveLead, /return \{ ok: false, error: "You do not have permission to move leads between pipelines" \}/);
   assert.match(moveLead, /return \{ ok: false, error: "This stage requires test-drive booking details" \}/);
   assert.match(moveLead, /return \{ ok: true \};/, "the success path must report success");

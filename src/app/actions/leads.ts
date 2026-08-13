@@ -29,6 +29,17 @@ import {
   listPipelineStages,
   type PipelineStageRow,
 } from "@/lib/pipelines";
+import {
+  CLEAR_VERDICT,
+  describeUnmet,
+  evaluateStageMove,
+  parseStageCriteria,
+  parseStageGateMode,
+  refusalSentence,
+  type StageGate,
+  type StageGateVerdict,
+} from "@/lib/stageGate";
+import { stageGateFactsForLead } from "@/lib/stageGateFacts";
 
 function leadData(formData: FormData) {
   const str = (key: string) => {
@@ -332,6 +343,86 @@ export async function updateLead(id: string, formData: FormData) {
 }
 
 /**
+ * How long an override reason must be to count as one.
+ *
+ * Ten characters, matching the lost-reason input the outcome dialog already
+ * demands. Short enough not to be busywork, long enough that "ok" and "." do not
+ * satisfy an audit trail somebody will read back in six months.
+ */
+const MIN_OVERRIDE_REASON = 10;
+
+/**
+ * Read one direction's gate off a stage row.
+ *
+ * The criteria column is JSONB and this is a raw SELECT, so what comes back is
+ * whatever is stored — hence the parse. A stored document that no longer parses
+ * is treated as a BROKEN gate rather than an absent one: silently ignoring it
+ * would turn a rule someone believes is blocking into a rule that does nothing,
+ * which is the worst of the three possible outcomes.
+ */
+function stageGateFor(row: PipelineStageRow, direction: "entry" | "exit"): StageGate | "broken" {
+  const mode = parseStageGateMode(direction === "entry" ? row.entryGateMode : row.exitGateMode);
+  try {
+    return { mode, criteria: parseStageCriteria(direction === "entry" ? row.entryCriteria : row.exitCriteria) };
+  } catch {
+    // An `off` gate cannot block anything, so an unreadable one is not worth
+    // stopping a board over — it is only reported when it would have mattered.
+    return mode === "off" ? { mode: "off", criteria: null } : "broken";
+  }
+}
+
+/**
+ * Decide one move against both stages' rules.
+ *
+ * Split out of `moveLead` because it needs four things resolved in order — the
+ * source stage, both gates, the facts, and the override permission — and because
+ * the Attention Centre's `stage_criteria_unmet` signal will want the same
+ * resolution against a lead's CURRENT stage.
+ */
+async function gateStageMove(input: {
+  leadId: string;
+  user: Awaited<ReturnType<typeof requireLeadAccess>>;
+  currentScope: { pipelineId: string; stageId: string };
+  targetStage: PipelineStageRow;
+}): Promise<{ verdict: StageGateVerdict } | { error: string; gate?: StageGateVerdict }> {
+  const { leadId, user, currentScope, targetStage } = input;
+  const entry = stageGateFor(targetStage, "entry");
+  if (entry === "broken") return { error: BROKEN_RULE_MESSAGE };
+
+  // The source stage is only needed for its EXIT gate, and only inside one
+  // pipeline — a cross-pipeline move runs the target's entry gate alone. It is
+  // fetched through `getPipelineStage`, which is tenant-filtered, so a stage from
+  // another workspace resolves to null and contributes no rule.
+  const samePipeline = currentScope.pipelineId === targetStage.pipelineId;
+  const fromRow = samePipeline ? await getPipelineStage(currentScope.stageId) : null;
+  const exit = fromRow ? stageGateFor(fromRow, "exit") : null;
+  if (exit === "broken") return { error: BROKEN_RULE_MESSAGE };
+
+  // Nothing to decide: both gates off or absent. Skips the facts entirely, which
+  // is what keeps an ungated board — every board, on the day this ships — paying
+  // nothing for this feature.
+  const entryLive = entry.mode !== "off" && Boolean(entry.criteria);
+  const exitLive = Boolean(exit && exit.mode !== "off" && exit.criteria);
+  if (!entryLive && !exitLive) return { verdict: CLEAR_VERDICT };
+
+  const facts = await stageGateFactsForLead(leadId);
+  if (!facts) return { error: "Lead not found." };
+
+  return {
+    verdict: evaluateStageMove({
+      from: fromRow && exit ? { stageId: fromRow.id, order: fromRow.order, exit } : null,
+      to: { stageId: targetStage.id, order: targetStage.order, entry },
+      samePipeline,
+      facts,
+      canOverride: await hasPermission(user, "leads.override_stage_rules"),
+    }),
+  };
+}
+
+const BROKEN_RULE_MESSAGE =
+  "A stage rule on this pipeline could not be read, so this move was not allowed. Fix it in Settings → Pipelines.";
+
+/**
  * Move a lead to another stage, reporting a refusal AS A VALUE.
  *
  * This threw. Every other action the Kanban calls — `moveLeadToTestDrive`,
@@ -346,7 +437,11 @@ export async function updateLead(id: string, formData: FormData) {
  * read out a hash — but the convention and the inconsistency settle it on their
  * own.
  */
-export async function moveLead(leadId: string, stageId: string): Promise<{ ok: boolean; error?: string }> {
+export async function moveLead(
+  leadId: string,
+  stageId: string,
+  options?: { overrideReason?: string },
+): Promise<{ ok: boolean; error?: string; gate?: StageGateVerdict }> {
   const user = await requireLeadAccess(leadId, "leads.change_stage");
   const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
   // Same refusal as `updateLead` and `moveLeadToTestDrive`, for the same reason: a
@@ -363,6 +458,38 @@ export async function moveLead(leadId: string, stageId: string): Promise<{ ok: b
   if (targetStage.entryAction === "book_test_drive") {
     return { ok: false, error: "This stage requires test-drive booking details" };
   }
+
+  // ── STAGE GATES ───────────────────────────────────────────────────────────
+  //
+  // Runs AFTER permissions and BEFORE the write, and its facts are re-derived
+  // here rather than taken from the request. The board runs the same
+  // `evaluateStageMove` to grey a column before the drag; that copy is a
+  // rendering hint built from a page-load snapshot, and a quote deleted in
+  // another tab thirty seconds ago is not in it. Only this one decides.
+  const gateOutcome = await gateStageMove({ leadId, user, currentScope, targetStage });
+  if ("error" in gateOutcome) return { ok: false, error: gateOutcome.error, gate: gateOutcome.gate };
+  const verdict = gateOutcome.verdict;
+  const overrideReason = options?.overrideReason?.trim() ?? "";
+  if (verdict.requiresReason && overrideReason.length < MIN_OVERRIDE_REASON) {
+    // Not a refusal — the client opens the reason dialog because the SERVER asked
+    // it to, so a POST that skips the dialog gets asked in exactly the same way.
+    return { ok: false, gate: verdict };
+  }
+  if (!verdict.allowed) {
+    const message = refusalSentence(verdict, targetStage.name);
+    // Best-effort, and noisy by design: a refusal log is how you find out a rule
+    // is wrong. `logAudit` rather than `logAuditStrict` because nothing changed
+    // and a failed write here must not turn a refusal into an error.
+    await logAudit({
+      action: "lead.stage_gate_blocked",
+      summary: `Blocked “${before.title}” from ${targetStage.name} — ${message}`,
+      leadId,
+      contactId: before.contactId,
+      user,
+    });
+    return { ok: false, error: message, gate: verdict };
+  }
+
   const lead = await prisma.lead.update({
     where: { id: leadId },
     data: { stageId, position: await nextPosition(stageId), stageEnteredAt: new Date() },
@@ -376,7 +503,35 @@ export async function moveLead(leadId: string, stageId: string): Promise<{ ok: b
     user,
     before: { stageId: before.stageId, position: before.position, pipelineId: currentScope.pipelineId },
     after: { stageId, position: lead.position, pipelineId: targetStage.pipelineId },
+    // A clean move carries nothing extra; a move that went through despite a rule
+    // carries what the rule wanted. `logAuditStrict` routes to AuditEvent, the
+    // only model with metadata and the only one whose triggers refuse UPDATE and
+    // DELETE — an override you can edit afterwards is not a record of anything.
+    ...(verdict.unmet.length > 0
+      ? { metadata: { gateDirection: verdict.direction, gateMode: verdict.mode, gateUnmet: verdict.unmet.map(describeUnmet) } }
+      : {}),
   });
+  if (verdict.requiresReason) {
+    // A SEPARATE, differently-named event, not a footnote on the move. "Who has
+    // been waving rules through" is a question somebody will ask, and it should
+    // be answerable by reading one action name rather than by filtering every
+    // stage change for a metadata key.
+    await logAuditStrict({
+      action: "lead.stage_gate_overridden",
+      summary: `Moved “${lead.title}” into ${lead.stage.name} without ${verdict.unmet.map(describeUnmet).join("; ")} — reason: “${overrideReason}”`,
+      leadId,
+      contactId: lead.contactId,
+      user,
+      before: { stageId: before.stageId },
+      after: { stageId },
+      metadata: {
+        direction: verdict.direction,
+        mode: verdict.mode,
+        unmet: verdict.unmet,
+        reason: overrideReason,
+      },
+    });
+  }
   const pipelineStages = await listPipelineStages(targetStage.pipelineId);
   const testDriveStage = pipelineStages.find((stage) => stage.entryAction === "book_test_drive");
   if (testDriveStage && targetStage.order < testDriveStage.order) {

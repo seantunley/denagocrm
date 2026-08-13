@@ -21,6 +21,12 @@ export const PERMISSIONS = [
   "leads.view_all", "leads.view_owned", "leads.create", "leads.edit", "leads.assign",
   "leads.change_stage", "leads.change_pipeline", "leads.mark_won", "leads.mark_lost",
   "leads.reopen", "leads.link_contact", "leads.delete",
+  // Move a lead past a stage rule set to BLOCK. Granted to nobody by default, so
+  // on the day this ships a blocking stage is unbypassable for every non-owner —
+  // deliberate, because a rule that anyone can wave through is not a rule. Tenant
+  // owners bypass permission checks entirely (see hasPermission), so an owner can
+  // never be locked out of their own board by a rule they wrote.
+  "leads.override_stage_rules",
   "contacts.view_all", "contacts.view_owned", "contacts.create", "contacts.edit",
   "contacts.delete", "contacts.merge",
   "quotes.view_all", "quotes.view_owned", "quotes.create", "quotes.edit",
