@@ -11,6 +11,7 @@ import { basePrisma } from "@/lib/db";
 import { putSetting } from "@/lib/settings";
 import { withSystemScope } from "@/lib/tenantScopeEntry";
 import { purgeTrash } from "@/lib/trash";
+import { pruneErrorLog } from "@/lib/errorLog";
 import { readFile, putManagedBlob, listActiveBackupBlobs, deleteFile, activeBlobWriteTokenPresent } from "@/lib/storage";
 import {
   decryptBytes,
@@ -231,6 +232,13 @@ export async function GET(req: NextRequest) {
     const purgedTrash = degradedAssets.length === 0
       ? await purgeTrash().catch(() => -1)
       : 0;
+    // Error-log retention rides the same gate, and for a sharper reason than
+    // Trash: if the backup is degraded, the System Log is the first thing anyone
+    // will want to read to find out why. Pruning it on the run that just failed
+    // would delete evidence at the exact moment it became useful.
+    const prunedErrorLog = degradedAssets.length === 0
+      ? await pruneErrorLog().catch(() => -1)
+      : 0;
     const result = {
       ok: degradedAssets.length === 0,
       completedAt: new Date().toISOString(),
@@ -250,6 +258,7 @@ export async function GET(req: NextRequest) {
       databaseBackupsPruned: stale.length,
       trashPurgeSkipped: degradedAssets.length > 0,
       purgedTrash,
+      prunedErrorLog,
     };
     await recordResult(result);
     // Degraded (some assets missed) is still a SUCCESSFUL database backup — the
