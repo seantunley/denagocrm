@@ -203,7 +203,10 @@ test("a warning names what was missing, on screen and not only in the audit", ()
 test("the board and the server describe an unmet criterion with one function", () => {
   // A second copy of this wording is how the refusal and the warning start
   // disagreeing about the same rule.
-  assert.match(board, /import \{[^}]*describeUnmet[^}]*\} from "@\/lib\/stageGate"/s);
+  // No `s` flag: `[^}]` already matches newlines, and dotAll needs an es2018
+  // target this project does not set — CI caught it, because I added this test
+  // after the last typecheck and only re-ran the test runner.
+  assert.match(board, /import \{[^}]*describeUnmet[^}]*\} from "@\/lib\/stageGate"/);
   assert.ok(!/function describeUnmet/.test(board), "the board must not restate it");
   // The reason length lives in the pure module for the same reason: the dialog's
   // disabled button and the server's refusal must use one number.
