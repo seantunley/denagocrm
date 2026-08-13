@@ -58,7 +58,33 @@ export async function pushRecipientsForTenant(tenantId: string): Promise<PushRec
 
 export async function pushRecipientsForCurrentScope(): Promise<PushRecipient[]> {
   const s = currentScopeClass();
-  if (s.mode === "closed") return [];
+  if (s.mode === "closed") {
+    // FAIL CLOSED, BUT NOT SILENTLY.
+    //
+    // Returning [] here is correct — a scopeless push must go to nobody rather
+    // than to everybody. What was wrong is that it went nowhere and said nothing:
+    // every caller sees the same `0` it would see if no device were subscribed,
+    // so a wiring fault at ONE entry point looks exactly like a workspace that
+    // has not enabled notifications. That is how "Send test notification" came to
+    // report "No subscribed devices yet" while two devices sat in the table.
+    //
+    // The scope is established at the ENTRY point — `withChannelTenantScope` on
+    // the webhooks, `runCronPerTenant` on the crons — so reaching this line means
+    // some path is sending a push without binding one. That is a bug in the
+    // caller, and it is invisible from the outside; hence the log.
+    //
+    // `alert: false` is what stops this recursing: logError raises a push of its
+    // own for the first error in a 30-minute window, which would arrive back here
+    // in the same scopeless state.
+    const { logError } = await import("./errorLog");
+    await logError(
+      "push",
+      new Error("Push requested with no tenant scope"),
+      "A notification was dropped because no workspace was attached to the request. The sending path needs to establish a tenant scope (or name a tenant explicitly) before it calls sendPushToAll.",
+      { tenantId: null, alert: false },
+    );
+    return [];
+  }
   if (s.mode === "global") {
     return prisma.pushSubscription.findMany({
       select: { id: true, endpoint: true, p256dh: true, auth: true },
@@ -71,6 +97,18 @@ export async function pushRecipientsForCurrentScope(): Promise<PushRecipient[]> 
     JOIN "Tenant" t ON t."id" = m."tenantId"
     JOIN "User" u ON u."id" = ps."userId"
     WHERE m."tenantId" = ${s.tenantId} AND t."active" = true AND u."disabledAt" IS NULL`;
+}
+
+/**
+ * Are the VAPID keys present at all?
+ *
+ * Exported so a caller can tell "this server cannot send pushes" apart from
+ * "there was nobody to send to". `sendPushToAll` collapses both into `0`, which
+ * is fine for the fire-and-forget callers and useless for the one that reports
+ * back to a person.
+ */
+export function pushConfigured(): boolean {
+  return Boolean(process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY);
 }
 
 let configured = false;
