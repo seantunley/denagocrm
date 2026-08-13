@@ -38,14 +38,33 @@
 -- -----------------------------------------------------------------------------
 -- 1. The role
 -- -----------------------------------------------------------------------------
--- NOTE ON NEON: prefer creating this role in the Neon console (Roles → New
--- Role), NOT with the CREATE ROLE below. A console-created role is registered
--- with Neon's connection proxy, which is what makes it usable on the POOLED
--- endpoint that DATABASE_URL points at. Create it there, then run this script
--- from step 2 onwards to grant it. The CREATE ROLE here is for self-hosted
--- Postgres and for the disposable database used by `npm run test:rls-restricted`.
+-- ⛔ NOTE ON NEON — CREATE THIS ROLE HERE, IN SQL. NEVER IN THE NEON CONSOLE.
 --
--- Either way the attributes below are the requirement, and step 5 verifies them:
+-- This note used to say the opposite: prefer the console, because a
+-- console-created role is registered with Neon's connection proxy and is
+-- therefore usable on the POOLED endpoint. Both halves of that were wrong, and
+-- following it on 2026-08-12 produced a role that defeats the entire purpose of
+-- this file.
+--
+--   1. A ROLE CREATED IN THE NEON CONSOLE IS CREATED *WITH* BYPASSRLS — the same
+--      profile as neondb_owner (verified on production: crm_app came back
+--      rolbypassrls=true, rolcreaterole=true). Every policy on all 120 forced
+--      tables is then evaluated exactly never, which is the precise failure this
+--      role exists to end.
+--
+--   2. IT CANNOT BE REPAIRED. Only a superuser may clear BYPASSRLS, Neon exposes
+--      none, and `neondb_owner` cannot even DROP OWNED BY / DROP ROLE a
+--      console-created role. There is no way back except recreating it.
+--
+--   3. THE PREMISE WAS FALSE ANYWAY. A role created by the CREATE ROLE below
+--      authenticates on the POOLED endpoint perfectly well — confirmed on
+--      production. Nothing was gained by using the console.
+--
+-- CREATE ROLE ... NOBYPASSRLS is unrestricted: superuser is needed to GRANT a
+-- privilege, not to WITHHOLD one. So the role can only be born correct, and this
+-- is where that happens.
+--
+-- The attributes below are the requirement, and step 5 verifies them:
 --   NOSUPERUSER   — a superuser bypasses RLS unconditionally.
 --   NOBYPASSRLS   — the whole point. This is the attribute neondb_owner has.
 --   NOCREATEROLE  — cannot grant itself anything, or create a role that can.
@@ -72,8 +91,52 @@ END $$;
 -- Re-assert the attributes even when the role already existed. A role created in
 -- the Neon console does not necessarily have them, and a role that silently
 -- gained BYPASSRLS later is the exact failure this whole script exists to stop.
+--
+-- ON NEON THIS CANNOT BE A BARE `ALTER ROLE`, and the reason is worth stating
+-- because it invalidates the advice above it.
+--
+-- Only a SUPERUSER may change the BYPASSRLS attribute. `neondb_owner` is
+-- `rolsuper = false` and Neon exposes no real superuser, so
+-- `ALTER ROLE crm_app NOBYPASSRLS` fails with
+-- `ERROR: permission denied to alter role (42501)` — and Postgres checks the
+-- permission whether or not the change is a no-op, so it fails even when the
+-- attributes are ALREADY correct. Run through `psql` or `prisma db execute`,
+-- that aborts the whole file; run through Neon's SQL editor, it reports one red
+-- statement and carries on, leaving the grants applied and the attributes not.
+--
+-- Worse, a role created in the NEON CONSOLE is created WITH BYPASSRLS — the same
+-- profile as neondb_owner (verified on production 2026-08-12: crm_app came back
+-- rolbypassrls=true, rolcreaterole=true). So the console route, which the note
+-- above recommends, produces a role that defeats the entire purpose and cannot
+-- then be repaired from SQL.
+--
+-- CREATE ROLE with NOBYPASSRLS is unrestricted — you need superuser to GRANT a
+-- privilege, not to withhold one — so the role must be created correctly in the
+-- first place, via SQL, and never repaired afterwards. See docs/RLS-ROLE-CUTOVER.md.
+--
+-- This block therefore VERIFIES rather than asserts: it repairs what it is
+-- permitted to repair, and fails loudly and specifically on the one attribute it
+-- cannot, instead of dying on a permission error that says nothing about why.
 -- ROLE NAME (2 of 3)
-ALTER ROLE crm_app NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
+DO $$
+DECLARE
+  r RECORD;
+BEGIN
+  SELECT rolsuper, rolbypassrls INTO r FROM pg_roles WHERE rolname = 'crm_app';
+  IF r.rolsuper OR r.rolbypassrls THEN
+    RAISE EXCEPTION
+      'crm_app has rolsuper=% rolbypassrls=% and NEITHER can be removed without superuser, which Neon does not provide. '
+      'This role was almost certainly created in the Neon console, which creates roles WITH BYPASSRLS. '
+      'It cannot be repaired — drop it and recreate it in SQL: '
+      'DROP OWNED BY crm_app; DROP ROLE crm_app; '
+      'CREATE ROLE crm_app LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD ''...'';',
+      r.rolsuper, r.rolbypassrls;
+  END IF;
+  -- These four are alterable by a CREATEROLE role, so a drifted role can be
+  -- corrected in place without recreating it.
+  EXECUTE 'ALTER ROLE crm_app NOCREATEDB NOCREATEROLE NOINHERIT';
+  RAISE NOTICE 'crm_app attributes verified: NOBYPASSRLS already set, NOCREATEDB/NOCREATEROLE/NOINHERIT applied';
+END $$;
 
 
 -- -----------------------------------------------------------------------------

@@ -34,17 +34,47 @@ const ROLE_SQL = "prisma/rls/app-role.sql";
  * wider grant makes that suite pass more easily, not less.
  */
 
-test("the app role cannot bypass RLS, and the script says so twice", () => {
+test("the app role cannot bypass RLS, and the script refuses to continue if it can", () => {
   const sql = sqlBody(ROLE_SQL);
-  // Once on creation, once re-asserted on a role that already existed — a role
-  // made in the Neon console does not necessarily have these attributes.
-  assert.ok(
-    (sql.match(/NOBYPASSRLS/g) ?? []).length >= 2,
-    "NOBYPASSRLS must be set at creation AND re-asserted on an existing role",
+
+  // THE ROLE MUST BE BORN CORRECT, because it cannot be corrected later.
+  //
+  // This used to assert a re-asserting `ALTER ROLE crm_app NOSUPERUSER
+  // NOBYPASSRLS`, on the reasonable theory that a role which already existed
+  // should have its attributes forced. On Neon that statement cannot work: only a
+  // SUPERUSER may change BYPASSRLS, `neondb_owner` is not one, Neon exposes none,
+  // and Postgres checks the permission even when the change is a NO-OP. So it
+  // fails with 42501 whether the role is already correct or not — aborting the
+  // file in psql, or (worse) failing one red statement in Neon's SQL editor while
+  // the grants around it apply. Verified on production 2026-08-12.
+  assert.match(
+    sql,
+    /CREATE ROLE crm_app LOGIN NOSUPERUSER NOBYPASSRLS/,
+    "the only moment these attributes can be set is CREATE ROLE",
   );
-  assert.match(sql, /NOSUPERUSER/, "a superuser bypasses RLS unconditionally");
-  assert.match(sql, /ALTER ROLE crm_app NOSUPERUSER NOBYPASSRLS/);
-  // And it refuses to finish quietly if either is somehow still true.
+
+  // So the script VERIFIES what it cannot repair, and says exactly what to do.
+  assert.match(sql, /SELECT rolsuper, rolbypassrls INTO r FROM pg_roles WHERE rolname = 'crm_app'/);
+  assert.match(sql, /IF r\.rolsuper OR r\.rolbypassrls THEN/);
+  assert.match(
+    sql,
+    /RAISE EXCEPTION[\s\S]{0,80}crm_app has rolsuper=/,
+    "a role that can bypass RLS must stop the script with a specific error, not a bare 42501",
+  );
+
+  // THE BARE ALTER MUST NOT COME BACK. This is the assertion that replaces the
+  // old one, inverted: its return would reintroduce the failure above.
+  assert.doesNotMatch(
+    sql,
+    /ALTER ROLE crm_app[^;]*\b(NO)?BYPASSRLS\b/,
+    "altering BYPASSRLS needs superuser, which Neon does not have — verify instead",
+  );
+
+  // The four attributes a CREATEROLE role IS allowed to change are still forced,
+  // so a drifted role can be corrected in place without recreating it.
+  assert.match(sql, /ALTER ROLE crm_app NOCREATEDB NOCREATEROLE NOINHERIT/);
+
+  // And it still refuses to finish quietly if either attribute is somehow true.
   assert.match(sql, /RAISE EXCEPTION 'crm_app can bypass RLS/);
 });
 
@@ -61,7 +91,18 @@ test("the grant is the four DML verbs and nothing wider", () => {
 
   // DDL would let the role drop the very policies that isolate tenants.
   assert.doesNotMatch(sql, /GRANT[^;]*\bCREATE\b[^;]*ON SCHEMA/i, "no DDL in schema public");
-  assert.doesNotMatch(sql, /\bSUPERUSER\b(?!\s)/i);
+
+  // No statement may CONFER superuser. Scoped to role statements rather than
+  // matching the bare word anywhere: `NOSUPERUSER` is the thing we want and does
+  // not match `\bSUPERUSER\b`, but the script now also EXPLAINS in a RAISE
+  // EXCEPTION message that removing the attribute needs superuser — prose inside
+  // a string literal, which sqlBody cannot strip because it is not a comment.
+  // The previous form matched that sentence and failed.
+  assert.doesNotMatch(
+    sql,
+    /(ALTER|CREATE)\s+ROLE[^;]*\bSUPERUSER\b/i,
+    "the app role must never be granted superuser — it would bypass RLS unconditionally",
+  );
 });
 
 test("future tables are granted by a RULE, not by a loop that already ran", () => {
