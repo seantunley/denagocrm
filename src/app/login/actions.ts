@@ -8,6 +8,7 @@ import { SignJWT, jwtVerify } from "jose";
 import { basePrisma } from "@/lib/db";
 import { createSessionCookie, destroySessionCookie } from "@/lib/auth";
 import { verifySession, SESSION_COOKIE } from "@/lib/session";
+import { logError } from "@/lib/errorLog";
 import { verifyTotp } from "@/lib/totp";
 import { matchBackupCode } from "@/lib/backupCodes";
 import { decryptValue } from "@/lib/settings";
@@ -248,7 +249,23 @@ export async function logout() {
         data: { revokedAt: new Date() },
       });
     }
-  } catch {}
+  } catch (err) {
+    // A FAILED REVOCATION IS INVISIBLE TO THE PERSON IT AFFECTS.
+    //
+    // The cookie is cleared and the redirect happens either way, so the UI says
+    // "signed out" whether or not the session was actually revoked. If this write
+    // failed, the token stays valid server-side until it expires — which matters on
+    // a shared machine, and matters more if the token was ever copied. Revocation
+    // IS the protection; the cookie delete only hides the token from this browser.
+    //
+    // So it still fails open — deliberately, because stranding someone on a page
+    // they cannot leave is worse — but it no longer fails SILENTLY.
+    await logError(
+      "logout",
+      err,
+      "Session revocation failed; the cookie was cleared anyway, so this token stays valid until it expires.",
+    );
+  }
   await destroySessionCookie();
   redirect("/login");
 }
