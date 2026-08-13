@@ -130,14 +130,35 @@ src/lib/settings.ts:428              src/lib/statistics.ts:374
 src/lib/tenantWrite.ts:116
 ```
 
-These do not throw and never will — they write a *confident, wrong* owner. With one
-workspace the guess is always right and the whole class is invisible. With two, a row is
-filed under the wrong business and reads as correct to every later query. `actingTenant.ts`
-already calls this out as the worse direction, and the acting-scope work has been removing
-these rung by rung.
+**The exposure is narrower than the count suggests, and I had it wrong in the first draft
+of this report.** `writeTenantId()` does not simply return null on failure:
 
-**Not fixed here** — this is the multi-tenancy flip's own workstream, not an audit item.
-The thing worth knowing is the number: **twelve**, and they are listed above.
+```ts
+export function writeTenantId(): string | null {
+  const s = currentScopeClass();
+  if (s.mode === "closed") throw new TenantScopeError(...);   // ← does not reach the ??
+  return s.mode === "tenant" ? s.tenantId : null;             // ← null only for `global`
+}
+```
+
+So with enforcement ON — which is where production is now — a bound tenant scope returns
+the real tenant and the `??` never fires, and a *missing* scope throws rather than
+defaulting. The fallback is reachable only under `global`, which under enforcement means a
+**deliberate system scope**: cron slices, sweeps, trusted cross-tenant work. Several of
+those paths run inside `runCronPerTenant`, which binds a real per-tenant scope, so the
+fallback never fires there either.
+
+What is left is genuinely narrow: system-scoped background work that writes a tenant-owned
+row without inheriting an owner from the record it is acting on. Still wrong at two
+workspaces, still invisible at one — but it is not, as the first draft implied, sitting
+under ordinary user writes.
+
+**Not fixed here, deliberately.** Converting these to throws would turn silent-wrong into
+loud-failure in live background paths for zero benefit at one workspace, and today already
+demonstrated how fragile scope resolution is in non-render contexts. Converting them to
+inherit needs a parent record and per-site knowledge of the calling context. That is the
+multi-tenancy workstream — the phase the project notes already flag as needing hands-on
+review — not something to bulk-edit off the back of an audit.
 
 ---
 
