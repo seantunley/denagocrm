@@ -2,7 +2,7 @@ import "server-only";
 import { resolveActingTenant } from "./tenantContext";
 import { honoredTenantClaim, decideStaffTenantScope } from "./tenant";
 import { tenantEnforcing } from "./tenantEnforcement";
-import { enterTenantScope, runInTenantScope } from "./tenantScope";
+import { enterTenantScope, runInTenantScope, type TenantScope } from "./tenantScope";
 import { resolveChannelTenant, type ChannelKind } from "./channelTenant";
 
 /**
@@ -55,7 +55,7 @@ export async function establishStaffTenantScope(
   userId: string,
   tid: string | null,
   isOwner: boolean,
-): Promise<{ ok: boolean }> {
+): Promise<{ ok: boolean; scope: TenantScope | null }> {
   // Resolve the exact same validated membership/claim pair in both modes. This is
   // the authenticated chokepoint, so unlike cron/webhook work there is a real
   // actor to ask. Background paths never call this function.
@@ -68,17 +68,29 @@ export async function establishStaffTenantScope(
     // tenant owner. It simply leaves no scope, exactly as before. A successfully
     // resolved workspace, however, is bound so explicit basePrisma predicates can
     // enforce the real user-facing boundary today.
-    if (tenantId) enterTenantScope({ tenantId, system: false });
-    return { ok: true };
+    if (tenantId) {
+      const scope = { tenantId, system: false };
+      enterTenantScope(scope);
+      return { ok: true, scope };
+    }
+    return { ok: true, scope: null };
   }
 
   const decision = decideStaffTenantScope(true, tenantId, isOwner);
   // enterTenantId === null means enter NO scope — either the owner escape hatch or a
   // fail-closed miss; we NEVER enter a `system` scope for a user-facing request.
   if (decision.ok && decision.enterTenantId !== null) {
-    enterTenantScope({ tenantId: decision.enterTenantId, system: false });
+    const scope = { tenantId: decision.enterTenantId, system: false };
+    enterTenantScope(scope);
+    // RETURNED, not merely entered. The caller re-enters it on every call — see
+    // getCurrentUser. Entering it here alone binds it to whichever execution
+    // context happened to run this function, and that context is decided by
+    // React's `cache()`: whoever takes the MISS runs the body, and everyone who
+    // takes the HIT never does. That is the 2026-08-12 lockout and the
+    // 2026-08-13 Server Action failure, one mechanism.
+    return { ok: true, scope };
   }
-  return { ok: decision.ok };
+  return { ok: decision.ok, scope: null };
 }
 
 /**
