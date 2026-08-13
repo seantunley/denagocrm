@@ -218,6 +218,30 @@ test("the board and the server describe an unmet criterion with one function", (
   );
 });
 
+test("the test-drive path is gated too, and can carry a reason", () => {
+  // A stage may carry BOTH a required action and entry criteria, and the board
+  // routes a required-action stage straight to the booking dialog — so `moveLead`,
+  // where the gate lived, was never called for those stages. The rules were
+  // skipped on exactly the stages most likely to have them.
+  const leads = src("src/app/actions/leads.ts");
+  const testDrive = leads.slice(leads.indexOf("export async function moveLeadToTestDrive("));
+  const code = testDrive.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  assert.ok(code.includes("gateStageMove("), "the booking path must run the gate");
+  assert.ok(code.includes("MIN_OVERRIDE_REASON"), "and enforce the reason length itself");
+  assert.ok(code.includes("lead.stage_gate_overridden"), "an override here is audited like any other");
+  // Only when the stage actually changes: rescheduling a booking on the stage the
+  // lead already sits in is not a transition, and gates never judge residency.
+  assert.match(code, /if \(changingStage\) \{\s+const gated = await gateStageMove/);
+
+  // The board keeps the booking details across the reason prompt rather than
+  // making somebody fill the form in twice.
+  assert.match(boardCode, /testDrive\?: \{ productId: string \| null/);
+  assert.match(boardCode, /submitTestDrive\(lead, stageId, testDrive, reason\)/);
+  // Taking the target as an argument, not re-reading state a frame later.
+  assert.match(boardCode, /function submitTestDrive\(\s*lead: KanbanLead,\s*stageId: string,/);
+  assert.ok(!/setTimeout\(\(\) => confirmTestDrive/.test(boardCode), "no timing hack");
+});
+
 test("the edit form's stage picker is gated too", () => {
   // LeadForm carries a stageId select, so a rule enforced only in `moveLead`
   // would be walked around by opening the lead and choosing the stage from a

@@ -620,8 +620,9 @@ export async function moveLead(
 export async function moveLeadToTestDrive(
   leadId: string,
   stageId: string,
-  data: { productId: string | null; date: string; time: string; location: string }
-): Promise<{ ok: boolean; error?: string }> {
+  data: { productId: string | null; date: string; time: string; location: string },
+  options?: { overrideReason?: string },
+): Promise<{ ok: boolean; error?: string; gate?: StageGateVerdict }> {
   const user = await requireLeadAccess(leadId, "leads.change_stage");
   const when = new Date(`${data.date}T${data.time || "09:00"}:00+02:00`);
   if (isNaN(when.getTime())) return { ok: false, error: "Pick a valid date and time" };
@@ -643,6 +644,38 @@ export async function moveLeadToTestDrive(
   }
   if (targetStage.entryAction !== "book_test_drive") {
     return { ok: false, error: "That stage is not configured for test-drive booking." };
+  }
+
+  // THE STAGE'S RULES APPLY ON THIS PATH TOO.
+  //
+  // A stage may carry BOTH a required action and entry criteria, and the board
+  // routes a required-action stage straight to the booking dialog — so `moveLead`,
+  // which is where the gate lived, was never called for those stages at all. The
+  // rules were silently skipped on exactly the stages most likely to have them.
+  //
+  // Third bypass of the same shape: the rule has to run on every door into the
+  // stage, not on the one the feature was written against.
+  let verdict = CLEAR_VERDICT;
+  if (changingStage) {
+    const gated = await gateStageMove({ leadId, user, currentScope, targetStage });
+    if ("error" in gated) return { ok: false, error: gated.error };
+    verdict = gated.verdict;
+    const overrideReason = options?.overrideReason?.trim() ?? "";
+    if (verdict.requiresReason && overrideReason.length < MIN_OVERRIDE_REASON) {
+      // Same contract as `moveLead`: the client is asked for a reason BY THE
+      // SERVER, and the booking details it already collected are re-sent with it.
+      return { ok: false, gate: verdict };
+    }
+    if (!verdict.allowed) {
+      const message = refusalSentence(verdict, targetStage.name);
+      await logAudit({
+        action: "lead.stage_gate_blocked",
+        summary: `Blocked “${leadId}” from ${targetStage.name} — ${message}`,
+        leadId,
+        user,
+      });
+      return { ok: false, error: message, gate: verdict };
+    }
   }
 
   let productId: string | null = null;
@@ -714,10 +747,29 @@ export async function moveLeadToTestDrive(
     contactId: lead.contactId,
     user,
   });
+  if (verdict.requiresReason) {
+    // Same event, same logger and the same reasoning as `moveLead`: an override
+    // is a separate, append-only record, not a footnote on the booking.
+    await logAuditStrict({
+      action: "lead.stage_gate_overridden",
+      summary: `Moved “${lead.title}” into ${lead.stage.name} without ${verdict.unmet.map(describeUnmet).join("; ")} — reason: “${options?.overrideReason?.trim() ?? ""}”`,
+      leadId,
+      contactId: lead.contactId,
+      user,
+      after: { stageId },
+      metadata: {
+        direction: verdict.direction,
+        mode: verdict.mode,
+        unmet: verdict.unmet,
+        reason: options?.overrideReason?.trim() ?? "",
+        via: "test_drive_booking",
+      },
+    });
+  }
   if (changingStage) await emitLeadJourneyEvent("stage_entered", leadId);
   revalidatePath("/leads");
   revalidatePath("/calendar");
-  return { ok: true };
+  return { ok: true, gate: verdict };
 }
 
 export async function assignLead(leadId: string, assignedToId: string) {

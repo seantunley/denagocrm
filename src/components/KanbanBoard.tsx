@@ -657,12 +657,19 @@ export default function KanbanBoard({
   const [stages, setStages] = useState(initial);
   const [activeLead, setActiveLead] = useState<KanbanLead | null>(null);
   const [pendingTd, setPendingTd] = useState<{ lead: KanbanLead; stageId: string } | null>(null);
-  /** A move the server will accept once a reason is typed — see requestMove. */
+  /**
+   * A move the server will accept once a reason is typed — see requestMove.
+   *
+   * `testDrive` carries the booking details the person already filled in, so a
+   * rule that asks for a reason on a test-drive stage does not throw that form
+   * away and make them enter it twice.
+   */
   const [pendingGate, setPendingGate] = useState<{
     lead: KanbanLead;
     stageId: string;
     stageName: string;
     verdict: StageGateVerdict;
+    testDrive?: { productId: string | null; date: string; time: string; location: string };
   } | null>(null);
   const [pendingOutcome, setPendingOutcome] = useState<{ lead: KanbanLead; mode: "won" | "lost" } | null>(null);
   const [query, setQuery] = useState("");
@@ -829,8 +836,14 @@ export default function KanbanBoard({
   /** Retry the move the server asked a reason for, this time carrying it. */
   function confirmGateOverride(reason: string) {
     if (!pendingGate) return;
-    const { lead, stageId } = pendingGate;
+    const { lead, stageId, testDrive } = pendingGate;
     setPendingGate(null);
+    if (testDrive) {
+      // Re-send the booking the person already filled in, with the reason,
+      // rather than asking them to enter it a second time.
+      submitTestDrive(lead, stageId, testDrive, reason);
+      return;
+    }
     requestMove(lead, stageId, reason);
   }
 
@@ -846,16 +859,50 @@ export default function KanbanBoard({
   function confirmTestDrive(data: { productId: string | null; date: string; time: string; location: string }) {
     if (!pendingTd) return;
     const { lead, stageId } = pendingTd;
-    const fromStage = stages.find((stage) => stage.leads.some((item) => item.id === lead.id));
     setPendingTd(null);
+    submitTestDrive(lead, stageId, data);
+  }
+
+  /**
+   * The booking submit, taking its target EXPLICITLY.
+   *
+   * Split out of `confirmTestDrive` so the reason-retry can call it directly.
+   * Reading `pendingTd` from state would have meant re-populating that state and
+   * then waiting a frame for it to be visible — a timing hack in place of an
+   * argument.
+   */
+  function submitTestDrive(
+    lead: KanbanLead,
+    stageId: string,
+    data: { productId: string | null; date: string; time: string; location: string },
+    overrideReason?: string,
+  ) {
+    const fromStage = stages.find((stage) => stage.leads.some((item) => item.id === lead.id));
     if (!fromStage) return;
+    const target = stages.find((stage) => stage.id === stageId);
     const snapshot = stages;
     if (fromStage.id !== stageId) applyMove(lead.id, fromStage.id, stageId);
     startTransition(async () => {
-      const result = await moveLeadToTestDrive(lead.id, stageId, data).catch(() => ({
-        ok: false as const,
-        error: "Something went wrong",
-      }));
+      const result = await moveLeadToTestDrive(
+        lead.id,
+        stageId,
+        data,
+        overrideReason ? { overrideReason } : undefined,
+      ).catch(() => ({ ok: false as const, error: "Something went wrong", gate: undefined }));
+      // A stage can carry BOTH a booking requirement and a rule, so this path
+      // gets the same reason prompt as a plain drag — carrying the booking
+      // details forward, rather than discarding a form the person just filled in.
+      if (!result.ok && result.gate?.requiresReason) {
+        setStages(snapshot);
+        setPendingGate({
+          lead,
+          stageId,
+          stageName: target?.name ?? "this stage",
+          verdict: result.gate,
+          testDrive: data,
+        });
+        return;
+      }
       if (result.ok) {
         toast.success(`Test drive ${lead.testDrive ? "rescheduled" : "booked"} for ${lead.name}`, {
           description: `${data.date} at ${data.time}${data.location ? ` · ${data.location}` : ""}`,
