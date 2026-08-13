@@ -38,14 +38,33 @@
 -- -----------------------------------------------------------------------------
 -- 1. The role
 -- -----------------------------------------------------------------------------
--- NOTE ON NEON: prefer creating this role in the Neon console (Roles → New
--- Role), NOT with the CREATE ROLE below. A console-created role is registered
--- with Neon's connection proxy, which is what makes it usable on the POOLED
--- endpoint that DATABASE_URL points at. Create it there, then run this script
--- from step 2 onwards to grant it. The CREATE ROLE here is for self-hosted
--- Postgres and for the disposable database used by `npm run test:rls-restricted`.
+-- ⛔ NOTE ON NEON — CREATE THIS ROLE HERE, IN SQL. NEVER IN THE NEON CONSOLE.
 --
--- Either way the attributes below are the requirement, and step 5 verifies them:
+-- This note used to say the opposite: prefer the console, because a
+-- console-created role is registered with Neon's connection proxy and is
+-- therefore usable on the POOLED endpoint. Both halves of that were wrong, and
+-- following it on 2026-08-12 produced a role that defeats the entire purpose of
+-- this file.
+--
+--   1. A ROLE CREATED IN THE NEON CONSOLE IS CREATED *WITH* BYPASSRLS — the same
+--      profile as neondb_owner (verified on production: crm_app came back
+--      rolbypassrls=true, rolcreaterole=true). Every policy on all 120 forced
+--      tables is then evaluated exactly never, which is the precise failure this
+--      role exists to end.
+--
+--   2. IT CANNOT BE REPAIRED. Only a superuser may clear BYPASSRLS, Neon exposes
+--      none, and `neondb_owner` cannot even DROP OWNED BY / DROP ROLE a
+--      console-created role. There is no way back except recreating it.
+--
+--   3. THE PREMISE WAS FALSE ANYWAY. A role created by the CREATE ROLE below
+--      authenticates on the POOLED endpoint perfectly well — confirmed on
+--      production. Nothing was gained by using the console.
+--
+-- CREATE ROLE ... NOBYPASSRLS is unrestricted: superuser is needed to GRANT a
+-- privilege, not to WITHHOLD one. So the role can only be born correct, and this
+-- is where that happens.
+--
+-- The attributes below are the requirement, and step 5 verifies them:
 --   NOSUPERUSER   — a superuser bypasses RLS unconditionally.
 --   NOBYPASSRLS   — the whole point. This is the attribute neondb_owner has.
 --   NOCREATEROLE  — cannot grant itself anything, or create a role that can.
