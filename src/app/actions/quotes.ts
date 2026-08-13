@@ -1,4 +1,5 @@
 "use server";
+import { withActingStaffScope } from "@/lib/actingScope";
 
 import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
 import { redirect } from "next/navigation";
@@ -250,7 +251,21 @@ export async function createQuoteForContact(formData: FormData) {
  *     every access check on the resulting quote is keyed on, so an unchecked one
  *     would be a quote the creator cannot open.
  */
+/**
+ * Bound with {@link withActingStaffScope} because this action reads the tenant scope
+ * SYNCHRONOUSLY (inheritedTenantId / activeTenantPredicate / writeTenantId), and a
+ * sync reader cannot recover a missing scope the way an awaited one can.
+ *
+ * A Server Action has no React request store, so #513's holder is never filled, and
+ * `enterWith` inside the auth chokepoint does not reach the frame that called it —
+ * the action body therefore runs with no ambient scope and the sync reader throws.
+ * Binding an ENCLOSING frame here is the only shape that reaches it.
+ */
 export async function createQuoteForFleet(formData: FormData) {
+  return withActingStaffScope(() => createQuoteForFleetInScope(formData));
+}
+
+async function createQuoteForFleetInScope(formData: FormData) {
   return asActionResult(async () => {
     // The PERMISSION gate comes before any refusal, deliberately: a refusal is a
     // reply, and replying to an unauthorised caller — even with "choose a fleet" —
@@ -330,7 +345,21 @@ export async function createQuoteForFleet(formData: FormData) {
  * supplies only editable fields; identity, locking state and quote numbering
  * are always resolved again on the server.
  */
+/**
+ * Bound with {@link withActingStaffScope} because this action reads the tenant scope
+ * SYNCHRONOUSLY (inheritedTenantId / activeTenantPredicate / writeTenantId), and a
+ * sync reader cannot recover a missing scope the way an awaited one can.
+ *
+ * A Server Action has no React request store, so #513's holder is never filled, and
+ * `enterWith` inside the auth chokepoint does not reach the frame that called it —
+ * the action body therefore runs with no ambient scope and the sync reader throws.
+ * Binding an ENCLOSING frame here is the only shape that reaches it.
+ */
 export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraftResult> {
+  return withActingStaffScope(() => saveQuoteDraftInScope(input));
+}
+
+async function saveQuoteDraftInScope(input: QuoteDraftInput): Promise<QuoteDraftResult> {
   const parsed = quoteDraftSchema.safeParse(input);
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Check the quote details." };
@@ -643,7 +672,21 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
   };
 }
 
+/**
+ * Bound with {@link withActingStaffScope} because this action reads the tenant scope
+ * SYNCHRONOUSLY (inheritedTenantId / activeTenantPredicate / writeTenantId), and a
+ * sync reader cannot recover a missing scope the way an awaited one can.
+ *
+ * A Server Action has no React request store, so #513's holder is never filled, and
+ * `enterWith` inside the auth chokepoint does not reach the frame that called it —
+ * the action body therefore runs with no ambient scope and the sync reader throws.
+ * Binding an ENCLOSING frame here is the only shape that reaches it.
+ */
 export async function createQuoteRevision(quoteId: string) {
+  return withActingStaffScope(() => createQuoteRevisionInScope(quoteId));
+}
+
+async function createQuoteRevisionInScope(quoteId: string) {
   return asActionResult(async () => {
     const user = await requireQuoteAccess(quoteId, "quotes.edit");
     const validDaysRaw = await getSetting("QUOTE_VALID_DAYS");

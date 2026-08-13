@@ -1,6 +1,8 @@
 import "server-only";
+import { basePrisma } from "./db";
 import { SESSION_COOKIE, verifySession } from "./session";
 import { establishStaffTenantScope } from "./tenantScopeEntry";
+import { getUserSecurityStateFresh } from "./userSecurity";
 import type { TenantScope } from "./tenantScope";
 
 /**
@@ -31,13 +33,31 @@ import type { TenantScope } from "./tenantScope";
  * own workspace" or "throw", never "a different workspace". An existing scope,
  * including a narrower or `system` one, is never consulted and never replaced.
  *
- * The signed JWT is the source for `sub`, `tid` and `role`, verified here, so none
- * is caller-supplied. Revocation, disabled-account and session-version checks are
- * deliberately NOT repeated: they are `getCurrentUser`'s job, they have already run
- * for any authenticated request that reached this point, and re-running them would
- * re-enter that memoised promise and deadlock (#518). This only RECOVERS a scope the
- * same validated session already earned — `establishStaffTenantScope` still resolves
- * the membership itself and still refuses when there is none.
+ * ── IT REVALIDATES THE SESSION IN FULL, AND IT MUST ────────────────────────
+ *
+ * The first version of this skipped the revocation, disabled-account and
+ * session-version checks, arguing they were `getCurrentUser`'s job and had already
+ * run for any request that got here. **That argument does not hold**, and review
+ * caught it: this is called from the db.ts guard, which runs for EVERY tenant-scoped
+ * query regardless of whether an auth guard ran first or ran at all — and
+ * `withActingStaffScope` deliberately runs it BEFORE the action reaches its own
+ * permission check. So the ordering it assumed is not merely unenforceable, it is
+ * routinely false.
+ *
+ * Left as it was, a revoked device, a disabled account or a superseded session
+ * (`sessionVersion` bumped by a password change) could still present its signed
+ * cookie and have any query on a path with a missing or misordered guard promoted
+ * into an authorised tenant query. That is the Prisma guard acting as an
+ * alternative authentication path, which it must never be.
+ *
+ * So the same three checks `getCurrentUser` makes are made here, against
+ * `basePrisma` and `getUserSecurityStateFresh`. Neither touches the memoised
+ * `resolveCurrentUser` promise, so this still cannot re-enter it and deadlock the
+ * way #518 did — the deadlock came from calling `getCurrentUser()` itself, not from
+ * the checks it performs.
+ *
+ * This is not authorization. It re-derives WHICH WORKSPACE a still-valid session
+ * acts in; permission checks remain entirely the callers' job.
  *
  * ── IT RETURNS THE SCOPE, NEVER A BOOLEAN ───────────────────────────────────
  *
@@ -57,6 +77,29 @@ export async function recoverStaffScopeFromSession(): Promise<TenantScope | null
     if (!token) return null;
     const session = await verifySession(token);
     if (!session) return null;
+
+    // The session registry: a revoked device is locked out on its next request.
+    // Mirrors getCurrentUser, including only checking when a `jti` is present —
+    // sessions minted before the registry existed legitimately carry none, and
+    // rejecting them here would sign those people out on a path that is only
+    // supposed to re-derive a workspace.
+    if (session.jti) {
+      const row = await basePrisma.userSession.findUnique({
+        where: { jti: session.jti },
+        select: { revokedAt: true },
+      });
+      if (!row || row.revokedAt) return null;
+    }
+
+    // Disabled accounts and superseded sessions, same rule and same order as
+    // getCurrentUser. `Fresh` (uncached) on purpose: the memoised variant is keyed
+    // by React `cache()`, which has no request store in a Server Action — the exact
+    // condition this function exists for — so caching would buy nothing and would
+    // put a `cache()` call on the recovery path for no reason.
+    const security = await getUserSecurityStateFresh(session.sub);
+    if (!security || security.disabledAt) return null;
+    if (security.sessionVersion !== session.sv) return null;
+
     const { ok, scope } = await establishStaffTenantScope(
       session.sub,
       session.tid ?? null,

@@ -99,6 +99,30 @@ test("a failure to resolve still fails closed", () => {
   assert.doesNotMatch(RECOVERY_CODE, /DEFAULT_TENANT_ID/, "never invent a workspace here either");
 });
 
+test("the recovery revalidates the session in full, so it is not an auth path", () => {
+  // REVIEW CAUGHT THIS AND IT WAS A REAL HOLE.
+  //
+  // The recovery is reachable from the db.ts guard, which runs for every
+  // tenant-scoped query regardless of whether an auth guard ran first — and
+  // `withActingStaffScope` runs it BEFORE the action reaches its permission check.
+  // So it may not assume `getCurrentUser` has already validated anything. Skipping
+  // these checks let a revoked device, a disabled account or a superseded session
+  // turn a query on a mis-guarded path into an authorised tenant query.
+  //
+  // Asserted on the SOURCE because the end-to-end test cannot isolate this: a
+  // properly guarded action refuses a revoked cookie at its own `requireUser`, so
+  // it would pass either way. These three checks are the actual fix.
+  assert.match(RECOVERY_CODE, /revokedAt/, "a revoked device must not recover a scope");
+  assert.match(RECOVERY_CODE, /security\.disabledAt/, "a disabled account must not recover a scope");
+  assert.match(
+    RECOVERY_CODE,
+    /security\.sessionVersion !== session\.sv/,
+    "a superseded session (password change) must not recover a scope",
+  );
+  // Not `getCurrentUser()` — that re-enters the memoised promise and deadlocks (#518).
+  assert.doesNotMatch(RECOVERY_CODE, /getCurrentUser\(/, "must not re-enter the memoised session promise");
+});
+
 test("the recovery returns the SCOPE, never the `ok` flag", () => {
   // `decideStaffTenantScope`'s owner escape hatch answers {ok: true, enterTenantId:
   // null} — success with NO scope. #519 returned `ok`, so the recovery reported

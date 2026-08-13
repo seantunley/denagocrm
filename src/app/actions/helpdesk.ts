@@ -7,7 +7,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma, basePrisma } from "@/lib/db";
 import { ciExactIdFilter } from "@/lib/ciExact";
-import { actingOwnerTenantId, withActingTenantWrite } from "@/lib/actingScope";
+import { actingOwnerTenantId, withActingTenantWrite, withActingStaffScope } from "@/lib/actingScope";
 import { resolveAssignableUser } from "@/lib/tenantActor";
 import { logAudit } from "@/lib/audit";
 import { logError } from "@/lib/errorLog";
@@ -107,7 +107,21 @@ async function logEvent(caseId: string, userId: string, body: string, meta: Pris
 }
 
 // ── Create ──────────────────────────────────────────────────────────────────
+/**
+ * Bound with {@link withActingStaffScope} because this action reads the tenant scope
+ * SYNCHRONOUSLY (inheritedTenantId / activeTenantPredicate / writeTenantId), and a
+ * sync reader cannot recover a missing scope the way an awaited one can.
+ *
+ * A Server Action has no React request store, so #513's holder is never filled, and
+ * `enterWith` inside the auth chokepoint does not reach the frame that called it —
+ * the action body therefore runs with no ambient scope and the sync reader throws.
+ * Binding an ENCLOSING frame here is the only shape that reaches it.
+ */
 export async function createTicket(formData: FormData): Promise<ActionResult> {
+  return withActingStaffScope(() => createTicketInScope(formData));
+}
+
+async function createTicketInScope(formData: FormData): Promise<ActionResult> {
   return asActionResult(async () => {
     const contactId = str(formData, "contactId");
     const user = await requireContactAccess(contactId, "cases.create");

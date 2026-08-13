@@ -412,9 +412,38 @@ async function main(): Promise<void> {
       (k) => k !== "contactId" && !k.startsWith("$ACTION_"),
     );
     check(
-      "the replayed form is Research's, carrying no foreign fields",
+      "the replayed form carries no foreign fields",
       foreign.length === 0,
       `unexpected fields: ${foreign.join(", ")} — this is not the ResearchButton form`,
+    );
+
+    // DECODE THE FORM'S ACTION REFERENCE AND PROVE IT IS researchRecord.
+    //
+    // The field-shape check above is necessary but NOT sufficient, and review was
+    // right to say so: any other `useActionState` form carrying only a contactId
+    // would satisfy it just as well. This test has already submitted the wrong
+    // action twice, so the binding to `researchRecord` has to be an identity, not
+    // an inference.
+    //
+    // `$ACTION_REF_<n>` names the reference; `$ACTION_<n>:0` holds its JSON, whose
+    // `id` is the very action id the build manifest records for the export.
+    const refKey = [...researchForm.keys()].find((k) => k.startsWith("$ACTION_REF_"));
+    const refIndex = refKey?.slice("$ACTION_REF_".length);
+    let referencedId: string | null = null;
+    if (refIndex !== undefined) {
+      const raw = researchForm.get(`$ACTION_${refIndex}:0`);
+      try {
+        const decoded = raw ? (JSON.parse(raw) as { id?: string }) : null;
+        referencedId = decoded?.id ?? null;
+      } catch {
+        referencedId = null;
+      }
+    }
+    check(
+      "the form's action reference IS researchRecord",
+      referencedId === actionId,
+      `the form references ${referencedId ?? "(undecodable)"} but researchRecord is ${actionId}. ` +
+        `Refusing to report on an action this test did not actually invoke.`,
     );
 
     // Built by hand rather than with `FormData`, so the request carries an explicit
@@ -492,6 +521,63 @@ async function main(): Promise<void> {
       "the action did not 500",
       postRes.status < 500,
       `status ${postRes.status}. Body starts: ${postBody.slice(0, 200)}`,
+    );
+
+    // ── 4. A REVOKED SESSION MUST NOT RECOVER A SCOPE ────────────────────────
+    //
+    // The scope recovery is reachable from the db.ts guard, which runs for EVERY
+    // tenant-scoped query whether or not an auth guard ran first — and
+    // withActingStaffScope runs it BEFORE the action reaches its permission check.
+    // So "getCurrentUser has already validated this session" is not something the
+    // recovery may assume, and the first version of it assumed exactly that while
+    // skipping the revocation, disabled-account and session-version checks.
+    //
+    // Same cookie, same everything — only the session registry says revoked.
+    //
+    // SCOPE OF THIS CHECK, STATED HONESTLY: researchRecord has a correct
+    // `requireUser` guard, so the refusal below comes from that guard and this
+    // proves end-to-end behaviour rather than isolating the recovery. The recovery's
+    // own three checks are pinned in tests/actingScopeRecovery.test.ts. Isolating it
+    // here would need a route with a deliberately missing guard, which is not
+    // something to add to the app just to test it.
+    const { basePrisma: db } = await import("../src/lib/db");
+    await db.userSession.updateMany({
+      where: { userId: fx.userId },
+      data: { revokedAt: new Date() },
+    });
+
+    const beforeRevoked = serverOutput.length;
+    const revokedRes = await fetch(contactUrl, {
+      method: "POST",
+      headers: {
+        cookie,
+        "content-type": `multipart/form-data; boundary=${boundary}`,
+        "content-length": String(multipart.byteLength),
+        origin: BASE,
+      },
+      body: multipart,
+      redirect: "manual",
+      signal: AbortSignal.timeout(60_000),
+    });
+    const revokedBody = await revokedRes.text();
+    const revokedLog = serverOutput.slice(beforeRevoked);
+    const revokedLocation = revokedRes.headers.get("location") ?? "";
+    console.log(
+      `revoked POST -> ${revokedRes.status} ${revokedLocation ? `→ ${revokedLocation}` : ""}`,
+    );
+
+    check(
+      "a REVOKED session is refused, not silently re-scoped",
+      revokedLocation.includes("/login") ||
+        revokedBody.includes("/login") ||
+        revokedRes.status >= 400,
+      `status ${revokedRes.status}, location "${revokedLocation}". A revoked cookie was ` +
+        `allowed to proceed — the recovery is acting as an authentication path.`,
+    );
+    check(
+      "the revoked request produced no tenant-scoped work",
+      !revokedLog.includes("researchNote"),
+      "a revoked session reached the action body",
     );
 
     // A durable second witness, in the shape production reported it.

@@ -3,7 +3,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { withActingTenantWrite } from "@/lib/actingScope";
+import { withActingTenantWrite, withActingStaffScope } from "@/lib/actingScope";
 import { requireOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
@@ -24,7 +24,30 @@ function productData(formData: FormData) {
   };
 }
 
+/**
+ * Bound with {@link withActingStaffScope} because this action reads the tenant scope
+ * SYNCHRONOUSLY (inheritedTenantId / activeTenantPredicate / writeTenantId), and a
+ * sync reader cannot recover a missing scope the way an awaited one can.
+ *
+ * A Server Action has no React request store, so #513's holder is never filled, and
+ * `enterWith` inside the auth chokepoint does not reach the frame that called it —
+ * the action body therefore runs with no ambient scope and the sync reader throws.
+ * Binding an ENCLOSING frame here is the only shape that reaches it.
+ */
 export async function createProduct(formData: FormData) {
+  // THE OWNER CHECK STAYS IN THE EXPORTED ACTION, not in a delegate.
+  //
+  // tests/actionAuthGates.test.ts requires it, and the requirement is right: a
+  // Server Action is an untrusted POST entry point, so the gate must be visible on
+  // the entry point itself rather than one hop away where a later refactor can drop
+  // it. Bind the scope first, then gate inside it.
+  return withActingStaffScope(async () => {
+    await requireOwner();
+    return createProductInScope(formData);
+  });
+}
+
+async function createProductInScope(formData: FormData) {
   await requireOwner();
   const data = productData(formData);
   if (!data.name) throw new Error("Product name is required");
