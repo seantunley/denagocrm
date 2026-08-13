@@ -106,9 +106,39 @@ export async function recoverStaffScopeFromSession(): Promise<TenantScope | null
       session.role === "owner",
     );
     return ok ? scope : null;
-  } catch {
-    // No request, no cookie store, a malformed token: all of them mean "no scope to
-    // recover", which is the state we were already in.
+  } catch (err) {
+    // STILL FAILS CLOSED — but no longer silently, and the distinction matters.
+    //
+    // "No request, no cookie store, a malformed token" is the documented reason
+    // this catch is broad, and for those it is right to say nothing: cron ticks,
+    // queue drains and operator scripts have no session by construction, and
+    // logging them would file a row per background pass.
+    //
+    // The catch does not only catch those. A database failure, a bad session
+    // secret, a membership lookup that blew up — all of them land here too, and
+    // all of them returned null indistinguishably. The caller then refuses with
+    // `TenantScopeError`, so the SYMPTOM gets logged and the CAUSE never does:
+    // the System Log says "this request has no resolvable workspace" while the
+    // real reason is one frame down, discarded. That is the exact shape of
+    // diagnosis this file exists to make possible, so it is worth one row.
+    //
+    // `tenantId: null` is passed EXPLICITLY, and it is load-bearing. `logError`
+    // otherwise infers the tenant via `actingTenantId()` → `actingScopeClass()`,
+    // which calls this function — an unbounded recursion on the error path, where
+    // it is least welcome. Passing the field short-circuits that inference.
+    const message = err instanceof Error ? err.message : String(err);
+    const noRequestContext =
+      message.includes("next-dynamic-api-wrong-context") ||
+      message.includes("outside a request scope");
+    if (!noRequestContext) {
+      const { logError } = await import("./errorLog");
+      await logError(
+        "scope-recovery",
+        err,
+        "Scope recovery failed before a workspace could be established — the caller will now refuse with TenantScopeError.",
+        { tenantId: null },
+      );
+    }
     return null;
   }
 }
