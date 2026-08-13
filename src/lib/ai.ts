@@ -95,6 +95,41 @@ const FREE_MAIL = new Set([
  * change, falls back to a plain paragraph), so this needed no migration and
  * no backfill.
  */
+/**
+ * Backstop on a runaway briefing — NOT the length budget.
+ *
+ * This used to be `summary.slice(0, 2000)`, which was invisible while briefings
+ * were one terse line each and started cutting the moment they became thorough:
+ * a real note ended "…appointed alternate directors of Shopr", mid-word, with
+ * the entire `Fit:` line gone. Nothing logged it, because slicing a string
+ * cannot fail.
+ *
+ * `Contact.research` and `ResearchNote.body` are unbounded Postgres text, so
+ * 2000 was never protecting anything. The ceiling now sits well above what a
+ * thorough briefing runs to, and cuts on a LINE boundary when it is reached —
+ * losing a whole labelled section is legible, losing half a word is not.
+ */
+const MAX_SUMMARY_CHARS = 12000;
+
+function capSummary(summary: string): string {
+  if (summary.length <= MAX_SUMMARY_CHARS) return summary;
+  const kept: string[] = [];
+  let used = 0;
+  for (const line of summary.split("\n")) {
+    if (used + line.length + 1 > MAX_SUMMARY_CHARS) break;
+    kept.push(line);
+    used += line.length + 1;
+  }
+  // A single line longer than the whole ceiling still has to be cut somewhere;
+  // prefer the last space so it ends on a word.
+  if (kept.length === 0) {
+    const hard = summary.slice(0, MAX_SUMMARY_CHARS);
+    const lastSpace = hard.lastIndexOf(" ");
+    return (lastSpace > MAX_SUMMARY_CHARS * 0.8 ? hard.slice(0, lastSpace) : hard).trim() + "…";
+  }
+  return kept.join("\n").trim();
+}
+
 export async function aiResearch(input: {
   name: string;
   email?: string | null;
@@ -180,7 +215,8 @@ export async function aiResearch(input: {
           "Company: what it does, how big it is, where it operates, and anything else that helps someone walk into the conversation informed\n" +
           "Role: the person's role and employer, stated plainly if confirmed, plus prior roles or other ventures if you found them\n" +
           "Fit: why they might want an electric cart (estate, lodge, farm, resort...), and how to approach them\n" +
-          "BE THOROUGH. Each label takes as much detail as you actually found — several sentences is right when the sources support it, and a research note that reads as thin or obvious is a failed one. What you must NOT do is put a line break inside a label's text: each label is one line, however long, because a stray newline breaks the card this renders into. Never pad with filler to reach a length — depth comes from what you found, not from wordcount.\n" +
+          "WRITE IT TO BE READ, NOT TO BE COMPLETE. A salesperson skims this in the thirty seconds before they make contact, so lead each label with the single most useful fact and put the supporting detail after it. Two to four ordinary sentences per label is the target. Full stops, not semicolons: a chain of clauses strung together with semicolons is the failure here — it is technically thorough and nobody can read it. Cut the corporate trivia that will not change how they open the conversation (founding dates, store counts, subsidiary history) unless it is genuinely the hook. A note that reads as thin is a failed one; so is one that has to be re-read. Never pad to reach a length — depth comes from what you found, not from wordcount.\n" +
+          "One more formatting rule, and it is absolute: NEVER put a line break inside a label's text. Each label is exactly one line, however long, because a stray newline breaks the card this renders into.\n" +
           "Omit a label entirely if you genuinely found nothing for it — do not write \"Company: not found\". Use \"No reliable information found.\" ONLY if the searches genuinely returned nothing usable about anyone of this name: it is the last resort, not the safe default.\n\n" +
           "STATE WHAT YOU FOUND PLAINLY. When a LinkedIn profile or the company's own page directly confirms a role or fact, say it as fact — \"is the CEO of X\", never \"might be tied to X\" or \"possibly works at X\" — because the source said so directly, not because you're certain in the abstract. Reserve hedging (\"appears to be\", \"likely\") for evidence that is genuinely indirect, stale, or where more than one person shares this name and you can't tell which one is the lead. Never fabricate. No preamble, no other text outside the labeled lines.",
     };
@@ -232,6 +268,41 @@ export async function aiResearch(input: {
         .join("")
         .trim();
 
+      // DROP THE NARRATION THE PROMPT ALREADY FORBIDS.
+      //
+      // The prompt says "no preamble" and this model writes one anyway — "I'll
+      // research this lead across multiple angles." — as its own text block. It
+      // is a documented habit of the model, not a prompt bug, so it is handled
+      // here rather than argued with in the system prompt.
+      //
+      // It has to be stripped, not tolerated: joined with "" the preamble is
+      // glued directly onto the first label ("...multiple angles.Company: ...")
+      // so NO line matches a label, ResearchBriefing drops to its verbatim
+      // fallback, and the whole briefing renders as one undifferentiated wall
+      // instead of the Company/Role/Fit card. One stray sentence costs the card.
+      //
+      // Only ever cuts a PREFIX, and only when a label exists after it, so a
+      // briefing with no labels at all ("No reliable information found.")
+      // is left exactly as written.
+      const labelStart = summary.search(/(?:Company|Role|Fit):/i);
+      if (labelStart > 0) {
+        // LOGGED ONLY WHEN IT IS BIG ENOUGH TO BE RESEARCH RATHER THAN NARRATION.
+        //
+        // The model prefixes a one-line "I'll research this lead…" on most calls,
+        // so logging every strip would file a row per research run and bury real
+        // errors in the System Log — the opposite of diagnosable. A LONG prefix is
+        // a different thing: it means this is cutting actual prose, and that is
+        // worth a row precisely because the discarded text is gone from the note.
+        if (labelStart > 200) {
+          await logError(
+            "ai-research",
+            "Discarded a long prefix before the first label",
+            `${labelStart} chars dropped: ${summary.slice(0, 160)}…`,
+          );
+        }
+        summary = summary.slice(labelStart).trim();
+      }
+
       // Only a paused turn is worth resuming. Any other stop_reason means the
       // model is done and whatever text exists is the answer.
       if (stopReason !== "pause_turn") break;
@@ -277,7 +348,36 @@ export async function aiResearch(input: {
       );
       return { error: "No usable research came back." };
     }
-    return { summary: summary.slice(0, 2000) };
+    // A BAIL IS A SUCCESSFUL RESPONSE, WHICH IS EXACTLY WHY IT NEEDS A ROW.
+    //
+    // "No reliable information found." returns HTTP 200 with a summary, so it is
+    // saved and nothing is logged — and that is the shape the 2026-08-13
+    // regression took: Research quietly gave up on every lead, and the only way
+    // anybody found out was opening a contact and reading the note. There is no
+    // error to catch here; the whole point is that the model answered.
+    //
+    // One row per bail. Bails should be rare — if they are not, that IS the
+    // finding, and the System Log is where it should show up.
+    if (/^no reliable information found\.?$/i.test(summary.trim())) {
+      await logError(
+        "ai-research",
+        "Research found nothing and bailed",
+        `Lead: ${input.name}${corporate ? ` (${corporate})` : " (no corporate domain)"}. ` +
+          `stop_reason=${stopReason ?? "unknown"}. Repeated bails mean the prompt or the search is regressing, not that every lead is unknown.`,
+      );
+    }
+
+    // The cap is a backstop, so reaching it is itself the news: a briefing that
+    // long means whole labelled sections were dropped from what gets saved, and
+    // the note on screen gives no hint that anything is missing.
+    if (summary.length > MAX_SUMMARY_CHARS) {
+      await logError(
+        "ai-research",
+        "Briefing exceeded the summary ceiling and was trimmed",
+        `${summary.length} chars trimmed to ${MAX_SUMMARY_CHARS}; trailing labelled sections were dropped.`,
+      );
+    }
+    return { summary: capSummary(summary) };
   } catch (err) {
     await logError("ai-research", err);
     return { error: "Research failed — logged in the System Log." };
