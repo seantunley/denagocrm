@@ -4,6 +4,7 @@ import { basePrisma } from "./db";
 import { actingScopeClass } from "./actingScope";
 import { TenantScopeError } from "./tenantGuard";
 import { deleteFile } from "./storage";
+import { logError } from "./errorLog";
 import { type CustomEntity } from "./customFields";
 
 export const TRASH_RETENTION_DAYS = 60;
@@ -163,6 +164,44 @@ export async function restoreRecord(model: TrashModel, id: string) {
 }
 
 /** Permanently removes trash older than the retention window. Returns count purged. */
+/**
+ * A guarded purge delete, with "restored" and "the database failed" kept apart.
+ *
+ * Every delete in the sweep is conditioned on `deletedAt` so a record restored
+ * between the scan and the delete matches zero rows and is skipped — that is the
+ * point of the guard and it is right. But these were written
+ * `.catch(() => ({ count: 0 }))`, which hands a genuine failure the SAME answer:
+ * `count === 0` then means "restored" and "the delete threw" indistinguishably.
+ *
+ * Nothing is destroyed either way — the guard keeps the row and its blobs — so
+ * the cost is not data loss, it is that a purge failing every single night looks
+ * exactly like a purge with nothing to do. The retention window quietly stops
+ * being enforced and no one finds out.
+ *
+ * So the failure is logged and the sweep continues to the next record: one bad
+ * row must not abort the whole nightly pass. `count === 0` now means only what it
+ * was always supposed to mean.
+ */
+async function purgeDelete(
+  attempt: () => Promise<{ count: number }>,
+  what: string,
+): Promise<number> {
+  try {
+    const { count } = await attempt();
+    return count;
+  } catch (err) {
+    await logError(
+      "trash-purge",
+      err,
+      `${what}: purge delete failed. The record and any files it owns were left in place and will be retried on the next sweep.`,
+      // Cross-tenant sweep running in a system scope — there is no one tenant to
+      // attribute this to, and inferring one would be wrong rather than merely absent.
+      { tenantId: null },
+    );
+    return 0;
+  }
+}
+
 export async function purgeTrash(): Promise<number> {
   const cutoff = subDays(new Date(), TRASH_RETENTION_DAYS);
   let purged = 0;
@@ -177,9 +216,10 @@ export async function purgeTrash(): Promise<number> {
     // Guard on deletedAt: a document restored between the scan and now cleared
     // its deletedAt, so the guarded deleteMany matches 0 rows and we skip it —
     // never purging (or orphaning the file of) a record that left the trash.
-    const { count } = await basePrisma.document
-      .deleteMany({ where: { id: doc.id, deletedAt: { lt: cutoff } } })
-      .catch(() => ({ count: 0 }));
+    const count = await purgeDelete(
+      () => basePrisma.document.deleteMany({ where: { id: doc.id, deletedAt: { lt: cutoff } } }),
+      `document ${doc.id}`,
+    );
     if (count === 0) continue; // restored or already gone — keep the file
     await deleteFile(doc.storedName).catch(() => {});
     purged++;
@@ -192,9 +232,10 @@ export async function purgeTrash(): Promise<number> {
     include: { versions: true },
   });
   for (const doc of staleLibrary) {
-    const { count } = await basePrisma.libraryDocument
-      .deleteMany({ where: { id: doc.id, deletedAt: { lt: cutoff } } })
-      .catch(() => ({ count: 0 }));
+    const count = await purgeDelete(
+      () => basePrisma.libraryDocument.deleteMany({ where: { id: doc.id, deletedAt: { lt: cutoff } } }),
+      `library document ${doc.id}`,
+    );
     if (count === 0) continue; // restored or already gone — keep its files
     for (const v of doc.versions) await deleteFile(v.storedName).catch(() => {});
     purged++;
@@ -221,18 +262,32 @@ export async function purgeTrash(): Promise<number> {
   for (const model of ["quote", "jobCard", "vehicle", "lead", "contact", "product"] as TrashModel[]) {
     const entity = customEntityFor[model];
     if (!entity) {
-      const res = await delegate(model)
-        .deleteMany({ where: { deletedAt: { lt: cutoff } } })
-        .catch(() => ({ count: 0 }));
-      purged += res.count;
+      purged += await purgeDelete(
+        () => delegate(model).deleteMany({ where: { deletedAt: { lt: cutoff } } }),
+        `${model} (bulk purge)`,
+      );
       continue;
     }
 
-    const staleIds: string[] = (
-      await delegate(model)
-        .findMany({ where: { deletedAt: { lt: cutoff } }, select: { id: true } })
-        .catch(() => [])
-    ).map((r: { id: string }) => r.id);
+    // The SCAN is guarded too, and for the same reason: swallowing it to `[]` made
+    // a failed read look like "nothing is due", so the whole model was skipped for
+    // the night with no record of it.
+    let staleIds: string[] = [];
+    try {
+      const rows: { id: string }[] = await delegate(model).findMany({
+        where: { deletedAt: { lt: cutoff } },
+        select: { id: true },
+      });
+      staleIds = rows.map((r) => r.id);
+    } catch (err) {
+      await logError(
+        "trash-purge",
+        err,
+        `${model}: could not scan for expired records; this model was skipped for this sweep.`,
+        { tenantId: null },
+      );
+      continue;
+    }
     if (staleIds.length === 0) continue;
 
     const table = tableName[model]!;

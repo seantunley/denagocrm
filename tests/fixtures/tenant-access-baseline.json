@@ -195,5 +195,7 @@
   "src/lib/trash.ts::bypass-read::PortalUpload": 1,
   "src/lib/trash.ts::bypass-write::CustomFieldValue": 2,
   "src/lib/trash.ts::bypass-write::CustomerCase": 1,
+  "src/lib/trash.ts::bypass-write::Document": 1,
+  "src/lib/trash.ts::bypass-write::LibraryDocument": 1,
   "src/lib/trash.ts::bypass-write::PortalUpload": 1
 }

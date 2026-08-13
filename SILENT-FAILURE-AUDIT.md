@@ -75,34 +75,47 @@ to the person affected. There is no error, no log, and the UI says "signed out".
 
 **Severity: highest in this audit.** Security-relevant, silent, and affects both roles.
 
-**Fixed in this PR** — both sites now log the failure with the jti so it is diagnosable in
-the System Log. Deliberately *not* changed: the cookie is still cleared and the redirect
-still happens. Leaving someone stuck on a page they cannot log out of would be worse, and
-changing the logout contract is a bigger decision than an audit should take unilaterally.
+**FIXED.** Both sites log the failure. The staff path additionally **escalates**: if
+revoking the one `jti` fails, it bumps the user's `sessionVersion`, which
+`getCurrentUser` compares on every request — so every token that user holds, including the
+one that could not be revoked, stops validating immediately. That is a bigger hammer, and
+it is the right trade on a path that only runs *after a logout has already failed*: being
+signed out of your other devices beats believing you signed out while the token stays live.
+If the escalation fails too (likely, if the database is unreachable), that is logged as a
+distinct message so the System Log separates "we closed the hole" from "the token is still
+live".
 
-**Still open for a decision:** a failed revocation could additionally bump the user's
-`sessionVersion`, which invalidates every session they hold and closes the hole outright.
-That logs them out on every device, so it is a product call, not a bug fix.
+Still deliberate: the cookie is cleared and the redirect happens regardless. Stranding
+someone on a page they cannot leave would be worse.
 
 ### 2. Trash purge cannot distinguish "restored" from "database failed"
 
-`src/lib/trash.ts:182, 197, 226` — `.catch(() => ({ count: 0 }))` then `if (count === 0)
-continue`.
+`src/lib/trash.ts` — `.catch(() => ({ count: 0 }))` then `if (count === 0) continue`.
 
 The guard is deliberate and good: a record restored between the scan and the delete must
-not be purged. But a genuine DB failure produces the identical `count: 0`, so a purge that
-is failing every night looks exactly like a purge with nothing to do. Blob files are
-correctly *kept* in both cases, so nothing is destroyed — the cost is that a persistently
-broken purge is undetectable.
+not be purged. But a genuine DB failure produced the identical `count: 0`, so a purge
+failing every night looked exactly like a purge with nothing to do. Nothing is destroyed
+either way — the guard keeps the row and its blobs — so the cost was that the retention
+window quietly stopped being enforced with no way to notice.
 
-**Not fixed** — the correct fix distinguishes the two by catching only the restored case,
-which means touching purge semantics. Worth doing, not worth doing blind.
+**FIXED.** A `purgeDelete` helper logs the failure and returns 0, so `count === 0` now
+means only "restored", which is what the code always assumed it meant. The sweep continues
+past a bad row rather than aborting the nightly pass. The **scan** was guarded the same way
+(`.catch(() => [])`, making a failed read look like "nothing is due") and is now logged too.
 
-### 3. Competitor lease release is best-effort
+One thing this surfaced, worth recording: the ratchet in `tenantAccessRatchet.test.ts`
+immediately flagged two *new* bypass-writes on `Document` and `LibraryDocument`. They are
+not new — the old chained `.catch()` shape hid them from the detector, and the same sweep's
+sibling writes (`CustomerCase`, `PortalUpload`, `CustomFieldValue`) were already
+acknowledged. They are baselined rather than restructured away, because `purgeTrash` is the
+documented platform-wide sweep and a cross-tenant write there is correct by design.
 
-`src/lib/competitors.ts:183` — the `finally` that clears `collectingAt` swallows failure.
-A lost release leaves the source marked as collecting; whether that self-heals depends on
-whether the claim has a timeout. **Unverified** — flagging rather than asserting.
+### 3. Competitor lease release — VERIFIED, not a bug
+
+`src/lib/competitors.ts:183`. Checked rather than left flagged: the claim is
+`OR: [{ collectingAt: null }, { collectingAt: { lt: leaseCutoff } }]` with a
+**10-minute** cutoff, so a lost release is reclaimed on the next run. The swallow is
+correct as written. No change.
 
 ### 4. The wrong-tenant fallback class — inert today, live at tenant #2
 

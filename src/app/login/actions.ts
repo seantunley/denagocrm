@@ -25,6 +25,7 @@ import {
   registerRateLimitAttempt,
 } from "@/lib/rateLimit";
 import {
+  bumpUserSessionVersion,
   getUserSecurityState,
   recordFailedLogin,
   recordSuccessfulLogin,
@@ -239,10 +240,13 @@ export async function verifySecondFactor(
 }
 
 export async function logout() {
+  // Declared out here so the catch can still identify WHO failed to log out — the
+  // fallback below needs the user id, and it is only reachable on the error path.
+  let session: Awaited<ReturnType<typeof verifySession>> | null = null;
   try {
     const store = await cookies();
     const token = store.get(SESSION_COOKIE)?.value;
-    const session = token ? await verifySession(token) : null;
+    session = token ? await verifySession(token) : null;
     if (session?.jti) {
       await basePrisma.userSession.updateMany({
         where: { jti: session.jti },
@@ -263,8 +267,34 @@ export async function logout() {
     await logError(
       "logout",
       err,
-      "Session revocation failed; the cookie was cleared anyway, so this token stays valid until it expires.",
+      "Session revocation failed; falling back to a session-version bump so the token cannot be reused.",
     );
+
+    // ESCALATE RATHER THAN LEAVE A LIVE TOKEN BEHIND.
+    //
+    // Revoking this one jti failed, so bump the user's sessionVersion instead:
+    // getCurrentUser compares `security.sessionVersion !== session.sv` on every
+    // request, so every token this user holds — including the one we just failed
+    // to revoke — stops validating immediately.
+    //
+    // It is a bigger hammer, and that is the right trade on THIS path: it only
+    // runs when a logout has already failed, and being signed out of your other
+    // devices is a far better outcome than believing you signed out while the
+    // token stays live. Someone who did not intend it just signs in again.
+    //
+    // Best-effort in turn — if the first write failed because the database is
+    // unreachable, this one probably fails too. It is logged separately so the
+    // System Log distinguishes "revocation failed but we closed the hole" from
+    // "revocation failed and the token is still live".
+    try {
+      if (session?.sub) await bumpUserSessionVersion(session.sub);
+    } catch (bumpErr) {
+      await logError(
+        "logout",
+        bumpErr,
+        "Session-version fallback ALSO failed — this token remains valid until it expires. Revoke the device from Settings → Security.",
+      );
+    }
   }
   await destroySessionCookie();
   redirect("/login");
