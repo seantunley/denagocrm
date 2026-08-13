@@ -97,8 +97,13 @@ export default function StageRulesEditor({
 
   return (
     <fieldset className="space-y-2 rounded-lg border border-border/70 p-3 md:col-span-6">
+      {/* NOT "When a lead enters this stage" — that wording already belongs to the
+          `entryAction` picker a few rows above, which is a different mechanism:
+          it collects details BEFORE a move (a test-drive booking), where this
+          decides WHETHER the move is allowed. Two near-identical labels on one
+          form is a support call waiting to happen. */}
       <legend className="px-1 text-xs font-medium text-muted-foreground">
-        {direction === "entry" ? `When a lead ENTERS ${stageName}` : `When a lead LEAVES ${stageName}`}
+        {direction === "entry" ? `Rules for entering ${stageName}` : `Rules for leaving ${stageName}`}
       </legend>
 
       {/* NOT RENDERED when the rule is read-only, and that absence is the signal:

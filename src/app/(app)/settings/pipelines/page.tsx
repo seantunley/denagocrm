@@ -227,7 +227,11 @@ export default async function PipelineSettingsPage() {
                         </select>
                       </label>
                       <label className="space-y-1 md:col-span-3">
-                        <span className="text-xs text-muted-foreground">When a lead enters this stage</span>
+                        {/* "Required action", not "when a lead enters" — the stage
+                            RULES below also describe entering, and the two were
+                            reading as the same setting. This one collects details
+                            before the move; that one decides whether it may happen. */}
+                        <span className="text-xs text-muted-foreground">Required action on entry</span>
                         <select name="entryAction" className="input" defaultValue={stage.entryAction ?? ""}>
                           <option value="">No required stage action</option>
                           <option value="book_test_drive">Require and book a test drive</option>
@@ -290,7 +294,8 @@ export default async function PipelineSettingsPage() {
                   </select>
                 </label>
                 <label className="space-y-1 md:col-span-3">
-                  <span className="text-xs text-muted-foreground">When a lead enters this stage</span>
+                  {/* Same rename as the edit form above, for the same reason. */}
+                  <span className="text-xs text-muted-foreground">Required action on entry</span>
                   <select name="entryAction" className="input" defaultValue="">
                     <option value="">No required stage action</option>
                     <option value="book_test_drive">Require and book a test drive</option>
