@@ -70,10 +70,29 @@ test("needs-attention filtering includes overdue work", () => {
 });
 
 test("required stage actions cannot be bypassed through the generic move action", () => {
-  assert.match(
-    leadActionsSource,
-    /targetStage\.entryAction === "book_test_drive"[\s\S]+requires test-drive booking details/,
+  // THE PROPERTY IS UNCHANGED; THE MECHANISM MOVED.
+  //
+  // `moveLead` used to refuse any stage carrying an entryAction outright, with
+  // "This stage requires test-drive booking details". A required action is now a
+  // REMEDY — a rule plus a form that satisfies it — so the refusal comes from the
+  // rule being unmet, and instead of a dead end the caller is told which dialog
+  // to open. Either way the lead does not move.
+  //
+  // What changed on purpose: a lead that ALREADY has a booked test drive now
+  // satisfies the rule and moves straight in, where before the dialog opened
+  // regardless. That is why the old literal cannot simply be re-asserted.
+  const moveLead = leadActionsSource.slice(
+    leadActionsSource.indexOf("export async function moveLead("),
+    leadActionsSource.indexOf("export async function moveLeadToTestDrive("),
   );
+  const write = moveLead.indexOf("prisma.$transaction(");
+  const offer = moveLead.indexOf("if (gateOutcome.remedy)");
+  assert.ok(offer >= 0, "the generic move must hand back the remedy rather than moving");
+  assert.ok(offer < write, "and it must do so BEFORE the write");
+  assert.match(moveLead, /return \{ ok: false, gate: verdict, remedy: gateOutcome\.remedy\.id \}/);
+
+  // The bespoke booking action still refuses a stage that does not ask for one,
+  // so it cannot be used as a way into an unrelated stage.
   assert.match(
     leadActionsSource,
     /targetStage\.entryAction !== "book_test_drive"[\s\S]+not configured for test-drive booking/,

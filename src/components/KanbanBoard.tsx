@@ -45,7 +45,16 @@ import {
 import { toast } from "sonner";
 import LocationAutocomplete from "@/components/LocationAutocomplete";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { assignLead, convertLeadToContact, markLost, markWon, moveLead, moveLeadToTestDrive } from "@/app/actions/leads";
+import {
+  assignLead,
+  convertLeadToContact,
+  markLost,
+  markWon,
+  moveLead,
+  moveLeadToTestDrive,
+  moveLeadWithContact,
+  searchLinkableContacts,
+} from "@/app/actions/leads";
 import { formatZAR } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -83,6 +92,9 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { isStale, matchesOwnerFilter, OWNER_ANY, OWNER_UNASSIGNED } from "@/lib/kanbanRules";
+// The registry decides WHICH dialog a remedy opens, so adding one does not add a
+// branch to this file.
+import { STAGE_REMEDIES, remedyFor } from "@/lib/stageRemedies";
 // Pure module — one import, from a file with none — so the board and the server
 // describe an unmet criterion with the SAME sentence. A second copy of this
 // wording here is how the refusal and the warning start disagreeing.
@@ -369,6 +381,9 @@ function LeadMenuItems({
   const SubTrigger = kind === "context" ? ContextMenuSubTrigger : DropdownMenuSubTrigger;
   const SubContent = kind === "context" ? ContextMenuSubContent : DropdownMenuSubContent;
   const currentStage = stages.find((stage) => stage.leads.some((item) => item.id === lead.id));
+  // The "Book a test drive" shortcut jumps to whichever stage asks for one. This
+  // one IS test-drive-specific — it is a menu item about test drives, not a
+  // decision about which dialog a rule needs — so it names the action directly.
   const testDriveStage = stages.find((stage) => stage.entryAction === "book_test_drive");
 
   return (
@@ -585,10 +600,12 @@ function Column({
         <p className="mt-1.5 text-[10px] text-muted-foreground">
           {stage.leads.length === 1 ? "1 active opportunity" : `${stage.leads.length} active opportunities`}
         </p>
-        {stage.entryAction === "book_test_drive" && (
+        {/* Named by the registry, so a second remedy labels its own column
+            instead of silently showing nothing. */}
+        {remedyFor(stage.entryAction) && (
           <p className="mt-1.5 flex items-center gap-1 text-[10px] font-medium text-primary">
             <Zap className="size-3" />
-            Requires test-drive booking
+            Requires {remedyFor(stage.entryAction)!.label.toLowerCase()}
           </p>
         )}
         {stage.automationRules.length > 0 && (
@@ -658,6 +675,17 @@ export default function KanbanBoard({
   const [activeLead, setActiveLead] = useState<KanbanLead | null>(null);
   const [pendingTd, setPendingTd] = useState<{ lead: KanbanLead; stageId: string } | null>(null);
   /**
+   * A move waiting on the customer-link remedy.
+   *
+   * Opened because the SERVER said so — see requestMove. The board no longer
+   * inspects `entryAction` to decide which dialog a stage needs.
+   */
+  const [pendingLink, setPendingLink] = useState<{
+    lead: KanbanLead;
+    stageId: string;
+    stageName: string;
+  } | null>(null);
+  /**
    * A move the server will accept once a reason is typed — see requestMove.
    *
    * `testDrive` carries the booking details the person already filled in, so a
@@ -670,6 +698,8 @@ export default function KanbanBoard({
     stageName: string;
     verdict: StageGateVerdict;
     testDrive?: { productId: string | null; date: string; time: string; location: string };
+    /** A customer already chosen for the link remedy, carried across the prompt. */
+    contactId?: string;
   } | null>(null);
   const [pendingOutcome, setPendingOutcome] = useState<{ lead: KanbanLead; mode: "won" | "lost" } | null>(null);
   const [query, setQuery] = useState("");
@@ -783,10 +813,14 @@ export default function KanbanBoard({
     const fromStage = stages.find((stage) => stage.leads.some((item) => item.id === lead.id));
     const target = stages.find((stage) => stage.id === targetStageId);
     if (!fromStage || !target || fromStage.id === targetStageId) return;
-    if (target.entryAction === "book_test_drive") {
-      setPendingTd({ lead, stageId: targetStageId });
-      return;
-    }
+    // NO CLIENT-SIDE INTERCEPTION ANY MORE.
+    //
+    // This used to check `target.entryAction === "book_test_drive"` and open the
+    // booking dialog WITHOUT asking the server — so it could not know whether the
+    // lead already had a booked drive, and every future remedy needed another
+    // branch here. The server now evaluates the rule and names the remedy to
+    // offer, if one is needed at all.
+    //
     // Captured BEFORE the optimistic move, so a refusal restores what the user
     // was looking at rather than an approximation of it.
     const snapshot = stages;
@@ -798,11 +832,11 @@ export default function KanbanBoard({
       // reaching the server at all; the board must not keep a card in a column
       // the server never accepted, whichever way the attempt ended.
       const result = await moveLead(lead.id, targetStageId, overrideReason ? { overrideReason } : undefined).catch(
-        // The same SHAPE as the action's own result, `gate` included. Without it
-        // the union has a member with no `gate`, and every read of it has to be
-        // guarded — a transport failure has no verdict, which is exactly what
-        // `undefined` says.
-        () => ({ ok: false as const, error: "Couldn't move the lead", gate: undefined }),
+        // The same SHAPE as the action's own result, `gate` and `remedy`
+        // included. Without them the union has a member missing those keys and
+        // every read has to be guarded — a transport failure has no verdict and
+        // no remedy, which is exactly what `undefined` says.
+        () => ({ ok: false as const, error: "Couldn't move the lead", gate: undefined, remedy: undefined }),
       );
 
       // A STAGE RULE ASKING FOR A REASON IS A QUESTION, NOT A FAILURE.
@@ -814,6 +848,16 @@ export default function KanbanBoard({
       // and an owner could never move a lead past their own blocking rule (owners
       // hold every permission, so a block always resolves to the override path
       // for them).
+      // A REMEDY THE SERVER OFFERED. Same shape as the reason prompt and for the
+      // same reason: not a refusal, a next step. Which dialog to open comes from
+      // the registry, so adding a remedy does not add a branch here.
+      if (!result.ok && result.remedy) {
+        setStages(snapshot);
+        const remedy = STAGE_REMEDIES[result.remedy];
+        if (remedy.dialog === "test_drive") setPendingTd({ lead, stageId: targetStageId });
+        else setPendingLink({ lead, stageId: targetStageId, stageName: target.name });
+        return;
+      }
       if (!result.ok && result.gate?.requiresReason) {
         setStages(snapshot);
         setPendingGate({ lead, stageId: targetStageId, stageName: target.name, verdict: result.gate });
@@ -833,11 +877,72 @@ export default function KanbanBoard({
     });
   }
 
+  /** The customer-link remedy, from the picker. */
+  function confirmContactLink(contactId: string) {
+    if (!pendingLink) return;
+    const { lead, stageId } = pendingLink;
+    setPendingLink(null);
+    submitContactLink(lead, stageId, contactId);
+  }
+
+  /**
+   * Link-and-move, taking its target EXPLICITLY.
+   *
+   * Split for the same reason `submitTestDrive` is: the reason-retry calls it
+   * directly, and reading `pendingLink` back out of state would mean
+   * re-populating that state and waiting a frame for it to be visible.
+   */
+  function submitContactLink(
+    lead: KanbanLead,
+    stageId: string,
+    contactId: string,
+    overrideReason?: string,
+  ) {
+    const fromStage = stages.find((stage) => stage.leads.some((item) => item.id === lead.id));
+    if (!fromStage) return;
+    const target = stages.find((stage) => stage.id === stageId);
+    const snapshot = stages;
+    if (fromStage.id !== stageId) applyMove(lead.id, fromStage.id, stageId);
+    startTransition(async () => {
+      const result = await moveLeadWithContact(
+        lead.id,
+        stageId,
+        contactId,
+        overrideReason ? { overrideReason } : undefined,
+      ).catch(() => ({ ok: false as const, error: "Couldn't link the customer", gate: undefined }));
+      // A stage can want the link AND something else; the reason prompt carries
+      // the chosen customer forward so the picker is not shown twice.
+      if (!result.ok && result.gate?.requiresReason) {
+        setStages(snapshot);
+        setPendingGate({
+          lead,
+          stageId,
+          stageName: target?.name ?? "this stage",
+          verdict: result.gate,
+          contactId,
+        });
+        return;
+      }
+      if (!result.ok) {
+        rollbackTo(snapshot, result.error ?? "Couldn't link the customer");
+        return;
+      }
+      toast.success(`Linked ${lead.name} to a customer`);
+      router.refresh();
+    });
+  }
+
   /** Retry the move the server asked a reason for, this time carrying it. */
   function confirmGateOverride(reason: string) {
     if (!pendingGate) return;
-    const { lead, stageId, testDrive } = pendingGate;
+    const { lead, stageId, testDrive, contactId } = pendingGate;
     setPendingGate(null);
+    if (contactId) {
+      // Re-send the customer they already chose, with the reason, rather than
+      // showing the picker a second time.
+      submitContactLink(lead, stageId, contactId, reason);
+      return;
+    }
     if (testDrive) {
       // Re-send the booking the person already filled in, with the reason,
       // rather than asking them to enter it a second time.
@@ -1180,6 +1285,12 @@ export default function KanbanBoard({
           onCancel={() => setPendingOutcome(null)}
           onConfirm={confirmOutcome}
         />
+        <ContactLinkDialog
+          key={pendingLink ? `${pendingLink.lead.id}-${pendingLink.stageId}` : "link-closed"}
+          pending={pendingLink}
+          onCancel={() => setPendingLink(null)}
+          onConfirm={confirmContactLink}
+        />
         <StageRuleReasonDialog
           key={pendingGate ? `${pendingGate.lead.id}-${pendingGate.stageId}` : "gate-closed"}
           pending={pendingGate}
@@ -1188,6 +1299,113 @@ export default function KanbanBoard({
         />
       </DndContext>
     </>
+  );
+}
+
+/**
+ * The `link_contact` remedy's picker.
+ *
+ * A SEARCH, not a list. The lead detail page renders every contact into a
+ * `<select>`, which is fine on a page loaded for one lead and wrong on a board —
+ * it would ship the whole customer table to the browser on every render, for a
+ * dialog most people never open.
+ */
+function ContactLinkDialog({
+  pending,
+  onCancel,
+  onConfirm,
+}: {
+  pending: { lead: KanbanLead; stageId: string; stageName: string } | null;
+  onCancel: () => void;
+  onConfirm: (contactId: string) => void;
+}) {
+  const [term, setTerm] = useState("");
+  const [rows, setRows] = useState<Array<{ id: string; label: string; sublabel: string }>>([]);
+  const [searching, setSearching] = useState(false);
+  const latest = useRef("");
+
+  useEffect(() => {
+    const query = term.trim();
+    latest.current = query;
+    if (query.length < 2) return;
+    const timer = setTimeout(() => {
+      setSearching(true);
+      searchLinkableContacts(query)
+        .then((results) => {
+          // A newer keystroke owns the box; an older answer must not repaint it.
+          if (latest.current === query) setRows(results);
+        })
+        .catch(() => {
+          if (latest.current === query) setRows([]);
+        })
+        .finally(() => {
+          if (latest.current === query) setSearching(false);
+        });
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [term]);
+
+  const searchable = term.trim().length >= 2;
+
+  return (
+    <Dialog open={!!pending} onOpenChange={(open) => !open && onCancel()}>
+      <ResponsiveDialogContent className="sm:max-w-md">
+        {pending && (
+          <>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <UserRound className="size-4 text-primary" />
+                Link a customer
+              </DialogTitle>
+              <DialogDescription>
+                <span className="font-medium text-foreground">{pending.lead.name}</span> needs a linked
+                customer before it can enter {pending.stageName}.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">Find a customer</label>
+              <input
+                value={term}
+                onChange={(event) => setTerm(event.target.value)}
+                className="input"
+                autoFocus
+                placeholder="Name, company, email or phone"
+              />
+            </div>
+
+            <div className="max-h-64 space-y-1 overflow-y-auto">
+              {!searchable && (
+                <p className="px-1 text-xs text-muted-foreground">Type at least two characters.</p>
+              )}
+              {searchable && searching && rows.length === 0 && (
+                <p className="px-1 text-xs text-muted-foreground">Searching…</p>
+              )}
+              {searchable && !searching && rows.length === 0 && (
+                <p className="px-1 text-xs text-muted-foreground">No customers match that.</p>
+              )}
+              {rows.map((row) => (
+                <button
+                  key={row.id}
+                  type="button"
+                  onClick={() => onConfirm(row.id)}
+                  className="flex w-full items-center justify-between gap-3 rounded-md border border-border px-3 py-2 text-left text-sm hover:border-primary/40 hover:bg-primary/5"
+                >
+                  <span className="truncate font-medium">{row.label}</span>
+                  <span className="truncate text-xs text-muted-foreground">{row.sublabel}</span>
+                </button>
+              ))}
+            </div>
+
+            <div className="flex justify-end">
+              <Button type="button" variant="outline" onClick={onCancel}>
+                Cancel
+              </Button>
+            </div>
+          </>
+        )}
+      </ResponsiveDialogContent>
+    </Dialog>
   );
 }
 

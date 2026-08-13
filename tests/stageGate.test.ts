@@ -46,6 +46,7 @@ function facts(overrides: Partial<{
   ageDays: number;
   valueCents: number;
   assignedToId: string | null;
+  testDrives: number;
 }> = {}): StageGateFacts {
   return {
     lead: {
@@ -63,7 +64,11 @@ function facts(overrides: Partial<{
       latestStatus: overrides.latestStatus ?? null,
     },
     contact: { linked: overrides.contactLinked ?? false, email: null, phone: null },
-    activity: { plannedCount: overrides.planned ?? 0, overdueCount: overrides.overdue ?? 0 },
+    activity: {
+      plannedCount: overrides.planned ?? 0,
+      overdueCount: overrides.overdue ?? 0,
+      testDriveCount: overrides.testDrives ?? 0,
+    },
     signature: { completedCount: 0, pendingCount: 0 },
     stage: { ageDays: overrides.ageDays ?? 0 },
   };

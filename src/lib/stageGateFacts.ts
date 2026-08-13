@@ -89,6 +89,13 @@ export async function stageGateFactsForLead(
   const signatures = await signatureCounts(quotes.map((quote) => quote.id));
 
   const planned = activityCounts.find((row) => row.status === "planned")?._count._all ?? 0;
+  // Counted separately from `planned`, and only when there is something planned
+  // to narrow. The `book_test_drive` remedy declares this as the criterion it
+  // satisfies, so it has to mean "a test drive is booked" and not "something is
+  // booked" — otherwise a service visit satisfies a test-drive rule.
+  const testDrives = planned
+    ? await prisma.activity.count({ where: { leadId, status: "planned", type: "test_drive" } })
+    : 0;
   // Overdue is a second, narrower question than "planned", so it is counted
   // separately rather than derived — a planned activity due tomorrow is not
   // overdue, and the groupBy above cannot express the date predicate.
@@ -118,7 +125,7 @@ export async function stageGateFactsForLead(
       email: lead.contact?.email ?? null,
       phone: lead.contact?.phone ?? null,
     },
-    activity: { plannedCount: planned, overdueCount: overdue },
+    activity: { plannedCount: planned, overdueCount: overdue, testDriveCount: testDrives },
     signature: signatures,
     stage: {
       // Whole days, floored, matching how the board's own `ageDays` is computed

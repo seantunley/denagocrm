@@ -3,7 +3,7 @@
 import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import { prisma, basePrisma } from "@/lib/db";
-import { parseRands } from "@/lib/format";
+import { contactName, parseRands } from "@/lib/format";
 import { emitLeadJourneyEvent } from "@/lib/leadJourneyEvents";
 import { recordReferral, markReferralEarned } from "@/lib/referrals";
 import { logAudit, logAuditStrict, GOVERNANCE_TX } from "@/lib/audit";
@@ -17,11 +17,14 @@ import { customerRecordTenantId } from "@/lib/customerRecordTenant";
 // against, and it is the one that enforces membership while dormant.
 import { resolveAssignableUser } from "@/lib/tenantActor";
 import {
+  getAccessibleContactIds,
   hasPermission,
+  requireAnyPermission,
   requireLeadAccess,
   requireLeadReadAccess,
   requirePermission,
 } from "@/lib/permissions";
+import { type PipelineStageAction } from "@/lib/pipelineStageActions";
 import {
   getDefaultPipeline,
   getLeadPipeline,
@@ -37,10 +40,18 @@ import {
   parseStageCriteria,
   parseStageGateMode,
   refusalSentence,
+  type StageCriteriaGroup,
   type StageGate,
   type StageGateVerdict,
 } from "@/lib/stageGate";
 import { stageGateFactsForLead } from "@/lib/stageGateFacts";
+import {
+  DERIVED_GATE_MODE,
+  derivedCriteria,
+  remedyAddresses,
+  remedyFor,
+  type StageRemedy,
+} from "@/lib/stageRemedies";
 
 function leadData(formData: FormData) {
   const str = (key: string) => {
@@ -399,13 +410,31 @@ export async function updateLead(id: string, formData: FormData) {
  */
 function stageGateFor(row: PipelineStageRow, direction: "entry" | "exit"): StageGate | "broken" {
   const mode = parseStageGateMode(direction === "entry" ? row.entryGateMode : row.exitGateMode);
+  let criteria: StageCriteriaGroup | null;
   try {
-    return { mode, criteria: parseStageCriteria(direction === "entry" ? row.entryCriteria : row.exitCriteria) };
+    criteria = parseStageCriteria(direction === "entry" ? row.entryCriteria : row.exitCriteria);
   } catch {
     // An `off` gate cannot block anything, so an unreadable one is not worth
     // stopping a board over — it is only reported when it would have mattered.
     return mode === "off" ? { mode: "off", criteria: null } : "broken";
   }
+
+  // THE DERIVATION THAT MAKES THIS SHIP WITHOUT A BACKFILL.
+  //
+  // A stage that declares a REMEDY and stores no entry rule of its own is judged
+  // by exactly what that remedy provides, at `block`. So `book_test_drive`
+  // behaves as it always has — the booking is mandatory — while becoming the
+  // derived case of the general mechanism rather than a special case beside it.
+  //
+  // One thing does change, and it is the point: the criterion is EVALUATED. A
+  // lead that already has a booked test drive now satisfies it and moves straight
+  // in, where before the dialog opened regardless and asked somebody to
+  // re-book what was already booked.
+  if (direction === "entry" && !criteria) {
+    const remedy = remedyFor(row.entryAction);
+    if (remedy) return { mode: DERIVED_GATE_MODE, criteria: derivedCriteria(remedy) };
+  }
+  return { mode, criteria };
 }
 
 /**
@@ -421,7 +450,10 @@ async function gateStageMove(input: {
   user: Awaited<ReturnType<typeof requireLeadAccess>>;
   currentScope: { pipelineId: string; stageId: string };
   targetStage: PipelineStageRow;
-}): Promise<{ verdict: StageGateVerdict } | { error: string; gate?: StageGateVerdict }> {
+}): Promise<
+  | { verdict: StageGateVerdict; remedy: StageRemedy | null }
+  | { error: string; gate?: StageGateVerdict }
+> {
   const { leadId, user, currentScope, targetStage } = input;
   const entry = stageGateFor(targetStage, "entry");
   if (entry === "broken") return { error: BROKEN_RULE_MESSAGE };
@@ -440,20 +472,34 @@ async function gateStageMove(input: {
   // nothing for this feature.
   const entryLive = entry.mode !== "off" && Boolean(entry.criteria);
   const exitLive = Boolean(exit && exit.mode !== "off" && exit.criteria);
-  if (!entryLive && !exitLive) return { verdict: CLEAR_VERDICT };
+  if (!entryLive && !exitLive) return { verdict: CLEAR_VERDICT, remedy: null };
 
   const facts = await stageGateFactsForLead(leadId);
   if (!facts) return { error: "Lead not found." };
 
-  return {
-    verdict: evaluateStageMove({
-      from: fromRow && exit ? { stageId: fromRow.id, order: fromRow.order, exit } : null,
-      to: { stageId: targetStage.id, order: targetStage.order, entry },
-      samePipeline,
-      facts,
-      canOverride: await hasPermission(user, "leads.override_stage_rules"),
-    }),
-  };
+  const verdict = evaluateStageMove({
+    from: fromRow && exit ? { stageId: fromRow.id, order: fromRow.order, exit } : null,
+    to: { stageId: targetStage.id, order: targetStage.order, entry },
+    samePipeline,
+    facts,
+    canOverride: await hasPermission(user, "leads.override_stage_rules"),
+  });
+
+  // WHICH REMEDY TO OFFER, decided HERE rather than by the board.
+  //
+  // The board used to look at `entryAction` itself and open the booking dialog
+  // before calling the server at all — so it could not know whether the work was
+  // already done, and every future remedy would have needed another branch in
+  // the client. The server evaluates the rule and names the remedy that addresses
+  // what actually failed; the board's job shrinks to opening the dialog it is
+  // told to.
+  //
+  // Offered only when the move is not already clear, and only when the remedy
+  // addresses one of the unmet clauses: a stage requiring both a quote and a
+  // customer link, missing only the quote, must not offer the customer picker.
+  const remedy = remedyFor(targetStage.entryAction);
+  const offer = remedy && verdict.unmet.length > 0 && remedyAddresses(remedy, verdict.unmet) ? remedy : null;
+  return { verdict, remedy: offer };
 }
 
 const BROKEN_RULE_MESSAGE =
@@ -478,7 +524,7 @@ export async function moveLead(
   leadId: string,
   stageId: string,
   options?: { overrideReason?: string },
-): Promise<{ ok: boolean; error?: string; gate?: StageGateVerdict }> {
+): Promise<{ ok: boolean; error?: string; gate?: StageGateVerdict; remedy?: PipelineStageAction }> {
   const user = await requireLeadAccess(leadId, "leads.change_stage");
   const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
   // Same refusal as `updateLead` and `moveLeadToTestDrive`, for the same reason: a
@@ -492,10 +538,6 @@ export async function moveLead(
   if (currentScope.pipelineId !== targetStage.pipelineId && !(await hasPermission(user, "leads.change_pipeline"))) {
     return { ok: false, error: "You do not have permission to move leads between pipelines" };
   }
-  if (targetStage.entryAction === "book_test_drive") {
-    return { ok: false, error: "This stage requires test-drive booking details" };
-  }
-
   // ── STAGE GATES ───────────────────────────────────────────────────────────
   //
   // Runs AFTER permissions and BEFORE the write, and its facts are re-derived
@@ -506,6 +548,23 @@ export async function moveLead(
   const gateOutcome = await gateStageMove({ leadId, user, currentScope, targetStage });
   if ("error" in gateOutcome) return { ok: false, error: gateOutcome.error, gate: gateOutcome.gate };
   const verdict = gateOutcome.verdict;
+
+  // A REMEDY IS OFFERED BEFORE A REFUSAL IS ISSUED.
+  //
+  // `This stage requires test-drive booking details` used to be returned here for
+  // any stage carrying an entryAction, unconditionally — the board caught that
+  // stage on the way out and opened the dialog itself, so the message existed
+  // only to stop a direct POST. Now the SERVER decides: the rule is evaluated,
+  // and when what failed is exactly what a remedy provides, the client is told
+  // which dialog to open instead of being refused.
+  //
+  // The consequence people will notice: a lead that ALREADY has a booked test
+  // drive satisfies the criterion and moves straight in, where before the dialog
+  // opened regardless and asked for a booking that existed.
+  if (gateOutcome.remedy) {
+    return { ok: false, gate: verdict, remedy: gateOutcome.remedy.id };
+  }
+
   const overrideReason = options?.overrideReason?.trim() ?? "";
   if (verdict.requiresReason && overrideReason.length < MIN_OVERRIDE_REASON) {
     // Not a refusal — the client opens the reason dialog because the SERVER asked
@@ -775,6 +834,185 @@ export async function moveLeadToTestDrive(
   if (changingStage) await emitLeadJourneyEvent("stage_entered", leadId);
   revalidatePath("/leads");
   revalidatePath("/calendar");
+  return { ok: true, gate: verdict };
+}
+
+/**
+ * Customers this lead could be linked to, for the `link_contact` remedy's picker.
+ *
+ * A search rather than a full list: the lead detail page renders every contact
+ * into a `<select>`, which is fine on a page loaded for one lead and wrong on a
+ * board that would then ship the whole customer table to the browser on every
+ * render.
+ *
+ * Scoped by `getAccessibleContactIds`, the same helper every contact surface
+ * uses, with its documented contract — `null` is unrestricted, `[]` must become
+ * an impossible match rather than an absent filter.
+ */
+export async function searchLinkableContacts(
+  term: string,
+): Promise<Array<{ id: string; label: string; sublabel: string }>> {
+  // Gated on being able to SEE customers, which is what this returns, rather than
+  // on a lead id it does not take. `getAccessibleContactIds` then narrows to the
+  // ones this caller may actually open.
+  const user = await requireAnyPermission("contacts.view_all", "contacts.view_owned");
+  const query = term.trim();
+  if (query.length < 2) return [];
+  const ids = await getAccessibleContactIds(user);
+  if (ids !== null && ids.length === 0) return [];
+  const contains = { contains: query, mode: "insensitive" as const };
+  const rows = await prisma.contact.findMany({
+    where: {
+      ...(ids === null ? {} : { id: { in: ids } }),
+      OR: [{ firstName: contains }, { lastName: contains }, { company: contains }, { email: contains }, { phone: contains }],
+    },
+    select: { id: true, firstName: true, lastName: true, company: true, isCompany: true, email: true, phone: true },
+    orderBy: { updatedAt: "desc" },
+    take: 8,
+  });
+  return rows.map((row) => ({
+    id: row.id,
+    label: contactName(row),
+    sublabel: row.email ?? row.phone ?? "",
+  }));
+}
+
+/**
+ * The `link_contact` remedy: link the customer AND make the move, together.
+ *
+ * The sibling of `moveLeadToTestDrive`, and the second entry in the registry —
+ * which is the point of the registry existing. Everything it does that is not
+ * "link a contact" is the same shape: gate the move, do the work and the move in
+ * one transaction, audit both, and report the verdict back.
+ *
+ * `leads.link_contact` is required ON TOP of `leads.change_stage`. The remedy
+ * writes a contact link, and a stage rule must not become a way to perform a
+ * write the caller is not entitled to make.
+ */
+export async function moveLeadWithContact(
+  leadId: string,
+  stageId: string,
+  contactId: string,
+  options?: { overrideReason?: string },
+): Promise<{ ok: boolean; error?: string; gate?: StageGateVerdict }> {
+  const user = await requireLeadAccess(leadId, "leads.change_stage");
+  if (!(await hasPermission(user, "leads.link_contact"))) {
+    return { ok: false, error: "You do not have permission to link customers to leads." };
+  }
+  if (!contactId) return { ok: false, error: "Choose a customer to link." };
+
+  const currentScope = await getLeadPipeline(leadId);
+  if (!currentScope) return { ok: false, error: "Lead not found." };
+  const changingStage = currentScope.stageId !== stageId;
+  const resolved = await resolveOpenStage(stageId);
+  if ("error" in resolved) return { ok: false, error: resolved.error };
+  const targetStage = resolved.stage;
+  if (
+    currentScope.pipelineId !== targetStage.pipelineId &&
+    !(await hasPermission(user, "leads.change_pipeline"))
+  ) {
+    return { ok: false, error: "You cannot move leads between pipelines." };
+  }
+  if (targetStage.entryAction !== "link_contact") {
+    return { ok: false, error: "That stage does not ask for a customer link." };
+  }
+
+  // The contact id arrives from the client, so it is resolved through the guarded
+  // client — a forged id from another workspace does not exist here.
+  const contact = await prisma.contact.findUnique({
+    where: { id: contactId },
+    select: { id: true, tenantId: true, firstName: true, lastName: true, company: true, isCompany: true },
+  });
+  if (!contact) return { ok: false, error: "That customer is not available in this workspace." };
+
+  const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
+
+  // The gate runs on this door too — see the note on `moveLeadToTestDrive`. The
+  // link itself is what satisfies the rule, so the facts are read BEFORE it is
+  // written and the verdict describes the move as it stands.
+  let verdict = CLEAR_VERDICT;
+  if (changingStage) {
+    const gated = await gateStageMove({ leadId, user, currentScope, targetStage });
+    if ("error" in gated) return { ok: false, error: gated.error };
+    verdict = gated.verdict;
+    const overrideReason = options?.overrideReason?.trim() ?? "";
+    // A verdict that only wanted the CUSTOMER LINK is satisfied by this very
+    // call, so it must not also demand a reason — the remedy is the answer to it.
+    // Anything else unmet still asks.
+    const onlyTheLink =
+      verdict.unmet.length > 0 && verdict.unmet.every((u) => u.field === "contact.linked");
+    if (!onlyTheLink) {
+      if (verdict.requiresReason && overrideReason.length < MIN_OVERRIDE_REASON) {
+        return { ok: false, gate: verdict };
+      }
+      if (!verdict.allowed) {
+        return { ok: false, error: refusalSentence(verdict, targetStage.name), gate: verdict };
+      }
+    }
+  }
+
+  const position = changingStage ? await nextPosition(stageId) : before.position;
+  // The transaction's result is not needed out here — the summaries are built
+  // inside it from `updated`, and the revalidation below is keyed on ids the
+  // caller already has.
+  await prisma.$transaction(async (tx) => {
+    // A contact created outside any workspace inherits the lead's, matching
+    // `linkLeadToContact` — the same rule, because it is the same link.
+    if (contact.tenantId === null && before.tenantId !== null) {
+      await tx.contact.update({ where: { id: contactId }, data: { tenantId: before.tenantId } });
+    }
+    const updated = await tx.lead.update({
+      where: { id: leadId },
+      data: {
+        contactId,
+        ...(changingStage ? { stageId, position, stageEnteredAt: new Date() } : {}),
+      },
+      include: { stage: true, contact: true },
+    });
+    await logAuditStrict({
+      action: "lead.contact_linked",
+      summary: `Linked “${updated.title}” to ${contactName(contact)}${changingStage ? ` and moved it to ${updated.stage.name}` : ""}`,
+      leadId,
+      contactId,
+      user,
+      before: { contactId: before.contactId, stageId: before.stageId },
+      after: { contactId, stageId: updated.stageId },
+    }, tx);
+    if (changingStage) {
+      await logAuditStrict({
+        action: "lead.stage_changed",
+        summary: `Moved “${updated.title}” to ${updated.stage.name}`,
+        leadId,
+        contactId,
+        user,
+        before: { stageId: before.stageId, position: before.position, pipelineId: currentScope.pipelineId },
+        after: { stageId, position: updated.position, pipelineId: targetStage.pipelineId },
+      }, tx);
+    }
+    if (verdict.requiresReason && options?.overrideReason?.trim()) {
+      await logAuditStrict({
+        action: "lead.stage_gate_overridden",
+        summary: `Moved “${updated.title}” into ${updated.stage.name} without ${verdict.unmet.map(describeUnmet).join("; ")} — reason: “${options.overrideReason.trim()}”`,
+        leadId,
+        contactId,
+        user,
+        after: { stageId },
+        metadata: {
+          direction: verdict.direction,
+          mode: verdict.mode,
+          unmet: verdict.unmet,
+          reason: options.overrideReason.trim(),
+          via: "contact_link",
+        },
+      }, tx);
+    }
+    return updated;
+  }, GOVERNANCE_TX);
+
+  if (changingStage) await emitLeadJourneyEvent("stage_entered", leadId);
+  revalidatePath("/leads");
+  revalidatePath(`/leads/${leadId}`);
+  revalidatePath("/forecast");
   return { ok: true, gate: verdict };
 }
 

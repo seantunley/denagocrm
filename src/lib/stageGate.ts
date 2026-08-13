@@ -144,6 +144,7 @@ export const STAGE_CRITERION_FIELDS = [
   "contact.phone",
   "activity.plannedCount",
   "activity.overdueCount",
+  "activity.testDriveCount",
   "signature.completedCount",
   "signature.pendingCount",
   "stage.ageDays",
@@ -171,6 +172,7 @@ export const STAGE_CRITERION_LABELS: Record<StageCriterionField, string> = {
   "contact.phone": "Contact phone",
   "activity.plannedCount": "Planned activities",
   "activity.overdueCount": "Overdue activities",
+  "activity.testDriveCount": "Booked test drives",
   "signature.completedCount": "Completed signatures",
   "signature.pendingCount": "Pending signatures",
   "stage.ageDays": "Days in current stage",
@@ -195,6 +197,7 @@ export const STAGE_CRITERION_KINDS: Record<StageCriterionField, StageCriterionKi
   "contact.phone": "text",
   "activity.plannedCount": "number",
   "activity.overdueCount": "number",
+  "activity.testDriveCount": "number",
   "signature.completedCount": "number",
   "signature.pendingCount": "number",
   "stage.ageDays": "number",
@@ -271,7 +274,14 @@ export type StageGateFacts = {
   };
   quote: { count: number; sentCount: number; acceptedCount: number; latestStatus: string | null };
   contact: { linked: boolean; email: string | null; phone: string | null };
-  activity: { plannedCount: number; overdueCount: number };
+  /**
+   * `testDriveCount` counts PLANNED test drives specifically, not activities in
+   * general. It exists because the `book_test_drive` remedy declares the
+   * criterion it satisfies, and "plannedCount >= 1" would have been satisfied by
+   * a booked service visit — a rule that says "a test drive is booked" would
+   * then pass for a lead that has no test drive.
+   */
+  activity: { plannedCount: number; overdueCount: number; testDriveCount: number };
   signature: { completedCount: number; pendingCount: number };
   stage: { ageDays: number };
 };

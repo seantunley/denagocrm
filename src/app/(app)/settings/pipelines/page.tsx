@@ -15,7 +15,11 @@ import ModalTrigger from "@/components/Modal";
 import { buttonVariants } from "@/components/ui/button";
 import { SettingsWorkspace } from "@/components/settings-workspace";
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
-import { PIPELINE_STAGE_ACTION_META } from "@/lib/pipelineStageActions";
+import {
+  PIPELINE_STAGE_ACTIONS,
+  PIPELINE_STAGE_ACTION_META,
+  parsePipelineStageAction,
+} from "@/lib/pipelineStageActions";
 import { stageJourneyNames } from "@/lib/journeyStageBadges";
 import StageRulesEditor from "@/components/StageRulesEditor";
 import {
@@ -48,6 +52,15 @@ function readCriteria(stored: unknown): { criteria: StageCriteriaGroup | null; r
     return { criteria: isGroupish(stored) ? (stored as StageCriteriaGroup) : null, readOnly: true };
   }
 }
+
+/**
+ * The stored action, if this build still knows it.
+ *
+ * Every option on this screen now comes from PIPELINE_STAGE_ACTIONS rather than
+ * being written out by hand — the list was three hardcoded copies of one value,
+ * which is exactly how a second one gets added everywhere but the picker.
+ */
+const stageAction = (value: string | null) => parsePipelineStageAction(value);
 
 function isGroupish(value: unknown): boolean {
   return (
@@ -181,10 +194,10 @@ export default async function PipelineSettingsPage() {
                       <span className="text-xs text-muted-foreground">{stage.defaultProbability}% probability</span>
                       {stage.staleAfterDays && <span className="text-xs text-muted-foreground">stale after {stage.staleAfterDays}d</span>}
                       {stage.isClosed && <span className="badge bg-muted text-muted-foreground">{stage.closedStatus || "closed"}</span>}
-                      {stage.entryAction === "book_test_drive" && (
+                      {stageAction(stage.entryAction) && (
                         <span className="badge bg-primary/15 text-primary">
                           <Zap className="size-3" />
-                          {PIPELINE_STAGE_ACTION_META.book_test_drive.shortLabel}
+                          {PIPELINE_STAGE_ACTION_META[stageAction(stage.entryAction)!].shortLabel}
                         </span>
                       )}
                       {(automationRulesByStage.get(stage.id)?.length ?? 0) > 0 && (
@@ -234,11 +247,15 @@ export default async function PipelineSettingsPage() {
                         <span className="text-xs text-muted-foreground">Required action on entry</span>
                         <select name="entryAction" className="input" defaultValue={stage.entryAction ?? ""}>
                           <option value="">No required stage action</option>
-                          <option value="book_test_drive">Require and book a test drive</option>
+                          {PIPELINE_STAGE_ACTIONS.map((action) => (
+                            <option key={action} value={action}>
+                              {PIPELINE_STAGE_ACTION_META[action].label}
+                            </option>
+                          ))}
                         </select>
                         <span className="block text-[11px] leading-4 text-muted-foreground">
-                          {stage.entryAction === "book_test_drive"
-                            ? PIPELINE_STAGE_ACTION_META.book_test_drive.description
+                          {stageAction(stage.entryAction)
+                            ? PIPELINE_STAGE_ACTION_META[stageAction(stage.entryAction)!].description
                             : "The lead moves immediately; configurable automations can still run afterward."}
                         </span>
                       </label>
@@ -298,7 +315,11 @@ export default async function PipelineSettingsPage() {
                   <span className="text-xs text-muted-foreground">Required action on entry</span>
                   <select name="entryAction" className="input" defaultValue="">
                     <option value="">No required stage action</option>
-                    <option value="book_test_drive">Require and book a test drive</option>
+                    {PIPELINE_STAGE_ACTIONS.map((action) => (
+                      <option key={action} value={action}>
+                        {PIPELINE_STAGE_ACTION_META[action].label}
+                      </option>
+                    ))}
                   </select>
                   <span className="block text-[11px] leading-4 text-muted-foreground">
                     Required actions collect their details before the lead is moved.

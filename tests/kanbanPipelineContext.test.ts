@@ -130,13 +130,23 @@ test("a refused move is a return value, not a throw", () => {
   // returned `{ ok: false }`, and the verdict rides along so the board can open
   // the reason dialog because the SERVER asked it to. The `ok`/`error` pair is
   // still asserted exactly.
+  // `remedy?` joined `gate?` when stage actions became remedies: a stage that
+  // asks for a booking or a customer link is answered with WHICH dialog to open,
+  // rather than a flat refusal the caller cannot act on. Both are additive and
+  // neither weakens the property under test — a refusal is still a returned
+  // `{ ok: false }`, never a throw.
   assert.match(
     moveLead,
-    /Promise<\{ ok: boolean; error\?: string; gate\?: StageGateVerdict \}>/,
+    /Promise<\{ ok: boolean; error\?: string; gate\?: StageGateVerdict; remedy\?: PipelineStageAction \}>/,
     "the signature says so",
   );
   assert.match(moveLead, /return \{ ok: false, error: "You do not have permission to move leads between pipelines" \}/);
-  assert.match(moveLead, /return \{ ok: false, error: "This stage requires test-drive booking details" \}/);
+  // This used to assert the flat refusal `"This stage requires test-drive
+  // booking details"`. A required action is now a REMEDY — a rule plus a form
+  // that satisfies it — so the same situation returns WHICH dialog to open
+  // instead of a dead end. Still a returned value, still not a throw, which is
+  // the property this test is actually about.
+  assert.match(moveLead, /return \{ ok: false, gate: verdict, remedy: gateOutcome\.remedy\.id \}/);
   // `gate` rides along on success too — a `warn` gate allows the move and exists
   // to say what was missing, which a bare `{ ok: true }` made unsayable.
   assert.match(moveLead, /return \{ ok: true, gate: verdict \};/, "the success path must report success");

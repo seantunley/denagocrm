@@ -590,7 +590,10 @@ test("getLeadPipeline is off the dormant filter, and its callers refuse a null",
   const leads = strip(src("src/app/actions/leads.ts"));
   const calls = [...leads.matchAll(/await getLeadPipeline\(/g)];
   const guarded = [...leads.matchAll(/const (\w+) = await getLeadPipeline\(\w+\);\s*\n\s*if \(!\1\)/g)];
-  assert.equal(calls.length, 3, "a new caller of getLeadPipeline needs a null guard too");
+  // 3 → 4 with `moveLeadWithContact`, the customer-link stage remedy. The number
+  // is the ratchet; the equality below is the actual rule, and it is what proves
+  // the new caller guards its null rather than falling through.
+  assert.equal(calls.length, 4, "a new caller of getLeadPipeline needs a null guard too");
   assert.equal(guarded.length, calls.length,
     "a null now means 'not this workspace's lead' — every caller must refuse, not fall through");
   // A null must not silently satisfy the permission it feeds.
