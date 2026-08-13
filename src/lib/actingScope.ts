@@ -1,13 +1,11 @@
 import "server-only";
 import { getActiveTenantIdIfRequest } from "./auth";
-import { SESSION_COOKIE, verifySession } from "./session";
-import { establishStaffTenantScope } from "./tenantScopeEntry";
 import { basePrisma } from "./db";
 import { actingTenantId } from "./actingTenant";
 import { decideActingScope, type ActingScope } from "./actingScopeRule";
 import { tenantEnforcing } from "./tenantEnforcement";
 import { TenantScopeError } from "./tenantGuard";
-import { currentTenantScope, runInTenantScope } from "./tenantScope";
+import { currentTenantScope, enterTenantScope, runInTenantScope, type TenantScope } from "./tenantScope";
 import { currentScopeClass } from "./tenantWrite";
 
 export type { ActingScope };
@@ -52,29 +50,14 @@ export type { ActingScope };
  * `establishStaffTenantScope` still resolves the membership itself and still
  * refuses when there is none.
  *
- * Returns false on anything unexpected, leaving the scope absent and the caller
- * failing closed exactly as before.
+ * Moved to {@link ./scopeRecovery} so the db.ts guard can share it: an action needs
+ * the same recovery one layer down, and duplicating it would be two copies of the
+ * one piece of logic that must never drift.
  */
-async function restoreStaffScopeFromSession(): Promise<boolean> {
-  try {
-    const { cookies } = await import("next/headers");
-    const store = await cookies();
-    const token = store.get(SESSION_COOKIE)?.value;
-    if (!token) return false;
-    const session = await verifySession(token);
-    if (!session) return false;
-    const { ok } = await establishStaffTenantScope(
-      session.sub,
-      session.tid ?? null,
-      session.role === "owner",
-    );
-    return ok;
-  } catch {
-    // No request, no cookie store, a malformed token: all of them mean "no scope
-    // to recover", which is the state we were already in.
-    return false;
-  }
-}
+const restoreStaffScopeFromSession = async (): Promise<TenantScope | null> => {
+  const { recoverStaffScopeFromSession } = await import("./scopeRecovery");
+  return recoverStaffScopeFromSession();
+};
 
 export async function actingScopeClass(): Promise<ActingScope> {
   const enforcing = tenantEnforcing();
@@ -138,8 +121,25 @@ export async function actingScopeClass(): Promise<ActingScope> {
   // same function `getCurrentUser` uses to establish the scope, it reads through
   // `basePrisma`, and it never touches the memoised promise — so this cannot
   // re-enter anything.
+  // AND IT IS RE-ENTERED **HERE**, IN THE CONTEXT THAT IS ABOUT TO READ IT.
+  //
+  // #519 called the recovery and then re-read the ambient scope, trusting the
+  // `enterWith` inside `establishStaffTenantScope` to be visible on return. In a
+  // Server Action it is not — see the trace quoted on `restoreStaffScopeFromSession`,
+  // where the scope resolves correctly and the very next line reads `ambient=null`.
+  // So the recovery ran, found the right workspace, and refused anyway.
+  //
+  // This is the same lesson #517 already learned one layer up: it made the chokepoint
+  // RETURN the scope so `getCurrentUser` could re-enter it in the caller's own
+  // context. This path took the fix and then threw the returned value away.
+  //
+  // Entering it here costs two assignments and no query, and it fixes more than the
+  // check: every guarded read and write in the REST of the action — the ResearchNote
+  // insert, the Contact update — runs in the same scope instead of failing closed a
+  // few lines later for exactly the same reason.
   if (enforcing && enforcedScope.mode === "closed") {
-    await restoreStaffScopeFromSession();
+    const recovered = await restoreStaffScopeFromSession();
+    if (recovered) enterTenantScope(recovered);
     enforcedScope = currentScopeClass();
   }
 
@@ -249,6 +249,41 @@ export async function actingOwnerTenantId(): Promise<string> {
  * a caller with no ambient scope AND no resolvable session, and there is no
  * correct workspace to invent for it.
  */
+/**
+ * Bind the acting workspace around a WHOLE Server Action, so everything inside it
+ * — guards, guarded reads, settings lookups, writes — resolves the same workspace.
+ *
+ * THIS IS THE ONLY SHAPE THAT ACTUALLY WORKS IN AN ACTION, and the 2026-08-13
+ * Research outage is the proof. Every previous fix established the scope somewhere
+ * INSIDE the call tree (`getCurrentUser`, then `actingScopeClass`, then the db
+ * guard) and each one fixed exactly the reader it touched, because:
+ *
+ *   - a Server Action has no React request store, so #513's holder — the carrier a
+ *     page render relies on — is never filled; and
+ *   - `enterWith` in a callee does not reach the frame that called it, so a scope
+ *     established deep in a helper is invisible to the action body above it.
+ *
+ * Measured, not assumed: with the scope entered inside the auth chokepoint, the
+ * action's own next line read `ambient=null`. Fixing `actingScopeClass` then moved
+ * the failure to `prisma.contact`; fixing the db guard moved it to `AppSetting`.
+ * Each fix was correct and none of them was the fix, because the scope was always
+ * being established BELOW the code that needed it.
+ *
+ * `runInTenantScope` binds a real enclosing frame, which propagates DOWNWARD to
+ * everything the action calls — the direction that does work.
+ *
+ * NEVER WIDENS. An already-bound scope wins and this is a bare `fn()`; with no
+ * resolvable session it is also a bare `fn()`, so the downstream guards fail closed
+ * exactly as they do today rather than inventing a workspace.
+ */
+export async function withActingStaffScope<T>(fn: () => Promise<T>): Promise<T> {
+  if (currentTenantScope()) return fn();
+  const { recoverStaffScopeFromSession } = await import("./scopeRecovery");
+  const recovered = await recoverStaffScopeFromSession();
+  if (!recovered) return fn();
+  return runInTenantScope(recovered, fn);
+}
+
 export async function withStaffConversationScope<T>(fn: () => Promise<T>): Promise<T> {
   if (currentTenantScope()) return fn();
   const tenantId = await actingTenantId();

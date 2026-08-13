@@ -1,6 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 import { SOFT_DELETE_MODELS } from "./softDeleteModels";
-import { currentTenantScope } from "./tenantScope";
+import { currentTenantScope, runInTenantScope } from "./tenantScope";
 import { tenantEnforcing } from "./tenantEnforcement";
 import {
   isTenantScopedModel,
@@ -334,6 +334,38 @@ function buildClient(raw: PrismaClient) {
     query: {
       $allModels: {
         async $allOperations({ model, operation, args, query }: any) {
+          // POINT-OF-USE SCOPE RECOVERY, FOR SERVER ACTIONS.
+          //
+          // A page render always reaches here with a scope: the auth chokepoint
+          // establishes one and #513's request-keyed holder carries it between
+          // segments. A SERVER ACTION has no React request store, so that holder is
+          // never filled, and `enterWith` does not propagate from a callee back up
+          // to the frame that called it. The result is that an action authenticates
+          // successfully and then refuses its own queries — the 2026-08-13 Research
+          // failure, and it is reproduced by scripts/test-action-tenant-scope.ts.
+          //
+          // Recovering HERE rather than at each caller is what fixes the CLASS. The
+          // scope is bound with `runInTenantScope` (a real enclosing frame, not
+          // `enterWith`), so this query and anything nested under it can see it.
+          //
+          // IT CANNOT WIDEN ANYTHING. It runs only when there is NO scope, which is
+          // otherwise an outright refusal — so the choice is between the acting
+          // session's own workspace and a thrown error, never a different workspace.
+          // An existing scope, narrower or `system`, is left untouched: this branch
+          // is not reached when one is present.
+          //
+          // Paid ONLY on the miss path, and a miss today is a hard failure, so no
+          // request that works now pays anything for it.
+          if (tenantEnforcing() && isTenantScopedModel(model) && !currentTenantScope()) {
+            const { recoverStaffScopeFromSession } = await import("./scopeRecovery");
+            const recovered = await recoverStaffScopeFromSession();
+            if (recovered) {
+              return runInTenantScope(recovered, () => {
+                const scopedArgs = applyScopeArgs(model, operation, args);
+                return withRlsScope(ref.c, ref.execRaw, () => query(scopedArgs));
+              });
+            }
+          }
           // Apply tenant scoping HERE (Layer 2), before withRlsScope's $transaction.
           // Prisma's array $transaction loses AsyncLocalStorage context inside its
           // execution callbacks, so currentTenantScope() is unreachable in Layer 1.

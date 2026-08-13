@@ -15,6 +15,7 @@ import {
 } from "@/lib/permissions";
 import { aiCheckDraft, aiResearch } from "@/lib/ai";
 import { inheritedTenantId } from "@/lib/tenantWrite";
+import { withActingStaffScope } from "@/lib/actingScope";
 import { basePrisma } from "@/lib/db";
 import { contactName } from "@/lib/format";
 
@@ -149,6 +150,15 @@ export async function researchRecord(
   _prev: ResearchState | undefined,
   formData: FormData
 ): Promise<ResearchState> {
+  // Bind the acting workspace around the WHOLE action — see withActingStaffScope.
+  // A Server Action gets no tenant scope from the auth chokepoint (no React request
+  // store for #513's holder, and `enterWith` does not travel back up to the caller),
+  // so without this every guarded read below refuses one at a time: the access
+  // check, then Contact, then AppSetting. Binding once here covers all of them.
+  return withActingStaffScope(() => researchRecordInScope(formData));
+}
+
+async function researchRecordInScope(formData: FormData): Promise<ResearchState> {
   // Read grade is only the pre-filter here — the write is gated a few lines down
   // on the record's own edit permission (requireLeadAccess/requireContactAccess),
   // which is what actually authorises the ResearchNote and the record update.
