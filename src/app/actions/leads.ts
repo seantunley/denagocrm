@@ -47,6 +47,7 @@ import {
   type StageGateVerdict,
 } from "@/lib/stageGate";
 import { stageGateFactsForLead } from "@/lib/stageGateFacts";
+import { insertQuoteFromLead, quoteFromLeadDefaults } from "@/lib/quoteFromLead";
 import {
   DERIVED_GATE_MODE,
   STAGE_REMEDIES,
@@ -1140,6 +1141,199 @@ async function moveLeadWithContactInScope(
   revalidatePath(`/leads/${leadId}`);
   revalidatePath("/forecast");
   return { ok: true, gate: verdict };
+}
+
+/**
+ * The `attach_quote` remedy: raise the quote AND make the move, together.
+ *
+ * The third registry entry, and the first added since the machinery existed — so
+ * everything it does that is not "create a quote" is the shape the other two
+ * already established: bind the acting workspace, gate the move, do the work and
+ * the move in one transaction, audit both, re-judge the rule against the facts
+ * this call creates, and report the verdict back.
+ *
+ * `quotes.create` is required ON TOP of `leads.change_stage`. A stage rule must
+ * not become a way to perform a write the caller is not entitled to make — the
+ * same reason `moveLeadWithContact` demands `leads.link_contact`.
+ *
+ * ── WHY THIS ONE IS A basePrisma TRANSACTION AND THE OTHER TWO ARE NOT ───────
+ *
+ * `Quote.number` is `@unique` GLOBALLY, and `nextQuoteNumber` allocates it as
+ * `MAX(number) + 1`. On the tenant-scoped client that maximum is per workspace, so
+ * it would hand back a number another workspace already holds and fail the unique
+ * constraint — the collision the advisory lock exists to prevent, reintroduced by
+ * scoping. The allocation therefore has to run on the bypass client, and the quote
+ * and the move have to share one transaction, so the whole transaction does.
+ *
+ * What that costs, and how it is paid for: the bypass client applies no tenant
+ * filter, so ownership is established BEFORE the transaction — `requireLeadAccess`
+ * and `getLeadPipeline` both refuse a lead outside the acting workspace — and every
+ * write inside it either names `tenantId` explicitly or carries it in the `where`.
+ * The lead update is keyed on `{ id, tenantId }` rather than `{ id }` for that
+ * reason: on the scoped client the guard adds it, and here nothing would.
+ *
+ * The returned `quoteId` is what the board opens the editor with. The quote is
+ * seeded from the lead's product line, so it is a real draft to finish rather than
+ * an empty row created to satisfy a rule.
+ */
+export async function moveLeadWithNewQuote(
+  leadId: string,
+  stageId: string,
+  options?: { overrideReason?: string },
+): Promise<{ ok: boolean; error?: string; gate?: StageGateVerdict; quoteId?: string }> {
+  return withActingStaffScope(() => moveLeadWithNewQuoteInScope(leadId, stageId, options));
+}
+
+async function moveLeadWithNewQuoteInScope(
+  leadId: string,
+  stageId: string,
+  options?: { overrideReason?: string },
+): Promise<{ ok: boolean; error?: string; gate?: StageGateVerdict; quoteId?: string }> {
+  const user = await requireLeadAccess(leadId, "leads.change_stage");
+  if (!(await hasPermission(user, "quotes.create"))) {
+    return { ok: false, error: "You do not have permission to create quotes." };
+  }
+
+  const currentScope = await getLeadPipeline(leadId);
+  if (!currentScope) return { ok: false, error: "Lead not found." };
+  const changingStage = currentScope.stageId !== stageId;
+  const resolved = await resolveOpenStage(stageId);
+  if ("error" in resolved) return { ok: false, error: resolved.error };
+  const targetStage = resolved.stage;
+  if (
+    currentScope.pipelineId !== targetStage.pipelineId &&
+    !(await hasPermission(user, "leads.change_pipeline"))
+  ) {
+    return { ok: false, error: "You cannot move leads between pipelines." };
+  }
+  if (targetStage.entryAction !== "attach_quote") {
+    return { ok: false, error: "That stage does not ask for a quote." };
+  }
+
+  // Read through the GUARDED client, so a lead outside this workspace does not
+  // resolve — the transaction below cannot make that check for itself.
+  const before = await prisma.lead.findUnique({
+    where: { id: leadId },
+    select: {
+      id: true,
+      title: true,
+      tenantId: true,
+      contactId: true,
+      stageId: true,
+      position: true,
+      valueCents: true,
+      color: true,
+      product: { select: { id: true, name: true, basePriceCents: true } },
+    },
+  });
+  if (!before) return { ok: false, error: "Lead not found." };
+  // The bypass transaction stamps this on the quote and its item, and matches on it
+  // in the lead update. There is no correct value to invent if it is absent.
+  if (!before.tenantId) {
+    return { ok: false, error: "This lead has no workspace, so a quote cannot be raised for it." };
+  }
+
+  let verdict = CLEAR_VERDICT;
+  if (changingStage) {
+    const gated = await gateStageMove({ leadId, user, currentScope, targetStage });
+    if ("error" in gated) return { ok: false, error: gated.error };
+    // Judged against the facts this call creates — the real evaluator, the same
+    // gates. See the note where `verdictAfterRemedy` used to be in stageGate.ts:
+    // the criteria tree is where `and`, `or` and `not` live, so the only honest
+    // way to ask "will this remedy get the lead in" is to ask the rule again.
+    verdict = gated.move
+      ? evaluateStageMove({
+          ...gated.move,
+          facts: factsAfterRemedy(gated.move.facts, STAGE_REMEDIES.attach_quote),
+        })
+      : gated.verdict;
+    const overrideReason = options?.overrideReason?.trim() ?? "";
+    if (verdict.requiresReason && overrideReason.length < MIN_OVERRIDE_REASON) {
+      return { ok: false, gate: verdict };
+    }
+    if (!verdict.allowed) {
+      return { ok: false, error: refusalSentence(verdict, targetStage.name), gate: verdict };
+    }
+  }
+
+  // Resolved OUTSIDE the transaction: two AppSetting reads, and holding the
+  // quote-number advisory lock across them would serialise every concurrent quote
+  // creation behind a settings lookup.
+  const defaults = await quoteFromLeadDefaults();
+  const position = changingStage ? await nextPosition(stageId) : before.position;
+  const tenantId = before.tenantId;
+
+  const created = await basePrisma.$transaction(async (tx) => {
+    const quote = await insertQuoteFromLead(tx, {
+      lead: {
+        id: leadId,
+        contactId: before.contactId,
+        valueCents: before.valueCents,
+        color: before.color,
+        product: before.product,
+      },
+      tenantId,
+      createdById: user.id,
+      defaults,
+    });
+    // `{ id, tenantId }`, not `{ id }`: this is the bypass client, so nothing adds
+    // the workspace for us. `updateMany` because a composite where on a non-unique
+    // pair is not a `update` — and the count is checked, so a lead that moved
+    // workspace between the read and here fails the operation instead of silently
+    // updating nothing.
+    const moved = await tx.lead.updateMany({
+      where: { id: leadId, tenantId },
+      data: changingStage
+        ? { stageId, position, stageEnteredAt: new Date() }
+        : {},
+    });
+    if (moved.count !== 1) throw new Error("Lead not found.");
+
+    await logAuditStrict({
+      action: "quote.created",
+      summary: `Created quote Q-${quote.number} for lead “${before.title}”${changingStage ? ` and moved it to ${targetStage.name}` : ""}`,
+      leadId,
+      contactId: before.contactId,
+      user,
+      after: { quoteId: quote.id, number: quote.number, stageId },
+    }, tx);
+    if (changingStage) {
+      await logAuditStrict({
+        action: "lead.stage_changed",
+        summary: `Moved “${before.title}” to ${targetStage.name}`,
+        leadId,
+        contactId: before.contactId,
+        user,
+        before: { stageId: before.stageId, position: before.position, pipelineId: currentScope.pipelineId },
+        after: { stageId, position, pipelineId: targetStage.pipelineId },
+      }, tx);
+    }
+    if (verdict.requiresReason && options?.overrideReason?.trim()) {
+      await logAuditStrict({
+        action: "lead.stage_gate_overridden",
+        summary: `Moved “${before.title}” into ${targetStage.name} without ${verdict.unmet.map(describeUnmet).join("; ")} — reason: “${options.overrideReason.trim()}”`,
+        leadId,
+        contactId: before.contactId,
+        user,
+        after: { stageId },
+        metadata: {
+          direction: verdict.direction,
+          mode: verdict.mode,
+          unmet: verdict.unmet,
+          reason: options.overrideReason.trim(),
+          via: "attach_quote",
+        },
+      }, tx);
+    }
+    return quote;
+  }, GOVERNANCE_TX);
+
+  if (changingStage) await emitLeadJourneyEvent("stage_entered", leadId);
+  revalidatePath("/leads");
+  revalidatePath(`/leads/${leadId}`);
+  revalidatePath("/quotes");
+  revalidatePath("/forecast");
+  return { ok: true, gate: verdict, quoteId: created.id };
 }
 
 export async function assignLead(leadId: string, assignedToId: string) {

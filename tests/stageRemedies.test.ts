@@ -187,7 +187,14 @@ test("the CHECK constraint permits exactly the actions this build offers", () =>
       continue;
     }
     // The LAST migration to define it wins, which is what the database sees.
-    for (const match of sql.matchAll(/"entryAction" IS NULL OR "entryAction" IN \(([^)]*)\)/g)) {
+    //
+    // Whitespace-tolerant on purpose. The pattern used to require the clause on a
+    // single line with single spaces, so wrapping a longer vocabulary across lines
+    // — which the third action forced — made it match nothing, and the loop then
+    // silently read the PREVIOUS migration's list. That is a false reading rather
+    // than a failure: it happens to fail loudly here, but only because the lists
+    // differ. Formatting must not decide which constraint this test believes in.
+    for (const match of sql.matchAll(/"entryAction"\s+IS\s+NULL\s+OR\s+"entryAction"\s+IN\s*\(([^)]*)\)/g)) {
       allowed = match[1].split(",").map((value) => value.trim().replace(/^'|'$/g, ""));
     }
   }

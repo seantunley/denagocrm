@@ -53,6 +53,7 @@ import {
   moveLead,
   moveLeadToTestDrive,
   moveLeadWithContact,
+  moveLeadWithNewQuote,
   searchLinkableContacts,
 } from "@/app/actions/leads";
 import { formatZAR } from "@/lib/format";
@@ -700,6 +701,30 @@ export default function KanbanBoard({
     testDrive?: { productId: string | null; date: string; time: string; location: string };
     /** A customer already chosen for the link remedy, carried across the prompt. */
     contactId?: string;
+    /**
+     * The quote remedy was confirmed and the server then asked for a reason.
+     *
+     * A flag rather than a payload, because unlike the other two this remedy
+     * collects nothing from the person — the quote is seeded from the lead. What
+     * it records is WHICH retry to make, so the reason prompt does not fall
+     * through to a plain `requestMove` that would refuse for the missing quote.
+     */
+    newQuote?: boolean;
+  } | null>(null);
+  /**
+   * The quote remedy: a confirmation, not a form.
+   *
+   * The quote editor is a 77KB dialog that needs products, settings and fee
+   * definitions; mounting it on the board would put all of that in the leads
+   * page's payload for a stage most boards do not have. So this confirms the
+   * intent, the server creates the draft seeded from the lead's product line, and
+   * the board then opens the real editor on the quotes page to finish it — one
+   * click to satisfy the rule, and the full editor to do the actual work.
+   */
+  const [pendingQuote, setPendingQuote] = useState<{
+    lead: KanbanLead;
+    stageId: string;
+    stageName: string;
   } | null>(null);
   const [pendingOutcome, setPendingOutcome] = useState<{ lead: KanbanLead; mode: "won" | "lost" } | null>(null);
   const [query, setQuery] = useState("");
@@ -853,9 +878,22 @@ export default function KanbanBoard({
       // the registry, so adding a remedy does not add a branch here.
       if (!result.ok && result.remedy) {
         setStages(snapshot);
-        const remedy = STAGE_REMEDIES[result.remedy];
-        if (remedy.dialog === "test_drive") setPendingTd({ lead, stageId: targetStageId });
-        else setPendingLink({ lead, stageId: targetStageId, stageName: target.name });
+        // A switch on the registry's own `dialog`, exhaustive by type — so adding a
+        // remedy is a compile error here until its dialog is wired, rather than an
+        // if/else whose final branch silently becomes the default for anything new.
+        // That is what the previous `if (test_drive) … else contact_link` would have
+        // done to this very remedy.
+        switch (STAGE_REMEDIES[result.remedy].dialog) {
+          case "test_drive":
+            setPendingTd({ lead, stageId: targetStageId });
+            break;
+          case "contact_link":
+            setPendingLink({ lead, stageId: targetStageId, stageName: target.name });
+            break;
+          case "quote_create":
+            setPendingQuote({ lead, stageId: targetStageId, stageName: target.name });
+            break;
+        }
         return;
       }
       if (!result.ok && result.gate?.requiresReason) {
@@ -932,11 +970,67 @@ export default function KanbanBoard({
     });
   }
 
+  /** The quote remedy, from its confirmation. */
+  function confirmNewQuote() {
+    if (!pendingQuote) return;
+    const { lead, stageId } = pendingQuote;
+    setPendingQuote(null);
+    submitNewQuote(lead, stageId);
+  }
+
+  /**
+   * Raise-and-move, taking its target EXPLICITLY — same reason as the other two:
+   * the reason-retry calls it directly, and reading `pendingQuote` back out of
+   * state would mean re-populating that state and waiting a frame to see it.
+   */
+  function submitNewQuote(lead: KanbanLead, stageId: string, overrideReason?: string) {
+    const fromStage = stages.find((stage) => stage.leads.some((item) => item.id === lead.id));
+    if (!fromStage) return;
+    const target = stages.find((stage) => stage.id === stageId);
+    const snapshot = stages;
+    if (fromStage.id !== stageId) applyMove(lead.id, fromStage.id, stageId);
+    startTransition(async () => {
+      const result = await moveLeadWithNewQuote(
+        lead.id,
+        stageId,
+        overrideReason ? { overrideReason } : undefined,
+      ).catch(() => ({ ok: false as const, error: "Couldn't raise the quote", gate: undefined, quoteId: undefined }));
+      // A stage can want the quote AND something else. `newQuote` tells the retry
+      // to come back through here rather than through a plain move, which would be
+      // refused for the quote that does not exist yet.
+      if (!result.ok && result.gate?.requiresReason) {
+        setStages(snapshot);
+        setPendingGate({
+          lead,
+          stageId,
+          stageName: target?.name ?? "this stage",
+          verdict: result.gate,
+          newQuote: true,
+        });
+        return;
+      }
+      if (!result.ok) {
+        rollbackTo(snapshot, result.error ?? "Couldn't raise the quote");
+        return;
+      }
+      toast.success(`Quote raised for ${lead.name}`);
+      // Straight into the real editor to finish it. The draft is already seeded
+      // from the lead's product line, and the rule is already satisfied, so
+      // abandoning this navigation leaves a usable draft rather than a broken move.
+      if (result.quoteId) router.push(`/quotes?edit=${result.quoteId}`);
+      else router.refresh();
+    });
+  }
+
   /** Retry the move the server asked a reason for, this time carrying it. */
   function confirmGateOverride(reason: string) {
     if (!pendingGate) return;
-    const { lead, stageId, testDrive, contactId } = pendingGate;
+    const { lead, stageId, testDrive, contactId, newQuote } = pendingGate;
     setPendingGate(null);
+    if (newQuote) {
+      submitNewQuote(lead, stageId, reason);
+      return;
+    }
     if (contactId) {
       // Re-send the customer they already chose, with the reason, rather than
       // showing the picker a second time.
@@ -1291,6 +1385,12 @@ export default function KanbanBoard({
           onCancel={() => setPendingLink(null)}
           onConfirm={confirmContactLink}
         />
+        <NewQuoteDialog
+          key={pendingQuote ? `${pendingQuote.lead.id}-${pendingQuote.stageId}` : "quote-closed"}
+          pending={pendingQuote}
+          onCancel={() => setPendingQuote(null)}
+          onConfirm={confirmNewQuote}
+        />
         <StageRuleReasonDialog
           key={pendingGate ? `${pendingGate.lead.id}-${pendingGate.stageId}` : "gate-closed"}
           pending={pendingGate}
@@ -1299,6 +1399,61 @@ export default function KanbanBoard({
         />
       </DndContext>
     </>
+  );
+}
+
+/**
+ * The `attach_quote` remedy's confirmation.
+ *
+ * Deliberately NOT the quote editor. That dialog is 77KB and needs products,
+ * settings and fee definitions loaded with it; mounting it here would put all of
+ * that in the leads page's payload for a stage most boards do not have. The
+ * server creates the draft seeded from the lead's product line and the board opens
+ * the real editor afterwards — so this screen's job is to say plainly what is about
+ * to happen, which is also the honest answer to "does this create an empty quote
+ * just to satisfy a rule?". It does not: it creates the same draft the lead's own
+ * "Create quote" button creates, and takes you straight to it.
+ */
+function NewQuoteDialog({
+  pending,
+  onCancel,
+  onConfirm,
+}: {
+  pending: { lead: KanbanLead; stageId: string; stageName: string } | null;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  useEffect(() => {
+    if (!pending) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onCancel();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [pending, onCancel]);
+
+  if (!pending) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl dark:bg-slate-900">
+        <h2 className="text-base font-semibold">Raise a quote</h2>
+        <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+          {pending.stageName} needs a quote before a deal may enter it.
+        </p>
+        <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+          This creates a draft quote for <strong>{pending.lead.name}</strong>, pre-filled from the
+          lead, moves the card, and opens the quote for you to finish.
+        </p>
+        <div className="mt-4 flex justify-end gap-2">
+          <button type="button" className="btn-ghost" onClick={onCancel}>
+            Cancel
+          </button>
+          <button type="button" className="btn-primary" onClick={onConfirm}>
+            {STAGE_REMEDIES.attach_quote.cta}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
