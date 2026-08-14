@@ -16,7 +16,7 @@ import {
   STAGE_REMEDIES,
   derivedCriteria,
   factsAfterRemedy,
-  factsIfRemedyIdeal,
+  offerIsPredictable,
 } from "../src/lib/stageRemedies";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -296,13 +296,14 @@ test("the offer is decided by asking the real evaluator, not by inspecting a fla
   // rather than "does this stage name a remedy?", which is what the board used to
   // decide for itself.
   //
-  // WHICH projection it asks with was itself a defect and is pinned separately
-  // below: this asserts the shape, the test at the end of the file asserts that
-  // the offer uses the OPTIMISTIC projection and the actions never do.
+  // WHETHER it may ask at all was itself a defect, twice, and is pinned separately
+  // below: a remedy whose outcome depends on a choice cannot be predicted, so it
+  // is not predicted.
   const code = shipped("src/app/actions/leads.ts");
   const start = code.indexOf("async function gateStageMove");
   const body = code.slice(start, code.indexOf("\nconst BROKEN_RULE_MESSAGE", start));
-  assert.match(body, /evaluateStageMove\(\{ \.\.\.move, facts: factsIfRemedyIdeal\(move\.facts, remedy\) \}\)\.allowed/);
+  assert.match(body, /evaluateStageMove\(\{ \.\.\.move, facts: factsAfterRemedy\(move\.facts, remedy\) \}\)\.allowed/);
+  assert.match(body, /!offerIsPredictable\(remedy\) \|\|/, "…and only when prediction is possible");
   assert.match(body, /remedy: worthOffering \? remedy : null/);
 });
 
@@ -331,19 +332,48 @@ test("OFFER — a rule wanting a customer AND their email still opens the picker
   const input = moveInput("block", rule, facts({ contactLinked: false, contactEmail: null }));
   assert.equal(evaluateStageMove(input).allowed, false, "unlinked, it refuses");
 
-  // What the offer site now asks: could ANY choice satisfy this?
-  const ideal = evaluateStageMove({ ...input, facts: factsIfRemedyIdeal(input.facts, LINK) });
-  assert.equal(ideal.allowed, true, "a customer with an email would satisfy it — so offer the picker");
-
-  // What the guaranteed effect says, and why it was the wrong question here.
+  // The guarantee alone cannot promise an email, which is why predicting the
+  // offer from it suppressed the picker.
   const guaranteed = evaluateStageMove({ ...input, facts: factsAfterRemedy(input.facts, LINK) });
-  assert.equal(guaranteed.allowed, false, "…while the guarantee alone cannot promise an email");
+  assert.equal(guaranteed.allowed, false);
+
+  // So this remedy is not predicted at all. The picker opens whenever it
+  // addresses something unmet, and the action judges what was picked.
+  assert.equal(offerIsPredictable(LINK), false, "its outcome depends on which customer is chosen");
 });
 
-test("ACTION — the optimistic projection never permits the move", () => {
-  // The safety property. Opening a dialog permits nothing; the action re-judges
-  // against the contact actually chosen, so picking one WITHOUT an email is still
-  // refused, naming what is missing.
+test("no rule about real values can be suppressed by an invented one", () => {
+  // THE SECOND REPORTED DEFECT, and why guessing was abandoned rather than
+  // improved. Sentinel values fixed `email is not empty` and still suppressed a
+  // rule about the address itself — an invented address cannot satisfy a rule
+  // about real ones, and every sentinel has that shape for some rule.
+  //
+  // The report named `ends_with`, which this operator set does not have; the
+  // defect is the same with `contains`, which it does. That is the point — the
+  // failure belongs to the whole class of value rules, not to one operator.
+  //
+  // The property is now structural: the offer for a choice-dependent remedy does
+  // not evaluate anything, so there is no value for a rule to disagree with.
+  const rule: StageCriteriaGroup = {
+    logic: "and",
+    conditions: [LINKED, { field: "contact.email", operator: "contains", value: ".co.za" }],
+  };
+  const input = moveInput("block", rule, facts({ contactLinked: false, contactEmail: null }));
+  assert.equal(evaluateStageMove(input).allowed, false, "unlinked, it refuses");
+  assert.equal(offerIsPredictable(LINK), false, "…and the picker opens regardless of the operator");
+
+  // …and a customer whose address DOES match clears it, which is the outcome the
+  // suppressed picker was preventing anyone from reaching.
+  const base = factsAfterRemedy(input.facts, LINK);
+  const chosen = { ...base, contact: { ...base.contact, email: "buyer@acme.co.za" } };
+  assert.deepEqual(evaluateStageMove({ ...input, facts: chosen }), CLEAR_VERDICT);
+});
+
+test("ACTION — opening the picker permits nothing", () => {
+  // The safety property. The action re-judges against the contact actually
+  // chosen, so picking one WITHOUT an email is still refused, naming what is
+  // missing. That refusal is the cost of not guessing, and it is the right cost:
+  // a dialog that sometimes ends in a refusal beats a rule nobody can satisfy.
   const rule: StageCriteriaGroup = {
     logic: "and",
     conditions: [LINKED, { field: "contact.email", operator: "is_not_empty", value: "" }],
@@ -368,36 +398,28 @@ test("ACTION — the optimistic projection never permits the move", () => {
   );
 });
 
-test("the best case does not overwrite details the lead already has", () => {
-  // A lead whose contact facts are already populated must keep them, or the
-  // projection would answer a rule about THIS lead with invented values.
-  const already = facts({ contactLinked: false, contactEmail: "known@customer.com" });
-  const ideal = factsIfRemedyIdeal(already, LINK);
-  assert.equal(ideal.contact.email, "known@customer.com");
-  assert.equal(ideal.contact.linked, true);
-});
+test("a remedy that collects nothing IS still predicted", () => {
+  // The suppression is worth keeping where it is sound. Booking a test drive
+  // creates exactly one planned test drive whatever anyone does, so the server can
+  // say in advance whether it would get the lead in — and refuse once, naming
+  // everything missing, rather than opening a dialog that leads to the same
+  // refusal with the booking thrown away.
+  assert.equal(offerIsPredictable(DRIVE), true);
 
-test("a remedy that collects nothing has no separate best case", () => {
-  // book_test_drive declares no offerEffect, so the offer and the guarantee are
-  // the same question — there is no choice to make it go better.
-  const snapshot = facts({ testDrives: 0 });
-  assert.deepEqual(factsIfRemedyIdeal(snapshot, DRIVE), factsAfterRemedy(snapshot, DRIVE));
-});
-
-test("the offer site uses the ideal projection and the actions do not", () => {
-  const code = shipped("src/app/actions/leads.ts");
-  const gate = code.slice(
-    code.indexOf("async function gateStageMove"),
-    code.indexOf("\nconst BROKEN_RULE_MESSAGE"),
+  const rule: StageCriteriaGroup = { logic: "and", conditions: [HAS_QUOTE] };
+  const input = moveInput("block", rule, facts({ testDrives: 0, quotes: 0 }));
+  assert.equal(
+    evaluateStageMove({ ...input, facts: factsAfterRemedy(input.facts, DRIVE) }).allowed,
+    false,
+    "booking would not satisfy a quote rule, so the dialog is not worth opening",
   );
-  assert.match(gate, /factsIfRemedyIdeal\(move\.facts, remedy\)/, "the offer asks the optimistic question");
-  assert.doesNotMatch(gate, /factsAfterRemedy\(/, "…and must not decide the offer on the guarantee");
+});
 
-  // Every remedy action judges on the guarantee (plus what it actually knows).
-  // An optimistic projection there would let a lead in on a choice nobody made.
-  for (const fn of ["moveLeadWithContactInScope", "moveLeadToTestDrive"]) {
-    const start = code.indexOf(`function ${fn}`);
-    const body = code.slice(start, code.indexOf("\nexport ", start + 1));
-    assert.doesNotMatch(body, /factsIfRemedyIdeal\(/, `${fn} must never judge on the best case`);
-  }
+test("no invented value survives anywhere in the registry", () => {
+  // The mechanism that produced the second defect is gone, not merely unused. A
+  // sentinel reintroduced for any future remedy would fail a rule about real
+  // values in exactly the same way.
+  const code = shipped("src/lib/stageRemedies.ts");
+  assert.doesNotMatch(code, /BEST_CASE_EMAIL|BEST_CASE_PHONE|offerEffect/);
+  assert.doesNotMatch(code, /@example\.com/, "no stand-in address may reach a decision");
 });

@@ -52,7 +52,7 @@ import {
   STAGE_REMEDIES,
   derivedCriteria,
   factsAfterRemedy,
-  factsIfRemedyIdeal,
+  offerIsPredictable,
   remedyAddresses,
   remedyFor,
   type StageRemedy,
@@ -517,23 +517,25 @@ async function gateStageMove(input: {
   // better than refusing twice with the work wasted in between.
   const remedy = remedyFor(targetStage.entryAction);
   const addresses = remedy !== null && verdict.unmet.length > 0 && remedyAddresses(remedy, verdict.unmet);
-  // Asked of the real evaluator, against the BEST the remedy could achieve.
+  // PREDICTED ONLY WHERE PREDICTION IS POSSIBLE.
   //
-  // The distinction matters and reading `factsAfterRemedy` here was wrong.
-  // That is what the remedy GUARANTEES whatever is chosen — for `link_contact`,
-  // only that a customer is attached — so a stage requiring a customer AND that
-  // customer's email was refused outright and the picker never opened, even
-  // though choosing a customer who has an email satisfies both. The action
-  // projects the chosen contact's real email and phone, and that code was
-  // unreachable.
+  // A remedy that collects nothing — booking a test drive, raising a quote — has
+  // an outcome `effect` describes exactly, so the server can say in advance
+  // whether doing it would get the lead in, and refuse once naming everything
+  // missing rather than opening a dialog that leads to the same refusal.
   //
-  // The offer asks "could ANY choice satisfy this?"; the action asks "does THIS
-  // choice satisfy it?". Optimism is safe HERE and only here, because opening a
-  // dialog permits nothing — every remedy action re-judges against what actually
-  // happened, and refuses naming what is still missing if the choice falls short.
+  // `link_contact` is different: the facts afterwards depend on the customer
+  // chosen. Two attempts at predicting that were both wrong in the same
+  // direction — `effect` alone suppressed the picker for
+  // `and(linked, email is not empty)`, and sentinel values fixed that case while
+  // still suppressing `contact.email ends_with ".co.za"`, because an invented
+  // address cannot satisfy a rule about real ones and every sentinel has that
+  // shape somewhere. So it is offered whenever it addresses something unmet, and
+  // `moveLeadWithContact` judges the actual choice.
   const worthOffering =
     addresses &&
-    evaluateStageMove({ ...move, facts: factsIfRemedyIdeal(move.facts, remedy) }).allowed;
+    (!offerIsPredictable(remedy) ||
+      evaluateStageMove({ ...move, facts: factsAfterRemedy(move.facts, remedy) }).allowed);
   return { verdict, remedy: worthOffering ? remedy : null, move };
 }
 
