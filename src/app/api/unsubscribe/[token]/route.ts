@@ -5,6 +5,7 @@ import { resolveCampaignRecipientTenant } from "@/lib/tokenTenant";
 import { brandForTenant } from "@/lib/tenantBrand";
 import { escapeHtml } from "@/lib/escapeHtml";
 import { PLATFORM_NAME } from "@/lib/platformIdentity";
+import { GOVERNANCE_TX } from "@/lib/audit";
 
 /**
  * MARKETING UNSUBSCRIBE — whose brand, and on which verb.
@@ -137,14 +138,26 @@ export async function POST(_req: Request, { params }: { params: Promise<{ token:
       async () => {
         const r = await prisma.campaignRecipient.findUnique({ where: { token } });
         if (!r) return false;
-        await prisma.contact.update({
-          where: { id: r.contactId },
-          data: { marketingOptOut: true },
-        });
-        await prisma.campaignRecipient.update({
-          where: { id: r.id },
-          data: { unsubscribedAt: new Date() },
-        });
+        // ONE TRANSACTION, because the two writes and the sentence we show are a
+        // single claim. Sequentially, a failure on the second left the contact
+        // genuinely opted out while the catch below told them it had not worked —
+        // so the person is unsubscribed, believes they are not, and the row that
+        // would show when it happened is missing. Every later reader disagrees
+        // with every other one.
+        //
+        // The direction of that error is the harmless one for the customer, which
+        // is exactly why it would have gone unnoticed: nobody complains about mail
+        // they stopped receiving.
+        await prisma.$transaction(async (tx) => {
+          await tx.contact.update({
+            where: { id: r.contactId },
+            data: { marketingOptOut: true },
+          });
+          await tx.campaignRecipient.update({
+            where: { id: r.id },
+            data: { unsubscribedAt: new Date() },
+          });
+        }, GOVERNANCE_TX);
         return true;
       },
       () => false,

@@ -88,6 +88,29 @@ test("the opt-out still commits inside the recipient's tenant scope", () => {
   assert.match(code, /const owner = await resolveCampaignRecipientTenant\(token\);/);
 });
 
+test("the opt-out and its timestamp commit together", () => {
+  // Two sequential writes and a sentence that reports on both. A failure on the
+  // SECOND left the contact genuinely opted out while the catch told them it had
+  // not worked — so the person is unsubscribed, believes they are not, and the
+  // row recording when it happened is missing. Nothing complains, because nobody
+  // reports mail they stopped receiving.
+  //
+  // Asserted positionally: both updates must be INSIDE the transaction callback,
+  // which is what a later edit adding a third write outside it would break.
+  const code = shipped(ROUTE);
+  const post = code.slice(code.indexOf("export async function POST"));
+  const txAt = post.indexOf("prisma.$transaction(");
+  assert.ok(txAt >= 0, "the writes must share a transaction");
+
+  for (const write of ["tx.contact.update(", "tx.campaignRecipient.update("]) {
+    const at = post.indexOf(write);
+    assert.ok(at > txAt, `${write} must run inside the transaction, not before it`);
+  }
+  // …and neither may be reached through the non-transactional client any more.
+  assert.doesNotMatch(post, /prisma\.contact\.update\(/, "the standalone contact write is what this replaced");
+  assert.doesNotMatch(post, /prisma\.campaignRecipient\.update\(/, "…and so is the standalone timestamp write");
+});
+
 test("success is claimed only when the write committed", () => {
   // Pre-existing and load-bearing: telling someone they have been unsubscribed
   // when nothing committed is the compliance failure this route exists to avoid.
