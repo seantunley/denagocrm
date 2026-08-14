@@ -11,6 +11,7 @@ import { currentTenantScope } from "./tenantScope";
 import { trackedLinkPattern } from "./trackRedirect";
 import { escapeHtml } from "./escapeHtml";
 import { unsubscribeUrlFor, unsubscribeHeadersFor } from "./unsubscribeLinks";
+import { inlineEmailStyles } from "./emailInlineStyles";
 
 export type SegmentCriteria = {
   source?: string;
@@ -167,9 +168,22 @@ export function buildTrackedEmail(personalizedHtml: string, token: string, brand
   // platform origin stays valid forever, so a campaign sent last month tracks
   // and unsubscribes exactly as before.
   const base = emailBase(brand);
+  // INLINE THE BODY'S STYLES BEFORE ANYTHING ELSE TOUCHES IT.
+  //
+  // The shell around this is already email-safe — a 600px presentation table with
+  // inline styles. The BODY was not: a `<p>` or a `<ul>` carrying no style
+  // attribute is at the mercy of each client's default stylesheet, and Outlook's
+  // is not the browser's. This is the send-time half of the Dittofeed borrow, and
+  // it is deliberately not MJML — see emailInlineStyles.ts for why, and for why
+  // tables are left alone.
+  //
+  // Applied FIRST because it only ever adds `style` attributes to opening tags,
+  // while the two steps below rewrite `href` values and append markup. Doing it
+  // last would mean styling the tracking pixel.
+  const styled = inlineEmailStyles(personalizedHtml);
   // Same pattern the click route reads the campaign's vouched-for hosts with, so
   // the set of links rewritten here and the set accepted there cannot drift.
-  const rewritten = personalizedHtml.replace(
+  const rewritten = styled.replace(
     trackedLinkPattern(),
     (_m, url) => `href="${base}/api/track/c/${token}?u=${encodeURIComponent(url)}"`,
   );

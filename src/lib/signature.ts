@@ -1,5 +1,6 @@
 /** Email signature: custom HTML if the user set one, else the branded template. */
 import { PLATFORM_NAME } from "./platformIdentity";
+import { inlineEmailStyles } from "./emailInlineStyles";
 import type { CompanyProfile } from "./companyBrand";
 import { escapeHtml } from "./escapeHtml";
 
@@ -197,9 +198,13 @@ ${socialRow}${footerRow}</table>`;
 
 /** Wraps editor HTML + signature into a complete email body. */
 export function buildEmailHtml(bodyHtml: string, signature: string): string {
+  // The body comes out of the SAME rich editor the campaign templates use, so it
+  // arrives with the same problem: tags carrying no style attribute, at the mercy
+  // of whatever default stylesheet the recipient's client applies. The signature
+  // is already inline-styled and is left alone.
   return `<!DOCTYPE html>
 <html><body style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#1e293b;line-height:1.6;">
-${bodyHtml}
+${inlineEmailStyles(bodyHtml)}
 ${signature}
 </body></html>`;
 }
