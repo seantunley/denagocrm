@@ -735,6 +735,11 @@ model Lead {
   researchedAt DateTime?
   viewedAt     DateTime? // first time a staff member opened the lead
   stageEnteredAt DateTime @default(now()) // when it landed in the current stage (stale-age flag)
+  /// Attention Centre: hide this lead's signals until then. NULL means never
+  /// snoozed, and an elapsed timestamp means the snooze is over — the same state,
+  /// so neither needs a backfill. A signal you have acknowledged must stop
+  /// shouting, or the list stops being read.
+  attentionSnoozedUntil DateTime?
 
   deletedAt     DateTime?
   deletedByName String?
