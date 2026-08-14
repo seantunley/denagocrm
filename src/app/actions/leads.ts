@@ -41,7 +41,7 @@ import {
   parseStageCriteria,
   parseStageGateMode,
   refusalSentence,
-  verdictAfterRemedy,
+  type StageMoveInput,
   type StageCriteriaGroup,
   type StageGate,
   type StageGateVerdict,
@@ -51,6 +51,7 @@ import {
   DERIVED_GATE_MODE,
   STAGE_REMEDIES,
   derivedCriteria,
+  factsAfterRemedy,
   remedyAddresses,
   remedyFor,
   type StageRemedy,
@@ -454,11 +455,12 @@ async function gateStageMove(input: {
   currentScope: { pipelineId: string; stageId: string };
   targetStage: PipelineStageRow;
 }): Promise<
-  // `canOverride` rides along because the remedy paths need it to re-judge what
-  // is left after their own work — see `verdictAfterRemedy`. Recomputing it there
-  // would be a second permission read per move; reading it back out of the
-  // verdict would be a shortcut that inverts silently if the mode table changes.
-  | { verdict: StageGateVerdict; remedy: StageRemedy | null; canOverride: boolean }
+  // `move` is the whole question — both gates, the facts and the override
+  // permission — so a remedy path can ask it AGAIN with the facts its own work is
+  // about to create. That is the only way to re-judge a rule without
+  // reimplementing `and`/`or`/`not`; see the note where `verdictAfterRemedy` used
+  // to be in stageGate.ts. `null` when nothing was evaluated at all.
+  | { verdict: StageGateVerdict; remedy: StageRemedy | null; move: StageMoveInput | null }
   | { error: string; gate?: StageGateVerdict }
 > {
   const { leadId, user, currentScope, targetStage } = input;
@@ -479,19 +481,19 @@ async function gateStageMove(input: {
   // nothing for this feature.
   const entryLive = entry.mode !== "off" && Boolean(entry.criteria);
   const exitLive = Boolean(exit && exit.mode !== "off" && exit.criteria);
-  if (!entryLive && !exitLive) return { verdict: CLEAR_VERDICT, remedy: null, canOverride: false };
+  if (!entryLive && !exitLive) return { verdict: CLEAR_VERDICT, remedy: null, move: null };
 
   const facts = await stageGateFactsForLead(leadId);
   if (!facts) return { error: "Lead not found." };
 
-  const canOverride = await hasPermission(user, "leads.override_stage_rules");
-  const verdict = evaluateStageMove({
+  const move: StageMoveInput = {
     from: fromRow && exit ? { stageId: fromRow.id, order: fromRow.order, exit } : null,
     to: { stageId: targetStage.id, order: targetStage.order, entry },
     samePipeline,
     facts,
-    canOverride,
-  });
+    canOverride: await hasPermission(user, "leads.override_stage_rules"),
+  };
+  const verdict = evaluateStageMove(move);
 
   // WHICH REMEDY TO OFFER, decided HERE rather than by the board.
   //
@@ -514,9 +516,13 @@ async function gateStageMove(input: {
   // better than refusing twice with the work wasted in between.
   const remedy = remedyFor(targetStage.entryAction);
   const addresses = remedy !== null && verdict.unmet.length > 0 && remedyAddresses(remedy, verdict.unmet);
+  // Asked of the real evaluator, against the facts the remedy would create — the
+  // same question the remedy action itself will ask, so the offer and the outcome
+  // cannot disagree.
   const worthOffering =
-    addresses && verdictAfterRemedy(verdict, remedy.satisfies.field, canOverride).allowed;
-  return { verdict, remedy: worthOffering ? remedy : null, canOverride };
+    addresses &&
+    evaluateStageMove({ ...move, facts: factsAfterRemedy(move.facts, remedy) }).allowed;
+  return { verdict, remedy: worthOffering ? remedy : null, move };
 }
 
 const BROKEN_RULE_MESSAGE =
@@ -745,11 +751,16 @@ export async function moveLeadToTestDrive(
     // Nothing caught it because the tests around this are source-shape tests, and
     // the shape was right; only the arithmetic of "not booked yet" against "must
     // be booked" was wrong.
-    verdict = verdictAfterRemedy(
-      gated.verdict,
-      STAGE_REMEDIES.book_test_drive.satisfies.field,
-      gated.canOverride,
-    );
+    //
+    // Judged by re-running the REAL evaluator on the facts this booking creates,
+    // never by editing the verdict — the criteria tree is where `and`/`or`/`not`
+    // live and a flattened list has already lost it.
+    verdict = gated.move
+      ? evaluateStageMove({
+          ...gated.move,
+          facts: factsAfterRemedy(gated.move.facts, STAGE_REMEDIES.book_test_drive),
+        })
+      : gated.verdict;
     const overrideReason = options?.overrideReason?.trim() ?? "";
     if (verdict.requiresReason && overrideReason.length < MIN_OVERRIDE_REASON) {
       // Same contract as `moveLead`: the client is asked for a reason BY THE
@@ -984,7 +995,19 @@ async function moveLeadWithContactInScope(
   // client — a forged id from another workspace does not exist here.
   const contact = await prisma.contact.findUnique({
     where: { id: contactId },
-    select: { id: true, tenantId: true, firstName: true, lastName: true, company: true, isCompany: true },
+    // email and phone are selected for the GATE, not for the link — a stage may
+    // ask for "the customer has an email", and after this call that fact is this
+    // contact's email. See the re-evaluation below.
+    select: {
+      id: true,
+      tenantId: true,
+      firstName: true,
+      lastName: true,
+      company: true,
+      isCompany: true,
+      email: true,
+      phone: true,
+    },
   });
   if (!contact) return { ok: false, error: "That customer is not available in this workspace." };
 
@@ -1005,20 +1028,32 @@ async function moveLeadWithContactInScope(
     // whole, and the move was refused after the customer had been chosen. The
     // remedy the board offered accomplished nothing.
     //
-    // `verdictAfterRemedy` discounts the clause and re-judges what is left under
-    // the same mode rules, so a residual `reason` gate still asks and a residual
-    // `block` still refuses — naming only what is genuinely still missing. It is
-    // also what the audit below records, so the override entry no longer lists a
-    // customer link as unmet in the same transaction that writes one.
-    verdict = verdictAfterRemedy(
-      gated.verdict,
-      // From the REGISTRY, not a literal. The field this remedy satisfies is
-      // declared in one place and used to derive the criterion, to decide whether
-      // to offer the remedy, and to discount it here — a copy in this file is a
-      // fourth spelling waiting to disagree with the other three.
-      STAGE_REMEDIES.link_contact.satisfies.field,
-      gated.canOverride,
-    );
+    // The rule is re-run — the REAL evaluator, the same gates — against the facts
+    // this call is about to create. Not by editing the verdict: the criteria tree
+    // is where `and`, `or` and `not` live, and the flattened `unmet` list has
+    // already thrown it away, so subtracting a clause answers
+    // `or(linked, quote exists)` wrongly in the permissive direction's opposite —
+    // refusing a move the rule plainly allows.
+    //
+    // The registry's effect is the baseline ("a customer is linked"). Which
+    // customer is known HERE and nowhere else, so the facts that depend on the
+    // record chosen are filled in exactly rather than left at their pre-link
+    // values — a stage asking for a customer WITH an email is satisfied by
+    // picking one who has an email, and would otherwise be refused for a fact
+    // that is about to be true.
+    //
+    // What this also fixes without special-casing: the audit below reads
+    // `verdict.unmet`, so the override entry no longer lists a customer link as
+    // missing in the same transaction that writes one.
+    if (gated.move) {
+      const base = factsAfterRemedy(gated.move.facts, STAGE_REMEDIES.link_contact);
+      verdict = evaluateStageMove({
+        ...gated.move,
+        facts: { ...base, contact: { ...base.contact, email: contact.email, phone: contact.phone } },
+      });
+    } else {
+      verdict = gated.verdict;
+    }
     const overrideReason = options?.overrideReason?.trim() ?? "";
     if (verdict.requiresReason && overrideReason.length < MIN_OVERRIDE_REASON) {
       return { ok: false, gate: verdict };

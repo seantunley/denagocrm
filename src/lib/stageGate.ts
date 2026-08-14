@@ -369,13 +369,25 @@ const MODE_RANK: Record<StageGateMode, number> = { off: 0, warn: 1, reason: 2, b
  * do, not a list — but "one verdict" now means "the strictest one", not "the
  * first one seen".
  */
-export function evaluateStageMove(input: {
+/**
+ * Everything one move is judged on.
+ *
+ * Named and exported so a caller can hold it and ask the question AGAIN with one
+ * field changed — which is how a remedy is judged: the same gates, the same
+ * permission, and the facts as they will stand once the remedy has run. Passing
+ * the whole thing keeps `evaluateStageMove` the only implementation of the rule
+ * language; the alternative was a second function that re-derived a verdict from
+ * a flattened list and got `or` and `not` wrong.
+ */
+export type StageMoveInput = {
   from: { stageId: string; order: number; exit: StageGate } | null;
   to: { stageId: string; order: number; entry: StageGate };
   samePipeline: boolean;
   facts: StageGateFacts;
   canOverride: boolean;
-}): StageGateVerdict {
+};
+
+export function evaluateStageMove(input: StageMoveInput): StageGateVerdict {
   const { from, to, samePipeline, facts, canOverride } = input;
 
   // Not a transition at all. Reordering inside a column is not a stage change,
@@ -421,67 +433,34 @@ export function evaluateStageMove(input: {
     : { allowed: false, requiresReason: false, direction, mode, unmet };
 }
 
-/**
- * The verdict that remains once a remedy's own work is counted as already done.
+/*
+ * ── HOW A REMEDY IS JUDGED, AND THE FUNCTION THAT USED TO BE HERE ───────────
  *
- * ── WHY A REMEDY CANNOT BE JUDGED BY THE VERDICT THAT SUMMONED IT ───────────
+ * A remedy is offered because something is unmet, and then it is performed. The
+ * verdict was computed BEFORE it ran — it has to be, since the work and the move
+ * commit in one transaction and the facts cannot be re-read in between. So the
+ * pre-remedy verdict still reports the very clause the remedy is about to
+ * satisfy, and applied literally it refuses the move the remedy exists to permit.
  *
- * A remedy is offered because it addresses something unmet, and then it is
- * performed. But the verdict was computed BEFORE it ran — and it has to be, since
- * the whole point is to do the work and the move together in one transaction, so
- * the facts cannot be re-read in between without splitting them apart.
+ * `verdictAfterRemedy` lived here and answered that by SUBTRACTING the satisfied
+ * clause from the flattened `unmet` list and re-deriving a verdict from what was
+ * left. It is deleted, because the flattened list has already thrown the criteria
+ * tree away and the whole rule language lives in that tree:
  *
- * So the pre-remedy verdict still reports the very clause the remedy satisfies.
- * Applied literally it refuses the move that the remedy exists to permit: the
- * person is offered the customer picker, picks a customer, and is told the lead
- * still needs a customer. Two paths did exactly that.
+ *   or(a customer is linked, a quote exists)   — neither true
  *
- * `moveLeadWithContact` had a narrow guard for it — proceed when the ONLY unmet
- * clause was the link — which is right for a stage with one rule and wrong for a
- * stage with two. Missing a link and a value, the guard failed, the pre-link
- * verdict was applied whole, and the move was refused after the customer had been
- * chosen. The offered remedy accomplished nothing.
+ * Linking the customer satisfies the WHOLE rule. Subtraction removes the contact
+ * clause, sees the quote clause still in the list, and refuses. `not(...)` fails
+ * the other way: a remedy can make a negated group start FAILING, and subtraction
+ * can only ever loosen a verdict, never tighten one.
  *
- * `moveLeadToTestDrive` had no guard at all. A `book_test_drive` stage with no
- * explicit rules DERIVES `test drives booked ≥ 1` at `block`, so the booking path
- * evaluated "has a test drive" against a lead that did not have one yet and
- * refused every first booking — the primary remedy, unusable.
- *
- * ── WHAT THIS RETURNS ───────────────────────────────────────────────────────
- *
- * The unmet clauses the remedy does NOT satisfy, re-judged under the same mode
- * rules `evaluateStageMove` applies — so a residual `reason` gate still asks for a
- * reason and a residual `block` still refuses, naming only what is genuinely
- * still missing. Nothing left unmet means the move is clear.
- *
- * Matched by FIELD, the same comparison `remedyAddresses` uses to decide whether
- * to offer the remedy at all. Offering by one rule and discounting by another is
- * how the two would drift into disagreeing about the same clause.
- *
- * `canOverride` is passed in rather than inferred from the verdict. For a `block`
- * gate it IS recoverable — `allowed` is true exactly when the caller may override
- * — but reading a permission back out of a decision it produced is the kind of
- * shortcut that silently inverts when the mode table changes.
+ * The replacement is to adjust the FACTS by the remedy's declared effect and call
+ * `evaluateStageMove` again on the same gates — see `StageMoveInput` above and
+ * `factsAfterRemedy` in stageRemedies.ts. The evaluator is the thing that
+ * understands `and`, `or` and `not`, so asking it the question again is the only
+ * answer that cannot disagree with the rule as written. There is one
+ * implementation of the rule language, which is what this module claims.
  */
-export function verdictAfterRemedy(
-  verdict: StageGateVerdict,
-  satisfiedField: string,
-  canOverride: boolean,
-): StageGateVerdict {
-  const unmet = verdict.unmet.filter((criterion) => criterion.field !== satisfiedField);
-  // The remedy addressed nothing in this verdict. Returned untouched rather than
-  // rebuilt, so a caller cannot accidentally launder a refusal through a remedy
-  // that has nothing to do with it.
-  if (unmet.length === verdict.unmet.length) return verdict;
-  if (unmet.length === 0) return CLEAR_VERDICT;
-
-  const { direction, mode } = verdict;
-  if (mode === "warn") return { allowed: true, requiresReason: false, direction, mode, unmet };
-  if (mode === "reason") return { allowed: true, requiresReason: true, direction, mode, unmet };
-  return canOverride
-    ? { allowed: true, requiresReason: true, direction, mode, unmet }
-    : { allowed: false, requiresReason: false, direction, mode, unmet };
-}
 
 /**
  * One sentence for one failed clause. Used by the drag tooltip AND the server's

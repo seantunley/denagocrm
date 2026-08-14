@@ -35,7 +35,13 @@
  * needed and every future remedy would otherwise repeat.
  */
 import type { PipelineStageAction } from "./pipelineStageActions";
-import type { StageCriteriaGroup, StageCriterion, StageGateMode, UnmetCriterion } from "./stageGate";
+import type {
+  StageCriteriaGroup,
+  StageCriterion,
+  StageGateFacts,
+  StageGateMode,
+  UnmetCriterion,
+} from "./stageGate";
 
 /** Which dialog the board opens. The one part that cannot be declarative. */
 export type StageRemedyDialog = "test_drive" | "contact_link";
@@ -50,6 +56,31 @@ export type StageRemedy = {
   description: string;
   /** THE criterion this remedy makes true. See the header. */
   satisfies: StageCriterion;
+  /**
+   * The facts as they WILL be once this remedy has run — its guaranteed effect,
+   * applied to a snapshot taken before it.
+   *
+   * Required, not optional, so adding a remedy without declaring what it changes
+   * is a compile error rather than a rule that quietly never notices the work.
+   *
+   * ── WHY A FACT EDIT AND NOT A CRITERION SUBTRACTION ─────────────────────────
+   *
+   * The first version of this subtracted the satisfied clause from the flattened
+   * `unmet` list and re-judged what was left. That is correct only for a flat
+   * `and`, because the flat list has already thrown the tree away.
+   *
+   * For `or(a customer is linked, a quote exists)` with neither true, linking the
+   * customer satisfies the WHOLE rule — but subtraction removes the contact
+   * clause, sees the quote clause still in the list, and refuses a move the rule
+   * plainly permits. `not(...)` inverts the same way: a remedy can make a
+   * negated group start FAILING, which subtraction can only ever loosen.
+   *
+   * Adjusting the facts and re-running the real evaluator keeps the whole Boolean
+   * structure, because the evaluator is the thing that understands it. There is
+   * then only one implementation of the rule language, which is the property this
+   * module's header claims and the subtraction version quietly broke.
+   */
+  effect: (facts: StageGateFacts) => StageGateFacts;
   dialog: StageRemedyDialog;
 };
 
@@ -60,6 +91,19 @@ export const STAGE_REMEDIES: Record<PipelineStageAction, StageRemedy> = {
     cta: "Book the test drive",
     description: "Require a model, date, time and location, then create a test-drive activity.",
     satisfies: { field: "activity.testDriveCount", operator: "greater_or_equal", value: 1 },
+    // The booking creates ONE planned activity whose type is `test_drive`, so both
+    // counters move. `plannedCount` is included because it genuinely rises — a
+    // stage asking for "an activity is planned" is satisfied by booking a test
+    // drive, and declaring only the narrower counter would refuse that move for a
+    // fact that is about to be true.
+    effect: (facts) => ({
+      ...facts,
+      activity: {
+        ...facts.activity,
+        testDriveCount: facts.activity.testDriveCount + 1,
+        plannedCount: facts.activity.plannedCount + 1,
+      },
+    }),
     dialog: "test_drive",
   },
   link_contact: {
@@ -70,9 +114,27 @@ export const STAGE_REMEDIES: Record<PipelineStageAction, StageRemedy> = {
     // The editor's Yes/No select posts "true"/"false" and `equals` compares as
     // strings, so this is the same shape a hand-written rule would take.
     satisfies: { field: "contact.linked", operator: "equals", value: "true" },
+    // ONLY `linked`. The remedy guarantees that a customer is attached and nothing
+    // about WHICH one, so a rule wanting the customer's email or phone is not
+    // satisfied by this alone — those depend on the record the person picks, which
+    // this registry cannot see. `moveLeadWithContact` layers the chosen contact's
+    // own values on top, because there it IS known; that refinement belongs at the
+    // call site, not here.
+    effect: (facts) => ({ ...facts, contact: { ...facts.contact, linked: true } }),
     dialog: "contact_link",
   },
 };
+
+/**
+ * The facts as they will stand once this remedy has run.
+ *
+ * A named function rather than `remedy.effect(facts)` at each call site, so the
+ * intent — "judge the rule against the world this action is about to create" —
+ * reads the same everywhere it is used.
+ */
+export function factsAfterRemedy(facts: StageGateFacts, remedy: StageRemedy): StageGateFacts {
+  return remedy.effect(facts);
+}
 
 /** The remedy a stage offers, if it declares one this build understands. */
 export function remedyFor(entryAction: string | null | undefined): StageRemedy | null {
