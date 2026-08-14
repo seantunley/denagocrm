@@ -44,7 +44,7 @@ import type {
 } from "./stageGate";
 
 /** Which dialog the board opens. The one part that cannot be declarative. */
-export type StageRemedyDialog = "test_drive" | "contact_link";
+export type StageRemedyDialog = "test_drive" | "contact_link" | "quote_create";
 
 export type StageRemedy = {
   id: PipelineStageAction;
@@ -122,6 +122,26 @@ export const STAGE_REMEDIES: Record<PipelineStageAction, StageRemedy> = {
     // call site, not here.
     effect: (facts) => ({ ...facts, contact: { ...facts.contact, linked: true } }),
     dialog: "contact_link",
+  },
+  attach_quote: {
+    id: "attach_quote",
+    label: "Raise a quote",
+    cta: "Create the quote",
+    description: "Require the lead to have a quote before it may enter.",
+    satisfies: { field: "quote.count", operator: "greater_or_equal", value: 1 },
+    // `latestStatus` moves too, and that is not incidental. The quote created here
+    // is by definition the most recently raised one, and it is a DRAFT — so a rule
+    // reading "the latest quote is accepted" is no longer satisfied afterwards,
+    // and the gate must say so. Declaring only `count` would let this remedy
+    // quietly break such a rule while reporting the move as clear, which is the
+    // same class of error as the `not(...)` case: an effect can tighten a verdict
+    // as well as loosen it, and the honest way to find out is to re-run the rule
+    // against facts that tell the whole truth.
+    effect: (facts) => ({
+      ...facts,
+      quote: { ...facts.quote, count: facts.quote.count + 1, latestStatus: "draft" },
+    }),
+    dialog: "quote_create",
   },
 };
 
