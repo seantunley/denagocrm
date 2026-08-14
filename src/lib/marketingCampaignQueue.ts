@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { basePrisma } from "./db";
 import { sendEmail, renderTemplate } from "./email";
 import { sendSms } from "./sms";
-import { buildTrackedEmail } from "./campaigns";
+import { buildTrackedEmail, unsubscribeHeaders } from "./campaigns";
 import { emailBrand } from "./emailBrand";
 import { canContactPerson, classifyRetry, nextCommunicationWindow, type CommunicationChannel } from "./communicationPolicy";
 import { contactName } from "./format";
@@ -186,12 +186,18 @@ async function deliver(recipient: ClaimedRecipient) {
 
   await event({ tenantId: recipient.tenantId, campaignId: recipient.campaignId, recipientId: recipient.id, contactId: recipient.contactId, type: "send_attempt", metadata: { attempt: recipient.attemptCount } });
   const vars = { first_name: recipient.firstName, name: contactName(recipient) };
+  // Resolved ONCE, not once per use. The footer link and the List-Unsubscribe
+  // header both carry the tenant's origin, and two calls could not disagree
+  // (emailBrand is cache()d) — but the single binding is what makes it obvious
+  // that they are the same brand rather than two lookups that happen to match.
+  const brand = recipient.channel === "email" ? await emailBrand(recipient.tenantId) : undefined;
   const result = recipient.channel === "email"
     ? await sendEmail({
         to: eligibility.destination,
         subject: renderTemplate(recipient.subject ?? "", vars),
         text: renderTemplate(recipient.body, vars),
-        html: buildTrackedEmail(renderTemplate(recipient.htmlBody ?? recipient.body, vars), recipient.token, await emailBrand(recipient.tenantId)),
+        html: buildTrackedEmail(renderTemplate(recipient.htmlBody ?? recipient.body, vars), recipient.token, brand),
+        headers: unsubscribeHeaders(recipient.token, brand),
       })
     : await sendSms(eligibility.destination, renderTemplate(recipient.body, vars));
 

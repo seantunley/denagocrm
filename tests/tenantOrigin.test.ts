@@ -288,21 +288,43 @@ test("campaign links, the open pixel and unsubscribe use the tenant origin", () 
   // it is the one link someone clicks when they do not trust the sender, and
   // pointing it at a company they have never heard of is the worst possible
   // moment to look like a stranger.
+  // THE PROPERTY IS UNCHANGED; THE SPELLING MOVED. `brand?.origin || appBaseUrl()`
+  // used to be written out at each of the two call sites, and this test pinned
+  // both copies. It now has ONE definition — emailBase — because the
+  // List-Unsubscribe header needs the same base as the footer link and a third
+  // copy is how a header ends up naming a different host from the message it
+  // travels with. Pinning the definition is strictly stronger than pinning two
+  // copies of it.
   const code = shipped("src/lib/campaigns.ts");
+  const baseStart = code.indexOf("export function emailBase(");
+  assert.ok(baseStart >= 0, "one resolver for every link in an email");
+  assert.match(
+    code.slice(baseStart, code.indexOf("\n}", baseStart)),
+    /return brand\?\.origin \|\| appBaseUrl\(\);/,
+    "…and it is still the tenant's origin, falling back to the platform's",
+  );
+
   const start = code.indexOf("export function buildTrackedEmail(");
   const body = code.slice(start, code.indexOf("\n}", start));
-  assert.match(body, /const base = brand\?\.origin \|\| appBaseUrl\(\);/, "tracked links");
+  assert.match(body, /const base = emailBase\(brand\);/, "tracked links");
   assert.match(body, /\$\{base\}\/api\/track\/c\//, "click wrapper");
   assert.match(body, /\$\{base\}\/api\/track\/o\//, "open pixel");
-  assert.match(body, /\$\{base\}\/api\/unsubscribe\//, "unsubscribe");
+  assert.match(body, /unsubscribeUrl\(token, brand\)/, "unsubscribe");
+
+  // …and the unsubscribe URL resolves through the same one resolver, rather than
+  // reaching for appBaseUrl() on its own.
+  const unsubStart = code.indexOf("export function unsubscribeUrl(");
+  assert.match(
+    code.slice(unsubStart, code.indexOf("\n}", unsubStart)),
+    /unsubscribeUrlFor\(emailBase\(brand\), token\)/,
+  );
 
   // The shell's built-in logo fallback resolves the same way, so the picture and
   // the links in one email cannot arrive from two different hosts.
-  const shell = shipped("src/lib/campaigns.ts");
-  const shellStart = shell.indexOf("function emailShell(");
+  const shellStart = code.indexOf("function emailShell(");
   assert.match(
-    shell.slice(shellStart, shell.indexOf("return `<!doctype", shellStart)),
-    /const base = brand\?\.origin \|\| appBaseUrl\(\);/,
+    code.slice(shellStart, code.indexOf("return `<!doctype", shellStart)),
+    /const base = emailBase\(brand\);/,
   );
 });
 
