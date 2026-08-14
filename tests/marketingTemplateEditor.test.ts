@@ -32,12 +32,33 @@ test("email templates are composed in the rich editor", () => {
   assert.doesNotMatch(code, /onChange=\{\(html\) => setDraft\(\{ \.\.\.draft,/);
 });
 
-test("SMS keeps the plain textarea", () => {
-  // Plain text with a live character count. A rich editor there would invite
-  // formatting the channel cannot carry and the count cannot measure.
+test("everything that is not email keeps plain text", () => {
+  // KEYED ON isEmail, NOT ON !isSms. There are THREE channels: the category list
+  // types `channel` as "email" | "sms" | "internal", and `internal_notification`
+  // plus the legacy `internal` category are neither of the first two. `!isSms`
+  // handed them the rich editor as well, and their content is consumed as plain
+  // text — so the markup would have been delivered literally, `<p>` and all, in
+  // an internal message. A negated condition made a third case the default for a
+  // change that was only ever about email.
   const code = shipped(WORKSPACE);
-  assert.match(code, /\{isSms \? \(\s*<textarea id="marketing-template-body"/);
-  assert.match(code, /\{draft\.body\.length\} characters/, "the count is still measured on the raw string");
+  assert.match(code, /\{!isEmail \? \(\s*<textarea id="marketing-template-body"/);
+  assert.doesNotMatch(code, /\{isSms \? \(\s*<textarea/, "the two-channel assumption is what this replaced");
+  assert.match(code, /\{draft\.body\.length\} characters/, "the SMS count is still measured on the raw string");
+
+  // The emptiness rule follows the same split: plain-text semantics for anything
+  // that is not email, or an internal template made only of spaces would save.
+  assert.match(code, /hasVisibleContent\(draft\.body, !isEmail\)/);
+  // …and the cursor insert only runs where the editor actually mounts.
+  assert.match(code, /if \(editor && isEmail\)/);
+});
+
+test("the three channels are still three", () => {
+  // The fix depends on `internal` existing as a channel rather than being
+  // absorbed into one of the others. If that type ever collapses to two, `!isEmail`
+  // and `isSms` become the same test and this defect cannot recur — but the
+  // reader of this test should know why it was written.
+  assert.match(shipped(WORKSPACE), /channel: "email" \| "sms" \| "internal";/);
+  assert.match(shipped(WORKSPACE), /channel: "internal"/, "at least one category must use it");
 });
 
 test("an empty rich-text document cannot be saved", () => {
@@ -46,7 +67,7 @@ test("an empty rich-text document cannot be saved", () => {
   // document as `<p></p>`, which is truthy — so an untouched template would have
   // looked ready and gone out as a blank email.
   const code = shipped(WORKSPACE);
-  assert.match(code, /hasVisibleContent\(draft\.body, isSms\)/);
+  assert.match(code, /hasVisibleContent\(draft\.body, !isEmail\)/);
   assert.doesNotMatch(code, /draft\.name\.trim\(\) && draft\.body\.trim\(\)/, "the old check is what this replaced");
 });
 

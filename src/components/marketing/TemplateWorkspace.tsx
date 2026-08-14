@@ -140,7 +140,7 @@ export default function TemplateWorkspace({ templates }: { templates: Template[]
   // template would have looked saveable and gone out as a blank email. Measured
   // by whether there is anything a recipient would SEE: text, or an image.
   const canSave = Boolean(
-    draft.name.trim() && hasVisibleContent(draft.body, isSms) && (!isEmail || draft.subject.trim()),
+    draft.name.trim() && hasVisibleContent(draft.body, !isEmail) && (!isEmail || draft.subject.trim()),
   );
 
   function clearFeedback() {
@@ -200,7 +200,10 @@ export default function TemplateWorkspace({ templates }: { templates: Template[]
    */
   function insertVariable(variable: string) {
     const editor = bodyEditor.current;
-    if (editor && !isSms) {
+    // `isEmail`, not `!isSms`. The editor only mounts for email now, so the ref
+    // should already be null elsewhere — but a stale ref surviving a category
+    // change would otherwise insert into a document that is no longer on screen.
+    if (editor && isEmail) {
       editor.chain().focus().insertContent(variable).run();
       return;
     }
@@ -275,11 +278,11 @@ export default function TemplateWorkspace({ templates }: { templates: Template[]
 
               <div>
                 <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-                  <div><label className="label mb-0" htmlFor="marketing-template-body">Message content</label><p className="mt-1 text-[11px] text-muted-foreground">{isSms ? "Keep it concise; the character count updates live." : "Format it here — the merge buttons insert where your cursor is."}</p></div>
+                  <div><label className="label mb-0" htmlFor="marketing-template-body">Message content</label><p className="mt-1 text-[11px] text-muted-foreground">{isEmail ? "Format it here — the merge buttons insert where your cursor is." : isSms ? "Keep it concise; the character count updates live." : "Plain text — internal notifications are not rendered as HTML."}</p></div>
                   <div className="flex flex-wrap gap-1.5"><button type="button" className="btn-secondary btn-sm" onClick={() => insertVariable("{{first_name}}")}>+ First name</button><button type="button" className="btn-secondary btn-sm" onClick={() => insertVariable("{{name}}")}>+ Full name</button></div>
                 </div>
                 {/*
-                  EMAIL GETS THE REAL EDITOR; SMS KEEPS THE TEXTAREA.
+                  EMAIL GETS THE REAL EDITOR. EVERYTHING ELSE KEEPS PLAIN TEXT.
 
                   An email template was authored by hand-writing HTML into a
                   monospace box, while one-to-one email has had a rich editor for
@@ -287,12 +290,20 @@ export default function TemplateWorkspace({ templates }: { templates: Template[]
                   HTML, so this reads and writes the same `body` column and every
                   template written before it opens and saves unchanged.
 
-                  SMS is deliberately untouched: it is plain text with a live
-                  character count, and a rich editor would invite formatting that
-                  the channel cannot carry and the count cannot measure.
+                  KEYED ON isEmail, NOT ON !isSms. There are THREE channels, not
+                  two: `internal_notification` and the legacy `internal` category
+                  are neither email nor SMS, and `!isSms` handed them the rich
+                  editor as well. Their content is consumed as plain text, so the
+                  markup would have been delivered literally — `<p>` and all — in
+                  an internal message. A negated condition made a third case the
+                  default for a change that was only ever about email.
+
+                  SMS is plain text with a live character count, and a rich editor
+                  would invite formatting the channel cannot carry and the count
+                  cannot measure. Internal is plain text for the same reason.
                 */}
-                {isSms ? (
-                  <textarea id="marketing-template-body" className="input min-h-72 resize-y font-mono text-xs leading-6" value={draft.body} onChange={(event) => setDraft({ ...draft, body: event.target.value })} placeholder="Hi {{first_name}}, your message…" />
+                {!isEmail ? (
+                  <textarea id="marketing-template-body" className="input min-h-72 resize-y font-mono text-xs leading-6" value={draft.body} onChange={(event) => setDraft({ ...draft, body: event.target.value })} placeholder={isSms ? "Hi {{first_name}}, your message…" : "Reusable content for internal notifications…"} />
                 ) : (
                   <RichTextEditor
                     value={draft.body}
