@@ -52,6 +52,7 @@ import {
   STAGE_REMEDIES,
   derivedCriteria,
   factsAfterRemedy,
+  factsIfRemedyIdeal,
   remedyAddresses,
   remedyFor,
   type StageRemedy,
@@ -516,12 +517,23 @@ async function gateStageMove(input: {
   // better than refusing twice with the work wasted in between.
   const remedy = remedyFor(targetStage.entryAction);
   const addresses = remedy !== null && verdict.unmet.length > 0 && remedyAddresses(remedy, verdict.unmet);
-  // Asked of the real evaluator, against the facts the remedy would create — the
-  // same question the remedy action itself will ask, so the offer and the outcome
-  // cannot disagree.
+  // Asked of the real evaluator, against the BEST the remedy could achieve.
+  //
+  // The distinction matters and reading `factsAfterRemedy` here was wrong.
+  // That is what the remedy GUARANTEES whatever is chosen — for `link_contact`,
+  // only that a customer is attached — so a stage requiring a customer AND that
+  // customer's email was refused outright and the picker never opened, even
+  // though choosing a customer who has an email satisfies both. The action
+  // projects the chosen contact's real email and phone, and that code was
+  // unreachable.
+  //
+  // The offer asks "could ANY choice satisfy this?"; the action asks "does THIS
+  // choice satisfy it?". Optimism is safe HERE and only here, because opening a
+  // dialog permits nothing — every remedy action re-judges against what actually
+  // happened, and refuses naming what is still missing if the choice falls short.
   const worthOffering =
     addresses &&
-    evaluateStageMove({ ...move, facts: factsAfterRemedy(move.facts, remedy) }).allowed;
+    evaluateStageMove({ ...move, facts: factsIfRemedyIdeal(move.facts, remedy) }).allowed;
   return { verdict, remedy: worthOffering ? remedy : null, move };
 }
 

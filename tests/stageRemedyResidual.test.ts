@@ -12,7 +12,12 @@ import {
   type StageGateMode,
   type StageMoveInput,
 } from "../src/lib/stageGate";
-import { STAGE_REMEDIES, derivedCriteria, factsAfterRemedy } from "../src/lib/stageRemedies";
+import {
+  STAGE_REMEDIES,
+  derivedCriteria,
+  factsAfterRemedy,
+  factsIfRemedyIdeal,
+} from "../src/lib/stageRemedies";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8").replace(/\r\n/g, "\n");
@@ -286,13 +291,18 @@ test("both remedy actions re-run the evaluator on their own post-remedy facts", 
   }
 });
 
-test("the offer is decided by the same question the remedy action will ask", () => {
-  // Otherwise the board opens a dialog for a move that is then refused, and the
-  // customer chosen or the test drive booked is thrown away.
+test("the offer is decided by asking the real evaluator, not by inspecting a flag", () => {
+  // The offer must be a rule question — "would doing this get the lead in?" —
+  // rather than "does this stage name a remedy?", which is what the board used to
+  // decide for itself.
+  //
+  // WHICH projection it asks with was itself a defect and is pinned separately
+  // below: this asserts the shape, the test at the end of the file asserts that
+  // the offer uses the OPTIMISTIC projection and the actions never do.
   const code = shipped("src/app/actions/leads.ts");
   const start = code.indexOf("async function gateStageMove");
   const body = code.slice(start, code.indexOf("\nconst BROKEN_RULE_MESSAGE", start));
-  assert.match(body, /evaluateStageMove\(\{ \.\.\.move, facts: factsAfterRemedy\(move\.facts, remedy\) \}\)\.allowed/);
+  assert.match(body, /evaluateStageMove\(\{ \.\.\.move, facts: factsIfRemedyIdeal\(move\.facts, remedy\) \}\)\.allowed/);
   assert.match(body, /remedy: worthOffering \? remedy : null/);
 });
 
@@ -303,4 +313,91 @@ test("the chosen customer's own details are used, since that call site knows the
   assert.match(body, /contact: \{ \.\.\.base\.contact, email: contact\.email, phone: contact\.phone \}/);
   // …which means they have to be selected, or they would silently be undefined.
   assert.match(body, /email: true,\s*\n\s*phone: true,/);
+});
+
+/* ── the offer asks a different question from the action ────────────────── */
+
+test("OFFER — a rule wanting a customer AND their email still opens the picker", () => {
+  // THE REPORTED DEFECT. `effect` is what the remedy GUARANTEES whatever is
+  // chosen — for link_contact, only that a customer is attached. Deciding the
+  // OFFER with it refused `and(linked, email is not empty)` outright and never
+  // opened the picker, even though choosing a customer who has an email satisfies
+  // both. The action already projected the chosen contact's real email; that code
+  // was simply unreachable.
+  const rule: StageCriteriaGroup = {
+    logic: "and",
+    conditions: [LINKED, { field: "contact.email", operator: "is_not_empty", value: "" }],
+  };
+  const input = moveInput("block", rule, facts({ contactLinked: false, contactEmail: null }));
+  assert.equal(evaluateStageMove(input).allowed, false, "unlinked, it refuses");
+
+  // What the offer site now asks: could ANY choice satisfy this?
+  const ideal = evaluateStageMove({ ...input, facts: factsIfRemedyIdeal(input.facts, LINK) });
+  assert.equal(ideal.allowed, true, "a customer with an email would satisfy it — so offer the picker");
+
+  // What the guaranteed effect says, and why it was the wrong question here.
+  const guaranteed = evaluateStageMove({ ...input, facts: factsAfterRemedy(input.facts, LINK) });
+  assert.equal(guaranteed.allowed, false, "…while the guarantee alone cannot promise an email");
+});
+
+test("ACTION — the optimistic projection never permits the move", () => {
+  // The safety property. Opening a dialog permits nothing; the action re-judges
+  // against the contact actually chosen, so picking one WITHOUT an email is still
+  // refused, naming what is missing.
+  const rule: StageCriteriaGroup = {
+    logic: "and",
+    conditions: [LINKED, { field: "contact.email", operator: "is_not_empty", value: "" }],
+  };
+  const input = moveInput("block", rule, facts({ contactLinked: false, contactEmail: null }));
+
+  // The action's projection: the registry baseline, then the chosen contact's own
+  // values — exactly what moveLeadWithContact builds.
+  const base = factsAfterRemedy(input.facts, LINK);
+  const chosenWithout = { ...base, contact: { ...base.contact, email: null, phone: null } };
+  assert.equal(
+    evaluateStageMove({ ...input, facts: chosenWithout }).allowed,
+    false,
+    "a customer with no email must still be refused",
+  );
+
+  const chosenWith = { ...base, contact: { ...base.contact, email: "real@customer.com", phone: null } };
+  assert.deepEqual(
+    evaluateStageMove({ ...input, facts: chosenWith }),
+    CLEAR_VERDICT,
+    "…and one with an email goes through",
+  );
+});
+
+test("the best case does not overwrite details the lead already has", () => {
+  // A lead whose contact facts are already populated must keep them, or the
+  // projection would answer a rule about THIS lead with invented values.
+  const already = facts({ contactLinked: false, contactEmail: "known@customer.com" });
+  const ideal = factsIfRemedyIdeal(already, LINK);
+  assert.equal(ideal.contact.email, "known@customer.com");
+  assert.equal(ideal.contact.linked, true);
+});
+
+test("a remedy that collects nothing has no separate best case", () => {
+  // book_test_drive declares no offerEffect, so the offer and the guarantee are
+  // the same question — there is no choice to make it go better.
+  const snapshot = facts({ testDrives: 0 });
+  assert.deepEqual(factsIfRemedyIdeal(snapshot, DRIVE), factsAfterRemedy(snapshot, DRIVE));
+});
+
+test("the offer site uses the ideal projection and the actions do not", () => {
+  const code = shipped("src/app/actions/leads.ts");
+  const gate = code.slice(
+    code.indexOf("async function gateStageMove"),
+    code.indexOf("\nconst BROKEN_RULE_MESSAGE"),
+  );
+  assert.match(gate, /factsIfRemedyIdeal\(move\.facts, remedy\)/, "the offer asks the optimistic question");
+  assert.doesNotMatch(gate, /factsAfterRemedy\(/, "…and must not decide the offer on the guarantee");
+
+  // Every remedy action judges on the guarantee (plus what it actually knows).
+  // An optimistic projection there would let a lead in on a choice nobody made.
+  for (const fn of ["moveLeadWithContactInScope", "moveLeadToTestDrive"]) {
+    const start = code.indexOf(`function ${fn}`);
+    const body = code.slice(start, code.indexOf("\nexport ", start + 1));
+    assert.doesNotMatch(body, /factsIfRemedyIdeal\(/, `${fn} must never judge on the best case`);
+  }
 });

@@ -81,6 +81,29 @@ export type StageRemedy = {
    * module's header claims and the subtraction version quietly broke.
    */
   effect: (facts: StageGateFacts) => StageGateFacts;
+  /**
+   * The facts if the person makes the BEST available choice — used to decide
+   * whether the dialog is worth OPENING, and for nothing else.
+   *
+   * `effect` is what the remedy guarantees regardless of what is chosen. That is
+   * the right answer once a choice has been made, and the wrong question before
+   * one has: `link_contact` guarantees only that *a* customer is attached, so a
+   * stage requiring a customer AND that customer's email was refused outright and
+   * the picker never opened — even though picking a customer who has an email
+   * would have satisfied both. The action already projects the chosen contact's
+   * real email and phone; that code was simply unreachable.
+   *
+   * So the offer asks "could ANY choice satisfy this?" and the action asks "does
+   * THIS choice satisfy it?". Optional, and defaulting to `effect`, because a
+   * remedy that collects nothing from the person — booking a test drive, raising
+   * a quote — has no better case to describe.
+   *
+   * ⚠️ NEVER PERMITS A MOVE. This projection is optimistic by construction, so
+   * using it to decide whether a write may proceed would let a lead in on the
+   * strength of a customer who was never chosen. `gateStageMove` uses it for the
+   * offer; every remedy action re-judges against what actually happened.
+   */
+  offerEffect?: (facts: StageGateFacts) => StageGateFacts;
   dialog: StageRemedyDialog;
 };
 
@@ -121,6 +144,19 @@ export const STAGE_REMEDIES: Record<PipelineStageAction, StageRemedy> = {
     // own values on top, because there it IS known; that refinement belongs at the
     // call site, not here.
     effect: (facts) => ({ ...facts, contact: { ...facts.contact, linked: true } }),
+    // The best the picker could do: a customer who has both an email and a phone.
+    // The values are SENTINELS, not predictions — they exist so that "the customer
+    // has an email" can be true in this projection, and they never reach a
+    // decision that permits anything. A rule demanding an exact address is not
+    // satisfied by them, which under-offers rather than over-permits.
+    offerEffect: (facts) => ({
+      ...facts,
+      contact: {
+        linked: true,
+        email: facts.contact.email ?? BEST_CASE_EMAIL,
+        phone: facts.contact.phone ?? BEST_CASE_PHONE,
+      },
+    }),
     dialog: "contact_link",
   },
 };
@@ -134,6 +170,28 @@ export const STAGE_REMEDIES: Record<PipelineStageAction, StageRemedy> = {
  */
 export function factsAfterRemedy(facts: StageGateFacts, remedy: StageRemedy): StageGateFacts {
   return remedy.effect(facts);
+}
+
+/**
+ * Stand-ins for "the chosen customer has one of these".
+ *
+ * Named rather than inlined so they are searchable, and shaped like real values
+ * so an operator such as `contains "@"` behaves as it would against a real one.
+ * They are only ever seen by `factsIfRemedyIdeal`, which decides whether to open
+ * a dialog — never by anything that writes.
+ */
+const BEST_CASE_EMAIL = "customer@example.com";
+const BEST_CASE_PHONE = "+27000000000";
+
+/**
+ * The facts if this remedy goes as well as it possibly can.
+ *
+ * Used ONLY to decide whether a dialog is worth offering. See `offerEffect` — the
+ * projection is optimistic, so a caller that used it to permit a move would let a
+ * lead in on the strength of a choice nobody made.
+ */
+export function factsIfRemedyIdeal(facts: StageGateFacts, remedy: StageRemedy): StageGateFacts {
+  return (remedy.offerEffect ?? remedy.effect)(facts);
 }
 
 /** The remedy a stage offers, if it declares one this build understands. */
