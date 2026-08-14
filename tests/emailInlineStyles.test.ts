@@ -82,6 +82,53 @@ test("TABLES ARE LEFT ALONE — the most important thing here", () => {
   assert.equal(inlineEmailStyles(layout), layout, "not one byte");
 });
 
+test("a `>` inside a quoted attribute does not end the tag", () => {
+  // THE REPORTED DEFECT, and the one that made the module's own stated guarantee
+  // false. The first version matched attributes with `[^>]*`, which stops at the
+  // `>` INSIDE the title — so it wrote a style attribute into the middle of that
+  // quoted value and left ` 0">go</a>` behind as text. Not under-styling:
+  // corruption, at send, in mail already on its way out.
+  const out = inlineEmailStyles('<a title="1 > 0" href="https://x.com">go</a>');
+  assert.match(out, /title="1 > 0"/, "the attribute must survive intact");
+  assert.match(out, /href="https:\/\/x\.com"/);
+  assert.match(out, /style="color:#2563eb;text-decoration:underline;"/);
+  assert.ok(out.endsWith("go</a>"), "the content and closing tag are unchanged");
+  // Nothing leaked out of the tag as text: the whole thing is one opening tag,
+  // its content, and its closing tag.
+  assert.equal(out.split("<").length - 1, 2, "exactly two tags — the open and the close");
+});
+
+test("single-quoted attributes are honoured too", () => {
+  const out = inlineEmailStyles("<p title='a > b'>x</p>");
+  assert.match(out, /title='a > b'/);
+  assert.ok(out.endsWith("x</p>"));
+});
+
+test("an unterminated tag is copied through rather than guessed at", () => {
+  // A truncated body or a stray `<`. Guessing where the tag ended is how a
+  // half-written document becomes a corrupted one.
+  const truncated = '<p style="margin:0';
+  assert.equal(inlineEmailStyles(truncated), truncated);
+});
+
+test("a bare `<` in text is left alone", () => {
+  // Unescaped, and common in hand-written bodies: "5 < 10".
+  assert.equal(inlineEmailStyles("5 < 10 and 3 > 1"), "5 < 10 and 3 > 1");
+});
+
+test("closing tags, comments and doctypes are not treated as openings", () => {
+  const html = '<!-- a > b --><!DOCTYPE html><p>x</p></p>';
+  const out = inlineEmailStyles(html);
+  assert.match(out, /^<!-- a > b --><!DOCTYPE html>/, "neither is rewritten");
+  assert.match(out, /<p style="[^"]+">x<\/p>/);
+});
+
+test("a self-closing tag keeps its slash in place", () => {
+  const out = inlineEmailStyles('<img src="x.png" />');
+  assert.match(out, /\/>$/);
+  assert.match(out, /max-width:100%/);
+});
+
 test("unknown tags pass through untouched", () => {
   const html = "<section><span>hi</span><custom-tag>x</custom-tag></section>";
   assert.equal(inlineEmailStyles(html), html);

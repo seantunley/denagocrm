@@ -83,21 +83,58 @@ const TAG_STYLES: Record<string, string> = {
  */
 const STYLED_TAGS = new Set(Object.keys(TAG_STYLES));
 
-/**
- * Matches an opening tag and captures its name and its attributes.
- *
- * `[^>]*` for the attributes is sufficient here and would not be for a general
- * parser: an attribute value containing `>` would end the match early. That is a
- * real limitation and the reason this only ever ADDS a style attribute rather
- * than restructuring anything — the worst outcome of a mis-parse is a tag left
- * unstyled, not markup broken.
- *
- * Closing tags are excluded by requiring a letter immediately after `<`.
- */
-const OPEN_TAG = /<([a-zA-Z][a-zA-Z0-9]*)((?:\s[^>]*)?)(\/?)>/g;
-
 /** Pull an existing `style="…"` out of an attribute string, if there is one. */
 const STYLE_ATTR = /\sstyle\s*=\s*("([^"]*)"|'([^']*)')/i;
+
+/**
+ * WHY THIS IS A SCANNER AND NOT A REGEX.
+ *
+ * The first version matched opening tags with `<([a-zA-Z][a-zA-Z0-9]*)((?:\s[^>]*)?)(\/?)>`
+ * and claimed that the worst outcome of a mis-parse was a tag left unstyled. That
+ * claim was FALSE, and the counter-example is ordinary markup:
+ *
+ *     <a title="1 > 0">go</a>
+ *
+ * `[^>]*` stops at the `>` INSIDE the quoted title, so the match is `<a title="1 >`
+ * — and the replacement then writes a `style` attribute into the middle of that
+ * quoted value, leaving ` 0">go</a>` behind as text. It does not under-style; it
+ * corrupts the document, at send, in mail that is already on its way out.
+ *
+ * A quote-aware scan is the fix, and it is barely more code: walk the string, and
+ * once inside a tag, track whether we are inside `"` or `'` so that a `>` there is
+ * a character rather than the end of the tag.
+ *
+ * This still is not a full HTML parser and does not need to be. It never
+ * restructures — it reads one opening tag at a time and rewrites that tag alone —
+ * so the properties that matter are that it finds the true end of a tag and that
+ * anything it does not understand is copied through untouched.
+ */
+
+/** Where an opening tag ends, honouring quoted attribute values. -1 if unterminated. */
+function tagEnd(html: string, start: number): number {
+  let quote: '"' | "'" | null = null;
+  for (let i = start; i < html.length; i++) {
+    const ch = html[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === ">") return i;
+  }
+  // Unterminated — a truncated body, or a stray `<`. The caller copies the rest
+  // through verbatim rather than guessing where the tag was meant to stop.
+  return -1;
+}
+
+/** The tag name at `start`, or null when this `<` does not begin one. */
+function tagNameAt(html: string, start: number): string | null {
+  const match = /^<([a-zA-Z][a-zA-Z0-9]*)/.exec(html.slice(start, start + 16));
+  return match ? match[1] : null;
+}
 
 /**
  * Add email-safe inline styles to a body fragment.
@@ -108,19 +145,58 @@ const STYLE_ATTR = /\sstyle\s*=\s*("([^"]*)"|'([^']*)')/i;
  */
 export function inlineEmailStyles(html: string): string {
   if (!html) return html;
-  return html.replace(OPEN_TAG, (whole, rawName: string, attrs: string, selfClose: string) => {
+
+  let out = "";
+  let cursor = 0;
+  while (cursor < html.length) {
+    const open = html.indexOf("<", cursor);
+    if (open === -1) {
+      out += html.slice(cursor);
+      break;
+    }
+    out += html.slice(cursor, open);
+
+    // Closing tags, comments, doctypes and a bare `<` in text all land here and
+    // are copied through as-is.
+    const rawName = tagNameAt(html, open);
+    if (!rawName) {
+      out += "<";
+      cursor = open + 1;
+      continue;
+    }
+
+    const end = tagEnd(html, open + 1 + rawName.length);
+    if (end === -1) {
+      out += html.slice(open);
+      break;
+    }
+
     const name = rawName.toLowerCase();
     const defaults = TAG_STYLES[name];
-    if (!defaults || !STYLED_TAGS.has(name)) return whole;
+    if (!defaults || !STYLED_TAGS.has(name)) {
+      out += html.slice(open, end + 1);
+      cursor = end + 1;
+      continue;
+    }
+
+    // Everything between the name and the `>`, minus a trailing `/` on a
+    // self-closing tag, which has to survive in the same position.
+    let attrs = html.slice(open + 1 + rawName.length, end);
+    let selfClose = "";
+    if (attrs.endsWith("/")) {
+      attrs = attrs.slice(0, -1);
+      selfClose = "/";
+    }
 
     const existing = attrs.match(STYLE_ATTR);
     if (!existing) {
-      return `<${rawName}${attrs} style="${defaults}"${selfClose}>`;
+      out += `<${rawName}${attrs} style="${defaults}"${selfClose}>`;
+    } else {
+      // Prepended, so the author's own declarations come last and win.
+      const value = existing[2] ?? existing[3] ?? "";
+      out += `<${rawName}${attrs.replace(STYLE_ATTR, "")} style="${defaults}${value.trim()}"${selfClose}>`;
     }
-    // Prepended, so the author's own declarations come last and win.
-    const value = existing[2] ?? existing[3] ?? "";
-    const merged = `${defaults}${value.trim()}`;
-    const rest = attrs.replace(STYLE_ATTR, "");
-    return `<${rawName}${rest} style="${merged}"${selfClose}>`;
-  });
+    cursor = end + 1;
+  }
+  return out;
 }
