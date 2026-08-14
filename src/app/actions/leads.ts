@@ -16,6 +16,7 @@ import { customerRecordTenantId } from "@/lib/customerRecordTenant";
 // supersedes the direct `resolveTenantMemberUser` call this branch was written
 // against, and it is the one that enforces membership while dormant.
 import { resolveAssignableUser } from "@/lib/tenantActor";
+import { withActingStaffScope } from "@/lib/actingScope";
 import {
   getAccessibleContactIds,
   hasPermission,
@@ -848,33 +849,51 @@ export async function moveLeadToTestDrive(
  * Scoped by `getAccessibleContactIds`, the same helper every contact surface
  * uses, with its documented contract — `null` is unrestricted, `[]` must become
  * an impossible match rather than an absent filter.
+ *
+ * ── Why the whole body is inside withActingStaffScope ────────────────────────
+ *
+ * This is a STANDALONE Server Action: nothing renders it, so nothing above it has
+ * bound a workspace. A Server Action has no React request store to carry one, and
+ * a scope established by a callee does not reach the frame that called it — so
+ * without an enclosing frame here, the guarded reads below fail closed under
+ * enforcement and the picker returns nothing with no error the user can act on.
+ *
+ * The PERMISSION LOOKUP is inside the wrapper, not outside it. `requireAnyPermission`
+ * resolves the session and reads role and permission rows through the guarded
+ * client, so it needs the scope every bit as much as the contact query does —
+ * wrapping only the query would move the failure one line up and look fixed.
+ *
+ * Same defect as #528 and #529, same shape, same cure. It never widens: an
+ * already-bound scope wins and this becomes a bare call.
  */
 export async function searchLinkableContacts(
   term: string,
 ): Promise<Array<{ id: string; label: string; sublabel: string }>> {
-  // Gated on being able to SEE customers, which is what this returns, rather than
-  // on a lead id it does not take. `getAccessibleContactIds` then narrows to the
-  // ones this caller may actually open.
-  const user = await requireAnyPermission("contacts.view_all", "contacts.view_owned");
-  const query = term.trim();
-  if (query.length < 2) return [];
-  const ids = await getAccessibleContactIds(user);
-  if (ids !== null && ids.length === 0) return [];
-  const contains = { contains: query, mode: "insensitive" as const };
-  const rows = await prisma.contact.findMany({
-    where: {
-      ...(ids === null ? {} : { id: { in: ids } }),
-      OR: [{ firstName: contains }, { lastName: contains }, { company: contains }, { email: contains }, { phone: contains }],
-    },
-    select: { id: true, firstName: true, lastName: true, company: true, isCompany: true, email: true, phone: true },
-    orderBy: { updatedAt: "desc" },
-    take: 8,
+  return withActingStaffScope(async () => {
+    // Gated on being able to SEE customers, which is what this returns, rather than
+    // on a lead id it does not take. `getAccessibleContactIds` then narrows to the
+    // ones this caller may actually open.
+    const user = await requireAnyPermission("contacts.view_all", "contacts.view_owned");
+    const query = term.trim();
+    if (query.length < 2) return [];
+    const ids = await getAccessibleContactIds(user);
+    if (ids !== null && ids.length === 0) return [];
+    const contains = { contains: query, mode: "insensitive" as const };
+    const rows = await prisma.contact.findMany({
+      where: {
+        ...(ids === null ? {} : { id: { in: ids } }),
+        OR: [{ firstName: contains }, { lastName: contains }, { company: contains }, { email: contains }, { phone: contains }],
+      },
+      select: { id: true, firstName: true, lastName: true, company: true, isCompany: true, email: true, phone: true },
+      orderBy: { updatedAt: "desc" },
+      take: 8,
+    });
+    return rows.map((row) => ({
+      id: row.id,
+      label: contactName(row),
+      sublabel: row.email ?? row.phone ?? "",
+    }));
   });
-  return rows.map((row) => ({
-    id: row.id,
-    label: contactName(row),
-    sublabel: row.email ?? row.phone ?? "",
-  }));
 }
 
 /**
@@ -890,6 +909,20 @@ export async function searchLinkableContacts(
  * write the caller is not entitled to make.
  */
 export async function moveLeadWithContact(
+  leadId: string,
+  stageId: string,
+  contactId: string,
+  options?: { overrideReason?: string },
+): Promise<{ ok: boolean; error?: string; gate?: StageGateVerdict }> {
+  // Bound the same way as `searchLinkableContacts`, for the same reason — a
+  // standalone Server Action has nothing above it holding a workspace — and
+  // delegating rather than indenting because the body is a hundred lines and
+  // re-indenting it would bury the change in whitespace. The wrapper is still
+  // enclosing: everything the inner function calls runs inside the scope.
+  return withActingStaffScope(() => moveLeadWithContactInScope(leadId, stageId, contactId, options));
+}
+
+async function moveLeadWithContactInScope(
   leadId: string,
   stageId: string,
   contactId: string,

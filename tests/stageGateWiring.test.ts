@@ -333,3 +333,61 @@ test("every gate column arrives with a default that cannot enforce anything", ()
   assert.equal(alters.length, 4);
   assert.equal([...migration.matchAll(/ADD COLUMN IF NOT EXISTS/g)].length, 4, "every ADD COLUMN must be reentrant");
 });
+
+/* ── the remedy's own Server Actions bind a workspace ────────────────────── */
+
+test("the remedy actions run inside an enclosing acting-staff scope", () => {
+  // A STANDALONE Server Action has nothing above it holding a workspace. There is
+  // no React request store for `cache()` to carry one, and a scope established by
+  // a callee does not reach the frame that called it — so without an enclosing
+  // frame the guarded reads inside fail closed under enforcement. For the picker
+  // that means an empty customer list with no error the user can act on; for the
+  // move it means the remedy cannot complete at all.
+  //
+  // Same defect as #528 and #529. `withActingStaffScope` never widens: an
+  // already-bound scope wins and the wrapper becomes a bare call.
+  const code = src("src/app/actions/leads.ts");
+
+  /**
+   * The slice between one exported action and the next.
+   *
+   * Throws rather than returning a -1 bound. `code.slice(start, -1)` is almost
+   * the whole file, which would make every assertion below pass against some
+   * OTHER function's body — the "guard that proves nothing" failure this suite
+   * has already been bitten by once.
+   */
+  const bodyOf = (fn: string) => {
+    const start = code.indexOf(`export async function ${fn}(`);
+    assert.ok(start >= 0, `${fn} must exist`);
+    const end = code.indexOf("\nexport ", start + 1);
+    assert.ok(end > start, `${fn} must be followed by another export for this slice to be bounded`);
+    return code.slice(start, end);
+  };
+
+  for (const [fn, why] of [
+    ["searchLinkableContacts", "the link_contact picker"],
+    ["moveLeadWithContact", "the link_contact remedy itself"],
+  ] as const) {
+    assert.ok(
+      /withActingStaffScope\(/.test(bodyOf(fn)),
+      `${fn} (${why}) must bind the acting workspace`,
+    );
+  }
+
+  // THE PERMISSION LOOKUP IS INSIDE THE WRAPPER, not outside it.
+  //
+  // requireAnyPermission resolves the session and reads role and permission rows
+  // through the guarded client, so it needs the scope every bit as much as the
+  // contact query does. Wrapping only the query would move the failure one line
+  // up and look fixed — so this asserts the ORDER, not merely the presence.
+  //
+  // Both indexes are checked for -1 FIRST. `-1 < n` is true, so comparing them
+  // straight would report "correctly ordered" for a function that had been
+  // unwrapped entirely — passing precisely when the defect returned.
+  const search = bodyOf("searchLinkableContacts");
+  const scopeAt = search.indexOf("withActingStaffScope(");
+  const permAt = search.indexOf("requireAnyPermission(");
+  assert.ok(scopeAt >= 0, "searchLinkableContacts must bind a scope at all");
+  assert.ok(permAt >= 0, "…and must still check the permission");
+  assert.ok(scopeAt < permAt, "the scope must be bound before the permission check, not after it");
+});
