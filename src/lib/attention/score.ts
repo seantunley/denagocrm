@@ -119,13 +119,43 @@ export function compareAttention(
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
-/** Is this lead's attention currently snoozed? */
-export function isSnoozed(snoozedUntil: Date | null | undefined, now: Date): boolean {
-  return snoozedUntil != null && snoozedUntil.getTime() > now.getTime();
+/**
+ * Has this lead been dismissed from the list?
+ *
+ * ── WHY DISMISSAL NEEDS A REASON, AND WHY IT IS NOT OPTIONAL ────────────────
+ *
+ * This is the one screen whose job is to make sure nothing is forgotten, so the
+ * only way off it must be accountable. A one-click dismiss is a button that makes
+ * work disappear, and the first time somebody asks "why did nobody chase this
+ * deal" the honest answer would be "someone clicked something, we don't know
+ * who or why".
+ *
+ * A reason is therefore REQUIRED, and required at a length that stops "x" and
+ * "ok" from satisfying it — the same discipline `MIN_OVERRIDE_REASON` applies to
+ * overriding a stage rule, and for the same reason: an audit trail of blank
+ * justifications is an audit trail nobody can use.
+ */
+export function isDismissed(dismissedAt: Date | null | undefined): boolean {
+  return dismissedAt != null;
 }
 
-/** How long a snooze lasts. One working week — long enough to mean it. */
-export const SNOOZE_DAYS = 7;
+/**
+ * Long enough that "done" and "n/a" do not pass.
+ *
+ * Deliberately the same number as `MIN_OVERRIDE_REASON` in stageGate.ts. Two
+ * different minimums for two justification fields in the same product is a
+ * distinction nobody can defend when asked.
+ */
+export const MIN_DISMISS_REASON = 10;
+
+export function dismissReasonError(reason: string): string | null {
+  const trimmed = reason.trim();
+  if (trimmed.length === 0) return "A reason is required to dismiss a deal from this list.";
+  if (trimmed.length < MIN_DISMISS_REASON) {
+    return `Say a little more — at least ${MIN_DISMISS_REASON} characters, so the record means something later.`;
+  }
+  return null;
+}
 
 const BAND_LABELS: Record<AttentionBand, string> = {
   urgent: "Urgent",

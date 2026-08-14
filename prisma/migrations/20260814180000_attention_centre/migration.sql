@@ -1,23 +1,30 @@
--- The Attention Centre: one nullable column and three indexes.
+-- The Attention Centre: dismissal state on Lead, and three indexes.
 --
--- ADDITIVE AND INERT. The column defaults to NULL, which `isSnoozed` reads as
--- "not snoozed" — the behaviour every existing row already has. The indexes
--- change no result, only how fast it is reached. Nothing here is read until the
--- page exists, and nothing here changes what the board does today.
+-- ADDITIVE AND INERT. Both columns default to NULL, which `isDismissed` reads as
+-- "still listed" — the behaviour every existing row already has. The indexes
+-- change no result, only how fast it is reached.
 --
 -- Reentrant by construction: this runner opens NO transaction, so a half-applied
 -- migration is a real failure mode and every statement carries its own guard.
 --
--- ── WHY A SNOOZE COLUMN AT ALL ──────────────────────────────────────────────
+-- ── WHY DISMISSAL CARRIES A REASON ──────────────────────────────────────────
 --
--- A signal you have already acknowledged must stop shouting, or the list stops
--- being read — and a list nobody reads is worse than no list, because it looks
--- like coverage. Precedent in this schema: CustomerCase.snoozedUntil.
+-- This is the one screen whose job is to make sure nothing is forgotten, so the
+-- only way off it has to be accountable. A one-click dismiss is a button that
+-- makes work disappear, and the first time somebody asks "why did nobody chase
+-- this deal", the honest answer would be "someone clicked something".
 --
--- Nullable rather than defaulted to a past timestamp, so "never snoozed" and
--- "snooze expired" are the same state and neither needs a backfill.
+-- The reason is stored on the ROW as well as in the audit log, because the row is
+-- what the restore view reads: "Dismissed — customer asked us to call in March"
+-- is the sentence somebody needs while deciding whether to bring it back, and
+-- making that view join the audit log for one string would be a query per row.
+--
+-- Nullable rather than NOT NULL DEFAULT '': "never dismissed" and "dismissed with
+-- an empty reason" must not be the same state, and the second one is impossible
+-- by construction — the action refuses a reason shorter than MIN_DISMISS_REASON.
 
-ALTER TABLE "Lead" ADD COLUMN IF NOT EXISTS "attentionSnoozedUntil" TIMESTAMP(3);
+ALTER TABLE "Lead" ADD COLUMN IF NOT EXISTS "attentionDismissedAt" TIMESTAMP(3);
+ALTER TABLE "Lead" ADD COLUMN IF NOT EXISTS "attentionDismissReason" TEXT;
 
 -- ── The three indexes the loader's queries need ─────────────────────────────
 --

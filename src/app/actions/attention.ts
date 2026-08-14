@@ -5,62 +5,110 @@ import { prisma } from "@/lib/db";
 import { logAuditStrict } from "@/lib/audit";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { requireLeadAccess } from "@/lib/permissions";
-import { SNOOZE_DAYS } from "@/lib/attention/score";
+import { dismissReasonError } from "@/lib/attention/score";
 
 /**
- * Snooze a lead's attention signals, or wake them again.
+ * Dismiss a lead from the Attention Centre — WITH A REASON, always.
  *
- * A signal you have already acknowledged must stop shouting, or the list stops
- * being read — and a list nobody reads is worse than no list, because it looks
- * like coverage. This is the only write the Attention Centre makes.
+ * ── WHY THE REASON IS NOT OPTIONAL ──────────────────────────────────────────
  *
- * ── WHY IT IS AUDITED ───────────────────────────────────────────────────────
+ * This is the one screen whose job is to make sure nothing is forgotten, so the
+ * only way off it must be accountable. A one-click dismiss is a button that makes
+ * work disappear, and the first time somebody asks "why did nobody chase this
+ * deal", the honest answer would be "someone clicked something".
  *
- * Snoozing is how a deal legitimately disappears from the one screen whose job is
- * to make sure nothing is forgotten. "Who silenced this, and when" is exactly the
- * question somebody asks a month later about a deal that went quiet, and the row
- * itself only remembers the deadline, not the decision.
+ * VALIDATED ON THE SERVER, not only in the dialog. The dialog's disabled button is
+ * a courtesy; this is the rule. A Server Action is a public endpoint and a client
+ * that skipped the form would otherwise write an empty justification — which is
+ * worse than no field at all, because the audit trail would look complete.
  *
  * ── PERMISSION ──────────────────────────────────────────────────────────────
  *
  * `leads.edit`, through `requireLeadAccess`, which also enforces that this caller
- * may see THIS lead. Snoozing is not a stage change and not a status change, but
- * it is a change to how the lead is worked — a read-only viewer must not be able
- * to silence somebody else's queue.
- *
- * Bound in an enclosing `withActingStaffScope` for the reason every standalone
- * Server Action in this codebase now is: nothing renders it, so nothing above it
- * has established a workspace, and the guarded reads inside would fail closed
- * under enforcement.
+ * may see THIS lead. Dismissing is not a stage or status change, but it is a
+ * change to how the lead gets worked, and a read-only viewer must not be able to
+ * empty somebody else's queue.
  */
-export async function setLeadAttentionSnooze(
+export async function dismissLeadAttention(
   leadId: string,
-  snooze: boolean,
+  reason: string,
 ): Promise<{ ok: boolean; error?: string }> {
+  return withActingStaffScope(async () => {
+    const invalid = dismissReasonError(reason);
+    if (invalid) return { ok: false, error: invalid };
+
+    const user = await requireLeadAccess(leadId, "leads.edit");
+    const before = await prisma.lead.findUnique({
+      where: { id: leadId },
+      select: { id: true, title: true, name: true, contactId: true, attentionDismissedAt: true },
+    });
+    if (!before) return { ok: false, error: "Lead not found." };
+
+    const trimmed = reason.trim();
+    const at = new Date();
+    // The write and its audit together. A dismissal nobody can account for is the
+    // exact thing the reason exists to prevent, so it must not be able to commit
+    // on its own.
+    await prisma.$transaction(async (tx) => {
+      await tx.lead.update({
+        where: { id: leadId },
+        data: { attentionDismissedAt: at, attentionDismissReason: trimmed },
+      });
+      await logAuditStrict(
+        {
+          action: "lead.attention_dismissed",
+          summary: `Dismissed “${before.name}” from the attention list — reason: “${trimmed}”`,
+          leadId,
+          contactId: before.contactId,
+          user,
+          before: { attentionDismissedAt: before.attentionDismissedAt },
+          after: { attentionDismissedAt: at, attentionDismissReason: trimmed },
+        },
+        tx,
+      );
+    });
+
+    revalidatePath("/leads/attention");
+    revalidatePath("/leads");
+    return { ok: true };
+  });
+}
+
+/**
+ * Put a dismissed lead back on the list.
+ *
+ * No reason required, and that asymmetry is deliberate: restoring ADDS work to
+ * somebody's queue, which needs no justification, while dismissing removes it,
+ * which does. The reason that was given is cleared with it — keeping a stale
+ * justification on a live row would have it read as current the next time
+ * somebody dismissed the deal without one.
+ */
+export async function restoreLeadAttention(leadId: string): Promise<{ ok: boolean; error?: string }> {
   return withActingStaffScope(async () => {
     const user = await requireLeadAccess(leadId, "leads.edit");
     const before = await prisma.lead.findUnique({
       where: { id: leadId },
-      select: { id: true, title: true, contactId: true, attentionSnoozedUntil: true },
+      select: { id: true, name: true, contactId: true, attentionDismissedAt: true, attentionDismissReason: true },
     });
     if (!before) return { ok: false, error: "Lead not found." };
 
-    const until = snooze ? new Date(Date.now() + SNOOZE_DAYS * 24 * 60 * 60 * 1000) : null;
-    // The write and its audit together: a snooze nobody can account for is the
-    // thing the audit exists to prevent, so it must not be able to commit alone.
     await prisma.$transaction(async (tx) => {
-      await tx.lead.update({ where: { id: leadId }, data: { attentionSnoozedUntil: until } });
+      await tx.lead.update({
+        where: { id: leadId },
+        data: { attentionDismissedAt: null, attentionDismissReason: null },
+      });
       await logAuditStrict(
         {
-          action: snooze ? "lead.attention_snoozed" : "lead.attention_woken",
-          summary: snooze
-            ? `Snoozed attention on “${before.title}” for ${SNOOZE_DAYS} days`
-            : `Brought “${before.title}” back into the attention list`,
+          action: "lead.attention_restored",
+          summary: `Brought “${before.name}” back onto the attention list`,
           leadId,
           contactId: before.contactId,
           user,
-          before: { attentionSnoozedUntil: before.attentionSnoozedUntil },
-          after: { attentionSnoozedUntil: until },
+          before: {
+            attentionDismissedAt: before.attentionDismissedAt,
+            attentionDismissReason: before.attentionDismissReason,
+          },
+          after: { attentionDismissedAt: null, attentionDismissReason: null },
         },
         tx,
       );

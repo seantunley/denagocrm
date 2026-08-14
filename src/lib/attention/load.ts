@@ -7,7 +7,7 @@ import { collectAttentionSignals, type AttentionStage } from "./signals";
 import {
   attentionBand,
   compareAttention,
-  isSnoozed,
+  isDismissed,
   needsAttention,
   scoreAttention,
   type AttentionBand,
@@ -42,7 +42,15 @@ import {
 
 export type AttentionLead = {
   id: string;
-  title: string;
+  /**
+   * WHO. `Lead.name` is the person; `Lead.title` is the opportunity, which is
+   * usually the product — so two deals for the same model rendered as two
+   * identical rows, and the list was unreadable at exactly the moment it had
+   * several things to show. The board has always led with `name` for this reason.
+   */
+  name: string;
+  /** WHAT, shown second and only when it says something the name does not. */
+  opportunity: string | null;
   valueCents: number;
   stageId: string;
   stageName: string;
@@ -51,13 +59,26 @@ export type AttentionLead = {
   signals: AttentionSignal[];
   score: number;
   band: AttentionBand;
-  snoozedUntil: Date | null;
+};
+
+/** A lead somebody has taken off the list, and the reason they gave. */
+export type DismissedLead = {
+  id: string;
+  name: string;
+  reason: string;
+  at: Date;
 };
 
 export type AttentionList = {
   leads: AttentionLead[];
-  /** Snoozed leads that WOULD be listed. Surfaced so a snooze is visible, not a hole. */
-  snoozedCount: number;
+  /**
+   * Dismissed leads that WOULD otherwise be listed, with their reasons.
+   *
+   * Carried rather than counted, because "why is this not here" is the question
+   * the reason exists to answer, and a bare number cannot. They are already
+   * loaded — filtering them out client-side costs nothing.
+   */
+  dismissed: DismissedLead[];
 };
 
 /**
@@ -73,7 +94,7 @@ export const loadAttentionList = cache(async (user: PermissionUser, now: Date = 
   // become an impossible match rather than an absent filter, which is the bug
   // that turns a scoped list into a full one.
   const accessibleIds = await getAccessibleLeadIds(user);
-  if (accessibleIds !== null && accessibleIds.length === 0) return { leads: [], snoozedCount: 0 };
+  if (accessibleIds !== null && accessibleIds.length === 0) return { leads: [], dismissed: [] };
 
   const leads = await prisma.lead.findMany({
     where: {
@@ -83,17 +104,19 @@ export const loadAttentionList = cache(async (user: PermissionUser, now: Date = 
     },
     select: {
       id: true,
+      name: true,
       title: true,
       valueCents: true,
       stageId: true,
       contactId: true,
       stageEnteredAt: true,
-      attentionSnoozedUntil: true,
+      attentionDismissedAt: true,
+      attentionDismissReason: true,
       stage: { select: { id: true, name: true, staleAfterDays: true } },
       assignedTo: { select: { name: true } },
     },
   });
-  if (leads.length === 0) return { leads: [], snoozedCount: 0 };
+  if (leads.length === 0) return { leads: [], dismissed: [] };
 
   const stages = new Map<string, AttentionStage>();
   const stageByLead = new Map<string, string>();
@@ -112,21 +135,30 @@ export const loadAttentionList = cache(async (user: PermissionUser, now: Date = 
     stageEnteredByLead,
   });
 
-  let snoozedCount = 0;
+  const dismissed: DismissedLead[] = [];
   const rows: AttentionLead[] = [];
   for (const lead of leads) {
     const own = signals.get(lead.id) ?? [];
     if (!needsAttention(own)) continue;
-    // Counted BEFORE being dropped, so the page can say "4 snoozed" rather than
-    // silently showing a shorter list than the person expects.
-    if (isSnoozed(lead.attentionSnoozedUntil, now)) {
-      snoozedCount++;
+    // Collected BEFORE being dropped, so the page can say what was taken off and
+    // why rather than silently showing a shorter list than the person expects.
+    if (isDismissed(lead.attentionDismissedAt)) {
+      dismissed.push({
+        id: lead.id,
+        name: lead.name,
+        reason: lead.attentionDismissReason ?? "",
+        at: lead.attentionDismissedAt!,
+      });
       continue;
     }
     const score = scoreAttention(own);
     rows.push({
       id: lead.id,
-      title: lead.title,
+      name: lead.name,
+      // Shown only when it adds something. `title` is often exactly the product
+      // name, and repeating it under the person's name is noise that pushes the
+      // reasons — the part being read — further down.
+      opportunity: lead.title && lead.title !== lead.name ? lead.title : null,
       valueCents: lead.valueCents,
       stageId: lead.stageId,
       stageName: lead.stage?.name ?? "—",
@@ -137,10 +169,10 @@ export const loadAttentionList = cache(async (user: PermissionUser, now: Date = 
       signals: [...own].sort((a, b) => b.weight - a.weight),
       score,
       band: attentionBand(score),
-      snoozedUntil: lead.attentionSnoozedUntil,
     });
   }
 
   rows.sort(compareAttention);
-  return { leads: rows, snoozedCount };
+  dismissed.sort((a, b) => b.at.getTime() - a.at.getTime());
+  return { leads: rows, dismissed };
 });

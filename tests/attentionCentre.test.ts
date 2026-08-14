@@ -6,10 +6,11 @@ import path from "node:path";
 import {
   ATTENTION_WEIGHTS,
   MAX_ATTENTION_SCORE,
-  SNOOZE_DAYS,
+  MIN_DISMISS_REASON,
   attentionBand,
   compareAttention,
-  isSnoozed,
+  dismissReasonError,
+  isDismissed,
   needsAttention,
   scoreAttention,
   type AttentionSignal,
@@ -102,24 +103,96 @@ test("the order is total, so the list does not shuffle between refreshes", () =>
 
 /* ── snoozing ───────────────────────────────────────────────────────────── */
 
-test("a snooze expires rather than needing to be cleared", () => {
-  // NULL and "elapsed" are the same state, which is why the column needed no
-  // backfill and why nothing has to sweep it.
-  const now = new Date("2026-08-14T12:00:00Z");
-  assert.equal(isSnoozed(null, now), false);
-  assert.equal(isSnoozed(undefined, now), false);
-  assert.equal(isSnoozed(new Date("2026-08-13T12:00:00Z"), now), false, "yesterday is not a snooze");
-  assert.equal(isSnoozed(new Date("2026-08-15T12:00:00Z"), now), true);
+test("A REASON IS REQUIRED TO DISMISS, and a token one does not count", () => {
+  // This is the one screen whose job is to make sure nothing is forgotten, so the
+  // only way off it must be accountable. A one-click dismiss is a button that
+  // makes work disappear, and "someone clicked something" is not an answer to
+  // "why did nobody chase this deal".
+  assert.ok(dismissReasonError("") != null, "empty is refused");
+  assert.ok(dismissReasonError("   ") != null, "whitespace is not a reason");
+  assert.ok(dismissReasonError("ok") != null, "…nor is a token one");
+  assert.ok(dismissReasonError("x".repeat(MIN_DISMISS_REASON - 1)) != null, "one short still fails");
+  assert.equal(dismissReasonError("x".repeat(MIN_DISMISS_REASON)), null, "the boundary passes");
+  assert.equal(dismissReasonError("Customer asked us to call back in March"), null);
 });
 
-test("snoozed leads are counted, not silently dropped", () => {
-  // A shorter list than expected is indistinguishable from a broken one, and a
-  // snooze somebody else set is exactly what you would want to know about.
+test("the minimum matches the one used for overriding a stage rule", () => {
+  // Two different minimums for two justification fields in the same product is a
+  // distinction nobody can defend when asked.
+  //
+  // Compared only WHEN the other one exists. `stageGate.ts` arrives with #527,
+  // which is a separate unmerged branch — asserting against it unconditionally
+  // would make this branch's tests depend on that branch's files, which is how a
+  // green PR fails the moment it is checked out on its own. It ties itself back
+  // once both have landed.
+  let stageGate: string | null = null;
+  try {
+    stageGate = shipped("src/lib/stageGate.ts");
+  } catch {
+    stageGate = null;
+  }
+  assert.equal(MIN_DISMISS_REASON, 10, "the value itself is pinned either way");
+  if (!stageGate) return;
+  const declared = stageGate.match(/export const MIN_OVERRIDE_REASON = (\d+)/);
+  assert.ok(declared, "MIN_OVERRIDE_REASON must still exist to compare against");
+  assert.equal(MIN_DISMISS_REASON, Number(declared[1]), "the two justification minimums must agree");
+});
+
+test("dismissal is a flag, not a deadline", () => {
+  // It stays off the list until somebody puts it back. NULL is "still listed",
+  // which is what every existing row already is — hence no backfill.
+  assert.equal(isDismissed(null), false);
+  assert.equal(isDismissed(undefined), false);
+  assert.equal(isDismissed(new Date("2020-01-01T00:00:00Z")), true, "however long ago");
+});
+
+test("dismissed leads are shown WITH their reasons, not counted", () => {
+  // "Why is this not here" is the question the reason exists to answer, and a
+  // bare number cannot. A shorter list than expected is otherwise
+  // indistinguishable from a broken one.
   const loader = shipped("src/lib/attention/load.ts");
-  assert.match(loader, /snoozedCount\+\+;/);
-  assert.match(loader, /if \(isSnoozed\(lead\.attentionSnoozedUntil, now\)\)/);
+  assert.match(loader, /if \(isDismissed\(lead\.attentionDismissedAt\)\)/);
+  assert.match(loader, /reason: lead\.attentionDismissReason \?\? ""/);
   const page = shipped("src/app/(app)/leads/attention/page.tsx");
-  assert.match(page, /snoozedCount > 0 &&/, "and the page has to say so");
+  assert.match(page, /dismissed\.length > 0 &&/);
+  assert.match(page, /\{lead\.reason\}/, "the reason has to be rendered, not just carried");
+  assert.match(page, /RestoreAttentionButton/, "and there must be a way back");
+});
+
+test("the server enforces the reason, not just the dialog", () => {
+  // A Server Action is a public endpoint. A client that skipped the form would
+  // otherwise write an empty justification — worse than no field at all, because
+  // the audit trail would look complete.
+  const action = shipped("src/app/actions/attention.ts");
+  const check = action.indexOf("dismissReasonError(reason)");
+  const write = action.indexOf("prisma.$transaction(");
+  assert.ok(check > 0 && check < write, "validated before anything is written");
+  assert.match(action, /if \(invalid\) return \{ ok: false, error: invalid \}/);
+  // The dialog shows the SAME sentence the server would have replied with.
+  assert.match(shipped("src/components/DismissAttentionButton.tsx"), /dismissReasonError\(reason\)/);
+});
+
+test("restoring needs no reason, and clears the old one", () => {
+  // The asymmetry is deliberate: restoring ADDS work to a queue and needs no
+  // justification. Keeping a stale reason on a live row would have it read as
+  // current the next time somebody dismissed the deal.
+  const action = shipped("src/app/actions/attention.ts");
+  const restore = action.slice(action.indexOf("export async function restoreLeadAttention"));
+  assert.doesNotMatch(restore, /dismissReasonError/);
+  assert.match(restore, /attentionDismissedAt: null, attentionDismissReason: null/);
+});
+
+test("there is no reasonless way off the list", () => {
+  // The snooze button was exactly that, and is gone rather than hidden.
+  assert.throws(() => src("src/components/SnoozeAttentionButton.tsx"));
+  for (const rel of [
+    "src/lib/attention/score.ts",
+    "src/lib/attention/load.ts",
+    "src/app/actions/attention.ts",
+    "src/app/(app)/leads/attention/page.tsx",
+  ]) {
+    assert.doesNotMatch(shipped(rel), /snooze/i, `${rel} must not offer a reasonless escape`);
+  }
 });
 
 /* ── the loader's contracts ─────────────────────────────────────────────── */
@@ -131,7 +204,7 @@ test("scope comes from the shared helper, with its documented empty-list rule", 
   assert.match(loader, /getAccessibleLeadIds\(user\)/);
   assert.match(
     loader,
-    /if \(accessibleIds !== null && accessibleIds\.length === 0\) return \{ leads: \[\], snoozedCount: 0 \}/,
+    /if \(accessibleIds !== null && accessibleIds\.length === 0\) return \{ leads: \[\], dismissed: \[\] \}/,
   );
   assert.match(loader, /accessibleIds === null \? \{\} : \{ id: \{ in: accessibleIds \} \}/);
 });
@@ -172,44 +245,78 @@ test("no stored score, and no cron to keep one fresh", () => {
 
 /* ── the write ──────────────────────────────────────────────────────────── */
 
-test("snoozing is permissioned, scoped, audited and atomic", () => {
+test("both writes are permissioned, scoped, audited and atomic", () => {
   const action = shipped("src/app/actions/attention.ts");
-  assert.match(action, /withActingStaffScope\(/, "a standalone Server Action binds its workspace");
-  assert.match(action, /requireLeadAccess\(leadId, "leads\.edit"\)/, "a viewer must not silence a queue");
-  assert.match(action, /prisma\.\$transaction\(/);
-  const tx = action.indexOf("prisma.$transaction(");
-  assert.ok(action.indexOf("tx.lead.update") > tx, "the write is inside");
-  assert.ok(action.indexOf("logAuditStrict(") > tx, "…and so is its audit");
-  assert.match(action, /action: snooze \? "lead\.attention_snoozed" : "lead\.attention_woken"/);
+  assert.equal(
+    (action.match(/withActingStaffScope\(/g) ?? []).length,
+    2,
+    "both standalone Server Actions bind their workspace",
+  );
+  assert.equal(
+    (action.match(/requireLeadAccess\(leadId, "leads\.edit"\)/g) ?? []).length,
+    2,
+    "a read-only viewer must not be able to empty somebody else's queue",
+  );
+  // A dismissal nobody can account for is what the reason exists to prevent, so
+  // the write must not be able to commit without its audit.
+  assert.equal((action.match(/prisma\.\$transaction\(/g) ?? []).length, 2);
+  assert.equal((action.match(/logAuditStrict\(/g) ?? []).length, 2);
+  assert.match(action, /action: "lead\.attention_dismissed"/);
+  assert.match(action, /action: "lead\.attention_restored"/);
+  // The reason is recorded in the audit summary, not only in the column — the
+  // column is overwritten by the next dismissal, the audit is not.
+  assert.match(action, /reason: “\$\{trimmed\}”/);
 });
 
-test("the snooze button is not optimistic", () => {
+test("the dismiss dialog is not optimistic", () => {
   // The row DISAPPEARS on success. An optimistic removal that then failed would
-  // leave somebody believing they had dealt with a deal they had not — the one
-  // outcome this screen exists to prevent.
-  const button = shipped("src/components/SnoozeAttentionButton.tsx");
-  const setDone = button.indexOf("setDone(true)");
+  // leave somebody believing they had dealt with a deal they had not.
+  // Anchored on the EARLY RETURN rather than on exact whitespace: the failure
+  // branch has to bail out before anything closes the dialog or hides the row.
+  const button = shipped("src/components/DismissAttentionButton.tsx");
   const guard = button.indexOf("if (!result.ok)");
-  assert.ok(guard > 0 && guard < setDone, "the failure path must be taken before the row is hidden");
-});
-
-test("the snooze window has one definition", () => {
-  assert.equal(SNOOZE_DAYS, 7);
-  // The action computes the deadline and the button labels it, both from the
-  // pure module — a literal in either would drift from the other.
-  assert.match(shipped("src/app/actions/attention.ts"), /SNOOZE_DAYS \* 24 \* 60 \* 60 \* 1000/);
-  assert.match(shipped("src/components/SnoozeAttentionButton.tsx"), /\$\{SNOOZE_DAYS\}/);
+  const bail = button.indexOf("return;", guard);
+  const close = button.indexOf("toast.success");
+  assert.ok(guard > 0, "the result must be checked at all");
+  assert.ok(bail > guard && bail < close, "…and must return before the success path runs");
+  // …and the confirm button cannot be clicked into an invalid state.
+  assert.match(button, /disabled=\{!ready \|\| pending\}/);
 });
 
 /* ── the migration ──────────────────────────────────────────────────────── */
 
+test("rows lead with the PERSON, not the product", () => {
+  // The first version led with `Lead.title`, which is usually the product name —
+  // so two deals for the same model rendered as two identical rows and the list
+  // was unreadable at exactly the moment it had several things to show.
+  const loader = shipped("src/lib/attention/load.ts");
+  assert.match(loader, /name: lead\.name,/);
+  assert.match(
+    loader,
+    /opportunity: lead\.title && lead\.title !== lead\.name \? lead\.title : null/,
+    "the opportunity is shown only when it adds something",
+  );
+  const page = shipped("src/app/(app)/leads/attention/page.tsx");
+  assert.match(page, /\{lead\.name\}/);
+  assert.doesNotMatch(page, /\{lead\.title\}/, "title is not the row's identity");
+});
+
+test("a chatty note cannot push the rest of the list off the screen", () => {
+  // A signal's sentence can quote free text somebody typed — an activity summary
+  // is often a paragraph, as the first real screenful showed.
+  const page = shipped("src/app/(app)/leads/attention/page.tsx");
+  assert.match(page, /line-clamp-2/);
+  assert.match(page, /title=\{signal\.detail\}/, "the full text stays available on hover");
+});
+
 test("the migration is additive, inert and reentrant", () => {
   const sql = src("prisma/migrations/20260814180000_attention_centre/migration.sql");
   const statements = sql.replace(/^\s*--.*$/gm, "");
-  assert.match(statements, /ADD COLUMN IF NOT EXISTS "attentionSnoozedUntil" TIMESTAMP\(3\)/);
-  // Nullable with no default: "never snoozed" and "snooze expired" are the same
-  // state, so nothing needs backfilling.
-  assert.doesNotMatch(statements, /attentionSnoozedUntil"[^;]*NOT NULL/);
+  assert.match(statements, /ADD COLUMN IF NOT EXISTS "attentionDismissedAt" TIMESTAMP\(3\)/);
+  assert.match(statements, /ADD COLUMN IF NOT EXISTS "attentionDismissReason" TEXT/);
+  // Nullable with no default: "never dismissed" and "dismissed with an empty
+  // reason" must not be the same state, and the second is impossible anyway.
+  assert.doesNotMatch(statements, /attentionDismiss\w*"[^;]*NOT NULL/);
   assert.doesNotMatch(statements, /\bUPDATE\b|\bINSERT\b|\bDELETE\b/i, "it must not touch a row");
   // The runner opens no transaction, so every statement carries its own guard.
   assert.equal((statements.match(/CREATE INDEX IF NOT EXISTS/g) ?? []).length, 3);
