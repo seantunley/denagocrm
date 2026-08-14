@@ -83,8 +83,85 @@ const TAG_STYLES: Record<string, string> = {
  */
 const STYLED_TAGS = new Set(Object.keys(TAG_STYLES));
 
-/** Pull an existing `style="…"` out of an attribute string, if there is one. */
-const STYLE_ATTR = /\sstyle\s*=\s*("([^"]*)"|'([^']*)')/i;
+/**
+ * The `style` attribute's own span and value, found by WALKING the attributes.
+ *
+ * A regex over the raw attribute text has the same defect the tag matcher had,
+ * one level down. `/\sstyle\s*=\s*("…"|'…')/` finds the first thing that LOOKS
+ * like a style attribute anywhere in the string, including inside another
+ * attribute's quoted value:
+ *
+ *     <p title="use style='compact'">Text</p>
+ *
+ * That matched ` style='compact'` inside the title, captured `compact` as CSS,
+ * and — because the old code removed the match with `.replace()` — left the title
+ * as `"use"`. Attribute stolen, title corrupted, and the result still looked like
+ * plausible markup.
+ *
+ * So attributes are parsed the same way the tag itself is: one at a time,
+ * tracking quotes, so `style` is recognised only as a NAME in attribute position
+ * and never as text inside a value. `data-style` and `xstyle` do not match either,
+ * because the name is compared whole rather than by prefix.
+ *
+ * Returns the span so the caller can splice — rebuilding the attribute string
+ * from parsed pieces would reformat attributes it was never asked to touch.
+ */
+type StyleAttr = { value: string; start: number; end: number };
+
+function findStyleAttr(attrs: string): StyleAttr | null {
+  let i = 0;
+  while (i < attrs.length) {
+    while (i < attrs.length && /\s/.test(attrs[i])) i++;
+    if (i >= attrs.length) break;
+
+    const nameStart = i;
+    while (i < attrs.length && !/[\s=]/.test(attrs[i])) i++;
+    const name = attrs.slice(nameStart, i);
+    // A stray `=` with no name before it. Step over it rather than spinning.
+    if (!name) {
+      i++;
+      continue;
+    }
+
+    let j = i;
+    while (j < attrs.length && /\s/.test(attrs[j])) j++;
+    if (attrs[j] !== "=") {
+      // A valueless attribute (`nowrap`, `hidden`). A valueless `style` is
+      // meaningless but legal, and it has to be CLAIMED rather than skipped:
+      // skipping it appends a second `style`, and a client reading the first one
+      // finds no declarations and applies nothing. Treated as an empty value so
+      // the defaults are spliced over it.
+      if (name.toLowerCase() === "style") return { value: "", start: nameStart, end: i };
+      i = j;
+      continue;
+    }
+
+    j++;
+    while (j < attrs.length && /\s/.test(attrs[j])) j++;
+
+    let value: string;
+    const quote = attrs[j];
+    if (quote === '"' || quote === "'") {
+      const close = attrs.indexOf(quote, j + 1);
+      if (close === -1) {
+        // Unterminated value — the rest of the tag belongs to it.
+        value = attrs.slice(j + 1);
+        j = attrs.length;
+      } else {
+        value = attrs.slice(j + 1, close);
+        j = close + 1;
+      }
+    } else {
+      const valueStart = j;
+      while (j < attrs.length && !/\s/.test(attrs[j])) j++;
+      value = attrs.slice(valueStart, j);
+    }
+
+    if (name.toLowerCase() === "style") return { value, start: nameStart, end: j };
+    i = j;
+  }
+  return null;
+}
 
 /**
  * WHY THIS IS A SCANNER AND NOT A REGEX.
@@ -188,13 +265,26 @@ export function inlineEmailStyles(html: string): string {
       selfClose = "/";
     }
 
-    const existing = attrs.match(STYLE_ATTR);
+    const existing = findStyleAttr(attrs);
     if (!existing) {
       out += `<${rawName}${attrs} style="${defaults}"${selfClose}>`;
     } else {
+      // SPLICED IN PLACE, so every other attribute is copied byte-for-byte and
+      // the style attribute keeps its original position. Rebuilding the string
+      // from parsed pieces would reformat attributes nobody asked to change —
+      // and quoting is exactly where that goes wrong.
+      //
       // Prepended, so the author's own declarations come last and win.
-      const value = existing[2] ?? existing[3] ?? "";
-      out += `<${rawName}${attrs.replace(STYLE_ATTR, "")} style="${defaults}${value.trim()}"${selfClose}>`;
+      //
+      // The value is re-emitted in DOUBLE quotes whatever it arrived in, so a
+      // double quote inside it has to be escaped or it closes the attribute
+      // early. Not hypothetical: `font-family:"Helvetica Neue"` is ordinary CSS,
+      // and `style='font-family:"X"'` would otherwise be re-emitted as
+      // `style="font-family:"X""` — one attribute turned into three tokens.
+      const merged = `${defaults}${existing.value.trim()}`.replace(/"/g, "&quot;");
+      const before = attrs.slice(0, existing.start);
+      const after = attrs.slice(existing.end);
+      out += `<${rawName}${before}style="${merged}"${after}${selfClose}>`;
     }
     cursor = end + 1;
   }

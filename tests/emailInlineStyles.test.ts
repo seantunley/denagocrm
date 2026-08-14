@@ -98,6 +98,72 @@ test("a `>` inside a quoted attribute does not end the tag", () => {
   assert.equal(out.split("<").length - 1, 2, "exactly two tags — the open and the close");
 });
 
+test("`style` inside another attribute's value is not mistaken for the real one", () => {
+  // THE SECOND REPORTED DEFECT — the same class as the tag matcher, one level
+  // down. A regex over the raw attribute text found ` style='compact'` INSIDE the
+  // title, captured `compact` as CSS, and removed it from the title, leaving
+  // `title="use"`. Attribute stolen, title corrupted, output still plausible.
+  const out = inlineEmailStyles(`<p title="use style='compact'">Text</p>`);
+  assert.match(out, /title="use style='compact'"/, "the title must survive whole");
+  assert.match(out, /style="margin:0 0 16px 0;line-height:1\.6;"/, "…and the real style is the default one");
+  assert.ok(out.endsWith("Text</p>"));
+});
+
+test("a real style attribute is still found when another attribute mentions one", () => {
+  // The harder half: the decoy must be ignored AND the genuine attribute merged.
+  const out = inlineEmailStyles(`<p title="style='x'" style="color:red">T</p>`);
+  assert.match(out, /title="style='x'"/, "the decoy is untouched");
+  assert.match(out, /style="margin:0 0 16px 0;line-height:1\.6;color:red"/, "the real one is merged");
+  assert.equal(out.match(/ style=/g)?.length, 1, "exactly one style attribute in attribute position");
+});
+
+test("an attribute whose NAME merely contains style is not matched", () => {
+  const out = inlineEmailStyles('<p data-style="x">T</p>');
+  assert.match(out, /data-style="x"/);
+  assert.match(out, /style="margin:0 0 16px 0;line-height:1\.6;"/, "the default is added, not merged into data-style");
+});
+
+test("an unquoted style value is merged", () => {
+  // Legal HTML, and the regex only ever matched quoted values — so this silently
+  // gained a SECOND style attribute before.
+  const out = inlineEmailStyles("<p style=color:red>T</p>");
+  assert.equal(out.match(/style=/g)?.length, 1);
+  assert.match(out, /style="margin:0 0 16px 0;line-height:1\.6;color:red"/);
+});
+
+test("a valueless attribute before style does not derail the walk", () => {
+  const out = inlineEmailStyles('<p hidden style="color:red">T</p>');
+  assert.match(out, /hidden/);
+  assert.match(out, /style="margin:0 0 16px 0;line-height:1\.6;color:red"/);
+  assert.equal(out.match(/style=/g)?.length, 1);
+});
+
+test("a double quote inside a style value is escaped, not left to close the attribute", () => {
+  // Found by running the walk over pathological input rather than by reading it.
+  // The merged value is re-emitted in DOUBLE quotes whatever it arrived in, so
+  // `style='font-family:"Helvetica Neue"'` — ordinary CSS — would have been
+  // written as `style="font-family:"Helvetica Neue""`, turning one attribute into
+  // three tokens.
+  const out = inlineEmailStyles(`<p style='font-family:"Helvetica Neue"'>T</p>`);
+  assert.match(out, /&quot;Helvetica Neue&quot;/);
+  assert.equal(out.match(/"/g)?.length, 2, "exactly one pair of quotes around the value");
+});
+
+test("a valueless style attribute is claimed, not duplicated", () => {
+  // `<p style>` is meaningless but legal. Skipping it appended a SECOND style
+  // attribute, and a client reading the first one finds no declarations and
+  // applies nothing — so the tag ends up worse than if it had been left alone.
+  const out = inlineEmailStyles("<p style>T</p>");
+  assert.equal(out.match(/style/g)?.length, 1, "one style attribute, not two");
+  assert.match(out, /<p style="margin:0 0 16px 0;line-height:1\.6;">T<\/p>/);
+});
+
+test("attributes keep their original order and spacing", () => {
+  // Spliced in place rather than rebuilt, so nothing else is reformatted.
+  const out = inlineEmailStyles('<a href="https://x.com" style="color:red" target="_blank">g</a>');
+  assert.match(out, /^<a href="https:\/\/x\.com" style="[^"]+" target="_blank">/);
+});
+
 test("single-quoted attributes are honoured too", () => {
   const out = inlineEmailStyles("<p title='a > b'>x</p>");
   assert.match(out, /title='a > b'/);
