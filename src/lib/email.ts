@@ -72,6 +72,22 @@ export async function sendEmail(input: {
    * not have to widen a type to send a standards-defined one.
    */
   headers?: Record<string, string>;
+  /**
+   * `Reply-To`, as a comma-separated address list.
+   *
+   * Mail goes out as the WORKSPACE (`SMTP_FROM`), so without this a customer's
+   * reply lands wherever that address delivers and nowhere else — either the
+   * shared mailbox the IMAP sync files against the record, or the person who
+   * actually wrote the mail, but not both. The header takes a LIST, which is what
+   * lets it be both.
+   *
+   * A first-class nodemailer field rather than an entry in some `headers` map:
+   * nodemailer parses and encodes addresses here, where an arbitrary header would
+   * be passed through verbatim. Callers must still validate — see `parseReplyTo`
+   * in `replyToAddresses.ts` — because a CR or LF in a header value is header
+   * injection, and "the library probably handles it" is not a control.
+   */
+  replyTo?: string;
 }): Promise<{ ok: boolean; error?: string }> {
   const config = await getSmtpConfig();
   if (!config) return { ok: false, error: "SMTP is not configured (see Settings → Email)." };
@@ -90,6 +106,9 @@ export async function sendEmail(input: {
       html: input.html,
       attachments: input.attachments,
       headers: input.headers,
+      // Omitted entirely when absent, so mail that sets no Reply-To is
+      // byte-for-byte what it was before this field existed.
+      ...(input.replyTo ? { replyTo: input.replyTo } : {}),
     });
     await noteSmtpOutcome(config, null);
     return { ok: true };

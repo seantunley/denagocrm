@@ -19,6 +19,7 @@ import { signatureCompanyFrom, buildSignature, buildEmailHtml, htmlToText } from
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { readFile } from "@/lib/storage";
 import { resolveActingTenant } from "@/lib/tenantContext";
+import { parseReplyTo } from "@/lib/replyToAddresses";
 import { tenantOrigin } from "@/lib/tenantOrigin";
 
 export type SendEmailState = { ok?: string; error?: string };
@@ -47,6 +48,14 @@ export async function sendEmailAction(
   const bodyText = htmlToText(bodyHtml);
   if (!to || !subject || !bodyText) {
     return { error: "To, subject and message are required." };
+  }
+  // REFUSED, NOT SANITISED. This value reaches a mail header, where a CR or LF
+  // would start a new one — so anything that is not a plain address list is
+  // rejected outright. Quietly dropping the bad part would send mail whose replies
+  // go somewhere the sender did not ask for and was never told about.
+  const replyTo = parseReplyTo(String(formData.get("replyTo") ?? ""));
+  if (!replyTo.ok) {
+    return { error: `Reply-to is not a valid address list: ${replyTo.invalid.join(", ")}` };
   }
   // Don't let a caller log an email against — or pull context from — a contact or
   // lead they can't access. (`to` stays free-form: the CRM legitimately emails
@@ -101,6 +110,7 @@ export async function sendEmailAction(
     text: `${bodyText}\n\n--\n${[user.name, profile.name, profile.phone].filter((s) => s && s.trim()).join(" · ")}`,
     html,
     attachments,
+    replyTo: replyTo.value ?? undefined,
   });
   if (!result.ok) return { error: result.error };
 
@@ -121,9 +131,12 @@ export async function sendEmailAction(
   });
   await logAudit({
     action: "email.sent",
+    // Where replies were directed is part of what was sent, and it is the one
+    // detail nobody can recover afterwards — the message has left, and the header
+    // exists only in the recipient's copy.
     summary: `Sent email to ${to}: “${subject}”${
       attachedNames.length > 0 ? ` (attached: ${attachedNames.join(", ")})` : ""
-    }`,
+    }${replyTo.value ? ` (replies to: ${replyTo.value})` : ""}`,
     contactId,
     leadId,
     user,
