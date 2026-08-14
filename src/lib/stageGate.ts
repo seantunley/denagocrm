@@ -422,6 +422,68 @@ export function evaluateStageMove(input: {
 }
 
 /**
+ * The verdict that remains once a remedy's own work is counted as already done.
+ *
+ * ── WHY A REMEDY CANNOT BE JUDGED BY THE VERDICT THAT SUMMONED IT ───────────
+ *
+ * A remedy is offered because it addresses something unmet, and then it is
+ * performed. But the verdict was computed BEFORE it ran — and it has to be, since
+ * the whole point is to do the work and the move together in one transaction, so
+ * the facts cannot be re-read in between without splitting them apart.
+ *
+ * So the pre-remedy verdict still reports the very clause the remedy satisfies.
+ * Applied literally it refuses the move that the remedy exists to permit: the
+ * person is offered the customer picker, picks a customer, and is told the lead
+ * still needs a customer. Two paths did exactly that.
+ *
+ * `moveLeadWithContact` had a narrow guard for it — proceed when the ONLY unmet
+ * clause was the link — which is right for a stage with one rule and wrong for a
+ * stage with two. Missing a link and a value, the guard failed, the pre-link
+ * verdict was applied whole, and the move was refused after the customer had been
+ * chosen. The offered remedy accomplished nothing.
+ *
+ * `moveLeadToTestDrive` had no guard at all. A `book_test_drive` stage with no
+ * explicit rules DERIVES `test drives booked ≥ 1` at `block`, so the booking path
+ * evaluated "has a test drive" against a lead that did not have one yet and
+ * refused every first booking — the primary remedy, unusable.
+ *
+ * ── WHAT THIS RETURNS ───────────────────────────────────────────────────────
+ *
+ * The unmet clauses the remedy does NOT satisfy, re-judged under the same mode
+ * rules `evaluateStageMove` applies — so a residual `reason` gate still asks for a
+ * reason and a residual `block` still refuses, naming only what is genuinely
+ * still missing. Nothing left unmet means the move is clear.
+ *
+ * Matched by FIELD, the same comparison `remedyAddresses` uses to decide whether
+ * to offer the remedy at all. Offering by one rule and discounting by another is
+ * how the two would drift into disagreeing about the same clause.
+ *
+ * `canOverride` is passed in rather than inferred from the verdict. For a `block`
+ * gate it IS recoverable — `allowed` is true exactly when the caller may override
+ * — but reading a permission back out of a decision it produced is the kind of
+ * shortcut that silently inverts when the mode table changes.
+ */
+export function verdictAfterRemedy(
+  verdict: StageGateVerdict,
+  satisfiedField: string,
+  canOverride: boolean,
+): StageGateVerdict {
+  const unmet = verdict.unmet.filter((criterion) => criterion.field !== satisfiedField);
+  // The remedy addressed nothing in this verdict. Returned untouched rather than
+  // rebuilt, so a caller cannot accidentally launder a refusal through a remedy
+  // that has nothing to do with it.
+  if (unmet.length === verdict.unmet.length) return verdict;
+  if (unmet.length === 0) return CLEAR_VERDICT;
+
+  const { direction, mode } = verdict;
+  if (mode === "warn") return { allowed: true, requiresReason: false, direction, mode, unmet };
+  if (mode === "reason") return { allowed: true, requiresReason: true, direction, mode, unmet };
+  return canOverride
+    ? { allowed: true, requiresReason: true, direction, mode, unmet }
+    : { allowed: false, requiresReason: false, direction, mode, unmet };
+}
+
+/**
  * One sentence for one failed clause. Used by the drag tooltip AND the server's
  * refusal, so the wording a person is refused with is the wording they were
  * warned with.
