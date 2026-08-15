@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { AlertTriangle, ArrowLeft, Clock } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Clock, RotateCcw } from "lucide-react";
 import { hasPermission, requireAnyPermission } from "@/lib/permissions";
 import { loadAttentionList, type SetAsideLead } from "@/lib/attention/load";
 import { attentionBandLabel, type AttentionBand } from "@/lib/attention/score";
@@ -7,6 +7,10 @@ import { formatDate, formatZAR } from "@/lib/format";
 import SetAsideAttentionButton from "@/components/SetAsideAttentionButton";
 import RestoreAttentionButton from "@/components/RestoreAttentionButton";
 import { PageHeader } from "@/components/page-header";
+import AttentionLiveRefresh from "@/components/AttentionLiveRefresh";
+import AttentionQuickAssign from "@/components/AttentionQuickAssign";
+import { listActingTenantStaff } from "@/lib/tenantActor";
+import type { AttentionCategory } from "@/lib/attention/score";
 
 /**
  * The Attention Centre.
@@ -42,7 +46,11 @@ const BAND_STYLES: Record<AttentionBand, string> = {
  */
 const DETAIL_CLAMP = "line-clamp-2";
 
-export default async function AttentionPage() {
+export default async function AttentionPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ owner?: string; category?: string }>;
+}) {
   // The same guard `/leads` uses. This page shows customer names and deal values,
   // so it is exactly as sensitive as the board it is reached from.
   const user = await requireAnyPermission("leads.view_all", "leads.view_owned");
@@ -64,7 +72,24 @@ export default async function AttentionPage() {
   // This is a courtesy, not the rule. The actions keep their own checks — a
   // hidden button is not a permission.
   const canEdit = await hasPermission(user, "leads.edit");
-  const { leads, snoozed, dismissed } = await loadAttentionList(user);
+  const [{ owner = "mine", category = "all" }, canAssign, users, result] = await Promise.all([
+    searchParams,
+    hasPermission(user, "leads.assign"),
+    listActingTenantStaff(),
+    loadAttentionList(user),
+  ]);
+  const selectedCategory = (["customer", "commitment", "workflow"] as string[]).includes(category)
+    ? category as AttentionCategory
+    : null;
+  const leads = result.leads.filter((lead) => {
+    if (owner === "mine" && lead.ownerId !== user.id) return false;
+    if (owner === "unassigned" && lead.ownerId !== null) return false;
+    if (selectedCategory && !lead.signals.some((signal) => signal.category === selectedCategory)) return false;
+    return true;
+  });
+  const { snoozed, dismissed } = result;
+  const href = (nextOwner: string, nextCategory: string) =>
+    `/leads/attention?owner=${encodeURIComponent(nextOwner)}&category=${encodeURIComponent(nextCategory)}`;
 
   return (
     <div className="space-y-5">
@@ -80,7 +105,31 @@ export default async function AttentionPage() {
         <Link href="/leads" className="btn-secondary btn-sm">
           <ArrowLeft className="size-4" /> Back to the board
         </Link>
+        <AttentionLiveRefresh />
       </PageHeader>
+
+      <nav className="flex flex-wrap gap-2" aria-label="Attention filters">
+        {[
+          ["mine", "Mine"],
+          ["unassigned", "Unassigned"],
+          ["all", "Everyone"],
+        ].map(([value, label]) => (
+          <Link key={value} href={href(value, category)} className={owner === value ? "btn-primary btn-sm" : "btn-secondary btn-sm"}>
+            {label}
+          </Link>
+        ))}
+        <span className="mx-1 border-l border-border" />
+        {[
+          ["all", "All reasons"],
+          ["customer", "Customer waiting"],
+          ["commitment", "Commitments"],
+          ["workflow", "Workflow"],
+        ].map(([value, label]) => (
+          <Link key={value} href={href(owner, value)} className={category === value ? "btn-primary btn-sm" : "btn-secondary btn-sm"}>
+            {label}
+          </Link>
+        ))}
+      </nav>
 
       {leads.length === 0 ? (
         <div className="card text-center">
@@ -119,24 +168,37 @@ export default async function AttentionPage() {
                 )}
                 <ul className="mt-2 space-y-1">
                   {lead.signals.map((signal) => (
-                    <li key={signal.kind} className="flex items-start gap-1.5 text-xs text-foreground/80">
-                      <Clock className="mt-0.5 size-3 shrink-0 text-muted-foreground" />
-                      <span className={DETAIL_CLAMP} title={signal.detail}>
-                        {signal.detail}
-                      </span>
+                    <li key={signal.key} className="rounded-lg border border-border/60 p-2 text-xs text-foreground/80">
+                      <div className="flex items-start gap-1.5">
+                        <Clock className="mt-0.5 size-3 shrink-0 text-muted-foreground" />
+                        <span className={DETAIL_CLAMP} title={signal.detail}>{signal.detail}</span>
+                      </div>
+                      <details className="mt-1 pl-4 text-muted-foreground">
+                        <summary className="cursor-pointer">Context</summary>
+                        <p className="mt-1 whitespace-pre-wrap">{signal.context}</p>
+                      </details>
+                      <div className="mt-2 flex flex-wrap items-center gap-2 pl-4">
+                        <Link href={signal.actionHref} className="btn-primary btn-sm">{signal.actionLabel}</Link>
+                        {canEdit && (
+                          <>
+                            <SetAsideAttentionButton leadId={lead.id} name={lead.name} mode="snooze" signalKey={signal.key} signalKind={signal.kind} />
+                            <SetAsideAttentionButton leadId={lead.id} name={lead.name} mode="dismiss" signalKey={signal.key} signalKind={signal.kind} />
+                          </>
+                        )}
+                      </div>
                     </li>
                   ))}
                 </ul>
+                {lead.repeatedSnooze && (
+                  <p className="mt-2 flex items-center gap-1 text-xs font-medium text-amber-300">
+                    <RotateCcw className="size-3.5" /> Snoozed repeatedly — decide whether to progress or close.
+                  </p>
+                )}
                 {lead.ownerName && (
                   <p className="mt-2 text-[11px] text-muted-foreground">Owner: {lead.ownerName}</p>
                 )}
               </div>
-              {canEdit && (
-                <div className="flex shrink-0 gap-2">
-                  <SetAsideAttentionButton leadId={lead.id} name={lead.name} mode="snooze" />
-                  <SetAsideAttentionButton leadId={lead.id} name={lead.name} mode="dismiss" />
-                </div>
-              )}
+              {canAssign && <AttentionQuickAssign leadId={lead.id} ownerId={lead.ownerId} users={users} />}
             </li>
           ))}
         </ul>
@@ -192,7 +254,7 @@ function SetAside({
       <ul className="mt-3 space-y-2">
         {rows.map((lead) => (
           <li
-            key={lead.id}
+            key={lead.key}
             className="flex items-start justify-between gap-3 border-t border-border pt-2 first:border-0 first:pt-0"
           >
             <div className="min-w-0">
@@ -201,8 +263,9 @@ function SetAside({
               </Link>
               <span className="ml-2 text-[11px] text-muted-foreground">{when(lead.at)}</span>
               <p className="mt-0.5 text-xs text-muted-foreground">“{lead.reason}”</p>
+              <p className="mt-0.5 text-xs text-foreground/70">{lead.signalDetail}</p>
             </div>
-            {canEdit && <RestoreAttentionButton leadId={lead.id} name={lead.name} />}
+            {canEdit && <RestoreAttentionButton leadId={lead.id} name={lead.name} signalKey={lead.signalKey} />}
           </li>
         ))}
       </ul>

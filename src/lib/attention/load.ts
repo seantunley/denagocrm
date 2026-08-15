@@ -5,6 +5,11 @@ import { prisma } from "../db";
 import { getAccessibleLeadIds, type PermissionUser } from "../permissions";
 import { collectAttentionSignals, type AttentionStage } from "./signals";
 import {
+  dispositionIsActive,
+  parseAttentionDispositions,
+  REPEAT_SNOOZE_THRESHOLD,
+} from "./dispositions";
+import {
   attentionBand,
   compareAttention,
   isDismissed,
@@ -56,16 +61,22 @@ export type AttentionLead = {
   stageId: string;
   stageName: string;
   ownerName: string | null;
+  ownerId: string | null;
   contactId: string | null;
   signals: AttentionSignal[];
   score: number;
   band: AttentionBand;
+  repeatedSnooze: boolean;
 };
 
 /** A lead somebody has set aside, and the reason they gave. */
 export type SetAsideLead = {
+  key: string;
   id: string;
   name: string;
+  signalKey: string;
+  signalKind: AttentionSignal["kind"];
+  signalDetail: string;
   reason: string;
   /** When it returns (snoozed) or when it was taken off (dismissed). */
   at: Date;
@@ -121,6 +132,8 @@ export const loadAttentionList = cache(async (user: PermissionUser, now: Date = 
       attentionDismissReason: true,
       stage: { select: { id: true, name: true, staleAfterDays: true } },
       assignedTo: { select: { name: true } },
+      assignedToId: true,
+      attentionDispositions: true,
     },
   });
   if (leads.length === 0) return { leads: [], snoozed: [], dismissed: [] };
@@ -148,6 +161,32 @@ export const loadAttentionList = cache(async (user: PermissionUser, now: Date = 
   for (const lead of leads) {
     const own = signals.get(lead.id) ?? [];
     if (!needsAttention(own)) continue;
+    const dispositionMap = parseAttentionDispositions(lead.attentionDispositions);
+    const active: AttentionSignal[] = [];
+    for (const signal of own) {
+      const disposition = dispositionMap[signal.key];
+      if (!dispositionIsActive(disposition, now)) {
+        active.push(signal);
+        continue;
+      }
+      const row: SetAsideLead = {
+        key: `${lead.id}:${signal.key}`,
+        id: lead.id,
+        name: lead.name,
+        signalKey: signal.key,
+        signalKind: signal.kind,
+        signalDetail: signal.detail,
+        reason: disposition?.reason ?? "",
+        at: new Date(
+          disposition?.state === "dismissed"
+            ? disposition.dismissedAt!
+            : disposition?.snoozedUntil!,
+        ),
+      };
+      if (disposition?.state === "dismissed") dismissed.push(row);
+      else snoozed.push(row);
+    }
+    if (!needsAttention(active)) continue;
     // Collected BEFORE being dropped, so the page can say what was set aside and
     // why rather than silently showing a shorter list than the person expects.
     //
@@ -155,25 +194,33 @@ export const loadAttentionList = cache(async (user: PermissionUser, now: Date = 
     // dismissed in April — and the later, stronger decision is the one that
     // describes where it is. Checking snooze first would have a dismissed deal
     // reappear the moment its old snooze elapsed.
-    if (isDismissed(lead.attentionDismissedAt)) {
+    if (Object.keys(dispositionMap).length === 0 && isDismissed(lead.attentionDismissedAt)) {
       dismissed.push({
+        key: `${lead.id}:legacy`,
         id: lead.id,
         name: lead.name,
+        signalKey: "legacy",
+        signalKind: own[0].kind,
+        signalDetail: "Legacy lead-level dismissal",
         reason: lead.attentionDismissReason ?? "",
         at: lead.attentionDismissedAt!,
       });
       continue;
     }
-    if (isSnoozed(lead.attentionSnoozedUntil, now)) {
+    if (Object.keys(dispositionMap).length === 0 && isSnoozed(lead.attentionSnoozedUntil, now)) {
       snoozed.push({
+        key: `${lead.id}:legacy`,
         id: lead.id,
         name: lead.name,
+        signalKey: "legacy",
+        signalKind: own[0].kind,
+        signalDetail: "Legacy lead-level snooze",
         reason: lead.attentionSnoozeReason ?? "",
         at: lead.attentionSnoozedUntil!,
       });
       continue;
     }
-    const score = scoreAttention(own);
+    const score = scoreAttention(active);
     rows.push({
       id: lead.id,
       name: lead.name,
@@ -185,12 +232,16 @@ export const loadAttentionList = cache(async (user: PermissionUser, now: Date = 
       stageId: lead.stageId,
       stageName: lead.stage?.name ?? "—",
       ownerName: lead.assignedTo?.name ?? null,
+      ownerId: lead.assignedToId,
       contactId: lead.contactId,
       // Heaviest reason first, so the sentence a person reads first is the one
       // that earned the ranking.
-      signals: [...own].sort((a, b) => b.weight - a.weight),
+      signals: [...active].sort((a, b) => b.weight - a.weight),
       score,
       band: attentionBand(score),
+      repeatedSnooze: Object.values(dispositionMap).some(
+        (row) => row.snoozeCount >= REPEAT_SNOOZE_THRESHOLD,
+      ),
     });
   }
 

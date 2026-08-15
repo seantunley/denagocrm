@@ -13,7 +13,7 @@ import { restoreLeadAttention } from "@/app/actions/attention";
  * queue, and nothing is lost if it was a misclick — the row simply reappears with
  * its signals. Dismissing is the direction that needs an argument.
  */
-export default function RestoreAttentionButton({ leadId, name }: { leadId: string; name: string }) {
+export default function RestoreAttentionButton({ leadId, name, signalKey }: { leadId: string; name: string; signalKey?: string }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
 
@@ -24,7 +24,7 @@ export default function RestoreAttentionButton({ leadId, name }: { leadId: strin
       disabled={pending}
       onClick={() =>
         startTransition(async () => {
-          const result = await restoreLeadAttention(leadId).catch(() => ({
+      const result = await restoreLeadAttention(leadId, signalKey).catch(() => ({
             ok: false as const,
             error: "Couldn't restore this deal",
           }));

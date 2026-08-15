@@ -6,6 +6,16 @@ import { logAuditStrict } from "@/lib/audit";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { requireLeadAccess } from "@/lib/permissions";
 import { attentionReasonError, snoozeDateError } from "@/lib/attention/score";
+import type { AttentionSignalKind } from "@/lib/attention/score";
+import { parseAttentionDispositions } from "@/lib/attention/dispositions";
+
+const SIGNAL_KINDS = new Set<AttentionSignalKind>([
+  "unanswered_inbound", "overdue_task", "quote_expiring", "no_next_step", "stage_age",
+]);
+
+function validSignal(signalKey: string, kind: AttentionSignalKind): boolean {
+  return signalKey.length > 0 && signalKey.length <= 160 && SIGNAL_KINDS.has(kind);
+}
 
 /**
  * Snooze a lead until a date — WITH A REASON, always.
@@ -30,6 +40,8 @@ export async function snoozeLeadAttention(
   leadId: string,
   untilIso: string,
   reason: string,
+  signalKey: string,
+  signalKind: AttentionSignalKind,
 ): Promise<{ ok: boolean; error?: string }> {
   return withActingStaffScope(async () => {
     const now = new Date();
@@ -38,19 +50,34 @@ export async function snoozeLeadAttention(
     if (badDate) return { ok: false, error: badDate };
     const badReason = attentionReasonError(reason, "snooze");
     if (badReason) return { ok: false, error: badReason };
+    if (!validSignal(signalKey, signalKind)) return { ok: false, error: "That attention item is no longer valid." };
 
     const user = await requireLeadAccess(leadId, "leads.edit");
     const before = await prisma.lead.findUnique({
       where: { id: leadId },
-      select: { id: true, name: true, contactId: true, attentionSnoozedUntil: true },
+      select: { id: true, name: true, contactId: true, attentionDispositions: true },
     });
     if (!before) return { ok: false, error: "Lead not found." };
 
     const trimmed = reason.trim();
+    const dispositions = parseAttentionDispositions(before.attentionDispositions);
+    const previous = dispositions[signalKey];
+    const next = {
+      ...dispositions,
+      [signalKey]: {
+        kind: signalKind,
+        signalKey,
+        state: "snoozed" as const,
+        reason: trimmed,
+        snoozedUntil: until.toISOString(),
+        snoozeCount: (previous?.snoozeCount ?? 0) + 1,
+        lastSnoozedAt: now.toISOString(),
+      },
+    };
     await prisma.$transaction(async (tx) => {
       await tx.lead.update({
         where: { id: leadId },
-        data: { attentionSnoozedUntil: until, attentionSnoozeReason: trimmed },
+        data: { attentionDispositions: next },
       });
       await logAuditStrict(
         {
@@ -59,8 +86,8 @@ export async function snoozeLeadAttention(
           leadId,
           contactId: before.contactId,
           user,
-          before: { attentionSnoozedUntil: before.attentionSnoozedUntil },
-          after: { attentionSnoozedUntil: until, attentionSnoozeReason: trimmed },
+          before: { attentionDisposition: previous ?? null },
+          after: { attentionDisposition: next[signalKey] },
         },
         tx,
       );
@@ -97,27 +124,44 @@ export async function snoozeLeadAttention(
 export async function dismissLeadAttention(
   leadId: string,
   reason: string,
+  signalKey: string,
+  signalKind: AttentionSignalKind,
 ): Promise<{ ok: boolean; error?: string }> {
   return withActingStaffScope(async () => {
     const invalid = attentionReasonError(reason, "dismiss");
     if (invalid) return { ok: false, error: invalid };
+    if (!validSignal(signalKey, signalKind)) return { ok: false, error: "That attention item is no longer valid." };
 
     const user = await requireLeadAccess(leadId, "leads.edit");
     const before = await prisma.lead.findUnique({
       where: { id: leadId },
-      select: { id: true, title: true, name: true, contactId: true, attentionDismissedAt: true },
+      select: { id: true, title: true, name: true, contactId: true, attentionDispositions: true },
     });
     if (!before) return { ok: false, error: "Lead not found." };
 
     const trimmed = reason.trim();
     const at = new Date();
+    const dispositions = parseAttentionDispositions(before.attentionDispositions);
+    const previous = dispositions[signalKey];
+    const next = {
+      ...dispositions,
+      [signalKey]: {
+        kind: signalKind,
+        signalKey,
+        state: "dismissed" as const,
+        reason: trimmed,
+        dismissedAt: at.toISOString(),
+        snoozeCount: previous?.snoozeCount ?? 0,
+        lastSnoozedAt: previous?.lastSnoozedAt,
+      },
+    };
     // The write and its audit together. A dismissal nobody can account for is the
     // exact thing the reason exists to prevent, so it must not be able to commit
     // on its own.
     await prisma.$transaction(async (tx) => {
       await tx.lead.update({
         where: { id: leadId },
-        data: { attentionDismissedAt: at, attentionDismissReason: trimmed },
+        data: { attentionDispositions: next },
       });
       await logAuditStrict(
         {
@@ -126,8 +170,8 @@ export async function dismissLeadAttention(
           leadId,
           contactId: before.contactId,
           user,
-          before: { attentionDismissedAt: before.attentionDismissedAt },
-          after: { attentionDismissedAt: at, attentionDismissReason: trimmed },
+          before: { attentionDisposition: previous ?? null },
+          after: { attentionDisposition: next[signalKey] },
         },
         tx,
       );
@@ -153,7 +197,10 @@ export async function dismissLeadAttention(
  * left behind on a live row would read as current the next time the deal was set
  * aside.
  */
-export async function restoreLeadAttention(leadId: string): Promise<{ ok: boolean; error?: string }> {
+export async function restoreLeadAttention(
+  leadId: string,
+  signalKey?: string,
+): Promise<{ ok: boolean; error?: string }> {
   return withActingStaffScope(async () => {
     const user = await requireLeadAccess(leadId, "leads.edit");
     const before = await prisma.lead.findUnique({
@@ -166,10 +213,13 @@ export async function restoreLeadAttention(leadId: string): Promise<{ ok: boolea
         attentionSnoozeReason: true,
         attentionDismissedAt: true,
         attentionDismissReason: true,
+        attentionDispositions: true,
       },
     });
     if (!before) return { ok: false, error: "Lead not found." };
 
+    const dispositions = parseAttentionDispositions(before.attentionDispositions);
+    if (signalKey && signalKey !== "legacy") delete dispositions[signalKey];
     await prisma.$transaction(async (tx) => {
       await tx.lead.update({
         where: { id: leadId },
@@ -178,6 +228,7 @@ export async function restoreLeadAttention(leadId: string): Promise<{ ok: boolea
           attentionSnoozeReason: null,
           attentionDismissedAt: null,
           attentionDismissReason: null,
+          attentionDispositions: dispositions,
         },
       });
       await logAuditStrict(

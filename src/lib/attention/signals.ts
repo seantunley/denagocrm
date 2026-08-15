@@ -1,7 +1,7 @@
 import "server-only";
 
 import { prisma } from "../db";
-import { ATTENTION_WEIGHTS, type AttentionSignal } from "./score";
+import { ATTENTION_CATEGORY, ATTENTION_WEIGHTS, attentionSignalKey, type AttentionSignal } from "./score";
 
 /**
  * The Attention Centre — the IMPURE half. Five queries, never five per lead.
@@ -105,9 +105,14 @@ export async function collectAttentionSignals(input: {
     if (days < threshold) continue;
     add(signals, leadId, {
       kind: "stage_age",
+      key: attentionSignalKey("stage_age"),
+      category: ATTENTION_CATEGORY.stage_age,
       weight: ATTENTION_WEIGHTS.stage_age,
       detail: `In this stage ${days} days — past the ${threshold}-day mark`,
       since: enteredAt.toISOString(),
+      context: "Stage age is measured from the last stage change.",
+      actionHref: `/leads/${leadId}`,
+      actionLabel: "Move or close",
     });
   }
 
@@ -118,7 +123,7 @@ export async function collectAttentionSignals(input: {
     const overdue = await prisma.activity.findMany({
       where: { leadId: { in: batch }, status: "planned", dueDate: { lt: now } },
       // `summary` is Activity's name field — there is no `title` on this model.
-      select: { leadId: true, summary: true, dueDate: true },
+      select: { id: true, leadId: true, summary: true, note: true, dueDate: true },
       orderBy: { dueDate: "asc" },
     });
     const seen = new Set<string>();
@@ -127,9 +132,14 @@ export async function collectAttentionSignals(input: {
       seen.add(row.leadId);
       add(signals, row.leadId, {
         kind: "overdue_task",
+        key: attentionSignalKey("overdue_task", row.id),
+        category: ATTENTION_CATEGORY.overdue_task,
         weight: ATTENTION_WEIGHTS.overdue_task,
         detail: `“${row.summary}” was due ${agoHours(row.dueDate, now)} ago`,
         since: row.dueDate.toISOString(),
+        context: row.note || row.summary,
+        actionHref: `/leads/${row.leadId}#activities`,
+        actionLabel: "Complete task",
       });
     }
   }
@@ -148,8 +158,13 @@ export async function collectAttentionSignals(input: {
       if (hasPlanned.has(leadId)) continue;
       add(signals, leadId, {
         kind: "no_next_step",
+        key: attentionSignalKey("no_next_step"),
+        category: ATTENTION_CATEGORY.no_next_step,
         weight: ATTENTION_WEIGHTS.no_next_step,
         detail: "No next step planned",
+        context: "No planned activity is currently attached to this opportunity.",
+        actionHref: `/leads/${leadId}#activities`,
+        actionLabel: "Add next step",
       });
     }
   }
@@ -170,7 +185,7 @@ export async function collectAttentionSignals(input: {
         supersededAt: null,
         validUntil: { not: null, lte: horizon },
       },
-      select: { leadId: true, number: true, validUntil: true },
+      select: { id: true, leadId: true, number: true, validUntil: true },
       orderBy: { validUntil: "asc" },
     });
     const seen = new Set<string>();
@@ -182,11 +197,16 @@ export async function collectAttentionSignals(input: {
       const expired = row.validUntil.getTime() < now.getTime();
       add(signals, row.leadId, {
         kind: "quote_expiring",
+        key: attentionSignalKey("quote_expiring", row.id),
+        category: ATTENTION_CATEGORY.quote_expiring,
         weight: ATTENTION_WEIGHTS.quote_expiring,
         detail: expired
           ? `Quote Q-${row.number} expired ${agoHours(row.validUntil, now)} ago`
           : `Quote Q-${row.number} expires ${inDays(row.validUntil, now)}`,
         since: row.validUntil.toISOString(),
+        context: `Quote Q-${row.number} is still sent and unsigned.`,
+        actionHref: `/quotes/${row.id}`,
+        actionLabel: "Open quote",
       });
     }
   }
@@ -199,7 +219,19 @@ export async function collectAttentionSignals(input: {
   for (const batch of batches) {
     const waiting = await prisma.conversation.findMany({
       where: { leadId: { in: batch }, lastDirection: "inbound", lastMessageAt: { lt: quietBefore } },
-      select: { leadId: true, lastMessageAt: true },
+      select: {
+        id: true,
+        leadId: true,
+        channel: true,
+        subject: true,
+        lastMessageAt: true,
+        messages: {
+          where: { direction: "inbound" },
+          orderBy: { occurredAt: "desc" },
+          take: 1,
+          select: { body: true },
+        },
+      },
       orderBy: { lastMessageAt: "asc" },
     });
     const seen = new Set<string>();
@@ -208,9 +240,14 @@ export async function collectAttentionSignals(input: {
       seen.add(row.leadId);
       add(signals, row.leadId, {
         kind: "unanswered_inbound",
+        key: attentionSignalKey("unanswered_inbound", row.id),
+        category: ATTENTION_CATEGORY.unanswered_inbound,
         weight: ATTENTION_WEIGHTS.unanswered_inbound,
         detail: `Customer wrote ${agoHours(row.lastMessageAt, now)} ago and has had no reply`,
         since: row.lastMessageAt.toISOString(),
+        context: row.messages[0]?.body || row.subject || `Latest inbound ${row.channel} message`,
+        actionHref: `/inbox?conversation=${row.id}`,
+        actionLabel: "Reply now",
       });
     }
   }

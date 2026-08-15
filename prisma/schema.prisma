@@ -752,6 +752,9 @@ model Lead {
   attentionSnoozeReason    String?
   attentionDismissedAt     DateTime?
   attentionDismissReason   String?
+  /// Per-signal set-asides. Keyed by a stable signal identity so a new customer
+  /// message is never hidden by snoozing an older workflow warning.
+  attentionDispositions    Json?
 
   deletedAt     DateTime?
   deletedByName String?

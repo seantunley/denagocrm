@@ -30,6 +30,23 @@ export type AttentionSignalKind =
   | "no_next_step"
   | "stage_age";
 
+export type AttentionCategory = "customer" | "commitment" | "workflow";
+
+export const ATTENTION_CATEGORY: Record<AttentionSignalKind, AttentionCategory> = {
+  unanswered_inbound: "customer",
+  overdue_task: "commitment",
+  quote_expiring: "commitment",
+  no_next_step: "workflow",
+  stage_age: "workflow",
+};
+
+/** Related symptoms stay visible, but cannot inflate the same underlying problem. */
+export const ATTENTION_CATEGORY_CAPS: Record<AttentionCategory, number> = {
+  customer: 60,
+  commitment: 45,
+  workflow: 25,
+};
+
 /**
  * Fixed, and not configurable in v1.
  *
@@ -47,11 +64,17 @@ export const ATTENTION_WEIGHTS: Record<AttentionSignalKind, number> = {
 
 export type AttentionSignal = {
   kind: AttentionSignalKind;
+  /** Stable identity of the underlying task, quote or conversation. */
+  key: string;
+  category: AttentionCategory;
   weight: number;
   /** Rendered verbatim. This is the product — see the header. */
   detail: string;
   /** ISO instant the condition started, where one is knowable. */
   since?: string;
+  context?: string;
+  actionHref: string;
+  actionLabel: string;
 };
 
 export type AttentionBand = "none" | "watch" | "act" | "urgent";
@@ -66,8 +89,20 @@ export const MAX_ATTENTION_SCORE = 100;
  * over. Ordering within the cap comes from the tiebreak.
  */
 export function scoreAttention(signals: AttentionSignal[]): number {
-  const total = signals.reduce((sum, signal) => sum + signal.weight, 0);
+  const totals: Record<AttentionCategory, number> = { customer: 0, commitment: 0, workflow: 0 };
+  for (const signal of signals) {
+    const category = signal.category ?? ATTENTION_CATEGORY[signal.kind];
+    totals[category] += signal.weight;
+  }
+  const total = (Object.keys(totals) as AttentionCategory[]).reduce(
+    (sum, category) => sum + Math.min(totals[category], ATTENTION_CATEGORY_CAPS[category]),
+    0,
+  );
   return Math.min(MAX_ATTENTION_SCORE, total);
+}
+
+export function attentionSignalKey(kind: AttentionSignalKind, entityId?: string | null): string {
+  return entityId ? `${kind}:${entityId}` : kind;
 }
 
 /**

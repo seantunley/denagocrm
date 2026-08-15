@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import {
   ATTENTION_WEIGHTS,
+  ATTENTION_CATEGORY,
+  ATTENTION_CATEGORY_CAPS,
   MAX_ATTENTION_SCORE,
   MAX_SNOOZE_DAYS,
   MIN_ATTENTION_REASON,
@@ -37,8 +39,12 @@ const shipped = (rel: string) =>
 
 const signal = (kind: AttentionSignalKind, detail = "x"): AttentionSignal => ({
   kind,
+  key: kind,
+  category: ATTENTION_CATEGORY[kind],
   weight: ATTENTION_WEIGHTS[kind],
   detail,
+  actionHref: "/",
+  actionLabel: "Act",
 });
 
 /* ── the score ──────────────────────────────────────────────────────────── */
@@ -62,6 +68,14 @@ test("the score is a sum, capped", () => {
   const uncapped = everything.reduce((sum, s) => sum + s.weight, 0);
   assert.ok(uncapped > MAX_ATTENTION_SCORE, "the fixture must actually exceed the cap");
   assert.equal(scoreAttention(everything), MAX_ATTENTION_SCORE);
+});
+
+test("related symptoms stay visible but are capped by category", () => {
+  const commitment = [signal("overdue_task"), signal("quote_expiring")];
+  assert.equal(commitment.length, 2);
+  assert.equal(scoreAttention(commitment), ATTENTION_CATEGORY_CAPS.commitment);
+  const workflow = [signal("no_next_step"), signal("stage_age")];
+  assert.equal(scoreAttention(workflow), ATTENTION_CATEGORY_CAPS.workflow);
 });
 
 test("bands are contiguous and ordered", () => {
@@ -154,7 +168,8 @@ test("dismissed leads are shown WITH their reasons, not counted", () => {
   // bare number cannot. A shorter list than expected is otherwise
   // indistinguishable from a broken one.
   const loader = shipped("src/lib/attention/load.ts");
-  assert.match(loader, /if \(isDismissed\(lead\.attentionDismissedAt\)\)/);
+  assert.match(loader, /isDismissed\(lead\.attentionDismissedAt\)/);
+  assert.match(loader, /dispositionMap\[signal\.key\]/, "set-asides are signal-specific");
   assert.match(loader, /reason: lead\.attentionDismissReason \?\? ""/);
   const page = shipped("src/app/(app)/leads/attention/page.tsx");
   assert.match(page, /rows=\{dismissed\}/, "the dismissed list is rendered, not counted");
@@ -235,7 +250,7 @@ test("a read-only viewer is not offered controls they cannot use", () => {
   assert.match(page, /const canEdit = await hasPermission\(user, "leads\.edit"\)/);
 
   // Every control is behind it — the two set-aside buttons and the restore.
-  assert.match(page, /\{canEdit && \(\s*<div[^>]*>\s*<SetAsideAttentionButton/);
+  assert.match(page, /\{canEdit && \(\s*<>\s*<SetAsideAttentionButton/);
   assert.match(page, /\{canEdit && <RestoreAttentionButton/);
 
   // …and the LISTS are not. Knowing a deal was set aside, and why, is information
@@ -443,4 +458,17 @@ test("the board links to the list instead of replacing its filter", () => {
   const board = shipped("src/components/KanbanBoard.tsx");
   assert.match(board, /href="\/leads\/attention"/);
   assert.match(board, /aria-pressed=\{attentionOnly\}/, "the existing toggle survives");
+});
+
+test("the upgraded centre is actionable, filterable and self-refreshing", () => {
+  const page = shipped("src/app/(app)/leads/attention/page.tsx");
+  assert.match(page, /Customer waiting/);
+  assert.match(page, /Unassigned/);
+  assert.match(page, /AttentionQuickAssign/);
+  assert.match(page, /signal\.actionHref/);
+  assert.match(page, /<summary className="cursor-pointer">Context<\/summary>/);
+  assert.match(page, /repeatedSnooze/);
+  const refresh = shipped("src/components/AttentionLiveRefresh.tsx");
+  assert.match(refresh, /window\.setInterval\(tick, REFRESH_MS\)/);
+  assert.match(refresh, /visibilitychange/);
 });

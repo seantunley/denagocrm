@@ -11,6 +11,7 @@ import {
   attentionReasonError,
   snoozeDateError,
 } from "@/lib/attention/score";
+import type { AttentionSignalKind } from "@/lib/attention/score";
 
 /**
  * The two ways off the Attention Centre, in one dialog.
@@ -44,10 +45,14 @@ export default function SetAsideAttentionButton({
   leadId,
   name,
   mode,
+  signalKey,
+  signalKind,
 }: {
   leadId: string;
   name: string;
   mode: "snooze" | "dismiss";
+  signalKey: string;
+  signalKind: AttentionSignalKind;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -87,8 +92,8 @@ export default function SetAsideAttentionButton({
     if (!ready) return;
     startTransition(async () => {
       const result = await (snoozing
-        ? snoozeLeadAttention(leadId, until, reason)
-        : dismissLeadAttention(leadId, reason)
+        ? snoozeLeadAttention(leadId, until, reason, signalKey, signalKind)
+        : dismissLeadAttention(leadId, reason, signalKey, signalKind)
       ).catch(() => ({ ok: false as const, error: `Couldn't ${mode} this deal` }));
       if (!result.ok) {
         toast.error(result.error ?? `Couldn't ${mode} this deal`);
