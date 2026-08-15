@@ -225,6 +225,37 @@ test("BOTH ways off the list exist, and NEITHER is reasonless", () => {
   assert.match(page, /mode="dismiss"/);
 });
 
+test("a read-only viewer is not offered controls they cannot use", () => {
+  // The page renders for anyone who may SEE leads, but every set-aside action
+  // calls `requireLeadAccess(leadId, "leads.edit")`. Rendering the buttons
+  // regardless let a read-only viewer open a dialog, type a reason, submit, and
+  // be refused — worse than not offering the button, because the work is wasted
+  // and the refusal reads as a fault rather than as a rule.
+  const page = shipped("src/app/(app)/leads/attention/page.tsx");
+  assert.match(page, /const canEdit = await hasPermission\(user, "leads\.edit"\)/);
+
+  // Every control is behind it — the two set-aside buttons and the restore.
+  assert.match(page, /\{canEdit && \(\s*<div[^>]*>\s*<SetAsideAttentionButton/);
+  assert.match(page, /\{canEdit && <RestoreAttentionButton/);
+
+  // …and the LISTS are not. Knowing a deal was set aside, and why, is information
+  // a read-only viewer is entitled to; only the way back is a write.
+  assert.match(page, /rows=\{snoozed\}/);
+  assert.match(page, /rows=\{dismissed\}/);
+});
+
+test("hiding a control is not a permission", () => {
+  // The UI gate is a courtesy. Every action keeps its own check, so a crafted
+  // request from a read-only session is still refused — a hidden button proves
+  // nothing about what a Server Action will accept.
+  const action = shipped("src/app/actions/attention.ts");
+  assert.equal(
+    (action.match(/requireLeadAccess\(leadId, "leads\.edit"\)/g) ?? []).length,
+    3,
+    "all three writes re-check, regardless of what the page rendered",
+  );
+});
+
 test("a snooze must name a date, and a bounded one", () => {
   // An unbounded snooze is a dismiss wearing a date: it silences a deal for
   // practical ever while reading as temporary, which defeats having two tools.

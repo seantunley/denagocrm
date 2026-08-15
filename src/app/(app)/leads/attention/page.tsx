@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { AlertTriangle, ArrowLeft, Clock } from "lucide-react";
-import { requireAnyPermission } from "@/lib/permissions";
+import { hasPermission, requireAnyPermission } from "@/lib/permissions";
 import { loadAttentionList, type SetAsideLead } from "@/lib/attention/load";
 import { attentionBandLabel, type AttentionBand } from "@/lib/attention/score";
 import { formatDate, formatZAR } from "@/lib/format";
@@ -46,6 +46,24 @@ export default async function AttentionPage() {
   // The same guard `/leads` uses. This page shows customer names and deal values,
   // so it is exactly as sensitive as the board it is reached from.
   const user = await requireAnyPermission("leads.view_all", "leads.view_owned");
+  // ── WHY THE CONTROLS NEED THEIR OWN CHECK ─────────────────────────────────
+  //
+  // Viewing and setting aside are different permissions. The page renders for
+  // anyone who may SEE leads, but every set-aside action calls
+  // `requireLeadAccess(leadId, "leads.edit")` — so a read-only viewer could open
+  // a dialog, type a reason, submit, and be refused. That is a worse experience
+  // than not being offered the button: the work is wasted and the refusal reads
+  // as a fault rather than as a rule.
+  //
+  // ONE CHECK, NOT ONE PER ROW, and that is not a shortcut.
+  // `requireLeadAccess` is `requirePermission(...)` AND `canAccessLead(...)`, and
+  // `canAccessLead` resolves through the very same `getAccessibleLeadIds` the
+  // loader already applied to build this list. Every row here is therefore
+  // access-checked already; the only thing left to establish is the permission.
+  //
+  // This is a courtesy, not the rule. The actions keep their own checks — a
+  // hidden button is not a permission.
+  const canEdit = await hasPermission(user, "leads.edit");
   const { leads, snoozed, dismissed } = await loadAttentionList(user);
 
   return (
@@ -113,10 +131,12 @@ export default async function AttentionPage() {
                   <p className="mt-2 text-[11px] text-muted-foreground">Owner: {lead.ownerName}</p>
                 )}
               </div>
-              <div className="flex shrink-0 gap-2">
-                <SetAsideAttentionButton leadId={lead.id} name={lead.name} mode="snooze" />
-                <SetAsideAttentionButton leadId={lead.id} name={lead.name} mode="dismiss" />
-              </div>
+              {canEdit && (
+                <div className="flex shrink-0 gap-2">
+                  <SetAsideAttentionButton leadId={lead.id} name={lead.name} mode="snooze" />
+                  <SetAsideAttentionButton leadId={lead.id} name={lead.name} mode="dismiss" />
+                </div>
+              )}
             </li>
           ))}
         </ul>
@@ -134,12 +154,17 @@ export default async function AttentionPage() {
         // The date it RETURNS is the useful fact for a snooze, so it leads.
         when={(at) => `back ${formatDate(at)}`}
         empty={snoozed.length === 0}
+        // The LISTS stay for everyone — knowing a deal was set aside, and why, is
+        // information a read-only viewer is entitled to. Only the way back is
+        // gated, because restoring is a write.
+        canEdit={canEdit}
       />
       <SetAside
         title={`${dismissed.length} dismissed`}
         rows={dismissed}
         when={(at) => `dismissed ${formatDate(at)}`}
         empty={dismissed.length === 0}
+        canEdit={canEdit}
       />
     </div>
   );
@@ -151,11 +176,14 @@ function SetAside({
   rows,
   when,
   empty,
+  canEdit,
 }: {
   title: string;
   rows: SetAsideLead[];
   when: (at: Date) => string;
   empty: boolean;
+  /** Required, not defaulted: a new caller must decide rather than inherit `true`. */
+  canEdit: boolean;
 }) {
   if (empty) return null;
   return (
@@ -174,7 +202,7 @@ function SetAside({
               <span className="ml-2 text-[11px] text-muted-foreground">{when(lead.at)}</span>
               <p className="mt-0.5 text-xs text-muted-foreground">“{lead.reason}”</p>
             </div>
-            <RestoreAttentionButton leadId={lead.id} name={lead.name} />
+            {canEdit && <RestoreAttentionButton leadId={lead.id} name={lead.name} />}
           </li>
         ))}
       </ul>
