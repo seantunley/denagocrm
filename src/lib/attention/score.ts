@@ -140,19 +140,67 @@ export function isDismissed(dismissedAt: Date | null | undefined): boolean {
 }
 
 /**
+ * Is this lead snoozed right now?
+ *
+ * ── SNOOZE AND DISMISS ARE DIFFERENT TOOLS ──────────────────────────────────
+ *
+ *   SNOOZE   nothing is wrong — come back on a date.
+ *   DISMISS  this does not belong on the list at all.
+ *
+ * The first build had only snooze, which was reasonless. The second replaced it
+ * with dismiss, which was accountable but wrong for the commonest case: the first
+ * real screenful had a deal reading "In Italy at the moment. Back on the 19th".
+ * Nothing is wrong with that deal. Dismissing it is a lie, and leaving it shouting
+ * is what makes a list stop being read.
+ *
+ * An ELAPSED snooze is simply not snoozed — the comparison is against `now`, so
+ * the deal reappears on its own and nothing has to sweep the column.
+ */
+export function isSnoozed(snoozedUntil: Date | null | undefined, now: Date): boolean {
+  return snoozedUntil != null && snoozedUntil.getTime() > now.getTime();
+}
+
+/**
  * Long enough that "done" and "n/a" do not pass.
  *
  * Deliberately the same number as `MIN_OVERRIDE_REASON` in stageGate.ts. Two
  * different minimums for two justification fields in the same product is a
  * distinction nobody can defend when asked.
+ *
+ * ONE minimum for BOTH exits, for the same reason. Snoozing and dismissing are
+ * different decisions but they are the same kind of record: the note the next
+ * person reads when they ask why this was not on the list.
  */
-export const MIN_DISMISS_REASON = 10;
+export const MIN_ATTENTION_REASON = 10;
 
-export function dismissReasonError(reason: string): string | null {
+export function attentionReasonError(reason: string, verb: "snooze" | "dismiss"): string | null {
   const trimmed = reason.trim();
-  if (trimmed.length === 0) return "A reason is required to dismiss a deal from this list.";
-  if (trimmed.length < MIN_DISMISS_REASON) {
-    return `Say a little more — at least ${MIN_DISMISS_REASON} characters, so the record means something later.`;
+  if (trimmed.length === 0) return `A reason is required to ${verb} a deal.`;
+  if (trimmed.length < MIN_ATTENTION_REASON) {
+    return `Say a little more — at least ${MIN_ATTENTION_REASON} characters, so the record means something later.`;
+  }
+  return null;
+}
+
+/**
+ * How far ahead a snooze may reach.
+ *
+ * Bounded, because an unbounded one is a dismiss wearing a date — "back on this
+ * in 2031" silences a deal for practical ever while reading as temporary, and the
+ * whole point of having two tools is that the honest one is available. Three
+ * months covers every real "call me after the new year" and stops short of
+ * indefinite.
+ */
+export const MAX_SNOOZE_DAYS = 90;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Validate a snooze date. Returns the sentence to show, or null when it is fine. */
+export function snoozeDateError(until: Date | null, now: Date): string | null {
+  if (!until || Number.isNaN(until.getTime())) return "Pick a date to snooze until.";
+  if (until.getTime() <= now.getTime()) return "Pick a date in the future.";
+  if (until.getTime() - now.getTime() > MAX_SNOOZE_DAYS * DAY_MS) {
+    return `Snooze for at most ${MAX_SNOOZE_DAYS} days — dismiss it instead if it should go for longer.`;
   }
   return null;
 }

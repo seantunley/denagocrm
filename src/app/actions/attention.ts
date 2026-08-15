@@ -5,7 +5,72 @@ import { prisma } from "@/lib/db";
 import { logAuditStrict } from "@/lib/audit";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { requireLeadAccess } from "@/lib/permissions";
-import { dismissReasonError } from "@/lib/attention/score";
+import { attentionReasonError, snoozeDateError } from "@/lib/attention/score";
+
+/**
+ * Snooze a lead until a date — WITH A REASON, always.
+ *
+ * ── WHY BOTH THIS AND DISMISS EXIST ─────────────────────────────────────────
+ *
+ * They are different decisions. Snooze says "nothing is wrong, come back on the
+ * 19th"; dismiss says "this does not belong on the list". The commonest real case
+ * is the first — a customer travelling, a decision due after month-end — and
+ * dismissing one of those is a lie, while leaving it shouting is what makes a
+ * list stop being read.
+ *
+ * The reason is required here too. It is not there to justify the snooze so much
+ * as to answer the question the next person has: "back from Italy on the 19th" is
+ * exactly what somebody needs to see when the deal reappears.
+ *
+ * BOTH the date and the reason are validated on the SERVER. A Server Action is a
+ * public endpoint, and a client that skipped the form would otherwise write an
+ * unbounded snooze — which is a dismiss wearing a date, without the honesty.
+ */
+export async function snoozeLeadAttention(
+  leadId: string,
+  untilIso: string,
+  reason: string,
+): Promise<{ ok: boolean; error?: string }> {
+  return withActingStaffScope(async () => {
+    const now = new Date();
+    const until = new Date(untilIso);
+    const badDate = snoozeDateError(Number.isNaN(until.getTime()) ? null : until, now);
+    if (badDate) return { ok: false, error: badDate };
+    const badReason = attentionReasonError(reason, "snooze");
+    if (badReason) return { ok: false, error: badReason };
+
+    const user = await requireLeadAccess(leadId, "leads.edit");
+    const before = await prisma.lead.findUnique({
+      where: { id: leadId },
+      select: { id: true, name: true, contactId: true, attentionSnoozedUntil: true },
+    });
+    if (!before) return { ok: false, error: "Lead not found." };
+
+    const trimmed = reason.trim();
+    await prisma.$transaction(async (tx) => {
+      await tx.lead.update({
+        where: { id: leadId },
+        data: { attentionSnoozedUntil: until, attentionSnoozeReason: trimmed },
+      });
+      await logAuditStrict(
+        {
+          action: "lead.attention_snoozed",
+          summary: `Snoozed “${before.name}” until ${until.toISOString().slice(0, 10)} — reason: “${trimmed}”`,
+          leadId,
+          contactId: before.contactId,
+          user,
+          before: { attentionSnoozedUntil: before.attentionSnoozedUntil },
+          after: { attentionSnoozedUntil: until, attentionSnoozeReason: trimmed },
+        },
+        tx,
+      );
+    });
+
+    revalidatePath("/leads/attention");
+    revalidatePath("/leads");
+    return { ok: true };
+  });
+}
 
 /**
  * Dismiss a lead from the Attention Centre — WITH A REASON, always.
@@ -34,7 +99,7 @@ export async function dismissLeadAttention(
   reason: string,
 ): Promise<{ ok: boolean; error?: string }> {
   return withActingStaffScope(async () => {
-    const invalid = dismissReasonError(reason);
+    const invalid = attentionReasonError(reason, "dismiss");
     if (invalid) return { ok: false, error: invalid };
 
     const user = await requireLeadAccess(leadId, "leads.edit");
@@ -75,27 +140,45 @@ export async function dismissLeadAttention(
 }
 
 /**
- * Put a dismissed lead back on the list.
+ * Put a lead back on the list, however it came off.
  *
- * No reason required, and that asymmetry is deliberate: restoring ADDS work to
- * somebody's queue, which needs no justification, while dismissing removes it,
- * which does. The reason that was given is cleared with it — keeping a stale
- * justification on a live row would have it read as current the next time
- * somebody dismissed the deal without one.
+ * ONE action for both exits. "Bring this back" is a single intent, and asking
+ * somebody to notice whether a deal was snoozed or dismissed before they can
+ * un-hide it would be a distinction that serves the data model rather than the
+ * person reading the screen.
+ *
+ * No reason required, and that asymmetry is deliberate: restoring ADDS work to a
+ * queue, which needs no justification, while snoozing and dismissing remove it,
+ * which does. Both stored reasons are cleared with their dates — a justification
+ * left behind on a live row would read as current the next time the deal was set
+ * aside.
  */
 export async function restoreLeadAttention(leadId: string): Promise<{ ok: boolean; error?: string }> {
   return withActingStaffScope(async () => {
     const user = await requireLeadAccess(leadId, "leads.edit");
     const before = await prisma.lead.findUnique({
       where: { id: leadId },
-      select: { id: true, name: true, contactId: true, attentionDismissedAt: true, attentionDismissReason: true },
+      select: {
+        id: true,
+        name: true,
+        contactId: true,
+        attentionSnoozedUntil: true,
+        attentionSnoozeReason: true,
+        attentionDismissedAt: true,
+        attentionDismissReason: true,
+      },
     });
     if (!before) return { ok: false, error: "Lead not found." };
 
     await prisma.$transaction(async (tx) => {
       await tx.lead.update({
         where: { id: leadId },
-        data: { attentionDismissedAt: null, attentionDismissReason: null },
+        data: {
+          attentionSnoozedUntil: null,
+          attentionSnoozeReason: null,
+          attentionDismissedAt: null,
+          attentionDismissReason: null,
+        },
       });
       await logAuditStrict(
         {
@@ -105,10 +188,12 @@ export async function restoreLeadAttention(leadId: string): Promise<{ ok: boolea
           contactId: before.contactId,
           user,
           before: {
+            attentionSnoozedUntil: before.attentionSnoozedUntil,
+            attentionSnoozeReason: before.attentionSnoozeReason,
             attentionDismissedAt: before.attentionDismissedAt,
             attentionDismissReason: before.attentionDismissReason,
           },
-          after: { attentionDismissedAt: null, attentionDismissReason: null },
+          after: { attentionSnoozedUntil: null, attentionDismissedAt: null },
         },
         tx,
       );

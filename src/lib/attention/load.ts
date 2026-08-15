@@ -8,6 +8,7 @@ import {
   attentionBand,
   compareAttention,
   isDismissed,
+  isSnoozed,
   needsAttention,
   scoreAttention,
   type AttentionBand,
@@ -61,24 +62,28 @@ export type AttentionLead = {
   band: AttentionBand;
 };
 
-/** A lead somebody has taken off the list, and the reason they gave. */
-export type DismissedLead = {
+/** A lead somebody has set aside, and the reason they gave. */
+export type SetAsideLead = {
   id: string;
   name: string;
   reason: string;
+  /** When it returns (snoozed) or when it was taken off (dismissed). */
   at: Date;
 };
 
 export type AttentionList = {
   leads: AttentionLead[];
   /**
-   * Dismissed leads that WOULD otherwise be listed, with their reasons.
+   * Set-aside leads that WOULD otherwise be listed, with their reasons.
    *
-   * Carried rather than counted, because "why is this not here" is the question
-   * the reason exists to answer, and a bare number cannot. They are already
-   * loaded — filtering them out client-side costs nothing.
+   * Kept as two lists because they are two different states — "back on the 19th"
+   * and "does not belong here" are answers to different questions — and carried
+   * rather than counted, because "why is this not here" is what the reason exists
+   * to answer and a bare number cannot. They are already loaded, so splitting
+   * them costs nothing.
    */
-  dismissed: DismissedLead[];
+  snoozed: SetAsideLead[];
+  dismissed: SetAsideLead[];
 };
 
 /**
@@ -94,7 +99,7 @@ export const loadAttentionList = cache(async (user: PermissionUser, now: Date = 
   // become an impossible match rather than an absent filter, which is the bug
   // that turns a scoped list into a full one.
   const accessibleIds = await getAccessibleLeadIds(user);
-  if (accessibleIds !== null && accessibleIds.length === 0) return { leads: [], dismissed: [] };
+  if (accessibleIds !== null && accessibleIds.length === 0) return { leads: [], snoozed: [], dismissed: [] };
 
   const leads = await prisma.lead.findMany({
     where: {
@@ -110,13 +115,15 @@ export const loadAttentionList = cache(async (user: PermissionUser, now: Date = 
       stageId: true,
       contactId: true,
       stageEnteredAt: true,
+      attentionSnoozedUntil: true,
+      attentionSnoozeReason: true,
       attentionDismissedAt: true,
       attentionDismissReason: true,
       stage: { select: { id: true, name: true, staleAfterDays: true } },
       assignedTo: { select: { name: true } },
     },
   });
-  if (leads.length === 0) return { leads: [], dismissed: [] };
+  if (leads.length === 0) return { leads: [], snoozed: [], dismissed: [] };
 
   const stages = new Map<string, AttentionStage>();
   const stageByLead = new Map<string, string>();
@@ -135,19 +142,34 @@ export const loadAttentionList = cache(async (user: PermissionUser, now: Date = 
     stageEnteredByLead,
   });
 
-  const dismissed: DismissedLead[] = [];
+  const snoozed: SetAsideLead[] = [];
+  const dismissed: SetAsideLead[] = [];
   const rows: AttentionLead[] = [];
   for (const lead of leads) {
     const own = signals.get(lead.id) ?? [];
     if (!needsAttention(own)) continue;
-    // Collected BEFORE being dropped, so the page can say what was taken off and
+    // Collected BEFORE being dropped, so the page can say what was set aside and
     // why rather than silently showing a shorter list than the person expects.
+    //
+    // DISMISS IS CHECKED FIRST. A lead can carry both — snoozed in March, then
+    // dismissed in April — and the later, stronger decision is the one that
+    // describes where it is. Checking snooze first would have a dismissed deal
+    // reappear the moment its old snooze elapsed.
     if (isDismissed(lead.attentionDismissedAt)) {
       dismissed.push({
         id: lead.id,
         name: lead.name,
         reason: lead.attentionDismissReason ?? "",
         at: lead.attentionDismissedAt!,
+      });
+      continue;
+    }
+    if (isSnoozed(lead.attentionSnoozedUntil, now)) {
+      snoozed.push({
+        id: lead.id,
+        name: lead.name,
+        reason: lead.attentionSnoozeReason ?? "",
+        at: lead.attentionSnoozedUntil!,
       });
       continue;
     }
@@ -173,6 +195,7 @@ export const loadAttentionList = cache(async (user: PermissionUser, now: Date = 
   }
 
   rows.sort(compareAttention);
+  snoozed.sort((a, b) => a.at.getTime() - b.at.getTime());
   dismissed.sort((a, b) => b.at.getTime() - a.at.getTime());
-  return { leads: rows, dismissed };
+  return { leads: rows, snoozed, dismissed };
 });

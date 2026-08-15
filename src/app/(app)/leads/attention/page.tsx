@@ -1,10 +1,10 @@
 import Link from "next/link";
 import { AlertTriangle, ArrowLeft, Clock } from "lucide-react";
 import { requireAnyPermission } from "@/lib/permissions";
-import { loadAttentionList } from "@/lib/attention/load";
+import { loadAttentionList, type SetAsideLead } from "@/lib/attention/load";
 import { attentionBandLabel, type AttentionBand } from "@/lib/attention/score";
-import { formatZAR } from "@/lib/format";
-import DismissAttentionButton from "@/components/DismissAttentionButton";
+import { formatDate, formatZAR } from "@/lib/format";
+import SetAsideAttentionButton from "@/components/SetAsideAttentionButton";
 import RestoreAttentionButton from "@/components/RestoreAttentionButton";
 import { PageHeader } from "@/components/page-header";
 
@@ -46,7 +46,7 @@ export default async function AttentionPage() {
   // The same guard `/leads` uses. This page shows customer names and deal values,
   // so it is exactly as sensitive as the board it is reached from.
   const user = await requireAnyPermission("leads.view_all", "leads.view_owned");
-  const { leads, dismissed } = await loadAttentionList(user);
+  const { leads, snoozed, dismissed } = await loadAttentionList(user);
 
   return (
     <div className="space-y-5">
@@ -113,36 +113,71 @@ export default async function AttentionPage() {
                   <p className="mt-2 text-[11px] text-muted-foreground">Owner: {lead.ownerName}</p>
                 )}
               </div>
-              <DismissAttentionButton leadId={lead.id} name={lead.name} />
+              <div className="flex shrink-0 gap-2">
+                <SetAsideAttentionButton leadId={lead.id} name={lead.name} mode="snooze" />
+                <SetAsideAttentionButton leadId={lead.id} name={lead.name} mode="dismiss" />
+              </div>
             </li>
           ))}
         </ul>
       )}
 
-      {dismissed.length > 0 && (
-        // Shown WITH the reasons, not counted. "Why is this not here" is the
-        // question the reason exists to answer, and a bare number cannot — a
-        // shorter list than expected is otherwise indistinguishable from a broken
-        // one. Collapsed by default so it does not compete with the live list.
-        <details className="rounded-xl border border-border bg-muted/10 p-3">
-          <summary className="cursor-pointer text-xs font-medium">
-            {dismissed.length} dismissed
-          </summary>
-          <ul className="mt-3 space-y-2">
-            {dismissed.map((lead) => (
-              <li key={lead.id} className="flex items-start justify-between gap-3 border-t border-border pt-2 first:border-0 first:pt-0">
-                <div className="min-w-0">
-                  <Link href={`/leads/${lead.id}`} className="text-sm font-medium hover:underline">
-                    {lead.name}
-                  </Link>
-                  <p className="mt-0.5 text-xs text-muted-foreground">“{lead.reason}”</p>
-                </div>
-                <RestoreAttentionButton leadId={lead.id} name={lead.name} />
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
+      {/*
+        Set-aside deals, shown WITH their reasons and kept as two lists.
+        "Back on the 19th" and "does not belong here" answer different questions,
+        and a shorter list than expected is otherwise indistinguishable from a
+        broken one. Collapsed so they do not compete with the live list.
+      */}
+      <SetAside
+        title={`${snoozed.length} snoozed`}
+        rows={snoozed}
+        // The date it RETURNS is the useful fact for a snooze, so it leads.
+        when={(at) => `back ${formatDate(at)}`}
+        empty={snoozed.length === 0}
+      />
+      <SetAside
+        title={`${dismissed.length} dismissed`}
+        rows={dismissed}
+        when={(at) => `dismissed ${formatDate(at)}`}
+        empty={dismissed.length === 0}
+      />
     </div>
+  );
+}
+
+/** One collapsible list of set-aside deals, with a way back for each. */
+function SetAside({
+  title,
+  rows,
+  when,
+  empty,
+}: {
+  title: string;
+  rows: SetAsideLead[];
+  when: (at: Date) => string;
+  empty: boolean;
+}) {
+  if (empty) return null;
+  return (
+    <details className="rounded-xl border border-border bg-muted/10 p-3">
+      <summary className="cursor-pointer text-xs font-medium">{title}</summary>
+      <ul className="mt-3 space-y-2">
+        {rows.map((lead) => (
+          <li
+            key={lead.id}
+            className="flex items-start justify-between gap-3 border-t border-border pt-2 first:border-0 first:pt-0"
+          >
+            <div className="min-w-0">
+              <Link href={`/leads/${lead.id}`} className="text-sm font-medium hover:underline">
+                {lead.name}
+              </Link>
+              <span className="ml-2 text-[11px] text-muted-foreground">{when(lead.at)}</span>
+              <p className="mt-0.5 text-xs text-muted-foreground">“{lead.reason}”</p>
+            </div>
+            <RestoreAttentionButton leadId={lead.id} name={lead.name} />
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }

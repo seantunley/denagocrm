@@ -23,6 +23,18 @@
 -- an empty reason" must not be the same state, and the second one is impossible
 -- by construction — the action refuses a reason shorter than MIN_DISMISS_REASON.
 
+-- TWO WAYS OFF THE LIST, because they are different decisions:
+--
+--   SNOOZE   nothing is wrong — come back on a date. The commonest case by far:
+--            "in Italy at the moment, back on the 19th".
+--   DISMISS  this does not belong on the list at all.
+--
+-- Both carry a reason. Neither is a one-click exit, and an elapsed snooze is
+-- simply not snoozed — the loader compares against `now`, so a deal reappears on
+-- its own and nothing has to sweep the column.
+
+ALTER TABLE "Lead" ADD COLUMN IF NOT EXISTS "attentionSnoozedUntil" TIMESTAMP(3);
+ALTER TABLE "Lead" ADD COLUMN IF NOT EXISTS "attentionSnoozeReason" TEXT;
 ALTER TABLE "Lead" ADD COLUMN IF NOT EXISTS "attentionDismissedAt" TIMESTAMP(3);
 ALTER TABLE "Lead" ADD COLUMN IF NOT EXISTS "attentionDismissReason" TEXT;
 
