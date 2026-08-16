@@ -148,18 +148,19 @@ for (const [rel, triggers] of WRITE_PATHS) {
 }
 
 test("every path that changes a stage emits stage_entered", () => {
-  // FOUR distinct paths now change a lead's stage — the edit form, the board
-  // drag, the test-drive booking dialog and the customer-link remedy. Missing one
-  // means a stage-entry journey fires from some parts of the UI and not others.
+  // FIVE distinct paths now change a lead's stage — the edit form, the board
+  // drag, and the three remedies (test-drive booking, customer link, raise a
+  // quote). Missing one means a stage-entry journey fires from some parts of the
+  // UI and not others.
   //
-  // Was three until `moveLeadWithContact` landed as the second stage remedy. The
-  // count is deliberately kept as a ratchet: a fifth path has to come here and
-  // say so.
+  // Three → four with `moveLeadWithContact`, four → five with
+  // `moveLeadWithNewQuote`. The count is deliberately kept as a ratchet: a sixth
+  // path has to come here and say so.
   const code = shipped("src/app/actions/leads.ts");
   assert.equal(
     (code.match(/emitLeadJourneyEvent\("stage_entered"/g) ?? []).length,
-    4,
-    "updateLead, moveLead, moveLeadToTestDrive and moveLeadWithContact must each emit stage_entered",
+    5,
+    "updateLead, moveLead and the three remedy actions must each emit stage_entered",
   );
   // Named as well as counted, so the number cannot be satisfied by four emits in
   // three functions.

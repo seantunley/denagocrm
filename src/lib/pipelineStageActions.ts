@@ -13,7 +13,7 @@
  * enforced only by the database — Prisma's DSL has no equivalent — so a value
  * added here without the migration fails at the INSERT.
  */
-export const PIPELINE_STAGE_ACTIONS = ["book_test_drive", "link_contact"] as const;
+export const PIPELINE_STAGE_ACTIONS = ["book_test_drive", "link_contact", "attach_quote"] as const;
 
 export type PipelineStageAction = (typeof PIPELINE_STAGE_ACTIONS)[number];
 
@@ -32,6 +32,12 @@ export const PIPELINE_STAGE_ACTION_META: Record<
     shortLabel: "Customer link",
     description:
       "Require the lead to be linked to a customer record. Offers a picker when it is not.",
+  },
+  attach_quote: {
+    label: "Raise a quote",
+    shortLabel: "Quote",
+    description:
+      "Require the lead to have a quote. Offers to create one, pre-filled from the lead, and opens it for editing.",
   },
 };
 

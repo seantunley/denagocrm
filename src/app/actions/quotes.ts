@@ -14,6 +14,7 @@ import { getSetting } from "@/lib/settings";
 import { markReferralEarned } from "@/lib/referrals";
 import { hasOpenSignatureRequest } from "@/lib/quoteLock";
 import { nextQuoteNumber } from "@/lib/numbering";
+import { insertQuoteFromLead, quoteFromLeadDefaults } from "@/lib/quoteFromLead";
 import { actingTenantId } from "@/lib/actingTenant";
 import { feeRowsFor, itemRowsFor, priorById } from "@/lib/quoteRows";
 import { emitLeadJourneyEvent } from "@/lib/leadJourneyEvents";
@@ -100,46 +101,17 @@ async function createQuoteFromLeadRecord(leadId: string) {
     where: { id: leadId },
     include: { product: true },
   });
-  const validDaysRaw = await getSetting("QUOTE_VALID_DAYS");
-  const validDays = validDaysRaw ? parseInt(validDaysRaw, 10) : 7;
-  const terms =
-    (await getSetting("QUOTE_TERMS")) ||
-    "Prices include VAT. Delivery arranged on acceptance. E&OE.";
-  // Allocate the number and insert in ONE transaction under the advisory lock so
-  // two concurrent creates can't read the same MAX(number) and collide (#11).
-  // Resolved OUTSIDE the transaction. `basePrisma` is the RLS bypass — a scoped
-  // permission check before it does NOT scope the transaction, so every row
-  // created in here has to carry its owner explicitly. Nested creates inherit
-  // nothing from the parent, so the items are stamped too.
+  // Settings first, then ONE transaction holding the advisory lock for the number
+  // allocation and the insert together, so two concurrent creates can't read the
+  // same MAX(number) and collide (#11). Both halves now live in
+  // `lib/quoteFromLead.ts` so the `attach_quote` stage remedy — which must create
+  // the quote and move the lead in one transaction — shares this definition of
+  // what a lead-seeded quote contains rather than keeping a second copy.
+  const defaults = await quoteFromLeadDefaults();
   const tenantId = await actingTenantId();
-  const quote = await basePrisma.$transaction(async (tx) => {
-    const number = await nextQuoteNumber(tx);
-    return tx.quote.create({
-      data: {
-        number,
-        tenantId,
-        leadId,
-        contactId: lead.contactId,
-        createdById: user.id,
-        validUntil: addDays(new Date(), isNaN(validDays) ? 7 : validDays),
-        terms,
-        items: lead.product
-          ? {
-              create: [
-                {
-                  tenantId,
-                  description: lead.product.name,
-                  qty: 1,
-                  unitPriceCents: lead.valueCents || lead.product.basePriceCents,
-                  productId: lead.product.id,
-                  colorPreference: lead.color || null,
-                },
-              ],
-            }
-          : undefined,
-      },
-    });
-  });
+  const quote = await basePrisma.$transaction((tx) =>
+    insertQuoteFromLead(tx, { lead, tenantId, createdById: user.id, defaults }),
+  );
   await logAudit({
     action: "quote.created",
     summary: `Created quote Q-${quote.number} for lead “${lead.title}”`,
