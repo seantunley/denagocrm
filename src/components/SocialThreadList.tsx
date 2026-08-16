@@ -26,6 +26,11 @@ export const CHANNEL_META: Record<string, { label: string; icon: React.ReactNode
     // eslint-disable-next-line @next/next/no-img-element
     icon: <img src="/branding/social-instagram.png" alt="Instagram" className="size-4 rounded-sm" />,
   },
+  x: {
+    label: "X",
+    // eslint-disable-next-line @next/next/no-img-element
+    icon: <img src="/branding/social-x.svg" alt="X" className="size-4 rounded-sm" />,
+  },
 };
 
 export default function SocialThreadList({

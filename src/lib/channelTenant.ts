@@ -17,7 +17,7 @@ import { basePrisma } from "./db";
  * endpoint, or a deleted tenant (no `Tenant` row) must NOT resolve. Returns the
  * owning `tenantId`, or null to fail closed.
  */
-export type ChannelKind = "whatsapp" | "messenger" | "instagram";
+export type ChannelKind = "whatsapp" | "messenger" | "instagram" | "x";
 
 export async function resolveChannelTenant(
   channel: ChannelKind,
