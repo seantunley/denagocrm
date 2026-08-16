@@ -156,12 +156,28 @@ export async function destroyPlatformSessionCookie(): Promise<void> {
   if (token) {
     const result = await verifyPlatformSessionFull(token);
     if (result.status === "ok") {
+      // Same rule as the staff logout, and for the same reason: this doc comment
+      // above already says the delete may be lost or the token copied elsewhere,
+      // which makes revocation the actual protection rather than a tidy-up. A
+      // swallowed failure here clears the cookie, shows "signed out", and leaves a
+      // platform-admin token live until it expires — the highest-privilege session
+      // in the product, failing open with nothing written down.
+      //
+      // Still fails open on purpose; no longer fails silently.
       await basePrisma.platformAdminSession
         .updateMany({
           where: { jti: result.payload.jti, revokedAt: null },
           data: { revokedAt: new Date() },
         })
-        .catch(() => {});
+        .catch(async (err) => {
+          const { logError } = await import("./errorLog");
+          await logError(
+            "platform-logout",
+            err,
+            "Platform admin session revocation failed; the cookie was cleared anyway, so this token stays valid until it expires.",
+            { tenantId: null },
+          );
+        });
     }
   }
 

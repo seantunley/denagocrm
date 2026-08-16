@@ -8,6 +8,7 @@ import { SignJWT, jwtVerify } from "jose";
 import { basePrisma } from "@/lib/db";
 import { createSessionCookie, destroySessionCookie } from "@/lib/auth";
 import { verifySession, SESSION_COOKIE } from "@/lib/session";
+import { logError } from "@/lib/errorLog";
 import { verifyTotp } from "@/lib/totp";
 import { matchBackupCode } from "@/lib/backupCodes";
 import { decryptValue } from "@/lib/settings";
@@ -24,6 +25,7 @@ import {
   registerRateLimitAttempt,
 } from "@/lib/rateLimit";
 import {
+  bumpUserSessionVersion,
   getUserSecurityState,
   recordFailedLogin,
   recordSuccessfulLogin,
@@ -238,17 +240,62 @@ export async function verifySecondFactor(
 }
 
 export async function logout() {
+  // Declared out here so the catch can still identify WHO failed to log out — the
+  // fallback below needs the user id, and it is only reachable on the error path.
+  let session: Awaited<ReturnType<typeof verifySession>> | null = null;
   try {
     const store = await cookies();
     const token = store.get(SESSION_COOKIE)?.value;
-    const session = token ? await verifySession(token) : null;
+    session = token ? await verifySession(token) : null;
     if (session?.jti) {
       await basePrisma.userSession.updateMany({
         where: { jti: session.jti },
         data: { revokedAt: new Date() },
       });
     }
-  } catch {}
+  } catch (err) {
+    // A FAILED REVOCATION IS INVISIBLE TO THE PERSON IT AFFECTS.
+    //
+    // The cookie is cleared and the redirect happens either way, so the UI says
+    // "signed out" whether or not the session was actually revoked. If this write
+    // failed, the token stays valid server-side until it expires — which matters on
+    // a shared machine, and matters more if the token was ever copied. Revocation
+    // IS the protection; the cookie delete only hides the token from this browser.
+    //
+    // So it still fails open — deliberately, because stranding someone on a page
+    // they cannot leave is worse — but it no longer fails SILENTLY.
+    await logError(
+      "logout",
+      err,
+      "Session revocation failed; falling back to a session-version bump so the token cannot be reused.",
+    );
+
+    // ESCALATE RATHER THAN LEAVE A LIVE TOKEN BEHIND.
+    //
+    // Revoking this one jti failed, so bump the user's sessionVersion instead:
+    // getCurrentUser compares `security.sessionVersion !== session.sv` on every
+    // request, so every token this user holds — including the one we just failed
+    // to revoke — stops validating immediately.
+    //
+    // It is a bigger hammer, and that is the right trade on THIS path: it only
+    // runs when a logout has already failed, and being signed out of your other
+    // devices is a far better outcome than believing you signed out while the
+    // token stays live. Someone who did not intend it just signs in again.
+    //
+    // Best-effort in turn — if the first write failed because the database is
+    // unreachable, this one probably fails too. It is logged separately so the
+    // System Log distinguishes "revocation failed but we closed the hole" from
+    // "revocation failed and the token is still live".
+    try {
+      if (session?.sub) await bumpUserSessionVersion(session.sub);
+    } catch (bumpErr) {
+      await logError(
+        "logout",
+        bumpErr,
+        "Session-version fallback ALSO failed — this token remains valid until it expires. Revoke the device from Settings → Security.",
+      );
+    }
+  }
   await destroySessionCookie();
   redirect("/login");
 }
