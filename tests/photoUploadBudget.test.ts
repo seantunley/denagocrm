@@ -154,6 +154,21 @@ test("every camera field resizes before submitting", () => {
   assert.match(mobileCapture, /<SaveButton[^>]*w-full/);
 });
 
+test("Choose photos opens the gallery instead of forcing the rear camera", () => {
+  // Android honours capture="environment" as a camera-only instruction. That
+  // made the control labelled "Choose photos" skip phone storage entirely. The
+  // browser can still offer its normal gallery/camera sources from the image
+  // chooser, so the shared file field must not force one source in advance.
+  const field = src("src/components/PhotoUploadField.tsx");
+  assert.match(field, /type="file"/);
+  assert.match(field, /accept="image\/\*"/);
+  assert.doesNotMatch(field, /capture=/, "the gallery picker must not force camera capture");
+
+  const mobileCapture = src("src/components/MobilePhotoCapture.tsx");
+  assert.match(mobileCapture, /Take or choose photos/);
+  assert.match(mobileCapture, /<PhotoUploadField/);
+});
+
 test("both upload actions enforce the TOTAL payload, not only per-file", () => {
   for (const file of ["src/app/actions/jobcards.ts", "src/app/actions/fulfilment.ts"]) {
     const code = src(file);
