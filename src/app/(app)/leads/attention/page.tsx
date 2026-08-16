@@ -72,7 +72,9 @@ export default async function AttentionPage({
   // This is a courtesy, not the rule. The actions keep their own checks — a
   // hidden button is not a permission.
   const canEdit = await hasPermission(user, "leads.edit");
-  const [{ owner = "mine", category = "all" }, canAssign, users, result] = await Promise.all([
+  // Opening the page shows the whole accessible queue. "Mine" is an explicit
+  // view, not a silent default that can make a populated queue look empty.
+  const [{ owner = "all", category = "all" }, canAssign, users, result] = await Promise.all([
     searchParams,
     hasPermission(user, "leads.assign"),
     listActingTenantStaff(),
@@ -87,6 +89,7 @@ export default async function AttentionPage({
     if (selectedCategory && !lead.signals.some((signal) => signal.category === selectedCategory)) return false;
     return true;
   });
+  const isFiltered = owner !== "all" || selectedCategory !== null;
   const { snoozed, dismissed } = result;
   const href = (nextOwner: string, nextCategory: string) =>
     `/leads/attention?owner=${encodeURIComponent(nextOwner)}&category=${encodeURIComponent(nextCategory)}`;
@@ -133,10 +136,26 @@ export default async function AttentionPage({
 
       {leads.length === 0 ? (
         <div className="card text-center">
-          <p className="text-sm font-medium">Nothing is waiting.</p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Every open deal has a next step, no overdue work and no unanswered customer.
-          </p>
+          {result.leads.length === 0 ? (
+            <>
+              <p className="text-sm font-medium">Nothing is waiting.</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                No accessible open deal currently has an attention signal.
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="text-sm font-medium">No attention items match these filters.</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                The full queue has {result.leads.length} {result.leads.length === 1 ? "item" : "items"}.
+              </p>
+              {isFiltered && (
+                <Link href="/leads/attention?owner=all&category=all" className="btn-secondary btn-sm mt-3">
+                  Show everyone
+                </Link>
+              )}
+            </>
+          )}
         </div>
       ) : (
         <ul className="space-y-2">

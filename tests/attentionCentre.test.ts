@@ -472,3 +472,11 @@ test("the upgraded centre is actionable, filterable and self-refreshing", () => 
   assert.match(refresh, /window\.setInterval\(tick, REFRESH_MS\)/);
   assert.match(refresh, /visibilitychange/);
 });
+
+test("filters cannot make a populated queue claim nothing is waiting", () => {
+  const page = shipped("src/app/(app)/leads/attention/page.tsx");
+  assert.match(page, /owner = "all"/, "the full accessible queue is the default view");
+  assert.match(page, /result\.leads\.length === 0/, "the strong empty state uses the unfiltered queue");
+  assert.match(page, /No attention items match these filters/);
+  assert.match(page, /Show everyone/);
+});
