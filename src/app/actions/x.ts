@@ -4,15 +4,16 @@ import { requirePermission } from "@/lib/permissions";
 import { prisma } from "@/lib/db";
 import { currentTenantScope } from "@/lib/tenantScope";
 import { resolveTenantCredential } from "@/lib/settings";
+import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 
 export async function draftXReplyWithGrok(conversationId: string): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
   await requirePermission("inbox.reply");
+  const tenantId = currentTenantScope()?.tenantId ?? DEFAULT_TENANT_ID;
   const conversation = await prisma.conversation.findFirst({
-    where: { id: conversationId, channel: "x" },
+    where: { id: conversationId, channel: "x", tenantId },
     include: { messages: { orderBy: { occurredAt: "desc" }, take: 12, select: { direction: true, body: true } } },
   });
   if (!conversation) return { ok: false, error: "X conversation not found in this workspace." };
-  const tenantId = currentTenantScope()?.tenantId ?? null;
   const [apiKey, configuredModel, enabled] = await Promise.all([
     resolveTenantCredential(tenantId, "XAI_API_KEY"),
     resolveTenantCredential(tenantId, "XAI_MODEL"),
