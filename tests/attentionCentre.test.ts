@@ -21,6 +21,11 @@ import {
   type AttentionSignal,
   type AttentionSignalKind,
 } from "../src/lib/attention/score";
+import {
+  dispositionAt,
+  dispositionIsActive,
+  parseAttentionDispositions,
+} from "../src/lib/attention/dispositions";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8").replace(/\r\n/g, "\n");
@@ -458,6 +463,52 @@ test("the board links to the list instead of replacing its filter", () => {
   const board = shipped("src/components/KanbanBoard.tsx");
   assert.match(board, /href="\/leads\/attention"/);
   assert.match(board, /aria-pressed=\{attentionOnly\}/, "the existing toggle survives");
+});
+
+/* ── per-signal dispositions ────────────────────────────────────────────── */
+
+test("A DISPOSITION WITH NO READABLE DATE HIDES NOTHING", () => {
+  // The column is JSONB, so it can hold whatever an older build wrote. A row
+  // that cannot say when it was set aside — or when it comes back — must not be
+  // able to hide a signal: this screen exists so nothing is forgotten, and the
+  // safe direction to fail in is "still on the list".
+  const base = { kind: "overdue_task", signalKey: "k", reason: "away until the 19th", snoozeCount: 1 };
+  const dateless = parseAttentionDispositions({ k: { ...base, state: "snoozed" } });
+  assert.deepEqual(dateless, {}, "a snooze with no date is not a snooze");
+  const unparseable = parseAttentionDispositions({ k: { ...base, state: "dismissed", dismissedAt: "not a date" } });
+  assert.deepEqual(unparseable, {}, "a dismissal whose date does not parse is not a dismissal");
+  // The counterpart: a well-formed one survives, so the check above is not
+  // simply rejecting everything.
+  const good = parseAttentionDispositions({ k: { ...base, state: "snoozed", snoozedUntil: "2026-09-19T00:00:00.000Z" } });
+  assert.equal(good.k?.state, "snoozed");
+  assert.equal(dispositionAt(good.k!)?.toISOString(), "2026-09-19T00:00:00.000Z");
+});
+
+test("an elapsed snooze is simply not snoozed", () => {
+  const row = parseAttentionDispositions({
+    k: { kind: "overdue_task", signalKey: "k", state: "snoozed", reason: "back on the 19th", snoozeCount: 1, snoozedUntil: "2026-09-19T00:00:00.000Z" },
+  }).k!;
+  assert.equal(dispositionIsActive(row, new Date("2026-09-18T00:00:00.000Z")), true);
+  assert.equal(dispositionIsActive(row, new Date("2026-09-20T00:00:00.000Z")), false, "it returns on its own");
+  assert.equal(dispositionIsActive(undefined, new Date()), false);
+});
+
+test("dismiss has no expiry, however long you wait", () => {
+  const row = parseAttentionDispositions({
+    k: { kind: "overdue_task", signalKey: "k", state: "dismissed", reason: "duplicate of the other enquiry", snoozeCount: 0, dismissedAt: "2026-08-01T00:00:00.000Z" },
+  }).k!;
+  assert.equal(dispositionIsActive(row, new Date("2030-01-01T00:00:00.000Z")), true);
+  assert.equal(dispositionAt(row)?.toISOString(), "2026-08-01T00:00:00.000Z", "a dismissal is dated by WHEN, a snooze by UNTIL");
+});
+
+test("the set-aside date is read without a non-null assertion", () => {
+  // `disposition?.dismissedAt!` asserted away the very optionality the type
+  // carries on purpose, and rendered `Invalid Date` at somebody when it was
+  // wrong. The narrowing lives in the type guard now.
+  const load = shipped("src/lib/attention/load.ts");
+  assert.doesNotMatch(load, /disposition\?\.\w+!/);
+  assert.match(load, /const at = dispositionAt\(disposition\)/);
+  assert.match(load, /if \(!at\) \{\s*active\.push\(signal\);/, "an unreadable date puts the signal back on the list");
 });
 
 test("the upgraded centre is actionable, filterable and self-refreshing", () => {

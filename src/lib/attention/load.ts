@@ -5,6 +5,7 @@ import { prisma } from "../db";
 import { getAccessibleLeadIds, type PermissionUser } from "../permissions";
 import { collectAttentionSignals, type AttentionStage } from "./signals";
 import {
+  dispositionAt,
   dispositionIsActive,
   parseAttentionDispositions,
   REPEAT_SNOOZE_THRESHOLD,
@@ -169,6 +170,16 @@ export const loadAttentionList = cache(async (user: PermissionUser, now: Date = 
         active.push(signal);
         continue;
       }
+      // `dispositionIsActive` narrows `disposition` to a real row, and
+      // `dispositionAt` reads the one date that matters for its state. Belt and
+      // braces on the null: the parser already refuses a dateless disposition,
+      // so if one ever reaches here the signal goes back on the list rather than
+      // being hidden behind an unreadable date.
+      const at = dispositionAt(disposition);
+      if (!at) {
+        active.push(signal);
+        continue;
+      }
       const row: SetAsideLead = {
         key: `${lead.id}:${signal.key}`,
         id: lead.id,
@@ -176,14 +187,10 @@ export const loadAttentionList = cache(async (user: PermissionUser, now: Date = 
         signalKey: signal.key,
         signalKind: signal.kind,
         signalDetail: signal.detail,
-        reason: disposition?.reason ?? "",
-        at: new Date(
-          disposition?.state === "dismissed"
-            ? disposition.dismissedAt!
-            : disposition?.snoozedUntil!,
-        ),
+        reason: disposition.reason,
+        at,
       };
-      if (disposition?.state === "dismissed") dismissed.push(row);
+      if (disposition.state === "dismissed") dismissed.push(row);
       else snoozed.push(row);
     }
     if (!needsAttention(active)) continue;
