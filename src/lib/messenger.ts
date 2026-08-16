@@ -28,7 +28,7 @@ const OUTBOUND_TIMEOUT_MS = 15_000;
 /** Largest inbound DM attachment we will pull into memory. */
 const ATTACHMENT_MAX_BYTES = 20 * 1024 * 1024;
 
-export type DmPlatform = "messenger" | "instagram";
+export type DmPlatform = "messenger" | "instagram" | "x";
 
 /** The tenant a Meta page-token lookup should prefer, or null (global). */
 function ambientTenantId(): string | null {
@@ -237,6 +237,19 @@ async function persistAttachment(
 }
 
 async function fetchProfileName(platform: DmPlatform, userId: string): Promise<string | null> {
+  if (platform === "x") {
+    const token = await resolveTenantCredential(ambientTenantId(), "X_ACCESS_TOKEN");
+    if (!token) return null;
+    try {
+      const res = await fetch(`https://api.x.com/2/users/${encodeURIComponent(userId)}`, {
+        headers: { Authorization: `Bearer ${token}` }, cache: "no-store",
+        signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
+      });
+      if (!res.ok) return null;
+      const json = await res.json();
+      return json.data?.name ?? json.data?.username ?? null;
+    } catch { return null; }
+  }
   const token = await getPageToken();
   if (!token) return null;
   try {
@@ -271,12 +284,19 @@ export async function recordInboundDm(
   /** The provider's message id (mid), so a redelivery reuses these rows. */
   providerMessageId?: string,
 ) {
-  const idField = platform === "instagram" ? "instagramId" : "messengerPsid";
-  let contact = await prisma.contact.findFirst({ where: { [idField]: senderId } });
+  const idField = platform === "instagram" ? "instagramId" : platform === "x" ? "xUserId" : "messengerPsid";
+  let contact = await prisma.contact.findFirst({
+    where: {
+      [idField]: senderId,
+      // X user ids are global to X, not page-scoped like Meta PSIDs. Bind the
+      // lookup explicitly even while ORM enforcement is dormant.
+      ...(platform === "x" ? { tenantId: writeTenantId() ?? DEFAULT_TENANT_ID } : {}),
+    },
+  });
 
   if (!contact) {
     const profileName = await fetchProfileName(platform, senderId);
-    const label = platform === "instagram" ? "Instagram" : "Messenger";
+    const label = platform === "instagram" ? "Instagram" : platform === "x" ? "X" : "Messenger";
     const [firstName, ...rest] = (profileName ?? `${label} user`).split(/\s+/);
     contact = await prisma.contact.create({
       data: {
@@ -284,6 +304,7 @@ export async function recordInboundDm(
         lastName: rest.join(" ") || null,
         source: platform,
         [idField]: senderId,
+        ...(platform === "x" ? { tenantId: writeTenantId() ?? DEFAULT_TENANT_ID } : {}),
         notes: profileName ? null : `Created from an inbound ${label} DM — name not yet available.`,
       },
     });
@@ -309,7 +330,7 @@ export async function recordInboundDm(
       // `lead_created` automations and raised no "New lead" push, and — because
       // it never set `position` while topPosition hands out DECREASING numbers —
       // it landed underneath every lead that came in through the web form.
-      const label = platform === "instagram" ? "Instagram" : "Facebook";
+      const label = platform === "instagram" ? "Instagram" : platform === "x" ? "X" : "Facebook";
       const who = `${contact.firstName}${contact.lastName ? ` ${contact.lastName}` : ""}`;
       const title = `${label} ad enquiry — ${who}`;
       // …IfPipelineReady keeps the old `if (firstStage)` guard: with no pipeline
@@ -317,7 +338,7 @@ export async function recordInboundDm(
       const lead = await createLeadRecordIfPipelineReady({
         title,
         name: who,
-        source: platform === "instagram" ? "instagram" : "facebook",
+        source: platform === "instagram" ? "instagram" : platform === "x" ? "x" : "facebook",
         contactId: contact.id,
         notes: [
           "Started a DM conversation from an ad.",

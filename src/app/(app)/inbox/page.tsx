@@ -25,7 +25,7 @@ export default async function InboxPage() {
   // tenant enforcement is off, observing or on.
   const workspaceTenantId = (await getActiveTenantId()) ?? DEFAULT_TENANT_ID;
   const scopeWhere = await accessibleInboxWhere(user);
-  const channelWhere = { type: { in: ["whatsapp", "messenger", "instagram"] } };
+  const channelWhere = { type: { in: ["whatsapp", "messenger", "instagram", "x"] } };
   const [activeComms, archivedComms, reviews, placeId] = await Promise.all([
     // Threads are chosen by their own recency, then their messages are loaded —
     // so a busy conversation can no longer evict a quiet one from the queue.
@@ -136,11 +136,12 @@ export default async function InboxPage() {
         actions={<a href="/messages" target="_blank" className="btn-primary btn-sm"><MessageSquare className="size-4" /> Open Messages app <ExternalLink className="size-3.5" /></a>}
       />
 
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {[
           { label: "WhatsApp", icon: "/branding/social-whatsapp.png", count: channelCount("whatsapp") },
           { label: "Messenger", icon: "/branding/social-facebook.png", count: channelCount("messenger") },
           { label: "Instagram", icon: "/branding/social-instagram.png", count: channelCount("instagram") },
+          { label: "X", icon: "/branding/social-x.svg", count: channelCount("x") },
         ].map((channel) => (
           <Surface key={channel.label} className="flex items-center gap-3 px-4 py-3">
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -157,6 +158,7 @@ export default async function InboxPage() {
           { key: "whatsapp", label: "WhatsApp", count: threadList.filter((thread) => thread.channel === "whatsapp" && thread.unread).length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "whatsapp")} empty="No WhatsApp conversations yet. Connect the WhatsApp Business number in Settings → Integrations." /> },
           { key: "messenger", label: "Messenger", count: threadList.filter((thread) => thread.channel === "messenger" && thread.unread).length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "messenger")} empty="No Messenger conversations yet." /> },
           { key: "instagram", label: "Instagram", count: threadList.filter((thread) => thread.channel === "instagram" && thread.unread).length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "instagram")} empty="No Instagram DMs yet. They appear once the Instagram account and Meta messaging permissions are connected." /> },
+          { key: "x", label: "X", count: threadList.filter((thread) => thread.channel === "x" && thread.unread).length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "x")} empty="No X conversations yet. Connect the tenant's X account in Settings → Integrations." /> },
           { key: "reviews", label: "Google Reviews", count: reviews.length, content: reviewsPanel },
           { key: "archived", label: "Archived", count: archivedList.length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={archivedList} empty="Nothing archived. Archive finished or test conversations to keep the active queue focused." /> },
         ]}
