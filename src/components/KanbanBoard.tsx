@@ -29,6 +29,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleAlert,
+  ListChecks,
   FilterX,
   GripVertical,
   Hourglass,
@@ -1182,6 +1183,20 @@ export default function KanbanBoard({
               <CircleAlert className="size-4" />
               Needs attention
             </button>
+            {/*
+              The filter and the list are different tools and both are kept.
+              Filtering answers "show me only these cards, in their columns"; the
+              Attention Centre answers "what should I do next, across every
+              stage, and why" — which a filter structurally cannot, because it can
+              neither rank nor explain.
+
+              A LINK rather than a replacement: the board's toggle is still the
+              right thing when you want to keep the spatial view.
+            */}
+            <Link href="/leads/attention" className="btn-secondary h-10">
+              <ListChecks className="size-4" />
+              Attention list
+            </Link>
             {(query || owner !== OWNER_ANY || attentionOnly) && (
               <button
                 type="button"

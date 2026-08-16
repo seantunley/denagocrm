@@ -766,6 +766,26 @@ model Lead {
   researchedAt DateTime?
   viewedAt     DateTime? // first time a staff member opened the lead
   stageEnteredAt DateTime @default(now()) // when it landed in the current stage (stale-age flag)
+  /// Attention Centre: the two ways a lead comes off the list, each with its
+  /// reason.
+  ///
+  /// SNOOZE is "nothing is wrong, come back on a date" — the commonest case, and
+  /// an elapsed date is simply not snoozed, so a deal reappears on its own and
+  /// nothing sweeps the column. DISMISS is "this does not belong on the list at
+  /// all", and stays until somebody restores it.
+  ///
+  /// NULL is "still listed", which is what every existing row already is. Both
+  /// reasons are stored on the ROW as well as in the audit log because the
+  /// review lists read them — joining the audit log for one string would be a
+  /// query per row — and neither can be blank, because both actions refuse
+  /// anything shorter than MIN_ATTENTION_REASON.
+  attentionSnoozedUntil    DateTime?
+  attentionSnoozeReason    String?
+  attentionDismissedAt     DateTime?
+  attentionDismissReason   String?
+  /// Per-signal set-asides. Keyed by a stable signal identity so a new customer
+  /// message is never hidden by snoozing an older workflow warning.
+  attentionDispositions    Json?
 
   deletedAt     DateTime?
   deletedByName String?
