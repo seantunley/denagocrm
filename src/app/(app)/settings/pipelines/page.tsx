@@ -15,10 +15,60 @@ import ModalTrigger from "@/components/Modal";
 import { buttonVariants } from "@/components/ui/button";
 import { SettingsWorkspace } from "@/components/settings-workspace";
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
-import { PIPELINE_STAGE_ACTION_META } from "@/lib/pipelineStageActions";
+import {
+  PIPELINE_STAGE_ACTIONS,
+  PIPELINE_STAGE_ACTION_META,
+  parsePipelineStageAction,
+} from "@/lib/pipelineStageActions";
 import { stageJourneyNames } from "@/lib/journeyStageBadges";
+import StageRulesEditor from "@/components/StageRulesEditor";
+import {
+  parseStageCriteria,
+  parseStageGateMode,
+  type StageCriteriaGroup,
+} from "@/lib/stageGate";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * Read a stored criteria document for the EDITOR.
+ *
+ * Lenient where the move path is strict, on purpose. `moveLead` refuses a move it
+ * cannot read a rule for, because acting on a rule you do not understand is
+ * worse than not moving. This page is the one place a broken rule can be FIXED,
+ * so it must render rather than throw — a settings screen that crashes on the
+ * rule you came to repair is a dead end.
+ *
+ * The shape is passed through unparsed on failure, with `readOnly` set, so
+ * `StageRulesEditor` shows it verbatim and posts nothing — which leaves the
+ * column untouched instead of destroying a rule while renaming a stage.
+ */
+function readCriteria(stored: unknown): { criteria: StageCriteriaGroup | null; readOnly: boolean } {
+  try {
+    return { criteria: parseStageCriteria(stored), readOnly: false };
+  } catch {
+    // Unreadable, but still a rule somebody wrote — a field this build no longer
+    // offers, or an operator paired with a type that no longer accepts it.
+    return { criteria: isGroupish(stored) ? (stored as StageCriteriaGroup) : null, readOnly: true };
+  }
+}
+
+/**
+ * The stored action, if this build still knows it.
+ *
+ * Every option on this screen now comes from PIPELINE_STAGE_ACTIONS rather than
+ * being written out by hand — the list was three hardcoded copies of one value,
+ * which is exactly how a second one gets added everywhere but the picker.
+ */
+const stageAction = (value: string | null) => parsePipelineStageAction(value);
+
+function isGroupish(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    Array.isArray((value as { conditions?: unknown }).conditions)
+  );
+}
 
 export default async function PipelineSettingsPage() {
   await requirePermission("pipelines.manage");
@@ -144,10 +194,10 @@ export default async function PipelineSettingsPage() {
                       <span className="text-xs text-muted-foreground">{stage.defaultProbability}% probability</span>
                       {stage.staleAfterDays && <span className="text-xs text-muted-foreground">stale after {stage.staleAfterDays}d</span>}
                       {stage.isClosed && <span className="badge bg-muted text-muted-foreground">{stage.closedStatus || "closed"}</span>}
-                      {stage.entryAction === "book_test_drive" && (
+                      {stageAction(stage.entryAction) && (
                         <span className="badge bg-primary/15 text-primary">
                           <Zap className="size-3" />
-                          {PIPELINE_STAGE_ACTION_META.book_test_drive.shortLabel}
+                          {PIPELINE_STAGE_ACTION_META[stageAction(stage.entryAction)!].shortLabel}
                         </span>
                       )}
                       {(automationRulesByStage.get(stage.id)?.length ?? 0) > 0 && (
@@ -190,17 +240,37 @@ export default async function PipelineSettingsPage() {
                         </select>
                       </label>
                       <label className="space-y-1 md:col-span-3">
-                        <span className="text-xs text-muted-foreground">When a lead enters this stage</span>
+                        {/* "Required action", not "when a lead enters" — the stage
+                            RULES below also describe entering, and the two were
+                            reading as the same setting. This one collects details
+                            before the move; that one decides whether it may happen. */}
+                        <span className="text-xs text-muted-foreground">Required action on entry</span>
                         <select name="entryAction" className="input" defaultValue={stage.entryAction ?? ""}>
                           <option value="">No required stage action</option>
-                          <option value="book_test_drive">Require and book a test drive</option>
+                          {PIPELINE_STAGE_ACTIONS.map((action) => (
+                            <option key={action} value={action}>
+                              {PIPELINE_STAGE_ACTION_META[action].label}
+                            </option>
+                          ))}
                         </select>
                         <span className="block text-[11px] leading-4 text-muted-foreground">
-                          {stage.entryAction === "book_test_drive"
-                            ? PIPELINE_STAGE_ACTION_META.book_test_drive.description
+                          {stageAction(stage.entryAction)
+                            ? PIPELINE_STAGE_ACTION_META[stageAction(stage.entryAction)!].description
                             : "The lead moves immediately; configurable automations can still run afterward."}
                         </span>
                       </label>
+                      <StageRulesEditor
+                        direction="entry"
+                        stageName={stage.name}
+                        {...readCriteria(stage.entryCriteria)}
+                        defaultMode={parseStageGateMode(stage.entryGateMode)}
+                      />
+                      <StageRulesEditor
+                        direction="exit"
+                        stageName={stage.name}
+                        {...readCriteria(stage.exitCriteria)}
+                        defaultMode={parseStageGateMode(stage.exitGateMode)}
+                      />
                     </SaveForm>
                     </details>
                   </div>
@@ -241,10 +311,15 @@ export default async function PipelineSettingsPage() {
                   </select>
                 </label>
                 <label className="space-y-1 md:col-span-3">
-                  <span className="text-xs text-muted-foreground">When a lead enters this stage</span>
+                  {/* Same rename as the edit form above, for the same reason. */}
+                  <span className="text-xs text-muted-foreground">Required action on entry</span>
                   <select name="entryAction" className="input" defaultValue="">
                     <option value="">No required stage action</option>
-                    <option value="book_test_drive">Require and book a test drive</option>
+                    {PIPELINE_STAGE_ACTIONS.map((action) => (
+                      <option key={action} value={action}>
+                        {PIPELINE_STAGE_ACTION_META[action].label}
+                      </option>
+                    ))}
                   </select>
                   <span className="block text-[11px] leading-4 text-muted-foreground">
                     Required actions collect their details before the lead is moved.

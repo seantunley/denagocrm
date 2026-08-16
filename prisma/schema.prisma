@@ -672,6 +672,37 @@ model PipelineStage {
   isClosed           Boolean @default(false)
   closedStatus       String?
 
+  /// STAGE GATES — the criteria a lead must meet to enter or leave this stage.
+  ///
+  /// Columns on THIS table rather than a `PipelineStageCriterion` table, and that
+  /// is a tenancy decision before it is a modelling one: a column inherits this
+  /// row's `tenantId`, its index, its `@@unique([tenantId, id])`, the composite
+  /// FK `Lead(tenantId, stageId)` and the RLS policy from `20260727130000_rls_enforce`.
+  /// A new table would have to re-earn every one of those, and the prod audit
+  /// found 27 tables with NO RLS precisely because they were added after that
+  /// migration. A JSON column cannot become a 28th.
+  ///
+  /// The shape is `StageCriteriaGroup` (src/lib/stageGate.ts) — structurally the
+  /// journey builder's condition group with this feature's field vocabulary. NULL
+  /// means no gate, and is structurally incapable of blocking: `evaluateConditions`
+  /// returns true for a null or empty group.
+  ///
+  /// Criteria are never queried ACROSS stages — "which stages require a quote" is
+  /// not a question anyone asks — so they are always read with the stage that owns
+  /// them. That is the textbook case for a document column, and it is the house
+  /// pattern already: BotFlow.definition, SignWorkflow.graphJson,
+  /// JourneyVersion.definition, Segment.ruleTree.
+  entryCriteria Json?
+  exitCriteria  Json?
+
+  /// StageGateMode: off | warn | reason | block. Defaults to "off" so shipping
+  /// this changes nothing on any existing board — you author a rule, watch it for
+  /// a week, then turn it up. Severity is per GATE, not per clause: under `or`,
+  /// "which clause failed" is not a well-formed question, so a per-clause severity
+  /// would be incoherent exactly where the group logic earns its keep.
+  entryGateMode String @default("off")
+  exitGateMode  String @default("off")
+
   // Multi-tenancy (Phase B — additive/inert): owning tenant. See Contact.tenantId.
   // NOT derived from the acting user: a stage takes its PARENT PIPELINE's tenant,
   // or a pipeline's stages could end up split across two owners and the composite

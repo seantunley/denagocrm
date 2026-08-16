@@ -87,10 +87,19 @@ test("a rejected move restores exactly what the user was looking at", () => {
   const snapshotAt = requestMove.indexOf("const snapshot = stages;");
   const applyAt = requestMove.indexOf("applyMove(lead.id");
   assert.ok(snapshotAt >= 0 && applyAt > snapshotAt, "the snapshot must precede the optimistic move");
-  assert.match(requestMove, /if \(!result\.ok\) rollbackTo\(snapshot/, "a refusal must roll back");
+  // The refusal branch grew a sibling — a verdict that ASKS for a reason is not a
+  // refusal — so this is no longer a one-liner. The property is unchanged: a
+  // result that is not ok, and is not a reason request, rolls the board back.
+  assert.match(requestMove, /if \(!result\.ok\) \{\s+rollbackTo\(snapshot/, "a refusal must roll back");
+  // And a reason request restores the snapshot WITHOUT an error toast: the
+  // server is asking, not refusing, and rollbackTo() toasts.
+  assert.match(requestMove, /setStages\(snapshot\);\s+setPendingGate\(/);
   // A transport failure has to roll back too, or the board keeps a card in a
-  // column the server never accepted.
-  assert.match(requestMove, /\.catch\(\(\) => \(\{[\s\S]{0,120}ok: false as const/);
+  // column the server never accepted. Comments stripped: the fallback now
+  // carries a paragraph explaining why it mirrors the action's result shape,
+  // which pushed the match past the window this pattern allows.
+  const requestMoveCode = requestMove.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  assert.match(requestMoveCode, /\.catch\(\s*\(\) => \(\{[\s\S]{0,120}ok: false as const/);
   // The old behaviour: a toast and nothing else, leaving the card where the
   // server refused to put it.
   assert.doesNotMatch(requestMove, /catch \(\) => \{\s*toast\.error/);
@@ -116,10 +125,31 @@ test("a refused move is a return value, not a throw", () => {
     actions.indexOf("export async function moveLeadToTestDrive("),
   );
   assert.ok(moveLead.length > 0, "moveLead must still exist");
-  assert.match(moveLead, /Promise<\{ ok: boolean; error\?: string \}>/, "the signature says so");
+  // `gate?: StageGateVerdict` joined this in the stage-gates change. It is
+  // additive and does not weaken the property under test: a refusal is still a
+  // returned `{ ok: false }`, and the verdict rides along so the board can open
+  // the reason dialog because the SERVER asked it to. The `ok`/`error` pair is
+  // still asserted exactly.
+  // `remedy?` joined `gate?` when stage actions became remedies: a stage that
+  // asks for a booking or a customer link is answered with WHICH dialog to open,
+  // rather than a flat refusal the caller cannot act on. Both are additive and
+  // neither weakens the property under test — a refusal is still a returned
+  // `{ ok: false }`, never a throw.
+  assert.match(
+    moveLead,
+    /Promise<\{ ok: boolean; error\?: string; gate\?: StageGateVerdict; remedy\?: PipelineStageAction \}>/,
+    "the signature says so",
+  );
   assert.match(moveLead, /return \{ ok: false, error: "You do not have permission to move leads between pipelines" \}/);
-  assert.match(moveLead, /return \{ ok: false, error: "This stage requires test-drive booking details" \}/);
-  assert.match(moveLead, /return \{ ok: true \};/, "the success path must report success");
+  // This used to assert the flat refusal `"This stage requires test-drive
+  // booking details"`. A required action is now a REMEDY — a rule plus a form
+  // that satisfies it — so the same situation returns WHICH dialog to open
+  // instead of a dead end. Still a returned value, still not a throw, which is
+  // the property this test is actually about.
+  assert.match(moveLead, /return \{ ok: false, gate: verdict, remedy: gateOutcome\.remedy\.id \}/);
+  // `gate` rides along on success too — a `warn` gate allows the move and exists
+  // to say what was missing, which a bare `{ ok: true }` made unsayable.
+  assert.match(moveLead, /return \{ ok: true, gate: verdict \};/, "the success path must report success");
   // Bare throws are what produced a digest on the client and a hash in the toast.
   const code = moveLead.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
   assert.doesNotMatch(code, /throw new Error\(/, "an expected refusal must not be thrown");
@@ -163,7 +193,15 @@ test("cards are ordered by the position the server persists", () => {
   const page = src("src/app/(app)/leads/page.tsx");
   assert.match(page, /orderBy: \[\{ position: "asc" \}, \{ createdAt: "desc" \}\]/);
   // And the move actually writes one, or the ordering key never changes.
-  assert.match(src("src/app/actions/leads.ts"), /position: await nextPosition\(stageId\)/);
+  //
+  // `nextPosition` is now resolved into a local BEFORE the move's transaction
+  // opens rather than awaited inline in the `data` object — it reads the target
+  // column, and asking for it inside would query on a second connection while
+  // the transaction holds locks. The property is unchanged: the move computes a
+  // position and writes it.
+  const actions = src("src/app/actions/leads.ts");
+  assert.match(actions, /const position = await nextPosition\(stageId\);/);
+  assert.match(actions, /data: \{ stageId, position, stageEnteredAt: new Date\(\) \}/);
 });
 
 /* ── SalesPipeline was never tenant-scoped at all ──────────────────────── */

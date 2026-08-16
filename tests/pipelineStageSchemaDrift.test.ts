@@ -188,7 +188,11 @@ test("no column of the table is left off the model at all", () => {
   const body = modelBody("PipelineStage");
   const missing = columns.filter((c) => fieldLine(body, c) === null);
   assert.deepEqual(missing, [], `undeclared PipelineStage columns: ${missing.join(", ")}`);
-  assert.equal(columns.length, 11, "the table's column count changed — re-check the model");
+  // 11 → 15 with 20260813120000_stage_gates, which adds entryCriteria,
+  // exitCriteria, entryGateMode and exitGateMode. All four are declared on the
+  // model in the same change — the `missing` assertion above is what proves it;
+  // this number only exists to make the NEXT undeclared column fail here.
+  assert.equal(columns.length, 15, "the table's column count changed — re-check the model");
 });
 
 test("the relation to SalesPipeline is declared on both sides, and matches the FK", () => {

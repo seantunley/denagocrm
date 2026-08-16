@@ -147,16 +147,33 @@ for (const [rel, triggers] of WRITE_PATHS) {
   });
 }
 
-test("moveLead and moveLeadToTestDrive both emit stage_entered", () => {
-  // Three distinct paths change a lead's stage — the edit form, the board drag,
-  // and the test-drive booking dialog. Missing one means a stage-entry journey
-  // fires from some parts of the UI and not others.
+test("every path that changes a stage emits stage_entered", () => {
+  // FOUR distinct paths now change a lead's stage — the edit form, the board
+  // drag, the test-drive booking dialog and the customer-link remedy. Missing one
+  // means a stage-entry journey fires from some parts of the UI and not others.
+  //
+  // Was three until `moveLeadWithContact` landed as the second stage remedy. The
+  // count is deliberately kept as a ratchet: a fifth path has to come here and
+  // say so.
   const code = shipped("src/app/actions/leads.ts");
   assert.equal(
     (code.match(/emitLeadJourneyEvent\("stage_entered"/g) ?? []).length,
-    3,
-    "updateLead, moveLead and moveLeadToTestDrive must each emit stage_entered",
+    4,
+    "updateLead, moveLead, moveLeadToTestDrive and moveLeadWithContact must each emit stage_entered",
   );
+  // Named as well as counted, so the number cannot be satisfied by four emits in
+  // three functions.
+  for (const fn of [
+    "export async function updateLead(",
+    "export async function moveLead(",
+    "export async function moveLeadToTestDrive(",
+    "export async function moveLeadWithContact(",
+  ]) {
+    const start = code.indexOf(fn);
+    assert.ok(start >= 0, `${fn} is missing`);
+    const body = code.slice(start, code.indexOf("export async function ", start + fn.length));
+    assert.match(body, /emitLeadJourneyEvent\("stage_entered"/, `${fn} must emit stage_entered`);
+  }
 });
 
 test("emitting can never break the write path it hangs off", () => {
