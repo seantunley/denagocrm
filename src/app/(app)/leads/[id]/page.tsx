@@ -15,6 +15,7 @@ import { createQuoteFromLead } from "@/app/actions/quotes";
 import CommsTimeline from "@/components/CommsTimeline";
 import ActivityPanel from "@/components/ActivityPanel";
 import EmailComposer from "@/components/EmailComposer";
+import { composerReplyToDefault } from "@/lib/replyToDefault";
 import LeadTimeline from "@/components/LeadTimeline";
 import { auditDetailFor } from "@/lib/auditDetailQuery";
 import ConfirmDelete from "@/components/ConfirmDelete";
@@ -51,6 +52,10 @@ export default async function LeadDetailPage({
   const { id } = await params;
   const { tab, schedule } = await searchParams;
   const user = await requireUser();
+  // The composer's Reply-To default: this person plus the mailbox IMAP reads, so
+  // a customer's reply reaches both their inbox and this record's timeline. Never
+  // throws — an empty string just opens the field blank.
+  const replyToDefault = await composerReplyToDefault(user.email);
   const lead = await prisma.lead.findUnique({
     where: { id },
     include: {
@@ -428,6 +433,7 @@ export default async function LeadDetailPage({
                       revalidate={path}
                       libraryDocs={libraryDocs}
                       aiConfigured={aiOn}
+                      defaultReplyTo={replyToDefault}
                     />
                     <WhatsAppPanel
                       phone={lead.phone ?? lead.contact?.whatsapp ?? lead.contact?.phone ?? null}

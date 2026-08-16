@@ -34,6 +34,7 @@ export default function EmailComposer({
   revalidate,
   libraryDocs = [],
   aiConfigured = false,
+  defaultReplyTo = "",
 }: {
   defaultTo: string;
   templates: RenderedTemplate[];
@@ -43,6 +44,13 @@ export default function EmailComposer({
   revalidate: string;
   libraryDocs?: { id: string; label: string }[];
   aiConfigured?: boolean;
+  /**
+   * Pre-filled Reply-To — the sender plus the CRM's own mailbox, resolved by
+   * `composerReplyToDefault`. Defaulted to "" so a caller that has not been
+   * updated renders an empty field rather than `undefined`, and mail from that
+   * screen behaves exactly as it did before this field existed.
+   */
+  defaultReplyTo?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [subject, setSubject] = useState("");
@@ -136,6 +144,32 @@ export default function EmailComposer({
                 ))}
               </select>
             </div>
+          </div>
+          <div>
+            <label className="label" htmlFor="email-reply-to">
+              Reply to
+            </label>
+            <input
+              id="email-reply-to"
+              name="replyTo"
+              className="input"
+              defaultValue={defaultReplyTo}
+              placeholder="you@example.com, crm@example.com"
+              // NOT type="email". That input type validates a SINGLE address, so
+              // the browser would reject the two-address default this field exists
+              // to provide. The server validates the list — see parseReplyTo — and
+              // it is the server's answer that matters, since the value reaches a
+              // mail header.
+              type="text"
+              autoComplete="off"
+              spellCheck={false}
+              aria-describedby="email-reply-to-hint"
+            />
+            <p id="email-reply-to-hint" className="mt-1 text-xs text-slate-400">
+              Where the customer&apos;s reply goes. Separate several with commas — the CRM mailbox
+              keeps the reply on this record, and yours puts it in your normal inbox. Clear it to
+              send replies to the workspace address only.
+            </p>
           </div>
           <div>
             <label className="label">Subject</label>

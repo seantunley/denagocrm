@@ -8,6 +8,7 @@ import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import DocumentsPanel from "@/components/DocumentsPanel";
 import ActivityPanel from "@/components/ActivityPanel";
 import EmailComposer from "@/components/EmailComposer";
+import { composerReplyToDefault } from "@/lib/replyToDefault";
 import LeadTimeline from "@/components/LeadTimeline";
 import { auditDetailFor } from "@/lib/auditDetailQuery";
 import ConfirmDelete from "@/components/ConfirmDelete";
@@ -45,6 +46,9 @@ export default async function ContactDetailPage({
 }) {
   const { id } = await params;
   const user = await requireUser();
+  // Same default as the lead page — this person plus the mailbox IMAP reads, so a
+  // reply lands in their inbox AND on this record. Never throws.
+  const replyToDefault = await composerReplyToDefault(user.email);
   const [automotiveOn, marketingOn] = await Promise.all([
     isModuleEnabled("automotive"),
     isModuleEnabled("marketing"),
@@ -338,6 +342,7 @@ export default async function ContactDetailPage({
                       revalidate={path}
                       libraryDocs={libraryDocs}
                       aiConfigured={aiOn}
+                      defaultReplyTo={replyToDefault}
                     />
                     <WhatsAppPanel
                       phone={contact.whatsapp ?? contact.phone}
