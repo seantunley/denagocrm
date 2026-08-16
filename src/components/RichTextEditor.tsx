@@ -130,11 +130,25 @@ export default function RichTextEditor({
   onChange,
   placeholder,
   onImageUpload,
+  onEditorReady,
 }: {
   value: string;
   onChange: (html: string) => void;
   placeholder?: string;
   onImageUpload?: (file: File) => Promise<string | null>;
+  /**
+   * Hands the editor instance to the parent, for the things only an imperative
+   * API can do — inserting at the CURSOR being the one that matters.
+   *
+   * The marketing template screen has "+ First name" buttons that used to append
+   * `{{first_name}}` to the end of a plain-text body. Appending to HTML would put
+   * the variable after the closing tag rather than where the person is typing, so
+   * the button needs to reach the editor rather than the string.
+   *
+   * Optional, and called with `null` on teardown, so every existing caller is
+   * unchanged and a parent holding the reference cannot keep a dead editor.
+   */
+  onEditorReady?: (editor: Editor | null) => void;
 }) {
   const editor = useEditor({
     extensions: [
@@ -165,6 +179,14 @@ export default function RichTextEditor({
       editor.commands.setContent(value, { emitUpdate: false });
     }
   }, [value, editor]);
+
+  // Published on mount and RETRACTED on teardown. Without the cleanup a parent
+  // would hold a destroyed editor and its next command would throw.
+  useEffect(() => {
+    if (!onEditorReady) return;
+    onEditorReady(editor ?? null);
+    return () => onEditorReady(null);
+  }, [editor, onEditorReady]);
 
   if (!editor) {
     return <div className="input min-h-40 animate-pulse" />;

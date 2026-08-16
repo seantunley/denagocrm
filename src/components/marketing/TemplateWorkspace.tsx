@@ -1,7 +1,29 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import type { Editor } from "@tiptap/react";
+import RichTextEditor from "@/components/RichTextEditor";
+
+/**
+ * Is there anything in this body a recipient would actually see?
+ *
+ * Plain text answers with `trim()`. HTML does not: the rich editor's EMPTY
+ * document serialises to `<p></p>`, which is a non-empty string, so the obvious
+ * check would call a blank template ready to send.
+ *
+ * Tags are removed, entities that render as whitespace are treated as whitespace,
+ * and an `<img>` counts as content on its own — a template that is one banner
+ * image is a real template, and stripping tags first would call it empty.
+ */
+function hasVisibleContent(body: string, plainText: boolean): boolean {
+  if (plainText) return body.trim().length > 0;
+  if (/<img\b/i.test(body)) return true;
+  return body
+    .replace(/<[^>]*>/g, "")
+    .replace(/&nbsp;|&#160;/gi, " ")
+    .trim().length > 0;
+}
 import {
   Archive,
   CheckCircle2,
@@ -109,7 +131,17 @@ export default function TemplateWorkspace({ templates }: { templates: Template[]
   const selectedCategory = categoryFor(draft.category);
   const isEmail = selectedCategory.channel === "email";
   const isSms = selectedCategory.channel === "sms";
-  const canSave = Boolean(draft.name.trim() && draft.body.trim() && (!isEmail || draft.subject.trim()));
+  // The mounted editor, for inserting a merge variable at the cursor. A ref rather
+  // than state: it changes on mount and teardown only, and rendering does not
+  // depend on it, so state would be a re-render for nothing.
+  const bodyEditor = useRef<Editor | null>(null);
+  // `draft.body.trim()` was enough while the body was plain text. The rich editor
+  // emits `<p></p>` for an EMPTY document, which is truthy — so an untouched
+  // template would have looked saveable and gone out as a blank email. Measured
+  // by whether there is anything a recipient would SEE: text, or an image.
+  const canSave = Boolean(
+    draft.name.trim() && hasVisibleContent(draft.body, !isEmail) && (!isEmail || draft.subject.trim()),
+  );
 
   function clearFeedback() {
     setError(null);
@@ -157,7 +189,24 @@ export default function TemplateWorkspace({ templates }: { templates: Template[]
     clearFeedback();
   }
 
+  /**
+   * Put a merge variable where the person is actually typing.
+   *
+   * The rich editor holds the document, so appending to `draft.body` would place
+   * the variable AFTER the closing tag — outside the content, where it renders as
+   * a stray line and never gets merged. When the editor is mounted this goes
+   * through it; the SMS textarea keeps the original append, which is correct for
+   * plain text.
+   */
   function insertVariable(variable: string) {
+    const editor = bodyEditor.current;
+    // `isEmail`, not `!isSms`. The editor only mounts for email now, so the ref
+    // should already be null elsewhere — but a stale ref surviving a category
+    // change would otherwise insert into a document that is no longer on screen.
+    if (editor && isEmail) {
+      editor.chain().focus().insertContent(variable).run();
+      return;
+    }
     setDraft((current) => ({
       ...current,
       body: `${current.body}${current.body && !current.body.endsWith(" ") ? " " : ""}${variable}`,
@@ -229,10 +278,40 @@ export default function TemplateWorkspace({ templates }: { templates: Template[]
 
               <div>
                 <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-                  <div><label className="label mb-0" htmlFor="marketing-template-body">Message content</label><p className="mt-1 text-[11px] text-muted-foreground">{isEmail ? "HTML is supported, but plain text is fine too." : isSms ? "Keep it concise; the character count updates live." : "Reusable content for internal notifications."}</p></div>
+                  <div><label className="label mb-0" htmlFor="marketing-template-body">Message content</label><p className="mt-1 text-[11px] text-muted-foreground">{isEmail ? "Format it here — the merge buttons insert where your cursor is." : isSms ? "Keep it concise; the character count updates live." : "Plain text — internal notifications are not rendered as HTML."}</p></div>
                   <div className="flex flex-wrap gap-1.5"><button type="button" className="btn-secondary btn-sm" onClick={() => insertVariable("{{first_name}}")}>+ First name</button><button type="button" className="btn-secondary btn-sm" onClick={() => insertVariable("{{name}}")}>+ Full name</button></div>
                 </div>
-                <textarea id="marketing-template-body" className="input min-h-72 resize-y font-mono text-xs leading-6" value={draft.body} onChange={(event) => setDraft({ ...draft, body: event.target.value })} placeholder={isSms ? "Hi {{first_name}}, your message…" : "Hi {{first_name}},\n\nWrite your reusable message here…"} />
+                {/*
+                  EMAIL GETS THE REAL EDITOR. EVERYTHING ELSE KEEPS PLAIN TEXT.
+
+                  An email template was authored by hand-writing HTML into a
+                  monospace box, while one-to-one email has had a rich editor for
+                  months — the wrong one of the two had it. TipTap round-trips
+                  HTML, so this reads and writes the same `body` column and every
+                  template written before it opens and saves unchanged.
+
+                  KEYED ON isEmail, NOT ON !isSms. There are THREE channels, not
+                  two: `internal_notification` and the legacy `internal` category
+                  are neither email nor SMS, and `!isSms` handed them the rich
+                  editor as well. Their content is consumed as plain text, so the
+                  markup would have been delivered literally — `<p>` and all — in
+                  an internal message. A negated condition made a third case the
+                  default for a change that was only ever about email.
+
+                  SMS is plain text with a live character count, and a rich editor
+                  would invite formatting the channel cannot carry and the count
+                  cannot measure. Internal is plain text for the same reason.
+                */}
+                {!isEmail ? (
+                  <textarea id="marketing-template-body" className="input min-h-72 resize-y font-mono text-xs leading-6" value={draft.body} onChange={(event) => setDraft({ ...draft, body: event.target.value })} placeholder={isSms ? "Hi {{first_name}}, your message…" : "Reusable content for internal notifications…"} />
+                ) : (
+                  <RichTextEditor
+                    value={draft.body}
+                    onChange={(html) => setDraft((current) => ({ ...current, body: html }))}
+                    placeholder="Hi {{first_name}}, write your reusable message here…"
+                    onEditorReady={(editor) => { bodyEditor.current = editor; }}
+                  />
+                )}
                 {isSms && <p className="mt-1 text-right text-[11px] tabular-nums text-muted-foreground">{draft.body.length} characters</p>}
               </div>
 
