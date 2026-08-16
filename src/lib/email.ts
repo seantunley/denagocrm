@@ -60,6 +60,18 @@ export async function sendEmail(input: {
   text: string;
   html?: string;
   attachments?: { filename: string; content: Buffer; contentType?: string }[];
+  /**
+   * Extra RFC 5322 headers. Added for `List-Unsubscribe` /
+   * `List-Unsubscribe-Post`, which are headers rather than body content by
+   * definition: the whole point is that the recipient's mail client can offer an
+   * unsubscribe control WITHOUT the recipient having to find a link in the
+   * message. There was previously nowhere to put one.
+   *
+   * Deliberately a plain map passed straight to nodemailer rather than a typed
+   * union — a caller that needs a header this signature has not heard of should
+   * not have to widen a type to send a standards-defined one.
+   */
+  headers?: Record<string, string>;
 }): Promise<{ ok: boolean; error?: string }> {
   const config = await getSmtpConfig();
   if (!config) return { ok: false, error: "SMTP is not configured (see Settings → Email)." };
@@ -77,6 +89,7 @@ export async function sendEmail(input: {
       text: input.text,
       html: input.html,
       attachments: input.attachments,
+      headers: input.headers,
     });
     await noteSmtpOutcome(config, null);
     return { ok: true };

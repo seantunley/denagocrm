@@ -198,7 +198,8 @@ test("no cookie-authenticated route mutates on GET", () => {
     ["src/app/api/cron/backup/route.ts", "CRON_SECRET in the Authorization header"],
     ["src/app/api/track/c/[token]/route.ts", "per-recipient token in the path"],
     ["src/app/api/track/o/[token]/route.ts", "per-recipient token in the path"],
-    ["src/app/api/unsubscribe/[token]/route.ts", "per-recipient token in the path"],
+    // /api/unsubscribe used to be here. It is not exempt any more — it simply
+    // does not write on GET. See the dedicated test below.
   ]);
 
   const walk = (dir: string, out: string[] = []): string[] => {
@@ -235,6 +236,38 @@ test("no cookie-authenticated route mutates on GET", () => {
     [],
     `these mutate on GET while authenticating by cookie — CSRF-able by a plain link:\n  ${offenders.join("\n  ")}`,
   );
+});
+
+test("the unsubscribe GET renders a page and writes nothing", () => {
+  // It is not on the allowlist above any more, and this is why: it does not
+  // mutate on GET at all. A per-recipient token in the path made the old
+  // mutating GET safe from CSRF — but not from LINK PREFETCHING, which is a
+  // different attacker with a different motive (none). Corporate mail scanners,
+  // Safe-Links rewriters and client prefetchers walk every URL in a message, and
+  // each walk silently unsubscribed a customer who never clicked. That loss is
+  // undetectable after the fact: a scanner's opt-out row looks exactly like a
+  // real one.
+  //
+  // Restoring the write to GET would pass every other test in this file, because
+  // this route authenticates with a token rather than a cookie. Hence a check
+  // that names it directly.
+  const rel = "src/app/api/unsubscribe/[token]/route.ts";
+  const code = src(rel);
+  const file = path.join(root, rel);
+
+  const getBody = code.match(/export async function GET[\s\S]*?(?=\nexport |$)/)?.[0];
+  assert.ok(getBody, "the confirmation page is served by GET");
+  assert.equal(
+    mutationPath(file, getBody),
+    null,
+    "GET must render the confirmation page only — the opt-out belongs on POST",
+  );
+
+  // …and the opt-out must still exist somewhere, or "no write on GET" would be
+  // satisfied by an unsubscribe link that does nothing at all.
+  const postBody = code.match(/export async function POST[\s\S]*?(?=\nexport |$)/)?.[0];
+  assert.ok(postBody, "the opt-out is performed by POST");
+  assert.ok(mutationPath(file, postBody), "POST must actually record the opt-out");
 });
 
 test("the mutating-GET check sees through a helper, not just an inline write", () => {
@@ -299,7 +332,6 @@ test("the mutating-GET allowlist has not gone stale", () => {
     "src/app/api/cron/backup/route.ts",
     "src/app/api/track/c/[token]/route.ts",
     "src/app/api/track/o/[token]/route.ts",
-    "src/app/api/unsubscribe/[token]/route.ts",
   ]) {
     const full = path.join(root, rel);
     assert.ok(statSync(full).isFile(), `${rel} is allowlisted but no longer exists`);

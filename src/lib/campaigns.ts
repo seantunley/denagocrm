@@ -10,6 +10,7 @@ import { contactName } from "./format";
 import { currentTenantScope } from "./tenantScope";
 import { trackedLinkPattern } from "./trackRedirect";
 import { escapeHtml } from "./escapeHtml";
+import { unsubscribeUrlFor, unsubscribeHeadersFor } from "./unsubscribeLinks";
 
 export type SegmentCriteria = {
   source?: string;
@@ -96,7 +97,7 @@ export async function countContacts(
 function emailShell(inner: string, unsubUrl: string, brand?: EmailBrand) {
   // Same origin the links use, so the built-in logo fallback does not arrive
   // from a different host than everything around it.
-  const base = brand?.origin || appBaseUrl();
+  const base = emailBase(brand);
   // Absolute URL, always: a mail client has no origin to resolve a relative path
   // against. Falls back to the built-in asset when the tenant has no logo.
   const logo = brand?.logoUrl ?? `${base}/branding/denago-cape-town-logo.png`;
@@ -128,6 +129,28 @@ You received this because you're a ${safeName} customer.
 </table></td></tr></table></body></html>`;
 }
 
+/**
+ * The base every link in ONE email is built from.
+ *
+ * One resolver, so the click wrapper, the open pixel, the unsubscribe link in
+ * the footer and the `List-Unsubscribe` header cannot end up naming different
+ * hosts. A header pointing somewhere the footer does not is how a mail client's
+ * unsubscribe button quietly stops matching what the message itself offers.
+ */
+export function emailBase(brand?: EmailBrand) {
+  return brand?.origin || appBaseUrl();
+}
+
+/** Where this recipient's unsubscribe link points — footer and header alike. */
+export function unsubscribeUrl(token: string, brand?: EmailBrand) {
+  return unsubscribeUrlFor(emailBase(brand), token);
+}
+
+/** RFC 8058 one-click unsubscribe headers for one recipient. */
+export function unsubscribeHeaders(token: string, brand?: EmailBrand): Record<string, string> {
+  return unsubscribeHeadersFor(emailBase(brand), token);
+}
+
 /** Wrap personalised HTML with the brand shell, rewrite links for click
  *  tracking, and append the open-tracking pixel + unsubscribe footer. */
 export function buildTrackedEmail(personalizedHtml: string, token: string, brand?: EmailBrand) {
@@ -143,7 +166,7 @@ export function buildTrackedEmail(personalizedHtml: string, token: string, brand
   // Old links keep working: every hostname reaches the same deployment and the
   // platform origin stays valid forever, so a campaign sent last month tracks
   // and unsubscribes exactly as before.
-  const base = brand?.origin || appBaseUrl();
+  const base = emailBase(brand);
   // Same pattern the click route reads the campaign's vouched-for hosts with, so
   // the set of links rewritten here and the set accepted there cannot drift.
   const rewritten = personalizedHtml.replace(
@@ -151,7 +174,7 @@ export function buildTrackedEmail(personalizedHtml: string, token: string, brand
     (_m, url) => `href="${base}/api/track/c/${token}?u=${encodeURIComponent(url)}"`,
   );
   const pixel = `<img src="${base}/api/track/o/${token}" width="1" height="1" alt="" style="display:block;width:1px;height:1px;overflow:hidden;">`;
-  return emailShell(rewritten + pixel, `${base}/api/unsubscribe/${token}`, brand);
+  return emailShell(rewritten + pixel, unsubscribeUrl(token, brand), brand);
 }
 
 export function newToken() {
@@ -213,7 +236,13 @@ export async function sendCampaignBatch(
       const personalized = renderTemplate(campaign.htmlBody ?? campaign.body, vars);
       const html = buildTrackedEmail(personalized, r.token, brand);
       const text = renderTemplate(campaign.body, vars);
-      res = await sendEmail({ to: c.email!, subject, text, html });
+      res = await sendEmail({
+        to: c.email!,
+        subject,
+        text,
+        html,
+        headers: unsubscribeHeaders(r.token, brand),
+      });
     } else {
       res = await sendSms((c.whatsapp ?? c.phone)!, renderTemplate(campaign.body, vars));
     }

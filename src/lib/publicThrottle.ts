@@ -37,6 +37,17 @@ import {
  *   /api/unsubscribe  Mail clients prefetch links, so a limit can swallow a
  *                     genuine opt-out. Blocking an unsubscribe is a compliance
  *                     problem far worse than the abuse.
+ *
+ *                     Note what changed under this reasoning without changing
+ *                     its conclusion. "Mail clients prefetch links" was written
+ *                     when the GET itself unsubscribed, so a prefetch was a
+ *                     silent opt-out AND the argument against throttling. The
+ *                     GET is now a confirmation page that writes nothing, so a
+ *                     prefetch costs nothing — and the POST that does write is
+ *                     reached by a deliberate click or by RFC 8058 one-click
+ *                     from the provider's own infrastructure, which is exactly
+ *                     the shared-IP shape the /api/track entry above describes.
+ *                     Both routes to the write are ones a limiter would harm.
  */
 export type ThrottleVerdict = { allowed: true } | { allowed: false; retryAfterSeconds: number };
 
