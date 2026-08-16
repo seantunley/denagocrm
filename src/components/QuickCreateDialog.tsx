@@ -62,6 +62,7 @@ export default function QuickCreateDialog() {
   const [kind, setKind] = useState<QuickCreateKind | null>(null);
   const [createDefaults, setCreateDefaults] = useState<QuickCreateDefaults>({});
   const [options, setOptions] = useState<Options | null>(null);
+  const [optionsKind, setOptionsKind] = useState<QuickCreateKind | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [calendarType, setCalendarType] = useState<string>("call");
 
@@ -92,9 +93,9 @@ export default function QuickCreateDialog() {
   }, []);
 
   useEffect(() => {
-    if (!kind || options) return;
+    if (!kind || optionsKind === kind) return;
     let cancelled = false;
-    fetch("/api/quick-create")
+    fetch(`/api/quick-create?kind=${encodeURIComponent(kind)}`)
       .then(async (response) => {
         if (!response.ok) {
           throw new Error(
@@ -108,6 +109,7 @@ export default function QuickCreateDialog() {
       .then((data) => {
         if (cancelled) return;
         setOptions(data as Options);
+        setOptionsKind(kind);
         setLoadError(null);
       })
       .catch((error) => {
@@ -119,7 +121,7 @@ export default function QuickCreateDialog() {
     return () => {
       cancelled = true;
     };
-  }, [kind, options]);
+  }, [kind, optionsKind]);
 
   useEffect(() => {
     setCalendarType(createDefaults.workshop ? "meeting" : "call");
@@ -144,14 +146,16 @@ export default function QuickCreateDialog() {
     }
   }
 
-  if (kind === "quote" && options) {
+  const currentOptions = optionsKind === kind ? options : null;
+
+  if (kind === "quote" && currentOptions) {
     return (
       <QuoteEditorDialog
         open
         onOpenChange={(next) => !next && close()}
-        contacts={options.contacts}
-        products={options.products}
-        defaults={options.quoteDefaults}
+        contacts={currentOptions.contacts}
+        products={currentOptions.products}
+        defaults={currentOptions.quoteDefaults}
       />
     );
   }
@@ -165,7 +169,7 @@ export default function QuickCreateDialog() {
 
         {loadError ? (
           <div className="py-10 text-center text-sm text-muted-foreground">{loadError}</div>
-        ) : !options ? (
+        ) : !currentOptions ? (
           <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" />
             Loading…
@@ -175,10 +179,10 @@ export default function QuickCreateDialog() {
             {kind === "lead" && (
               <LeadForm
                 action={createQuickLead}
-                products={options.products}
-                stages={options.stages}
-                contacts={options.contacts}
-                users={options.users}
+                products={currentOptions.products}
+                stages={currentOptions.stages}
+                contacts={currentOptions.contacts}
+                users={currentOptions.users}
                 defaults={{
                   contactId: createDefaults.contactId,
                   name: createDefaults.contactLabel,
@@ -189,16 +193,16 @@ export default function QuickCreateDialog() {
             )}
 
             {kind === "contact" && (
-              <ContactForm action={createQuickContact} users={options.users} fleetPicker={options.fleetPicker} submitLabel="Create contact" variant="dialog" />
+              <ContactForm action={createQuickContact} users={currentOptions.users} fleetPicker={currentOptions.fleetPicker} submitLabel="Create contact" variant="dialog" />
             )}
 
-            {kind === "jobcard" && <JobCardForm vehicles={options.vehicles} />}
+            {kind === "jobcard" && <JobCardForm vehicles={currentOptions.vehicles} />}
 
             {kind === "vehicle" && (
               <VehicleForm
                 action={createQuickVehicle}
-                contacts={options.contacts}
-                products={options.products}
+                contacts={currentOptions.contacts}
+                products={currentOptions.products}
                 submitLabel="Register vehicle"
                 showInitialKm
                 variant="dialog"
@@ -239,7 +243,7 @@ export default function QuickCreateDialog() {
                     <label className="label">Customer or contact</label>
                     <select name="contactId" className={input} defaultValue={createDefaults.contactId ?? ""}>
                       <option value="">—</option>
-                      {options.contacts.map((contact) => (
+                      {currentOptions.contacts.map((contact) => (
                         <option key={contact.id} value={contact.id}>{contact.label}</option>
                       ))}
                     </select>
@@ -248,7 +252,7 @@ export default function QuickCreateDialog() {
                     <label className="label">Assign to</label>
                     <select name="assignedToId" className={input} defaultValue="">
                       <option value="">Me</option>
-                      {options.users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
+                      {currentOptions.users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
                     </select>
                   </div>
                 </div>
