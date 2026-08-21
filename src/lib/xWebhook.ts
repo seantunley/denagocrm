@@ -22,7 +22,10 @@ export function verifyXSignature(secret: string, rawBody: string, signature: str
 
 /** Accepts X Activity envelopes and the legacy-shaped events used during migration. */
 export function normaliseXActivity(payload: unknown, accountId: string): XInboundEvent[] {
-  // Multiple X Activity API generations use different envelopes. Keep the\n  // provider boundary loose, then normalise only checked scalar fields below.\n  // eslint-disable-next-line @typescript-eslint/no-explicit-any\n  const body = payload as Record<string, any>;
+  // Multiple X Activity API generations use different envelopes. Keep the
+  // provider boundary loose, then normalise only checked scalar fields below.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const body = payload as Record<string, any>;
   const result: XInboundEvent[] = [];
   // Current X Activity API: one event per { data: { event_uuid, filter,
   // event_type, payload } } envelope.
