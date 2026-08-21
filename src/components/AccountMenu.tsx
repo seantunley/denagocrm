@@ -14,6 +14,7 @@ import {
 import { logout } from "@/app/login/actions";
 import { APP_VERSION } from "@/lib/version";
 import { cn } from "@/lib/utils";
+import { purgeOfflineData } from "@/lib/offlineClient";
 
 export type AccountMenuUser = {
   name: string;
@@ -48,6 +49,14 @@ export default function AccountMenu({
   isOwner: boolean;
   compact?: boolean;
 }) {
+  async function signOutSafely() {
+    await purgeOfflineData().catch(() => {});
+    if ("caches" in window) {
+      await caches.delete("denago-offline-v1").catch(() => false);
+    }
+    await logout();
+  }
+
   const avatar = (
     <Avatar className={cn("rounded-md", compact ? "size-7" : "size-7")}>
       {user.avatarVersion ? (
@@ -135,7 +144,7 @@ export default function AccountMenu({
           </DropdownMenuItem>
         )}
         <DropdownMenuSeparator />
-        <DropdownMenuItem variant="destructive" onSelect={() => logout()}>
+        <DropdownMenuItem variant="destructive" onSelect={() => void signOutSafely()}>
           <LogOut className="size-4" />
           Sign out
         </DropdownMenuItem>
