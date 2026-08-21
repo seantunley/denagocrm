@@ -105,6 +105,17 @@ export async function syncChecklistRun(payload: unknown): Promise<ActionResult> 
     context: "run=unparsed",
   };
   return asActionResult(async () => {
+    /*
+     * A SESSION BEFORE ANY STATE IS READ.
+     *
+     * Not redundant with the host check below, which cannot run until the record
+     * has been fetched to find out which host it belongs to. Without this, the
+     * specific refusals underneath ("that step is no longer available") answer an
+     * unauthenticated caller, turning the action into an existence oracle for
+     * client-minted ids. The host gate still decides access; this decides who may
+     * be told anything at all.
+     */
+    await requireUser();
     const tenantId = await actingTenantId();
     failureLog.tenantId = tenantId;
 
@@ -278,6 +289,17 @@ export async function syncChecklistRun(payload: unknown): Promise<ActionResult> 
  */
 export async function completeChecklistRun(runId: string): Promise<ActionResult> {
   return asActionResult(async () => {
+    /*
+     * A SESSION BEFORE ANY STATE IS READ.
+     *
+     * Not redundant with the host check below, which cannot run until the record
+     * has been fetched to find out which host it belongs to. Without this, the
+     * specific refusals underneath ("that step is no longer available") answer an
+     * unauthenticated caller, turning the action into an existence oracle for
+     * client-minted ids. The host gate still decides access; this decides who may
+     * be told anything at all.
+     */
+    await requireUser();
     const tenantId = await actingTenantId();
     const run = await basePrisma.checklistRun.findFirst({
       where: { id: runId, tenantId },
@@ -368,6 +390,17 @@ export async function registerChecklistPhoto(
     context: `entry=${entryId}`,
   };
   return asActionResult(async () => {
+    /*
+     * A SESSION BEFORE ANY STATE IS READ.
+     *
+     * Not redundant with the host check below, which cannot run until the record
+     * has been fetched to find out which host it belongs to. Without this, the
+     * specific refusals underneath ("that step is no longer available") answer an
+     * unauthenticated caller, turning the action into an existence oracle for
+     * client-minted ids. The host gate still decides access; this decides who may
+     * be told anything at all.
+     */
+    await requireUser();
     const tenantId = await actingTenantId();
     failureLog.tenantId = tenantId;
 
@@ -457,6 +490,17 @@ export async function registerChecklistPhoto(
  */
 export async function deleteChecklistPhoto(photoId: string): Promise<ActionResult> {
   return asActionResult(async () => {
+    /*
+     * A SESSION BEFORE ANY STATE IS READ.
+     *
+     * Not redundant with the host check below, which cannot run until the record
+     * has been fetched to find out which host it belongs to. Without this, the
+     * specific refusals underneath ("that step is no longer available") answer an
+     * unauthenticated caller, turning the action into an existence oracle for
+     * client-minted ids. The host gate still decides access; this decides who may
+     * be told anything at all.
+     */
+    await requireUser();
     const tenantId = await actingTenantId();
     const photo = await basePrisma.checklistPhoto.findFirst({
       where: { id: photoId, tenantId },

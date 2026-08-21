@@ -233,12 +233,22 @@ export async function saveChecklistTemplate(
   input: unknown,
 ): Promise<ActionResult> {
   return asActionResult(async () => {
+    /*
+     * THE SETTINGS GATE RUNS BEFORE THE PAYLOAD IS EVEN DESCRIBED.
+     *
+     * `firstIssue` names which field is wrong and where, which is precisely what
+     * makes it useful to somebody probing the shape of a configuration API they
+     * have no business calling. The host gate cannot come first — it needs the
+     * parsed payload to know which host is being configured — so the two are
+     * split: capability now, situation once it is known.
+     */
+    const user = await requireChecklistSettings();
     const parsed = TEMPLATE_INPUT.safeParse(input);
     if (!parsed.success) refuse(firstIssue(parsed.error));
     const template = parsed.data;
 
     const host = resolveHost(template.host);
-    const user = await requireChecklistConfigurer(host);
+    await requireUsableHost(user, host);
     // The workspace is resolved HERE, from the session, and is never taken from
     // the payload. A server action is a POST endpoint: a `tenantId` argument
     // would be an invitation to file one business's configuration under another.
@@ -321,8 +331,15 @@ export async function saveChecklistTemplate(
     const bump = itemsChanged(existing.items, template.items);
 
     await basePrisma.$transaction(async (tx) => {
-      await tx.checklistTemplate.update({
-        where: { id: existing.id },
+      // `updateMany` rather than `update`, so the tenant is named in the call
+      // itself. `existing` was already resolved tenant-scoped, so this changes no
+      // behaviour — but a write that carries its own scope cannot be detached
+      // from the read that justified it by a later edit, and the sibling
+      // deleteMany below already names it. The ratchet in
+      // tests/tenantAccessRatchet.test.ts holds every new tenant-owned write to
+      // this shape for exactly that reason.
+      await tx.checklistTemplate.updateMany({
+        where: { id: existing.id, tenantId },
         data: {
           name: template.name,
           description: template.description ?? null,
