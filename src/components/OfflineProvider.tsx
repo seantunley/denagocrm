@@ -150,15 +150,19 @@ export default function OfflineProvider({
   return (
     <OfflineContext.Provider value={{ online, pending, syncing, queue, syncNow, snapshot, refreshSnapshot }}>
       {children}
-      {(!online || pending > 0) && (
-        <div className="fixed bottom-3 left-3 right-3 z-[80] mx-auto flex max-w-xl items-center justify-between gap-3 rounded-xl border border-amber-400/30 bg-slate-950/95 px-4 py-3 text-xs text-slate-200 shadow-2xl backdrop-blur">
-          <div>
-            <p className="font-semibold">{online ? (syncing ? "Synchronising field work…" : `${pending} change${pending === 1 ? "" : "s"} waiting`) : "Working offline"}</p>
-            <p className="text-slate-400">{online ? "Keep this screen open until syncing finishes." : "Changes stay on this device until you reconnect."}</p>
-          </div>
-          <Link href="/offline" className="shrink-0 font-semibold text-orange-300 hover:text-orange-200">Open</Link>
-        </div>
-      )}
+      <Link
+        href="/offline"
+        aria-label={online ? `Online${pending ? `, ${pending} pending changes` : ""}` : `Offline${pending ? `, ${pending} pending changes` : ""}`}
+        className={`fixed bottom-3 right-3 z-[80] flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold shadow-2xl backdrop-blur transition-colors ${
+          online
+            ? "border-emerald-400/30 bg-emerald-950/95 text-emerald-200"
+            : "border-amber-400/40 bg-amber-950/95 text-amber-100"
+        }`}
+      >
+        <span className={`size-2 rounded-full ${online ? "bg-emerald-400" : "bg-amber-400"}`} aria-hidden />
+        <span>{syncing ? "Syncing…" : online ? "Online" : "Offline"}</span>
+        {pending > 0 && <span className="rounded-full bg-black/25 px-1.5 py-0.5 tabular-nums">{pending}</span>}
+      </Link>
     </OfflineContext.Provider>
   );
 }
