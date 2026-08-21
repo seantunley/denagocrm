@@ -30,10 +30,11 @@ export const PHOTO_JPEG_QUALITY = 0.82;
  * Direct uploads send one file per request, so increasing the batch count does
  * not increase the HTTP request body size.
  */
-export const MAX_PHOTOS = 30;
+/** Explicit browser-to-Blob batch limit, kept literal for config-contract tests. */
+export const DIRECT_PHOTO_BATCH_LIMIT = 30;
 
-/** Explicit name used by the browser-to-Blob upload flow. */
-export const DIRECT_PHOTO_BATCH_LIMIT = MAX_PHOTOS;
+/** Legacy upload actions use the same application-wide count. */
+export const MAX_PHOTOS = DIRECT_PHOTO_BATCH_LIMIT;
 
 /** Largest single file, after shrinking. */
 export const MAX_PHOTO_BYTES = 4 * 1024 * 1024;
