@@ -1,14 +1,12 @@
 import Link from "next/link";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { Truck, FileText, Wallet, CalendarClock, PackageCheck, ArrowRight, Camera } from "lucide-react";
-import PhotoUploadField from "@/components/PhotoUploadField";
-import { MobilePhotoCapture } from "@/components/MobilePhotoCapture";
+import DirectPhotoUploader from "@/components/DirectPhotoUploader";
 import { prisma } from "@/lib/db";
 import {
   markInvoiced,
   markDepositPaid,
   scheduleDelivery,
-  uploadDeliveryPhotos,
 } from "@/app/actions/fulfilment";
 import ProofOfDelivery from "@/components/ProofOfDelivery";
 import { formatDate, formatZAR } from "@/lib/format";
