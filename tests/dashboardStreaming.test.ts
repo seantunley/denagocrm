@@ -112,7 +112,8 @@ test("a contained card failure still reaches the server", () => {
   const boundary = code("src/components/dashboard/CardBoundary.tsx");
   assert.match(boundary, /\/api\/client-error/, "report to the same endpoint the page boundary uses");
   assert.match(boundary, /keepalive/, "the report must survive a navigation away");
-  assert.match(boundary, /\.catch\(\(\) => \{\}\)/, "a failing reporter must not break the fallback");
+  assert.match(boundary, /\.catch\(\(reportError\) => \{/, "a failing reporter must not break the fallback");
+  assert.match(boundary, /\[client-error-report-failure\]/, "reporting failure must remain visible in the browser console");
   assert.match(boundary, /dashboard card/, "the log line must say which card");
 });
 
