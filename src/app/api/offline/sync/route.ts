@@ -73,7 +73,7 @@ async function execute(operation: Operation, formData: FormData) {
       return uploadInspectionPhoto(operation.recordId, operation.parentId, formData);
     case "jobcard.photo":
       if (!operation.recordId) throw new Error("Missing job card id.");
-      return String(formData.get("category")) === "checkout"
+      return operation.parentId === "checkout" || String(formData.get("category")) === "checkout"
         ? uploadCheckoutPhotos(operation.recordId, formData)
         : uploadJobCardPhotos(operation.recordId, formData);
     case "delivery.complete":
