@@ -23,7 +23,7 @@ export async function GET() {
       getAccessibleJobCardIds(user),
       getAccessibleQuoteIds(user),
     ]);
-    const [leads, contacts, jobCards, deliveries] = await Promise.all([
+    const [leads, contacts, jobCards, deliveries, stages, products] = await Promise.all([
       prisma.lead.findMany({
         where: { ...(leadIds ? { id: { in: leadIds } } : {}), deletedAt: null },
         select: { id: true, title: true, name: true, email: true, phone: true, status: true, updatedAt: true, stage: { select: { name: true } } },
@@ -60,6 +60,15 @@ export async function GET() {
         orderBy: { deliveryScheduledFor: "asc" },
         take: 250,
       }),
+      prisma.pipelineStage.findMany({
+        select: { id: true, name: true },
+        orderBy: { order: "asc" },
+      }),
+      prisma.product.findMany({
+        where: { active: true, deletedAt: null },
+        select: { id: true, name: true },
+        orderBy: { name: "asc" },
+      }),
     ]);
 
     const snapshot: OfflineSnapshot = {
@@ -93,6 +102,7 @@ export async function GET() {
         scheduledFor: quote.deliveryScheduledFor?.toISOString() ?? null,
         updatedAt: quote.updatedAt.toISOString(),
       })),
+      options: { stages, products },
     };
     return NextResponse.json(snapshot, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
