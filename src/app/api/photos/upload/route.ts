@@ -36,16 +36,16 @@ function parseTarget(raw: string | null | undefined): PhotoTarget {
 export async function POST(request: Request) {
   let tenantId: string | null = null;
   /*
-   * Held in an object rather than a bare `let`.
+   * A plain string rather than the parsed target.
    *
-   * `target` is only ever assigned inside the onBeforeGenerateToken closure, and
+   * `target` is only assigned inside the onBeforeGenerateToken closure, and
    * TypeScript's control-flow analysis does not follow that: at the catch block
-   * it still believes the variable is `null`, narrows it to `never`, and rejects
-   * `target?.kind` — so the failure log could not name what failed. A property on
-   * a stable object is not narrowed that way, which keeps the diagnostic that the
-   * whole point of this route's logging is to preserve.
+   * it still believes the variable is null, narrows it to `never`, and rejects
+   * `target?.kind` — so the failure log could not name what failed, which is the
+   * one thing this route's logging exists to do. Building the message eagerly
+   * sidesteps the narrowing entirely.
    */
-  const captured: { target: PhotoTarget | null } = { target: null };
+  let failureContext = "kind=unknown record=unknown";
   try {
     tenantId = await actingTenantId();
     const body = (await request.json()) as HandleUploadBody;
@@ -54,7 +54,7 @@ export async function POST(request: Request) {
       body,
       onBeforeGenerateToken: async (pathname, clientPayload) => {
         const target = parseTarget(clientPayload);
-        captured.target = target;
+        failureContext = `kind=${target.kind} record=${target.recordId}`;
         if (target.kind === "delivery") {
           await requireQuoteAccess(target.recordId, "deliveries.manage");
           const quote = await basePrisma.quote.findFirst({
@@ -124,7 +124,7 @@ export async function POST(request: Request) {
     await logError(
       "photo-upload-token",
       error,
-      `kind=${captured.target?.kind ?? "unknown"} record=${captured.target?.recordId ?? "unknown"}`,
+      failureContext,
       { tenantId, alert: false },
     );
     return NextResponse.json(

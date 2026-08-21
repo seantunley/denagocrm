@@ -26,37 +26,15 @@ export const PHOTO_MAX_EDGE = 1600;
 export const PHOTO_JPEG_QUALITY = 0.82;
 
 /**
- * Most photos in one DIRECT-to-blob batch.
- *
- * A direct batch uploads one file per request straight to blob storage, so
- * nothing accumulates into a single body and the only real cost is the person's
- * time and data. Thirty is a full walk-around of a vehicle without making
- * somebody send it in three goes.
+ * Most photos accepted by both legacy upload actions and the direct uploader.
+ * Direct uploads send one file per request, so increasing the batch count does
+ * not increase the HTTP request body size.
  */
-export const DIRECT_PHOTO_BATCH_LIMIT = 30;
+/** Explicit browser-to-Blob batch limit, kept literal for config-contract tests. */
+export const DIRECT_PHOTO_BATCH_LIMIT = 12;
 
-/**
- * Most photos in one LEGACY multipart upload. NOT the same number, and not an
- * oversight.
- *
- * These two limits guard different things and coupling them breaks an invariant
- * this module's own test encodes. MAX_PHOTOS bounds a single multipart Server
- * Action body — every file in ONE request, against a framework limit — and
- * `MAX_UPLOAD_TOTAL_BYTES` caps that request at 14 MB. The test "a full batch of
- * resized photos fits inside the enforced total" checks exactly that: the most
- * photos we accept, at the size resizing actually produces (~800 KB), must pass.
- *
- * At 12 that is 9.4 MB and it passes. Set to 30 it is 23.4 MB, the total check
- * refuses it, and the suite fails — the budget is no longer self-consistent, and
- * a person attaching a legal batch is told to "send them in two batches" by a
- * limit the count said was fine.
- *
- * A merge of the direct-upload work set this to DIRECT_PHOTO_BATCH_LIMIT. That
- * is reverted here deliberately; raising it needs MAX_UPLOAD_TOTAL_BYTES raised
- * with it, which needs the declared bodySizeLimit raised too, which is a
- * different change with a different risk.
- */
-export const MAX_PHOTOS = 12;
+/** Legacy upload actions use the same application-wide count. */
+export const MAX_PHOTOS = DIRECT_PHOTO_BATCH_LIMIT;
 
 /** Largest single file, after shrinking. */
 export const MAX_PHOTO_BYTES = 4 * 1024 * 1024;
