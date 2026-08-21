@@ -4,18 +4,21 @@ import { Camera } from "lucide-react";
 import type { ActionResult } from "@/lib/actionResultTypes";
 import PhotoUploadField from "@/components/PhotoUploadField";
 import { SaveButton, SaveForm } from "@/components/SaveForm";
+import type { OfflineDescriptor } from "@/lib/offlineTypes";
 
 export function MobilePhotoCapture({
   action,
   label,
   success = "Photos uploaded",
+  offlineOperation,
 }: {
   action: (formData: FormData) => Promise<ActionResult | void>;
   label: string;
   success?: string;
+  offlineOperation?: OfflineDescriptor;
 }) {
   return (
-    <SaveForm action={action} success={success} className="mt-3 rounded-xl border border-primary/20 bg-primary/[0.055] p-2.5">
+    <SaveForm action={action} success={success} offlineOperation={offlineOperation} className="mt-3 rounded-xl border border-primary/20 bg-primary/[0.055] p-2.5">
       <label className="mb-2 flex items-center gap-1.5 text-xs font-medium text-foreground">
         <Camera className="size-3.5 text-primary" />
         {label}
