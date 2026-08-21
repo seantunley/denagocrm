@@ -45,7 +45,14 @@ async function attachStageDocument(
       },
     });
   } catch (error) {
-    await deleteFile(storedName).catch(() => {});
+    await deleteFile(storedName).catch(async (cleanupError) => {
+      await logError(
+        "delivery-photo-cleanup",
+        cleanupError,
+        `quote=${quoteId} original-write-failure=true`,
+        { tenantId, alert: false },
+      );
+    });
     throw error;
   }
 }
