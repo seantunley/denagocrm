@@ -23,7 +23,20 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   const url = new URL(event.request.url);
-  if (url.origin !== self.location.origin || event.request.mode !== "navigate") return;
+  if (url.origin !== self.location.origin) return;
+  if (url.pathname.startsWith("/_next/static/") || url.pathname.startsWith("/icons/")) {
+    event.respondWith(
+      caches.match(event.request).then((cached) => cached || fetch(event.request).then((response) => {
+        if (response.ok) {
+          const copy = response.clone();
+          event.waitUntil(caches.open(OFFLINE_CACHE).then((cache) => cache.put(event.request, copy)));
+        }
+        return response;
+      }))
+    );
+    return;
+  }
+  if (event.request.mode !== "navigate") return;
   if (url.pathname === "/offline") {
     event.respondWith(
       fetch(event.request)
