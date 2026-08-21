@@ -24,7 +24,7 @@ function parseTarget(raw: string | null | undefined): PhotoTarget {
 
 export async function POST(request: Request) {
   let tenantId: string | null = null;
-  let target: PhotoTarget | null = null;
+  let failureContext = "kind=unknown record=unknown";
   try {
     tenantId = await actingTenantId();
     const body = (await request.json()) as HandleUploadBody;
@@ -32,7 +32,8 @@ export async function POST(request: Request) {
       request,
       body,
       onBeforeGenerateToken: async (pathname, clientPayload) => {
-        target = parseTarget(clientPayload);
+        const target = parseTarget(clientPayload);
+        failureContext = `kind=${target.kind} record=${target.recordId}`;
         if (target.kind === "delivery") {
           await requireQuoteAccess(target.recordId, "deliveries.manage");
           const quote = await basePrisma.quote.findFirst({
@@ -83,7 +84,7 @@ export async function POST(request: Request) {
     await logError(
       "photo-upload-token",
       error,
-      `kind=${target?.kind ?? "unknown"} record=${target?.recordId ?? "unknown"}`,
+      failureContext,
       { tenantId, alert: false },
     );
     return NextResponse.json(
