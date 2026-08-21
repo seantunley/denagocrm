@@ -66,6 +66,7 @@ export function refuse(message: string): never {
  */
 export async function asActionResult(
   body: () => Promise<void | ActionResult>,
+  options: { scope?: string; context?: string; tenantId?: string | null } = {},
 ): Promise<ActionResult> {
   try {
     // A body may return `{ success }` to describe what actually happened — for an
@@ -78,8 +79,19 @@ export async function asActionResult(
     unstable_rethrow(error);
 
     const failure = classifyFailure(error, failureReference());
-    // console.error, because that is what reaches the platform's runtime logs.
-    if (failure.kind === "unexpected") console.error(failure.logLine, error);
+    if (failure.kind === "unexpected") {
+      console.error(failure.logLine, error);
+      // Persist the SAME reference in the product. A serverless console is not
+      // available to the person holding the toast, so console-only references
+      // were impossible to find from Settings → System Log.
+      const { logError } = await import("./errorLog");
+      await logError(
+        options.scope ?? "server-action",
+        error,
+        [failure.logLine, options.context].filter(Boolean).join(" · "),
+        { tenantId: options.tenantId, alert: false },
+      );
+    }
     return { error: failure.message };
   }
 }
