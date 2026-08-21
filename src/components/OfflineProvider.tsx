@@ -27,8 +27,12 @@ type OfflineContextValue = {
 
 const OfflineContext = createContext<OfflineContextValue | null>(null);
 
+export function useOptionalOffline() {
+  return useContext(OfflineContext);
+}
+
 export function useOffline() {
-  const value = useContext(OfflineContext);
+  const value = useOptionalOffline();
   if (!value) throw new Error("useOffline must be used inside OfflineProvider");
   return value;
 }
