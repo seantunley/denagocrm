@@ -53,7 +53,11 @@ export type OfflineSnapshot = {
     source: string | null; notes: string | null; marketingOptOut: boolean; ownerId: string | null;
     fleetId: string | null; isCompany: boolean; vatNumber: string | null; tags: string[]; updatedAt: string;
   }>;
-  jobCards: Array<{ id: string; number: number; status: string; description: string; customer: string; vehicle: string; checkinNotes: string | null; checkoutNotes: string | null; updatedAt: string }>;
+  jobCards: Array<{
+    id: string; number: number; status: string; description: string; customer: string; vehicle: string;
+    checkinNotes: string | null; checkoutNotes: string | null; updatedAt: string;
+    inspectionItems: Array<{ id: string; label: string; status: string; notes: string | null; hasPhoto: boolean }>;
+  }>;
   deliveries: Array<{ id: string; number: number; customer: string; scheduledFor: string | null; updatedAt: string }>;
   options: {
     stages: Array<{ id: string; name: string }>;

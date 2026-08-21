@@ -88,6 +88,7 @@ async function execute(operation: Operation, formData: FormData) {
 export async function POST(request: Request) {
   let tenantId: string | null = null;
   let mutationId = "unknown";
+  let receiptClaimed = false;
   try {
     const user = await requireApiUser();
     tenantId = await actingTenantId();
@@ -113,6 +114,7 @@ export async function POST(request: Request) {
       await prisma.offlineMutationReceipt.create({
         data: { id: mutationId, tenantId, userId: user.id, operation: operation.type },
       });
+      receiptClaimed = true;
     } catch (error) {
       if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") throw error;
       const previous = await prisma.offlineMutationReceipt.findUnique({ where: { id: mutationId } });
@@ -120,7 +122,10 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "Offline mutation identity collision." }, { status: 409 });
       }
       if (previous.status === "completed") return NextResponse.json(previous.result ?? { success: "Already synchronised" });
-      return NextResponse.json({ error: previous.status === "rejected" ? "This offline change was previously rejected." : "This offline change is already being processed." }, { status: 409 });
+      if (previous.status === "rejected") {
+        return NextResponse.json(previous.result ?? { error: "This offline change was previously rejected." }, { status: 409 });
+      }
+      return NextResponse.json({ error: "This offline change is already being processed.", retry: true }, { status: 409 });
     }
 
     const version = await currentVersion(operation);
@@ -144,6 +149,21 @@ export async function POST(request: Request) {
     });
     return NextResponse.json(storedResult, { status: rejected ? 400 : 200 });
   } catch (error) {
+    // Never strand a receipt as "processing" after an unexpected failure. A
+    // stranded receipt can neither be replayed nor honestly reviewed. It is
+    // closed as rejected (not deleted), preserving the at-most-once guarantee:
+    // if the business action committed and recording its result failed, a retry
+    // still cannot apply that action a second time.
+    if (receiptClaimed && tenantId && mutationId !== "unknown") {
+      await prisma.offlineMutationReceipt.updateMany({
+        where: { id: mutationId, tenantId, status: "processing" },
+        data: {
+          status: "rejected",
+          result: { error: "Offline synchronization failed and was recorded in Settings → System Log." },
+          completedAt: new Date(),
+        },
+      }).catch(() => undefined);
+    }
     await logError("offline-sync", error, `mutation=${mutationId}`, { tenantId, alert: false });
     return apiAuthErrorResponse(error) ?? NextResponse.json(
       { error: "Offline synchronization failed and was recorded in Settings → System Log." },

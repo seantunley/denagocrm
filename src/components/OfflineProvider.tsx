@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { Loader2, Wifi, WifiOff } from "lucide-react";
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import {
@@ -89,7 +90,12 @@ export default function OfflineProvider({
     syncLock.current = true;
     setSyncing(true);
     try {
-      const entries = await listOfflineMutations(tenantId, userId);
+      // A conflict or server refusal requires a person to review it. Replaying it
+      // on every focus both destroys the useful first error and hammers a receipt
+      // the server has deliberately closed as rejected.
+      const entries = (await listOfflineMutations(tenantId, userId)).filter(
+        (entry) => entry.status === "pending" || entry.status === "syncing",
+      );
       for (const entry of entries) {
         if (mutationExpired(entry)) {
           await saveOfflineMutation({ ...entry, status: "failed", error: "Expired after 72 hours; review before retrying." });
@@ -99,9 +105,18 @@ export default function OfflineProvider({
         await saveOfflineMutation(working);
         try {
           const response = await fetch("/api/offline/sync", { method: "POST", body: mutationBody(working) });
-          const result = await response.json().catch(() => ({})) as { error?: string; conflict?: boolean };
+          const result = await response.json().catch(() => ({})) as { error?: string; conflict?: boolean; retry?: boolean };
           if (response.ok) {
             await removeOfflineMutation(entry.id);
+          } else if (result.retry) {
+            // Another tab or request owns this receipt. Leave it retryable so a
+            // later pass can observe the completed receipt without replaying it.
+            await saveOfflineMutation({
+              ...working,
+              status: "pending",
+              error: result.error ?? "Another synchronisation is still processing this change.",
+            });
+            break;
           } else {
             await saveOfflineMutation({
               ...working,
@@ -156,15 +171,19 @@ export default function OfflineProvider({
       {children}
       <Link
         href="/offline"
-        aria-label={online ? `Online${pending ? `, ${pending} pending changes` : ""}` : `Offline${pending ? `, ${pending} pending changes` : ""}`}
-        className={`fixed bottom-3 right-3 z-[80] flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold shadow-2xl backdrop-blur transition-colors ${
-          online
-            ? "border-emerald-400/30 bg-emerald-950/95 text-emerald-200"
-            : "border-amber-400/40 bg-amber-950/95 text-amber-100"
+        role="status"
+        data-connectivity={syncing ? "syncing" : online ? "online" : "offline"}
+        aria-label={syncing ? `Synchronising${pending ? `, ${pending} pending changes` : ""}` : online ? `Online${pending ? `, ${pending} pending changes` : ""}` : `Offline${pending ? `, ${pending} pending changes` : ""}`}
+        className={`fixed bottom-20 right-3 z-[80] flex min-w-28 items-center justify-center gap-2 rounded-xl border-2 px-3 py-2.5 text-xs font-bold uppercase tracking-wide shadow-2xl transition-colors lg:bottom-4 ${
+          syncing
+            ? "border-sky-300 bg-sky-950 text-sky-100"
+            : online
+              ? "border-emerald-300 bg-emerald-950 text-emerald-100"
+              : "border-orange-300 bg-orange-950 text-orange-50"
         }`}
       >
-        <span className={`size-2 rounded-full ${online ? "bg-emerald-400" : "bg-amber-400"}`} aria-hidden />
-        <span>{syncing ? "Syncing…" : online ? "Online" : "Offline"}</span>
+        {syncing ? <Loader2 className="size-4 animate-spin" aria-hidden /> : online ? <Wifi className="size-4" aria-hidden /> : <WifiOff className="size-4" aria-hidden />}
+        <span>{syncing ? "Syncing" : online ? "Online" : "Offline"}</span>
         {pending > 0 && <span className="rounded-full bg-black/25 px-1.5 py-0.5 tabular-nums">{pending}</span>}
       </Link>
     </OfflineContext.Provider>

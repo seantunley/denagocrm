@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
-import { requireUser, getActiveTenantId } from "@/lib/auth";
+import { getActiveTenantId, requireUser } from "@/lib/auth";
+import { actingTenantId } from "@/lib/actingTenant";
 import { brandForTenant, brandLogoUrl, brandStyle, DEFAULT_BRAND } from "@/lib/tenantBrand";
 import { getSetting } from "@/lib/settings";
 import { WEATHER_CITIES_KEY, parseWeatherCities } from "@/lib/weatherCities";
@@ -30,7 +31,10 @@ export default async function AppLayout({
     redirect("/platform/tenants");
   }
 
-  const activeTenantId = await getActiveTenantId();
+  // The offline partition key may never be nullable. `actingTenantId` applies
+  // the same enforced-scope/session/founding-tenant ladder as server actions,
+  // whereas the raw session claim deliberately returns null for legacy tokens.
+  const activeTenantId = await actingTenantId();
   const [inboxWaiting, casesWaiting, permissions, enabledModules, brand] = await Promise.all([
     awaitingReplyCount(user).catch(() => 0),
     casesAwaitingCount(user).catch(() => 0),
@@ -41,7 +45,7 @@ export default async function AppLayout({
     // already known, and a staff member reaching the CRM on the platform's own
     // domain must still see their own brand. brandForTenant never throws; this
     // layout wraps every page in the workspace.
-    brandForTenant(activeTenantId).catch(() => DEFAULT_BRAND),
+    getActiveTenantId().then(brandForTenant).catch(() => DEFAULT_BRAND),
   ]);
 
   // Single-point route block: a page belonging to a disabled module is not

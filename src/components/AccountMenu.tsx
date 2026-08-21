@@ -15,6 +15,7 @@ import { logout } from "@/app/login/actions";
 import { APP_VERSION } from "@/lib/version";
 import { cn } from "@/lib/utils";
 import { purgeOfflineData } from "@/lib/offlineClient";
+import { toast } from "sonner";
 
 export type AccountMenuUser = {
   name: string;
@@ -50,9 +51,18 @@ export default function AccountMenu({
   compact?: boolean;
 }) {
   async function signOutSafely() {
-    await purgeOfflineData().catch(() => {});
-    if ("caches" in window) {
-      await caches.open("denago-offline-v1").then((cache) => cache.delete("/offline")).catch(() => false);
+    try {
+      // Customer records and queued files must be gone BEFORE the authenticated
+      // session is ended. Swallowing a storage failure would leave the next
+      // person using this device with the previous user's offline evidence.
+      await purgeOfflineData();
+      if ("caches" in window) {
+        const cache = await caches.open("denago-offline-v1");
+        await cache.delete("/offline");
+      }
+    } catch {
+      toast.error("Offline customer data could not be removed. Sign-out was stopped; free device storage and try again.");
+      return;
     }
     await logout();
   }

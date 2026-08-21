@@ -128,33 +128,28 @@ export function CameraCapture({
       shots.forEach((s, i) =>
         fd.append("files", new File([s.blob], `camera-${i + 1}.jpg`, { type: "image/jpeg" })),
       );
-      if (offline && !offline.online) {
+      const queuedOffline = Boolean(offline && !offline.online);
+      if (queuedOffline) {
         if (!offlineOperation) {
           setError("This photo operation requires an internet connection.");
           return;
         }
-        await offline.queue(offlineOperation, fd);
-        close();
-        return;
+        await offline!.queue(offlineOperation, fd);
+      } else {
+        const result = await action(fd);
+        // On refusal: keep the captured shots and say why, so the photos are not
+        // lost and the person can retry or recapture.
+        if (result && typeof result === "object" && "error" in result && result.error) {
+          setError(String(result.error));
+          return;
+        }
+        toast.success(
+          result && typeof result === "object" && "success" in result && result.success
+            ? String(result.success)
+            : "Photos uploaded",
+        );
+        router.refresh();
       }
-      const result = await action(fd);
-      // The result was previously AWAITED AND DISCARDED — so a refusal ("None of
-      // those files could be used", "Choose at least one photo") vanished, the
-      // modal closed, and the shots were revoked. That is the dropped-{ error }
-      // failure this conversion exists to remove, reproduced one layer up.
-      //
-      // On refusal: keep the captured shots and say why, so the photos are not
-      // lost and the person can retry or recapture.
-      if (result && typeof result === "object" && "error" in result && result.error) {
-        setError(String(result.error));
-        return;
-      }
-      toast.success(
-        result && typeof result === "object" && "success" in result && result.success
-          ? String(result.success)
-          : "Photos uploaded",
-      );
-      router.refresh();
       close();
     } catch {
       setError("Upload failed. Please try again.");

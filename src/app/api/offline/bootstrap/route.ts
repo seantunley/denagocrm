@@ -9,6 +9,7 @@ import {
   getAccessibleQuoteIds,
 } from "@/lib/permissions";
 import { contactName } from "@/lib/format";
+import { loadBillToFleets, quoteBillTo } from "@/lib/quoteBillTo";
 import type { OfflineSnapshot } from "@/lib/offlineTypes";
 
 export const dynamic = "force-dynamic";
@@ -41,7 +42,11 @@ export async function GET() {
         select: {
           id: true, number: true, status: true, description: true, checkinNotes: true, checkoutNotes: true, updatedAt: true,
           contact: { select: { firstName: true, lastName: true, company: true } },
-          vehicle: { select: { model: true, registration: true } },
+          vehicle: { select: { model: true, regNumber: true } },
+          inspectionItems: {
+            select: { id: true, label: true, status: true, notes: true, photoStoredName: true },
+            orderBy: { sortOrder: "asc" },
+          },
         },
         orderBy: { updatedAt: "desc" },
         take: 250,
@@ -55,6 +60,7 @@ export async function GET() {
         },
         select: {
           id: true, number: true, deliveryScheduledFor: true, updatedAt: true,
+          fleetId: true,
           contact: { select: { firstName: true, lastName: true, company: true } },
         },
         orderBy: { deliveryScheduledFor: "asc" },
@@ -71,6 +77,7 @@ export async function GET() {
       }),
     ]);
 
+    const fleetsById = await loadBillToFleets(prisma, deliveries.map((quote) => quote.fleetId));
     const snapshot: OfflineSnapshot = {
       tenantId,
       userId: user.id,
@@ -106,15 +113,22 @@ export async function GET() {
         status: job.status,
         description: job.description,
         customer: contactName(job.contact),
-        vehicle: [job.vehicle.model, job.vehicle.registration].filter(Boolean).join(" · "),
+        vehicle: [job.vehicle.model, job.vehicle.regNumber].filter(Boolean).join(" · "),
         checkinNotes: job.checkinNotes,
         checkoutNotes: job.checkoutNotes,
         updatedAt: job.updatedAt.toISOString(),
+        inspectionItems: job.inspectionItems.map((item) => ({
+          id: item.id,
+          label: item.label,
+          status: item.status,
+          notes: item.notes,
+          hasPhoto: Boolean(item.photoStoredName),
+        })),
       })),
       deliveries: deliveries.map((quote) => ({
         id: quote.id,
         number: quote.number,
-        customer: quote.contact ? contactName(quote.contact) : "Unlinked customer",
+        customer: quoteBillTo(quote, fleetsById.get(quote.fleetId ?? "") ?? null).name || "Unlinked customer",
         scheduledFor: quote.deliveryScheduledFor?.toISOString() ?? null,
         updatedAt: quote.updatedAt.toISOString(),
       })),

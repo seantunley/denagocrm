@@ -20,5 +20,11 @@ ALTER TABLE "OfflineMutationReceipt" FORCE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "OfflineMutationReceipt_tenant_isolation" ON "OfflineMutationReceipt";
 CREATE POLICY "OfflineMutationReceipt_tenant_isolation" ON "OfflineMutationReceipt"
-  USING ("tenantId" = NULLIF(current_setting('app.tenant_id', true), ''))
-  WITH CHECK ("tenantId" = NULLIF(current_setting('app.tenant_id', true), ''));
+  USING (
+    current_setting('app.bypass_rls', true) = 'on'
+    OR "tenantId" = NULLIF(current_setting('app.current_tenant', true), '')
+  )
+  WITH CHECK (
+    current_setting('app.bypass_rls', true) = 'on'
+    OR "tenantId" = NULLIF(current_setting('app.current_tenant', true), '')
+  );

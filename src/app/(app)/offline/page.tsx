@@ -1,10 +1,13 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import ProofOfDelivery from "@/components/ProofOfDelivery";
 import { useOffline } from "@/components/OfflineProvider";
 import { listOfflineMutations, removeOfflineMutation } from "@/lib/offlineClient";
 import type { OfflineDescriptor, OfflineMutation } from "@/lib/offlineTypes";
+import { INSPECTION_STATUSES } from "@/lib/workshop-constants";
+import PhotoUploadField from "@/components/PhotoUploadField";
+import { PageHeader } from "@/components/page-header";
 
 const tabs = ["Leads", "Contacts", "Job cards", "Deliveries", "Pending"] as const;
 type Tab = (typeof tabs)[number];
@@ -13,6 +16,7 @@ export default function OfflineWorkspacePage() {
   const offline = useOffline();
   const [tab, setTab] = useState<Tab>("Job cards");
   const [entries, setEntries] = useState<OfflineMutation[]>([]);
+  const queueLock = useRef(false);
 
   async function reloadEntries() {
     if (!offline.snapshot) return;
@@ -23,26 +27,29 @@ export default function OfflineWorkspacePage() {
 
   async function queue(event: FormEvent<HTMLFormElement>, operation: OfflineDescriptor) {
     event.preventDefault();
+    if (queueLock.current) return;
+    queueLock.current = true;
     const form = event.currentTarget;
-    await offline.queue(operation, new FormData(form));
-    form.reset();
-    if (offline.online) await offline.syncNow();
+    try {
+      await offline.queue(operation, new FormData(form));
+      form.reset();
+      if (offline.online) await offline.syncNow();
+    } finally {
+      queueLock.current = false;
+    }
   }
 
   const snapshot = offline.snapshot;
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold">Offline field workspace</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {offline.online ? "Connected. Cached field records and queued work are up to date." : "No connection. Work is stored on this device until synchronisation."}
-          </p>
-        </div>
+      <PageHeader
+        title="Offline field workspace"
+        description={offline.online ? "Connected. Cached field records and queued work are up to date." : "No connection. Work is stored on this device until synchronisation."}
+      >
         <button type="button" className="btn-secondary btn-sm" disabled={!offline.online} onClick={() => void offline.refreshSnapshot()}>
           Refresh offline data
         </button>
-      </div>
+      </PageHeader>
 
       <div className={`rounded-xl border px-4 py-3 text-sm ${offline.online ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-200" : "border-amber-400/30 bg-amber-400/10 text-amber-100"}`}>
         <span className={`mr-2 inline-block size-2 rounded-full ${offline.online ? "bg-emerald-400" : "bg-amber-400"}`} />
@@ -146,12 +153,45 @@ export default function OfflineWorkspacePage() {
           {tab === "Job cards" && (
             <div className="space-y-3">
               {snapshot.jobCards.map((job) => (
-                <form key={job.id} className="card space-y-3" onSubmit={(event) => void queue(event, { type: "jobcard.notes", recordId: job.id, baseVersion: job.updatedAt })}>
+                <div key={job.id} className="card space-y-4">
                   <div><p className="font-semibold">Job #{job.number} · {job.vehicle}</p><p className="text-xs text-muted-foreground">{job.customer} · {job.status} · {job.description}</p></div>
-                  <textarea name="checkinNotes" className="input" defaultValue={job.checkinNotes ?? ""} placeholder="Check-in condition notes" />
-                  <textarea name="checkoutNotes" className="input" defaultValue={job.checkoutNotes ?? ""} placeholder="Check-out condition notes" />
-                  <button className="btn-secondary btn-sm">Save notes on this device</button>
-                </form>
+                  <form className="space-y-2" onSubmit={(event) => void queue(event, { type: "jobcard.notes", recordId: job.id, baseVersion: job.updatedAt })}>
+                    <textarea name="checkinNotes" className="input" defaultValue={job.checkinNotes ?? ""} placeholder="Check-in condition notes" />
+                    <textarea name="checkoutNotes" className="input" defaultValue={job.checkoutNotes ?? ""} placeholder="Check-out condition notes" />
+                    <button className="btn-secondary btn-sm w-full">Save notes on this device</button>
+                  </form>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <form className="rounded-lg border border-border p-3" onSubmit={(event) => void queue(event, { type: "jobcard.photo", recordId: job.id })}>
+                      <label className="mb-2 block text-xs font-semibold">Check-in photos</label>
+                      <PhotoUploadField required className="block w-full text-xs text-muted-foreground" />
+                      <button className="btn-secondary btn-sm mt-2 w-full">Queue check-in photos</button>
+                    </form>
+                    <form className="rounded-lg border border-border p-3" onSubmit={(event) => void queue(event, { type: "jobcard.photo", recordId: job.id, parentId: "checkout" })}>
+                      <label className="mb-2 block text-xs font-semibold">Check-out photos</label>
+                      <PhotoUploadField required className="block w-full text-xs text-muted-foreground" />
+                      <button className="btn-secondary btn-sm mt-2 w-full">Queue check-out photos</button>
+                    </form>
+                  </div>
+                  {job.inspectionItems.length > 0 && (
+                    <div className="space-y-2 border-t border-border pt-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Inspection checklist</p>
+                      {job.inspectionItems.map((item) => (
+                        <div key={item.id} className="rounded-lg border border-border p-3">
+                          <p className="mb-2 text-sm font-medium">{item.label}</p>
+                          <form className="grid gap-2 sm:grid-cols-[10rem_1fr_auto]" onSubmit={(event) => void queue(event, { type: "jobcard.inspection", recordId: item.id, parentId: job.id, baseVersion: job.updatedAt })}>
+                            <select name="status" className="input" defaultValue={item.status}>{INSPECTION_STATUSES.map((status) => <option key={status.value} value={status.value}>{status.label}</option>)}</select>
+                            <input name="notes" className="input" defaultValue={item.notes ?? ""} placeholder="Inspection note" />
+                            <button className="btn-secondary btn-sm">Queue update</button>
+                          </form>
+                          <form className="mt-2 flex flex-wrap items-center gap-2" onSubmit={(event) => void queue(event, { type: "inspection.photo", recordId: item.id, parentId: job.id })}>
+                            <PhotoUploadField required name="file" maxPhotos={1} className="min-w-0 flex-1 text-xs text-muted-foreground" />
+                            <button className="btn-secondary btn-sm">{item.hasPhoto ? "Replace photo" : "Queue photo"}</button>
+                          </form>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               ))}
             </div>
           )}
@@ -163,6 +203,11 @@ export default function OfflineWorkspacePage() {
                   <p className="font-semibold">Quote Q-{delivery.number}</p>
                   <p className="text-xs text-muted-foreground">{delivery.customer}{delivery.scheduledFor ? ` · ${new Date(delivery.scheduledFor).toLocaleString("en-ZA")}` : ""}</p>
                   <ProofOfDelivery quoteId={delivery.id} baseVersion={delivery.updatedAt} />
+                  <form className="mt-3 border-t border-border pt-3" onSubmit={(event) => void queue(event, { type: "delivery.photo", recordId: delivery.id })}>
+                    <label className="mb-2 block text-xs font-semibold">Delivery photos</label>
+                    <PhotoUploadField required className="block w-full text-xs text-muted-foreground" />
+                    <button className="btn-secondary btn-sm mt-2 w-full">Queue delivery photos</button>
+                  </form>
                 </div>
               ))}
             </div>
