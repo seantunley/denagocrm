@@ -120,7 +120,11 @@ test("X activity normalisation ignores our own events and classifies DMs, mentio
   assert.deepEqual(events.map((event) => event.kind), ["dm", "mention", "reply"]);
 });
 
-test("current X Activity envelopes use the filter user as tenant discriminator and event UUID for dedupe", () => {
+test("current X Activity envelopes key on the post, not on the delivery", () => {
+  // This test previously asserted the opposite — that `event_uuid` was the
+  // dedupe key. That was the bug: X documents event_uuid as the identifier of
+  // the DELIVERY, so a redelivery, or the same post arriving in a second
+  // envelope generation, carried a different key and was filed again.
   const events = normaliseXActivity({
     data: {
       event_uuid: "delivery-1",
@@ -129,7 +133,7 @@ test("current X Activity envelopes use the filter user as tenant discriminator a
       payload: { id: "post-1", author_id: "customer", text: "@shop yes please" },
     },
   }, "account");
-  assert.deepEqual(events, [{ id: "delivery-1", kind: "reply", senderId: "customer", recipientId: "account", text: "@shop yes please" }]);
+  assert.deepEqual(events, [{ id: "post-1", kind: "reply", senderId: "customer", recipientId: "account", text: "@shop yes please" }]);
 });
 
 test("the implementation keeps account resolution and credentials tenant-bound", async () => {
@@ -224,7 +228,9 @@ test("the current envelope is authoritative, so one message cannot file twice", 
     "1111",
   );
   assert.equal(both.length, 1, "one logical message, one event");
-  assert.equal(both[0].id, "uuid-1", "the current envelope's id wins");
+  // The MESSAGE's id, not the delivery's — which is also why this value is the
+  // same whichever envelope ends up answering.
+  assert.equal(both[0].id, "dm-1", "the current envelope answers, keyed on the message");
 });
 
 test("exactly one reader answers a delivery, whichever shapes it carries", () => {
@@ -270,7 +276,7 @@ test("exactly one reader answers a delivery, whichever shapes it carries", () =>
     "1111",
   );
   assert.equal(allThree.length, 1, "one logical message, one event");
-  assert.equal(allThree[0].id, "uuid-1", "the current envelope outranks both fallbacks");
+  assert.equal(allThree[0].id, "dm-1", "the current envelope outranks both fallbacks, keyed on the message");
 
   // A lower-precedence reader still answers when the higher ones recognise
   // nothing — otherwise this fix would silently drop older deliveries.
@@ -457,4 +463,84 @@ test("a DM that does not name its recipient is refused, not assumed to be ours",
   );
   assert.equal(mention.length, 1, "a public mention needs no recipient");
   assert.equal(mention[0].kind, "mention");
+});
+
+test("the same message keyed identically whichever generation delivers it", () => {
+  /*
+   * Precedence only settles duplicates WITHIN one payload. Across two separate
+   * deliveries — one current, one legacy, which is exactly what a migration
+   * produces — nothing suppresses the second. The only thing that can is the id,
+   * so it must identify the MESSAGE and not the delivery.
+   *
+   * `event_uuid` is X's identifier for the delivery. Keying on it meant one DM
+   * arriving in both generations produced uuid-1 and dm-1, two dedupe keys, and
+   * two inbox rows. It also meant a plain redelivery duplicated, since a
+   * redelivery is by definition a new delivery with a new uuid.
+   */
+  const message = {
+    id: "dm-1",
+    message_create: {
+      sender_id: "9999",
+      target: { recipient_id: "1111" },
+      message_data: { text: "one message" },
+    },
+  };
+
+  const viaCurrent = normaliseXActivity(
+    { data: { event_type: "dm.received", event_uuid: "uuid-1", payload: { direct_message_events: [message] } } },
+    "1111",
+  );
+  const viaLegacy = normaliseXActivity({ direct_message_events: [message] }, "1111");
+
+  assert.equal(viaCurrent.length, 1);
+  assert.equal(viaLegacy.length, 1);
+  assert.equal(
+    viaCurrent[0].id,
+    viaLegacy[0].id,
+    "the same DM must carry the same dedupe key in either generation",
+  );
+  assert.equal(viaCurrent[0].id, "dm-1", "and that key is the message's own id");
+
+  // The same for a post: two deliveries of one reply must agree.
+  const post = { id: "post-1", author_id: "9999", text: "@shop hi" };
+  const replyNow = normaliseXActivity(
+    { data: { event_type: "post.reply.create", event_uuid: "uuid-2", payload: post } },
+    "1111",
+  );
+  const replyLater = normaliseXActivity(
+    { data: { event_type: "post.reply.create", event_uuid: "uuid-3", payload: post } },
+    "1111",
+  );
+  assert.equal(replyNow[0].id, replyLater[0].id, "a redelivery must not create a second key");
+  assert.equal(replyNow[0].id, "post-1");
+});
+
+test("an empty legacy array does not claim a delivery it is not carrying", () => {
+  /*
+   * `recognisesLegacy` claimed ANY array, so `{ direct_message_events: [],
+   * events: [valid] }` selected the legacy reader, which had nothing to read,
+   * and the valid generic event was silently dropped. An empty container is not
+   * evidence of a generation.
+   */
+  const valid = {
+    type: "dm.received",
+    data: { id: "event-1", sender_id: "9999", recipient_id: "1111", text: "hello" },
+  };
+
+  const withEmptyLegacy = normaliseXActivity(
+    { direct_message_events: [], events: [valid] },
+    "1111",
+  );
+  assert.equal(withEmptyLegacy.length, 1, "an empty legacy array must not suppress a real generic event");
+  assert.equal(withEmptyLegacy[0].id, "event-1");
+
+  const withEmptyTweets = normaliseXActivity(
+    { tweet_create_events: [], events: [valid] },
+    "1111",
+  );
+  assert.equal(withEmptyTweets.length, 1, "the same for an empty tweet array");
+
+  // A delivery whose containers are all empty is recognised by nobody and
+  // normalises to nothing, which is the correct reading of an empty payload.
+  assert.deepEqual(normaliseXActivity({ direct_message_events: [], events: [] }, "1111"), []);
 });
