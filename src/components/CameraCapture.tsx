@@ -4,6 +4,8 @@ import { toast } from "sonner";
 import type { ActionResult } from "@/lib/actionResultTypes";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useOptionalOffline } from "@/components/OfflineProvider";
+import type { OfflineDescriptor } from "@/lib/offlineTypes";
 
 type Shot = { url: string; blob: Blob };
 
@@ -19,14 +21,17 @@ type Shot = { url: string; blob: Blob };
 export function CameraCapture({
   action,
   label = "Use camera",
+  offlineOperation,
 }: {
   // Accepts converted actions too. CameraCapture invokes the action directly
   // rather than through a form, so it has no SaveForm to report through — its
   // own capture UI is the feedback here.
   action: (formData: FormData) => Promise<ActionResult | void>;
   label?: string;
+  offlineOperation?: OfflineDescriptor;
 }) {
   const router = useRouter();
+  const offline = useOptionalOffline();
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
@@ -123,6 +128,16 @@ export function CameraCapture({
       shots.forEach((s, i) =>
         fd.append("files", new File([s.blob], `camera-${i + 1}.jpg`, { type: "image/jpeg" })),
       );
+      if (offline && !offline.online) {
+        if (!offlineOperation) {
+          setError("This photo operation requires an internet connection.");
+          return;
+        }
+        await offline.queue(offlineOperation, fd);
+        toast.success("Photos saved on this device — waiting to sync");
+        close();
+        return;
+      }
       const result = await action(fd);
       // The result was previously AWAITED AND DISCARDED — so a refusal ("None of
       // those files could be used", "Choose at least one photo") vanished, the
