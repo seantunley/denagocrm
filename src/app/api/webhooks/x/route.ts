@@ -46,6 +46,21 @@ export async function POST(request: Request) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let body: Record<string, any>;
   try { body = JSON.parse(raw); } catch { return NextResponse.json({ error: "Invalid JSON." }, { status: 400 }); }
+  /*
+   * A body must be a JSON OBJECT, stated explicitly rather than left implicit in
+   * the property reads below.
+   *
+   * This is one half of a pair. `xCrcResponse` refuses to sign anything that
+   * parses as a JSON object, and this refuses to ingest anything that does not —
+   * so the set of text the public CRC handshake will sign and the set of text
+   * this route will act on are disjoint by construction, and a CRC reply can
+   * never be a usable signature here. Leaving it implicit would make that
+   * property depend on how `accountIdFrom` happens to behave on a string or an
+   * array, which is exactly the kind of thing a later refactor breaks silently.
+   */
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return NextResponse.json({ error: "Invalid webhook body." }, { status: 400 });
+  }
   const accountId = accountIdFrom(body, request);
   if (!accountId) return NextResponse.json({ error: "Missing X account discriminator." }, { status: 400 });
   const owner = await resolveChannelTenant("x", accountId);
