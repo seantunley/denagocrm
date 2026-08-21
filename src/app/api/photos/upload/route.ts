@@ -15,10 +15,10 @@ type PhotoTarget = {
 
 function parseTarget(raw: string | null | undefined): PhotoTarget {
   const value = JSON.parse(raw ?? "{}") as Partial<PhotoTarget>;
-  if ((value.kind !== "delivery" && value.kind !== "jobcard") || !value.recordId) {
+  if (!["delivery", "jobcard", "jobcard-checkout", "inspection"].includes(String(value.kind)) || !value.recordId) {
     throw new Error("Invalid photo upload target.");
   }
-  return { kind: value.kind, recordId: String(value.recordId) };
+  return { kind: value.kind as PhotoTarget["kind"], recordId: String(value.recordId), jobCardId: value.jobCardId ? String(value.jobCardId) : undefined };
 }
 
 export async function POST(request: Request) {
@@ -39,6 +39,14 @@ export async function POST(request: Request) {
             select: { id: true, tenantId: true },
           });
           if (!quote?.tenantId) throw new Error("This quote is not available in the active workspace.");
+        } else if (target.kind === "inspection") {
+          if (!target.jobCardId) throw new Error("Missing inspection job card.");
+          await requireJobCardAccess(target.jobCardId, "jobcards.manage");
+          const item = await basePrisma.jobCardInspectionItem.findFirst({
+            where: { id: target.recordId, jobCardId: target.jobCardId, tenantId },
+            select: { id: true },
+          });
+          if (!item) throw new Error("This inspection item is not available in the active workspace.");
         } else {
           await requireJobCardAccess(target.recordId, "jobcards.manage");
           const jobCard = await basePrisma.jobCard.findFirst({
