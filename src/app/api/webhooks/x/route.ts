@@ -25,7 +25,18 @@ export async function GET(request: Request) {
   if (!owner) return NextResponse.json({ error: "Unknown X account." }, { status: 404 });
   const secret = await resolveTenantCredential(owner, "X_WEBHOOK_SECRET");
   if (!secret) return NextResponse.json({ error: "X webhook not configured." }, { status: 503 });
-  return NextResponse.json({ response_token: xCrcResponse(secret, token) });
+  /*
+   * A null response means the token was not one X would send, and this endpoint
+   * refuses to sign it. That is a security control, not input tidiness — see the
+   * note on `xCrcResponse`. This route is public, and its reply is a valid POST
+   * signature for whatever text it signs, so anything it will sign is something
+   * an anonymous caller can forge a webhook with.
+   */
+  const responseToken = xCrcResponse(secret, token);
+  if (!responseToken) {
+    return NextResponse.json({ error: "Invalid CRC token." }, { status: 400 });
+  }
+  return NextResponse.json({ response_token: responseToken });
 }
 
 export async function POST(request: Request) {
