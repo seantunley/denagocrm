@@ -60,7 +60,11 @@ function CardFallback({ title }: { title?: string }, { error, unstable_retry }: 
         path: typeof window === "undefined" ? null : window.location.pathname,
       }),
       keepalive: true,
-    }).catch(() => {});
+    }).catch((reportError) => {
+      // If the reporting endpoint itself is unavailable, retain evidence in the
+      // browser console instead of silently discarding the second failure.
+      console.error("[client-error-report-failure]", reportError);
+    });
   }, [error, title]);
 
   return (
