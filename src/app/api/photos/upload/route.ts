@@ -9,8 +9,9 @@ import { requireJobCardAccess, requireQuoteAccess } from "@/lib/permissions";
 export const runtime = "nodejs";
 
 type PhotoTarget = {
-  kind: "delivery" | "jobcard";
+  kind: "delivery" | "jobcard" | "jobcard-checkout" | "inspection";
   recordId: string;
+  jobCardId?: string;
 };
 
 function parseTarget(raw: string | null | undefined): PhotoTarget {
