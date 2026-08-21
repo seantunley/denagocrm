@@ -15,6 +15,7 @@ import {
 } from "@/lib/botOutbox";
 import { attachmentDigest, sendOutcomeMessage, staffReplyIdempotencyKey } from "@/lib/messageDelivery";
 import { canServeOutboundMedia } from "@/lib/outboundMedia";
+import { sendXDirectMessage } from "@/lib/x";
 
 const ATTACH_KIND = (mime: string): AttachmentKind =>
   mime.startsWith("image/") ? "image" : mime.startsWith("audio/") ? "audio" : mime.startsWith("video/") ? "video" : "file";
@@ -31,7 +32,7 @@ export type DmState = { ok?: string; error?: string };
 
 /** Narrows a stored conversation channel to a platform we can actually send on. */
 function isDmPlatform(value: string): value is DmPlatform {
-  return value === "messenger" || value === "instagram";
+  return value === "messenger" || value === "instagram" || value === "x";
 }
 
 export async function sendDmReply(
@@ -78,13 +79,26 @@ export async function sendDmReply(
     return { error: `This is a ${conversation.channel} conversation, not a Messenger or Instagram one.` };
   }
   const platform: DmPlatform = conversation.channel;
+  const tenantId = await customerRecordTenantId({ contactId });
 
-  const recipientId = platform === "instagram" ? contact.instagramId : contact.messengerPsid;
+  const recipientId = platform === "instagram" ? contact.instagramId : platform === "x" ? contact.xUserId : contact.messengerPsid;
   // Deliberately no fallback to the other platform: sending to the wrong channel
   // is worse than not sending, because the customer sees nothing and staff see
   // "Sent ✓".
   if (!recipientId) {
-    return { error: `This contact has no ${platform === "instagram" ? "Instagram" : "Messenger"} identity, so the reply cannot be delivered there.` };
+    return { error: `This contact has no ${platform === "instagram" ? "Instagram" : platform === "x" ? "X" : "Messenger"} identity, so the reply cannot be delivered there.` };
+  }
+
+  if (platform === "x") {
+    if (hasFile) return { error: "X attachments are not supported yet — send text or a link." };
+    const result = await sendXDirectMessage(recipientId, text);
+    if (!result.ok) return { error: result.error ?? "X refused the message." };
+    await prisma.communication.create({ data: {
+      type: "x", direction: "outbound", body: text, contactId, userId: user.id,
+      messageId: result.providerMessageId ?? null, tenantId,
+    }});
+    revalidatePath(String(formData.get("revalidate") ?? "/inbox"));
+    return { ok: "Sent via X ✓" };
   }
 
   const compositionId = String(formData.get("compositionId") ?? "").trim();
@@ -118,7 +132,7 @@ export async function sendDmReply(
       buffer,
       file.name || "attachment",
       attachmentContentType,
-      await customerRecordTenantId({ contactId }),
+      tenantId,
     );
     attachmentKind = ATTACH_KIND(file.type || "");
     /**

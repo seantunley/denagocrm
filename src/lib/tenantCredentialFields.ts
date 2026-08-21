@@ -30,6 +30,23 @@ export type TenantCredentialIntegration = {
 
 export const TENANT_CREDENTIAL_INTEGRATIONS: readonly TenantCredentialIntegration[] = [
   {
+    id: "x",
+    label: "X",
+    description: "Receive X DMs, mentions and replies, reply from the inbox, and create CRM leads for this tenant.",
+    fields: [
+      { key: "X_CLIENT_ID", label: "OAuth 2 client ID", placeholder: "From X Developer Portal" },
+      { key: "X_CLIENT_SECRET", label: "OAuth 2 client secret", placeholder: "Shown once in X Developer Portal" },
+      { key: "X_WEBHOOK_SECRET", label: "Webhook signing secret", placeholder: "X app consumer secret" },
+      { key: "X_ACCOUNT_ID", label: "Connected X account ID", placeholder: "Filled by OAuth", required: false },
+      { key: "X_USERNAME", label: "Connected @username", placeholder: "Filled by OAuth", required: false },
+      { key: "X_ACCESS_TOKEN", label: "Access token", placeholder: "Filled by OAuth", required: false },
+      { key: "X_REFRESH_TOKEN", label: "Refresh token", placeholder: "Filled by OAuth", required: false },
+      { key: "XAI_API_KEY", label: "Grok API key (optional)", placeholder: "xai-…", required: false },
+      { key: "XAI_MODEL", label: "Grok model", placeholder: "grok-4.6", required: false },
+      { key: "XAI_DRAFTS_ENABLED", label: "Allow Grok reply drafts", placeholder: "false", required: false },
+    ],
+  },
+  {
     id: "whatsapp",
     label: "WhatsApp Business (Cloud API)",
     description:

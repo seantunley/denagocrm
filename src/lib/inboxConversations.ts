@@ -7,11 +7,11 @@ import { threadCollaborationKey, type ThreadIdentity } from "./inboxThreads";
  * The canonical Conversation id behind each inbox thread.
  *
  * The inbox groups Communication rows into threads by contact-or-lead + channel.
- * That grouping is a view; the Conversation is the RECORD. For Messenger and
- * Instagram the difference is load-bearing: `sendDmReply` decides which platform
+ * That grouping is a view; the Conversation is the RECORD. For Messenger,
+ * Instagram, and X the difference is load-bearing: `sendDmReply` decides which platform
  * to deliver on by reading the Conversation's channel, because the alternative —
  * believing a channel the browser posted — lets anyone with inbox.reply choose
- * Messenger or Instagram for a customer who has both identities. So the reply box
+ * Messenger, Instagram, or X for a customer who has both identities. So the reply box
  * cannot be enabled for a DM thread until this resolves an id for it.
  */
 
@@ -24,7 +24,7 @@ import { threadCollaborationKey, type ThreadIdentity } from "./inboxThreads";
  * Conversation, and creating rows on sight for threads that never needed one
  * would be a write with no reader.
  */
-const CHANNELS_REQUIRING_CONVERSATION = new Set(["messenger", "instagram"]);
+const CHANNELS_REQUIRING_CONVERSATION = new Set(["messenger", "instagram", "x"]);
 
 /**
  * Map inbox threads to their Conversation ids, creating the missing DM ones.

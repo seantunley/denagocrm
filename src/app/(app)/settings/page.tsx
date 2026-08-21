@@ -38,6 +38,7 @@ import { saveSessionPolicy } from "@/app/actions/security";
 import { saveImapSettings } from "@/app/actions/emails";
 import { clearErrorLog } from "@/app/actions/ai";
 import { basePrisma } from "@/lib/db";
+import { resolveTenantCredential } from "@/lib/settings";
 import { formatDateTime } from "@/lib/format";
 import { ABSOLUTE_SESSION_HOURS } from "@/lib/session";
 import { decryptValue } from "@/lib/settings";
@@ -125,6 +126,11 @@ export default async function SettingsPage({
       return ""; // encrypted value, key unavailable in this environment
     }
   };
+  const settingsTenantId = tab === "integrations" ? await getActiveTenantId() : null;
+  const xEntries = tab === "integrations"
+    ? await Promise.all(["X_ACCOUNT_ID", "X_USERNAME"].map(async (key) => [key, await resolveTenantCredential(settingsTenantId, key)] as const))
+    : [];
+  const xSetting = (key: string) => xEntries.find(([candidate]) => candidate === key)?.[1] ?? setting(key);
   const isOwner = isAdmin;
   // The System Log is TENANT-SCOPED. `basePrisma` bypasses the tenant guard, so the
   // unfiltered read this replaced handed every tenant owner every other tenant's
@@ -1098,6 +1104,36 @@ export default async function SettingsPage({
       {tab === "integrations" && (
         <div className="max-w-3xl">
           <div className="card p-0 divide-y divide-border/50">
+            <Row
+              title="X"
+              status={xSetting("X_ACCOUNT_ID") ? <span className="badge bg-emerald-500/15 text-emerald-300">Connected @{xSetting("X_USERNAME") || "account"}</span> : <span className="badge bg-amber-500/15 text-amber-300">Not set up</span>}
+            >
+              <p className="text-xs text-muted-foreground mb-4">Receive and reply to DMs, capture mentions and replies, and create CRM leads in the Social inbox. One X account is connected per tenant.</p>
+              <div className="rounded-lg border border-border bg-background/40 p-4">
+                <div><label className="label">Webhook callback URL</label><code className="block text-sm bg-muted rounded-lg px-3 py-2">https://crm.denagocpt.co.za/api/webhooks/x{xSetting("X_ACCOUNT_ID") ? `?account_id=${xSetting("X_ACCOUNT_ID")}` : ""}</code></div>
+                {[
+                  { key: "X_CLIENT_ID", label: "OAuth 2 client ID", secret: false, hint: "From X Developer Portal" },
+                  { key: "X_CLIENT_SECRET", label: "OAuth 2 client secret", secret: true, hint: "Shown once in X Developer Portal" },
+                  { key: "X_WEBHOOK_SECRET", label: "Webhook signing secret", secret: true, hint: "X app consumer secret" },
+                  { key: "XAI_API_KEY", label: "Grok API key (optional)", secret: true, hint: "xai-…" },
+                  { key: "XAI_MODEL", label: "Grok model", secret: false, hint: "grok-4.6" },
+                  { key: "XAI_DRAFTS_ENABLED", label: "Allow Grok reply drafts (true/false)", secret: false, hint: "false" },
+                ].map((field) => (
+                  <SaveForm key={field.key} resetOnSuccess={false} action={saveSetting} className="mt-3 flex gap-2 items-end">
+                    <input type="hidden" name="key" value={field.key} />
+                    {field.secret ? <input type="hidden" name="keepIfBlank" value="1" /> : null}
+                    <div className="flex-1">
+                      <label className="label">{field.label}</label>
+                      <input name="value" type={field.secret ? "password" : "text"} autoComplete={field.secret ? "new-password" : undefined} className="input" defaultValue={field.secret ? undefined : setting(field.key)} placeholder={field.secret && setting(field.key) ? "•••••••• saved — leave blank to keep" : field.hint} />
+                    </div>
+                    <SaveButton className="btn-secondary">Save</SaveButton>
+                    {field.secret && setting(field.key) ? <ClearSecret settingKey={field.key} label={field.label} /> : null}
+                  </SaveForm>
+                ))}
+                <a href="/api/integrations/x/connect" className="btn-primary btn-sm mt-4 inline-flex">{xSetting("X_ACCOUNT_ID") ? "Reconnect X" : "Connect X account"}</a>
+              </div>
+            </Row>
+
             <Row
               title="Facebook & Instagram (Meta)"
               status={
