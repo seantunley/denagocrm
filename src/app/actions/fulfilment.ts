@@ -200,7 +200,7 @@ export async function registerDeliveryPhotos(
 
     const urls = [...new Set(staged.map((item) => String(item.url ?? "").trim()).filter(Boolean))];
     if (urls.length === 0) refuse("Choose at least one photo.");
-    if (urls.length > 30) refuse("Upload up to 30 delivery photos at a time.");
+    if (urls.length > MAX_PHOTOS) refuse(`Upload up to ${MAX_PHOTOS} delivery photos at a time.`);
 
     let saved = 0;
     let failed = 0;
