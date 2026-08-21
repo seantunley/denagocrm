@@ -304,7 +304,7 @@ export default async function DeliveriesPage() {
                         )}
                         {canManage && column.key === "deliver" && (
                           <div className="mt-2.5 border-t border-border/60 pt-2.5">
-                            <ProofOfDelivery quoteId={quote.id} />
+                            <ProofOfDelivery quoteId={quote.id} baseVersion={quote.updatedAt.toISOString()} />
                             <p className="mt-1 text-[10px] text-muted-foreground/70">Capture driver, handover checklist &amp; signature.</p>
                             {/* Resets on success: an upload form that keeps its
                                 file selection invites the same photos being sent
