@@ -42,7 +42,7 @@ import { activeRecordRequest } from "@/lib/signing/record";
 import JobCardItemForm from "@/components/JobCardItemForm";
 import { AnnotatablePhoto, type AnnData } from "@/components/PhotoAnnotator";
 import { CameraCapture } from "@/components/CameraCapture";
-import { uploadJobCardPhotos } from "@/app/actions/jobcards";
+import DirectPhotoUploader from "@/components/DirectPhotoUploader";
 import { contactName, formatDate, formatDateTime, formatZAR } from "@/lib/format";
 import {
   ArrowLeft,
@@ -320,12 +320,8 @@ export default async function JobCardDetailPage({
                   sides.
                 </p>
               </div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <CameraCapture action={uploadJobCardPhotos.bind(null, jobCard.id)} />
-                <SaveForm success="Photos uploaded" resetOnSuccess={false} action={uploadJobCardPhotos.bind(null, jobCard.id)} className="flex items-center gap-2">
-                  <PhotoUploadField required className="block text-xs text-slate-400 file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
-                  <SaveButton className="btn-primary btn-sm">Upload</SaveButton>
-                </SaveForm>
+              <div className="w-full sm:w-auto">
+                <DirectPhotoUploader kind="jobcard" recordId={jobCard.id} tenantId={jobCard.tenantId ?? ""} label="Add check-in photos" />
               </div>
             </div>
             {jobCard.documents.filter((d) => d.tag === "checkin-photo").length === 0 ? (
