@@ -9,7 +9,7 @@ import {
   UserRoundX,
   Wrench,
 } from "lucide-react";
-import { MobilePhotoCapture } from "@/components/MobilePhotoCapture";
+import DirectPhotoUploader from "@/components/DirectPhotoUploader";
 import { prisma } from "@/lib/db";
 import ModalTrigger from "@/components/Modal";
 import JobCardForm from "@/components/JobCardForm";
@@ -221,7 +221,7 @@ export default async function JobCardsPage({
                         <MobileDataField label="Priority">{priorityMeta(job.priority).label}</MobileDataField>
                       </MobileDataFields>
                       {canManage && (
-                        <MobilePhotoCapture action={uploadJobCardPhotos.bind(null, job.id)} label="Add condition photos" />
+                        <DirectPhotoUploader kind="jobcard" recordId={job.id} tenantId={job.tenantId ?? ""} label="Add condition photos" />
                       )}
                       <Link href={`/jobcards/${job.id}`} className="inline-flex items-center gap-1 text-xs font-semibold text-primary">Open workspace <ArrowRight className="size-3.5" /></Link>
                     </MobileDataCard>
