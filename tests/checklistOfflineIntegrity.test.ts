@@ -21,7 +21,16 @@ test("login scope changes and sign-out remove device-held customer evidence", ()
   const store = src("src/lib/checklists/deviceStore.ts");
   const menu = src("src/components/AccountMenu.tsx");
   assert.match(store, /row\.scopeKey !== wanted \|\| Date\.parse\(row\.expiresAt\) <= now/g);
-  assert.match(menu, /clearChecklistDeviceData\(\)\.finally\(\(\) => logout\(\)\)/);
+  assert.match(menu, /offlinePendingCount\(\{ tenantId, userId: user\.id \}\)/);
+  assert.match(menu, /Discard offline work and sign out\?/);
+  assert.match(menu, /await clearChecklistDeviceData\(\)/);
+});
+
+test("offline recovery never lets a clean device cache shadow server truth", () => {
+  const runner = src("src/components/checklists/ChecklistRunner.tsx");
+  assert.match(runner, /stored\?\.dirty/);
+  assert.match(runner, /await deleteDeviceSession\(scope, active\.runId\)/);
+  assert.match(runner, /persistTail\.current = write\.catch/);
 });
 
 test("connectivity is permanently visible in both app headers", () => {

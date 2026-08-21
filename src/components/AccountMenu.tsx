@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 import { ChevronsUpDown, KeyRound, LogOut, Settings, Trash2, UserRound } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
@@ -14,9 +15,18 @@ import {
 import { logout } from "@/app/login/actions";
 import { APP_VERSION } from "@/lib/version";
 import { cn } from "@/lib/utils";
-import { clearChecklistDeviceData } from "@/lib/checklists/deviceStore";
+import { clearChecklistDeviceData, offlinePendingCount } from "@/lib/checklists/deviceStore";
+import {
+  Dialog,
+  DialogClose,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  ResponsiveDialogContent,
+} from "@/components/ui/dialog";
 
 export type AccountMenuUser = {
+  id: string;
   name: string;
   role: string;
   avatarVersion?: string | null;
@@ -43,12 +53,27 @@ function initials(name: string) {
 export default function AccountMenu({
   user,
   isOwner,
+  tenantId,
   compact = false,
 }: {
   user: AccountMenuUser;
   isOwner: boolean;
+  tenantId: string;
   compact?: boolean;
 }) {
+  const [discardCount, setDiscardCount] = useState(0);
+  const [discardOpen, setDiscardOpen] = useState(false);
+
+  async function signOutSafely() {
+    const pending = await offlinePendingCount({ tenantId, userId: user.id });
+    if (pending > 0) {
+      setDiscardCount(pending);
+      setDiscardOpen(true);
+      return;
+    }
+    await clearChecklistDeviceData();
+    await logout();
+  }
   const avatar = (
     <Avatar className={cn("rounded-md", compact ? "size-7" : "size-7")}>
       {user.avatarVersion ? (
@@ -65,6 +90,7 @@ export default function AccountMenu({
   );
 
   return (
+    <>
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         {compact ? (
@@ -138,7 +164,10 @@ export default function AccountMenu({
         <DropdownMenuSeparator />
         <DropdownMenuItem
           variant="destructive"
-          onSelect={() => void clearChecklistDeviceData().finally(() => logout())}
+          onSelect={(event) => {
+            event.preventDefault();
+            void signOutSafely();
+          }}
         >
           <LogOut className="size-4" />
           Sign out
@@ -147,5 +176,29 @@ export default function AccountMenu({
         <DropdownMenuLabel className="py-1 text-[11px] font-normal text-muted-foreground">v{APP_VERSION}</DropdownMenuLabel>
       </DropdownMenuContent>
     </DropdownMenu>
+    <Dialog open={discardOpen} onOpenChange={setDiscardOpen}>
+      <ResponsiveDialogContent className="sm:max-w-md">
+        <DialogHeader className="text-left">
+          <DialogTitle>Discard offline work and sign out?</DialogTitle>
+          <DialogDescription>
+            {discardCount} offline checklist change{discardCount === 1 ? " is" : "s are"} still waiting to sync.
+            Signing out will permanently discard {discardCount === 1 ? "it" : "them"} from this device.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <DialogClose asChild>
+            <button type="button" className="btn-secondary">Keep my work</button>
+          </DialogClose>
+          <button
+            type="button"
+            className="btn-danger"
+            onClick={() => void clearChecklistDeviceData().then(() => logout())}
+          >
+            Discard and sign out
+          </button>
+        </div>
+      </ResponsiveDialogContent>
+    </Dialog>
+    </>
   );
 }

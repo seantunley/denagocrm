@@ -216,6 +216,10 @@ export default function ChecklistRunner({
    * state because carrying a File is not something to re-render over.
    */
   const carried = useRef<{ id: string; entryId: string; file: File; capturedAt: string }[]>([]);
+  /* Keep device snapshots in the same order as the edits that produced them.
+   * IndexedDB transactions from separate calls are not an ordering primitive;
+   * without this tail, a slower older keystroke can overwrite a newer answer. */
+  const persistTail = useRef<Promise<void>>(Promise.resolve());
   const autoSync = useRef<() => void>(() => undefined);
   useEffect(() => {
     const held = previews.current;
@@ -316,25 +320,34 @@ export default function ChecklistRunner({
     return first === -1 ? Math.max(0, list.length - 1) : first;
   }
 
-  async function persist(active: Session): Promise<void> {
-    await saveDeviceSession(scope, {
-      runId: active.runId,
-      hostType,
-      hostId,
-      templateId: template.id,
-      templateVersion: active.templateVersion,
-      startedAt: active.startedAt,
-      entries: active.entries,
-      dirty: active.dirty,
+  function persist(active: Session): Promise<void> {
+    const write = persistTail.current.then(async () => {
+      await saveDeviceSession(scope, {
+        runId: active.runId,
+        hostType,
+        hostId,
+        templateId: template.id,
+        templateVersion: active.templateVersion,
+        startedAt: active.startedAt,
+        entries: active.entries,
+        dirty: active.dirty,
+      });
     });
+    persistTail.current = write.catch(() => undefined);
+    return write;
   }
 
   async function openRunner() {
     setBusy("Opening saved work…");
     const stored = await loadDeviceSession(scope, { hostType, hostId, templateId: template.id });
-    const built: Session = stored
-      ? { runId: stored.runId, startedAt: stored.startedAt, templateVersion: stored.templateVersion, entries: stored.entries, dirty: stored.dirty }
-      : session ?? buildSession();
+    /* Only dirty device work may outrank the server. A clean snapshot is merely
+     * a cache and can contain pre-upload photo counts; restoring it would hide
+     * evidence that has already reached the authoritative run. */
+    const built: Session = stored?.dirty
+      ? { runId: stored.runId, startedAt: stored.startedAt, templateVersion: stored.templateVersion, entries: stored.entries, dirty: true }
+      : run
+        ? buildSession()
+        : session ?? buildSession();
     if (!stored) await persist(built);
     const queuedPhotos = await pending(scope, built.runId);
     const restored: Record<string, Capture[]> = {};
@@ -343,7 +356,14 @@ export default function ChecklistRunner({
       previews.current.add(preview);
       (restored[photo.entryId] ??= []).push({ id: photo.id, preview, state: "queued" });
     }
-    setCaptures(restored);
+    setCaptures((previous) => {
+      if (session?.runId !== built.runId) return restored;
+      const kept = Object.fromEntries(
+        Object.entries(previous).map(([entryId, items]) => [entryId, items.filter((item) => item.state !== "queued")]),
+      );
+      for (const [entryId, items] of Object.entries(restored)) kept[entryId] = [...(kept[entryId] ?? []), ...items];
+      return kept;
+    });
     setSession(built);
     setStep(resumeStep(built.entries));
     setProblem(null);
@@ -576,7 +596,10 @@ export default function ChecklistRunner({
       if (report.failed > 0) {
         return `${report.failed} photo${report.failed === 1 ? "" : "s"} could not be uploaded. They are still on this device — try again when the signal is better.`;
       }
-      await persist({ ...active, dirty: false });
+      /* Once the server has both answers and photos it is authoritative. Keeping
+       * a clean pre-upload snapshot makes a later reopen hide those photos. */
+      await persistTail.current;
+      await deleteDeviceSession(scope, active.runId);
       return null;
     } catch {
       await persist({ ...active, dirty: true });
