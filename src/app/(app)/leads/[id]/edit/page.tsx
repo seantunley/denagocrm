@@ -52,6 +52,8 @@ export default async function EditLeadPage({
         contacts={contacts.map((c) => ({ id: c.id, label: contactName(c) }))}
         users={users.map((u) => ({ id: u.id, name: u.name }))}
         defaults={lead}
+        offlineRecordId={lead.id}
+        offlineBaseVersion={lead.updatedAt.toISOString()}
         submitLabel="Save changes"
       />
     </div>
