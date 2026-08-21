@@ -42,6 +42,8 @@ export default async function EditContactPage({
       <ContactForm
         action={updateContact.bind(null, contact.id)}
         defaults={{ ...contact, tags: contact.tags.map((t) => t.name).join(", ") }}
+        offlineRecordId={contact.id}
+        offlineBaseVersion={contact.updatedAt.toISOString()}
         submitLabel="Save changes"
         users={users.map((u) => ({ id: u.id, name: u.name }))}
         fleetPicker={picker}
