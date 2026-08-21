@@ -81,7 +81,23 @@ export default function OfflineWorkspacePage() {
                 <button className="btn-primary sm:col-span-2">Save lead on this device</button>
               </form>
               <div className="grid gap-3 md:grid-cols-2">
-                {snapshot.leads.map((lead) => <div key={lead.id} className="card"><p className="font-semibold">{lead.title}</p><p className="text-sm text-muted-foreground">{lead.name} · {lead.stage}</p><p className="mt-2 text-xs text-muted-foreground">{lead.phone ?? lead.email ?? "No contact channel"}</p></div>)}
+                {snapshot.leads.map((lead) => (
+                  <details key={lead.id} className="card">
+                    <summary className="cursor-pointer"><span className="font-semibold">{lead.title}</span><span className="ml-2 text-sm text-muted-foreground">{lead.name} · {lead.stage}</span></summary>
+                    <form className="mt-3 grid gap-2 sm:grid-cols-2" onSubmit={(event) => void queue(event, { type: "lead.update", recordId: lead.id, baseVersion: lead.updatedAt })}>
+                      <input name="name" required className="input" defaultValue={lead.name} />
+                      <input name="phone" className="input" defaultValue={lead.phone ?? ""} placeholder="Phone" />
+                      <input name="email" type="email" className="input" defaultValue={lead.email ?? ""} placeholder="Email" />
+                      <select name="stageId" className="input" defaultValue={lead.stageId}>{snapshot.options.stages.map((stage) => <option key={stage.id} value={stage.id}>{stage.name}</option>)}</select>
+                      <select name="productId" className="input" defaultValue={lead.productId ?? ""}><option value="">Model undecided</option>{snapshot.options.products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select>
+                      <input name="value" className="input" inputMode="decimal" defaultValue={String(lead.valueCents / 100)} />
+                      <input name="title" className="input sm:col-span-2" defaultValue={lead.title} />
+                      <textarea name="notes" className="input sm:col-span-2" defaultValue={lead.notes ?? ""} />
+                      <input type="hidden" name="source" value={lead.source} /><input type="hidden" name="color" value={lead.color ?? ""} /><input type="hidden" name="quantity" value={lead.quantity} /><input type="hidden" name="contactId" value={lead.contactId ?? ""} /><input type="hidden" name="assignedToId" value={lead.assignedToId ?? ""} />
+                      <button className="btn-secondary btn-sm sm:col-span-2">Queue lead changes</button>
+                    </form>
+                  </details>
+                ))}
               </div>
             </div>
           )}
@@ -99,7 +115,30 @@ export default function OfflineWorkspacePage() {
                 <button className="btn-primary sm:col-span-2">Save contact on this device</button>
               </form>
               <div className="grid gap-3 md:grid-cols-2">
-                {snapshot.contacts.map((contact) => <div key={contact.id} className="card"><p className="font-semibold">{contact.name}</p><p className="text-xs text-muted-foreground">{contact.phone ?? contact.whatsapp ?? contact.email ?? "No contact channel"}</p></div>)}
+                {snapshot.contacts.map((contact) => (
+                  <details key={contact.id} className="card">
+                    <summary className="cursor-pointer"><span className="font-semibold">{contact.name}</span><span className="ml-2 text-xs text-muted-foreground">{contact.phone ?? contact.whatsapp ?? contact.email ?? "No contact channel"}</span></summary>
+                    {contact.fleetId ? <p className="mt-3 text-xs text-amber-200">Fleet membership changes require an online fleet lookup. Other downloaded details remain available for reference.</p> : (
+                      <form className="mt-3 grid gap-2 sm:grid-cols-2" onSubmit={(event) => void queue(event, { type: "contact.update", recordId: contact.id, baseVersion: contact.updatedAt })}>
+                        <input name="firstName" required className="input" defaultValue={contact.firstName} />
+                        <input name="lastName" className="input" defaultValue={contact.lastName ?? ""} />
+                        <input name="company" className="input" defaultValue={contact.company ?? ""} placeholder="Company" />
+                        <input name="vatNumber" className="input" defaultValue={contact.vatNumber ?? ""} placeholder="VAT number" />
+                        <input name="phone" className="input" defaultValue={contact.phone ?? ""} placeholder="Phone" />
+                        <input name="whatsapp" className="input" defaultValue={contact.whatsapp ?? ""} placeholder="WhatsApp" />
+                        <input name="email" type="email" className="input sm:col-span-2" defaultValue={contact.email ?? ""} placeholder="Email" />
+                        <input name="address" className="input sm:col-span-2" defaultValue={contact.address ?? ""} placeholder="Address" />
+                        <input name="suburb" className="input" defaultValue={contact.suburb ?? ""} placeholder="Suburb" />
+                        <input name="city" className="input" defaultValue={contact.city ?? ""} placeholder="City" />
+                        <input name="province" className="input" defaultValue={contact.province ?? ""} placeholder="Province" />
+                        <input name="postalCode" className="input" defaultValue={contact.postalCode ?? ""} placeholder="Postal code" />
+                        <textarea name="notes" className="input sm:col-span-2" defaultValue={contact.notes ?? ""} />
+                        <input type="hidden" name="contactKind" value={contact.isCompany ? "business" : "individual"} /><input type="hidden" name="source" value={contact.source ?? ""} /><input type="hidden" name="ownerId" value={contact.ownerId ?? ""} /><input type="hidden" name="tags" value={contact.tags.join(", ")} />{contact.marketingOptOut && <input type="hidden" name="marketingOptOut" value="on" />}
+                        <button className="btn-secondary btn-sm sm:col-span-2">Queue contact changes</button>
+                      </form>
+                    )}
+                  </details>
+                ))}
               </div>
             </div>
           )}
