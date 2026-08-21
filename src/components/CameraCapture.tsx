@@ -134,7 +134,6 @@ export function CameraCapture({
           return;
         }
         await offline.queue(offlineOperation, fd);
-        toast.success("Photos saved on this device — waiting to sync");
         close();
         return;
       }
