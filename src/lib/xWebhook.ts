@@ -36,12 +36,16 @@ export function isIngestibleBody(text: string): boolean {
     // Not JSON at all, so the POST path could never act on it.
     return false;
   }
-  // Arrays are excluded from ingest for the same reason objects are included:
-  // the route reads named discriminators off the body, which an array cannot
-  // carry. They are treated as ingestible here ANYWAY — refusing to sign one
-  // costs nothing, and it keeps this predicate a superset of what the route
-  // accepts rather than something that has to track it exactly.
-  return typeof parsed === "object" && parsed !== null;
+  // Arrays are NOT ingestible: the route refuses them explicitly, because it
+  // reads named discriminators off the body and an array carries none. So this
+  // excludes them too.
+  //
+  // Being a superset of what the route accepts would be safe for forgery and
+  // wrong for availability — every extra thing refused here is an opaque token X
+  // might legitimately send and get a 400 for, and repeated CRC failures are how
+  // a subscription gets disabled. The predicate matches the route EXACTLY, in
+  // both directions.
+  return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed);
 }
 
 /**
@@ -94,6 +98,48 @@ export function verifyXSignature(secret: string, rawBody: string, signature: str
 type Envelope = Record<string, any>;
 
 /**
+ * The recipient a DM was addressed to, or null when the payload does not say.
+ *
+ * DEFAULTING A MISSING RECIPIENT TO "us" IS THE BUG THIS EXISTS TO PREVENT.
+ * `recipient_id ?? accountId` makes the check `recipientId === accountId` pass
+ * vacuously whenever the field is absent — so a shape that omits it is accepted
+ * without anything having proved the message was ours. A DM is private, and the
+ * only safe reading of "the payload does not say who this was for" is that we
+ * cannot claim it. Absent means refuse, and a delivery X really does send
+ * without a recipient fails visibly rather than being ingested wrongly.
+ */
+function dmRecipient(raw: unknown): string | null {
+  const value = String(raw ?? "").trim();
+  return value.length > 0 ? value : null;
+}
+
+/**
+ * Which reader OWNS a payload, decided by its shape alone.
+ *
+ * Selecting by shape rather than by "the first reader that produced something"
+ * is the whole point, and getting that wrong was a worse bug than the duplicate
+ * it replaced: a current envelope carrying a DM for another account correctly
+ * yields NO events, and a result-based rule reads that emptiness as "this reader
+ * did not recognise the payload" and tries the weaker ones. A generic copy of
+ * the same delivery that omits `recipient_id` would then be accepted — so the
+ * cross-account protection defeated itself precisely when it was working.
+ *
+ * A reader that recognises its shape answers for the whole delivery, including
+ * when the honest answer is nothing at all.
+ */
+function recognisesActivity(body: Envelope): boolean {
+  return Boolean(body.data?.event_type && body.data?.payload);
+}
+
+function recognisesLegacy(body: Envelope): boolean {
+  return Array.isArray(body.direct_message_events) || Array.isArray(body.tweet_create_events);
+}
+
+function recognisesGeneric(body: Envelope): boolean {
+  return Array.isArray(body.events);
+}
+
+/**
  * The current X Activity envelope: { data: { event_uuid, filter, event_type,
  * payload } }.
  */
@@ -107,7 +153,7 @@ function readActivityEnvelope(body: Envelope, accountId: string): XInboundEvent[
     for (const dm of eventPayload.direct_message_events ?? []) {
       const create = dm.message_create ?? {};
       const senderId = String(create.sender_id ?? "");
-      const recipientId = String(create.target?.recipient_id ?? accountId);
+      const recipientId = dmRecipient(create.target?.recipient_id);
       const text = String(create.message_data?.text ?? "");
       if (dm.id && senderId && senderId !== accountId && recipientId === accountId && text) {
         out.push({ id: String(activity.event_uuid ?? dm.id), kind: "dm", senderId, recipientId, text });
@@ -133,7 +179,7 @@ function readLegacyEnvelope(body: Envelope, accountId: string): XInboundEvent[] 
   for (const event of body.direct_message_events ?? []) {
     const create = event.message_create ?? {};
     const senderId = String(create.sender_id ?? "");
-    const recipientId = String(create.target?.recipient_id ?? accountId);
+    const recipientId = dmRecipient(create.target?.recipient_id);
     const text = String(create.message_data?.text ?? "");
     if (event.id && senderId && recipientId === accountId && senderId !== accountId && text) {
       out.push({ id: String(event.id), kind: "dm", senderId, recipientId, text });
@@ -162,16 +208,20 @@ function readGenericEnvelope(body: Envelope, accountId: string): XInboundEvent[]
     const data = event.data ?? event;
     const type = String(event.type ?? data.event_type ?? "");
     const senderId = String(data.sender_id ?? data.author_id ?? "");
-    const recipientId = String(data.recipient_id ?? accountId);
+    const recipientId = dmRecipient(data.recipient_id);
     const text = String(data.text ?? data.message?.text ?? "");
     const id = String(data.id ?? event.id ?? "");
     if (!id || !senderId || senderId === accountId || !text) continue;
-    // A DM must be addressed to the account this webhook is FOR. An app may hold
-    // Activity subscriptions for several users, so without this a private message
-    // sent to somebody else's account is ingested into this workspace's inbox and
-    // can raise a lead off it.
+    // A DM must be PROVABLY addressed to the account this webhook is for. An app
+    // may hold Activity subscriptions for several users, so a private message
+    // sent to somebody else's account would otherwise be ingested into this
+    // workspace's inbox and raise a lead off it. A payload that does not name a
+    // recipient proves nothing, so it is refused rather than assumed — see
+    // `dmRecipient`.
     if (type.includes("dm")) {
-      if (recipientId === accountId) out.push({ id, kind: "dm", senderId, recipientId, text });
+      if (recipientId && recipientId === accountId) {
+        out.push({ id, kind: "dm", senderId, recipientId, text });
+      }
     } else if (type.includes("reply")) {
       out.push({ id, kind: "reply", senderId, recipientId: accountId, text });
     } else if (type.includes("mention")) {
@@ -212,9 +262,17 @@ function readGenericEnvelope(body: Envelope, accountId: string): XInboundEvent[]
 export function normaliseXActivity(payload: unknown, accountId: string): XInboundEvent[] {
   const body = payload as Envelope;
   if (!body || typeof body !== "object") return [];
-  for (const read of [readActivityEnvelope, readLegacyEnvelope, readGenericEnvelope]) {
-    const events = read(body, accountId);
-    if (events.length > 0) return events;
+  const readers: [(body: Envelope) => boolean, (body: Envelope, accountId: string) => XInboundEvent[]][] = [
+    [recognisesActivity, readActivityEnvelope],
+    [recognisesLegacy, readLegacyEnvelope],
+    [recognisesGeneric, readGenericEnvelope],
+  ];
+  for (const [recognises, read] of readers) {
+    // Selected on SHAPE, and answering even when the answer is no events. A
+    // reader that recognised the delivery has spoken for it; falling through on
+    // an empty result is what let a rejected cross-account DM be re-admitted by
+    // a weaker representation of the same message.
+    if (recognises(body)) return read(body, accountId);
   }
   return [];
 }
