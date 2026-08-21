@@ -79,13 +79,14 @@ export async function sendDmReply(
     return { error: `This is a ${conversation.channel} conversation, not a Messenger or Instagram one.` };
   }
   const platform: DmPlatform = conversation.channel;
+  const tenantId = await customerRecordTenantId({ contactId });
 
   const recipientId = platform === "instagram" ? contact.instagramId : platform === "x" ? contact.xUserId : contact.messengerPsid;
   // Deliberately no fallback to the other platform: sending to the wrong channel
   // is worse than not sending, because the customer sees nothing and staff see
   // "Sent ✓".
   if (!recipientId) {
-    return { error: `This contact has no ${platform === "instagram" ? "Instagram" : "Messenger"} identity, so the reply cannot be delivered there.` };
+    return { error: `This contact has no ${platform === "instagram" ? "Instagram" : platform === "x" ? "X" : "Messenger"} identity, so the reply cannot be delivered there.` };
   }
 
   if (platform === "x") {
@@ -94,7 +95,7 @@ export async function sendDmReply(
     if (!result.ok) return { error: result.error ?? "X refused the message." };
     await prisma.communication.create({ data: {
       type: "x", direction: "outbound", body: text, contactId, userId: user.id,
-      messageId: result.providerMessageId ?? null,
+      messageId: result.providerMessageId ?? null, tenantId,
     }});
     revalidatePath(String(formData.get("revalidate") ?? "/inbox"));
     return { ok: "Sent via X ✓" };
@@ -131,7 +132,7 @@ export async function sendDmReply(
       buffer,
       file.name || "attachment",
       attachmentContentType,
-      await customerRecordTenantId({ contactId }),
+      tenantId,
     );
     attachmentKind = ATTACH_KIND(file.type || "");
     /**
