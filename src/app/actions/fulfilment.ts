@@ -10,7 +10,7 @@ import { logAudit } from "@/lib/audit";
 import { emitLeadJourneyEvent } from "@/lib/leadJourneyEvents";
 import { deleteFile, saveFile } from "@/lib/storage";
 import { logError } from "@/lib/errorLog";
-import { checkUploadPayload } from "@/lib/photoBudget";
+import { checkUploadPayload, MAX_PHOTOS } from "@/lib/photoBudget";
 import { contactName } from "@/lib/format";
 import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { isModuleEnabled, requireModuleEnabled } from "@/lib/modules/enabled";
@@ -181,10 +181,19 @@ export async function scheduleDelivery(quoteId: string, formData: FormData) {
 }
 
 export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) {
+  // Server Actions do not inherit the page's tenant scope. Resolve the acting
+  // workspace before any operation that can fail and share this mutable options
+  // object with asActionResult, so the eventual ErrorLog row is visible in that
+  // workspace rather than being filed as an unattributed platform error.
+  const failureLog: { scope: string; context: string; tenantId?: string | null } = {
+    scope: "delivery-photo-upload",
+    context: `quote=${quoteId}`,
+  };
   return asActionResult(async () => {
+    const tenantId = await actingTenantId();
+    failureLog.tenantId = tenantId;
     const user = await requireQuoteAccess(quoteId, "deliveries.manage");
     if (!(await isModuleEnabled("automotive"))) refuse("The automotive pack is switched off.");
-    const tenantId = await actingTenantId();
     const quote = await prisma.quote.findFirst({ where: { id: quoteId, tenantId } });
     if (!quote) refuse(QUOTE_GONE);
     const files = formData.getAll("files").filter(
@@ -192,7 +201,6 @@ export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) 
     );
     if (files.length === 0) refuse("Choose at least one photo.");
 
-    const MAX_PHOTOS = 10;
     const accepted = files.filter((file) => file.size <= MAX_FILE && file.type.startsWith("image/"));
     if (accepted.length === 0) {
       refuse("None of those files could be used — photos must be images under 4 MB.");
@@ -242,7 +250,7 @@ export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) 
           ? `${saved} photo${saved === 1 ? "" : "s"} uploaded — ${skipped} skipped (not an image, over 4 MB, or past the ${MAX_PHOTOS}-photo limit)`
           : `${saved} photo${saved === 1 ? "" : "s"} uploaded`,
     };
-  }, { scope: "delivery-photo-upload", context: `quote=${quoteId}` });
+  }, failureLog);
 }
 
 export async function markDelivered(quoteId: string, formData: FormData): Promise<ActionResult> {
