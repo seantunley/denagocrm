@@ -4,7 +4,7 @@ import { useRef, useState } from "react";
 import { upload } from "@vercel/blob/client";
 import { useRouter } from "next/navigation";
 import { registerDeliveryPhotos } from "@/app/actions/fulfilment";
-import { registerJobCardPhotos } from "@/app/actions/jobcards";
+import { registerInspectionPhoto, registerJobCardPhotos } from "@/app/actions/jobcards";
 import {
   DIRECT_PHOTO_BATCH_LIMIT,
   MAX_PHOTO_BYTES,
@@ -13,7 +13,7 @@ import {
   fitWithinMaxEdge,
 } from "@/lib/photoBudget";
 
-type Kind = "delivery" | "jobcard";
+type Kind = "delivery" | "jobcard" | "jobcard-checkout" | "inspection";
 
 async function preparePhoto(file: File): Promise<File> {
   if (!file.type.startsWith("image/")) return file;
@@ -52,12 +52,14 @@ export default function DirectPhotoUploader({
   kind,
   recordId,
   tenantId,
+  jobCardId,
   label = "Add photos",
   className = "",
 }: {
   kind: Kind;
   recordId: string;
   tenantId: string;
+  jobCardId?: string;
   label?: string;
   className?: string;
 }) {
@@ -72,6 +74,10 @@ export default function DirectPhotoUploader({
     setProblem(null);
     if (selected.length === 0) {
       setProblem("Choose at least one photo.");
+      return;
+    }
+    if (kind === "inspection" && selected.length > 1) {
+      setProblem("Choose one photo for an inspection item.");
       return;
     }
     if (selected.length > DIRECT_PHOTO_BATCH_LIMIT) {
@@ -97,7 +103,7 @@ export default function DirectPhotoUploader({
             {
               access: "public",
               handleUploadUrl: "/api/photos/upload",
-              clientPayload: JSON.stringify({ kind, recordId }),
+              clientPayload: JSON.stringify({ kind, recordId, jobCardId }),
             },
           );
           staged.push({ url: blob.url });
@@ -113,7 +119,9 @@ export default function DirectPhotoUploader({
       setStatus(`Filing ${staged.length} photo${staged.length === 1 ? "" : "s"}…`);
       const result = kind === "delivery"
         ? await registerDeliveryPhotos(recordId, staged)
-        : await registerJobCardPhotos(recordId, staged);
+        : kind === "inspection"
+          ? await registerInspectionPhoto(recordId, jobCardId ?? "", staged)
+          : await registerJobCardPhotos(recordId, staged, kind === "jobcard-checkout" ? "checkout" : "checkin");
       if ("error" in result && result.error) {
         setProblem(result.error);
         return;
