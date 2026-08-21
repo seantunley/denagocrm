@@ -9,6 +9,7 @@ export type OfflineOperationType =
   | "jobcard.notes"
   | "jobcard.inspection"
   | "jobcard.photo"
+  | "inspection.photo"
   | "delivery.complete"
   | "delivery.photo";
 
