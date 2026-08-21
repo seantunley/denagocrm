@@ -49,22 +49,34 @@ export async function queueOfflineMutation(
   userId: string,
   operation: OfflineDescriptor,
   formData: FormData,
-): Promise<OfflineMutation> {
+): Promise<OfflineMutation[]> {
   if (!tenantId || !userId) throw new Error("Offline work requires an active workspace and user.");
-  const entry: OfflineMutation = {
+  const fields = await serialiseForm(formData);
+  const isPhoto = operation.type === "jobcard.photo" || operation.type === "inspection.photo" || operation.type === "delivery.photo";
+  const textFields = fields.filter((field) => field.kind === "text");
+  const fileFields = fields.filter((field) => field.kind === "file");
+  const batches = isPhoto && fileFields.length > 0
+    ? fileFields.map((file) => [...textFields, file])
+    : [fields];
+  const entries = batches.map((batch): OfflineMutation => ({
     id: crypto.randomUUID(),
     tenantId,
     userId,
     operation,
-    fields: await serialiseForm(formData),
+    fields: batch,
     createdAt: Date.now(),
     attempts: 0,
     status: "pending",
-  };
+  }));
   const db = await openDb();
-  await request(db.transaction(MUTATIONS, "readwrite").objectStore(MUTATIONS).put(entry));
+  const tx = db.transaction(MUTATIONS, "readwrite");
+  for (const entry of entries) tx.objectStore(MUTATIONS).put(entry);
+  await new Promise<void>((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
   db.close();
-  return entry;
+  return entries;
 }
 
 export async function listOfflineMutations(tenantId: string, userId: string): Promise<OfflineMutation[]> {
@@ -101,7 +113,9 @@ export async function loadOfflineSnapshot(tenantId: string, userId: string): Pro
   const db = await openDb();
   const value = await request(db.transaction(SNAPSHOTS).objectStore(SNAPSHOTS).get(`${tenantId}:${userId}`));
   db.close();
-  return (value as OfflineSnapshot | undefined) ?? null;
+  const snapshot = (value as OfflineSnapshot | undefined) ?? null;
+  if (snapshot && Date.now() - snapshot.capturedAt > OFFLINE_MAX_AGE_MS) return null;
+  return snapshot;
 }
 
 export async function purgeOfflineData(tenantId?: string, userId?: string): Promise<void> {
