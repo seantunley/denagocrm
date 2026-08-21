@@ -40,8 +40,19 @@ export type OfflineSnapshot = {
   tenantId: string;
   userId: string;
   capturedAt: number;
-  leads: Array<{ id: string; title: string; name: string; email: string | null; phone: string | null; status: string; stage: string; updatedAt: string }>;
-  contacts: Array<{ id: string; name: string; email: string | null; phone: string | null; whatsapp: string | null; updatedAt: string }>;
+  leads: Array<{
+    id: string; title: string; name: string; email: string | null; phone: string | null;
+    status: string; stage: string; stageId: string; source: string; color: string | null;
+    notes: string | null; quantity: number; valueCents: number; productId: string | null;
+    contactId: string | null; assignedToId: string | null; updatedAt: string;
+  }>;
+  contacts: Array<{
+    id: string; name: string; firstName: string; lastName: string | null; company: string | null;
+    email: string | null; phone: string | null; whatsapp: string | null; address: string | null;
+    suburb: string | null; city: string | null; province: string | null; postalCode: string | null;
+    source: string | null; notes: string | null; marketingOptOut: boolean; ownerId: string | null;
+    fleetId: string | null; isCompany: boolean; vatNumber: string | null; tags: string[]; updatedAt: string;
+  }>;
   jobCards: Array<{ id: string; number: number; status: string; description: string; customer: string; vehicle: string; checkinNotes: string | null; checkoutNotes: string | null; updatedAt: string }>;
   deliveries: Array<{ id: string; number: number; customer: string; scheduledFor: string | null; updatedAt: string }>;
   options: {
