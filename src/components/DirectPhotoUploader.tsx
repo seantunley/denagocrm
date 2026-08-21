@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { upload } from "@vercel/blob/client";
 import { useRouter } from "next/navigation";
 import { registerDeliveryPhotos } from "@/app/actions/fulfilment";
+import { reportPhotoUploadFailure } from "@/app/actions/photoUploads";
 import { registerInspectionPhoto, registerJobCardPhotos } from "@/app/actions/jobcards";
 import {
   DIRECT_PHOTO_BATCH_LIMIT,
@@ -109,6 +110,10 @@ export default function DirectPhotoUploader({
           staged.push({ url: blob.url });
         } catch {
           uploadFailures++;
+          await reportPhotoUploadFailure(
+            { kind, recordId, jobCardId },
+            { stage: "transfer", fileType: file.type, fileSize: file.size },
+          ).catch(() => {});
         }
       }
 
@@ -133,6 +138,7 @@ export default function DirectPhotoUploader({
       if (inputRef.current) inputRef.current.value = "";
       router.refresh();
     } catch {
+      await reportPhotoUploadFailure({ kind, recordId, jobCardId }, { stage: "finalize" }).catch(() => {});
       setProblem("The upload did not complete. The technical reason is recorded in Settings → System Log.");
     } finally {
       setWorking(false);
