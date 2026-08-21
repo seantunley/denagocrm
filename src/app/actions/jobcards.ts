@@ -41,10 +41,11 @@ export type StagedJobCardPhoto = { url: string };
 export async function registerJobCardPhotos(
   jobCardId: string,
   staged: StagedJobCardPhoto[],
+  category: "checkin" | "checkout" = "checkin",
 ): Promise<ActionResult> {
   const failureLog: { scope: string; context: string; tenantId?: string | null } = {
     scope: "jobcard-photo-finalize",
-    context: `jobCard=${jobCardId}`,
+    context: `jobCard=${jobCardId} category=${category}`,
   };
   return asActionResult(async () => {
     const tenantId = await actingTenantId();
@@ -67,19 +68,19 @@ export async function registerJobCardPhotos(
         const blob = await assertOwnedBlob(url, jobCard.tenantId);
         if (!blob.contentType.startsWith("image/")) throw new Error("Stored job-card evidence is not an image.");
         if (blob.size <= 0 || blob.size > MAX_PHOTO_BYTES) throw new Error("Stored job-card photo is outside the 4 MB limit.");
-        if (!blob.pathname.startsWith(`uploads/${jobCard.tenantId}/jobcard/${jobCard.id}/`)) {
+        if (!blob.pathname.startsWith(`uploads/${jobCard.tenantId}/${category === "checkout" ? "jobcard-checkout" : "jobcard"}/${jobCard.id}/`)) {
           throw new Error("Stored job-card photo is not bound to this job card.");
         }
         await prisma.document.create({
           data: {
             tenantId: jobCard.tenantId,
-            fileName: `Check-in photo — job card #${jobCard.number} — ${index + 1}`,
+            fileName: `${category === "checkout" ? "Check-out" : "Check-in"} photo — job card #${jobCard.number} — ${index + 1}`,
             storedName: url,
             mimeType: blob.contentType,
             sizeBytes: blob.size,
             contactId: jobCard.contactId,
             jobCardId,
-            tag: "checkin-photo",
+            tag: category === "checkout" ? "checkout-photo" : "checkin-photo",
             uploadedById: user.id,
           },
         });
@@ -105,7 +106,7 @@ export async function registerJobCardPhotos(
     }
     await logAudit({
       action: "jobcard.photos",
-      summary: `${saved} check-in photo${saved === 1 ? "" : "s"} added to job card #${jobCard.number}`,
+      summary: `${saved} ${category === "checkout" ? "check-out" : "check-in"} photo${saved === 1 ? "" : "s"} added to job card #${jobCard.number}`,
       contactId: jobCard.contactId,
       user,
     });
@@ -695,6 +696,50 @@ export async function deleteInspectionItem(itemId: string, jobCardId: string) {
     await prisma.jobCardInspectionItem.deleteMany({ where: { id: itemId, jobCardId } });
     revalidatePath(`/jobcards/${jobCardId}`);
   });
+}
+
+export async function registerInspectionPhoto(
+  itemId: string,
+  jobCardId: string,
+  staged: StagedJobCardPhoto[],
+): Promise<ActionResult> {
+  const failureLog: { scope: string; context: string; tenantId?: string | null } = {
+    scope: "inspection-photo-finalize",
+    context: `jobCard=${jobCardId} item=${itemId}`,
+  };
+  return asActionResult(async () => {
+    const tenantId = await actingTenantId();
+    failureLog.tenantId = tenantId;
+    await requireJobCardAccess(jobCardId, "jobcards.manage");
+    const item = await basePrisma.jobCardInspectionItem.findFirst({
+      where: { id: itemId, jobCardId, tenantId },
+      select: { id: true, tenantId: true, photoStoredName: true },
+    });
+    if (!item?.tenantId) refuse("That inspection item is no longer available in this workspace.");
+    const url = String(staged[0]?.url ?? "").trim();
+    if (!url || staged.length !== 1) refuse("Choose one inspection photo.");
+
+    const blob = await assertOwnedBlob(url, item.tenantId);
+    if (!blob.contentType.startsWith("image/")) refuse("That file is not an image.");
+    if (blob.size <= 0 || blob.size > MAX_PHOTO_BYTES) refuse("That photo is outside the 4 MB limit.");
+    if (!blob.pathname.startsWith(`uploads/${item.tenantId}/inspection/${item.id}/`)) {
+      refuse("That photo does not belong to this inspection item.");
+    }
+    await basePrisma.jobCardInspectionItem.updateMany({
+      where: { id: item.id, jobCardId, tenantId: item.tenantId },
+      data: { photoStoredName: url },
+    });
+    if (item.photoStoredName && item.photoStoredName !== url) {
+      await deleteFile(item.photoStoredName).catch(async (error) => {
+        await logError("inspection-photo-cleanup", error, `jobCard=${jobCardId} item=${itemId}`, {
+          tenantId: item.tenantId,
+          alert: false,
+        });
+      });
+    }
+    revalidatePath(`/jobcards/${jobCardId}`);
+    return { success: "Inspection photo uploaded" };
+  }, failureLog);
 }
 
 export async function uploadInspectionPhoto(itemId: string, jobCardId: string, formData: FormData) {
