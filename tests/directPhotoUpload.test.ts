@@ -42,7 +42,7 @@ test("finalizers verify blob ownership and log every filing failure", () => {
   assert.match(fulfilment, /delivery-photo-finalize/);
   assert.match(jobcards, /assertOwnedBlob\(url, jobCard\.tenantId\)/);
   assert.match(jobcards, /jobcard-photo-finalize/);
-  assert.match(jobcards, /uploads\/\$\{jobCard\.tenantId\}\/jobcard\/\$\{jobCard\.id\}\//);
+  assert.match(jobcards, /category === "checkout" \? "jobcard-checkout" : "jobcard"/);
 });
 
 test("browser transfer failures are authorised and persisted", () => {
