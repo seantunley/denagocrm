@@ -28,6 +28,18 @@ export const PHOTO_JPEG_QUALITY = 0.82;
 /** Most photos per upload. Unchanged — this was never the problem. */
 export const MAX_PHOTOS = 12;
 
+/**
+ * Most photos in one DIRECT-to-blob batch.
+ *
+ * Higher than MAX_PHOTOS because the two limits guard different things.
+ * MAX_PHOTOS bounds a single multipart Server Action body — every file in one
+ * request, against a framework limit. A direct batch uploads one file per
+ * request straight to blob storage, so nothing accumulates and the only real
+ * cost is the person's time and data. Thirty is a full walk-around of a vehicle
+ * without making somebody send it in three goes.
+ */
+export const DIRECT_PHOTO_BATCH_LIMIT = 30;
+
 /** Largest single file, after shrinking. */
 export const MAX_PHOTO_BYTES = 4 * 1024 * 1024;
 
