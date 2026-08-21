@@ -35,7 +35,6 @@ import {
 } from "@/lib/permissions";
 import RecordContextMenu, { type RecordContextAction } from "@/components/RecordContextMenu";
 import { SaveButton, SaveForm } from "@/components/SaveForm";
-import { uploadJobCardPhotos } from "@/app/actions/jobcards";
 
 const FILTERS = [
   { value: "all", label: "All" },
