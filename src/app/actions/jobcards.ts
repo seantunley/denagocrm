@@ -1,6 +1,6 @@
 "use server";
 
-import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
+import { asActionResult, ActionRefusal, refuse, type ActionResult } from "@/lib/actionResult";
 import { randomUUID } from "crypto";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
@@ -13,7 +13,7 @@ import { sendReviewRequest } from "@/lib/reviewRequests";
 import { triggerSurvey } from "@/lib/surveys";
 import { CLOSED_REQUEST_STATUSES } from "@/lib/signing/status";
 import { MAX_PHOTOS, MAX_PHOTO_BYTES, checkUploadPayload } from "@/lib/photoBudget";
-import { saveFile, deleteFile } from "@/lib/storage";
+import { assertOwnedBlob, saveFile, deleteFile } from "@/lib/storage";\nimport { logError } from "@/lib/errorLog";
 import { parseRands } from "@/lib/format";
 import { Prisma } from "@prisma/client";
 import { STAGE_VALUES, PRIORITY_VALUES, stageMeta } from "@/lib/workshop-constants";
@@ -34,6 +34,88 @@ function photoMessage(saved: number, skipped: number): string {
   return skipped > 0
     ? `${base} — ${skipped} skipped (not an image, over 4 MB, or past the 12-photo limit)`
     : base;
+}
+
+export type StagedJobCardPhoto = { url: string };
+
+export async function registerJobCardPhotos(
+  jobCardId: string,
+  staged: StagedJobCardPhoto[],
+): Promise<ActionResult> {
+  const failureLog: { scope: string; context: string; tenantId?: string | null } = {
+    scope: "jobcard-photo-finalize",
+    context: `jobCard=${jobCardId}`,
+  };
+  return asActionResult(async () => {
+    const tenantId = await actingTenantId();
+    failureLog.tenantId = tenantId;
+    const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
+    const jobCard = await basePrisma.jobCard.findFirst({
+      where: { id: jobCardId, tenantId },
+      select: { id: true, tenantId: true, number: true, contactId: true },
+    });
+    if (!jobCard?.tenantId) refuse("This job card is no longer available in this workspace.");
+
+    const urls = [...new Set(staged.map((item) => String(item.url ?? "").trim()).filter(Boolean))];
+    if (urls.length === 0) refuse("Choose at least one photo.");
+    if (urls.length > 30) refuse("Upload up to 30 job-card photos at a time.");
+
+    let saved = 0;
+    let failed = 0;
+    for (const [index, url] of urls.entries()) {
+      try {
+        const blob = await assertOwnedBlob(url, jobCard.tenantId);
+        if (!blob.contentType.startsWith("image/")) throw new Error("Stored job-card evidence is not an image.");
+        if (blob.size <= 0 || blob.size > MAX_PHOTO_BYTES) throw new Error("Stored job-card photo is outside the 4 MB limit.");
+        if (!blob.pathname.startsWith(`uploads/${jobCard.tenantId}/jobcard/${jobCard.id}/`)) {
+          throw new Error("Stored job-card photo is not bound to this job card.");
+        }
+        await prisma.document.create({
+          data: {
+            tenantId: jobCard.tenantId,
+            fileName: `Check-in photo — job card #${jobCard.number} — ${index + 1}`,
+            storedName: url,
+            mimeType: blob.contentType,
+            sizeBytes: blob.size,
+            contactId: jobCard.contactId,
+            jobCardId,
+            tag: "checkin-photo",
+            uploadedById: user.id,
+          },
+        });
+        saved++;
+      } catch (error) {
+        failed++;
+        await logError(
+          "jobcard-photo-finalize",
+          error,
+          `jobCard=${jobCardId} photo=${index + 1}/${urls.length}`,
+          { tenantId: jobCard.tenantId, alert: false },
+        );
+        await deleteFile(url).catch(async (cleanupError) => {
+          await logError("jobcard-photo-cleanup", cleanupError, `jobCard=${jobCardId} photo=${index + 1}`, {
+            tenantId: jobCard.tenantId,
+            alert: false,
+          });
+        });
+      }
+    }
+    if (saved === 0) {
+      refuse("The photos were uploaded but could not be filed. See Settings → System Log under jobcard-photo-finalize.");
+    }
+    await logAudit({
+      action: "jobcard.photos",
+      summary: `${saved} check-in photo${saved === 1 ? "" : "s"} added to job card #${jobCard.number}`,
+      contactId: jobCard.contactId,
+      user,
+    });
+    revalidatePath(`/jobcards/${jobCardId}`);
+    return {
+      success: failed
+        ? `${saved} photo${saved === 1 ? "" : "s"} uploaded — ${failed} failed and were logged`
+        : `${saved} photo${saved === 1 ? "" : "s"} uploaded`,
+    };
+  }, failureLog);
 }
 
 export async function uploadJobCardPhotos(jobCardId: string, formData: FormData) {
