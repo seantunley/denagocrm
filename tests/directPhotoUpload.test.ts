@@ -44,3 +44,13 @@ test("finalizers verify blob ownership and log every filing failure", () => {
   assert.match(jobcards, /jobcard-photo-finalize/);
   assert.match(jobcards, /uploads\/\$\{jobCard\.tenantId\}\/jobcard\/\$\{jobCard\.id\}\//);
 });
+
+test("browser transfer failures are authorised and persisted", () => {
+  const uploader = src("src/components/DirectPhotoUploader.tsx");
+  const reporter = src("src/app/actions/photoUploads.ts");
+  assert.match(uploader, /reportPhotoUploadFailure\(/);
+  assert.match(reporter, /requireQuoteAccess/);
+  assert.match(reporter, /requireJobCardAccess/);
+  assert.match(reporter, /where: \{ id: target\.recordId, jobCardId, tenantId \}/);
+  assert.match(reporter, /"photo-upload-client"/);
+});
