@@ -128,15 +128,34 @@ function dmRecipient(raw: unknown): string | null {
  * when the honest answer is nothing at all.
  */
 function recognisesActivity(body: Envelope): boolean {
+  // A definitive discriminator rather than a container: `event_type` names the
+  // generation outright, so this is true exactly when the delivery IS a current
+  // envelope, empty payload or not.
   return Boolean(body.data?.event_type && body.data?.payload);
 }
 
+/**
+ * Recognition requires a NON-EMPTY array, and that is not fussiness.
+ *
+ * Claiming any array meant `{ direct_message_events: [], events: [valid] }`
+ * selected the legacy reader, which had nothing to read, and the valid generic
+ * event was silently dropped — a delivery answered by a reader that was never
+ * carrying it. An empty container is not evidence of a generation; it is
+ * evidence of nothing.
+ *
+ * A delivery whose arrays are all empty is recognised by nobody and normalises
+ * to no events, which is the correct reading of a payload with no events in it.
+ */
+function hasEntries(value: unknown): boolean {
+  return Array.isArray(value) && value.length > 0;
+}
+
 function recognisesLegacy(body: Envelope): boolean {
-  return Array.isArray(body.direct_message_events) || Array.isArray(body.tweet_create_events);
+  return hasEntries(body.direct_message_events) || hasEntries(body.tweet_create_events);
 }
 
 function recognisesGeneric(body: Envelope): boolean {
-  return Array.isArray(body.events);
+  return hasEntries(body.events);
 }
 
 /**
@@ -156,7 +175,9 @@ function readActivityEnvelope(body: Envelope, accountId: string): XInboundEvent[
       const recipientId = dmRecipient(create.target?.recipient_id);
       const text = String(create.message_data?.text ?? "");
       if (dm.id && senderId && senderId !== accountId && recipientId === accountId && text) {
-        out.push({ id: String(activity.event_uuid ?? dm.id), kind: "dm", senderId, recipientId, text });
+        // `dm.id`, NOT `activity.event_uuid` — see the note on canonical ids
+        // above `normaliseXActivity`.
+        out.push({ id: String(dm.id), kind: "dm", senderId, recipientId, text });
       }
     }
   } else if (type === "post.mention.create" || type === "post.reply.create") {
@@ -164,7 +185,8 @@ function readActivityEnvelope(body: Envelope, accountId: string): XInboundEvent[
     const text = String(eventPayload.text ?? "");
     if (senderId && senderId !== accountId && eventPayload.id && text) {
       out.push({
-        id: String(activity.event_uuid ?? eventPayload.id),
+        // The post's own id, not the delivery's — see the canonical-id note.
+        id: String(eventPayload.id),
         kind: type === "post.reply.create" ? "reply" : "mention",
         senderId, recipientId: accountId, text,
       });
@@ -253,11 +275,23 @@ function readGenericEnvelope(body: Envelope, accountId: string): XInboundEvent[]
  * is exactly the case these fallbacks exist to survive, which is what makes
  * summing them the wrong instinct.
  *
- * Precedence rather than id-normalisation: the shapes disagree about WHICH id is
- * canonical, so there is no single provider id to normalise onto without
- * inventing a rule about which generation's identifier is authoritative. Picking
- * the most current reader that recognises the payload settles it with no such
- * invention.
+ * ── THE ID IS THE MESSAGE'S, NEVER THE DELIVERY'S ───────────────────────────
+ *
+ * Precedence settles duplicates WITHIN one payload. It does nothing across two
+ * separate deliveries, and X can send the same message twice — once per
+ * generation during a migration, or again after a resubscribe.
+ *
+ * So the id emitted here is always the underlying provider object: the DM's own
+ * `id`, or the post's `id`. Never `event_uuid`, which X documents as the
+ * identifier of the DELIVERY rather than of the thing delivered. Keying on it
+ * meant the same DM arriving in a current envelope and a legacy one produced two
+ * different dedupe keys, so `recordInboundDm` filed it twice — and it meant a
+ * simple redelivery of one message would duplicate too, since a redelivery is by
+ * definition a new delivery with a new uuid.
+ *
+ * Every reader therefore emits the same id for the same message, whatever shape
+ * carried it, which is what makes the provider-id dedupe downstream actually
+ * work.
  */
 export function normaliseXActivity(payload: unknown, accountId: string): XInboundEvent[] {
   const body = payload as Envelope;
