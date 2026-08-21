@@ -52,7 +52,7 @@ export default function AccountMenu({
   async function signOutSafely() {
     await purgeOfflineData().catch(() => {});
     if ("caches" in window) {
-      await caches.delete("denago-offline-v1").catch(() => false);
+      await caches.open("denago-offline-v1").then((cache) => cache.delete("/offline")).catch(() => false);
     }
     await logout();
   }
