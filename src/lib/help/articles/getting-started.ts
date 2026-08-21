@@ -175,7 +175,7 @@ export const gettingStartedArticles: HelpArticle[] = [
         "Every replay is authenticated and tenant-scoped; changing the queued tenant or user is refused.",
         "Signing out removes local CRM records, queued files and the authenticated offline shell from that device.",
         "Switching user or workspace purges data that does not match the active identity.",
-        "Queued operations expire after 72 hours and require review; the app does not silently submit stale work.",
+        "Downloaded records and queued operations expire after 72 hours; the app does not keep serving or silently submit stale field data.",
         "Integration secrets, credentials, financial approvals, user administration, deletion and system logs are never available offline.",
       ] },
       { type: "h", text: "Troubleshooting" },
