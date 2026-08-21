@@ -67,7 +67,11 @@ export default function AppError({
       headers: { "content-type": "application/json" },
       body: payload,
       keepalive: true,
-    }).catch(() => {});
+    }).catch((reportError) => {
+      // If the reporting endpoint itself is unavailable, retain evidence in the
+      // browser console instead of silently discarding the second failure.
+      console.error("[client-error-report-failure]", reportError);
+    });
   }, [error]);
 
   return (
