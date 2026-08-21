@@ -47,6 +47,7 @@ test("connectivity is always explicit and help covers offline security", () => {
   assert.match(provider, /online \? "Online" : "Offline"/);
   assert.match(help, /slug: "offline-field-mode"/);
   assert.match(help, /expire after 72 hours/);
+  assert.match(src("src/lib/offlineClient.ts"), /fileFields\.map/);
   assert.match(help, /Signing out removes local CRM records/);
 });
 
