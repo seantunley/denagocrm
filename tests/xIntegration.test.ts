@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import crypto from "node:crypto";
-import { isCrcToken, normaliseXActivity, verifyXSignature, xCrcResponse } from "../src/lib/xWebhook";
+import { isIngestibleBody, normaliseXActivity, verifyXSignature, xCrcResponse } from "../src/lib/xWebhook";
 
 test("X webhook signatures and CRC use constant provider-compatible HMACs", () => {
   const secret = "tenant-secret";
@@ -28,7 +28,9 @@ test("the CRC handshake refuses to sign anything that could be a webhook body", 
    * signature over the exact JSON of a fabricated DM and then POST it.
    *
    * Domain separation is unavailable — both formats are X's. So the defence is
-   * that a JSON object must contain `{`, and `{` is not in the CRC alphabet.
+   * narrowed to exactly the overlap: the route acts only on a body that parses
+   * as a JSON object, so that is the only thing the handshake refuses to sign.
+   * Everything else X might send as an opaque challenge is answered normally.
    */
   const secret = "tenant-secret";
   const forgedBody = JSON.stringify({
@@ -46,7 +48,7 @@ test("the CRC handshake refuses to sign anything that could be a webhook body", 
   });
 
   assert.equal(xCrcResponse(secret, forgedBody), null, "a JSON body must never be signed");
-  assert.equal(isCrcToken(forgedBody), false);
+  assert.equal(isIngestibleBody(forgedBody), true);
 
   // The property that actually matters, stated directly: nothing the CRC
   // endpoint will sign can be a body the POST path would accept, because the
@@ -58,18 +60,33 @@ test("the CRC handshake refuses to sign anything that could be a webhook body", 
     '{}',
     ' {"for_user_id":"1"} ',
     '["x"]',
-    'challenge"; DROP',
   ]) {
     assert.equal(xCrcResponse(secret, hostile), null, `must refuse: ${hostile}`);
   }
 
-  // And a real token is still accepted, or the handshake breaks and the
-  // integration never registers.
-  for (const legitimate of ["cGxlYXNlLXNpZ24tdGhpcw==", "abc12345", "a-b_c.d+e/f=", "x".repeat(256)]) {
-    assert.ok(xCrcResponse(secret, legitimate), `must accept: ${legitimate}`);
+  /*
+   * X documents crc_token as an OPAQUE challenge and promises nothing about its
+   * alphabet or length; its own reference implementation signs any non-empty
+   * token. So the guard must not invent a format — a token X sends that we
+   * refuse is a 400, and repeated CRC failures are how X disables a webhook
+   * subscription. Each of these would have been rejected by an alphabet rule and
+   * must be answered.
+   */
+  for (const opaque of [
+    "cGxlYXNlLXNpZ24tdGhpcw==",
+    "abc",                                  // shorter than any invented minimum
+    "x".repeat(4096),                       // longer than any invented maximum
+    "token with spaces",
+    "tok:en/with?punctuation&more",
+    'challenge"; DROP',                     // quotes and punctuation, still not JSON
+    "unicode-éèê",
+    "123",                                  // parses as JSON, but not an object
+    '"a string"',                           // parses as JSON, but not an object
+    "null",
+  ]) {
+    assert.ok(xCrcResponse(secret, opaque), `must accept opaque token: ${opaque.slice(0, 24)}`);
   }
-  assert.equal(xCrcResponse(secret, "short"), null, "too short to be a real token");
-  assert.equal(xCrcResponse(secret, "x".repeat(257)), null, "beyond any real token length");
+  assert.equal(xCrcResponse(secret, ""), null, "an empty token is not a challenge");
 });
 
 test("a CRC reply cannot be replayed as a signature for a JSON body", () => {
@@ -209,4 +226,60 @@ test("the current envelope is authoritative, so one message cannot file twice", 
   );
   assert.equal(both.length, 1, "one logical message, one event");
   assert.equal(both[0].id, "uuid-1", "the current envelope's id wins");
+});
+
+test("exactly one reader answers a delivery, whichever shapes it carries", () => {
+  /*
+   * The first attempt at this only stopped the CURRENT envelope from being
+   * re-read by the fallbacks; the two fallbacks still ran together. A payload
+   * carrying the same DM as both `direct_message_events` and `events` produced
+   * two events with different ids — and different ids are different transcript
+   * dedupe keys, so the message was still filed twice.
+   *
+   * Precedence is now applied across every shape: the most current reader that
+   * recognises the payload answers for the whole delivery.
+   */
+  const dm = {
+    id: "dm-1",
+    message_create: {
+      sender_id: "9999",
+      target: { recipient_id: "1111" },
+      message_data: { text: "same message" },
+    },
+  };
+  const generic = {
+    type: "dm.received",
+    data: { id: "event-1", sender_id: "9999", recipient_id: "1111", text: "same message" },
+  };
+
+  // The pair the review reproduced: both FALLBACK shapes, no current envelope.
+  const bothFallbacks = normaliseXActivity({ direct_message_events: [dm], events: [generic] }, "1111");
+  assert.equal(bothFallbacks.length, 1, "one logical message, one event");
+  assert.equal(bothFallbacks[0].id, "dm-1", "the legacy reader outranks the generic one");
+
+  // All three shapes at once.
+  const allThree = normaliseXActivity(
+    {
+      data: {
+        event_type: "dm.received",
+        event_uuid: "uuid-1",
+        payload: { direct_message_events: [dm] },
+      },
+      direct_message_events: [dm],
+      events: [generic],
+    },
+    "1111",
+  );
+  assert.equal(allThree.length, 1, "one logical message, one event");
+  assert.equal(allThree[0].id, "uuid-1", "the current envelope outranks both fallbacks");
+
+  // A lower-precedence reader still answers when the higher ones recognise
+  // nothing — otherwise this fix would silently drop older deliveries.
+  const genericOnly = normaliseXActivity({ events: [generic] }, "1111");
+  assert.equal(genericOnly.length, 1);
+  assert.equal(genericOnly[0].id, "event-1");
+
+  // An unrecognised payload is empty, not a throw.
+  assert.deepEqual(normaliseXActivity({ nothing: true }, "1111"), []);
+  assert.deepEqual(normaliseXActivity(null, "1111"), []);
 });
