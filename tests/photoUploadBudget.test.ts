@@ -146,7 +146,7 @@ test("every camera field resizes before submitting", () => {
       /<input[^>]*capture="environment"/,
       `${file} still posts unresized camera files`,
     );
-    assert.match(code, /<(?:PhotoUploadField|MobilePhotoCapture)/, `${file} must use the resizing field directly or through the mobile capture primitive`);
+    assert.match(code, /<(?:PhotoUploadField|MobilePhotoCapture|DirectPhotoUploader)/, `${file} must use the resizing field directly or through the mobile capture primitive`);
   }
 
   const mobileCapture = src("src/components/MobilePhotoCapture.tsx");

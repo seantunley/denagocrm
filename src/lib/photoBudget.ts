@@ -25,8 +25,16 @@ export const PHOTO_MAX_EDGE = 1600;
 /** JPEG quality for re-encoded photos. Visually lossless for this purpose. */
 export const PHOTO_JPEG_QUALITY = 0.82;
 
-/** Most photos per upload. Unchanged — this was never the problem. */
-export const MAX_PHOTOS = 12;
+/**
+ * Most photos accepted by both legacy upload actions and the direct uploader.
+ * Direct uploads send one file per request, so increasing the batch count does
+ * not increase the HTTP request body size.
+ */
+/** Explicit browser-to-Blob batch limit, kept literal for config-contract tests. */
+export const DIRECT_PHOTO_BATCH_LIMIT = 12;
+
+/** Legacy upload actions use the same application-wide count. */
+export const MAX_PHOTOS = DIRECT_PHOTO_BATCH_LIMIT;
 
 /** Largest single file, after shrinking. */
 export const MAX_PHOTO_BYTES = 4 * 1024 * 1024;

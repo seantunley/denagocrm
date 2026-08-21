@@ -39,6 +39,13 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
       { key: "company", label: "Company profile", href: "/settings/company", keywords: ["business", "address", "phone", "branding", "footer", "logo", "details"] },
       { key: "modules", label: "Modules", href: "/settings/modules", keywords: ["features", "packs", "enable", "disable", "automotive", "workshop", "inbox", "add-ons"] },
       { key: "custom-fields", label: "Custom fields", href: "/settings/custom-fields", keywords: ["custom", "fields", "eav", "extra", "attributes", "metadata", "contact fields", "lead fields", "properties"] },
+      // Beside custom fields rather than under Operations: both decide what gets
+      // recorded against a record, and a checklist is not tied to one module —
+      // it configures deliveries, workshop check-ins and vehicle condition
+      // reports from one screen. The permission mirrors the page's own guard,
+      // which mirrors the action's, so the entry cannot advertise a screen the
+      // viewer would be redirected away from.
+      { key: "checklists", label: "Checklists", href: "/settings/checklists", permission: "document_templates.manage", keywords: ["checklist", "checklists", "handover", "inspection", "photos", "capture", "steps", "delivery", "check-in", "condition report"] },
       { key: "clock-weather", label: "Clock & weather", href: "/settings/clock-weather", keywords: ["clock", "time", "weather", "cities", "timezone", "city", "temperature"] },
     ],
   },

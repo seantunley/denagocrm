@@ -8,9 +8,9 @@ import { customerRecordTenantId } from "@/lib/customerRecordTenant";
 import { requireQuoteAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { emitLeadJourneyEvent } from "@/lib/leadJourneyEvents";
-import { deleteFile, saveFile } from "@/lib/storage";
+import { assertOwnedBlob, deleteFile, saveFile } from "@/lib/storage";
 import { logError } from "@/lib/errorLog";
-import { checkUploadPayload } from "@/lib/photoBudget";
+import { checkUploadPayload, MAX_PHOTOS } from "@/lib/photoBudget";
 import { contactName } from "@/lib/format";
 import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { isModuleEnabled, requireModuleEnabled } from "@/lib/modules/enabled";
@@ -180,11 +180,102 @@ export async function scheduleDelivery(quoteId: string, formData: FormData) {
   });
 }
 
-export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) {
+export type StagedDeliveryPhoto = { url: string };
+
+export async function registerDeliveryPhotos(
+  quoteId: string,
+  staged: StagedDeliveryPhoto[],
+): Promise<ActionResult> {
+  const failureLog: { scope: string; context: string; tenantId?: string | null } = {
+    scope: "delivery-photo-finalize",
+    context: `quote=${quoteId}`,
+  };
   return asActionResult(async () => {
+    const tenantId = await actingTenantId();
+    failureLog.tenantId = tenantId;
     const user = await requireQuoteAccess(quoteId, "deliveries.manage");
     if (!(await isModuleEnabled("automotive"))) refuse("The automotive pack is switched off.");
+    const quote = await prisma.quote.findFirst({ where: { id: quoteId, tenantId } });
+    if (!quote?.tenantId) refuse(QUOTE_GONE);
+
+    const urls = [...new Set(staged.map((item) => String(item.url ?? "").trim()).filter(Boolean))];
+    if (urls.length === 0) refuse("Choose at least one photo.");
+    if (urls.length > MAX_PHOTOS) refuse(`Upload up to ${MAX_PHOTOS} delivery photos at a time.`);
+
+    let saved = 0;
+    let failed = 0;
+    for (const [index, url] of urls.entries()) {
+      try {
+        const blob = await assertOwnedBlob(url, quote.tenantId);
+        if (!blob.contentType.startsWith("image/")) throw new Error("Stored delivery evidence is not an image.");
+        if (blob.size <= 0 || blob.size > MAX_FILE) throw new Error("Stored delivery photo is outside the 4 MB limit.");
+        if (!blob.pathname.startsWith(`uploads/${quote.tenantId}/delivery/${quote.id}/`)) {
+          throw new Error("Stored delivery photo is not bound to this quote.");
+        }
+        await prisma.document.create({
+          data: {
+            tenantId: quote.tenantId,
+            fileName: `Delivery photo — Q-${quote.number} — ${index + 1}`,
+            storedName: url,
+            mimeType: blob.contentType,
+            sizeBytes: blob.size,
+            contactId: quote.contactId,
+            quoteId,
+            tag: "delivery-photo",
+            uploadedById: user.id,
+          },
+        });
+        saved++;
+      } catch (error) {
+        failed++;
+        await logError(
+          "delivery-photo-finalize",
+          error,
+          `quote=${quoteId} photo=${index + 1}/${urls.length}`,
+          { tenantId: quote.tenantId, alert: false },
+        );
+        await deleteFile(url).catch(async (cleanupError) => {
+          await logError("delivery-photo-cleanup", cleanupError, `quote=${quoteId} photo=${index + 1}`, {
+            tenantId: quote.tenantId,
+            alert: false,
+          });
+        });
+      }
+    }
+    if (saved === 0) {
+      refuse("The photos were uploaded but could not be filed. See Settings → System Log under delivery-photo-finalize.");
+    }
+    await logAudit({
+      action: "fulfilment.photos",
+      summary: `${saved} delivery photo${saved === 1 ? "" : "s"} added to Q-${quote.number}`,
+      contactId: quote.contactId,
+      leadId: quote.leadId,
+      user,
+    });
+    revalidatePath("/deliveries");
+    revalidatePath(`/quotes/${quoteId}`);
+    return {
+      success: failed
+        ? `${saved} photo${saved === 1 ? "" : "s"} uploaded — ${failed} failed and were logged`
+        : `${saved} photo${saved === 1 ? "" : "s"} uploaded`,
+    };
+  }, failureLog);
+}
+
+export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) {
+  // Server Actions do not inherit the page's tenant scope. Resolve the acting
+  // workspace before any operation that can fail and share this mutable options
+  // object with asActionResult, so the eventual ErrorLog row is visible in that
+  // workspace rather than being filed as an unattributed platform error.
+  const failureLog: { scope: string; context: string; tenantId?: string | null } = {
+    scope: "delivery-photo-upload",
+    context: `quote=${quoteId}`,
+  };
+  return asActionResult(async () => {
     const tenantId = await actingTenantId();
+    failureLog.tenantId = tenantId;
+    const user = await requireQuoteAccess(quoteId, "deliveries.manage");
+    if (!(await isModuleEnabled("automotive"))) refuse("The automotive pack is switched off.");
     const quote = await prisma.quote.findFirst({ where: { id: quoteId, tenantId } });
     if (!quote) refuse(QUOTE_GONE);
     const files = formData.getAll("files").filter(
@@ -192,7 +283,6 @@ export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) 
     );
     if (files.length === 0) refuse("Choose at least one photo.");
 
-    const MAX_PHOTOS = 10;
     const accepted = files.filter((file) => file.size <= MAX_FILE && file.type.startsWith("image/"));
     if (accepted.length === 0) {
       refuse("None of those files could be used — photos must be images under 4 MB.");
@@ -242,7 +332,7 @@ export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) 
           ? `${saved} photo${saved === 1 ? "" : "s"} uploaded — ${skipped} skipped (not an image, over 4 MB, or past the ${MAX_PHOTOS}-photo limit)`
           : `${saved} photo${saved === 1 ? "" : "s"} uploaded`,
     };
-  }, { scope: "delivery-photo-upload", context: `quote=${quoteId}` });
+  }, failureLog);
 }
 
 export async function markDelivered(quoteId: string, formData: FormData): Promise<ActionResult> {

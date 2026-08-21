@@ -23,6 +23,10 @@ import { BatteryHealthChart } from "@/components/BatteryHealthChart";
 import { computeWarranty, warrantyColors, warrantyLabels, claimColors, claimStatuses } from "@/lib/warranty";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
+import { requireUser } from "@/lib/auth";
+import { hasPermission } from "@/lib/permissions";
+import ChecklistCard from "@/components/checklists/ChecklistCard";
+import { runsForHost, templatesForHostRecord } from "@/lib/checklists/store";
 
 export default async function VehicleDetailPage({
   params,
@@ -47,6 +51,15 @@ export default async function VehicleDetailPage({
     },
   });
   if (!vehicle) notFound();
+  const currentUser = await requireUser();
+  const canManageChecklists = await hasPermission(currentUser, "vehicles.manage");
+  const checklistTenantId = vehicle.tenantId ?? "";
+  const [conditionTemplates, conditionRuns] = canManageChecklists && checklistTenantId
+    ? await Promise.all([
+        templatesForHostRecord("vehicle.condition", vehicle.id),
+        runsForHost("vehicle.condition", vehicle.id),
+      ])
+    : [[], []];
   const due = computeDue(vehicle);
   const path = `/vehicles/${vehicle.id}`;
 
@@ -126,6 +139,18 @@ export default async function VehicleDetailPage({
           </p>
         </div>
       </div>
+
+      {checklistTenantId && (
+        <ChecklistCard
+          tenantId={checklistTenantId}
+          userId={currentUser.id}
+          hostType="vehicle.condition"
+          hostId={vehicle.id}
+          templates={conditionTemplates}
+          runs={conditionRuns}
+          canCapture={canManageChecklists}
+        />
+      )}
 
       <div className="grid lg:grid-cols-2 gap-6 items-start">
         <div className="space-y-6">

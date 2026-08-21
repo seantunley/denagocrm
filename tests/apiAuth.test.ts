@@ -53,7 +53,7 @@ const APPROVED_GUARDS = [
   // a second authorization source RBAC never wrote to.
   "requirePermission", "requireAnyPermission", "requireRoute",
   "getCurrentUser",
-  "requireQuoteReadAccess", "requireLeadReadAccess", "requireLeadAccess", "requireDocumentAccess",
+  "requireQuoteReadAccess", "requireQuoteAccess", "requireJobCardAccess", "requireLeadReadAccess", "requireLeadAccess", "requireDocumentAccess",
   "portalCanAccess", "requirePortal", "verifyPortal", "portalSession",
 ];
 

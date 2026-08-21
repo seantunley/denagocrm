@@ -1,0 +1,68 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+
+const src = (file: string) => readFileSync(path.join(process.cwd(), file), "utf8");
+
+test("photo batches bypass Server Action request bodies one file at a time", () => {
+  const uploader = src("src/components/DirectPhotoUploader.tsx");
+  // The per-file loop stays this component's own: it is what keeps a batch from
+  // accumulating into one Server Action request body.
+  assert.match(uploader, /for \(const \[index, original\] of selected\.entries\(\)\)/);
+  assert.match(uploader, /DIRECT_PHOTO_BATCH_LIMIT/);
+  assert.match(uploader, /uploadPhoto\(/);
+  /*
+   * The transfer itself moved to lib/photoTransport.ts when the guided checklist
+   * runner became a second sender. Same guard, following the code: there must be
+   * exactly ONE client-side place that talks to the blob client and builds the
+   * `uploads/<tenant>/<kind>/<record>/` prefix, because that prefix is what
+   * /api/photos/upload refuses to sign when it does not match.
+   */
+  const transport = src("src/lib/photoTransport.ts");
+  assert.match(transport, /from "@vercel\/blob\/client"/);
+  assert.match(transport, /handleUploadUrl: "\/api\/photos\/upload"/);
+  assert.doesNotMatch(uploader, /from "@vercel\/blob\/client"/);
+  assert.match(src("src/lib/photoBudget.ts"), /DIRECT_PHOTO_BATCH_LIMIT = 12/);
+});
+
+test("delivery and job-card screens use the shared direct uploader", () => {
+  const delivery = src("src/app/(app)/deliveries/page.tsx");
+  const jobList = src("src/app/(app)/jobcards/page.tsx");
+  const job = src("src/app/(app)/jobcards/[id]/page.tsx");
+  for (const code of [delivery, jobList, job]) assert.match(code, /<DirectPhotoUploader/);
+  assert.doesNotMatch(delivery, /uploadDeliveryPhotos\.bind/);
+  assert.doesNotMatch(jobList, /uploadJobCardPhotos\.bind/);
+  assert.doesNotMatch(job, /uploadJobCardPhotos\.bind/);
+});
+
+test("upload tokens are permission checked and bound to tenant plus record path", () => {
+  const route = src("src/app/api/photos/upload/route.ts");
+  assert.match(route, /actingTenantId\(\)/);
+  assert.match(route, /requireQuoteAccess\(target\.recordId, "deliveries\.manage"\)/);
+  assert.match(route, /requireJobCardAccess\(target\.recordId, "jobcards\.manage"\)/);
+  assert.match(route, /where: \{ id: target\.recordId, tenantId \}/);
+  assert.match(route, /uploads\/\$\{tenantId\}\/\$\{target\.kind\}\/\$\{target\.recordId\}\//);
+  assert.match(route, /maximumSizeInBytes: MAX_PHOTO_BYTES/);
+  assert.match(route, /logError\(/);
+});
+
+test("finalizers verify blob ownership and log every filing failure", () => {
+  const fulfilment = src("src/app/actions/fulfilment.ts");
+  const jobcards = src("src/app/actions/jobcards.ts");
+  assert.match(fulfilment, /assertOwnedBlob\(url, quote\.tenantId\)/);
+  assert.match(fulfilment, /delivery-photo-finalize/);
+  assert.match(jobcards, /assertOwnedBlob\(url, jobCard\.tenantId\)/);
+  assert.match(jobcards, /jobcard-photo-finalize/);
+  assert.match(jobcards, /category === "checkout" \? "jobcard-checkout" : "jobcard"/);
+});
+
+test("browser transfer failures are authorised and persisted", () => {
+  const uploader = src("src/components/DirectPhotoUploader.tsx");
+  const reporter = src("src/app/actions/photoUploads.ts");
+  assert.match(uploader, /reportPhotoUploadFailure\(/);
+  assert.match(reporter, /requireQuoteAccess/);
+  assert.match(reporter, /requireJobCardAccess/);
+  assert.match(reporter, /where: \{ id: target\.recordId, jobCardId, tenantId \}/);
+  assert.match(reporter, /"photo-upload-client"/);
+});

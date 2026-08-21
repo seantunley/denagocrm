@@ -1,14 +1,12 @@
 import Link from "next/link";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
-import { Truck, FileText, Wallet, CalendarClock, PackageCheck, ArrowRight, Camera } from "lucide-react";
-import PhotoUploadField from "@/components/PhotoUploadField";
-import { MobilePhotoCapture } from "@/components/MobilePhotoCapture";
+import { Truck, FileText, Wallet, CalendarClock, PackageCheck, ArrowRight } from "lucide-react";
+import DirectPhotoUploader from "@/components/DirectPhotoUploader";
 import { prisma } from "@/lib/db";
 import {
   markInvoiced,
   markDepositPaid,
   scheduleDelivery,
-  uploadDeliveryPhotos,
 } from "@/app/actions/fulfilment";
 import ProofOfDelivery from "@/components/ProofOfDelivery";
 import { formatDate, formatZAR } from "@/lib/format";
@@ -27,6 +25,8 @@ import {
   MobileStatPair,
   MobileWorkspaceHeader,
 } from "@/components/mobile-workspace";
+import ChecklistCard from "@/components/checklists/ChecklistCard";
+import { runsForHost, templatesForHostRecord } from "@/lib/checklists/store";
 
 export const metadata = { title: "Deliveries — DenagoCRM" };
 
@@ -63,6 +63,19 @@ export default async function DeliveriesPage() {
     include: { contact: true, lead: { include: { product: true } }, items: true, fees: true },
     orderBy: { updatedAt: "asc" },
   });
+  const checklistByQuote = new Map<string, {
+    templates: Awaited<ReturnType<typeof templatesForHostRecord>>;
+    runs: Awaited<ReturnType<typeof runsForHost>>;
+  }>();
+  if (canManage) {
+    await Promise.all(quotes.filter((quote) => colOf(quote) === "deliver").map(async (quote) => {
+      const [templates, runs] = await Promise.all([
+        templatesForHostRecord("quote.delivery", quote.id),
+        runsForHost("quote.delivery", quote.id),
+      ]);
+      checklistByQuote.set(quote.id, { templates, runs });
+    }));
+  }
   // One batched, tenant-scoped lookup for the board — see lib/quoteBillTo.ts.
   const fleetsById = await loadBillToFleets(prisma, quotes.map((quote) => quote.fleetId));
   const docs = await prisma.document.findMany({
@@ -151,7 +164,21 @@ export default async function DeliveriesPage() {
                       </div>
                     </div>
                     {canManage && (
-                      <MobilePhotoCapture action={uploadDeliveryPhotos.bind(null, quote.id)} label="Add handover photos" />
+                      <>
+                        <DirectPhotoUploader kind="delivery" recordId={quote.id} tenantId={quote.tenantId ?? ""} label="Add handover photos" />
+                        {colOf(quote) === "deliver" && checklistByQuote.get(quote.id) && (
+                          <div className="mt-3">
+                            <ChecklistCard
+                              tenantId={quote.tenantId ?? ""}
+                              userId={user.id}
+                              hostType="quote.delivery"
+                              hostId={quote.id}
+                              templates={checklistByQuote.get(quote.id)!.templates}
+                              runs={checklistByQuote.get(quote.id)!.runs}
+                            />
+                          </div>
+                        )}
+                      </>
                     )}
                   </article>
                 );
@@ -306,14 +333,19 @@ export default async function DeliveriesPage() {
                           <div className="mt-2.5 border-t border-border/60 pt-2.5">
                             <ProofOfDelivery quoteId={quote.id} />
                             <p className="mt-1 text-[10px] text-muted-foreground/70">Capture driver, handover checklist &amp; signature.</p>
-                            {/* Resets on success: an upload form that keeps its
-                                file selection invites the same photos being sent
-                                again. The action returns its own count-aware
-                                message, so no `success` prop is needed here. */}
-                            <SaveForm action={uploadDeliveryPhotos.bind(null, quote.id)} className="mt-1.5 space-y-1.5">
-                              <PhotoUploadField className="block w-full text-xs text-muted-foreground file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
-                              <SaveButton className="btn-secondary btn-sm w-full">📷 Add delivery photos</SaveButton>
-                            </SaveForm>
+                            <DirectPhotoUploader kind="delivery" recordId={quote.id} tenantId={quote.tenantId ?? ""} label="Add delivery photos" className="mt-1.5" />
+                            {checklistByQuote.get(quote.id) && (
+                              <div className="mt-3">
+                                <ChecklistCard
+                                  tenantId={quote.tenantId ?? ""}
+                                  userId={user.id}
+                                  hostType="quote.delivery"
+                                  hostId={quote.id}
+                                  templates={checklistByQuote.get(quote.id)!.templates}
+                                  runs={checklistByQuote.get(quote.id)!.runs}
+                                />
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>

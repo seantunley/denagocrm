@@ -17,16 +17,33 @@ test("lead and contact capture use the same section, field, hero and footer prim
   }
 });
 
-test("mobile operational photo capture has one prominent, camera-ready pattern", () => {
-  const component = source("src", "components", "MobilePhotoCapture.tsx");
+test("mobile operational photo capture has one prominent, gallery-ready pattern", () => {
+  const component = source("src", "components", "DirectPhotoUploader.tsx");
   const jobcards = source("src", "app", "(app)", "jobcards", "page.tsx");
   const deliveries = source("src", "app", "(app)", "deliveries", "page.tsx");
 
-  assert.match(component, /<PhotoUploadField/);
-  assert.match(component, /Take or choose photos/);
-  assert.match(component, /btn-primary mt-2 w-full/);
-  assert.match(jobcards, /<MobilePhotoCapture[^>]*label="Add condition photos"/);
-  assert.match(deliveries, /<MobilePhotoCapture[^>]*label="Add handover photos"/);
+  assert.match(component, /type="file"/);
+  assert.match(component, /accept="image\/\*"/);
+  assert.match(jobcards, /<DirectPhotoUploader[^>]*label="Add condition photos"/);
+  assert.match(deliveries, /<DirectPhotoUploader[^>]*label="Add handover photos"/);
+
+  /*
+   * The upload URL moved to lib/photoTransport.ts when the guided checklist
+   * runner became a second thing that sends photos.
+   *
+   * The assertion follows it rather than being deleted, and it is now stronger
+   * than it was: the endpoint must appear in the shared transport, and must NOT
+   * appear in either sender. What this guard is really protecting is that there
+   * is ONE client-side sender — the blob pathname a caller builds has to match
+   * the prefix `/api/photos/upload` checks before it will sign anything, so a
+   * second hand-rolled copy of that string is how one screen silently loses the
+   * ability to upload while the other keeps working.
+   */
+  const transport = source("src", "lib", "photoTransport.ts");
+  assert.match(transport, /handleUploadUrl: "\/api\/photos\/upload"/);
+  assert.doesNotMatch(component, /handleUploadUrl:/, "the uploader must not hold its own endpoint");
+  const runner = source("src", "components", "checklists", "ChecklistRunner.tsx");
+  assert.doesNotMatch(runner, /handleUploadUrl:/, "the checklist runner must not hold its own endpoint");
 });
 
 test("the mobile capture sheet prioritises on-site work before record creation", () => {
