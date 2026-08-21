@@ -151,7 +151,7 @@ export default async function DeliveriesPage() {
                       </div>
                     </div>
                     {canManage && (
-                      <MobilePhotoCapture action={uploadDeliveryPhotos.bind(null, quote.id)} label="Add handover photos" />
+                      <MobilePhotoCapture action={uploadDeliveryPhotos.bind(null, quote.id)} offlineOperation={{ type: "delivery.photo", recordId: quote.id }} label="Add handover photos" />
                     )}
                   </article>
                 );
@@ -310,7 +310,7 @@ export default async function DeliveriesPage() {
                                 file selection invites the same photos being sent
                                 again. The action returns its own count-aware
                                 message, so no `success` prop is needed here. */}
-                            <SaveForm action={uploadDeliveryPhotos.bind(null, quote.id)} className="mt-1.5 space-y-1.5">
+                            <SaveForm action={uploadDeliveryPhotos.bind(null, quote.id)} offlineOperation={{ type: "delivery.photo", recordId: quote.id }} className="mt-1.5 space-y-1.5">
                               <PhotoUploadField className="block w-full text-xs text-muted-foreground file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
                               <SaveButton className="btn-secondary btn-sm w-full">📷 Add delivery photos</SaveButton>
                             </SaveForm>
