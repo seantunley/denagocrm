@@ -44,4 +44,8 @@ export type OfflineSnapshot = {
   contacts: Array<{ id: string; name: string; email: string | null; phone: string | null; whatsapp: string | null; updatedAt: string }>;
   jobCards: Array<{ id: string; number: number; status: string; description: string; customer: string; vehicle: string; checkinNotes: string | null; checkoutNotes: string | null; updatedAt: string }>;
   deliveries: Array<{ id: string; number: number; customer: string; scheduledFor: string | null; updatedAt: string }>;
+  options: {
+    stages: Array<{ id: string; name: string }>;
+    products: Array<{ id: string; name: string }>;
+  };
 };
