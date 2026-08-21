@@ -5,7 +5,10 @@ import { withChannelTenantScope } from "@/lib/tenantScopeEntry";
 import { normaliseXActivity, verifyXSignature, xCrcResponse } from "@/lib/xWebhook";
 import { recordInboundDm } from "@/lib/messenger";
 
-// X publishes several documented envelope generations; the normaliser validates the\n// fields it consumes after the raw request signature has been verified.\n// eslint-disable-next-line @typescript-eslint/no-explicit-any\nfunction accountIdFrom(body: Record<string, any>, request: Request): string {
+// X publishes several documented envelope generations; the normaliser validates the
+// fields it consumes after the raw request signature has been verified.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function accountIdFrom(body: Record<string, any>, request: Request): string {
   return String(
     body.for_user_id ?? body.account_id ?? body.user_id ??
     body.data?.filter?.user_id ??
@@ -27,7 +30,10 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const raw = await request.text();
-  // JSON.parse is untyped at this boundary; field validation happens in the\n  // discriminator and normaliser before anything is persisted.\n  // eslint-disable-next-line @typescript-eslint/no-explicit-any\n  let body: Record<string, any>;
+  // JSON.parse is untyped at this boundary; field validation happens in the
+  // discriminator and normaliser before anything is persisted.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let body: Record<string, any>;
   try { body = JSON.parse(raw); } catch { return NextResponse.json({ error: "Invalid JSON." }, { status: 400 }); }
   const accountId = accountIdFrom(body, request);
   if (!accountId) return NextResponse.json({ error: "Missing X account discriminator." }, { status: 400 });
