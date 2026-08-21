@@ -1,53 +1,24 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { upload } from "@vercel/blob/client";
 import { useRouter } from "next/navigation";
 import { registerDeliveryPhotos } from "@/app/actions/fulfilment";
 import { reportPhotoUploadFailure } from "@/app/actions/photoUploads";
 import { registerInspectionPhoto, registerJobCardPhotos } from "@/app/actions/jobcards";
-import {
-  DIRECT_PHOTO_BATCH_LIMIT,
-  MAX_PHOTO_BYTES,
-  PHOTO_JPEG_QUALITY,
-  PHOTO_MAX_EDGE,
-  fitWithinMaxEdge,
-} from "@/lib/photoBudget";
+import { DIRECT_PHOTO_BATCH_LIMIT } from "@/lib/photoBudget";
+/*
+ * `preparePhoto`, `unsendablePhoto` and the blob-path arithmetic used to be
+ * written out here. They moved to lib/photoTransport.ts when the guided
+ * checklist runner became a second sender: the pathname this builds has to match
+ * the prefix `/api/photos/upload` checks before it will sign anything, and two
+ * copies of that string is how one caller ends up silently unable to upload.
+ * The loop below — one request per file, so nothing accumulates into a Server
+ * Action body — is still this component's own and is what keeps a batch under
+ * the framework's limit.
+ */
+import { preparePhoto, unsendablePhoto, uploadPhoto } from "@/lib/photoTransport";
 
 type Kind = "delivery" | "jobcard" | "jobcard-checkout" | "inspection";
-
-async function preparePhoto(file: File): Promise<File> {
-  if (!file.type.startsWith("image/")) return file;
-  let bitmap: ImageBitmap;
-  try {
-    bitmap = await createImageBitmap(file);
-  } catch {
-    return file;
-  }
-  const { width, height } = fitWithinMaxEdge(bitmap.width, bitmap.height, PHOTO_MAX_EDGE);
-  if (width === bitmap.width && height === bitmap.height) {
-    bitmap.close();
-    return file;
-  }
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext("2d");
-  if (!context) {
-    bitmap.close();
-    return file;
-  }
-  context.drawImage(bitmap, 0, 0, width, height);
-  bitmap.close();
-  const blob = await new Promise<Blob | null>((resolve) =>
-    canvas.toBlob(resolve, "image/jpeg", PHOTO_JPEG_QUALITY),
-  );
-  if (!blob || blob.size >= file.size) return file;
-  return new File([blob], `${file.name.replace(/\.[^.]+$/, "") || "photo"}.jpg`, {
-    type: "image/jpeg",
-    lastModified: file.lastModified,
-  });
-}
 
 export default function DirectPhotoUploader({
   kind,
@@ -93,21 +64,13 @@ export default function DirectPhotoUploader({
       for (const [index, original] of selected.entries()) {
         setStatus(`Preparing and uploading ${index + 1} of ${selected.length}…`);
         const file = await preparePhoto(original);
-        if (!file.type.startsWith("image/") || file.size <= 0 || file.size > MAX_PHOTO_BYTES) {
+        if (unsendablePhoto(file)) {
           uploadFailures++;
           continue;
         }
         try {
-          const blob = await upload(
-            `uploads/${tenantId}/${kind}/${recordId}/${crypto.randomUUID()}-${file.name}`,
-            file,
-            {
-              access: "public",
-              handleUploadUrl: "/api/photos/upload",
-              clientPayload: JSON.stringify({ kind, recordId, jobCardId }),
-            },
-          );
-          staged.push({ url: blob.url });
+          const url = await uploadPhoto({ kind, recordId, jobCardId, tenantId }, file);
+          staged.push({ url });
         } catch {
           uploadFailures++;
           await reportPhotoUploadFailure(

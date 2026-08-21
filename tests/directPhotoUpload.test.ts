@@ -7,10 +7,22 @@ const src = (file: string) => readFileSync(path.join(process.cwd(), file), "utf8
 
 test("photo batches bypass Server Action request bodies one file at a time", () => {
   const uploader = src("src/components/DirectPhotoUploader.tsx");
-  assert.match(uploader, /from "@vercel\/blob\/client"/);
+  // The per-file loop stays this component's own: it is what keeps a batch from
+  // accumulating into one Server Action request body.
   assert.match(uploader, /for \(const \[index, original\] of selected\.entries\(\)\)/);
-  assert.match(uploader, /handleUploadUrl: "\/api\/photos\/upload"/);
   assert.match(uploader, /DIRECT_PHOTO_BATCH_LIMIT/);
+  assert.match(uploader, /uploadPhoto\(/);
+  /*
+   * The transfer itself moved to lib/photoTransport.ts when the guided checklist
+   * runner became a second sender. Same guard, following the code: there must be
+   * exactly ONE client-side place that talks to the blob client and builds the
+   * `uploads/<tenant>/<kind>/<record>/` prefix, because that prefix is what
+   * /api/photos/upload refuses to sign when it does not match.
+   */
+  const transport = src("src/lib/photoTransport.ts");
+  assert.match(transport, /from "@vercel\/blob\/client"/);
+  assert.match(transport, /handleUploadUrl: "\/api\/photos\/upload"/);
+  assert.doesNotMatch(uploader, /from "@vercel\/blob\/client"/);
   assert.match(src("src/lib/photoBudget.ts"), /DIRECT_PHOTO_BATCH_LIMIT = 12/);
 });
 
