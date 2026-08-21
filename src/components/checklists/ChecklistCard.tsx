@@ -40,6 +40,7 @@ import ChecklistRunner, {
 
 export default function ChecklistCard({
   tenantId,
+  userId,
   hostType,
   hostId,
   templates,
@@ -49,6 +50,7 @@ export default function ChecklistCard({
 }: {
   /** Needed to build the blob path the upload route will authorise. */
   tenantId: string;
+  userId: string;
   hostType: string;
   hostId: string;
   /** The ACTIVE lists for this host — `templatesForHost(host)`. */
@@ -82,6 +84,7 @@ export default function ChecklistCard({
   const startable = usable.filter(
     (template) => !unfinished.some((run) => run.templateId === template.id),
   );
+  if (!canCapture && runs.length === 0 && usable.length === 0) return null;
 
   return (
     <section className="card space-y-3" aria-labelledby={`checklists-${hostId}`}>
@@ -109,6 +112,7 @@ export default function ChecklistCard({
               key={run.id}
               run={run}
               tenantId={tenantId}
+              userId={userId}
               hostType={hostType}
               hostId={hostId}
               template={usable.find((candidate) => candidate.id === run.templateId)}
@@ -125,6 +129,7 @@ export default function ChecklistCard({
             <ChecklistRunner
               key={template.id}
               tenantId={tenantId}
+              userId={userId}
               hostType={hostType}
               hostId={hostId}
               template={template}
@@ -147,6 +152,7 @@ export default function ChecklistCard({
 function RunRow({
   run,
   tenantId,
+  userId,
   hostType,
   hostId,
   template,
@@ -155,6 +161,7 @@ function RunRow({
 }: {
   run: ChecklistRunRow;
   tenantId: string;
+  userId: string;
   hostType: string;
   hostId: string;
   /** Absent when the list was deactivated or deleted after this run was taken. */
@@ -252,10 +259,11 @@ function RunRow({
       {canCapture && resumable && template && (
         <ChecklistRunner
           tenantId={tenantId}
+          userId={userId}
           hostType={hostType}
           hostId={hostId}
           template={template}
-          run={{ id: run.id, startedAt: run.startedAt, entries }}
+          run={{ id: run.id, templateVersion: run.templateVersion, startedAt: run.startedAt, entries }}
           triggerLabel="Carry on"
         />
       )}
@@ -316,5 +324,6 @@ function toRunnerEntry(entry: ChecklistRunRow["entries"][number]): RunnerEntry {
     value: entry.value ?? null,
     skipReason: entry.skipReason ?? null,
     photoCount: entry.photoCount,
+    photos: entry.photos.map((photo) => ({ id: photo.id, url: photo.url })),
   };
 }

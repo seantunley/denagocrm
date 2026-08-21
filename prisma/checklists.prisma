@@ -65,9 +65,27 @@ model ChecklistTemplate {
 
   items ChecklistItem[]
   runs  ChecklistRun[]
+  revisions ChecklistTemplateRevision[]
 
   /// The picker's query: the active lists for one host, in order.
   @@index([tenantId, host, active, sortOrder])
+  @@unique([tenantId, id])
+}
+
+/// An immutable, server-authored copy of a template's questions.
+model ChecklistTemplateRevision {
+  id         String   @id @default(dbgenerated("gen_random_uuid()::text"))
+  tenantId   String
+  templateId String
+  version    Int
+  items      Json
+  createdAt  DateTime @default(now())
+
+  template ChecklistTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, templateId, version])
+  @@unique([tenantId, id])
+  @@index([templateId, version])
 }
 
 /// One step of a configured list.
@@ -98,6 +116,7 @@ model ChecklistItem {
 
   @@index([templateId, sortOrder])
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 /// One filled-in instance of a list, against one record.
@@ -135,6 +154,7 @@ model ChecklistRun {
   /// "Which runs are still unfinished" — the outstanding-work query, and what a
   /// dashboard card or a stage gate asks.
   @@index([tenantId, templateId, completedAt])
+  @@unique([tenantId, id])
 }
 
 /// One answered step.
@@ -147,6 +167,8 @@ model ChecklistEntry {
   /// delete the evidence somebody already captured against it. The snapshots
   /// below are what keep the orphaned entry readable.
   itemId String?
+  /// Immutable id of the revision item, even if the live ChecklistItem is later deleted.
+  itemIdSnapshot String
 
   /// WHAT THE PERSON WAS ACTUALLY ASKED, frozen at capture time.
   ///
@@ -160,6 +182,7 @@ model ChecklistEntry {
   captureSnapshot     String
   requiredSnapshot    Boolean @default(true)
   minPhotosSnapshot   Int     @default(1)
+  maxPhotosSnapshot   Int     @default(1)
   sortOrder           Int     @default(0)
 
   /// pending | done | skipped | na
@@ -179,6 +202,8 @@ model ChecklistEntry {
 
   @@index([runId, sortOrder])
   @@index([tenantId])
+  @@unique([tenantId, id])
+  @@unique([tenantId, runId, itemIdSnapshot])
 }
 
 /// One photo that actually reached blob storage.
@@ -213,4 +238,5 @@ model ChecklistPhoto {
 
   @@index([entryId])
   @@index([tenantId])
+  @@unique([tenantId, id])
 }

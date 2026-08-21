@@ -49,6 +49,8 @@ import {
 
 const root = path.join(__dirname, "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
+const SCOPE = { tenantId: "tenant-1", userId: "user-1" };
+const SCOPE_KEY = "tenant-1:user-1";
 
 /* ── a store double ───────────────────────────────────────────────────── */
 
@@ -71,9 +73,9 @@ function memoryStore(log: string[] = []): QueueStore & { rows: Map<string, Queue
       const row = rows.get(id);
       return row ? { ...row } : undefined;
     },
-    async all(runId) {
+    async all(scopeKey, runId) {
       return [...rows.values()]
-        .filter((row) => row.runId === runId)
+        .filter((row) => row.scopeKey === scopeKey && row.runId === runId)
         .map((row) => ({ ...row }))
         .sort((a, b) => a.capturedAt.localeCompare(b.capturedAt));
     },
@@ -94,10 +96,10 @@ test("enqueue writes the blob to the store and sends nothing", async () => {
   const store = memoryStore();
   const sent: string[] = [];
 
-  const result = await enqueue({ runId: "run-1", entryId: "entry-1", blob: photo() }, store);
+  const result = await enqueue({ scope: SCOPE, runId: "run-1", entryId: "entry-1", blob: photo() }, store);
   assert.equal(result.stored, true, "a working store must accept the photo");
 
-  const held = await store.all("run-1");
+  const held = await store.all(SCOPE_KEY, "run-1");
   assert.equal(held.length, 1, "the photo must be on disk the instant it is taken");
   assert.equal(await held[0].blob.text(), "photo-bytes", "the bytes themselves must be kept, not a reference");
   assert.equal(held[0].attempts, 0);
@@ -111,23 +113,36 @@ test("the write happens before the send, in that order, for the same photo", asy
   // this file and still lose a photo to a tab that dies mid-request.
   const log: string[] = [];
   const store = memoryStore(log);
-  await enqueue({ id: "p1", runId: "run-1", entryId: "entry-1", blob: photo() }, store);
-  await drain("run-1", async (item) => { log.push(`upload:${item.id}`); }, store);
+  await enqueue({ scope: SCOPE, id: "p1", runId: "run-1", entryId: "entry-1", blob: photo() }, store);
+  await drain(SCOPE, "run-1", {
+    async upload(item) { log.push(`upload:${item.id}`); return `https://blob/${item.id}`; },
+    async finalize() {},
+  }, store);
 
-  assert.deepEqual(log, ["put:p1", "upload:p1", "remove:p1"]);
+  assert.deepEqual(log, ["put:p1", "upload:p1", "put:p1", "remove:p1"]);
 });
 
 test("a photo survives being read back from a store the caller reopened", async () => {
   // Standing in for "the app was closed and opened again": the same rows, a
   // fresh caller, no in-memory state carried over.
   const store = memoryStore();
-  await enqueue({ id: "p1", runId: "run-1", entryId: "entry-1", blob: photo("tunnel") }, store);
+  await enqueue({ scope: SCOPE, id: "p1", runId: "run-1", entryId: "entry-1", blob: photo("tunnel") }, store);
 
-  const survivors = await pending("run-1", store);
+  const survivors = await pending(SCOPE, "run-1", store);
   assert.equal(survivors.length, 1);
   assert.equal(await survivors[0].blob.text(), "tunnel");
-  assert.equal(await countPending("run-1", store), 1);
-  assert.equal(await countPending("run-2", store), 0, "another run's queue must not be counted");
+  assert.equal(await countPending(SCOPE, "run-1", store), 1);
+  assert.equal(await countPending(SCOPE, "run-2", store), 0, "another run's queue must not be counted");
+});
+
+test("another tenant or user cannot read or remove this device queue", async () => {
+  const store = memoryStore();
+  const otherScope = { tenantId: "tenant-2", userId: "user-2" };
+  await enqueue({ scope: SCOPE, id: "p1", runId: "run-1", entryId: "entry-1", blob: photo() }, store);
+
+  assert.deepEqual(await pending(otherScope, "run-1", store), []);
+  await removeQueued(otherScope, "p1", store);
+  assert.equal(await countPending(SCOPE, "run-1", store), 1, "a foreign session must not delete the owner’s evidence");
 });
 
 /* ── 2. draining is idempotent ────────────────────────────────────────── */
@@ -135,15 +150,19 @@ test("a photo survives being read back from a store the caller reopened", async 
 test("draining twice uploads once", async () => {
   const store = memoryStore();
   const sent: string[] = [];
-  await enqueue({ id: "p1", runId: "run-1", entryId: "entry-1", blob: photo() }, store);
+  await enqueue({ scope: SCOPE, id: "p1", runId: "run-1", entryId: "entry-1", blob: photo() }, store);
 
-  const first = await drain("run-1", async (item) => { sent.push(item.id); }, store);
-  const second = await drain("run-1", async (item) => { sent.push(item.id); }, store);
+  const uploader = {
+    async upload(item: QueuedPhoto) { sent.push(item.id); return `https://blob/${item.id}`; },
+    async finalize() {},
+  };
+  const first = await drain(SCOPE, "run-1", uploader, store);
+  const second = await drain(SCOPE, "run-1", uploader, store);
 
   assert.deepEqual(sent, ["p1"], "the second drain must find nothing left to send");
   assert.equal(first.uploaded, 1);
   assert.equal(second.uploaded, 0);
-  assert.equal(await countPending("run-1", store), 0, "an uploaded photo must leave the queue");
+  assert.equal(await countPending(SCOPE, "run-1", store), 0, "an uploaded photo must leave the queue");
 });
 
 test("two drains running at once do not send the same photo twice", async () => {
@@ -157,16 +176,20 @@ test("two drains running at once do not send the same photo twice", async () => 
   let release: (() => void) | null = null;
   const held = new Promise<void>((resolve) => { release = resolve; });
 
-  await enqueue({ id: "p1", runId: "run-1", entryId: "entry-1", blob: photo() }, store);
-  await enqueue({ id: "p2", runId: "run-1", entryId: "entry-1", blob: photo() }, store);
+  await enqueue({ scope: SCOPE, id: "p1", runId: "run-1", entryId: "entry-1", blob: photo() }, store);
+  await enqueue({ scope: SCOPE, id: "p2", runId: "run-1", entryId: "entry-1", blob: photo() }, store);
 
-  const uploader = async (item: QueuedPhoto) => {
-    sent.push(item.id);
-    await held;
+  const uploader = {
+    async upload(item: QueuedPhoto) {
+      sent.push(item.id);
+      await held;
+      return `https://blob/${item.id}`;
+    },
+    async finalize() {},
   };
   const both = Promise.all([
-    drain("run-1", uploader, store),
-    drain("run-1", uploader, store),
+    drain(SCOPE, "run-1", uploader, store),
+    drain(SCOPE, "run-1", uploader, store),
   ]);
   // Let both drains get as far as their first send before anything completes.
   await new Promise((resolve) => setImmediate(resolve));
@@ -176,7 +199,7 @@ test("two drains running at once do not send the same photo twice", async () => 
   assert.deepEqual([...sent].sort(), ["p1", "p2"], "each photo must be sent exactly once");
   assert.equal(a.uploaded + b.uploaded, 2);
   assert.ok(a.skipped + b.skipped > 0, "the overlapping drain must report what it stood aside from");
-  assert.equal(await countPending("run-1", store), 0);
+  assert.equal(await countPending(SCOPE, "run-1", store), 0);
 });
 
 test("a photo another drain finished mid-loop is not resent from the stale snapshot", async () => {
@@ -188,15 +211,20 @@ test("a photo another drain finished mid-loop is not resent from the stale snaps
    */
   const store = memoryStore();
   const sent: string[] = [];
-  await enqueue({ id: "p1", runId: "run-1", entryId: "entry-1", blob: photo() }, store);
-  await enqueue({ id: "p2", runId: "run-1", entryId: "entry-1", blob: photo() }, store);
+  await enqueue({ scope: SCOPE, id: "p1", runId: "run-1", entryId: "entry-1", blob: photo() }, store);
+  await enqueue({ scope: SCOPE, id: "p2", runId: "run-1", entryId: "entry-1", blob: photo() }, store);
 
   const report = await drain(
+    SCOPE,
     "run-1",
-    async (item) => {
-      sent.push(item.id);
-      // While p1 is in flight, p2 is finished and removed by somebody else.
-      if (item.id === "p1") await store.remove("p2");
+    {
+      async upload(item) {
+        sent.push(item.id);
+        // While p1 is in flight, p2 is finished and removed by somebody else.
+        if (item.id === "p1") await store.remove("p2");
+        return `https://blob/${item.id}`;
+      },
+      async finalize() {},
     },
     store,
   );
@@ -210,39 +238,81 @@ test("a photo another drain finished mid-loop is not resent from the stale snaps
 
 test("a failed upload keeps the blob, counts the attempt and records why", async () => {
   const store = memoryStore();
-  await enqueue({ id: "p1", runId: "run-1", entryId: "entry-1", blob: photo("evidence") }, store);
+  await enqueue({ scope: SCOPE, id: "p1", runId: "run-1", entryId: "entry-1", blob: photo("evidence") }, store);
 
-  const report = await drain("run-1", async () => { throw new Error("Network unreachable"); }, store);
+  const report = await drain(SCOPE, "run-1", {
+    async upload() { throw new Error("Network unreachable"); },
+    async finalize() {},
+  }, store);
 
   assert.equal(report.uploaded, 0);
   assert.equal(report.failed, 1);
-  const [held] = await store.all("run-1");
+  const [held] = await store.all(SCOPE_KEY, "run-1");
   assert.ok(held, "a failed upload must never destroy the only copy of the photo");
   assert.equal(await held.blob.text(), "evidence");
   assert.equal(held.attempts, 1);
   assert.equal(held.lastError, "Network unreachable");
 });
 
+test("a lost finalisation response retries the same uploaded URL without uploading twice", async () => {
+  const store = memoryStore();
+  const uploaded: string[] = [];
+  const finalised: string[] = [];
+  let loseFirstResponse = true;
+  await enqueue({ scope: SCOPE, id: "p1", runId: "run-1", entryId: "entry-1", blob: photo() }, store);
+
+  const uploader = {
+    async upload(item: QueuedPhoto) {
+      uploaded.push(item.id);
+      return "https://blob/stable-p1";
+    },
+    async finalize(_item: QueuedPhoto, url: string) {
+      finalised.push(url);
+      if (loseFirstResponse) {
+        loseFirstResponse = false;
+        throw new Error("Response lost after commit");
+      }
+    },
+  };
+
+  const first = await drain(SCOPE, "run-1", uploader, store);
+  const [held] = await store.all(SCOPE_KEY, "run-1");
+  assert.equal(first.failed, 1);
+  assert.equal(held.uploadedUrl, "https://blob/stable-p1", "the upload result is the retry boundary");
+
+  const second = await drain(SCOPE, "run-1", uploader, store);
+  assert.equal(second.uploaded, 1);
+  assert.deepEqual(uploaded, ["p1"], "the blob must not be transferred again");
+  assert.deepEqual(finalised, ["https://blob/stable-p1", "https://blob/stable-p1"]);
+});
+
 test("retries stop at the cap and the photo becomes visible rather than looping", async () => {
   const store = memoryStore();
   let attempts = 0;
-  await enqueue({ id: "p1", runId: "run-1", entryId: "entry-1", blob: photo() }, store);
+  await enqueue({ scope: SCOPE, id: "p1", runId: "run-1", entryId: "entry-1", blob: photo() }, store);
 
-  const failing = async () => { attempts++; throw new Error("This checklist step is not available."); };
+  const failing = {
+    async upload() { attempts++; throw new Error("This checklist step is not available."); },
+    async finalize() {},
+  };
   // Drained far more times than the cap allows, the way a phone reconnecting
   // repeatedly would.
-  let last = await drain("run-1", failing, store);
-  for (let i = 0; i < MAX_QUEUE_ATTEMPTS + 5; i++) last = await drain("run-1", failing, store);
+  let last = await drain(SCOPE, "run-1", failing, store);
+  for (let i = 0; i < MAX_QUEUE_ATTEMPTS + 5; i++) last = await drain(SCOPE, "run-1", failing, store);
 
   assert.equal(attempts, MAX_QUEUE_ATTEMPTS, "the queue must stop trying a photo that cannot succeed");
   assert.equal(last.failed, 0, "past the cap there is nothing left to try");
   assert.equal(last.stuck.length, 1, "a stuck photo must be reported, not silently skipped");
   assert.equal(last.stuck[0].lastError, "This checklist step is not available.");
-  assert.equal(await countPending("run-1", store), 1, "the blob stays so somebody can act on it");
+  assert.equal(await countPending(SCOPE, "run-1", store), 1, "the blob stays so somebody can act on it");
 });
 
 test("the attempt cap is counted on the item, not on the drain", () => {
   const item: QueuedPhoto = {
+    scopeKey: SCOPE_KEY,
+    tenantId: SCOPE.tenantId,
+    userId: SCOPE.userId,
+    expiresAt: "2026-08-24T09:00:00.000Z",
     id: "p1",
     runId: "run-1",
     entryId: "entry-1",
@@ -250,6 +320,7 @@ test("the attempt cap is counted on the item, not on the drain", () => {
     capturedAt: "2026-08-21T09:00:00.000Z",
     attempts: MAX_QUEUE_ATTEMPTS - 1,
     lastError: "timeout",
+    uploadedUrl: null,
   };
   assert.equal(isStuck(item), false);
   const worse = recordFailure(item, new Error("timeout again"));
@@ -264,7 +335,7 @@ test("the attempt cap is counted on the item, not on the drain", () => {
 /* ── 4. no IndexedDB degrades instead of throwing ─────────────────────── */
 
 test("with no store the photo is handed back to be sent immediately, with a reason", async () => {
-  const result = await enqueue({ runId: "run-1", entryId: "entry-1", blob: photo("no-store") }, null);
+  const result = await enqueue({ scope: SCOPE, runId: "run-1", entryId: "entry-1", blob: photo("no-store") }, null);
   assert.equal(result.stored, false, "nothing was kept, and the caller has to be told so");
   assert.ok(result.reason.length > 0, "the caller needs something to show the person");
   assert.equal(result.item.entryId, "entry-1", "the photo itself still comes back, ready to upload now");
@@ -280,18 +351,21 @@ test("a store that refuses the write is reported, not swallowed", async () => {
     async all() { return []; },
     async remove() {},
   };
-  const result = await enqueue({ runId: "run-1", entryId: "entry-1", blob: photo() }, full);
+  const result = await enqueue({ scope: SCOPE, runId: "run-1", entryId: "entry-1", blob: photo() }, full);
   assert.equal(result.stored, false);
   assert.equal(result.reason, "QuotaExceededError");
 });
 
 test("every other entry point is inert without a store rather than throwing", async () => {
-  assert.deepEqual(await pending("run-1", null), []);
-  assert.equal(await countPending("run-1", null), 0);
-  await removeQueued("p1", null);
+  assert.deepEqual(await pending(SCOPE, "run-1", null), []);
+  assert.equal(await countPending(SCOPE, "run-1", null), 0);
+  await removeQueued(SCOPE, "p1", null);
 
   let called = false;
-  const report = await drain("run-1", async () => { called = true; }, null);
+  const report = await drain(SCOPE, "run-1", {
+    async upload() { called = true; return "https://blob/p1"; },
+    async finalize() { called = true; },
+  }, null);
   assert.equal(report.unavailable, true, "the screen has to be able to say there is no offline queue");
   assert.equal(report.uploaded, 0);
   assert.equal(called, false);

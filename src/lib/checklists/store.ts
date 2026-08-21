@@ -4,8 +4,9 @@ import type { Prisma } from "@prisma/client";
 import { basePrisma } from "@/lib/db";
 import { actingTenantId } from "@/lib/actingTenant";
 import { requireChecklistHostAccess } from "./hostRecords";
+import { visibleChecklistItems } from "./visibility";
 import type { HostId } from "./hosts";
-import { CHECKLIST_LIMITS, ENTRY_STATUSES, type EntryState, type EntryStatus } from "./types";
+import { CHECKLIST_LIMITS, ENTRY_STATUSES, REVISION_ITEMS, type EntryState, type EntryStatus } from "./types";
 
 /**
  * The READ path for checklists. The write paths are
@@ -98,11 +99,12 @@ export type ChecklistPhotoRow = {
  * and be refused on the server.
  */
 export type ChecklistEntryRow = EntryState & {
-  itemId: string | null;
+  /** Immutable revision-item id used by offline sync. */
+  itemId: string;
   descriptionSnapshot: string | null;
   sortOrder: number;
   recordedAt: string | null;
-  /** How many more photos this step will accept. See {@link entryMaxPhotos}. */
+  /** Frozen upper bound from the authoritative template revision. */
   maxPhotos: number;
   photos: ChecklistPhotoRow[];
 };
@@ -140,23 +142,18 @@ export function asEntryStatus(value: string): EntryStatus {
 /**
  * How many photos a step will accept.
  *
- * The live item's `maxPhotos` when the step still exists. When it does not —
- * `ChecklistEntry.itemId` is SET NULL on purpose, so evidence outlives the step
- * that asked for it — there is no `maxPhotosSnapshot` column to fall back to, and
- * inventing a generous default would turn every orphaned step into an unbounded
- * photo bucket that any device holding its id could keep filling. The snapshot of
- * what the run was ASKED for is the only surviving statement of intent, so that
- * is the cap, floored at one so a step that wanted no photos can still be
- * corrected with one.
+ * The authoritative `maxPhotosSnapshot`, floored at one so a step that wanted no
+ * photos can still be corrected with one. The live item is never consulted:
+ * editing a template must not change the evidence limit of an in-flight run.
  *
  * Clamped to `photosPerItem` at both ends, because the stored number predates any
  * later tightening of the cap.
  */
 export function entryMaxPhotos(
-  itemMaxPhotos: number | null | undefined,
+  maxPhotosSnapshot: number | null | undefined,
   minPhotosSnapshot: number,
 ): number {
-  const wanted = itemMaxPhotos ?? Math.max(minPhotosSnapshot, 1);
+  const wanted = maxPhotosSnapshot ?? Math.max(minPhotosSnapshot, 1);
   return Math.min(Math.max(wanted, 1), CHECKLIST_LIMITS.photosPerItem);
 }
 
@@ -239,18 +236,19 @@ const RUN_SELECT = {
     select: {
       id: true,
       itemId: true,
+      itemIdSnapshot: true,
       labelSnapshot: true,
       descriptionSnapshot: true,
       captureSnapshot: true,
       requiredSnapshot: true,
       minPhotosSnapshot: true,
+      maxPhotosSnapshot: true,
       sortOrder: true,
       status: true,
       note: true,
       value: true,
       skipReason: true,
       recordedAt: true,
-      item: { select: { maxPhotos: true } },
       photos: { orderBy: { capturedAt: "asc" }, select: { id: true, url: true, capturedAt: true } },
     },
   },
@@ -292,11 +290,11 @@ function toRunRow(row: RunShape): ChecklistRunRow {
     completedById: row.completedById,
     entries: row.entries.map((entry) => ({
       ...entryState(entry, entry.photos.length),
-      itemId: entry.itemId,
+      itemId: entry.itemIdSnapshot,
       descriptionSnapshot: entry.descriptionSnapshot,
       sortOrder: entry.sortOrder,
       recordedAt: entry.recordedAt?.toISOString() ?? null,
-      maxPhotos: entryMaxPhotos(entry.item?.maxPhotos, entry.minPhotosSnapshot),
+      maxPhotos: entryMaxPhotos(entry.maxPhotosSnapshot, entry.minPhotosSnapshot),
       photos: entry.photos.map((photo) => ({
         id: photo.id,
         url: photo.url,
@@ -329,6 +327,25 @@ export const templatesForHost = cache(
       select: TEMPLATE_SELECT,
     });
     return rows.map(toTemplateRow);
+  },
+);
+
+/** Active templates with visibility rules evaluated for one concrete record. */
+export const templatesForHostRecord = cache(
+  async (host: HostId, hostId: string): Promise<ChecklistTemplateRow[]> => {
+    const tenantId = await actingTenantId();
+    if (!tenantId) return [];
+    await requireChecklistHostAccess(host, hostId, tenantId);
+    const templates = await templatesForHost(host);
+    return Promise.all(templates.map(async (template) => ({
+      ...template,
+      items: await visibleChecklistItems(
+        REVISION_ITEMS.parse(template.items.map((item) => ({ ...item, visibility: item.visibility ?? null }))),
+        host,
+        hostId,
+        tenantId,
+      ),
+    })));
   },
 );
 

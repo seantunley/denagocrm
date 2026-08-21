@@ -14,6 +14,7 @@ import {
 import { logout } from "@/app/login/actions";
 import { APP_VERSION } from "@/lib/version";
 import { cn } from "@/lib/utils";
+import { clearChecklistDeviceData } from "@/lib/checklists/deviceStore";
 
 export type AccountMenuUser = {
   name: string;
@@ -135,7 +136,10 @@ export default function AccountMenu({
           </DropdownMenuItem>
         )}
         <DropdownMenuSeparator />
-        <DropdownMenuItem variant="destructive" onSelect={() => logout()}>
+        <DropdownMenuItem
+          variant="destructive"
+          onSelect={() => void clearChecklistDeviceData().finally(() => logout())}
+        >
           <LogOut className="size-4" />
           Sign out
         </DropdownMenuItem>

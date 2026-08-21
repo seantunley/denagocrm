@@ -5,6 +5,7 @@ import { HELP_CATEGORIES } from "./categories";
 import { gettingStartedArticles } from "./articles/getting-started";
 import { dashboardArticles } from "./articles/dashboards";
 import { journeysArticles } from "./articles/journeys";
+import { offlineChecklistArticles } from "./articles/offline-checklists";
 import crm from "./data/crm.json";
 import sales from "./data/sales.json";
 import stock from "./data/stock.json";
@@ -45,6 +46,7 @@ const preservedLegacyMarketing = (marketing as HelpArticle[]).filter((article) =
 export const HELP_ARTICLES: HelpArticle[] = [
   ...gettingStartedArticles,
   ...dashboardArticles,
+  ...offlineChecklistArticles,
   ...(crm as HelpArticle[]),
   ...(sales as HelpArticle[]),
   ...(stock as HelpArticle[]),

@@ -10,9 +10,10 @@ import { logError } from "@/lib/errorLog";
 import { MAX_PHOTO_BYTES } from "@/lib/photoBudget";
 import { assertOwnedBlob, deleteFile } from "@/lib/storage";
 import { requireChecklistHostAccess } from "@/lib/checklists/hostRecords";
+import { visibleChecklistItems } from "@/lib/checklists/visibility";
 import { hostHref } from "@/lib/checklists/hosts";
 import { entryMaxPhotos, entryState } from "@/lib/checklists/store";
-import { RUN_INPUT, outstanding, type Outstanding } from "@/lib/checklists/types";
+import { REVISION_ITEMS, RUN_INPUT, outstanding, type Outstanding } from "@/lib/checklists/types";
 
 /**
  * Capturing a guided checklist. Configuration is
@@ -89,10 +90,10 @@ function describeOutstanding(missing: Outstanding[]): string {
  * exactly like a request that never arrived, and the device has no way to tell
  * them apart.
  *
- * ENTRIES THE PAYLOAD OMITS ARE LEFT ALONE. A partial sync — a device that has
- * only managed to push half its answers — must not read as "delete the rest".
- * There is no path here that removes an answer; removing a photo is
- * `deleteChecklistPhoto`, and removing a step is a template edit.
+ * THE DEVICE MUST SUBMIT THE WHOLE APPLICABLE ITEM SET. Answers are small and
+ * stored together; accepting a partial set would let a modified client omit the
+ * required steps that define completion. Sync only upserts those authoritative
+ * entries and never deletes evidence; photo removal remains an explicit action.
  *
  * AN INACTIVE TEMPLATE IS STILL SYNCABLE, deliberately. Somebody may have started
  * a handover an hour before an administrator deactivated the list, and refusing
@@ -131,7 +132,17 @@ export async function syncChecklistRun(payload: unknown): Promise<ActionResult> 
 
     const template = await basePrisma.checklistTemplate.findFirst({
       where: { id: run.templateId, tenantId },
-      select: { id: true, host: true, name: true, version: true, items: { select: { id: true } } },
+      select: {
+        id: true,
+        host: true,
+        name: true,
+        items: { select: { id: true } },
+        revisions: {
+          where: { version: run.templateVersion },
+          take: 1,
+          select: { version: true, items: true },
+        },
+      },
     });
     if (!template) refuse("That checklist is no longer available in this workspace.");
     // A run must not answer a list built for a different situation. Without this,
@@ -141,6 +152,17 @@ export async function syncChecklistRun(payload: unknown): Promise<ActionResult> 
     if (template.host !== run.hostType) {
       refuse(`“${template.name}” is not a checklist for this kind of record.`);
     }
+    const revision = template.revisions[0];
+    if (!revision) refuse("That checklist revision is no longer available. Refresh the record and start again.");
+    const parsedRevision = REVISION_ITEMS.safeParse(revision.items);
+    if (!parsedRevision.success) refuse("That checklist revision is damaged and cannot be used.");
+    const applicable = await visibleChecklistItems(
+      parsedRevision.data,
+      run.hostType,
+      run.hostId,
+      tenantId,
+      run.startedAt,
+    );
 
     /*
      * WHO CURRENTLY HOLDS THIS ID.
@@ -160,6 +182,7 @@ export async function syncChecklistRun(payload: unknown): Promise<ActionResult> 
         id: true,
         tenantId: true,
         templateId: true,
+        templateVersion: true,
         hostType: true,
         hostId: true,
         completedAt: true,
@@ -187,10 +210,24 @@ export async function syncChecklistRun(payload: unknown): Promise<ActionResult> 
       // authorised the NEW target; it says nothing about the old one.
       refuse("That checklist belongs to a different record. Start a new one for this record.");
     }
+    if (existing && existing.templateVersion !== run.templateVersion) {
+      refuse("That saved checklist belongs to a different template revision. Refresh the record and carry on there.");
+    }
 
     const entryIds = run.entries.map((entry) => entry.id);
     if (new Set(entryIds).size !== entryIds.length) {
       refuse("Two steps in that checklist share an id.");
+    }
+    const submittedItems = run.entries.map((entry) => entry.itemId);
+    if (new Set(submittedItems).size !== submittedItems.length) {
+      refuse("That checklist submitted the same configured step more than once.");
+    }
+    const applicableIds = new Set(applicable.map((item) => item.id));
+    if (
+      submittedItems.length !== applicableIds.size ||
+      submittedItems.some((itemId) => !applicableIds.has(itemId))
+    ) {
+      refuse("The steps on this device do not match the authoritative checklist revision. Refresh and start again.");
     }
     /*
      * Same question, for the entries: is any of these ids already held by another
@@ -209,7 +246,8 @@ export async function syncChecklistRun(payload: unknown): Promise<ActionResult> 
       refuse("One of those steps is already recorded against another checklist.");
     }
 
-    const templateItems = new Set(template.items.map((item) => item.id));
+    const liveItems = new Set(template.items.map((item) => item.id));
+    const authoritative = new Map(applicable.map((item) => [item.id, item]));
     const user = await requireUser();
 
     await basePrisma.$transaction(async (tx) => {
@@ -223,7 +261,7 @@ export async function syncChecklistRun(payload: unknown): Promise<ActionResult> 
           // was in force when it started; re-reading today's version on every
           // sync would let an edit made this morning claim authorship of what was
           // recorded last week.
-          templateVersion: template.version,
+          templateVersion: revision.version,
           hostType: run.hostType,
           hostId: run.hostId,
           startedAt: run.startedAt,
@@ -236,22 +274,30 @@ export async function syncChecklistRun(payload: unknown): Promise<ActionResult> 
         update: {},
       });
 
+      // The row lock is the finality boundary. Completion and every evidence
+      // mutation take the same lock, so none can pass a stale completedAt read.
+      const [locked] = await tx.$queryRaw<Array<{ completedAt: Date | null }>>`
+        SELECT "completedAt" FROM "ChecklistRun"
+        WHERE "id" = ${run.id} AND "tenantId" = ${tenantId}
+        FOR UPDATE
+      `;
+      if (!locked || locked.completedAt) {
+        refuse("That checklist was already completed and can no longer be changed.");
+      }
+
+      const storedEntries = await tx.checklistEntry.findMany({
+        where: { tenantId, runId: run.id },
+        select: { id: true, itemIdSnapshot: true },
+      });
+      const storedByItem = new Map(storedEntries.map((entry) => [entry.itemIdSnapshot, entry.id]));
+
       for (const entry of run.entries) {
-        // An itemId this template does not own becomes null rather than a
-        // refusal. The honest case is a step deleted since the run began — which
-        // is exactly what the SET NULL on this column is for — and the dishonest
-        // one (an id borrowed from another template, which the foreign key would
-        // happily accept) resolves to the same harmless null. The snapshots below
-        // are what keep the entry readable either way.
-        const itemId = entry.itemId && templateItems.has(entry.itemId) ? entry.itemId : null;
+        const item = authoritative.get(entry.itemId)!;
+        const storedId = storedByItem.get(item.id);
+        if (storedId && storedId !== entry.id) {
+          refuse("That checklist step is already saved under a different device id.");
+        }
         const answers = {
-          itemId,
-          labelSnapshot: entry.labelSnapshot,
-          descriptionSnapshot: entry.descriptionSnapshot ?? null,
-          captureSnapshot: entry.captureSnapshot,
-          requiredSnapshot: entry.requiredSnapshot,
-          minPhotosSnapshot: entry.minPhotosSnapshot,
-          sortOrder: entry.sortOrder,
           status: entry.status,
           note: entry.note ?? null,
           value: entry.value ?? null,
@@ -260,7 +306,21 @@ export async function syncChecklistRun(payload: unknown): Promise<ActionResult> 
         };
         await tx.checklistEntry.upsert({
           where: { id: entry.id },
-          create: { id: entry.id, tenantId, runId: run.id, ...answers },
+          create: {
+            id: entry.id,
+            tenantId,
+            runId: run.id,
+            itemId: liveItems.has(item.id) ? item.id : null,
+            itemIdSnapshot: item.id,
+            labelSnapshot: item.label,
+            descriptionSnapshot: item.description,
+            captureSnapshot: item.capture,
+            requiredSnapshot: item.required,
+            minPhotosSnapshot: item.minPhotos,
+            maxPhotosSnapshot: item.maxPhotos,
+            sortOrder: item.sortOrder,
+            ...answers,
+          },
           update: answers,
         });
       }
@@ -307,49 +367,45 @@ export async function completeChecklistRun(runId: string): Promise<ActionResult>
         id: true,
         hostType: true,
         hostId: true,
-        completedAt: true,
-        entries: {
-          select: {
-            id: true,
-            labelSnapshot: true,
-            captureSnapshot: true,
-            requiredSnapshot: true,
-            minPhotosSnapshot: true,
-            status: true,
-            note: true,
-            value: true,
-            skipReason: true,
-            _count: { select: { photos: true } },
-          },
-        },
       },
     });
     if (!run) refuse("That checklist is no longer available in this workspace.");
     const { host } = await requireChecklistHostAccess(run.hostType, run.hostId, tenantId);
-    if (run.completedAt) {
-      refuse("That checklist has already been completed.");
-    }
-    // An empty run passes every completeness rule vacuously, which would let a
-    // device create a run, complete it immediately and present the result as a
-    // signed-off handover with nothing in it.
-    if (run.entries.length === 0) {
-      refuse("That checklist has no steps recorded yet.");
-    }
-
-    const missing = outstanding(run.entries.map((entry) => entryState(entry, entry._count.photos)));
-    if (missing.length > 0) {
-      refuse(`Not finished yet — ${describeOutstanding(missing)}.`);
-    }
-
     const user = await requireUser();
-    // Guarded: `completedAt: null` is re-asserted at the moment of the write, so
-    // two people tapping Complete at once produce one completion with one name on
-    // it rather than a last-writer-wins overwrite of who signed it off.
-    const { count } = await basePrisma.checklistRun.updateMany({
-      where: { id: run.id, tenantId, completedAt: null },
-      data: { completedAt: new Date(), completedById: user.id },
+    await basePrisma.$transaction(async (tx) => {
+      const [locked] = await tx.$queryRaw<Array<{ completedAt: Date | null }>>`
+        SELECT "completedAt" FROM "ChecklistRun"
+        WHERE "id" = ${run.id} AND "tenantId" = ${tenantId}
+        FOR UPDATE
+      `;
+      if (!locked) refuse("That checklist is no longer available in this workspace.");
+      if (locked.completedAt) refuse("That checklist has already been completed.");
+
+      const entries = await tx.checklistEntry.findMany({
+        where: { tenantId, runId: run.id },
+        select: {
+          id: true,
+          labelSnapshot: true,
+          captureSnapshot: true,
+          requiredSnapshot: true,
+          minPhotosSnapshot: true,
+          status: true,
+          note: true,
+          value: true,
+          skipReason: true,
+          _count: { select: { photos: true } },
+        },
+      });
+      if (entries.length === 0) refuse("That checklist has no steps recorded yet.");
+      const missing = outstanding(entries.map((entry) => entryState(entry, entry._count.photos)));
+      if (missing.length > 0) refuse(`Not finished yet — ${describeOutstanding(missing)}.`);
+
+      const completed = await tx.checklistRun.updateMany({
+        where: { id: run.id, tenantId, completedAt: null },
+        data: { completedAt: new Date(), completedById: user.id },
+      });
+      if (completed.count !== 1) refuse("That checklist has already been completed.");
     });
-    if (count === 0) refuse("That checklist has just been completed by somebody else.");
 
     revalidatePath(hostHref(host, run.hostId));
     return { success: "Checklist completed" };
@@ -410,28 +466,16 @@ export async function registerChecklistPhoto(
         id: true,
         tenantId: true,
         minPhotosSnapshot: true,
-        item: { select: { maxPhotos: true } },
+        maxPhotosSnapshot: true,
         run: { select: { id: true, hostType: true, hostId: true, completedAt: true } },
-        _count: { select: { photos: true } },
       },
     });
     if (!entry?.run) refuse("That checklist step is no longer available in this workspace.");
     const { host } = await requireChecklistHostAccess(entry.run.hostType, entry.run.hostId, tenantId);
-    if (entry.run.completedAt) {
-      refuse("That checklist has been completed, so no more photos can be added to it.");
-    }
 
     const photo = STAGED_PHOTO.safeParse(staged[0]);
     if (staged.length !== 1 || !photo.success) refuse("Register one checklist photo at a time.");
     const url = photo.data.url;
-
-    // The cap is enforced against rows that EXIST, not against a number the
-    // device is keeping. See `entryMaxPhotos` for what happens when the step
-    // itself has since been deleted.
-    const cap = entryMaxPhotos(entry.item?.maxPhotos, entry.minPhotosSnapshot);
-    if (entry._count.photos >= cap) {
-      refuse(`That step already holds ${cap} photo${cap === 1 ? "" : "s"}. Remove one before adding another.`);
-    }
 
     const blob = await assertOwnedBlob(url, entry.tenantId);
     if (!blob.contentType.startsWith("image/")) refuse("That file is not an image.");
@@ -449,32 +493,39 @@ export async function registerChecklistPhoto(
      * primary-key violation — and re-pointing it at this entry would move
      * somebody else's photograph onto this record.
      */
-    const held = await basePrisma.checklistPhoto.findUnique({
-      where: { id: photo.data.id },
-      select: { id: true, tenantId: true, entryId: true, url: true },
-    });
-    if (held) {
-      if (held.tenantId !== tenantId || held.entryId !== entry.id) {
-        refuse("That photo id is already in use.");
+    let alreadyRecorded = false;
+    await basePrisma.$transaction(async (tx) => {
+      const [locked] = await tx.$queryRaw<Array<{ completedAt: Date | null }>>`
+        SELECT "completedAt" FROM "ChecklistRun"
+        WHERE "id" = ${entry.run.id} AND "tenantId" = ${tenantId}
+        FOR UPDATE
+      `;
+      if (!locked || locked.completedAt) {
+        refuse("That checklist has been completed, so no more photos can be added to it.");
       }
-      if (held.url !== url) {
-        refuse("That photo id has already been used for a different image.");
-      }
-      return { success: "Photo already recorded" };
-    }
 
-    await basePrisma.checklistPhoto.create({
-      data: {
-        id: photo.data.id,
-        tenantId,
-        entryId: entry.id,
-        url,
-        capturedAt: photo.data.capturedAt,
-      },
+      const held = await tx.checklistPhoto.findUnique({
+        where: { id: photo.data.id },
+        select: { tenantId: true, entryId: true, url: true },
+      });
+      if (held) {
+        if (held.tenantId !== tenantId || held.entryId !== entry.id) refuse("That photo id is already in use.");
+        if (held.url !== url) refuse("That photo id has already been used for a different image.");
+        alreadyRecorded = true;
+      } else {
+        const cap = entryMaxPhotos(entry.maxPhotosSnapshot, entry.minPhotosSnapshot);
+        const count = await tx.checklistPhoto.count({ where: { tenantId, entryId: entry.id } });
+        if (count >= cap) {
+          refuse(`That step already holds ${cap} photo${cap === 1 ? "" : "s"}. Remove one before adding another.`);
+        }
+        await tx.checklistPhoto.create({
+          data: { id: photo.data.id, tenantId, entryId: entry.id, url, capturedAt: photo.data.capturedAt },
+        });
+      }
     });
 
     revalidatePath(hostHref(host, entry.run.hostId));
-    return { success: "Photo saved" };
+    return { success: alreadyRecorded ? "Photo already recorded" : "Photo saved" };
   }, failureLog);
 }
 
@@ -510,7 +561,7 @@ export async function deleteChecklistPhoto(photoId: string): Promise<ActionResul
         entry: {
           select: {
             id: true,
-            run: { select: { hostType: true, hostId: true, completedAt: true } },
+            run: { select: { id: true, hostType: true, hostId: true, completedAt: true } },
           },
         },
       },
@@ -521,14 +572,18 @@ export async function deleteChecklistPhoto(photoId: string): Promise<ActionResul
       photo.entry.run.hostId,
       tenantId,
     );
-    if (photo.entry.run.completedAt) {
-      refuse("That checklist has been completed, so its photos can no longer be removed.");
-    }
-
-    const { count } = await basePrisma.checklistPhoto.deleteMany({
-      where: { id: photo.id, tenantId },
+    const removed = await basePrisma.$transaction(async (tx) => {
+      const [locked] = await tx.$queryRaw<Array<{ completedAt: Date | null }>>`
+        SELECT "completedAt" FROM "ChecklistRun"
+        WHERE "id" = ${photo.entry.run.id} AND "tenantId" = ${tenantId}
+        FOR UPDATE
+      `;
+      if (!locked || locked.completedAt) {
+        refuse("That checklist has been completed, so its photos can no longer be removed.");
+      }
+      return tx.checklistPhoto.deleteMany({ where: { id: photo.id, tenantId, entryId: photo.entry.id } });
     });
-    if (count > 0) {
+    if (removed.count > 0) {
       await deleteFile(photo.url).catch(async (error) => {
         await logError("checklist-photo-cleanup", error, `entry=${photo.entry?.id} photo=${photo.id}`, {
           tenantId,

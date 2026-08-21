@@ -70,6 +70,9 @@ import {
   APPROVAL_STATUS_TONE,
 } from "@/lib/workshop-constants";
 import { getDefaultLabourRateCents, effectiveLabourRateCents, totalLoggedHours, jobProfit } from "@/lib/workshop";
+import { hasPermission } from "@/lib/permissions";
+import ChecklistCard from "@/components/checklists/ChecklistCard";
+import { runsForHost, templatesForHostRecord } from "@/lib/checklists/store";
 
 /**
  * One collapsible step in the job's flow. The current stage is expanded; done
@@ -155,6 +158,16 @@ export default async function JobCardDetailPage({
   ]);
   if (!jobCard) notFound();
   const currentUser = await requireUser();
+  const canManageChecklists = await hasPermission(currentUser, "jobcards.manage");
+  const checklistTenantId = jobCard.tenantId ?? "";
+  const [checkinTemplates, checkinRuns, checkoutTemplates, checkoutRuns] = canManageChecklists && checklistTenantId
+    ? await Promise.all([
+        templatesForHostRecord("jobcard.checkin", jobCard.id),
+        runsForHost("jobcard.checkin", jobCard.id),
+        templatesForHostRecord("jobcard.checkout", jobCard.id),
+        runsForHost("jobcard.checkout", jobCard.id),
+      ])
+    : [[], [], [], []];
   const [servicePackages, siblingJobs] = await Promise.all([
     prisma.servicePackage.findMany({ where: { active: true }, orderBy: { name: "asc" } }),
     prisma.jobCard.findMany({
@@ -307,6 +320,17 @@ export default async function JobCardDetailPage({
 
         {/* 2 · Check-in ──────────────────────────────────────────────────── */}
         <StageSection n={2} label="Check-in" state={stageState(1)} hint={`${jobCard.documents.filter((d) => d.tag === "checkin-photo").length} check-in photos${jobCard.kmIn != null ? ` · ${jobCard.kmIn.toLocaleString()} km` : ""}`}>
+          {checklistTenantId && (
+            <ChecklistCard
+              tenantId={checklistTenantId}
+              userId={currentUser.id}
+              hostType="jobcard.checkin"
+              hostId={jobCard.id}
+              templates={checkinTemplates}
+              runs={checkinRuns}
+              canCapture={canManageChecklists}
+            />
+          )}
           <div className="card">
             <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
               <div>
@@ -683,6 +707,17 @@ export default async function JobCardDetailPage({
 
         {/* 6 · Quality check ─────────────────────────────────────────────── */}
         <StageSection n={6} label="Quality check" state={stageState(5)} hint={`${jobCard.documents.filter((d) => d.tag === "checkout-photo").length} check-out photos`}>
+          {checklistTenantId && (
+            <ChecklistCard
+              tenantId={checklistTenantId}
+              userId={currentUser.id}
+              hostType="jobcard.checkout"
+              hostId={jobCard.id}
+              templates={checkoutTemplates}
+              runs={checkoutRuns}
+              canCapture={canManageChecklists}
+            />
+          )}
           <div className="card">
             <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
               <div>

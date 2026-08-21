@@ -33,6 +33,48 @@ import { hostById, type HostDef } from "./hosts";
 export type ResolvedHost = { host: HostDef; hostId: string };
 
 /**
+ * A deliberately small, flat set of host facts available to item visibility
+ * rules. These are presentation rules, never access control; the host gate must
+ * have run before this helper is called.
+ */
+export async function checklistHostSignals(
+  hostType: string,
+  hostId: string,
+  tenantId: string,
+): Promise<Record<string, unknown>> {
+  const host = hostById(hostType);
+  if (!host) throw new Error("That checklist target is not something this app knows about.");
+  switch (host.model) {
+    case "quote": {
+      const row = await basePrisma.quote.findFirst({
+        where: { id: hostId, tenantId, deletedAt: null },
+        select: { status: true, invoicedAt: true, depositPaidAt: true, deliveryScheduledFor: true, deliveredAt: true, fleetId: true },
+      });
+      if (!row) throw new Error("That quote is not available in the active workspace.");
+      return { ...row, hasFleet: Boolean(row.fleetId) };
+    }
+    case "jobCard": {
+      const row = await basePrisma.jobCard.findFirst({
+        where: { id: hostId, tenantId, deletedAt: null },
+        select: { status: true, priority: true, underWarranty: true, isSubcontracted: true, kmIn: true, vehicleId: true },
+      });
+      if (!row) throw new Error("That job card is not available in the active workspace.");
+      return row;
+    }
+    case "vehicle": {
+      const row = await basePrisma.vehicle.findFirst({
+        where: { id: hostId, tenantId, deletedAt: null },
+        select: { model: true, color: true, vin: true, regNumber: true, warrantyMonths: true, serviceIntervalKm: true },
+      });
+      if (!row) throw new Error("That vehicle is not available in the active workspace.");
+      return { ...row, hasVin: Boolean(row.vin), hasRegistration: Boolean(row.regNumber) };
+    }
+    default:
+      throw new Error("That checklist target has no resolver.");
+  }
+}
+
+/**
  * Authorise a host record, or throw.
  *
  * Throws rather than returning a boolean deliberately: every caller is a

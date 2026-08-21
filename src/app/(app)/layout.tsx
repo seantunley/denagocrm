@@ -29,6 +29,7 @@ export default async function AppLayout({
     redirect("/platform/tenants");
   }
 
+  const activeTenantId = await getActiveTenantId();
   const [inboxWaiting, casesWaiting, permissions, enabledModules, brand] = await Promise.all([
     awaitingReplyCount(user).catch(() => 0),
     casesAwaitingCount(user).catch(() => 0),
@@ -39,9 +40,7 @@ export default async function AppLayout({
     // already known, and a staff member reaching the CRM on the platform's own
     // domain must still see their own brand. brandForTenant never throws; this
     // layout wraps every page in the workspace.
-    getActiveTenantId()
-      .then(brandForTenant)
-      .catch(() => DEFAULT_BRAND),
+    brandForTenant(activeTenantId).catch(() => DEFAULT_BRAND),
   ]);
 
   // Single-point route block: a page belonging to a disabled module is not
@@ -78,6 +77,7 @@ export default async function AppLayout({
           component has no access to. */}
       <AppShell
         user={{
+          id: user.id,
           name: user.name,
           role: user.role,
           permissions,
@@ -88,6 +88,7 @@ export default async function AppLayout({
         enabledModules={enabledModules ? [...enabledModules] : undefined}
         brand={{ logoUrl: brandLogoUrl(brand), displayName: brand.displayName }}
         weatherCities={weatherCities}
+        tenantId={activeTenantId ?? ""}
       >
         {children}
         {modal}

@@ -26,12 +26,21 @@ import {
   countPending,
   drain,
   enqueue,
+  notifyOfflineState,
+  pending,
   remove as removeQueued,
+  type OfflineScope,
   type QueuedPhoto,
 } from "@/lib/checklists/queue";
+import {
+  deleteDeviceSession,
+  loadDeviceSession,
+  saveDeviceSession,
+} from "@/lib/checklists/deviceStore";
 import { preparePhoto, unsendablePhoto, uploadPhoto } from "@/lib/photoTransport";
 import {
   completeChecklistRun,
+  deleteChecklistPhoto,
   registerChecklistPhoto,
   syncChecklistRun,
 } from "@/app/actions/checklistRuns";
@@ -107,7 +116,8 @@ export type RunnerTemplate = {
  */
 export type RunnerEntry = {
   id: string;
-  itemId: string | null;
+  /** Immutable id from the authoritative revision, even if the live item is deleted. */
+  itemId: string;
   labelSnapshot: string;
   descriptionSnapshot: string | null;
   captureSnapshot: CaptureKind;
@@ -122,10 +132,12 @@ export type RunnerEntry = {
   skipReason: string | null;
   /** Photos that have already reached the server for this entry. */
   photoCount: number;
+  photos: Array<{ id: string; url: string }>;
 };
 
 export type RunnerRun = {
   id: string;
+  templateVersion: number;
   /** ISO-8601, because a Date does not survive the server→client boundary. */
   startedAt: string;
   entries: RunnerEntry[];
@@ -140,13 +152,14 @@ type Capture = {
    * False when IndexedDB was unavailable and the photo went straight up. Such a
    * photo is NOT in the queue, so it must not be counted as waiting.
    */
-  queued: boolean;
+  state: "queued" | "carried" | "registered";
 };
 
-type Session = { runId: string; startedAt: string; entries: RunnerEntry[] };
+type Session = { runId: string; startedAt: string; templateVersion: number; entries: RunnerEntry[]; dirty: boolean };
 
 export default function ChecklistRunner({
   tenantId,
+  userId,
   hostType,
   hostId,
   template,
@@ -156,6 +169,7 @@ export default function ChecklistRunner({
 }: {
   /** Needed to build the blob path the upload route will authorise. */
   tenantId: string;
+  userId: string;
   hostType: string;
   hostId: string;
   template: RunnerTemplate;
@@ -165,6 +179,7 @@ export default function ChecklistRunner({
   triggerClassName?: string;
 }) {
   const router = useRouter();
+  const scope: OfflineScope = { tenantId, userId };
   const [open, setOpen] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
   const [step, setStep] = useState(0);
@@ -201,12 +216,18 @@ export default function ChecklistRunner({
    * state because carrying a File is not something to re-render over.
    */
   const carried = useRef<{ id: string; entryId: string; file: File; capturedAt: string }[]>([]);
+  const autoSync = useRef<() => void>(() => undefined);
   useEffect(() => {
     const held = previews.current;
     return () => {
       for (const url of held) URL.revokeObjectURL(url);
       held.clear();
     };
+  }, []);
+  useEffect(() => {
+    const handleOnline = () => autoSync.current();
+    window.addEventListener("online", handleOnline);
+    return () => window.removeEventListener("online", handleOnline);
   }, []);
 
   const entries = session?.entries ?? [];
@@ -227,11 +248,11 @@ export default function ChecklistRunner({
   }));
 
   const refreshQueued = useCallback(async (runId: string) => {
-    setQueued(await countPending(runId));
-  }, []);
+    setQueued(await countPending({ tenantId, userId }, runId));
+  }, [tenantId, userId]);
 
   function buildSession(): Session {
-    if (run) return { runId: run.id, startedAt: run.startedAt, entries: run.entries.map((e) => ({ ...e })) };
+    if (run) return { runId: run.id, startedAt: run.startedAt, templateVersion: run.templateVersion, entries: run.entries.map((e) => ({ ...e })), dirty: false };
     /*
      * Ids minted here, in an event handler, and never during a render.
      *
@@ -243,6 +264,8 @@ export default function ChecklistRunner({
     return {
       runId: crypto.randomUUID(),
       startedAt,
+      templateVersion: template.version,
+      dirty: true,
       entries: [...template.items]
         .sort((a, b) => a.sortOrder - b.sortOrder)
         .map((item, index) => ({
@@ -260,6 +283,7 @@ export default function ChecklistRunner({
           value: null,
           skipReason: null,
           photoCount: 0,
+          photos: [],
         })),
     };
   }
@@ -292,29 +316,57 @@ export default function ChecklistRunner({
     return first === -1 ? Math.max(0, list.length - 1) : first;
   }
 
-  function onOpenChange(next: boolean) {
-    if (next) {
-      // Kept across a close, so shutting the screen to answer a phone call does
-      // not throw away captures that have not been synced yet.
-      const built = session ?? buildSession();
-      setSession(built);
-      setStep(resumeStep(built.entries));
-      setProblem(null);
-      setNotice(null);
-      setBlockers([]);
-      setSkipping(false);
-      setSkipReason("");
-      void refreshQueued(built.runId);
+  async function persist(active: Session): Promise<void> {
+    await saveDeviceSession(scope, {
+      runId: active.runId,
+      hostType,
+      hostId,
+      templateId: template.id,
+      templateVersion: active.templateVersion,
+      startedAt: active.startedAt,
+      entries: active.entries,
+      dirty: active.dirty,
+    });
+  }
+
+  async function openRunner() {
+    setBusy("Opening saved work…");
+    const stored = await loadDeviceSession(scope, { hostType, hostId, templateId: template.id });
+    const built: Session = stored
+      ? { runId: stored.runId, startedAt: stored.startedAt, templateVersion: stored.templateVersion, entries: stored.entries, dirty: stored.dirty }
+      : session ?? buildSession();
+    if (!stored) await persist(built);
+    const queuedPhotos = await pending(scope, built.runId);
+    const restored: Record<string, Capture[]> = {};
+    for (const photo of queuedPhotos) {
+      const preview = URL.createObjectURL(photo.blob);
+      previews.current.add(preview);
+      (restored[photo.entryId] ??= []).push({ id: photo.id, preview, state: "queued" });
     }
-    setOpen(next);
+    setCaptures(restored);
+    setSession(built);
+    setStep(resumeStep(built.entries));
+    setProblem(null);
+    setNotice(stored ? "Restored from this device." : null);
+    setBlockers([]);
+    setSkipping(false);
+    setSkipReason("");
+    await refreshQueued(built.runId);
+    setBusy(null);
+    setOpen(true);
+  }
+
+  function onOpenChange(next: boolean) {
+    if (!next) setOpen(false);
   }
 
   function patch(entryId: string, change: Partial<RunnerEntry>) {
-    setSession((previous) =>
-      previous
-        ? { ...previous, entries: previous.entries.map((e) => (e.id === entryId ? { ...e, ...change } : e)) }
-        : previous,
-    );
+    setSession((previous) => {
+      if (!previous) return previous;
+      const next = { ...previous, dirty: true, entries: previous.entries.map((e) => (e.id === entryId ? { ...e, ...change } : e)) };
+      void persist(next);
+      return next;
+    });
   }
 
   /* ── taking a photo ───────────────────────────────────────────────── */
@@ -352,12 +404,12 @@ export default function ChecklistRunner({
       }
 
       const id = crypto.randomUUID();
-      const result = await enqueue({ id, runId: session.runId, entryId: entry.id, blob: file });
+      const result = await enqueue({ id, runId: session.runId, entryId: entry.id, blob: file, scope });
       const preview = URL.createObjectURL(file);
       previews.current.add(preview);
 
       if (result.stored) {
-        added.push({ id, preview, queued: true });
+        added.push({ id, preview, state: "queued" });
         continue;
       }
       /*
@@ -369,10 +421,10 @@ export default function ChecklistRunner({
        */
       try {
         await sendNow(entry.id, id, file, result.item.capturedAt);
-        added.push({ id, preview, queued: false });
+        added.push({ id, preview, state: "registered" });
         sentDirectly++;
       } catch {
-        added.push({ id, preview, queued: false });
+        added.push({ id, preview, state: "carried" });
         carried.current.push({ id, entryId: entry.id, file, capturedAt: result.item.capturedAt });
         refused =
           "This browser will not keep photos offline. This one is being held in memory and sent when you save — keep this screen open until then.";
@@ -393,6 +445,15 @@ export default function ChecklistRunner({
     if (result.error) throw new Error(result.error);
   }
 
+  function markCaptureRegistered(entryId: string, photoId: string) {
+    setCaptures((previous) => ({
+      ...previous,
+      [entryId]: (previous[entryId] ?? []).map((capture) =>
+        capture.id === photoId ? { ...capture, state: "registered" } : capture,
+      ),
+    }));
+  }
+
   /** Send whatever is being carried in memory. Returns how many are still stuck. */
   async function flushCarried(): Promise<number> {
     if (carried.current.length === 0) return 0;
@@ -400,6 +461,7 @@ export default function ChecklistRunner({
     for (const item of carried.current) {
       try {
         await sendNow(item.entryId, item.id, item.file, item.capturedAt);
+        markCaptureRegistered(item.entryId, item.id);
       } catch {
         // Kept, not dropped. The id is stable, so a later attempt that succeeds
         // after an earlier one half-succeeded still converges on one row.
@@ -411,7 +473,16 @@ export default function ChecklistRunner({
   }
 
   async function dropCapture(entryId: string, photoId: string) {
-    await removeQueued(photoId);
+    const capture = captures[entryId]?.find((item) => item.id === photoId);
+    await removeQueued(scope, photoId);
+    carried.current = carried.current.filter((item) => item.id !== photoId);
+    if (capture?.state === "registered") {
+      const result = await deleteChecklistPhoto(photoId);
+      if (result.error) {
+        setProblem(result.error);
+        return;
+      }
+    }
     setCaptures((previous) => ({
       ...previous,
       [entryId]: (previous[entryId] ?? []).filter((capture) => capture.id !== photoId),
@@ -419,29 +490,34 @@ export default function ChecklistRunner({
     if (session) await refreshQueued(session.runId);
   }
 
+  async function dropServerPhoto(entry: RunnerEntry, photoId: string) {
+    const result = await deleteChecklistPhoto(photoId);
+    if (result.error) return setProblem(result.error);
+    patch(entry.id, {
+      photoCount: Math.max(0, entry.photoCount - 1),
+      photos: entry.photos.filter((photo) => photo.id !== photoId),
+    });
+  }
+
   /**
    * Send one queued photo. Handed to `drain`, which owns the retry accounting.
    *
    * A throw is the signal to keep the blob and count an attempt, so every
-   * failure — transfer or filing — must throw rather than be swallowed. A photo
-   * whose bytes landed but whose row did not will be re-sent, and that is fine:
-   * the photo's id is client-minted and is the row's primary key, so the second
-   * arrival converges on the same row rather than creating a duplicate.
+   * failure — transfer or filing — must throw rather than be swallowed. The
+   * queue persists the uploaded URL before finalising, so a response lost after
+   * registration retries only that final step against the same object.
    */
-  const uploader = useCallback(
-    async (item: QueuedPhoto) => {
+  const uploader = {
+    upload: async (item: QueuedPhoto) => {
       const file = new File([item.blob], `${item.id}.jpg`, { type: item.blob.type || "image/jpeg" });
-      const url = await uploadPhoto(
-        { kind: "checklist", recordId: item.entryId, tenantId, key: item.id },
-        file,
-      );
-      const result = await registerChecklistPhoto(item.entryId, [
-        { url, id: item.id, capturedAt: item.capturedAt },
-      ]);
-      if (result.error) throw new Error(result.error);
+      return uploadPhoto({ kind: "checklist", recordId: item.entryId, tenantId, key: item.id }, file);
     },
-    [tenantId],
-  );
+    finalize: async (item: QueuedPhoto, url: string) => {
+      const result = await registerChecklistPhoto(item.entryId, [{ url, id: item.id, capturedAt: item.capturedAt }]);
+      if (result.error) throw new Error(result.error);
+      markCaptureRegistered(item.entryId, item.id);
+    },
+  };
 
   /* ── saving ───────────────────────────────────────────────────────── */
 
@@ -449,18 +525,13 @@ export default function ChecklistRunner({
     return {
       id: active.runId,
       templateId: template.id,
+      templateVersion: active.templateVersion,
       hostType: hostType as ChecklistRunInput["hostType"],
       hostId,
       startedAt: new Date(active.startedAt),
       entries: active.entries.map((entry) => ({
         id: entry.id,
         itemId: entry.itemId,
-        labelSnapshot: entry.labelSnapshot,
-        descriptionSnapshot: entry.descriptionSnapshot ?? undefined,
-        captureSnapshot: entry.captureSnapshot,
-        requiredSnapshot: entry.requiredSnapshot,
-        minPhotosSnapshot: entry.minPhotosSnapshot,
-        sortOrder: entry.sortOrder,
         status: entry.status,
         note: entry.note ?? undefined,
         value: entry.value ?? undefined,
@@ -478,30 +549,41 @@ export default function ChecklistRunner({
    * the wrong way round.
    */
   async function syncAndUpload(active: Session): Promise<string | null> {
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      await persist({ ...active, dirty: true });
+      notifyOfflineState(false);
+      return "Saved on this device — waiting to sync when you are online.";
+    }
+    notifyOfflineState(true);
     setBusy("Saving the checklist…");
-    const synced = await syncChecklistRun(payload(active));
-    if (synced.error) return synced.error;
+    try {
+      const synced = await syncChecklistRun(payload(active));
+      if (synced.error) return synced.error;
 
-    setBusy("Uploading photos…");
-    // The memory-held ones first: they have no store to retry them from, so this
-    // is the only chance they get, and it exists only now that the sync has put
-    // their entries on the server for the upload token to be authorised against.
-    const stranded = await flushCarried();
-    const report = await drain(active.runId, uploader);
-    await refreshQueued(active.runId);
+      setBusy("Uploading photos…");
+      const stranded = await flushCarried();
+      const report = await drain(scope, active.runId, uploader);
+      await refreshQueued(active.runId);
 
-    if (stranded > 0) {
-      return `${stranded} photo${stranded === 1 ? "" : "s"} could not be sent and this browser cannot hold them offline. Do not close this screen — try again when the signal is better.`;
-    }
+      if (stranded > 0) {
+        return `${stranded} photo${stranded === 1 ? "" : "s"} could not be sent and this browser cannot hold them offline. Do not close this screen — try again when the signal is better.`;
+      }
 
-    if (report.stuck.length > 0) {
-      const first = report.stuck[0];
-      return `${report.stuck.length} photo${report.stuck.length === 1 ? " has" : "s have"} failed too many times and will not be retried: ${first.lastError ?? "no reason recorded"}`;
+      if (report.stuck.length > 0) {
+        const first = report.stuck[0];
+        return `${report.stuck.length} photo${report.stuck.length === 1 ? " has" : "s have"} failed too many times and will not be retried: ${first.lastError ?? "no reason recorded"}`;
+      }
+      if (report.failed > 0) {
+        return `${report.failed} photo${report.failed === 1 ? "" : "s"} could not be uploaded. They are still on this device — try again when the signal is better.`;
+      }
+      await persist({ ...active, dirty: false });
+      return null;
+    } catch {
+      await persist({ ...active, dirty: true });
+      return "Saved on this device — the server could not be reached. It will retry when you are online.";
+    } finally {
+      notifyOfflineState(false);
     }
-    if (report.failed > 0) {
-      return `${report.failed} photo${report.failed === 1 ? "" : "s"} could not be uploaded. They are still on this device — try again when the signal is better.`;
-    }
-    return null;
   }
 
   async function saveProgress() {
@@ -510,12 +592,18 @@ export default function ChecklistRunner({
     setNotice(null);
     const failure = await syncAndUpload(session);
     setBusy(null);
-    setProblem(failure);
+    const savedLocally = failure?.startsWith("Saved on this device") ?? false;
+    setProblem(savedLocally ? null : failure);
+    if (savedLocally) setNotice(failure);
     if (!failure) {
+      setSession((previous) => previous ? { ...previous, dirty: false } : previous);
       setNotice("Saved. You can close this and carry on later.");
       router.refresh();
     }
   }
+  autoSync.current = () => {
+    if (session && (session.dirty || queued > 0 || carried.current.length > 0) && busy === null) void saveProgress();
+  };
 
   async function finish() {
     if (!session) return;
@@ -535,7 +623,12 @@ export default function ChecklistRunner({
     const failure = await syncAndUpload(session);
     if (failure) {
       setBusy(null);
-      setProblem(failure);
+      if (failure.startsWith("Saved on this device")) {
+        setNotice(failure);
+        setProblem(null);
+      } else {
+        setProblem(failure);
+      }
       return;
     }
 
@@ -553,6 +646,7 @@ export default function ChecklistRunner({
       setBlockers(outstanding(states));
       return;
     }
+    await deleteDeviceSession(scope, session.runId);
     setOpen(false);
     router.refresh();
   }
@@ -606,7 +700,7 @@ export default function ChecklistRunner({
     <>
       <button
         type="button"
-        onClick={() => onOpenChange(true)}
+        onClick={() => void openRunner()}
         className={cn("btn-primary btn-sm", triggerClassName)}
       >
         <Camera className="size-3.5" aria-hidden="true" />
@@ -667,6 +761,7 @@ export default function ChecklistRunner({
                 galleryRef={galleryRef}
                 onFiles={(files) => void acceptFiles(current, files)}
                 onDropCapture={(photoId) => void dropCapture(current.id, photoId)}
+                onDropServerPhoto={(photoId) => void dropServerPhoto(current, photoId)}
                 onPatch={(change) => patch(current.id, change)}
                 onSkipReason={setSkipReason}
                 onStartSkip={() => setSkipping(true)}
@@ -779,6 +874,7 @@ function Step({
   galleryRef,
   onFiles,
   onDropCapture,
+  onDropServerPhoto,
   onPatch,
   onSkipReason,
   onStartSkip,
@@ -793,6 +889,7 @@ function Step({
   galleryRef: React.RefObject<HTMLInputElement | null>;
   onFiles: (files: File[]) => void;
   onDropCapture: (photoId: string) => void;
+  onDropServerPhoto: (photoId: string) => void;
   onPatch: (change: Partial<RunnerEntry>) => void;
   onSkipReason: (value: string) => void;
   onStartSkip: () => void;
@@ -883,8 +980,22 @@ function Step({
             Choose a photo already taken
           </button>
 
-          {captures.length > 0 && (
+          {(entry.photos.length > 0 || captures.length > 0) && (
             <ul className="flex flex-wrap gap-2 pt-1">
+              {entry.photos.map((photo) => (
+                <li key={photo.id} className="relative">
+                  {/* eslint-disable-next-line @next/next/no-img-element -- public evidence blob */}
+                  <img src={photo.url} alt={`Photo captured for ${entry.labelSnapshot}`} className="size-16 rounded-lg border border-border object-cover" />
+                  <button
+                    type="button"
+                    onClick={() => onDropServerPhoto(photo.id)}
+                    aria-label={`Remove this photo from ${entry.labelSnapshot}`}
+                    className="absolute -right-1.5 -top-1.5 grid size-6 place-items-center rounded-full border border-border bg-card text-muted-foreground hover:text-destructive"
+                  >
+                    <X className="size-3" aria-hidden="true" />
+                  </button>
+                </li>
+              ))}
               {captures.map((capture) => (
                 <li key={capture.id} className="relative">
                   {/* eslint-disable-next-line @next/next/no-img-element -- an

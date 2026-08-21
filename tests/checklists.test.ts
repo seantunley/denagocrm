@@ -284,6 +284,7 @@ test("the wire format demands the ids the device minted", () => {
     RUN_INPUT.safeParse({
       id: "run-00000001",
       templateId: "tpl-1",
+      templateVersion: 1,
       hostType: "quote.delivery",
       hostId: "q1",
       startedAt: "2026-08-21T09:00:00.000Z",
@@ -297,6 +298,7 @@ test("the wire format demands the ids the device minted", () => {
     RUN_INPUT.safeParse({
       id: "run-00000001",
       templateId: "tpl-1",
+      templateVersion: 1,
       hostType: "invoice.something",
       hostId: "q1",
       startedAt: "2026-08-21T09:00:00.000Z",
@@ -307,13 +309,13 @@ test("the wire format demands the ids the device minted", () => {
   // And a run cannot carry more answers than a template may have questions.
   const tooMany = Array.from({ length: CHECKLIST_LIMITS.itemsPerTemplate + 1 }, (_, i) => ({
     id: `entry-0000000${i}`,
-    labelSnapshot: `Step ${i}`,
-    captureSnapshot: "photo",
+    itemId: `item-${i}`,
   }));
   assert.equal(
     RUN_INPUT.safeParse({
       id: "run-00000001",
       templateId: "tpl-1",
+      templateVersion: 1,
       hostType: "quote.delivery",
       hostId: "q1",
       startedAt: "2026-08-21T09:00:00.000Z",
@@ -478,9 +480,19 @@ test("syncChecklistRun proves the template belongs here and fits this situation"
     /if \(template\.host !== run\.hostType\)/,
     "a run must not answer a list built for a different situation",
   );
-  // The version is stamped at CREATE only. Re-reading it on every sync would let
-  // an edit made this morning claim authorship of last week's handover.
-  assert.match(body, /create: \{[\s\S]*?templateVersion: template\.version/, "the revision must be stamped on create");
+  // The exact device-rendered revision is resolved server-side and stamped at
+  // CREATE only. Re-reading today's template version would rewrite old work.
+  assert.match(body, /revisions: \{[\s\S]*?where: \{ version: run\.templateVersion \}/, "the submitted revision must be resolved authoritatively");
+  assert.match(body, /create: \{[\s\S]*?templateVersion: revision\.version/, "the authoritative revision must be stamped on create");
+  for (const field of ["label", "description", "capture", "required", "minPhotos", "maxPhotos"] as const) {
+    assert.match(
+      body,
+      new RegExp(`${field}Snapshot: item\\.${field}`),
+      `${field} must come from the authoritative revision, not the device`,
+    );
+  }
+  assert.match(body, /submittedItems\.length !== applicableIds\.size/);
+  assert.match(body, /submittedItems\.some\(\(itemId\) => !applicableIds\.has\(itemId\)\)/);
   assert.ok(
     !/update: \{[\s\S]{0,200}templateVersion/.test(body),
     "the stamped revision must never be rewritten by a later sync",
@@ -508,20 +520,20 @@ test("completeChecklistRun recomputes completeness from the database", () => {
     /_count: \{ select: \{ photos: true \} \}/,
     "the photo counts must be counted rows, not a number the device reported",
   );
-  const readAt = body.indexOf("checklistRun.findFirst");
+  const readAt = body.indexOf("checklistEntry.findMany");
   const judgeAt = body.indexOf("outstanding(");
   const writeAt = firstWriteAt(body);
   assert.ok(readAt >= 0 && judgeAt > readAt, "the run must be read before it is judged");
   assert.ok(judgeAt < writeAt, "the run must be judged before it is completed");
   assert.match(
     body,
-    /outstanding\(run\.entries\.map\(\(entry\) => entryState\(entry, entry\._count\.photos\)\)\)/,
+    /outstanding\(entries\.map\(\(entry\) => entryState\(entry, entry\._count\.photos\)\)\)/,
     "completeness must be computed from the stored entries and the real photo counts",
   );
-  assert.match(body, /if \(missing\.length > 0\)\s*\{\s*refuse\(/, "an unfinished run must be refused");
+  assert.match(body, /if \(missing\.length > 0\) refuse\(/, "an unfinished run must be refused");
   // An empty run satisfies every rule vacuously. Without this it would be a way
   // to produce a signed-off handover with nothing in it.
-  assert.match(body, /run\.entries\.length === 0/, "an empty run must not count as complete");
+  assert.match(body, /entries\.length === 0/, "an empty run must not count as complete");
   // The completion itself is guarded, so two people tapping Complete produce one
   // completion with one name on it.
   assert.match(
@@ -564,9 +576,10 @@ test("registerChecklistPhoto verifies the blob before it records anything", () =
     "registerChecklistPhoto must not delete anything — removal is deleteChecklistPhoto's job",
   );
   // The cap is against rows that exist, and a completed run accepts nothing.
-  assert.match(body, /entry\._count\.photos >= cap/, "the photo cap must be enforced against stored rows");
-  assert.match(body, /entryMaxPhotos\(entry\.item\?\.maxPhotos, entry\.minPhotosSnapshot\)/, "the cap must fall back to the snapshot when the step is gone");
-  assert.match(body, /if \(entry\.run\.completedAt\)/, "a completed run must not gain evidence");
+  assert.match(body, /checklistPhoto\.count\(\{ where: \{ tenantId, entryId: entry\.id \} \}\)/, "the photo cap must be enforced against stored rows");
+  assert.match(body, /entryMaxPhotos\(entry\.maxPhotosSnapshot, entry\.minPhotosSnapshot\)/, "the immutable upper snapshot must set the cap");
+  assert.match(body, /FOR UPDATE/, "photo registration must share the run finality lock");
+  assert.match(body, /locked\.completedAt/, "a completed run must not gain evidence");
 });
 
 test("deleteChecklistPhoto removes the row first and then the object", () => {
@@ -579,7 +592,8 @@ test("deleteChecklistPhoto removes the row first and then the object", () => {
     /deleteFile\(photo\.url\)\.catch\(async \(error\) => \{\s*await logError\(/,
     "a failed object delete must be logged, not thrown — the person has already had what they asked for",
   );
-  assert.match(body, /if \(photo\.entry\.run\.completedAt\)/, "a completed run's photos are a record");
+  assert.match(body, /FOR UPDATE/, "photo deletion must share the run finality lock");
+  assert.match(body, /locked\.completedAt/, "a completed run's photos are a record");
 });
 
 /* ══ the read path reads ════════════════════════════════════════════════ */
@@ -626,6 +640,7 @@ test("a step's visibility rule is parsed by the shared condition grammar", () =>
   );
   assert.match(source, /const VISIBILITY = SECTION\.shape\.visibility;/);
   assert.match(source, /VISIBILITY\.safeParse\(item\.visibility\)/);
+  assert.match(source, /parsed\.data \?\? \[\]\)\.some\(isSecurityRelevant\)/, "screen-only rules must not be accepted by a server-validated checklist");
   // A second grammar is the drift this prevents. If any of these appear here,
   // somebody has started writing their own "if".
   for (const token of ['z.literal("and")', 'z.literal("or")', '"greater_or_equal"', 'kind: z.literal(']) {
@@ -639,12 +654,15 @@ test("a step's visibility rule is parsed by the shared condition grammar", () =>
 test("the template version moves when the questions move, and not otherwise", () => {
   const source = code(TEMPLATES_PATH);
   const fn = source.slice(source.indexOf("function itemsChanged"));
-  for (const field of ["label", "capture", "required", "minPhotos"]) {
+  for (const field of ["label", "capture", "required", "minPhotos", "maxPhotos"]) {
     assert.ok(
       new RegExp(`prior\\.${field} !== item\\.${field}`).test(fn),
       `a change to ${field} must produce a new revision — a run stamps this version to say which list it answered`,
     );
   }
+  assert.match(fn, /prior\.description/);
+  assert.match(fn, /prior\.sortOrder/);
+  assert.match(fn, /prior\.visibility/);
   assert.match(fn, /if \(!prior\) return true;/, "a step this template does not own is a new step");
   assert.match(fn, /kept\.size !== existing\.length/, "a removed step must produce a new revision");
   // Renaming the TEMPLATE is not a new revision. Bumping for it would scatter a

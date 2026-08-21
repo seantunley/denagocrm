@@ -52,6 +52,10 @@
 
 /** One photo waiting to go up. */
 export type QueuedPhoto = {
+  scopeKey: string;
+  tenantId: string;
+  userId: string;
+  expiresAt: string;
   /**
    * Minted on the DEVICE, before the photo has anywhere to go.
    *
@@ -85,7 +89,21 @@ export type QueuedPhoto = {
   attempts: number;
   /** Why the last attempt failed, so a stuck photo can say what is wrong. */
   lastError: string | null;
+  /** Persisted after transfer, before registration, so finalisation retries the same URL. */
+  uploadedUrl: string | null;
 };
+
+export type OfflineScope = { tenantId: string; userId: string };
+export const OFFLINE_TTL_MS = 72 * 60 * 60 * 1000;
+export function offlineScopeKey(scope: OfflineScope): string {
+  return `${scope.tenantId}:${scope.userId}`;
+}
+
+export function notifyOfflineState(syncing?: boolean): void {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("denago:offline-state", { detail: { syncing } }));
+  }
+}
 
 /**
  * How many times one photo may fail before the queue stops trying it.
@@ -101,7 +119,9 @@ export const MAX_QUEUE_ATTEMPTS = 5;
 
 export const QUEUE_DB_NAME = "denago-checklist-photos";
 export const QUEUE_STORE_NAME = "photos";
-const QUEUE_RUN_INDEX = "runId";
+export const SESSION_STORE_NAME = "runs";
+export const QUEUE_DB_VERSION = 2;
+const QUEUE_RUN_INDEX = "scopeRun";
 
 /* ── the storage seam ─────────────────────────────────────────────────── */
 
@@ -116,7 +136,7 @@ export type QueueStore = {
   put(item: QueuedPhoto): Promise<void>;
   get(id: string): Promise<QueuedPhoto | undefined>;
   /** Every photo waiting for one run, oldest capture first. */
-  all(runId: string): Promise<QueuedPhoto[]>;
+  all(scopeKey: string, runId: string): Promise<QueuedPhoto[]>;
   remove(id: string): Promise<void>;
 };
 
@@ -166,7 +186,7 @@ export async function openQueue(): Promise<QueueStore | null> {
 async function openConnection(): Promise<QueueStore | null> {
   try {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open(QUEUE_DB_NAME, 1);
+      const request = indexedDB.open(QUEUE_DB_NAME, QUEUE_DB_VERSION);
       request.onupgradeneeded = () => {
         const database = request.result;
         if (!database.objectStoreNames.contains(QUEUE_STORE_NAME)) {
@@ -174,7 +194,18 @@ async function openConnection(): Promise<QueueStore | null> {
           // Every read is "what is still waiting for THIS run", so the run is
           // the index. Without it a device holding three runs' photos would scan
           // all of them on every progress update.
-          store.createIndex(QUEUE_RUN_INDEX, "runId", { unique: false });
+          store.createIndex(QUEUE_RUN_INDEX, ["scopeKey", "runId"], { unique: false });
+        } else {
+          // v1 records had no tenant/user scope. They cannot be safely adopted.
+          const store = request.transaction!.objectStore(QUEUE_STORE_NAME);
+          store.clear();
+          if (store.indexNames.contains("runId")) store.deleteIndex("runId");
+          if (!store.indexNames.contains(QUEUE_RUN_INDEX)) {
+            store.createIndex(QUEUE_RUN_INDEX, ["scopeKey", "runId"], { unique: false });
+          }
+        }
+        if (!database.objectStoreNames.contains(SESSION_STORE_NAME)) {
+          database.createObjectStore(SESSION_STORE_NAME, { keyPath: "key" });
         }
       };
       request.onsuccess = () => resolve(request.result);
@@ -228,9 +259,9 @@ function indexedDbStore(db: IDBDatabase): QueueStore {
     async get(id) {
       return run<QueuedPhoto | undefined>("readonly", (store) => store.get(id));
     },
-    async all(runId) {
+    async all(scopeKey, runId) {
       const rows = await run<QueuedPhoto[]>("readonly", (store) =>
-        store.index(QUEUE_RUN_INDEX).getAll(runId),
+        store.index(QUEUE_RUN_INDEX).getAll([scopeKey, runId]),
       );
       // Capture order, so a step's photos reach the server in the order they
       // were taken rather than in whatever order the index hands them back.
@@ -287,6 +318,7 @@ export type NewPhoto = {
   entryId: string;
   blob: Blob;
   capturedAt?: Date | string;
+  scope: OfflineScope;
 };
 
 /**
@@ -305,10 +337,15 @@ export async function enqueue(input: NewPhoto, store?: QueueStore | null): Promi
     id: input.id ?? crypto.randomUUID(),
     runId: input.runId,
     entryId: input.entryId,
+    scopeKey: offlineScopeKey(input.scope),
+    tenantId: input.scope.tenantId,
+    userId: input.scope.userId,
+    expiresAt: new Date(Date.now() + OFFLINE_TTL_MS).toISOString(),
     blob: input.blob,
     capturedAt: toIso(input.capturedAt),
     attempts: 0,
     lastError: null,
+    uploadedUrl: null,
   };
 
   const target = await resolve(store);
@@ -321,6 +358,7 @@ export async function enqueue(input: NewPhoto, store?: QueueStore | null): Promi
   }
   try {
     await target.put(item);
+    notifyOfflineState();
     return { stored: true, item };
   } catch (error) {
     /*
@@ -343,27 +381,34 @@ function toIso(value: Date | string | undefined): string {
 /* ── reading the queue ────────────────────────────────────────────────── */
 
 /** Everything still waiting for one run, oldest capture first. */
-export async function pending(runId: string, store?: QueueStore | null): Promise<QueuedPhoto[]> {
+export async function pending(scope: OfflineScope, runId: string, store?: QueueStore | null): Promise<QueuedPhoto[]> {
   const target = await resolve(store);
-  return target ? target.all(runId) : [];
+  return target ? target.all(offlineScopeKey(scope), runId) : [];
 }
 
 /** How many photos are still waiting — the number the capture screen shows. */
-export async function countPending(runId: string, store?: QueueStore | null): Promise<number> {
-  return (await pending(runId, store)).length;
+export async function countPending(scope: OfflineScope, runId: string, store?: QueueStore | null): Promise<number> {
+  return (await pending(scope, runId, store)).length;
 }
 
 /** Forget one photo. Used when the person deletes a capture before it goes up. */
-export async function remove(id: string, store?: QueueStore | null): Promise<void> {
+export async function remove(scope: OfflineScope, id: string, store?: QueueStore | null): Promise<void> {
   const target = await resolve(store);
-  await target?.remove(id);
+  const item = await target?.get(id);
+  if (item?.scopeKey === offlineScopeKey(scope)) {
+    await target?.remove(id);
+    notifyOfflineState();
+  }
 }
 
 /* ── draining ─────────────────────────────────────────────────────────── */
 
 /** Send one photo, or throw. Supplied by the caller because only it knows the
  *  tenant, the blob path and which action files the resulting row. */
-export type QueueUploader = (item: QueuedPhoto) => Promise<void>;
+export type QueueUploader = {
+  upload(item: QueuedPhoto): Promise<string>;
+  finalize(item: QueuedPhoto, url: string): Promise<void>;
+};
 
 export type DrainReport = {
   uploaded: number;
@@ -422,6 +467,7 @@ const inFlight = new Set<string>();
  * attempt worse off, with the reason recorded on it.
  */
 export async function drain(
+  scope: OfflineScope,
   runId: string,
   uploader: QueueUploader,
   store?: QueueStore | null,
@@ -430,7 +476,8 @@ export async function drain(
   const target = await resolve(store);
   if (!target) return { ...report, unavailable: true };
 
-  for (const snapshot of await target.all(runId)) {
+  const scopeKey = offlineScopeKey(scope);
+  for (const snapshot of await target.all(scopeKey, runId)) {
     /*
      * CLAIMED BEFORE THE FIRST AWAIT, and that is not a stylistic choice.
      *
@@ -448,7 +495,7 @@ export async function drain(
     inFlight.add(snapshot.id);
     try {
       const item = await target.get(snapshot.id);
-      if (!item) {
+      if (!item || item.scopeKey !== scopeKey) {
         // Finished and deleted by a concurrent drain while this one was working.
         report.skipped++;
         continue;
@@ -460,12 +507,22 @@ export async function drain(
         continue;
       }
       try {
-        await uploader(item);
+        let staged = item;
+        if (!staged.uploadedUrl) {
+          const uploadedUrl = await uploader.upload(staged);
+          staged = { ...staged, uploadedUrl };
+          // This write is the idempotency boundary: a lost finaliser response
+          // retries registration against this exact URL, never a new blob.
+          await target.put(staged);
+        }
+        await uploader.finalize(staged, staged.uploadedUrl!);
         // Only now. The blob is the only copy until the server has it.
         await target.remove(item.id);
+        notifyOfflineState();
         report.uploaded++;
       } catch (error) {
-        const failed = recordFailure(item, error);
+        const current = (await target.get(item.id)) ?? item;
+        const failed = recordFailure(current, error);
         await target.put(failed);
         report.failed++;
         if (isStuck(failed)) report.stuck.push(failed);

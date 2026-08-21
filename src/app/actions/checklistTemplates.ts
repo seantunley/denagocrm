@@ -15,6 +15,7 @@ import {
 } from "@/lib/permissions";
 import { getEnabledModuleIds } from "@/lib/modules/enabled";
 import { SECTION } from "@/lib/dashboard/config";
+import { isSecurityRelevant } from "@/lib/dashboard/conditions";
 import { canUseHost, hostById, type HostDef } from "@/lib/checklists/hosts";
 import {
   CHECKLIST_LIMITS,
@@ -161,6 +162,9 @@ function visibilityFor(item: ChecklistItemInput): Prisma.InputJsonValue | typeof
   if (!parsed.success) {
     refuse(`The "show this step when…" rule on "${item.label}" could not be read.`);
   }
+  if ((parsed.data ?? []).some(isSecurityRelevant)) {
+    refuse(`The visibility rule on "${item.label}" cannot depend on screen size because checklist steps are validated by the server.`);
+  }
   if (!parsed.data || parsed.data.length === 0) return Prisma.DbNull;
   // Stringified for the same reason dashboardConfig.ts does it: a parsed
   // condition carries optional keys as explicit `undefined`, which Prisma's
@@ -171,9 +175,13 @@ function visibilityFor(item: ChecklistItemInput): Prisma.InputJsonValue | typeof
 type StoredItem = {
   id: string;
   label: string;
+  description: string | null;
   capture: string;
   required: boolean;
   minPhotos: number;
+  maxPhotos: number;
+  visibility: unknown;
+  sortOrder: number;
 };
 
 /**
@@ -188,8 +196,8 @@ type StoredItem = {
  * what a person is asked and what "finished" means. Renaming the TEMPLATE is not:
  * "Delivery handover" becoming "Handover (delivery)" asks nobody anything new, and
  * bumping for it would leave a workspace's runs scattered across a dozen revisions
- * that are all the same list. The guidance text and the upper photo bound are left
- * out for the same reason — neither changes the answer a run has to give.
+ * that are all the same list. Guidance, ordering, visibility and the upper photo
+ * bound are included because they change what the device renders or may collect.
  */
 function itemsChanged(existing: StoredItem[], incoming: ChecklistItemInput[]): boolean {
   const before = new Map(existing.map((item) => [item.id, item]));
@@ -201,11 +209,40 @@ function itemsChanged(existing: StoredItem[], incoming: ChecklistItemInput[]): b
     if (!prior) return true;
     kept.add(prior.id);
     if (prior.label !== item.label) return true;
+    if ((prior.description ?? "") !== (item.description ?? "")) return true;
     if (prior.capture !== item.capture) return true;
     if (prior.required !== item.required) return true;
     if (prior.minPhotos !== item.minPhotos) return true;
+    if (prior.maxPhotos !== item.maxPhotos) return true;
+    if (prior.sortOrder !== incoming.indexOf(item)) return true;
+    const nextVisibility = item.visibility == null ? null : JSON.parse(JSON.stringify(item.visibility));
+    if (JSON.stringify(prior.visibility) !== JSON.stringify(nextVisibility)) return true;
   }
   return kept.size !== existing.length;
+}
+
+function revisionItems(items: Array<{
+  id: string;
+  label: string;
+  description: string | null;
+  capture: string;
+  required: boolean;
+  minPhotos: number;
+  maxPhotos: number;
+  visibility: unknown;
+  sortOrder: number;
+}>): Prisma.InputJsonValue {
+  return JSON.parse(JSON.stringify(items.map((item) => ({
+    id: item.id,
+    label: item.label,
+    description: item.description,
+    capture: item.capture,
+    required: item.required,
+    minPhotos: item.minPhotos,
+    maxPhotos: item.maxPhotos,
+    visibility: item.visibility ?? null,
+    sortOrder: item.sortOrder,
+  })))) as Prisma.InputJsonValue;
 }
 
 /* ── save ─────────────────────────────────────────────────────────────── */
@@ -270,31 +307,41 @@ export async function saveChecklistTemplate(
     }));
 
     if (!templateId) {
-      const created = await basePrisma.checklistTemplate.create({
-        data: {
-          tenantId,
-          host: template.host,
-          name: template.name,
-          description: template.description ?? null,
-          active: template.active,
-          sortOrder: template.sortOrder,
-          // A brand-new list is revision 1. Nothing has answered it yet.
-          version: 1,
-          items: {
-            create: items.map(({ input: item, visibility, sortOrder }) => ({
-              tenantId,
-              label: item.label,
-              description: item.description ?? null,
-              capture: item.capture,
-              required: item.required,
-              minPhotos: item.minPhotos,
-              maxPhotos: item.maxPhotos,
-              visibility,
-              sortOrder,
-            })),
+      const created = await basePrisma.$transaction(async (tx) => {
+        const row = await tx.checklistTemplate.create({
+          data: {
+            tenantId,
+            host: template.host,
+            name: template.name,
+            description: template.description ?? null,
+            active: template.active,
+            sortOrder: template.sortOrder,
+            version: 1,
+            items: {
+              create: items.map(({ input: item, visibility, sortOrder }) => ({
+                tenantId,
+                label: item.label,
+                description: item.description ?? null,
+                capture: item.capture,
+                required: item.required,
+                minPhotos: item.minPhotos,
+                maxPhotos: item.maxPhotos,
+                visibility,
+                sortOrder,
+              })),
+            },
           },
-        },
-        select: { id: true, name: true },
+          select: { id: true, name: true, version: true },
+        });
+        const stored = await tx.checklistItem.findMany({
+          where: { tenantId, templateId: row.id },
+          orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+          select: { id: true, label: true, description: true, capture: true, required: true, minPhotos: true, maxPhotos: true, visibility: true, sortOrder: true },
+        });
+        await tx.checklistTemplateRevision.create({
+          data: { tenantId, templateId: row.id, version: row.version, items: revisionItems(stored) },
+        });
+        return row;
       });
       await logAudit({
         action: "checklist.template_created",
@@ -312,7 +359,7 @@ export async function saveChecklistTemplate(
         host: true,
         name: true,
         version: true,
-        items: { select: { id: true, label: true, capture: true, required: true, minPhotos: true } },
+        items: { select: { id: true, label: true, description: true, capture: true, required: true, minPhotos: true, maxPhotos: true, visibility: true, sortOrder: true } },
       },
     });
     if (!existing) refuse("That checklist is no longer available in this workspace.");
@@ -380,6 +427,17 @@ export async function saveChecklistTemplate(
           await tx.checklistItem.create({ data: { ...data, tenantId, templateId: existing.id } });
         }
       }
+      const version = existing.version + (bump ? 1 : 0);
+      const stored = await tx.checklistItem.findMany({
+        where: { tenantId, templateId: existing.id },
+        orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+        select: { id: true, label: true, description: true, capture: true, required: true, minPhotos: true, maxPhotos: true, visibility: true, sortOrder: true },
+      });
+      await tx.checklistTemplateRevision.upsert({
+        where: { tenantId_templateId_version: { tenantId, templateId: existing.id, version } },
+        create: { tenantId, templateId: existing.id, version, items: revisionItems(stored) },
+        update: {},
+      });
     });
 
     await logAudit({

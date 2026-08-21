@@ -147,14 +147,11 @@ const CLIENT_ID = z.string().trim().min(8).max(64);
 
 export const ENTRY_INPUT = z.object({
   id: CLIENT_ID,
-  /** Null when the step was deleted from the template after this run began. */
-  itemId: z.string().min(1).max(40).nullable().optional(),
-  labelSnapshot: z.string().trim().min(1).max(CHECKLIST_LIMITS.labelLength),
-  descriptionSnapshot: z.string().trim().max(CHECKLIST_LIMITS.descriptionLength).optional(),
-  captureSnapshot: z.enum(CAPTURE_KINDS),
-  requiredSnapshot: z.boolean().default(true),
-  minPhotosSnapshot: z.number().int().min(0).max(CHECKLIST_LIMITS.photosPerItem).default(1),
-  sortOrder: z.number().int().min(0).max(999).default(0),
+  /**
+   * The only template fact a device may name. The server resolves every frozen
+   * label/capture/required/photo-limit value from the authoritative revision.
+   */
+  itemId: z.string().min(1).max(40),
   status: z.enum(ENTRY_STATUSES).default("pending"),
   note: z.string().trim().max(CHECKLIST_LIMITS.noteLength).optional(),
   value: z.string().trim().max(CHECKLIST_LIMITS.valueLength).optional(),
@@ -166,12 +163,33 @@ export type ChecklistEntryInput = z.infer<typeof ENTRY_INPUT>;
 export const RUN_INPUT = z.object({
   id: CLIENT_ID,
   templateId: z.string().min(1).max(40),
+  /** The exact immutable revision the device rendered. */
+  templateVersion: z.number().int().min(1),
   hostType: z.enum(HOST_IDS),
   hostId: z.string().min(1).max(40),
   startedAt: z.coerce.date(),
   entries: z.array(ENTRY_INPUT).max(CHECKLIST_LIMITS.itemsPerTemplate),
 });
 export type ChecklistRunInput = z.infer<typeof RUN_INPUT>;
+
+/**
+ * The immutable server-owned representation of one template revision.
+ * Stored as JSON on ChecklistTemplateRevision and parsed again on every sync:
+ * database JSON is durable input, not trusted TypeScript memory.
+ */
+export const REVISION_ITEM = z.object({
+  id: z.string().min(1).max(40),
+  label: z.string().trim().min(1).max(CHECKLIST_LIMITS.labelLength),
+  description: z.string().trim().max(CHECKLIST_LIMITS.descriptionLength).nullable(),
+  capture: z.enum(CAPTURE_KINDS),
+  required: z.boolean(),
+  minPhotos: z.number().int().min(0).max(CHECKLIST_LIMITS.photosPerItem),
+  maxPhotos: z.number().int().min(1).max(CHECKLIST_LIMITS.photosPerItem),
+  visibility: z.unknown().nullable(),
+  sortOrder: z.number().int().min(0).max(999),
+});
+export const REVISION_ITEMS = z.array(REVISION_ITEM).max(CHECKLIST_LIMITS.itemsPerTemplate);
+export type ChecklistRevisionItem = z.infer<typeof REVISION_ITEM>;
 
 /* ── completeness ─────────────────────────────────────────────────────── */
 
