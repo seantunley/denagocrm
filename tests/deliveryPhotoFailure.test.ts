@@ -18,4 +18,6 @@ test("a database filing failure compensates the already-written blob", () => {
   assert.match(helper, /const storedName = await saveFile/);
   assert.match(helper, /await prisma\.document\.create/);
   assert.match(helper, /await deleteFile\(storedName\)\.catch/);
+  assert.match(helper, /await logError\(\s*"delivery-photo-cleanup"/s);
+  assert.doesNotMatch(helper, /deleteFile\(storedName\)\.catch\(\(\) => \{\}\)/);
 });
