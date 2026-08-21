@@ -11,7 +11,7 @@ test("photo batches bypass Server Action request bodies one file at a time", () 
   assert.match(uploader, /for \(const \[index, original\] of selected\.entries\(\)\)/);
   assert.match(uploader, /handleUploadUrl: "\/api\/photos\/upload"/);
   assert.match(uploader, /DIRECT_PHOTO_BATCH_LIMIT/);
-  assert.match(src("src/lib/photoBudget.ts"), /DIRECT_PHOTO_BATCH_LIMIT = 30/);
+  assert.match(src("src/lib/photoBudget.ts"), /DIRECT_PHOTO_BATCH_LIMIT = 12/);
 });
 
 test("delivery and job-card screens use the shared direct uploader", () => {
