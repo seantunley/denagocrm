@@ -135,11 +135,14 @@ export async function POST(request: Request) {
 
     const result = (await execute(operation, formData)) ?? {};
     const rejected = typeof result === "object" && result !== null && "error" in result && Boolean(result.error);
+    // Server actions use optional fields. Remove undefined values before storing the
+    // result as Prisma JSON so recording a successful replay cannot itself fail.
+    const storedResult = JSON.parse(JSON.stringify(result)) as Prisma.InputJsonValue;
     await prisma.offlineMutationReceipt.update({
       where: { id: mutationId },
-      data: { status: rejected ? "rejected" : "completed", result: result as Prisma.InputJsonValue, completedAt: new Date() },
+      data: { status: rejected ? "rejected" : "completed", result: storedResult, completedAt: new Date() },
     });
-    return NextResponse.json(result, { status: rejected ? 400 : 200 });
+    return NextResponse.json(storedResult, { status: rejected ? 400 : 200 });
   } catch (error) {
     await logError("offline-sync", error, `mutation=${mutationId}`, { tenantId, alert: false });
     return apiAuthErrorResponse(error) ?? NextResponse.json(
