@@ -240,6 +240,9 @@ export default async function TenantProfilePage({
           </div>
 
           <div className="flex shrink-0 items-center gap-2">
+            <Link href={`/platform/tenants/${tenant.id}/onboarding`} className="btn-secondary btn-sm">
+              {tenant.active ? "Review onboarding" : "Continue onboarding"}
+            </Link>
             {tenant.active ? (
               !isFounding && (
                 <SaveForm
