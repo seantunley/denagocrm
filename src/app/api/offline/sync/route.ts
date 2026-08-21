@@ -21,7 +21,7 @@ export const runtime = "nodejs";
 const operationSchema = z.object({
   type: z.enum([
     "lead.create", "lead.update", "contact.create", "contact.update",
-    "jobcard.notes", "jobcard.inspection", "jobcard.photo",
+    "jobcard.notes", "jobcard.inspection", "jobcard.photo", "inspection.photo",
     "delivery.complete", "delivery.photo",
   ]),
   recordId: z.string().min(1).max(100).optional(),
@@ -68,6 +68,9 @@ async function execute(operation: Operation, formData: FormData) {
     case "jobcard.inspection":
       if (!operation.recordId || !operation.parentId) throw new Error("Missing inspection identity.");
       return setInspectionItem(operation.recordId, operation.parentId, formData);
+    case "inspection.photo":
+      if (!operation.recordId || !operation.parentId) throw new Error("Missing inspection identity.");
+      return uploadInspectionPhoto(operation.recordId, operation.parentId, formData);
     case "jobcard.photo":
       if (!operation.recordId) throw new Error("Missing job card id.");
       return String(formData.get("category")) === "checkout"
