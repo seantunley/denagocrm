@@ -18,7 +18,7 @@ test("lead and contact capture use the same section, field, hero and footer prim
 });
 
 test("mobile operational photo capture has one prominent, camera-ready pattern", () => {
-  const component = source("src", "components", "MobilePhotoCapture.tsx");
+  const component = source("src", "components", "DirectPhotoUploader.tsx");
   const jobcards = source("src", "app", "(app)", "jobcards", "page.tsx");
   const deliveries = source("src", "app", "(app)", "deliveries", "page.tsx");
 
