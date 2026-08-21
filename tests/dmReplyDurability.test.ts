@@ -147,7 +147,8 @@ test("the upload happens outside the transaction, and nothing else does", () => 
   const enqueueAt = action.indexOf("enqueueStaffReply({");
   assert.ok(uploadAt >= 0 && enqueueAt > uploadAt, "the blob must exist before a row can point at it");
   // Its only failure mode is an orphaned blob, which the customer never sees.
-  assert.doesNotMatch(action, /prisma\.communication\.create/, "history must be written by the durable path");
+  const metaPath = action.slice(action.indexOf("const compositionId"));
+  assert.doesNotMatch(metaPath, /prisma\.communication\.create/, "Meta history must be written by the durable path");
 });
 
 test("the DM reply reports what actually happened, worst part first", () => {
@@ -179,8 +180,8 @@ test("the durable rewrite keeps the reply bound to its own thread", () => {
   );
   // The recipient is still resolved from the resolved platform, never supplied
   // by the client, and there is still no cross-platform fallback.
-  assert.match(action, /platform === "instagram" \? contact\.instagramId : contact\.messengerPsid/);
-  assert.match(action, /has no \$\{platform === "instagram" \? "Instagram" : "Messenger"\} identity/);
+  assert.match(action, /platform === "instagram" \? contact\.instagramId : platform === "x" \? contact\.xUserId : contact\.messengerPsid/);
+  assert.match(action, /has no \$\{platform === "instagram" \? "Instagram" : platform === "x" \? "X" : "Messenger"\} identity/);
   // And the queued row is addressed with exactly that pair.
   assert.match(action, /channel: platform,\s*\n\s*key: recipientId,/);
 });
