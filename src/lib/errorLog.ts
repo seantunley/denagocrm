@@ -159,9 +159,15 @@ export async function logError(
           url: "/settings?tab=system",
         },
         "system_error"
-      ).catch(() => {});
+      ).catch((pushError) => {
+        // Never recurse through logError here: push is called from the logger.
+        // The runtime console is the durable fallback when alert delivery fails.
+        console.error("[error-log-alert-failure]", pushError);
+      });
     }
-  } catch {
-    // the error logger must never become the error
+  } catch (loggingError) {
+    // The logger must never become the caller's error, but its own failure must
+    // still be observable when the database is unavailable. Do not recurse.
+    console.error("[error-log-write-failure]", { scope, context }, loggingError);
   }
 }
