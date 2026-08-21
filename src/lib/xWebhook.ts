@@ -154,10 +154,6 @@ function recognisesLegacy(body: Envelope): boolean {
   return hasEntries(body.direct_message_events) || hasEntries(body.tweet_create_events);
 }
 
-function recognisesGeneric(body: Envelope): boolean {
-  return hasEntries(body.events);
-}
-
 /**
  * The current X Activity envelope: { data: { event_uuid, filter, event_type,
  * payload } }.
@@ -223,57 +219,44 @@ function readLegacyEnvelope(body: Envelope, accountId: string): XInboundEvent[] 
   return out;
 }
 
-/** The generic `events: [...]` shape. */
-function readGenericEnvelope(body: Envelope, accountId: string): XInboundEvent[] {
-  const out: XInboundEvent[] = [];
-  for (const event of body.events ?? []) {
-    const data = event.data ?? event;
-    const type = String(event.type ?? data.event_type ?? "");
-    const senderId = String(data.sender_id ?? data.author_id ?? "");
-    const recipientId = dmRecipient(data.recipient_id);
-    const text = String(data.text ?? data.message?.text ?? "");
-    const id = String(data.id ?? event.id ?? "");
-    if (!id || !senderId || senderId === accountId || !text) continue;
-    // A DM must be PROVABLY addressed to the account this webhook is for. An app
-    // may hold Activity subscriptions for several users, so a private message
-    // sent to somebody else's account would otherwise be ingested into this
-    // workspace's inbox and raise a lead off it. A payload that does not name a
-    // recipient proves nothing, so it is refused rather than assumed — see
-    // `dmRecipient`.
-    if (type.includes("dm")) {
-      if (recipientId && recipientId === accountId) {
-        out.push({ id, kind: "dm", senderId, recipientId, text });
-      }
-    } else if (type.includes("reply")) {
-      out.push({ id, kind: "reply", senderId, recipientId: accountId, text });
-    } else if (type.includes("mention")) {
-      out.push({ id, kind: "mention", senderId, recipientId: accountId, text });
-    }
-  }
-  return out;
-}
-/* eslint-enable @typescript-eslint/no-explicit-any */
 
 /**
- * Accepts X Activity envelopes and the legacy shapes used during migration.
+ * Accepts the two X envelope generations this app actually supports.
+ *
+ * ── ONLY DOCUMENTED SHAPES ARE PARSED ───────────────────────────────────────
+ *
+ * There used to be a third reader, for a generic `events: [{ type, data }]`
+ * shape. It has been removed, and the reasoning matters more than the deletion.
+ *
+ * That shape matches no X format. X documents the legacy Account Activity
+ * payload (`direct_message_events` / `tweet_create_events`) and the current
+ * Activity envelope (`data.event_type` + `data.payload`); the third was a
+ * speculative catch-all, present since this integration's first commit and
+ * referenced by nothing else.
+ *
+ * A parser for a format nobody can point at cannot be made correct, and it was
+ * not merely unused — it was the source of two real defects. It defaulted a
+ * missing DM recipient to the connected account, which let another account's
+ * private message into this workspace. And because nothing says which of its
+ * fields is the message id, it emitted `data.id` for a message the other readers
+ * key differently, so the same DM delivered in that shape and a real one
+ * produced two dedupe keys and two inbox rows.
+ *
+ * Canonicalising it would have meant INVENTING which field is authoritative in a
+ * format that does not exist — the same class of mistake as inventing a CRC
+ * token alphabet. A shape X genuinely starts sending should be added
+ * deliberately, with its real field names and its own tests, not guessed at in
+ * advance. Until then an unrecognised delivery normalises to no events, which
+ * fails visibly rather than ingesting something nobody can reason about.
  *
  * ── EXACTLY ONE READER WINS ─────────────────────────────────────────────────
  *
- * The three readers are ALTERNATIVES, in descending order of how current the
- * generation is — not passes to be summed. The first one that recognises the
- * payload answers for the whole delivery.
- *
- * Running them all was a duplicate-ingestion bug, and it is worth being precise
- * about why, because the shapes look disjoint and are not. Each generation keys
- * its events differently: the current envelope carries a delivery `event_uuid`,
- * the legacy one the DM's own `id`, the generic one whatever `data.id` holds. So
- * one logical message appearing in two shapes produces two events with DIFFERENT
- * ids, the provider-id dedupe in recordInboundDm sees two distinct keys, and the
- * customer's message is filed to the inbox twice.
- *
- * A transitional delivery carrying more than one shape is not hypothetical — it
- * is exactly the case these fallbacks exist to survive, which is what makes
- * summing them the wrong instinct.
+ * The readers are ALTERNATIVES, in descending order of how current the
+ * generation is — not passes to be summed. Selection is by SHAPE: a reader that
+ * recognises a delivery answers for it, including when the honest answer is no
+ * events. Deciding by result instead could not tell "did not recognise this"
+ * from "recognised it and correctly found nothing", and a current envelope
+ * rejecting a cross-account DM produces exactly the latter.
  *
  * ── THE ID IS THE MESSAGE'S, NEVER THE DELIVERY'S ───────────────────────────
  *
@@ -289,7 +272,7 @@ function readGenericEnvelope(body: Envelope, accountId: string): XInboundEvent[]
  * simple redelivery of one message would duplicate too, since a redelivery is by
  * definition a new delivery with a new uuid.
  *
- * Every reader therefore emits the same id for the same message, whatever shape
+ * Both readers therefore emit the same id for the same message, whatever shape
  * carried it, which is what makes the provider-id dedupe downstream actually
  * work.
  */
@@ -299,7 +282,6 @@ export function normaliseXActivity(payload: unknown, accountId: string): XInboun
   const readers: [(body: Envelope) => boolean, (body: Envelope, accountId: string) => XInboundEvent[]][] = [
     [recognisesActivity, readActivityEnvelope],
     [recognisesLegacy, readLegacyEnvelope],
-    [recognisesGeneric, readGenericEnvelope],
   ];
   for (const [recognises, read] of readers) {
     // Selected on SHAPE, and answering even when the answer is no events. A

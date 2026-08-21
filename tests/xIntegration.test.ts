@@ -148,146 +148,8 @@ test("the implementation keeps account resolution and credentials tenant-bound",
 
 /* ── every DM parser must check who the message was addressed to ───────── */
 
-test("a DM addressed to another account is ignored, in every envelope shape", () => {
-  /*
-   * An X app can hold Activity subscriptions for more than one user, and all of
-   * their events arrive at the same webhook. `accountId` is which account this
-   * delivery is FOR, so a message whose recipient is somebody else belongs to a
-   * different subscription — ingesting it puts a private DM sent to another
-   * account into this workspace's inbox, where it can raise a lead.
-   *
-   * Three of the four parser branches checked this. The `events` branch did not.
-   */
-  const connected = "1111";
-  const foreign = "2222";
 
-  const viaEvents = normaliseXActivity(
-    { events: [{ type: "dm.received", data: { id: "e1", sender_id: "9999", recipient_id: foreign, text: "hi" } }] },
-    connected,
-  );
-  assert.deepEqual(viaEvents, [], "the events envelope must check the recipient");
 
-  const viaLegacy = normaliseXActivity(
-    {
-      direct_message_events: [
-        { id: "e2", message_create: { sender_id: "9999", target: { recipient_id: foreign }, message_data: { text: "hi" } } },
-      ],
-    },
-    connected,
-  );
-  assert.deepEqual(viaLegacy, [], "the legacy envelope must check the recipient");
-
-  const viaCurrent = normaliseXActivity(
-    {
-      data: {
-        event_type: "dm.received",
-        event_uuid: "u1",
-        payload: {
-          direct_message_events: [
-            { id: "e3", message_create: { sender_id: "9999", target: { recipient_id: foreign }, message_data: { text: "hi" } } },
-          ],
-        },
-      },
-    },
-    connected,
-  );
-  assert.deepEqual(viaCurrent, [], "the current envelope must check the recipient");
-
-  // The control: correctly addressed, via the branch that was broken.
-  const addressed = normaliseXActivity(
-    { events: [{ type: "dm.received", data: { id: "ok", sender_id: "9999", recipient_id: connected, text: "hi" } }] },
-    connected,
-  );
-  assert.equal(addressed.length, 1, "a DM to this account must still be accepted");
-});
-
-test("the current envelope is authoritative, so one message cannot file twice", () => {
-  /*
-   * The legacy readers are fallbacks for older Activity generations, not extra
-   * passes over the same payload. A transitional delivery carrying both shapes
-   * is exactly what they exist to survive — and if both ran, the same DM would
-   * be emitted twice with DIFFERENT ids (`event_uuid` here, message `id` there),
-   * so the provider-id dedupe in recordInboundDm could not collapse them and the
-   * customer's message would appear in the inbox twice.
-   */
-  const both = normaliseXActivity(
-    {
-      data: {
-        event_type: "dm.received",
-        event_uuid: "uuid-1",
-        payload: {
-          direct_message_events: [
-            { id: "dm-1", message_create: { sender_id: "9999", target: { recipient_id: "1111" }, message_data: { text: "hi" } } },
-          ],
-        },
-      },
-      direct_message_events: [
-        { id: "dm-1", message_create: { sender_id: "9999", target: { recipient_id: "1111" }, message_data: { text: "hi" } } },
-      ],
-    },
-    "1111",
-  );
-  assert.equal(both.length, 1, "one logical message, one event");
-  // The MESSAGE's id, not the delivery's — which is also why this value is the
-  // same whichever envelope ends up answering.
-  assert.equal(both[0].id, "dm-1", "the current envelope answers, keyed on the message");
-});
-
-test("exactly one reader answers a delivery, whichever shapes it carries", () => {
-  /*
-   * The first attempt at this only stopped the CURRENT envelope from being
-   * re-read by the fallbacks; the two fallbacks still ran together. A payload
-   * carrying the same DM as both `direct_message_events` and `events` produced
-   * two events with different ids — and different ids are different transcript
-   * dedupe keys, so the message was still filed twice.
-   *
-   * Precedence is now applied across every shape: the most current reader that
-   * recognises the payload answers for the whole delivery.
-   */
-  const dm = {
-    id: "dm-1",
-    message_create: {
-      sender_id: "9999",
-      target: { recipient_id: "1111" },
-      message_data: { text: "same message" },
-    },
-  };
-  const generic = {
-    type: "dm.received",
-    data: { id: "event-1", sender_id: "9999", recipient_id: "1111", text: "same message" },
-  };
-
-  // The pair the review reproduced: both FALLBACK shapes, no current envelope.
-  const bothFallbacks = normaliseXActivity({ direct_message_events: [dm], events: [generic] }, "1111");
-  assert.equal(bothFallbacks.length, 1, "one logical message, one event");
-  assert.equal(bothFallbacks[0].id, "dm-1", "the legacy reader outranks the generic one");
-
-  // All three shapes at once.
-  const allThree = normaliseXActivity(
-    {
-      data: {
-        event_type: "dm.received",
-        event_uuid: "uuid-1",
-        payload: { direct_message_events: [dm] },
-      },
-      direct_message_events: [dm],
-      events: [generic],
-    },
-    "1111",
-  );
-  assert.equal(allThree.length, 1, "one logical message, one event");
-  assert.equal(allThree[0].id, "dm-1", "the current envelope outranks both fallbacks, keyed on the message");
-
-  // A lower-precedence reader still answers when the higher ones recognise
-  // nothing — otherwise this fix would silently drop older deliveries.
-  const genericOnly = normaliseXActivity({ events: [generic] }, "1111");
-  assert.equal(genericOnly.length, 1);
-  assert.equal(genericOnly[0].id, "event-1");
-
-  // An unrecognised payload is empty, not a throw.
-  assert.deepEqual(normaliseXActivity({ nothing: true }, "1111"), []);
-  assert.deepEqual(normaliseXActivity(null, "1111"), []);
-});
 
 test("an opaque array token is signed, because POST refuses arrays too", () => {
   /*
@@ -306,164 +168,7 @@ test("an opaque array token is signed, because POST refuses arrays too", () => {
   assert.equal(xCrcResponse(secret, '{"for_user_id":"1"}'), null);
 });
 
-test("a reader that recognises a delivery answers for it, even with nothing to report", () => {
-  /*
-   * THE SEQUENCE THIS CLOSES, which was worse than the duplicate it replaced.
-   *
-   * Precedence used to be decided by "the first reader that returned events".
-   * A current envelope holding a DM for account 2222, read for connected account
-   * 1111, correctly yields NOTHING — and an empty result was indistinguishable
-   * from "this reader did not recognise the payload". So parsing fell through to
-   * the generic reader, which saw a copy of the same message with no
-   * `recipient_id`, defaulted the missing recipient to 1111, and accepted the
-   * private DM. The cross-account protection defeated itself at the exact moment
-   * it was working.
-   *
-   * Selection is now by SHAPE. A recognised envelope answers for the delivery,
-   * including when the honest answer is no events at all.
-   */
-  const connected = "1111";
-  const foreign = "2222";
 
-  const fellThrough = normaliseXActivity(
-    {
-      // Recognised, and correctly rejects: the DM is for somebody else.
-      data: {
-        event_type: "dm.received",
-        event_uuid: "uuid-1",
-        payload: {
-          direct_message_events: [
-            {
-              id: "dm-1",
-              message_create: {
-                sender_id: "9999",
-                target: { recipient_id: foreign },
-                message_data: { text: "private" },
-              },
-            },
-          ],
-        },
-      },
-      // The weaker copy of the same message, with the recipient omitted.
-      events: [{ type: "dm.received", data: { id: "event-1", sender_id: "9999", text: "private" } }],
-    },
-    connected,
-  );
-  assert.deepEqual(fellThrough, [], "a rejected current envelope must not be retried by a weaker reader");
-
-  /*
-   * The case above is blocked twice over — by shape precedence AND by the
-   * recipient rule — so on its own it cannot tell which fix is doing the work.
-   * (Mutation testing caught exactly that: reverting precedence alone failed
-   * nothing.) This isolates precedence: the fallback here carries a PERFECTLY
-   * VALID DM addressed to the connected account, so the only thing that can
-   * suppress it is the current envelope having already answered.
-   */
-  const isolated = normaliseXActivity(
-    {
-      data: {
-        event_type: "dm.received",
-        event_uuid: "uuid-2",
-        payload: {
-          direct_message_events: [
-            {
-              id: "dm-2",
-              message_create: {
-                sender_id: "9999",
-                target: { recipient_id: foreign },
-                message_data: { text: "for someone else" },
-              },
-            },
-          ],
-        },
-      },
-      events: [
-        {
-          type: "dm.received",
-          data: { id: "event-2", sender_id: "9999", recipient_id: connected, text: "would be accepted alone" },
-        },
-      ],
-    },
-    connected,
-  );
-  assert.deepEqual(
-    isolated,
-    [],
-    "the current envelope answered; a fallback must not add events to that delivery",
-  );
-
-  // Control: the same fallback, delivered on its own, IS ingested — otherwise
-  // this guard would pass simply because the generic reader stopped working.
-  const fallbackAlone = normaliseXActivity(
-    {
-      events: [
-        {
-          type: "dm.received",
-          data: { id: "event-2", sender_id: "9999", recipient_id: connected, text: "would be accepted alone" },
-        },
-      ],
-    },
-    connected,
-  );
-  assert.equal(fallbackAlone.length, 1, "the generic reader must still work when it owns the delivery");
-});
-
-test("a DM that does not name its recipient is refused, not assumed to be ours", () => {
-  // `recipient_id ?? accountId` made the recipient check pass vacuously whenever
-  // the field was absent. A DM is private; "the payload does not say who this
-  // was for" cannot mean "it was for us".
-  const connected = "1111";
-
-  assert.deepEqual(
-    normaliseXActivity(
-      { events: [{ type: "dm.received", data: { id: "e1", sender_id: "9999", text: "private" } }] },
-      connected,
-    ),
-    [],
-    "generic: a DM with no recipient must be refused",
-  );
-
-  assert.deepEqual(
-    normaliseXActivity(
-      {
-        direct_message_events: [
-          { id: "e2", message_create: { sender_id: "9999", message_data: { text: "private" } } },
-        ],
-      },
-      connected,
-    ),
-    [],
-    "legacy: a DM with no recipient must be refused",
-  );
-
-  assert.deepEqual(
-    normaliseXActivity(
-      {
-        data: {
-          event_type: "dm.received",
-          event_uuid: "u1",
-          payload: {
-            direct_message_events: [
-              { id: "e3", message_create: { sender_id: "9999", message_data: { text: "private" } } },
-            ],
-          },
-        },
-      },
-      connected,
-    ),
-    [],
-    "current: a DM with no recipient must be refused",
-  );
-
-  // Mentions and replies are PUBLIC and carry no recipient by nature — they must
-  // still be ingested, or this hardening would silently switch off half the feed.
-  const mention = normaliseXActivity(
-    { events: [{ type: "post.mention.create", data: { id: "m1", author_id: "9999", text: "@shop hi" } }] },
-    connected,
-  );
-  assert.equal(mention.length, 1, "a public mention needs no recipient");
-  assert.equal(mention[0].kind, "mention");
-});
 
 test("the same message keyed identically whichever generation delivers it", () => {
   /*
@@ -515,32 +220,222 @@ test("the same message keyed identically whichever generation delivers it", () =
   assert.equal(replyNow[0].id, "post-1");
 });
 
-test("an empty legacy array does not claim a delivery it is not carrying", () => {
+
+/* ── only documented generations are parsed ────────────────────────────── */
+
+test("an undocumented envelope shape is ingested by nothing", () => {
   /*
-   * `recognisesLegacy` claimed ANY array, so `{ direct_message_events: [],
-   * events: [valid] }` selected the legacy reader, which had nothing to read,
-   * and the valid generic event was silently dropped. An empty container is not
-   * evidence of a generation.
+   * A third reader used to accept a generic `events: [{ type, data }]` shape.
+   * It matched no X format — X documents the legacy Account Activity payload and
+   * the current `data.event_type` envelope, and that was a speculative
+   * catch-all present since this integration's first commit.
+   *
+   * It was not harmlessly unused. It defaulted a missing DM recipient to the
+   * connected account, which let another account's private message in; and
+   * because nothing says which of its fields is the message id, it keyed on
+   * `data.id` while the real readers key on the message, so one DM delivered in
+   * that shape and a real one produced two dedupe keys and two inbox rows.
+   *
+   * Canonicalising it would have meant inventing which field is authoritative in
+   * a format that does not exist — the same mistake as inventing a CRC token
+   * alphabet. An unrecognised delivery now normalises to nothing, which fails
+   * visibly instead.
    */
-  const valid = {
-    type: "dm.received",
-    data: { id: "event-1", sender_id: "9999", recipient_id: "1111", text: "hello" },
+  const wouldHaveBeenIngested = {
+    events: [
+      { type: "dm.received", data: { id: "event-1", sender_id: "9999", recipient_id: "1111", text: "hello" } },
+    ],
   };
+  assert.deepEqual(normaliseXActivity(wouldHaveBeenIngested, "1111"), []);
+  assert.deepEqual(normaliseXActivity({ nothing: true }, "1111"), []);
+  assert.deepEqual(normaliseXActivity(null, "1111"), []);
+});
 
-  const withEmptyLegacy = normaliseXActivity(
-    { direct_message_events: [], events: [valid] },
+/* ── the DM recipient rule, across both real generations ───────────────── */
+
+test("a DM addressed to another account is ignored, in both generations", () => {
+  const connected = "1111";
+  const foreign = "2222";
+
+  assert.deepEqual(
+    normaliseXActivity(
+      {
+        direct_message_events: [
+          { id: "e2", message_create: { sender_id: "9999", target: { recipient_id: foreign }, message_data: { text: "hi" } } },
+        ],
+      },
+      connected,
+    ),
+    [],
+    "legacy must check the recipient",
+  );
+
+  assert.deepEqual(
+    normaliseXActivity(
+      {
+        data: {
+          event_type: "dm.received",
+          event_uuid: "u1",
+          payload: {
+            direct_message_events: [
+              { id: "e3", message_create: { sender_id: "9999", target: { recipient_id: foreign }, message_data: { text: "hi" } } },
+            ],
+          },
+        },
+      },
+      connected,
+    ),
+    [],
+    "current must check the recipient",
+  );
+
+  // Control: correctly addressed, still ingested.
+  const addressed = normaliseXActivity(
+    {
+      direct_message_events: [
+        { id: "ok", message_create: { sender_id: "9999", target: { recipient_id: connected }, message_data: { text: "hi" } } },
+      ],
+    },
+    connected,
+  );
+  assert.equal(addressed.length, 1);
+});
+
+test("a DM that does not name its recipient is refused, not assumed to be ours", () => {
+  // `recipient_id ?? accountId` made the check pass vacuously whenever the field
+  // was absent. A DM is private; "the payload does not say who this was for"
+  // cannot mean "it was for us".
+  const connected = "1111";
+
+  assert.deepEqual(
+    normaliseXActivity(
+      { direct_message_events: [{ id: "e2", message_create: { sender_id: "9999", message_data: { text: "private" } } }] },
+      connected,
+    ),
+    [],
+    "legacy: a DM with no recipient must be refused",
+  );
+
+  assert.deepEqual(
+    normaliseXActivity(
+      {
+        data: {
+          event_type: "dm.received",
+          event_uuid: "u1",
+          payload: {
+            direct_message_events: [{ id: "e3", message_create: { sender_id: "9999", message_data: { text: "private" } } }],
+          },
+        },
+      },
+      connected,
+    ),
+    [],
+    "current: a DM with no recipient must be refused",
+  );
+
+  // Mentions and replies are PUBLIC and carry no recipient by nature — they must
+  // still be ingested, or this hardening would switch off half the feed.
+  const mention = normaliseXActivity(
+    { tweet_create_events: [{ id_str: "m1", user: { id_str: "9999" }, text: "@shop hi" }] },
+    connected,
+  );
+  assert.equal(mention.length, 1, "a public mention needs no recipient");
+  assert.equal(mention[0].kind, "mention");
+});
+
+/* ── one reader owns a delivery ────────────────────────────────────────── */
+
+test("a reader that recognises a delivery answers for it, even with nothing to report", () => {
+  /*
+   * Precedence decided by RESULT could not tell "did not recognise this" from
+   * "recognised it and correctly found nothing" — and a current envelope
+   * rejecting a cross-account DM produces exactly the latter. It then fell
+   * through to a weaker reader, which re-admitted the message.
+   *
+   * The fallback here carries a perfectly valid DM addressed to the connected
+   * account, so the ONLY thing that can suppress it is the current envelope
+   * having already answered.
+   */
+  const connected = "1111";
+  const foreign = "2222";
+
+  const isolated = normaliseXActivity(
+    {
+      data: {
+        event_type: "dm.received",
+        event_uuid: "uuid-2",
+        payload: {
+          direct_message_events: [
+            {
+              id: "dm-2",
+              message_create: {
+                sender_id: "9999",
+                target: { recipient_id: foreign },
+                message_data: { text: "for someone else" },
+              },
+            },
+          ],
+        },
+      },
+      direct_message_events: [
+        {
+          id: "dm-3",
+          message_create: {
+            sender_id: "9999",
+            target: { recipient_id: connected },
+            message_data: { text: "would be accepted alone" },
+          },
+        },
+      ],
+    },
+    connected,
+  );
+  assert.deepEqual(isolated, [], "the current envelope answered; the fallback must not add to that delivery");
+
+  // Control: that same legacy payload, delivered on its own, IS ingested.
+  const alone = normaliseXActivity(
+    {
+      direct_message_events: [
+        {
+          id: "dm-3",
+          message_create: {
+            sender_id: "9999",
+            target: { recipient_id: connected },
+            message_data: { text: "would be accepted alone" },
+          },
+        },
+      ],
+    },
+    connected,
+  );
+  assert.equal(alone.length, 1, "the legacy reader must still work when it owns the delivery");
+});
+
+test("an empty container does not suppress a real event beside it", () => {
+  /*
+   * HONEST NOTE ON WHAT THIS DOES AND DOES NOT PROVE.
+   *
+   * `recognisesLegacy` requires a NON-EMPTY array. That mattered when a third
+   * reader sat after it: `{ direct_message_events: [], events: [valid] }`
+   * selected legacy, which had nothing to read, and the valid event was dropped.
+   *
+   * With that reader removed, legacy is LAST — so `hasEntries` and a bare
+   * `Array.isArray` now produce identical results, and mutation testing
+   * confirmed it: relaxing the check fails nothing. The precision is kept
+   * because it states the intended rule and becomes load-bearing the moment any
+   * reader is added after legacy, but this test is a description of current
+   * behaviour, not a guard that can catch its removal. Saying so here is better
+   * than leaving a test that looks like protection and is not.
+   */
+  const valid = { id_str: "m1", user: { id_str: "9999" }, text: "@shop hi" };
+
+  const withEmptyDms = normaliseXActivity(
+    { direct_message_events: [], tweet_create_events: [valid] },
     "1111",
   );
-  assert.equal(withEmptyLegacy.length, 1, "an empty legacy array must not suppress a real generic event");
-  assert.equal(withEmptyLegacy[0].id, "event-1");
+  assert.equal(withEmptyDms.length, 1, "an empty DM array must not suppress a real tweet event");
+  assert.equal(withEmptyDms[0].id, "m1");
 
-  const withEmptyTweets = normaliseXActivity(
-    { tweet_create_events: [], events: [valid] },
-    "1111",
-  );
-  assert.equal(withEmptyTweets.length, 1, "the same for an empty tweet array");
-
-  // A delivery whose containers are all empty is recognised by nobody and
-  // normalises to nothing, which is the correct reading of an empty payload.
-  assert.deepEqual(normaliseXActivity({ direct_message_events: [], events: [] }, "1111"), []);
+  // All containers empty: recognised by nobody, normalises to nothing.
+  assert.deepEqual(normaliseXActivity({ direct_message_events: [], tweet_create_events: [] }, "1111"), []);
 });
