@@ -8,7 +8,8 @@ import { customerRecordTenantId } from "@/lib/customerRecordTenant";
 import { requireQuoteAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { emitLeadJourneyEvent } from "@/lib/leadJourneyEvents";
-import { saveFile } from "@/lib/storage";
+import { deleteFile, saveFile } from "@/lib/storage";
+import { logError } from "@/lib/errorLog";
 import { checkUploadPayload } from "@/lib/photoBudget";
 import { contactName } from "@/lib/format";
 import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
@@ -29,19 +30,24 @@ async function attachStageDocument(
 ) {
   const buffer = Buffer.from(await file.arrayBuffer());
   const storedName = await saveFile(buffer, file.name || fileName, file.type || "application/pdf", tenantId);
-  await prisma.document.create({
-    data: {
-      tenantId,
-      fileName,
-      storedName,
-      mimeType: file.type || "application/pdf",
-      sizeBytes: file.size,
-      contactId,
-      quoteId,
-      tag,
-      uploadedById: userId,
-    },
-  });
+  try {
+    await prisma.document.create({
+      data: {
+        tenantId,
+        fileName,
+        storedName,
+        mimeType: file.type || "application/pdf",
+        sizeBytes: file.size,
+        contactId,
+        quoteId,
+        tag,
+        uploadedById: userId,
+      },
+    });
+  } catch (error) {
+    await deleteFile(storedName).catch(() => {});
+    throw error;
+  }
 }
 
 function pickFile(formData: FormData): File | null {
@@ -191,13 +197,27 @@ export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) 
     if (!payload.ok) refuse(payload.reason);
 
     let saved = 0;
-    for (const file of accepted.slice(0, MAX_PHOTOS)) {
-      await attachStageDocument(quoteId, quote.contactId, "delivery-photo", `Delivery photo — Q-${quote.number} — ${file.name}`, file, user.id, quote.tenantId);
-      saved++;
+    let failed = 0;
+    for (const [index, file] of accepted.slice(0, MAX_PHOTOS).entries()) {
+      try {
+        await attachStageDocument(quoteId, quote.contactId, "delivery-photo", `Delivery photo — Q-${quote.number} — ${file.name}`, file, user.id, quote.tenantId);
+        saved++;
+      } catch (error) {
+        failed++;
+        await logError(
+          "delivery-photo-upload",
+          error,
+          `quote=${quoteId} photo=${index + 1}/${Math.min(accepted.length, MAX_PHOTOS)} type=${file.type || "unknown"} bytes=${file.size}`,
+          { tenantId: quote.tenantId, alert: false },
+        );
+      }
+    }
+    if (saved === 0) {
+      refuse("The photos could not be stored. The technical reason is now available in Settings → System Log under delivery-photo-upload.");
     }
     const rejected = files.length - accepted.length;
     const overCap = Math.max(0, accepted.length - MAX_PHOTOS);
-    const skipped = rejected + overCap;
+    const skipped = rejected + overCap + failed;
     if (saved > 0) {
       await logAudit({
         action: "fulfilment.photos",
@@ -215,7 +235,7 @@ export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) 
           ? `${saved} photo${saved === 1 ? "" : "s"} uploaded — ${skipped} skipped (not an image, over 4 MB, or past the ${MAX_PHOTOS}-photo limit)`
           : `${saved} photo${saved === 1 ? "" : "s"} uploaded`,
     };
-  });
+  }, { scope: "delivery-photo-upload", context: `quote=${quoteId}` });
 }
 
 export async function markDelivered(quoteId: string, formData: FormData): Promise<ActionResult> {
