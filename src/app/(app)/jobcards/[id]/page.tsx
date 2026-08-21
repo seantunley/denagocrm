@@ -321,7 +321,7 @@ export default async function JobCardDetailPage({
                 </p>
               </div>
               <div className="flex items-center gap-2 flex-wrap">
-                <CameraCapture action={uploadJobCardPhotos.bind(null, jobCard.id)} />
+                <CameraCapture action={uploadJobCardPhotos.bind(null, jobCard.id)} offlineOperation={{ type: "jobcard.photo", recordId: jobCard.id }} />
                 <SaveForm success="Photos uploaded" resetOnSuccess={false} action={uploadJobCardPhotos.bind(null, jobCard.id)} offlineOperation={{ type: "jobcard.photo", recordId: jobCard.id }} className="flex items-center gap-2">
                   <input type="hidden" name="category" value="checkin" />
                   <PhotoUploadField required className="block text-xs text-slate-400 file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
@@ -695,7 +695,7 @@ export default async function JobCardDetailPage({
                 <p className="text-xs text-slate-400">Condition AFTER the work — proof of hand-over state.</p>
               </div>
               <div className="flex items-center gap-2 flex-wrap">
-                <CameraCapture action={uploadCheckoutPhotos.bind(null, jobCard.id)} />
+                <CameraCapture action={uploadCheckoutPhotos.bind(null, jobCard.id)} offlineOperation={{ type: "jobcard.photo", recordId: jobCard.id }} />
                 <SaveForm success="Photos uploaded" resetOnSuccess={false} action={uploadCheckoutPhotos.bind(null, jobCard.id)} offlineOperation={{ type: "jobcard.photo", recordId: jobCard.id }} className="flex items-center gap-2">
                   <input type="hidden" name="category" value="checkout" />
                   <PhotoUploadField required className="block text-xs text-slate-400 file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
