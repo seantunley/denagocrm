@@ -36,6 +36,21 @@ test("actingTenantId recovers a lost Server Action scope without replacing an ex
     "a successfully recovered staff workspace must satisfy awaited actor resolution");
 });
 
+test("the async tenant predicate recovers only a genuinely missing request scope", () => {
+  const code = shipped("src/lib/tenantPredicate.ts");
+  const body = functionBody(code, "recoverableActiveTenantPredicate");
+
+  assert.match(body, /return activeTenantPredicate\(context\);/,
+    "existing scopes and dormant mode must keep the original rule");
+  assert.match(body, /error instanceof TenantScopeError/);
+  assert.match(body, /currentTenantScope\(\)/,
+    "a deliberately bound null/system scope must not be replaced");
+  assert.match(body, /recoverStaffScopeFromSession\(\)/);
+  assert.match(body, /if \(!recovered\?\.tenantId\) throw error;/,
+    "sessionless/unresolved helpers still fail closed with their original context");
+  assert.match(body, /return \{ tenantId: recovered\.tenantId \};/);
+});
+
 test("contact creation no longer synchronously reads tenant scope before its fleet lookup", () => {
   const code = shipped("src/app/actions/contacts.ts");
   const resolveStart = code.indexOf("async function resolveFleet");
@@ -65,6 +80,19 @@ test("all fleet mutations resolve their fleet through the recoverable awaited ac
     assert.match(functionBody(code, name), /tenantFleet\(/,
       `${name} must pass through the tenant-bounded fleet resolver`);
   }
+});
+
+test("async request helpers do not strand a recovered action at the next synchronous predicate", () => {
+  const directory = shipped("src/lib/fleetDirectory.ts");
+  assert.match(functionBody(directory, "fleetPicker"), /await recoverableActiveTenantPredicate\("fleet picker"\)/,
+    "the quick-create API and contact pages share this helper");
+
+  const billTo = shipped("src/lib/quoteBillTo.ts");
+  assert.match(
+    functionBody(billTo, "loadBillToFleets", "loadBillToFleet"),
+    /await recoverableActiveTenantPredicate\("quote bill-to fleet"\)/,
+    "fulfilment/quote actions and PDF route handlers must not fail after actor recovery",
+  );
 });
 
 test("known synchronous tenant readers in Server Actions remain enclosed", () => {
