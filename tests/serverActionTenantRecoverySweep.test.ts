@@ -51,6 +51,32 @@ test("the async tenant predicate recovers only a genuinely missing request scope
   assert.match(body, /return \{ tenantId: recovered\.tenantId \};/);
 });
 
+test("known-tenant public requests use an enclosing callback scope, not enter-and-return", () => {
+  const entry = shipped("src/lib/tenantScopeEntry.ts");
+  const body = entry.slice(entry.indexOf("export function withTenantScopeFromId"));
+  assert.match(body, /if \(!tenantEnforcing\(\)\) return fn\(\);/,
+    "dormant compatibility must stay unchanged");
+  assert.match(body, /return runInTenantScope\(\{ tenantId, system: false \}, fn\);/,
+    "enforcement needs a real enclosing async frame");
+
+  const routes = [
+    "src/app/api/intake/route.ts",
+    "src/app/api/bookings/route.ts",
+    "src/app/api/bookings/slots/route.ts",
+    "src/app/api/service-lookup/route.ts",
+    "src/app/api/service-lookup/verify/route.ts",
+  ];
+  for (const file of routes) {
+    const code = shipped(file);
+    const authAt = code.indexOf("authenticateIntakeKey(");
+    const scopeAt = code.indexOf("withTenantScopeFromId(auth.tenantId");
+    assert.ok(authAt >= 0 && scopeAt > authAt,
+      `${file} must derive the tenant from the authenticated API key before binding it`);
+    assert.doesNotMatch(code, /establishTenantScopeFromId\(/,
+      `${file} must not rely on a callee enterWith surviving after the helper returns`);
+  }
+});
+
 test("contact creation no longer synchronously reads tenant scope before its fleet lookup", () => {
   const code = shipped("src/app/actions/contacts.ts");
   const resolveStart = code.indexOf("async function resolveFleet");
