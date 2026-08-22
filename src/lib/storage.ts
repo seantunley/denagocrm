@@ -580,21 +580,31 @@ export async function listActiveBackupBlobs(prefix: string): Promise<Array<{ pat
  * uploadedAt, and widening it would give every backup caller a field it has no
  * use for.
  */
-export async function listActiveUploadBlobs(
+export type UploadBlob = { pathname: string; url: string; uploadedAt: Date | null };
+export type UploadBlobPage = { blobs: UploadBlob[]; cursor: string | null };
+
+/**
+ * ONE PAGE at a time, and a cursor to resume from.
+ *
+ * Deliberately not a "collect everything then act" helper like its backup
+ * sibling. The orphan sweep runs on a cron budget, and a version that listed the
+ * whole namespace first spent that budget walking the store before deleting
+ * anything — so as storage grew it would do less and less real work per tick,
+ * and objects past the first page would never be reached at all. Handing back a
+ * page and a cursor lets the caller work, check its deadline, and resume.
+ */
+export async function listActiveUploadBlobPage(
   prefix: string,
-): Promise<Array<{ pathname: string; url: string; uploadedAt: Date | null }>> {
+  cursor?: string | null,
+  limit = 250,
+): Promise<UploadBlobPage> {
   const token = activeStoreToken(privateMode(), storeTokens());
-  if (!token) return [];
-  const out: Array<{ pathname: string; url: string; uploadedAt: Date | null }> = [];
-  let cursor: string | undefined;
-  do {
-    const page = await list({ prefix, cursor, limit: 1000, token });
-    for (const b of page.blobs) {
-      out.push({ pathname: b.pathname, url: b.url, uploadedAt: b.uploadedAt ?? null });
-    }
-    cursor = page.hasMore ? page.cursor : undefined;
-  } while (cursor);
-  return out;
+  if (!token) return { blobs: [], cursor: null };
+  const page = await list({ prefix, cursor: cursor ?? undefined, limit, token });
+  return {
+    blobs: page.blobs.map((b) => ({ pathname: b.pathname, url: b.url, uploadedAt: b.uploadedAt ?? null })),
+    cursor: page.hasMore ? (page.cursor ?? null) : null,
+  };
 }
 
 /**
