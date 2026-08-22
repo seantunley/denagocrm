@@ -72,8 +72,8 @@ test("every photo action facade encloses the delegate and records facade failure
   ];
   for (let i = 0; i < names.length; i++) {
     const body = functionBody(actions, names[i], names[i + 1]);
-    assert.match(body, /withActingStaffScope\(/,
-      `${names[i]} must bind the recovered workspace around the whole underlying action`);
+    assert.match(body, /withPhotoActionScope\(/,
+      `${names[i]} must bind an authenticated recovered workspace around the whole underlying action`);
     assert.match(body, /asActionResult\(/,
       `${names[i]} must still turn facade/import failures into a durable reference`);
   }
