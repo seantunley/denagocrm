@@ -51,13 +51,17 @@ test("the async tenant predicate recovers only a genuinely missing request scope
   assert.match(body, /return \{ tenantId: recovered\.tenantId \};/);
 });
 
-test("known-tenant public requests use an enclosing callback scope, not enter-and-return", () => {
+test("known-tenant public requests establish one enclosing callback scope", () => {
   const entry = shipped("src/lib/tenantScopeEntry.ts");
-  const body = entry.slice(entry.indexOf("export function withTenantScopeFromId"));
+  const body = entry.slice(entry.indexOf("export function establishTenantScopeFromId"));
+  assert.match(body, /fn:\s*\(\)\s*=>\s*Promise<T>/,
+    "known-tenant scope establishment must own the operation callback");
   assert.match(body, /if \(!tenantEnforcing\(\)\) return fn\(\);/,
     "dormant compatibility must stay unchanged");
   assert.match(body, /return runInTenantScope\(\{ tenantId, system: false \}, fn\);/,
     "enforcement needs a real enclosing async frame");
+  assert.doesNotMatch(body, /enterTenantScope\(\{ tenantId, system: false \}\)/,
+    "the known-tenant request helper must not return after a callee-only enterWith");
 
   const routes = [
     "src/app/api/intake/route.ts",
@@ -69,11 +73,9 @@ test("known-tenant public requests use an enclosing callback scope, not enter-an
   for (const file of routes) {
     const code = shipped(file);
     const authAt = code.indexOf("authenticateIntakeKey(");
-    const scopeAt = code.indexOf("withTenantScopeFromId(auth.tenantId");
+    const scopeAt = code.indexOf("establishTenantScopeFromId(auth.tenantId, async");
     assert.ok(authAt >= 0 && scopeAt > authAt,
-      `${file} must derive the tenant from the authenticated API key before binding it`);
-    assert.doesNotMatch(code, /establishTenantScopeFromId\(/,
-      `${file} must not rely on a callee enterWith surviving after the helper returns`);
+      `${file} must derive the tenant from the authenticated API key before enclosing the work`);
   }
 });
 
