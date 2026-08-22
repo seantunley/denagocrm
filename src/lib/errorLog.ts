@@ -1,8 +1,7 @@
 import { subDays } from "date-fns";
 import { basePrisma } from "./db";
 import { redactUrl } from "./redactUrl";
-import { actingTenantId } from "./actingTenant";
-import { getActiveTenantIdIfRequest } from "./auth";
+import { attributionTenantId } from "./actingTenant";
 
 /**
  * How long a logged error is kept.
@@ -75,7 +74,7 @@ export async function pruneErrorLog(now: Date = new Date()): Promise<number> {
  * known belongs to nobody, and inventing an owner would make a healthy workspace
  * look broken.
  *
- * The resolution order is the shared one ({@link actingTenantId}): an established
+ * The resolution order is the shared one ({@link attributionTenantId}): an established
  * scope, `system` and platform-console requests deliberately unattributed, then the
  * acting staff session. Shared rather than restated so error attribution and record
  * ownership cannot drift apart — this file used to carry its own copy, and a copy
@@ -83,34 +82,11 @@ export async function pruneErrorLog(now: Date = new Date()): Promise<number> {
  * attribution must never be able to break logging.
  */
 async function tenantForError(): Promise<string | null> {
-  try {
-    return await actingTenantId();
-  } catch {
-    /*
-     * THE SESSION IS THE FALLBACK, AND WITHOUT IT THE LOG HIDES ITS WORST ERRORS.
-     *
-     * actingTenantId() calls writeTenantId() FIRST, and under enforcement that
-     * throws when a request carries no bound scope - before the session rung of
-     * its own ladder is ever reached. So every error caused by a MISSING SCOPE
-     * was attributed to nobody, written with tenantId: null, and then filtered
-     * out of Settings -> System Log, which reads where: { tenantId: <yours> }.
-     *
-     * The class of failure that loses the workspace was therefore precisely the
-     * class that erased its own evidence. A fleet-quote PDF 500'd in production
-     * and the log stayed empty while it did.
-     *
-     * The session still knows the workspace: the tid claim is on the cookie and
-     * needs no ambient scope to read. Reading it here is attribution ONLY - it
-     * grants nothing, and the request that failed has already failed. A genuinely
-     * sessionless caller (cron, a webhook, a queue drain) returns null and stays
-     * unattributed, which is still the correct answer for it.
-     */
-    try {
-      return await getActiveTenantIdIfRequest();
-    } catch {
-      return null;
-    }
-  }
+  // One question, asked of the module that owns the resolution order. The
+  // swallow that used to live here returned null for every enforced request with
+  // no bound scope - which is exactly the failure most worth seeing, filed where
+  // the tenant own System Log could not show it. See attributionTenantId.
+  return attributionTenantId();
 }
 
 /**

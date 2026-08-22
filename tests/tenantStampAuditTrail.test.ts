@@ -523,7 +523,14 @@ test("ErrorLog is global on purpose, and its attribution shares one resolver", (
   // The attribution column is still filled best-effort, through the SAME resolver
   // every other write uses. A second copy of that decision is how it drifts.
   const errorLog = shipped("src/lib/errorLog.ts");
-  assert.match(errorLog, /import \{ actingTenantId \} from "\.\/actingTenant"/);
+  // The resolver must come FROM the shared module. It is attributionTenantId
+  // rather than actingTenantId because the two answer different questions:
+  // actingTenantId throws under enforcement with no scope, which is right for a
+  // WRITE and wrong for attribution - it is why a scope-loss error was filed
+  // against no workspace and then hidden from the very System Log that would
+  // have shown it. Both live in actingTenant.ts, so there is still one module
+  // owning the order and still no copy here.
+  assert.match(errorLog, /import \{ attributionTenantId \} from "\.\/actingTenant"/);
   assert.doesNotMatch(
     errorLog,
     /getActiveTenantId|PLATFORM_SESSION_COOKIE/,

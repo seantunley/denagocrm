@@ -109,3 +109,51 @@ export async function actingTenantId(): Promise<string> {
   }
   return decideBuilderTenant({ enforcedTenantId, sessionTenantId });
 }
+
+
+/**
+ * The workspace an ERROR should be filed against — best effort, never throwing.
+ *
+ * ── WHY THIS IS NOT JUST actingTenantId() IN A TRY ─────────────────────────
+ *
+ * {@link actingTenantId} calls `writeTenantId()` FIRST, and under enforcement
+ * that throws when the request carries no bound scope. The throw happens before
+ * its own session rung is ever reached — which is correct for a WRITE (a record
+ * with no provable owner must not be created) and exactly wrong for ATTRIBUTION.
+ *
+ * The consequence was measured, not theoretical. A fleet-quote print route 500'd
+ * in production because it read the scope without binding it; the error was
+ * filed with `tenantId: null`; and Settings → System Log reads
+ * `where: { tenantId: <yours> }`, so it matched nothing. The one class of
+ * failure that loses the workspace was precisely the class that erased its own
+ * evidence, and the log sat empty through a live outage.
+ *
+ * So this asks the same questions in the same order and simply declines to throw:
+ * an explicitly bound scope, then the session's own workspace, then null. It is
+ * ATTRIBUTION ONLY — it grants nothing, authorises nothing, and by the time it
+ * runs the request it describes has already failed.
+ *
+ * A genuinely sessionless caller — cron, a webhook, a queue drain — still gets
+ * null, which remains the right answer: that error belongs to nobody, and
+ * inventing an owner would make a healthy workspace look broken.
+ *
+ * It lives HERE, beside the resolver it defers to, because errorLog.ts used to
+ * carry its own copy of this decision and a copy is a thing that goes stale
+ * silently. One module owns the order; this is a second question asked of it,
+ * not a second answer.
+ */
+export async function attributionTenantId(): Promise<string | null> {
+  try {
+    return await actingTenantId();
+  } catch {
+    // The same two rungs actingTenantId would have consulted had it got past
+    // writeTenantId(), in the same order.
+    const ambient = currentTenantScope()?.tenantId ?? null;
+    if (ambient) return ambient;
+    try {
+      return await getActiveTenantIdIfRequest();
+    } catch {
+      return null;
+    }
+  }
+}
