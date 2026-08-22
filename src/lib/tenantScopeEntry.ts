@@ -98,10 +98,41 @@ export async function establishStaffTenantScope(
  * (e.g. the customer portal, from its Contact's `tenantId`). No-op when
  * enforcement off. A null tenantId is carried through — under enforcement the db
  * guard refuses it (fail closed), never runs unscoped.
+ *
+ * Prefer {@link withTenantScopeFromId} when the caller controls the operation's
+ * callback. `enterTenantScope()` binds downward from THIS frame; a Server Action
+ * or Route Handler that calls this function and then resumes in its own frame can
+ * lose that binding for the same reason the staff actions did. This legacy
+ * establish-and-return form remains for chokepoints whose surrounding runtime
+ * already owns a stable request carrier.
  */
 export function establishTenantScopeFromId(tenantId: string | null): void {
   if (!tenantEnforcing()) return;
   enterTenantScope({ tenantId, system: false });
+}
+
+/**
+ * Run a request whose tenant has ALREADY been authenticated/resolved (API key,
+ * portal contact, other trusted principal) inside one enclosing tenant scope.
+ *
+ * This is the callback form of {@link establishTenantScopeFromId}, and it exists
+ * for the same propagation failure that hit Server Actions: `enterWith` inside a
+ * helper does not reliably flow BACK UP into the caller frame after that helper
+ * returns. `runInTenantScope` creates the enclosing async frame instead, so every
+ * guarded read/write below the callback sees the resolved tenant.
+ *
+ * DORMANT is deliberately byte-for-byte compatible: no scope is added and `fn`
+ * runs directly. Under enforcement a null tenant is still carried, which makes
+ * tenant-owned operations fail closed exactly as `establishTenantScopeFromId`
+ * does. The caller is responsible for deriving `tenantId` from a trusted source;
+ * this helper performs no authentication of its own.
+ */
+export function withTenantScopeFromId<T>(
+  tenantId: string | null,
+  fn: () => Promise<T>,
+): Promise<T> {
+  if (!tenantEnforcing()) return fn();
+  return runInTenantScope({ tenantId, system: false }, fn);
 }
 
 type TrustedTenantResolver = () => Promise<{ tenantId: string | null } | null>;
