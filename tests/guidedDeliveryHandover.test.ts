@@ -6,6 +6,7 @@ import { deliveryHandoverReadiness } from "../src/lib/checklists/deliveryHandove
 const actionSource = readFileSync("src/app/actions/guidedDelivery.ts", "utf8");
 const pageSource = readFileSync("src/app/(app)/deliveries/page.tsx", "utf8");
 const completionSource = readFileSync("src/components/checklists/GuidedDeliveryCompletion.tsx", "utf8");
+const deliveryNoteSource = readFileSync("src/app/(print)/quotes/[id]/delivery-note/page.tsx", "utf8");
 
 test("guided delivery is unavailable rather than implicitly complete with no template", () => {
   assert.deepEqual(deliveryHandoverReadiness([], []), {
@@ -53,6 +54,16 @@ test("the guided UI reviews the actual delivery note before showing signature", 
   assert.ok(signatureAt > continueAt);
   assert.match(completionSource, /`\/quotes\/\$\{quoteId\}\/delivery-note`/);
   assert.match(completionSource, /completeGuidedDelivery\.bind\(null, quoteId\)/);
+});
+
+test("the delivery note shows the guided snapshots being signed, then the stored signature", () => {
+  assert.match(deliveryNoteSource, /prisma\.checklistRun\.findMany/);
+  assert.match(deliveryNoteSource, /hostType: "quote\.delivery"/);
+  assert.match(deliveryNoteSource, /labelSnapshot/);
+  assert.match(deliveryNoteSource, /captureSnapshot/);
+  assert.match(deliveryNoteSource, /latestRunByTemplate/);
+  assert.match(deliveryNoteSource, /tag: "delivery-signature"/);
+  assert.match(deliveryNoteSource, /src=\{`\/api\/files\/\$\{signatureDoc\.id\}`\}/);
 });
 
 test("Deliveries uses the old proof-of-delivery only as an unconfigured fallback", () => {
