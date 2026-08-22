@@ -1,5 +1,6 @@
 import { requireQuoteReadAccess } from "@/lib/permissions";
-import { renderQuotePrintHtml, printToolbarHtml } from "@/lib/quotePrintDocument";
+import { renderQuotePrintHtml } from "@/lib/quotePrintDocument";
+import { printToolbarHtml } from "@/lib/printToolbar";
 import { withActingStaffScope } from "@/lib/actingScope";
 
 export const runtime = "nodejs";
@@ -49,7 +50,10 @@ export async function GET(
   const html = await renderQuotePrintHtml({
     quoteId: id,
     templateId,
-    toolbarHtml: printToolbarHtml(`/quotes?edit=${id}`, "Back to quote"),
+    // The nonce the proxy stamped on this request. The toolbar needs it because
+    // CSP forbids inline handlers, so the print button is wired by a nonced
+    // script rather than an onclick that the browser would silently refuse.
+    toolbarHtml: printToolbarHtml(`/quotes?edit=${id}`, "Back to quote", request.headers.get("x-nonce")),
   });
   if (!html) {
     return new Response(

@@ -90,10 +90,3 @@ export async function renderQuotePrintHtml(opts: {
 }
 
 /** Screen-only Print / Back bar. Hidden by @media print — see renderDocumentHtml. */
-export function printToolbarHtml(backHref: string, backLabel: string): string {
-  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
-  return `<div class="doc-toolbar" style="position:sticky;top:0;z-index:50;display:flex;gap:8px;align-items:center;justify-content:flex-end;padding:10px 14px;background:#0f172a;font-family:Helvetica,Arial,sans-serif">
-    <a href="${esc(backHref)}" style="color:#cbd5e1;text-decoration:none;font-size:13px;margin-right:auto">&larr; ${esc(backLabel)}</a>
-    <button type="button" onclick="window.print()" style="background:#ea580c;color:#fff;border:none;border-radius:6px;padding:8px 16px;font-size:13px;font-weight:700;cursor:pointer">Print / Save PDF</button>
-  </div>`;
-}
