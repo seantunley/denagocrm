@@ -435,7 +435,10 @@ export function renderDocumentHtml(
       body { background: #e2e8f0; }
       .doc-page {
         width: ${size.w}px;
-        margin: 16px auto;
+        /* NO BOTTOM MARGIN: the footer region follows the last page and must
+           sit flush against it. Pages are still separated from one another, by
+           the TOP margin of the one that follows. */
+        margin: 16px auto 0;
         padding: ${m}px;
         background: #ffffff;
         box-shadow: 0 1px 3px rgba(15, 23, 42, 0.2);
@@ -451,26 +454,47 @@ export function renderDocumentHtml(
        */
       .doc-header, .doc-footer {
         position: static;
+        /* Contains the footer BLOCK’s own margin. Without a block formatting
+           context that margin collapses OUT of this region and becomes a gap
+           between the sheet and its footer — measured at 8px, and invisible to
+           every margin adjustment because no margin here was ever non-zero. */
+        display: flow-root;
         width: ${size.w}px;
         margin: 0 auto;
-        padding: 0 ${m}px;
         background: #ffffff;
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.2);
       }
+      /* Continuous with the sheet: the side padding matches the page's margin
+         so the content lines up, and the outer padding stands in for the page
+         margin these regions have displaced. */
+      .doc-header { margin-top: 16px; padding: ${m}px ${m}px 0; }
+      .doc-header + .doc-page { margin-top: 0; }
+      .doc-footer { padding: 0 ${m}px ${m}px; margin-bottom: 16px; }
+      /* A document with no footer region still needs air under the last page. */
+      body { padding-bottom: 16px; }
     }
-  </style></head><body>
-    ${opts?.toolbarHtml ?? ""}
-    ${header ? `<div class="doc-header">${header}</div>` : ""}
-    ${body}
-    ${/* AFTER the pages, and that is not cosmetic ordering.
-
-          For print these two are position:fixed, which repeats them on every
-          sheet and makes document order irrelevant — so the footer sat in the
-          markup directly after the header, above the pages, and nothing showed
-          it. The screen rule puts them back in flow, and in flow the markup
-          order IS the rendered order: the footer appeared above the document it
-          belongs under.
-
-          Print is unaffected either way; the screen depends on it. */ ""}
-    ${footer ? `<div class="doc-footer">${footer}</div>` : ""}
-  </body></html>`;
+  </style></head><body>${[
+    opts?.toolbarHtml ?? "",
+    header ? `<div class="doc-header">${header}</div>` : "",
+    body,
+    /*
+     * THE FOOTER GOES AFTER THE PAGES, and the parts are joined with NOTHING
+     * between them. Both halves were bugs and both are load-bearing.
+     *
+     * ORDER: for print these regions are position:fixed, which repeats them on
+     * every sheet and makes document order irrelevant — so the footer sat in
+     * the markup right after the header, above the pages, and nothing showed
+     * it. On screen they are in flow, where markup order IS rendered order, so
+     * the footer appeared above the document it belongs under.
+     *
+     * WHITESPACE: the parts used to be interpolated on separate indented
+     * lines, which left whitespace-only TEXT NODES between the block elements.
+     * Those produce an anonymous line box — a MEASURED 8px band of background
+     * between the last page and the footer, so the footer read as a detached
+     * strip floating below the sheet instead of the bottom of it. No margin
+     * was involved, which is why two attempts to fix it by adjusting margins
+     * changed nothing.
+     */
+    footer ? `<div class="doc-footer">${footer}</div>` : "",
+  ].join("")}</body></html>`;
 }
