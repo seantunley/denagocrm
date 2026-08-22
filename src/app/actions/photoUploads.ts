@@ -1,5 +1,6 @@
 "use server";
 
+import { asActionResult } from "@/lib/actionResult";
 import { actingTenantId } from "@/lib/actingTenant";
 import { TenantScopeError } from "@/lib/tenantGuard";
 import { getCurrentUser, requireUser } from "@/lib/auth";
@@ -15,27 +16,7 @@ export type PhotoUploadTarget = {
   jobCardId?: string;
 };
 
-/**
- * Return only the non-secret store access mode the browser must pass to
- * @vercel/blob/client. Resolving the token here is intentional: private mode
- * fails closed before the browser starts preparing a batch if its private store
- * token is missing.
- *
- * requireUser() is the guard, and actingTenantId() is NOT a substitute for it —
- * it resolves which workspace is acting, not whether the caller is anyone at
- * all. A Server Action is a POST endpoint reachable by anyone who can send the
- * request, so without this an anonymous caller learns the store's access mode
- * and, through the thrown token error, whether the private store is configured.
- * There is no record to authorize here: the per-record permission check belongs
- * to the token mint in /api/photos/upload, which is what actually grants write
- * access to a path.
- */
-export async function getPhotoUploadAccess(): Promise<PhotoBlobAccess> {
-  await requireUser();
-  await actingTenantId();
-  photoBlobToken();
-  return photoBlobAccess();
-}
+
 
 /**
  * How this deployment can accept photos.
@@ -60,12 +41,34 @@ export type PhotoUploadPlan =
   | { transport: "direct"; access: PhotoBlobAccess }
   | { transport: "form" };
 
-export async function getPhotoUploadPlan(): Promise<PhotoUploadPlan> {
-  await requireUser();
-  await actingTenantId();
-  const token = photoBlobToken();
-  if (!token) return { transport: "form" };
-  return { transport: "direct", access: photoBlobAccess() };
+export async function getPhotoUploadPlan(): Promise<PhotoUploadPlan | { error: string }> {
+  /*
+   * THE REAL ERROR MUST BE LOGGED HERE, ON THE SERVER.
+   *
+   * This threw raw. A Server Action that throws is redacted by Next before the
+   * browser sees it — "An error occurred in the Server Components render. The
+   * specific message is omitted in production builds" — so the one place the
+   * cause existed was the one place nothing recorded it, and the client could
+   * not report what it had never been told. That is why the System Log stayed
+   * empty however much the browser-side reporting was improved.
+   *
+   * asActionResult is the established answer: it logs the REAL error with a
+   * reference and hands back a message safe to show, carrying that same
+   * reference so the row can be found from the screen that mentioned it. Every
+   * other action in this codebase already goes through it; this one did not.
+   */
+  let plan: PhotoUploadPlan | null = null;
+  const outcome = await asActionResult(async () => {
+    await requireUser();
+    await actingTenantId();
+    const token = photoBlobToken();
+    plan = token ? { transport: "direct", access: photoBlobAccess() } : { transport: "form" };
+  }, { scope: "photo-upload-plan" });
+
+  if (outcome.error || !plan) {
+    return { error: outcome.error ?? "The upload could not be prepared." };
+  }
+  return plan;
 }
 
 /**

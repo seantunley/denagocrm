@@ -109,7 +109,10 @@ test("browser receives only the access mode and never a Blob write token", () =>
   assert.match(uploader, /\{\s*access,\s*handleUploadUrl:/);
   assert.doesNotMatch(uploader, /BLOB_(?:PRIVATE_)?READ_WRITE_TOKEN/);
   assert.doesNotMatch(actions, /return \{ transport: "direct", access: photoBlobToken/, "the token must never be returned to the browser");
-  assert.match(actions, /return \{ transport: "direct", access: photoBlobAccess\(\) \};/);
+  // The plan is now built inside asActionResult, so a failure is LOGGED rather
+  // than thrown into a redacted void — but it still carries only the access
+  // mode, never the token.
+  assert.match(actions, /plan = token \? \{ transport: "direct", access: photoBlobAccess\(\) \}/);
 });
 
 test("finalizers verify blob ownership and log every filing failure", () => {
@@ -143,7 +146,7 @@ test("browser transfer failures are authorised and persisted", () => {
 test("a deployment with no Blob store still captures photos", () => {
   const actions = src("src/app/actions/photoUploads.ts");
   assert.match(actions, /transport: "form"/, "there must be a path for a store-less deployment");
-  assert.match(actions, /const token = photoBlobToken\(\);\s*\n\s*if \(!token\) return \{ transport: "form" \};/,
+  assert.match(actions, /plan = token \? \{ transport: "direct"[^}]*\} : \{ transport: "form" \};/,
     "the absence of a token is what selects it");
 
   const uploader = src("src/components/DirectPhotoUploader.tsx");
