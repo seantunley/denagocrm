@@ -2,6 +2,7 @@
 
 import { asActionResult } from "@/lib/actionResult";
 import { actingTenantId } from "@/lib/actingTenant";
+import { withActingStaffScope } from "@/lib/actingScope";
 import { withPhotoActionScope } from "./photoActionScope";
 import { TenantScopeError } from "@/lib/tenantGuard";
 import { getCurrentUser, requireUser } from "@/lib/auth";
@@ -41,7 +42,15 @@ export async function reportPhotoUploadFailure(
   target: PhotoUploadTarget,
   detail: PhotoFailureDetail,
 ) {
-  return withPhotoActionScope(async () => {
+  // Do NOT use withPhotoActionScope here. The reporter has one intentional
+  // exception to the ordinary staff-action rule: when identity is valid but the
+  // workspace itself cannot be resolved, it records that exact diagnostic with
+  // tenantId=null. Requiring a resolved staff workspace before entering this body
+  // would turn the diagnostic into a redirect and make the System Log empty again.
+  // withActingStaffScope still binds a valid workspace when one can be recovered;
+  // otherwise the explicit getCurrentUser/authorise/classification contract below
+  // decides whether a row is safe to write.
+  return withActingStaffScope(async () => {
     await recordPhotoUploadFailure(
       {
         identify: () => getCurrentUser(),
