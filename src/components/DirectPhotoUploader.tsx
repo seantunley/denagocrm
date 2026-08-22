@@ -122,6 +122,14 @@ export default function DirectPhotoUploader({
       // and so a deployment with no Blob store is detected before any file is
       // prepared, rather than after the first upload call has already failed.
       const plan = await getPhotoUploadPlan();
+      if ("error" in plan) {
+        // The server already wrote the real cause to the System Log and gave us a
+        // message carrying its reference. Showing it verbatim is the whole point:
+        // a Server Action failure is redacted in transit, so this string is the
+        // only thing the browser will ever know about it.
+        setProblem(plan.error);
+        return;
+      }
 
       if (plan.transport === "form") {
         // Self-hosted / no Blob store: post through the original upload action,
