@@ -4,7 +4,7 @@ import { useRef, useState } from "react";
 import { upload } from "@vercel/blob/client";
 import { useRouter } from "next/navigation";
 import { registerDeliveryPhotos } from "@/app/actions/fulfilment";
-import { reportPhotoUploadFailure } from "@/app/actions/photoUploads";
+import { getPhotoUploadAccess, reportPhotoUploadFailure } from "@/app/actions/photoUploads";
 import { registerInspectionPhoto, registerJobCardPhotos } from "@/app/actions/jobcards";
 import {
   DIRECT_PHOTO_BATCH_LIMIT,
@@ -90,6 +90,9 @@ export default function DirectPhotoUploader({
     const staged: { url: string }[] = [];
     let uploadFailures = 0;
     try {
+      // The access mode is safe to expose, but the selected store token remains
+      // server-only. Fetch it once per batch so every upload uses the same mode.
+      const access = await getPhotoUploadAccess();
       for (const [index, original] of selected.entries()) {
         setStatus(`Preparing and uploading ${index + 1} of ${selected.length}…`);
         const file = await preparePhoto(original);
@@ -102,7 +105,7 @@ export default function DirectPhotoUploader({
             `uploads/${tenantId}/${kind}/${recordId}/${crypto.randomUUID()}-${file.name}`,
             file,
             {
-              access: "public",
+              access,
               handleUploadUrl: "/api/photos/upload",
               clientPayload: JSON.stringify({ kind, recordId, jobCardId }),
             },
