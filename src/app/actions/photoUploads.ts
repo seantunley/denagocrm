@@ -73,32 +73,80 @@ export async function getPhotoUploadPlan(): Promise<PhotoUploadPlan> {
  */
 export async function reportPhotoUploadFailure(
   target: PhotoUploadTarget,
-  detail: { stage: "prepare" | "transfer" | "finalize"; fileType?: string; fileSize?: number },
+  detail: {
+    stage: "prepare" | "transfer" | "finalize";
+    fileType?: string;
+    fileSize?: number;
+    /**
+     * What the browser actually caught.
+     *
+     * The one fact worth having, and it used not to be sent at all: the client
+     * caught the error, discarded it, and logged "A photo did not reach blob
+     * storage" — a sentence that describes the symptom already on screen and
+     * names no cause. Truncated because it is client-supplied text going into a
+     * log row, and logged as CONTEXT rather than as the error, so it can never
+     * be mistaken for something the server observed.
+     */
+    reason?: string;
+  },
 ) {
-  const tenantId = await actingTenantId();
+  /*
+   * THIS MUST SURVIVE THE FAILURE IT IS REPORTING, and it did not.
+   *
+   * It opened with a bare `await actingTenantId()`, which THROWS when the
+   * sign-in resolves no workspace. That is one of the failures an upload hits —
+   * a Server Action does not inherit the page's tenant scope — so in exactly the
+   * case worth recording, the recorder threw first, the client's `.catch(() => {})`
+   * swallowed it, and the System Log stayed empty while the message on screen
+   * insisted the reason was in it.
+   *
+   * The tenant is now best-effort. It is still the attribution for the row when
+   * it resolves; when it does not, the row is written unattributed rather than
+   * not at all.
+   */
+  let tenantId: string | null = null;
+  try {
+    tenantId = await actingTenantId();
+  } catch {
+    tenantId = null;
+  }
+
+  /*
+   * The permission check is NOT best-effort and never becomes optional — it is
+   * what stops this being an endpoint for writing arbitrary log rows. The
+   * tenant-ownership re-check below is defence in depth on top of it, and is the
+   * only part skipped when there is no tenant to check against.
+   */
   if (target.kind === "delivery") {
     await requireQuoteAccess(target.recordId, "deliveries.manage");
-    const owned = await basePrisma.quote.findFirst({ where: { id: target.recordId, tenantId }, select: { id: true } });
-    if (!owned) return;
+    if (tenantId) {
+      const owned = await basePrisma.quote.findFirst({ where: { id: target.recordId, tenantId }, select: { id: true } });
+      if (!owned) return;
+    }
   } else {
     const jobCardId = target.kind === "inspection" ? target.jobCardId : target.recordId;
     if (!jobCardId) return;
     await requireJobCardAccess(jobCardId, "jobcards.manage");
-    if (target.kind === "inspection") {
+    if (tenantId && target.kind === "inspection") {
       const owned = await basePrisma.jobCardInspectionItem.findFirst({
         where: { id: target.recordId, jobCardId, tenantId },
         select: { id: true },
       });
       if (!owned) return;
-    } else {
+    } else if (tenantId) {
       const owned = await basePrisma.jobCard.findFirst({ where: { id: jobCardId, tenantId }, select: { id: true } });
       if (!owned) return;
     }
   }
+  // The REASON leads. "A photo did not reach blob storage" restates the symptom
+  // the person already saw and names no cause, which is what made this log row
+  // worthless to read. Sanitised: one line, length-capped, and marked as coming
+  // from the browser so nobody reads it as a server observation.
+  const reason = (detail.reason ?? "").replace(/\s+/g, " ").trim().slice(0, 300);
   await logError(
     "photo-upload-client",
-    new Error("A photo did not reach blob storage."),
-    `kind=${target.kind} record=${target.recordId} stage=${detail.stage} type=${detail.fileType ?? "unknown"} bytes=${detail.fileSize ?? 0}`,
+    new Error(reason ? `A photo did not reach blob storage: ${reason}` : "A photo did not reach blob storage (the browser reported no reason)."),
+    `kind=${target.kind} record=${target.recordId} stage=${detail.stage} type=${detail.fileType ?? "unknown"} bytes=${detail.fileSize ?? 0} source=browser`,
     { tenantId, alert: false },
   );
 }

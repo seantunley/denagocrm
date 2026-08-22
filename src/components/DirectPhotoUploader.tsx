@@ -18,6 +18,28 @@ import {
 
 type Kind = "delivery" | "jobcard" | "jobcard-checkout" | "inspection";
 
+/**
+ * A short, human-readable reason from whatever was thrown.
+ *
+ * Every failure here arrives as an exception, and the browser is the only place
+ * that ever sees some of them — a blocked request, a store that rejects the
+ * token, a Server Action that redirected instead of returning. Reduced to one
+ * line so it can be shown next to the button rather than only written somewhere
+ * the person has to go and look.
+ */
+function reasonOf(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === "string" && error) return error;
+  // A thrown non-Error still has to say something more useful than "undefined".
+  try {
+    const text = JSON.stringify(error);
+    if (text && text !== "{}" && text !== "null") return text;
+  } catch {
+    // Circular or otherwise unserialisable — fall through to the generic line.
+  }
+  return "the browser reported no reason";
+}
+
 async function preparePhoto(file: File): Promise<File> {
   if (!file.type.startsWith("image/")) return file;
   let bitmap: ImageBitmap;
@@ -91,6 +113,9 @@ export default function DirectPhotoUploader({
     setWorking(true);
     const staged: { url: string }[] = [];
     let uploadFailures = 0;
+    // The first real reason, kept so an all-failed batch can say WHY rather than
+    // pointing at a log that may have nothing in it.
+    let firstFailure: string | null = null;
     try {
       // The access mode is safe to expose, but the selected store token remains
       // server-only. Fetched once per batch so every upload uses the same mode —
@@ -184,17 +209,27 @@ export default function DirectPhotoUploader({
             },
           );
           staged.push({ url: blob.url });
-        } catch {
+        } catch (error) {
           uploadFailures++;
+          // KEEP THE REASON. This was a bare `catch {}`, so the one fact worth
+          // having was destroyed at the moment it existed — and the message sent
+          // people to a System Log that, for exactly that reason, had nothing in
+          // it. Remembered here so the person is told what happened even when the
+          // server-side report cannot be written.
+          firstFailure = firstFailure ?? reasonOf(error);
           await reportPhotoUploadFailure(
             { kind, recordId, jobCardId },
-            { stage: "transfer", fileType: file.type, fileSize: file.size },
+            { stage: "transfer", fileType: file.type, fileSize: file.size, reason: reasonOf(error) },
           ).catch(() => {});
         }
       }
 
       if (staged.length === 0) {
-        setProblem("No photos were uploaded. The failure is recorded in Settings → System Log.");
+        setProblem(
+          firstFailure
+            ? `No photos were uploaded: ${firstFailure}`
+            : "No photos were uploaded, and no reason was reported.",
+        );
         return;
       }
       setStatus(`Filing ${staged.length} photo${staged.length === 1 ? "" : "s"}…`);
@@ -213,9 +248,19 @@ export default function DirectPhotoUploader({
       setStatus(`${result.success ?? `${staged.length} photos uploaded`}${suffix}`);
       if (inputRef.current) inputRef.current.value = "";
       router.refresh();
-    } catch {
-      await reportPhotoUploadFailure({ kind, recordId, jobCardId }, { stage: "finalize" }).catch(() => {});
-      setProblem("The upload did not complete. The technical reason is recorded in Settings → System Log.");
+    } catch (error) {
+      // The reason goes ON SCREEN, not only to a log the person then has to go
+      // and find. This catch used to bind nothing and promise that the technical
+      // reason was "recorded in Settings → System Log" — but the report it fired
+      // is itself a Server Action that can fail (it re-authorises the record
+      // first), and its failure was swallowed too. So the promise was routinely
+      // false: an empty log, and a message insisting the answer was in it.
+      const reason = reasonOf(error);
+      await reportPhotoUploadFailure(
+        { kind, recordId, jobCardId },
+        { stage: "finalize", reason },
+      ).catch(() => {});
+      setProblem(`The upload did not complete: ${reason}`);
     } finally {
       setWorking(false);
     }
