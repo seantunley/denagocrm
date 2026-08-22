@@ -1,9 +1,10 @@
 export type PhotoBlobAccess = "private" | "public";
 
-type PhotoBlobEnv = Pick<
-  NodeJS.ProcessEnv,
-  "BLOB_PRIVATE" | "BLOB_PRIVATE_READ_WRITE_TOKEN" | "BLOB_READ_WRITE_TOKEN"
->;
+type PhotoBlobEnv = {
+  BLOB_PRIVATE?: string;
+  BLOB_PRIVATE_READ_WRITE_TOKEN?: string;
+  BLOB_READ_WRITE_TOKEN?: string;
+};
 
 /**
  * Keep direct photo uploads on the same store policy as the rest of document
