@@ -3,6 +3,7 @@
 import { actingTenantId } from "@/lib/actingTenant";
 import { basePrisma } from "@/lib/db";
 import { logError } from "@/lib/errorLog";
+import { photoBlobAccess, photoBlobToken, type PhotoBlobAccess } from "@/lib/photoBlob";
 import { requireJobCardAccess, requireQuoteAccess } from "@/lib/permissions";
 
 export type PhotoUploadTarget = {
@@ -10,6 +11,18 @@ export type PhotoUploadTarget = {
   recordId: string;
   jobCardId?: string;
 };
+
+/**
+ * Return only the non-secret store access mode the browser must pass to
+ * @vercel/blob/client. Resolving the token here is intentional: private mode
+ * fails closed before the browser starts preparing a batch if its private store
+ * token is missing.
+ */
+export async function getPhotoUploadAccess(): Promise<PhotoBlobAccess> {
+  await actingTenantId();
+  photoBlobToken();
+  return photoBlobAccess();
+}
 
 /**
  * Browser-to-blob transfer errors happen after token creation, outside the API
