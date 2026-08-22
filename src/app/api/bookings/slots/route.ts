@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { authenticateIntakeKey } from "@/lib/apiKeys";
 import { throttlePublic } from "@/lib/publicThrottle";
 import { API_KEY_POLICY } from "@/lib/rateLimit";
-import { withTenantScopeFromId } from "@/lib/tenantScopeEntry";
+import { establishTenantScopeFromId } from "@/lib/tenantScopeEntry";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { getDayAvailability, getSlotConfig } from "@/lib/bookingSlots";
 
@@ -20,7 +20,7 @@ export async function OPTIONS() {
 export async function GET(req: NextRequest) {
   // Authenticate before any tenant-owned read. The key itself resolves the tenant;
   // the callback below keeps that scope enclosing the rest of this Route Handler
-  // rather than relying on enterWith from a helper to propagate back into it.
+  // rather than relying on a helper's enterWith to propagate back into it.
   {
     const throttled = await throttlePublic("api-bookings-slots", req.headers.get("x-api-key"), API_KEY_POLICY);
     if (throttled) return throttled;
@@ -30,7 +30,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Invalid API key" }, { status: 401, headers: corsHeaders });
   }
 
-  return withTenantScopeFromId(auth.tenantId, async () => {
+  return establishTenantScopeFromId(auth.tenantId, async () => {
     // Workshop bookings belong to the automotive pack — gone when it's off.
     if (!(await isModuleEnabled("automotive"))) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
