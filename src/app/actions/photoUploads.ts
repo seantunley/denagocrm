@@ -167,19 +167,24 @@ export async function reportPhotoUploadFailure(
  * valid scope can be recovered the underlying action runs bare and fails closed
  * exactly as before. All record permissions and Blob ownership checks remain in
  * the underlying actions; this only supplies the execution context they require.
+ *
+ * The outer asActionResult is deliberate even though the delegated action also
+ * uses it: dynamic import / facade failures happen BEFORE the delegate can log
+ * anything. The outer layer gives those failures a durable reference too, while
+ * a normal delegated {success}/{error} result passes through unchanged.
  */
 export async function registerDeliveryPhotos(recordId: string, staged: StagedPhoto[]) {
-  return withActingStaffScope(async () => {
+  return withActingStaffScope(() => asActionResult(async () => {
     const actions = await import("./fulfilment");
     return actions.registerDeliveryPhotos(recordId, staged);
-  });
+  }, { scope: "delivery-photo-entry" }));
 }
 
 export async function uploadDeliveryPhotos(recordId: string, formData: FormData) {
-  return withActingStaffScope(async () => {
+  return withActingStaffScope(() => asActionResult(async () => {
     const actions = await import("./fulfilment");
     return actions.uploadDeliveryPhotos(recordId, formData);
-  });
+  }, { scope: "delivery-photo-form-entry" }));
 }
 
 export async function registerJobCardPhotos(
@@ -187,24 +192,24 @@ export async function registerJobCardPhotos(
   staged: StagedPhoto[],
   category: "checkin" | "checkout" = "checkin",
 ) {
-  return withActingStaffScope(async () => {
+  return withActingStaffScope(() => asActionResult(async () => {
     const actions = await import("./jobcards");
     return actions.registerJobCardPhotos(recordId, staged, category);
-  });
+  }, { scope: "jobcard-photo-entry" }));
 }
 
 export async function uploadJobCardPhotos(recordId: string, formData: FormData) {
-  return withActingStaffScope(async () => {
+  return withActingStaffScope(() => asActionResult(async () => {
     const actions = await import("./jobcards");
     return actions.uploadJobCardPhotos(recordId, formData);
-  });
+  }, { scope: "jobcard-photo-form-entry" }));
 }
 
 export async function uploadCheckoutPhotos(recordId: string, formData: FormData) {
-  return withActingStaffScope(async () => {
+  return withActingStaffScope(() => asActionResult(async () => {
     const actions = await import("./jobcards");
     return actions.uploadCheckoutPhotos(recordId, formData);
-  });
+  }, { scope: "jobcard-checkout-photo-form-entry" }));
 }
 
 export async function registerInspectionPhoto(
@@ -212,10 +217,10 @@ export async function registerInspectionPhoto(
   jobCardId: string,
   staged: StagedPhoto[],
 ) {
-  return withActingStaffScope(async () => {
+  return withActingStaffScope(() => asActionResult(async () => {
     const actions = await import("./jobcards");
     return actions.registerInspectionPhoto(recordId, jobCardId, staged);
-  });
+  }, { scope: "inspection-photo-entry" }));
 }
 
 export async function uploadInspectionPhoto(
@@ -223,8 +228,8 @@ export async function uploadInspectionPhoto(
   jobCardId: string,
   formData: FormData,
 ) {
-  return withActingStaffScope(async () => {
+  return withActingStaffScope(() => asActionResult(async () => {
     const actions = await import("./jobcards");
     return actions.uploadInspectionPhoto(recordId, jobCardId, formData);
-  });
+  }, { scope: "inspection-photo-form-entry" }));
 }
