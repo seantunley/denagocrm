@@ -1,9 +1,11 @@
 import "server-only";
 import { basePrisma } from "@/lib/db";
-import { deleteFile, listActiveUploadBlobs } from "@/lib/storage";
-import { ORPHAN_GRACE_MS, isPastGrace, parsePhotoPath } from "@/lib/photoOrphanRules";
+import { deleteFile, listActiveUploadBlobPage } from "@/lib/storage";
+import { getSetting, putSetting } from "@/lib/settings";
+import { runOrphanSweep, type OrphanSweep } from "@/lib/photoOrphanRules";
 
 export { ORPHAN_GRACE_MS, parsePhotoPath } from "@/lib/photoOrphanRules";
+export type { OrphanSweep } from "@/lib/photoOrphanRules";
 
 /**
  * Sweep staged photos that never became records.
@@ -20,9 +22,11 @@ export { ORPHAN_GRACE_MS, parsePhotoPath } from "@/lib/photoOrphanRules";
  * Direct upload trades that atomicity for a request small enough to survive a
  * phone, which is the right trade — but it makes cleanup a background job rather
  * than a `catch`.
+ *
+ * This module is only the WIRING. The loop, including the paging and resume
+ * behaviour, lives in photoOrphanRules.ts so it can be exercised without a Blob
+ * store or a database.
  */
-
-
 
 /**
  * Is this staged object claimed by a record?
@@ -46,47 +50,21 @@ async function isClaimed(url: string, tenantId: string): Promise<boolean> {
   return Boolean(document || inspection);
 }
 
-export type OrphanSweep = { scanned: number; deleted: number; kept: number };
-
-/**
- * Delete unclaimed staged photos older than the grace period.
- *
- * `now` and `shouldStop` are injected so the sweep is testable and so a cron
- * slice can stop cleanly at its deadline rather than being cut off mid-delete.
- */
+/** Delete unclaimed staged photos older than the grace period, within budget. */
 export async function sweepOrphanPhotos(opts: {
   tenantId: string | null;
   now?: () => number;
   shouldStop?: () => boolean;
   graceMs?: number;
 } = { tenantId: null }): Promise<OrphanSweep> {
-  const now = opts.now ?? Date.now;
-  const graceMs = opts.graceMs ?? ORPHAN_GRACE_MS;
-  const prefix = opts.tenantId ? `uploads/${opts.tenantId}/` : "uploads/";
-  const blobs = await listActiveUploadBlobs(prefix);
-
-  let scanned = 0;
-  let deleted = 0;
-  let kept = 0;
-  for (const blob of blobs) {
-    if (opts.shouldStop?.()) break;
-    const parsed = parsePhotoPath(blob.pathname);
-    if (!parsed) continue;
-    // A tenant-scoped sweep must never reach past its own namespace, even if the
-    // store returned something outside the prefix it was asked for.
-    if (opts.tenantId && parsed.tenantId !== opts.tenantId) continue;
-    scanned++;
-
-    if (!isPastGrace(blob.uploadedAt, now(), graceMs)) {
-      kept++;
-      continue;
-    }
-    if (await isClaimed(blob.url, parsed.tenantId)) {
-      kept++;
-      continue;
-    }
-    await deleteFile(blob.url);
-    deleted++;
-  }
-  return { scanned, deleted, kept };
+  return runOrphanSweep({
+    ...opts,
+    io: {
+      listPage: listActiveUploadBlobPage,
+      claimed: isClaimed,
+      remove: deleteFile,
+      readCursor: getSetting,
+      writeCursor: putSetting,
+    },
+  });
 }

@@ -69,7 +69,7 @@ test("a claimed photo is recognised from BOTH places a URL can be stored", () =>
 });
 
 test("a tenant-scoped sweep cannot delete past its own workspace", () => {
-  const lib = src("src/lib/photoOrphans.ts");
+  const lib = src("src/lib/photoOrphanRules.ts");
   assert.ok(lib.includes('const prefix = opts.tenantId ? `uploads/${opts.tenantId}/` : "uploads/";'));
   assert.ok(
     lib.includes("if (opts.tenantId && parsed.tenantId !== opts.tenantId) continue;"),
@@ -78,12 +78,12 @@ test("a tenant-scoped sweep cannot delete past its own workspace", () => {
 });
 
 test("the sweep deletes only after both the age and the claim check", () => {
-  const lib = src("src/lib/photoOrphans.ts")
+  const lib = src("src/lib/photoOrphanRules.ts")
     .replace(/\/\*[\s\S]*?\*\//g, " ")
     .replace(/^\s*\/\/.*$/gm, "");
   const age = lib.indexOf("isPastGrace(");
-  const claim = lib.indexOf("await isClaimed(");
-  const del = lib.indexOf("await deleteFile(");
+  const claim = lib.indexOf("await io.claimed(");
+  const del = lib.indexOf("await io.remove(");
   assert.ok(age !== -1 && claim !== -1 && del !== -1);
   assert.ok(age < del, "an object inside its grace period must never reach the delete");
   assert.ok(claim < del, "a claimed object must never reach the delete");

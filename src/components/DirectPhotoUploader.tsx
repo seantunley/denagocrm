@@ -8,6 +8,8 @@ import { getPhotoUploadPlan, reportPhotoUploadFailure } from "@/app/actions/phot
 import { registerInspectionPhoto, registerJobCardPhotos, uploadCheckoutPhotos, uploadInspectionPhoto, uploadJobCardPhotos } from "@/app/actions/jobcards";
 import {
   DIRECT_PHOTO_BATCH_LIMIT,
+  MAX_UPLOAD_TOTAL_BYTES,
+  checkUploadPayload,
   MAX_PHOTO_BYTES,
   PHOTO_JPEG_QUALITY,
   PHOTO_MAX_EDGE,
@@ -107,22 +109,57 @@ export default function DirectPhotoUploader({
           setProblem("None of those files could be used — photos must be images under 4 MB.");
           return;
         }
-        const form = new FormData();
-        if (kind === "inspection") form.append("file", usable[0]);
-        else for (const file of usable) form.append("files", file);
-        setStatus(`Uploading ${usable.length} photo${usable.length === 1 ? "" : "s"}…`);
-        const posted = kind === "delivery"
-          ? await uploadDeliveryPhotos(recordId, form)
-          : kind === "inspection"
-            ? await uploadInspectionPhoto(recordId, jobCardId ?? "", form)
-            : kind === "jobcard-checkout"
-              ? await uploadCheckoutPhotos(recordId, form)
-              : await uploadJobCardPhotos(recordId, form);
-        if (posted && "error" in posted && posted.error) {
-          setProblem(posted.error);
-          return;
+        // ONE REQUEST PER BATCH WOULD EXCEED THE BODY LIMIT. This path posts real
+        // files through a Server Action, and twelve photos at up to 4 MB is far
+        // past the declared limit — the framework rejects the request before the
+        // action runs, so its careful per-file validation never happens and the
+        // person sees a generic failure. Split into requests that each stay
+        // inside the budget the server states.
+        const batches: File[][] = [];
+        let batch: File[] = [];
+        let batchBytes = 0;
+        for (const file of usable) {
+          if (batch.length > 0 && batchBytes + file.size > MAX_UPLOAD_TOTAL_BYTES) {
+            batches.push(batch);
+            batch = [];
+            batchBytes = 0;
+          }
+          batch.push(file);
+          batchBytes += file.size;
         }
-        setStatus((posted && "success" in posted && posted.success) || `${usable.length} photos uploaded`);
+        if (batch.length) batches.push(batch);
+
+        let sent = 0;
+        for (const [index, group] of batches.entries()) {
+          const verdict = checkUploadPayload(group.map((f) => f.size));
+          if (!verdict.ok) {
+            setProblem(verdict.reason);
+            return;
+          }
+          const form = new FormData();
+          if (kind === "inspection") form.append("file", group[0]);
+          else for (const file of group) form.append("files", file);
+          setStatus(
+            batches.length === 1
+              ? `Uploading ${group.length} photo${group.length === 1 ? "" : "s"}…`
+              : `Uploading batch ${index + 1} of ${batches.length}…`,
+          );
+          const posted = kind === "delivery"
+            ? await uploadDeliveryPhotos(recordId, form)
+            : kind === "inspection"
+              ? await uploadInspectionPhoto(recordId, jobCardId ?? "", form)
+              : kind === "jobcard-checkout"
+                ? await uploadCheckoutPhotos(recordId, form)
+                : await uploadJobCardPhotos(recordId, form);
+          if (posted && "error" in posted && posted.error) {
+            // Say what DID land. Reporting only the failure after two successful
+            // batches would send someone back to re-upload photos already filed.
+            setProblem(sent > 0 ? `${posted.error} (${sent} already uploaded)` : posted.error);
+            return;
+          }
+          sent += group.length;
+        }
+        setStatus(`${sent} photo${sent === 1 ? "" : "s"} uploaded`);
         if (inputRef.current) inputRef.current.value = "";
         router.refresh();
         return;
