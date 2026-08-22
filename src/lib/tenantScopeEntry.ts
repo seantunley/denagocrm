@@ -2,7 +2,8 @@ import "server-only";
 import { resolveActingTenant } from "./tenantContext";
 import { honoredTenantClaim, decideStaffTenantScope } from "./tenant";
 import { tenantEnforcing } from "./tenantEnforcement";
-import { enterTenantScope, runInTenantScope, type TenantScope } from "./tenantScope";
+import { currentTenantScope, enterTenantScope, runInTenantScope, type TenantScope } from "./tenantScope";
+import { TenantScopeError } from "./tenantGuard";
 import { resolveChannelTenant, type ChannelKind } from "./channelTenant";
 
 /**
@@ -97,27 +98,43 @@ export async function establishStaffTenantScope(
  * Run a request whose tenant has ALREADY been authenticated/resolved (API key,
  * portal contact, other trusted principal) inside one enclosing tenant scope.
  *
- * This function used to take only `tenantId`, call `enterTenantScope()`, and
- * return. That is not a reliable Route Handler / Server Action boundary: the
- * `enterWith` performed inside this helper does not necessarily propagate BACK
- * UP into the caller frame after the helper returns — the same mechanism that
- * produced the staff Server Action outages.
+ * Application request boundaries MUST use the callback form. `runInTenantScope`
+ * creates an enclosing async frame, so every guarded read/write below `fn` sees
+ * the resolved tenant. This is the reliable replacement for the old shape that
+ * called `enterTenantScope()` in a helper and then resumed work in the caller.
  *
- * The callback is therefore mandatory. `runInTenantScope` creates the enclosing
- * async frame, so every guarded read/write below `fn` sees the resolved tenant.
- * The tenant must already have been derived from a trusted principal; this helper
- * performs no authentication of its own.
+ * There is one deliberately narrow legacy overload with no callback: a trusted
+ * pre-principal bootstrap that is ALREADY running inside an explicit system scope
+ * may transition that same carrier to the resolved tenant. That is used by the
+ * low-level tenant-guard harness and mirrors auth chokepoints which own the carrier
+ * themselves. Outside a system scope the one-argument form throws, so a Route
+ * Handler or Server Action cannot accidentally reintroduce the propagation bug.
  *
- * DORMANT is deliberately byte-for-byte compatible: no scope is added and `fn`
- * runs directly. Under enforcement a null tenant is still carried, which makes
- * tenant-owned operations fail closed rather than running globally.
+ * DORMANT remains byte-for-byte compatible: the callback runs directly, while a
+ * legacy one-argument transition is a no-op. The tenant must already have been
+ * derived from a trusted principal; this helper performs no authentication.
  */
+export function establishTenantScopeFromId(tenantId: string | null): void;
 export function establishTenantScopeFromId<T>(
   tenantId: string | null,
   fn: () => Promise<T>,
-): Promise<T> {
-  if (!tenantEnforcing()) return fn();
-  return runInTenantScope({ tenantId, system: false }, fn);
+): Promise<T>;
+export function establishTenantScopeFromId<T>(
+  tenantId: string | null,
+  fn?: () => Promise<T>,
+): void | Promise<T> {
+  if (fn) {
+    if (!tenantEnforcing()) return fn();
+    return runInTenantScope({ tenantId, system: false }, fn);
+  }
+
+  if (!tenantEnforcing()) return;
+  if (!currentTenantScope()?.system) {
+    throw new TenantScopeError(
+      "An enclosing tenant callback is required outside a trusted system bootstrap",
+    );
+  }
+  enterTenantScope({ tenantId, system: false });
 }
 
 type TrustedTenantResolver = () => Promise<{ tenantId: string | null } | null>;
