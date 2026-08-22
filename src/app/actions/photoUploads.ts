@@ -1,6 +1,7 @@
 "use server";
 
 import { actingTenantId } from "@/lib/actingTenant";
+import { requireUser } from "@/lib/auth";
 import { basePrisma } from "@/lib/db";
 import { logError } from "@/lib/errorLog";
 import { photoBlobAccess, photoBlobToken, type PhotoBlobAccess } from "@/lib/photoBlob";
@@ -17,8 +18,18 @@ export type PhotoUploadTarget = {
  * @vercel/blob/client. Resolving the token here is intentional: private mode
  * fails closed before the browser starts preparing a batch if its private store
  * token is missing.
+ *
+ * requireUser() is the guard, and actingTenantId() is NOT a substitute for it —
+ * it resolves which workspace is acting, not whether the caller is anyone at
+ * all. A Server Action is a POST endpoint reachable by anyone who can send the
+ * request, so without this an anonymous caller learns the store's access mode
+ * and, through the thrown token error, whether the private store is configured.
+ * There is no record to authorize here: the per-record permission check belongs
+ * to the token mint in /api/photos/upload, which is what actually grants write
+ * access to a path.
  */
 export async function getPhotoUploadAccess(): Promise<PhotoBlobAccess> {
+  await requireUser();
   await actingTenantId();
   photoBlobToken();
   return photoBlobAccess();
