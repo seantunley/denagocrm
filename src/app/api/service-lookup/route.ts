@@ -7,7 +7,7 @@ import { ciExactIdFilter } from "@/lib/ciExact";
 import { authenticateIntakeKey } from "@/lib/apiKeys";
 import { throttlePublic } from "@/lib/publicThrottle";
 import { API_KEY_POLICY } from "@/lib/rateLimit";
-import { establishTenantScopeFromId } from "@/lib/tenantScopeEntry";
+import { withTenantScopeFromId } from "@/lib/tenantScopeEntry";
 import { serviceOtpKey } from "@/lib/serviceOtp";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { sendSms, isSmsConfigured, maskPhone } from "@/lib/sms";
@@ -43,11 +43,10 @@ export async function OPTIONS() {
  * masked. Details are only released after the OTP is verified.
  */
 export async function POST(req: NextRequest) {
-  // Authenticate + establish the caller's tenant scope BEFORE any guarded read
-  // (the vehicle lookup below is then confined to this tenant under enforcement).
-  // Throttled BEFORE the key is checked, so guessing keys is bounded too;
-  // keyed on the presented key (HMACed by rateLimitKey) so a LEAKED key cannot
-  // write without limit. See API_KEY_POLICY — generous, aimed at abuse not use.
+  // Authenticate the API key before any guarded read. Once it resolves a tenant,
+  // keep the rest of this Route Handler INSIDE that tenant's async frame; calling
+  // enterTenantScope in a helper and returning here is the same lost-scope shape
+  // that broke staff Server Actions under enforcement.
   {
     const throttled = await throttlePublic("api-service-lookup", req.headers.get("x-api-key"), API_KEY_POLICY);
     if (throttled) return throttled;
@@ -56,125 +55,127 @@ export async function POST(req: NextRequest) {
   if (!auth) {
     return NextResponse.json({ error: "Invalid API key" }, { status: 401, headers: corsHeaders });
   }
-  establishTenantScopeFromId(auth.tenantId);
-  // Workshop bookings belong to the automotive pack — gone when it's off.
-  if (!(await isModuleEnabled("automotive"))) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
-  let json: unknown;
-  try {
-    json = await req.json();
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON" }, { status: 400, headers: corsHeaders });
-  }
-  const parsed = lookupSchema.safeParse(json);
-  if (!parsed.success) {
-    return NextResponse.json({ error: "Invalid VIN" }, { status: 422, headers: corsHeaders });
-  }
-  const vin = normalizeVin(parsed.data.vin);
-  // Tenant-namespaced challenge key: the whole OTP lifecycle for this VIN is
-  // confined to the authenticated tenant (OtpChallenge is a global model).
-  const otpKey = serviceOtpKey(vin);
-  const notFound = NextResponse.json(
-    {
-      ok: true,
-      sent: false,
-      message:
-        "We couldn't verify that VIN / serial number automatically — please fill in your details below.",
-    },
-    { headers: corsHeaders }
-  );
 
-  // Flood guard: max 3 codes per VIN per hour (per tenant — see otpKey)
-  const recent = await basePrisma.otpChallenge.count({
-    where: {
-      purpose: "service-booking",
-      key: otpKey,
-      createdAt: { gte: new Date(Date.now() - 60 * 60 * 1000) },
-    },
-  });
-  if (recent >= 3) {
-    return NextResponse.json(
-      { ok: true, sent: false, message: "Too many attempts — please try again in an hour or fill in the form manually." },
+  return withTenantScopeFromId(auth.tenantId, async () => {
+    // Workshop bookings belong to the automotive pack — gone when it's off.
+    if (!(await isModuleEnabled("automotive"))) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    let json: unknown;
+    try {
+      json = await req.json();
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON" }, { status: 400, headers: corsHeaders });
+    }
+    const parsed = lookupSchema.safeParse(json);
+    if (!parsed.success) {
+      return NextResponse.json({ error: "Invalid VIN" }, { status: 422, headers: corsHeaders });
+    }
+    const vin = normalizeVin(parsed.data.vin);
+    // Tenant-namespaced challenge key: the whole OTP lifecycle for this VIN is
+    // confined to the authenticated tenant (OtpChallenge is a global model).
+    const otpKey = serviceOtpKey(vin);
+    const notFound = NextResponse.json(
+      {
+        ok: true,
+        sent: false,
+        message:
+          "We couldn't verify that VIN / serial number automatically — please fill in your details below.",
+      },
       { headers: corsHeaders }
     );
-  }
 
-  // Exact (case-folded), not `mode: "insensitive"`. Not exploitable here today —
-  // normalizeVin() above strips everything outside [a-zA-Z0-9], so `_` and `%`
-  // never reach the query — but that makes an ILIKE on a public VIN lookup safe
-  // only by a side effect of an unrelated function. Sixteen underscores would
-  // otherwise return the first 17-character VIN on file, with the owner's contact
-  // row attached. The comparison should not depend on that.
-  const vehicle = await prisma.vehicle.findFirst({
-    where: await ciExactIdFilter("vehicleVin", vin),
-    include: { contact: true },
-  });
-  if (!vehicle || vehicle.contact.deletedAt) return notFound;
-
-  const phone = vehicle.contact.whatsapp ?? vehicle.contact.phone;
-  const email = vehicle.contact.email;
-  const code = crypto.randomInt(100000, 1000000).toString();
-  // bcrypt, not plain SHA-256: a 6-digit code hashed with a fast unsalted
-  // digest is trivially reversible from a DB dump.
-  const codeHash = await bcrypt.hash(code, 10);
-
-  let channel: "sms" | "email" | null = null;
-  let target = "";
-  if (phone && (await isSmsConfigured())) {
-    const res = await sendSms(
-      phone,
-      `Denago Cape Town: your verification code is ${code}. It expires in 10 minutes. If you didn't request this, ignore this message.`
-    );
-    if (res.ok) {
-      channel = "sms";
-      target = maskPhone(phone);
-    }
-  }
-  if (!channel && email && (await isSmtpConfigured())) {
-    const res = await sendEmail({
-      to: email,
-      subject: "Your Denago Cape Town verification code",
-      text: `Your verification code is ${code}.\n\nIt expires in 10 minutes. If you didn't request this, you can ignore this email.\n\nDenago Cape Town`,
-    });
-    if (res.ok) {
-      channel = "email";
-      target = maskEmail(email);
-    }
-  }
-  if (!channel) return notFound;
-
-  // Invalidate prior unverified codes for this VIN before issuing the new one, in
-  // one transaction serialized by a per-key advisory lock — verification uses the
-  // newest unverified challenge, so an older still-unexpired code must not remain
-  // usable after a newer one is sent, and two concurrent reissues must not each
-  // leave a valid code.
-  await basePrisma.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`otp:service-booking:${otpKey}`})::bigint)`;
-    await tx.otpChallenge.updateMany({
-      where: { purpose: "service-booking", key: otpKey, verifiedAt: null },
-      data: { expiresAt: new Date() },
-    });
-    await tx.otpChallenge.create({
-      data: {
+    // Flood guard: max 3 codes per VIN per hour (per tenant — see otpKey)
+    const recent = await basePrisma.otpChallenge.count({
+      where: {
         purpose: "service-booking",
         key: otpKey,
-        codeHash,
-        channel,
-        target,
-        expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+        createdAt: { gte: new Date(Date.now() - 60 * 60 * 1000) },
       },
     });
-  });
+    if (recent >= 3) {
+      return NextResponse.json(
+        { ok: true, sent: false, message: "Too many attempts — please try again in an hour or fill in the form manually." },
+        { headers: corsHeaders }
+      );
+    }
 
-  return NextResponse.json(
-    {
-      ok: true,
-      sent: true,
-      channel,
-      target,
-      message: `We've sent a 6-digit code to ${target}.`,
-    },
-    { headers: corsHeaders }
-  );
+    // Exact (case-folded), not `mode: "insensitive"`. Not exploitable here today —
+    // normalizeVin() above strips everything outside [a-zA-Z0-9], so `_` and `%`
+    // never reach the query — but that makes an ILIKE on a public VIN lookup safe
+    // only by a side effect of an unrelated function. Sixteen underscores would
+    // otherwise return the first 17-character VIN on file, with the owner's contact
+    // row attached. The comparison should not depend on that.
+    const vehicle = await prisma.vehicle.findFirst({
+      where: await ciExactIdFilter("vehicleVin", vin),
+      include: { contact: true },
+    });
+    if (!vehicle || vehicle.contact.deletedAt) return notFound;
+
+    const phone = vehicle.contact.whatsapp ?? vehicle.contact.phone;
+    const email = vehicle.contact.email;
+    const code = crypto.randomInt(100000, 1000000).toString();
+    // bcrypt, not plain SHA-256: a 6-digit code hashed with a fast unsalted
+    // digest is trivially reversible from a DB dump.
+    const codeHash = await bcrypt.hash(code, 10);
+
+    let channel: "sms" | "email" | null = null;
+    let target = "";
+    if (phone && (await isSmsConfigured())) {
+      const res = await sendSms(
+        phone,
+        `Denago Cape Town: your verification code is ${code}. It expires in 10 minutes. If you didn't request this, ignore this message.`
+      );
+      if (res.ok) {
+        channel = "sms";
+        target = maskPhone(phone);
+      }
+    }
+    if (!channel && email && (await isSmtpConfigured())) {
+      const res = await sendEmail({
+        to: email,
+        subject: "Your Denago Cape Town verification code",
+        text: `Your verification code is ${code}.\n\nIt expires in 10 minutes. If you didn't request this, you can ignore this email.\n\nDenago Cape Town`,
+      });
+      if (res.ok) {
+        channel = "email";
+        target = maskEmail(email);
+      }
+    }
+    if (!channel) return notFound;
+
+    // Invalidate prior unverified codes for this VIN before issuing the new one, in
+    // one transaction serialized by a per-key advisory lock — verification uses the
+    // newest unverified challenge, so an older still-unexpired code must not remain
+    // usable after a newer one is sent, and two concurrent reissues must not each
+    // leave a valid code.
+    await basePrisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`otp:service-booking:${otpKey}`})::bigint)`;
+      await tx.otpChallenge.updateMany({
+        where: { purpose: "service-booking", key: otpKey, verifiedAt: null },
+        data: { expiresAt: new Date() },
+      });
+      await tx.otpChallenge.create({
+        data: {
+          purpose: "service-booking",
+          key: otpKey,
+          codeHash,
+          channel,
+          target,
+          expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+        },
+      });
+    });
+
+    return NextResponse.json(
+      {
+        ok: true,
+        sent: true,
+        channel,
+        target,
+        message: `We've sent a 6-digit code to ${target}.`,
+      },
+      { headers: corsHeaders }
+    );
+  });
 }
