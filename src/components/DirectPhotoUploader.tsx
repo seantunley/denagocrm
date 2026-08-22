@@ -3,9 +3,9 @@
 import { useRef, useState } from "react";
 import { upload } from "@vercel/blob/client";
 import { useRouter } from "next/navigation";
-import { registerDeliveryPhotos } from "@/app/actions/fulfilment";
-import { getPhotoUploadAccess, reportPhotoUploadFailure } from "@/app/actions/photoUploads";
-import { registerInspectionPhoto, registerJobCardPhotos } from "@/app/actions/jobcards";
+import { registerDeliveryPhotos, uploadDeliveryPhotos } from "@/app/actions/fulfilment";
+import { getPhotoUploadPlan, reportPhotoUploadFailure } from "@/app/actions/photoUploads";
+import { registerInspectionPhoto, registerJobCardPhotos, uploadCheckoutPhotos, uploadInspectionPhoto, uploadJobCardPhotos } from "@/app/actions/jobcards";
 import {
   DIRECT_PHOTO_BATCH_LIMIT,
   MAX_PHOTO_BYTES,
@@ -91,8 +91,44 @@ export default function DirectPhotoUploader({
     let uploadFailures = 0;
     try {
       // The access mode is safe to expose, but the selected store token remains
-      // server-only. Fetch it once per batch so every upload uses the same mode.
-      const access = await getPhotoUploadAccess();
+      // server-only. Fetched once per batch so every upload uses the same mode —
+      // and so a deployment with no Blob store is detected before any file is
+      // prepared, rather than after the first upload call has already failed.
+      const plan = await getPhotoUploadPlan();
+
+      if (plan.transport === "form") {
+        // Self-hosted / no Blob store: post through the original upload action,
+        // which writes via saveFile() and works on disk. Photos are still resized
+        // first, so the request stays inside the declared body limit.
+        setStatus(`Preparing ${selected.length} photo${selected.length === 1 ? "" : "s"}…`);
+        const prepared = await Promise.all(selected.map(preparePhoto));
+        const usable = prepared.filter((f) => f.type.startsWith("image/") && f.size > 0 && f.size <= MAX_PHOTO_BYTES);
+        if (usable.length === 0) {
+          setProblem("None of those files could be used — photos must be images under 4 MB.");
+          return;
+        }
+        const form = new FormData();
+        if (kind === "inspection") form.append("file", usable[0]);
+        else for (const file of usable) form.append("files", file);
+        setStatus(`Uploading ${usable.length} photo${usable.length === 1 ? "" : "s"}…`);
+        const posted = kind === "delivery"
+          ? await uploadDeliveryPhotos(recordId, form)
+          : kind === "inspection"
+            ? await uploadInspectionPhoto(recordId, jobCardId ?? "", form)
+            : kind === "jobcard-checkout"
+              ? await uploadCheckoutPhotos(recordId, form)
+              : await uploadJobCardPhotos(recordId, form);
+        if (posted && "error" in posted && posted.error) {
+          setProblem(posted.error);
+          return;
+        }
+        setStatus((posted && "success" in posted && posted.success) || `${usable.length} photos uploaded`);
+        if (inputRef.current) inputRef.current.value = "";
+        router.refresh();
+        return;
+      }
+
+      const access = plan.access;
       for (const [index, original] of selected.entries()) {
         setStatus(`Preparing and uploading ${index + 1} of ${selected.length}…`);
         const file = await preparePhoto(original);
