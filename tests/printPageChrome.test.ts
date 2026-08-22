@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-import { blankDocument } from "../src/lib/doceditor/factory";
+import { blankDocument, newBlock } from "../src/lib/doceditor/factory";
 import { renderDocumentHtml } from "../src/lib/doceditor/serialize";
 import { printToolbarHtml } from "../src/lib/printToolbar";
 import { PAGE_SIZES } from "../src/lib/doceditor/model";
@@ -161,4 +161,29 @@ test("every page size states an exact physical height", () => {
   for (const [name, size] of Object.entries(PAGE_SIZES)) {
     assert.match(size.cssH, /^[\d.]+(mm|in)$/, `${name} needs a physical height, not a pixel one`);
   }
+});
+
+/*
+ * The header and footer are position:fixed for PRINT, which repeats them on
+ * every sheet and makes document order irrelevant. The screen rule puts them
+ * back in flow — and in flow, markup order IS rendered order. The footer sat
+ * directly after the header, above the pages, so on screen it appeared above the
+ * document it belongs under.
+ */
+test("the footer follows the pages in the markup, not the header", () => {
+  const doc = blankDocument("Quote");
+  // The regions are only emitted when they hold something, so the fixture has to
+  // put a block in each.
+  doc.header = [newBlock("text")];
+  doc.footer = [newBlock("footer")];
+  const html = renderDocumentHtml(doc, ctx);
+
+  const header = html.indexOf('<div class="doc-header">');
+  const page = html.indexOf('<div class="doc-page"');
+  const footer = html.indexOf('<div class="doc-footer">');
+
+  assert.notEqual(header, -1, "this fixture must render a header");
+  assert.notEqual(footer, -1, "this fixture must render a footer");
+  assert.ok(header < page, "the header belongs above the document");
+  assert.ok(page < footer, "the footer belongs BELOW the document, or a static footer renders above it");
 });

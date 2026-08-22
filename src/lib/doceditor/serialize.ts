@@ -460,7 +460,17 @@ export function renderDocumentHtml(
   </style></head><body>
     ${opts?.toolbarHtml ?? ""}
     ${header ? `<div class="doc-header">${header}</div>` : ""}
-    ${footer ? `<div class="doc-footer">${footer}</div>` : ""}
     ${body}
+    ${/* AFTER the pages, and that is not cosmetic ordering.
+
+          For print these two are position:fixed, which repeats them on every
+          sheet and makes document order irrelevant — so the footer sat in the
+          markup directly after the header, above the pages, and nothing showed
+          it. The screen rule puts them back in flow, and in flow the markup
+          order IS the rendered order: the footer appeared above the document it
+          belongs under.
+
+          Print is unaffected either way; the screen depends on it. */ ""}
+    ${footer ? `<div class="doc-footer">${footer}</div>` : ""}
   </body></html>`;
 }
