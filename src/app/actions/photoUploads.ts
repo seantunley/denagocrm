@@ -2,7 +2,7 @@
 
 import { asActionResult } from "@/lib/actionResult";
 import { actingTenantId } from "@/lib/actingTenant";
-import { withActingStaffScope } from "@/lib/actingScope";
+import { withPhotoActionScope as withActingStaffScope } from "./photoActionScope";
 import { TenantScopeError } from "@/lib/tenantGuard";
 import { getCurrentUser, requireUser } from "@/lib/auth";
 import { recordPhotoUploadFailure, type PhotoFailureDetail } from "@/lib/photoFailureReport";
