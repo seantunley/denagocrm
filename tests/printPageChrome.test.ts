@@ -187,3 +187,45 @@ test("the footer follows the pages in the markup, not the header", () => {
   assert.ok(header < page, "the header belongs above the document");
   assert.ok(page < footer, "the footer belongs BELOW the document, or a static footer renders above it");
 });
+
+/*
+ * THE FOOTER READ AS A DETACHED STRIP FLOATING BELOW THE SHEET. Measured in
+ * Chrome: an 8px band of background between the last page and the footer, with
+ * every margin involved computing to 0px — which is why two earlier attempts to
+ * close it by adjusting margins changed nothing at all.
+ *
+ * Two causes, neither of them a margin.
+ *
+ *  1. The parts were interpolated on separate indented lines, leaving
+ *     whitespace-only TEXT NODES between the block elements. Those produce an
+ *     anonymous line box.
+ *  2. The footer BLOCK carries `margin: 8px 0`, and the region wrapping it had
+ *     no block formatting context, so that margin collapsed straight out of it.
+ *     The same bug, in the same file, as the one that pushed every document onto
+ *     a second page.
+ */
+test("nothing sits between the last page and the footer", () => {
+  const doc = blankDocument("Quote");
+  doc.footer = [newBlock("footer")];
+  const html = renderDocumentHtml(doc, ctx);
+
+  const pageEnd = html.indexOf('<div class="doc-footer">');
+  const between = html.slice(html.lastIndexOf("</div>", pageEnd) + "</div>".length, pageEnd);
+  assert.equal(between, "", "whitespace between the blocks renders as a line box and becomes a visible gap");
+});
+
+test("the footer region contains its own block's margin", () => {
+  const html = renderDocumentHtml(blankDocument("Quote"), ctx);
+  const rule = screenRule(html);
+  const regions = rule.slice(rule.indexOf(".doc-header, .doc-footer {"));
+  assert.ok(
+    regions.slice(0, regions.indexOf("}")).includes("display: flow-root"),
+    "without a formatting context the footer block's margin escapes and reopens the gap",
+  );
+});
+
+test("the page leaves no bottom margin for the footer to sit under", () => {
+  const rule = screenRule(renderDocumentHtml(blankDocument("Quote"), ctx));
+  const page = rule.slice(rule.indexOf(".doc-page {"), rule.indexOf("}", rule.indexOf(".doc-page {")));
+  assert.ok(page.includes("margin: 16px auto 0"), "a bottom margin here detaches the footer from the sheet");
+});
