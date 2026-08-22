@@ -101,10 +101,15 @@ test("direct photos use the private store and fail closed without its token", ()
 test("browser receives only the access mode and never a Blob write token", () => {
   const uploader = src("src/components/DirectPhotoUploader.tsx");
   const actions = src("src/app/actions/photoUploads.ts");
-  assert.match(uploader, /const access = await getPhotoUploadAccess\(\)/);
+  // The browser is told WHICH STORE MODE to use and nothing else. The plan now
+  // also decides the transport (see the store-less test below), but it still
+  // carries only `access` — the token stays server-side.
+  assert.match(uploader, /const plan = await getPhotoUploadPlan\(\)/);
+  assert.match(uploader, /const access = plan\.access/);
   assert.match(uploader, /\{\s*access,\s*handleUploadUrl:/);
   assert.doesNotMatch(uploader, /BLOB_(?:PRIVATE_)?READ_WRITE_TOKEN/);
-  assert.match(actions, /photoBlobToken\(\);\s*return photoBlobAccess\(\);/);
+  assert.doesNotMatch(actions, /return \{ transport: "direct", access: photoBlobToken/, "the token must never be returned to the browser");
+  assert.match(actions, /return \{ transport: "direct", access: photoBlobAccess\(\) \};/);
 });
 
 test("finalizers verify blob ownership and log every filing failure", () => {
@@ -125,4 +130,39 @@ test("browser transfer failures are authorised and persisted", () => {
   assert.match(reporter, /requireJobCardAccess/);
   assert.match(reporter, /where: \{ id: target\.recordId, jobCardId, tenantId \}/);
   assert.match(reporter, /"photo-upload-client"/);
+});
+
+/*
+ * NOT EVERY DEPLOYMENT HAS A BLOB STORE. storage.ts supports two modes by
+ * design — Vercel Blob when a token is set, files on disk when self-hosted — and
+ * browser-to-Blob upload only exists in the first. Making the camera
+ * unconditionally use @vercel/blob/client took photo capture away from the
+ * second entirely: the upload call fails in the browser before the server is
+ * reached, so nothing even reaches the System Log to explain it.
+ */
+test("a deployment with no Blob store still captures photos", () => {
+  const actions = src("src/app/actions/photoUploads.ts");
+  assert.match(actions, /transport: "form"/, "there must be a path for a store-less deployment");
+  assert.match(actions, /const token = photoBlobToken\(\);\s*\n\s*if \(!token\) return \{ transport: "form" \};/,
+    "the absence of a token is what selects it");
+
+  const uploader = src("src/components/DirectPhotoUploader.tsx");
+  assert.match(uploader, /if \(plan\.transport === "form"\)/, "the component must honour the plan");
+  // The fallback must reach the ORIGINAL actions, which write via saveFile() and
+  // therefore work on disk.
+  for (const action of ["uploadDeliveryPhotos", "uploadJobCardPhotos", "uploadCheckoutPhotos", "uploadInspectionPhoto"]) {
+    assert.ok(uploader.includes(`await ${action}(`), `${action} is the store-less path for its kind`);
+  }
+  // …and it must be chosen BEFORE any file is prepared or uploaded, so a
+  // store-less deployment never makes a doomed upload call.
+  const decision = uploader.indexOf('if (plan.transport === "form")');
+  const directUpload = uploader.indexOf("await upload(");
+  assert.ok(decision !== -1 && decision < directUpload, "the fallback must short-circuit before the direct upload");
+});
+
+test("a missing PRIVATE token still fails closed rather than downgrading", () => {
+  // BLOB_PRIVATE=true with no private token is a misconfiguration. Reporting
+  // "form" there would quietly route sensitive photos somewhere else and hide it.
+  const env = blobEnv({ BLOB_PRIVATE: "true", BLOB_READ_WRITE_TOKEN: "public-token" });
+  assert.throws(() => photoBlobToken(env), /BLOB_PRIVATE=true requires BLOB_PRIVATE_READ_WRITE_TOKEN/);
 });

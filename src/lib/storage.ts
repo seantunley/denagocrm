@@ -572,6 +572,32 @@ export async function listActiveBackupBlobs(prefix: string): Promise<Array<{ pat
 }
 
 /**
+ * List staged uploads in the ACTIVE store, WITH their upload time.
+ *
+ * Separate from listActiveBackupBlobs because the orphan sweep needs to know how
+ * old an object is: deleting one that a phone is still in the middle of
+ * registering would destroy a photo somebody just took. collectBlobs drops
+ * uploadedAt, and widening it would give every backup caller a field it has no
+ * use for.
+ */
+export async function listActiveUploadBlobs(
+  prefix: string,
+): Promise<Array<{ pathname: string; url: string; uploadedAt: Date | null }>> {
+  const token = activeStoreToken(privateMode(), storeTokens());
+  if (!token) return [];
+  const out: Array<{ pathname: string; url: string; uploadedAt: Date | null }> = [];
+  let cursor: string | undefined;
+  do {
+    const page = await list({ prefix, cursor, limit: 1000, token });
+    for (const b of page.blobs) {
+      out.push({ pathname: b.pathname, url: b.url, uploadedAt: b.uploadedAt ?? null });
+    }
+    cursor = page.hasMore ? page.cursor : undefined;
+  } while (cursor);
+  return out;
+}
+
+/**
  * List blobs across BOTH stores (deduped by pathname). Use this ONLY for
  * restore/verify selection, where a legacy public backup must remain findable
  * after the cutover to the private store.
