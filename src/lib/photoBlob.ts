@@ -1,10 +1,6 @@
 export type PhotoBlobAccess = "private" | "public";
 
-type PhotoBlobEnv = {
-  BLOB_PRIVATE?: string;
-  BLOB_PRIVATE_READ_WRITE_TOKEN?: string;
-  BLOB_READ_WRITE_TOKEN?: string;
-};
+type PhotoBlobEnv = Record<string, string | undefined>;
 
 /**
  * Keep direct photo uploads on the same store policy as the rest of document
