@@ -5,7 +5,7 @@ import { ciExactIdFilter } from "@/lib/ciExact";
 import { authenticateIntakeKey } from "@/lib/apiKeys";
 import { throttlePublic } from "@/lib/publicThrottle";
 import { API_KEY_POLICY } from "@/lib/rateLimit";
-import { withTenantScopeFromId } from "@/lib/tenantScopeEntry";
+import { establishTenantScopeFromId } from "@/lib/tenantScopeEntry";
 import { writeTenantId } from "@/lib/tenantWrite";
 import { resolveTenantActor } from "@/lib/tenantActor";
 import { isModuleEnabled } from "@/lib/modules/enabled";
@@ -44,8 +44,8 @@ export async function OPTIONS() {
 export async function POST(req: NextRequest) {
   // Authenticate before any tenant-owned read. The API key is the tenant
   // principal for this public route; keep its resolved tenant as an ENCLOSING
-  // async scope around the operation rather than relying on enterWith in a helper
-  // to propagate back into this Route Handler.
+  // async scope around the operation rather than entering scope in a helper and
+  // returning to this Route Handler.
   {
     const throttled = await throttlePublic("api-bookings", req.headers.get("x-api-key"), API_KEY_POLICY);
     if (throttled) return throttled;
@@ -55,7 +55,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid API key" }, { status: 401, headers: corsHeaders });
   }
 
-  return withTenantScopeFromId(auth.tenantId, async () => {
+  return establishTenantScopeFromId(auth.tenantId, async () => {
     // Workshop bookings belong to the automotive pack — gone when it's off.
     if (!(await isModuleEnabled("automotive"))) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
