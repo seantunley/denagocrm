@@ -6,7 +6,7 @@ import { ciExactIdFilter } from "@/lib/ciExact";
 import { authenticateIntakeKey } from "@/lib/apiKeys";
 import { throttlePublic } from "@/lib/publicThrottle";
 import { API_KEY_POLICY } from "@/lib/rateLimit";
-import { withTenantScopeFromId } from "@/lib/tenantScopeEntry";
+import { establishTenantScopeFromId } from "@/lib/tenantScopeEntry";
 import { serviceOtpKey } from "@/lib/serviceOtp";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { logAudit } from "@/lib/audit";
@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid API key" }, { status: 401, headers: corsHeaders });
   }
 
-  return withTenantScopeFromId(auth.tenantId, async () => {
+  return establishTenantScopeFromId(auth.tenantId, async () => {
     // Workshop bookings belong to the automotive pack — gone when it's off.
     if (!(await isModuleEnabled("automotive"))) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
