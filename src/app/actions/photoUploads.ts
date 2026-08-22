@@ -57,10 +57,28 @@ export async function getPhotoUploadPlan(): Promise<PhotoUploadPlan | { error: s
    * reference so the row can be found from the screen that mentioned it. Every
    * other action in this codebase already goes through it; this one did not.
    */
+  /*
+   * IT DOES NOT RESOLVE A WORKSPACE, AND MUST NOT.
+   *
+   * This used to `await actingTenantId()` and THROW THE RESULT AWAY. Nothing here
+   * needs a workspace: the only thing this action reveals is which Blob store
+   * mode the deployment uses, which is a property of the deployment and not of
+   * any tenant. The call was a gate that gated nothing.
+   *
+   * It was also the first server call the camera makes, and actingTenantId throws
+   * when a sign-in resolves no workspace. So a session with no `tid` claim could
+   * not take a photo — stopped by a line whose value was discarded — and because
+   * the same missing claim also blanks the System Log, the failure was invisible.
+   *
+   * requireUser() is the gate that belongs here, and it stays: this is
+   * staff-only. The real per-record authorisation happens where a decision is
+   * actually made — /api/photos/upload mints the token and checks access to that
+   * specific record, and register*Photos re-checks before filing anything. Both
+   * need a workspace and both resolve one for themselves.
+   */
   let plan: PhotoUploadPlan | null = null;
   const outcome = await asActionResult(async () => {
     await requireUser();
-    await actingTenantId();
     const token = photoBlobToken();
     plan = token ? { transport: "direct", access: photoBlobAccess() } : { transport: "form" };
   }, { scope: "photo-upload-plan" });
