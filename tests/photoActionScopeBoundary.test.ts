@@ -59,7 +59,7 @@ test("the browser uses scoped entrypoints for both direct finalization and form 
   }
 });
 
-test("every photo action facade encloses the underlying action in staff scope", () => {
+test("every photo action facade encloses the delegate and records facade failures", () => {
   const actions = shipped("src/app/actions/photoUploads.ts");
   const names = [
     "registerDeliveryPhotos",
@@ -72,7 +72,9 @@ test("every photo action facade encloses the underlying action in staff scope", 
   ];
   for (let i = 0; i < names.length; i++) {
     const body = functionBody(actions, names[i], names[i + 1]);
-    assert.match(body, /withActingStaffScope\(async \(\) => \{/,
+    assert.match(body, /withActingStaffScope\(/,
       `${names[i]} must bind the recovered workspace around the whole underlying action`);
+    assert.match(body, /asActionResult\(/,
+      `${names[i]} must still turn facade/import failures into a durable reference`);
   }
 });
