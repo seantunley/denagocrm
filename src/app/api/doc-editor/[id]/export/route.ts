@@ -1,4 +1,5 @@
 import { getCurrentUser } from "@/lib/auth";
+import { withActingStaffScope } from "@/lib/actingScope";
 import { hasAnyPermission } from "@/lib/permissions";
 import { getBuilderTemplate } from "@/lib/docbuilder/store";
 import {
@@ -19,10 +20,30 @@ export const dynamic = "force-dynamic";
 
 const FORMATS: ExportFormat[] = ["html", "email", "doc"];
 
+/**
+ * Bound with withActingStaffScope because this is a ROUTE HANDLER: no layout
+ * runs above it, so nothing establishes the acting workspace the way (app)'s
+ * layout does for an ordinary page.
+ *
+ * The document build below reaches lib/doceditor/generate.ts, which resolves the
+ * quote's fleet account and therefore reads the tenant scope SYNCHRONOUSLY
+ * through activeTenantPredicate. Under TENANT_ENFORCEMENT=enforce a sync read
+ * with no scope THROWS rather than returning an empty predicate, and nothing
+ * here catches it - a bare 500, with the error filed against no workspace and so
+ * invisible in the tenant's System Log.
+ *
+ * Found by tests/apiRouteTenantScope.test.ts alongside the quote print route that
+ * actually broke in production; these two had the same defect and had simply not
+ * been exercised on a fleet-billed document yet.
+ *
+ * Never widens: an already-bound scope wins, and an unresolvable session runs
+ * bare so the access checks below still fail closed.
+ */
 export async function GET(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
+  return withActingStaffScope(async () => {
   // Match the docbuilder PDF route: granular docbuilder access, not owner-only, so
   // this export sibling isn't stricter than the editor/preview it accompanies.
   const user = await getCurrentUser();
@@ -100,5 +121,6 @@ export async function GET(
       "Content-Type": result.mime,
       "Content-Disposition": `attachment; filename="${filename}"`,
     },
+  });
   });
 }

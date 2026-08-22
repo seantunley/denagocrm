@@ -2,6 +2,7 @@ import { subDays } from "date-fns";
 import { basePrisma } from "./db";
 import { redactUrl } from "./redactUrl";
 import { actingTenantId } from "./actingTenant";
+import { getActiveTenantIdIfRequest } from "./auth";
 
 /**
  * How long a logged error is kept.
@@ -85,7 +86,30 @@ async function tenantForError(): Promise<string | null> {
   try {
     return await actingTenantId();
   } catch {
-    return null;
+    /*
+     * THE SESSION IS THE FALLBACK, AND WITHOUT IT THE LOG HIDES ITS WORST ERRORS.
+     *
+     * actingTenantId() calls writeTenantId() FIRST, and under enforcement that
+     * throws when a request carries no bound scope - before the session rung of
+     * its own ladder is ever reached. So every error caused by a MISSING SCOPE
+     * was attributed to nobody, written with tenantId: null, and then filtered
+     * out of Settings -> System Log, which reads where: { tenantId: <yours> }.
+     *
+     * The class of failure that loses the workspace was therefore precisely the
+     * class that erased its own evidence. A fleet-quote PDF 500'd in production
+     * and the log stayed empty while it did.
+     *
+     * The session still knows the workspace: the tid claim is on the cookie and
+     * needs no ambient scope to read. Reading it here is attribution ONLY - it
+     * grants nothing, and the request that failed has already failed. A genuinely
+     * sessionless caller (cron, a webhook, a queue drain) returns null and stays
+     * unattributed, which is still the correct answer for it.
+     */
+    try {
+      return await getActiveTenantIdIfRequest();
+    } catch {
+      return null;
+    }
   }
 }
 
