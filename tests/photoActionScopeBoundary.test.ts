@@ -23,6 +23,19 @@ test("the deployment-only photo plan does not demand a workspace", () => {
   assert.doesNotMatch(body, /actingTenantId\(\)/, "choosing the transport must not require tenant scope");
 });
 
+test("the failure reporter can still record a valid user whose workspace is unresolved", () => {
+  const actions = shipped("src/app/actions/photoUploads.ts");
+  const body = functionBody(actions, "reportPhotoUploadFailure", "registerDeliveryPhotos");
+  assert.match(body, /withActingStaffScope\(/,
+    "bind a recoverable workspace when one exists");
+  assert.doesNotMatch(body, /withPhotoActionScope\(/,
+    "requiring a resolved workspace here would suppress the unresolved-workspace diagnostic");
+  assert.match(body, /identify:\s*\(\) => getCurrentUser\(\)/,
+    "the reporter still has to establish a real signed-in identity before it can log");
+  assert.match(body, /isWorkspaceFailure:\s*\(error\) => error instanceof TenantScopeError/,
+    "only the typed workspace-resolution failure is recoverable");
+});
+
 test("the Blob token request binds the recovered workspace around authorization", () => {
   const route = shipped("src/app/api/photos/upload/route.ts");
   const branchStart = route.indexOf("if (photoUploadNeedsStaffSession(body?.type)) {");
