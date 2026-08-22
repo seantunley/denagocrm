@@ -41,6 +41,7 @@ test("server completion repeats the checklist, review, driver and signature gate
   assert.match(actionSource, /deliveryNoteReviewed/);
   assert.match(actionSource, /deliveredByName/);
   assert.match(actionSource, /SIGNATURE_PREFIX/);
+  assert.match(actionSource, /signatureBytes\.length > MAX_SIGNATURE_BYTES/);
   assert.match(actionSource, /deliveryHandoverReadiness\(templates, runs\)/);
   assert.match(actionSource, /return markDelivered\(quoteId, formData\)/);
 });
