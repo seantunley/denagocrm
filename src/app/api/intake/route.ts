@@ -3,7 +3,7 @@ import { z } from "zod";
 import { authenticateIntakeKey } from "@/lib/apiKeys";
 import { throttlePublic } from "@/lib/publicThrottle";
 import { API_KEY_POLICY } from "@/lib/rateLimit";
-import { establishTenantScopeFromId } from "@/lib/tenantScopeEntry";
+import { withTenantScopeFromId } from "@/lib/tenantScopeEntry";
 import { createIntakeLead } from "@/lib/leadIntake";
 import { recordReferral } from "@/lib/referrals";
 
@@ -44,36 +44,41 @@ export async function POST(req: NextRequest) {
       { status: 401, headers: corsHeaders }
     );
   }
-  establishTenantScopeFromId(auth.tenantId);
 
-  let json: unknown;
-  try {
-    json = await req.json();
-  } catch {
+  // The API key is the principal that owns this request. Bind its tenant around
+  // the WHOLE authenticated operation rather than calling enterTenantScope in a
+  // helper and returning to this frame: that callee-only shape is the same scope
+  // propagation failure that broke Server Actions under enforcement.
+  return withTenantScopeFromId(auth.tenantId, async () => {
+    let json: unknown;
+    try {
+      json = await req.json();
+    } catch {
+      return NextResponse.json(
+        { error: "Invalid JSON" },
+        { status: 400, headers: corsHeaders }
+      );
+    }
+
+    const parsed = intakeSchema.safeParse(json);
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: "Validation failed", issues: parsed.error.issues },
+        { status: 422, headers: corsHeaders }
+      );
+    }
+
+    const { referralCode, ...leadInput } = parsed.data;
+    const lead = await createIntakeLead({
+      ...leadInput,
+      source: leadInput.source ?? "website",
+      raw: json,
+    });
+    if (referralCode) await recordReferral(referralCode, lead.id).catch(() => {});
+
     return NextResponse.json(
-      { error: "Invalid JSON" },
-      { status: 400, headers: corsHeaders }
+      { ok: true, id: lead.id },
+      { status: 201, headers: corsHeaders }
     );
-  }
-
-  const parsed = intakeSchema.safeParse(json);
-  if (!parsed.success) {
-    return NextResponse.json(
-      { error: "Validation failed", issues: parsed.error.issues },
-      { status: 422, headers: corsHeaders }
-    );
-  }
-
-  const { referralCode, ...leadInput } = parsed.data;
-  const lead = await createIntakeLead({
-    ...leadInput,
-    source: leadInput.source ?? "website",
-    raw: json,
   });
-  if (referralCode) await recordReferral(referralCode, lead.id).catch(() => {});
-
-  return NextResponse.json(
-    { ok: true, id: lead.id },
-    { status: 201, headers: corsHeaders }
-  );
 }
