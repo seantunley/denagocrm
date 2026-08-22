@@ -1,7 +1,8 @@
 "use server";
 
 import { actingTenantId } from "@/lib/actingTenant";
-import { requireUser } from "@/lib/auth";
+import { getCurrentUser, requireUser } from "@/lib/auth";
+import { recordPhotoUploadFailure, type PhotoFailureDetail } from "@/lib/photoFailureReport";
 import { basePrisma } from "@/lib/db";
 import { logError } from "@/lib/errorLog";
 import { photoBlobAccess, photoBlobToken, type PhotoBlobAccess } from "@/lib/photoBlob";
@@ -68,85 +69,54 @@ export async function getPhotoUploadPlan(): Promise<PhotoUploadPlan> {
 
 /**
  * Browser-to-blob transfer errors happen after token creation, outside the API
- * route. Record an intentionally sanitised event after re-authorising the target
- * so those failures are visible without accepting arbitrary client log entries.
+ * route — so the browser is the only witness. Record a sanitised event, without
+ * accepting arbitrary client log entries.
+ *
+ * The decision logic lives in lib/photoFailureReport.ts with its effects
+ * injected, because the interesting behaviour here is what happens when those
+ * effects THROW, and that cannot be established by reading this file top to
+ * bottom. See its comment for why the order changed.
  */
 export async function reportPhotoUploadFailure(
   target: PhotoUploadTarget,
-  detail: {
-    stage: "prepare" | "transfer" | "finalize";
-    fileType?: string;
-    fileSize?: number;
-    /**
-     * What the browser actually caught.
-     *
-     * The one fact worth having, and it used not to be sent at all: the client
-     * caught the error, discarded it, and logged "A photo did not reach blob
-     * storage" — a sentence that describes the symptom already on screen and
-     * names no cause. Truncated because it is client-supplied text going into a
-     * log row, and logged as CONTEXT rather than as the error, so it can never
-     * be mistaken for something the server observed.
-     */
-    reason?: string;
-  },
+  detail: PhotoFailureDetail,
 ) {
-  /*
-   * THIS MUST SURVIVE THE FAILURE IT IS REPORTING, and it did not.
-   *
-   * It opened with a bare `await actingTenantId()`, which THROWS when the
-   * sign-in resolves no workspace. That is one of the failures an upload hits —
-   * a Server Action does not inherit the page's tenant scope — so in exactly the
-   * case worth recording, the recorder threw first, the client's `.catch(() => {})`
-   * swallowed it, and the System Log stayed empty while the message on screen
-   * insisted the reason was in it.
-   *
-   * The tenant is now best-effort. It is still the attribution for the row when
-   * it resolves; when it does not, the row is written unattributed rather than
-   * not at all.
-   */
-  let tenantId: string | null = null;
-  try {
-    tenantId = await actingTenantId();
-  } catch {
-    tenantId = null;
-  }
-
-  /*
-   * The permission check is NOT best-effort and never becomes optional — it is
-   * what stops this being an endpoint for writing arbitrary log rows. The
-   * tenant-ownership re-check below is defence in depth on top of it, and is the
-   * only part skipped when there is no tenant to check against.
-   */
-  if (target.kind === "delivery") {
-    await requireQuoteAccess(target.recordId, "deliveries.manage");
-    if (tenantId) {
-      const owned = await basePrisma.quote.findFirst({ where: { id: target.recordId, tenantId }, select: { id: true } });
-      if (!owned) return;
-    }
-  } else {
-    const jobCardId = target.kind === "inspection" ? target.jobCardId : target.recordId;
-    if (!jobCardId) return;
-    await requireJobCardAccess(jobCardId, "jobcards.manage");
-    if (tenantId && target.kind === "inspection") {
-      const owned = await basePrisma.jobCardInspectionItem.findFirst({
-        where: { id: target.recordId, jobCardId, tenantId },
-        select: { id: true },
-      });
-      if (!owned) return;
-    } else if (tenantId) {
-      const owned = await basePrisma.jobCard.findFirst({ where: { id: jobCardId, tenantId }, select: { id: true } });
-      if (!owned) return;
-    }
-  }
-  // The REASON leads. "A photo did not reach blob storage" restates the symptom
-  // the person already saw and names no cause, which is what made this log row
-  // worthless to read. Sanitised: one line, length-capped, and marked as coming
-  // from the browser so nobody reads it as a server observation.
-  const reason = (detail.reason ?? "").replace(/\s+/g, " ").trim().slice(0, 300);
-  await logError(
-    "photo-upload-client",
-    new Error(reason ? `A photo did not reach blob storage: ${reason}` : "A photo did not reach blob storage (the browser reported no reason)."),
-    `kind=${target.kind} record=${target.recordId} stage=${detail.stage} type=${detail.fileType ?? "unknown"} bytes=${detail.fileSize ?? 0} source=browser`,
-    { tenantId, alert: false },
+  await recordPhotoUploadFailure(
+    {
+      // Identity WITHOUT a workspace. getCurrentUser resolves the person and
+      // enters their scope if one exists, but does not demand that one does —
+      // which is what lets this run in the case worth reporting.
+      identify: () => getCurrentUser(),
+      resolveTenant: actingTenantId,
+      authorise: async (t, tenantId) => {
+        // Permission first, and never conditional: this is what stops the action
+        // being a way to write arbitrary rows. The tenant-ownership re-check on
+        // top of it needs a tenant, so it is skipped when there is not one —
+        // recorded as "unknown" rather than silently treated as a pass.
+        if (t.kind === "delivery") {
+          await requireQuoteAccess(t.recordId, "deliveries.manage");
+          if (!tenantId) return true;
+          const owned = await basePrisma.quote.findFirst({ where: { id: t.recordId, tenantId }, select: { id: true } });
+          return Boolean(owned);
+        }
+        const jobCardId = t.kind === "inspection" ? t.jobCardId : t.recordId;
+        if (!jobCardId) return false;
+        await requireJobCardAccess(jobCardId, "jobcards.manage");
+        if (!tenantId) return true;
+        if (t.kind === "inspection") {
+          const owned = await basePrisma.jobCardInspectionItem.findFirst({
+            where: { id: t.recordId, jobCardId, tenantId },
+            select: { id: true },
+          });
+          return Boolean(owned);
+        }
+        const owned = await basePrisma.jobCard.findFirst({ where: { id: jobCardId, tenantId }, select: { id: true } });
+        return Boolean(owned);
+      },
+      log: ({ message, context, tenantId }) =>
+        logError("photo-upload-client", new Error(message), context, { tenantId, alert: false }),
+    },
+    target,
+    detail,
   );
 }

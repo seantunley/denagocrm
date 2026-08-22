@@ -128,7 +128,7 @@ test("browser transfer failures are authorised and persisted", () => {
   assert.match(uploader, /reportPhotoUploadFailure\(/);
   assert.match(reporter, /requireQuoteAccess/);
   assert.match(reporter, /requireJobCardAccess/);
-  assert.match(reporter, /where: \{ id: target\.recordId, jobCardId, tenantId \}/);
+  assert.match(reporter, /where: { id: t.recordId, jobCardId, tenantId }/, "the inspection ownership re-check keeps its shape");
   assert.match(reporter, /"photo-upload-client"/);
 });
 

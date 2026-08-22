@@ -64,43 +64,15 @@ test("an all-failed batch says why rather than pointing elsewhere", () => {
   assert.ok(code.includes("`No photos were uploaded: ${firstFailure}`"));
 });
 
-test("the failure report carries the reason the browser saw", () => {
-  const actions = shipped("src/app/actions/photoUploads.ts");
-  assert.ok(actions.includes("reason?: string"), "the reporter must accept one");
-  assert.ok(actions.includes("A photo did not reach blob storage: ${reason}"), "and lead with it");
-  assert.ok(actions.includes("source=browser"), "marked as client-reported, not a server observation");
-  assert.ok(actions.includes(".slice(0, 300)"), "client text going into a log row must be capped");
-});
-
 /*
- * The recorder has to survive the failure it is recording. This is the one that
- * made the log empty rather than merely unhelpful.
+ * The server-side half of this — that a row is written even when the workspace
+ * and the record check both fail — is covered in photoFailureReport.test.ts,
+ * which RUNS that path rather than reading it.
+ *
+ * The three assertions that used to sit here checked the order of statements in
+ * the action's source. They passed while the bug was still live: the ordering
+ * they described was correct, and the code still could not reach the log,
+ * because requireQuoteAccess re-enters the same tenant resolution that had
+ * already thrown. Source order was the wrong thing to assert, so it is not
+ * asserted somewhere else — it is replaced by executing the failure.
  */
-test("an unresolvable workspace no longer stops the report being written", () => {
-  const actions = shipped("src/app/actions/photoUploads.ts");
-  const opening = actions.slice(0, actions.indexOf("if (target.kind === \"delivery\")"));
-  assert.ok(
-    /try\s*\{\s*tenantId = await actingTenantId\(\);\s*\}\s*catch\s*\{/.test(opening),
-    "actingTenantId throws with no workspace — that must not abort the report",
-  );
-  assert.ok(actions.includes("let tenantId: string | null = null;"), "the row is written unattributed rather than not at all");
-});
-
-test("but the permission check never becomes optional", () => {
-  // It is what stops this being an endpoint for writing arbitrary log rows. Only
-  // the tenant-ownership re-check — defence in depth on top of it — is skipped
-  // when there is no tenant to check against.
-  const actions = shipped("src/app/actions/photoUploads.ts");
-  assert.ok(actions.includes('await requireQuoteAccess(target.recordId, "deliveries.manage");'));
-  assert.ok(actions.includes('await requireJobCardAccess(jobCardId, "jobcards.manage");'));
-
-  const gate = actions.indexOf("requireQuoteAccess");
-  const ownership = actions.indexOf("basePrisma.quote.findFirst");
-  assert.ok(gate < ownership, "the permission check must run before the ownership read");
-
-  // The permission calls must NOT sit behind the `if (tenantId)` guard.
-  assert.ok(
-    !/if \(tenantId\) \{\s*await require/.test(actions),
-    "a missing tenant must not skip the authorisation gate",
-  );
-});
