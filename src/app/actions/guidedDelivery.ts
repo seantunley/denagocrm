@@ -9,6 +9,7 @@ import { requireQuoteAccess } from "@/lib/permissions";
 import { markDelivered } from "@/app/actions/fulfilment";
 
 const SIGNATURE_PREFIX = "data:image/png;base64,";
+const MAX_SIGNATURE_BYTES = 4 * 1024 * 1024;
 
 /**
  * Finalise a delivery that is using the configurable guided-handover system.
@@ -43,6 +44,13 @@ export async function completeGuidedDelivery(
     const signatureBytes = Buffer.from(signature.slice(SIGNATURE_PREFIX.length), "base64");
     if (signatureBytes.length === 0) {
       refuse("Ask the customer to sign before completing the delivery.");
+    }
+    // markDelivered intentionally accepts the legacy flow's optional signature,
+    // so it skips an oversized image rather than refusing the whole delivery.
+    // Guided completion requires a signature, which means silently dropping an
+    // oversized one would violate the promise this screen makes to the customer.
+    if (signatureBytes.length > MAX_SIGNATURE_BYTES) {
+      refuse("That signature image is too large. Clear it and sign again.");
     }
 
     const templates = await prisma.checklistTemplate.findMany({
