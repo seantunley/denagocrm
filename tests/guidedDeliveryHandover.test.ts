@@ -53,7 +53,15 @@ test("the guided UI reviews the actual delivery note before showing signature", 
   assert.ok(continueAt > reviewAt);
   assert.ok(signatureAt > continueAt);
   assert.match(completionSource, /`\/quotes\/\$\{quoteId\}\/delivery-note`/);
+  assert.match(completionSource, /previewHref = `\$\{noteHref\}\?embed=1`/);
+  assert.match(completionSource, /src=\{previewHref\}/);
   assert.match(completionSource, /completeGuidedDelivery\.bind\(null, quoteId\)/);
+});
+
+test("embedded delivery-note review hides its nested print toolbar", () => {
+  assert.match(deliveryNoteSource, /embed\?: string/);
+  assert.match(deliveryNoteSource, /const embedded = embed === "1"/);
+  assert.match(deliveryNoteSource, /\{!embedded && <PrintActions/);
 });
 
 test("the delivery note shows the guided snapshots being signed, then the stored signature", () => {
