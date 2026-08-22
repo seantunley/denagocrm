@@ -44,7 +44,7 @@ export default async function DeliveryNotePrintPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ tpl?: string }>;
+  searchParams: Promise<{ tpl?: string; embed?: string }>;
 }) {
   const { id } = await params;
   // The (print) layout guard treats /quotes as core, so this automotive delivery
@@ -52,7 +52,8 @@ export default async function DeliveryNotePrintPage({
   // explicitly when the automotive pack is off.
   if (!(await isModuleEnabled("automotive"))) notFound();
   await requireQuoteReadAccess(id);
-  const { tpl: tplId } = await searchParams;
+  const { tpl: tplId, embed } = await searchParams;
+  const embedded = embed === "1";
   const quote = await prisma.quote.findUnique({
     where: { id },
     include: { items: true, fees: { orderBy: { sortOrder: "asc" } }, contact: true, lead: true },
@@ -127,7 +128,7 @@ export default async function DeliveryNotePrintPage({
 
   return (
     <>
-      <PrintActions backHref="/deliveries" backLabel="Back to deliveries" />
+      {!embedded && <PrintActions backHref="/deliveries" backLabel="Back to deliveries" />}
       <PrintDocShell
         company={company}
         template={tpl}
