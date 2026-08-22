@@ -20,6 +20,7 @@ export default function GuidedDeliveryCompletion({ quoteId }: { quoteId: string 
   const drawing = useRef(false);
   const hasInk = useRef(false);
   const noteHref = `/quotes/${quoteId}/delivery-note`;
+  const previewHref = `${noteHref}?embed=1`;
 
   function point(event: React.PointerEvent<HTMLCanvasElement>) {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -90,7 +91,7 @@ export default function GuidedDeliveryCompletion({ quoteId }: { quoteId: string 
               <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-border bg-white">
                 <iframe
                   title="Delivery note preview"
-                  src={noteHref}
+                  src={previewHref}
                   className="h-full min-h-[52dvh] w-full bg-white"
                 />
               </div>
