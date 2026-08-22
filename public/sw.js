@@ -1,18 +1,57 @@
-/* Denago CRM service worker — push notifications + installability (rev 4) */
+/* Denago CRM service worker — push, installability and secure offline shell (rev 5) */
+
+const OFFLINE_CACHE = "denago-offline-v1";
+const OFFLINE_ASSETS = ["/offline.html", "/icons/icon-192.png", "/icons/icon-512.png"];
 
 // Take over as soon as a new worker is deployed, instead of waiting for every
 // tab to close — otherwise notification icon/badge changes never reach an
 // installed PWA that's always open.
-self.addEventListener("install", () => self.skipWaiting());
-self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
+self.addEventListener("install", (event) => {
+  event.waitUntil(caches.open(OFFLINE_CACHE).then((cache) => cache.addAll(OFFLINE_ASSETS)).then(() => self.skipWaiting()));
+});
+self.addEventListener("activate", (event) => {
+  event.waitUntil(
+    caches.keys()
+      .then((keys) => Promise.all(keys.filter((key) => key.startsWith("denago-offline-") && key !== OFFLINE_CACHE).map((key) => caches.delete(key))))
+      .then(() => self.clients.claim())
+  );
+});
 
-// Chrome only fires beforeinstallprompt (and considers the app installable) when
-// a service worker with a fetch handler is present. This is a deliberate no-op
-// pass-through: we do NOT call event.respondWith, so every request is handled by
-// the browser exactly as if no worker existed — no caching, no offline, no change
-// to network behaviour. Its mere presence is what unlocks installability.
+// Dynamic CRM pages remain network-only. The one authenticated offline workspace
+// shell may be cached after a successful visit; its customer records are never in
+// CacheStorage — they live in the tenant/user-partitioned IndexedDB store.
 self.addEventListener("fetch", (event) => {
-  /* pass-through: let the browser handle the request normally */
+  if (event.request.method !== "GET") return;
+  const url = new URL(event.request.url);
+  if (url.origin !== self.location.origin) return;
+  if (url.pathname.startsWith("/_next/static/") || url.pathname.startsWith("/icons/")) {
+    event.respondWith(
+      caches.match(event.request).then((cached) => cached || fetch(event.request).then((response) => {
+        if (response.ok) {
+          const copy = response.clone();
+          event.waitUntil(caches.open(OFFLINE_CACHE).then((cache) => cache.put(event.request, copy)));
+        }
+        return response;
+      }))
+    );
+    return;
+  }
+  if (event.request.mode !== "navigate") return;
+  if (url.pathname === "/offline") {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          if (response.ok) {
+            const copy = response.clone();
+            event.waitUntil(caches.open(OFFLINE_CACHE).then((cache) => cache.put("/offline", copy)));
+          }
+          return response;
+        })
+        .catch(async () => (await caches.match("/offline")) || (await caches.match("/offline.html")))
+    );
+    return;
+  }
+  event.respondWith(fetch(event.request).catch(() => caches.match("/offline.html")));
 });
 
 /**

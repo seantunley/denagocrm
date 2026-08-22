@@ -66,6 +66,8 @@ export default function LeadForm({
   submitLabel,
   users = [],
   variant = "compact",
+  offlineRecordId,
+  offlineBaseVersion,
 }: {
   action: (formData: FormData) => Promise<ActionResult | void>;
   products: LeadFormProduct[];
@@ -75,6 +77,8 @@ export default function LeadForm({
   submitLabel: string;
   users?: { id: string; name: string }[];
   variant?: LeadFormVariant;
+  offlineRecordId?: string;
+  offlineBaseVersion?: string;
 }) {
   const [name, setName] = useState(defaults.name ?? "");
   const [contactId, setContactId] = useState(defaults.contactId ?? "");
@@ -127,6 +131,11 @@ export default function LeadForm({
       // Replaced on success — create redirects, edit re-renders with the saved
       // values — so a reset would only blank fields still on screen.
       resetOnSuccess={false}
+      offlineOperation={{
+        type: offlineRecordId ? "lead.update" : "lead.create",
+        recordId: offlineRecordId,
+        baseVersion: offlineBaseVersion,
+      }}
       className={cn(
         "space-y-4",
         variant === "compact" && "card max-w-3xl",

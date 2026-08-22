@@ -14,6 +14,8 @@ import {
 import { logout } from "@/app/login/actions";
 import { APP_VERSION } from "@/lib/version";
 import { cn } from "@/lib/utils";
+import { purgeOfflineData } from "@/lib/offlineClient";
+import { toast } from "sonner";
 
 export type AccountMenuUser = {
   name: string;
@@ -48,6 +50,23 @@ export default function AccountMenu({
   isOwner: boolean;
   compact?: boolean;
 }) {
+  async function signOutSafely() {
+    try {
+      // Customer records and queued files must be gone BEFORE the authenticated
+      // session is ended. Swallowing a storage failure would leave the next
+      // person using this device with the previous user's offline evidence.
+      await purgeOfflineData();
+      if ("caches" in window) {
+        const cache = await caches.open("denago-offline-v1");
+        await cache.delete("/offline");
+      }
+    } catch {
+      toast.error("Offline customer data could not be removed. Sign-out was stopped; free device storage and try again.");
+      return;
+    }
+    await logout();
+  }
+
   const avatar = (
     <Avatar className={cn("rounded-md", compact ? "size-7" : "size-7")}>
       {user.avatarVersion ? (
@@ -135,7 +154,7 @@ export default function AccountMenu({
           </DropdownMenuItem>
         )}
         <DropdownMenuSeparator />
-        <DropdownMenuItem variant="destructive" onSelect={() => logout()}>
+        <DropdownMenuItem variant="destructive" onSelect={() => void signOutSafely()}>
           <LogOut className="size-4" />
           Sign out
         </DropdownMenuItem>
