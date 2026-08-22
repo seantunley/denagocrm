@@ -307,7 +307,7 @@ function pageHtml(page: DocumentPage, doc: DocumentModel, ctx: RenderCtx, logoDa
     `<div style="position:absolute;left:${fb.x - doc.style.margin}px;top:${fb.y - doc.style.margin}px;width:${fb.width}px">${blockHtml(fb.block, ctx, doc.style, logoDataUri)}</div>`
   ).join("");
   const size = PAGE_SIZES[doc.style.pageSize];
-  return `<div style="position:relative;min-height:${size.h - doc.style.margin * 2}px;${isLast ? "" : "page-break-after:always;"}">${rows}${fields}${floats}${stamped}</div>`;
+  return `<div class="doc-page" style="position:relative;min-height:${size.h - doc.style.margin * 2}px;${isLast ? "" : "page-break-after:always;"}">${rows}${fields}${floats}${stamped}</div>`;
 }
 
 /**
@@ -387,6 +387,7 @@ export function renderDocumentHtml(
   const stamped = opts?.stampedFields;
   const body = doc.pages.map((p, i) => pageHtml(p, doc, ctx, logoDataUri, i === lastIdx && !opts?.appendHtml, opts?.hideOverlays, stamped ? stamped.filter((s) => s.page === i) : undefined)).join("") + (opts?.appendHtml ?? "");
   const pageCss = doc.style.pageSize === "A4" ? "A4" : "letter";
+  const size = PAGE_SIZES[doc.style.pageSize];
   return `<!doctype html><html><head><meta charset="utf-8"><style>
     @page { size: ${pageCss}; margin: ${m}px; }
     * { box-sizing: border-box; }
@@ -402,6 +403,28 @@ export function renderDocumentHtml(
     ${header ? `.doc-header { position: fixed; top: -${m - 8}px; left: 0; right: 0; }` : ""}
     ${footer ? `.doc-footer { position: fixed; bottom: -${m - 8}px; left: 0; right: 0; }` : ""}
     ${opts?.toolbarHtml ? "@media print { .doc-toolbar { display: none !important; } }" : ""}
+    /*
+     * ON SCREEN ONLY. The @page rule above sizes the PRINTED sheet and does
+     * nothing in the browser window, so this rendered edge-to-edge across whatever
+     * width the viewport happened to be - text flush against the left, the totals
+     * bar stretched to the far right, nothing resembling the page that comes out
+     * of the printer.
+     *
+     * Constrained to the real page width and given the margin as padding, so what
+     * is on screen is the sheet. Wrapped in @media screen so the printed output
+     * and the PDF pipeline are byte-for-byte unchanged - they must keep taking
+     * their geometry from the @page rule, not from this.
+     */
+    @media screen {
+      body { background: #e2e8f0; }
+      .doc-page {
+        width: ${size.w}px;
+        margin: 16px auto;
+        padding: ${m}px;
+        background: #ffffff;
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.2);
+      }
+    }
   </style></head><body>
     ${opts?.toolbarHtml ?? ""}
     ${header ? `<div class="doc-header">${header}</div>` : ""}
