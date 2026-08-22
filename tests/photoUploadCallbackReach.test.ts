@@ -72,3 +72,39 @@ test("the callback trusts its signature, never the request's identity", () => {
   assert.match(completed, /parseCompletionOwnership\(tokenPayload\)/);
   assert.doesNotMatch(completed, /actingTenantId|requireUser|getCurrentUser/, "the callback has no session to check");
 });
+
+/*
+ * Being in PUBLIC_PATHS has a cost the token branch must also pay: an anonymous
+ * caller reaches this route, and every failure here writes a persistent ErrorLog
+ * row. Unbounded, from the open internet, that is a log-flooding primitive — the
+ * System Log fills with rows nobody can attribute and real failures are buried.
+ */
+test("an unidentified caller is refused before anything is written", () => {
+  const route = src("src/app/api/photos/upload/route.ts")
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/^\s*\/\/.*$/gm, "");
+
+  // Both refusals must come BEFORE the handleUpload call whose catch logs, or
+  // the anonymous request is still recorded on its way out.
+  const gate = route.lastIndexOf('return NextResponse.json({ error: "Unauthorized" }, { status: 401 })');
+  const work = route.indexOf("const response = await handleUpload(");
+  assert.notEqual(gate, -1, "an anonymous caller must be refused with 401");
+  assert.notEqual(work, -1, "handleUpload not found — has the route been restructured?");
+  assert.ok(gate < work, "the refusals must precede the work whose catch writes the log row");
+
+  assert.match(route, /catch \{\s*return NextResponse\.json\(\{ error: "Unauthorized" \}/, "a thrown actingTenantId must refuse, not fall through to the logger");
+  assert.match(route, /!request\.headers\.get\("x-vercel-signature"\)/, "an unsigned callback must be refused before handleUpload logs it");
+});
+
+test("only an identified caller can write to the System Log", () => {
+  const route = src("src/app/api/photos/upload/route.ts")
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/^\s*\/\/.*$/gm, "");
+  const tail = route.slice(route.lastIndexOf("} catch (error) {"));
+
+  assert.match(tail, /if \(tenantId\) \{/, "the persistent write must be conditional on having a tenant");
+  const guard = tail.indexOf("if (tenantId)");
+  const write = tail.indexOf("logError(");
+  assert.ok(guard !== -1 && guard < write, "logError must sit inside the tenant guard");
+  assert.match(tail, /console\.error\(/, "an unattributable failure still needs to go somewhere that rotates");
+});

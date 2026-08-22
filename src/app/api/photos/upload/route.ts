@@ -39,12 +39,33 @@ export async function POST(request: Request) {
     ? "photo-upload-callback"
     : "photo-upload-token";
 
-  try {
-    // The browser token exchange has the signed-in staff session. Vercel's
-    // upload-completed callback is server-to-server and intentionally does not.
-    if (photoUploadNeedsStaffSession(body?.type)) {
+  /*
+   * REFUSE UNIDENTIFIED CALLERS HERE, BEFORE ANYTHING IS RECORDED.
+   *
+   * This route is in PUBLIC_PATHS so Vercel's signed callback can reach it — a
+   * server-to-server request with no session cookie. That necessarily means an
+   * anonymous caller can reach it too, and every failure below writes a
+   * persistent ErrorLog row. Left inside the try, the endpoint was a way for
+   * anyone on the internet to fill a tenant's System Log with unbounded rows by
+   * POSTing nonsense in a loop.
+   *
+   * The browser token exchange carries the staff session; the callback carries a
+   * signature instead. Neither present means there is nobody to attribute the
+   * failure to, so it is refused without a trace rather than logged.
+   */
+  if (photoUploadNeedsStaffSession(body?.type)) {
+    try {
       tenantId = await actingTenantId();
+    } catch {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+  } else if (body?.type === "blob.upload-completed" && !request.headers.get("x-vercel-signature")) {
+    // handleUpload refuses an unsigned callback anyway; refusing first is what
+    // keeps that refusal out of the database.
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  try {
 
     const response = await handleUpload({
       request,
@@ -104,12 +125,22 @@ export async function POST(request: Request) {
     });
     return NextResponse.json(response);
   } catch (error) {
-    await logError(
-      failureScope,
-      error,
-      failureContext,
-      { tenantId, alert: false },
-    );
+    // Only an IDENTIFIED caller may write a persistent row. A caller that got
+    // past the gate above but failed here — a forged signature, a malformed
+    // callback — still has no tenant to attribute anything to, and a public
+    // endpoint that writes to the database on every failure is a log-flooding
+    // primitive. Those go to the console, which rotates, not the System Log,
+    // which does not.
+    if (tenantId) {
+      await logError(
+        failureScope,
+        error,
+        failureContext,
+        { tenantId, alert: false },
+      );
+    } else {
+      console.error(`[${failureScope}] ${failureContext}`, error);
+    }
     return NextResponse.json(
       {
         error: body?.type === "blob.upload-completed"
