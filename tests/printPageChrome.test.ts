@@ -122,3 +122,43 @@ test("no server-rendered HTML string ships an inline event handler", () => {
   }
   assert.deepEqual(offenders, [], "these render HTML sent to a browser under a nonce-only CSP");
 });
+
+/*
+ * EVERY DOCUMENT PRINTED ONTO A SECOND, NEARLY EMPTY PAGE. Verified in Chrome
+ * across all eight standard templates: two pages before, one after.
+ *
+ * Two causes, and the first hid the second. The page box took its height from
+ * PAGE_SIZES.A4.h — 1123 — but A4 is 1122.52 CSS px, so it was half a pixel over
+ * on its own. Underneath that, the last block inside the page (a terms box, a
+ * footer, a paragraph) has a bottom margin, and with no block formatting context
+ * that margin collapsed THROUGH the bottom edge and added to the document's
+ * height. It was invisible from script: scrollHeight excludes a collapsed-out
+ * margin, so the box measured as fitting while it printed as not.
+ */
+test("the page box cannot be taller than the sheet it prints on", () => {
+  const html = renderDocumentHtml(blankDocument("Quote"), ctx);
+  const page = html.slice(html.indexOf('<div class="doc-page"'));
+
+  assert.ok(
+    page.includes("display:flow-root"),
+    "without a block formatting context the last child's bottom margin escapes the page and forces a second sheet",
+  );
+  // The EXACT sheet height, not the rounded pixel one.
+  assert.ok(page.includes("min-height:calc(297mm -"), "A4 is 1122.52px, so the height must come from millimetres");
+  assert.ok(!page.includes("min-height:1043px"), "1123 - margins is half a pixel over A4");
+});
+
+test("Letter pages are measured in their own exact units too", () => {
+  const doc = blankDocument("Quote");
+  doc.style.pageSize = "Letter";
+  const html = renderDocumentHtml(doc, ctx);
+  assert.ok(html.slice(html.indexOf('<div class="doc-page"')).includes("min-height:calc(11in -"));
+});
+
+test("every page size states an exact physical height", () => {
+  // The rounded pixel width stays for the editor canvas, which positions overlay
+  // fields and must not land them on fractional pixels. Print takes the exact one.
+  for (const [name, size] of Object.entries(PAGE_SIZES)) {
+    assert.match(size.cssH, /^[\d.]+(mm|in)$/, `${name} needs a physical height, not a pixel one`);
+  }
+});
