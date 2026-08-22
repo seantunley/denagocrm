@@ -31,6 +31,13 @@ export type PhotoFailureDeps = {
    * it re-enters the same tenant lookup — which is the whole problem here.
    */
   authorise: (target: PhotoFailureTarget, tenantId: string | null) => Promise<boolean>;
+  /**
+   * Is this thrown value a failure to resolve the WORKSPACE, as opposed to a
+   * refusal of access? Recognised positively: anything unrecognised — a
+   * redirect, a permission error, a bug — is treated as a refusal, so a hole
+   * cannot be opened by a new error type nobody thought about.
+   */
+  isWorkspaceFailure: (error: unknown) => boolean;
   log: (entry: { message: string; context: string; tenantId: string | null }) => Promise<void>;
 };
 
@@ -84,11 +91,20 @@ export async function recordPhotoUploadFailure(
   let authorised: boolean | null = null;
   try {
     authorised = await deps.authorise(target, tenantId);
-  } catch {
-    // Could not COMPLETE the check — almost certainly the same missing workspace
-    // that failed above. Recorded as unknown, not as a refusal, because those are
-    // different facts and the difference is what someone reading the log needs.
-    authorised = null;
+  } catch (error) {
+    /*
+     * FAIL CLOSED. Treating every thrown authorisation as "could not check" was
+     * wrong and was a hole, not a rough edge: requireQuoteAccess denies by
+     * calling redirect(), which THROWS. It never returns false. So a signed-in
+     * person with no access to a record still reached the log, and could write
+     * persistent rows naming any record id they liked with any text they liked.
+     *
+     * Only a failure to RESOLVE THE WORKSPACE counts as unknown — that is the
+     * one this report has to survive, and it is recognised positively rather
+     * than by exclusion. Everything else, including a redirect and anything
+     * unrecognised, is a refusal.
+     */
+    authorised = deps.isWorkspaceFailure(error) ? null : false;
   }
 
   // A REFUSAL is the one verdict that suppresses the row: the caller has no

@@ -1,6 +1,7 @@
 "use server";
 
 import { actingTenantId } from "@/lib/actingTenant";
+import { TenantScopeError } from "@/lib/tenantGuard";
 import { getCurrentUser, requireUser } from "@/lib/auth";
 import { recordPhotoUploadFailure, type PhotoFailureDetail } from "@/lib/photoFailureReport";
 import { basePrisma } from "@/lib/db";
@@ -113,6 +114,10 @@ export async function reportPhotoUploadFailure(
         const owned = await basePrisma.jobCard.findFirst({ where: { id: jobCardId, tenantId }, select: { id: true } });
         return Boolean(owned);
       },
+      // Only a TenantScopeError means "could not establish the workspace".
+      // requireQuoteAccess denies by calling redirect(), which throws, so any
+      // other throw here is a refusal and must suppress the row.
+      isWorkspaceFailure: (error) => error instanceof TenantScopeError,
       log: ({ message, context, tenantId }) =>
         logError("photo-upload-client", new Error(message), context, { tenantId, alert: false }),
     },

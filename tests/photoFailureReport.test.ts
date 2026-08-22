@@ -22,13 +22,23 @@ function deps(over: Partial<PhotoFailureDeps> = {}) {
     identify: async () => ({ id: "u_1" }),
     resolveTenant: async () => "tenant_a",
     authorise: async () => true,
+    isWorkspaceFailure: (e) => e instanceof WorkspaceError,
     log: async (entry) => { rows.push(entry); },
     ...over,
   };
   return { d, rows };
 }
 
-const noWorkspace = () => { throw new Error("No workspace is attached to this sign-in"); };
+/** Stands in for TenantScopeError: the ONE failure that means "could not check". */
+class WorkspaceError extends Error {}
+const noWorkspace = () => { throw new WorkspaceError("No workspace is attached to this sign-in"); };
+
+/** How production actually denies: requireQuoteAccess calls redirect(), which THROWS. */
+function redirectDenial(): never {
+  const error = new Error("NEXT_REDIRECT") as Error & { digest: string };
+  error.digest = "NEXT_REDIRECT;replace;/quotes;307;";
+  throw error;
+}
 
 /**
  * THE HEADLINE CASE, RUN RATHER THAN READ.
@@ -143,4 +153,53 @@ test("the action delegates rather than re-implementing the order", () => {
   // The permission calls must sit inside authorise, unconditionally.
   assert.match(code, /await requireQuoteAccess\(t\.recordId, "deliveries\.manage"\);/);
   assert.match(code, /await requireJobCardAccess\(jobCardId, "jobcards\.manage"\);/);
+});
+
+/*
+ * FAIL CLOSED ON DENIAL. requireQuoteAccess does not return false when access is
+ * refused — it calls redirect(), which throws. Treating every throw as "could
+ * not check" therefore let a signed-in person with no access to a record write
+ * persistent log rows naming any record id, carrying any browser-supplied text.
+ * The earlier refusal test only covered an explicit `false`, which production
+ * authorisation never returns.
+ */
+test("a denial that THROWS suppresses the row, exactly like an explicit refusal", async () => {
+  const { d, rows } = deps({ authorise: async () => redirectDenial() });
+  const outcome = await recordPhotoUploadFailure(d, TARGET, DETAIL);
+
+  assert.equal(outcome.authorised, false, "a thrown redirect is a refusal, not an unknown");
+  assert.equal(outcome.logged, false);
+  assert.deepEqual(rows, [], "a denied caller must not be able to write rows");
+});
+
+test("an unrecognised failure is a refusal, not a free pass", async () => {
+  // Anything nobody thought about — a bug, a new error type, a database fault —
+  // must close rather than open. Only the workspace failure is recognised, and it
+  // is recognised POSITIVELY.
+  for (const thrower of [
+    () => { throw new Error("something else entirely"); },
+    () => { throw "a bare string"; },
+    () => { throw null; },
+  ]) {
+    const { d, rows } = deps({ authorise: async () => thrower() });
+    const outcome = await recordPhotoUploadFailure(d, TARGET, DETAIL);
+    assert.equal(outcome.logged, false, "an unrecognised throw must not write a row");
+    assert.deepEqual(rows, []);
+  }
+});
+
+test("only the workspace failure still reaches the log as unknown", async () => {
+  // The whole point of the previous fix must survive this one.
+  const { d, rows } = deps({ resolveTenant: noWorkspace, authorise: noWorkspace });
+  const outcome = await recordPhotoUploadFailure(d, TARGET, DETAIL);
+
+  assert.equal(outcome.logged, true);
+  assert.equal(outcome.authorised, null);
+  assert.match(rows[0].context, /authorised=unknown/);
+});
+
+test("the action recognises the workspace failure by type, not by message", () => {
+  const code = src("src/app/actions/photoUploads.ts");
+  assert.match(code, /isWorkspaceFailure: \(error\) => error instanceof TenantScopeError/,
+    "matching on a message would break the moment the wording changed");
 });
