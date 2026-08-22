@@ -467,6 +467,57 @@ export async function deleteFile(ref: string): Promise<void> {
   await fs.unlink(path.join(UPLOAD_DIR, ref)).catch(() => {});
 }
 
+/**
+ * May this stored object be deleted as cleanup for `requiredPrefix`?
+ *
+ * Pure, so the rule can be exercised directly rather than inferred from a call
+ * site. Both halves are load-bearing: ownership answers "is this the caller's
+ * workspace's object", the prefix answers "is it the one this record just
+ * staged" — a caller must not be able to tidy away an unrelated file of its own.
+ */
+export function mayCleanUpStoredBlob(pathname: string, tenantId: string, requiredPrefix: string): boolean {
+  if (!requiredPrefix) return false;
+  return blobBelongsToTenant(pathname, tenantId) && pathname.startsWith(requiredPrefix);
+}
+
+/**
+ * Delete a staged upload ONLY after proving it belongs to `tenantId` and to the
+ * record identified by `requiredPrefix`.
+ *
+ * WHY THIS EXISTS, and why cleanup must never call {@link deleteFile} directly
+ * on a client-supplied URL. The register* actions take blob URLs from the
+ * browser, verify each with {@link assertOwnedBlob}, and file it. Verification
+ * failure threw into a catch whose job was to tidy up the staged object — so a
+ * URL REJECTED as belonging to another workspace was handed straight to
+ * deleteFile, which has no tenant check and deletes with the application's own
+ * credentials. The cleanup path therefore undid the very protection the
+ * ownership check had just applied: any user who could stage a photo on their
+ * own record could delete another workspace's file by pasting its URL.
+ *
+ * Ordering it as verify-then-delete inside one helper is deliberate. A boolean
+ * flag at the call site would work until someone restructured the try/catch;
+ * here a caller cannot express the unsafe operation at all.
+ *
+ * `io` is a test seam in the style of {@link photoBlobAccess}'s `env` — the
+ * refusal path is the security boundary, so it has to be executable in a test
+ * without a Blob store to talk to.
+ */
+export async function deleteOwnedBlob(
+  ref: string,
+  tenantId: string,
+  requiredPrefix: string,
+  io: {
+    verify: (ref: string, tenantId?: string | null) => Promise<OwnedBlob>;
+    remove: (ref: string) => Promise<void>;
+  } = { verify: assertOwnedBlob, remove: deleteFile },
+): Promise<void> {
+  const blob = await io.verify(ref, tenantId);
+  if (!mayCleanUpStoredBlob(blob.pathname, tenantId, requiredPrefix)) {
+    throw new Error("Refusing to delete a stored file that is not bound to this record");
+  }
+  await io.remove(ref);
+}
+
 const storeTokens = () => ({ publicToken: publicToken(), privateToken: privateToken() });
 
 /** Whether the store we currently WRITE to has a usable token (see backupBlobs). */

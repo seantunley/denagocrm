@@ -8,7 +8,7 @@ import { customerRecordTenantId } from "@/lib/customerRecordTenant";
 import { requireQuoteAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { emitLeadJourneyEvent } from "@/lib/leadJourneyEvents";
-import { assertOwnedBlob, deleteFile, saveFile } from "@/lib/storage";
+import { assertOwnedBlob, deleteFile, deleteOwnedBlob, saveFile } from "@/lib/storage";
 import { logError } from "@/lib/errorLog";
 import { checkUploadPayload, MAX_PHOTOS } from "@/lib/photoBudget";
 import { contactName } from "@/lib/format";
@@ -202,6 +202,9 @@ export async function registerDeliveryPhotos(
     if (urls.length === 0) refuse("Choose at least one photo.");
     if (urls.length > MAX_PHOTOS) refuse(`Upload up to ${MAX_PHOTOS} delivery photos at a time.`);
 
+    // One definition, used to admit the photo AND to bound the cleanup below.
+    // Two copies of this string would let the two checks drift apart.
+    const ownPrefix = `uploads/${quote.tenantId}/delivery/${quote.id}/`;
     let saved = 0;
     let failed = 0;
     for (const [index, url] of urls.entries()) {
@@ -209,7 +212,7 @@ export async function registerDeliveryPhotos(
         const blob = await assertOwnedBlob(url, quote.tenantId);
         if (!blob.contentType.startsWith("image/")) throw new Error("Stored delivery evidence is not an image.");
         if (blob.size <= 0 || blob.size > MAX_FILE) throw new Error("Stored delivery photo is outside the 4 MB limit.");
-        if (!blob.pathname.startsWith(`uploads/${quote.tenantId}/delivery/${quote.id}/`)) {
+        if (!blob.pathname.startsWith(ownPrefix)) {
           throw new Error("Stored delivery photo is not bound to this quote.");
         }
         await prisma.document.create({
@@ -234,7 +237,12 @@ export async function registerDeliveryPhotos(
           `quote=${quoteId} photo=${index + 1}/${urls.length}`,
           { tenantId: quote.tenantId, alert: false },
         );
-        await deleteFile(url).catch(async (cleanupError) => {
+        // NOT deleteFile(url). The failure being handled here may be that the
+        // URL belongs to ANOTHER workspace, and deleteFile has no tenant check —
+        // it would delete with our own credentials, undoing the refusal that put
+        // us in this catch. deleteOwnedBlob re-proves ownership and the record
+        // binding first, and refuses instead of deleting when either fails.
+        await deleteOwnedBlob(url, quote.tenantId, ownPrefix).catch(async (cleanupError) => {
           await logError("delivery-photo-cleanup", cleanupError, `quote=${quoteId} photo=${index + 1}`, {
             tenantId: quote.tenantId,
             alert: false,

@@ -13,7 +13,7 @@ import { sendReviewRequest } from "@/lib/reviewRequests";
 import { triggerSurvey } from "@/lib/surveys";
 import { CLOSED_REQUEST_STATUSES } from "@/lib/signing/status";
 import { MAX_PHOTOS, MAX_PHOTO_BYTES, checkUploadPayload } from "@/lib/photoBudget";
-import { assertOwnedBlob, saveFile, deleteFile } from "@/lib/storage";
+import { assertOwnedBlob, saveFile, deleteFile, deleteOwnedBlob } from "@/lib/storage";
 import { logError } from "@/lib/errorLog";
 import { parseRands } from "@/lib/format";
 import { Prisma } from "@prisma/client";
@@ -62,6 +62,9 @@ export async function registerJobCardPhotos(
     if (urls.length === 0) refuse("Choose at least one photo.");
     if (urls.length > MAX_PHOTOS) refuse(`Upload up to ${MAX_PHOTOS} job-card photos at a time.`);
 
+    // One definition, used to admit the photo AND to bound the cleanup below.
+    // Two copies of this string would let the two checks drift apart.
+    const ownPrefix = `uploads/${jobCard.tenantId}/${category === "checkout" ? "jobcard-checkout" : "jobcard"}/${jobCard.id}/`;
     let saved = 0;
     let failed = 0;
     for (const [index, url] of urls.entries()) {
@@ -69,7 +72,7 @@ export async function registerJobCardPhotos(
         const blob = await assertOwnedBlob(url, jobCard.tenantId);
         if (!blob.contentType.startsWith("image/")) throw new Error("Stored job-card evidence is not an image.");
         if (blob.size <= 0 || blob.size > MAX_PHOTO_BYTES) throw new Error("Stored job-card photo is outside the 4 MB limit.");
-        if (!blob.pathname.startsWith(`uploads/${jobCard.tenantId}/${category === "checkout" ? "jobcard-checkout" : "jobcard"}/${jobCard.id}/`)) {
+        if (!blob.pathname.startsWith(ownPrefix)) {
           throw new Error("Stored job-card photo is not bound to this job card.");
         }
         await prisma.document.create({
@@ -94,7 +97,12 @@ export async function registerJobCardPhotos(
           `jobCard=${jobCardId} photo=${index + 1}/${urls.length}`,
           { tenantId: jobCard.tenantId, alert: false },
         );
-        await deleteFile(url).catch(async (cleanupError) => {
+        // NOT deleteFile(url). The failure being handled here may be that the
+        // URL belongs to ANOTHER workspace, and deleteFile has no tenant check —
+        // it would delete with our own credentials, undoing the refusal that put
+        // us in this catch. deleteOwnedBlob re-proves ownership and the record
+        // binding first, and refuses instead of deleting when either fails.
+        await deleteOwnedBlob(url, jobCard.tenantId, ownPrefix).catch(async (cleanupError) => {
           await logError("jobcard-photo-cleanup", cleanupError, `jobCard=${jobCardId} photo=${index + 1}`, {
             tenantId: jobCard.tenantId,
             alert: false,
