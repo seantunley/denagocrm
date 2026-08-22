@@ -1,6 +1,7 @@
 import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
 import { NextResponse } from "next/server";
 import { actingTenantId } from "@/lib/actingTenant";
+import { withActingStaffScope } from "@/lib/actingScope";
 import { basePrisma } from "@/lib/db";
 import { logError } from "@/lib/errorLog";
 import { photoBlobToken, photoUploadNeedsStaffSession } from "@/lib/photoBlob";
@@ -33,40 +34,57 @@ function parseCompletionOwnership(raw: string | null | undefined): Partial<Photo
 
 export async function POST(request: Request) {
   const body = (await request.json()) as HandleUploadBody;
-  let tenantId: string | null = null;
+
+  /*
+   * THE TOKEN EXCHANGE NEEDS AN ENCLOSING STAFF SCOPE.
+   *
+   * This route is a fresh request, not a descendant of the page that rendered the
+   * camera. Calling actingTenantId() directly therefore repeats the production
+   * failure that blocked getPhotoUploadPlan: under enforcement there is no ambient
+   * scope in this frame, so writeTenantId() refuses before the session rung can be
+   * consulted.
+   *
+   * withActingStaffScope is the existing Server-Action/API recovery boundary. It
+   * fully revalidates the signed staff session, never replaces an existing scope,
+   * and binds the recovered tenant AROUND everything below it so record guards and
+   * guarded Prisma reads inherit the same workspace. If recovery cannot establish
+   * one, actingTenantId still refuses and this remains a 401 — no fallback tenant,
+   * no widened access.
+   *
+   * The Vercel upload-completed callback is intentionally NOT wrapped: it has no
+   * staff cookie. Its authority is the Vercel signature plus the signed token
+   * payload minted below.
+   */
+  if (photoUploadNeedsStaffSession(body?.type)) {
+    return withActingStaffScope(async () => {
+      let tenantId: string;
+      try {
+        tenantId = await actingTenantId();
+      } catch {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      }
+      return handlePhotoUpload(request, body, tenantId);
+    });
+  } else if (body?.type === "blob.upload-completed" && !request.headers.get("x-vercel-signature")) {
+    // handleUpload refuses an unsigned callback anyway; refusing first is what
+    // keeps that rejection out of the persistent System Log.
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  return handlePhotoUpload(request, body, null);
+}
+
+async function handlePhotoUpload(
+  request: Request,
+  body: HandleUploadBody,
+  tenantId: string | null,
+) {
   let failureContext = `event=${String(body?.type ?? "unknown")}`;
   const failureScope = body?.type === "blob.upload-completed"
     ? "photo-upload-callback"
     : "photo-upload-token";
 
-  /*
-   * REFUSE UNIDENTIFIED CALLERS HERE, BEFORE ANYTHING IS RECORDED.
-   *
-   * This route is in PUBLIC_PATHS so Vercel's signed callback can reach it — a
-   * server-to-server request with no session cookie. That necessarily means an
-   * anonymous caller can reach it too, and every failure below writes a
-   * persistent ErrorLog row. Left inside the try, the endpoint was a way for
-   * anyone on the internet to fill a tenant's System Log with unbounded rows by
-   * POSTing nonsense in a loop.
-   *
-   * The browser token exchange carries the staff session; the callback carries a
-   * signature instead. Neither present means there is nobody to attribute the
-   * failure to, so it is refused without a trace rather than logged.
-   */
-  if (photoUploadNeedsStaffSession(body?.type)) {
-    try {
-      tenantId = await actingTenantId();
-    } catch {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-  } else if (body?.type === "blob.upload-completed" && !request.headers.get("x-vercel-signature")) {
-    // handleUpload refuses an unsigned callback anyway; refusing first is what
-    // keeps that refusal out of the database.
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
   try {
-
     const response = await handleUpload({
       request,
       body,
