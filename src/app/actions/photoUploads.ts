@@ -2,6 +2,7 @@
 
 import { asActionResult } from "@/lib/actionResult";
 import { actingTenantId } from "@/lib/actingTenant";
+import { withActingStaffScope } from "@/lib/actingScope";
 import { TenantScopeError } from "@/lib/tenantGuard";
 import { getCurrentUser, requireUser } from "@/lib/auth";
 import { recordPhotoUploadFailure, type PhotoFailureDetail } from "@/lib/photoFailureReport";
@@ -16,7 +17,7 @@ export type PhotoUploadTarget = {
   jobCardId?: string;
 };
 
-
+type StagedPhoto = { url: string };
 
 /**
  * How this deployment can accept photos.
@@ -73,8 +74,7 @@ export async function getPhotoUploadPlan(): Promise<PhotoUploadPlan | { error: s
    * requireUser() is the gate that belongs here, and it stays: this is
    * staff-only. The real per-record authorisation happens where a decision is
    * actually made — /api/photos/upload mints the token and checks access to that
-   * specific record, and register*Photos re-checks before filing anything. Both
-   * need a workspace and both resolve one for themselves.
+   * specific record, and the scoped finalizers re-check before filing anything.
    */
   let plan: PhotoUploadPlan | null = null;
   const outcome = await asActionResult(async () => {
@@ -94,55 +94,137 @@ export async function getPhotoUploadPlan(): Promise<PhotoUploadPlan | { error: s
  * route — so the browser is the only witness. Record a sanitised event, without
  * accepting arbitrary client log entries.
  *
- * The decision logic lives in lib/photoFailureReport.ts with its effects
- * injected, because the interesting behaviour here is what happens when those
- * effects THROW, and that cannot be established by reading this file top to
- * bottom. See its comment for why the order changed.
+ * The whole reporter runs inside the recovered staff scope when one exists. A
+ * Server Action cannot inherit the page's ALS frame, and entering a scope inside
+ * a nested guard does not flow back UP into this action. Binding an enclosing
+ * frame here is what makes the tenant available to every call below. If recovery
+ * cannot establish a valid staff workspace, withActingStaffScope deliberately
+ * runs the body bare and the existing fail-closed/unknown logic still applies.
  */
 export async function reportPhotoUploadFailure(
   target: PhotoUploadTarget,
   detail: PhotoFailureDetail,
 ) {
-  await recordPhotoUploadFailure(
-    {
-      // Identity WITHOUT a workspace. getCurrentUser resolves the person and
-      // enters their scope if one exists, but does not demand that one does —
-      // which is what lets this run in the case worth reporting.
-      identify: () => getCurrentUser(),
-      resolveTenant: actingTenantId,
-      authorise: async (t, tenantId) => {
-        // Permission first, and never conditional: this is what stops the action
-        // being a way to write arbitrary rows. The tenant-ownership re-check on
-        // top of it needs a tenant, so it is skipped when there is not one —
-        // recorded as "unknown" rather than silently treated as a pass.
-        if (t.kind === "delivery") {
-          await requireQuoteAccess(t.recordId, "deliveries.manage");
+  return withActingStaffScope(async () => {
+    await recordPhotoUploadFailure(
+      {
+        // Identity WITHOUT demanding a workspace. getCurrentUser resolves the
+        // person and enters their scope if one exists, but the reporter still has
+        // to handle the legitimate "workspace unresolved" diagnostic path.
+        identify: () => getCurrentUser(),
+        resolveTenant: actingTenantId,
+        authorise: async (t, tenantId) => {
+          // Permission first, and never conditional: this is what stops the action
+          // being a way to write arbitrary rows. The tenant-ownership re-check on
+          // top of it needs a tenant, so it is skipped when there is not one —
+          // recorded as "unknown" rather than silently treated as a pass.
+          if (t.kind === "delivery") {
+            await requireQuoteAccess(t.recordId, "deliveries.manage");
+            if (!tenantId) return true;
+            const owned = await basePrisma.quote.findFirst({ where: { id: t.recordId, tenantId }, select: { id: true } });
+            return Boolean(owned);
+          }
+          const jobCardId = t.kind === "inspection" ? t.jobCardId : t.recordId;
+          if (!jobCardId) return false;
+          await requireJobCardAccess(jobCardId, "jobcards.manage");
           if (!tenantId) return true;
-          const owned = await basePrisma.quote.findFirst({ where: { id: t.recordId, tenantId }, select: { id: true } });
+          if (t.kind === "inspection") {
+            const owned = await basePrisma.jobCardInspectionItem.findFirst({
+              where: { id: t.recordId, jobCardId, tenantId },
+              select: { id: true },
+            });
+            return Boolean(owned);
+          }
+          const owned = await basePrisma.jobCard.findFirst({ where: { id: jobCardId, tenantId }, select: { id: true } });
           return Boolean(owned);
-        }
-        const jobCardId = t.kind === "inspection" ? t.jobCardId : t.recordId;
-        if (!jobCardId) return false;
-        await requireJobCardAccess(jobCardId, "jobcards.manage");
-        if (!tenantId) return true;
-        if (t.kind === "inspection") {
-          const owned = await basePrisma.jobCardInspectionItem.findFirst({
-            where: { id: t.recordId, jobCardId, tenantId },
-            select: { id: true },
-          });
-          return Boolean(owned);
-        }
-        const owned = await basePrisma.jobCard.findFirst({ where: { id: jobCardId, tenantId }, select: { id: true } });
-        return Boolean(owned);
+        },
+        // Only a TenantScopeError means "could not establish the workspace".
+        // requireQuoteAccess denies by calling redirect(), which throws, so any
+        // other throw here is a refusal and must suppress the row.
+        isWorkspaceFailure: (error) => error instanceof TenantScopeError,
+        log: ({ message, context, tenantId }) =>
+          logError("photo-upload-client", new Error(message), context, { tenantId, alert: false }),
       },
-      // Only a TenantScopeError means "could not establish the workspace".
-      // requireQuoteAccess denies by calling redirect(), which throws, so any
-      // other throw here is a refusal and must suppress the row.
-      isWorkspaceFailure: (error) => error instanceof TenantScopeError,
-      log: ({ message, context, tenantId }) =>
-        logError("photo-upload-client", new Error(message), context, { tenantId, alert: false }),
-    },
-    target,
-    detail,
-  );
+      target,
+      detail,
+    );
+  });
+}
+
+/*
+ * PHOTO SERVER ACTIONS NEED AN ENCLOSING STAFF SCOPE.
+ *
+ * The browser-to-Blob flow crosses request boundaries three times: plan, token,
+ * then finalizer. The form fallback is a Server Action too. The underlying
+ * fulfilment/job-card actions correctly authorise their records, but several of
+ * them call actingTenantId() or guarded Prisma after the action has already lost
+ * the page's AsyncLocalStorage frame. A guard that recovers a scope inside its own
+ * callee cannot make that scope flow back up into the action frame.
+ *
+ * These thin entrypoints bind the recovered staff scope AROUND the whole existing
+ * action. They add no authority: recoverStaffScopeFromSession fully revalidates
+ * the session, an existing narrower/system scope is never replaced, and if no
+ * valid scope can be recovered the underlying action runs bare and fails closed
+ * exactly as before. All record permissions and Blob ownership checks remain in
+ * the underlying actions; this only supplies the execution context they require.
+ */
+export async function registerDeliveryPhotos(recordId: string, staged: StagedPhoto[]) {
+  return withActingStaffScope(async () => {
+    const actions = await import("./fulfilment");
+    return actions.registerDeliveryPhotos(recordId, staged);
+  });
+}
+
+export async function uploadDeliveryPhotos(recordId: string, formData: FormData) {
+  return withActingStaffScope(async () => {
+    const actions = await import("./fulfilment");
+    return actions.uploadDeliveryPhotos(recordId, formData);
+  });
+}
+
+export async function registerJobCardPhotos(
+  recordId: string,
+  staged: StagedPhoto[],
+  category: "checkin" | "checkout" = "checkin",
+) {
+  return withActingStaffScope(async () => {
+    const actions = await import("./jobcards");
+    return actions.registerJobCardPhotos(recordId, staged, category);
+  });
+}
+
+export async function uploadJobCardPhotos(recordId: string, formData: FormData) {
+  return withActingStaffScope(async () => {
+    const actions = await import("./jobcards");
+    return actions.uploadJobCardPhotos(recordId, formData);
+  });
+}
+
+export async function uploadCheckoutPhotos(recordId: string, formData: FormData) {
+  return withActingStaffScope(async () => {
+    const actions = await import("./jobcards");
+    return actions.uploadCheckoutPhotos(recordId, formData);
+  });
+}
+
+export async function registerInspectionPhoto(
+  recordId: string,
+  jobCardId: string,
+  staged: StagedPhoto[],
+) {
+  return withActingStaffScope(async () => {
+    const actions = await import("./jobcards");
+    return actions.registerInspectionPhoto(recordId, jobCardId, staged);
+  });
+}
+
+export async function uploadInspectionPhoto(
+  recordId: string,
+  jobCardId: string,
+  formData: FormData,
+) {
+  return withActingStaffScope(async () => {
+    const actions = await import("./jobcards");
+    return actions.uploadInspectionPhoto(recordId, jobCardId, formData);
+  });
 }
