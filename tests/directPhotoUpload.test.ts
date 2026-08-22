@@ -54,8 +54,23 @@ test("Vercel completion callbacks never require a staff session", () => {
   assert.equal(photoUploadNeedsStaffSession("anything-else"), false);
 
   const route = src("src/app/api/photos/upload/route.ts");
-  assert.match(route, /if \(photoUploadNeedsStaffSession\(body\?\.type\)\) \{\s*tenantId = await actingTenantId\(\);\s*\}/);
-  assert.match(route, /body\?\.type === "blob\.upload-completed"\s*\? "photo-upload-callback"/);
+  // actingTenantId() is resolved for the TOKEN branch only, and its refusal is
+  // now caught so an anonymous caller is turned away rather than logged (see
+  // photoUploadCallbackReach.test.ts). The property this test guards is
+  // unchanged: the resolution stays inside the staff-session branch, so the
+  // callback — which has no session — never reaches it.
+  const guarded = route.slice(
+    route.indexOf("if (photoUploadNeedsStaffSession(body?.type)) {"),
+    route.indexOf("const response = await handleUpload("),
+  );
+  assert.ok(guarded.length > 0, "the staff-session branch is gone — was the route restructured?");
+  assert.match(guarded, /tenantId = await actingTenantId\(\);/, "the token branch must still resolve the acting workspace");
+  assert.equal(
+    (route.match(/await actingTenantId\(\)/g) ?? []).length,
+    1,
+    "actingTenantId must be called once, inside the staff-session branch — a second call would gate the callback too",
+  );
+  assert.match(route, /body\?\.type === "blob\.upload-completed"\s*\n?\s*\? "photo-upload-callback"/);
 });
 
 test("direct photos use the configured public Blob store", () => {
