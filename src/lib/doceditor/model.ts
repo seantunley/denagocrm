@@ -30,9 +30,23 @@ import { isSafeCssColor } from "./css";
 const colorField = (fallback: string) =>
   z.string().default(fallback).transform((value) => (isSafeCssColor(value) ? value : fallback));
 
+/**
+ * Page boxes in TWO units, and both are load-bearing.
+ *
+ * `w`/`h` are the rounded CSS pixel sizes the editor lays out and measures with —
+ * whole pixels, because a canvas that positions overlay fields on fractional
+ * pixels is worse than one that is a third of a millimetre out.
+ *
+ * `cssH` is the EXACT physical height, and it is what the printed page box must
+ * be derived from. A4 is 297mm, which is 1122.52 CSS px at 96dpi — not 1123. The
+ * page div took its min-height from the rounded number, so every document was
+ * half a pixel taller than the sheet it printed on and Chrome broke EVERY one of
+ * them onto a second, near-empty page. Rounding down instead would leave a
+ * visible sliver of unusable paper; stating the real measurement costs nothing.
+ */
 export const PAGE_SIZES = {
-  A4: { w: 794, h: 1123 }, // px @ 96dpi
-  Letter: { w: 816, h: 1056 },
+  A4: { w: 794, h: 1123, cssH: "297mm" }, // px @ 96dpi; cssH is exact
+  Letter: { w: 816, h: 1056, cssH: "11in" },
 } as const;
 export type PageSizeName = keyof typeof PAGE_SIZES;
 

@@ -307,7 +307,23 @@ function pageHtml(page: DocumentPage, doc: DocumentModel, ctx: RenderCtx, logoDa
     `<div style="position:absolute;left:${fb.x - doc.style.margin}px;top:${fb.y - doc.style.margin}px;width:${fb.width}px">${blockHtml(fb.block, ctx, doc.style, logoDataUri)}</div>`
   ).join("");
   const size = PAGE_SIZES[doc.style.pageSize];
-  return `<div class="doc-page" style="position:relative;min-height:${size.h - doc.style.margin * 2}px;${isLast ? "" : "page-break-after:always;"}">${rows}${fields}${floats}${stamped}</div>`;
+  /*
+   * EVERY DOCUMENT PRINTED ONTO A SECOND, NEARLY EMPTY PAGE. Two separate causes,
+   * and the first hid the second.
+   *
+   * `display:flow-root` is the one that matters. The page box is exactly the
+   * printable height, and the LAST block inside it — a terms box, a footer, a
+   * paragraph — carries a bottom margin. With nothing establishing a block
+   * formatting context here, that margin collapsed THROUGH the bottom edge and
+   * added itself to the document's height, so the sheet was a few pixels too tall
+   * and Chrome broke it. It was invisible from script: scrollHeight excludes a
+   * collapsed-out margin, so the box measured as fitting while it printed as not.
+   *
+   * The height is a calc() from the EXACT sheet size rather than the rounded
+   * pixel one, because A4 is 1122.52 CSS px and not 1123 — `1123 - margins` was
+   * half a pixel over on its own.
+   */
+  return `<div class="doc-page" style="position:relative;display:flow-root;min-height:calc(${size.cssH} - ${doc.style.margin * 2}px);${isLast ? "" : "page-break-after:always;"}">${rows}${fields}${floats}${stamped}</div>`;
 }
 
 /**
@@ -423,6 +439,22 @@ export function renderDocumentHtml(
         padding: ${m}px;
         background: #ffffff;
         box-shadow: 0 1px 3px rgba(15, 23, 42, 0.2);
+      }
+      /*
+       * The header and footer are position:fixed because that is how a PRINTED
+       * document repeats them on every sheet. A browser window is one continuous
+       * scroll with nothing to repeat, so fixed just pins them to the window: the
+       * footer sat across the middle of whatever page you had scrolled to, and
+       * once the sheet became a centred column it also spanned wider than the
+       * paper. Put back in the flow at the sheet's width - shown once, bracketing
+       * the pages, instead of floating over them.
+       */
+      .doc-header, .doc-footer {
+        position: static;
+        width: ${size.w}px;
+        margin: 0 auto;
+        padding: 0 ${m}px;
+        background: #ffffff;
       }
     }
   </style></head><body>
