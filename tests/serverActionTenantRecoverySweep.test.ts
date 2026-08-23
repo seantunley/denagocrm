@@ -60,8 +60,15 @@ test("known-tenant public requests establish one enclosing callback scope", () =
     "dormant compatibility must stay unchanged");
   assert.match(body, /return runInTenantScope\(\{ tenantId, system: false \}, fn\);/,
     "enforcement needs a real enclosing async frame");
-  assert.doesNotMatch(body, /enterTenantScope\(\{ tenantId, system: false \}\)/,
-    "the known-tenant request helper must not return after a callee-only enterWith");
+
+  const legacyBootstrapAt = body.indexOf("if (!currentTenantScope()?.system)");
+  assert.ok(legacyBootstrapAt > 0,
+    "the legacy one-argument transition must stay behind the trusted system-scope gate");
+  const callbackPath = body.slice(0, legacyBootstrapAt);
+  assert.doesNotMatch(callbackPath, /enterTenantScope\(\{ tenantId, system: false \}\)/,
+    "the request callback path must not return after a callee-only enterWith");
+  assert.match(body.slice(legacyBootstrapAt), /enterTenantScope\(\{ tenantId, system: false \}\)/,
+    "the intentionally retained legacy transition remains available only after the system-scope gate");
 
   const routes = [
     "src/app/api/intake/route.ts",
