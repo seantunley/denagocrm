@@ -41,7 +41,7 @@ async function registrationForMode(mode: "crm" | "messages") {
   const reg = await navigator.serviceWorker.register(
     mode === "messages" ? MESSAGES_SW : ROOT_SW,
     mode === "messages"
-      ? { scope: "/messages/", updateViaCache: "none" }
+      ? { scope: "/messages", updateViaCache: "none" }
       : { scope: "/", updateViaCache: "none" },
   );
   void reg.update().catch(() => {});
@@ -71,9 +71,7 @@ async function waitUntilActive(reg: ServiceWorkerRegistration): Promise<void> {
 
 async function rootSubscription(): Promise<PushSubscription | null> {
   const reg = await navigator.serviceWorker.getRegistration(`${window.location.origin}/`);
-  if (!reg || !reg.scope.endsWith("/")) return null;
-  // A more-specific /messages/ registration also ends in '/', so identify the
-  // root registration by its exact scope URL.
+  if (!reg) return null;
   if (reg.scope !== `${window.location.origin}/`) return null;
   return reg.pushManager.getSubscription();
 }
