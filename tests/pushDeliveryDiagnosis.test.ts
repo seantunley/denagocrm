@@ -59,10 +59,11 @@ test("subscribing still needs no scope, because PushSubscription is a global mod
 
 test("Messages has its own service-worker registration and scope", () => {
   assert.match(register, /register\("\/messages-sw\.js"/);
-  assert.match(register, /scope: "\/messages\/"/);
+  assert.match(register, /scope: "\/messages"/);
+  assert.doesNotMatch(register, /scope: "\/messages\/"/);
   assert.match(register, /updateViaCache: "none"/);
   assert.match(toggle, /const MESSAGES_SW = "\/messages-sw\.js"/);
-  assert.match(toggle, /mode === "messages"[\s\S]*?scope: "\/messages\/"/);
+  assert.match(toggle, /mode === "messages"[\s\S]*?scope: "\/messages"/);
   assert.match(messagesWorker, /self\.addEventListener\("push"/);
   assert.match(messagesWorker, /messages-192\.png/);
 });
