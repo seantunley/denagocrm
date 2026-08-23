@@ -165,11 +165,85 @@ test("the ids are re-verified against the quote, never trusted", () => {
   const fulfilment = readFileSync("src/app/actions/fulfilment.ts", "utf8");
   assert.match(fulfilment, /hostType: "quote\.delivery",\s*\n\s*hostId: quoteId,/, "scoped to THIS quote");
   assert.match(fulfilment, /completedAt: \{ not: null \}/, "and to completed runs only");
-  assert.match(fulfilment, /verified\.length !== new Set\(handoverRunIds\)\.size/, "a partial match must refuse");
+  // The de-duplication moved into `requestedRunIds` when the readiness gate was
+  // added, so both sides of this comparison could be reused by it.
+  assert.match(fulfilment, /verifiedRuns\.length !== requestedRunIds\.length/, "a partial match must refuse");
 });
 
 test("the note never re-derives the selection for itself", () => {
   const page = deliveryNoteSource;
   assert.match(page, /deliveryNoteRuns\(guidedRuns, quote\.deliveryHandoverRunIds\)/);
   assert.doesNotMatch(page, /latestRunByTemplate/, "a second copy of the rule is how the two drift apart");
+});
+
+/*
+ * THE GATE MUST HOLD FOR A DIRECT CALL, NOT ONLY THROUGH THE WRAPPER.
+ *
+ * markDelivered is an exported Server Action, which is a public POST endpoint. A
+ * stale legacy form or a hand-made request reaches it without going anywhere
+ * near completeGuidedDelivery — so a readiness check that lives only in the
+ * wrapper is optional, which is the same as absent. It would record a delivery
+ * as signed with an EMPTY deliveryHandoverRunIds and no checklist behind it.
+ *
+ * And a Server Action's arguments are deserialised from the request, so the run
+ * ids are client-supplied too. Re-verifying each id is necessary but not
+ * sufficient: a caller could pass one genuine run while a second configured
+ * checklist was still unfinished, and be recorded with partial evidence.
+ */
+test("the legacy delivery action enforces the guided gate itself", () => {
+  const fulfilment = readFileSync("src/app/actions/fulfilment.ts", "utf8");
+
+  assert.match(
+    fulfilment,
+    /prisma\.checklistTemplate\.findMany\(\{\s*\n\s*where: \{ tenantId, host: "quote\.delivery", active: true \}/,
+    "markDelivered must look up the tenant's own configured handover",
+  );
+  assert.match(
+    fulfilment,
+    /deliveryHandoverReadiness\(handoverTemplates, verifiedRuns\)/,
+    "and require the SAME readiness the guided wrapper does",
+  );
+  assert.match(fulfilment, /This delivery uses a guided handover\./, "with a refusal that says where to go");
+});
+
+test("readiness is judged on VERIFIED runs, never on what the caller claimed", () => {
+  const fulfilment = readFileSync("src/app/actions/fulfilment.ts", "utf8");
+  const gate = fulfilment.slice(fulfilment.indexOf("const requestedRunIds"));
+
+  // The database lookup must come first, and readiness must be judged on its
+  // result — otherwise a caller naming ids it does not own satisfies the gate.
+  const verify = gate.indexOf("prisma.checklistRun.findMany");
+  const readiness = gate.indexOf("deliveryHandoverReadiness(");
+  assert.ok(verify !== -1 && verify < readiness, "verify before judging readiness");
+  assert.match(gate, /hostId: quoteId,/, "scoped to this quote");
+  assert.match(gate, /completedAt: \{ not: null \}/, "completed runs only");
+  assert.match(
+    gate,
+    /verifiedRuns\.length !== requestedRunIds\.length/,
+    "an id that does not resolve must refuse, not be dropped",
+  );
+});
+
+test("a tenant with no configured handover keeps the legacy flow", () => {
+  // The gate is scoped to what the tenant actually configured. No active
+  // template means no guided handover, and proof-of-delivery is untouched.
+  const fulfilment = readFileSync("src/app/actions/fulfilment.ts", "utf8");
+  assert.match(fulfilment, /if \(handoverTemplates\.length > 0\) \{/, "the gate must be conditional on configuration");
+
+  // Stated as behaviour too: with no templates, readiness reports unconfigured
+  // rather than complete, so nothing here can read it as a silent pass.
+  assert.deepEqual(deliveryHandoverReadiness([], []), {
+    configured: false,
+    ready: false,
+    missingTemplateIds: [],
+  });
+});
+
+test("a partial set of genuine runs is still refused", () => {
+  // The case re-verification alone would have let through.
+  const templates = [{ id: "tpl_a" }, { id: "tpl_b" }];
+  const onlyOneDone = [{ templateId: "tpl_a", completedAt: new Date() }];
+  const readiness = deliveryHandoverReadiness(templates, onlyOneDone);
+  assert.equal(readiness.ready, false);
+  assert.deepEqual(readiness.missingTemplateIds, ["tpl_b"]);
 });

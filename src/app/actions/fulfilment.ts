@@ -14,6 +14,7 @@ import { checkUploadPayload, MAX_PHOTOS } from "@/lib/photoBudget";
 import { contactName } from "@/lib/format";
 import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { isModuleEnabled, requireModuleEnabled } from "@/lib/modules/enabled";
+import { deliveryHandoverReadiness } from "@/lib/checklists/deliveryHandover";
 
 const MAX_FILE = 4 * 1024 * 1024;
 const QUOTE_GONE = "This quote is no longer available in this workspace.";
@@ -338,15 +339,33 @@ export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) 
 /**
  * `handoverRunIds` — the guided checklist runs the customer is signing BESIDE.
  *
- * Passed server-to-server by completeGuidedDelivery, never off the form: this is
- * evidence, and a value the browser could set is not evidence. It is re-verified
- * here against the quote and the acting tenant anyway, because a caller inside
- * the process is still a caller.
+ * THIS IS AN EXPORTED SERVER ACTION, WHICH IS A PUBLIC POST ENDPOINT, AND ITS
+ * ARGUMENTS COME FROM THE CLIENT. An earlier version of this comment claimed the
+ * ids were "passed server-to-server, never off the form" — that is wrong twice
+ * over. A stale legacy form, or a hand-made request, can call this directly
+ * without going anywhere near completeGuidedDelivery; and a Server Action's
+ * arguments are deserialised from the request, so a caller can supply this third
+ * parameter as freely as any form field.
+ *
+ * So the guided-handover gate cannot live only in completeGuidedDelivery. It is
+ * enforced HERE, against the database, for every caller:
+ *
+ *  - every id must be a COMPLETED run of THIS quote's delivery handover, in the
+ *    acting tenant — a caller cannot name another workspace's run, or an
+ *    unfinished one; and
+ *  - when the tenant has any ACTIVE quote.delivery template, the verified runs
+ *    must satisfy deliveryHandoverReadiness — every configured checklist has one.
+ *
+ * Re-verification alone was not enough: a crafted call could pass one genuine
+ * run id while a second configured checklist was still unfinished, and be
+ * recorded as a signed handover carrying partial evidence.
+ *
+ * A tenant with no active template is the legacy flow, unchanged: no ids, empty
+ * column, and the delivery note falls back exactly as it does for deliveries
+ * completed before this existed.
  *
  * Written in the SAME updateMany that records the delivery, so a signed handover
- * can never exist without the runs it was signed against. The legacy flow passes
- * nothing and the column stays empty, which is what the delivery note falls back
- * on for deliveries completed before this existed.
+ * can never exist without the runs it was signed against.
  */
 export async function markDelivered(
   quoteId: string,
@@ -407,23 +426,53 @@ export async function markDelivered(
      * rather than signed against a partial set — a delivery note showing three of
      * four checklists is worse than one that refuses to be produced.
      */
-    let deliveryHandoverRunIds: string[] = [];
-    if (handoverRunIds?.length) {
-      const verified = await prisma.checklistRun.findMany({
+    const requestedRunIds = [...new Set(handoverRunIds ?? [])];
+    let verifiedRuns: { id: string; templateId: string; completedAt: Date | null }[] = [];
+    if (requestedRunIds.length) {
+      verifiedRuns = await prisma.checklistRun.findMany({
         where: {
-          id: { in: [...new Set(handoverRunIds)] },
+          id: { in: requestedRunIds },
           tenantId,
           hostType: "quote.delivery",
           hostId: quoteId,
           completedAt: { not: null },
         },
-        select: { id: true },
+        select: { id: true, templateId: true, completedAt: true },
       });
-      if (verified.length !== new Set(handoverRunIds).size) {
+      if (verifiedRuns.length !== requestedRunIds.length) {
         refuse("The handover checklists could not be confirmed. Reload the delivery and try again.");
       }
-      deliveryHandoverRunIds = verified.map((run) => run.id);
     }
+
+    /*
+     * THE GUIDED GATE, ENFORCED HERE RATHER THAN ONLY IN THE WRAPPER.
+     *
+     * completeGuidedDelivery checks readiness before delegating, but this action
+     * is exported and therefore reachable without it — by a stale legacy form or
+     * a hand-made request. Checking only in the wrapper leaves the invariant
+     * optional, which is the same as not having it.
+     *
+     * Scoped to what the tenant has actually configured: no active template means
+     * no guided handover, and the legacy proof-of-delivery flow is untouched.
+     */
+    const handoverTemplates = await prisma.checklistTemplate.findMany({
+      where: { tenantId, host: "quote.delivery", active: true },
+      select: { id: true, name: true },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+    });
+    if (handoverTemplates.length > 0) {
+      const readiness = deliveryHandoverReadiness(handoverTemplates, verifiedRuns);
+      if (!readiness.ready) {
+        const missing = handoverTemplates
+          .filter((template) => readiness.missingTemplateIds.includes(template.id))
+          .map((template) => template.name);
+        refuse(
+          `This delivery uses a guided handover. Complete ${missing.length === 1 ? `“${missing[0]}”` : missing.join(", ")} and sign from the delivery screen.`,
+        );
+      }
+    }
+
+    const deliveryHandoverRunIds = verifiedRuns.map((run) => run.id);
 
     const updated = await prisma.quote.updateMany({
       where: { id: quoteId, tenantId },
