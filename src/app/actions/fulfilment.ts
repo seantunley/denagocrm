@@ -383,42 +383,18 @@ export async function markDelivered(
     if (!quote) refuse(QUOTE_GONE);
     if (!quote.deliveryScheduledFor) refuse("Schedule the delivery before marking it delivered.");
     if (quote.deliveredAt) refuse("This delivery is already marked as delivered.");
-    const file = pickFile(formData);
-    if (file && file.size > MAX_FILE) refuse("That delivery note is larger than 4 MB.");
-    if (file) {
-      await attachStageDocument(quoteId, quote.contactId, "delivery-note", `Delivery note — Q-${quote.number} — ${file.name}`, file, user.id, quote.tenantId);
-    }
-
-    const deliveredByName = String(formData.get("deliveredByName") ?? "").trim() || null;
-    let deliveryChecklist: object | undefined;
-    try {
-      const parsed = JSON.parse(String(formData.get("checklist") ?? ""));
-      if (parsed && typeof parsed === "object") deliveryChecklist = parsed;
-    } catch {}
-    let deliverySignatureRef: string | null = null;
-    const signature = String(formData.get("signature") ?? "");
-    if (signature.startsWith("data:image/png;base64,")) {
-      const buffer = Buffer.from(signature.split(",")[1], "base64");
-      if (buffer.length > 0 && buffer.length <= MAX_FILE) {
-        // The customer's signature on THIS quote's delivery — the quote owns it,
-        // for the same reason its invoice and delivery note do.
-        deliverySignatureRef = await saveFile(buffer, `delivery-signature-Q${quote.number}.png`, "image/png", quote.tenantId);
-        await prisma.document.create({
-          data: {
-            tenantId: quote.tenantId,
-            fileName: `Delivery signature — Q-${quote.number}`,
-            storedName: deliverySignatureRef,
-            mimeType: "image/png",
-            sizeBytes: buffer.length,
-            contactId: quote.contactId,
-            quoteId,
-            tag: "delivery-signature",
-            uploadedById: user.id,
-          },
-        });
-      }
-    }
-
+    /*
+     * BEFORE ANY SIDE EFFECT, and that ordering is the point.
+     *
+     * Everything below this writes: the delivery-note file, the signature
+     * blob, and a Document row for each. Running the gate afterwards refused
+     * the request correctly and still left an uploaded blob and a Document row
+     * behind for a delivery that never completed — storage dirtied by a call
+     * that was rejected, with nothing to clean it up.
+     *
+     * The gate only reads, so it can run first at no cost, and a refusal then
+     * costs the caller nothing but the round trip.
+     */
     /*
      * Re-verified, not trusted. Each id must be a COMPLETED run of this quote's
      * own delivery handover, in this tenant. Anything that does not resolve is a
@@ -473,6 +449,44 @@ export async function markDelivered(
     }
 
     const deliveryHandoverRunIds = verifiedRuns.map((run) => run.id);
+
+    const file = pickFile(formData);
+    if (file && file.size > MAX_FILE) refuse("That delivery note is larger than 4 MB.");
+    if (file) {
+      await attachStageDocument(quoteId, quote.contactId, "delivery-note", `Delivery note — Q-${quote.number} — ${file.name}`, file, user.id, quote.tenantId);
+    }
+
+    const deliveredByName = String(formData.get("deliveredByName") ?? "").trim() || null;
+    let deliveryChecklist: object | undefined;
+    try {
+      const parsed = JSON.parse(String(formData.get("checklist") ?? ""));
+      if (parsed && typeof parsed === "object") deliveryChecklist = parsed;
+    } catch {}
+    let deliverySignatureRef: string | null = null;
+    const signature = String(formData.get("signature") ?? "");
+    if (signature.startsWith("data:image/png;base64,")) {
+      const buffer = Buffer.from(signature.split(",")[1], "base64");
+      if (buffer.length > 0 && buffer.length <= MAX_FILE) {
+        // The customer's signature on THIS quote's delivery — the quote owns it,
+        // for the same reason its invoice and delivery note do.
+        deliverySignatureRef = await saveFile(buffer, `delivery-signature-Q${quote.number}.png`, "image/png", quote.tenantId);
+        await prisma.document.create({
+          data: {
+            tenantId: quote.tenantId,
+            fileName: `Delivery signature — Q-${quote.number}`,
+            storedName: deliverySignatureRef,
+            mimeType: "image/png",
+            sizeBytes: buffer.length,
+            contactId: quote.contactId,
+            quoteId,
+            tag: "delivery-signature",
+            uploadedById: user.id,
+          },
+        });
+      }
+    }
+
+
 
     const updated = await prisma.quote.updateMany({
       where: { id: quoteId, tenantId },

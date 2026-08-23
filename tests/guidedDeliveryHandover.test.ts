@@ -247,3 +247,43 @@ test("a partial set of genuine runs is still refused", () => {
   assert.equal(readiness.ready, false);
   assert.deepEqual(readiness.missingTemplateIds, ["tpl_b"]);
 });
+
+/*
+ * A REFUSAL MUST NOT LEAVE ANYTHING BEHIND.
+ *
+ * The gate was correct but ran too late: markDelivered stored the optional
+ * delivery-note file and the customer-signature document BEFORE checking
+ * readiness. A stale or crafted legacy request was refused — and had already
+ * uploaded a blob and created Document rows for a delivery that never
+ * completed. Nothing cleans those up, so every rejected attempt left litter in
+ * storage attached to a real quote.
+ *
+ * The gate only reads, so it costs nothing to run first.
+ */
+test("the guided gate runs before markDelivered writes anything", () => {
+  const fulfilment = readFileSync("src/app/actions/fulfilment.ts", "utf8");
+  const start = fulfilment.indexOf("export async function markDelivered(");
+  assert.notEqual(start, -1, "markDelivered not found — was it renamed?");
+  const after = fulfilment.slice(start + 1);
+  const next = after.indexOf("\nexport async function ");
+  const body = next === -1 ? after : after.slice(0, next);
+
+  const gate = body.indexOf("deliveryHandoverReadiness(handoverTemplates, verifiedRuns)");
+  assert.notEqual(gate, -1, "the readiness gate must be inside markDelivered");
+
+  // Every side effect, by name. Each must come after the gate.
+  for (const [what, needle] of [
+    ["the delivery-note upload", "attachStageDocument("],
+    ["the signature blob", "saveFile("],
+    ["the signature Document row", "prisma.document.create("],
+    ["the delivery itself", "prisma.quote.updateMany("],
+  ] as const) {
+    const at = body.indexOf(needle);
+    assert.notEqual(at, -1, `${what} not found — has markDelivered been restructured?`);
+    assert.ok(at > gate, `${what} must not run before the guided gate — a refusal would leave it behind`);
+  }
+
+  // And the id verification must precede the gate that judges it.
+  const verify = body.indexOf("prisma.checklistRun.findMany(");
+  assert.ok(verify !== -1 && verify < gate, "ids are verified, then judged");
+});
