@@ -335,7 +335,24 @@ export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) 
   }, failureLog);
 }
 
-export async function markDelivered(quoteId: string, formData: FormData): Promise<ActionResult> {
+/**
+ * `handoverRunIds` — the guided checklist runs the customer is signing BESIDE.
+ *
+ * Passed server-to-server by completeGuidedDelivery, never off the form: this is
+ * evidence, and a value the browser could set is not evidence. It is re-verified
+ * here against the quote and the acting tenant anyway, because a caller inside
+ * the process is still a caller.
+ *
+ * Written in the SAME updateMany that records the delivery, so a signed handover
+ * can never exist without the runs it was signed against. The legacy flow passes
+ * nothing and the column stays empty, which is what the delivery note falls back
+ * on for deliveries completed before this existed.
+ */
+export async function markDelivered(
+  quoteId: string,
+  formData: FormData,
+  handoverRunIds?: readonly string[],
+): Promise<ActionResult> {
   return asActionResult(async () => {
     await requireModuleEnabled("automotive");
     const user = await requireQuoteAccess(quoteId, "deliveries.manage");
@@ -383,9 +400,34 @@ export async function markDelivered(quoteId: string, formData: FormData): Promis
       }
     }
 
+    /*
+     * Re-verified, not trusted. Each id must be a COMPLETED run of this quote's
+     * own delivery handover, in this tenant. Anything that does not resolve is a
+     * caller passing ids it should not have, so the whole delivery is refused
+     * rather than signed against a partial set — a delivery note showing three of
+     * four checklists is worse than one that refuses to be produced.
+     */
+    let deliveryHandoverRunIds: string[] = [];
+    if (handoverRunIds?.length) {
+      const verified = await prisma.checklistRun.findMany({
+        where: {
+          id: { in: [...new Set(handoverRunIds)] },
+          tenantId,
+          hostType: "quote.delivery",
+          hostId: quoteId,
+          completedAt: { not: null },
+        },
+        select: { id: true },
+      });
+      if (verified.length !== new Set(handoverRunIds).size) {
+        refuse("The handover checklists could not be confirmed. Reload the delivery and try again.");
+      }
+      deliveryHandoverRunIds = verified.map((run) => run.id);
+    }
+
     const updated = await prisma.quote.updateMany({
       where: { id: quoteId, tenantId },
-      data: { deliveredAt: new Date(), deliveredByName, deliveryChecklist, deliverySignatureRef },
+      data: { deliveredAt: new Date(), deliveredByName, deliveryChecklist, deliverySignatureRef, deliveryHandoverRunIds },
     });
     if (updated.count !== 1) refuse(QUOTE_GONE);
     if (quote.leadId) {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { deliveryHandoverReadiness } from "../src/lib/checklists/deliveryHandover";
+import { deliveryHandoverReadiness, deliveryNoteRuns } from "../src/lib/checklists/deliveryHandover";
 
 const actionSource = readFileSync("src/app/actions/guidedDelivery.ts", "utf8");
 const pageSource = readFileSync("src/app/(app)/deliveries/page.tsx", "utf8");
@@ -43,7 +43,9 @@ test("server completion repeats the checklist, review, driver and signature gate
   assert.match(actionSource, /SIGNATURE_PREFIX/);
   assert.match(actionSource, /signatureBytes\.length > MAX_SIGNATURE_BYTES/);
   assert.match(actionSource, /deliveryHandoverReadiness\(templates, runs\)/);
-  assert.match(actionSource, /return markDelivered\(quoteId, formData\)/);
+  // Now carries the runs it pinned. The delegation is what this assertion is
+  // for; the third argument is what makes the signed note immutable.
+  assert.match(actionSource, /return markDelivered\(quoteId, formData, signedRunIds\)/);
 });
 
 test("the guided UI reviews the actual delivery note before showing signature", () => {
@@ -70,7 +72,10 @@ test("the delivery note shows the guided snapshots being signed, then the stored
   assert.match(deliveryNoteSource, /hostType: "quote\.delivery"/);
   assert.match(deliveryNoteSource, /labelSnapshot/);
   assert.match(deliveryNoteSource, /captureSnapshot/);
-  assert.match(deliveryNoteSource, /latestRunByTemplate/);
+  // The selection moved into deliveryNoteRuns so it could be executed rather
+  // than described — and so the note stops re-deciding, after signing, which run
+  // the customer signed against.
+  assert.match(deliveryNoteSource, /deliveryNoteRuns\(guidedRuns, quote\.deliveryHandoverRunIds\)/);
   assert.match(deliveryNoteSource, /tag: "delivery-signature"/);
   assert.match(deliveryNoteSource, /src=\{`\/api\/files\/\$\{signatureDoc\.id\}`\}/);
 });
@@ -81,4 +86,90 @@ test("Deliveries uses the old proof-of-delivery only as an unconfigured fallback
   assert.match(pageSource, /<GuidedDeliveryCompletion quoteId=\{quote\.id\} \/>/);
   assert.match(pageSource, /No guided delivery checklist is configured/);
   assert.match(pageSource, /<ProofOfDelivery quoteId=\{quote\.id\} \/>/);
+});
+
+/*
+ * THE SIGNED DELIVERY NOTE MUST NOT CHANGE AFTER IT IS SIGNED.
+ *
+ * The note chose the newest completed run per template on EVERY render, and a
+ * delivery checklist is repeatable by design. So re-running one after handover
+ * silently replaced the evidence printed beside a signature the customer had
+ * already given. The per-entry snapshots froze the template's WORDING; nothing
+ * froze WHICH RUN, which is the half that actually carries the findings.
+ */
+
+const run = (id: string, templateId: string, completedAt: string | null, sortOrder = 0) => ({
+  id,
+  templateId,
+  completedAt: completedAt ? new Date(completedAt) : null,
+  template: { sortOrder },
+});
+
+test("a run completed AFTER signing cannot appear on the signed note", () => {
+  const atSigning = run("run_signed", "tpl_a", "2026-08-01T10:00:00Z");
+  const rerunLater = run("run_rerun", "tpl_a", "2026-09-01T10:00:00Z");
+  // Newest first, exactly as the page queries them.
+  const rows = [rerunLater, atSigning];
+
+  const shown = deliveryNoteRuns(rows, ["run_signed"]);
+  assert.deepEqual(shown.map((r) => r.id), ["run_signed"], "the newer run must not displace the signed one");
+});
+
+test("the signed set is the WHOLE answer, not a preference", () => {
+  // A template whose run is not in the signed set contributes nothing — the note
+  // shows what was signed, never what merely exists now.
+  const rows = [run("run_b_new", "tpl_b", "2026-09-01T10:00:00Z", 1), run("run_a", "tpl_a", "2026-08-01T10:00:00Z", 0)];
+  assert.deepEqual(deliveryNoteRuns(rows, ["run_a"]).map((r) => r.id), ["run_a"]);
+});
+
+test("signed runs are ordered by the template's own order, not by recency", () => {
+  const rows = [run("run_second", "tpl_b", "2026-08-02T10:00:00Z", 2), run("run_first", "tpl_a", "2026-08-01T10:00:00Z", 1)];
+  assert.deepEqual(
+    deliveryNoteRuns(rows, ["run_first", "run_second"]).map((r) => r.id),
+    ["run_first", "run_second"],
+  );
+});
+
+test("with nothing signed it behaves exactly as before", () => {
+  // Deliveries completed before the ids existed, and notes not yet signed. Both
+  // keep the newest-completed-per-template selection: the first must reproduce
+  // what it renders today, and the second has nothing frozen to honour yet.
+  const rows = [
+    run("run_new", "tpl_a", "2026-09-01T10:00:00Z", 0),
+    run("run_old", "tpl_a", "2026-08-01T10:00:00Z", 0),
+    run("run_b", "tpl_b", "2026-08-05T10:00:00Z", 1),
+  ];
+  assert.deepEqual(deliveryNoteRuns(rows, []).map((r) => r.id), ["run_new", "run_b"]);
+});
+
+test("an incomplete run is never shown, signed or not", () => {
+  const rows = [run("run_open", "tpl_a", null), run("run_done", "tpl_a", "2026-08-01T10:00:00Z")];
+  assert.deepEqual(deliveryNoteRuns(rows, []).map((r) => r.id), ["run_done"]);
+});
+
+/* The wiring: pinning at signing, and re-verifying what was pinned. */
+
+test("completion records the runs it validated, in the same write as the delivery", () => {
+  const guided = actionSource;
+  assert.match(guided, /select: \{ id: true, templateId: true, completedAt: true \}/, "the ids must be selected to be pinned");
+  assert.match(guided, /orderBy: \{ completedAt: "desc" \}/, "newest-first is what makes the choice deterministic");
+  assert.match(guided, /markDelivered\(quoteId, formData, signedRunIds\)/, "the pinned ids must reach the write");
+
+  const fulfilment = readFileSync("src/app/actions/fulfilment.ts", "utf8");
+  assert.match(fulfilment, /deliveryHandoverRunIds\s*\}/, "they must land in the delivery update itself");
+});
+
+test("the ids are re-verified against the quote, never trusted", () => {
+  // They arrive server-to-server, but a caller inside the process is still a
+  // caller — and a note signed against a partial set is worse than none.
+  const fulfilment = readFileSync("src/app/actions/fulfilment.ts", "utf8");
+  assert.match(fulfilment, /hostType: "quote\.delivery",\s*\n\s*hostId: quoteId,/, "scoped to THIS quote");
+  assert.match(fulfilment, /completedAt: \{ not: null \}/, "and to completed runs only");
+  assert.match(fulfilment, /verified\.length !== new Set\(handoverRunIds\)\.size/, "a partial match must refuse");
+});
+
+test("the note never re-derives the selection for itself", () => {
+  const page = deliveryNoteSource;
+  assert.match(page, /deliveryNoteRuns\(guidedRuns, quote\.deliveryHandoverRunIds\)/);
+  assert.doesNotMatch(page, /latestRunByTemplate/, "a second copy of the rule is how the two drift apart");
 });

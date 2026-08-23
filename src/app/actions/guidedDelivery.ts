@@ -25,6 +25,9 @@ export async function completeGuidedDelivery(
   quoteId: string,
   formData: FormData,
 ): Promise<ActionResult> {
+  // Filled inside the gate, read after it: the runs this delivery is signed
+  // against, decided once at signing time rather than re-chosen on every render.
+  let signedRunIds: string[] = [];
   const gate = await asActionResult(async () => {
     await requireModuleEnabled("automotive");
     await requireQuoteAccess(quoteId, "deliveries.manage");
@@ -69,7 +72,12 @@ export async function completeGuidedDelivery(
         hostId: quoteId,
         templateId: { in: templates.map((template) => template.id) },
       },
-      select: { templateId: true, completedAt: true },
+      // `id` and the ordering are what let this action PIN the runs being signed.
+      // Newest-completed-first per template is the same rule the delivery note
+      // used to re-evaluate on every render; evaluating it once, here, is what
+      // stops it changing afterwards.
+      select: { id: true, templateId: true, completedAt: true },
+      orderBy: { completedAt: "desc" },
     });
 
     const readiness = deliveryHandoverReadiness(templates, runs);
@@ -83,8 +91,35 @@ export async function completeGuidedDelivery(
           : `Finish the guided handover checklists before the customer signs: ${missingNames.join(", ")}.`,
       );
     }
+
+    /*
+     * PIN THE RUNS, HERE, ONCE.
+     *
+     * The delivery note chose the newest completed run per template every time it
+     * rendered. A delivery checklist is repeatable by design, so re-running one
+     * after handover silently swapped the evidence shown beside a signature the
+     * customer had already given: the document changed after it was signed. The
+     * per-entry snapshots froze the template's WORDING and nothing froze WHICH
+     * RUN.
+     *
+     * The same selection rule is evaluated once, at the moment of signing, and
+     * the result is stored. `runs` is ordered newest-completed-first, so the
+     * first completed run seen for a template is the one being signed against.
+     */
+    const signedByTemplate = new Map<string, string>();
+    for (const run of runs) {
+      if (!run.completedAt) continue;
+      if (!signedByTemplate.has(run.templateId)) signedByTemplate.set(run.templateId, run.id);
+    }
+    signedRunIds = templates
+      .map((template) => signedByTemplate.get(template.id))
+      .filter((id): id is string => Boolean(id));
   });
 
   if (gate.error || gate.redirectTo) return gate;
-  return markDelivered(quoteId, formData);
+  // Handed over server-to-server rather than through the form: this is evidence,
+  // and a value the browser could set is not evidence. markDelivered re-verifies
+  // every id against this quote and tenant, and writes them in the same update
+  // that records the delivery — so a signed handover cannot exist without them.
+  return markDelivered(quoteId, formData, signedRunIds);
 }

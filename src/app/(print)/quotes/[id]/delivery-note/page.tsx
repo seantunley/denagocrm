@@ -9,6 +9,7 @@ import { formatDate } from "@/lib/format";
 import { documentTotals, feeRows, includedLines } from "@/lib/pricing";
 import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { isModuleEnabled } from "@/lib/modules/enabled";
+import { deliveryNoteRuns } from "@/lib/checklists/deliveryHandover";
 
 type GuidedEntry = {
   id: string;
@@ -93,15 +94,17 @@ export default async function DeliveryNotePrintPage({
 
   // A delivery checklist is repeatable by design, but the delivery note should
   // show the run the customer is actually signing, not every historical retry.
-  // Keep the newest completed run for each configured list; every entry carries
-  // its frozen snapshots, so later template edits cannot rewrite this evidence.
-  const latestRunByTemplate = new Map<string, (typeof guidedRuns)[number]>();
-  for (const run of guidedRuns) {
-    if (!latestRunByTemplate.has(run.templateId)) latestRunByTemplate.set(run.templateId, run);
-  }
-  const guidedRunsForNote = [...latestRunByTemplate.values()].sort(
-    (a, b) => a.template.sortOrder - b.template.sortOrder,
-  );
+  //
+  // ONCE SIGNED, THAT IS DECIDED AND THIS MUST NOT RE-DECIDE IT. Choosing the
+  // newest completed run per template on every render meant a checklist re-run
+  // AFTER handover silently replaced the evidence beside a signature the customer
+  // had already given — the document changed after it was signed. The per-entry
+  // snapshots froze the template's wording; nothing froze WHICH RUN.
+  //
+  // completeGuidedDelivery now records the ids at the moment of signing, in the
+  // same write that records the delivery. Where they exist they are the whole
+  // answer, and a later run cannot appear on this note however new it is.
+  const guidedRunsForNote = deliveryNoteRuns(guidedRuns, quote.deliveryHandoverRunIds);
 
   const signatureDoc = quote.deliverySignatureRef
     ? await prisma.document.findFirst({

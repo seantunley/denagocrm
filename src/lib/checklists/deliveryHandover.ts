@@ -37,3 +37,47 @@ export function deliveryHandoverReadiness(
     missingTemplateIds,
   };
 }
+
+export type DeliveryNoteRun = {
+  id: string;
+  templateId: string;
+  completedAt: unknown | null;
+  template: { sortOrder: number };
+};
+
+/**
+ * The runs a delivery note may show.
+ *
+ * ONCE SIGNED, THIS IS ALREADY DECIDED. The note used to choose the newest
+ * completed run per template on every render, and a delivery checklist is
+ * repeatable by design — so re-running one AFTER handover silently replaced the
+ * evidence beside a signature the customer had already given. The document
+ * changed after it was signed. Per-entry snapshots froze the template's WORDING;
+ * nothing froze WHICH RUN.
+ *
+ * `signedRunIds` is recorded by completeGuidedDelivery at the moment of signing.
+ * Where it exists it is the whole answer, and a newer run cannot displace it.
+ *
+ * Empty means either a delivery completed before those ids existed, or a note
+ * that has not been signed yet. Both keep the previous selection: the first
+ * reproduces exactly what it renders today, and the second has nothing frozen to
+ * honour yet.
+ */
+export function deliveryNoteRuns<T extends DeliveryNoteRun>(
+  runs: readonly T[],
+  signedRunIds: readonly string[],
+): T[] {
+  const bySortOrder = (a: T, b: T) => a.template.sortOrder - b.template.sortOrder;
+
+  if (signedRunIds.length > 0) {
+    const signed = new Set(signedRunIds);
+    return runs.filter((run) => signed.has(run.id)).sort(bySortOrder);
+  }
+
+  const latestByTemplate = new Map<string, T>();
+  for (const run of runs) {
+    if (!run.completedAt) continue;
+    if (!latestByTemplate.has(run.templateId)) latestByTemplate.set(run.templateId, run);
+  }
+  return [...latestByTemplate.values()].sort(bySortOrder);
+}
