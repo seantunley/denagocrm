@@ -15,20 +15,18 @@ const shipped = (rel: string) =>
  * device". Two devices were in the table at the time, and the tenant join
  * returned both.
  *
- * Two defects, and the second is why the first was invisible:
- *
- *   1. A Server Action does not inherit the tenant scope a page render
- *      establishes, so `pushRecipientsForCurrentScope()` found the scope CLOSED
- *      and correctly returned nobody. Same shape as #520.
- *   2. `sendPushToAll` returns a bare count, so a closed scope, missing VAPID
- *      keys, a rejected send and a genuinely empty table all arrive as `0` — and
- *      the one sentence written for the last of them was shown for all four.
- *
- * Source-patterned, and says so: the scope behaviour itself needs a request.
+ * The original diagnosis fixed scope and zero-send reporting. The Messages PWA
+ * exposed a second class of false-positive: a browser can retain a local
+ * PushSubscription after its server row disappears, and a provider accepting a
+ * push says nothing about whether THIS phone's worker actually displayed it.
+ * The tests below pin both sides of that boundary.
  */
 
 const action = src("src/app/actions/push.ts");
 const lib = src("src/lib/push.ts");
+const toggle = src("src/components/PushToggle.tsx");
+const worker = src("public/sw.js");
+const messagesNav = src("src/components/MessagesNav.tsx");
 
 test("the test push binds a tenant scope, because a Server Action has none", () => {
   // `withActingStaffScope` binds an ENCLOSING frame via runInTenantScope. An
@@ -94,4 +92,47 @@ test("subscribing still needs no scope, because PushSubscription is a global mod
   const guard = src("src/lib/tenantGuard.ts");
   const globals = guard.slice(guard.indexOf("GLOBAL_MODELS"), guard.indexOf("export function isTenantScopedModel"));
   assert.ok(globals.includes('"PushSubscription"'), "PushSubscription must remain a global model");
+});
+
+test("an existing browser subscription is re-synced to the server on panel open", () => {
+  const initialise = toggle.slice(
+    toggle.indexOf("async function initialise()"),
+    toggle.indexOf("async function enable()"),
+  );
+  const local = initialise.indexOf("getSubscription()");
+  const sync = initialise.indexOf("syncPushSubscription(sub)");
+  assert.ok(local >= 0 && sync >= 0, "initialisation must inspect and sync an existing subscription");
+  assert.ok(local < sync, "the browser subscription must be discovered before it is re-upserted");
+  assert.match(initialise, /Notification\.permission === "granted"/);
+});
+
+test("the Messages PWA test follows the real social-DM kind and landing page", () => {
+  const sendTest = action.slice(action.indexOf("export async function sendTestPush("));
+  assert.match(sendTest, /const messagesMode = options\.mode === "messages"/);
+  assert.match(sendTest, /getSetting\("PUSH_DISABLED_KINDS"\)/);
+  assert.match(sendTest, /disabled\?\.includes\("dm"\)/);
+  assert.match(sendTest, /const baseUrl = messagesMode \? "\/messages" : "\/"/);
+  assert.match(sendTest, /const kind = messagesMode \? "dm" : undefined/);
+  assert.match(messagesNav, /<PushToggle mode="messages" \/>/);
+});
+
+test("provider acceptance is not presented as proof that this phone displayed the notification", () => {
+  assert.match(worker, /push-test-displayed/);
+  assert.match(worker, /push-test-failed/);
+  assert.match(worker, /notifyOpenClients/);
+  assert.match(toggle, /navigator\.serviceWorker\.addEventListener\("message", onMessage\)/);
+  assert.match(toggle, /Waiting for this device to confirm display/);
+  assert.match(toggle, /This device did not confirm receipt/);
+});
+
+test("the service worker only acknowledges a test after showNotification resolves", () => {
+  const pushHandler = worker.slice(
+    worker.indexOf('self.addEventListener("push"'),
+    worker.indexOf('self.addEventListener("notificationclick"'),
+  );
+  const display = pushHandler.indexOf("showNotification(");
+  const success = pushHandler.indexOf('type: "push-test-displayed"');
+  const failure = pushHandler.indexOf('type: "push-test-failed"');
+  assert.ok(display >= 0 && success > display, "display acknowledgement must follow showNotification");
+  assert.ok(failure > display, "display failures must be returned to the open test page");
 });
