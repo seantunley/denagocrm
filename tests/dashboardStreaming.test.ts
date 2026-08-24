@@ -95,7 +95,11 @@ test("the card boundary uses the framework primitive, not a hand-rolled class", 
    * See node_modules/next/dist/docs/.../catchError.md.
    */
   const boundary = code("src/components/dashboard/CardBoundary.tsx");
-  assert.match(boundary, /unstable_catchError/, "use the framework's boundary");
+  // `catchError`, not `unstable_catchError`: the API graduated in Next 16.3 and
+  // the prefix did exactly what it advertises. What this asserts is that the
+  // FRAMEWORK primitive is used at all — a hand-rolled class is the regression,
+  // not a rename.
+  assert.match(boundary, /\bcatchError\b/, "use the framework's boundary");
   assert.match(boundary, /from "next\/error"/);
   assert.match(boundary, /"use client"/, "an error boundary cannot be a server component");
   assert.doesNotMatch(
@@ -118,10 +122,16 @@ test("a contained card failure still reaches the server", () => {
 });
 
 test("a failed card can be retried on its own", () => {
-  // unstable_retry re-fetches and re-renders just this boundary's children, so
-  // one failed card does not need a whole-page reload to recover.
+  // retry() re-fetches and re-renders just this boundary's children, so one
+  // failed card does not need a whole-page reload to recover. (Named
+  // `unstable_retry` until Next 16.3; the behaviour is what matters here.)
+  //
+  // `reset()` is deliberately NOT accepted in its place: it clears the error
+  // state without re-fetching, so a card that failed on the server would render
+  // straight back into the same failure.
   const boundary = code("src/components/dashboard/CardBoundary.tsx");
-  assert.match(boundary, /unstable_retry\(\)/);
+  assert.match(boundary, /\bretry\(\)/);
+  assert.doesNotMatch(boundary, /\breset\(\)/, "reset does not re-fetch, so the card would fail again immediately");
 });
 
 test("a failed card says nothing about why", () => {
