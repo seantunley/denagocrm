@@ -1,6 +1,7 @@
 "use server";
 
 import { asActionResult, refuse, type ActionResult } from "@/lib/actionResult";
+import { withActingStaffScope } from "@/lib/actingScope";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { actingTenantId } from "@/lib/actingTenant";
@@ -17,6 +18,20 @@ import { isModuleEnabled, requireModuleEnabled } from "@/lib/modules/enabled";
 
 const MAX_FILE = 4 * 1024 * 1024;
 const QUOTE_GONE = "This quote is no longer available in this workspace.";
+
+/**
+ * A Server Action needs the tenant scope bound around its whole body. Resolving
+ * actingTenantId() inside the body is not enough under tenant enforcement: the
+ * recovered scope from a nested helper does not propagate back up to later writes
+ * in the action frame. Keep asActionResult outside the scope wrapper so a failure
+ * while recovering the scope is still logged and returned with a reference.
+ */
+function asFulfilmentAction(
+  body: () => Promise<void | ActionResult>,
+  options: { scope?: string; context?: string; tenantId?: string | null } = {},
+): Promise<ActionResult> {
+  return asActionResult(() => withActingStaffScope(body), options);
+}
 
 async function attachStageDocument(
   quoteId: string,
@@ -63,7 +78,7 @@ function pickFile(formData: FormData): File | null {
 }
 
 export async function markInvoiced(quoteId: string, formData: FormData) {
-  return asActionResult(async () => {
+  return asFulfilmentAction(async () => {
     await requireModuleEnabled("automotive");
     const user = await requireQuoteAccess(quoteId, "deliveries.manage");
     const tenantId = await actingTenantId();
@@ -96,7 +111,7 @@ export async function markInvoiced(quoteId: string, formData: FormData) {
 }
 
 export async function markDepositPaid(quoteId: string, formData: FormData) {
-  return asActionResult(async () => {
+  return asFulfilmentAction(async () => {
     await requireModuleEnabled("automotive");
     const user = await requireQuoteAccess(quoteId, "deliveries.manage");
     const tenantId = await actingTenantId();
@@ -126,7 +141,7 @@ export async function markDepositPaid(quoteId: string, formData: FormData) {
 }
 
 export async function scheduleDelivery(quoteId: string, formData: FormData) {
-  return asActionResult(async () => {
+  return asFulfilmentAction(async () => {
     await requireModuleEnabled("automotive");
     const user = await requireQuoteAccess(quoteId, "deliveries.manage");
     const tenantId = await actingTenantId();
@@ -190,7 +205,7 @@ export async function registerDeliveryPhotos(
     scope: "delivery-photo-finalize",
     context: `quote=${quoteId}`,
   };
-  return asActionResult(async () => {
+  return asFulfilmentAction(async () => {
     const tenantId = await actingTenantId();
     failureLog.tenantId = tenantId;
     const user = await requireQuoteAccess(quoteId, "deliveries.manage");
@@ -279,7 +294,7 @@ export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) 
     scope: "delivery-photo-upload",
     context: `quote=${quoteId}`,
   };
-  return asActionResult(async () => {
+  return asFulfilmentAction(async () => {
     const tenantId = await actingTenantId();
     failureLog.tenantId = tenantId;
     const user = await requireQuoteAccess(quoteId, "deliveries.manage");
@@ -344,7 +359,7 @@ export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) 
 }
 
 export async function markDelivered(quoteId: string, formData: FormData): Promise<ActionResult> {
-  return asActionResult(async () => {
+  return asFulfilmentAction(async () => {
     await requireModuleEnabled("automotive");
     const user = await requireQuoteAccess(quoteId, "deliveries.manage");
     const tenantId = await actingTenantId();
