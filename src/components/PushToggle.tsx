@@ -25,7 +25,6 @@ async function syncPushSubscription(sub: PushSubscription) {
 }
 
 type PushToggleProps = {
-  /** Messages uses the DM notification kind, icon and landing page for its test. */
   mode?: "crm" | "messages";
 };
 
@@ -35,9 +34,64 @@ type PushTestSignal = {
   error?: string;
 };
 
+const ROOT_SW = "/sw.js";
+const MESSAGES_SW = "/messages-sw.js";
+
+async function registrationForMode(mode: "crm" | "messages") {
+  const reg = await navigator.serviceWorker.register(
+    mode === "messages" ? MESSAGES_SW : ROOT_SW,
+    mode === "messages"
+      ? { scope: "/messages", updateViaCache: "none" }
+      : { scope: "/", updateViaCache: "none" },
+  );
+  void reg.update().catch(() => {});
+  return reg;
+}
+
+async function waitUntilActive(reg: ServiceWorkerRegistration): Promise<void> {
+  if (reg.active) return;
+  const worker = reg.installing ?? reg.waiting;
+  if (!worker) return;
+  if (worker.state === "activated") return;
+
+  await new Promise<void>((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      worker.removeEventListener("statechange", onChange);
+      reject(new Error("The notification service worker did not activate in time. Close and reopen the app, then try again."));
+    }, 8000);
+    const onChange = () => {
+      if (worker.state !== "activated") return;
+      window.clearTimeout(timeout);
+      worker.removeEventListener("statechange", onChange);
+      resolve();
+    };
+    worker.addEventListener("statechange", onChange);
+  });
+}
+
+async function rootSubscription(): Promise<PushSubscription | null> {
+  const reg = await navigator.serviceWorker.getRegistration(`${window.location.origin}/`);
+  if (!reg) return null;
+  if (reg.scope !== `${window.location.origin}/`) return null;
+  return reg.pushManager.getSubscription();
+}
+
+async function removeLegacyRootSubscription(currentEndpoint: string): Promise<boolean> {
+  const legacy = await rootSubscription();
+  if (!legacy || legacy.endpoint === currentEndpoint) return false;
+
+  // Save the dedicated Messages subscription FIRST. Only once it is durable do
+  // we remove the old shared root subscription, otherwise a failed migration can
+  // leave the phone with no notification channel at all.
+  await removePushSubscription(legacy.endpoint);
+  await legacy.unsubscribe();
+  return true;
+}
+
 export default function PushToggle({ mode = "crm" }: PushToggleProps) {
   const [supported, setSupported] = useState(true);
   const [enabled, setEnabled] = useState(false);
+  const [repairNeeded, setRepairNeeded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
 
@@ -55,11 +109,8 @@ export default function PushToggle({ mode = "crm" }: PushToggleProps) {
       }
 
       try {
-        const reg = await navigator.serviceWorker.register("/sw.js");
-        // Do not leave an installed PWA on an old worker until every window has
-        // eventually been closed. The worker itself uses skipWaiting/claim; this
-        // asks the browser to check for the new script while this screen is open.
-        void reg.update().catch(() => {});
+        const reg = await registrationForMode(mode);
+        await waitUntilActive(reg).catch(() => {});
         const sub = await reg.pushManager.getSubscription();
         if (cancelled) return;
 
@@ -67,12 +118,14 @@ export default function PushToggle({ mode = "crm" }: PushToggleProps) {
         setEnabled(Boolean(sub) && granted);
 
         if (sub && granted) {
-          // A local PushSubscription can survive a DB restore, a pruned server row,
-          // or a deployment. The old UI only looked at the browser and therefore
-          // said "Disable on this device" even when the server had forgotten this
-          // endpoint. Re-upsert it whenever the notification panel is opened.
           try {
             await syncPushSubscription(sub);
+            if (mode === "messages") {
+              const cleaned = await removeLegacyRootSubscription(sub.endpoint).catch(() => false);
+              if (cleaned && !cancelled) {
+                setStatus("Messages notifications migrated to this app's dedicated channel ✓");
+              }
+            }
           } catch (error) {
             if (!cancelled) {
               setStatus(
@@ -82,9 +135,25 @@ export default function PushToggle({ mode = "crm" }: PushToggleProps) {
               );
             }
           }
-        } else if (sub && Notification.permission === "denied") {
+          return;
+        }
+
+        if (mode === "messages" && !sub) {
+          // Before this fix the Messages PWA borrowed the root CRM registration.
+          // That made the panel say "enabled" because the origin had a subscription,
+          // even though the installed Messages app had no push channel of its own.
+          const legacy = await rootSubscription();
+          if (legacy && !cancelled) {
+            setRepairNeeded(true);
+            setStatus(
+              "This installation is still using the old shared CRM notification channel. Tap Repair notifications once to move Denago Messages onto its own channel.",
+            );
+          }
+        }
+
+        if (Notification.permission === "denied" && !cancelled) {
           setStatus(
-            "Notifications are blocked by this device. Allow notifications for the installed app/browser in system settings, then enable them here again.",
+            "Notifications are blocked by this device. Allow notifications for Denago Messages in Android/iPhone app settings, then return here and repair them.",
           );
         }
       } catch (error) {
@@ -98,7 +167,7 @@ export default function PushToggle({ mode = "crm" }: PushToggleProps) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [mode]);
 
   async function enable() {
     setBusy(true);
@@ -108,26 +177,45 @@ export default function PushToggle({ mode = "crm" }: PushToggleProps) {
         setSupported(false);
         return;
       }
+
+      // Keep this on the button click. Mobile browsers require a user gesture for
+      // notification permission; doing it from the mount effect is not equivalent.
       const permission = await Notification.requestPermission();
       if (permission !== "granted") {
-        setStatus("Permission denied — allow notifications in your browser/phone settings.");
+        setStatus(
+          mode === "messages"
+            ? "Denago Messages does not have notification permission. Allow it in the phone's app notification settings, then tap Repair notifications again."
+            : "Permission denied — allow notifications in your browser/phone settings.",
+        );
         return;
       }
-      const reg = await navigator.serviceWorker.ready;
+
+      const reg = await registrationForMode(mode);
+      await waitUntilActive(reg);
       const key = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
       if (!key) {
         setStatus("Push keys not configured on the server.");
         return;
       }
+
       const sub =
         (await reg.pushManager.getSubscription()) ??
         (await reg.pushManager.subscribe({
           userVisibleOnly: true,
           applicationServerKey: urlBase64ToUint8Array(key),
         }));
+
       await syncPushSubscription(sub);
+      if (mode === "messages") {
+        await removeLegacyRootSubscription(sub.endpoint).catch(() => false);
+      }
       setEnabled(true);
-      setStatus("Notifications enabled and synced on this device ✓");
+      setRepairNeeded(false);
+      setStatus(
+        mode === "messages"
+          ? "Denago Messages notifications repaired and synced on this device ✓"
+          : "Notifications enabled and synced on this device ✓",
+      );
     } catch (e) {
       setStatus(e instanceof Error ? e.message : "Could not enable notifications.");
     } finally {
@@ -138,13 +226,14 @@ export default function PushToggle({ mode = "crm" }: PushToggleProps) {
   async function disable() {
     setBusy(true);
     try {
-      const reg = await navigator.serviceWorker.ready;
+      const reg = await registrationForMode(mode);
       const sub = await reg.pushManager.getSubscription();
       if (sub) {
         await removePushSubscription(sub.endpoint);
         await sub.unsubscribe();
       }
       setEnabled(false);
+      setRepairNeeded(false);
       setStatus("Notifications disabled on this device.");
     } finally {
       setBusy(false);
@@ -160,20 +249,24 @@ export default function PushToggle({ mode = "crm" }: PushToggleProps) {
     try {
       if (!("Notification" in window) || Notification.permission !== "granted") {
         setEnabled(false);
-        setStatus("Notifications are not allowed on this device. Enable them first, then test again.");
+        setStatus("Notifications are not allowed on this device. Enable/repair them first, then test again.");
         return;
       }
 
-      const reg = await navigator.serviceWorker.ready;
+      const reg = await registrationForMode(mode);
+      await waitUntilActive(reg);
       const sub = await reg.pushManager.getSubscription();
       if (!sub) {
         setEnabled(false);
-        setStatus("This device has no active push subscription. Enable notifications again, then test.");
+        setRepairNeeded(mode === "messages");
+        setStatus(
+          mode === "messages"
+            ? "Denago Messages has no dedicated push subscription yet. Tap Repair notifications, then test again."
+            : "This device has no active push subscription. Enable notifications again, then test.",
+        );
         return;
       }
 
-      // Heal a missing/stale server row before testing. This is the current device,
-      // not an inference from how many other endpoints happen to exist in the DB.
       await syncPushSubscription(sub);
 
       const testId =
@@ -195,13 +288,16 @@ export default function PushToggle({ mode = "crm" }: PushToggleProps) {
       };
       navigator.serviceWorker.addEventListener("message", onMessage);
 
-      const r = await sendTestPush({ mode, testId });
+      // Test ONLY this endpoint. Broadcasting the test to every saved device was
+      // the false-positive in the screenshot: another phone could accept it and
+      // the current Messages PWA still received nothing.
+      const r = await sendTestPush({ mode, testId, endpoint: sub.endpoint });
       if (r.error) {
         setStatus(r.error);
         return;
       }
 
-      setStatus(`${r.ok ?? "Push service accepted the test."} Waiting for this device to confirm display…`);
+      setStatus(`${r.ok ?? "This device's push service accepted the test."} Waiting for this device to confirm display…`);
 
       const timeoutPromise = new Promise<null>((resolve) => {
         timeoutId = window.setTimeout(() => resolve(null), 10_000);
@@ -209,14 +305,14 @@ export default function PushToggle({ mode = "crm" }: PushToggleProps) {
       const signal = await Promise.race([signalPromise, timeoutPromise]);
 
       if (signal?.type === "push-test-displayed") {
-        setStatus("Test notification displayed on this device ✓");
+        setStatus("Test notification reached the Denago Messages worker on this device ✓");
       } else if (signal?.type === "push-test-failed") {
         setStatus(
-          `Push reached this device, but the browser/OS could not display it${signal.error ? `: ${signal.error}` : "."} Check the installed app's notification permission in system settings.`,
+          `Push reached this device, but notification display failed${signal.error ? `: ${signal.error}` : "."} Allow notifications for Denago Messages in the phone's app settings.`,
         );
       } else {
         setStatus(
-          `${r.ok ?? "The push service accepted the test."} This device did not confirm receipt. Re-enable notifications on this device and check the installed app's notification permission/battery restrictions.`,
+          "This device's push service accepted the test, but the Denago Messages worker never received it. Tap Repair notifications once. If it still fails, allow notifications for Denago Messages in the phone's app settings and remove battery restrictions for the app.",
         );
       }
     } catch (e) {
@@ -252,7 +348,7 @@ export default function PushToggle({ mode = "crm" }: PushToggleProps) {
           </>
         ) : (
           <button className="btn-primary" onClick={enable} disabled={busy}>
-            🔔 Enable notifications on this device
+            {repairNeeded ? "🔧 Repair notifications" : "🔔 Enable notifications on this device"}
           </button>
         )}
       </div>
@@ -260,9 +356,8 @@ export default function PushToggle({ mode = "crm" }: PushToggleProps) {
       <p className="text-xs text-slate-500">
         {mode === "messages" ? (
           <>
-            This device is synced automatically. The test uses the same notification kind as
-            Messenger/Instagram DMs. If a push is accepted but not displayed, allow notifications
-            for the installed Denago Messages app/browser in your phone&apos;s system settings.
+            Denago Messages now uses its own push channel. The test targets this phone only; another
+            subscribed device can no longer make this screen report a false success.
           </>
         ) : (
           <>
