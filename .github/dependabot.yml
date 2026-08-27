@@ -37,6 +37,20 @@ updates:
       # 0.35 changed its package exports), so it is upgraded by hand.
       - dependency-name: sharp
         update-types: [version-update:semver-major]
+      # @types/node is PINNED TO THE RUNTIME, not to the newest types.
+      #
+      # Both CI workflows pin node-version: 22, so the types are held at ^22 to
+      # match — see the "//engines" note in package.json. Types ahead of the
+      # runtime are worse than none: tsc stops flagging APIs the deployed Node
+      # does not have, so the compiler goes quiet about exactly the calls that
+      # would fail in production.
+      #
+      # Dependabot cannot read that reasoning, and opened #543 (22 → 26) which
+      # failed with five TS2769 errors — the types disagreeing with the runtime,
+      # not bugs to fix. Ignored here so the same PR does not keep returning.
+      # RAISE THIS TOGETHER WITH node-version IN THE WORKFLOWS, never alone.
+      - dependency-name: "@types/node"
+        update-types: [version-update:semver-major]
     labels:
       - dependencies
     commit-message:
