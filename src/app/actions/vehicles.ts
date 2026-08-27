@@ -10,6 +10,7 @@ import { remindVehicleService } from "@/lib/serviceReminders";
 import { softDeleteRecord } from "@/lib/trash";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { withActingStaffScope } from "@/lib/actingScope";
+import { vehiclesAwaitingRegistration } from "@/lib/deliveryVehicles";
 import {
   requireContactAccess,
   requireVehicleAccess,
@@ -80,6 +81,28 @@ export async function createVehicle(formData: FormData) {
       await triggerSurvey("delivery", { contactId: vehicle.contactId });
     }
     revalidatePath("/vehicles");
+
+    /*
+     * A DELIVERY OF SEVERAL VEHICLES COMES BACK HERE UNTIL THE QUEUE IS EMPTY.
+     *
+     * Without this the flow registered exactly one vehicle and finished, however
+     * many were sold — Q-1014 sold two Rover XXLs and the second silently never
+     * existed. The queue is re-derived from the quote rather than trusted from the
+     * form, so a tampered or stale `deliverySeq` cannot conjure registrations the
+     * quote never sold; it only indexes.
+     */
+    const deliveryQuoteId = String(formData.get("deliveryQuoteId") ?? "").trim();
+    if (deliveryQuoteId) {
+      const quote = await prisma.quote.findFirst({
+        where: { id: deliveryQuoteId },
+        include: { items: { include: { product: true }, orderBy: { sortOrder: "asc" } } },
+      });
+      const queue = quote ? vehiclesAwaitingRegistration(quote.items) : [];
+      const next = (Number.parseInt(String(formData.get("deliverySeq") ?? "0"), 10) || 0) + 1;
+      if (next < queue.length) {
+        redirect(`/vehicles/new?contactId=${vehicle.contactId}&quoteId=${deliveryQuoteId}&seq=${next}`);
+      }
+    }
     redirect(`/vehicles/${vehicle.id}`);
   });
 }
