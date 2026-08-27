@@ -113,6 +113,51 @@ test("asActionResult logs the unexpected case and rethrows framework signals fir
   );
 });
 
+/*
+ * THE ACTING WORKSPACE IS BOUND AROUND THE BODY, NOT LEFT TO THE CALLEE.
+ *
+ * 2026-08-26, production, twice sixteen seconds apart:
+ *
+ *   TenantScopeError: No tenant scope established for a tenant-owned write
+ *
+ * A Server Action starts with no ambient tenant scope, and `enterWith` in a
+ * callee does not reach the frame that called it. The db.ts guard already
+ * recovers from this for GUARDED model operations — but `writeTenantId()`, which
+ * every `basePrisma` transaction and raw statement calls, is SYNCHRONOUS and
+ * cannot do a database round trip to recover. It throws instead.
+ *
+ * Signing out and back in does not help, and that is the part worth pinning: the
+ * failing sessions were under two minutes old. The session was never the problem.
+ */
+test("the acting workspace is bound AROUND the action body", () => {
+  const code = src("src/lib/actionResult.ts");
+  assert.match(
+    code,
+    /return \(await withActingStaffScope\(body\)\) \?\? \{\}/,
+    "the body must run INSIDE the scope — runInTenantScope only propagates downward",
+  );
+  // Inside the `try`, so a recovery that throws is reported with a reference like
+  // any other failure rather than escaping as an opaque digest.
+  const tryStart = code.indexOf("try {");
+  const catchStart = code.indexOf("} catch (error) {");
+  const bind = code.indexOf("withActingStaffScope(body)");
+  assert.ok(tryStart >= 0 && catchStart > tryStart, "the wrapper must still have its try/catch");
+  assert.ok(bind > tryStart && bind < catchStart, "the binding belongs inside the try");
+});
+
+test("binding the workspace can never widen one that is already set", () => {
+  // The whole safety argument rests on this, so it is asserted against the
+  // primitive rather than described in a comment: an existing scope short-circuits
+  // to a bare `fn()`, and so does an unresolvable session. The only states this
+  // changes are the ones that are currently a hard error.
+  const scope = src("src/lib/actingScope.ts");
+  const fn = scope.slice(scope.indexOf("export async function withActingStaffScope"));
+  const body = fn.slice(0, fn.indexOf("\n}"));
+  assert.match(body, /if \(currentTenantScope\(\)\) return fn\(\);/, "an existing scope wins");
+  assert.match(body, /if \(!recovered\) return fn\(\);/, "no resolvable session must not invent a workspace");
+  assert.doesNotMatch(body, /DEFAULT_TENANT_ID|foundingTenant/, "and must never fall back to the founding tenant");
+});
+
 test("the platform guard raises NotAuthenticated, not a bare Error", () => {
   const auth = src("src/lib/platformAuth.ts");
   assert.match(auth, /throw new NotAuthenticated\(/);

@@ -69,10 +69,46 @@ export async function asActionResult(
   options: { scope?: string; context?: string; tenantId?: string | null } = {},
 ): Promise<ActionResult> {
   try {
+    /*
+     * THE ACTING WORKSPACE IS BOUND AROUND THE WHOLE BODY.
+     *
+     * A Server Action starts with no ambient tenant scope: React `cache()` has no
+     * request store in an action, so #513's holder is never filled, and
+     * `enterWith` in a callee does not reach the frame that called it. The db.ts
+     * guard already recovers from this — but only for GUARDED model operations,
+     * because that is where the extension sits.
+     *
+     * An UNGUARDED tenant write has no such rescue. `writeTenantId()` is what
+     * every `basePrisma.$transaction`, raw statement and hand-joined global model
+     * calls to decide what to stamp, and it is SYNCHRONOUS — recovery is a
+     * database round trip, so it cannot recover in place. It throws instead:
+     *
+     *   TenantScopeError: No tenant scope established for a tenant-owned write
+     *
+     * That is a real production failure, twice on 2026-08-26 and five times over
+     * the preceding week, and re-authenticating does not help — the sessions were
+     * minutes old. The session was never the problem; the action frame simply had
+     * nowhere to read a workspace from.
+     *
+     * Binding HERE fixes the class rather than 69 call sites, and it is the only
+     * level that can: `runInTenantScope` propagates downward, so it has to wrap
+     * the body, and this wrapper is already the thing that wraps the body.
+     *
+     * IT CANNOT WIDEN ANYTHING. `withActingStaffScope` returns a bare `fn()` when
+     * a scope is already bound — an existing narrower or `system` scope wins — and
+     * a bare `fn()` when no session resolves, leaving the downstream guards to
+     * fail closed exactly as they do now. The only states it changes are the ones
+     * that are currently a hard error.
+     *
+     * It costs one session recovery per action, and only on the miss path. The
+     * guarded client was already paying that same lookup whenever it fired; this
+     * moves it up one frame, where the unguarded writes can see it too.
+     */
+    const { withActingStaffScope } = await import("./actingScope");
     // A body may return `{ success }` to describe what actually happened — for an
     // idempotent no-op like "left blank, kept the saved value", reporting the
     // form's generic "Saved" would claim a change that never occurred.
-    return (await body()) ?? {};
+    return (await withActingStaffScope(body)) ?? {};
   } catch (error) {
     // BEFORE anything else: a redirect is not a failure, and logging one as a
     // failure would fill the log with successful navigations.
