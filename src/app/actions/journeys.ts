@@ -3,7 +3,7 @@
 import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { withActingTenantWrite } from "@/lib/actingScope";
+import { withActingTenantWrite, withActingStaffScope } from "@/lib/actingScope";
 import { journeyScope } from "@/lib/flowScope";
 import { requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
@@ -183,184 +183,194 @@ async function assertStepAssigneesResolve(definition: unknown): Promise<void> {
 }
 
 export async function createJourney(formData: FormData) {
-  const user = await requirePermission("journeys.manage");
-  const data = journeyData(formData);
-  await assertStepAssigneesResolve(data.definition);
-  // Atomic: journey + its first version in ONE transaction, tenant-stamped.
-  //
-  // USER-ORIGINATED: `requirePermission("journeys.manage")` above proves a
-  // signed-in person is doing this, and a journey has no parent record, so the
-  // acting workspace is the owner. `withTenantWrite` resolved the FOUNDING tenant
-  // for every actor while enforcement is dormant — and a journey is not an inert
-  // record: `publishJourney` scopes its stage/segment validation by
-  // `journey.tenantId`, so a journey created in workspace B but stamped with
-  // tenant A refuses to publish against B's own stages ("no longer exists in this
-  // workspace") while looking correctly owned. The VERSION shares the journey's
-  // tenantId from the same transaction, so parent and child cannot disagree.
-  const journey = await withActingTenantWrite(async (tx, tenantId) => {
-    const j = await tx.journey.create({
-      data: {
-        name: data.name,
-        description: data.description,
-        category: data.category,
-        // A new journey with no control on the form keeps the schema default
-        // ("single"), which is the safe end of the range.
-        ...(data.runMode ? { runMode: data.runMode } : {}),
-        createdById: user.id,
-        tenantId,
-      },
+  return withActingStaffScope(async () => {
+    const user = await requirePermission("journeys.manage");
+    const data = journeyData(formData);
+    await assertStepAssigneesResolve(data.definition);
+    // Atomic: journey + its first version in ONE transaction, tenant-stamped.
+    //
+    // USER-ORIGINATED: `requirePermission("journeys.manage")` above proves a
+    // signed-in person is doing this, and a journey has no parent record, so the
+    // acting workspace is the owner. `withTenantWrite` resolved the FOUNDING tenant
+    // for every actor while enforcement is dormant — and a journey is not an inert
+    // record: `publishJourney` scopes its stage/segment validation by
+    // `journey.tenantId`, so a journey created in workspace B but stamped with
+    // tenant A refuses to publish against B's own stages ("no longer exists in this
+    // workspace") while looking correctly owned. The VERSION shares the journey's
+    // tenantId from the same transaction, so parent and child cannot disagree.
+    const journey = await withActingTenantWrite(async (tx, tenantId) => {
+      const j = await tx.journey.create({
+        data: {
+          name: data.name,
+          description: data.description,
+          category: data.category,
+          // A new journey with no control on the form keeps the schema default
+          // ("single"), which is the safe end of the range.
+          ...(data.runMode ? { runMode: data.runMode } : {}),
+          createdById: user.id,
+          tenantId,
+        },
+      });
+      await tx.journeyVersion.create({
+        data: {
+          journeyId: j.id,
+          version: 1,
+          state: "draft",
+          triggers: data.triggers,
+          ...legacyTriggerPair(data.triggers),
+          entryConditions: data.entryConditions ?? Prisma.JsonNull,
+          definition: data.definition,
+          createdById: user.id,
+          tenantId,
+        },
+      });
+      return j;
     });
-    await tx.journeyVersion.create({
-      data: {
-        journeyId: j.id,
-        version: 1,
-        state: "draft",
+    await logAudit({
+      action: "journey.created",
+      summary: `Created journey “${journey.name}”`,
+      user,
+    });
+    revalidatePath("/journeys");
+    // /automations was revalidated here too; it is a redirect now, with nothing
+    // of its own to re-render.
+  });
+}
+
+export async function saveJourneyDraft(journeyId: string, formData: FormData) {
+  return withActingStaffScope(async () => {
+    const user = await requirePermission("journeys.manage");
+    const data = journeyData(formData);
+    await assertStepAssigneesResolve(data.definition);
+    await prisma.$transaction(async (tx) => {
+      const journey = await tx.journey.findUniqueOrThrow({
+        where: { id: journeyId },
+        include: { versions: { orderBy: { version: "desc" } } },
+      });
+      const draft = journey.versions.find((version) => version.state === "draft");
+      const versionData = {
         triggers: data.triggers,
         ...legacyTriggerPair(data.triggers),
         entryConditions: data.entryConditions ?? Prisma.JsonNull,
         definition: data.definition,
         createdById: user.id,
-        tenantId,
-      },
+      };
+      if (draft) {
+        await tx.journeyVersion.update({ where: { id: draft.id }, data: versionData });
+      } else {
+        await tx.journeyVersion.create({
+          data: {
+            journeyId,
+            version: (journey.versions[0]?.version ?? 0) + 1,
+            state: "draft",
+            ...versionData,
+          },
+        });
+      }
+      await tx.journey.update({
+        where: { id: journeyId },
+        data: {
+          name: data.name,
+          description: data.description,
+          category: data.category,
+          // The run mode lives on the Journey, not the version: it governs
+          // enrolment, which happens before any version is chosen, and it takes
+          // effect without a republish. Dropping it here is what left every
+          // journey stuck on whatever the database had.
+          ...(data.runMode ? { runMode: data.runMode } : {}),
+          status: journey.activeVersion ? journey.status : "draft",
+        },
+      });
     });
-    return j;
+    await logAudit({
+      action: "journey.draft_saved",
+      summary: `Saved a new draft for journey “${data.name}”`,
+      user,
+    });
+    revalidatePath("/journeys");
   });
-  await logAudit({
-    action: "journey.created",
-    summary: `Created journey “${journey.name}”`,
-    user,
-  });
-  revalidatePath("/journeys");
-  // /automations was revalidated here too; it is a redirect now, with nothing
-  // of its own to re-render.
 }
 
-export async function saveJourneyDraft(journeyId: string, formData: FormData) {
-  const user = await requirePermission("journeys.manage");
-  const data = journeyData(formData);
-  await assertStepAssigneesResolve(data.definition);
-  await prisma.$transaction(async (tx) => {
-    const journey = await tx.journey.findUniqueOrThrow({
+export async function publishJourney(journeyId: string) {
+  return withActingStaffScope(async () => {
+    const user = await requirePermission("journeys.manage");
+    const journey = await prisma.journey.findUniqueOrThrow({
       where: { id: journeyId },
       include: { versions: { orderBy: { version: "desc" } } },
     });
     const draft = journey.versions.find((version) => version.state === "draft");
-    const versionData = {
-      triggers: data.triggers,
-      ...legacyTriggerPair(data.triggers),
-      entryConditions: data.entryConditions ?? Prisma.JsonNull,
-      definition: data.definition,
-      createdById: user.id,
-    };
-    if (draft) {
-      await tx.journeyVersion.update({ where: { id: draft.id }, data: versionData });
-    } else {
-      await tx.journeyVersion.create({
-        data: {
-          journeyId,
-          version: (journey.versions[0]?.version ?? 0) + 1,
-          state: "draft",
-          ...versionData,
-        },
-      });
-    }
-    await tx.journey.update({
-      where: { id: journeyId },
-      data: {
-        name: data.name,
-        description: data.description,
-        category: data.category,
-        // The run mode lives on the Journey, not the version: it governs
-        // enrolment, which happens before any version is chosen, and it takes
-        // effect without a republish. Dropping it here is what left every
-        // journey stuck on whatever the database had.
-        ...(data.runMode ? { runMode: data.runMode } : {}),
-        status: journey.activeVersion ? journey.status : "draft",
-      },
+    if (!draft) throw new Error("This journey has no draft to publish");
+
+    // PUBLISH IS THE STRICT GATE — for the whole version, not just its definition.
+    //
+    // Saving already validates strictly, so it is tempting to treat a stored draft
+    // as trusted. It is not: legacy drafts were CONVERTED into the triggers shape
+    // by a migration, never re-saved, and the runtime reader is deliberately
+    // tolerant of trigger names it does not know so that an unknown name degrades
+    // to "matches nothing" instead of throwing mid-sweep. Publishing such a draft
+    // without re-checking therefore produces an ACTIVE journey that silently
+    // enrols nobody — the exact failure this feature must not introduce, and one
+    // no error surfaces because tolerance is doing its job.
+    //
+    // So everything that decides who gets enrolled is re-parsed here, strictly,
+    // before any row changes state.
+    parseJourneyTriggers(draft.triggers);
+    parseConditionGroup(draft.entryConditions);
+    parseJourneyDefinition(draft.definition);
+    await assertTriggerReferencesResolve(journey.tenantId, draft.triggers);
+    // Also on publish, not only on save: a draft can be written by one build and
+    // published by another, and membership can lapse in between. Publishing is
+    // what the enrolment sweep acts on, so it is the last point at which a person
+    // can be told.
+    await assertStepAssigneesResolve(draft.definition);
+
+    await prisma.$transaction([
+      prisma.journeyVersion.updateMany({
+        where: { journeyId, state: "published" },
+        data: { state: "retired" },
+      }),
+      prisma.journeyVersion.update({
+        where: { id: draft.id },
+        data: { state: "published", publishedAt: new Date() },
+      }),
+      prisma.journey.update({
+        where: { id: journeyId },
+        data: { activeVersion: draft.version, status: "active" },
+      }),
+    ]);
+    await logAudit({
+      action: "journey.published",
+      summary: `Published journey “${journey.name}” version ${draft.version}`,
+      user,
     });
+    revalidatePath("/journeys");
   });
-  await logAudit({
-    action: "journey.draft_saved",
-    summary: `Saved a new draft for journey “${data.name}”`,
-    user,
-  });
-  revalidatePath("/journeys");
-}
-
-export async function publishJourney(journeyId: string) {
-  const user = await requirePermission("journeys.manage");
-  const journey = await prisma.journey.findUniqueOrThrow({
-    where: { id: journeyId },
-    include: { versions: { orderBy: { version: "desc" } } },
-  });
-  const draft = journey.versions.find((version) => version.state === "draft");
-  if (!draft) throw new Error("This journey has no draft to publish");
-
-  // PUBLISH IS THE STRICT GATE — for the whole version, not just its definition.
-  //
-  // Saving already validates strictly, so it is tempting to treat a stored draft
-  // as trusted. It is not: legacy drafts were CONVERTED into the triggers shape
-  // by a migration, never re-saved, and the runtime reader is deliberately
-  // tolerant of trigger names it does not know so that an unknown name degrades
-  // to "matches nothing" instead of throwing mid-sweep. Publishing such a draft
-  // without re-checking therefore produces an ACTIVE journey that silently
-  // enrols nobody — the exact failure this feature must not introduce, and one
-  // no error surfaces because tolerance is doing its job.
-  //
-  // So everything that decides who gets enrolled is re-parsed here, strictly,
-  // before any row changes state.
-  parseJourneyTriggers(draft.triggers);
-  parseConditionGroup(draft.entryConditions);
-  parseJourneyDefinition(draft.definition);
-  await assertTriggerReferencesResolve(journey.tenantId, draft.triggers);
-  // Also on publish, not only on save: a draft can be written by one build and
-  // published by another, and membership can lapse in between. Publishing is
-  // what the enrolment sweep acts on, so it is the last point at which a person
-  // can be told.
-  await assertStepAssigneesResolve(draft.definition);
-
-  await prisma.$transaction([
-    prisma.journeyVersion.updateMany({
-      where: { journeyId, state: "published" },
-      data: { state: "retired" },
-    }),
-    prisma.journeyVersion.update({
-      where: { id: draft.id },
-      data: { state: "published", publishedAt: new Date() },
-    }),
-    prisma.journey.update({
-      where: { id: journeyId },
-      data: { activeVersion: draft.version, status: "active" },
-    }),
-  ]);
-  await logAudit({
-    action: "journey.published",
-    summary: `Published journey “${journey.name}” version ${draft.version}`,
-    user,
-  });
-  revalidatePath("/journeys");
 }
 
 export async function setJourneyStatus(journeyId: string, status: "active" | "paused" | "archived") {
-  const user = await requirePermission("journeys.manage");
-  const journey = await prisma.journey.findUniqueOrThrow({ where: { id: journeyId } });
-  if (status === "active" && !journey.activeVersion) throw new Error("Publish the journey before activating it");
-  await prisma.journey.update({ where: { id: journeyId }, data: { status } });
-  await logAudit({
-    action: `journey.${status}`,
-    summary: `${status === "active" ? "Activated" : status === "paused" ? "Paused" : "Archived"} journey “${journey.name}”`,
-    user,
+  return withActingStaffScope(async () => {
+    const user = await requirePermission("journeys.manage");
+    const journey = await prisma.journey.findUniqueOrThrow({ where: { id: journeyId } });
+    if (status === "active" && !journey.activeVersion) throw new Error("Publish the journey before activating it");
+    await prisma.journey.update({ where: { id: journeyId }, data: { status } });
+    await logAudit({
+      action: `journey.${status}`,
+      summary: `${status === "active" ? "Activated" : status === "paused" ? "Paused" : "Archived"} journey “${journey.name}”`,
+      user,
+    });
+    revalidatePath("/journeys");
   });
-  revalidatePath("/journeys");
 }
 
 export async function runJourneyNow(journeyId: string) {
-  await requirePermission("journeys.manage");
-  const scheduled = await enrollJourneyNow(journeyId);
-  const events = await processJourneyEvents(100);
-  const runs = await processJourneyRuns(50);
-  revalidatePath("/journeys");
-  return { scheduled, events, runs };
+  return withActingStaffScope(async () => {
+    await requirePermission("journeys.manage");
+    const scheduled = await enrollJourneyNow(journeyId);
+    const events = await processJourneyEvents(100);
+    const runs = await processJourneyRuns(50);
+    revalidatePath("/journeys");
+    return { scheduled, events, runs };
+  });
 }
 
 function definition(steps: Array<Record<string, unknown>>) {
@@ -374,120 +384,122 @@ function definition(steps: Array<Record<string, unknown>>) {
 }
 
 export async function installJourneyTemplates() {
-  const user = await requirePermission("journeys.manage");
-  const templates = [
-    {
-      name: "New lead speed-to-contact",
-      description: "Immediately alerts the team and creates a same-day follow-up task.",
-      category: "automation",
-      triggers: [{ type: "lead_created", config: {} }],
-      entryConditions: { logic: "and", conditions: [] },
-      definition: definition([
-        { id: "notify", type: "send_push", config: { message: "New lead: {{name}} — {{model}}" } },
-        { id: "task", type: "create_activity", config: { activityType: "call", summary: "Call new lead {{name}}", dueDays: 0 } },
-      ]),
-    },
-    {
-      name: "Won-customer welcome",
-      description: "A delayed welcome message after a lead is marked won.",
-      category: "marketing",
-      triggers: [{ type: "lead_won", config: {} }],
-      entryConditions: { logic: "and", conditions: [] },
-      definition: definition([
-        { id: "wait", type: "wait", config: { amount: 1, unit: "days" } },
-        {
-          id: "welcome",
-          type: "send_email",
-          config: {
-            subject: "Welcome to the Denago Cape Town family",
-            body: "Hi {{first_name}},\n\nThank you for choosing Denago Cape Town. We are delighted to have you with us and will be in touch with the next steps.\n\nWarm regards,\nDenago Cape Town",
+  return withActingStaffScope(async () => {
+    const user = await requirePermission("journeys.manage");
+    const templates = [
+      {
+        name: "New lead speed-to-contact",
+        description: "Immediately alerts the team and creates a same-day follow-up task.",
+        category: "automation",
+        triggers: [{ type: "lead_created", config: {} }],
+        entryConditions: { logic: "and", conditions: [] },
+        definition: definition([
+          { id: "notify", type: "send_push", config: { message: "New lead: {{name}} — {{model}}" } },
+          { id: "task", type: "create_activity", config: { activityType: "call", summary: "Call new lead {{name}}", dueDays: 0 } },
+        ]),
+      },
+      {
+        name: "Won-customer welcome",
+        description: "A delayed welcome message after a lead is marked won.",
+        category: "marketing",
+        triggers: [{ type: "lead_won", config: {} }],
+        entryConditions: { logic: "and", conditions: [] },
+        definition: definition([
+          { id: "wait", type: "wait", config: { amount: 1, unit: "days" } },
+          {
+            id: "welcome",
+            type: "send_email",
+            config: {
+              subject: "Welcome to the Denago Cape Town family",
+              body: "Hi {{first_name}},\n\nThank you for choosing Denago Cape Town. We are delighted to have you with us and will be in touch with the next steps.\n\nWarm regards,\nDenago Cape Town",
+            },
           },
-        },
-      ]),
-    },
-    {
-      name: "Purchase anniversary",
-      description: "Annual anniversary greeting for vehicle owners.",
-      category: "marketing",
-      triggers: [{ type: "purchase_anniversary", config: {} }],
-      entryConditions: { logic: "and", conditions: [] },
-      definition: definition([
-        {
-          id: "anniversary-email",
-          type: "send_email",
-          config: {
-            subject: "Happy Denago anniversary, {{first_name}}!",
-            body: "Hi {{first_name}},\n\nHappy anniversary from Denago Cape Town. Thank you for being part of our community. If your vehicle needs a service, accessories or a battery health check, our team is ready to help.\n\nWarm regards,\nDenago Cape Town",
+        ]),
+      },
+      {
+        name: "Purchase anniversary",
+        description: "Annual anniversary greeting for vehicle owners.",
+        category: "marketing",
+        triggers: [{ type: "purchase_anniversary", config: {} }],
+        entryConditions: { logic: "and", conditions: [] },
+        definition: definition([
+          {
+            id: "anniversary-email",
+            type: "send_email",
+            config: {
+              subject: "Happy Denago anniversary, {{first_name}}!",
+              body: "Hi {{first_name}},\n\nHappy anniversary from Denago Cape Town. Thank you for being part of our community. If your vehicle needs a service, accessories or a battery health check, our team is ready to help.\n\nWarm regards,\nDenago Cape Town",
+            },
           },
-        },
-      ]),
-    },
-    {
-      name: "Service win-back",
-      description: "Re-engages owners who have been inactive for 12 months.",
-      category: "marketing",
-      triggers: [{ type: "win_back", config: { inactiveMonths: 12 } }],
-      entryConditions: { logic: "and", conditions: [] },
-      definition: definition([
-        {
-          id: "winback-email",
-          type: "send_email",
-          config: {
-            subject: "We miss you at Denago Cape Town",
-            body: "Hi {{first_name}},\n\nIt has been a while since we saw you. A quick service helps protect your vehicle and battery. Reply to this email and our team will arrange a convenient booking.\n\nWarm regards,\nDenago Cape Town",
+        ]),
+      },
+      {
+        name: "Service win-back",
+        description: "Re-engages owners who have been inactive for 12 months.",
+        category: "marketing",
+        triggers: [{ type: "win_back", config: { inactiveMonths: 12 } }],
+        entryConditions: { logic: "and", conditions: [] },
+        definition: definition([
+          {
+            id: "winback-email",
+            type: "send_email",
+            config: {
+              subject: "We miss you at Denago Cape Town",
+              body: "Hi {{first_name}},\n\nIt has been a while since we saw you. A quick service helps protect your vehicle and battery. Reply to this email and our team will arrange a convenient booking.\n\nWarm regards,\nDenago Cape Town",
+            },
           },
-        },
-        { id: "wait", type: "wait", config: { amount: 7, unit: "days" } },
-        { id: "follow-up", type: "create_activity", config: { activityType: "call", summary: "Follow up win-back contact {{name}}", dueDays: 0 } },
-      ]),
-    },
-  ];
+          { id: "wait", type: "wait", config: { amount: 7, unit: "days" } },
+          { id: "follow-up", type: "create_activity", config: { activityType: "call", summary: "Follow up win-back contact {{name}}", dueDays: 0 } },
+        ]),
+      },
+    ];
 
-  // USER-ORIGINATED: `requirePermission("journeys.manage")` above. Templates are
-  // installed INTO the acting workspace, so both halves of this loop take that
-  // workspace — and they must take the SAME one.
-  //
-  // The existence check is scoped for that reason. It was a bare name match with
-  // no tenant predicate, and the db.ts guard adds none while enforcement is
-  // dormant, so once the founding tenant had installed the templates every OTHER
-  // workspace saw `exists` and installed NOTHING — the button reported success and
-  // did nothing at all. Reading globally while writing into one workspace is the
-  // same disagreement the write itself had, on the read side.
-  // `journeyScope()` is the existing rule for "which Journey rows does this
-  // builder's workspace own" — the same `enforced ?? session ?? founding` ladder
-  // the acting scope uses, plus the documented legacy clause (Journey.tenantId is
-  // nullable and the NULL rows are the FOUNDING tenant's, and only its). Reusing
-  // it keeps one rule rather than a second copy that can drift from it.
-  const ownScope = await journeyScope();
-  for (const item of templates) {
-    const exists = await prisma.journey.findFirst({
-      where: { name: item.name, status: { not: "archived" }, ...ownScope },
-    });
-    if (exists) continue;
-    await withActingTenantWrite(async (tx, tenantId) => {
-      const tpl = await tx.journey.create({
-        data: {
-          name: item.name,
-          description: item.description,
-          category: item.category,
-          createdById: user.id,
-          tenantId,
-        },
+    // USER-ORIGINATED: `requirePermission("journeys.manage")` above. Templates are
+    // installed INTO the acting workspace, so both halves of this loop take that
+    // workspace — and they must take the SAME one.
+    //
+    // The existence check is scoped for that reason. It was a bare name match with
+    // no tenant predicate, and the db.ts guard adds none while enforcement is
+    // dormant, so once the founding tenant had installed the templates every OTHER
+    // workspace saw `exists` and installed NOTHING — the button reported success and
+    // did nothing at all. Reading globally while writing into one workspace is the
+    // same disagreement the write itself had, on the read side.
+    // `journeyScope()` is the existing rule for "which Journey rows does this
+    // builder's workspace own" — the same `enforced ?? session ?? founding` ladder
+    // the acting scope uses, plus the documented legacy clause (Journey.tenantId is
+    // nullable and the NULL rows are the FOUNDING tenant's, and only its). Reusing
+    // it keeps one rule rather than a second copy that can drift from it.
+    const ownScope = await journeyScope();
+    for (const item of templates) {
+      const exists = await prisma.journey.findFirst({
+        where: { name: item.name, status: { not: "archived" }, ...ownScope },
       });
-      await tx.journeyVersion.create({
-        data: {
-          journeyId: tpl.id,
-          version: 1,
-          state: "draft",
-          triggers: item.triggers,
-          ...legacyTriggerPair(item.triggers),
-          entryConditions: item.entryConditions,
-          definition: item.definition as Prisma.InputJsonValue,
-          createdById: user.id,
-          tenantId,
-        },
+      if (exists) continue;
+      await withActingTenantWrite(async (tx, tenantId) => {
+        const tpl = await tx.journey.create({
+          data: {
+            name: item.name,
+            description: item.description,
+            category: item.category,
+            createdById: user.id,
+            tenantId,
+          },
+        });
+        await tx.journeyVersion.create({
+          data: {
+            journeyId: tpl.id,
+            version: 1,
+            state: "draft",
+            triggers: item.triggers,
+            ...legacyTriggerPair(item.triggers),
+            entryConditions: item.entryConditions,
+            definition: item.definition as Prisma.InputJsonValue,
+            createdById: user.id,
+            tenantId,
+          },
+        });
       });
-    });
-  }
-  revalidatePath("/journeys");
+    }
+    revalidatePath("/journeys");
+  });
 }

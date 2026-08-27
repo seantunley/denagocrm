@@ -8,6 +8,7 @@ import { isKnownTenantCredentialKey } from "@/lib/tenantCredentialFields";
 import { integrationsUsingCredentialKey } from "@/lib/integrationFlow";
 import { clearIntegrationVerification } from "@/lib/integrationConnection";
 import { logAuditStrict } from "@/lib/audit";
+import { withActingStaffScope } from "@/lib/actingScope";
 
 const OVERRIDES_PATH = "/settings/integration-overrides";
 
@@ -36,37 +37,39 @@ async function invalidateVerificationForKey(tenantId: string, key: string): Prom
  * an owner can only ever set an override for their own active tenant.
  */
 export async function saveTenantCredentialOverride(formData: FormData): Promise<void> {
-  const user = await requireTenantOwner();
-  const key = String(formData.get("key") ?? "");
-  if (!isKnownTenantCredentialKey(key)) throw new Error("Unknown integration credential key.");
+  return withActingStaffScope(async () => {
+    const user = await requireTenantOwner();
+    const key = String(formData.get("key") ?? "");
+    if (!isKnownTenantCredentialKey(key)) throw new Error("Unknown integration credential key.");
 
-  const value = String(formData.get("value") ?? "").trim();
-  // The field never echoes back a saved value (secret or plain — this UI never
-  // renders one), so a blank submit means "leave whatever's saved (override or
-  // platform default) alone" — same "leave blank to keep" semantics as the
-  // global settings page's secret fields. Clearing an override is a separate,
-  // explicit action (clearTenantCredentialOverride).
-  if (!value) return;
+    const value = String(formData.get("value") ?? "").trim();
+    // The field never echoes back a saved value (secret or plain — this UI never
+    // renders one), so a blank submit means "leave whatever's saved (override or
+    // platform default) alone" — same "leave blank to keep" semantics as the
+    // global settings page's secret fields. Clearing an override is a separate,
+    // explicit action (clearTenantCredentialOverride).
+    if (!value) return;
 
-  const tenantId = await getActiveTenantId();
-  if (!tenantId) throw new Error("No active tenant — can't save a tenant-specific override.");
+    const tenantId = await getActiveTenantId();
+    if (!tenantId) throw new Error("No active tenant — can't save a tenant-specific override.");
 
-  await putTenantCredential(tenantId, key, value);
-  // The stored bundle changed, so any verification verdict about it is now
-  // about a credential that no longer exists.
-  await invalidateVerificationForKey(tenantId, key);
-  // Never log the value itself (secret or not) — only that an override for
-  // this key was set, mirroring how the global page's saveSetting action never
-  // writes a credential value into an audit entry either.
-  await logAuditStrict({
-    action: "tenant_credential.override_set",
-    summary: `Set a tenant override for ${key}`,
-    entityType: "TenantIntegrationCredential",
-    entityId: `${tenantId}:${key}`,
-    user,
-    after: { key },
+    await putTenantCredential(tenantId, key, value);
+    // The stored bundle changed, so any verification verdict about it is now
+    // about a credential that no longer exists.
+    await invalidateVerificationForKey(tenantId, key);
+    // Never log the value itself (secret or not) — only that an override for
+    // this key was set, mirroring how the global page's saveSetting action never
+    // writes a credential value into an audit entry either.
+    await logAuditStrict({
+      action: "tenant_credential.override_set",
+      summary: `Set a tenant override for ${key}`,
+      entityType: "TenantIntegrationCredential",
+      entityId: `${tenantId}:${key}`,
+      user,
+      after: { key },
+    });
+    revalidatePath(OVERRIDES_PATH);
   });
-  revalidatePath(OVERRIDES_PATH);
 }
 
 /**
@@ -77,22 +80,24 @@ export async function saveTenantCredentialOverride(formData: FormData): Promise<
  * a harmless no-op instead of a P2025 "record not found" error.
  */
 export async function clearTenantCredentialOverride(key: string): Promise<void> {
-  const user = await requireTenantOwner();
-  if (!isKnownTenantCredentialKey(key)) throw new Error("Unknown integration credential key.");
+  return withActingStaffScope(async () => {
+    const user = await requireTenantOwner();
+    if (!isKnownTenantCredentialKey(key)) throw new Error("Unknown integration credential key.");
 
-  const tenantId = await getActiveTenantId();
-  if (!tenantId) throw new Error("No active tenant — nothing to clear.");
+    const tenantId = await getActiveTenantId();
+    if (!tenantId) throw new Error("No active tenant — nothing to clear.");
 
-  await basePrisma.tenantIntegrationCredential.deleteMany({ where: { tenantId, key } });
-  // Reverting to the platform default is just as much a change to what the
-  // bundle IS — the old verdict was about the override that just went away.
-  await invalidateVerificationForKey(tenantId, key);
-  await logAuditStrict({
-    action: "tenant_credential.override_cleared",
-    summary: `Cleared the tenant override for ${key}`,
-    entityType: "TenantIntegrationCredential",
-    entityId: `${tenantId}:${key}`,
-    user,
+    await basePrisma.tenantIntegrationCredential.deleteMany({ where: { tenantId, key } });
+    // Reverting to the platform default is just as much a change to what the
+    // bundle IS — the old verdict was about the override that just went away.
+    await invalidateVerificationForKey(tenantId, key);
+    await logAuditStrict({
+      action: "tenant_credential.override_cleared",
+      summary: `Cleared the tenant override for ${key}`,
+      entityType: "TenantIntegrationCredential",
+      entityId: `${tenantId}:${key}`,
+      user,
+    });
+    revalidatePath(OVERRIDES_PATH);
   });
-  revalidatePath(OVERRIDES_PATH);
 }
