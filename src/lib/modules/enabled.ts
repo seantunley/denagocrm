@@ -4,7 +4,7 @@ import { basePrisma } from "@/lib/db";
 import { getSetting, putSetting } from "@/lib/settings";
 import { currentTenantScope } from "@/lib/tenantScope";
 import { OPTIONAL_MODULE_IDS, type ModuleId } from "./registry";
-import { effectiveModuleIds, installWideModuleIds } from "./entitlement";
+import { effectiveModuleIds, grantedModuleIds, installWideModuleIds } from "./entitlement";
 
 // We persist the DISABLED optional packs, not the enabled ones. Storing the
 // disabled set means a newly-added module defaults ON for every existing
@@ -140,6 +140,44 @@ async function resolveTenantForModules(): Promise<TenantResolution> {
   } catch {
     return { kind: "none" };
   }
+}
+
+/**
+ * What this workspace MAY use — the grant, before its own on/off choices.
+ *
+ * ── WHY THE SETTINGS SCREEN NEEDS THIS AND NOTHING ELSE DOES ────────────────
+ *
+ * Everywhere else only cares whether a module is effective, and
+ * `getEnabledModuleIds` answers that. Settings → Modules is different: it draws a
+ * checkbox per module, and an ungranted module rendered as an unchecked box is a
+ * control that cannot work. Ticking it saves correctly — the local disable list
+ * is written — and the module stays off, because effective is grant MINUS
+ * disabled and the grant never contained it. The box comes back unticked and it
+ * reads as "saving is broken".
+ *
+ * That cost real time on 2026-08-28: the dev workspace was missing `automation`
+ * from its grant, the pack could not be switched on, and the save was blamed.
+ * The setting had written perfectly.
+ *
+ * FAILS CLOSED the same way the effective set does — an unresolved tenant yields
+ * the mandatory modules only, never the install-wide list, so this can never
+ * present a module as available that the tenant was not granted.
+ */
+export async function grantedModuleIdsForRequest(): Promise<Set<ModuleId>> {
+  const resolution = await resolveTenantForModules();
+  if (resolution.kind !== "tenant") {
+    // No single tenant applies. `installWideModuleIds` is the honest answer for
+    // the pre-tenancy and system paths, and grantedModuleIds("") is the
+    // fail-closed answer for a scope that names nobody.
+    return resolution.kind === "scoped-but-unresolved"
+      ? grantedModuleIds("")
+      : installWideModuleIds([]);
+  }
+  const tenant = await basePrisma.tenant.findUnique({
+    where: { id: resolution.tenantId },
+    select: { modules: true },
+  });
+  return grantedModuleIds(tenant?.modules ?? "");
 }
 
 /** Convenience: is a single module switched on for this install? */
