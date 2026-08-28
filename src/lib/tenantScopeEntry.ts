@@ -2,7 +2,8 @@ import "server-only";
 import { resolveActingTenant } from "./tenantContext";
 import { honoredTenantClaim, decideStaffTenantScope } from "./tenant";
 import { tenantEnforcing } from "./tenantEnforcement";
-import { enterTenantScope, runInTenantScope, type TenantScope } from "./tenantScope";
+import { currentTenantScope, enterTenantScope, runInTenantScope, type TenantScope } from "./tenantScope";
+import { TenantScopeError } from "./tenantGuard";
 import { resolveChannelTenant, type ChannelKind } from "./channelTenant";
 
 /**
@@ -94,13 +95,45 @@ export async function establishStaffTenantScope(
 }
 
 /**
- * Any chokepoint that has already resolved the owning tenant of the principal
- * (e.g. the customer portal, from its Contact's `tenantId`). No-op when
- * enforcement off. A null tenantId is carried through — under enforcement the db
- * guard refuses it (fail closed), never runs unscoped.
+ * Run a request whose tenant has ALREADY been authenticated/resolved (API key,
+ * portal contact, other trusted principal) inside one enclosing tenant scope.
+ *
+ * Application request boundaries MUST use the callback form. `runInTenantScope`
+ * creates an enclosing async frame, so every guarded read/write below `fn` sees
+ * the resolved tenant. This is the reliable replacement for the old shape that
+ * called `enterTenantScope()` in a helper and then resumed work in the caller.
+ *
+ * There is one deliberately narrow legacy overload with no callback: a trusted
+ * pre-principal bootstrap that is ALREADY running inside an explicit system scope
+ * may transition that same carrier to the resolved tenant. That is used by the
+ * low-level tenant-guard harness and mirrors auth chokepoints which own the carrier
+ * themselves. Outside a system scope the one-argument form throws, so a Route
+ * Handler or Server Action cannot accidentally reintroduce the propagation bug.
+ *
+ * DORMANT remains byte-for-byte compatible: the callback runs directly, while a
+ * legacy one-argument transition is a no-op. The tenant must already have been
+ * derived from a trusted principal; this helper performs no authentication.
  */
-export function establishTenantScopeFromId(tenantId: string | null): void {
+export function establishTenantScopeFromId(tenantId: string | null): void;
+export function establishTenantScopeFromId<T>(
+  tenantId: string | null,
+  fn: () => Promise<T>,
+): Promise<T>;
+export function establishTenantScopeFromId<T>(
+  tenantId: string | null,
+  fn?: () => Promise<T>,
+): void | Promise<T> {
+  if (fn) {
+    if (!tenantEnforcing()) return fn();
+    return runInTenantScope({ tenantId, system: false }, fn);
+  }
+
   if (!tenantEnforcing()) return;
+  if (!currentTenantScope()?.system) {
+    throw new TenantScopeError(
+      "An enclosing tenant callback is required outside a trusted system bootstrap",
+    );
+  }
   enterTenantScope({ tenantId, system: false });
 }
 
