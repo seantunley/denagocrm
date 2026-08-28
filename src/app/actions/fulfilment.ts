@@ -14,6 +14,7 @@ import { checkUploadPayload, MAX_PHOTOS } from "@/lib/photoBudget";
 import { contactName } from "@/lib/format";
 import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { isModuleEnabled, requireModuleEnabled } from "@/lib/modules/enabled";
+import { vehiclesAwaitingRegistration } from "@/lib/deliveryVehicles";
 
 const MAX_FILE = 4 * 1024 * 1024;
 const QUOTE_GONE = "This quote is no longer available in this workspace.";
@@ -350,7 +351,10 @@ export async function markDelivered(quoteId: string, formData: FormData): Promis
     const tenantId = await actingTenantId();
     const quote = await prisma.quote.findFirst({
       where: { id: quoteId, tenantId },
-      include: { lead: true },
+      // `items` so the delivery knows how many vehicles it actually sold. It used
+      // to send the customer to register exactly one, whatever the quantity —
+      // Q-1014 sold two Rover XXLs and the second was never recorded.
+      include: { lead: true, items: { include: { product: true }, orderBy: { sortOrder: "asc" } } },
     });
     if (!quote) refuse(QUOTE_GONE);
     if (!quote.deliveryScheduledFor) refuse("Schedule the delivery before marking it delivered.");
@@ -411,6 +415,25 @@ export async function markDelivered(quoteId: string, formData: FormData): Promis
     });
     revalidatePath("/deliveries");
     revalidatePath(`/quotes/${quoteId}`);
-    return { redirectTo: `/vehicles/new?contactId=${quote.contactId ?? ""}&productId=${quote.lead?.productId ?? ""}&color=${encodeURIComponent(quote.lead?.color ?? "")}` };
+    /*
+     * Hand over the WHOLE queue, by pointing at the quote rather than at one
+     * vehicle's details.
+     *
+     * `?quoteId=…&seq=0` keeps the quote as the single source of truth: the
+     * registration page re-derives the queue from the same lines, so the URL
+     * cannot carry a stale or hand-edited list, and the position survives a
+     * refresh. The old link passed the LEAD's product, which was not even
+     * necessarily what the quote sold.
+     *
+     * A quote with no catalogue lines queues nothing, and keeps the previous
+     * behaviour — a blank registration form seeded with the contact.
+     */
+    const queue = vehiclesAwaitingRegistration(quote.items);
+    const contactParam = `contactId=${quote.contactId ?? ""}`;
+    return {
+      redirectTo: queue.length > 0
+        ? `/vehicles/new?${contactParam}&quoteId=${quoteId}&seq=0`
+        : `/vehicles/new?${contactParam}&productId=${quote.lead?.productId ?? ""}&color=${encodeURIComponent(quote.lead?.color ?? "")}`,
+    };
   });
 }
