@@ -11,26 +11,30 @@ export async function savePushSubscription(sub: {
   endpoint: string;
   keys: { p256dh: string; auth: string };
 }) {
-  const user = await requireUser();
-  if (!isAllowedPushEndpoint(sub.endpoint)) {
-    throw new Error("That push endpoint is not a recognised push service.");
-  }
-  await prisma.pushSubscription.upsert({
-    where: { endpoint: sub.endpoint },
-    update: { p256dh: sub.keys.p256dh, auth: sub.keys.auth, userId: user.id, userName: user.name },
-    create: {
-      endpoint: sub.endpoint,
-      p256dh: sub.keys.p256dh,
-      auth: sub.keys.auth,
-      userId: user.id,
-      userName: user.name,
-    },
+  return withActingStaffScope(async () => {
+    const user = await requireUser();
+    if (!isAllowedPushEndpoint(sub.endpoint)) {
+      throw new Error("That push endpoint is not a recognised push service.");
+    }
+    await prisma.pushSubscription.upsert({
+      where: { endpoint: sub.endpoint },
+      update: { p256dh: sub.keys.p256dh, auth: sub.keys.auth, userId: user.id, userName: user.name },
+      create: {
+        endpoint: sub.endpoint,
+        p256dh: sub.keys.p256dh,
+        auth: sub.keys.auth,
+        userId: user.id,
+        userName: user.name,
+      },
+    });
   });
 }
 
 export async function removePushSubscription(endpoint: string) {
-  const user = await requireUser();
-  await prisma.pushSubscription.deleteMany({ where: { endpoint, userId: user.id } });
+  return withActingStaffScope(async () => {
+    const user = await requireUser();
+    await prisma.pushSubscription.deleteMany({ where: { endpoint, userId: user.id } });
+  });
 }
 
 type PushTestOptions = {

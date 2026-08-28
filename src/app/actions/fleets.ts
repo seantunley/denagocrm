@@ -98,22 +98,24 @@ export async function createFleet(formData: FormData) {
 }
 
 export async function updateFleet(id: string, formData: FormData) {
-  const user = await requirePermission("fleets.manage");
-  const fleet = await tenantFleet(id);
-  // #15: reassigning the fleet's contact requires access to the destination contact.
-  const contactId = String(formData.get("contactId") ?? "").trim() || null;
-  if (contactId) await requireContactAccess(contactId, "fleets.manage");
-  await prisma.fleet.update({
-    where: { id: fleet.id },
-    data: {
-      name: String(formData.get("name") ?? "").trim() || "Untitled fleet",
-      type: parseFleetType(formData.get("type")),
-      contactId,
-      notes: String(formData.get("notes") ?? "").trim() || null,
-    },
+  return withActingStaffScope(async () => {
+    const user = await requirePermission("fleets.manage");
+    const fleet = await tenantFleet(id);
+    // #15: reassigning the fleet's contact requires access to the destination contact.
+    const contactId = String(formData.get("contactId") ?? "").trim() || null;
+    if (contactId) await requireContactAccess(contactId, "fleets.manage");
+    await prisma.fleet.update({
+      where: { id: fleet.id },
+      data: {
+        name: String(formData.get("name") ?? "").trim() || "Untitled fleet",
+        type: parseFleetType(formData.get("type")),
+        contactId,
+        notes: String(formData.get("notes") ?? "").trim() || null,
+      },
+    });
+    await logAudit({ action: "fleet.updated", summary: `Updated fleet "${fleet.name}"`, user });
+    revalidatePath(`/fleets/${id}`);
   });
-  await logAudit({ action: "fleet.updated", summary: `Updated fleet "${fleet.name}"`, user });
-  revalidatePath(`/fleets/${id}`);
 }
 
 /**
@@ -125,28 +127,30 @@ export async function updateFleet(id: string, formData: FormData) {
  * same audit line as its neighbour.
  */
 export async function updateFleetBusiness(id: string, formData: FormData) {
-  const user = await requirePermission("fleets.manage");
-  const fleet = await tenantFleet(id);
-  await prisma.fleet.update({
-    where: { id: fleet.id },
-    data: {
-      registrationNumber: optional(formData, "registrationNumber"),
-      vatNumber: optional(formData, "vatNumber"),
-      billingEmail: optional(formData, "billingEmail"),
-      billingPhone: optional(formData, "billingPhone"),
-      address: optional(formData, "address"),
-      suburb: optional(formData, "suburb"),
-      city: optional(formData, "city"),
-      province: optional(formData, "province"),
-      postalCode: optional(formData, "postalCode"),
-    },
+  return withActingStaffScope(async () => {
+    const user = await requirePermission("fleets.manage");
+    const fleet = await tenantFleet(id);
+    await prisma.fleet.update({
+      where: { id: fleet.id },
+      data: {
+        registrationNumber: optional(formData, "registrationNumber"),
+        vatNumber: optional(formData, "vatNumber"),
+        billingEmail: optional(formData, "billingEmail"),
+        billingPhone: optional(formData, "billingPhone"),
+        address: optional(formData, "address"),
+        suburb: optional(formData, "suburb"),
+        city: optional(formData, "city"),
+        province: optional(formData, "province"),
+        postalCode: optional(formData, "postalCode"),
+      },
+    });
+    await logAudit({
+      action: "fleet.updated",
+      summary: `Updated business details for fleet "${fleet.name}"`,
+      user,
+    });
+    revalidatePath(`/fleets/${id}`);
   });
-  await logAudit({
-    action: "fleet.updated",
-    summary: `Updated business details for fleet "${fleet.name}"`,
-    user,
-  });
-  revalidatePath(`/fleets/${id}`);
 }
 
 /**
@@ -182,18 +186,22 @@ export async function deleteFleet(id: string, formData: FormData) {
 }
 
 export async function assignVehicleToFleet(fleetId: string, formData: FormData) {
-  const vehicleId = String(formData.get("vehicleId") ?? "");
-  if (!vehicleId) return;
-  await requireVehicleAccess(vehicleId, "fleets.manage");
-  // The DESTINATION is checked too: vehicle access alone says nothing about the
-  // fleet it is being moved into.
-  const fleet = await tenantFleet(fleetId);
-  await prisma.vehicle.update({ where: { id: vehicleId }, data: { fleetId: fleet.id } });
-  revalidatePath(`/fleets/${fleetId}`);
+  return withActingStaffScope(async () => {
+    const vehicleId = String(formData.get("vehicleId") ?? "");
+    if (!vehicleId) return;
+    await requireVehicleAccess(vehicleId, "fleets.manage");
+    // The DESTINATION is checked too: vehicle access alone says nothing about the
+    // fleet it is being moved into.
+    const fleet = await tenantFleet(fleetId);
+    await prisma.vehicle.update({ where: { id: vehicleId }, data: { fleetId: fleet.id } });
+    revalidatePath(`/fleets/${fleetId}`);
+  });
 }
 
 export async function removeVehicleFromFleet(vehicleId: string, fleetId: string) {
-  await requireVehicleAccess(vehicleId, "fleets.manage");
-  await prisma.vehicle.update({ where: { id: vehicleId }, data: { fleetId: null } });
-  revalidatePath(`/fleets/${fleetId}`);
+  return withActingStaffScope(async () => {
+    await requireVehicleAccess(vehicleId, "fleets.manage");
+    await prisma.vehicle.update({ where: { id: vehicleId }, data: { fleetId: null } });
+    revalidatePath(`/fleets/${fleetId}`);
+  });
 }

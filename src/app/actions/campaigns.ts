@@ -6,6 +6,7 @@ import { requirePermission, requireContactAccess } from "@/lib/permissions";
 import { sendEmail } from "@/lib/email";
 import { saveFile } from "@/lib/storage";
 import { resolveActingTenant } from "@/lib/tenantContext";
+import { withActingStaffScope } from "@/lib/actingScope";
 import {
   resolveContacts,
   buildTrackedEmail,
@@ -61,60 +62,66 @@ async function audienceLabel(criteria: SegmentCriteria, tenantId: string): Promi
 }
 
 export async function uploadCampaignImage(formData: FormData): Promise<string | null> {
-  const user = await requirePermission("campaigns.manage");
-  // A campaign image is uploaded from the composer BEFORE any campaign exists, so
-  // there is no parent record to inherit from — the workspace the author is acting
-  // in owns it. That workspace was already resolved and REQUIRED here (the action
-  // refuses without one), so namespacing costs nothing and invents nothing.
-  const tenantId = await tenantIdFor(user.id);
-  if (!tenantId) return null;
-  const file = formData.get("file") as File | null;
-  if (!file || !file.type.startsWith("image/")) return null;
-  if (file.size > 5 * 1024 * 1024) return null;
-  const buf = Buffer.from(await file.arrayBuffer());
-  return saveFile(buf, file.name, file.type, tenantId);
+  return withActingStaffScope(async () => {
+    const user = await requirePermission("campaigns.manage");
+    // A campaign image is uploaded from the composer BEFORE any campaign exists, so
+    // there is no parent record to inherit from — the workspace the author is acting
+    // in owns it. That workspace was already resolved and REQUIRED here (the action
+    // refuses without one), so namespacing costs nothing and invents nothing.
+    const tenantId = await tenantIdFor(user.id);
+    if (!tenantId) return null;
+    const file = formData.get("file") as File | null;
+    if (!file || !file.type.startsWith("image/")) return null;
+    if (file.size > 5 * 1024 * 1024) return null;
+    const buf = Buffer.from(await file.arrayBuffer());
+    return saveFile(buf, file.name, file.type, tenantId);
+  });
 }
 
 export async function previewAudience(formData: FormData): Promise<{ count: number }> {
-  const user = await requirePermission("campaigns.manage");
-  const tenantId = await tenantIdFor(user.id);
-  if (!tenantId) return { count: 0 };
-  const channel = str(formData.get("channel")) || "email";
-  try {
-    const { criteria } = await criteriaFor(formData, tenantId);
-    return { count: (await resolveContacts(tenantId, criteria, channel)).length };
-  } catch {
-    return { count: 0 };
-  }
+  return withActingStaffScope(async () => {
+    const user = await requirePermission("campaigns.manage");
+    const tenantId = await tenantIdFor(user.id);
+    if (!tenantId) return { count: 0 };
+    const channel = str(formData.get("channel")) || "email";
+    try {
+      const { criteria } = await criteriaFor(formData, tenantId);
+      return { count: (await resolveContacts(tenantId, criteria, channel)).length };
+    } catch {
+      return { count: 0 };
+    }
+  });
 }
 
 export async function sendCampaignTest(
   _prev: CampaignState | undefined,
   formData: FormData,
 ): Promise<CampaignState> {
-  const user = await requirePermission("campaigns.manage");
-  if (!(await tenantIdFor(user.id))) return { error: "No active tenant is available." };
-  const channel = str(formData.get("channel")) || "email";
-  const to = str(formData.get("testTo"));
-  if (!to) return { error: "Enter a test address / number." };
-  const vars = "there";
-  if (channel === "email") {
-    const subject = str(formData.get("subject")).replace(/\{\{\s*(first_name|name)\s*\}\}/g, vars) || "Test";
-    const html = str(formData.get("htmlBody")).replace(/\{\{\s*(first_name|name)\s*\}\}/g, vars);
-    if (!html) return { error: "Write the email first." };
-    const res = await sendEmail({
-      to,
-      subject,
-      text: htmlToText(html),
-      html: buildTrackedEmail(html, "preview"),
-    });
-    return res.ok ? { ok: `Test email sent to ${to}.` } : { error: res.error ?? "Send failed." };
-  }
-  const body = str(formData.get("body")).replace(/\{\{\s*(first_name|name)\s*\}\}/g, vars);
-  if (!body) return { error: "Write the message first." };
-  const { sendSms } = await import("@/lib/sms");
-  const res = await sendSms(to, body);
-  return res.ok ? { ok: `Test SMS sent to ${to}.` } : { error: res.error ?? "Send failed." };
+  return withActingStaffScope(async () => {
+    const user = await requirePermission("campaigns.manage");
+    if (!(await tenantIdFor(user.id))) return { error: "No active tenant is available." };
+    const channel = str(formData.get("channel")) || "email";
+    const to = str(formData.get("testTo"));
+    if (!to) return { error: "Enter a test address / number." };
+    const vars = "there";
+    if (channel === "email") {
+      const subject = str(formData.get("subject")).replace(/\{\{\s*(first_name|name)\s*\}\}/g, vars) || "Test";
+      const html = str(formData.get("htmlBody")).replace(/\{\{\s*(first_name|name)\s*\}\}/g, vars);
+      if (!html) return { error: "Write the email first." };
+      const res = await sendEmail({
+        to,
+        subject,
+        text: htmlToText(html),
+        html: buildTrackedEmail(html, "preview"),
+      });
+      return res.ok ? { ok: `Test email sent to ${to}.` } : { error: res.error ?? "Send failed." };
+    }
+    const body = str(formData.get("body")).replace(/\{\{\s*(first_name|name)\s*\}\}/g, vars);
+    if (!body) return { error: "Write the message first." };
+    const { sendSms } = await import("@/lib/sms");
+    const res = await sendSms(to, body);
+    return res.ok ? { ok: `Test SMS sent to ${to}.` } : { error: res.error ?? "Send failed." };
+  });
 }
 
 /**
@@ -129,45 +136,53 @@ export async function sendCampaign(
   _prev: CampaignState | undefined,
   _formData: FormData,
 ): Promise<CampaignState> {
-  await requirePermission("campaigns.manage");
-  return {
-    error:
-      "Direct campaign launch has been retired. Create a governed draft in Marketing → Campaigns, submit it for review, approve it, then schedule or queue it.",
-  };
+  return withActingStaffScope(async () => {
+    await requirePermission("campaigns.manage");
+    return {
+      error:
+        "Direct campaign launch has been retired. Create a governed draft in Marketing → Campaigns, submit it for review, approve it, then schedule or queue it.",
+    };
+  });
 }
 
 export async function saveSegment(formData: FormData) {
-  const user = await requirePermission("campaigns.manage");
-  const tenantId = await tenantIdFor(user.id);
-  if (!tenantId) return;
-  const name = str(formData.get("name"));
-  if (!name) return;
-  const criteria = criteriaFromForm(formData);
-  if (criteria.tagId) {
-    const tagExists = await prisma.tag.count({ where: { id: criteria.tagId, tenantId } });
-    if (!tagExists) return;
-  }
-  await prisma.segment.create({
-    data: { tenantId, name, criteria: JSON.stringify(criteria) },
+  return withActingStaffScope(async () => {
+    const user = await requirePermission("campaigns.manage");
+    const tenantId = await tenantIdFor(user.id);
+    if (!tenantId) return;
+    const name = str(formData.get("name"));
+    if (!name) return;
+    const criteria = criteriaFromForm(formData);
+    if (criteria.tagId) {
+      const tagExists = await prisma.tag.count({ where: { id: criteria.tagId, tenantId } });
+      if (!tagExists) return;
+    }
+    await prisma.segment.create({
+      data: { tenantId, name, criteria: JSON.stringify(criteria) },
+    });
+    revalidatePath("/campaigns");
   });
-  revalidatePath("/campaigns");
 }
 
 export async function deleteSegment(id: string) {
-  const user = await requirePermission("campaigns.manage");
-  const tenantId = await tenantIdFor(user.id);
-  if (!tenantId) return;
-  await prisma.segment.deleteMany({ where: { id, tenantId } });
-  revalidatePath("/campaigns");
+  return withActingStaffScope(async () => {
+    const user = await requirePermission("campaigns.manage");
+    const tenantId = await tenantIdFor(user.id);
+    if (!tenantId) return;
+    await prisma.segment.deleteMany({ where: { id, tenantId } });
+    revalidatePath("/campaigns");
+  });
 }
 
 export async function setMarketingOptOut(contactId: string, optOut: boolean) {
-  const user = await requireContactAccess(contactId, "campaigns.manage");
-  const tenantId = await tenantIdFor(user.id);
-  if (!tenantId) return;
-  await prisma.contact.updateMany({
-    where: { id: contactId, tenantId },
-    data: { marketingOptOut: optOut },
+  return withActingStaffScope(async () => {
+    const user = await requireContactAccess(contactId, "campaigns.manage");
+    const tenantId = await tenantIdFor(user.id);
+    if (!tenantId) return;
+    await prisma.contact.updateMany({
+      where: { id: contactId, tenantId },
+      data: { marketingOptOut: optOut },
+    });
+    revalidatePath("/campaigns");
   });
-  revalidatePath("/campaigns");
 }

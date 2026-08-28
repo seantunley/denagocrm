@@ -69,41 +69,49 @@ export async function createProduct(formData: FormData) {
 }
 
 export async function updateProduct(id: string, formData: FormData) {
-  await requireOwner();
-  const data = productData(formData);
-  if (!data.name) throw new Error("Product name is required");
-  await prisma.product.update({ where: { id }, data });
-  revalidatePath("/products");
-  revalidatePath(`/products/${id}`);
+  return withActingStaffScope(async () => {
+    await requireOwner();
+    const data = productData(formData);
+    if (!data.name) throw new Error("Product name is required");
+    await prisma.product.update({ where: { id }, data });
+    revalidatePath("/products");
+    revalidatePath(`/products/${id}`);
+  });
 }
 
 export async function addProductColor(productId: string, formData: FormData) {
-  await requireOwner();
-  const name = String(formData.get("name") ?? "").trim();
-  if (!name) return;
-  await prisma.productColor.create({ data: { productId, name } });
-  revalidatePath(`/products/${productId}`);
+  return withActingStaffScope(async () => {
+    await requireOwner();
+    const name = String(formData.get("name") ?? "").trim();
+    if (!name) return;
+    await prisma.productColor.create({ data: { productId, name } });
+    revalidatePath(`/products/${productId}`);
+  });
 }
 
 export async function deleteProductColor(id: string, productId: string, formData: FormData) {
-  await requireOwner();
-  void formData;
-  await prisma.productColor.delete({ where: { id } });
-  revalidatePath(`/products/${productId}`);
+  return withActingStaffScope(async () => {
+    await requireOwner();
+    void formData;
+    await prisma.productColor.delete({ where: { id } });
+    revalidatePath(`/products/${productId}`);
+  });
 }
 
 export async function deleteProduct(id: string, formData: FormData) {
-  const user = await requireOwner();
-  const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
-  const product = await softDeleteRecord("product", id, reason, user.name);
-  // Nothing matched — another tenant's id, or already gone. Never audit a
-  // deletion that did not happen.
-  if (!product) return;
-  await logAudit({
-    action: "trash.deleted",
-    summary: `Moved product ${product.name} to trash — ${reason}`,
-    user,
+  return withActingStaffScope(async () => {
+    const user = await requireOwner();
+    const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
+    const product = await softDeleteRecord("product", id, reason, user.name);
+    // Nothing matched — another tenant's id, or already gone. Never audit a
+    // deletion that did not happen.
+    if (!product) return;
+    await logAudit({
+      action: "trash.deleted",
+      summary: `Moved product ${product.name} to trash — ${reason}`,
+      user,
+    });
+    revalidatePath("/products");
+    redirect("/products");
   });
-  revalidatePath("/products");
-  redirect("/products");
 }
