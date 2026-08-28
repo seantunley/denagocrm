@@ -1,18 +1,50 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
-import { Bot, FileUp, Play, RotateCcw, Send, UserRound } from "lucide-react";
+import { Bot, FileUp, MessageCircle, Play, RotateCcw, Send, SlidersHorizontal, UserRound } from "lucide-react";
 import { simulateFlowTurn } from "@/app/actions/flowSimulator";
+import WhatsAppPreview, { type PreviewLine } from "@/components/WhatsAppPreview";
 import type { FlowSession, OutMsg } from "@/lib/flow";
 
- type ChatLine = { id: string; role: "customer" | "bot"; text: string };
+/**
+ * `msg` carries the ORIGINAL message alongside the flattened text.
+ *
+ * The plain view only ever needed a string, so bot replies were flattened on
+ * arrival and their structure thrown away. The WhatsApp view needs the structure
+ * — whether a choice becomes three reply buttons or a list sheet, and which
+ * labels get cut — so the message is kept intact and the existing view goes on
+ * reading `text` exactly as before.
+ */
+type ChatLine = { id: string; role: "customer" | "bot"; text: string; msg?: OutMsg };
 
 type Choice = { id: string; label: string; description?: string };
 
 let lineSeq = 0;
-const line = (role: ChatLine["role"], text: string): ChatLine => ({ id: `${Date.now()}-${lineSeq++}`, role, text });
+const line = (role: ChatLine["role"], text: string, msg?: OutMsg): ChatLine => ({
+  id: `${Date.now()}-${lineSeq++}`,
+  role,
+  text,
+  ...(msg ? { msg } : {}),
+});
 
-export default function FlowSimulator({ flowId }: { flowId: string }) {
+export default function FlowSimulator({
+  flowId,
+  businessName = "Denago Cape Town",
+}: {
+  flowId: string;
+  businessName?: string;
+}) {
+  /*
+   * TWO VIEWS OF THE SAME TURN, and both earn their place.
+   *
+   * `whatsapp` shows what the customer will actually receive — the buttons/list
+   * switch at option four, and every label WhatsApp will cut. `plain` keeps the
+   * labelled Bot/Customer transcript, which is easier to read next to the
+   * execution trace when the question is "why did it branch there".
+   *
+   * The engine call is identical either way; only the drawing differs.
+   */
+  const [view, setView] = useState<"whatsapp" | "plain">("whatsapp");
   const [session, setSession] = useState<FlowSession | null>(null);
   const [chat, setChat] = useState<ChatLine[]>([]);
   const [choices, setChoices] = useState<Choice[]>([]);
@@ -31,10 +63,10 @@ export default function FlowSimulator({ flowId }: { flowId: string }) {
     const lines: ChatLine[] = [];
     let nextChoices: Choice[] = [];
     for (const message of messages) {
-      if (message.type === "text") lines.push(line("bot", message.text));
-      else if (message.type === "image") lines.push(line("bot", `🖼 ${message.caption || message.url}`));
+      if (message.type === "text") lines.push(line("bot", message.text, message));
+      else if (message.type === "image") lines.push(line("bot", `🖼 ${message.caption || message.url}`, message));
       else {
-        lines.push(line("bot", message.text));
+        lines.push(line("bot", message.text, message));
         nextChoices = message.options;
       }
     }
@@ -109,6 +141,24 @@ export default function FlowSimulator({ flowId }: { flowId: string }) {
             <p className="text-xs text-slate-400">Draft only · CRM writes and provider sends are disabled</p>
           </div>
           <div className="flex items-center gap-2">
+            <div className="flex overflow-hidden rounded-lg border border-white/10">
+              <button
+                type="button"
+                onClick={() => setView("whatsapp")}
+                className={`flex items-center gap-1.5 px-2.5 py-1 text-xs ${view === "whatsapp" ? "bg-white/10 text-white" : "text-slate-400"}`}
+                title="Draw it the way WhatsApp will"
+              >
+                <MessageCircle className="size-3.5" /> WhatsApp
+              </button>
+              <button
+                type="button"
+                onClick={() => setView("plain")}
+                className={`flex items-center gap-1.5 px-2.5 py-1 text-xs ${view === "plain" ? "bg-white/10 text-white" : "text-slate-400"}`}
+                title="Plain transcript, easiest to read against the trace"
+              >
+                <SlidersHorizontal className="size-3.5" /> Plain
+              </button>
+            </div>
             <label className="flex items-center gap-2 text-xs text-slate-400">
               <input type="checkbox" checked={simulateAiHandoff} onChange={(event) => setSimulateAiHandoff(event.target.checked)} />
               AI hands off
@@ -119,7 +169,25 @@ export default function FlowSimulator({ flowId }: { flowId: string }) {
           </div>
         </div>
 
-        <div className="flex-1 space-y-3 overflow-y-auto p-4">
+        {view === "whatsapp" && started && (
+          <WhatsAppPreview
+            lines={chat.flatMap<PreviewLine>((entry) =>
+              entry.role === "customer"
+                ? [{ id: entry.id, role: "customer", text: entry.text }]
+                : entry.msg
+                  ? [{ id: entry.id, role: "bot", msg: entry.msg }]
+                  : [],
+            )}
+            onPick={(id) => {
+              const picked = choices.find((choice) => choice.id === id);
+              if (picked) choose(picked);
+            }}
+            disabled={pending || ended}
+            businessName={businessName}
+          />
+        )}
+
+        <div className={`flex-1 space-y-3 overflow-y-auto p-4 ${view === "whatsapp" && started ? "hidden" : ""}`}>
           {!started && (
             <div className="grid h-full min-h-80 place-items-center text-center">
               <div><Bot className="mx-auto mb-3 size-8 text-slate-500" /><p className="text-sm text-slate-300">Start the simulator to run the saved draft.</p><p className="mt-1 text-xs text-slate-500">Nothing here is sent to customers or written into the CRM.</p></div>
@@ -139,7 +207,15 @@ export default function FlowSimulator({ flowId }: { flowId: string }) {
         </div>
 
         <div className="border-t border-white/10 p-3">
-          {choices.length > 0 && !ended && (
+          {/*
+            The chips are the PLAIN view's way to answer a choice. In the
+            WhatsApp view the buttons and the list sheet are the interface, and
+            showing both would let somebody tap an option WhatsApp had already
+            truncated or dropped — which is exactly what the preview exists to
+            reveal. Typing stays available in both, because a customer can
+            always type instead of tapping.
+          */}
+          {choices.length > 0 && !ended && view === "plain" && (
             <div className="mb-3 flex flex-wrap gap-2">
               {choices.map((choice) => (
                 <button key={choice.id} type="button" disabled={pending} onClick={() => choose(choice)} className="btn-secondary btn-sm text-left">
