@@ -1,6 +1,7 @@
 "use server";
 
 import { actingTenantId } from "@/lib/actingTenant";
+import { withActingStaffScope } from "@/lib/actingScope";
 import { asActionResult, refuse, type ActionResult } from "@/lib/actionResult";
 import { prisma } from "@/lib/db";
 import { deliveryHandoverReadiness } from "@/lib/checklists/deliveryHandover";
@@ -28,7 +29,7 @@ export async function completeGuidedDelivery(
   // Filled inside the gate, read after it: the runs this delivery is signed
   // against, decided once at signing time rather than re-chosen on every render.
   let signedRunIds: string[] = [];
-  const gate = await asActionResult(async () => {
+  const gate = await asActionResult(() => withActingStaffScope(async () => {
     await requireModuleEnabled("automotive");
     await requireQuoteAccess(quoteId, "deliveries.manage");
     const tenantId = await actingTenantId();
@@ -141,7 +142,7 @@ export async function completeGuidedDelivery(
     }
 
     signedRunIds = claimedRunIds;
-  });
+  }));
 
   if (gate.error || gate.redirectTo) return gate;
   // Handed over server-to-server rather than through the form: this is evidence,
