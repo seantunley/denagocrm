@@ -80,6 +80,39 @@ export function effectiveModuleIds(
 }
 
 /**
+ * What the DISABLED_MODULES setting should become after an owner saves the
+ * Modules screen.
+ *
+ * THE FORM CANNOT SPEAK FOR PACKS IT DID NOT SHOW AS USABLE. An ungranted pack
+ * renders as a DISABLED checkbox, and a disabled checkbox posts nothing — so
+ * reading "absent from `picked`" as "the owner switched it off" invents a
+ * decision the owner was never offered. Doing that wrote every ungranted pack
+ * into the disable list the first time anyone pressed Save.
+ *
+ * The damage only appears later: when a platform admin ADDS the pack to the
+ * grant, effective = granted MINUS disabled leaves it off, and the new grant
+ * looks like it did not take — the same "the setting saved perfectly and the
+ * module stayed off" confusion the screen was fixed to end.
+ *
+ * So each optional pack is decided by the layer that is entitled to decide it:
+ *   - IN the grant      → the form's ticks are authoritative
+ *   - OUTSIDE the grant → carry the stored state through untouched
+ *
+ * Consulting the grant here also means a hand-made POST cannot enable a pack the
+ * tenant was never given: the omission is no longer what protects us.
+ */
+export function nextDisabledModuleIds(
+  granted: ReadonlySet<string>,
+  previouslyDisabled: readonly string[],
+  picked: readonly string[],
+): ModuleId[] {
+  const wasDisabled = new Set(previouslyDisabled.map((id) => id.trim()));
+  return OPTIONAL_MODULE_IDS.filter((id) =>
+    granted.has(id) ? !picked.includes(id) : wasDisabled.has(id),
+  );
+}
+
+/**
  * Behaviour for an install with NO resolvable tenant — cron sweeps, public token
  * routes, and every request while tenant enforcement is still dormant and sessions
  * carry no usable `tid`.
