@@ -121,7 +121,18 @@ export default function OfflineWorkspacePage() {
                       <input name="name" required className="input" defaultValue={lead.name} />
                       <input name="phone" className="input" defaultValue={lead.phone ?? ""} placeholder="Phone" />
                       <input name="email" type="email" className="input" defaultValue={lead.email ?? ""} placeholder="Email" />
-                      <select name="stageId" className="input" defaultValue={lead.stageId}>{snapshot.options.stages.map((stage) => <option key={stage.id} value={stage.id}>{stage.name}</option>)}</select>
+                      {/*
+                        Moving a lead between stages is its own permission, and
+                        updateLead refuses the change by itself. Left enabled,
+                        this picker took the change into the outbox, reported it
+                        saved, and had it refused on replay with the form long
+                        since reset. Disabled it posts nothing, so the current
+                        stage is carried in a hidden field — without it the
+                        replay would read the silence as a stage change and be
+                        refused for the very reason we are avoiding.
+                      */}
+                      <select name={can.leadChangeStage ? "stageId" : undefined} disabled={!can.leadChangeStage} className="input" defaultValue={lead.stageId} title={can.leadChangeStage ? undefined : "Your role cannot move leads between stages."}>{snapshot.options.stages.map((stage) => <option key={stage.id} value={stage.id}>{stage.name}</option>)}</select>
+                      {!can.leadChangeStage && <input type="hidden" name="stageId" value={lead.stageId} />}
                       <select name="productId" className="input" defaultValue={lead.productId ?? ""}><option value="">Model undecided</option>{snapshot.options.products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select>
                       <input name="value" className="input" inputMode="decimal" defaultValue={String(lead.valueCents / 100)} />
                       <input name="title" className="input sm:col-span-2" defaultValue={lead.title} />
@@ -214,12 +225,12 @@ export default function OfflineWorkspacePage() {
                       {job.inspectionItems.map((item) => (
                         <div key={item.id} className="rounded-lg border border-border p-3">
                           <p className="mb-2 text-sm font-medium">{item.label}</p>
-                          <form className="grid gap-2 sm:grid-cols-[10rem_1fr_auto]" onSubmit={(event) => void queue(event, { type: "jobcard.inspection", recordId: item.id, parentId: job.id, baseVersion: job.updatedAt })}>
+                          <form className="grid gap-2 sm:grid-cols-[10rem_1fr_auto]" onSubmit={(event) => void queue(event, { type: "jobcard.inspection", recordId: item.id, parentId: job.id, baseVersion: item.updatedAt })}>
                             <select name="status" className="input" defaultValue={item.status}>{INSPECTION_STATUSES.map((status) => <option key={status.value} value={status.value}>{status.label}</option>)}</select>
                             <input name="notes" className="input" defaultValue={item.notes ?? ""} placeholder="Inspection note" />
                             <button className="btn-secondary btn-sm">Queue update</button>
                           </form>
-                          <form className="mt-2 flex flex-wrap items-center gap-2" onSubmit={(event) => void queue(event, { type: "inspection.photo", recordId: item.id, parentId: job.id })}>
+                          <form className="mt-2 flex flex-wrap items-center gap-2" onSubmit={(event) => void queue(event, { type: "inspection.photo", recordId: item.id, parentId: job.id, baseVersion: item.updatedAt })}>
                             <PhotoUploadField required name="file" maxPhotos={1} className="min-w-0 flex-1 text-xs text-muted-foreground" />
                             <button className="btn-secondary btn-sm">{item.hasPhoto ? "Replace photo" : "Queue photo"}</button>
                           </form>

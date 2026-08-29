@@ -185,6 +185,30 @@ export default function OfflineProvider({
   }, [recount, tenantId, userId]);
 
   useEffect(() => {
+    /*
+     * TELL THE WORKER WHOSE DEVICE THIS IS.
+     *
+     * The cached /offline shell is server-rendered for one user and names them,
+     * so serving it to the next person points the app at the first user's
+     * IndexedDB partition. Sign-out clears it, but a session that simply EXPIRES
+     * never runs sign-out — so the shell has to be invalidated by the arrival of
+     * a different user instead.
+     *
+     * This provider sits in the authenticated layout, so it mounts on every page
+     * a signed-in user renders: the new user announces themselves long before
+     * they could ever reach /offline. Announcing from a page that was itself
+     * served from the cached shell simply repeats the owner already stamped,
+     * which is a no-op.
+     */
+    navigator.serviceWorker?.ready
+      .then((registration) =>
+        registration.active?.postMessage({
+          type: "offline-shell-owner",
+          owner: `${tenantId}:${userId}`,
+        }),
+      )
+      .catch(() => {});
+
     setOnline(navigator.onLine);
     void purgeOfflineData(tenantId, userId).then(async () => {
       await recount();

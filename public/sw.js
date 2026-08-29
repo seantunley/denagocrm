@@ -3,6 +3,66 @@
 const OFFLINE_CACHE = "denago-offline-v1";
 const OFFLINE_ASSETS = ["/offline.html", "/icons/icon-192.png", "/icons/icon-512.png"];
 
+/*
+ * THE CACHED SHELL NAMES A USER, SO IT CANNOT OUTLIVE THEM.
+ *
+ * The /offline response is server-rendered for whoever fetched it and carries
+ * their tenantId and userId in the markup. OfflineProvider reads those to pick
+ * an IndexedDB partition — so a shell cached for one user, served later to
+ * another, points the app straight at the first user's cached CRM records. On a
+ * shared device that is a cross-user disclosure, and the sign-out path cannot
+ * prevent it: a session that simply EXPIRES never runs it.
+ *
+ * The shell is therefore stamped with its owner, and the app announces the
+ * signed-in identity from every authenticated page it renders. A mismatch means
+ * the device has changed hands: the shell is dropped, and re-warmed for the new
+ * owner while the network is still there, so switching users does not silently
+ * cost them offline mode.
+ *
+ * RESIDUAL, AND INHERENT: within the 72-hour data lifetime, someone holding an
+ * unlocked device on which a user was signed in can read that user's cached
+ * records offline, because offline there is no session to check. Bounding it
+ * further needs at-rest encryption behind a device secret, which is a larger
+ * change than this feature.
+ */
+const SHELL_KEY = "/offline";
+const SHELL_OWNER_KEY = "/__offline-shell-owner";
+
+async function cachedShellOwner(cache) {
+  const stamped = await cache.match(SHELL_OWNER_KEY);
+  return stamped ? stamped.text() : null;
+}
+
+async function claimShell(owner) {
+  const cache = await caches.open(OFFLINE_CACHE);
+  if ((await cachedShellOwner(cache)) === owner) return;
+  await cache.delete(SHELL_KEY);
+  await cache.put(SHELL_OWNER_KEY, new Response(owner));
+  // Re-warm for the new owner. This runs from a page that has just rendered, so
+  // the network is there; if it is not, /offline.html remains the fallback.
+  try {
+    const fresh = await fetch(SHELL_KEY, { credentials: "include" });
+    if (fresh.ok) await cache.put(SHELL_KEY, fresh);
+  } catch {
+    /* offline — leave it uncached rather than storing an error page */
+  }
+}
+
+async function forgetShell() {
+  const cache = await caches.open(OFFLINE_CACHE);
+  await Promise.all([cache.delete(SHELL_KEY), cache.delete(SHELL_OWNER_KEY)]);
+}
+
+self.addEventListener("message", (event) => {
+  const data = event.data;
+  if (!data || typeof data !== "object") return;
+  if (data.type === "offline-shell-owner" && typeof data.owner === "string" && data.owner) {
+    event.waitUntil(claimShell(data.owner));
+  } else if (data.type === "offline-shell-forget") {
+    event.waitUntil(forgetShell());
+  }
+});
+
 // Take over as soon as a new worker is deployed, instead of waiting for every
 // tab to close — otherwise notification icon/badge changes never reach an
 // installed PWA that's always open.
@@ -43,11 +103,11 @@ self.addEventListener("fetch", (event) => {
         .then((response) => {
           if (response.ok) {
             const copy = response.clone();
-            event.waitUntil(caches.open(OFFLINE_CACHE).then((cache) => cache.put("/offline", copy)));
+            event.waitUntil(caches.open(OFFLINE_CACHE).then((cache) => cache.put(SHELL_KEY, copy)));
           }
           return response;
         })
-        .catch(async () => (await caches.match("/offline")) || (await caches.match("/offline.html")))
+        .catch(async () => (await caches.match(SHELL_KEY)) || (await caches.match("/offline.html")))
     );
     return;
   }

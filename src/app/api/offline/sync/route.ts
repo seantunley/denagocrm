@@ -49,8 +49,14 @@ async function liveVersion(operation: Operation): Promise<Date | null> {
   if (operation.type === "contact.update") {
     return (await prisma.contact.findUnique({ where: { id }, select: { updatedAt: true } }))?.updatedAt ?? null;
   }
-  if (operation.type === "jobcard.notes" || operation.type === "jobcard.inspection") {
+  if (operation.type === "jobcard.notes") {
     return (await prisma.jobCard.findUnique({ where: { id }, select: { updatedAt: true } }))?.updatedAt ?? null;
+  }
+  if (operation.type === "jobcard.inspection" || operation.type === "inspection.photo") {
+    // The ITEM's own version. Both of these write only the item row, so the
+    // parent job card's timestamp says nothing about whether the result the
+    // device downloaded is still the current one.
+    return (await prisma.jobCardInspectionItem.findUnique({ where: { id }, select: { updatedAt: true } }))?.updatedAt ?? null;
   }
   if (operation.type === "delivery.complete") {
     return (await prisma.quote.findUnique({ where: { id }, select: { updatedAt: true } }))?.updatedAt ?? null;

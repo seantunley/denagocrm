@@ -58,7 +58,10 @@ export default function AccountMenu({
       await purgeOfflineData();
       if ("caches" in window) {
         const cache = await caches.open("denago-offline-v1");
-        await cache.delete("/offline");
+        // The owner stamp goes with the shell. Leaving it behind would make the
+        // worker believe the next arrival of this same user needs no
+        // invalidation, when there is no longer a shell it can vouch for.
+        await Promise.all([cache.delete("/offline"), cache.delete("/__offline-shell-owner")]);
       }
     } catch {
       toast.error("Offline customer data could not be removed. Sign-out was stopped; free device storage and try again.");

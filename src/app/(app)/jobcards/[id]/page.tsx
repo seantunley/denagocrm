@@ -368,7 +368,7 @@ export default async function JobCardDetailPage({
                   return (
                     <div key={item.id} className="flex flex-wrap items-center gap-3 py-2">
                       <span className="min-w-40 flex-1 font-medium">{item.label}</span>
-                      <SaveForm success="Inspection updated" resetOnSuccess={false} action={setInspectionItem.bind(null, item.id, jobCard.id)} offlineOperation={{ type: "jobcard.inspection", recordId: item.id, parentId: jobCard.id, baseVersion: jobCard.updatedAt.toISOString() }} className="flex items-center gap-2">
+                      <SaveForm success="Inspection updated" resetOnSuccess={false} action={setInspectionItem.bind(null, item.id, jobCard.id)} offlineOperation={{ type: "jobcard.inspection", recordId: item.id, parentId: jobCard.id, baseVersion: item.updatedAt.toISOString() }} className="flex items-center gap-2">
                         <select name="status" defaultValue={item.status} className="input h-8 py-0 text-xs w-32">
                           {INSPECTION_STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
                         </select>

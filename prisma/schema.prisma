@@ -1591,6 +1591,11 @@ model JobCardInspectionItem {
   photoStoredName String? // blob URL / filename from saveFile
   sortOrder      Int      @default(0)
   createdAt      DateTime @default(now())
+  // Its OWN version. Offline replays used to be conflict-checked against the
+  // parent JobCard, which setInspectionItem and uploadInspectionPhoto never
+  // write — so a concurrent change to an item was invisible to the guard and
+  // was silently overwritten.
+  updatedAt      DateTime @default(now()) @updatedAt
 
   jobCardId String
   jobCard   JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)

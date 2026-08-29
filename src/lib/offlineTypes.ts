@@ -30,9 +30,17 @@ export type OfflineDescriptor = {
  * record an operation guards, chained edits would start being rejected as
  * conflicts again, which is precisely the failure this is here to prevent.
  *
- * An inspection update is guarded by its JOB CARD, not by the item — the item
- * has no version of its own in the snapshot, and the job card is what the
- * device downloaded.
+ * AN INSPECTION IS GUARDED BY THE ITEM, NOT BY ITS JOB CARD. Guarding the
+ * parent looked reasonable — the job card is what the device downloaded — but
+ * `setInspectionItem` and `uploadInspectionPhoto` write only the ITEM row, so
+ * the parent's `updatedAt` never moves when an inspection result changes. A
+ * technician who re-checked an item after a device took its snapshot left the
+ * guard still matching, and the offline replay overwrote their result with no
+ * conflict reported. The item carries its own `updatedAt` now.
+ *
+ * `inspection.photo` is guarded for the same reason: it REPLACES the item's
+ * single photo, so two devices doing it is a genuine collision. The other photo
+ * operations only ever append and cannot collide.
  */
 export function guardedRecordKey(operation: OfflineDescriptor): string | null {
   switch (operation.type) {
@@ -40,9 +48,9 @@ export function guardedRecordKey(operation: OfflineDescriptor): string | null {
     case "contact.update":
     case "delivery.complete":
     case "jobcard.notes":
-      return operation.recordId ?? null;
     case "jobcard.inspection":
-      return operation.parentId ?? null;
+    case "inspection.photo":
+      return operation.recordId ?? null;
     default:
       return null;
   }
@@ -62,6 +70,14 @@ export function guardedRecordKey(operation: OfflineDescriptor): string | null {
 export type OfflineCapabilities = {
   leadCreate: boolean;
   leadEdit: boolean;
+  /**
+   * Moving a lead between stages is its own permission, and `updateLead`
+   * refuses the change on its own. A role with `leads.edit` but not this one
+   * was still shown an enabled stage picker: the change was accepted into the
+   * outbox, reported saved, and refused on replay with the form long since
+   * reset. The picker is disabled instead.
+   */
+  leadChangeStage: boolean;
   contactCreate: boolean;
   contactEdit: boolean;
   jobCardManage: boolean;
@@ -79,6 +95,7 @@ export type OfflineCapabilities = {
 export const NO_OFFLINE_CAPABILITIES: OfflineCapabilities = {
   leadCreate: false,
   leadEdit: false,
+  leadChangeStage: false,
   contactCreate: false,
   contactEdit: false,
   jobCardManage: false,
@@ -154,7 +171,7 @@ export type OfflineSnapshot = {
   jobCards: Array<{
     id: string; number: number; status: string; description: string; customer: string; vehicle: string;
     checkinNotes: string | null; checkoutNotes: string | null; updatedAt: string;
-    inspectionItems: Array<{ id: string; label: string; status: string; notes: string | null; hasPhoto: boolean }>;
+    inspectionItems: Array<{ id: string; label: string; status: string; notes: string | null; hasPhoto: boolean; updatedAt: string }>;
   }>;
   deliveries: Array<{ id: string; number: number; customer: string; scheduledFor: string | null; updatedAt: string }>;
   /* What this user may write. Read it through NO_OFFLINE_CAPABILITIES: a

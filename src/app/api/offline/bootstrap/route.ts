@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { apiAuthErrorResponse, requireApiUser } from "@/lib/auth";
 import { actingTenantId } from "@/lib/actingTenant";
 import { prisma } from "@/lib/db";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import {
   getAccessibleContactIds,
   getAccessibleJobCardIds,
@@ -41,15 +42,37 @@ export async function GET() {
      * something about it. The server checks have not moved and are still the
      * boundary; this only stops the UI promising what they will refuse.
      */
-    const [leadCreate, leadEdit, contactCreate, contactEdit, jobCardManage, deliveryManage] =
-      await Promise.all([
-        hasPermission(user, "leads.create"),
-        hasPermission(user, "leads.edit"),
-        hasPermission(user, "contacts.create"),
-        hasPermission(user, "contacts.edit"),
-        hasPermission(user, "jobcards.manage"),
-        hasPermission(user, "deliveries.manage"),
-      ]);
+    const [
+      leadCreate,
+      leadEdit,
+      leadChangeStage,
+      contactCreate,
+      contactEdit,
+      jobCardPermitted,
+      deliveryPermitted,
+      automotive,
+    ] = await Promise.all([
+      hasPermission(user, "leads.create"),
+      hasPermission(user, "leads.edit"),
+      hasPermission(user, "leads.change_stage"),
+      hasPermission(user, "contacts.create"),
+      hasPermission(user, "contacts.edit"),
+      hasPermission(user, "jobcards.manage"),
+      hasPermission(user, "deliveries.manage"),
+      isModuleEnabled("automotive"),
+    ]);
+
+    /*
+     * A PERMISSION IS NOT AN ENTITLEMENT. Job cards and deliveries belong to the
+     * automotive pack, and every one of their actions calls
+     * requireModuleEnabled("automotive") before anything else. A workspace that
+     * switched the pack off while roles still carry jobcards.manage would have
+     * been shipped the records and allowed to queue work against them, and every
+     * replay would then have been refused for a reason no permission screen
+     * mentions. Both layers, or neither.
+     */
+    const jobCardManage = jobCardPermitted && automotive;
+    const deliveryManage = deliveryPermitted && automotive;
     const [leads, contacts, jobCards, deliveries, stages, products] = await Promise.all([
       prisma.lead.findMany({
         where: { ...(leadIds ? { id: { in: leadIds } } : {}), deletedAt: null },
@@ -63,21 +86,23 @@ export async function GET() {
         orderBy: { updatedAt: "desc" },
         take: 500,
       }),
-      prisma.jobCard.findMany({
+      // Not merely ungated but ABSENT when the pack is off: a device should not
+      // be carrying records from a module this workspace does not have.
+      !automotive ? [] : prisma.jobCard.findMany({
         where: { ...(jobCardIds ? { id: { in: jobCardIds } } : {}), deletedAt: null, status: { notIn: ["collected", "cancelled"] } },
         select: {
           id: true, number: true, status: true, description: true, checkinNotes: true, checkoutNotes: true, updatedAt: true,
           contact: { select: { firstName: true, lastName: true, company: true } },
           vehicle: { select: { model: true, regNumber: true } },
           inspectionItems: {
-            select: { id: true, label: true, status: true, notes: true, photoStoredName: true },
+            select: { id: true, label: true, status: true, notes: true, photoStoredName: true, updatedAt: true },
             orderBy: { sortOrder: "asc" },
           },
         },
         orderBy: { updatedAt: "desc" },
         take: 250,
       }),
-      prisma.quote.findMany({
+      !automotive ? [] : prisma.quote.findMany({
         where: {
           ...(quoteIds ? { id: { in: quoteIds } } : {}),
           deletedAt: null,
@@ -149,6 +174,7 @@ export async function GET() {
           status: item.status,
           notes: item.notes,
           hasPhoto: Boolean(item.photoStoredName),
+          updatedAt: item.updatedAt.toISOString(),
         })),
       })),
       deliveries: deliveries.map((quote) => ({
@@ -158,7 +184,7 @@ export async function GET() {
         scheduledFor: quote.deliveryScheduledFor?.toISOString() ?? null,
         updatedAt: quote.updatedAt.toISOString(),
       })),
-      can: { leadCreate, leadEdit, contactCreate, contactEdit, jobCardManage, deliveryManage },
+      can: { leadCreate, leadEdit, leadChangeStage, contactCreate, contactEdit, jobCardManage, deliveryManage },
       options: { stages, products },
     };
     return NextResponse.json(snapshot, { headers: { "Cache-Control": "private, no-store" } });

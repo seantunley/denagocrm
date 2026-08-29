@@ -96,7 +96,10 @@ test("the service worker caches only the offline shell, not CRM data routes", ()
   // must never persist authenticated CRM responses under their request URL.
   const navigationBranch = worker.slice(worker.indexOf('if (event.request.mode !== "navigate")'));
   assert.doesNotMatch(navigationBranch, /cache\.put\(event\.request/);
-  assert.match(navigationBranch, /cache\.put\("\/offline"/);
+  // SHELL_KEY is "/offline" — the constant exists because the owner stamp beside
+  // it must be deleted in step with it, and two string literals drift.
+  assert.match(navigationBranch, /cache\.put\(SHELL_KEY/);
+  assert.match(worker, /const SHELL_KEY = "\/offline";/);
 });
 
 /* ── chained local edits are not conflicts ───────────────────────────────── */
@@ -120,21 +123,121 @@ const queued = (
   ...over,
 });
 
-test("an inspection is guarded by its JOB CARD, not by the item", () => {
-  // The item has no version in the snapshot; the job card is what was downloaded.
+test("AN INSPECTION IS GUARDED BY THE ITEM, NOT ITS JOB CARD", () => {
+  /*
+   * setInspectionItem and uploadInspectionPhoto write only the ITEM row, so the
+   * parent job card's updatedAt never moves when an inspection result changes.
+   * Guarding the parent left a stale baseVersion still matching, and the offline
+   * replay silently overwrote a technician's newer result.
+   */
   assert.equal(
     guardedRecordKey({ type: "jobcard.inspection", recordId: "item1", parentId: "job1" }),
-    "job1",
+    "item1",
+  );
+  // A replaced photo is a genuine collision, so it is guarded too.
+  assert.equal(
+    guardedRecordKey({ type: "inspection.photo", recordId: "item1", parentId: "job1" }),
+    "item1",
   );
   assert.equal(guardedRecordKey({ type: "jobcard.notes", recordId: "job1" }), "job1");
-  // Creates and photo appends guard nothing — there is no version to collide.
+  // Creates and photo APPENDS guard nothing — there is no version to collide.
   assert.equal(guardedRecordKey({ type: "lead.create" }), null);
   assert.equal(guardedRecordKey({ type: "jobcard.photo", recordId: "job1" }), null);
   assert.equal(guardedRecordKey({ type: "delivery.photo", recordId: "q1" }), null);
 });
 
+test("the item carries its own version, end to end", () => {
+  // A guard is only as good as the column behind it.
+  assert.match(
+    src("prisma/schema.prisma"),
+    /model JobCardInspectionItem[\s\S]*?updatedAt\s+DateTime\s+@default\(now\(\)\) @updatedAt/,
+  );
+  assert.match(
+    src("prisma/migrations/20260829080000_inspection_item_version/migration.sql"),
+    /ALTER TABLE "JobCardInspectionItem"[\s\S]*?ADD COLUMN IF NOT EXISTS "updatedAt"/,
+  );
+  // Shipped in the snapshot…
+  const bootstrap = src("src/app/api/offline/bootstrap/route.ts");
+  assert.match(bootstrap, /updatedAt: item\.updatedAt\.toISOString\(\)/);
+  // …looked up by the sync route…
+  assert.match(
+    src("src/app/api/offline/sync/route.ts"),
+    /prisma\.jobCardInspectionItem\.findUnique\(\{ where: \{ id \}, select: \{ updatedAt: true \} \}\)/,
+  );
+  // …and used as the base version by both screens that queue the operation.
+  assert.match(src("src/app/(app)/offline/page.tsx"), /baseVersion: item\.updatedAt/);
+  assert.match(src("src/app/(app)/jobcards/[id]/page.tsx"), /baseVersion: item\.updatedAt\.toISOString\(\)/);
+});
+
+test("A STAGE PICKER THE REPLAY WILL REFUSE IS NOT LEFT ENABLED", () => {
+  /*
+   * updateLead refuses a stage change without leads.change_stage. Left enabled,
+   * the picker took the change into the outbox, reported it saved, and had it
+   * refused on replay with the form long since reset.
+   */
+  const workspace = src("src/app/(app)/offline/page.tsx");
+  assert.match(workspace, /disabled=\{!can\.leadChangeStage\}/);
+  /*
+   * A disabled select posts NOTHING, and updateLead compares the submitted
+   * stageId against the stored one — so without carrying the current stage the
+   * replay would read the silence as a stage change and refuse it for exactly
+   * the reason being avoided.
+   */
+  assert.match(workspace, /!can\.leadChangeStage && <input type="hidden" name="stageId" value=\{lead\.stageId\}/);
+  assert.match(src("src/app/api/offline/bootstrap/route.ts"), /hasPermission\(user, "leads\.change_stage"\)/);
+  // The refusal being avoided must still exist.
+  assert.match(src("src/app/actions/leads.ts"), /You do not have permission to change the lead stage/);
+});
+
+test("A DISABLED MODULE WITHHOLDS ITS RECORDS, not just its buttons", () => {
+  /*
+   * Job cards and deliveries belong to the automotive pack and every one of
+   * their actions calls requireModuleEnabled("automotive") first. A workspace
+   * that switched the pack off while roles still carry jobcards.manage was
+   * shipped the records and allowed to queue work that every replay refused.
+   */
+  const bootstrap = src("src/app/api/offline/bootstrap/route.ts");
+  assert.match(bootstrap, /isModuleEnabled\("automotive"\)/);
+  assert.match(bootstrap, /const jobCardManage = jobCardPermitted && automotive;/);
+  assert.match(bootstrap, /const deliveryManage = deliveryPermitted && automotive;/);
+  // …and the records themselves are absent, not merely ungated.
+  assert.match(bootstrap, /!automotive \? \[\] : prisma\.jobCard\.findMany/);
+  assert.match(bootstrap, /!automotive \? \[\] : prisma\.quote\.findMany/);
+  assert.match(src("src/app/actions/fulfilment.ts"), /requireModuleEnabled\("automotive"\)/);
+});
+
+test("A CACHED SHELL CANNOT OUTLIVE THE USER IT NAMES", () => {
+  /*
+   * /offline is server-rendered for one user and carries their tenantId and
+   * userId, which OfflineProvider uses to pick an IndexedDB partition. Served
+   * later to somebody else, it points the app at the first user's cached CRM
+   * records. Sign-out cannot be the answer: a session that simply EXPIRES never
+   * runs it.
+   */
+  const worker = src("public/sw.js");
+  assert.match(worker, /const SHELL_OWNER_KEY = "\/__offline-shell-owner";/);
+  assert.match(worker, /if \(\(await cachedShellOwner\(cache\)\) === owner\) return;\s*\r?\n\s*await cache\.delete\(SHELL_KEY\);/,
+    "a different owner must drop the shell");
+  assert.match(worker, /addEventListener\("message"/);
+
+  // The identity is announced from the authenticated layout, so it arrives on
+  // every page a signed-in user renders — long before they could reach /offline.
+  const provider = src("src/components/OfflineProvider.tsx");
+  assert.match(provider, /type: "offline-shell-owner"/);
+  assert.match(provider, /owner: `\$\{tenantId\}:\$\{userId\}`/);
+
+  // Sign-out takes the stamp with the shell, or the worker would vouch for a
+  // shell that no longer exists.
+  assert.match(src("src/components/AccountMenu.tsx"), /cache\.delete\("\/__offline-shell-owner"\)/);
+});
+
 test("SAVING NOTES THEN AN INSPECTION OFFLINE IS NOT A CONFLICT", () => {
-  // Both captured against the same job.updatedAt, which is the reported case.
+  /*
+   * This was the reported case, and it is now impossible BY CONSTRUCTION rather
+   * than by chaining: the notes guard the job card, the inspection guards its
+   * own item, so replaying the notes cannot make the inspection look stale.
+   * Nothing needs carrying, because nothing moved under it.
+   */
   const notes = queued({
     id: "a",
     createdAt: 100,
@@ -143,11 +246,37 @@ test("SAVING NOTES THEN AN INSPECTION OFFLINE IS NOT A CONFLICT", () => {
   const inspection = queued({
     id: "b",
     createdAt: 200,
-    operation: { type: "jobcard.inspection", recordId: "item1", parentId: "job1", baseVersion: "V1" },
+    operation: { type: "jobcard.inspection", recordId: "item1", parentId: "job1", baseVersion: "I1" },
   });
 
-  const moved = chainableSiblings(notes, [notes, inspection], "job1", "V2");
-  assert.deepEqual(moved.map((m) => m.id), ["b"], "the inspection must be carried onto the new version");
+  assert.notEqual(
+    guardedRecordKey(notes.operation),
+    guardedRecordKey(inspection.operation),
+    "the two must not share a version at all",
+  );
+  assert.deepEqual(chainableSiblings(notes, [notes, inspection], "job1", "V2"), []);
+});
+
+test("TWO EDITS TO THE SAME RECORD STILL CHAIN", () => {
+  /*
+   * Separate versions fix the notes/inspection pair, not the general case: a
+   * field user who corrects the same job card twice, or the same lead twice,
+   * still queues two changes carrying one downloaded version. The second is
+   * this device's own follow-up, not somebody else's edit.
+   */
+  const first = queued({ id: "a", createdAt: 100, operation: { type: "jobcard.notes", recordId: "job1", baseVersion: "V1" } });
+  const second = queued({ id: "b", createdAt: 200, operation: { type: "jobcard.notes", recordId: "job1", baseVersion: "V1" } });
+
+  const moved = chainableSiblings(first, [first, second], "job1", "V2");
+  assert.deepEqual(moved.map((m) => m.id), ["b"], "the second edit must be carried onto the new version");
+
+  // Same for two corrections to one inspection item.
+  const shotA = queued({ id: "c", createdAt: 300, operation: { type: "jobcard.inspection", recordId: "item1", parentId: "job1", baseVersion: "I1" } });
+  const shotB = queued({ id: "d", createdAt: 400, operation: { type: "inspection.photo", recordId: "item1", parentId: "job1", baseVersion: "I1" } });
+  assert.deepEqual(
+    chainableSiblings(shotA, [shotA, shotB], "item1", "I2").map((m) => m.id),
+    ["d"],
+  );
 });
 
 test("an unrelated record in the queue is left alone", () => {
@@ -191,7 +320,10 @@ test("a REJECTED replay advances nothing, so its siblings are refused too", () =
 /* ── the device must only offer what the replay will accept ──────────────── */
 
 test("capabilities fail closed for a snapshot cached before they existed", () => {
-  assert.deepEqual(Object.values(NO_OFFLINE_CAPABILITIES), [false, false, false, false, false, false]);
+  // Every capability, whatever the list grows to, defaults to refusing.
+  const values = Object.values(NO_OFFLINE_CAPABILITIES);
+  assert.ok(values.length >= 7, "each gated workflow needs its own capability");
+  assert.ok(values.every((allowed) => allowed === false));
   const workspace = src("src/app/(app)/offline/page.tsx");
   assert.match(workspace, /snapshot\?\.can \?\? NO_OFFLINE_CAPABILITIES/);
 });
