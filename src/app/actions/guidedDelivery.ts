@@ -93,27 +93,54 @@ export async function completeGuidedDelivery(
     }
 
     /*
-     * PIN THE RUNS, HERE, ONCE.
+     * THE RUNS THE CUSTOMER ACTUALLY REVIEWED — VERIFIED, NOT RE-DERIVED.
      *
-     * The delivery note chose the newest completed run per template every time it
-     * rendered. A delivery checklist is repeatable by design, so re-running one
-     * after handover silently swapped the evidence shown beside a signature the
-     * customer had already given: the document changed after it was signed. The
-     * per-entry snapshots froze the template's WORDING and nothing froze WHICH
-     * RUN.
+     * "The newest completed run per template" is an answer that changes. It was
+     * being asked twice: once by the delivery note when the customer previewed
+     * it, and again HERE at submission. A colleague finishing another checklist
+     * in between changed the answer, so the customer reviewed run A and their
+     * signature was filed beside run B — the one defect a signature is supposed
+     * to make impossible.
      *
-     * The same selection rule is evaluated once, at the moment of signing, and
-     * the result is stored. `runs` is ordered newest-completed-first, so the
-     * first completed run seen for a template is the one being signed against.
+     * The screen now asks once, drives the preview iframe with that answer, and
+     * submits the same ids. They arrive through the browser, so they are checked
+     * rather than trusted — but note what the check permits: only runs that
+     * already belong to THIS quote in THIS tenant and are complete. The choice
+     * space is exactly the set of legitimate answers, so a forged value can pick
+     * a different one of the customer's own completed runs and nothing else.
      */
-    const signedByTemplate = new Map<string, string>();
-    for (const run of runs) {
-      if (!run.completedAt) continue;
-      if (!signedByTemplate.has(run.templateId)) signedByTemplate.set(run.templateId, run.id);
+    const claimedRunIds = String(formData.get("runIds") ?? "")
+      .split(",")
+      .map((id) => id.trim())
+      .filter(Boolean);
+    if (claimedRunIds.length === 0) {
+      refuse("Reload the delivery note and review it again before signing.");
     }
-    signedRunIds = templates
-      .map((template) => signedByTemplate.get(template.id))
-      .filter((id): id is string => Boolean(id));
+
+    const completedById = new Map(runs.filter((run) => run.completedAt).map((run) => [run.id, run]));
+    const seenTemplates = new Set<string>();
+    for (const id of claimedRunIds) {
+      const run = completedById.get(id);
+      // Not in the map means: not this quote's, not this tenant's, not against
+      // an active delivery template, or not finished. All of them are "no".
+      if (!run) {
+        refuse("The delivery note has changed since it was reviewed. Reload it and review it again before signing.");
+      }
+      // One run per template, or the note would show a template twice and the
+      // signature would cover an ambiguous document.
+      if (seenTemplates.has(run.templateId)) {
+        refuse("The delivery note has changed since it was reviewed. Reload it and review it again before signing.");
+      }
+      seenTemplates.add(run.templateId);
+    }
+    // Every active template must be covered. Readiness above proved a completed
+    // run EXISTS for each; this proves the reviewed set actually names them, so
+    // a short list cannot get a signature against a partial handover.
+    if (templates.some((template) => !seenTemplates.has(template.id))) {
+      refuse("The delivery note has changed since it was reviewed. Reload it and review it again before signing.");
+    }
+
+    signedRunIds = claimedRunIds;
   });
 
   if (gate.error || gate.redirectTo) return gate;

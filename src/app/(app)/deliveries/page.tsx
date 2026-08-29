@@ -27,7 +27,7 @@ import {
 } from "@/components/mobile-workspace";
 import ChecklistCard from "@/components/checklists/ChecklistCard";
 import GuidedDeliveryCompletion from "@/components/checklists/GuidedDeliveryCompletion";
-import { deliveryHandoverReadiness } from "@/lib/checklists/deliveryHandover";
+import { deliveryHandoverReadiness, handoverRunSelection } from "@/lib/checklists/deliveryHandover";
 import { runsForHost, templatesForHostRecord } from "@/lib/checklists/store";
 
 export const metadata = { title: "Deliveries — DenagoCRM" };
@@ -156,6 +156,7 @@ export default async function DeliveriesPage() {
                 const photos = photoCount(quote.id);
                 const checklist = checklistByQuote.get(quote.id);
                 const handover = checklist ? deliveryHandoverReadiness(checklist.templates, checklist.runs) : null;
+                const handoverRuns = checklist ? handoverRunSelection(checklist.templates, checklist.runs) : [];
                 return (
                   <article key={quote.id} className="rounded-2xl border border-border bg-card p-3.5">
                     <div className="flex items-start gap-3">
@@ -182,7 +183,7 @@ export default async function DeliveriesPage() {
                             />
                             {handover?.configured ? (
                               handover.ready ? (
-                                <GuidedDeliveryCompletion quoteId={quote.id} />
+                                <GuidedDeliveryCompletion quoteId={quote.id} runIds={handoverRuns} />
                               ) : (
                                 <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5 text-[11px] text-amber-200">
                                   Complete the guided handover above to unlock delivery-note review and customer signing.
@@ -291,6 +292,7 @@ export default async function DeliveriesPage() {
                     const photos = photoCount(quote.id);
                     const checklist = checklistByQuote.get(quote.id);
                     const handover = checklist ? deliveryHandoverReadiness(checklist.templates, checklist.runs) : null;
+                const handoverRuns = checklist ? handoverRunSelection(checklist.templates, checklist.runs) : [];
                     return (
                       <div key={quote.id} className="rounded-xl border border-border bg-card p-3 shadow-sm transition-colors hover:border-primary/30">
                         <div className="flex items-baseline justify-between gap-2">
@@ -371,7 +373,7 @@ export default async function DeliveriesPage() {
                             )}
                             {handover?.configured ? (
                               handover.ready ? (
-                                <GuidedDeliveryCompletion quoteId={quote.id} />
+                                <GuidedDeliveryCompletion quoteId={quote.id} runIds={handoverRuns} />
                               ) : (
                                 <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5 text-[10px] text-amber-200">
                                   Complete the guided handover before customer signing is unlocked.

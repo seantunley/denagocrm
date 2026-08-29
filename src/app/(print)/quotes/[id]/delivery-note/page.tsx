@@ -45,7 +45,7 @@ export default async function DeliveryNotePrintPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ tpl?: string; embed?: string }>;
+  searchParams: Promise<{ tpl?: string; embed?: string; runs?: string }>;
 }) {
   const { id } = await params;
   // The (print) layout guard treats /quotes as core, so this automotive delivery
@@ -53,7 +53,7 @@ export default async function DeliveryNotePrintPage({
   // explicitly when the automotive pack is off.
   if (!(await isModuleEnabled("automotive"))) notFound();
   await requireQuoteReadAccess(id);
-  const { tpl: tplId, embed } = await searchParams;
+  const { tpl: tplId, embed, runs: requestedRuns } = await searchParams;
   const embedded = embed === "1";
   const quote = await prisma.quote.findUnique({
     where: { id },
@@ -104,7 +104,28 @@ export default async function DeliveryNotePrintPage({
   // completeGuidedDelivery now records the ids at the moment of signing, in the
   // same write that records the delivery. Where they exist they are the whole
   // answer, and a later run cannot appear on this note however new it is.
-  const guidedRunsForNote = deliveryNoteRuns(guidedRuns, quote.deliveryHandoverRunIds);
+  /*
+   * BEFORE SIGNING, THE REVIEWER SAYS WHICH RUNS. After it, the record does.
+   *
+   * `deliveryHandoverRunIds` is written at the moment of signing and is the
+   * whole answer once it exists — a later run cannot appear on a signed note.
+   * But during REVIEW there is nothing written yet, and picking "the newest
+   * completed run per template" here while the completion action picked it again
+   * at submission is what let the customer read one note and sign beside
+   * another. The screen now chooses once and passes the ids to both.
+   *
+   * Only ids that are already among this quote's completed runs survive the
+   * intersection below, so the parameter cannot introduce anything; and a signed
+   * note ignores it entirely.
+   */
+  const previewRunIds = (requestedRuns ?? "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
+  const noteRunIds = quote.deliveryHandoverRunIds.length > 0
+    ? quote.deliveryHandoverRunIds
+    : previewRunIds.filter((id) => guidedRuns.some((run) => run.id === id));
+  const guidedRunsForNote = deliveryNoteRuns(guidedRuns, noteRunIds);
 
   const signatureDoc = quote.deliverySignatureRef
     ? await prisma.document.findFirst({

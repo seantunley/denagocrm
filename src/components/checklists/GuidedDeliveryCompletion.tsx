@@ -12,15 +12,29 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 
-export default function GuidedDeliveryCompletion({ quoteId }: { quoteId: string }) {
+export default function GuidedDeliveryCompletion({
+  quoteId,
+  runIds,
+}: {
+  quoteId: string;
+  /*
+   * The runs this handover is about, chosen ONCE on the server by
+   * handoverRunSelection. They drive the preview iframe AND the submitted form,
+   * so the note the customer reads is provably the note their signature is filed
+   * beside. Asking "which runs are newest" separately in each place is what let
+   * a colleague finishing another checklist mid-review swap one for the other.
+   */
+  runIds: string[];
+}) {
   const [open, setOpen] = useState(false);
   const [phase, setPhase] = useState<"review" | "sign">("review");
   const [signature, setSignature] = useState("");
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const drawing = useRef(false);
   const hasInk = useRef(false);
-  const noteHref = `/quotes/${quoteId}/delivery-note`;
-  const previewHref = `${noteHref}?embed=1`;
+  const runs = runIds.join(",");
+  const noteHref = `/quotes/${quoteId}/delivery-note?runs=${encodeURIComponent(runs)}`;
+  const previewHref = `/quotes/${quoteId}/delivery-note?embed=1&runs=${encodeURIComponent(runs)}`;
 
   function point(event: React.PointerEvent<HTMLCanvasElement>) {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -115,6 +129,10 @@ export default function GuidedDeliveryCompletion({ quoteId }: { quoteId: string 
                 className="space-y-4"
               >
                 <input type="hidden" name="deliveryNoteReviewed" value="yes" />
+                {/* The SAME ids the iframe above rendered. Verified server-side
+                    against this quote's own completed runs — see
+                    completeGuidedDelivery — because they travel via the browser. */}
+                <input type="hidden" name="runIds" value={runs} />
                 <input type="hidden" name="signature" value={signature} />
 
                 <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-200">

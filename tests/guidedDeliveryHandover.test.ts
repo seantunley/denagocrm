@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { deliveryHandoverReadiness, deliveryNoteRuns } from "../src/lib/checklists/deliveryHandover";
+import {
+  deliveryHandoverReadiness,
+  deliveryNoteRuns,
+  handoverRunSelection,
+} from "../src/lib/checklists/deliveryHandover";
 
 const actionSource = readFileSync("src/app/actions/guidedDelivery.ts", "utf8");
 const pageSource = readFileSync("src/app/(app)/deliveries/page.tsx", "utf8");
@@ -55,8 +59,8 @@ test("the guided UI reviews the actual delivery note before showing signature", 
   assert.ok(reviewAt >= 0);
   assert.ok(continueAt > reviewAt);
   assert.ok(signatureAt > continueAt);
-  assert.match(completionSource, /`\/quotes\/\$\{quoteId\}\/delivery-note`/);
-  assert.match(completionSource, /previewHref = `\$\{noteHref\}\?embed=1`/);
+  assert.match(completionSource, /`\/quotes\/\$\{quoteId\}\/delivery-note\?runs=/);
+  assert.match(completionSource, /previewHref = `\/quotes\/\$\{quoteId\}\/delivery-note\?embed=1&runs=\$\{encodeURIComponent\(runs\)\}`/);
   assert.match(completionSource, /src=\{previewHref\}/);
   assert.match(completionSource, /completeGuidedDelivery\.bind\(null, quoteId\)/);
 });
@@ -75,7 +79,7 @@ test("the delivery note shows the guided snapshots being signed, then the stored
   // The selection moved into deliveryNoteRuns so it could be executed rather
   // than described — and so the note stops re-deciding, after signing, which run
   // the customer signed against.
-  assert.match(deliveryNoteSource, /deliveryNoteRuns\(guidedRuns, quote\.deliveryHandoverRunIds\)/);
+  assert.match(deliveryNoteSource, /deliveryNoteRuns\(guidedRuns, noteRunIds\)/);
   assert.match(deliveryNoteSource, /tag: "delivery-signature"/);
   assert.match(deliveryNoteSource, /src=\{`\/api\/files\/\$\{signatureDoc\.id\}`\}/);
 });
@@ -83,7 +87,7 @@ test("the delivery note shows the guided snapshots being signed, then the stored
 test("Deliveries uses the old proof-of-delivery only as an unconfigured fallback", () => {
   assert.match(pageSource, /handover\?\.configured \? \(/);
   assert.match(pageSource, /handover\.ready \? \(/);
-  assert.match(pageSource, /<GuidedDeliveryCompletion quoteId=\{quote\.id\} \/>/);
+  assert.match(pageSource, /<GuidedDeliveryCompletion quoteId=\{quote\.id\} runIds=\{handoverRuns\} \/>/);
   assert.match(pageSource, /No guided delivery checklist is configured/);
   assert.match(pageSource, /<ProofOfDelivery quoteId=\{quote\.id\} \/>/);
 });
@@ -172,7 +176,7 @@ test("the ids are re-verified against the quote, never trusted", () => {
 
 test("the note never re-derives the selection for itself", () => {
   const page = deliveryNoteSource;
-  assert.match(page, /deliveryNoteRuns\(guidedRuns, quote\.deliveryHandoverRunIds\)/);
+  assert.match(page, /deliveryNoteRuns\(guidedRuns, noteRunIds\)/);
   assert.doesNotMatch(page, /latestRunByTemplate/, "a second copy of the rule is how the two drift apart");
 });
 
@@ -286,4 +290,107 @@ test("the guided gate runs before markDelivered writes anything", () => {
   // And the id verification must precede the gate that judges it.
   const verify = body.indexOf("prisma.checklistRun.findMany(");
   assert.ok(verify !== -1 && verify < gate, "ids are verified, then judged");
+});
+
+/* ── the note reviewed is the note signed ────────────────────────────────── */
+
+/*
+ * "The newest completed run per template" is an answer that CHANGES, and it was
+ * being asked twice: once by the delivery note when the customer previewed it,
+ * and again by completeGuidedDelivery at submission. A colleague finishing
+ * another checklist in between changed the answer, so the customer reviewed run
+ * A and their signature was filed beside run B — the one thing a signature is
+ * supposed to make impossible.
+ */
+
+const pick = (id: string, templateId: string, completedAt: string | null) => ({ id, templateId, completedAt });
+
+test("ONE SELECTION, newest completed run per template, in template order", () => {
+  const templates = [{ id: "t1" }, { id: "t2" }];
+  const runs = [
+    pick("r-old", "t1", "2026-08-01T10:00:00Z"),
+    pick("r-new", "t1", "2026-08-02T10:00:00Z"),
+    pick("r-two", "t2", "2026-08-01T09:00:00Z"),
+    pick("r-unfinished", "t2", null),
+  ];
+  assert.deepEqual(handoverRunSelection(templates, runs), ["r-new", "r-two"]);
+});
+
+test("the selection does not depend on the order the caller fetched in", () => {
+  // Two callers with different orderBy clauses must not pin different runs.
+  const templates = [{ id: "t1" }];
+  const ascending = [pick("r-old", "t1", "2026-08-01T10:00:00Z"), pick("r-new", "t1", "2026-08-02T10:00:00Z")];
+  const descending = [...ascending].reverse();
+  assert.deepEqual(handoverRunSelection(templates, ascending), handoverRunSelection(templates, descending));
+});
+
+test("A RUN COMPLETED DURING REVIEW CANNOT REPLACE THE ONE ON SCREEN", () => {
+  /*
+   * The whole defect, as data. The screen pins its selection, then a colleague
+   * finishes a newer run. Re-deriving would move the note; honouring the pinned
+   * ids does not.
+   */
+  const templates = [{ id: "t1" }];
+  const atReview = [pick("r-reviewed", "t1", "2026-08-01T10:00:00Z")];
+  const pinned = handoverRunSelection(templates, atReview);
+  assert.deepEqual(pinned, ["r-reviewed"]);
+
+  const atSigning = [...atReview, pick("r-later", "t1", "2026-08-01T10:05:00Z")];
+  assert.deepEqual(
+    handoverRunSelection(templates, atSigning),
+    ["r-later"],
+    "re-deriving would indeed have moved — which is why it must not be re-derived",
+  );
+
+  // deliveryNoteRuns honours the pinned ids over anything newer.
+  const withTemplate = atSigning.map((r) => ({ ...r, template: { sortOrder: 0 } }));
+  assert.deepEqual(
+    deliveryNoteRuns(withTemplate, pinned).map((r) => r.id),
+    ["r-reviewed"],
+  );
+});
+
+test("the iframe and the form carry the SAME ids", () => {
+  // If these two ever came from different expressions, the property above would
+  // be true of the library and false of the screen.
+  assert.match(completionSource, /const runs = runIds\.join\(","\);/);
+  assert.match(completionSource, /previewHref = `\/quotes\/\$\{quoteId\}\/delivery-note\?embed=1&runs=\$\{encodeURIComponent\(runs\)\}`/);
+  assert.match(completionSource, /<input type="hidden" name="runIds" value=\{runs\} \/>/);
+  // …and the page computes them ONCE for both layouts.
+  assert.match(pageSource, /const handoverRuns = checklist \? handoverRunSelection\(checklist\.templates, checklist\.runs\) : \[\];/);
+  assert.equal(
+    (pageSource.match(/runIds=\{handoverRuns\}/g) ?? []).length,
+    2,
+    "mobile and desktop must pin the same runs for the same delivery",
+  );
+});
+
+test("THE SUBMITTED IDS ARE VERIFIED, NOT TRUSTED", () => {
+  /*
+   * They travel through the browser. What the check permits is the point: only
+   * runs already belonging to this quote, in this tenant, against an active
+   * delivery template, and complete — so a forged value can pick a different one
+   * of the customer's own completed runs and nothing else.
+   */
+  assert.match(actionSource, /const claimedRunIds = String\(formData\.get\("runIds"\) \?\? ""\)/);
+  assert.match(actionSource, /const completedById = new Map\(runs\.filter\(\(run\) => run\.completedAt\)/);
+  assert.match(actionSource, /if \(!run\) \{[\s\S]*?refuse\(/, "an unknown id must be refused");
+  assert.match(actionSource, /if \(seenTemplates\.has\(run\.templateId\)\) \{[\s\S]*?refuse\(/,
+    "two runs for one template would make the signed document ambiguous");
+  assert.match(actionSource, /if \(templates\.some\(\(template\) => !seenTemplates\.has\(template\.id\)\)\) \{[\s\S]*?refuse\(/,
+    "a short list must not get a signature against a partial handover");
+  assert.match(actionSource, /signedRunIds = claimedRunIds;/);
+  // The action must no longer make its own choice.
+  assert.doesNotMatch(actionSource, /signedByTemplate/, "the action must not re-derive the selection");
+});
+
+test("a signed note ignores the query parameter entirely", () => {
+  // Once recorded, the stored ids are the whole answer — a link cannot restyle
+  // a document somebody has already signed.
+  assert.match(
+    deliveryNoteSource,
+    /quote\.deliveryHandoverRunIds\.length > 0\s*\r?\n?\s*\? quote\.deliveryHandoverRunIds/,
+  );
+  // And an unsigned preview only honours ids that are already this quote's runs.
+  assert.match(deliveryNoteSource, /previewRunIds\.filter\(\(id\) => guidedRuns\.some\(\(run\) => run\.id === id\)\)/);
 });

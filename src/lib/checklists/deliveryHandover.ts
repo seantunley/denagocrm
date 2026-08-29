@@ -38,6 +38,50 @@ export function deliveryHandoverReadiness(
   };
 }
 
+export type HandoverCandidateRun = {
+  id: string;
+  templateId: string;
+  completedAt: Date | string | null;
+};
+
+/**
+ * WHICH RUNS THIS HANDOVER IS ABOUT — chosen ONCE, by one rule.
+ *
+ * A delivery checklist is repeatable, so "the newest completed run per
+ * template" is an answer that changes. It was being asked twice: the delivery
+ * note asked it when the customer previewed, and the completion action asked it
+ * again at submission. Between those two moments a colleague finishing another
+ * checklist changed the answer, and the customer reviewed run A while their
+ * signature was filed beside run B.
+ *
+ * Asking once and carrying the ids through the review, the signature and the
+ * write is what makes "the note they signed" a fact rather than a re-derivation.
+ * The server still re-verifies the ids it is handed — see completeGuidedDelivery
+ * — because they travel via the browser.
+ *
+ * Sorted here rather than relying on the caller's `orderBy`, so the two callers
+ * cannot disagree by fetching in different orders.
+ */
+export function handoverRunSelection(
+  templates: readonly DeliveryHandoverTemplate[],
+  runs: readonly HandoverCandidateRun[],
+): string[] {
+  const time = (value: Date | string | null) => (value ? new Date(value).getTime() : 0);
+  const newestFirst = runs
+    .filter((run) => Boolean(run.completedAt))
+    .slice()
+    .sort((a, b) => time(b.completedAt) - time(a.completedAt));
+
+  const chosen = new Map<string, string>();
+  for (const run of newestFirst) {
+    if (!chosen.has(run.templateId)) chosen.set(run.templateId, run.id);
+  }
+  // Template order, so the ids read the same way the note lays the sections out.
+  return templates
+    .map((template) => chosen.get(template.id))
+    .filter((id): id is string => Boolean(id));
+}
+
 export type DeliveryNoteRun = {
   id: string;
   templateId: string;
