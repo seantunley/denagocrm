@@ -4,7 +4,11 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-import { effectiveModuleIds, grantedModuleIds } from "../src/lib/modules/entitlement";
+import {
+  effectiveModuleIds,
+  grantedModuleIds,
+  nextDisabledModuleIds,
+} from "../src/lib/modules/entitlement";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
@@ -69,4 +73,61 @@ test("the grant reader fails closed, never install-wide", () => {
   const body = fn.slice(0, fn.indexOf("\n}"));
   assert.match(body, /scoped-but-unresolved/);
   assert.match(body, /grantedModuleIds\(""\)/, "an unresolved scope yields mandatory modules only");
+});
+
+/* ── what a SAVE is allowed to decide ────────────────────────────────────── */
+
+/*
+ * The screen now renders an ungranted pack as a DISABLED checkbox. A disabled
+ * checkbox posts nothing, so "absent from the post" stopped meaning "the owner
+ * switched it off" — and the save must not read it that way.
+ */
+
+test("SAVING DOES NOT SILENTLY DISABLE PACKS THE PLAN NEVER INCLUDED", () => {
+  // automation is not in the grant, so its box is disabled and posts nothing.
+  const granted = grantedModuleIds("marketing,inbox");
+  const disabled = nextDisabledModuleIds(granted, [], ["marketing"]);
+
+  assert.equal(
+    disabled.includes("automation"),
+    false,
+    "an ungranted pack must not be written off by a save that never offered it",
+  );
+  // …and the pack the owner DID untick is switched off, as asked.
+  assert.equal(disabled.includes("inbox"), true);
+});
+
+test("a later grant therefore actually turns the pack on", () => {
+  /*
+   * This is the failure the previous rule caused, and it only appeared later:
+   * the owner saves, every ungranted pack lands in the disable list, and the
+   * platform admin's new grant is cancelled out by a choice nobody made.
+   */
+  const beforeGrant = nextDisabledModuleIds(grantedModuleIds("marketing"), [], ["marketing"]);
+  assert.equal(
+    effectiveModuleIds("automation,marketing", beforeGrant).has("automation"),
+    true,
+    "granting a pack after a save must switch it on",
+  );
+});
+
+test("an ungranted pack that WAS switched off stays switched off", () => {
+  // Revoking a grant must not quietly clear a deliberate local choice: if the
+  // grant comes back, the pack should return in the state the owner left it.
+  const granted = grantedModuleIds("marketing");
+  const disabled = nextDisabledModuleIds(granted, ["automation"], ["marketing"]);
+  assert.equal(disabled.includes("automation"), true);
+});
+
+test("the post cannot enable a pack outside the grant", () => {
+  // A hand-made POST naming an ungranted pack. The omission of a disabled
+  // checkbox is no longer what protects us — the grant is consulted directly.
+  const granted = grantedModuleIds("marketing");
+  const disabled = nextDisabledModuleIds(granted, ["automation"], ["marketing", "automation"]);
+  assert.equal(
+    disabled.includes("automation"),
+    true,
+    "a forged tick must not clear the disable entry for an ungranted pack",
+  );
+  assert.equal(effectiveModuleIds("marketing", disabled).has("automation"), false);
 });

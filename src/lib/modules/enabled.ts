@@ -3,8 +3,13 @@ import { cache } from "react";
 import { basePrisma } from "@/lib/db";
 import { getSetting, putSetting } from "@/lib/settings";
 import { currentTenantScope } from "@/lib/tenantScope";
-import { OPTIONAL_MODULE_IDS, type ModuleId } from "./registry";
-import { effectiveModuleIds, grantedModuleIds, installWideModuleIds } from "./entitlement";
+import { type ModuleId } from "./registry";
+import {
+  effectiveModuleIds,
+  grantedModuleIds,
+  installWideModuleIds,
+  nextDisabledModuleIds,
+} from "./entitlement";
 
 // We persist the DISABLED optional packs, not the enabled ones. Storing the
 // disabled set means a newly-added module defaults ON for every existing
@@ -200,7 +205,31 @@ export async function requireModuleEnabled(id: ModuleId): Promise<void> {
 
 /** Persist module choices as the disabled set (mandatory core can never be disabled). */
 export async function setEnabledModuleIds(enabledIds: string[]): Promise<void> {
-  const disabled = OPTIONAL_MODULE_IDS.filter((id) => !enabledIds.includes(id));
+  /*
+   * A SAVE ONLY DECIDES FOR PACKS THE TENANT ACTUALLY HOLDS.
+   *
+   * The form posts the ticked boxes, and an ungranted pack now renders as a
+   * DISABLED checkbox — which posts nothing at all. Treating "absent from the
+   * post" as "the owner switched it off" therefore wrote every ungranted pack
+   * into the disabled list the first time anyone pressed Save, for a decision
+   * the owner was never shown and could not have made.
+   *
+   * That is invisible until it matters: when a platform admin later ADDS the
+   * pack to the grant, effective = granted MINUS disabled leaves it off, and the
+   * grant looks like it did not take. The same "the setting wrote perfectly and
+   * the module stayed off" confusion this screen was fixed to end.
+   *
+   * So the stored state of anything outside the grant is carried through
+   * untouched. Reading the grant here rather than trusting the form also means a
+   * hand-made POST cannot enable a pack the tenant was not given — the omission
+   * is no longer what protects us.
+   */
+  const [granted, previouslyDisabled] = await Promise.all([
+    grantedModuleIdsForRequest(),
+    locallyDisabledIds(),
+  ]);
+  const disabled = nextDisabledModuleIds(granted, previouslyDisabled, enabledIds);
+
   // Via putSetting for the same reason as the read: AppSetting is keyed
   // (tenantId, key), so a direct upsert on `key` alone emits ON CONFLICT (key) and
   // fails with 42P10 — which is exactly how saving module choices broke.
