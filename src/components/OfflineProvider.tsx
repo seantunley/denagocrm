@@ -158,6 +158,28 @@ export default function OfflineProvider({
               error: result.error ?? "Another synchronisation is still processing this change.",
             });
             break;
+          } else if (response.status === 401 || response.status === 403) {
+            /*
+             * NOT A REFUSAL OF THE WORK — a refusal of the CALLER.
+             *
+             * Connectivity often returns after a session has expired or been
+             * revoked, and /api/offline/sync answers 401 before it claims a
+             * receipt, so nothing was applied and nothing is decided. Marking
+             * these `failed` stranded them permanently: a later pass only
+             * selects `pending` or `syncing`, and the Pending list offers no way
+             * back, so signing in again could not replay work that was never
+             * refused on its merits.
+             *
+             * Left pending, and the pass STOPS: every remaining entry would meet
+             * the same closed door, and walking the rest of the outbox would
+             * burn an attempt on each.
+             */
+            await saveOfflineMutation({
+              ...working,
+              status: "pending",
+              error: "Your session has expired. Sign in again and this will synchronise.",
+            });
+            break;
           } else {
             await saveOfflineMutation({
               ...working,
@@ -200,9 +222,23 @@ export default function OfflineProvider({
      * served from the cached shell simply repeats the owner already stamped,
      * which is a no-op.
      */
-    navigator.serviceWorker?.ready
+    /*
+     * REGISTER, THEN WAIT. `ready` never resolves on a device that has no root
+     * registration yet — it waits for one rather than creating it — so waiting
+     * on it alone meant the worker was only ever installed by PushToggle, which
+     * lives on Settings. Anybody who followed the offline workspace flow without
+     * first visiting Settings had no cached shell and no navigation fallback,
+     * and discovered it at the moment they lost connectivity.
+     *
+     * Registering the same worker with the same scope as PushToggle is
+     * idempotent: the browser returns the existing registration rather than
+     * installing a second one.
+     */
+    void navigator.serviceWorker
+      ?.register("/sw.js", { scope: "/", updateViaCache: "none" })
+      .then((registration) => navigator.serviceWorker.ready.then(() => registration))
       .then((registration) =>
-        registration.active?.postMessage({
+        (registration.active ?? navigator.serviceWorker.controller)?.postMessage({
           type: "offline-shell-owner",
           owner: `${tenantId}:${userId}`,
         }),

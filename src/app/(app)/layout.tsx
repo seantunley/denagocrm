@@ -14,6 +14,31 @@ import { currentTenantScope } from "@/lib/tenantScope";
 import AppShell from "@/components/AppShell";
 import OfflineProvider from "@/components/OfflineProvider";
 
+/**
+ * The offline outbox, when there is a workspace to key it by.
+ *
+ * Written as a component rather than inlined so the children are built ONCE.
+ * Duplicating the whole <AppShell> tree across both arms of a ternary is how the
+ * two copies drift, and one of them is only ever rendered by the sessions
+ * nobody tests with.
+ */
+function MaybeOffline({
+  tenantId,
+  userId,
+  children,
+}: {
+  tenantId: string | null;
+  userId: string;
+  children: React.ReactNode;
+}) {
+  if (!tenantId) return <>{children}</>;
+  return (
+    <OfflineProvider tenantId={tenantId} userId={userId}>
+      {children}
+    </OfflineProvider>
+  );
+}
+
 export default async function AppLayout({
   children,
   modal,
@@ -31,10 +56,28 @@ export default async function AppLayout({
     redirect("/platform/tenants");
   }
 
-  // The offline partition key may never be nullable. `actingTenantId` applies
-  // the same enforced-scope/session/founding-tenant ladder as server actions,
-  // whereas the raw session claim deliberately returns null for legacy tokens.
-  const activeTenantId = await actingTenantId();
+  /*
+   * A PARTITION KEY REQUIREMENT MUST NOT BECOME AN ACCESS REQUIREMENT.
+   *
+   * The offline outbox needs a non-null tenant to key its IndexedDB store, and
+   * `actingTenantId` is the right ladder for that — it applies the same
+   * enforced-scope/session/founding-tenant resolution as a server action, where
+   * the raw session claim deliberately returns null for legacy tokens.
+   *
+   * But it THROWS when it cannot resolve one, and this is the layout every
+   * authenticated page in the CRM renders through. A valid session with no `tid`
+   * claim, or a user with several memberships while enforcement is still
+   * dormant, would have taken down the entire app — for a feature that is one
+   * optional panel. `requireUser` and `getActiveTenantId` both continue to
+   * support tenantless sessions in dormant mode on purpose; this line quietly
+   * withdrew that support for everything.
+   *
+   * So the refusal is caught and the OFFLINE PROVIDER is what becomes
+   * conditional. No tenant means no partition, which means no offline workspace
+   * — and the rest of the CRM renders exactly as it did before this feature
+   * existed.
+   */
+  const activeTenantId = await actingTenantId().catch(() => null);
   const [inboxWaiting, casesWaiting, permissions, enabledModules, brand] = await Promise.all([
     awaitingReplyCount(user).catch(() => 0),
     casesAwaitingCount(user).catch(() => 0),
@@ -80,7 +123,13 @@ export default async function AppLayout({
       {/* Resolved here, in the SERVER layout, for the same reason `brand` is:
           getSetting reads the tenant from the request scope, which a client
           component has no access to. */}
-      <OfflineProvider tenantId={activeTenantId} userId={user.id}>
+      {/*
+        The shell renders either way. Without a resolvable tenant there is no
+        partition to store offline work in, so the provider is omitted rather
+        than handed an empty key that would collide with every other tenantless
+        session on the device.
+      */}
+      <MaybeOffline tenantId={activeTenantId} userId={user.id}>
         <AppShell
           user={{
             name: user.name,
@@ -97,7 +146,7 @@ export default async function AppLayout({
           {children}
           {modal}
         </AppShell>
-      </OfflineProvider>
+      </MaybeOffline>
     </>
   );
 }

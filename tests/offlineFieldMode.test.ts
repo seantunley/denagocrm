@@ -375,3 +375,65 @@ test("SIGNING IS NOT OFFERED BEFORE THE DELIVERY IS SCHEDULED", () => {
   // markDelivered is the refusal being avoided; it must still be there.
   assert.match(src("src/app/actions/fulfilment.ts"), /Schedule the delivery before marking it delivered/);
 });
+
+/* ── the feature must not become a precondition for the app ──────────────── */
+
+test("OFFLINE MODE CANNOT TAKE DOWN THE CRM FOR A TENANTLESS SESSION", () => {
+  /*
+   * The outbox needs a non-null tenant to key its IndexedDB partition, and
+   * actingTenantId is the right ladder for that — but it THROWS when it cannot
+   * resolve one, and this layout is what every authenticated page renders
+   * through. A valid session with no `tid`, or a user with several memberships
+   * while enforcement is dormant, would have lost the entire CRM to one optional
+   * panel. requireUser and getActiveTenantId both keep supporting tenantless
+   * sessions in dormant mode on purpose.
+   */
+  const layout = src("src/app/(app)/layout.tsx");
+  assert.match(layout, /await actingTenantId\(\)\.catch\(\(\) => null\)/,
+    "an unresolvable tenant must not throw out of the shell");
+  assert.match(layout, /if \(!tenantId\) return <>\{children\}<\/>;/,
+    "the shell must render without the provider");
+  assert.match(layout, /<MaybeOffline tenantId=\{activeTenantId\} userId=\{user\.id\}>/);
+  // …and the provider itself still refuses an empty partition key, so the
+  // conditional above is the only thing deciding.
+  assert.match(src("src/lib/offlineClient.ts"), /if \(!tenantId \|\| !userId\) throw new Error/);
+});
+
+test("THE WORKER IS REGISTERED, NOT MERELY AWAITED", () => {
+  /*
+   * `navigator.serviceWorker.ready` waits for a registration; it does not create
+   * one. The only root registration in the app lives in PushToggle, which mounts
+   * on Settings — so anybody who went straight to the offline workspace had no
+   * cached shell and no navigation fallback, and found out when they lost signal.
+   */
+  const provider = src("src/components/OfflineProvider.tsx");
+  assert.match(provider, /\.register\("\/sw\.js", \{ scope: "\/", updateViaCache: "none" \}\)/);
+  const registerAt = provider.indexOf('.register("/sw.js"');
+  const readyAt = provider.indexOf("serviceWorker.ready");
+  assert.ok(registerAt !== -1 && registerAt < readyAt, "registration must come before the wait");
+  // Same worker and scope as the Settings toggle, so the browser returns the
+  // existing registration rather than installing a second one.
+  assert.match(src("src/components/PushToggle.tsx"), /const ROOT_SW = "\/sw\.js";/);
+});
+
+test("AN EXPIRED SESSION LEAVES THE OUTBOX REPLAYABLE", () => {
+  /*
+   * /api/offline/sync answers 401 BEFORE claiming a receipt, so nothing was
+   * applied and nothing is decided. Marking those `failed` stranded them: a
+   * later pass only selects pending or syncing, and the Pending list offers no
+   * way back, so signing in again could not replay work that was never refused
+   * on its merits.
+   */
+  const provider = src("src/components/OfflineProvider.tsx");
+  assert.match(provider, /else if \(response\.status === 401 \|\| response\.status === 403\)/);
+  const branch = provider.slice(
+    provider.indexOf("else if (response.status === 401"),
+    provider.indexOf("} else {", provider.indexOf("else if (response.status === 401")),
+  );
+  assert.match(branch, /status: "pending"/, "an auth failure must stay replayable");
+  assert.match(branch, /Sign in again/, "and say what to do about it");
+  assert.match(branch, /break;/, "the pass must stop rather than burn an attempt on every entry");
+  // The selection this depends on: only pending/syncing are ever retried, which
+  // is exactly why `failed` was a dead end.
+  assert.match(provider, /entry\.status === "pending" \|\| entry\.status === "syncing"/);
+});
