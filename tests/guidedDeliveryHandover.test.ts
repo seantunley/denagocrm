@@ -39,6 +39,7 @@ test("every active handover template needs a completed run before signing unlock
 });
 
 test("server completion repeats the checklist, review, driver and signature gates", () => {
+  assert.match(actionSource, /withActingStaffScope\(async \(\) => \{/);
   assert.match(actionSource, /requireQuoteAccess\(quoteId, "deliveries\.manage"\)/);
   assert.match(actionSource, /host: "quote\.delivery", active: true/);
   assert.match(actionSource, /hostType: "quote\.delivery"/);
@@ -226,6 +227,16 @@ test("readiness is judged on VERIFIED runs, never on what the caller claimed", (
     /verifiedRuns\.length !== requestedRunIds\.length/,
     "an id that does not resolve must refuse, not be dropped",
   );
+  assert.match(
+    gate,
+    /verifiedRuns\.length !== handoverTemplates\.length/,
+    "extra genuine runs must not make the signed evidence ambiguous",
+  );
+  assert.match(
+    gate,
+    /else if \(requestedRunIds\.length > 0\)/,
+    "a tenant with no active handover must not store caller-supplied run ids",
+  );
 });
 
 test("a tenant with no configured handover keeps the legacy flow", () => {
@@ -322,6 +333,13 @@ test("the selection does not depend on the order the caller fetched in", () => {
   const ascending = [pick("r-old", "t1", "2026-08-01T10:00:00Z"), pick("r-new", "t1", "2026-08-02T10:00:00Z")];
   const descending = [...ascending].reverse();
   assert.deepEqual(handoverRunSelection(templates, ascending), handoverRunSelection(templates, descending));
+});
+
+test("equal completion timestamps are resolved deterministically", () => {
+  const templates = [{ id: "t1" }];
+  const first = [pick("run_b", "t1", "2026-08-01T10:00:00Z"), pick("run_a", "t1", "2026-08-01T10:00:00Z")];
+  assert.deepEqual(handoverRunSelection(templates, first), ["run_a"]);
+  assert.deepEqual(handoverRunSelection(templates, [...first].reverse()), ["run_a"]);
 });
 
 test("A RUN COMPLETED DURING REVIEW CANNOT REPLACE THE ONE ON SCREEN", () => {
