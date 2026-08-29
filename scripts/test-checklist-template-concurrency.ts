@@ -65,6 +65,9 @@ const ids = {
 };
 
 async function seed() {
+  await basePrisma.tenant.create({
+    data: { id: ids.tenant, name: `Checklist concurrency ${SFX}`, slug: `checklist-concurrency-${SFX}`, active: true },
+  });
   await basePrisma.checklistTemplate.create({
     data: {
       id: ids.template,
@@ -81,6 +84,7 @@ async function cleanup() {
   await basePrisma.checklistTemplateRevision.deleteMany({ where: { templateId: ids.template } });
   await basePrisma.checklistItem.deleteMany({ where: { templateId: ids.template } });
   await basePrisma.checklistTemplate.deleteMany({ where: { id: ids.template } });
+  await basePrisma.tenant.deleteMany({ where: { id: ids.tenant } });
 }
 
 function meta(name: string) {
