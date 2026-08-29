@@ -70,7 +70,7 @@ export function handoverRunSelection(
   const newestFirst = runs
     .filter((run) => Boolean(run.completedAt))
     .slice()
-    .sort((a, b) => time(b.completedAt) - time(a.completedAt));
+    .sort((a, b) => time(b.completedAt) - time(a.completedAt) || a.id.localeCompare(b.id));
 
   const chosen = new Map<string, string>();
   for (const run of newestFirst) {
