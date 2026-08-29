@@ -26,8 +26,16 @@
  * mostly to make that visible.
  */
 
-/** Body text on any interactive message. */
+/** Body text on any INTERACTIVE message. Plain text messages get WA_TEXT_MAX. */
 export const WA_BODY_MAX = 1024;
+/**
+ * A plain text message — four times the interactive body.
+ *
+ * Kept distinct because the two are easy to conflate and the preview is only
+ * useful if its truncation marks are real: `sendWhatsAppText` forwards its
+ * argument unchanged, so anything under this arrives whole.
+ */
+export const WA_TEXT_MAX = 4096;
 /** Reply buttons: at most three, titles cut hard at twenty characters. */
 export const WA_BUTTON_MAX = 3;
 export const WA_BUTTON_TITLE_MAX = 20;
@@ -100,7 +108,17 @@ export function renderWhatsAppChoice(body: string, options: ChoiceOption[]): Ren
   };
 }
 
-/** Body text of a plain text message, as it will arrive. */
+/**
+ * Body text of a plain text message, as it will arrive.
+ *
+ * WA_TEXT_MAX, NOT WA_BODY_MAX. The 1,024 limit belongs to the body of an
+ * INTERACTIVE message; an ordinary text message gets 4,096. Using the
+ * interactive limit here made the preview mark a 1,100-character message as
+ * "cut by WhatsApp" when `sendWhatsAppText` forwards its argument untouched and
+ * the customer receives every word — a preview lying in the safe direction is
+ * still a preview that cannot be trusted, and this one exists precisely to be
+ * believed about truncation.
+ */
 export function renderWhatsAppText(text: string): { text: string; truncated: boolean } {
-  return cut(text, WA_BODY_MAX);
+  return cut(text, WA_TEXT_MAX);
 }

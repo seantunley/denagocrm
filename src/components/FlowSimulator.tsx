@@ -29,10 +29,17 @@ const line = (role: ChatLine["role"], text: string, msg?: OutMsg): ChatLine => (
 
 export default function FlowSimulator({
   flowId,
-  businessName = "Denago Cape Town",
+  businessName,
 }: {
   flowId: string;
-  businessName?: string;
+  /*
+   * REQUIRED, and resolved by the page from the acting tenant's Company
+   * Profile. This used to default to "Denago Cape Town", which the sole call
+   * site then relied on — so every workspace previewed its chatbot under one
+   * dealer's name, in the one place the preview is meant to show the customer's
+   * exact view. A default that is another tenant's identity is not a default.
+   */
+  businessName: string;
 }) {
   /*
    * TWO VIEWS OF THE SAME TURN, and both earn their place.
@@ -201,10 +208,26 @@ export default function FlowSimulator({
               </div>
             </div>
           ))}
-          {pending && <p className="text-xs text-slate-500">Running draft…</p>}
-          {error && <p className="rounded-lg border border-red-500/25 bg-red-500/8 px-3 py-2 text-xs text-red-300">{error}</p>}
-          {ended && started && !pending && <p className="text-center text-xs text-slate-500">Simulation stopped · restart to run again.</p>}
         </div>
+
+        {/*
+          STATUS SITS OUTSIDE BOTH VIEWS, because it is about the simulator and
+          not about the conversation.
+
+          It used to live at the foot of the transcript — which the WhatsApp view
+          hides. A malformed saved flow therefore made `simulateFlowTurn` return
+          an error into an element with `hidden` on it: the phone frame simply
+          stayed empty, and the only way to learn why was to guess that the Plain
+          toggle would say something. The one moment the operator most needs a
+          sentence was the one moment there wasn't one.
+        */}
+        {(pending || error || (ended && started)) && (
+          <div className="space-y-2 px-4 pb-3">
+            {pending && <p className="text-xs text-slate-500">Running draft…</p>}
+            {error && <p className="rounded-lg border border-red-500/25 bg-red-500/8 px-3 py-2 text-xs text-red-300">{error}</p>}
+            {ended && started && !pending && <p className="text-center text-xs text-slate-500">Simulation stopped · restart to run again.</p>}
+          </div>
+        )}
 
         <div className="border-t border-white/10 p-3">
           {/*

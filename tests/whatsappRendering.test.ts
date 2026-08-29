@@ -11,6 +11,7 @@ import {
   WA_LIST_TITLE_MAX,
   WA_LIST_DESCRIPTION_MAX,
   WA_BODY_MAX,
+  WA_TEXT_MAX,
   renderWhatsAppChoice,
   renderWhatsAppText,
 } from "../src/lib/whatsappRendering";
@@ -77,12 +78,28 @@ test("a long description is cut at seventy-two", () => {
   assert.equal(row?.descriptionTruncated, true);
 });
 
-test("body text is cut at 1024 on both shapes", () => {
+test("an interactive body is cut at 1024 on both shapes", () => {
   const long = "y".repeat(2000);
   assert.equal(renderWhatsAppChoice(long, opts(2)).body.length, WA_BODY_MAX);
   assert.equal(renderWhatsAppChoice(long, opts(2)).bodyTruncated, true);
-  assert.equal(renderWhatsAppText(long).text.length, WA_BODY_MAX);
   assert.equal(renderWhatsAppText("short").truncated, false);
+});
+
+/*
+ * A PLAIN TEXT MESSAGE IS NOT AN INTERACTIVE BODY. 1,024 is the interactive
+ * limit; a text message gets 4,096. Applying the interactive number to text made
+ * the preview stamp "cut by WhatsApp" on a message `sendWhatsAppText` forwards
+ * untouched, and a preview that invents truncation is no more usable than one
+ * that hides it — this component's whole claim is that its cuts are real.
+ */
+test("a plain text message is cut at 4096, not 1024", () => {
+  const overInteractive = "y".repeat(2000);
+  assert.equal(renderWhatsAppText(overInteractive).truncated, false, "2,000 characters arrive whole");
+  assert.equal(renderWhatsAppText(overInteractive).text.length, 2000);
+
+  const overText = "y".repeat(5000);
+  assert.equal(renderWhatsAppText(overText).text.length, WA_TEXT_MAX);
+  assert.equal(renderWhatsAppText(overText).truncated, true);
 });
 
 test("text that fits is reported as untouched", () => {
