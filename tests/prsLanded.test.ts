@@ -154,6 +154,29 @@ test("a landed pull request is never reclassified by a recovery record", () => {
   assert.equal(classifyMerged(pr, true, false).status, "landed");
 });
 
+test("the X webhook SECURITY fix is recorded as recovered, not as lost", () => {
+  // #548 closed a CRC signing oracle. It was merged into
+  // `agent/x-social-inbox-integration` while the X integration itself reached
+  // main separately under #538 — so the vulnerable code was live and its fix was
+  // on a side branch. #549 re-landed it.
+  //
+  // Pinned because of what it would mean to get this wrong in either direction:
+  // reported as stranded, a shipped security fix keeps the guard red until
+  // somebody switches it off; excused without its replacement landing, a real
+  // hole reads as closed.
+  assert.equal(RECOVERED_BY[548], 549);
+  const pr = {
+    number: 548,
+    title: "fix(x): close the CRC signing oracle, and two parser holes",
+    baseRefName: "agent/x-social-inbox-integration",
+    headRefOid: "bd9b2a29",
+  };
+  assert.equal(classifyMerged(pr, false, true).status, "recovered");
+  // …and only while #549 itself is on main. A reverted recovery must put the
+  // security fix straight back on the stranded list.
+  assert.equal(classifyMerged(pr, false, false).status, "stranded");
+});
+
 test("the recovery table stays small and self-describing", () => {
   // A growing table is the smell this guard exists to catch: it would mean
   // stranding PRs routinely and recording it rather than fixing the merges.

@@ -37,7 +37,7 @@ import {
   loadDeviceSession,
   saveDeviceSession,
 } from "@/lib/checklists/deviceStore";
-import { preparePhoto, unsendablePhoto, uploadPhoto } from "@/lib/photoTransport";
+import { photoUploadAccess, preparePhoto, unsendablePhoto, uploadPhoto } from "@/lib/photoTransport";
 import {
   completeChecklistRun,
   deleteChecklistPhoto,
@@ -460,7 +460,8 @@ export default function ChecklistRunner({
   }
 
   async function sendNow(entryId: string, photoId: string, file: File, capturedAt: string) {
-    const url = await uploadPhoto({ kind: "checklist", recordId: entryId, tenantId, key: photoId }, file);
+    const access = await photoUploadAccess();
+    const url = await uploadPhoto({ kind: "checklist", recordId: entryId, tenantId, key: photoId, access }, file);
     const result = await registerChecklistPhoto(entryId, [{ url, id: photoId, capturedAt }]);
     if (result.error) throw new Error(result.error);
   }
@@ -530,7 +531,8 @@ export default function ChecklistRunner({
   const uploader = {
     upload: async (item: QueuedPhoto) => {
       const file = new File([item.blob], `${item.id}.jpg`, { type: item.blob.type || "image/jpeg" });
-      return uploadPhoto({ kind: "checklist", recordId: item.entryId, tenantId, key: item.id }, file);
+      const access = await photoUploadAccess();
+      return uploadPhoto({ kind: "checklist", recordId: item.entryId, tenantId, key: item.id, access }, file);
     },
     finalize: async (item: QueuedPhoto, url: string) => {
       const result = await registerChecklistPhoto(item.entryId, [{ url, id: item.id, capturedAt: item.capturedAt }]);

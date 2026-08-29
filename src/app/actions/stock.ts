@@ -14,6 +14,7 @@ import {
   type StockActor,
 } from "@/lib/stockPlatform";
 import { getStockLabels, saveStockLabels, slugifyLabel } from "@/lib/stockLabels";
+import { withActingStaffScope } from "@/lib/actingScope";
 
 const rand = (value: FormDataEntryValue | null) => {
   const parsed = Number.parseFloat(String(value ?? "0").replace(/[^0-9.-]/g, ""));
@@ -548,7 +549,9 @@ export async function completePdi(id: string, formData: FormData) {
 }
 
 export async function markUnitSold(id: string, formData: FormData) {
-  return allocateUnit(id, formData);
+  return withActingStaffScope(async () => {
+    return allocateUnit(id, formData);
+  });
 }
 
 export async function deliverStockUnit(id: string, formData: FormData) {

@@ -307,7 +307,23 @@ function pageHtml(page: DocumentPage, doc: DocumentModel, ctx: RenderCtx, logoDa
     `<div style="position:absolute;left:${fb.x - doc.style.margin}px;top:${fb.y - doc.style.margin}px;width:${fb.width}px">${blockHtml(fb.block, ctx, doc.style, logoDataUri)}</div>`
   ).join("");
   const size = PAGE_SIZES[doc.style.pageSize];
-  return `<div style="position:relative;min-height:${size.h - doc.style.margin * 2}px;${isLast ? "" : "page-break-after:always;"}">${rows}${fields}${floats}${stamped}</div>`;
+  /*
+   * EVERY DOCUMENT PRINTED ONTO A SECOND, NEARLY EMPTY PAGE. Two separate causes,
+   * and the first hid the second.
+   *
+   * `display:flow-root` is the one that matters. The page box is exactly the
+   * printable height, and the LAST block inside it — a terms box, a footer, a
+   * paragraph — carries a bottom margin. With nothing establishing a block
+   * formatting context here, that margin collapsed THROUGH the bottom edge and
+   * added itself to the document's height, so the sheet was a few pixels too tall
+   * and Chrome broke it. It was invisible from script: scrollHeight excludes a
+   * collapsed-out margin, so the box measured as fitting while it printed as not.
+   *
+   * The height is a calc() from the EXACT sheet size rather than the rounded
+   * pixel one, because A4 is 1122.52 CSS px and not 1123 — `1123 - margins` was
+   * half a pixel over on its own.
+   */
+  return `<div class="doc-page" style="position:relative;display:flow-root;min-height:calc(${size.cssH} - ${doc.style.margin * 2}px);${isLast ? "" : "page-break-after:always;"}">${rows}${fields}${floats}${stamped}</div>`;
 }
 
 /**
@@ -387,6 +403,7 @@ export function renderDocumentHtml(
   const stamped = opts?.stampedFields;
   const body = doc.pages.map((p, i) => pageHtml(p, doc, ctx, logoDataUri, i === lastIdx && !opts?.appendHtml, opts?.hideOverlays, stamped ? stamped.filter((s) => s.page === i) : undefined)).join("") + (opts?.appendHtml ?? "");
   const pageCss = doc.style.pageSize === "A4" ? "A4" : "letter";
+  const size = PAGE_SIZES[doc.style.pageSize];
   return `<!doctype html><html><head><meta charset="utf-8"><style>
     @page { size: ${pageCss}; margin: ${m}px; }
     * { box-sizing: border-box; }
@@ -402,10 +419,82 @@ export function renderDocumentHtml(
     ${header ? `.doc-header { position: fixed; top: -${m - 8}px; left: 0; right: 0; }` : ""}
     ${footer ? `.doc-footer { position: fixed; bottom: -${m - 8}px; left: 0; right: 0; }` : ""}
     ${opts?.toolbarHtml ? "@media print { .doc-toolbar { display: none !important; } }" : ""}
-  </style></head><body>
-    ${opts?.toolbarHtml ?? ""}
-    ${header ? `<div class="doc-header">${header}</div>` : ""}
-    ${footer ? `<div class="doc-footer">${footer}</div>` : ""}
-    ${body}
-  </body></html>`;
+    /*
+     * ON SCREEN ONLY. The @page rule above sizes the PRINTED sheet and does
+     * nothing in the browser window, so this rendered edge-to-edge across whatever
+     * width the viewport happened to be - text flush against the left, the totals
+     * bar stretched to the far right, nothing resembling the page that comes out
+     * of the printer.
+     *
+     * Constrained to the real page width and given the margin as padding, so what
+     * is on screen is the sheet. Wrapped in @media screen so the printed output
+     * and the PDF pipeline are byte-for-byte unchanged - they must keep taking
+     * their geometry from the @page rule, not from this.
+     */
+    @media screen {
+      body { background: #e2e8f0; }
+      .doc-page {
+        width: ${size.w}px;
+        /* NO BOTTOM MARGIN: the footer region follows the last page and must
+           sit flush against it. Pages are still separated from one another, by
+           the TOP margin of the one that follows. */
+        margin: 16px auto 0;
+        padding: ${m}px;
+        background: #ffffff;
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.2);
+      }
+      /*
+       * The header and footer are position:fixed because that is how a PRINTED
+       * document repeats them on every sheet. A browser window is one continuous
+       * scroll with nothing to repeat, so fixed just pins them to the window: the
+       * footer sat across the middle of whatever page you had scrolled to, and
+       * once the sheet became a centred column it also spanned wider than the
+       * paper. Put back in the flow at the sheet's width - shown once, bracketing
+       * the pages, instead of floating over them.
+       */
+      .doc-header, .doc-footer {
+        position: static;
+        /* Contains the footer BLOCK’s own margin. Without a block formatting
+           context that margin collapses OUT of this region and becomes a gap
+           between the sheet and its footer — measured at 8px, and invisible to
+           every margin adjustment because no margin here was ever non-zero. */
+        display: flow-root;
+        width: ${size.w}px;
+        margin: 0 auto;
+        background: #ffffff;
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.2);
+      }
+      /* Continuous with the sheet: the side padding matches the page's margin
+         so the content lines up, and the outer padding stands in for the page
+         margin these regions have displaced. */
+      .doc-header { margin-top: 16px; padding: ${m}px ${m}px 0; }
+      .doc-header + .doc-page { margin-top: 0; }
+      .doc-footer { padding: 0 ${m}px ${m}px; margin-bottom: 16px; }
+      /* A document with no footer region still needs air under the last page. */
+      body { padding-bottom: 16px; }
+    }
+  </style></head><body>${[
+    opts?.toolbarHtml ?? "",
+    header ? `<div class="doc-header">${header}</div>` : "",
+    body,
+    /*
+     * THE FOOTER GOES AFTER THE PAGES, and the parts are joined with NOTHING
+     * between them. Both halves were bugs and both are load-bearing.
+     *
+     * ORDER: for print these regions are position:fixed, which repeats them on
+     * every sheet and makes document order irrelevant — so the footer sat in
+     * the markup right after the header, above the pages, and nothing showed
+     * it. On screen they are in flow, where markup order IS rendered order, so
+     * the footer appeared above the document it belongs under.
+     *
+     * WHITESPACE: the parts used to be interpolated on separate indented
+     * lines, which left whitespace-only TEXT NODES between the block elements.
+     * Those produce an anonymous line box — a MEASURED 8px band of background
+     * between the last page and the footer, so the footer read as a detached
+     * strip floating below the sheet instead of the bottom of it. No margin
+     * was involved, which is why two attempts to fix it by adjusting margins
+     * changed nothing.
+     */
+    footer ? `<div class="doc-footer">${footer}</div>` : "",
+  ].join("")}</body></html>`;
 }

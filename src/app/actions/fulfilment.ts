@@ -1,6 +1,7 @@
 "use server";
 
 import { asActionResult, refuse, type ActionResult } from "@/lib/actionResult";
+import { withActingStaffScope } from "@/lib/actingScope";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { actingTenantId } from "@/lib/actingTenant";
@@ -8,15 +9,30 @@ import { customerRecordTenantId } from "@/lib/customerRecordTenant";
 import { requireQuoteAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { emitLeadJourneyEvent } from "@/lib/leadJourneyEvents";
-import { assertOwnedBlob, deleteFile, saveFile } from "@/lib/storage";
+import { assertOwnedBlob, deleteFile, deleteOwnedBlob, saveFile } from "@/lib/storage";
 import { logError } from "@/lib/errorLog";
 import { checkUploadPayload, MAX_PHOTOS } from "@/lib/photoBudget";
 import { contactName } from "@/lib/format";
 import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { isModuleEnabled, requireModuleEnabled } from "@/lib/modules/enabled";
+import { vehiclesAwaitingRegistration } from "@/lib/deliveryVehicles";
 
 const MAX_FILE = 4 * 1024 * 1024;
 const QUOTE_GONE = "This quote is no longer available in this workspace.";
+
+/**
+ * A Server Action needs the tenant scope bound around its whole body. Resolving
+ * actingTenantId() inside the body is not enough under tenant enforcement: the
+ * recovered scope from a nested helper does not propagate back up to later writes
+ * in the action frame. Keep asActionResult outside the scope wrapper so a failure
+ * while recovering the scope is still logged and returned with a reference.
+ */
+function asFulfilmentAction(
+  body: () => Promise<void | ActionResult>,
+  options: { scope?: string; context?: string; tenantId?: string | null } = {},
+): Promise<ActionResult> {
+  return asActionResult(() => withActingStaffScope(body), options);
+}
 
 async function attachStageDocument(
   quoteId: string,
@@ -63,7 +79,7 @@ function pickFile(formData: FormData): File | null {
 }
 
 export async function markInvoiced(quoteId: string, formData: FormData) {
-  return asActionResult(async () => {
+  return asFulfilmentAction(async () => {
     await requireModuleEnabled("automotive");
     const user = await requireQuoteAccess(quoteId, "deliveries.manage");
     const tenantId = await actingTenantId();
@@ -96,7 +112,7 @@ export async function markInvoiced(quoteId: string, formData: FormData) {
 }
 
 export async function markDepositPaid(quoteId: string, formData: FormData) {
-  return asActionResult(async () => {
+  return asFulfilmentAction(async () => {
     await requireModuleEnabled("automotive");
     const user = await requireQuoteAccess(quoteId, "deliveries.manage");
     const tenantId = await actingTenantId();
@@ -126,7 +142,7 @@ export async function markDepositPaid(quoteId: string, formData: FormData) {
 }
 
 export async function scheduleDelivery(quoteId: string, formData: FormData) {
-  return asActionResult(async () => {
+  return asFulfilmentAction(async () => {
     await requireModuleEnabled("automotive");
     const user = await requireQuoteAccess(quoteId, "deliveries.manage");
     const tenantId = await actingTenantId();
@@ -190,7 +206,7 @@ export async function registerDeliveryPhotos(
     scope: "delivery-photo-finalize",
     context: `quote=${quoteId}`,
   };
-  return asActionResult(async () => {
+  return asFulfilmentAction(async () => {
     const tenantId = await actingTenantId();
     failureLog.tenantId = tenantId;
     const user = await requireQuoteAccess(quoteId, "deliveries.manage");
@@ -202,6 +218,9 @@ export async function registerDeliveryPhotos(
     if (urls.length === 0) refuse("Choose at least one photo.");
     if (urls.length > MAX_PHOTOS) refuse(`Upload up to ${MAX_PHOTOS} delivery photos at a time.`);
 
+    // One definition, used to admit the photo AND to bound the cleanup below.
+    // Two copies of this string would let the two checks drift apart.
+    const ownPrefix = `uploads/${quote.tenantId}/delivery/${quote.id}/`;
     let saved = 0;
     let failed = 0;
     for (const [index, url] of urls.entries()) {
@@ -209,7 +228,7 @@ export async function registerDeliveryPhotos(
         const blob = await assertOwnedBlob(url, quote.tenantId);
         if (!blob.contentType.startsWith("image/")) throw new Error("Stored delivery evidence is not an image.");
         if (blob.size <= 0 || blob.size > MAX_FILE) throw new Error("Stored delivery photo is outside the 4 MB limit.");
-        if (!blob.pathname.startsWith(`uploads/${quote.tenantId}/delivery/${quote.id}/`)) {
+        if (!blob.pathname.startsWith(ownPrefix)) {
           throw new Error("Stored delivery photo is not bound to this quote.");
         }
         await prisma.document.create({
@@ -234,7 +253,12 @@ export async function registerDeliveryPhotos(
           `quote=${quoteId} photo=${index + 1}/${urls.length}`,
           { tenantId: quote.tenantId, alert: false },
         );
-        await deleteFile(url).catch(async (cleanupError) => {
+        // NOT deleteFile(url). The failure being handled here may be that the
+        // URL belongs to ANOTHER workspace, and deleteFile has no tenant check —
+        // it would delete with our own credentials, undoing the refusal that put
+        // us in this catch. deleteOwnedBlob re-proves ownership and the record
+        // binding first, and refuses instead of deleting when either fails.
+        await deleteOwnedBlob(url, quote.tenantId, ownPrefix).catch(async (cleanupError) => {
           await logError("delivery-photo-cleanup", cleanupError, `quote=${quoteId} photo=${index + 1}`, {
             tenantId: quote.tenantId,
             alert: false,
@@ -271,7 +295,7 @@ export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) 
     scope: "delivery-photo-upload",
     context: `quote=${quoteId}`,
   };
-  return asActionResult(async () => {
+  return asFulfilmentAction(async () => {
     const tenantId = await actingTenantId();
     failureLog.tenantId = tenantId;
     const user = await requireQuoteAccess(quoteId, "deliveries.manage");
@@ -336,13 +360,16 @@ export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) 
 }
 
 export async function markDelivered(quoteId: string, formData: FormData): Promise<ActionResult> {
-  return asActionResult(async () => {
+  return asFulfilmentAction(async () => {
     await requireModuleEnabled("automotive");
     const user = await requireQuoteAccess(quoteId, "deliveries.manage");
     const tenantId = await actingTenantId();
     const quote = await prisma.quote.findFirst({
       where: { id: quoteId, tenantId },
-      include: { lead: true },
+      // `items` so the delivery knows how many vehicles it actually sold. It used
+      // to send the customer to register exactly one, whatever the quantity —
+      // Q-1014 sold two Rover XXLs and the second was never recorded.
+      include: { lead: true, items: { include: { product: true }, orderBy: { sortOrder: "asc" } } },
     });
     if (!quote) refuse(QUOTE_GONE);
     if (!quote.deliveryScheduledFor) refuse("Schedule the delivery before marking it delivered.");
@@ -403,6 +430,25 @@ export async function markDelivered(quoteId: string, formData: FormData): Promis
     });
     revalidatePath("/deliveries");
     revalidatePath(`/quotes/${quoteId}`);
-    return { redirectTo: `/vehicles/new?contactId=${quote.contactId ?? ""}&productId=${quote.lead?.productId ?? ""}&color=${encodeURIComponent(quote.lead?.color ?? "")}` };
+    /*
+     * Hand over the WHOLE queue, by pointing at the quote rather than at one
+     * vehicle's details.
+     *
+     * `?quoteId=…&seq=0` keeps the quote as the single source of truth: the
+     * registration page re-derives the queue from the same lines, so the URL
+     * cannot carry a stale or hand-edited list, and the position survives a
+     * refresh. The old link passed the LEAD's product, which was not even
+     * necessarily what the quote sold.
+     *
+     * A quote with no catalogue lines queues nothing, and keeps the previous
+     * behaviour — a blank registration form seeded with the contact.
+     */
+    const queue = vehiclesAwaitingRegistration(quote.items);
+    const contactParam = `contactId=${quote.contactId ?? ""}`;
+    return {
+      redirectTo: queue.length > 0
+        ? `/vehicles/new?${contactParam}&quoteId=${quoteId}&seq=0`
+        : `/vehicles/new?${contactParam}&productId=${quote.lead?.productId ?? ""}&color=${encodeURIComponent(quote.lead?.color ?? "")}`,
+    };
   });
 }

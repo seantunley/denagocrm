@@ -26,11 +26,14 @@ export const PHOTO_MAX_EDGE = 1600;
 export const PHOTO_JPEG_QUALITY = 0.82;
 
 /**
- * Most photos accepted by both legacy upload actions and the direct uploader.
- * Direct uploads send one file per request, so increasing the batch count does
- * not increase the HTTP request body size.
+ * Most photos accepted per batch, by the direct uploader and the legacy upload
+ * actions alike. Direct uploads send one file per request, so raising the count
+ * does not grow any single HTTP body — the limit is about how much a person can
+ * usefully queue at once, not about the request size ceiling.
+ *
+ * Kept as a literal that MAX_PHOTOS derives from, rather than the other way
+ * round, so the config-contract test has one number to assert against.
  */
-/** Explicit browser-to-Blob batch limit, kept literal for config-contract tests. */
 export const DIRECT_PHOTO_BATCH_LIMIT = 12;
 
 /** Legacy upload actions use the same application-wide count. */

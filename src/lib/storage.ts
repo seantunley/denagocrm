@@ -467,6 +467,57 @@ export async function deleteFile(ref: string): Promise<void> {
   await fs.unlink(path.join(UPLOAD_DIR, ref)).catch(() => {});
 }
 
+/**
+ * May this stored object be deleted as cleanup for `requiredPrefix`?
+ *
+ * Pure, so the rule can be exercised directly rather than inferred from a call
+ * site. Both halves are load-bearing: ownership answers "is this the caller's
+ * workspace's object", the prefix answers "is it the one this record just
+ * staged" — a caller must not be able to tidy away an unrelated file of its own.
+ */
+export function mayCleanUpStoredBlob(pathname: string, tenantId: string, requiredPrefix: string): boolean {
+  if (!requiredPrefix) return false;
+  return blobBelongsToTenant(pathname, tenantId) && pathname.startsWith(requiredPrefix);
+}
+
+/**
+ * Delete a staged upload ONLY after proving it belongs to `tenantId` and to the
+ * record identified by `requiredPrefix`.
+ *
+ * WHY THIS EXISTS, and why cleanup must never call {@link deleteFile} directly
+ * on a client-supplied URL. The register* actions take blob URLs from the
+ * browser, verify each with {@link assertOwnedBlob}, and file it. Verification
+ * failure threw into a catch whose job was to tidy up the staged object — so a
+ * URL REJECTED as belonging to another workspace was handed straight to
+ * deleteFile, which has no tenant check and deletes with the application's own
+ * credentials. The cleanup path therefore undid the very protection the
+ * ownership check had just applied: any user who could stage a photo on their
+ * own record could delete another workspace's file by pasting its URL.
+ *
+ * Ordering it as verify-then-delete inside one helper is deliberate. A boolean
+ * flag at the call site would work until someone restructured the try/catch;
+ * here a caller cannot express the unsafe operation at all.
+ *
+ * `io` is a test seam in the style of {@link photoBlobAccess}'s `env` — the
+ * refusal path is the security boundary, so it has to be executable in a test
+ * without a Blob store to talk to.
+ */
+export async function deleteOwnedBlob(
+  ref: string,
+  tenantId: string,
+  requiredPrefix: string,
+  io: {
+    verify: (ref: string, tenantId?: string | null) => Promise<OwnedBlob>;
+    remove: (ref: string) => Promise<void>;
+  } = { verify: assertOwnedBlob, remove: deleteFile },
+): Promise<void> {
+  const blob = await io.verify(ref, tenantId);
+  if (!mayCleanUpStoredBlob(blob.pathname, tenantId, requiredPrefix)) {
+    throw new Error("Refusing to delete a stored file that is not bound to this record");
+  }
+  await io.remove(ref);
+}
+
 const storeTokens = () => ({ publicToken: publicToken(), privateToken: privateToken() });
 
 /** Whether the store we currently WRITE to has a usable token (see backupBlobs). */
@@ -518,6 +569,42 @@ export async function listActiveBackupBlobs(prefix: string): Promise<Array<{ pat
   const token = activeStoreToken(privateMode(), storeTokens());
   if (!token) return [];
   return collectBlobs(prefix, token);
+}
+
+/**
+ * List staged uploads in the ACTIVE store, WITH their upload time.
+ *
+ * Separate from listActiveBackupBlobs because the orphan sweep needs to know how
+ * old an object is: deleting one that a phone is still in the middle of
+ * registering would destroy a photo somebody just took. collectBlobs drops
+ * uploadedAt, and widening it would give every backup caller a field it has no
+ * use for.
+ */
+export type UploadBlob = { pathname: string; url: string; uploadedAt: Date | null };
+export type UploadBlobPage = { blobs: UploadBlob[]; cursor: string | null };
+
+/**
+ * ONE PAGE at a time, and a cursor to resume from.
+ *
+ * Deliberately not a "collect everything then act" helper like its backup
+ * sibling. The orphan sweep runs on a cron budget, and a version that listed the
+ * whole namespace first spent that budget walking the store before deleting
+ * anything — so as storage grew it would do less and less real work per tick,
+ * and objects past the first page would never be reached at all. Handing back a
+ * page and a cursor lets the caller work, check its deadline, and resume.
+ */
+export async function listActiveUploadBlobPage(
+  prefix: string,
+  cursor?: string | null,
+  limit = 250,
+): Promise<UploadBlobPage> {
+  const token = activeStoreToken(privateMode(), storeTokens());
+  if (!token) return { blobs: [], cursor: null };
+  const page = await list({ prefix, cursor: cursor ?? undefined, limit, token });
+  return {
+    blobs: page.blobs.map((b) => ({ pathname: b.pathname, url: b.url, uploadedAt: b.uploadedAt ?? null })),
+    cursor: page.hasMore ? (page.cursor ?? null) : null,
+  };
 }
 
 /**

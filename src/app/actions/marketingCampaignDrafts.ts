@@ -6,6 +6,7 @@ import { getActiveTenantId } from "@/lib/auth";
 import { requirePermission } from "@/lib/permissions";
 import { requireModuleEnabled } from "@/lib/modules/enabled";
 import { logAuditStrict } from "@/lib/audit";
+import { withActingStaffScope } from "@/lib/actingScope";
 import {
   createCampaignDraftRecord,
   readCampaignDraftRecord,
@@ -23,54 +24,60 @@ async function marketingContext(permission: Parameters<typeof requirePermission>
 }
 
 export async function createCampaignDraft(formData?: FormData) {
-  const { user, tenantId } = await marketingContext("campaigns.create");
-  const id = await createCampaignDraftRecord({ tenantId, userId: user.id, input: formData ? formObject(formData) : {} });
-  await logAuditStrict({
-    action: "campaign.created",
-    summary: "Created campaign draft",
-    entityType: "Campaign",
-    entityId: id,
-    user,
-    after: { id, status: "draft" },
+  return withActingStaffScope(async () => {
+    const { user, tenantId } = await marketingContext("campaigns.create");
+    const id = await createCampaignDraftRecord({ tenantId, userId: user.id, input: formData ? formObject(formData) : {} });
+    await logAuditStrict({
+      action: "campaign.created",
+      summary: "Created campaign draft",
+      entityType: "Campaign",
+      entityId: id,
+      user,
+      after: { id, status: "draft" },
+    });
+    redirect(`/marketing/campaigns/${id}/edit`);
   });
-  redirect(`/marketing/campaigns/${id}/edit`);
 }
 
 export async function updateCampaignDraft(id: string, formData: FormData) {
-  const { user, tenantId } = await marketingContext("campaigns.edit");
-  const before = await readCampaignDraftRecord(id, tenantId);
-  if (!before) throw new Error("Campaign not found");
-  await updateCampaignDraftRecord({ id, tenantId, input: formObject(formData) });
-  const after = await readCampaignDraftRecord(id, tenantId);
-  await logAuditStrict({
-    action: "campaign.updated",
-    summary: `Updated campaign draft “${after?.name ?? before.name}”`,
-    entityType: "Campaign",
-    entityId: id,
-    user,
-    before,
-    after,
+  return withActingStaffScope(async () => {
+    const { user, tenantId } = await marketingContext("campaigns.edit");
+    const before = await readCampaignDraftRecord(id, tenantId);
+    if (!before) throw new Error("Campaign not found");
+    await updateCampaignDraftRecord({ id, tenantId, input: formObject(formData) });
+    const after = await readCampaignDraftRecord(id, tenantId);
+    await logAuditStrict({
+      action: "campaign.updated",
+      summary: `Updated campaign draft “${after?.name ?? before.name}”`,
+      entityType: "Campaign",
+      entityId: id,
+      user,
+      before,
+      after,
+    });
+    revalidatePath(`/marketing/campaigns/${id}/edit`);
+    revalidatePath("/marketing/campaigns");
   });
-  revalidatePath(`/marketing/campaigns/${id}/edit`);
-  revalidatePath("/marketing/campaigns");
 }
 
 export async function duplicateCampaignDraft(id: string) {
-  const { user, tenantId } = await marketingContext("campaigns.create");
-  const source = await readCampaignDraftRecord(id, tenantId);
-  if (!source) throw new Error("Campaign not found");
-  const copyId = await createCampaignDraftRecord({
-    tenantId,
-    userId: user.id,
-    input: { ...source, name: `${source.name} — copy` },
+  return withActingStaffScope(async () => {
+    const { user, tenantId } = await marketingContext("campaigns.create");
+    const source = await readCampaignDraftRecord(id, tenantId);
+    if (!source) throw new Error("Campaign not found");
+    const copyId = await createCampaignDraftRecord({
+      tenantId,
+      userId: user.id,
+      input: { ...source, name: `${source.name} — copy` },
+    });
+    await logAuditStrict({
+      action: "campaign.duplicated",
+      summary: `Duplicated campaign “${source.name}”`,
+      entityType: "Campaign",
+      entityId: copyId,
+      user,
+      after: { id: copyId, sourceId: id, status: "draft" },
+    });
+    redirect(`/marketing/campaigns/${copyId}/edit`);
   });
-  await logAuditStrict({
-    action: "campaign.duplicated",
-    summary: `Duplicated campaign “${source.name}”`,
-    entityType: "Campaign",
-    entityId: copyId,
-    user,
-    after: { id: copyId, sourceId: id, status: "draft" },
-  });
-  redirect(`/marketing/campaigns/${copyId}/edit`);
 }

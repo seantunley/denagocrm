@@ -3,12 +3,33 @@ import { prisma } from "@/lib/db";
 import { requireApiOwner, apiAuthErrorResponse } from "@/lib/auth";
 import QuoteDoc from "@/lib/pdf/QuoteDoc";
 import { loadBillToFleet } from "@/lib/quoteBillTo";
+import { withActingStaffScope } from "@/lib/actingScope";
 
 // react-pdf renders in Node (no browser) — keep this handler on the Node runtime.
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/**
+ * Bound with {@link withActingStaffScope} for the same reason createQuoteForFleet
+ * is, and this route is the proof that the reason is not specific to Server
+ * Actions.
+ *
+ * A ROUTE HANDLER renders no layout, so nothing above it establishes the acting
+ * workspace - and loadBillToFleet below reads the scope SYNCHRONOUSLY, through
+ * activeTenantPredicate. Under TENANT_ENFORCEMENT=enforce a sync read with no
+ * scope THROWS, and that throw is uncaught here because the catch above handles
+ * only ApiAuthError, so the response is a bare 500.
+ *
+ * It only ever showed on FLEET quotes: loadBillToFleets returns early when the
+ * quote names no fleet, so an ordinary quote never reaches the predicate at all.
+ * That is why this rendered correctly for a long time and then broke for one kind
+ * of document the moment enforcement was switched on.
+ *
+ * The wrapper never widens - an already-bound scope wins, and an unresolvable
+ * session runs bare so the guards below still fail closed.
+ */
 export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
+  return withActingStaffScope(async () => {
   try { await requireApiOwner(); } catch (err) { const r = apiAuthErrorResponse(err); if (r) return r; throw err; }
   const { id } = await ctx.params;
   const { searchParams } = new URL(req.url);
@@ -38,5 +59,6 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
       "Content-Type": "application/pdf",
       "Content-Disposition": `inline; filename="quote-${quote.number}.pdf"`,
     },
+  });
   });
 }

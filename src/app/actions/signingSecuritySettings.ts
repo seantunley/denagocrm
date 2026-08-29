@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { requireOwner } from "@/lib/auth";
 import { getSetting, putSetting } from "@/lib/settings";
 import { logAudit } from "@/lib/audit";
+import { withActingStaffScope } from "@/lib/actingScope";
 import {
   parseOtpPolicy,
   parseOtpMinValue,
@@ -28,12 +29,14 @@ export type SigningSecuritySettings = {
  * would have mattered.
  */
 export async function readSigningSecuritySettings(): Promise<SigningSecuritySettings> {
-  await requireOwner();
-  const [policy, minValue] = await Promise.all([
-    getSetting(SIGNING_OTP_POLICY_KEY).catch(() => null),
-    getSetting(SIGNING_OTP_MIN_VALUE_KEY).catch(() => null),
-  ]);
-  return { policy: parseOtpPolicy(policy), minValue: parseOtpMinValue(minValue) };
+  return withActingStaffScope(async () => {
+    await requireOwner();
+    const [policy, minValue] = await Promise.all([
+      getSetting(SIGNING_OTP_POLICY_KEY).catch(() => null),
+      getSetting(SIGNING_OTP_MIN_VALUE_KEY).catch(() => null),
+    ]);
+    return { policy: parseOtpPolicy(policy), minValue: parseOtpMinValue(minValue) };
+  });
 }
 
 /**
@@ -48,32 +51,34 @@ export async function saveSigningSecuritySettings(
   _prev: { error?: string; ok?: string } | undefined,
   formData: FormData,
 ): Promise<{ error?: string; ok?: string }> {
-  const user = await requireOwner();
+  return withActingStaffScope(async () => {
+    const user = await requireOwner();
 
-  const policy = parseOtpPolicy(String(formData.get("policy") ?? ""));
-  const rawMin = String(formData.get("minValue") ?? "").trim();
-  // An unreadable number must not silently become 0 and pull every small
-  // document into the check — say so instead.
-  if (rawMin !== "" && !Number.isFinite(Number(rawMin))) {
-    return { error: "Enter the minimum value as a number, or leave it blank for any amount." };
-  }
-  const minValue = parseOtpMinValue(rawMin);
+    const policy = parseOtpPolicy(String(formData.get("policy") ?? ""));
+    const rawMin = String(formData.get("minValue") ?? "").trim();
+    // An unreadable number must not silently become 0 and pull every small
+    // document into the check — say so instead.
+    if (rawMin !== "" && !Number.isFinite(Number(rawMin))) {
+      return { error: "Enter the minimum value as a number, or leave it blank for any amount." };
+    }
+    const minValue = parseOtpMinValue(rawMin);
 
-  const before = await readSigningSecuritySettings();
-  await putSetting(SIGNING_OTP_POLICY_KEY, policy);
-  await putSetting(SIGNING_OTP_MIN_VALUE_KEY, String(minValue));
+    const before = await readSigningSecuritySettings();
+    await putSetting(SIGNING_OTP_POLICY_KEY, policy);
+    await putSetting(SIGNING_OTP_MIN_VALUE_KEY, String(minValue));
 
-  await logAudit({
-    action: "signing.identity_policy_changed",
-    summary:
-      `Signer verification set to “${policy}”` +
-      (policy === "money" ? ` for documents worth ${minValue} or more` : ""),
-    entityType: "AppSetting",
-    entityId: SIGNING_OTP_POLICY_KEY,
-    userName: user.name,
-    metadata: { before, after: { policy, minValue } },
+    await logAudit({
+      action: "signing.identity_policy_changed",
+      summary:
+        `Signer verification set to “${policy}”` +
+        (policy === "money" ? ` for documents worth ${minValue} or more` : ""),
+      entityType: "AppSetting",
+      entityId: SIGNING_OTP_POLICY_KEY,
+      userName: user.name,
+      metadata: { before, after: { policy, minValue } },
+    });
+
+    revalidatePath("/settings/signing-security");
+    return { ok: "Saved." };
   });
-
-  revalidatePath("/settings/signing-security");
-  return { ok: "Saved." };
 }

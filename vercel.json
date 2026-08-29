@@ -29,6 +29,10 @@
       "schedule": "0 2 * * *"
     },
     {
+      "path": "/api/cron/photo-orphans",
+      "schedule": "0 3 * * *"
+    },
+    {
       "path": "/api/cron/security",
       "schedule": "0 6 1 * *"
     },

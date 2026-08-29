@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
-import { Truck, FileText, Wallet, CalendarClock, PackageCheck, ArrowRight } from "lucide-react";
+import { Truck, FileText, Wallet, CalendarClock, PackageCheck, ArrowRight, Camera } from "lucide-react";
 import DirectPhotoUploader from "@/components/DirectPhotoUploader";
 import { prisma } from "@/lib/db";
 import {
@@ -149,7 +149,8 @@ export default async function DeliveriesPage() {
               {quotes.map((quote) => {
                 const model = quote.lead?.product?.name ?? quote.items[0]?.description ?? "Vehicle";
                 const who = quoteBillTo(quote, fleetsById.get(quote.fleetId ?? "") ?? null).name || "Customer";
-                const stage = columns.find((column) => column.key === colOf(quote));
+                const stageKey = colOf(quote);
+                const stage = columns.find((column) => column.key === stageKey);
                 const photos = photoCount(quote.id);
                 return (
                   <article key={quote.id} className="rounded-2xl border border-border bg-card p-3.5">
@@ -166,7 +167,7 @@ export default async function DeliveriesPage() {
                     {canManage && (
                       <>
                         <DirectPhotoUploader kind="delivery" recordId={quote.id} tenantId={quote.tenantId ?? ""} label="Add handover photos" />
-                        {colOf(quote) === "deliver" && checklistByQuote.get(quote.id) && (
+                        {stageKey === "deliver" && checklistByQuote.get(quote.id) && (
                           <div className="mt-3">
                             <ChecklistCard
                               tenantId={quote.tenantId ?? ""}
@@ -179,6 +180,31 @@ export default async function DeliveriesPage() {
                           </div>
                         )}
                       </>
+                    )}
+                    {(stageKey === "schedule" || stageKey === "deliver") && (
+                      <div className="mt-3 border-t border-border/60 pt-3">
+                        <Link
+                          href={`/quotes/${quote.id}/delivery-note`}
+                          className="btn-secondary btn-sm w-full justify-center"
+                        >
+                          <FileText className="size-4" />
+                          Review delivery note
+                        </Link>
+                        {canManage && stageKey === "deliver" ? (
+                          <>
+                            <ProofOfDelivery quoteId={quote.id} />
+                            <p className="mt-1 text-[10px] text-muted-foreground/70">
+                              Review the note, then capture the driver, handover checklist and customer signature on this device.
+                            </p>
+                          </>
+                        ) : (
+                          <p className="mt-1.5 text-[10px] text-muted-foreground/70">
+                            {canManage
+                              ? "Customer signing becomes available here once the delivery is scheduled."
+                              : "Delivery note is available for review."}
+                          </p>
+                        )}
+                      </div>
                     )}
                   </article>
                 );

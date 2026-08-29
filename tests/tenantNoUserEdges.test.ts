@@ -240,10 +240,26 @@ test("src/lib/push.ts: sendPushToAll delivers only to the current tenant's devic
   // device in the table while enforcement is dormant — a defensible rollout
   // default, and not a filter, so anything carrying customer data must name its
   // tenant instead of inheriting it. Neither branch may reach the table directly.
+  /*
+   * Asserted in two parts, because the selection became two steps: a dedicated
+   * push channel narrows the send to ONE endpoint, so the scoped list is now
+   * resolved into `recipients` and then filtered into `subs`.
+   *
+   * The rule is unchanged and both halves are still checked — the list still
+   * comes from a scoped source, and the narrowing still derives FROM that list
+   * rather than going back to the table. Splitting the assertion is what lets a
+   * further filter be added without this reading as a scope regression, while a
+   * `subs` built from anything but `recipients` still fails.
+   */
   assert.match(
     code,
-    /const\s+subs\s*=\s*options\.tenantId\s*\n?\s*\?\s*await\s+pushRecipientsForTenant\(options\.tenantId\)\s*\n?\s*:\s*await\s+pushRecipientsForCurrentScope\(\)/,
-    "sendPushToAll must use a scoped recipient list",
+    /const\s+recipients\s*=\s*options\.tenantId\s*\n?\s*\?\s*await\s+pushRecipientsForTenant\(options\.tenantId\)\s*\n?\s*:\s*await\s+pushRecipientsForCurrentScope\(\)/,
+    "sendPushToAll must build its recipient list from a scoped source",
+  );
+  assert.match(
+    code,
+    /const\s+subs\s*=[\s\S]{0,160}?\brecipients\b/,
+    "the sent-to list must derive from that scoped list, never from a fresh query",
   );
   assert.match(code, /export async function pushRecipientsForTenant\(tenantId: string\)/);
   assert.doesNotMatch(code, /prisma\.pushSubscription\.findMany\(\s*\)/, "must not do an unfiltered findMany() in the send path");

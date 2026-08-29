@@ -8,6 +8,7 @@ import { requireModuleEnabled } from "@/lib/modules/enabled";
 import { logAuditStrict } from "@/lib/audit";
 import { readCampaignDraftRecord } from "@/lib/marketingCampaignDrafts";
 import { transitionCampaign } from "@/lib/marketingCampaignWorkflow";
+import { withActingStaffScope } from "@/lib/actingScope";
 
 async function operationContext(permission: Parameters<typeof requirePermission>[0]) {
   await requireModuleEnabled("marketing");
@@ -22,19 +23,23 @@ async function campaignOrThrow(id: string, tenantId: string | null) {
 }
 
 export async function pauseCampaign(id: string) {
-  const { user, tenantId } = await operationContext("campaigns.pause");
-  const campaign = await campaignOrThrow(id, tenantId);
-  await transitionCampaign({ campaignId: id, tenantId, from: campaign.status, to: "paused", userId: user.id, userName: user.name });
-  await logAuditStrict({ action: "campaign.paused", summary: `Paused campaign “${campaign.name}”`, entityType: "Campaign", entityId: id, user, before: campaign, after: { status: "paused" } });
-  revalidatePath(`/marketing/campaigns/${id}`);
+  return withActingStaffScope(async () => {
+    const { user, tenantId } = await operationContext("campaigns.pause");
+    const campaign = await campaignOrThrow(id, tenantId);
+    await transitionCampaign({ campaignId: id, tenantId, from: campaign.status, to: "paused", userId: user.id, userName: user.name });
+    await logAuditStrict({ action: "campaign.paused", summary: `Paused campaign “${campaign.name}”`, entityType: "Campaign", entityId: id, user, before: campaign, after: { status: "paused" } });
+    revalidatePath(`/marketing/campaigns/${id}`);
+  });
 }
 
 export async function resumeCampaign(id: string) {
-  const { user, tenantId } = await operationContext("campaigns.send");
-  const campaign = await campaignOrThrow(id, tenantId);
-  await transitionCampaign({ campaignId: id, tenantId, from: campaign.status, to: "queued", userId: user.id, userName: user.name });
-  await logAuditStrict({ action: "campaign.resumed", summary: `Resumed campaign “${campaign.name}”`, entityType: "Campaign", entityId: id, user, before: campaign, after: { status: "queued" } });
-  revalidatePath(`/marketing/campaigns/${id}`);
+  return withActingStaffScope(async () => {
+    const { user, tenantId } = await operationContext("campaigns.send");
+    const campaign = await campaignOrThrow(id, tenantId);
+    await transitionCampaign({ campaignId: id, tenantId, from: campaign.status, to: "queued", userId: user.id, userName: user.name });
+    await logAuditStrict({ action: "campaign.resumed", summary: `Resumed campaign “${campaign.name}”`, entityType: "Campaign", entityId: id, user, before: campaign, after: { status: "queued" } });
+    revalidatePath(`/marketing/campaigns/${id}`);
+  });
 }
 
 export async function cancelCampaign(id: string, formData: FormData) {
@@ -147,9 +152,11 @@ export async function retryCampaignRecipients(id: string, recipientIds: string[]
 }
 
 export async function archiveCampaign(id: string) {
-  const { user, tenantId } = await operationContext("campaigns.archive");
-  const campaign = await campaignOrThrow(id, tenantId);
-  await transitionCampaign({ campaignId: id, tenantId, from: campaign.status, to: "archived", userId: user.id, userName: user.name });
-  await logAuditStrict({ action: "campaign.archived", summary: `Archived campaign “${campaign.name}”`, entityType: "Campaign", entityId: id, user, before: campaign, after: { status: "archived" } });
-  revalidatePath("/marketing/campaigns");
+  return withActingStaffScope(async () => {
+    const { user, tenantId } = await operationContext("campaigns.archive");
+    const campaign = await campaignOrThrow(id, tenantId);
+    await transitionCampaign({ campaignId: id, tenantId, from: campaign.status, to: "archived", userId: user.id, userName: user.name });
+    await logAuditStrict({ action: "campaign.archived", summary: `Archived campaign “${campaign.name}”`, entityType: "Campaign", entityId: id, user, before: campaign, after: { status: "archived" } });
+    revalidatePath("/marketing/campaigns");
+  });
 }

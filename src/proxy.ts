@@ -48,6 +48,22 @@ const PUBLIC_PATHS = [
   // calls requirePlatformAdmin while every console server action re-checks via
   // requirePlatformAdminAction.
   "/platform",
+  // Direct photo uploads. "Public" to this proxy only, and for ONE of the two
+  // events this route serves: Vercel Blob's `blob.upload-completed` is a
+  // server-to-server callback with no browser and therefore no session cookie,
+  // so the proxy would 401 it before the route saw it — silently, since nothing
+  // on the page waits for that callback. It is not unauthenticated: handleUpload
+  // verifies the x-vercel-signature HMAC against the store token before the
+  // handler runs, exactly as the webhook routes above verify theirs.
+  //
+  // The other event, `blob.generate-client-token`, is NOT relaxed by this entry.
+  // It resolves actingTenantId(), which THROWS when no session and no bound
+  // scope exist, and then re-checks the specific record with requireQuoteAccess
+  // or requireJobCardAccess before minting a token — so an anonymous caller gets
+  // a 400 and no token. The proxy is an optimistic pre-filter, not the boundary
+  // (see node_modules/next/dist/docs/01-app/02-guides/authentication.md,
+  // "Optimistic checks with Proxy"); the boundary here is in the route.
+  "/api/photos/upload",
   "/s", // public survey response pages (token-gated)
   "/manifest.webmanifest",
   "/messages/manifest.webmanifest", // Denago Messages PWA manifest (no app data)

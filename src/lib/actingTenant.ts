@@ -53,19 +53,51 @@ import { TenantScopeError } from "./tenantGuard";
  * moving the rule to a neutrally-named module is a follow-up worth doing, and a
  * rename is all it is.)
  *
- * Throws (fail closed) when enforcement is ON with no usable scope, because
- * `writeTenantId()` throws `TenantScopeError` before this ladder is reached — so
- * the fallbacks below can never paper over a missed chokepoint.
+ * SERVER ACTION RECOVERY. Under enforcement a Server Action may arrive here with
+ * no ambient AsyncLocalStorage scope even though its signed staff session is fully
+ * valid. `writeTenantId()` correctly throws in that state, but treating that throw
+ * as final made every awaited caller repeat the photo-upload outage: the session
+ * knew its workspace, yet the action failed before the session rung below could
+ * even run. On that one specific miss we now re-derive the scope from the signed
+ * session with `recoverStaffScopeFromSession()` and return its tenant id. The
+ * recovery revalidates revocation, disabled-account and session-version state and
+ * never invents a tenant. An EXISTING scope — including an explicit closed/system
+ * scope — is never replaced. If recovery cannot prove a tenant, the original
+ * TenantScopeError is rethrown unchanged.
+ *
+ * This point-of-use repair is sufficient for callers that need the VALUE returned
+ * by this awaited function. It deliberately does not pretend to establish an
+ * enclosing scope for synchronous readers higher in the caller's frame. Actions
+ * that call `activeTenantPredicate()`, `writeTenantId()` or `inheritedTenantId()`
+ * still need `withActingStaffScope()` around the whole action.
  *
  * NOT FOR BACKGROUND WORK — cron, webhooks, queue drains, scheduled journey
- * steps. There is no session there, so this would silently answer "the founding
- * tenant". Those paths ask the record they are acting on instead: see
- * `inheritedTenantId()` in ./tenantWrite. A customer-facing portal request is the
- * same case — the viewer is a Contact, not a staff member — and must resolve the
- * owner from the Contact.
+ * steps. There is no session there, so this refuses unless an explicit owning
+ * scope is already bound. Those paths ask the record they are acting on instead:
+ * see `inheritedTenantId()` in ./tenantWrite. A customer-facing portal request is
+ * the same case — the viewer is a Contact, not a staff member — and must resolve
+ * the owner from the Contact.
  */
 export async function actingTenantId(): Promise<string> {
-  const enforcedTenantId = writeTenantId();
+  let enforcedTenantId: string | null;
+  try {
+    enforcedTenantId = writeTenantId();
+  } catch (error) {
+    // `writeTenantId()` throws under enforcement when THIS execution context has
+    // no tenant scope. A Server Action can lose that carrier between the auth
+    // chokepoint and this frame, so recover the same validated session workspace
+    // at the point of use rather than failing a legitimate staff write.
+    //
+    // Never replace an existing scope. A present null/system scope is deliberate
+    // context, not propagation loss; changing it from here could turn a trusted
+    // system operation into a tenant operation or widen a deliberately closed one.
+    if (!(error instanceof TenantScopeError) || currentTenantScope()) throw error;
+    const { recoverStaffScopeFromSession } = await import("./scopeRecovery");
+    const recovered = await recoverStaffScopeFromSession();
+    if (!recovered?.tenantId) throw error;
+    return recovered.tenantId;
+  }
+
   // AN EXPLICITLY BOUND WORKSPACE COUNTS, IN BOTH MODES.
   //
   // `writeTenantId()` is null while enforcement is dormant even when an ambient

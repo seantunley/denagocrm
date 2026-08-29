@@ -191,8 +191,26 @@ test("every query the fleet pages issue directly names the tenant", () => {
 
 test("a fleet chosen on the contact form is resolved inside the caller's tenant", () => {
   const contacts = read("src", "app", "actions", "contacts.ts");
-  assert.match(contacts, /activeTenantPredicate\("contact fleet selection"\)/);
+  /*
+   * Asserted as the SCOPING, not as the name of the helper that supplies it.
+   *
+   * This pinned `activeTenantPredicate("contact fleet selection")` — the
+   * synchronous reader — and so failed when the resolution moved to the awaited
+   * `actingTenantId()`, which recovers a scope a Server Action has lost instead
+   * of throwing on it. That is strictly stronger, and a guard that fails on it is
+   * pinning the implementation rather than the property.
+   *
+   * The property is unchanged and is what is checked: the fleet is found by a
+   * query already narrowed to the caller's tenant. A lookup that fetched by id
+   * and compared afterwards would pass a name check and fail this one.
+   */
+  assert.match(contacts, /await actingTenantId\(\)/, "the caller's tenant must be resolved");
   assert.match(contacts, /prisma\.fleet\.findFirst/);
+  assert.match(
+    contacts,
+    /where: \{ id: fleetId, tenantId \}/,
+    "the fleet must be found INSIDE the tenant, not fetched and then checked",
+  );
   // The refusal, not a silent downgrade to a plain business contact.
   assert.match(contacts, /Choose which fleet this contact belongs to/);
   // The company name comes from the resolved record, never from the request.
@@ -202,7 +220,16 @@ test("a fleet chosen on the contact form is resolved inside the caller's tenant"
 test("every fleet mutation resolves the fleet inside the caller's tenant first", () => {
   const fleets = read("src", "app", "actions", "fleets.ts");
   assert.match(fleets, /async function tenantFleet/);
-  assert.match(fleets, /activeTenantPredicate\("fleet mutation"\)/);
+  // Same reasoning as above: the scoping is the property, the helper that
+  // supplies the tenant is not. tenantFleet awaits the acting tenant and narrows
+  // the query with it, so a fleet id from another workspace cannot resolve.
+  assert.match(fleets, /await actingTenantId\(\)/, "the caller's tenant must be resolved");
+  assert.match(
+    fleets,
+    /where: \{ id, tenantId \}/,
+    "the fleet must be found INSIDE the tenant, not fetched and then checked",
+  );
+  assert.match(fleets, /refuse\("That fleet is not available in this workspace"\)/);
   for (const action of ["updateFleet", "updateFleetBusiness", "deleteFleet", "assignVehicleToFleet"]) {
     const body = fleets.slice(fleets.indexOf(`export async function ${action}(`));
     const end = body.indexOf("\nexport async function", 1);
