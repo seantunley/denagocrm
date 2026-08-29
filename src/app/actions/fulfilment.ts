@@ -473,9 +473,17 @@ export async function markDelivered(
           `This delivery uses a guided handover. Complete ${missing.length === 1 ? `“${missing[0]}”` : missing.join(", ")} and sign from the delivery screen.`,
         );
       }
+      if (verifiedRuns.length !== handoverTemplates.length) {
+        refuse("The signed handover must include exactly one completed run for each active checklist. Reload the delivery and review it again.");
+      }
+    } else if (requestedRunIds.length > 0) {
+      refuse("This delivery does not have an active guided handover. Reload the delivery and try again.");
     }
 
-    const deliveryHandoverRunIds = verifiedRuns.map((run) => run.id);
+    const runByTemplate = new Map(verifiedRuns.map((run) => [run.templateId, run.id]));
+    const deliveryHandoverRunIds = handoverTemplates
+      .map((template) => runByTemplate.get(template.id))
+      .filter((id): id is string => Boolean(id));
 
     const file = pickFile(formData);
     if (file && file.size > MAX_FILE) refuse("That delivery note is larger than 4 MB.");
