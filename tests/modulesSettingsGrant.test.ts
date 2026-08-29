@@ -119,6 +119,58 @@ test("an ungranted pack that WAS switched off stays switched off", () => {
   assert.equal(disabled.includes("automation"), true);
 });
 
+test("A GRANT ADDED WHILE THE FORM WAS OPEN IS NOT UNDONE BY SAVING IT", () => {
+  /*
+   * The other side of the same hole. `automation` was ungranted when the page
+   * rendered, so its box was disabled and posts nothing. A platform admin then
+   * grants it. Deciding from the LIVE grant alone reads that silence as the
+   * owner unticking it, and the save switches off the pack that was just added —
+   * so the grant still appears not to take.
+   *
+   * `decidable` is the live grant intersected with what the form offered, which
+   * is what the action passes as `rendered`.
+   */
+  const live = grantedModuleIds("automation,marketing");
+  const rendered = ["marketing"]; // what the page could actually show as tickable
+  const decidable = new Set([...live].filter((id) => rendered.includes(id)));
+
+  const disabled = nextDisabledModuleIds(decidable, [], ["marketing"]);
+  assert.equal(disabled.includes("automation"), false, "a pack the form never offered must not be switched off");
+  assert.equal(
+    effectiveModuleIds("automation,marketing", disabled).has("automation"),
+    true,
+    "the freshly granted pack stays on",
+  );
+});
+
+test("a form claiming packs it was not granted cannot widen anything", () => {
+  // `rendered` arrives from the browser. Intersecting with the live grant means
+  // it can only ever SHRINK what a save decides.
+  const live = grantedModuleIds("marketing");
+  const forged = ["marketing", "automation", "portal"];
+  const decidable = new Set([...live].filter((id) => forged.includes(id)));
+  assert.equal(decidable.has("automation"), false);
+  assert.equal(decidable.has("portal"), false);
+
+  const disabled = nextDisabledModuleIds(decidable, ["automation"], forged);
+  assert.equal(disabled.includes("automation"), true, "the ungranted pack keeps its stored state");
+});
+
+test("a settings read failure must abort the save, not blank the preferences", () => {
+  /*
+   * The save is a read-modify-write. `locallyDisabledIds` swallows a read error
+   * into `[]`, which is right for rendering and wrong here: the write would then
+   * drop every preference it was meant to preserve, and an ungranted pack would
+   * arrive switched ON when it was later granted.
+   */
+  const enabled = src("src/lib/modules/enabled.ts");
+  const save = enabled.slice(enabled.indexOf("export async function setEnabledModuleIds"));
+  assert.match(save, /locallyDisabledIdsStrict\(\)/, "the save must use the non-swallowing read");
+  assert.doesNotMatch(save.slice(0, save.indexOf("\n}")), /locallyDisabledIds\(\)/);
+  assert.match(enabled, /async function locallyDisabledIdsStrict\(\): Promise<string\[\]> \{\s*\r?\n\s*return parseDisabled\(await getSetting\(SETTING_KEY\)\);/,
+    "and it must not catch");
+});
+
 test("the post cannot enable a pack outside the grant", () => {
   // A hand-made POST naming an ungranted pack. The omission of a disabled
   // checkbox is no longer what protects us — the grant is consulted directly.

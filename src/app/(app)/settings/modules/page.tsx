@@ -36,6 +36,22 @@ export default async function ModulesSettingsPage() {
       groups={SETTINGS_NAV_GROUPS}
     >
       <form action={saveEnabledModules} className="card max-w-2xl space-y-4 p-5">
+        {/*
+          WHAT THIS FORM OFFERED, stated by the form itself.
+
+          An ungranted pack renders disabled and posts nothing. If the grant
+          gains that pack between this render and the submit, the save would
+          otherwise read the silence as the owner unticking it and switch off the
+          pack the platform admin had just added. Naming the packs that were
+          actually tickable lets the save tell "not offered" apart from "offered
+          and declined". It is intersected with the live grant server-side, so
+          the claim can only narrow what the save may touch.
+        */}
+        <input
+          type="hidden"
+          name="rendered"
+          value={MODULE_REGISTRY.filter((m) => !m.mandatory && granted.has(m.id)).map((m) => m.id).join(",")}
+        />
         <div className="divide-y divide-border/60">
           {MODULE_REGISTRY.map((m) => {
             const on = enabled.has(m.id);

@@ -28,10 +28,31 @@ const SETTING_KEY = "DISABLED_MODULES";
  * `getSetting` resolves the owning tenant and uses the compound key, which is also
  * what makes this list genuinely per-tenant under enforcement.
  */
-async function locallyDisabledIds(): Promise<string[]> {
-  const value = await getSetting(SETTING_KEY).catch(() => null);
+function parseDisabled(value: string | null | undefined): string[] {
   if (!value) return [];
   return value.split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+async function locallyDisabledIds(): Promise<string[]> {
+  const value = await getSetting(SETTING_KEY).catch(() => null);
+  return parseDisabled(value);
+}
+
+/**
+ * The same list, but a read failure THROWS.
+ *
+ * Swallowing the error is right for rendering — a module screen that goes blank
+ * because a settings read blipped is worse than one that briefly shows a pack as
+ * on. It is wrong for the SAVE, which is a read-modify-write: a transient
+ * failure there yields `[]`, the save writes a list with every preserved
+ * preference missing, and the disable entries for ungranted packs are silently
+ * cleared. Nothing surfaces until one of those packs is granted months later and
+ * arrives switched ON, against a choice the owner did make.
+ *
+ * Failing the save instead is recoverable — the owner presses the button again.
+ */
+async function locallyDisabledIdsStrict(): Promise<string[]> {
+  return parseDisabled(await getSetting(SETTING_KEY));
 }
 
 /**
@@ -204,7 +225,15 @@ export async function requireModuleEnabled(id: ModuleId): Promise<void> {
 }
 
 /** Persist module choices as the disabled set (mandatory core can never be disabled). */
-export async function setEnabledModuleIds(enabledIds: string[]): Promise<void> {
+export async function setEnabledModuleIds(
+  enabledIds: string[],
+  /**
+   * The optional packs the submitted form actually offered as tickable. Only
+   * these may be decided by the post — see the comment below. Null means "no
+   * claim", which falls back to the live grant alone.
+   */
+  renderedAvailableIds: string[] | null,
+): Promise<void> {
   /*
    * A SAVE ONLY DECIDES FOR PACKS THE TENANT ACTUALLY HOLDS.
    *
@@ -226,9 +255,30 @@ export async function setEnabledModuleIds(enabledIds: string[]): Promise<void> {
    */
   const [granted, previouslyDisabled] = await Promise.all([
     grantedModuleIdsForRequest(),
-    locallyDisabledIds(),
+    // Strict: a read failure must abort the save, not silently drop every
+    // preference it was supposed to preserve.
+    locallyDisabledIdsStrict(),
   ]);
-  const disabled = nextDisabledModuleIds(granted, previouslyDisabled, enabledIds);
+
+  /*
+   * DECIDABLE = STILL GRANTED **AND** RENDERED AS USABLE.
+   *
+   * Consulting only the live grant reopened the same hole from the other side. A
+   * pack that was ungranted when the form was drawn has a disabled checkbox and
+   * posts nothing; if a platform admin grants it before that form is submitted,
+   * the live grant now contains it, its absence from the post reads as the owner
+   * unticking it, and the save switches off a pack the owner was never shown.
+   * The grant still appears not to take — the exact complaint, one race narrower.
+   *
+   * The form therefore states which packs it actually offered, and only their
+   * ticks are honoured. Intersecting with the live grant keeps that claim
+   * harmless: a forged list can only ever SHRINK what a save may decide, never
+   * let it reach a pack the tenant was not granted.
+   */
+  const decidable = new Set(
+    [...granted].filter((id) => !renderedAvailableIds || renderedAvailableIds.includes(id)),
+  );
+  const disabled = nextDisabledModuleIds(decidable, previouslyDisabled, enabledIds);
 
   // Via putSetting for the same reason as the read: AppSetting is keyed
   // (tenantId, key), so a direct upsert on `key` alone emits ON CONFLICT (key) and
