@@ -14,7 +14,13 @@ import {
   saveOfflineMutation,
   saveOfflineSnapshot,
 } from "@/lib/offlineClient";
-import type { OfflineDescriptor, OfflineMutation, OfflineSnapshot } from "@/lib/offlineTypes";
+import {
+  chainableSiblings,
+  guardedRecordKey,
+  type OfflineDescriptor,
+  type OfflineMutation,
+  type OfflineSnapshot,
+} from "@/lib/offlineTypes";
 
 type OfflineContextValue = {
   online: boolean;
@@ -96,17 +102,52 @@ export default function OfflineProvider({
       const entries = (await listOfflineMutations(tenantId, userId)).filter(
         (entry) => entry.status === "pending" || entry.status === "syncing",
       );
+      /*
+       * CHAINED LOCAL EDITS ARE NOT CONFLICTS.
+       *
+       * Everything queued in one offline session carries the SAME downloaded
+       * version — the notes and the inspection on a job card both hold the
+       * job.updatedAt from the snapshot. Replaying the notes moves the record
+       * on, so the inspection behind it looked stale and was rejected as "this
+       * record changed while the device was offline": the device blaming a
+       * third party for its own earlier edit, permanently, because a conflict
+       * is never retried.
+       *
+       * The server now reports the version each accepted replay produced. It is
+       * written straight onto the siblings still in the outbox, rather than held
+       * only for this pass, so a sync interrupted halfway does not leave them
+       * carrying a base version that no longer exists anywhere.
+       *
+       * REJECTIONS ADVANCE NOTHING. A refused change leaves its siblings on the
+       * same base it was refused for, and they are refused too — which is right:
+       * they were all authored against a version somebody else has moved.
+       */
+      async function advanceSiblings(after: OfflineMutation, key: string, version: string) {
+        const queued = await listOfflineMutations(tenantId, userId);
+        for (const sibling of chainableSiblings(after, queued, key, version)) {
+          await saveOfflineMutation({
+            ...sibling,
+            operation: { ...sibling.operation, baseVersion: version },
+          });
+        }
+      }
+
       for (const entry of entries) {
         if (mutationExpired(entry)) {
           await saveOfflineMutation({ ...entry, status: "failed", error: "Expired after 72 hours; review before retrying." });
           continue;
         }
-        const working = { ...entry, status: "syncing" as const, attempts: entry.attempts + 1, error: undefined };
+        // Re-read: an earlier replay in this same pass may have advanced this
+        // one's base version, and `entries` was listed before any of that.
+        const stored = (await listOfflineMutations(tenantId, userId)).find((item) => item.id === entry.id) ?? entry;
+        const working = { ...stored, status: "syncing" as const, attempts: stored.attempts + 1, error: undefined };
         await saveOfflineMutation(working);
         try {
           const response = await fetch("/api/offline/sync", { method: "POST", body: mutationBody(working) });
-          const result = await response.json().catch(() => ({})) as { error?: string; conflict?: boolean; retry?: boolean };
+          const result = await response.json().catch(() => ({})) as { error?: string; conflict?: boolean; retry?: boolean; version?: string };
           if (response.ok) {
+            const key = guardedRecordKey(working.operation);
+            if (key && result.version) await advanceSiblings(working, key, result.version);
             await removeOfflineMutation(entry.id);
           } else if (result.retry) {
             // Another tab or request owns this receipt. Leave it retryable so a

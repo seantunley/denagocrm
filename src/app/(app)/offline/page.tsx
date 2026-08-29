@@ -4,7 +4,11 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import ProofOfDelivery from "@/components/ProofOfDelivery";
 import { useOffline } from "@/components/OfflineProvider";
 import { listOfflineMutations, removeOfflineMutation } from "@/lib/offlineClient";
-import type { OfflineDescriptor, OfflineMutation } from "@/lib/offlineTypes";
+import {
+  NO_OFFLINE_CAPABILITIES,
+  type OfflineDescriptor,
+  type OfflineMutation,
+} from "@/lib/offlineTypes";
 import { INSPECTION_STATUSES } from "@/lib/workshop-constants";
 import PhotoUploadField from "@/components/PhotoUploadField";
 import { PageHeader } from "@/components/page-header";
@@ -40,6 +44,25 @@ export default function OfflineWorkspacePage() {
   }
 
   const snapshot = offline.snapshot;
+  /*
+   * ONLY OFFER WHAT THE REPLAY WILL ACCEPT.
+   *
+   * Every queued change is eventually executed by the ordinary Server Action,
+   * which does its own `requirePermission`. Rendering a form regardless meant a
+   * user without the write permission was told "Saved on this device", watched
+   * the form clear, and lost the work when the sync refused it — the Pending
+   * list records that a `lead.create` was rejected, not what was typed into it.
+   *
+   * Falling back to NO_OFFLINE_CAPABILITIES rather than to permissive defaults
+   * matters for a device holding a snapshot cached before `can` existed: the
+   * honest answer there is "refresh and I will tell you", not "go ahead".
+   */
+  const can = snapshot?.can ?? NO_OFFLINE_CAPABILITIES;
+  const readOnly = (what: string) => (
+    <p className="mt-3 text-xs text-amber-200">
+      Your role can view {what} but not change them, so there is nothing to queue here.
+    </p>
+  );
   return (
     <div className="space-y-5">
       <PageHeader
@@ -72,6 +95,7 @@ export default function OfflineWorkspacePage() {
         <>
           {tab === "Leads" && (
             <div className="space-y-4">
+              {can.leadCreate ? (
               <form className="card grid gap-3 sm:grid-cols-2" onSubmit={(event) => void queue(event, { type: "lead.create" })}>
                 <h2 className="sm:col-span-2 font-semibold">New offline lead</h2>
                 <input name="name" required className="input" placeholder="Customer name" />
@@ -87,10 +111,12 @@ export default function OfflineWorkspacePage() {
                 <textarea name="notes" className="input sm:col-span-2" placeholder="Notes" />
                 <button className="btn-primary sm:col-span-2">Save lead on this device</button>
               </form>
+              ) : <div className="card text-sm text-muted-foreground">Your role cannot create leads, so new leads cannot be captured on this device.</div>}
               <div className="grid gap-3 md:grid-cols-2">
                 {snapshot.leads.map((lead) => (
                   <details key={lead.id} className="card">
                     <summary className="cursor-pointer"><span className="font-semibold">{lead.title}</span><span className="ml-2 text-sm text-muted-foreground">{lead.name} · {lead.stage}</span></summary>
+                    {can.leadEdit ? (
                     <form className="mt-3 grid gap-2 sm:grid-cols-2" onSubmit={(event) => void queue(event, { type: "lead.update", recordId: lead.id, baseVersion: lead.updatedAt })}>
                       <input name="name" required className="input" defaultValue={lead.name} />
                       <input name="phone" className="input" defaultValue={lead.phone ?? ""} placeholder="Phone" />
@@ -103,6 +129,7 @@ export default function OfflineWorkspacePage() {
                       <input type="hidden" name="source" value={lead.source} /><input type="hidden" name="color" value={lead.color ?? ""} /><input type="hidden" name="quantity" value={lead.quantity} /><input type="hidden" name="contactId" value={lead.contactId ?? ""} /><input type="hidden" name="assignedToId" value={lead.assignedToId ?? ""} />
                       <button className="btn-secondary btn-sm sm:col-span-2">Queue lead changes</button>
                     </form>
+                    ) : readOnly("leads")}
                   </details>
                 ))}
               </div>
@@ -111,6 +138,7 @@ export default function OfflineWorkspacePage() {
 
           {tab === "Contacts" && (
             <div className="space-y-4">
+              {can.contactCreate ? (
               <form className="card grid gap-3 sm:grid-cols-2" onSubmit={(event) => void queue(event, { type: "contact.create" })}>
                 <h2 className="sm:col-span-2 font-semibold">New offline contact</h2>
                 <input name="firstName" required className="input" placeholder="First name / account name" />
@@ -121,11 +149,12 @@ export default function OfflineWorkspacePage() {
                 <textarea name="notes" className="input sm:col-span-2" placeholder="Notes" />
                 <button className="btn-primary sm:col-span-2">Save contact on this device</button>
               </form>
+              ) : <div className="card text-sm text-muted-foreground">Your role cannot create contacts, so new contacts cannot be captured on this device.</div>}
               <div className="grid gap-3 md:grid-cols-2">
                 {snapshot.contacts.map((contact) => (
                   <details key={contact.id} className="card">
                     <summary className="cursor-pointer"><span className="font-semibold">{contact.name}</span><span className="ml-2 text-xs text-muted-foreground">{contact.phone ?? contact.whatsapp ?? contact.email ?? "No contact channel"}</span></summary>
-                    {contact.fleetId ? <p className="mt-3 text-xs text-amber-200">Fleet membership changes require an online fleet lookup. Other downloaded details remain available for reference.</p> : (
+                    {contact.fleetId ? <p className="mt-3 text-xs text-amber-200">Fleet membership changes require an online fleet lookup. Other downloaded details remain available for reference.</p> : !can.contactEdit ? readOnly("contacts") : (
                       <form className="mt-3 grid gap-2 sm:grid-cols-2" onSubmit={(event) => void queue(event, { type: "contact.update", recordId: contact.id, baseVersion: contact.updatedAt })}>
                         <input name="firstName" required className="input" defaultValue={contact.firstName} />
                         <input name="lastName" className="input" defaultValue={contact.lastName ?? ""} />
@@ -152,9 +181,16 @@ export default function OfflineWorkspacePage() {
 
           {tab === "Job cards" && (
             <div className="space-y-3">
+              {!can.jobCardManage && (
+                <div className="card text-sm text-muted-foreground">
+                  Your role can view job cards but not change them. Notes, inspections and photos
+                  are read-only on this device.
+                </div>
+              )}
               {snapshot.jobCards.map((job) => (
                 <div key={job.id} className="card space-y-4">
                   <div><p className="font-semibold">Job #{job.number} · {job.vehicle}</p><p className="text-xs text-muted-foreground">{job.customer} · {job.status} · {job.description}</p></div>
+                  {can.jobCardManage && (<>
                   <form className="space-y-2" onSubmit={(event) => void queue(event, { type: "jobcard.notes", recordId: job.id, baseVersion: job.updatedAt })}>
                     <textarea name="checkinNotes" className="input" defaultValue={job.checkinNotes ?? ""} placeholder="Check-in condition notes" />
                     <textarea name="checkoutNotes" className="input" defaultValue={job.checkoutNotes ?? ""} placeholder="Check-out condition notes" />
@@ -191,6 +227,7 @@ export default function OfflineWorkspacePage() {
                       ))}
                     </div>
                   )}
+                  </>)}
                 </div>
               ))}
             </div>
@@ -198,16 +235,44 @@ export default function OfflineWorkspacePage() {
 
           {tab === "Deliveries" && (
             <div className="grid gap-3 md:grid-cols-2">
+              {!can.deliveryManage && (
+                <div className="card text-sm text-muted-foreground md:col-span-2">
+                  Your role can view deliveries but not complete them. Handovers and photos are
+                  read-only on this device.
+                </div>
+              )}
               {snapshot.deliveries.map((delivery) => (
                 <div key={delivery.id} className="card">
                   <p className="font-semibold">Quote Q-{delivery.number}</p>
                   <p className="text-xs text-muted-foreground">{delivery.customer}{delivery.scheduledFor ? ` · ${new Date(delivery.scheduledFor).toLocaleString("en-ZA")}` : ""}</p>
-                  <ProofOfDelivery quoteId={delivery.id} baseVersion={delivery.updatedAt} />
-                  <form className="mt-3 border-t border-border pt-3" onSubmit={(event) => void queue(event, { type: "delivery.photo", recordId: delivery.id })}>
-                    <label className="mb-2 block text-xs font-semibold">Delivery photos</label>
-                    <PhotoUploadField required className="block w-full text-xs text-muted-foreground" />
-                    <button className="btn-secondary btn-sm mt-2 w-full">Queue delivery photos</button>
-                  </form>
+                  {can.deliveryManage && (<>
+                    {/*
+                      SIGNING IS OFFERED ONLY ONCE THE DELIVERY IS SCHEDULED, which
+                      is the same rule the online deliveries page applies.
+
+                      The snapshot carries every signed, undelivered quote, and
+                      scheduling is not one of them. Offering the handover on an
+                      unscheduled quote walked the driver through the checklist and
+                      took the CUSTOMER'S SIGNATURE in front of them, then let
+                      `markDelivered` refuse it on reconnect with "Schedule the
+                      delivery before marking it delivered" — a refusal nobody
+                      present could act on, for a signature the Pending list has no
+                      way to give back.
+                    */}
+                    {delivery.scheduledFor ? (
+                      <ProofOfDelivery quoteId={delivery.id} baseVersion={delivery.updatedAt} />
+                    ) : (
+                      <p className="mt-2 text-xs text-amber-200">
+                        Not scheduled yet. Customer signing becomes available here once the
+                        delivery is scheduled — photos can still be captured.
+                      </p>
+                    )}
+                    <form className="mt-3 border-t border-border pt-3" onSubmit={(event) => void queue(event, { type: "delivery.photo", recordId: delivery.id })}>
+                      <label className="mb-2 block text-xs font-semibold">Delivery photos</label>
+                      <PhotoUploadField required className="block w-full text-xs text-muted-foreground" />
+                      <button className="btn-secondary btn-sm mt-2 w-full">Queue delivery photos</button>
+                    </form>
+                  </>)}
                 </div>
               ))}
             </div>

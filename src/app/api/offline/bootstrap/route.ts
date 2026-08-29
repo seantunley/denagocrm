@@ -7,6 +7,7 @@ import {
   getAccessibleJobCardIds,
   getAccessibleLeadIds,
   getAccessibleQuoteIds,
+  hasPermission,
 } from "@/lib/permissions";
 import { contactName } from "@/lib/format";
 import { loadBillToFleets, quoteBillTo } from "@/lib/quoteBillTo";
@@ -24,6 +25,31 @@ export async function GET() {
       getAccessibleJobCardIds(user),
       getAccessibleQuoteIds(user),
     ]);
+
+    /*
+     * WHAT THIS USER MAY WRITE, shipped with the data.
+     *
+     * The four id lists above answer "what may they SEE". Every offline form was
+     * rendered on the strength of that answer alone, so a role with
+     * `leads.view_owned` and no `leads.create` was shown a create form that
+     * accepted the work, reported "Saved on this device" and cleared itself --
+     * and the replay was refused by `requirePermission` hours later, by which
+     * time the typed details existed nowhere.
+     *
+     * These are exactly the permissions the replayed actions demand, so the
+     * device can decline in the one place where the person can still do
+     * something about it. The server checks have not moved and are still the
+     * boundary; this only stops the UI promising what they will refuse.
+     */
+    const [leadCreate, leadEdit, contactCreate, contactEdit, jobCardManage, deliveryManage] =
+      await Promise.all([
+        hasPermission(user, "leads.create"),
+        hasPermission(user, "leads.edit"),
+        hasPermission(user, "contacts.create"),
+        hasPermission(user, "contacts.edit"),
+        hasPermission(user, "jobcards.manage"),
+        hasPermission(user, "deliveries.manage"),
+      ]);
     const [leads, contacts, jobCards, deliveries, stages, products] = await Promise.all([
       prisma.lead.findMany({
         where: { ...(leadIds ? { id: { in: leadIds } } : {}), deletedAt: null },
@@ -132,6 +158,7 @@ export async function GET() {
         scheduledFor: quote.deliveryScheduledFor?.toISOString() ?? null,
         updatedAt: quote.updatedAt.toISOString(),
       })),
+      can: { leadCreate, leadEdit, contactCreate, contactEdit, jobCardManage, deliveryManage },
       options: { stages, products },
     };
     return NextResponse.json(snapshot, { headers: { "Cache-Control": "private, no-store" } });

@@ -24,14 +24,18 @@ test("mobile scheduled deliveries reuse the existing proof-of-delivery signature
   assert.ok(mobile.includes('const stageKey = colOf(quote);'), "mobile must retain the quote fulfilment stage");
   assert.match(
     mobile,
-    /canManage && stageKey === "deliver"[\s\S]*?<ProofOfDelivery quoteId=\{quote\.id\} \/>/,
+    // The props are matched loosely: ProofOfDelivery also takes a baseVersion
+    // now (the offline outbox needs a version to conflict-check against), and
+    // that is not what this test is about. What it guards is WHERE the signing
+    // step appears — behind canManage, in the deliver stage.
+    /canManage && stageKey === "deliver"[\s\S]*?<ProofOfDelivery quoteId=\{quote\.id\}/,
     "a scheduled delivery must expose the existing driver/checklist/signature handover",
   );
 });
 
 test("delivery-note review appears before signing, and signing is not offered before scheduling", () => {
   const review = mobile.indexOf("Review delivery note");
-  const signature = mobile.indexOf("<ProofOfDelivery quoteId={quote.id} />");
+  const signature = mobile.indexOf("<ProofOfDelivery quoteId={quote.id}");
   assert.ok(review >= 0 && signature > review, "review must lead into the signature step");
   assert.match(
     mobile,

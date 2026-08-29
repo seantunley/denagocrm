@@ -8,6 +8,7 @@ import { logError } from "@/lib/errorLog";
 import { createLead, updateLead } from "@/app/actions/leads";
 import { createContact, updateContact } from "@/app/actions/contacts";
 import { markDelivered, uploadDeliveryPhotos } from "@/app/actions/fulfilment";
+import { guardedRecordKey } from "@/lib/offlineTypes";
 import {
   saveConditionNotes,
   setInspectionItem,
@@ -31,21 +32,28 @@ const operationSchema = z.object({
 
 type Operation = z.infer<typeof operationSchema>;
 
-async function currentVersion(operation: Operation): Promise<Date | null> {
-  if (!operation.recordId || !operation.baseVersion) return null;
+/**
+ * The guarded record's version RIGHT NOW, or null when the operation guards
+ * nothing (a create, or a photo append that cannot collide).
+ *
+ * Deliberately independent of whether the caller sent a baseVersion: this is
+ * also what the response reports back after a successful replay, so the outbox
+ * can carry the new version onto the queued changes standing behind it.
+ */
+async function liveVersion(operation: Operation): Promise<Date | null> {
+  const id = guardedRecordKey(operation);
+  if (!id) return null;
   if (operation.type === "lead.update") {
-    return (await prisma.lead.findUnique({ where: { id: operation.recordId }, select: { updatedAt: true } }))?.updatedAt ?? null;
+    return (await prisma.lead.findUnique({ where: { id }, select: { updatedAt: true } }))?.updatedAt ?? null;
   }
   if (operation.type === "contact.update") {
-    return (await prisma.contact.findUnique({ where: { id: operation.recordId }, select: { updatedAt: true } }))?.updatedAt ?? null;
+    return (await prisma.contact.findUnique({ where: { id }, select: { updatedAt: true } }))?.updatedAt ?? null;
   }
   if (operation.type === "jobcard.notes" || operation.type === "jobcard.inspection") {
-    const id = operation.type === "jobcard.inspection" ? operation.parentId : operation.recordId;
-    if (!id) return null;
     return (await prisma.jobCard.findUnique({ where: { id }, select: { updatedAt: true } }))?.updatedAt ?? null;
   }
   if (operation.type === "delivery.complete") {
-    return (await prisma.quote.findUnique({ where: { id: operation.recordId }, select: { updatedAt: true } }))?.updatedAt ?? null;
+    return (await prisma.quote.findUnique({ where: { id }, select: { updatedAt: true } }))?.updatedAt ?? null;
   }
   return null;
 }
@@ -128,7 +136,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "This offline change is already being processed.", retry: true }, { status: 409 });
     }
 
-    const version = await currentVersion(operation);
+    const version = operation.baseVersion ? await liveVersion(operation) : null;
     if (version && operation.baseVersion && version.toISOString() !== operation.baseVersion) {
       const result = { error: "This record changed while the device was offline. Review the latest version before applying your change.", conflict: true };
       await prisma.offlineMutationReceipt.update({
@@ -140,9 +148,28 @@ export async function POST(request: Request) {
 
     const result = (await execute(operation, formData)) ?? {};
     const rejected = typeof result === "object" && result !== null && "error" in result && Boolean(result.error);
+
+    /*
+     * TELL THE DEVICE WHERE THE RECORD ENDED UP.
+     *
+     * Queued changes made in one offline session all carry the SAME downloaded
+     * version. Replaying the first one moves the record on, so every sibling
+     * behind it now looks stale and was rejected as "this record changed while
+     * the device was offline" — blaming a third party for the device's own
+     * earlier edit, and permanently, since a conflict is not retried.
+     *
+     * Reporting the resulting version lets the outbox advance the ones behind
+     * it. Only on ACCEPTANCE: if this replay was refused, the siblings are built
+     * on the same rejected base and must be refused too.
+     */
+    const resultingVersion = rejected ? null : await liveVersion(operation);
+    const reported = resultingVersion
+      ? { ...(result as object), version: resultingVersion.toISOString() }
+      : result;
+
     // Server actions use optional fields. Remove undefined values before storing the
     // result as Prisma JSON so recording a successful replay cannot itself fail.
-    const storedResult = JSON.parse(JSON.stringify(result)) as Prisma.InputJsonValue;
+    const storedResult = JSON.parse(JSON.stringify(reported)) as Prisma.InputJsonValue;
     await prisma.offlineMutationReceipt.update({
       where: { id: mutationId },
       data: { status: rejected ? "rejected" : "completed", result: storedResult, completedAt: new Date() },
