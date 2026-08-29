@@ -13,13 +13,14 @@ import { sendReviewRequest } from "@/lib/reviewRequests";
 import { triggerSurvey } from "@/lib/surveys";
 import { CLOSED_REQUEST_STATUSES } from "@/lib/signing/status";
 import { MAX_PHOTOS, MAX_PHOTO_BYTES, checkUploadPayload } from "@/lib/photoBudget";
-import { assertOwnedBlob, saveFile, deleteFile } from "@/lib/storage";
+import { assertOwnedBlob, saveFile, deleteFile, deleteOwnedBlob } from "@/lib/storage";
 import { logError } from "@/lib/errorLog";
 import { parseRands } from "@/lib/format";
 import { Prisma } from "@prisma/client";
 import { STAGE_VALUES, PRIORITY_VALUES, stageMeta } from "@/lib/workshop-constants";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { resolveAssignableUser } from "@/lib/tenantActor";
+import { withActingStaffScope } from "@/lib/actingScope";
 import {
   requireJobCardAccess,
   requireVehicleAccess,
@@ -62,6 +63,9 @@ export async function registerJobCardPhotos(
     if (urls.length === 0) refuse("Choose at least one photo.");
     if (urls.length > MAX_PHOTOS) refuse(`Upload up to ${MAX_PHOTOS} job-card photos at a time.`);
 
+    // One definition, used to admit the photo AND to bound the cleanup below.
+    // Two copies of this string would let the two checks drift apart.
+    const ownPrefix = `uploads/${jobCard.tenantId}/${category === "checkout" ? "jobcard-checkout" : "jobcard"}/${jobCard.id}/`;
     let saved = 0;
     let failed = 0;
     for (const [index, url] of urls.entries()) {
@@ -69,7 +73,7 @@ export async function registerJobCardPhotos(
         const blob = await assertOwnedBlob(url, jobCard.tenantId);
         if (!blob.contentType.startsWith("image/")) throw new Error("Stored job-card evidence is not an image.");
         if (blob.size <= 0 || blob.size > MAX_PHOTO_BYTES) throw new Error("Stored job-card photo is outside the 4 MB limit.");
-        if (!blob.pathname.startsWith(`uploads/${jobCard.tenantId}/${category === "checkout" ? "jobcard-checkout" : "jobcard"}/${jobCard.id}/`)) {
+        if (!blob.pathname.startsWith(ownPrefix)) {
           throw new Error("Stored job-card photo is not bound to this job card.");
         }
         await prisma.document.create({
@@ -94,7 +98,12 @@ export async function registerJobCardPhotos(
           `jobCard=${jobCardId} photo=${index + 1}/${urls.length}`,
           { tenantId: jobCard.tenantId, alert: false },
         );
-        await deleteFile(url).catch(async (cleanupError) => {
+        // NOT deleteFile(url). The failure being handled here may be that the
+        // URL belongs to ANOTHER workspace, and deleteFile has no tenant check —
+        // it would delete with our own credentials, undoing the refusal that put
+        // us in this catch. deleteOwnedBlob re-proves ownership and the record
+        // binding first, and refuses instead of deleting when either fails.
+        await deleteOwnedBlob(url, jobCard.tenantId, ownPrefix).catch(async (cleanupError) => {
           await logError("jobcard-photo-cleanup", cleanupError, `jobCard=${jobCardId} photo=${index + 1}`, {
             tenantId: jobCard.tenantId,
             alert: false,
@@ -184,103 +193,107 @@ export async function uploadJobCardPhotos(jobCardId: string, formData: FormData)
  * burned in (for display / print / PDF). The original photo is never touched.
  */
 export async function saveCheckinAnnotation(formData: FormData) {
-  const documentId = String(formData.get("documentId") ?? "");
-  const image = formData.get("image");
-  if (!documentId || !(image instanceof File) || image.size === 0) {
-    throw new Error("Missing annotation image");
-  }
-  const ext = image.type === "image/jpeg" ? "jpg" : image.type === "image/png" ? "png" : null;
-  if (image.size > 10 * 1024 * 1024 || !ext) {
-    throw new Error("Invalid annotation image");
-  }
+  return withActingStaffScope(async () => {
+    const documentId = String(formData.get("documentId") ?? "");
+    const image = formData.get("image");
+    if (!documentId || !(image instanceof File) || image.size === 0) {
+      throw new Error("Missing annotation image");
+    }
+    const ext = image.type === "image/jpeg" ? "jpg" : image.type === "image/png" ? "png" : null;
+    if (image.size > 10 * 1024 * 1024 || !ext) {
+      throw new Error("Invalid annotation image");
+    }
 
-  const doc = await prisma.document.findUniqueOrThrow({ where: { id: documentId } });
-  if (!doc.jobCardId || (doc.tag !== "checkin-photo" && doc.tag !== "checkout-photo")) {
-    throw new Error("Not a condition photo");
-  }
-  const user = await requireJobCardAccess(doc.jobCardId, "jobcards.manage");
+    const doc = await prisma.document.findUniqueOrThrow({ where: { id: documentId } });
+    if (!doc.jobCardId || (doc.tag !== "checkin-photo" && doc.tag !== "checkout-photo")) {
+      throw new Error("Not a condition photo");
+    }
+    const user = await requireJobCardAccess(doc.jobCardId, "jobcards.manage");
 
-  let annotations: Prisma.InputJsonValue;
-  try {
-    annotations = JSON.parse(String(formData.get("annotations") ?? "null")) as Prisma.InputJsonValue;
-  } catch {
-    throw new Error("Invalid annotation data");
-  }
+    let annotations: Prisma.InputJsonValue;
+    try {
+      annotations = JSON.parse(String(formData.get("annotations") ?? "null")) as Prisma.InputJsonValue;
+    } catch {
+      throw new Error("Invalid annotation data");
+    }
 
-  const buf = Buffer.from(await image.arrayBuffer());
-  // The flattened markup is a derivative of the photo it annotates, so it belongs
-  // exactly where that Document already does — a mismatch would leave the original
-  // and its markup in two different workspaces' prefixes.
-  const storedName = await saveFile(buf, `annotated-${doc.id}.${ext}`, image.type, doc.tenantId);
-  const previous = doc.annotatedStoredName;
+    const buf = Buffer.from(await image.arrayBuffer());
+    // The flattened markup is a derivative of the photo it annotates, so it belongs
+    // exactly where that Document already does — a mismatch would leave the original
+    // and its markup in two different workspaces' prefixes.
+    const storedName = await saveFile(buf, `annotated-${doc.id}.${ext}`, image.type, doc.tenantId);
+    const previous = doc.annotatedStoredName;
 
-  await prisma.document.update({
-    where: { id: doc.id },
-    data: { annotations, annotatedStoredName: storedName },
+    await prisma.document.update({
+      where: { id: doc.id },
+      data: { annotations, annotatedStoredName: storedName },
+    });
+
+    // Replace, don't accumulate: drop the previous flattened version once the new one is stored.
+    if (previous && previous !== storedName) {
+      await deleteFile(previous).catch(() => {});
+    }
+
+    await logAudit({
+      action: "jobcard.photo.annotate",
+      summary: `Marked up a check-in photo (pre-work condition)`,
+      contactId: doc.contactId,
+      user,
+    });
+    revalidatePath(`/jobcards/${doc.jobCardId}`);
   });
-
-  // Replace, don't accumulate: drop the previous flattened version once the new one is stored.
-  if (previous && previous !== storedName) {
-    await deleteFile(previous).catch(() => {});
-  }
-
-  await logAudit({
-    action: "jobcard.photo.annotate",
-    summary: `Marked up a check-in photo (pre-work condition)`,
-    contactId: doc.contactId,
-    user,
-  });
-  revalidatePath(`/jobcards/${doc.jobCardId}`);
 }
 
 export async function createJobCard(formData: FormData) {
-  // The automotive pack owns job cards; a stale quick-create dialog could still POST
-  // this action after the pack is switched off, so reject it server-side.
-  if (!(await isModuleEnabled("automotive"))) {
-    throw new Error("The automotive module is disabled");
-  }
-  const vehicleId = String(formData.get("vehicleId") ?? "");
-  const description = String(formData.get("description") ?? "").trim();
-  if (!vehicleId || !description) throw new Error("Vehicle and description are required");
-  const user = await requireVehicleAccess(vehicleId, "jobcards.manage");
-
-  const vehicle = await prisma.vehicle.findUniqueOrThrow({ where: { id: vehicleId } });
-  const kmInRaw = String(formData.get("kmIn") ?? "").trim();
-  const kmIn = kmInRaw === "" ? null : parseInt(kmInRaw, 10);
-
-  // Allocate the number and insert in ONE transaction under the advisory lock so
-  // two concurrent job-card creates can't collide on the unique number (#11).
-  // basePrisma is the RLS bypass: authorising the vehicle above did not scope
-  // this transaction, so both rows carry their owner explicitly.
-  const tenantId = await actingTenantId();
-  const jobCard = await basePrisma.$transaction(async (tx) => {
-    const number = await nextJobCardNumber(tx);
-    const jc = await tx.jobCard.create({
-      data: {
-        number,
-        tenantId,
-        vehicleId,
-        contactId: vehicle.contactId,
-        description,
-        kmIn: kmIn != null && !isNaN(kmIn) ? kmIn : null,
-        technicianId: user.id,
-      },
-    });
-    if (jc.kmIn != null) {
-      await tx.mileageLog.create({
-        data: { tenantId, vehicleId, km: jc.kmIn, note: `Job card #${jc.number} check-in` },
-      });
+  return withActingStaffScope(async () => {
+    // The automotive pack owns job cards; a stale quick-create dialog could still POST
+    // this action after the pack is switched off, so reject it server-side.
+    if (!(await isModuleEnabled("automotive"))) {
+      throw new Error("The automotive module is disabled");
     }
-    return jc;
+    const vehicleId = String(formData.get("vehicleId") ?? "");
+    const description = String(formData.get("description") ?? "").trim();
+    if (!vehicleId || !description) throw new Error("Vehicle and description are required");
+    const user = await requireVehicleAccess(vehicleId, "jobcards.manage");
+
+    const vehicle = await prisma.vehicle.findUniqueOrThrow({ where: { id: vehicleId } });
+    const kmInRaw = String(formData.get("kmIn") ?? "").trim();
+    const kmIn = kmInRaw === "" ? null : parseInt(kmInRaw, 10);
+
+    // Allocate the number and insert in ONE transaction under the advisory lock so
+    // two concurrent job-card creates can't collide on the unique number (#11).
+    // basePrisma is the RLS bypass: authorising the vehicle above did not scope
+    // this transaction, so both rows carry their owner explicitly.
+    const tenantId = await actingTenantId();
+    const jobCard = await basePrisma.$transaction(async (tx) => {
+      const number = await nextJobCardNumber(tx);
+      const jc = await tx.jobCard.create({
+        data: {
+          number,
+          tenantId,
+          vehicleId,
+          contactId: vehicle.contactId,
+          description,
+          kmIn: kmIn != null && !isNaN(kmIn) ? kmIn : null,
+          technicianId: user.id,
+        },
+      });
+      if (jc.kmIn != null) {
+        await tx.mileageLog.create({
+          data: { tenantId, vehicleId, km: jc.kmIn, note: `Job card #${jc.number} check-in` },
+        });
+      }
+      return jc;
+    });
+    await logAudit({
+      action: "jobcard.opened",
+      summary: `Opened job card #${jobCard.number} on ${vehicle.model}: ${description}`,
+      contactId: vehicle.contactId,
+      user,
+    });
+    revalidatePath("/jobcards");
+    redirect(`/jobcards/${jobCard.id}`);
   });
-  await logAudit({
-    action: "jobcard.opened",
-    summary: `Opened job card #${jobCard.number} on ${vehicle.model}: ${description}`,
-    contactId: vehicle.contactId,
-    user,
-  });
-  revalidatePath("/jobcards");
-  redirect(`/jobcards/${jobCard.id}`);
 }
 
 /**

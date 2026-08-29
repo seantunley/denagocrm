@@ -669,7 +669,14 @@ test("the template version moves when the questions move, and not otherwise", ()
   // workspace's runs across a dozen revisions that are all the same list.
   const save = exportedBodies(source).get("saveChecklistTemplate")!;
   assert.match(save, /const bump = itemsChanged\(existing\.items, template\.items\);/);
-  assert.match(save, /\.\.\.\(bump \? \{ version: existing\.version \+ 1 \} : \{\}\)/);
+  // The bump itself moved into lib/checklists/templateVersion.ts, where it is
+  // applied under the version claim -- the two have to be one statement or the
+  // claim guards nothing. The action passes the decision through.
+  assert.match(save, /bump,/, "the save must hand its decision to the claim");
+  assert.match(
+    code("src/lib/checklists/templateVersion.ts"),
+    /\.\.\.\(input\.bump \? \{ version: input\.fromVersion \+ 1 \} : \{\}\)/,
+  );
 });
 
 test("a template that has been used cannot be deleted, and says what to do instead", () => {
@@ -709,4 +716,71 @@ test("saving a template never adopts a step id it does not own", () => {
     /if \(existing\.host !== template\.host\)/,
     "a list must not be moved to a different situation once runs have answered it",
   );
+});
+
+/* ── the revision snapshot cannot disagree with the template ─────────────── */
+
+/*
+ * Two editors who both loaded revision 1 could both "succeed": the version was
+ * set to 2 twice with nothing checking it had not moved, the second editor's
+ * items overwrote the first's, and the revision upsert found revision 2 already
+ * there and did nothing. The live list held B's items while the immutable
+ * revision 2 held A's, so a run stamped version 2 DISPLAYED one checklist and
+ * SYNCED against a different set of authoritative questions.
+ *
+ * The race itself is proven against a real database in
+ * scripts/test-checklist-template-concurrency.ts — two statements cannot be
+ * raced by a test that can only call one of them. These assertions hold the
+ * SHAPE that makes that possible, so the guard cannot be quietly removed.
+ */
+test("A TEMPLATE SAVE CLAIMS THE VERSION IT WAS COMPUTED AGAINST", () => {
+  const claim = readFileSync(path.join(process.cwd(), "src/lib/checklists/templateVersion.ts"), "utf8");
+  assert.match(
+    claim,
+    /where: \{ id: input\.templateId, tenantId: input\.tenantId, version: input\.fromVersion \}/,
+    "the version read must be part of the write predicate",
+  );
+  assert.match(claim, /return claimed\.count === 1;/, "exactly one row, or nobody");
+
+  const action = readFileSync(path.join(process.cwd(), "src/app/actions/checklistTemplates.ts"), "utf8");
+  assert.match(action, /const claimed = await claimTemplateVersion\(tx, \{/, "the action must go through the claim");
+  assert.match(action, /fromVersion: existing\.version/, "and claim the version it read");
+  assert.match(action, /if \(!claimed\) \{[\s\S]*?refuse\(/, "a lost claim must refuse, never write on");
+  assert.match(action, /Somebody else saved this checklist while you were editing it/,
+    "and say so in a way the person can act on");
+});
+
+test("a bumped revision is CREATED, never silently reused", () => {
+  /*
+   * `upsert(… update: {})` was what turned a lost race into corruption rather
+   * than an error: it found the revision the other editor had just written and
+   * reported success. Holding the version claim means the number is ours alone,
+   * so a row already at it is proof the guard failed — let the constraint say so.
+   */
+  // code(), not the raw file: the comments here DISCUSS the upsert that was
+  // removed, and a doesNotMatch against prose would fail on the explanation of
+  // why the code no longer does it.
+  const action = code(TEMPLATES_PATH);
+  const bumped = action.slice(action.indexOf("if (bump) {"), action.indexOf("} else {", action.indexOf("if (bump) {")));
+  assert.match(bumped, /checklistTemplateRevision\.create\(/, "a new version takes a new revision row");
+  assert.doesNotMatch(bumped, /upsert/, "…and must not fall back to reusing one");
+  // The no-bump path keeps its upsert, but only to BACKFILL a template that
+  // predates revisions — the items are unchanged, so the stored snapshot is
+  // still accurate and must not be rewritten under runs already stamped to it.
+  const unchanged = action.slice(action.indexOf("} else {", action.indexOf("if (bump) {")));
+  assert.match(unchanged, /checklistTemplateRevision\.upsert\(/);
+  assert.match(unchanged, /update: \{\},/);
+});
+
+test("CI runs the concurrency proof, not just validate:security", () => {
+  /*
+   * validate:security reads like coverage and is not: the workflow calls the
+   * suites individually, so a script reachable only through that chain is never
+   * executed by the thing gating the merge. The sibling draft-concurrency test
+   * carries the same warning above it for the same reason.
+   */
+  const workflow = readFileSync(path.join(process.cwd(), ".github/workflows/security-rbac-ci.yml"), "utf8");
+  assert.match(workflow, /run: npm run test:checklist-concurrency/);
+  const pkg = readFileSync(path.join(process.cwd(), "package.json"), "utf8");
+  assert.match(pkg, /"test:checklist-concurrency": "tsx/);
 });

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
-import { Truck, FileText, Wallet, CalendarClock, PackageCheck, ArrowRight } from "lucide-react";
+import { Truck, FileText, Wallet, CalendarClock, PackageCheck, ArrowRight, Camera } from "lucide-react";
 import DirectPhotoUploader from "@/components/DirectPhotoUploader";
 import { prisma } from "@/lib/db";
 import {
@@ -205,6 +205,37 @@ export default async function DeliveriesPage() {
                           tenantId={quote.tenantId ?? ""}
                           label={handover?.configured ? "Add additional handover photos" : "Add handover photos"}
                         />
+                      </div>
+                    )}
+                    {(stageKey === "schedule" || stageKey === "deliver") && (
+                      <div className="mt-3 border-t border-border/60 pt-3">
+                        <Link
+                          href={`/quotes/${quote.id}/delivery-note`}
+                          className="btn-secondary btn-sm w-full justify-center"
+                        >
+                          <FileText className="size-4" />
+                          Review delivery note
+                        </Link>
+                        {/*
+                          THE LINK ONLY. Signing lives in the block above, which
+                          is the one that knows whether a guided handover is
+                          configured — and, when it is, will not sign until every
+                          checklist is complete.
+
+                          This section arrived from main carrying its own
+                          <ProofOfDelivery>. Keeping it here would have put two
+                          signing controls on the same card, and the second one
+                          did not consult the checklist at all: a delivery with a
+                          guided handover configured could have been signed off
+                          straight past it.
+                        */}
+                        <p className="mt-1.5 text-[10px] text-muted-foreground/70">
+                          {canManage
+                            ? stageKey === "deliver"
+                              ? "Review the note, then complete the handover above to capture the driver and customer signature."
+                              : "Customer signing becomes available here once the delivery is scheduled."
+                            : "Delivery note is available for review."}
+                        </p>
                       </div>
                     )}
                   </article>

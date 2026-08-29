@@ -28,6 +28,7 @@ import { logAuditStrict } from "@/lib/audit";
 import { bumpUserSessionVersion } from "@/lib/userSecurity";
 import { createUserInOwnerTenant } from "@/lib/tenantContext";
 import { deleteFile, saveFile } from "@/lib/storage";
+import { withActingStaffScope } from "@/lib/actingScope";
 import {
   detectProfileImageMime,
   isValidPhone,
@@ -303,37 +304,39 @@ export async function changeOwnPassword(
   _prev: FormState | undefined,
   formData: FormData
 ): Promise<FormState> {
-  const user = await requireUser();
-  const current = String(formData.get("current") ?? "");
-  const next = String(formData.get("next") ?? "");
-  if (!validPassword(next)) {
-    return { error: "New password must be at least 12 characters and contain letters and numbers." };
-  }
-  if (await bcrypt.compare(next, user.passwordHash)) {
-    return { error: "Choose a password different from your current password." };
-  }
-  if (!(await bcrypt.compare(current, user.passwordHash))) {
-    return { error: "Current password is incorrect." };
-  }
+  return withActingStaffScope(async () => {
+    const user = await requireUser();
+    const current = String(formData.get("current") ?? "");
+    const next = String(formData.get("next") ?? "");
+    if (!validPassword(next)) {
+      return { error: "New password must be at least 12 characters and contain letters and numbers." };
+    }
+    if (await bcrypt.compare(next, user.passwordHash)) {
+      return { error: "Choose a password different from your current password." };
+    }
+    if (!(await bcrypt.compare(current, user.passwordHash))) {
+      return { error: "Current password is incorrect." };
+    }
 
-  const updated = await prisma.user.update({
-    where: { id: user.id },
-    data: { passwordHash: await bcrypt.hash(next, 12), passwordChangedAt: new Date() },
+    const updated = await prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash: await bcrypt.hash(next, 12), passwordChangedAt: new Date() },
+    });
+    // Pin the cookie to the version this bump produced. Letting
+    // createSessionCookie re-read means a revoke-all landing in between is undone
+    // by the older request, handing back the access it just removed.
+    const revokedAt = await bumpUserSessionVersion(user.id);
+    await createSessionCookie(updated, { sessionVersion: revokedAt });
+    await logAuditStrict({
+      action: "security.password_changed",
+      summary: "Password changed; all other sessions revoked",
+      entityType: "User",
+      entityId: user.id,
+      user,
+    });
+    revalidatePath("/settings");
+    return { ok: "Password updated. Other signed-in devices have been signed out." };
   });
-  // Pin the cookie to the version this bump produced. Letting
-  // createSessionCookie re-read means a revoke-all landing in between is undone
-  // by the older request, handing back the access it just removed.
-  const revokedAt = await bumpUserSessionVersion(user.id);
-  await createSessionCookie(updated, { sessionVersion: revokedAt });
-  await logAuditStrict({
-    action: "security.password_changed",
-    summary: "Password changed; all other sessions revoked",
-    entityType: "User",
-    entityId: user.id,
-    user,
-  });
-  revalidatePath("/settings");
-  return { ok: "Password updated. Other signed-in devices have been signed out." };
 }
 
 export async function saveQuoteDefaults(formData: FormData) {
@@ -365,176 +368,186 @@ export async function saveWorkshopSettings(formData: FormData) {
 }
 
 export async function saveNextStepScheduling(formData: FormData) {
-  await requireOwner();
-  const hour = parseInt(String(formData.get("hour") ?? ""), 10);
-  // An unchecked checkbox submits nothing, so absence means "don't skip".
-  const skipWeekends = formData.get("skipWeekends") != null;
-  await setNextStepScheduling({ hour, skipWeekends });
-  revalidatePath("/automations");
-  revalidatePath("/settings");
+  return withActingStaffScope(async () => {
+    await requireOwner();
+    const hour = parseInt(String(formData.get("hour") ?? ""), 10);
+    // An unchecked checkbox submits nothing, so absence means "don't skip".
+    const skipWeekends = formData.get("skipWeekends") != null;
+    await setNextStepScheduling({ hour, skipWeekends });
+    revalidatePath("/automations");
+    revalidatePath("/settings");
+  });
 }
 
 export async function updateOwnProfile(
   _prev: FormState | undefined,
   formData: FormData,
 ): Promise<FormState> {
-  const user = await requireUser();
-  const name = String(formData.get("name") ?? "").trim().replace(/\s+/g, " ");
-  const jobTitle = String(formData.get("jobTitle") ?? "").trim().replace(/\s+/g, " ") || null;
-  const mobile = normalisePhone(String(formData.get("mobile") ?? ""));
+  return withActingStaffScope(async () => {
+    const user = await requireUser();
+    const name = String(formData.get("name") ?? "").trim().replace(/\s+/g, " ");
+    const jobTitle = String(formData.get("jobTitle") ?? "").trim().replace(/\s+/g, " ") || null;
+    const mobile = normalisePhone(String(formData.get("mobile") ?? ""));
 
-  if (name.length < 2 || name.length > 100) {
-    return { error: "Enter a name between 2 and 100 characters." };
-  }
-  if (jobTitle && jobTitle.length > 100) {
-    return { error: "Job title must be 100 characters or fewer." };
-  }
-  if (mobile && !isValidPhone(mobile)) {
-    return { error: "Enter a valid phone number, including its country code where possible." };
-  }
+    if (name.length < 2 || name.length > 100) {
+      return { error: "Enter a name between 2 and 100 characters." };
+    }
+    if (jobTitle && jobTitle.length > 100) {
+      return { error: "Job title must be 100 characters or fewer." };
+    }
+    if (mobile && !isValidPhone(mobile)) {
+      return { error: "Enter a valid phone number, including its country code where possible." };
+    }
 
-  await prisma.user.update({ where: { id: user.id }, data: { name, jobTitle, mobile } });
-  await logAuditStrict({
-    action: "account.profile_updated",
-    summary: "Updated personal profile",
-    entityType: "User",
-    entityId: user.id,
-    user,
-    before: { name: user.name, jobTitle: user.jobTitle, mobile: user.mobile },
-    after: { name, jobTitle, mobile },
+    await prisma.user.update({ where: { id: user.id }, data: { name, jobTitle, mobile } });
+    await logAuditStrict({
+      action: "account.profile_updated",
+      summary: "Updated personal profile",
+      entityType: "User",
+      entityId: user.id,
+      user,
+      before: { name: user.name, jobTitle: user.jobTitle, mobile: user.mobile },
+      after: { name, jobTitle, mobile },
+    });
+    revalidatePath("/settings");
+    revalidatePath("/", "layout");
+    return { ok: "Profile updated." };
   });
-  revalidatePath("/settings");
-  revalidatePath("/", "layout");
-  return { ok: "Profile updated." };
 }
 
 export async function updateOwnEmail(
   _prev: FormState | undefined,
   formData: FormData,
 ): Promise<FormState> {
-  const user = await requireUser();
-  const email = String(formData.get("email") ?? "").trim().toLowerCase();
-  const currentPassword = String(formData.get("currentPassword") ?? "");
+  return withActingStaffScope(async () => {
+    const user = await requireUser();
+    const email = String(formData.get("email") ?? "").trim().toLowerCase();
+    const currentPassword = String(formData.get("currentPassword") ?? "");
 
-  if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    return { error: "Enter a valid email address." };
-  }
-  if (!(await bcrypt.compare(currentPassword, user.passwordHash))) {
-    return { error: "Current password is incorrect." };
-  }
-  if (email === user.email.toLowerCase()) {
-    return { ok: "Your sign-in email is already up to date." };
-  }
-  // Exact (case-folded) match, not `mode: "insensitive"`. That compiled to an
-  // unescaped ILIKE, which made this clash check a user-enumeration oracle: the
-  // address is only regex-validated, so `a%@x.co` passes and "already in use"
-  // then answers "does any staff email start with a", one character at a time.
-  const existing = await prisma.user.findFirst({
-    where: { AND: [await ciExactIdFilter("userEmail", email), { id: { not: user.id } }] },
-    select: { id: true },
-  });
-  if (existing) return { error: "That email address is already in use." };
-
-  let updated;
-  try {
-    updated = await prisma.user.update({ where: { id: user.id }, data: { email } });
-  } catch (error) {
-    if (typeof error === "object" && error && "code" in error && error.code === "P2002") {
-      return { error: "That email address is already in use." };
+    if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return { error: "Enter a valid email address." };
     }
-    throw error;
-  }
-  await logAuditStrict({
-    action: "security.email_changed",
-    summary: "Changed account sign-in email",
-    entityType: "User",
-    entityId: user.id,
-    user,
-    before: { email: user.email },
-    after: { email },
+    if (!(await bcrypt.compare(currentPassword, user.passwordHash))) {
+      return { error: "Current password is incorrect." };
+    }
+    if (email === user.email.toLowerCase()) {
+      return { ok: "Your sign-in email is already up to date." };
+    }
+    // Exact (case-folded) match, not `mode: "insensitive"`. That compiled to an
+    // unescaped ILIKE, which made this clash check a user-enumeration oracle: the
+    // address is only regex-validated, so `a%@x.co` passes and "already in use"
+    // then answers "does any staff email start with a", one character at a time.
+    const existing = await prisma.user.findFirst({
+      where: { AND: [await ciExactIdFilter("userEmail", email), { id: { not: user.id } }] },
+      select: { id: true },
+    });
+    if (existing) return { error: "That email address is already in use." };
+
+    let updated;
+    try {
+      updated = await prisma.user.update({ where: { id: user.id }, data: { email } });
+    } catch (error) {
+      if (typeof error === "object" && error && "code" in error && error.code === "P2002") {
+        return { error: "That email address is already in use." };
+      }
+      throw error;
+    }
+    await logAuditStrict({
+      action: "security.email_changed",
+      summary: "Changed account sign-in email",
+      entityType: "User",
+      entityId: user.id,
+      user,
+      before: { email: user.email },
+      after: { email },
+    });
+    // Pin the cookie to the version this bump produced. Letting
+    // createSessionCookie re-read means a revoke-all landing in between is undone
+    // by the older request, handing back the access it just removed.
+    const revokedAt = await bumpUserSessionVersion(user.id);
+    await createSessionCookie(updated, { sessionVersion: revokedAt });
+    revalidatePath("/settings");
+    revalidatePath("/", "layout");
+    return { ok: "Email updated. Other signed-in devices have been signed out." };
   });
-  // Pin the cookie to the version this bump produced. Letting
-  // createSessionCookie re-read means a revoke-all landing in between is undone
-  // by the older request, handing back the access it just removed.
-  const revokedAt = await bumpUserSessionVersion(user.id);
-  await createSessionCookie(updated, { sessionVersion: revokedAt });
-  revalidatePath("/settings");
-  revalidatePath("/", "layout");
-  return { ok: "Email updated. Other signed-in devices have been signed out." };
 }
 
 export async function updateOwnAvatar(
   _prev: FormState | undefined,
   formData: FormData,
 ): Promise<FormState> {
-  const user = await requireUser();
-  const upload = formData.get("avatar");
-  if (!(upload instanceof File) || upload.size === 0) {
-    return { error: "Choose a JPG, PNG or WebP image." };
-  }
-  if (upload.size > PROFILE_IMAGE_MAX_BYTES) {
-    return { error: "Profile photos must be 3 MB or smaller." };
-  }
+  return withActingStaffScope(async () => {
+    const user = await requireUser();
+    const upload = formData.get("avatar");
+    if (!(upload instanceof File) || upload.size === 0) {
+      return { error: "Choose a JPG, PNG or WebP image." };
+    }
+    if (upload.size > PROFILE_IMAGE_MAX_BYTES) {
+      return { error: "Profile photos must be 3 MB or smaller." };
+    }
 
-  const buffer = Buffer.from(await upload.arrayBuffer());
-  const mimeType = detectProfileImageMime(buffer);
-  if (!mimeType) {
-    return { error: "That file is not a supported JPG, PNG or WebP image." };
-  }
-  const extension = mimeType === "image/jpeg" ? ".jpg" : mimeType === "image/png" ? ".png" : ".webp";
-  // A profile photo belongs to the USER row it is stored on, verbatim — not to
-  // whichever workspace they happened to be acting in when they uploaded it, which
-  // would move the same person's photo between prefixes as they switch workspaces.
-  // A global owner has no tenantId, and null is the honest answer for them.
-  const nextRef = await saveFile(buffer, `profile${extension}`, mimeType, user.tenantId);
-  try {
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { avatarRef: nextRef, avatarMimeType: mimeType, avatarUpdatedAt: new Date() },
+    const buffer = Buffer.from(await upload.arrayBuffer());
+    const mimeType = detectProfileImageMime(buffer);
+    if (!mimeType) {
+      return { error: "That file is not a supported JPG, PNG or WebP image." };
+    }
+    const extension = mimeType === "image/jpeg" ? ".jpg" : mimeType === "image/png" ? ".png" : ".webp";
+    // A profile photo belongs to the USER row it is stored on, verbatim — not to
+    // whichever workspace they happened to be acting in when they uploaded it, which
+    // would move the same person's photo between prefixes as they switch workspaces.
+    // A global owner has no tenantId, and null is the honest answer for them.
+    const nextRef = await saveFile(buffer, `profile${extension}`, mimeType, user.tenantId);
+    try {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { avatarRef: nextRef, avatarMimeType: mimeType, avatarUpdatedAt: new Date() },
+      });
+    } catch (error) {
+      await deleteFile(nextRef).catch(() => {});
+      throw error;
+    }
+    await logAuditStrict({
+      action: "account.photo_updated",
+      summary: "Updated profile photo",
+      entityType: "User",
+      entityId: user.id,
+      user,
     });
-  } catch (error) {
-    await deleteFile(nextRef).catch(() => {});
-    throw error;
-  }
-  await logAuditStrict({
-    action: "account.photo_updated",
-    summary: "Updated profile photo",
-    entityType: "User",
-    entityId: user.id,
-    user,
+    if (user.avatarRef) {
+      await deleteFile(user.avatarRef).catch((error) => console.warn("Unable to remove previous profile photo", error));
+    }
+    revalidatePath("/settings");
+    revalidatePath("/", "layout");
+    return { ok: "Profile photo updated." };
   });
-  if (user.avatarRef) {
-    await deleteFile(user.avatarRef).catch((error) => console.warn("Unable to remove previous profile photo", error));
-  }
-  revalidatePath("/settings");
-  revalidatePath("/", "layout");
-  return { ok: "Profile photo updated." };
 }
 
 export async function removeOwnAvatar(
   _prev: FormState | undefined,
   _formData: FormData,
 ): Promise<FormState> {
-  void _prev;
-  void _formData;
-  const user = await requireUser();
-  if (!user.avatarRef) return { ok: "No profile photo to remove." };
-  const previousRef = user.avatarRef;
-  await prisma.user.update({
-    where: { id: user.id },
-    data: { avatarRef: null, avatarMimeType: null, avatarUpdatedAt: new Date() },
+  return withActingStaffScope(async () => {
+    void _prev;
+    void _formData;
+    const user = await requireUser();
+    if (!user.avatarRef) return { ok: "No profile photo to remove." };
+    const previousRef = user.avatarRef;
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { avatarRef: null, avatarMimeType: null, avatarUpdatedAt: new Date() },
+    });
+    await logAuditStrict({
+      action: "account.photo_removed",
+      summary: "Removed profile photo",
+      entityType: "User",
+      entityId: user.id,
+      user,
+    });
+    await deleteFile(previousRef).catch((error) => console.warn("Unable to delete profile photo", error));
+    revalidatePath("/settings");
+    revalidatePath("/", "layout");
+    return { ok: "Profile photo removed." };
   });
-  await logAuditStrict({
-    action: "account.photo_removed",
-    summary: "Removed profile photo",
-    entityType: "User",
-    entityId: user.id,
-    user,
-  });
-  await deleteFile(previousRef).catch((error) => console.warn("Unable to delete profile photo", error));
-  revalidatePath("/settings");
-  revalidatePath("/", "layout");
-  return { ok: "Profile photo removed." };
 }
 
 export async function saveMyProfile(formData: FormData) {
@@ -570,20 +583,24 @@ export async function saveSetting(formData: FormData) {
 /** Reveal a stored secret to the owner on demand — so the value is NEVER in the
  *  initial server-rendered page, only fetched by an explicit owner action. */
 export async function revealSecret(key: string): Promise<string> {
-  await requireOwner();
-  if (!isManagedSecret(key)) throw new Error("Not a revealable secret.");
-  return (await getSetting(key)) ?? "";
+  return withActingStaffScope(async () => {
+    await requireOwner();
+    if (!isManagedSecret(key)) throw new Error("Not a revealable secret.");
+    return (await getSetting(key)) ?? "";
+  });
 }
 
 /** Explicitly clear a secret (disconnect an integration / remove a compromised
  *  key). Owner-only, and the key is allowlisted — a server action's bound arg
  *  comes from the client, so we must not delete an arbitrary AppSetting. */
 export async function clearSecret(key: string, _formData?: FormData): Promise<void> {
-  await requireOwner();
-  void _formData;
-  if (!isManagedSecret(key)) throw new Error("Not a clearable secret.");
-  await putSetting(key, "");
-  revalidatePath("/settings");
+  return withActingStaffScope(async () => {
+    await requireOwner();
+    void _formData;
+    if (!isManagedSecret(key)) throw new Error("Not a clearable secret.");
+    await putSetting(key, "");
+    revalidatePath("/settings");
+  });
 }
 
 export async function regenerateSetting(key: string) {

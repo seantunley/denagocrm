@@ -6,46 +6,9 @@ import { currentScopeClass } from "./tenantWrite";
 
 type PushRecipient = { id: string; endpoint: string; p256dh: string; auth: string };
 
-/**
- * How long a single push may take. web-push passes this through to the HTTP
- * request; without it the request inherits Node's default, which is no timeout
- * at all — so one unresponsive endpoint could hold a cron sweep or a server
- * action open indefinitely.
- */
 const PUSH_TIMEOUT_MS = 10_000;
 
-/**
- * The device subscriptions a push may be delivered to for the CURRENT tenant scope.
- * `PushSubscription` is a GLOBAL model (in the guard's allow-list), so tenant scope
- * does NOT filter it — a naive `findMany()` would send one tenant's customer data
- * (a new lead / booking name) to every other tenant's subscribed devices.
- *
- *   - `global`  (dormant OR trusted system scope) → EVERY subscription, unchanged.
- *   - `tenant`  → only devices of ACTIVE, non-disabled members of that tenant
- *                 (join through TenantMember → active Tenant, excluding disabled
- *                 users — a disabled account must not receive tenant data either).
- *   - `closed`  (enforcement on, no resolvable tenant) → NONE. A scopeless tenant
- *                 push must fail closed to nobody, never broadcast to everybody.
- *
- * Exported so scripts/test-tenant-guard.ts can prove the selection directly without
- * a live web-push transport.
- */
-/**
- * Every device belonging to ONE named tenant, whatever the enforcement mode.
- *
- * `pushRecipientsForCurrentScope` treats dormant enforcement as "global" and
- * returns every PushSubscription in the table. That is a defensible default for
- * a rollout in which one workspace exists — and it is not a filter, so it cannot
- * be relied on by anything carrying customer data that a second workspace must
- * not see. A Google review's author and text is exactly that: the review row
- * itself is now tenant-scoped by hand for the dormant period, and a notification
- * that broadcast the same words to every tenant's phones would reopen the hole
- * one line later.
- *
- * So this asks the tenant question directly. Same query as the enforcing branch
- * above, with the tenant named by the caller instead of inferred from a scope
- * that may not exist yet.
- */
+/** Every device belonging to ONE named tenant, whatever the enforcement mode. */
 export async function pushRecipientsForTenant(tenantId: string): Promise<PushRecipient[]> {
   return basePrisma.$queryRaw<PushRecipient[]>`
     SELECT ps."id", ps."endpoint", ps."p256dh", ps."auth"
@@ -59,23 +22,8 @@ export async function pushRecipientsForTenant(tenantId: string): Promise<PushRec
 export async function pushRecipientsForCurrentScope(): Promise<PushRecipient[]> {
   const s = currentScopeClass();
   if (s.mode === "closed") {
-    // FAIL CLOSED, BUT NOT SILENTLY.
-    //
-    // Returning [] here is correct — a scopeless push must go to nobody rather
-    // than to everybody. What was wrong is that it went nowhere and said nothing:
-    // every caller sees the same `0` it would see if no device were subscribed,
-    // so a wiring fault at ONE entry point looks exactly like a workspace that
-    // has not enabled notifications. That is how "Send test notification" came to
-    // report "No subscribed devices yet" while two devices sat in the table.
-    //
-    // The scope is established at the ENTRY point — `withChannelTenantScope` on
-    // the webhooks, `runCronPerTenant` on the crons — so reaching this line means
-    // some path is sending a push without binding one. That is a bug in the
-    // caller, and it is invisible from the outside; hence the log.
-    //
-    // `alert: false` is what stops this recursing: logError raises a push of its
-    // own for the first error in a 30-minute window, which would arrive back here
-    // in the same scopeless state.
+    // A scopeless tenant push must fail closed, but it also needs to be visible in
+    // diagnostics; otherwise a wiring fault looks exactly like zero subscriptions.
     const { logError } = await import("./errorLog");
     await logError(
       "push",
@@ -99,14 +47,6 @@ export async function pushRecipientsForCurrentScope(): Promise<PushRecipient[]> 
     WHERE m."tenantId" = ${s.tenantId} AND t."active" = true AND u."disabledAt" IS NULL`;
 }
 
-/**
- * Are the VAPID keys present at all?
- *
- * Exported so a caller can tell "this server cannot send pushes" apart from
- * "there was nobody to send to". `sendPushToAll` collapses both into `0`, which
- * is fine for the fire-and-forget callers and useless for the one that reports
- * back to a person.
- */
 export function pushConfigured(): boolean {
   return Boolean(process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY);
 }
@@ -157,11 +97,13 @@ async function isKindDisabled(kind?: PushKind): Promise<boolean> {
 }
 
 /**
- * Sends a push notification to every subscribed device; prunes dead subscriptions.
+ * Sends a push notification to subscribed devices; prunes dead subscriptions.
  *
- * `tenantId` names the workspace explicitly and is what a caller carrying
- * CUSTOMER data must use: without it, dormant enforcement resolves to "every
- * device in the table", which is a rollout default rather than a boundary.
+ * `tenantId` restricts customer data to one workspace. `endpoint` is an optional
+ * second restriction used by the interactive diagnostic so a test can prove the
+ * phone in the user's hand works instead of succeeding because some other saved
+ * device accepted the broadcast. The endpoint never creates a recipient: it only
+ * filters the already-authorised recipient set resolved above.
  */
 export async function sendPushToAll(
   payload: {
@@ -170,23 +112,21 @@ export async function sendPushToAll(
     url?: string;
   },
   kind?: PushKind,
-  options: { tenantId?: string | null } = {},
+  options: { tenantId?: string | null; endpoint?: string | null } = {},
 ): Promise<number> {
   if (!ensureConfigured()) return 0;
   if (await isKindDisabled(kind)) return 0;
-  // Deliver only to the CURRENT tenant's devices (all devices when global/system),
-  // or to exactly the named tenant when the caller knows which one it is.
-  const subs = options.tenantId
+
+  const recipients = options.tenantId
     ? await pushRecipientsForTenant(options.tenantId)
     : await pushRecipientsForCurrentScope();
+  const subs = options.endpoint
+    ? recipients.filter((sub) => sub.endpoint === options.endpoint)
+    : recipients;
+
   let sent = 0;
   await Promise.all(
     subs.map(async (sub) => {
-      // Checked at the WRITE too (actions/push.ts), but re-checked here because
-      // this is the line that actually makes the request, and rows stored before
-      // that check existed are still in the table. A row that is not a push
-      // service is dropped rather than skipped — it can only have got there by
-      // predating the guard or by a write path that forgot it.
       if (!isAllowedPushEndpoint(sub.endpoint)) {
         await prisma.pushSubscription.delete({ where: { id: sub.id } }).catch(() => {});
         return;
@@ -194,17 +134,8 @@ export async function sendPushToAll(
       try {
         await webpush.sendNotification(
           { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
-          // `kind` travels WITH the notification. The service worker is shared by
-          // both installed apps, so it is the only thing that can tell a chat
-          // notification from a backup failure at display time — and therefore
-          // which icon belongs on it. Everything else about the payload is
-          // unchanged; a worker that does not understand `kind` ignores it.
           JSON.stringify({ ...payload, kind }),
-          // Without this the request inherits Node's default (no timeout), so a
-          // push service that accepts the connection and never answers holds the
-          // request open — and sendPushToAll is awaited inside cron and action
-          // paths that have their own deadlines.
-          { timeout: PUSH_TIMEOUT_MS }
+          { timeout: PUSH_TIMEOUT_MS },
         );
         sent++;
       } catch (err) {
@@ -213,7 +144,7 @@ export async function sendPushToAll(
           await prisma.pushSubscription.delete({ where: { id: sub.id } }).catch(() => {});
         }
       }
-    })
+    }),
   );
   return sent;
 }

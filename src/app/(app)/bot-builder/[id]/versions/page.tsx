@@ -12,11 +12,29 @@ import { EmptyState, StatusPill, Surface } from "@/components/visual-system";
 import { builderTenantId } from "@/lib/flowScope";
 import { flowTenantWhere } from "@/lib/flowTenantScope";
 
+/**
+ * `createdAt`, because that is the column that exists.
+ *
+ * This read asked for `publishedAt`, which BotFlowVersion has never had — the
+ * model is id / tenantId / flowId / channel / version / definition /
+ * createdById / createdAt. Postgres answered `42703: column "publishedAt" does
+ * not exist` on EVERY request, so this page has been a guaranteed error boundary
+ * for anyone who clicked "versions", not an intermittent fault.
+ *
+ * Nothing caught it because the query is raw: `$queryRaw<VersionRow[]>` asserts
+ * the row shape rather than deriving it, so the compiler was told the column
+ * existed and had no way to disagree. A model read
+ * (`prisma.botFlowVersion.findMany`) would not have compiled.
+ *
+ * A row IS the publication — `publishFlowSnapshot` inserts one at the moment a
+ * version is published — so `createdAt` is the publication instant, and the
+ * label below still reads "Published".
+ */
 type VersionRow = {
   id: string;
   version: number;
   definition: string;
-  publishedAt: Date;
+  createdAt: Date;
 };
 
 function nodeCount(definition: string): number {
@@ -36,7 +54,7 @@ export default async function FlowVersionsPage({ params }: { params: Promise<{ i
   const flow = await prisma.botFlow.findFirst({ where: { id, ...scope } });
   if (!flow) notFound();
   const versions = await basePrisma.$queryRaw<VersionRow[]>(Prisma.sql`
-    SELECT "id", "version", "definition", "publishedAt"
+    SELECT "id", "version", "definition", "createdAt"
       FROM "BotFlowVersion"
      WHERE "tenantId" = ${tenantId}
        AND "flowId" = ${flow.id}
@@ -73,7 +91,7 @@ export default async function FlowVersionsPage({ params }: { params: Promise<{ i
               <div className="flex items-start justify-between gap-4 flex-wrap">
                 <div>
                   <div className="flex items-center gap-2"><h2 className="font-semibold">Version {Number(version.version)}</h2>{index === 0 && flow.active ? <StatusPill tone="success">Current published</StatusPill> : null}</div>
-                  <p className="mt-1 text-xs text-muted-foreground">Published {version.publishedAt.toLocaleString("en-ZA")} · {nodeCount(version.definition)} node{nodeCount(version.definition) === 1 ? "" : "s"}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Published {version.createdAt.toLocaleString("en-ZA")} · {nodeCount(version.definition)} node{nodeCount(version.definition) === 1 ? "" : "s"}</p>
                   <p className="mt-1 font-mono text-[10px] text-muted-foreground">{version.id}</p>
                 </div>
                 <form action={restoreFlowVersionToDraft.bind(null, flow.id, version.id)}>

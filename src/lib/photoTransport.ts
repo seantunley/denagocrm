@@ -139,8 +139,50 @@ export function unsendablePhoto(file: File): string | null {
  * sets `addRandomSuffix`, so the STORED path is not exactly this one — which is
  * why the returned URL is what callers must record, never the string built here.
  */
+/**
+ * WHICH BLOB STORE this deployment files photos in, asked once per page.
+ *
+ * `getPhotoUploadPlan()` is a Server Action, and the checklist runner drains its
+ * queue one photo at a time — asking per photo would be a round trip per file
+ * for an answer that cannot change while the page is open. Memoised on the
+ * promise so concurrent drains share the one call.
+ *
+ * A deployment with NO blob store reports `transport: "form"`, and there is no
+ * browser-to-blob path at all there. The senders that use this module have no
+ * form fallback, so that is surfaced as a stated reason rather than left to fail
+ * as an opaque upload error.
+ */
+let accessPromise: Promise<"public" | "private"> | null = null;
+
+export function forgetPhotoUploadAccess() {
+  accessPromise = null;
+}
+
+export function photoUploadAccess(): Promise<"public" | "private"> {
+  accessPromise ??= (async () => {
+    const { getPhotoUploadPlan } = await import("@/app/actions/photoUploads");
+    const plan = await getPhotoUploadPlan();
+    // The plan is also how a misconfiguration reports itself — asActionResult
+    // turns a thrown one into `{ error }` rather than letting it escape — so the
+    // stated reason is passed on instead of being flattened into "no storage".
+    if ("error" in plan) throw new Error(plan.error);
+    if (plan.transport !== "direct") {
+      throw new Error(
+        "This deployment has no photo storage configured, so photos cannot be uploaded from this screen.",
+      );
+    }
+    return plan.access;
+  })().catch((error) => {
+    // Do not memoise a failure: a transient one would poison every later photo
+    // for the life of the page.
+    accessPromise = null;
+    throw error;
+  });
+  return accessPromise;
+}
+
 export async function uploadPhoto(
-  target: PhotoTarget & { tenantId: string; key?: string },
+  target: PhotoTarget & { tenantId: string; key?: string; access: "public" | "private" },
   file: File,
 ): Promise<string> {
   const key = target.key ?? crypto.randomUUID();
@@ -148,7 +190,16 @@ export async function uploadPhoto(
     `uploads/${target.tenantId}/${target.kind}/${target.recordId}/${key}-${file.name}`,
     file,
     {
-      access: "public",
+      /*
+       * WHICH STORE, decided by the server and passed in.
+       *
+       * `getPhotoUploadPlan()` reports whether this deployment files photos in
+       * the public or the private Blob store; the token that proves it never
+       * leaves the server. Hardcoding "public" here would file every photo in
+       * the wrong store the moment a deployment set BLOB_PRIVATE, silently and
+       * with no error to notice.
+       */
+      access: target.access,
       handleUploadUrl: "/api/photos/upload",
       clientPayload: JSON.stringify({
         kind: target.kind,

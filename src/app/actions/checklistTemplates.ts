@@ -17,6 +17,7 @@ import { getEnabledModuleIds } from "@/lib/modules/enabled";
 import { SECTION } from "@/lib/dashboard/config";
 import { isSecurityRelevant } from "@/lib/dashboard/conditions";
 import { canUseHost, hostById, type HostDef } from "@/lib/checklists/hosts";
+import { claimTemplateVersion } from "@/lib/checklists/templateVersion";
 import {
   CHECKLIST_LIMITS,
   TEMPLATE_INPUT,
@@ -385,16 +386,46 @@ export async function saveChecklistTemplate(
       // deleteMany below already names it. The ratchet in
       // tests/tenantAccessRatchet.test.ts holds every new tenant-owned write to
       // this shape for exactly that reason.
-      await tx.checklistTemplate.updateMany({
-        where: { id: existing.id, tenantId },
-        data: {
+      /*
+       * THE VERSION READ IS PART OF THE WRITE.
+       *
+       * `existing` was read OUTSIDE this transaction, and everything below is
+       * computed from it — which items survive, whether to bump, what the
+       * revision should contain. Writing without re-checking the version it was
+       * read at let two editors who both loaded revision 1 both "succeed":
+       *
+       *   A  sets version 2, writes its items, creates revision 2 = A's items
+       *   B  sets version 2 again, overwrites the items with B's, and its
+       *      revision upsert found revision 2 already there and did nothing
+       *
+       * leaving the LIVE template holding B's items while the immutable
+       * revision 2 held A's. Runs stamped version 2 then displayed one checklist
+       * and synced against a different set of authoritative questions — the
+       * exact thing a revision snapshot exists to make impossible.
+       *
+       * Naming the version in the predicate makes the update fail rather than
+       * clobber: Postgres re-reads the row under its lock at READ COMMITTED, so
+       * the second writer matches nothing and is told to reload. A save computed
+       * against items somebody has since restructured is stale whether or not it
+       * bumps, so this guards both paths.
+       */
+      const claimed = await claimTemplateVersion(tx, {
+        tenantId,
+        templateId: existing.id,
+        fromVersion: existing.version,
+        bump,
+        meta: {
           name: template.name,
           description: template.description ?? null,
           active: template.active,
           sortOrder: template.sortOrder,
-          ...(bump ? { version: existing.version + 1 } : {}),
         },
       });
+      if (!claimed) {
+        refuse(
+          "Somebody else saved this checklist while you were editing it. Reload the page to see their version before saving yours.",
+        );
+      }
       // Removed steps first, so a label freed by a deletion can be reused by a
       // step created in the same save without tripping the duplicate-name rule.
       await tx.checklistItem.deleteMany({
@@ -433,11 +464,30 @@ export async function saveChecklistTemplate(
         orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
         select: { id: true, label: true, description: true, capture: true, required: true, minPhotos: true, maxPhotos: true, visibility: true, sortOrder: true },
       });
-      await tx.checklistTemplateRevision.upsert({
-        where: { tenantId_templateId_version: { tenantId, templateId: existing.id, version } },
-        create: { tenantId, templateId: existing.id, version, items: revisionItems(stored) },
-        update: {},
-      });
+      if (bump) {
+        /*
+         * CREATE, never upsert. Holding the version claim above means this
+         * version number is ours alone, so a row already sitting at it is not a
+         * harmless duplicate — it is proof the guard failed, and swallowing it
+         * with `update: {}` is what let a revision disagree with the items it
+         * was supposed to snapshot. Let the unique constraint say so.
+         */
+        await tx.checklistTemplateRevision.create({
+          data: { tenantId, templateId: existing.id, version, items: revisionItems(stored) },
+        });
+      } else {
+        /*
+         * No bump means the items are unchanged, so the revision already on file
+         * for this version is still an accurate snapshot and must not be
+         * rewritten — it is what existing runs were stamped against. The upsert
+         * survives only to BACKFILL a template that predates revisions.
+         */
+        await tx.checklistTemplateRevision.upsert({
+          where: { tenantId_templateId_version: { tenantId, templateId: existing.id, version } },
+          create: { tenantId, templateId: existing.id, version, items: revisionItems(stored) },
+          update: {},
+        });
+      }
     });
 
     await logAudit({

@@ -1,8 +1,10 @@
 import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
 import { NextResponse } from "next/server";
 import { actingTenantId } from "@/lib/actingTenant";
+import { withActingStaffScope } from "@/lib/actingScope";
 import { basePrisma } from "@/lib/db";
 import { logError } from "@/lib/errorLog";
+import { photoBlobToken, photoUploadNeedsStaffSession } from "@/lib/photoBlob";
 import { MAX_PHOTO_BYTES } from "@/lib/photoBudget";
 import { requireJobCardAccess, requireQuoteAccess } from "@/lib/permissions";
 import { requireChecklistHostAccess } from "@/lib/checklists/hostRecords";
@@ -16,6 +18,11 @@ export const runtime = "nodejs";
  * captured for "Serial number" can never be filed against "Charger" even by a
  * caller writing its own upload path. The entry is the finest-grained thing the
  * evidence belongs to, so it is what the path names.
+ *
+ * ONE list, shared with the client by restatement rather than by import:
+ * lib/photoTransport.ts cannot import this module (it pulls in Prisma and
+ * `server-only`), so a kind added here and forgotten there is a compile error at
+ * the call site rather than a runtime refusal.
  */
 const PHOTO_KINDS = ["delivery", "jobcard", "jobcard-checkout", "inspection", "checklist"] as const;
 
@@ -33,26 +40,73 @@ function parseTarget(raw: string | null | undefined): PhotoTarget {
   return { kind: value.kind as PhotoTarget["kind"], recordId: String(value.recordId), jobCardId: value.jobCardId ? String(value.jobCardId) : undefined };
 }
 
-export async function POST(request: Request) {
-  let tenantId: string | null = null;
-  /*
-   * A plain string rather than the parsed target.
-   *
-   * `target` is only assigned inside the onBeforeGenerateToken closure, and
-   * TypeScript's control-flow analysis does not follow that: at the catch block
-   * it still believes the variable is null, narrows it to `never`, and rejects
-   * `target?.kind` — so the failure log could not name what failed, which is the
-   * one thing this route's logging exists to do. Building the message eagerly
-   * sidesteps the narrowing entirely.
-   */
-  let failureContext = "kind=unknown record=unknown";
+function parseCompletionOwnership(raw: string | null | undefined): Partial<PhotoTarget> & { tenantId?: string } {
   try {
-    tenantId = await actingTenantId();
-    const body = (await request.json()) as HandleUploadBody;
+    return JSON.parse(raw ?? "{}") as Partial<PhotoTarget> & { tenantId?: string };
+  } catch {
+    return {};
+  }
+}
+
+export async function POST(request: Request) {
+  const body = (await request.json()) as HandleUploadBody;
+
+  /*
+   * THE TOKEN EXCHANGE NEEDS AN ENCLOSING STAFF SCOPE.
+   *
+   * This route is a fresh request, not a descendant of the page that rendered the
+   * camera. Calling actingTenantId() directly therefore repeats the production
+   * failure that blocked getPhotoUploadPlan: under enforcement there is no ambient
+   * scope in this frame, so writeTenantId() refuses before the session rung can be
+   * consulted.
+   *
+   * withActingStaffScope is the existing Server-Action/API recovery boundary. It
+   * fully revalidates the signed staff session, never replaces an existing scope,
+   * and binds the recovered tenant AROUND everything below it so record guards and
+   * guarded Prisma reads inherit the same workspace. If recovery cannot establish
+   * one, actingTenantId still refuses and this remains a 401 — no fallback tenant,
+   * no widened access.
+   *
+   * The Vercel upload-completed callback is intentionally NOT wrapped: it has no
+   * staff cookie. Its authority is the Vercel signature plus the signed token
+   * payload minted below.
+   */
+  if (photoUploadNeedsStaffSession(body?.type)) {
+    return withActingStaffScope(async () => {
+      let tenantId: string;
+      try {
+        tenantId = await actingTenantId();
+      } catch {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      }
+      return handlePhotoUpload(request, body, tenantId);
+    });
+  } else if (body?.type === "blob.upload-completed" && !request.headers.get("x-vercel-signature")) {
+    // handleUpload refuses an unsigned callback anyway; refusing first is what
+    // keeps that rejection out of the persistent System Log.
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  return handlePhotoUpload(request, body, null);
+}
+
+async function handlePhotoUpload(
+  request: Request,
+  body: HandleUploadBody,
+  tenantId: string | null,
+) {
+  let failureContext = `event=${String(body?.type ?? "unknown")}`;
+  const failureScope = body?.type === "blob.upload-completed"
+    ? "photo-upload-callback"
+    : "photo-upload-token";
+
+  try {
     const response = await handleUpload({
       request,
       body,
+      token: photoBlobToken(),
       onBeforeGenerateToken: async (pathname, clientPayload) => {
+        if (!tenantId) throw new Error("No active workspace is available for this photo upload.");
         const target = parseTarget(clientPayload);
         failureContext = `kind=${target.kind} record=${target.recordId}`;
         if (target.kind === "delivery") {
@@ -82,7 +136,6 @@ export async function POST(request: Request) {
            * that host demands, so an upload token is only ever issued to somebody
            * who could have attached evidence to that record by hand.
            */
-          if (!tenantId) throw new Error("No active workspace.");
           const entry = await basePrisma.checklistEntry.findFirst({
             where: { id: target.recordId, tenantId },
             select: { id: true, run: { select: { hostType: true, hostId: true } } },
@@ -110,7 +163,10 @@ export async function POST(request: Request) {
         };
       },
       onUploadCompleted: async ({ blob, tokenPayload }) => {
-        const ownership = JSON.parse(tokenPayload ?? "{}") as Partial<PhotoTarget> & { tenantId?: string };
+        // handleUpload verifies Vercel's callback signature before this runs.
+        // Ownership therefore comes from the signed token payload, not a staff
+        // session/cookie that does not exist on the callback request.
+        const ownership = parseCompletionOwnership(tokenPayload);
         if (!ownership.tenantId || !ownership.recordId || !ownership.kind) {
           await logError("photo-upload-completed", new Error("Missing upload ownership"), blob.pathname, {
             tenantId: ownership.tenantId ?? null,
@@ -121,14 +177,28 @@ export async function POST(request: Request) {
     });
     return NextResponse.json(response);
   } catch (error) {
-    await logError(
-      "photo-upload-token",
-      error,
-      failureContext,
-      { tenantId, alert: false },
-    );
+    // Only an IDENTIFIED caller may write a persistent row. A caller that got
+    // past the gate above but failed here — a forged signature, a malformed
+    // callback — still has no tenant to attribute anything to, and a public
+    // endpoint that writes to the database on every failure is a log-flooding
+    // primitive. Those go to the console, which rotates, not the System Log,
+    // which does not.
+    if (tenantId) {
+      await logError(
+        failureScope,
+        error,
+        failureContext,
+        { tenantId, alert: false },
+      );
+    } else {
+      console.error(`[${failureScope}] ${failureContext}`, error);
+    }
     return NextResponse.json(
-      { error: "The photo upload could not be authorised. See Settings → System Log." },
+      {
+        error: body?.type === "blob.upload-completed"
+          ? "The photo upload completion callback failed."
+          : "The photo upload could not be authorised. See Settings → System Log.",
+      },
       { status: 400 },
     );
   }

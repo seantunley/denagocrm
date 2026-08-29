@@ -17,7 +17,7 @@ import {
   type BuilderRecordKind,
 } from "@/lib/docbuilder/recordBinding";
 import { saveFile } from "@/lib/storage";
-import { actingOwnerTenantId } from "@/lib/actingScope";
+import { actingOwnerTenantId, withActingStaffScope } from "@/lib/actingScope";
 
 const BASE = "/settings/documents/builder";
 
@@ -113,35 +113,37 @@ export async function createDocEditorTemplate(formData: FormData) {
 export async function importDocEditorTemplate(
   raw: unknown,
 ): Promise<{ ok: boolean; error?: string; id?: string; name?: string; externalImages?: number }> {
-  const user = await requirePermission("docbuilder.manage");
-  const parsed = portableDocumentSchema.safeParse(raw);
-  if (!parsed.success) {
+  return withActingStaffScope(async () => {
+    const user = await requirePermission("docbuilder.manage");
+    const parsed = portableDocumentSchema.safeParse(raw);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error:
+          "That file is not a Denago document export. Use Export → Portable JSON on the document you want to copy.",
+      };
+    }
+    const { name, key, document } = parsed.data;
+    const created = await prisma.docBuilderTemplate.create({
+      data: { name, key, data: document as object, createdById: user.id },
+    });
+    await logAudit({
+      action: "doceditor.import",
+      summary: `Imported document “${name}”`,
+      entityType: "DocBuilderTemplate",
+      entityId: created.id,
+      user,
+    });
+    revalidatePath(BASE);
     return {
-      ok: false,
-      error:
-        "That file is not a Denago document export. Use Export → Portable JSON on the document you want to copy.",
+      ok: true,
+      id: created.id,
+      name,
+      // Surfaced, not silently accepted: a linked image belongs to the tenant
+      // that uploaded it and will not load here.
+      externalImages: externalImageCount(document),
     };
-  }
-  const { name, key, document } = parsed.data;
-  const created = await prisma.docBuilderTemplate.create({
-    data: { name, key, data: document as object, createdById: user.id },
   });
-  await logAudit({
-    action: "doceditor.import",
-    summary: `Imported document “${name}”`,
-    entityType: "DocBuilderTemplate",
-    entityId: created.id,
-    user,
-  });
-  revalidatePath(BASE);
-  return {
-    ok: true,
-    id: created.id,
-    name,
-    // Surfaced, not silently accepted: a linked image belongs to the tenant
-    // that uploaded it and will not load here.
-    externalImages: externalImageCount(document),
-  };
 }
 
 /** Generate and file a builder document bound to at most one compatible record. */
@@ -239,27 +241,29 @@ export async function saveDocEditor(
   id: string,
   doc: unknown,
 ): Promise<{ ok: boolean; error?: string }> {
-  const user = await requirePermission("docbuilder.manage");
-  const parsed = documentSchema.safeParse(doc);
-  if (!parsed.success) {
-    return { ok: false, error: "Invalid document structure" };
-  }
+  return withActingStaffScope(async () => {
+    const user = await requirePermission("docbuilder.manage");
+    const parsed = documentSchema.safeParse(doc);
+    if (!parsed.success) {
+      return { ok: false, error: "Invalid document structure" };
+    }
 
-  const existing = await prisma.docBuilderTemplate.findUnique({ where: { id } });
-  if (!existing || existing.deletedAt) {
-    return { ok: false, error: "Not found" };
-  }
+    const existing = await prisma.docBuilderTemplate.findUnique({ where: { id } });
+    if (!existing || existing.deletedAt) {
+      return { ok: false, error: "Not found" };
+    }
 
-  await prisma.docBuilderTemplate.update({
-    where: { id },
-    data: { data: parsed.data as object },
+    await prisma.docBuilderTemplate.update({
+      where: { id },
+      data: { data: parsed.data as object },
+    });
+    await logAudit({
+      action: "doceditor.save",
+      summary: `Saved document “${parsed.data.title}”`,
+      entityType: "DocBuilderTemplate",
+      entityId: id,
+      user,
+    });
+    return { ok: true };
   });
-  await logAudit({
-    action: "doceditor.save",
-    summary: `Saved document “${parsed.data.title}”`,
-    entityType: "DocBuilderTemplate",
-    entityId: id,
-    user,
-  });
-  return { ok: true };
 }

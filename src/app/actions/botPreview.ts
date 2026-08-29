@@ -3,6 +3,7 @@
 import { requireOwner } from "@/lib/auth";
 import { generateBotReply } from "@/lib/botAi";
 import { getBotKnowledgeEntries, retrieveRelevantKnowledge } from "@/lib/botKnowledge";
+import { withActingStaffScope } from "@/lib/actingScope";
 
 export type BotPreviewState = {
   error?: string;
@@ -25,40 +26,42 @@ export async function previewBotAnswer(
   _previous: BotPreviewState | undefined,
   formData: FormData,
 ): Promise<BotPreviewState> {
-  await requireOwner();
-  const question = String(formData.get("question") ?? "").trim().slice(0, 3000);
-  const customerName = String(formData.get("customerName") ?? "").trim().slice(0, 120) || null;
-  const isCustomer = formData.get("isCustomer") === "on";
-  if (!question) return { error: "Enter a customer question to test." };
+  return withActingStaffScope(async () => {
+    await requireOwner();
+    const question = String(formData.get("question") ?? "").trim().slice(0, 3000);
+    const customerName = String(formData.get("customerName") ?? "").trim().slice(0, 120) || null;
+    const isCustomer = formData.get("isCustomer") === "on";
+    if (!question) return { error: "Enter a customer question to test." };
 
-  const [decision, entries] = await Promise.all([
-    generateBotReply({
-      history: [{ role: "user", content: question }],
-      customerName,
-      isCustomer,
-    }),
-    getBotKnowledgeEntries(),
-  ]);
-  if (!decision) {
+    const [decision, entries] = await Promise.all([
+      generateBotReply({
+        history: [{ role: "user", content: question }],
+        customerName,
+        isCustomer,
+      }),
+      getBotKnowledgeEntries(),
+    ]);
+    if (!decision) {
+      return {
+        error: "The assistant could not produce a decision. Check the AI provider configuration and System Log.",
+        question,
+      };
+    }
+
+    const knowledge = retrieveRelevantKnowledge(entries, question).map((entry) => ({
+      id: entry.id,
+      title: entry.title,
+      sourceLabel: entry.sourceLabel,
+    }));
     return {
-      error: "The assistant could not produce a decision. Check the AI provider configuration and System Log.",
       question,
+      reply: decision.reply,
+      confidence: decision.confidence,
+      intent: decision.intent,
+      handoff: decision.handoff,
+      handoffReason: decision.handoffReason,
+      handoffSummary: decision.handoffSummary,
+      knowledge,
     };
-  }
-
-  const knowledge = retrieveRelevantKnowledge(entries, question).map((entry) => ({
-    id: entry.id,
-    title: entry.title,
-    sourceLabel: entry.sourceLabel,
-  }));
-  return {
-    question,
-    reply: decision.reply,
-    confidence: decision.confidence,
-    intent: decision.intent,
-    handoff: decision.handoff,
-    handoffReason: decision.handoffReason,
-    handoffSummary: decision.handoffSummary,
-    knowledge,
-  };
+  });
 }
