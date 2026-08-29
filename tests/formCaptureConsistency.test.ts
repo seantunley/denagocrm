@@ -17,16 +17,16 @@ test("lead and contact capture use the same section, field, hero and footer prim
   }
 });
 
-test("mobile operational photo capture has one prominent, camera-ready pattern", () => {
-  const component = source("src", "components", "MobilePhotoCapture.tsx");
+test("mobile operational photo capture has one prominent, gallery-ready pattern", () => {
+  const component = source("src", "components", "DirectPhotoUploader.tsx");
   const jobcards = source("src", "app", "(app)", "jobcards", "page.tsx");
   const deliveries = source("src", "app", "(app)", "deliveries", "page.tsx");
 
-  assert.match(component, /<PhotoUploadField/);
-  assert.match(component, /Take or choose photos/);
-  assert.match(component, /btn-primary mt-2 w-full/);
-  assert.match(jobcards, /<MobilePhotoCapture[^>]*label="Add condition photos"/);
-  assert.match(deliveries, /<MobilePhotoCapture[^>]*label="Add handover photos"/);
+  assert.match(component, /type="file"/);
+  assert.match(component, /accept="image\/\*"/);
+  assert.match(component, /handleUploadUrl: "\/api\/photos\/upload"/);
+  assert.match(jobcards, /<DirectPhotoUploader[^>]*label="Add condition photos"/);
+  assert.match(deliveries, /<DirectPhotoUploader[^>]*label="Add handover photos"/);
 });
 
 test("the mobile capture sheet prioritises on-site work before record creation", () => {

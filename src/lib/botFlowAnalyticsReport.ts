@@ -41,7 +41,20 @@ export type BotFlowAnalyticsReport = {
   nodes: FlowNodeReport[];
 };
 
-type VersionRow = { id: string; version: number; publishedAt: Date; definition: string };
+/**
+ * `createdAt` is the column; `publishedAt` is the NAME THE REPORT USES.
+ *
+ * This read asked BotFlowVersion for `publishedAt`, which it has never had, so
+ * Postgres answered `42703: column "publishedAt" does not exist` on every call
+ * and the analytics report failed outright. The raw query asserts its row type
+ * rather than deriving one, so nothing complained at compile time.
+ *
+ * Only the ROW type is corrected. The exported report keeps `publishedAt`,
+ * because a row IS the publication — `publishFlowSnapshot` inserts one at the
+ * moment a version is published — and renaming the public field would ripple
+ * into every consumer for no gain.
+ */
+type VersionRow = { id: string; version: number; createdAt: Date; definition: string };
 type ChannelRow = {
   channel: string;
   conversations: bigint | number;
@@ -86,13 +99,13 @@ function parseFlow(definition: string | undefined): Flow | null {
 export async function getBotFlowAnalyticsReport(flowId: string): Promise<BotFlowAnalyticsReport> {
   const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
   const versionRows = await basePrisma.$queryRaw<VersionRow[]>(Prisma.sql`
-    SELECT "id", "version", "publishedAt", "definition"
+    SELECT "id", "version", "createdAt", "definition"
       FROM "BotFlowVersion"
      WHERE "tenantId" = ${tenantId}
        AND "flowId" = ${flowId}
      ORDER BY "version" DESC
   `);
-  const versions = versionRows.map((row) => ({ id: row.id, version: Number(row.version), publishedAt: row.publishedAt }));
+  const versions = versionRows.map((row) => ({ id: row.id, version: Number(row.version), publishedAt: row.createdAt }));
   const latestVersion = versions[0] ?? null;
   const versionIds = versions.map((version) => version.id);
   const [allTime, latest, channels] = await Promise.all([

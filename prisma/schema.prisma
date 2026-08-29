@@ -390,6 +390,7 @@ model Contact {
   referralCode  String?  @unique // customer's shareable referral code
   messengerPsid String?  @unique // Facebook Messenger page-scoped id
   instagramId   String?  @unique // Instagram-scoped user id
+  xUserId       String? // X user id; unique only within its tenant
   address       String? // street address / estate + unit
   suburb        String?
   city          String?
@@ -453,6 +454,7 @@ model Contact {
   consentRecords    ConsentRecord[]
 
   @@index([tenantId])
+  @@unique([tenantId, xUserId])
   @@index([fleetId])
   @@unique([tenantId, id])
 }
@@ -1161,7 +1163,7 @@ model Communication {
 model Conversation {
   id              String    @id @default(cuid())
   tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
-  channel         String // email | whatsapp | messenger | instagram | call | note | other
+  channel         String // email | whatsapp | messenger | instagram | x | call | note | other
   subject         String?
   status          String    @default("open") // open | snoozed | closed
   unread          Boolean   @default(false) // has un-opened inbound messages
@@ -3029,7 +3031,7 @@ model TenantApiKey {
 model ChannelIdentity {
   id         String    @id @default(cuid())
   tenantId   String
-  channel    String // "whatsapp" | "messenger" | "instagram"
+  channel    String // "whatsapp" | "messenger" | "instagram" | "x"
   externalId String // the stable id of OUR endpoint, not the sender (see design §2.3)
   label      String? // human note e.g. "Denago main WABA"
   createdAt  DateTime  @default(now())

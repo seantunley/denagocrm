@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useActionState } from "react";
 import { sendWhatsAppMessage, type WaState } from "@/app/actions/whatsapp";
 import { sendDmReply, type DmState } from "@/app/actions/messenger";
@@ -8,6 +8,7 @@ import { saveConversationDraft, discardConversationDraft } from "@/app/actions/c
 import { draftCollision, type DraftCollision } from "@/lib/conversationDraft";
 import AiCheckButton from "@/components/AiCheckButton";
 import { enterIntent, readEnterSends, writeEnterSends } from "@/lib/enterToSend";
+import { draftXReplyWithGrok } from "@/app/actions/x";
 
 const QUICK_EMOJI = ["😀", "👍", "🙏", "🎉", "🔥", "❤️", "😂", "👌", "🚗", "⚡"];
 
@@ -26,7 +27,7 @@ export default function InboxReply({
   draft,
   viewerId,
 }: {
-  channel: "whatsapp" | "messenger" | "instagram";
+  channel: "whatsapp" | "messenger" | "instagram" | "x";
   contactId?: string | null;
   leadId?: string | null;
   phone?: string | null;
@@ -64,6 +65,8 @@ export default function InboxReply({
   const fileRef = useRef<HTMLInputElement>(null);
   const [fileName, setFileName] = useState("");
   const [showEmoji, setShowEmoji] = useState(false);
+  const [grokPending, startGrok] = useTransition();
+  const [grokError, setGrokError] = useState("");
   const canAttach = channel !== "whatsapp"; // WhatsApp media send comes later
   const formRef = useRef<HTMLFormElement>(null);
   // Defaults to true and is corrected after mount. Reading localStorage during
@@ -208,6 +211,20 @@ ${el.value.slice(end)}`;
     el.selectionStart = el.selectionEnd = start + e.length;
   }
 
+  function suggestWithGrok() {
+    if (!conversationId) return;
+    setGrokError("");
+    startGrok(async () => {
+      const result = await draftXReplyWithGrok(conversationId);
+      if (!result.ok) { setGrokError(result.error); return; }
+      if (textRef.current) {
+        textRef.current.value = result.text;
+        textRef.current.focus();
+        queueDraftSave();
+      }
+    });
+  }
+
   return (
     <form ref={formRef} action={channel === "whatsapp" ? waAction : dmAction} className="mt-3">
       {/* The warning goes ABOVE the box, before anything is typed. Told afterwards,
@@ -249,13 +266,21 @@ ${el.value.slice(end)}`;
       <input type="hidden" name="revalidate" value={revalidate} />
       <input type="hidden" name="compositionId" value={compositionId} />
 
+      {channel === "x" && (
+        <div className="mb-2 flex items-center gap-2">
+          <button type="button" className="btn-secondary btn-sm" onClick={suggestWithGrok} disabled={grokPending || missingConversation}>
+            {grokPending ? "Grok is drafting…" : "Draft with Grok"}
+          </button>
+          {grokError ? <span className="text-xs text-red-400">{grokError}</span> : null}
+        </div>
+      )}
       <div className="flex items-center gap-1.5">
         <textarea
           ref={textRef}
           name="text"
           rows={1}
           className="input flex-1 py-1.5 text-sm resize-none"
-          placeholder={`Reply via ${channel === "whatsapp" ? "WhatsApp" : channel === "instagram" ? "Instagram" : "Messenger"}…`}
+          placeholder={`Reply via ${channel === "whatsapp" ? "WhatsApp" : channel === "instagram" ? "Instagram" : channel === "x" ? "X" : "Messenger"}…`}
           onKeyDown={onKeyDown}
           // defaultValue, not value: the box stays uncontrolled, so restoring a
           // draft cannot fight the emoji inserter (which writes el.value directly)

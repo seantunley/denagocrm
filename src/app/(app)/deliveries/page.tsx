@@ -1,14 +1,12 @@
 import Link from "next/link";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { Truck, FileText, Wallet, CalendarClock, PackageCheck, ArrowRight, Camera } from "lucide-react";
-import PhotoUploadField from "@/components/PhotoUploadField";
-import { MobilePhotoCapture } from "@/components/MobilePhotoCapture";
+import DirectPhotoUploader from "@/components/DirectPhotoUploader";
 import { prisma } from "@/lib/db";
 import {
   markInvoiced,
   markDepositPaid,
   scheduleDelivery,
-  uploadDeliveryPhotos,
 } from "@/app/actions/fulfilment";
 import ProofOfDelivery from "@/components/ProofOfDelivery";
 import { formatDate, formatZAR } from "@/lib/format";
@@ -136,7 +134,8 @@ export default async function DeliveriesPage() {
               {quotes.map((quote) => {
                 const model = quote.lead?.product?.name ?? quote.items[0]?.description ?? "Vehicle";
                 const who = quoteBillTo(quote, fleetsById.get(quote.fleetId ?? "") ?? null).name || "Customer";
-                const stage = columns.find((column) => column.key === colOf(quote));
+                const stageKey = colOf(quote);
+                const stage = columns.find((column) => column.key === stageKey);
                 const photos = photoCount(quote.id);
                 return (
                   <article key={quote.id} className="rounded-2xl border border-border bg-card p-3.5">
@@ -151,7 +150,32 @@ export default async function DeliveriesPage() {
                       </div>
                     </div>
                     {canManage && (
-                      <MobilePhotoCapture action={uploadDeliveryPhotos.bind(null, quote.id)} offlineOperation={{ type: "delivery.photo", recordId: quote.id }} label="Add handover photos" />
+                      <DirectPhotoUploader kind="delivery" recordId={quote.id} tenantId={quote.tenantId ?? ""} label="Add handover photos" />
+                    )}
+                    {(stageKey === "schedule" || stageKey === "deliver") && (
+                      <div className="mt-3 border-t border-border/60 pt-3">
+                        <Link
+                          href={`/quotes/${quote.id}/delivery-note`}
+                          className="btn-secondary btn-sm w-full justify-center"
+                        >
+                          <FileText className="size-4" />
+                          Review delivery note
+                        </Link>
+                        {canManage && stageKey === "deliver" ? (
+                          <>
+                            <ProofOfDelivery quoteId={quote.id} baseVersion={quote.updatedAt.toISOString()} />
+                            <p className="mt-1 text-[10px] text-muted-foreground/70">
+                              Review the note, then capture the driver, handover checklist and customer signature on this device.
+                            </p>
+                          </>
+                        ) : (
+                          <p className="mt-1.5 text-[10px] text-muted-foreground/70">
+                            {canManage
+                              ? "Customer signing becomes available here once the delivery is scheduled."
+                              : "Delivery note is available for review."}
+                          </p>
+                        )}
+                      </div>
                     )}
                   </article>
                 );
@@ -306,14 +330,7 @@ export default async function DeliveriesPage() {
                           <div className="mt-2.5 border-t border-border/60 pt-2.5">
                             <ProofOfDelivery quoteId={quote.id} baseVersion={quote.updatedAt.toISOString()} />
                             <p className="mt-1 text-[10px] text-muted-foreground/70">Capture driver, handover checklist &amp; signature.</p>
-                            {/* Resets on success: an upload form that keeps its
-                                file selection invites the same photos being sent
-                                again. The action returns its own count-aware
-                                message, so no `success` prop is needed here. */}
-                            <SaveForm action={uploadDeliveryPhotos.bind(null, quote.id)} offlineOperation={{ type: "delivery.photo", recordId: quote.id }} className="mt-1.5 space-y-1.5">
-                              <PhotoUploadField className="block w-full text-xs text-muted-foreground file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
-                              <SaveButton className="btn-secondary btn-sm w-full">📷 Add delivery photos</SaveButton>
-                            </SaveForm>
+                            <DirectPhotoUploader kind="delivery" recordId={quote.id} tenantId={quote.tenantId ?? ""} label="Add delivery photos" className="mt-1.5" />
                           </div>
                         )}
                       </div>

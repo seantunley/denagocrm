@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { saveFile } from "@/lib/storage";
+import { withActingStaffScope } from "@/lib/actingScope";
 
 // All signing now runs through the unified hub (see @/app/actions/recordSigning
 // and @/lib/signing/*). The legacy token flow (enableSigning / emailSigningLink
@@ -21,23 +22,25 @@ import { saveFile } from "@/lib/storage";
 export async function saveMySignature(
   signatureDataUrl: string,
 ): Promise<{ ok?: boolean; error?: string }> {
-  const user = await requireUser();
-  if (!signatureDataUrl.startsWith("data:image/png;base64,") || signatureDataUrl.length > 400_000) {
-    return { error: "Invalid signature image." };
-  }
-  const buf = Buffer.from(signatureDataUrl.split(",")[1], "base64");
-  // Reusable and PERSONAL: this is stored on the User row and stamped onto whatever
-  // that person later countersigns, so the User owns it — same reasoning as the
-  // profile photo in settings.ts. Deliberately NOT the acting workspace: one
-  // signature would then exist under as many prefixes as the person has workspaces.
-  const ref = await saveFile(buf, `dealer-signature-${user.id}.png`, "image/png", user.tenantId);
-  await prisma.user.update({ where: { id: user.id }, data: { drawnSignatureRef: ref } });
-  await logAudit({
-    action: "user.signature_saved",
-    summary: `${user.name} saved a reusable signature`,
-    entityType: "User",
-    entityId: user.id,
-    user,
+  return withActingStaffScope(async () => {
+    const user = await requireUser();
+    if (!signatureDataUrl.startsWith("data:image/png;base64,") || signatureDataUrl.length > 400_000) {
+      return { error: "Invalid signature image." };
+    }
+    const buf = Buffer.from(signatureDataUrl.split(",")[1], "base64");
+    // Reusable and PERSONAL: this is stored on the User row and stamped onto whatever
+    // that person later countersigns, so the User owns it — same reasoning as the
+    // profile photo in settings.ts. Deliberately NOT the acting workspace: one
+    // signature would then exist under as many prefixes as the person has workspaces.
+    const ref = await saveFile(buf, `dealer-signature-${user.id}.png`, "image/png", user.tenantId);
+    await prisma.user.update({ where: { id: user.id }, data: { drawnSignatureRef: ref } });
+    await logAudit({
+      action: "user.signature_saved",
+      summary: `${user.name} saved a reusable signature`,
+      entityType: "User",
+      entityId: user.id,
+      user,
+    });
+    return { ok: true };
   });
-  return { ok: true };
 }

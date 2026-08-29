@@ -7,6 +7,7 @@ import { createLead } from "@/app/actions/leads";
 import { createContact } from "@/app/actions/contacts";
 import { scheduleActivity } from "@/app/actions/activities";
 import { createVehicle } from "@/app/actions/vehicles";
+import { withActingStaffScope } from "@/lib/actingScope";
 
 function formId(formData: FormData, key: string) {
   return String(formData.get(key) ?? "").trim() || null;
@@ -50,29 +51,37 @@ async function requireTenantRecord(
 
 /** Tenant-validation gateway for contextual/global quick-create actions. */
 export async function createQuickLead(formData: FormData) {
-  await Promise.all([
-    requireTenantMember(formData, "assignedToId", "team member"),
-    requireTenantRecord(formData, "contactId", "contact"),
-    requireTenantRecord(formData, "productId", "product"),
-    requireTenantRecord(formData, "stageId", "pipelineStage"),
-  ]);
-  return createLead(formData);
+  return withActingStaffScope(async () => {
+    await Promise.all([
+      requireTenantMember(formData, "assignedToId", "team member"),
+      requireTenantRecord(formData, "contactId", "contact"),
+      requireTenantRecord(formData, "productId", "product"),
+      requireTenantRecord(formData, "stageId", "pipelineStage"),
+    ]);
+    return createLead(formData);
+  });
 }
 
 export async function createQuickContact(formData: FormData) {
-  await requireTenantMember(formData, "ownerId", "owner");
-  return createContact(formData);
+  return withActingStaffScope(async () => {
+    await requireTenantMember(formData, "ownerId", "owner");
+    return createContact(formData);
+  });
 }
 
 export async function scheduleQuickActivity(formData: FormData) {
-  await requireTenantMember(formData, "assignedToId", "team member");
-  return scheduleActivity(formData);
+  return withActingStaffScope(async () => {
+    await requireTenantMember(formData, "assignedToId", "team member");
+    return scheduleActivity(formData);
+  });
 }
 
 export async function createQuickVehicle(formData: FormData) {
-  await Promise.all([
-    requireTenantRecord(formData, "contactId", "contact"),
-    requireTenantRecord(formData, "productId", "product"),
-  ]);
-  return createVehicle(formData);
+  return withActingStaffScope(async () => {
+    await Promise.all([
+      requireTenantRecord(formData, "contactId", "contact"),
+      requireTenantRecord(formData, "productId", "product"),
+    ]);
+    return createVehicle(formData);
+  });
 }

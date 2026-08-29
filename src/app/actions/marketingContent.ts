@@ -14,6 +14,7 @@ import {
   type AudienceGroup,
 } from "@/lib/marketingAudiences";
 import { logAuditStrict } from "@/lib/audit";
+import { withActingStaffScope } from "@/lib/actingScope";
 
 // Keep historical categories readable/editable while making the governed
 // Marketing workspace's purpose-specific categories authoritative for new work.
@@ -72,49 +73,53 @@ export async function createMarketingAudience(formData: FormData) {
 }
 
 export async function updateMarketingAudience(id: string, formData: FormData) {
-  const { user, tenantId } = await contentContext("campaigns.manage_audiences");
-  const tree = validateAudienceTree(json<AudienceGroup>(formData.get("ruleTree")));
-  const submittedName = formData.get("name");
-  const name = submittedName === null ? undefined : String(submittedName).trim();
-  if (submittedName !== null && !name) throw new Error("Audience name is required");
-  await validateAudienceReferences(tree, tenantId);
+  return withActingStaffScope(async () => {
+    const { user, tenantId } = await contentContext("campaigns.manage_audiences");
+    const tree = validateAudienceTree(json<AudienceGroup>(formData.get("ruleTree")));
+    const submittedName = formData.get("name");
+    const name = submittedName === null ? undefined : String(submittedName).trim();
+    if (submittedName !== null && !name) throw new Error("Audience name is required");
+    await validateAudienceReferences(tree, tenantId);
 
-  const result = await saveAudienceVersion({ segmentId: id, tenantId, tree, userId: user.id, userName: user.name, name });
-  await logAuditStrict({ action: "audience.updated", summary: `Updated audience version ${result.version}`, entityType: "Segment", entityId: id, user, after: { ...result, name } });
-  revalidatePath("/marketing/audiences");
+    const result = await saveAudienceVersion({ segmentId: id, tenantId, tree, userId: user.id, userName: user.name, name });
+    await logAuditStrict({ action: "audience.updated", summary: `Updated audience version ${result.version}`, entityType: "Segment", entityId: id, user, after: { ...result, name } });
+    revalidatePath("/marketing/audiences");
+  });
 }
 
 export async function previewMarketingAudience(formData: FormData) {
-  const { tenantId } = await contentContext("campaigns.manage_audiences");
-  const tree = validateAudienceTree(json<AudienceGroup>(formData.get("ruleTree")));
-  const channel = String(formData.get("channel") ?? "any");
-  if (!new Set(["any", "email", "sms"]).has(channel)) throw new Error("Unsupported preview channel");
-  await validateAudienceReferences(tree, tenantId);
+  return withActingStaffScope(async () => {
+    const { tenantId } = await contentContext("campaigns.manage_audiences");
+    const tree = validateAudienceTree(json<AudienceGroup>(formData.get("ruleTree")));
+    const channel = String(formData.get("channel") ?? "any");
+    if (!new Set(["any", "email", "sms"]).has(channel)) throw new Error("Unsupported preview channel");
+    await validateAudienceReferences(tree, tenantId);
 
-  // Resolve once so the preview can explain reachability without three full
-  // database/evaluation passes. evaluateAudience itself remains tenant-scoped and
-  // excludes deleted/marketing-opted-out contacts.
-  const contacts = await evaluateAudience(tree, "any", tenantId);
-  const emailCount = contacts.filter((contact) => Boolean(contact.email)).length;
-  const smsCount = contacts.filter((contact) => Boolean(contact.whatsapp || contact.phone)).length;
-  const selected = channel === "email"
-    ? contacts.filter((contact) => Boolean(contact.email))
-    : channel === "sms"
-      ? contacts.filter((contact) => Boolean(contact.whatsapp || contact.phone))
-      : contacts;
+    // Resolve once so the preview can explain reachability without three full
+    // database/evaluation passes. evaluateAudience itself remains tenant-scoped and
+    // excludes deleted/marketing-opted-out contacts.
+    const contacts = await evaluateAudience(tree, "any", tenantId);
+    const emailCount = contacts.filter((contact) => Boolean(contact.email)).length;
+    const smsCount = contacts.filter((contact) => Boolean(contact.whatsapp || contact.phone)).length;
+    const selected = channel === "email"
+      ? contacts.filter((contact) => Boolean(contact.email))
+      : channel === "sms"
+        ? contacts.filter((contact) => Boolean(contact.whatsapp || contact.phone))
+        : contacts;
 
-  return {
-    total: contacts.length,
-    channelCount: selected.length,
-    emailCount,
-    smsCount,
-    contacts: selected.slice(0, 20).map((contact) => ({
-      id: contact.id,
-      name: `${contact.firstName} ${contact.lastName ?? ""}`.trim(),
-      email: contact.email,
-      phone: contact.whatsapp ?? contact.phone,
-    })),
-  };
+    return {
+      total: contacts.length,
+      channelCount: selected.length,
+      emailCount,
+      smsCount,
+      contacts: selected.slice(0, 20).map((contact) => ({
+        id: contact.id,
+        name: `${contact.firstName} ${contact.lastName ?? ""}`.trim(),
+        email: contact.email,
+        phone: contact.whatsapp ?? contact.phone,
+      })),
+    };
+  });
 }
 
 export async function archiveMarketingAudience(id: string) {

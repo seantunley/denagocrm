@@ -8,6 +8,7 @@ import { SectionHeading, Surface } from "@/components/visual-system";
 import { prisma } from "@/lib/db";
 import { contactName } from "@/lib/format";
 import { getAccessibleContactIds, requirePermission } from "@/lib/permissions";
+import { vehiclesAwaitingRegistration } from "@/lib/deliveryVehicles";
 
 const vehicleJourney = [
   { icon: History, label: "Customer garage", detail: "The vehicle becomes part of the owner’s permanent sales and service timeline." },
@@ -18,10 +19,10 @@ const vehicleJourney = [
 export default async function NewVehiclePage({
   searchParams,
 }: {
-  searchParams: Promise<{ contactId?: string; productId?: string; color?: string }>;
+  searchParams: Promise<{ contactId?: string; productId?: string; color?: string; quoteId?: string; seq?: string }>;
 }) {
   const user = await requirePermission("vehicles.manage");
-  const { contactId, productId, color } = await searchParams;
+  const { contactId, productId, color, quoteId, seq } = await searchParams;
   const accessibleContactIds = await getAccessibleContactIds(user);
   const [contacts, products] = await Promise.all([
     prisma.contact.findMany({
@@ -31,7 +32,30 @@ export default async function NewVehiclePage({
     }),
     prisma.product.findMany({ where: { active: true }, include: { colors: true }, orderBy: { name: "asc" } }),
   ]);
-  const preselected = products.find((product) => product.id === productId);
+
+  /*
+   * A delivery of several vehicles arrives here once PER VEHICLE.
+   *
+   * The queue is re-derived from the quote rather than passed in the URL, so the
+   * position cannot be edited into something the quote never sold, and a refresh
+   * lands on the same vehicle. `seq` is only an index into it.
+   *
+   * A quote that is not readable in this workspace simply yields no queue, and
+   * the page falls back to the plain form — the guarded client already refuses
+   * anything outside the caller's tenant, so there is nothing extra to check.
+   */
+  const quote = quoteId
+    ? await prisma.quote.findFirst({
+        where: { id: quoteId },
+        include: { items: { include: { product: true }, orderBy: { sortOrder: "asc" } } },
+      })
+    : null;
+  const queue = quote ? vehiclesAwaitingRegistration(quote.items) : [];
+  const position = Math.max(0, Number.parseInt(seq ?? "0", 10) || 0);
+  const current = queue[position] ?? null;
+
+  const preselected =
+    products.find((product) => product.id === (current?.productId ?? productId)) ?? null;
 
   return (
     <div className="space-y-6">
@@ -40,8 +64,16 @@ export default async function NewVehiclePage({
         Back to vehicles
       </Link>
       <PageHeader
-        title="Register a customer vehicle"
-        description="Connect the vehicle to its owner and establish the identity, warranty and service data the team will rely on."
+        title={
+          queue.length > 1
+            ? `Register vehicle ${position + 1} of ${queue.length}`
+            : "Register a customer vehicle"
+        }
+        description={
+          queue.length > 1
+            ? `This delivery included ${queue.length} vehicles. Each one needs its own record — VIN, registration and mileage differ per unit, and so does its warranty and service history.`
+            : "Connect the vehicle to its owner and establish the identity, warranty and service data the team will rely on."
+        }
       />
 
       <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_20rem]">
@@ -55,11 +87,22 @@ export default async function NewVehiclePage({
           }))}
           defaults={{
             contactId: contactId ?? "",
-            productId: productId ?? "",
-            model: preselected?.name ?? "",
-            color: color ?? "",
+            productId: current?.productId ?? productId ?? "",
+            // The catalogue name when the queue knows it, so unit 2 of 2 arrives
+            // pre-filled the same way unit 1 did.
+            model: current?.model ?? preselected?.name ?? "",
+            color: current?.color || color || "",
           }}
-          submitLabel="Register vehicle"
+          hiddenFields={
+            queue.length > 0 && quoteId
+              ? { deliveryQuoteId: quoteId, deliverySeq: String(position) }
+              : undefined
+          }
+          submitLabel={
+            queue.length > 1 && position + 1 < queue.length
+              ? `Register vehicle ${position + 1} and continue`
+              : "Register vehicle"
+          }
           showInitialKm
           variant="page"
         />

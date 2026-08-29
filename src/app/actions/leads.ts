@@ -563,155 +563,157 @@ export async function moveLead(
   stageId: string,
   options?: { overrideReason?: string },
 ): Promise<{ ok: boolean; error?: string; gate?: StageGateVerdict; remedy?: PipelineStageAction }> {
-  const user = await requireLeadAccess(leadId, "leads.change_stage");
-  const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
-  // Same refusal as `updateLead` and `moveLeadToTestDrive`, for the same reason: a
-  // lead outside the acting workspace no longer resolves, and a null that fell
-  // through would SKIP the cross-pipeline permission check rather than fail it.
-  const currentScope = await getLeadPipeline(leadId);
-  if (!currentScope) return { ok: false, error: "Lead not found." };
-  const resolved = await resolveOpenStage(stageId);
-  if ("error" in resolved) return { ok: false, error: resolved.error };
-  const targetStage = resolved.stage;
-  if (currentScope.pipelineId !== targetStage.pipelineId && !(await hasPermission(user, "leads.change_pipeline"))) {
-    return { ok: false, error: "You do not have permission to move leads between pipelines" };
-  }
-  // ── STAGE GATES ───────────────────────────────────────────────────────────
-  //
-  // Runs AFTER permissions and BEFORE the write, and its facts are re-derived
-  // here rather than taken from the request. The board runs the same
-  // `evaluateStageMove` to grey a column before the drag; that copy is a
-  // rendering hint built from a page-load snapshot, and a quote deleted in
-  // another tab thirty seconds ago is not in it. Only this one decides.
-  const gateOutcome = await gateStageMove({ leadId, user, currentScope, targetStage });
-  if ("error" in gateOutcome) return { ok: false, error: gateOutcome.error, gate: gateOutcome.gate };
-  const verdict = gateOutcome.verdict;
+  return withActingStaffScope(async () => {
+    const user = await requireLeadAccess(leadId, "leads.change_stage");
+    const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
+    // Same refusal as `updateLead` and `moveLeadToTestDrive`, for the same reason: a
+    // lead outside the acting workspace no longer resolves, and a null that fell
+    // through would SKIP the cross-pipeline permission check rather than fail it.
+    const currentScope = await getLeadPipeline(leadId);
+    if (!currentScope) return { ok: false, error: "Lead not found." };
+    const resolved = await resolveOpenStage(stageId);
+    if ("error" in resolved) return { ok: false, error: resolved.error };
+    const targetStage = resolved.stage;
+    if (currentScope.pipelineId !== targetStage.pipelineId && !(await hasPermission(user, "leads.change_pipeline"))) {
+      return { ok: false, error: "You do not have permission to move leads between pipelines" };
+    }
+    // ── STAGE GATES ───────────────────────────────────────────────────────────
+    //
+    // Runs AFTER permissions and BEFORE the write, and its facts are re-derived
+    // here rather than taken from the request. The board runs the same
+    // `evaluateStageMove` to grey a column before the drag; that copy is a
+    // rendering hint built from a page-load snapshot, and a quote deleted in
+    // another tab thirty seconds ago is not in it. Only this one decides.
+    const gateOutcome = await gateStageMove({ leadId, user, currentScope, targetStage });
+    if ("error" in gateOutcome) return { ok: false, error: gateOutcome.error, gate: gateOutcome.gate };
+    const verdict = gateOutcome.verdict;
 
-  // A REMEDY IS OFFERED BEFORE A REFUSAL IS ISSUED.
-  //
-  // `This stage requires test-drive booking details` used to be returned here for
-  // any stage carrying an entryAction, unconditionally — the board caught that
-  // stage on the way out and opened the dialog itself, so the message existed
-  // only to stop a direct POST. Now the SERVER decides: the rule is evaluated,
-  // and when what failed is exactly what a remedy provides, the client is told
-  // which dialog to open instead of being refused.
-  //
-  // The consequence people will notice: a lead that ALREADY has a booked test
-  // drive satisfies the criterion and moves straight in, where before the dialog
-  // opened regardless and asked for a booking that existed.
-  if (gateOutcome.remedy) {
-    return { ok: false, gate: verdict, remedy: gateOutcome.remedy.id };
-  }
+    // A REMEDY IS OFFERED BEFORE A REFUSAL IS ISSUED.
+    //
+    // `This stage requires test-drive booking details` used to be returned here for
+    // any stage carrying an entryAction, unconditionally — the board caught that
+    // stage on the way out and opened the dialog itself, so the message existed
+    // only to stop a direct POST. Now the SERVER decides: the rule is evaluated,
+    // and when what failed is exactly what a remedy provides, the client is told
+    // which dialog to open instead of being refused.
+    //
+    // The consequence people will notice: a lead that ALREADY has a booked test
+    // drive satisfies the criterion and moves straight in, where before the dialog
+    // opened regardless and asked for a booking that existed.
+    if (gateOutcome.remedy) {
+      return { ok: false, gate: verdict, remedy: gateOutcome.remedy.id };
+    }
 
-  const overrideReason = options?.overrideReason?.trim() ?? "";
-  if (verdict.requiresReason && overrideReason.length < MIN_OVERRIDE_REASON) {
-    // Not a refusal — the client opens the reason dialog because the SERVER asked
-    // it to, so a POST that skips the dialog gets asked in exactly the same way.
-    return { ok: false, gate: verdict };
-  }
-  if (!verdict.allowed) {
-    const message = refusalSentence(verdict, targetStage.name);
-    // Best-effort, and noisy by design: a refusal log is how you find out a rule
-    // is wrong. `logAudit` rather than `logAuditStrict` because nothing changed
-    // and a failed write here must not turn a refusal into an error.
-    await logAudit({
-      action: "lead.stage_gate_blocked",
-      summary: `Blocked “${before.title}” from ${targetStage.name} — ${message}`,
-      leadId,
-      contactId: before.contactId,
-      user,
-    });
-    return { ok: false, error: message, gate: verdict };
-  }
+    const overrideReason = options?.overrideReason?.trim() ?? "";
+    if (verdict.requiresReason && overrideReason.length < MIN_OVERRIDE_REASON) {
+      // Not a refusal — the client opens the reason dialog because the SERVER asked
+      // it to, so a POST that skips the dialog gets asked in exactly the same way.
+      return { ok: false, gate: verdict };
+    }
+    if (!verdict.allowed) {
+      const message = refusalSentence(verdict, targetStage.name);
+      // Best-effort, and noisy by design: a refusal log is how you find out a rule
+      // is wrong. `logAudit` rather than `logAuditStrict` because nothing changed
+      // and a failed write here must not turn a refusal into an error.
+      await logAudit({
+        action: "lead.stage_gate_blocked",
+        summary: `Blocked “${before.title}” from ${targetStage.name} — ${message}`,
+        leadId,
+        contactId: before.contactId,
+        user,
+      });
+      return { ok: false, error: message, gate: verdict };
+    }
 
-  // THE MOVE AND ITS MANDATORY RECORD COMMIT TOGETHER, OR NEITHER DOES.
-  //
-  // These were three separate awaits: update, then `lead.stage_changed`, then
-  // `lead.stage_gate_overridden`. A strict audit throws on failure, so either
-  // audit failing left the lead ALREADY MOVED while the action reported an
-  // error — the person retries, against a lead that is now in the target stage.
-  // Worse for the override: the whole point of it is that waving a rule through
-  // is recorded, and the recording was the part that could be lost.
-  //
-  // `logAuditStrict`'s own doc says this is what the `tx` parameter is for, and
-  // `deleteLead` below already uses the pattern. Resolved BEFORE the transaction
-  // opens: `nextPosition` reads the target column, and asking for it inside
-  // would query on a different connection while this transaction holds locks.
-  // Same reasoning, spelled out at length, in `moveLeadToTestDrive`.
-  const position = await nextPosition(stageId);
-  const lead = await prisma.$transaction(async (tx) => {
-    const moved = await tx.lead.update({
-      where: { id: leadId },
-      data: { stageId, position, stageEnteredAt: new Date() },
-      include: { stage: true },
-    });
-    await logAuditStrict({
-      action: "lead.stage_changed",
-      summary: `Moved “${moved.title}” to ${moved.stage.name}`,
-      leadId,
-      contactId: moved.contactId,
-      user,
-      before: { stageId: before.stageId, position: before.position, pipelineId: currentScope.pipelineId },
-      after: { stageId, position: moved.position, pipelineId: targetStage.pipelineId },
-      // A clean move carries nothing extra; a move that went through despite a
-      // rule carries what the rule wanted. `logAuditStrict` routes to AuditEvent,
-      // the only model with metadata and the only one whose triggers refuse
-      // UPDATE and DELETE — an override you can edit afterwards is not a record.
-      ...(verdict.unmet.length > 0
-        ? { metadata: { gateDirection: verdict.direction, gateMode: verdict.mode, gateUnmet: verdict.unmet.map(describeUnmet) } }
-        : {}),
-    }, tx);
-    if (verdict.requiresReason) {
-      // A SEPARATE, differently-named event, not a footnote on the move. "Who has
-      // been waving rules through" is a question somebody will ask, and it should
-      // be answerable by reading one action name rather than by filtering every
-      // stage change for a metadata key.
+    // THE MOVE AND ITS MANDATORY RECORD COMMIT TOGETHER, OR NEITHER DOES.
+    //
+    // These were three separate awaits: update, then `lead.stage_changed`, then
+    // `lead.stage_gate_overridden`. A strict audit throws on failure, so either
+    // audit failing left the lead ALREADY MOVED while the action reported an
+    // error — the person retries, against a lead that is now in the target stage.
+    // Worse for the override: the whole point of it is that waving a rule through
+    // is recorded, and the recording was the part that could be lost.
+    //
+    // `logAuditStrict`'s own doc says this is what the `tx` parameter is for, and
+    // `deleteLead` below already uses the pattern. Resolved BEFORE the transaction
+    // opens: `nextPosition` reads the target column, and asking for it inside
+    // would query on a different connection while this transaction holds locks.
+    // Same reasoning, spelled out at length, in `moveLeadToTestDrive`.
+    const position = await nextPosition(stageId);
+    const lead = await prisma.$transaction(async (tx) => {
+      const moved = await tx.lead.update({
+        where: { id: leadId },
+        data: { stageId, position, stageEnteredAt: new Date() },
+        include: { stage: true },
+      });
       await logAuditStrict({
-        action: "lead.stage_gate_overridden",
-        summary: `Moved “${moved.title}” into ${moved.stage.name} without ${verdict.unmet.map(describeUnmet).join("; ")} — reason: “${overrideReason}”`,
+        action: "lead.stage_changed",
+        summary: `Moved “${moved.title}” to ${moved.stage.name}`,
         leadId,
         contactId: moved.contactId,
         user,
-        before: { stageId: before.stageId },
-        after: { stageId },
-        metadata: {
-          direction: verdict.direction,
-          mode: verdict.mode,
-          unmet: verdict.unmet,
-          reason: overrideReason,
-        },
+        before: { stageId: before.stageId, position: before.position, pipelineId: currentScope.pipelineId },
+        after: { stageId, position: moved.position, pipelineId: targetStage.pipelineId },
+        // A clean move carries nothing extra; a move that went through despite a
+        // rule carries what the rule wanted. `logAuditStrict` routes to AuditEvent,
+        // the only model with metadata and the only one whose triggers refuse
+        // UPDATE and DELETE — an override you can edit afterwards is not a record.
+        ...(verdict.unmet.length > 0
+          ? { metadata: { gateDirection: verdict.direction, gateMode: verdict.mode, gateUnmet: verdict.unmet.map(describeUnmet) } }
+          : {}),
       }, tx);
-    }
-    return moved;
-  }, GOVERNANCE_TX);
-  const pipelineStages = await listPipelineStages(targetStage.pipelineId);
-  const testDriveStage = pipelineStages.find((stage) => stage.entryAction === "book_test_drive");
-  if (testDriveStage && targetStage.order < testDriveStage.order) {
-    const booking = await prisma.activity.findFirst({
-      where: { leadId, type: "test_drive", status: "planned" },
-      orderBy: { dueDate: "desc" },
-    });
-    if (booking) {
-      await removeTimelinePin("activity", booking.id);
-      await prisma.activity.delete({ where: { id: booking.id } });
-      await logAudit({
-        action: "lead.test_drive_cancelled",
-        summary: `Cancelled the booked test drive for “${lead.title}” — moved back to ${lead.stage.name}`,
-        leadId,
-        contactId: lead.contactId,
-        user,
+      if (verdict.requiresReason) {
+        // A SEPARATE, differently-named event, not a footnote on the move. "Who has
+        // been waving rules through" is a question somebody will ask, and it should
+        // be answerable by reading one action name rather than by filtering every
+        // stage change for a metadata key.
+        await logAuditStrict({
+          action: "lead.stage_gate_overridden",
+          summary: `Moved “${moved.title}” into ${moved.stage.name} without ${verdict.unmet.map(describeUnmet).join("; ")} — reason: “${overrideReason}”`,
+          leadId,
+          contactId: moved.contactId,
+          user,
+          before: { stageId: before.stageId },
+          after: { stageId },
+          metadata: {
+            direction: verdict.direction,
+            mode: verdict.mode,
+            unmet: verdict.unmet,
+            reason: overrideReason,
+          },
+        }, tx);
+      }
+      return moved;
+    }, GOVERNANCE_TX);
+    const pipelineStages = await listPipelineStages(targetStage.pipelineId);
+    const testDriveStage = pipelineStages.find((stage) => stage.entryAction === "book_test_drive");
+    if (testDriveStage && targetStage.order < testDriveStage.order) {
+      const booking = await prisma.activity.findFirst({
+        where: { leadId, type: "test_drive", status: "planned" },
+        orderBy: { dueDate: "desc" },
       });
+      if (booking) {
+        await removeTimelinePin("activity", booking.id);
+        await prisma.activity.delete({ where: { id: booking.id } });
+        await logAudit({
+          action: "lead.test_drive_cancelled",
+          summary: `Cancelled the booked test drive for “${lead.title}” — moved back to ${lead.stage.name}`,
+          leadId,
+          contactId: lead.contactId,
+          user,
+        });
+      }
     }
-  }
 
-  await emitLeadJourneyEvent("stage_entered", leadId);
-  revalidatePath("/leads");
-  revalidatePath("/forecast");
-  // The verdict rides along on SUCCESS too, not only on refusal. A `warn` gate
-  // allows the move and its whole purpose is to say what was missing — returning
-  // a bare `{ ok: true }` made that unsayable, so the warning existed in the
-  // audit trail and nowhere the person could see it.
-  return { ok: true, gate: verdict };
+    await emitLeadJourneyEvent("stage_entered", leadId);
+    revalidatePath("/leads");
+    revalidatePath("/forecast");
+    // The verdict rides along on SUCCESS too, not only on refusal. A `warn` gate
+    // allows the move and its whole purpose is to say what was missing — returning
+    // a bare `{ ok: true }` made that unsayable, so the warning existed in the
+    // audit trail and nowhere the person could see it.
+    return { ok: true, gate: verdict };
+  });
 }
 
 export async function moveLeadToTestDrive(
@@ -1337,44 +1339,48 @@ async function moveLeadWithNewQuoteInScope(
 }
 
 export async function assignLead(leadId: string, assignedToId: string) {
-  const user = await requireLeadAccess(leadId, "leads.assign");
-  // Same shared contract as everywhere else, but this call site RETURNS its
-  // refusal rather than throwing it, and that difference is deliberate: the
-  // kanban board assigns by drag, catches the result and shows `error` in a
-  // toast, so a throw here would surface as "Something went wrong" instead of
-  // the reason. The catch keeps that shape — and keeps the exact sentence the
-  // board has always shown — while the membership question itself is no longer
-  // answered by a private copy of the rule.
-  const assignee = await resolveAssignableUser(assignedToId, ASSIGNEE_LABEL).catch(() => null);
-  if (!assignee) return { ok: false as const, error: "That team member is no longer available." };
+  return withActingStaffScope(async () => {
+    const user = await requireLeadAccess(leadId, "leads.assign");
+    // Same shared contract as everywhere else, but this call site RETURNS its
+    // refusal rather than throwing it, and that difference is deliberate: the
+    // kanban board assigns by drag, catches the result and shows `error` in a
+    // toast, so a throw here would surface as "Something went wrong" instead of
+    // the reason. The catch keeps that shape — and keeps the exact sentence the
+    // board has always shown — while the membership question itself is no longer
+    // answered by a private copy of the rule.
+    const assignee = await resolveAssignableUser(assignedToId, ASSIGNEE_LABEL).catch(() => null);
+    if (!assignee) return { ok: false as const, error: "That team member is no longer available." };
 
-  const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
-  const lead = await prisma.lead.update({
-    where: { id: leadId },
-    data: { assignedToId: assignee.id },
+    const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
+    const lead = await prisma.lead.update({
+      where: { id: leadId },
+      data: { assignedToId: assignee.id },
+    });
+    await logAuditStrict({
+      action: "lead.assigned",
+      summary: `Assigned lead “${lead.title}” to ${assignee.name}`,
+      leadId,
+      contactId: lead.contactId,
+      user,
+      before,
+      after: lead,
+    });
+    revalidatePath("/leads");
+    revalidatePath(`/leads/${leadId}`);
+    revalidatePath("/forecast");
+    return { ok: true as const, assignee };
   });
-  await logAuditStrict({
-    action: "lead.assigned",
-    summary: `Assigned lead “${lead.title}” to ${assignee.name}`,
-    leadId,
-    contactId: lead.contactId,
-    user,
-    before,
-    after: lead,
-  });
-  revalidatePath("/leads");
-  revalidatePath(`/leads/${leadId}`);
-  revalidatePath("/forecast");
-  return { ok: true as const, assignee };
 }
 
 export async function markLeadViewed(leadId: string) {
-  await requireLeadReadAccess(leadId);
-  const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { viewedAt: true } });
-  if (lead && !lead.viewedAt) {
-    await prisma.lead.update({ where: { id: leadId }, data: { viewedAt: new Date() } });
-    revalidatePath("/leads");
-  }
+  return withActingStaffScope(async () => {
+    await requireLeadReadAccess(leadId);
+    const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { viewedAt: true } });
+    if (lead && !lead.viewedAt) {
+      await prisma.lead.update({ where: { id: leadId }, data: { viewedAt: new Date() } });
+      revalidatePath("/leads");
+    }
+  });
 }
 
 export async function markWon(leadId: string, formData?: FormData) {
@@ -1519,90 +1525,92 @@ export async function linkLeadToContact(leadId: string, formData: FormData) {
 }
 
 export async function convertLeadToContact(leadId: string): Promise<{ ok: boolean; error?: string; contactId?: string }> {
-  try {
-    const user = await requireLeadAccess(leadId, "leads.link_contact");
-    const lead = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
+  return withActingStaffScope(async () => {
+    try {
+      const user = await requireLeadAccess(leadId, "leads.link_contact");
+      const lead = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
 
-    if (lead.contactId) return { ok: false, error: "Already linked to a contact" };
+      if (lead.contactId) return { ok: false, error: "Already linked to a contact" };
 
-    const matchers = [
-      ...(lead.email ? [{ email: lead.email }] : []),
-      ...(lead.phone ? [{ phone: lead.phone }] : []),
-    ];
-    const existingMatch = matchers.length > 0
-      ? await prisma.contact.findFirst({ where: { OR: matchers } })
-      : null;
-    // Reuse if tenantId already matches, or if it's null (pre-backfill) — stamp
-    // the lead's tenantId onto it so the composite FK is satisfied without
-    // creating a duplicate.
-    const canReuse = existingMatch && (
-      existingMatch.tenantId === lead.tenantId || existingMatch.tenantId === null
-    );
+      const matchers = [
+        ...(lead.email ? [{ email: lead.email }] : []),
+        ...(lead.phone ? [{ phone: lead.phone }] : []),
+      ];
+      const existingMatch = matchers.length > 0
+        ? await prisma.contact.findFirst({ where: { OR: matchers } })
+        : null;
+      // Reuse if tenantId already matches, or if it's null (pre-backfill) — stamp
+      // the lead's tenantId onto it so the composite FK is satisfied without
+      // creating a duplicate.
+      const canReuse = existingMatch && (
+        existingMatch.tenantId === lead.tenantId || existingMatch.tenantId === null
+      );
 
-    let contactId: string;
-    if (canReuse && existingMatch) {
-      contactId = existingMatch.id;
-      if (existingMatch.tenantId === null && lead.tenantId !== null) {
-        await prisma.contact.update({
-          where: { id: existingMatch.id },
-          data: { tenantId: lead.tenantId },
+      let contactId: string;
+      if (canReuse && existingMatch) {
+        contactId = existingMatch.id;
+        if (existingMatch.tenantId === null && lead.tenantId !== null) {
+          await prisma.contact.update({
+            where: { id: existingMatch.id },
+            data: { tenantId: lead.tenantId },
+          });
+        }
+      } else {
+        const [firstName, ...rest] = lead.name.split(/\s+/);
+        const contact = await prisma.contact.create({
+          data: {
+            firstName: firstName || lead.name,
+            lastName: rest.join(" ") || null,
+            email: lead.email,
+            phone: lead.phone,
+            source: lead.source,
+            // Converting is explicitly "this lead is now a customer". Losing the
+            // notes at that point loses the reason the customer exists.
+            notes: lead.notes,
+            notesFromLeadId: lead.notes?.trim() ? lead.id : null,
+            tenantId: lead.tenantId,
+            createdById: user.id,
+            ownerId: lead.assignedToId ?? user.id,
+          },
+        });
+        contactId = contact.id;
+        await logAudit({
+          action: "contact.created",
+          summary: `Created contact ${lead.name} from lead`,
+          contactId,
+          leadId,
+          user,
+          after: contact,
         });
       }
-    } else {
-      const [firstName, ...rest] = lead.name.split(/\s+/);
-      const contact = await prisma.contact.create({
-        data: {
-          firstName: firstName || lead.name,
-          lastName: rest.join(" ") || null,
-          email: lead.email,
-          phone: lead.phone,
-          source: lead.source,
-          // Converting is explicitly "this lead is now a customer". Losing the
-          // notes at that point loses the reason the customer exists.
-          notes: lead.notes,
-          notesFromLeadId: lead.notes?.trim() ? lead.id : null,
-          tenantId: lead.tenantId,
-          createdById: user.id,
-          ownerId: lead.assignedToId ?? user.id,
-        },
-      });
-      contactId = contact.id;
-      await logAudit({
-        action: "contact.created",
-        summary: `Created contact ${lead.name} from lead`,
-        contactId,
+
+      await prisma.lead.update({ where: { id: leadId }, data: { contactId } });
+      await logAuditStrict({
+        action: "lead.contact_linked",
+        summary: `Linked lead "${lead.title}" to contact`,
         leadId,
+        contactId,
         user,
-        after: contact,
+        before: { contactId: lead.contactId },
+        after: { contactId },
       });
+
+      revalidatePath("/leads");
+      revalidatePath("/contacts");
+      revalidatePath(`/leads/${leadId}`);
+
+      return { ok: true, contactId };
+    } catch (err: unknown) {
+      // Re-throw Next.js redirect errors so they navigate properly
+      if (err && typeof err === "object" && "digest" in err) {
+        const digest = (err as { digest: unknown }).digest;
+        if (typeof digest === "string" && digest.startsWith("NEXT_REDIRECT")) throw err;
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[convertLeadToContact]", message);
+      return { ok: false, error: message };
     }
-
-    await prisma.lead.update({ where: { id: leadId }, data: { contactId } });
-    await logAuditStrict({
-      action: "lead.contact_linked",
-      summary: `Linked lead "${lead.title}" to contact`,
-      leadId,
-      contactId,
-      user,
-      before: { contactId: lead.contactId },
-      after: { contactId },
-    });
-
-    revalidatePath("/leads");
-    revalidatePath("/contacts");
-    revalidatePath(`/leads/${leadId}`);
-
-    return { ok: true, contactId };
-  } catch (err: unknown) {
-    // Re-throw Next.js redirect errors so they navigate properly
-    if (err && typeof err === "object" && "digest" in err) {
-      const digest = (err as { digest: unknown }).digest;
-      if (typeof digest === "string" && digest.startsWith("NEXT_REDIRECT")) throw err;
-    }
-    const message = err instanceof Error ? err.message : String(err);
-    console.error("[convertLeadToContact]", message);
-    return { ok: false, error: message };
-  }
+  });
 }
 
 export async function deleteLead(leadId: string, formData: FormData) {

@@ -48,6 +48,7 @@ export default function VehicleForm({
   submitLabel,
   showInitialKm = false,
   variant = "compact",
+  hiddenFields,
 }: {
   action: (formData: FormData) => Promise<void>;
   contacts: { id: string; label: string }[];
@@ -56,6 +57,15 @@ export default function VehicleForm({
   submitLabel: string;
   showInitialKm?: boolean;
   variant?: CaptureFormVariant;
+  /**
+   * Values the ACTION needs but the person does not edit — currently which quote
+   * a multi-vehicle delivery is working through, and how far along it is.
+   *
+   * Hidden inputs rather than a bound argument, because the action is passed in
+   * by the caller and binding would change its signature for every other user of
+   * this form.
+   */
+  hiddenFields?: Record<string, string>;
 }) {
   const [contactId, setContactId] = useState(defaults.contactId ?? "");
   const [productId, setProductId] = useState(defaults.productId ?? "");
@@ -79,6 +89,9 @@ export default function VehicleForm({
       action={action}
       className={cn("space-y-4", variant === "compact" && "card max-w-3xl", variant === "page" && "min-w-0 space-y-5")}
     >
+      {Object.entries(hiddenFields ?? {}).map(([name, value]) => (
+        <input key={name} type="hidden" name={name} value={value} />
+      ))}
       {(variant === "page" || variant === "dialog") && (
         <CaptureHero
           icon={CarFront}

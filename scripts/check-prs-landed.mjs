@@ -59,11 +59,26 @@ const TRUNK = process.env.TRUNK_BRANCH || "main";
  * respectively, verified by content at the time (each PR's signature test file
  * present on main, and #492's scoped `updateMany` in place with no unscoped
  * write left).
+ *
+ * 2026-08-26: #548 the same way, and it mattered more than most — it closed a
+ * CRC signing oracle in the X webhook, so the guard was reporting a SECURITY fix
+ * as unshipped. It was merged into `agent/x-social-inbox-integration` while the
+ * X integration itself reached main separately under #538, which left the
+ * vulnerable code live and its fix on a side branch. #549 re-landed it on main
+ * under the title "SECURITY: X webhook fixes from #548 never reached main".
+ *
+ * Verified by CONTENT, not by the merge graph: all three files #548 touched —
+ * `src/lib/xWebhook.ts`, `src/app/api/webhooks/x/route.ts` and
+ * `tests/xIntegration.test.ts` — are byte-identical between main and
+ * `agent/x-social-inbox-integration`, and #548's own commit is on main as
+ * 6cd2a25f under a rebased sha. That is why its head never became an ancestor:
+ * the recovery rebased rather than merged.
  */
 export const RECOVERED_BY = {
   478: 498,
   491: 499,
   492: 500,
+  548: 549,
 };
 
 /**

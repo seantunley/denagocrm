@@ -4,6 +4,7 @@ import { getBuilderTemplate, defaultBuilderTemplateId } from "@/lib/docbuilder/s
 import { readTemplateDocument } from "@/lib/doceditor/legacy";
 import { parseDocument } from "@/lib/doceditor/model";
 import { renderDocumentHtml } from "@/lib/doceditor/serialize";
+import { attachQuoteFooterToFinalScreenSheet } from "@/lib/quoteFooterSheet";
 import { bindCtx, logoDataUri, signedFieldStamps } from "@/lib/signing/render";
 import { parseFrozenBrand } from "@/lib/signing/frozenBrand";
 
@@ -61,11 +62,12 @@ export async function renderQuotePrintHtml(opts: {
     const signedDoc = parseDocument(request.snapshotJson);
     if (signedDoc) {
       const stamps = await signedFieldStamps(request.id, "");
-      return renderDocumentHtml(signedDoc, ctx, frozen?.logoUrl ?? logoDataUri(), {
+      const html = renderDocumentHtml(signedDoc, ctx, frozen?.logoUrl ?? logoDataUri(), {
         hideOverlays: !stamps.length,
         stampedFields: stamps.length ? stamps : undefined,
         toolbarHtml: opts.toolbarHtml,
       });
+      return attachQuoteFooterToFinalScreenSheet(html);
     }
     // An unparseable snapshot falls through to the template below rather than
     // returning nothing — a printable quote beats a 404.
@@ -82,18 +84,12 @@ export async function renderQuotePrintHtml(opts: {
 
   const stampedFields = request ? await signedFieldStamps(request.id, "") : undefined;
 
-  return renderDocumentHtml(read.doc, ctx, logoDataUri(), {
+  const html = renderDocumentHtml(read.doc, ctx, logoDataUri(), {
     hideOverlays: !stampedFields?.length,
     stampedFields: stampedFields?.length ? stampedFields : undefined,
     toolbarHtml: opts.toolbarHtml,
   });
+  return attachQuoteFooterToFinalScreenSheet(html);
 }
 
 /** Screen-only Print / Back bar. Hidden by @media print — see renderDocumentHtml. */
-export function printToolbarHtml(backHref: string, backLabel: string): string {
-  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
-  return `<div class="doc-toolbar" style="position:sticky;top:0;z-index:50;display:flex;gap:8px;align-items:center;justify-content:flex-end;padding:10px 14px;background:#0f172a;font-family:Helvetica,Arial,sans-serif">
-    <a href="${esc(backHref)}" style="color:#cbd5e1;text-decoration:none;font-size:13px;margin-right:auto">&larr; ${esc(backLabel)}</a>
-    <button type="button" onclick="window.print()" style="background:#ea580c;color:#fff;border:none;border-radius:6px;padding:8px 16px;font-size:13px;font-weight:700;cursor:pointer">Print / Save PDF</button>
-  </div>`;
-}
