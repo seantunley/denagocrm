@@ -175,6 +175,61 @@ export async function sendPrivateReplyToComment(commentId: string, text: string)
   return postToSendApi({ text }, { comment_id: commentId }, humanisePrivateReplyError);
 }
 
+/**
+ * Reply to a comment PUBLICLY, under the post, where everyone can see it.
+ *
+ * The other half of answering a commenter. A private reply reaches one person
+ * once; a public reply answers the question for everybody still reading, which
+ * on an ad is usually the larger audience. Both are worth having, and they are
+ * not substitutes.
+ *
+ * ── THIS NEEDS A PERMISSION THE APP DOES NOT HAVE ───────────────────────────
+ *
+ * Writing a comment requires `pages_manage_engagement`. Reading comments needs
+ * only `pages_read_engagement`, and receiving the webhook only
+ * `pages_manage_metadata` — both of which are already granted, which is why
+ * ingestion and private replies work today and this does not.
+ *
+ * Until it is granted, Meta refuses this with a permissions error. That refusal
+ * is translated below into the specific thing somebody has to do about it,
+ * rather than surfacing Meta's wording, because "(#200) Permissions error" tells
+ * nobody which permission or where to get it.
+ */
+export async function sendPublicCommentReply(commentId: string, message: string): Promise<MetaSendResult> {
+  const token = await getPageToken();
+  if (!token) return { ok: false, error: "Meta page token is not configured (Settings → Integrations)." };
+  const res = await fetch(
+    `${GRAPH}/${encodeURIComponent(commentId)}/comments?access_token=${encodeURIComponent(token)}`,
+    {
+      signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message }),
+    },
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => null);
+    return { ok: false, error: humanisePublicReplyError(err?.error?.message ?? `Graph API error ${res.status}`) };
+  }
+  const accepted = await res.json().catch(() => null);
+  return { ok: true, providerMessageId: typeof accepted?.id === "string" ? accepted.id : undefined };
+}
+
+/** Meta's public-reply refusals, named so somebody can act on them. */
+function humanisePublicReplyError(message: string): string {
+  if (/permission|#200|OAuth|scope/i.test(message)) {
+    return (
+      "Meta has not granted this app permission to write comments. Add " +
+      "pages_manage_engagement to the Denago CRM app (it needs App Review) and " +
+      "reconnect the Page. Replying privately works without it."
+    );
+  }
+  if (/deleted|does not exist|Unsupported get request|invalid/i.test(message)) {
+    return "That comment no longer exists on Facebook — it may have been deleted or hidden.";
+  }
+  return message;
+}
+
 /** Meta's private-reply refusals, in words that say what to do instead. */
 function humanisePrivateReplyError(message: string): string {
   if (/already|duplicate|one message/i.test(message)) {

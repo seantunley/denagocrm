@@ -136,9 +136,57 @@ export function isOwnPageComment(comment: IngestibleComment, pageId: string | nu
   return page !== "" && comment.authorId === page;
 }
 
+/**
+ * The platforms a comment thread can belong to.
+ *
+ * Facebook is the only one ingesting today. The others are here because the
+ * thread key already carries the platform, so nothing about the screen, the
+ * icon or the storage has to change when Instagram comments are switched on —
+ * only the webhook branch that produces them.
+ */
+export type CommentPlatform = "facebook" | "instagram" | "x";
+
 /** The stable key for one post's comment thread. */
-export function commentThreadRef(platform: "facebook" | "instagram", postId: string): string {
+export function commentThreadRef(platform: CommentPlatform, postId: string): string {
   return `${platform}:${postId}`;
+}
+
+/** The platform a thread key names, or null when it names none we know. */
+export function commentPlatform(externalRef: string | null | undefined): CommentPlatform | null {
+  const prefix = (externalRef ?? "").split(":")[0];
+  return prefix === "facebook" || prefix === "instagram" || prefix === "x" ? prefix : null;
+}
+
+/** The post id, without its platform prefix. */
+export function commentPostId(externalRef: string | null | undefined): string | null {
+  const [prefix, ...rest] = (externalRef ?? "").split(":");
+  const id = rest.join(":");
+  return commentPlatform(prefix) && id ? id : null;
+}
+
+const PLATFORM_PRESENTATION: Record<CommentPlatform, { label: string; icon: string }> = {
+  facebook: { label: "Facebook", icon: "/branding/social-facebook.png" },
+  instagram: { label: "Instagram", icon: "/branding/social-instagram.png" },
+  x: { label: "X", icon: "/branding/social-x.svg" },
+};
+
+/** How a platform is named and shown. The same assets the inbox already uses. */
+export function commentPlatformPresentation(platform: CommentPlatform | null): { label: string; icon: string | null } {
+  if (!platform) return { label: "Unknown", icon: null };
+  return PLATFORM_PRESENTATION[platform];
+}
+
+/**
+ * A link back to the post itself, when the platform has one we can build.
+ *
+ * Facebook post ids are addressable by URL. Instagram's are not — a media id is
+ * not its shortcode — so rather than emit a link that 404s, there is none.
+ */
+export function commentPostUrl(externalRef: string | null | undefined): string | null {
+  const platform = commentPlatform(externalRef);
+  const postId = commentPostId(externalRef);
+  if (!platform || !postId) return null;
+  return platform === "facebook" ? `https://www.facebook.com/${postId}` : null;
 }
 
 /**

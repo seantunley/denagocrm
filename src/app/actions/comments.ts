@@ -5,7 +5,8 @@ import { asActionResult, refuse, type ActionResult } from "@/lib/actionResult";
 import { prisma } from "@/lib/db";
 import { requireConversationAccess } from "@/lib/permissions";
 import { withActingStaffScope } from "@/lib/actingScope";
-import { sendPrivateReplyToComment } from "@/lib/messenger";
+import { sendPrivateReplyToComment, sendPublicCommentReply } from "@/lib/messenger";
+import { commentDedupeKey } from "@/lib/socialComments";
 import { setCommentThreadMuted } from "@/lib/commentThreads";
 import { logAudit } from "@/lib/audit";
 
@@ -92,8 +93,117 @@ export async function privateReplyToComment(
         userName: user.name,
       });
 
-      revalidatePath("/inbox");
+      revalidatePath("/comments");
       return { success: "Private reply sent — their answer will arrive as a Messenger conversation." };
+    }),
+  );
+}
+
+/**
+ * Reply publicly, under the post, where everyone still reading can see it.
+ *
+ * The counterpart to the private reply, not a replacement for it. A private
+ * reply reaches one person once; this answers the question for the whole
+ * audience — usually the larger win on an ad.
+ *
+ * Unlike the private reply there is no one-shot limit and no seven-day window,
+ * so this can be used freely. What it DOES need is `pages_manage_engagement`,
+ * which this app has not been granted — the send translates Meta's refusal into
+ * the specific thing to do about it rather than surfacing "(#200) Permissions
+ * error", and nothing is recorded when it fails.
+ */
+export async function publicReplyToComment(
+  conversationId: string,
+  commentId: string,
+  text: string,
+): Promise<ActionResult> {
+  return asActionResult(async () =>
+    withActingStaffScope(async () => {
+      const user = await requireConversationAccess(conversationId, "inbox.reply");
+
+      const body = text.trim();
+      if (!body) refuse("Write a reply before sending it.");
+      if (!commentId.trim()) refuse("That comment can no longer be replied to.");
+
+      const thread = await prisma.conversation.findFirst({
+        where: { id: conversationId, channel: "comment" },
+        select: { id: true, tenantId: true },
+      });
+      if (!thread) refuse("That comment thread no longer exists.");
+
+      const sent = await sendPublicCommentReply(commentId, body);
+      if (!sent.ok) refuse(sent.error ?? "Meta refused the reply.");
+
+      // Recorded only on success. Our own reply also comes back through the
+      // `feed` webhook as a Page comment, which the ingest files as outbound —
+      // so this row carries the provider id and the redelivery is refused by
+      // the dedupe key rather than appearing twice.
+      await prisma.communication.create({
+        data: {
+          type: "comment",
+          direction: "outbound",
+          body,
+          subject: "Public reply",
+          conversationId: thread.id,
+          messageId: sent.providerMessageId,
+          ...(sent.providerMessageId && thread.tenantId
+            ? { dedupeKey: commentDedupeKey(thread.tenantId, sent.providerMessageId) }
+            : {}),
+          userId: user.id,
+          tenantId: thread.tenantId,
+        },
+      });
+
+      await logAudit({
+        action: "comment.public_reply",
+        summary: `Replied publicly to a comment (${commentId})`,
+        userName: user.name,
+      });
+
+      revalidatePath("/comments");
+      return { success: "Reply posted under the post." };
+    }),
+  );
+}
+
+/**
+ * Archive a post's comment thread, or bring it back.
+ *
+ * Different from muting, and both are wanted. MUTED stops new comments arriving
+ * at all — for a post running hot that nobody needs to read. ARCHIVED means
+ * "dealt with": it leaves the queue but keeps listening, so a new comment on an
+ * archived post still lands and can bring it back to attention.
+ */
+export async function setCommentThreadArchived(
+  conversationId: string,
+  archived: boolean,
+): Promise<ActionResult> {
+  return asActionResult(async () =>
+    withActingStaffScope(async () => {
+      const user = await requireConversationAccess(conversationId, "inbox.reply");
+
+      const thread = await prisma.conversation.findFirst({
+        where: { id: conversationId, channel: "comment" },
+        select: { id: true, subject: true },
+      });
+      if (!thread) refuse("That comment thread no longer exists.");
+
+      await prisma.conversation.updateMany({
+        where: { id: thread.id, channel: "comment" },
+        // `status` already carries exactly this meaning for a conversation, so
+        // archiving needs no new column — and "closed" is what the rest of the
+        // inbox already understands.
+        data: { status: archived ? "closed" : "open", ...(archived ? { unread: false } : {}) },
+      });
+
+      await logAudit({
+        action: archived ? "comment.thread_archived" : "comment.thread_reopened",
+        summary: `${archived ? "Archived" : "Reopened"} ${thread.subject ?? "a comment thread"}`,
+        userName: user.name,
+      });
+
+      revalidatePath("/comments");
+      return { success: archived ? "Archived." : "Back in the active list." };
     }),
   );
 }

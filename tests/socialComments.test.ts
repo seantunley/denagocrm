@@ -6,6 +6,10 @@ import { join } from "node:path";
 
 import {
   commentDedupeKey,
+  commentPlatform,
+  commentPlatformPresentation,
+  commentPostId,
+  commentPostUrl,
   commentThreadRef,
   commentThreadSubject,
   decideComment,
@@ -117,6 +121,95 @@ test("an unknown page id never makes a customer's comment look like ours", () =>
   assert.ok(decision.ok);
   assert.equal(isOwnPageComment(decision.comment, null), false);
   assert.equal(isOwnPageComment(decision.comment, ""), false);
+});
+
+// ── Platform ────────────────────────────────────────────────────────────────
+
+test("the thread key carries the platform, so the icon needs no extra column", () => {
+  assert.equal(commentPlatform("facebook:998877_112233"), "facebook");
+  assert.equal(commentPlatform("instagram:17841446988337480"), "instagram");
+  assert.equal(commentPlatform("x:1234567890"), "x");
+  assert.equal(commentPlatform("myspace:1"), null, "an unknown prefix names no platform");
+  assert.equal(commentPlatform(null), null);
+});
+
+test("the post id survives a colon in it", () => {
+  assert.equal(commentPostId("facebook:998877_112233"), "998877_112233");
+  assert.equal(commentPostId("facebook:a:b"), "a:b", "only the FIRST colon is the separator");
+  assert.equal(commentPostId("facebook:"), null);
+});
+
+test("each platform has the icon the inbox already uses", () => {
+  assert.equal(commentPlatformPresentation("facebook").icon, "/branding/social-facebook.png");
+  assert.equal(commentPlatformPresentation("instagram").icon, "/branding/social-instagram.png");
+  assert.equal(commentPlatformPresentation("x").icon, "/branding/social-x.svg");
+  // Unknown gets a label and no icon, so the card falls back rather than
+  // rendering a broken image.
+  assert.equal(commentPlatformPresentation(null).icon, null);
+  assert.equal(commentPlatformPresentation(null).label, "Unknown");
+});
+
+test("only Facebook posts get a link back, because only they have an addressable URL", () => {
+  assert.equal(commentPostUrl("facebook:998877_112233"), "https://www.facebook.com/998877_112233");
+  // An Instagram media id is not its shortcode, so a link built from it would
+  // 404. Better none than a broken one.
+  assert.equal(commentPostUrl("instagram:17841446988337480"), null);
+  assert.equal(commentPostUrl(null), null);
+});
+
+// ── Answering, archiving, silencing ─────────────────────────────────────────
+
+test("a commenter can be answered PUBLICLY as well as privately", () => {
+  // Two different things, not substitutes: a public reply answers the question
+  // for everyone still reading; a private one reaches a person and opens a
+  // conversation.
+  const messenger = shipped("src/lib/messenger.ts");
+  assert.match(messenger, /export async function sendPublicCommentReply/);
+  assert.match(messenger, /\/comments\?access_token=/, "a public reply POSTs to the comment's own edge");
+
+  const actions = shipped("src/app/actions/comments.ts");
+  assert.match(actions, /export async function publicReplyToComment/);
+  assert.match(actions, /export async function privateReplyToComment/);
+});
+
+test("the missing permission is NAMED, not surfaced as Meta's error code", () => {
+  // Public replies need pages_manage_engagement, which this install has not
+  // been granted. "(#200) Permissions error" tells nobody which permission or
+  // where to get it.
+  const messenger = shipped("src/lib/messenger.ts");
+  assert.match(messenger, /pages_manage_engagement/);
+  assert.match(messenger, /App Review/);
+});
+
+test("archive and mute are different, and both exist", () => {
+  /*
+   * MUTED stops new comments arriving at all — for a post running hot that
+   * nobody needs to read. ARCHIVED means dealt with: it leaves the queue but
+   * keeps listening, so a new comment brings the post back.
+   */
+  const actions = shipped("src/app/actions/comments.ts");
+  assert.match(actions, /export async function setCommentThreadArchived/);
+  assert.match(actions, /export async function setCommentThreadMute/);
+  // Archiving reuses `status`, which already means this for a conversation —
+  // no new column.
+  assert.match(actions, /status: archived \? "closed" : "open"/);
+});
+
+test("the screen separates active from archived, and archiving does not stop ingestion", () => {
+  const loader = shipped("src/lib/commentInbox.ts");
+  assert.match(loader, /status: archived \? "closed" : \{ not: "closed" \}/);
+  // Only muting stops the webhook filing new comments; archiving is a queue
+  // decision, not a subscription one.
+  const ingest = shipped("src/lib/commentThreads.ts");
+  assert.doesNotMatch(ingest, /status.*closed/, "an archived post must still take new comments");
+});
+
+test("a post is collapsible, and only the ones with something new open themselves", () => {
+  // A screen of expanded posts is unreadable the moment a campaign runs, which
+  // is the case this screen exists for.
+  const list = read("src/components/CommentThreadList.tsx");
+  assert.match(list, /useState\(thread\.unread && !thread\.archived\)/);
+  assert.match(list, /aria-expanded=\{open\}/, "the toggle must be announced to assistive tech");
 });
 
 // ── Keys ────────────────────────────────────────────────────────────────────

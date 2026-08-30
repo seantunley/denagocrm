@@ -1,9 +1,15 @@
 import "server-only";
 import { prisma } from "./db";
 import { activeTenantPredicate } from "./tenantPredicate";
+import {
+  commentPlatform,
+  commentPlatformPresentation,
+  commentPostUrl,
+  type CommentPlatform,
+} from "./socialComments";
 
 /**
- * Reading the comments mailbox.
+ * Reading the comments screen.
  *
  * ── WHY THIS DOES NOT GO THROUGH inboxQuery.ts ──────────────────────────────
  *
@@ -15,26 +21,30 @@ import { activeTenantPredicate } from "./tenantPredicate";
  * A comment thread has no person. `buildInboxThreads` skips any row without a
  * contact or lead — correctly, since it has nothing to name the thread after —
  * so comments are invisible to it by construction rather than by oversight.
- * Threading them there would mean teaching a person-shaped query about a
- * post-shaped thread, and risking the mailbox that already works.
  *
- * They are a separate mailbox, so they get a separate read. Comment rows carry
- * `conversationId` and no contact, so the two queries cannot see each other's
- * threads even by accident.
+ * Comments are a separate screen, so they get a separate read. Comment rows
+ * carry `conversationId` and no contact, so the two queries cannot see each
+ * other's threads even by accident.
  */
 
 export type CommentThread = {
   conversationId: string;
   /** "facebook:<postId>" — the post this thread belongs to. */
   externalRef: string | null;
+  platform: CommentPlatform | null;
+  platformLabel: string;
+  platformIcon: string | null;
+  /** A link back to the post, when the platform has an addressable URL. */
+  postUrl: string | null;
   subject: string;
   unread: boolean;
   muted: boolean;
+  archived: boolean;
   lastAt: Date;
   messageCount: number;
   comments: {
     id: string;
-    /** Meta's comment id — what a private reply is addressed to. */
+    /** Meta's comment id — what a reply is addressed to. */
     commentId: string | null;
     direction: string | null;
     author: string | null;
@@ -47,17 +57,27 @@ export type CommentThread = {
 /** How many comments of each thread to render before "open the post". */
 const COMMENTS_PER_THREAD = 12;
 
-export async function loadCommentThreads(limit = 40): Promise<CommentThread[]> {
+export async function loadCommentThreads(
+  options: { archived?: boolean; limit?: number } = {},
+): Promise<CommentThread[]> {
+  const archived = options.archived ?? false;
   const threads = await prisma.conversation.findMany({
-    where: { channel: "comment", ...activeTenantPredicate("comments inbox") },
+    where: {
+      channel: "comment",
+      // Archived means "dealt with" — status is what the rest of the inbox
+      // already uses for it, so no new column was needed.
+      status: archived ? "closed" : { not: "closed" },
+      ...activeTenantPredicate("comments screen"),
+    },
     orderBy: { lastMessageAt: "desc" },
-    take: limit,
+    take: options.limit ?? 40,
     select: {
       id: true,
       externalRef: true,
       subject: true,
       unread: true,
       mutedAt: true,
+      status: true,
       lastMessageAt: true,
       messageCount: true,
       messages: {
@@ -80,35 +100,38 @@ export async function loadCommentThreads(limit = 40): Promise<CommentThread[]> {
     },
   });
 
-  return threads.map((thread) => ({
-    conversationId: thread.id,
-    externalRef: thread.externalRef,
-    subject: thread.subject ?? "Comment thread",
-    unread: thread.unread,
-    muted: thread.mutedAt !== null,
-    lastAt: thread.lastMessageAt,
-    messageCount: thread.messageCount,
-    comments: thread.messages
-      .map((message) => ({
-        id: message.id,
-        commentId: message.messageId,
-        direction: message.direction,
-        // The commenter's name is stored in `subject` — a comment thread has no
-        // contact to read it from, and the name Meta sends is all we have.
-        author: message.subject,
-        body: message.body,
-        at: message.occurredAt,
-        attachmentUrl: message.attachmentUrl,
-      }))
-      // Newest-first out of the database so `take` keeps the RECENT ones;
-      // oldest-first for reading, which is how a conversation is read.
-      .reverse(),
-  }));
-}
-
-/** The Facebook permalink for a thread's post, when the ref names one. */
-export function postPermalink(externalRef: string | null): string | null {
-  if (!externalRef?.startsWith("facebook:")) return null;
-  const postId = externalRef.slice("facebook:".length);
-  return postId ? `https://www.facebook.com/${postId}` : null;
+  return threads.map((thread) => {
+    const platform = commentPlatform(thread.externalRef);
+    const presentation = commentPlatformPresentation(platform);
+    return {
+      conversationId: thread.id,
+      externalRef: thread.externalRef,
+      platform,
+      platformLabel: presentation.label,
+      platformIcon: presentation.icon,
+      postUrl: commentPostUrl(thread.externalRef),
+      subject: thread.subject ?? "Comment thread",
+      unread: thread.unread,
+      muted: thread.mutedAt !== null,
+      archived: thread.status === "closed",
+      lastAt: thread.lastMessageAt,
+      messageCount: thread.messageCount,
+      comments: thread.messages
+        .map((message) => ({
+          id: message.id,
+          commentId: message.messageId,
+          direction: message.direction,
+          // The commenter's name is stored in `subject` — a comment thread has
+          // no contact to read it from, and the name the platform sends is all
+          // we have.
+          author: message.subject,
+          body: message.body,
+          at: message.occurredAt,
+          attachmentUrl: message.attachmentUrl,
+        }))
+        // Newest-first out of the database so `take` keeps the RECENT ones;
+        // oldest-first for reading, which is how a conversation is read.
+        .reverse(),
+    };
+  });
 }

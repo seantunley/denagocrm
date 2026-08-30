@@ -4,6 +4,7 @@ import { loadCommentThreads } from "@/lib/commentInbox";
 import CommentThreadList from "@/components/CommentThreadList";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import AutoRefresh from "@/components/AutoRefresh";
+import Tabs from "@/components/Tabs";
 
 export const metadata = { title: "Comments — DenagoCRM" };
 
@@ -13,11 +14,11 @@ export const metadata = { title: "Comments — DenagoCRM" };
  * ── WHY IT IS SEPARATE ──────────────────────────────────────────────────────
  *
  * The Social inbox answers "who is waiting on us": one customer per thread, a
- * private conversation, and an answer owed. Comments answer a different
- * question entirely — a post with a crowd on it, in public, most of whom want
- * nothing. Sharing a screen makes each one worse: the public chatter buries the
- * private conversations that need someone, and the comment moderation view
- * inherits a reply box that cannot reply.
+ * private conversation, an answer owed. Comments answer a different question
+ * entirely — a post with a crowd on it, in public, most of whom want nothing.
+ * Sharing a screen made each one worse: the public chatter buried the private
+ * conversations that need someone, and the moderation view inherited a reply box
+ * that could not reply.
  *
  * They also cannot be threaded the same way. The inbox groups by PERSON, and a
  * commenter has no identity we can resolve — their Facebook id is not their
@@ -26,11 +27,15 @@ export const metadata = { title: "Comments — DenagoCRM" };
  */
 export default async function CommentsPage() {
   await requireRoute("/comments");
-  const threads = await loadCommentThreads();
 
-  const unread = threads.filter((thread) => thread.unread).length;
-  const muted = threads.filter((thread) => thread.muted).length;
-  const total = threads.reduce((sum, thread) => sum + thread.messageCount, 0);
+  const [active, archived] = await Promise.all([
+    loadCommentThreads({ archived: false }),
+    loadCommentThreads({ archived: true }),
+  ]);
+
+  const unread = active.filter((thread) => thread.unread).length;
+  const muted = active.filter((thread) => thread.muted).length;
+  const total = active.reduce((sum, thread) => sum + thread.messageCount, 0);
 
   return (
     <div className="space-y-6">
@@ -39,15 +44,41 @@ export default async function CommentsPage() {
         icon={MessagesSquare}
         eyebrow="Public conversations"
         title="Comments"
-        description="Comments left on your Facebook posts and ads. Reply privately to turn one into a conversation, or mute a post that is running hot."
+        description="Comments left on your posts and ads. Answer publicly under the post, or privately to turn one into a conversation — and archive a post once it is dealt with."
         stats={[
-          { label: "Posts", value: threads.length, detail: "With comments" },
-          { label: "Unread", value: unread, detail: unread ? "Needs a look" : "You're caught up", tone: unread ? "warning" : "success" },
+          { label: "Posts", value: active.length, detail: "With comments" },
+          {
+            label: "Unread",
+            value: unread,
+            detail: unread ? "Needs a look" : "You're caught up",
+            tone: unread ? "warning" : "success",
+          },
           { label: "Comments", value: total, detail: "Across those posts" },
           { label: "Muted", value: muted, detail: muted ? "Not taking new comments" : "None silenced" },
         ]}
       />
-      <CommentThreadList threads={threads} />
+
+      <Tabs
+        tabs={[
+          {
+            key: "active",
+            label: "Active",
+            count: unread,
+            content: <CommentThreadList threads={active} />,
+          },
+          {
+            key: "archived",
+            label: "Archived",
+            count: archived.length,
+            content: (
+              <CommentThreadList
+                threads={archived}
+                emptyMessage="Nothing archived yet. Archive a post once you have dealt with its comments — it leaves this list but keeps listening, so a new comment brings it back."
+              />
+            ),
+          },
+        ]}
+      />
     </div>
   );
 }
