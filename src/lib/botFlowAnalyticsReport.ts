@@ -4,21 +4,21 @@ import { basePrisma } from "./db";
 import { DEFAULT_TENANT_ID } from "./tenant";
 import { writeTenantId } from "./tenantWrite";
 import { getBotFlowVersionAnalytics, type BotFlowVersionAnalytics } from "./botFlowAnalytics";
+import {
+  normalizeBotAnalyticsFilters,
+  type BotAnalyticsFilterInput,
+  type BotAnalyticsFilters,
+} from "./botFlowAnalyticsFilters";
 import type { Flow, FlowNode } from "./flow";
 
-export type FlowVersionReportMeta = {
-  id: string;
-  version: number;
-  publishedAt: Date;
-};
-
+export type FlowVersionReportMeta = { id: string; version: number; publishedAt: Date };
 export type FlowChannelAnalytics = {
   channel: string;
   conversations: number;
   completed: number;
   handedOff: number;
+  crmActions: number;
 };
-
 export type FlowNodeReport = {
   nodeId: string;
   type: string;
@@ -31,35 +31,53 @@ export type FlowNodeReport = {
   handoffs: number;
   deliveryFailures: number;
 };
-
+export type FlowTrendPoint = { day: string; started: number; completed: number; handedOff: number; crmActions: number };
+export type FlowActionAnalytics = { action: string; label: string; count: number };
+export type FlowVersionPerformance = FlowVersionReportMeta & {
+  started: number;
+  completed: number;
+  handedOff: number;
+  crmActions: number;
+  deliveryFailures: number;
+};
 export type BotFlowAnalyticsReport = {
   versions: FlowVersionReportMeta[];
-  latestVersion: FlowVersionReportMeta | null;
-  latest: BotFlowVersionAnalytics;
+  selectedVersion: FlowVersionReportMeta | null;
+  filters: BotAnalyticsFilters;
+  summary: BotFlowVersionAnalytics;
   allTime: BotFlowVersionAnalytics;
   channels: FlowChannelAnalytics[];
   nodes: FlowNodeReport[];
+  trend: FlowTrendPoint[];
+  actions: FlowActionAnalytics[];
+  versionPerformance: FlowVersionPerformance[];
 };
 
-/**
- * `createdAt` is the column; `publishedAt` is the NAME THE REPORT USES.
- *
- * This read asked BotFlowVersion for `publishedAt`, which it has never had, so
- * Postgres answered `42703: column "publishedAt" does not exist` on every call
- * and the analytics report failed outright. The raw query asserts its row type
- * rather than deriving one, so nothing complained at compile time.
- *
- * Only the ROW type is corrected. The exported report keeps `publishedAt`,
- * because a row IS the publication — `publishFlowSnapshot` inserts one at the
- * moment a version is published — and renaming the public field would ripple
- * into every consumer for no gain.
- */
 type VersionRow = { id: string; version: number; createdAt: Date; definition: string };
 type ChannelRow = {
   channel: string;
   conversations: bigint | number;
   completed: bigint | number;
   handedOff: bigint | number;
+  crmActions: bigint | number;
+};
+type TrendRow = {
+  day: Date | string;
+  started: bigint | number;
+  completed: bigint | number;
+  handedOff: bigint | number;
+  crmActions: bigint | number;
+};
+type ActionRow = { action: string; count: bigint | number };
+type VersionPerformanceRow = {
+  id: string;
+  version: number;
+  createdAt: Date;
+  started: bigint | number;
+  completed: bigint | number;
+  handedOff: bigint | number;
+  crmActions: bigint | number;
+  deliveryFailures: bigint | number;
 };
 
 const n = (value: bigint | number | null | undefined) => Number(value ?? 0);
@@ -91,12 +109,50 @@ function parseFlow(definition: string | undefined): Flow | null {
   }
 }
 
+function actionLabel(action: string): string {
+  const labels: Record<string, string> = {
+    booking_service: "Service requests created",
+    booking_demo: "Demo / test-drive leads created",
+    booking_lead: "Leads created",
+    booking_lookup: "Bookings found",
+    booking_cancel: "Bookings cancelled",
+    book: "Workshop slots booked",
+    reschedule: "Workshop slots rescheduled",
+    journey_start: "Journey enrolments",
+  };
+  return labels[action] ?? action.replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase());
+}
+
+function dayKey(value: Date | string): string {
+  return new Date(value).toISOString().slice(0, 10);
+}
+
+function fillTrend(rows: TrendRow[], filters: BotAnalyticsFilters): FlowTrendPoint[] {
+  const byDay = new Map(rows.map((row) => [dayKey(row.day), row]));
+  return Array.from({ length: filters.rangeDays }, (_, index) => {
+    const day = new Date(filters.occurredFrom);
+    day.setUTCDate(day.getUTCDate() + index);
+    const key = day.toISOString().slice(0, 10);
+    const row = byDay.get(key);
+    return {
+      day: key,
+      started: n(row?.started),
+      completed: n(row?.completed),
+      handedOff: n(row?.handedOff),
+      crmActions: n(row?.crmActions),
+    };
+  });
+}
+
 /**
  * Reporting is pinned to immutable published versions. The mutable draft is not
- * used to label historic nodes, so an owner editing today's canvas cannot rewrite
- * the meaning of yesterday's funnel.
+ * used to label historic nodes, so editing today's canvas cannot rewrite the
+ * meaning of yesterday's funnel.
  */
-export async function getBotFlowAnalyticsReport(flowId: string): Promise<BotFlowAnalyticsReport> {
+export async function getBotFlowAnalyticsReport(
+  flowId: string,
+  input: BotAnalyticsFilterInput = {},
+): Promise<BotFlowAnalyticsReport> {
   const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
   const versionRows = await basePrisma.$queryRaw<VersionRow[]>(Prisma.sql`
     SELECT "id", "version", "createdAt", "definition"
@@ -106,36 +162,97 @@ export async function getBotFlowAnalyticsReport(flowId: string): Promise<BotFlow
      ORDER BY "version" DESC
   `);
   const versions = versionRows.map((row) => ({ id: row.id, version: Number(row.version), publishedAt: row.createdAt }));
-  const latestVersion = versions[0] ?? null;
+  const filters = normalizeBotAnalyticsFilters(input, versions.map((version) => version.id));
+  const selectedVersion = versions.find((version) => version.id === filters.versionId) ?? null;
+  const selectedRow = versionRows.find((row) => row.id === filters.versionId);
   const versionIds = versions.map((version) => version.id);
-  const [allTime, latest, channels] = await Promise.all([
+
+  if (!selectedVersion) {
+    const empty = { started: 0, completed: 0, handedOff: 0, deliveryFailures: 0, nodes: [] };
+    return { versions, selectedVersion: null, filters, summary: empty, allTime: empty, channels: [], nodes: [], trend: [], actions: [], versionPerformance: [] };
+  }
+
+  const occurredFilter = Prisma.sql`AND "occurredAt" >= ${filters.occurredFrom}`;
+  const channelFilter = filters.channel ? Prisma.sql`AND "channel" = ${filters.channel}` : Prisma.empty;
+  const joinedOccurredFilter = Prisma.sql`AND e."occurredAt" >= ${filters.occurredFrom}`;
+  const joinedChannelFilter = filters.channel ? Prisma.sql`AND e."channel" = ${filters.channel}` : Prisma.empty;
+
+  const [summary, allTime, channels, trendRows, actionRows, versionRowsPerformance] = await Promise.all([
+    getBotFlowVersionAnalytics([selectedVersion.id], { occurredFrom: filters.occurredFrom, channel: filters.channel }),
     getBotFlowVersionAnalytics(versionIds),
-    latestVersion ? getBotFlowVersionAnalytics([latestVersion.id]) : Promise.resolve({ started: 0, completed: 0, handedOff: 0, deliveryFailures: 0, nodes: [] }),
-    versionIds.length
-      ? basePrisma.$queryRaw<ChannelRow[]>(Prisma.sql`
-          SELECT
-            "channel",
-            COUNT(*) FILTER (WHERE "eventType" = 'flow_started') AS "conversations",
-            COUNT(*) FILTER (WHERE "eventType" = 'flow_completed') AS "completed",
-            COUNT(*) FILTER (WHERE "eventType" = 'flow_handoff') AS "handedOff"
-          FROM "BotFlowEvent"
-          WHERE "tenantId" = ${tenantId}
-            AND "flowVersionId" IN (${Prisma.join(versionIds)})
-          GROUP BY "channel"
-          ORDER BY COUNT(*) FILTER (WHERE "eventType" = 'flow_started') DESC
-        `)
-      : Promise.resolve([] as ChannelRow[]),
+    basePrisma.$queryRaw<ChannelRow[]>(Prisma.sql`
+      SELECT
+        "channel",
+        COUNT(*) FILTER (WHERE "eventType" = 'flow_started') AS "conversations",
+        COUNT(*) FILTER (WHERE "eventType" = 'flow_completed') AS "completed",
+        COUNT(*) FILTER (WHERE "eventType" = 'flow_handoff') AS "handedOff",
+        COUNT(*) FILTER (WHERE "eventType" = 'crm_action') AS "crmActions"
+      FROM "BotFlowEvent"
+      WHERE "tenantId" = ${tenantId}
+        AND "flowVersionId" = ${selectedVersion.id}
+        ${occurredFilter}
+        ${channelFilter}
+      GROUP BY "channel"
+      ORDER BY COUNT(*) FILTER (WHERE "eventType" = 'flow_started') DESC
+    `),
+    basePrisma.$queryRaw<TrendRow[]>(Prisma.sql`
+      SELECT
+        date_trunc('day', "occurredAt")::date AS "day",
+        COUNT(*) FILTER (WHERE "eventType" = 'flow_started') AS "started",
+        COUNT(*) FILTER (WHERE "eventType" = 'flow_completed') AS "completed",
+        COUNT(*) FILTER (WHERE "eventType" = 'flow_handoff') AS "handedOff",
+        COUNT(*) FILTER (WHERE "eventType" = 'crm_action') AS "crmActions"
+      FROM "BotFlowEvent"
+      WHERE "tenantId" = ${tenantId}
+        AND "flowVersionId" = ${selectedVersion.id}
+        ${occurredFilter}
+        ${channelFilter}
+      GROUP BY date_trunc('day', "occurredAt")::date
+      ORDER BY "day"
+    `),
+    basePrisma.$queryRaw<ActionRow[]>(Prisma.sql`
+      SELECT COALESCE("metadata" ->> 'action', 'other') AS "action", COUNT(*) AS "count"
+      FROM "BotFlowEvent"
+      WHERE "tenantId" = ${tenantId}
+        AND "flowVersionId" = ${selectedVersion.id}
+        AND "eventType" = 'crm_action'
+        ${occurredFilter}
+        ${channelFilter}
+      GROUP BY COALESCE("metadata" ->> 'action', 'other')
+      ORDER BY COUNT(*) DESC, "action"
+    `),
+    basePrisma.$queryRaw<VersionPerformanceRow[]>(Prisma.sql`
+      SELECT
+        v."id",
+        v."version",
+        v."createdAt",
+        COUNT(e."id") FILTER (WHERE e."eventType" = 'flow_started') AS "started",
+        COUNT(e."id") FILTER (WHERE e."eventType" = 'flow_completed') AS "completed",
+        COUNT(e."id") FILTER (WHERE e."eventType" = 'flow_handoff') AS "handedOff",
+        COUNT(e."id") FILTER (WHERE e."eventType" = 'crm_action') AS "crmActions",
+        COUNT(e."id") FILTER (WHERE e."eventType" = 'delivery_failed') AS "deliveryFailures"
+      FROM "BotFlowVersion" v
+      LEFT JOIN "BotFlowEvent" e
+        ON e."flowVersionId" = v."id"
+       AND e."tenantId" = ${tenantId}
+       ${joinedOccurredFilter}
+       ${joinedChannelFilter}
+      WHERE v."tenantId" = ${tenantId}
+        AND v."flowId" = ${flowId}
+      GROUP BY v."id", v."version", v."createdAt"
+      ORDER BY v."version" DESC
+    `),
   ]);
 
-  const latestFlow = parseFlow(versionRows[0]?.definition);
-  const latestByNode = new Map(latest.nodes.map((item) => [item.nodeId, item]));
+  const selectedFlow = parseFlow(selectedRow?.definition);
+  const selectedByNode = new Map(summary.nodes.map((item) => [item.nodeId, item]));
   const nodeIds = new Set<string>([
-    ...Object.keys(latestFlow?.nodes ?? {}),
-    ...latest.nodes.map((item) => item.nodeId),
+    ...Object.keys(selectedFlow?.nodes ?? {}),
+    ...summary.nodes.map((item) => item.nodeId),
   ]);
   const nodes: FlowNodeReport[] = [...nodeIds].map((nodeId) => {
-    const node = latestFlow?.nodes[nodeId];
-    const stats = latestByNode.get(nodeId);
+    const node = selectedFlow?.nodes[nodeId];
+    const stats = selectedByNode.get(nodeId);
     const reached = stats?.reached ?? 0;
     const interactive = isInteractive(node);
     const interacted = interactive ? stats?.interacted ?? 0 : null;
@@ -155,15 +272,29 @@ export async function getBotFlowAnalyticsReport(flowId: string): Promise<BotFlow
 
   return {
     versions,
-    latestVersion,
-    latest,
+    selectedVersion,
+    filters,
+    summary,
     allTime,
     channels: channels.map((row) => ({
       channel: row.channel,
       conversations: n(row.conversations),
       completed: n(row.completed),
       handedOff: n(row.handedOff),
+      crmActions: n(row.crmActions),
     })),
     nodes,
+    trend: fillTrend(trendRows, filters),
+    actions: actionRows.map((row) => ({ action: row.action, label: actionLabel(row.action), count: n(row.count) })),
+    versionPerformance: versionRowsPerformance.map((row) => ({
+      id: row.id,
+      version: Number(row.version),
+      publishedAt: row.createdAt,
+      started: n(row.started),
+      completed: n(row.completed),
+      handedOff: n(row.handedOff),
+      crmActions: n(row.crmActions),
+      deliveryFailures: n(row.deliveryFailures),
+    })),
   };
 }
