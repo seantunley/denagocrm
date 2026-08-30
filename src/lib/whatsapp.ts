@@ -1,4 +1,14 @@
 import { prisma } from "./db";
+import {
+  WA_BODY_MAX,
+  WA_BUTTON_MAX,
+  WA_BUTTON_TITLE_MAX,
+  WA_LIST_BUTTON_MAX,
+  WA_LIST_DESCRIPTION_MAX,
+  WA_LIST_ROW_MAX,
+  WA_LIST_TITLE_MAX,
+  WA_TEXT_MAX,
+} from "./whatsappRendering";
 import { customerRecordTenantId } from "./customerRecordTenant";
 import { credentialOwnerTenantId, resolveIntegrationBundleForTenant, resolveTenantCredential } from "./settings";
 import { sendPushToAll } from "./push";
@@ -218,7 +228,7 @@ export async function sendWhatsAppText(
       messaging_product: "whatsapp",
       to: toDigits,
       type: "text",
-      text: { body: text },
+      text: { body: text.slice(0, WA_TEXT_MAX) },
     }),
   });
   if (!res.ok) {
@@ -329,13 +339,15 @@ export async function sendWhatsAppButtons(
   body: string,
   buttons: { id: string; title: string }[]
 ) {
+  // The limits are imported, not written out here, so the builder's preview
+  // cannot disagree with what actually gets sent. Same numbers, same behaviour.
   return sendInteractive(toDigits, {
     type: "button",
-    body: { text: body.slice(0, 1024) },
+    body: { text: body.slice(0, WA_BODY_MAX) },
     action: {
-      buttons: buttons.slice(0, 3).map((b) => ({
+      buttons: buttons.slice(0, WA_BUTTON_MAX).map((b) => ({
         type: "reply",
-        reply: { id: b.id.slice(0, 256), title: b.title.slice(0, 20) },
+        reply: { id: b.id.slice(0, 256), title: b.title.slice(0, WA_BUTTON_TITLE_MAX) },
       })),
     },
   });
@@ -350,15 +362,15 @@ export async function sendWhatsAppList(
 ) {
   return sendInteractive(toDigits, {
     type: "list",
-    body: { text: body.slice(0, 1024) },
+    body: { text: body.slice(0, WA_BODY_MAX) },
     action: {
-      button: buttonLabel.slice(0, 20),
+      button: buttonLabel.slice(0, WA_LIST_BUTTON_MAX),
       sections: [
         {
-          rows: rows.slice(0, 10).map((r) => ({
+          rows: rows.slice(0, WA_LIST_ROW_MAX).map((r) => ({
             id: r.id.slice(0, 200),
-            title: r.title.slice(0, 24),
-            ...(r.description ? { description: r.description.slice(0, 72) } : {}),
+            title: r.title.slice(0, WA_LIST_TITLE_MAX),
+            ...(r.description ? { description: r.description.slice(0, WA_LIST_DESCRIPTION_MAX) } : {}),
           })),
         },
       ],
