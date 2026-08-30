@@ -47,10 +47,12 @@ import type { BookingAction, ConditionOperator, FlowNode, SlotAction } from "@/l
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { cn } from "@/lib/utils";
 import { BuilderSaveStatus, BuilderWorkspaceBar, BuilderWorkspaceShell } from "@/components/builder-workspace";
+import FlowLintPanel from "@/components/FlowLintPanel";
+import { validateFlow, type FlowChannel, type FlowIssue } from "@/lib/flowValidation";
 
 type Pos = { x: number; y: number };
 type FlowData = { start: string; nodes: Record<string, FlowNode>; positions?: Record<string, Pos> };
-type RFData = { flow: FlowNode; isStart: boolean };
+type RFData = { flow: FlowNode; isStart: boolean; issues?: FlowIssue[] };
 export type FlowJourneyOption = { id: string; name: string };
 
 const BUILTIN_VARIABLES = [
@@ -102,8 +104,14 @@ function NodeCard({ data }: NodeProps) {
   const n = d.flow;
   const meta = TYPE_META[n.type];
   const Icon = meta.icon;
+  const errors = d.issues?.filter((issue) => issue.severity === "error").length ?? 0;
+  const warnings = (d.issues?.length ?? 0) - errors;
   return (
-    <div className={cn("w-56 rounded-xl border bg-slate-950/95 text-slate-100 shadow-xl", d.isStart ? "border-orange-400/70 ring-2 ring-orange-400/15" : meta.tone)}>
+    <div className={cn(
+      "relative w-56 rounded-xl border bg-slate-950/95 text-slate-100 shadow-xl",
+      errors ? "border-red-400/80 ring-2 ring-red-400/20" : warnings ? "border-amber-400/70 ring-2 ring-amber-400/15" : d.isStart ? "border-orange-400/70 ring-2 ring-orange-400/15" : meta.tone,
+    )}>
+      {(errors > 0 || warnings > 0) && <span className={cn("absolute -right-2 -top-2 z-10 grid min-w-6 place-items-center rounded-full border border-slate-950 px-1.5 py-0.5 text-[10px] font-bold text-white", errors ? "bg-red-500" : "bg-amber-500")}>{errors || warnings}<span className="sr-only">{errors ? "errors" : "warnings"}</span></span>}
       <Handle type="target" position={Position.Left} id="in" style={{ background: "#64748b" }} />
       <div className={cn("flex items-center gap-1.5 rounded-t-[11px] px-3 py-2 text-xs font-semibold", meta.header)}>
         <Icon className="size-3.5" />
@@ -194,7 +202,7 @@ function blankNode(type: FlowNode["type"], id: string): FlowNode {
   }
 }
 
-export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt }: { flowId: string; initial: FlowData; journeys?: FlowJourneyOption[]; updatedAt: string }) {
+export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt, channels }: { flowId: string; initial: FlowData; journeys?: FlowJourneyOption[]; updatedAt: string; channels: FlowChannel[] }) {
   const router = useRouter();
   const [start, setStart] = useState(initial.start);
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState<Node<RFData>>(
@@ -226,6 +234,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt 
   const [fullscreen, setFullscreen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const focusCanvasNode = useRef<(nodeId: string) => void>(() => {});
 
   const patch = useCallback((id: string, updater: (n: FlowNode) => FlowNode) => {
     setStatus("Unsaved changes");
@@ -326,6 +335,31 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt 
   }
 
   const selected = rfNodes.find((n) => n.id === selectedId)?.data.flow ?? null;
+  const currentFlow = useMemo(() => ({
+    start,
+    nodes: Object.fromEntries(rfNodes.map((node) => [node.id, node.data.flow])),
+  }), [rfNodes, start]);
+  const liveIssues = useMemo(() => validateFlow(currentFlow, channels), [channels, currentFlow]);
+  const issuesByNode = useMemo(() => {
+    const grouped = new Map<string, FlowIssue[]>();
+    for (const issue of liveIssues) {
+      if (!issue.nodeId) continue;
+      grouped.set(issue.nodeId, [...(grouped.get(issue.nodeId) ?? []), issue]);
+    }
+    return grouped;
+  }, [liveIssues]);
+  const displayNodes = useMemo(() => rfNodes.map((node) => ({
+    ...node,
+    data: { ...node.data, issues: issuesByNode.get(node.id) ?? [] },
+  })), [issuesByNode, rfNodes]);
+  const selectedIssues = selectedId ? issuesByNode.get(selectedId) ?? [] : [];
+
+  const focusIssue = useCallback((issue: FlowIssue) => {
+    if (!issue.nodeId || !rfNodes.some((node) => node.id === issue.nodeId)) return;
+    setSelectedId(issue.nodeId);
+    setInspectorOpen(true);
+    window.setTimeout(() => focusCanvasNode.current(issue.nodeId!), 0);
+  }, [rfNodes]);
   const nodeOptions = rfNodes.map((n) => ({ id: n.id, label: `${TYPE_META[n.data.flow.type].label}: ${summary(n.data.flow).slice(0, 24) || n.data.flow.type}` }));
   const knownVariables = useMemo(() => {
     const vars = new Set(BUILTIN_VARIABLES);
@@ -337,7 +371,9 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt 
   }, [rfNodes]);
 
   return (
-    <BuilderWorkspaceShell fullscreen={fullscreen} className="min-h-[720px] md:h-[calc(100dvh-8rem)] md:min-h-0">
+    <div className="space-y-4">
+      <FlowLintPanel issues={liveIssues} channels={channels} onSelectIssue={focusIssue} live />
+      <BuilderWorkspaceShell fullscreen={fullscreen} className="min-h-[720px] md:h-[calc(100dvh-8rem)] md:min-h-0">
       <BuilderWorkspaceBar title="Conversation flow" description="Connect nodes to shape customer conversations and CRM hand-offs." status={<BuilderSaveStatus status={status} />}>
         <div className="flex items-center rounded-lg border border-white/10 bg-white/[0.035] p-0.5">
           <button type="button" onClick={() => setPaletteOpen((value) => !value)} className={cn("flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs text-slate-300 hover:bg-white/7", paletteOpen && "bg-primary/15 text-primary")}>
@@ -386,7 +422,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt 
 
         <main className="min-w-0 flex-1 bg-[#0b0f0e] p-2 sm:p-3">
           <div className="h-full min-h-[32rem] overflow-hidden rounded-xl border border-white/[0.08] bg-[#0f1412]">
-            <ReactFlow nodes={rfNodes} edges={edges} nodeTypes={nodeTypes} onNodesChange={onNodesChange} onConnect={onConnect} onNodeClick={(_, node) => { setSelectedId(node.id); setInspectorOpen(true); }} onPaneClick={() => setSelectedId(null)} fitView proOptions={{ hideAttribution: true }}>
+            <ReactFlow nodes={displayNodes} edges={edges} nodeTypes={nodeTypes} onInit={(instance) => { focusCanvasNode.current = (nodeId) => { void instance.fitView({ nodes: [{ id: nodeId }], duration: 250, maxZoom: 1.35, padding: 0.45 }); }; }} onNodesChange={onNodesChange} onConnect={onConnect} onNodeClick={(_, node) => { setSelectedId(node.id); setInspectorOpen(true); }} onPaneClick={() => setSelectedId(null)} fitView proOptions={{ hideAttribution: true }}>
               <Background color="#25312d" gap={20} />
               <Controls className="!border-white/10 !bg-[#18201d] !text-white" />
             </ReactFlow>
@@ -397,13 +433,24 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt 
           <aside className="w-80 shrink-0 overflow-y-auto border-l border-white/[0.08] bg-[#111614] max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-[81] max-md:max-h-[78dvh] max-md:w-auto max-md:rounded-t-3xl max-md:border-t max-md:shadow-[0_-24px_70px_rgba(0,0,0,.55)]">
             <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/[0.08] bg-[#111614]/95 px-4 py-3 backdrop-blur"><div><p className="text-sm font-semibold text-white">Inspector</p><p className="text-xs text-slate-400">Configure the selected node</p></div><button type="button" onClick={() => setInspectorOpen(false)} className="grid size-8 place-items-center rounded-lg text-slate-400 hover:bg-white/5 hover:text-white"><X className="size-4" /><span className="sr-only">Close inspector</span></button></div>
             <div className="p-4 pb-[max(1rem,env(safe-area-inset-bottom))] space-y-5">
-              {!selected ? <p className="text-sm leading-6 text-slate-400">Select a node to edit it. Drag from a node&apos;s output handle to another node to create a connection.</p> : <NodePanel key={selected.id} node={selected} isStart={selected.id === start} nodeOptions={nodeOptions.filter((option) => option.id !== selected.id)} variables={knownVariables} journeys={journeys} onChange={(next) => patch(selected.id, () => next)} onDelete={() => removeNode(selected.id)} onMakeStart={() => markStart(selected.id)} />}
+              {!selected ? <p className="text-sm leading-6 text-slate-400">Select a node to edit it. Drag from a node&apos;s output handle to another node to create a connection.</p> : <><NodeIssues issues={selectedIssues} /><NodePanel key={selected.id} node={selected} isStart={selected.id === start} nodeOptions={nodeOptions.filter((option) => option.id !== selected.id)} variables={knownVariables} journeys={journeys} onChange={(next) => patch(selected.id, () => next)} onDelete={() => removeNode(selected.id)} onMakeStart={() => markStart(selected.id)} /></>}
               <VariablesPanel variables={knownVariables} />
             </div>
           </aside>
         )}
       </div>
-    </BuilderWorkspaceShell>
+      </BuilderWorkspaceShell>
+    </div>
+  );
+}
+
+function NodeIssues({ issues }: { issues: FlowIssue[] }) {
+  if (!issues.length) return null;
+  return (
+    <div className="space-y-2 rounded-xl border border-white/10 bg-white/[0.025] p-3">
+      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Checks for this node</p>
+      {issues.map((issue, index) => <p key={`${issue.code}-${issue.channel ?? "all"}-${index}`} className={cn("text-xs leading-5", issue.severity === "error" ? "text-red-300" : "text-amber-300")}>{issue.message}{issue.channel ? <span className="block text-[10px] uppercase tracking-wide text-slate-500">{issue.channel}</span> : null}</p>)}
+    </div>
   );
 }
 
