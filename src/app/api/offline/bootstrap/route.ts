@@ -117,7 +117,22 @@ export async function GET() {
         orderBy: { deliveryScheduledFor: "asc" },
         take: 250,
       }),
+      /*
+       * OPEN STAGES ONLY, because those are the only ones a replay accepts.
+       *
+       * `createLead` and `updateLead` both run the stage through
+       * `validateOpenStage`, which refuses a closed one outright — "Use Mark won
+       * or Mark lost instead". Shipping every stage put Won and Lost in the
+       * offline pickers, so a field user could choose one, be told the lead was
+       * saved on the device, watch the form clear, and have the replay refuse it
+       * with the typed details gone.
+       *
+       * Won and lost are not edits to a stage field anyway; they are their own
+       * actions, with their own permissions and their own outcome fields, and
+       * neither exists offline.
+       */
       prisma.pipelineStage.findMany({
+        where: { isClosed: false },
         select: { id: true, name: true },
         orderBy: { order: "asc" },
       }),

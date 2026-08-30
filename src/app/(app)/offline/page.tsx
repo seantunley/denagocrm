@@ -116,7 +116,25 @@ export default function OfflineWorkspacePage() {
                 {snapshot.leads.map((lead) => (
                   <details key={lead.id} className="card">
                     <summary className="cursor-pointer"><span className="font-semibold">{lead.title}</span><span className="ml-2 text-sm text-muted-foreground">{lead.name} · {lead.stage}</span></summary>
-                    {can.leadEdit ? (
+                    {/*
+                      A LEAD IN A CLOSED STAGE CANNOT BE UPDATED AT ALL.
+
+                      `updateLead` runs the submitted stage through
+                      validateOpenStage UNCONDITIONALLY — not only when the stage
+                      changes — so every edit to a won or lost lead is refused
+                      whatever else was typed. The snapshot now carries only OPEN
+                      stages, which makes "this lead's stage is not among them"
+                      the exact test for a closed one, with no extra field.
+
+                      Offering the form anyway would take the work, say it was
+                      saved on the device, and lose it on replay.
+                    */}
+                    {!can.leadEdit ? readOnly("leads") : !snapshot.options.stages.some((stage) => stage.id === lead.stageId) ? (
+                      <p className="mt-3 text-xs text-amber-200">
+                        This lead is {lead.stage.toLowerCase()}. Closed leads cannot be edited offline —
+                        reopen it online first.
+                      </p>
+                    ) : (
                     <form className="mt-3 grid gap-2 sm:grid-cols-2" onSubmit={(event) => void queue(event, { type: "lead.update", recordId: lead.id, baseVersion: lead.updatedAt })}>
                       <input name="name" required className="input" defaultValue={lead.name} />
                       <input name="phone" className="input" defaultValue={lead.phone ?? ""} placeholder="Phone" />
@@ -140,7 +158,7 @@ export default function OfflineWorkspacePage() {
                       <input type="hidden" name="source" value={lead.source} /><input type="hidden" name="color" value={lead.color ?? ""} /><input type="hidden" name="quantity" value={lead.quantity} /><input type="hidden" name="contactId" value={lead.contactId ?? ""} /><input type="hidden" name="assignedToId" value={lead.assignedToId ?? ""} />
                       <button className="btn-secondary btn-sm sm:col-span-2">Queue lead changes</button>
                     </form>
-                    ) : readOnly("leads")}
+                    )}
                   </details>
                 ))}
               </div>

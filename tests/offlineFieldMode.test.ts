@@ -437,3 +437,46 @@ test("AN EXPIRED SESSION LEAVES THE OUTBOX REPLAYABLE", () => {
   // is exactly why `failed` was a dead end.
   assert.match(provider, /entry\.status === "pending" \|\| entry\.status === "syncing"/);
 });
+
+/* ── the pickers must only offer stages a replay accepts ─────────────────── */
+
+test("OFFLINE LEAD PICKERS OFFER OPEN STAGES ONLY", () => {
+  /*
+   * createLead and updateLead both run the chosen stage through
+   * validateOpenStage, which refuses a closed one outright — "Use Mark won or
+   * Mark lost instead". Shipping every stage put Won and Lost in the offline
+   * pickers: choose one, be told the lead was saved on the device, watch the
+   * form clear, and have the replay refuse it with the details gone.
+   *
+   * Won and lost are not edits to a stage field anyway — they are their own
+   * actions, with their own permissions and outcome fields, and neither exists
+   * offline.
+   */
+  const bootstrap = src("src/app/api/offline/bootstrap/route.ts");
+  const stageQuery = bootstrap.slice(bootstrap.indexOf("prisma.pipelineStage.findMany"));
+  assert.match(stageQuery.slice(0, 200), /where: \{ isClosed: false \}/);
+  // The refusal being avoided must still be there.
+  assert.match(src("src/app/actions/leads.ts"), /Use Mark won or Mark lost instead/);
+  assert.match(src("src/app/actions/leads.ts"), /await validateOpenStage\(data\.stageId\)/);
+});
+
+test("A LEAD ALREADY IN A CLOSED STAGE IS NOT OFFERED FOR EDITING", () => {
+  /*
+   * updateLead validates the submitted stage UNCONDITIONALLY — not only when it
+   * changes — so every edit to a won or lost lead is refused whatever else was
+   * typed. Shipping only open stages makes "this lead's stage is not among them"
+   * the exact test for a closed one, with no extra snapshot field to keep in
+   * step.
+   */
+  const workspace = src("src/app/(app)/offline/page.tsx");
+  assert.match(
+    workspace,
+    /!snapshot\.options\.stages\.some\(\(stage\) => stage\.id === lead\.stageId\)/,
+    "the closed case must be detected from the shipped options",
+  );
+  assert.match(workspace, /Closed leads cannot be edited offline/, "and explained rather than silently dropped");
+  // The permission gate still comes first — a role that cannot edit sees that
+  // reason, not a stage explanation.
+  const gate = workspace.slice(workspace.indexOf("{!can.leadEdit ?"), workspace.indexOf("Closed leads cannot be edited offline"));
+  assert.match(gate, /^\{!can\.leadEdit \? readOnly\("leads"\)/);
+});
