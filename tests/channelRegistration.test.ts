@@ -32,7 +32,7 @@ const read = (rel: string) => readFileSync(join(root, rel), "utf8");
 // stopped checking ownership would steal the row here and fail the assertions,
 // rather than being quietly saved by a helpful fake.
 
-type Call = { op: "find" | "create" | "update" | "disable"; channel: string; externalId: string; data?: unknown };
+type Call = { op: "find" | "create" | "update" | "disable" | "claim"; channel: string; externalId: string; data?: unknown };
 
 function fakeStore(seed: Record<string, ExistingIdentity> = {}, opts: { failCreateOnce?: boolean } = {}) {
   const rows = new Map(Object.entries(seed));
@@ -88,6 +88,21 @@ function fakeStore(seed: Record<string, ExistingIdentity> = {}, opts: { failCrea
       const existing = rows.get(`${channel}:${externalId}`);
       if (!existing || existing.tenantId !== tenantId) return;
       rows.set(`${channel}:${externalId}`, { ...existing, disabledAt: new Date("2026-08-30") });
+    },
+    async claim(channel, externalId, tenantId, label) {
+      calls.push({ op: "claim", channel, externalId });
+      const existing = rows.get(`${channel}:${externalId}`);
+      // The real store guards on `disabledAt IS NOT NULL` inside the write, so
+      // this one does too. An implementation that dropped that guard would take
+      // a LIVE endpoint from another tenant here as well, and the assertions
+      // would catch it.
+      if (!existing || existing.disabledAt === null) return false;
+      rows.set(`${channel}:${externalId}`, {
+        tenantId,
+        disabledAt: null,
+        label: label ?? existing.label,
+      });
+      return true;
     },
   };
 
@@ -320,17 +335,48 @@ test("retirement never touches another tenant's rows", async () => {
   assert.equal(f.rows.get("whatsapp:THEIRS")?.disabledAt, null);
 });
 
-test("a retired endpoint can then be claimed by the workspace it moved to", async () => {
+test("A RETIRED ENDPOINT CHANGES HANDS — otherwise it is dead to everyone", async () => {
+  /*
+   * This test previously asserted the opposite, and the reasoning was wrong.
+   *
+   * I called refusing the transfer "deliberate", on the grounds that moving an
+   * endpoint between workspaces should not happen silently. But retirement
+   * disables the row, and `resolveChannelTenant` ignores disabled rows — so the
+   * refusal left the endpoint owned by a tenant that could not receive on it and
+   * claimable by nobody. Permanently dead: strictly worse than the bug this
+   * module exists to fix, and reachable through the ordinary "disconnect, then
+   * connect somewhere else" path.
+   */
   const f = fakeStore({ [`whatsapp:${WA.externalId}`]: { tenantId: "tenant_a", disabledAt: null, label: null } });
 
   // tenant_a disconnects it...
   await retireEndpoints("tenant_a", "whatsapp", [], { store: f.store });
   // ...and tenant_b, which now holds the number at Meta, connects it.
-  // The row still names tenant_a, so this is the case that MUST be refused —
-  // retirement disables, it does not free the unique key. Transfer is a
-  // deliberate act, not something a credential save may perform silently.
+  const outcomes = await registerChannelEndpoints("tenant_b", [WA], { store: f.store });
+
+  assert.equal(outcomes[0].status, "registered");
+  const row = f.rows.get(`whatsapp:${WA.externalId}`);
+  assert.equal(row?.tenantId, "tenant_b");
+  assert.equal(row?.disabledAt, null, "and it must be live again, or it still routes nothing");
+});
+
+test("an ACTIVE endpoint is still never taken, even by a tenant that wants it", async () => {
+  // The other half of the same rule. Only retirement releases a claim.
+  const f = fakeStore({ [`whatsapp:${WA.externalId}`]: { tenantId: "tenant_a", disabledAt: null, label: null } });
+  const outcomes = await registerChannelEndpoints("tenant_b", [WA], { store: f.store });
+
+  assert.equal(outcomes[0].status, "claimed_by_another_tenant");
+  assert.equal(f.rows.get(`whatsapp:${WA.externalId}`)?.tenantId, "tenant_a");
+});
+
+test("losing the race to the previous owner reconnecting means they keep it", async () => {
+  // `claim` re-checks `disabledAt IS NOT NULL` inside the write. The fake store
+  // enforces the same guard, so an implementation that dropped it would take a
+  // live endpoint here too.
+  const f = fakeStore({ [`whatsapp:${WA.externalId}`]: { tenantId: "tenant_a", disabledAt: null, label: null } });
   const outcomes = await registerChannelEndpoints("tenant_b", [WA], { store: f.store });
   assert.equal(outcomes[0].status, "claimed_by_another_tenant");
+  assert.equal(f.calls.filter((c) => c.op === "claim").length, 0, "an active row is never even attempted");
 });
 
 // ── Cost ────────────────────────────────────────────────────────────────────
@@ -373,6 +419,49 @@ test("an existing row missing its label gets one filled in", async () => {
     store: f.store,
   });
   assert.equal(f.rows.get(`whatsapp:${WA.externalId}`)?.label, "Denago EV");
+});
+
+// ── The cron sweep's budget ─────────────────────────────────────────────────
+
+test("a provider call is bounded by the caller's remaining budget", () => {
+  // The sweep checked its deadline only BEFORE starting a tenant, which bounds
+  // when a call may begin but not how long it runs — so a discovery started at
+  // the edge of a 6s window could still block for the full 10s Graph timeout and
+  // overrun the automations route, taking the maintenance behind it with it.
+  const source = read("src/lib/channelEndpoints.ts");
+  assert.match(source, /function boundedTimeout/);
+  assert.match(source, /AbortSignal\.timeout\(boundedTimeout\(/);
+  assert.doesNotMatch(
+    source,
+    /AbortSignal\.timeout\(GRAPH_TIMEOUT_MS\)/,
+    "a fixed timeout ignores the budget the caller was given",
+  );
+});
+
+test("running out of discovery slots does not skip the tenant's WhatsApp registration", () => {
+  // It used to `continue` past the whole tenant — skipping the cheap WhatsApp
+  // half, which is the entire reason the backstop exists.
+  const source = read("src/lib/channelRegistration.ts");
+  assert.match(source, /const allowDiscovery = wants && discoveriesLeft > 0;/);
+  assert.match(
+    source,
+    /reconcileTenantChannels\(tenant\.id, \{[\s\S]*?allowDiscovery,/,
+    "the tenant is still reconciled; only the provider call is rationed",
+  );
+});
+
+test("a tenant with no Meta token never consumes a discovery slot", () => {
+  // It is missing both Meta rows and always will be, so counting it as a
+  // candidate burned a slot every tick and starved tenants that needed one.
+  const source = read("src/lib/channelRegistration.ts");
+  assert.match(source, /async function wantsMetaDiscovery/);
+  assert.match(source, /META_PAGE_ACCESS_TOKEN"\);\s*\r?\n\s*return Boolean\(token/);
+});
+
+test("the sweep iterates tenants in a stable order", () => {
+  // A truncated sweep should resume predictably rather than depending on
+  // whatever order Postgres felt like returning.
+  assert.match(read("src/lib/channelRegistration.ts"), /orderBy: \{ id: "asc" \}/);
 });
 
 // ── Which keys trigger it ───────────────────────────────────────────────────

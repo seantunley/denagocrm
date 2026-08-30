@@ -59,6 +59,21 @@ const GRAPH = "https://graph.facebook.com/v21.0";
 export const GRAPH_TIMEOUT_MS = 10_000;
 
 /**
+ * A provider call must never outlive the budget its caller was given.
+ *
+ * The cron sweep checks its deadline BEFORE starting a tenant, which bounds when
+ * a call may begin but not how long it then runs — so a discovery started at the
+ * edge of a 6-second window could still block for the full 10-second Graph
+ * timeout and overrun the route, taking the AI-health check, backup watchdog and
+ * log pruning behind it with it. Callers pass what they have left; a floor of
+ * one second keeps a nearly-spent budget from producing an instantly-aborted
+ * request that just wastes the attempt.
+ */
+function boundedTimeout(ms: number): number {
+  return Math.max(1_000, Math.min(GRAPH_TIMEOUT_MS, Math.floor(ms)));
+}
+
+/**
  * The row store, injected.
  *
  * Same separation as `commitVerifiedCredentials` and `resolveTenantCredential`:
@@ -92,6 +107,20 @@ export type ChannelIdentityStore = {
   ): Promise<void>;
   /** Retire one of this tenant's rows. Never deletes — see `retireEndpoints`. */
   disable(channel: ChannelKind, externalId: string, tenantId: string): Promise<void>;
+  /**
+   * Take over a RETIRED row for `tenantId`, returning whether it was taken.
+   *
+   * Must re-check `disabledAt IS NOT NULL` inside the write. The check that led
+   * here was a separate read, so the previous owner may have reconnected in
+   * between — and losing that race must mean "they kept it", never "we silently
+   * took a live endpoint from them".
+   */
+  claim(
+    channel: ChannelKind,
+    externalId: string,
+    tenantId: string,
+    label: string | null,
+  ): Promise<boolean>;
 };
 
 /** Prisma's unique-constraint violation. */
@@ -106,13 +135,25 @@ export function isUniqueViolation(error: unknown): boolean {
  * already ours and unchanged is not written at all, and no provider call is
  * made for it.
  *
- * ── WHAT IT WILL NOT DO ─────────────────────────────────────────────────────
+ * ── ACTIVE IS PROTECTED; RETIRED IS FREE ────────────────────────────────────
  *
- * It never takes an endpoint away from another tenant. `@@unique([channel,
- * externalId])` means one endpoint belongs to exactly one workspace, so a
- * second tenant presenting the same phone-number id is either a mistake or an
- * attempt to intercept somebody's messages. Both are refused and reported;
- * neither is served by moving the row.
+ * It never takes an endpoint away from a tenant that is still USING it.
+ * `@@unique([channel, externalId])` means one endpoint belongs to exactly one
+ * workspace, so a second tenant presenting the same live phone-number id is
+ * either a mistake or an attempt to intercept somebody's messages. Both are
+ * refused and reported.
+ *
+ * A RETIRED row is the opposite case and must not be treated the same way.
+ * `retireEndpoints` disables a row when its credentials go away, and
+ * `resolveChannelTenant` then ignores it — so a disabled row routes nothing to
+ * anybody. Refusing a new claim on it would leave the endpoint owned by a tenant
+ * that cannot receive on it and claimable by nobody: permanently dead, which is
+ * strictly worse than the bug this module was written to fix.
+ *
+ * So a disabled row changes hands. That is what "retired" has to mean for a
+ * number genuinely transferred between workspaces, and it is safe precisely
+ * because retirement only ever happens when the previous owner's credentials
+ * stopped naming it.
  */
 export async function registerChannelEndpoints(
   tenantId: string,
@@ -151,7 +192,20 @@ async function registerOne(
 
   if (existing) {
     if (existing.tenantId !== tenantId) {
-      return { channel, externalId, status: "claimed_by_another_tenant", ownedBy: existing.tenantId };
+      // Still in use by them — refuse. See "ACTIVE IS PROTECTED" above.
+      if (existing.disabledAt === null) {
+        return { channel, externalId, status: "claimed_by_another_tenant", ownedBy: existing.tenantId };
+      }
+      // Retired by them, so it routes nothing to anybody. Take it over — the
+      // `disabledAt IS NOT NULL` guard inside `claim` re-checks that under the
+      // write, so a concurrent re-enable by the previous owner wins instead of
+      // being silently overwritten.
+      const claimed = await store.claim(channel, externalId, tenantId, await labelFor(endpoint));
+      if (claimed) return { channel, externalId, status: "registered" };
+      const now = await store.find(channel, externalId);
+      return now && now.tenantId !== tenantId
+        ? { channel, externalId, status: "claimed_by_another_tenant", ownedBy: now.tenantId }
+        : { channel, externalId, status: "already_ours" };
     }
     // Ours already. Re-enable it if a previous disconnect disabled it, and fill
     // a label in if it has none — but never churn the row when nothing has
@@ -263,12 +317,13 @@ export async function whatsappLabelFrom(
   phoneNumberId: string,
   accessToken: string | null,
   fetchImpl: FetchLike = fetch,
+  timeoutMs: number = GRAPH_TIMEOUT_MS,
 ): Promise<string | null> {
   if (!accessToken) return null;
   try {
     const res = await fetchImpl(`${GRAPH}/${phoneNumberId}?fields=display_phone_number,verified_name`, {
       headers: { Authorization: `Bearer ${accessToken}` },
-      signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS),
+      signal: AbortSignal.timeout(boundedTimeout(timeoutMs)),
     });
     if (!res.ok) return null;
     const body = (await res.json()) as { display_phone_number?: string; verified_name?: string };
@@ -301,7 +356,7 @@ export type MetaDiscovery = { ok: true; endpoints: ChannelEndpoint[] } | { ok: f
  */
 export async function metaEndpointsFrom(
   pageAccessToken: string | null | undefined,
-  deps: { fetch?: FetchLike } = {},
+  deps: { fetch?: FetchLike; timeoutMs?: number } = {},
 ): Promise<MetaDiscovery> {
   const token = (pageAccessToken ?? "").trim();
   // No token is an ANSWER: this tenant has no Meta credentials, so it should
@@ -312,7 +367,7 @@ export async function metaEndpointsFrom(
   try {
     const res = await fetchImpl(`${GRAPH}/me/accounts?fields=id,name,instagram_business_account{id,username}`, {
       headers: { Authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS),
+      signal: AbortSignal.timeout(boundedTimeout(deps.timeoutMs ?? GRAPH_TIMEOUT_MS)),
     });
     if (!res.ok) return { ok: false };
     const body = (await res.json()) as {

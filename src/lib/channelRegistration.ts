@@ -70,6 +70,16 @@ const store: ChannelIdentityStore = {
       data: { disabledAt: new Date() },
     });
   },
+  claim: async (channel, externalId, tenantId, label) => {
+    // `disabledAt: { not: null }` is the race guard: the caller decided this row
+    // was retired from a separate read, and the previous owner may have
+    // reconnected since. Losing that race must mean they kept it.
+    const { count } = await basePrisma.channelIdentity.updateMany({
+      where: { channel, externalId, disabledAt: { not: null } },
+      data: { tenantId, disabledAt: null, ...(label !== null ? { label } : {}) },
+    });
+    return count === 1;
+  },
 };
 
 /**
@@ -93,7 +103,7 @@ const store: ChannelIdentityStore = {
  */
 export async function reconcileTenantChannels(
   tenantId: string,
-  opts: { force?: boolean; fetch?: FetchLike; allowDiscovery?: boolean } = {},
+  opts: { force?: boolean; fetch?: FetchLike; allowDiscovery?: boolean; timeoutMs?: number } = {},
 ): Promise<RegistrationOutcome[]> {
   try {
     const fetchImpl = opts.fetch ?? fetch;
@@ -101,6 +111,11 @@ export async function reconcileTenantChannels(
     const endpoints: ChannelEndpoint[] = [];
 
     // ── WhatsApp ────────────────────────────────────────────────────────────
+    //
+    // ALWAYS. This half needs no provider call to identify its endpoint, so it
+    // is never the thing worth rationing — and it is the half the backstop
+    // exists for. Gating it behind a Meta discovery allowance is how a tenant
+    // whose WhatsApp row is missing could go unrepaired indefinitely.
     const phoneNumberId = await resolveTenantCredential(tenantId, "WA_PHONE_NUMBER_ID");
     const accessToken = await resolveTenantCredential(tenantId, "WA_ACCESS_TOKEN");
     // Both halves are required for the channel to work at all, so clearing
@@ -110,7 +125,7 @@ export async function reconcileTenantChannels(
     if (whatsapp) {
       endpoints.push({
         ...whatsapp,
-        resolveLabel: () => whatsappLabelFrom(whatsapp.externalId, accessToken, fetchImpl),
+        resolveLabel: () => whatsappLabelFrom(whatsapp.externalId, accessToken, fetchImpl, opts.timeoutMs),
       });
     }
     // Authoritative either way: the credential itself says what WhatsApp
@@ -129,7 +144,7 @@ export async function reconcileTenantChannels(
     const needsMeta = opts.force || (await missingMetaChannels(tenantId)).length > 0;
     if (needsMeta && discoveryAllowed) {
       const pageToken = await resolveTenantCredential(tenantId, "META_PAGE_ACCESS_TOKEN");
-      const discovery = await metaEndpointsFrom(pageToken, { fetch: fetchImpl });
+      const discovery = await metaEndpointsFrom(pageToken, { fetch: fetchImpl, timeoutMs: opts.timeoutMs });
       if (discovery.ok) {
         endpoints.push(...discovery.endpoints);
         // Only when Meta actually answered. A failed call returns no endpoints,
@@ -202,27 +217,50 @@ export async function reconcileAllTenantChannels(
   const deadline = Date.now() + (opts.deadlineMs ?? 8_000);
   let discoveriesLeft = opts.maxDiscoveries ?? 3;
 
-  const tenants = await basePrisma.tenant.findMany({ where: { active: true }, select: { id: true } });
+  // Ordered, so a truncated sweep resumes predictably rather than depending on
+  // whatever order Postgres felt like returning.
+  const tenants = await basePrisma.tenant.findMany({
+    where: { active: true },
+    select: { id: true },
+    orderBy: { id: "asc" },
+  });
   let registered = 0;
   let retired = 0;
   let conflicts = 0;
   let skipped = 0;
 
   for (const tenant of tenants) {
-    if (Date.now() >= deadline) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
       skipped += 1;
       continue;
     }
-    // Ask before spending the budget: a tenant that needs no discovery is a
-    // few indexed reads and cannot block, so it always runs.
-    const wantsDiscovery = (await missingMetaChannels(tenant.id).catch(() => [])).length > 0;
-    if (wantsDiscovery && discoveriesLeft <= 0) {
-      skipped += 1;
-      continue;
-    }
-    if (wantsDiscovery) discoveriesLeft -= 1;
 
-    const outcomes = await reconcileTenantChannels(tenant.id, { allowDiscovery: wantsDiscovery });
+    /*
+     * DISCOVERY IS RATIONED; RECONCILIATION IS NOT.
+     *
+     * This used to `continue` past the whole tenant once the discovery
+     * allowance ran out — skipping the cheap WhatsApp registration that is the
+     * entire reason the backstop exists. And a tenant with no Meta token can
+     * never acquire its Meta rows, so it wanted discovery on EVERY tick and
+     * consumed a slot forever; with more of those than the allowance, tenants
+     * further down the list would never have been reached at all.
+     *
+     * So the allowance now gates only the provider call. Every tenant is still
+     * reconciled, and `wantsMetaDiscovery` asks whether a Meta token exists
+     * before counting the tenant as wanting anything — a tenant that has no
+     * Meta integration is not perpetually waiting for one.
+     */
+    const wants = await wantsMetaDiscovery(tenant.id).catch(() => false);
+    const allowDiscovery = wants && discoveriesLeft > 0;
+    if (allowDiscovery) discoveriesLeft -= 1;
+    if (wants && !allowDiscovery) skipped += 1;
+
+    const outcomes = await reconcileTenantChannels(tenant.id, {
+      allowDiscovery,
+      // What is left of the sweep's budget, so a call cannot outlive it.
+      timeoutMs: remaining,
+    });
     for (const outcome of outcomes) {
       if (outcome.status === "registered" || outcome.status === "reenabled") registered += 1;
       if (outcome.status === "retired") retired += 1;
@@ -231,6 +269,21 @@ export async function reconcileAllTenantChannels(
   }
 
   return { tenants: tenants.length, registered, retired, conflicts, skipped };
+}
+
+/**
+ * Whether this tenant has Meta channels left to discover AND the credential
+ * that could discover them.
+ *
+ * The token check is what stops a tenant with no Meta integration from wanting
+ * discovery forever: it is missing both Meta rows and always will be, so
+ * counting it as a candidate burned a slot on every tick and starved tenants
+ * that genuinely needed one.
+ */
+async function wantsMetaDiscovery(tenantId: string): Promise<boolean> {
+  if ((await missingMetaChannels(tenantId)).length === 0) return false;
+  const token = await resolveTenantCredential(tenantId, "META_PAGE_ACCESS_TOKEN");
+  return Boolean(token && token.trim());
 }
 
 /**
