@@ -12,6 +12,7 @@ import {
   snoozeDateError,
 } from "@/lib/attention/score";
 import type { AttentionSignalKind } from "@/lib/attention/score";
+import ModalPortal from "@/components/ui/modal-portal";
 
 /**
  * The two ways off the Attention Centre, in one dialog.
@@ -113,6 +114,7 @@ export default function SetAsideAttentionButton({
       </button>
 
       {open && (
+        <ModalPortal>
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
           onPointerDown={(event) => event.target === event.currentTarget && setOpen(false)}
@@ -180,6 +182,7 @@ export default function SetAsideAttentionButton({
             </div>
           </div>
         </div>
+        </ModalPortal>
       )}
     </>
   );
