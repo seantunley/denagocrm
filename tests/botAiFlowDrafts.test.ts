@@ -16,19 +16,22 @@ test("AI flow generation is a draft-only pure generator with a strict JSON contr
   assert.doesNotMatch(code, /prisma\./, "the model-generation helper must not write the database");
 });
 
-test("only compiler-clean generated graphs may replace the saved draft", () => {
+test("only compiler-clean generated graphs may become signed proposals", () => {
   const action = src("src/app/actions/flowAi.ts");
   assert.match(action, /const errors = flowErrors\(generated\.issues\)/);
   const errorsAt = action.indexOf("const errors = flowErrors");
-  const updateAt = action.indexOf("prisma.botFlow.updateMany", errorsAt);
-  assert.ok(errorsAt >= 0 && updateAt > errorsAt);
+  const proposalAt = action.indexOf("signFlowProposal", errorsAt);
+  assert.ok(errorsAt >= 0 && proposalAt > errorsAt);
   assert.match(action, /if \(errors\.length\)/);
+  const generate = action.slice(action.indexOf("export async function generateFlowDraftAction"), action.indexOf("export async function applyFlowDraftProposalAction"));
+  assert.doesNotMatch(generate, /botFlow\.updateMany/, "generation must not write the draft");
   assert.doesNotMatch(action, /publishFlowSnapshot|setActiveFlow/);
 });
 
-test("AI drafting cannot overwrite a human save that lands concurrently", () => {
+test("applying an AI proposal cannot overwrite a human save that lands concurrently", () => {
   const action = src("src/app/actions/flowAi.ts");
-  assert.match(action, /where: \{ id: flowId, definition: originalDefinition, \.\.\.scope \}/);
+  assert.match(action, /flowDefinitionHash\(row\.definition\) !== proposal\.baseHash/);
+  assert.match(action, /where: \{ id: flowId, definition: row\.definition, \.\.\.scope \}/);
   assert.match(action, /if \(updated\.count !== 1\)/);
   assert.match(action, /Nothing was overwritten/);
 });
@@ -43,10 +46,26 @@ test("generated graphs are fenced to existing deterministic node capabilities", 
   assert.match(code, /Use handoff when the requested action is unsupported/);
 });
 
-test("the editor warns that AI replaces only the saved draft and still requires review/publish", () => {
+test("the editor makes generation, review and apply separate decisions", () => {
   const ui = src("src/components/FlowAiDraftForm.tsx");
-  assert.match(ui, /saved draft only/);
-  assert.match(ui, /same channel compiler/);
-  assert.match(ui, /separate Publish action/);
+  assert.match(ui, /does <b>not<\/b> change the draft/);
+  assert.match(ui, /Review AI proposal/);
+  assert.match(ui, /Apply proposal/);
+  assert.match(ui, /Reject/);
+  assert.match(ui, /Publishing remains separate/);
   assert.match(src("src/app/(app)/bot-builder/[id]/page.tsx"), /<FlowAiDraftForm flowId=\{row\.id\} \/>/);
+});
+
+test("proposal application revalidates the graph and external references", () => {
+  const action = src("src/app/actions/flowAi.ts");
+  assert.match(action, /verifyFlowProposal\(token\)/);
+  assert.match(action, /validateFlowForEnabledChannels\(flow\)/);
+  assert.match(action, /proposal\.ownerId !== owner\.id/);
+  assert.match(action, /invalid or expired/);
+});
+
+test("the AI node contract includes every fallible outcome route", () => {
+  const generator = src("src/lib/flowAiDraft.ts");
+  for (const field of ["failureText", "failureNext", "unavailableNext", "booking_identity"]) assert.match(generator, new RegExp(field));
+  assert.match(generator, /Every fallible booking, slots or journey action needs an honest failure route/);
 });
