@@ -100,6 +100,12 @@ export async function clearTenantCredentialOverride(key: string): Promise<void> 
     // Reverting to the platform default is just as much a change to what the
     // bundle IS — the old verdict was about the override that just went away.
     await invalidateVerificationForKey(tenantId, key);
+    // And it changes which endpoints this tenant owns. Clearing an override
+    // must RETIRE the endpoint it named, or the row keeps routing inbound
+    // events here and blocks every other workspace from ever claiming it.
+    if (keyNamesAnInboundEndpoint(key)) {
+      await reconcileTenantChannels(tenantId, { force: true }).catch(() => undefined);
+    }
     await logAuditStrict({
       action: "tenant_credential.override_cleared",
       summary: `Cleared the tenant override for ${key}`,

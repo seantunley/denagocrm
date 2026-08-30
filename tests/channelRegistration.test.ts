@@ -8,6 +8,7 @@ import {
   keyNamesAnInboundEndpoint,
   metaEndpointsFrom,
   registerChannelEndpoints,
+  retireEndpoints,
   whatsappEndpointFrom,
   type ChannelIdentityStore,
   type ExistingIdentity,
@@ -31,7 +32,7 @@ const read = (rel: string) => readFileSync(join(root, rel), "utf8");
 // stopped checking ownership would steal the row here and fail the assertions,
 // rather than being quietly saved by a helpful fake.
 
-type Call = { op: "find" | "create" | "update"; channel: string; externalId: string; data?: unknown };
+type Call = { op: "find" | "create" | "update" | "disable"; channel: string; externalId: string; data?: unknown };
 
 function fakeStore(seed: Record<string, ExistingIdentity> = {}, opts: { failCreateOnce?: boolean } = {}) {
   const rows = new Map(Object.entries(seed));
@@ -70,6 +71,24 @@ function fakeStore(seed: Record<string, ExistingIdentity> = {}, opts: { failCrea
         label: data.label ?? existing.label,
       });
     },
+    async listForTenant(tenantId, channels) {
+      const wanted = new Set(channels);
+      return [...rows.entries()]
+        .filter(([key, row]) => {
+          const channel = key.split(":")[0];
+          return row.tenantId === tenantId && row.disabledAt === null && wanted.has(channel as never);
+        })
+        .map(([key]) => {
+          const [channel, externalId] = key.split(":");
+          return { channel: channel as never, externalId };
+        });
+    },
+    async disable(channel, externalId, tenantId) {
+      calls.push({ op: "disable", channel, externalId });
+      const existing = rows.get(`${channel}:${externalId}`);
+      if (!existing || existing.tenantId !== tenantId) return;
+      rows.set(`${channel}:${externalId}`, { ...existing, disabledAt: new Date("2026-08-30") });
+    },
   };
 
   return {
@@ -101,7 +120,7 @@ test("a pasted phone-number id is trimmed, because a stray space is a different 
 });
 
 test("a Meta page token yields both the Page and its Instagram account", async () => {
-  const endpoints = await metaEndpointsFrom("EAAtoken", {
+  const discovery = await metaEndpointsFrom("EAAtoken", {
     fetch: (async () =>
       new Response(
         JSON.stringify({
@@ -117,38 +136,44 @@ test("a Meta page token yields both the Page and its Instagram account", async (
       )) as unknown as typeof fetch,
   });
 
-  assert.deepEqual(endpoints, [
-    { channel: "messenger", externalId: "993949857137664", label: "Denago Cape Town" },
-    { channel: "instagram", externalId: "17841446988337480", label: "@denago_capetown" },
-  ]);
+  assert.deepEqual(discovery, {
+    ok: true,
+    endpoints: [
+      { channel: "messenger", externalId: "993949857137664", label: "Denago Cape Town" },
+      { channel: "instagram", externalId: "17841446988337480", label: "@denago_capetown" },
+    ],
+  });
 });
 
 test("a Page with no linked Instagram account yields only the Page", async () => {
-  const endpoints = await metaEndpointsFrom("EAAtoken", {
+  const discovery = await metaEndpointsFrom("EAAtoken", {
     fetch: (async () =>
       new Response(JSON.stringify({ data: [{ id: "993949857137664", name: "Denago" }] }), { status: 200 })) as unknown as typeof fetch,
   });
-  assert.deepEqual(endpoints.map((e) => e.channel), ["messenger"]);
+  assert.equal(discovery.ok, true);
+  assert.deepEqual(discovery.ok && discovery.endpoints.map((e) => e.channel), ["messenger"]);
 });
 
-test("Meta being unreachable yields no endpoints rather than throwing — a save must not fail on it", async () => {
+test("Meta being unreachable is 'we do not know', NOT 'this tenant has none'", async () => {
+  // The distinction is load-bearing: an empty array would let retirement wipe
+  // every working Meta row on a transient outage.
   const rejecting = (async () => {
     throw new Error("ECONNRESET");
   }) as unknown as typeof fetch;
-  assert.deepEqual(await metaEndpointsFrom("EAAtoken", { fetch: rejecting }), []);
+  assert.deepEqual(await metaEndpointsFrom("EAAtoken", { fetch: rejecting }), { ok: false });
 
   const refusing = (async () => new Response("nope", { status: 401 })) as unknown as typeof fetch;
-  assert.deepEqual(await metaEndpointsFrom("EAAtoken", { fetch: refusing }), []);
+  assert.deepEqual(await metaEndpointsFrom("EAAtoken", { fetch: refusing }), { ok: false });
 });
 
-test("no Meta token means no Graph call at all", async () => {
+test("no Meta token is an ANSWER — no endpoints, no Graph call, and retirement may act on it", async () => {
   let called = false;
   const spy = (async () => {
     called = true;
     return new Response("{}", { status: 200 });
   }) as unknown as typeof fetch;
-  assert.deepEqual(await metaEndpointsFrom("", { fetch: spy }), []);
-  assert.deepEqual(await metaEndpointsFrom(null, { fetch: spy }), []);
+  assert.deepEqual(await metaEndpointsFrom("", { fetch: spy }), { ok: true, endpoints: [] });
+  assert.deepEqual(await metaEndpointsFrom(null, { fetch: spy }), { ok: true, endpoints: [] });
   assert.equal(called, false);
 });
 
@@ -251,6 +276,103 @@ test("several endpoints from one credential are each registered", async () => {
     { store: f.store },
   );
   assert.deepEqual(outcomes.map((o) => o.status), ["registered", "registered"]);
+});
+
+// ── Retirement ──────────────────────────────────────────────────────────────
+//
+// Registering without retiring leaves a workspace holding an endpoint it no
+// longer has credentials for — which keeps routing inbound events there AND
+// permanently blocks any other workspace from claiming it, because
+// registration correctly refuses to steal a row it does not own.
+
+test("an endpoint the credentials no longer name is retired", async () => {
+  const f = fakeStore({
+    "whatsapp:OLD_NUMBER": { tenantId: "tenant_a", disabledAt: null, label: null },
+  });
+
+  const outcomes = await retireEndpoints("tenant_a", "whatsapp", [WA.externalId], { store: f.store });
+
+  assert.deepEqual(outcomes, [{ channel: "whatsapp", externalId: "OLD_NUMBER", status: "retired" }]);
+  assert.notEqual(f.rows.get("whatsapp:OLD_NUMBER")?.disabledAt, null, "the stale row must be disabled");
+});
+
+test("retirement disables rather than deletes, so the history of ownership survives", async () => {
+  const f = fakeStore({ "whatsapp:OLD": { tenantId: "tenant_a", disabledAt: null, label: null } });
+  await retireEndpoints("tenant_a", "whatsapp", [], { store: f.store });
+  assert.equal(f.rows.get("whatsapp:OLD")?.tenantId, "tenant_a", "the row is still there, just disabled");
+});
+
+test("retirement leaves the endpoint the credentials DO name alone", async () => {
+  const f = fakeStore({
+    [`whatsapp:${WA.externalId}`]: { tenantId: "tenant_a", disabledAt: null, label: null },
+  });
+  const outcomes = await retireEndpoints("tenant_a", "whatsapp", [WA.externalId], { store: f.store });
+  assert.deepEqual(outcomes, []);
+  assert.equal(f.rows.get(`whatsapp:${WA.externalId}`)?.disabledAt, null);
+});
+
+test("retirement never touches another tenant's rows", async () => {
+  const f = fakeStore({
+    "whatsapp:THEIRS": { tenantId: "tenant_b", disabledAt: null, label: null },
+  });
+  const outcomes = await retireEndpoints("tenant_a", "whatsapp", [], { store: f.store });
+  assert.deepEqual(outcomes, []);
+  assert.equal(f.rows.get("whatsapp:THEIRS")?.disabledAt, null);
+});
+
+test("a retired endpoint can then be claimed by the workspace it moved to", async () => {
+  const f = fakeStore({ [`whatsapp:${WA.externalId}`]: { tenantId: "tenant_a", disabledAt: null, label: null } });
+
+  // tenant_a disconnects it...
+  await retireEndpoints("tenant_a", "whatsapp", [], { store: f.store });
+  // ...and tenant_b, which now holds the number at Meta, connects it.
+  // The row still names tenant_a, so this is the case that MUST be refused —
+  // retirement disables, it does not free the unique key. Transfer is a
+  // deliberate act, not something a credential save may perform silently.
+  const outcomes = await registerChannelEndpoints("tenant_b", [WA], { store: f.store });
+  assert.equal(outcomes[0].status, "claimed_by_another_tenant");
+});
+
+// ── Cost ────────────────────────────────────────────────────────────────────
+
+test("a healthy endpoint resolves NO label — the cron sweep makes no provider call", async () => {
+  const f = fakeStore({
+    [`whatsapp:${WA.externalId}`]: { tenantId: "tenant_a", disabledAt: null, label: "Denago EV" },
+  });
+  let resolved = 0;
+
+  await registerChannelEndpoints(
+    "tenant_a",
+    [{ ...WA, resolveLabel: async () => { resolved += 1; return "Denago EV"; } }],
+    { store: f.store },
+  );
+
+  assert.equal(resolved, 0, "a label lookup on every tick can exhaust the cron route's budget");
+  assert.deepEqual(f.writes(), []);
+});
+
+test("a label IS resolved when a row is actually written", async () => {
+  const f = fakeStore();
+  let resolved = 0;
+
+  await registerChannelEndpoints(
+    "tenant_a",
+    [{ ...WA, resolveLabel: async () => { resolved += 1; return "Denago EV · +27 63 336 3533"; } }],
+    { store: f.store },
+  );
+
+  assert.equal(resolved, 1);
+  assert.equal(f.rows.get(`whatsapp:${WA.externalId}`)?.label, "Denago EV · +27 63 336 3533");
+});
+
+test("an existing row missing its label gets one filled in", async () => {
+  const f = fakeStore({
+    [`whatsapp:${WA.externalId}`]: { tenantId: "tenant_a", disabledAt: null, label: null },
+  });
+  await registerChannelEndpoints("tenant_a", [{ ...WA, resolveLabel: async () => "Denago EV" }], {
+    store: f.store,
+  });
+  assert.equal(f.rows.get(`whatsapp:${WA.externalId}`)?.label, "Denago EV");
 });
 
 // ── Which keys trigger it ───────────────────────────────────────────────────

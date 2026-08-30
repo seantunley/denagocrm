@@ -137,10 +137,15 @@ async function runGlobalMaintenance() {
     // tenants configured BEFORE registration became automatic: nobody is going
     // to re-save a working integration, so the repair cannot wait for them to.
     //
-    // Cheap when healthy — WhatsApp needs no provider call, and the Meta lookup
-    // is skipped entirely once a tenant has its rows — so a correct install
-    // costs one indexed read per tenant per tick. See channelRegistration.ts.
-    await reconcileAllTenantChannels().catch((e) => logError("channel-registration", e));
+    // BOUNDED, because this runs in a `finally` after a sweep that may already
+    // have spent 45 of the route's 60 seconds, and the maintenance below it
+    // must not be starved. Meta discovery is the only part that can block on a
+    // slow provider, so it is capped per tick and the whole sweep stops on a
+    // deadline; a tenant it did not reach is repaired on the next tick, fifteen
+    // minutes later. A fully-registered tenant does no provider work at all.
+    await reconcileAllTenantChannels({ deadlineMs: 6_000, maxDiscoveries: 3 }).catch((e) =>
+      logError("channel-registration", e),
+    );
     await runAiHealthIfDue().catch((e) => logError("ai-health", e));
     await runBackupWatchdog().catch(() => {});
     await basePrisma.errorLog

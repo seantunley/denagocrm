@@ -620,6 +620,11 @@ export async function clearSecret(key: string, _formData?: FormData): Promise<vo
     void _formData;
     if (!isManagedSecret(key)) throw new Error("Not a clearable secret.");
     await putSetting(key, "");
+    // Disconnecting must RETIRE the endpoint, not merely stop using it. A row
+    // left active keeps routing inbound events into this workspace, and — worse
+    // — permanently blocks any other workspace from claiming that endpoint,
+    // because registration correctly refuses to steal a row it does not own.
+    await registerInboundEndpointsFor(key);
     revalidatePath("/settings");
   });
 }
