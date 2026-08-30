@@ -11,6 +11,7 @@ import { runDmFlow } from "@/lib/flowDm";
 import { metaReceipt } from "@/lib/deliveryReceipts";
 import { applyReceipt } from "@/lib/messageReceipts";
 import { withChannelTenantScope, validateInSystemScope } from "@/lib/tenantScopeEntry";
+import { reportUnmappedEndpoint } from "@/lib/channelRegistration";
 import { inboundRetryResponse, noteInboundRetry, noteLeasedInbound } from "@/lib/webhookRetry";
 import { secretEquals } from "@/lib/secretCompare";
 import {
@@ -127,7 +128,7 @@ export async function POST(req: NextRequest) {
             throw await noteInboundRetry("meta-dm-webhook", "failed", `${platform} ${String(ev.message?.mid ?? "")}`);
           }
         }
-      }, () => console.warn(`[tenant-channel] skipped ${platform} DM: unmapped endpoint ${endpointId || "?"}`));
+      }, () => reportUnmappedEndpoint(platform, endpointId, (entry.messaging ?? []).length));
     }
     } catch (error) {
       return inboundRetryResponse("meta-dm-webhook", error);
@@ -164,7 +165,7 @@ export async function POST(req: NextRequest) {
             source: "facebook", externalId: leadgenId, raw: change.value,
           }).catch(() => {});
         }
-      }, () => console.warn(`[tenant-channel] skipped leadgen: unmapped page_id ${pageId || "?"}`));
+      }, () => reportUnmappedEndpoint("messenger", pageId, 1));
     }
   }
   return NextResponse.json({ received: true });

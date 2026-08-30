@@ -1,0 +1,299 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+
+import {
+  keyNamesAnInboundEndpoint,
+  metaEndpointsFrom,
+  registerChannelEndpoints,
+  whatsappEndpointFrom,
+  type ChannelIdentityStore,
+  type ExistingIdentity,
+  type RegistrationOutcome,
+} from "../src/lib/channelEndpoints";
+
+const root = join(fileURLToPath(new URL(".", import.meta.url)), "..");
+const read = (rel: string) => readFileSync(join(root, rel), "utf8");
+
+/**
+ * `ChannelIdentity` decides whether an inbound webhook is filed or discarded,
+ * and under enforcement an unregistered endpoint is dropped in silence. These
+ * tests cover the two halves of that: that a stored credential registers its
+ * endpoint, and that registering NEVER takes an endpoint from another tenant.
+ */
+
+// ── The store double ────────────────────────────────────────────────────────
+//
+// It applies no policy of its own: it returns exactly what it was seeded with
+// and records every write. So a version of registerChannelEndpoints that
+// stopped checking ownership would steal the row here and fail the assertions,
+// rather than being quietly saved by a helpful fake.
+
+type Call = { op: "find" | "create" | "update"; channel: string; externalId: string; data?: unknown };
+
+function fakeStore(seed: Record<string, ExistingIdentity> = {}, opts: { failCreateOnce?: boolean } = {}) {
+  const rows = new Map(Object.entries(seed));
+  const calls: Call[] = [];
+  let createsAttempted = 0;
+
+  const store: ChannelIdentityStore = {
+    async find(channel, externalId) {
+      calls.push({ op: "find", channel, externalId });
+      return rows.get(`${channel}:${externalId}`) ?? null;
+    },
+    async create(row) {
+      createsAttempted += 1;
+      calls.push({ op: "create", channel: row.channel, externalId: row.externalId, data: row });
+      if (opts.failCreateOnce && createsAttempted === 1) {
+        throw Object.assign(new Error("Unique constraint failed"), { code: "P2002" });
+      }
+      rows.set(`${row.channel}:${row.externalId}`, {
+        tenantId: row.tenantId,
+        disabledAt: null,
+        label: row.label,
+      });
+    },
+    async update(channel, externalId, data, tenantId) {
+      calls.push({ op: "update", channel, externalId, data });
+      const existing = rows.get(`${channel}:${externalId}`);
+      if (!existing) throw new Error("update of a row that does not exist");
+      // The real store filters on tenantId, so this one does too. A `updateMany`
+      // whose predicate stopped naming the tenant would edit another workspace's
+      // row in production; here it silently matches nothing, exactly as it would
+      // there — so the assertion that the row is unchanged still catches it.
+      if (existing.tenantId !== tenantId) return;
+      rows.set(`${channel}:${externalId}`, {
+        tenantId: existing.tenantId,
+        disabledAt: "disabledAt" in data ? null : existing.disabledAt,
+        label: data.label ?? existing.label,
+      });
+    },
+  };
+
+  return {
+    store,
+    calls,
+    rows,
+    writes: () => calls.filter((c) => c.op !== "find"),
+  };
+}
+
+const WA = { channel: "whatsapp" as const, externalId: "1267798526410379", label: null };
+
+// ── Deriving endpoints from credentials ─────────────────────────────────────
+
+test("the WhatsApp phone-number id IS the endpoint — no provider call needed", () => {
+  const endpoint = whatsappEndpointFrom("1267798526410379");
+  assert.deepEqual(endpoint, { channel: "whatsapp", externalId: "1267798526410379", label: null });
+});
+
+test("a blank or missing WhatsApp phone-number id registers nothing", () => {
+  assert.equal(whatsappEndpointFrom(""), null);
+  assert.equal(whatsappEndpointFrom("   "), null);
+  assert.equal(whatsappEndpointFrom(null), null);
+  assert.equal(whatsappEndpointFrom(undefined), null);
+});
+
+test("a pasted phone-number id is trimmed, because a stray space is a different endpoint", () => {
+  assert.equal(whatsappEndpointFrom("  1267798526410379 \n")?.externalId, "1267798526410379");
+});
+
+test("a Meta page token yields both the Page and its Instagram account", async () => {
+  const endpoints = await metaEndpointsFrom("EAAtoken", {
+    fetch: (async () =>
+      new Response(
+        JSON.stringify({
+          data: [
+            {
+              id: "993949857137664",
+              name: "Denago Cape Town",
+              instagram_business_account: { id: "17841446988337480", username: "denago_capetown" },
+            },
+          ],
+        }),
+        { status: 200 },
+      )) as unknown as typeof fetch,
+  });
+
+  assert.deepEqual(endpoints, [
+    { channel: "messenger", externalId: "993949857137664", label: "Denago Cape Town" },
+    { channel: "instagram", externalId: "17841446988337480", label: "@denago_capetown" },
+  ]);
+});
+
+test("a Page with no linked Instagram account yields only the Page", async () => {
+  const endpoints = await metaEndpointsFrom("EAAtoken", {
+    fetch: (async () =>
+      new Response(JSON.stringify({ data: [{ id: "993949857137664", name: "Denago" }] }), { status: 200 })) as unknown as typeof fetch,
+  });
+  assert.deepEqual(endpoints.map((e) => e.channel), ["messenger"]);
+});
+
+test("Meta being unreachable yields no endpoints rather than throwing — a save must not fail on it", async () => {
+  const rejecting = (async () => {
+    throw new Error("ECONNRESET");
+  }) as unknown as typeof fetch;
+  assert.deepEqual(await metaEndpointsFrom("EAAtoken", { fetch: rejecting }), []);
+
+  const refusing = (async () => new Response("nope", { status: 401 })) as unknown as typeof fetch;
+  assert.deepEqual(await metaEndpointsFrom("EAAtoken", { fetch: refusing }), []);
+});
+
+test("no Meta token means no Graph call at all", async () => {
+  let called = false;
+  const spy = (async () => {
+    called = true;
+    return new Response("{}", { status: 200 });
+  }) as unknown as typeof fetch;
+  assert.deepEqual(await metaEndpointsFrom("", { fetch: spy }), []);
+  assert.deepEqual(await metaEndpointsFrom(null, { fetch: spy }), []);
+  assert.equal(called, false);
+});
+
+// ── Registration ────────────────────────────────────────────────────────────
+
+test("an unregistered endpoint is claimed for the saving tenant", async () => {
+  const f = fakeStore();
+  const outcomes = await registerChannelEndpoints("tenant_a", [WA], { store: f.store });
+
+  assert.deepEqual(outcomes, [{ channel: "whatsapp", externalId: WA.externalId, status: "registered" }]);
+  assert.equal(f.rows.get(`whatsapp:${WA.externalId}`)?.tenantId, "tenant_a");
+});
+
+test("re-registering our own unchanged endpoint writes NOTHING — the cron sweep is a read", async () => {
+  const f = fakeStore({ [`whatsapp:${WA.externalId}`]: { tenantId: "tenant_a", disabledAt: null, label: null } });
+  const outcomes = await registerChannelEndpoints("tenant_a", [WA], { store: f.store });
+
+  assert.equal(outcomes[0].status, "already_ours");
+  assert.deepEqual(f.writes(), [], "a healthy install must not write on every cron tick");
+});
+
+test("a disabled endpoint of ours is re-enabled when the credential is saved again", async () => {
+  const f = fakeStore({
+    [`whatsapp:${WA.externalId}`]: { tenantId: "tenant_a", disabledAt: new Date("2026-08-01"), label: null },
+  });
+  const outcomes = await registerChannelEndpoints("tenant_a", [WA], { store: f.store });
+
+  assert.equal(outcomes[0].status, "reenabled");
+  assert.equal(f.rows.get(`whatsapp:${WA.externalId}`)?.disabledAt, null);
+});
+
+test("a label discovered later is filled in, without disturbing ownership", async () => {
+  const f = fakeStore({ [`whatsapp:${WA.externalId}`]: { tenantId: "tenant_a", disabledAt: null, label: null } });
+  await registerChannelEndpoints("tenant_a", [{ ...WA, label: "Denago EV · +27 63 336 3533" }], { store: f.store });
+
+  const row = f.rows.get(`whatsapp:${WA.externalId}`);
+  assert.equal(row?.label, "Denago EV · +27 63 336 3533");
+  assert.equal(row?.tenantId, "tenant_a");
+});
+
+test("AN ENDPOINT ANOTHER TENANT HOLDS IS NEVER TAKEN", async () => {
+  const f = fakeStore({ [`whatsapp:${WA.externalId}`]: { tenantId: "tenant_a", disabledAt: null, label: null } });
+  const conflicts: RegistrationOutcome[] = [];
+
+  const outcomes = await registerChannelEndpoints("tenant_b", [WA], {
+    store: f.store,
+    onConflict: (o) => { conflicts.push(o); },
+  });
+
+  assert.deepEqual(outcomes, [
+    { channel: "whatsapp", externalId: WA.externalId, status: "claimed_by_another_tenant", ownedBy: "tenant_a" },
+  ]);
+  // The row is untouched: tenant_a keeps receiving its own messages.
+  assert.deepEqual(f.writes(), [], "a contested endpoint must not be re-pointed");
+  assert.equal(f.rows.get(`whatsapp:${WA.externalId}`)?.tenantId, "tenant_a");
+  // And it is reported, not swallowed — one workspace is receiving nothing.
+  assert.equal(conflicts.length, 1);
+});
+
+test("losing the create race to ourselves settles as already_ours, not an error", async () => {
+  const f = fakeStore({}, { failCreateOnce: true });
+  // The concurrent winner was this same tenant.
+  f.rows.set(`whatsapp:${WA.externalId}`, { tenantId: "tenant_a", disabledAt: null, label: null });
+
+  const outcomes = await registerChannelEndpoints("tenant_a", [WA], { store: f.store });
+  assert.equal(outcomes[0].status, "already_ours");
+});
+
+test("losing the create race to another tenant is reported as a conflict, not swallowed", async () => {
+  const f = fakeStore({}, { failCreateOnce: true });
+  f.rows.set(`whatsapp:${WA.externalId}`, { tenantId: "tenant_other", disabledAt: null, label: null });
+
+  const conflicts: RegistrationOutcome[] = [];
+  const outcomes = await registerChannelEndpoints("tenant_a", [WA], {
+    store: f.store,
+    onConflict: (o) => { conflicts.push(o); },
+  });
+
+  assert.equal(outcomes[0].status, "claimed_by_another_tenant");
+  assert.equal(conflicts.length, 1);
+});
+
+test("a blank endpoint id is skipped rather than written as an empty row", async () => {
+  const f = fakeStore();
+  const outcomes = await registerChannelEndpoints("tenant_a", [{ channel: "whatsapp", externalId: "   ", label: null }], {
+    store: f.store,
+  });
+  assert.deepEqual(outcomes, []);
+  assert.deepEqual(f.writes(), []);
+});
+
+test("several endpoints from one credential are each registered", async () => {
+  const f = fakeStore();
+  const outcomes = await registerChannelEndpoints(
+    "tenant_a",
+    [
+      { channel: "messenger", externalId: "993949857137664", label: "Page" },
+      { channel: "instagram", externalId: "17841446988337480", label: "@ig" },
+    ],
+    { store: f.store },
+  );
+  assert.deepEqual(outcomes.map((o) => o.status), ["registered", "registered"]);
+});
+
+// ── Which keys trigger it ───────────────────────────────────────────────────
+
+test("the credential keys that name an inbound endpoint are recognised", () => {
+  assert.equal(keyNamesAnInboundEndpoint("WA_PHONE_NUMBER_ID"), true);
+  assert.equal(keyNamesAnInboundEndpoint("META_PAGE_ACCESS_TOKEN"), true);
+  assert.equal(keyNamesAnInboundEndpoint("SMTP_PASS"), false);
+  assert.equal(keyNamesAnInboundEndpoint("ANTHROPIC_API_KEY"), false);
+});
+
+// ── The wiring, which is what actually failed ───────────────────────────────
+//
+// The logic above was never the problem: there was no caller. These assert the
+// call sites exist, because a correct module nothing invokes is exactly the
+// state production was in for eighteen days.
+
+test("every path that stores a channel credential reconciles the endpoints", () => {
+  for (const file of [
+    "src/app/actions/settings.ts",
+    "src/app/actions/tenantCredentials.ts",
+    "src/app/actions/integrationFlow.ts",
+  ]) {
+    assert.match(
+      read(file),
+      /reconcileTenantChannels/,
+      `${file} stores channel credentials but never registers the endpoint they name`,
+    );
+  }
+});
+
+test("the cron sweep repairs tenants configured before registration was automatic", () => {
+  assert.match(read("src/app/api/cron/automations/route.ts"), /reconcileAllTenantChannels/);
+});
+
+test("an unattributable inbound event is LOGGED, never only console.warn'd", () => {
+  for (const route of ["src/app/api/webhooks/whatsapp/route.ts", "src/app/api/webhooks/meta/route.ts"]) {
+    const source = read(route);
+    assert.match(source, /reportUnmappedEndpoint/, `${route} must report a dropped inbound event`);
+    assert.doesNotMatch(
+      source,
+      /console\.warn\(`\[tenant-channel\]/,
+      `${route} must not swallow a dropped inbound event into a console line`,
+    );
+  }
+});

@@ -20,6 +20,7 @@ import { runSafeCampaignQueue } from "@/lib/marketingCampaignQueue";
 import { runSafeSurveyDistributionQueue } from "@/lib/surveyDistributionQueue";
 import { runRepairsDetectors } from "@/lib/repairsDetectors";
 import { runAiHealthIfDue, runBackupWatchdog } from "@/lib/systemHealth";
+import { reconcileAllTenantChannels } from "@/lib/channelRegistration";
 import { basePrisma } from "@/lib/db";
 import { expireReservations } from "@/lib/stockPlatform";
 import { resolveTenantActor } from "@/lib/tenantActor";
@@ -131,6 +132,15 @@ type OperationalResult = Awaited<ReturnType<typeof runOperationalQueues>>;
 
 async function runGlobalMaintenance() {
   await withSystemScope(async () => {
+    // Register any inbound channel endpoint whose credentials are stored but
+    // whose ChannelIdentity row is missing. This is the backstop that covers
+    // tenants configured BEFORE registration became automatic: nobody is going
+    // to re-save a working integration, so the repair cannot wait for them to.
+    //
+    // Cheap when healthy — WhatsApp needs no provider call, and the Meta lookup
+    // is skipped entirely once a tenant has its rows — so a correct install
+    // costs one indexed read per tenant per tick. See channelRegistration.ts.
+    await reconcileAllTenantChannels().catch((e) => logError("channel-registration", e));
     await runAiHealthIfDue().catch((e) => logError("ai-health", e));
     await runBackupWatchdog().catch(() => {});
     await basePrisma.errorLog
