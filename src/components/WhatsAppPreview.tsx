@@ -206,6 +206,17 @@ export default function WhatsAppPreview({
   // A fixed clock, not `new Date()`. Every bubble showing a different minute as
   // the preview runs is noise, and a stable time keeps the eye on the message.
   const time = "09:41";
+  /*
+   * Only the newest choice is actionable. Earlier choice messages stay in the
+   * transcript as history, but the simulator engine is waiting on choices from
+   * the current node only. Leaving old buttons enabled made them appear live
+   * while their ids could no longer be resolved, so a tap silently did nothing.
+   */
+  const activeChoiceLineId = lines.reduce<string | null>(
+    (latest, entry) =>
+      entry.role === "bot" && entry.msg.type === "choice" ? entry.id : latest,
+    null,
+  );
 
   return (
     <div className="relative flex-1 overflow-y-auto p-3" style={{ background: INK.canvas }}>
@@ -231,7 +242,7 @@ export default function WhatsAppPreview({
             <div key={entry.id} className="mb-1.5">
               <Bubble side="in" time={time}>
                 <span className="whitespace-pre-wrap break-words">{rendered.text}</span>
-                {rendered.truncated && <CutBadge what="message at 1024 characters" />}
+                {rendered.truncated && <CutBadge what="message at 4096 characters" />}
               </Bubble>
             </div>
           );
@@ -261,9 +272,17 @@ export default function WhatsAppPreview({
               {rendered.bodyTruncated && <CutBadge what="message at 1024 characters" />}
             </Bubble>
             {rendered.shape === "buttons" ? (
-              <ReplyButtons rendered={rendered} onPick={onPick} disabled={disabled} />
+              <ReplyButtons
+                rendered={rendered}
+                onPick={onPick}
+                disabled={disabled || entry.id !== activeChoiceLineId}
+              />
             ) : (
-              <ListChoice rendered={rendered} onPick={onPick} disabled={disabled} />
+              <ListChoice
+                rendered={rendered}
+                onPick={onPick}
+                disabled={disabled || entry.id !== activeChoiceLineId}
+              />
             )}
             {rendered.dropped.length > 0 && (
               <p
