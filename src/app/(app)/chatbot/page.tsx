@@ -12,8 +12,6 @@ import {
   setBotKnowledgeStatus,
   deleteBotKnowledge,
   whisperConfigured,
-  connectTelegram,
-  disconnectTelegram,
   telegramStatus,
 } from "@/app/actions/bot";
 import ClearSecret from "@/components/ClearSecret";
@@ -172,9 +170,24 @@ export default async function ChatbotSettingsPage() {
           </Surface>
 
           <Surface className="p-5">
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">Telegram {tg.connected && <span className="text-emerald-400 normal-case">· connected{tg.enabled ? " & live" : ""}</span>}</p>
-            <p className="text-xs text-muted-foreground mb-2">Create a bot with @BotFather, paste the token and Connect — it runs the same published flow.</p>
-            {!tg.connected ? <form action={connectTelegram} className="flex gap-2"><input name="token" className="input flex-1" placeholder="123456789:ABCdef..." /><button className="btn-primary btn-sm shrink-0">Connect</button></form> : <form action={disconnectTelegram}><button className="btn-secondary btn-sm">Disconnect</button></form>}
+            {/*
+              Status here, connecting in Settings.
+
+              This card used to carry its own Connect form, which made Telegram
+              the only channel with two doors — and the only one absent from the
+              screen that lists customer channels. Showing where the bot runs is
+              useful on this page; being a second place to configure it is how
+              the two drift apart.
+            */}
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">Telegram {tg.connected && <span className={tg.enabled ? "text-emerald-400 normal-case" : "text-amber-300 normal-case"}>· {tg.enabled ? "connected & live" : "token saved, webhook not registered"}</span>}</p>
+            <p className="text-xs text-muted-foreground mb-2">
+              {tg.connected
+                ? "Your Telegram bot runs this same published flow."
+                : "Connect a Telegram bot to run this same published flow on Telegram."}
+            </p>
+            <Link href="/settings?tab=integrations" className="btn-secondary btn-sm">
+              {tg.connected ? "Manage in Settings" : "Set up in Settings"}
+            </Link>
           </Surface>
         </aside>
       </div>
