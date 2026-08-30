@@ -25,7 +25,24 @@ test("mobile operational photo capture has one prominent, gallery-ready pattern"
   assert.match(component, /type="file"/);
   assert.match(component, /accept="image\/\*"/);
   assert.match(jobcards, /<DirectPhotoUploader[^>]*label="Add condition photos"/);
-  assert.match(deliveries, /<DirectPhotoUploader[^>]*label="Add handover photos"/);
+  /*
+   * The delivery label is now CONDITIONAL, and the assertion follows it rather
+   * than pinning the literal it used to be. Guided handover gives the button a
+   * second job: once a note has been configured, further photos are additional
+   * to it, and "Add handover photos" would misdescribe what pressing it does.
+   *
+   * What this guard protects is unchanged — the deliveries screen offers ONE
+   * prominent capture control, through the shared uploader, and the first-time
+   * wording is still "Add handover photos". Matching `label=` up to its closing
+   * brace keeps a conditional expression readable to it while still failing if
+   * the uploader or the wording disappears.
+   */
+  assert.match(deliveries, /<DirectPhotoUploader/);
+  assert.match(
+    deliveries,
+    /label=(?:"Add handover photos"|\{[^}]*"Add handover photos"[^}]*\})/,
+    "the delivery screen must still offer 'Add handover photos' as its first-time label",
+  );
 
   /*
    * The upload URL moved to lib/photoTransport.ts when the guided checklist

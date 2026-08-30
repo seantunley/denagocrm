@@ -15,6 +15,7 @@ import { checkUploadPayload, MAX_PHOTOS } from "@/lib/photoBudget";
 import { contactName } from "@/lib/format";
 import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { isModuleEnabled, requireModuleEnabled } from "@/lib/modules/enabled";
+import { deliveryHandoverReadiness } from "@/lib/checklists/deliveryHandover";
 import { vehiclesAwaitingRegistration } from "@/lib/deliveryVehicles";
 
 const MAX_FILE = 4 * 1024 * 1024;
@@ -359,7 +360,42 @@ export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) 
   }, failureLog);
 }
 
-export async function markDelivered(quoteId: string, formData: FormData): Promise<ActionResult> {
+/**
+ * `handoverRunIds` — the guided checklist runs the customer is signing BESIDE.
+ *
+ * THIS IS AN EXPORTED SERVER ACTION, WHICH IS A PUBLIC POST ENDPOINT, AND ITS
+ * ARGUMENTS COME FROM THE CLIENT. An earlier version of this comment claimed the
+ * ids were "passed server-to-server, never off the form" — that is wrong twice
+ * over. A stale legacy form, or a hand-made request, can call this directly
+ * without going anywhere near completeGuidedDelivery; and a Server Action's
+ * arguments are deserialised from the request, so a caller can supply this third
+ * parameter as freely as any form field.
+ *
+ * So the guided-handover gate cannot live only in completeGuidedDelivery. It is
+ * enforced HERE, against the database, for every caller:
+ *
+ *  - every id must be a COMPLETED run of THIS quote's delivery handover, in the
+ *    acting tenant — a caller cannot name another workspace's run, or an
+ *    unfinished one; and
+ *  - when the tenant has any ACTIVE quote.delivery template, the verified runs
+ *    must satisfy deliveryHandoverReadiness — every configured checklist has one.
+ *
+ * Re-verification alone was not enough: a crafted call could pass one genuine
+ * run id while a second configured checklist was still unfinished, and be
+ * recorded as a signed handover carrying partial evidence.
+ *
+ * A tenant with no active template is the legacy flow, unchanged: no ids, empty
+ * column, and the delivery note falls back exactly as it does for deliveries
+ * completed before this existed.
+ *
+ * Written in the SAME updateMany that records the delivery, so a signed handover
+ * can never exist without the runs it was signed against.
+ */
+export async function markDelivered(
+  quoteId: string,
+  formData: FormData,
+  handoverRunIds?: readonly string[],
+): Promise<ActionResult> {
   return asFulfilmentAction(async () => {
     await requireModuleEnabled("automotive");
     const user = await requireQuoteAccess(quoteId, "deliveries.manage");
@@ -374,6 +410,81 @@ export async function markDelivered(quoteId: string, formData: FormData): Promis
     if (!quote) refuse(QUOTE_GONE);
     if (!quote.deliveryScheduledFor) refuse("Schedule the delivery before marking it delivered.");
     if (quote.deliveredAt) refuse("This delivery is already marked as delivered.");
+    /*
+     * BEFORE ANY SIDE EFFECT, and that ordering is the point.
+     *
+     * Everything below this writes: the delivery-note file, the signature
+     * blob, and a Document row for each. Running the gate afterwards refused
+     * the request correctly and still left an uploaded blob and a Document row
+     * behind for a delivery that never completed — storage dirtied by a call
+     * that was rejected, with nothing to clean it up.
+     *
+     * The gate only reads, so it can run first at no cost, and a refusal then
+     * costs the caller nothing but the round trip.
+     */
+    /*
+     * Re-verified, not trusted. Each id must be a COMPLETED run of this quote's
+     * own delivery handover, in this tenant. Anything that does not resolve is a
+     * caller passing ids it should not have, so the whole delivery is refused
+     * rather than signed against a partial set — a delivery note showing three of
+     * four checklists is worse than one that refuses to be produced.
+     */
+    const requestedRunIds = [...new Set(handoverRunIds ?? [])];
+    let verifiedRuns: { id: string; templateId: string; completedAt: Date | null }[] = [];
+    if (requestedRunIds.length) {
+      verifiedRuns = await prisma.checklistRun.findMany({
+        where: {
+          id: { in: requestedRunIds },
+          tenantId,
+          hostType: "quote.delivery",
+          hostId: quoteId,
+          completedAt: { not: null },
+        },
+        select: { id: true, templateId: true, completedAt: true },
+      });
+      if (verifiedRuns.length !== requestedRunIds.length) {
+        refuse("The handover checklists could not be confirmed. Reload the delivery and try again.");
+      }
+    }
+
+    /*
+     * THE GUIDED GATE, ENFORCED HERE RATHER THAN ONLY IN THE WRAPPER.
+     *
+     * completeGuidedDelivery checks readiness before delegating, but this action
+     * is exported and therefore reachable without it — by a stale legacy form or
+     * a hand-made request. Checking only in the wrapper leaves the invariant
+     * optional, which is the same as not having it.
+     *
+     * Scoped to what the tenant has actually configured: no active template means
+     * no guided handover, and the legacy proof-of-delivery flow is untouched.
+     */
+    const handoverTemplates = await prisma.checklistTemplate.findMany({
+      where: { tenantId, host: "quote.delivery", active: true },
+      select: { id: true, name: true },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+    });
+    if (handoverTemplates.length > 0) {
+      const readiness = deliveryHandoverReadiness(handoverTemplates, verifiedRuns);
+      if (!readiness.ready) {
+        const missing = handoverTemplates
+          .filter((template) => readiness.missingTemplateIds.includes(template.id))
+          .map((template) => template.name);
+        refuse(
+          `This delivery uses a guided handover. Complete ${missing.length === 1 ? `“${missing[0]}”` : missing.join(", ")} and sign from the delivery screen.`,
+        );
+      }
+      if (verifiedRuns.length !== handoverTemplates.length) {
+        refuse("The signed handover must include exactly one completed run for each active checklist. Reload the delivery and review it again.");
+      }
+    } else if (requestedRunIds.length > 0) {
+      refuse("This delivery does not have an active guided handover. Reload the delivery and try again.");
+    }
+
+    const runByTemplate = new Map(verifiedRuns.map((run) => [run.templateId, run.id]));
+    const deliveryHandoverRunIds = handoverTemplates
+      .map((template) => runByTemplate.get(template.id))
+      .filter((id): id is string => Boolean(id));
+
     const file = pickFile(formData);
     if (file && file.size > MAX_FILE) refuse("That delivery note is larger than 4 MB.");
     if (file) {
@@ -410,9 +521,11 @@ export async function markDelivered(quoteId: string, formData: FormData): Promis
       }
     }
 
+
+
     const updated = await prisma.quote.updateMany({
       where: { id: quoteId, tenantId },
-      data: { deliveredAt: new Date(), deliveredByName, deliveryChecklist, deliverySignatureRef },
+      data: { deliveredAt: new Date(), deliveredByName, deliveryChecklist, deliverySignatureRef, deliveryHandoverRunIds },
     });
     if (updated.count !== 1) refuse(QUOTE_GONE);
     if (quote.leadId) {
