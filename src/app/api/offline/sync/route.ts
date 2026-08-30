@@ -103,6 +103,16 @@ export async function POST(request: Request) {
   let tenantId: string | null = null;
   let mutationId = "unknown";
   let receiptClaimed = false;
+  /*
+   * Whether the business action has been ENTERED.
+   *
+   * Everything before this point is a refusal that definitely changed nothing.
+   * Everything after it may have committed — `execute` writes, and the version
+   * lookup and receipt update that follow can still throw. A failure on that
+   * side is INDETERMINATE, and the difference decides whether the device may
+   * ever send the work again.
+   */
+  let executionStarted = false;
   try {
     const user = await requireApiUser();
     tenantId = await actingTenantId();
@@ -173,6 +183,7 @@ export async function POST(request: Request) {
       return NextResponse.json(result, { status: 409 });
     }
 
+    executionStarted = true;
     const result = (await execute(operation, formData)) ?? {};
     const rejected = typeof result === "object" && result !== null && "error" in result && Boolean(result.error);
 
@@ -208,20 +219,36 @@ export async function POST(request: Request) {
     // closed as rejected (not deleted), preserving the at-most-once guarantee:
     // if the business action committed and recording its result failed, a retry
     // still cannot apply that action a second time.
+    /*
+     * SAY WHETHER THE WORK MIGHT HAVE LANDED.
+     *
+     * The receipt is closed as rejected either way -- a stranded "processing"
+     * row can neither be replayed nor honestly reviewed. But "rejected" is now
+     * two different facts. A failure BEFORE `execute` changed nothing, so the
+     * device may safely send the work again. A failure after it may have
+     * committed and then fallen over recording that it did, and re-sending
+     * would create a second lead or file a second photo.
+     *
+     * The device cannot tell those apart from a 500, so it is told.
+     */
+    const failure = executionStarted
+      ? {
+          error: "This change may or may not have been applied — the server failed while recording it. Check the record before entering it again. Recorded in Settings → System Log.",
+          indeterminate: true,
+        }
+      : { error: "Offline synchronization failed and was recorded in Settings → System Log." };
+
     if (receiptClaimed && tenantId && mutationId !== "unknown") {
       await prisma.offlineMutationReceipt.updateMany({
         where: { id: mutationId, tenantId, status: "processing" },
         data: {
           status: "rejected",
-          result: { error: "Offline synchronization failed and was recorded in Settings → System Log." },
+          result: failure,
           completedAt: new Date(),
         },
       }).catch(() => undefined);
     }
     await logError("offline-sync", error, `mutation=${mutationId}`, { tenantId, alert: false });
-    return apiAuthErrorResponse(error) ?? NextResponse.json(
-      { error: "Offline synchronization failed and was recorded in Settings → System Log." },
-      { status: 500 },
-    );
+    return apiAuthErrorResponse(error) ?? NextResponse.json(failure, { status: 500 });
   }
 }

@@ -116,6 +116,15 @@ export type OfflineMutation = {
   attempts: number;
   status: "pending" | "syncing" | "failed" | "conflict";
   error?: string;
+  /**
+   * The server failed AFTER starting to apply this change.
+   *
+   * It may have committed and then fallen over recording that it had. Such an
+   * entry must never be sent again -- a fresh mutation id would bypass the
+   * closed receipt and could file a second lead or a second photo. The queue
+   * keeps it so the person can read what they captured and check the record.
+   */
+  indeterminate?: boolean;
 };
 
 /**
@@ -215,6 +224,19 @@ export function requeueBase(
   entry: OfflineMutation,
   snapshot: Pick<OfflineSnapshot, "leads" | "contacts" | "jobCards" | "deliveries"> | null,
 ): { retryable: true; baseVersion?: string } | { retryable: false } {
+  /*
+   * AN AMBIGUOUS FAILURE IS NEVER RESENT.
+   *
+   * At-most-once rests on the server's receipt, and re-queueing deliberately
+   * mints a NEW id -- which is exactly what walks past a closed one. That is
+   * correct for a change the server refused before applying, and wrong for one
+   * it may have applied and then failed to record: a create would land twice,
+   * and a photo append would file twice.
+   *
+   * The route reports which of the two happened. Anything ambiguous can be read
+   * and copied, never replayed.
+   */
+  if (entry.indeterminate) return { retryable: false };
   const key = guardedRecordKey(entry.operation);
   if (!key) return { retryable: true };
   if (!snapshot) return { retryable: false };

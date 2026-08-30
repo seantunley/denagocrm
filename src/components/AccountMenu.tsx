@@ -15,6 +15,7 @@ import { logout } from "@/app/login/actions";
 import { APP_VERSION } from "@/lib/version";
 import { cn } from "@/lib/utils";
 import { purgeOfflineData } from "@/lib/offlineClient";
+import { useOptionalOffline } from "@/components/OfflineProvider";
 import { toast } from "sonner";
 
 export type AccountMenuUser = {
@@ -50,22 +51,43 @@ export default function AccountMenu({
   isOwner: boolean;
   compact?: boolean;
 }) {
+  const offline = useOptionalOffline();
+
   async function signOutSafely() {
     /*
-     * DO NOT DESTROY UNSYNCED WORK FOR A SIGN-OUT THAT CANNOT HAPPEN.
+     * DO NOT DESTROY UNSYNCED WORK TO SIGN SOMEBODY OUT.
      *
      * The purge below is irreversible and runs FIRST, deliberately — the next
-     * person on this device must not inherit the last one's records. But
-     * `logout()` is a Server Action, so offline it simply fails: the snapshots,
-     * the captured photos and every queued mutation were already gone, and the
-     * session was still signed in. A field user tapping Sign out at the end of a
-     * day with no signal lost the day's work and stayed logged in.
+     * person on this device must not inherit the last one's records. Everything
+     * therefore depends on there being nothing left worth keeping.
      *
-     * Signing out is not urgent enough to be worth that. Offline it is refused,
-     * with the one instruction that makes it safe.
+     * BEING ONLINE IS NOT THAT ASSURANCE, which is what the first version of
+     * this guard got wrong. A full outbox on a connected device is the ordinary
+     * state moments after coming back into signal, and failed or conflicted
+     * entries sit there indefinitely BY DESIGN, waiting for somebody to read
+     * them. Signing out then deleted a day of captured work and the photos with
+     * it. (Offline it was worse still: `logout()` is a Server Action, so it
+     * failed after the purge and left the session signed in.)
+     *
+     * The queue itself is the question, so the queue is what is asked. Signing
+     * out is never urgent enough to be worth silently discarding work.
      */
+    // `useOptionalOffline` rather than the hook: the provider is only mounted
+    // when a workspace resolved, and where there is no provider there is no
+    // partition and so nothing queued to lose.
+    const queued = offline?.pending ?? 0;
+    if (queued > 0) {
+      toast.error(
+        navigator.onLine
+          ? `${queued} offline change${queued === 1 ? "" : "s"} still to synchronise. Open the offline workspace, clear the queue, then sign out.`
+          : `You are offline with ${queued} unsynchronised change${queued === 1 ? "" : "s"}. Reconnect and let them sync before signing out.`,
+      );
+      return;
+    }
     if (!navigator.onLine) {
-      toast.error("You are offline. Connect and let queued work synchronise before signing out.");
+      // Nothing queued, but signing out still ends with a Server Action that
+      // cannot run — and the purge would already have taken the cached records.
+      toast.error("You are offline. Reconnect before signing out.");
       return;
     }
     try {

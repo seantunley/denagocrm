@@ -508,19 +508,72 @@ test("A MISSING RECORD ID IS NOT EVIDENCE OF A CREATE", () => {
   assert.match(src("src/components/SaveForm.tsx"), /This operation requires an internet connection/);
 });
 
-test("SIGNING OUT OFFLINE DOES NOT DESTROY WORK THAT CANNOT SYNC", () => {
+test("SIGNING OUT NEVER SILENTLY DISCARDS QUEUED WORK", () => {
   /*
-   * The purge is irreversible and runs first, on purpose. But `logout()` is a
-   * Server Action, so offline it fails AFTER the snapshots, photos and queued
-   * mutations are already gone — and the session stays signed in. A field user
-   * tapping Sign out at the end of a day with no signal lost the day's work and
-   * remained logged in.
+   * The purge is irreversible and runs first, on purpose — the next person on
+   * this device must not inherit the last one's records. Everything therefore
+   * rests on there being nothing left worth keeping.
+   *
+   * BEING ONLINE IS NOT THAT ASSURANCE, which is what the first version of this
+   * guard got wrong. A full outbox on a connected device is the ordinary state
+   * moments after coming back into signal, and failed or conflicted entries sit
+   * there indefinitely BY DESIGN, waiting to be read. Sign-out was deleting a
+   * day of captured work and its photos.
+   *
+   * Offline it was worse still: `logout()` is a Server Action, so it failed
+   * AFTER the purge and left the session signed in.
    */
   const menu = src("src/components/AccountMenu.tsx");
-  assert.match(menu, /if \(!navigator\.onLine\) \{/);
-  const guard = menu.slice(menu.indexOf("if (!navigator.onLine) {"), menu.indexOf("await purgeOfflineData()"));
-  assert.match(guard, /return;/, "the refusal must come BEFORE the purge");
-  assert.match(menu, /Connect and let queued work synchronise before signing out/);
+  const guard = menu.slice(menu.indexOf("async function signOutSafely"), menu.indexOf("await purgeOfflineData()"));
+  assert.match(guard, /const queued = offline\?\.pending \?\? 0;/, "the queue is the question, not connectivity");
+  assert.match(guard, /if \(queued > 0\) \{/);
+  assert.match(guard, /if \(!navigator\.onLine\) \{/, "connectivity still matters — logout() is a Server Action");
+  assert.ok(
+    guard.indexOf("const queued") < guard.indexOf("if (!navigator.onLine)"),
+    "the work is checked before the connection — losing it is the worse failure",
+  );
+  assert.ok(
+    (guard.match(/return;/g) ?? []).length >= 2,
+    "both refusals must come BEFORE the purge",
+  );
+});
+
+test("AN AMBIGUOUSLY APPLIED CHANGE IS NEVER SENT AGAIN", () => {
+  /*
+   * At-most-once rests on the server's receipt, and re-queueing deliberately
+   * mints a NEW id — which is exactly what walks past a closed one. Right for a
+   * change refused BEFORE it was applied; wrong for one the server may have
+   * committed and then failed to record, where a create would land twice and a
+   * photo append would file twice.
+   */
+  const entry: OfflineMutation = {
+    id: "a",
+    tenantId: "t1",
+    userId: "u1",
+    operation: { type: "lead.create" },
+    fields: [],
+    createdAt: 1_700_000_000_000,
+    attempts: 1,
+    status: "failed",
+    indeterminate: true,
+  };
+  assert.deepEqual(
+    requeueBase(entry, null),
+    { retryable: false },
+    "an unguarded create is otherwise always retryable — the flag is what stops it",
+  );
+
+  const route = src("src/app/api/offline/sync/route.ts");
+  assert.match(route, /let executionStarted = false;/);
+  assert.match(
+    route,
+    /executionStarted = true;\s*\r?\n\s*const result = \(await execute\(/,
+    "the flag must be set immediately before the write, so everything earlier stays retryable",
+  );
+  assert.match(route, /const failure = executionStarted/);
+  assert.match(route, /may or may not have been applied/);
+  // …and the device has to carry it through onto the queue entry.
+  assert.match(src("src/components/OfflineProvider.tsx"), /indeterminate: result\.indeterminate === true/);
 });
 
 test("A STAGE MOVE THE DEVICE CANNOT PRE-VALIDATE IS NOT OFFERED", () => {

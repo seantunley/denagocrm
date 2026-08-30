@@ -144,7 +144,7 @@ export default function OfflineProvider({
         await saveOfflineMutation(working);
         try {
           const response = await fetch("/api/offline/sync", { method: "POST", body: mutationBody(working) });
-          const result = await response.json().catch(() => ({})) as { error?: string; conflict?: boolean; retry?: boolean; version?: string };
+          const result = await response.json().catch(() => ({})) as { error?: string; conflict?: boolean; retry?: boolean; version?: string; indeterminate?: boolean };
           if (response.ok) {
             const key = guardedRecordKey(working.operation);
             if (key && result.version) await advanceSiblings(working, key, result.version);
@@ -185,6 +185,9 @@ export default function OfflineProvider({
               ...working,
               status: result.conflict ? "conflict" : "failed",
               error: result.error ?? "The server refused this offline change.",
+              // Carried so the Pending screen never offers to send it again --
+              // see requeueBase.
+              indeterminate: result.indeterminate === true,
             });
           }
         } catch {
