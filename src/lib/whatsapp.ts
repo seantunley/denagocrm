@@ -7,6 +7,7 @@ import {
   WA_LIST_DESCRIPTION_MAX,
   WA_LIST_ROW_MAX,
   WA_LIST_TITLE_MAX,
+  WA_TEXT_MAX,
 } from "./whatsappRendering";
 import { customerRecordTenantId } from "./customerRecordTenant";
 import { credentialOwnerTenantId, resolveIntegrationBundleForTenant, resolveTenantCredential } from "./settings";
@@ -227,7 +228,7 @@ export async function sendWhatsAppText(
       messaging_product: "whatsapp",
       to: toDigits,
       type: "text",
-      text: { body: text },
+      text: { body: text.slice(0, WA_TEXT_MAX) },
     }),
   });
   if (!res.ok) {
