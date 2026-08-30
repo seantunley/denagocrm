@@ -151,6 +151,87 @@ export function chainableSiblings(
   );
 }
 
+/**
+ * What a person actually typed, ready to be shown back to them.
+ *
+ * ── WHY THIS EXISTS ─────────────────────────────────────────────────────────
+ *
+ * Every refusal an offline replay can produce — no permission, a closed stage, a
+ * gated move, a module switched off, a record deleted, a conflict — used to end
+ * the same way: the form had already cleared, and the Pending list showed the
+ * operation TYPE and nothing else. So the damage was never the refusal. It was
+ * that the work existed nowhere afterwards.
+ *
+ * The queue has held the fields the whole time. Showing them turns every one of
+ * those refusals from lost work into a sentence and a form to re-enter — which
+ * matters most for the refusals nobody has thought of yet.
+ *
+ * Hidden plumbing is dropped: a person reading "what did I type" is not helped
+ * by `source=offline` or a contactId. Files are named rather than rendered —
+ * a queued photo is evidence that it is still on the device, not something to
+ * preview here.
+ */
+const RECOVERY_NOISE = new Set([
+  "source",
+  "contactId",
+  "assignedToId",
+  "ownerId",
+  "quantity",
+  "color",
+  "contactKind",
+  "tags",
+  "marketingOptOut",
+]);
+
+export type RecoveredField = { name: string; value: string; kind: "text" | "file" };
+
+export function recoverableFields(entry: OfflineMutation): RecoveredField[] {
+  return entry.fields
+    .filter((field) => !RECOVERY_NOISE.has(field.name))
+    .map((field) =>
+      field.kind === "text"
+        ? { name: field.name, value: field.value.trim(), kind: "text" as const }
+        : { name: field.name, value: field.fileName, kind: "file" as const },
+    )
+    .filter((field) => field.value.length > 0);
+}
+
+/** The same thing as one block of text, for pasting into the online form. */
+export function recoveryText(entry: OfflineMutation): string {
+  const lines = recoverableFields(entry).map((field) => `${field.name}: ${field.value}`);
+  return [`${entry.operation.type} — captured ${new Date(entry.createdAt).toLocaleString("en-ZA")}`, ...lines].join("\n");
+}
+
+/**
+ * Whether a refused change can honestly be queued again, and against what.
+ *
+ * A guarded operation needs a CURRENT version, or re-queueing it would either
+ * hit the same conflict again or — worse, if the version were simply dropped —
+ * overwrite whatever replaced it without anyone deciding to. When the record is
+ * no longer in the snapshot at all there is nothing to rebase onto, so the
+ * honest answer is that the work can be copied but not replayed.
+ */
+export function requeueBase(
+  entry: OfflineMutation,
+  snapshot: Pick<OfflineSnapshot, "leads" | "contacts" | "jobCards" | "deliveries"> | null,
+): { retryable: true; baseVersion?: string } | { retryable: false } {
+  const key = guardedRecordKey(entry.operation);
+  if (!key) return { retryable: true };
+  if (!snapshot) return { retryable: false };
+
+  const versions = new Map<string, string>();
+  for (const lead of snapshot.leads) versions.set(lead.id, lead.updatedAt);
+  for (const contact of snapshot.contacts) versions.set(contact.id, contact.updatedAt);
+  for (const quote of snapshot.deliveries) versions.set(quote.id, quote.updatedAt);
+  for (const job of snapshot.jobCards) {
+    versions.set(job.id, job.updatedAt);
+    for (const item of job.inspectionItems) versions.set(item.id, item.updatedAt);
+  }
+
+  const baseVersion = versions.get(key);
+  return baseVersion ? { retryable: true, baseVersion } : { retryable: false };
+}
+
 export type OfflineSnapshot = {
   tenantId: string;
   userId: string;

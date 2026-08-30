@@ -94,6 +94,41 @@ export async function saveOfflineMutation(entry: OfflineMutation): Promise<void>
   db.close();
 }
 
+/**
+ * Queue a refused change again, as a NEW change.
+ *
+ * ── WHY A NEW ID AND NOT A RETRY ────────────────────────────────────────────
+ *
+ * The server keeps a receipt per mutation id, and a refused one is CLOSED as
+ * rejected — that is what makes replays at-most-once. Sending the same id again
+ * therefore returns the stored rejection forever, however the record has changed
+ * since. A retry that could never succeed is worse than no retry button.
+ *
+ * So this is a fresh mutation carrying the same work: new id, new receipt, and a
+ * `baseVersion` the caller has re-read from the current snapshot. That makes the
+ * meaning honest — the person has SEEN the refusal and the record's current
+ * state, and is choosing to apply their values on top of it. The old entry is
+ * removed only after the new one is stored, so a failure here leaves the work
+ * queued rather than nowhere.
+ */
+export async function requeueOfflineMutation(
+  entry: OfflineMutation,
+  baseVersion?: string,
+): Promise<OfflineMutation> {
+  const next: OfflineMutation = {
+    ...entry,
+    id: crypto.randomUUID(),
+    operation: { ...entry.operation, ...(baseVersion ? { baseVersion } : {}) },
+    createdAt: Date.now(),
+    attempts: 0,
+    status: "pending",
+    error: undefined,
+  };
+  await saveOfflineMutation(next);
+  await removeOfflineMutation(entry.id);
+  return next;
+}
+
 export async function removeOfflineMutation(id: string): Promise<void> {
   const db = await openDb();
   await request(db.transaction(MUTATIONS, "readwrite").objectStore(MUTATIONS).delete(id));

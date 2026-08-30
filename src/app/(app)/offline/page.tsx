@@ -3,9 +3,12 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import ProofOfDelivery from "@/components/ProofOfDelivery";
 import { useOffline } from "@/components/OfflineProvider";
-import { listOfflineMutations, removeOfflineMutation } from "@/lib/offlineClient";
+import { listOfflineMutations, removeOfflineMutation, requeueOfflineMutation } from "@/lib/offlineClient";
 import {
   NO_OFFLINE_CAPABILITIES,
+  recoverableFields,
+  recoveryText,
+  requeueBase,
   type OfflineDescriptor,
   type OfflineMutation,
 } from "@/lib/offlineTypes";
@@ -21,6 +24,7 @@ export default function OfflineWorkspacePage() {
   const [tab, setTab] = useState<Tab>("Job cards");
   const [entries, setEntries] = useState<OfflineMutation[]>([]);
   const queueLock = useRef(false);
+  const [copied, setCopied] = useState<string | null>(null);
 
   async function reloadEntries() {
     if (!offline.snapshot) return;
@@ -309,12 +313,89 @@ export default function OfflineWorkspacePage() {
 
           {tab === "Pending" && (
             <div className="space-y-3">
-              {entries.length === 0 ? <div className="card text-sm text-muted-foreground">Nothing is waiting to synchronise.</div> : entries.map((entry) => (
-                <div key={entry.id} className="card flex items-start justify-between gap-3">
-                  <div><p className="font-semibold">{entry.operation.type}</p><p className="text-xs text-muted-foreground">{new Date(entry.createdAt).toLocaleString("en-ZA")} · {entry.status}</p>{entry.error && <p className="mt-1 text-xs text-red-300">{entry.error}</p>}</div>
-                  <button type="button" className="btn-secondary btn-sm" onClick={async () => { await removeOfflineMutation(entry.id); await reloadEntries(); }}>Discard</button>
-                </div>
-              ))}
+              {/*
+                WHAT WAS TYPED, not just what was attempted.
+
+                Every refusal a replay can produce — no permission, a closed
+                stage, a gated move, a module switched off, a deleted record, a
+                conflict — used to end the same way: the form had already
+                cleared, and this list showed the operation type and nothing
+                else. The refusal was never the damage; the work existing
+                nowhere afterwards was. The queue held these fields the whole
+                time.
+              */}
+              {entries.length === 0 ? <div className="card text-sm text-muted-foreground">Nothing is waiting to synchronise.</div> : entries.map((entry) => {
+                const fields = recoverableFields(entry);
+                const requeue = requeueBase(entry, snapshot);
+                const stuck = entry.status === "failed" || entry.status === "conflict";
+                return (
+                  <div key={entry.id} className="card space-y-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="font-semibold">{entry.operation.type}</p>
+                        <p className="text-xs text-muted-foreground">{new Date(entry.createdAt).toLocaleString("en-ZA")} · {entry.status}</p>
+                      </div>
+                      <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                        stuck ? "bg-red-500/15 text-red-300" : "bg-muted text-muted-foreground"
+                      }`}>{stuck ? "needs you" : "waiting"}</span>
+                    </div>
+
+                    {entry.error && (
+                      <p className="rounded-lg border border-red-500/25 bg-red-500/8 px-3 py-2 text-xs text-red-300">{entry.error}</p>
+                    )}
+
+                    {fields.length > 0 && (
+                      <dl className="grid gap-x-4 gap-y-1 rounded-lg border border-border bg-muted/20 p-3 text-xs sm:grid-cols-2">
+                        {fields.map((field) => (
+                          <div key={field.name} className="min-w-0">
+                            <dt className="text-[10px] uppercase tracking-wide text-muted-foreground">{field.name}</dt>
+                            <dd className="break-words text-foreground">
+                              {field.kind === "file" ? `📎 ${field.value}` : field.value}
+                            </dd>
+                          </div>
+                        ))}
+                      </dl>
+                    )}
+
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        className="btn-secondary btn-sm"
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard.writeText(recoveryText(entry));
+                            setCopied(entry.id);
+                          } catch {
+                            // A clipboard the browser refuses is not a dead end:
+                            // the fields are on screen to be read either way.
+                            setCopied(null);
+                          }
+                        }}
+                      >
+                        {copied === entry.id ? "Copied" : "Copy details"}
+                      </button>
+                      {stuck && (requeue.retryable ? (
+                        <button
+                          type="button"
+                          className="btn-secondary btn-sm"
+                          onClick={async () => {
+                            await requeueOfflineMutation(entry, requeue.baseVersion);
+                            await reloadEntries();
+                            if (offline.online) await offline.syncNow();
+                          }}
+                        >
+                          Try again
+                        </button>
+                      ) : (
+                        <span className="self-center text-[11px] text-amber-200">
+                          The record this belongs to is no longer on this device — copy the details and re-enter them online.
+                        </span>
+                      ))}
+                      <button type="button" className="btn-secondary btn-sm ml-auto" onClick={async () => { await removeOfflineMutation(entry.id); await reloadEntries(); }}>Discard</button>
+                    </div>
+                  </div>
+                );
+              })}
               {offline.online && entries.length > 0 && <button type="button" className="btn-primary w-full" onClick={() => void offline.syncNow()}>Synchronise now</button>}
             </div>
           )}

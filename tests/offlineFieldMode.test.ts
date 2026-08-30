@@ -7,6 +7,9 @@ import {
   chainableSiblings,
   guardedRecordKey,
   NO_OFFLINE_CAPABILITIES,
+  recoverableFields,
+  recoveryText,
+  requeueBase,
   type OfflineMutation,
 } from "../src/lib/offlineTypes";
 
@@ -551,4 +554,153 @@ test("A GUARDED RECORD THAT NO LONGER EXISTS IS A CONFLICT", () => {
   // The write that made this silent: still an updateMany, which is why the guard
   // above has to be the thing that catches it.
   assert.match(src("src/app/actions/jobcards.ts"), /prisma\.jobCardInspectionItem\.updateMany\(/);
+});
+
+/* ── a refusal must not be the end of the work ───────────────────────────── */
+
+/*
+ * THE REFUSAL WAS NEVER THE DAMAGE.
+ *
+ * Every refusal an offline replay can produce — no permission, a closed stage, a
+ * gated move, a module switched off, a deleted record, a conflict — ended the
+ * same way: the form had already cleared, and Pending showed the operation TYPE
+ * and nothing else. That is what made each of them lost work rather than a
+ * sentence to read. The queue held the fields the whole time.
+ *
+ * This matters most for the refusals nobody has thought of yet.
+ */
+
+const captured = (over: Partial<OfflineMutation> & Pick<OfflineMutation, "id" | "operation">): OfflineMutation => ({
+  tenantId: "t1",
+  userId: "u1",
+  fields: [],
+  createdAt: 1_700_000_000_000,
+  attempts: 1,
+  status: "failed",
+  ...over,
+});
+
+test("WHAT THE PERSON TYPED SURVIVES A REFUSAL", () => {
+  const entry = captured({
+    id: "a",
+    operation: { type: "lead.create" },
+    error: "You do not have permission to create leads",
+    fields: [
+      { name: "name", kind: "text", value: "Jan Bekker" },
+      { name: "phone", kind: "text", value: "082 555 0134" },
+      { name: "notes", kind: "text", value: "Wants a finance quote" },
+    ],
+  });
+  assert.deepEqual(
+    recoverableFields(entry).map((f) => `${f.name}=${f.value}`),
+    ["name=Jan Bekker", "phone=082 555 0134", "notes=Wants a finance quote"],
+  );
+  const text = recoveryText(entry);
+  assert.match(text, /lead\.create/);
+  assert.match(text, /name: Jan Bekker/);
+  assert.match(text, /notes: Wants a finance quote/);
+});
+
+test("plumbing and blanks are not shown back as if they were typed", () => {
+  const entry = captured({
+    id: "a",
+    operation: { type: "lead.create" },
+    fields: [
+      { name: "name", kind: "text", value: "Jan" },
+      { name: "source", kind: "text", value: "offline" },
+      { name: "contactId", kind: "text", value: "c_123" },
+      { name: "email", kind: "text", value: "   " },
+    ],
+  });
+  assert.deepEqual(recoverableFields(entry).map((f) => f.name), ["name"]);
+});
+
+test("a queued photo is named, not lost", () => {
+  const entry = captured({
+    id: "a",
+    operation: { type: "jobcard.photo", recordId: "job1" },
+    fields: [{ name: "file", kind: "file", value: new Blob(["x"]), fileName: "front-bumper.jpg", contentType: "image/jpeg" }],
+  });
+  assert.deepEqual(recoverableFields(entry), [{ name: "file", value: "front-bumper.jpg", kind: "file" }]);
+});
+
+test("RE-QUEUEING REBASES ONTO THE RECORD AS IT IS NOW", () => {
+  /*
+   * A guarded operation needs a CURRENT version. Re-sending the stale one hits
+   * the same conflict; dropping it would overwrite whatever replaced the record
+   * without anyone deciding to.
+   */
+  const entry = captured({
+    id: "a",
+    status: "conflict",
+    operation: { type: "lead.update", recordId: "l1", baseVersion: "V1" },
+  });
+  const snapshot = {
+    leads: [{ id: "l1", updatedAt: "V2" }],
+    contacts: [],
+    jobCards: [],
+    deliveries: [],
+  } as unknown as Parameters<typeof requeueBase>[1];
+
+  assert.deepEqual(requeueBase(entry, snapshot), { retryable: true, baseVersion: "V2" });
+});
+
+test("a record no longer on the device can be copied but not replayed", () => {
+  // Nothing to rebase onto, so "Try again" is not offered — the honest answer is
+  // to copy the details and re-enter them online.
+  const entry = captured({ id: "a", status: "conflict", operation: { type: "lead.update", recordId: "gone", baseVersion: "V1" } });
+  const snapshot = { leads: [], contacts: [], jobCards: [], deliveries: [] } as unknown as Parameters<typeof requeueBase>[1];
+  assert.deepEqual(requeueBase(entry, snapshot), { retryable: false });
+  assert.deepEqual(requeueBase(entry, null), { retryable: false });
+});
+
+test("an unguarded change needs no version to be replayed", () => {
+  const entry = captured({ id: "a", operation: { type: "lead.create" } });
+  assert.deepEqual(requeueBase(entry, null), { retryable: true });
+});
+
+test("an inspection re-queues against the ITEM's version", () => {
+  // The guard moved to the item; recovery has to follow it or a retry would
+  // rebase onto the wrong row.
+  const entry = captured({
+    id: "a",
+    status: "conflict",
+    operation: { type: "jobcard.inspection", recordId: "item1", parentId: "job1", baseVersion: "I1" },
+  });
+  const snapshot = {
+    leads: [],
+    contacts: [],
+    deliveries: [],
+    jobCards: [{ id: "job1", updatedAt: "J9", inspectionItems: [{ id: "item1", updatedAt: "I2" }] }],
+  } as unknown as Parameters<typeof requeueBase>[1];
+  assert.deepEqual(requeueBase(entry, snapshot), { retryable: true, baseVersion: "I2" });
+});
+
+test("a retry is a NEW mutation, because a rejected receipt is closed forever", () => {
+  /*
+   * The server keeps a receipt per mutation id and closes a refused one as
+   * rejected — that is what makes replays at-most-once. Re-sending the same id
+   * returns the stored rejection however the record has changed since, so a
+   * retry button on the same id could never succeed.
+   */
+  const client = src("src/lib/offlineClient.ts");
+  assert.match(client, /id: crypto\.randomUUID\(\)/);
+  assert.match(client, /status: "pending",\s*\r?\n\s*error: undefined,/);
+  // Stored before the old one is removed, so a failure leaves the work queued
+  // rather than nowhere.
+  const fn = client.slice(client.indexOf("export async function requeueOfflineMutation"));
+  assert.ok(
+    fn.indexOf("saveOfflineMutation(next)") < fn.indexOf("removeOfflineMutation(entry.id)"),
+    "the replacement must exist before the original is deleted",
+  );
+  assert.match(src("src/app/api/offline/sync/route.ts"), /previous\.status === "rejected"/);
+});
+
+test("the Pending screen shows the fields and offers the way out", () => {
+  const workspace = src("src/app/(app)/offline/page.tsx");
+  assert.match(workspace, /const fields = recoverableFields\(entry\);/);
+  assert.match(workspace, /const requeue = requeueBase\(entry, snapshot\);/);
+  assert.match(workspace, /recoveryText\(entry\)/, "copying out is what makes a permanent refusal survivable");
+  assert.match(workspace, /requeueOfflineMutation\(entry, requeue\.baseVersion\)/);
+  assert.match(workspace, /no longer on this device — copy the details and re-enter them online/);
 });
