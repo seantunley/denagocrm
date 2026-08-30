@@ -704,3 +704,44 @@ test("the Pending screen shows the fields and offers the way out", () => {
   assert.match(workspace, /requeueOfflineMutation\(entry, requeue\.baseVersion\)/);
   assert.match(workspace, /no longer on this device — copy the details and re-enter them online/);
 });
+
+/* ── round six ───────────────────────────────────────────────────────────── */
+
+test("MAKING THE STANDARD EDIT FORMS QUEUEABLE DID NOT SKIP THE STAGE GATE", () => {
+  /*
+   * Passing offlineRecordId turned the two standard lead edit routes into forms
+   * that queue — and their stage picker had no capability gate, unlike the
+   * offline workspace's. updateLead refuses a stage change without
+   * leads.change_stage, so an enabled picker was a promise the save could not
+   * keep: online the refusal is immediate and the form is still filled in;
+   * offline it arrives after the modal has closed.
+   */
+  const form = src("src/components/LeadForm.tsx");
+  assert.match(form, /disabled=\{!canChangeStage\}/);
+  assert.match(form, /name=\{canChangeStage \? "stageId" : undefined\}/);
+  // A disabled select posts nothing, and updateLead compares the submitted stage
+  // against the stored one — the silence would itself read as a change.
+  assert.match(form, /!canChangeStage && <input type="hidden" name="stageId" value=\{stageId\}/);
+  // Both edit call sites must resolve it; a create does not need it, so the
+  // default stays permissive.
+  assert.match(form, /canChangeStage = true,/);
+  for (const page of ["src/app/(app)/leads/[id]/page.tsx", "src/app/(app)/leads/[id]/edit/page.tsx"]) {
+    assert.match(src(page), /hasPermission\(user, "leads\.change_stage"\)/, `${page} must resolve the permission`);
+    assert.match(src(page), /canChangeStage=\{/, `${page} must pass it`);
+  }
+});
+
+test("A REDIRECT TO LOGIN IS NOT CACHED AS THE OFFLINE SHELL", () => {
+  /*
+   * With an expired session /offline redirects to /login and fetch FOLLOWS it,
+   * so response.ok is true and the body is the sign-in page. Caching that
+   * overwrote the authenticated shell: the next loss of connectivity served a
+   * login form with no workspace behind it, and no way to sign in either.
+   */
+  const worker = src("public/sw.js");
+  assert.match(worker, /!response\.redirected && finalPath === SHELL_KEY/);
+  assert.match(worker, /new URL\(response\.url \|\| event\.request\.url\)\.pathname/);
+  // The guard must sit on the branch that WRITES the shell.
+  const shellBranch = worker.slice(worker.indexOf('if (url.pathname === "/offline")'), worker.indexOf("event.respondWith(fetch(event.request).catch("));
+  assert.match(shellBranch, /response\.ok && !response\.redirected/);
+});

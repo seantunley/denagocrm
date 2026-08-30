@@ -101,7 +101,27 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       fetch(event.request)
         .then((response) => {
-          if (response.ok) {
+          /*
+           * A 200 IS NOT PROOF THIS IS THE SHELL.
+           *
+           * When the session has expired, /offline redirects to /login and fetch
+           * FOLLOWS it — so `response.ok` is true and the body is the login
+           * page. Caching that overwrote the authenticated shell with a sign-in
+           * form, and the next time the device lost connectivity the fallback
+           * served it: no workspace, no queued work reachable, and no way to
+           * sign in either, because signing in needs the network.
+           *
+           * `redirected` catches the followed hop and the pathname check catches
+           * a rewrite that did not set it.
+           */
+          const finalPath = (() => {
+            try {
+              return new URL(response.url || event.request.url).pathname;
+            } catch {
+              return null;
+            }
+          })();
+          if (response.ok && !response.redirected && finalPath === SHELL_KEY) {
             const copy = response.clone();
             event.waitUntil(caches.open(OFFLINE_CACHE).then((cache) => cache.put(SHELL_KEY, copy)));
           }

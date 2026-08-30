@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { updateLead } from "@/app/actions/leads";
-import { getAccessibleContactIds, requireLeadAccess } from "@/lib/permissions";
+import { getAccessibleContactIds, hasPermission, requireLeadAccess } from "@/lib/permissions";
 import { listActingTenantStaff } from "@/lib/tenantActor";
 import LeadForm from "@/components/LeadForm";
 import { contactName } from "@/lib/format";
@@ -54,6 +54,7 @@ export default async function EditLeadPage({
         defaults={lead}
         offlineRecordId={lead.id}
         offlineBaseVersion={lead.updatedAt.toISOString()}
+        canChangeStage={await hasPermission(user, "leads.change_stage")}
         submitLabel="Save changes"
       />
     </div>
