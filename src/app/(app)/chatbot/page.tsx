@@ -12,7 +12,6 @@ import {
   setBotKnowledgeStatus,
   deleteBotKnowledge,
   whisperConfigured,
-  telegramStatus,
 } from "@/app/actions/bot";
 import ClearSecret from "@/components/ClearSecret";
 import { Bot, BrainCircuit, BookOpenCheck, GitBranch, MessagesSquare, Radio } from "lucide-react";
@@ -21,13 +20,12 @@ import { StatusPill, Surface } from "@/components/visual-system";
 
 export default async function ChatbotSettingsPage() {
   await requireOwner();
-  const [settings, botFaqs, knowledge, libraryDocuments, hasWhisper, tg] = await Promise.all([
+  const [settings, botFaqs, knowledge, libraryDocuments, hasWhisper] = await Promise.all([
     prisma.appSetting.findMany(),
     getBotFaqs(),
     getBotKnowledgeEntries(),
     prisma.libraryDocument.findMany({ select: { id: true, name: true }, orderBy: { updatedAt: "desc" }, take: 100 }),
     whisperConfigured(),
-    telegramStatus(),
   ]);
   const setting = (key: string) => {
     const raw = settings.find((s) => s.key === key)?.value ?? "";
@@ -169,26 +167,19 @@ export default async function ChatbotSettingsPage() {
             </details>
           </Surface>
 
-          <Surface className="p-5">
-            {/*
-              Status here, connecting in Settings.
+          {/*
+            Telegram is not here at all, and that is the point.
 
-              This card used to carry its own Connect form, which made Telegram
-              the only channel with two doors — and the only one absent from the
-              screen that lists customer channels. Showing where the bot runs is
-              useful on this page; being a second place to configure it is how
-              the two drift apart.
-            */}
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">Telegram {tg.connected && <span className={tg.enabled ? "text-emerald-400 normal-case" : "text-amber-300 normal-case"}>· {tg.enabled ? "connected & live" : "token saved, webhook not registered"}</span>}</p>
-            <p className="text-xs text-muted-foreground mb-2">
-              {tg.connected
-                ? "Your Telegram bot runs this same published flow."
-                : "Connect a Telegram bot to run this same published flow on Telegram."}
-            </p>
-            <Link href="/settings?tab=integrations" className="btn-secondary btn-sm">
-              {tg.connected ? "Manage in Settings" : "Set up in Settings"}
-            </Link>
-          </Surface>
+            A channel is configured in Settings → Integrations, like WhatsApp,
+            Meta and X. Telegram had its own card on this page — the only
+            channel with a second home — and was correspondingly missing from
+            the screen that lists customer channels, so people looking in the
+            obvious place concluded it was unsupported.
+
+            What DOES belong on this page is how the bot behaves, not where it
+            connects: the master switch, the guided-flow toggle, and the
+            Messenger/Instagram DM toggle above are all bot behaviour.
+          */}
         </aside>
       </div>
     </div>

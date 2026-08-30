@@ -9,6 +9,19 @@ import { TENANT_CREDENTIAL_INTEGRATIONS, isKnownTenantCredentialKey } from "../s
 const root = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const read = (rel: string) => readFileSync(join(root, rel), "utf8");
 
+/**
+ * Source with comments stripped — the repo's usual `shipped()` convention.
+ *
+ * Needed here in particular: the chatbot page carries a comment explaining why
+ * Telegram is NOT on it, and a naive scan would match that comment and report
+ * the very thing it documents as still present. JSX `{/* … *\/}` blocks are
+ * ordinary block comments once the braces are gone.
+ */
+const shipped = (rel: string) =>
+  read(rel)
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+
 const SETTINGS = "src/app/(app)/settings/page.tsx";
 const CHATBOT = "src/app/(app)/chatbot/page.tsx";
 
@@ -51,15 +64,23 @@ test("the badge distinguishes 'token stored' from 'actually receiving'", () => {
   assert.match(source, /webhook not registered/i);
 });
 
-test("the chatbot page shows status but is no longer a second place to configure it", () => {
-  const source = read(CHATBOT);
-  assert.match(source, /Telegram/, "the chatbot page may still say where the bot runs");
-  assert.doesNotMatch(
-    source,
-    /action=\{connectTelegram\}/,
-    "two doors to one credential is how the two drift apart",
-  );
-  assert.match(source, /href="\/settings\?tab=integrations"/, "…and it should point at the one door");
+test("A CHANNEL IS CONFIGURED IN ONE PLACE — Telegram is not on the chatbot page at all", () => {
+  /*
+   * The rule, stated plainly: channel setup lives in Settings → Integrations,
+   * like WhatsApp, Meta and X. Nothing about connecting Telegram — not a form,
+   * not a status badge, not a shortcut — belongs anywhere else.
+   *
+   * Telegram was the only channel with a second home, and was correspondingly
+   * missing from the screen that lists customer channels, so people looking in
+   * the obvious place concluded it was unsupported.
+   *
+   * The chatbot page keeps BOT BEHAVIOUR: the master switch, the guided-flow
+   * toggle, and the Messenger/Instagram DM toggle. Those are about how the bot
+   * acts, not about where a channel connects.
+   */
+  const source = shipped(CHATBOT);
+  assert.doesNotMatch(source, /Telegram/, "channel setup belongs only in Settings → Integrations");
+  assert.doesNotMatch(source, /telegramStatus|connectTelegram|disconnectTelegram/);
 });
 
 test("the override page no longer offers a Telegram token it cannot make work", () => {
