@@ -1591,6 +1591,11 @@ model JobCardInspectionItem {
   photoStoredName String? // blob URL / filename from saveFile
   sortOrder      Int      @default(0)
   createdAt      DateTime @default(now())
+  // Its OWN version. Offline replays used to be conflict-checked against the
+  // parent JobCard, which setInspectionItem and uploadInspectionPhoto never
+  // write — so a concurrent change to an item was invisible to the guard and
+  // was silently overwritten.
+  updatedAt      DateTime @default(now()) @updatedAt
 
   jobCardId String
   jobCard   JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
@@ -3039,4 +3044,22 @@ model ChannelIdentity {
 
   @@unique([channel, externalId]) // one endpoint belongs to exactly one tenant
   @@index([tenantId])
+}
+
+
+/// Idempotency ledger for mutations captured while a device was offline.
+/// Payloads and customer data are deliberately not stored here; those remain on
+/// the device until the existing authorised action accepts them.
+model OfflineMutationReceipt {
+  id          String    @id
+  tenantId    String
+  userId      String
+  operation   String
+  status      String    @default("processing")
+  result      Json?
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  @@index([tenantId, createdAt])
+  @@index([userId, createdAt])
 }

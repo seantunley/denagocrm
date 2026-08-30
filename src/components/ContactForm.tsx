@@ -48,6 +48,8 @@ import { contactKind } from "@/lib/contactKind";
 import { cn } from "@/lib/utils";
 
 type ContactDefaults = {
+  /** Present when EDITING. See the offlineOperation comment below. */
+  id?: string;
   isCompany?: boolean;
   fleetId?: string | null;
   vatNumber?: string | null;
@@ -78,6 +80,8 @@ export default function ContactForm({
   users = [],
   fleetPicker = NO_FLEET_PICKER,
   variant = "compact",
+  offlineRecordId,
+  offlineBaseVersion,
 }: {
   action: (formData: FormData) => Promise<ActionResult | void>;
   defaults?: ContactDefaults;
@@ -92,6 +96,8 @@ export default function ContactForm({
    */
   fleetPicker?: FleetPicker;
   variant?: ContactFormVariant;
+  offlineRecordId?: string;
+  offlineBaseVersion?: string;
 }) {
   const isPage = variant === "page";
   const isDialog = variant === "dialog";
@@ -107,6 +113,22 @@ export default function ContactForm({
       // the saved values — so clearing it here would only blank fields the person
       // is still looking at.
       resetOnSuccess={false}
+      /*
+        The same rule as LeadForm, for the same reason: a missing record id is
+        not evidence of a create. An edit whose offline identity was never passed
+        offers NO offline operation, so SaveForm refuses rather than queueing a
+        duplicate contact under the wrong verb. Every edit call site here does
+        pass it today -- this is what keeps that true.
+      */
+      offlineOperation={
+        defaults.id && !offlineRecordId
+          ? undefined
+          : {
+              type: offlineRecordId ? "contact.update" : "contact.create",
+              recordId: offlineRecordId,
+              baseVersion: offlineBaseVersion,
+            }
+      }
       className={cn(
         "space-y-4",
         variant === "compact" && "card max-w-3xl",

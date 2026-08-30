@@ -30,6 +30,14 @@ export type LeadFormProduct = {
 };
 
 type LeadDefaults = {
+  /**
+   * Present when this form is EDITING a lead.
+   *
+   * Declared so the offline path can tell an edit from a create without being
+   * told twice. See the offlineOperation comment below: inferring "create" from
+   * a missing optional id is what queued an edit as a new lead.
+   */
+  id?: string;
   title?: string;
   name?: string;
   email?: string | null;
@@ -66,6 +74,9 @@ export default function LeadForm({
   submitLabel,
   users = [],
   variant = "compact",
+  offlineRecordId,
+  offlineBaseVersion,
+  canChangeStage = true,
 }: {
   action: (formData: FormData) => Promise<ActionResult | void>;
   products: LeadFormProduct[];
@@ -75,6 +86,20 @@ export default function LeadForm({
   submitLabel: string;
   users?: { id: string; name: string }[];
   variant?: LeadFormVariant;
+  offlineRecordId?: string;
+  offlineBaseVersion?: string;
+  /**
+   * Whether this person may move the lead between stages.
+   *
+   * `updateLead` refuses the change without `leads.change_stage`, so an enabled
+   * picker is a promise the save cannot keep. It matters more since these forms
+   * became offline-queueable: online the refusal is immediate and the form is
+   * still filled in; offline it arrives after the modal has closed.
+   *
+   * Defaults to true because a CREATE has no stage to move away from —
+   * createLead validates the stage but does not require this permission.
+   */
+  canChangeStage?: boolean;
 }) {
   const [name, setName] = useState(defaults.name ?? "");
   const [contactId, setContactId] = useState(defaults.contactId ?? "");
@@ -127,6 +152,30 @@ export default function LeadForm({
       // Replaced on success — create redirects, edit re-renders with the saved
       // values — so a reset would only blank fields still on screen.
       resetOnSuccess={false}
+      /*
+        A MISSING RECORD ID IS NOT EVIDENCE OF A CREATE.
+
+        This read `offlineRecordId ? "lead.update" : "lead.create"`, so the edit
+        modal on the lead detail page -- which passes updateLead and the lead's
+        own defaults, but never passed offlineRecordId -- queued its submission
+        as a NEW LEAD. Offline, a user with create permission got a duplicate on
+        replay; an edit-only user got a refusal after being told it was saved.
+
+        `defaults.id` is what actually distinguishes the two, so an edit that was
+        not given its offline identity now offers NO offline operation at all:
+        SaveForm refuses with "This operation requires an internet connection"
+        rather than queueing the wrong verb. A call site that forgets loses
+        offline support for that form -- it does not silently corrupt data.
+      */
+      offlineOperation={
+        defaults.id && !offlineRecordId
+          ? undefined
+          : {
+              type: offlineRecordId ? "lead.update" : "lead.create",
+              recordId: offlineRecordId,
+              baseVersion: offlineBaseVersion,
+            }
+      }
       className={cn(
         "space-y-4",
         variant === "compact" && "card max-w-3xl",
@@ -275,11 +324,31 @@ export default function LeadForm({
         description="Place the lead in the right stage, record its source and choose who owns the next action."
       >
         <Field label="Pipeline stage">
-          <select name="stageId" className="input" value={stageId} onChange={(event) => setStageId(event.target.value)} required>
+          <select
+            name={canChangeStage ? "stageId" : undefined}
+            className="input"
+            value={stageId}
+            onChange={(event) => setStageId(event.target.value)}
+            disabled={!canChangeStage}
+            title={canChangeStage ? undefined : "Your role cannot move leads between stages."}
+            required={canChangeStage}
+          >
             {stages.map((item) => (
               <option key={item.id} value={item.id}>{item.name}</option>
             ))}
           </select>
+          {/*
+            A disabled select posts NOTHING, and updateLead compares the
+            submitted stage against the stored one — so without carrying the
+            current stage the save would read that silence as a stage change and
+            refuse it for precisely the reason being avoided.
+          */}
+          {!canChangeStage && <input type="hidden" name="stageId" value={stageId} />}
+          {!canChangeStage && (
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Your role cannot move leads between stages.
+            </p>
+          )}
         </Field>
         {/*
           The field STAYS when there is nobody to list.

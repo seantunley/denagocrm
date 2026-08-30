@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
-import { Truck, FileText, Wallet, CalendarClock, PackageCheck, ArrowRight, Camera } from "lucide-react";
+import { Truck, FileText, Wallet, CalendarClock, PackageCheck, ArrowRight } from "lucide-react";
 import DirectPhotoUploader from "@/components/DirectPhotoUploader";
 import { prisma } from "@/lib/db";
 import {
@@ -163,7 +163,7 @@ export default async function DeliveriesPage() {
                         </Link>
                         {canManage && stageKey === "deliver" ? (
                           <>
-                            <ProofOfDelivery quoteId={quote.id} />
+                            <ProofOfDelivery quoteId={quote.id} baseVersion={quote.updatedAt.toISOString()} />
                             <p className="mt-1 text-[10px] text-muted-foreground/70">
                               Review the note, then capture the driver, handover checklist and customer signature on this device.
                             </p>
@@ -328,7 +328,7 @@ export default async function DeliveriesPage() {
                         )}
                         {canManage && column.key === "deliver" && (
                           <div className="mt-2.5 border-t border-border/60 pt-2.5">
-                            <ProofOfDelivery quoteId={quote.id} />
+                            <ProofOfDelivery quoteId={quote.id} baseVersion={quote.updatedAt.toISOString()} />
                             <p className="mt-1 text-[10px] text-muted-foreground/70">Capture driver, handover checklist &amp; signature.</p>
                             <DirectPhotoUploader kind="delivery" recordId={quote.id} tenantId={quote.tenantId ?? ""} label="Add delivery photos" className="mt-1.5" />
                           </div>

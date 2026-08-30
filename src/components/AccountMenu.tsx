@@ -14,6 +14,9 @@ import {
 import { logout } from "@/app/login/actions";
 import { APP_VERSION } from "@/lib/version";
 import { cn } from "@/lib/utils";
+import { purgeOfflineData } from "@/lib/offlineClient";
+import { useOptionalOffline } from "@/components/OfflineProvider";
+import { toast } from "sonner";
 
 export type AccountMenuUser = {
   name: string;
@@ -48,6 +51,64 @@ export default function AccountMenu({
   isOwner: boolean;
   compact?: boolean;
 }) {
+  const offline = useOptionalOffline();
+
+  async function signOutSafely() {
+    /*
+     * DO NOT DESTROY UNSYNCED WORK TO SIGN SOMEBODY OUT.
+     *
+     * The purge below is irreversible and runs FIRST, deliberately — the next
+     * person on this device must not inherit the last one's records. Everything
+     * therefore depends on there being nothing left worth keeping.
+     *
+     * BEING ONLINE IS NOT THAT ASSURANCE, which is what the first version of
+     * this guard got wrong. A full outbox on a connected device is the ordinary
+     * state moments after coming back into signal, and failed or conflicted
+     * entries sit there indefinitely BY DESIGN, waiting for somebody to read
+     * them. Signing out then deleted a day of captured work and the photos with
+     * it. (Offline it was worse still: `logout()` is a Server Action, so it
+     * failed after the purge and left the session signed in.)
+     *
+     * The queue itself is the question, so the queue is what is asked. Signing
+     * out is never urgent enough to be worth silently discarding work.
+     */
+    // `useOptionalOffline` rather than the hook: the provider is only mounted
+    // when a workspace resolved, and where there is no provider there is no
+    // partition and so nothing queued to lose.
+    const queued = offline?.pending ?? 0;
+    if (queued > 0) {
+      toast.error(
+        navigator.onLine
+          ? `${queued} offline change${queued === 1 ? "" : "s"} still to synchronise. Open the offline workspace, clear the queue, then sign out.`
+          : `You are offline with ${queued} unsynchronised change${queued === 1 ? "" : "s"}. Reconnect and let them sync before signing out.`,
+      );
+      return;
+    }
+    if (!navigator.onLine) {
+      // Nothing queued, but signing out still ends with a Server Action that
+      // cannot run — and the purge would already have taken the cached records.
+      toast.error("You are offline. Reconnect before signing out.");
+      return;
+    }
+    try {
+      // Customer records and queued files must be gone BEFORE the authenticated
+      // session is ended. Swallowing a storage failure would leave the next
+      // person using this device with the previous user's offline evidence.
+      await purgeOfflineData();
+      if ("caches" in window) {
+        const cache = await caches.open("denago-offline-v1");
+        // The owner stamp goes with the shell. Leaving it behind would make the
+        // worker believe the next arrival of this same user needs no
+        // invalidation, when there is no longer a shell it can vouch for.
+        await Promise.all([cache.delete("/offline"), cache.delete("/__offline-shell-owner")]);
+      }
+    } catch {
+      toast.error("Offline customer data could not be removed. Sign-out was stopped; free device storage and try again.");
+      return;
+    }
+    await logout();
+  }
+
   const avatar = (
     <Avatar className={cn("rounded-md", compact ? "size-7" : "size-7")}>
       {user.avatarVersion ? (
@@ -135,7 +196,7 @@ export default function AccountMenu({
           </DropdownMenuItem>
         )}
         <DropdownMenuSeparator />
-        <DropdownMenuItem variant="destructive" onSelect={() => logout()}>
+        <DropdownMenuItem variant="destructive" onSelect={() => void signOutSafely()}>
           <LogOut className="size-4" />
           Sign out
         </DropdownMenuItem>

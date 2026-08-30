@@ -28,6 +28,7 @@ import ResearchTabPanel from "@/components/ResearchTabPanel";
 import { isAiConfigured } from "@/lib/ai";
 import { isWhatsAppConfigured } from "@/lib/whatsapp";
 import { requireUser } from "@/lib/auth";
+import { hasPermission } from "@/lib/permissions";
 import { listActingTenantStaff } from "@/lib/tenantActor";
 import { brandForTenant, teamSignoff } from "@/lib/tenantBrand";
 import { getActiveTenantId } from "@/lib/auth";
@@ -72,6 +73,11 @@ export default async function LeadDetailPage({
   });
   if (!lead) notFound();
   const automotiveOn = await isModuleEnabled("automotive");
+  // updateLead refuses a stage change without this, so the picker must not offer
+  // one. It matters more now the modal is offline-queueable: online the refusal
+  // is immediate and the form is still filled in; offline it arrives long after
+  // the modal has closed.
+  const canChangeStage = await hasPermission(user, "leads.change_stage");
   const alreadyViewed = !!lead.viewedAt;
   const [contacts, users, templates, smtpConfigured, audit, waConfigured, libraryDocuments, products, stages] = await Promise.all([
     prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
@@ -237,6 +243,9 @@ export default async function LeadDetailPage({
                             contacts={contacts.map((c) => ({ id: c.id, label: contactName(c) }))}
                             users={users.map((u) => ({ id: u.id, name: u.name }))}
                             defaults={lead}
+                            offlineRecordId={lead.id}
+                            offlineBaseVersion={lead.updatedAt.toISOString()}
+                            canChangeStage={canChangeStage}
                             submitLabel="Save changes"
                           />
                         </ModalTrigger>

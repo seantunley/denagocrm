@@ -13,7 +13,7 @@ const CHECKLIST = [
   "Cart inspected — no visible damage",
 ];
 
-export default function ProofOfDelivery({ quoteId }: { quoteId: string }) {
+export default function ProofOfDelivery({ quoteId, baseVersion }: { quoteId: string; baseVersion: string }) {
   const [open, setOpen] = useState(false);
   const [checked, setChecked] = useState<Record<string, boolean>>({});
   const [sig, setSig] = useState("");
@@ -75,6 +75,7 @@ export default function ProofOfDelivery({ quoteId }: { quoteId: string }) {
               action={markDelivered.bind(null, quoteId)}
               success="Delivery confirmed"
               resetOnSuccess={false}
+              offlineOperation={{ type: "delivery.complete", recordId: quoteId, baseVersion }}
               className="space-y-4"
             >
               <div>
