@@ -1,5 +1,14 @@
 -- Comment threads in the Social Inbox.
 --
+-- DATE-STAMPED, NOT NUMBERED, AND THAT MATTERS. apply-migrations.mjs orders by
+-- true NUMERIC prefix, so the date-stamped tenancy migrations (20260722…,
+-- 20260727…) sort AFTER every small number. `Conversation."tenantId"` is added
+-- by 20260722144000_tenant_inbox_isolation, so this file named "83_" ran BEFORE
+-- that column existed and the unique index below failed with 42703 on any fresh
+-- database — CI, preview, and disaster recovery. Production survives it only
+-- because the column is already there. Anything touching a tenant column has to
+-- carry a timestamp later than the tenancy work.
+--
 -- A DM thread is one customer. A COMMENT thread is one POST — many people, most
 -- of whom the CRM has never met, because a commenter's Facebook id is not their
 -- Messenger id and cannot be matched to an existing contact. So a comment thread

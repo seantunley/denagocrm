@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 
@@ -172,6 +172,43 @@ test("comments live on their own channel, never mixed into the DM mailbox", () =
   assert.match(shipped("src/lib/commentThreads.ts"), /channel: "comment"/);
   // And are read separately: the DM list threads by person and skips these rows.
   assert.match(shipped("src/lib/commentInbox.ts"), /channel: "comment"/);
+});
+
+test("A MIGRATION TOUCHING A TENANT COLUMN SORTS AFTER THE TENANCY MIGRATIONS", () => {
+  /*
+   * apply-migrations.mjs orders by true NUMERIC prefix, so the date-stamped
+   * tenancy migrations (20260722…, 20260727…) run AFTER every small number.
+   * `Conversation."tenantId"` is added by 20260722144000_tenant_inbox_isolation.
+   *
+   * This migration was originally "83_comment_threads" and its unique index
+   * named "tenantId" — so on any FRESH database it ran before the column
+   * existed and failed with 42703. CI, preview and disaster recovery all build
+   * fresh; production survived only because the column was already there, which
+   * is exactly the kind of difference that hides until the day it matters.
+   */
+  const dirs = readdirSync(join(root, "prisma/migrations")).filter((name) => /^\d/.test(name));
+  const numeric = (name: string) => Number(name.split("_")[0]);
+  // The migration that ADDS Conversation.tenantId. Anything reading that column
+  // must come after it; that migration itself, and the tenancy work around it,
+  // are what create the columns and are not offenders.
+  const ADDS_IT = "20260722144000_tenant_inbox_isolation";
+  const threshold = numeric(ADDS_IT);
+
+  const offenders = dirs.filter((dir) => {
+    if (numeric(dir) >= threshold) return false;
+    const sql = readFileSync(join(root, "prisma/migrations", dir, "migration.sql"), "utf8");
+    // Narrow on purpose: only Conversation's tenant column, which is the one
+    // whose ordering this test exists to protect. A broader rule would flag the
+    // tenancy migrations themselves, which legitimately create these columns.
+    return /"Conversation"/.test(sql) && /"tenantId"/.test(sql);
+  });
+
+  assert.deepEqual(
+    offenders,
+    [],
+    `these read Conversation."tenantId" before ${ADDS_IT} creates it, so they fail with 42703 on a fresh database:\n  ` +
+      offenders.join("\n  "),
+  );
 });
 
 test("the private reply is addressed to the COMMENT, not to a person", () => {
