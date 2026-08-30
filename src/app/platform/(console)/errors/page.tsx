@@ -110,16 +110,22 @@ export default async function PlatformSystemErrorsPage() {
           <p className="mt-1 text-[11px] text-muted-foreground">Shown in that workspace&apos;s System Log.</p>
         </div>
         <div className="rounded-xl border border-border bg-card p-3.5">
-          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Distinct problems</p>
+          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+            Distinct problems{total > MAX_ROWS ? " · displayed rows" : ""}
+          </p>
           <p className="mt-1 text-2xl font-semibold tabular-nums">{groups.length}</p>
-          <p className="mt-1 text-[11px] text-muted-foreground">Identical repeats collapsed.</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            {total > MAX_ROWS
+              ? `Among the latest ${MAX_ROWS}; identical repeats collapsed.`
+              : "Identical repeats collapsed."}
+          </p>
         </div>
       </div>
 
       {total > MAX_ROWS && (
         <p className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">
           <AlertTriangle className="size-3.5 shrink-0" />
-          Showing the most recent {MAX_ROWS} of {total}. The counts above are exact.
+          Showing the most recent {MAX_ROWS} of {total}. Error totals are exact; the distinct-problem count covers only these displayed rows.
         </p>
       )}
 
