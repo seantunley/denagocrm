@@ -119,6 +119,7 @@ test("the live transport uses these constants, so the preview cannot lie", () =>
    */
   const transport = src("src/lib/whatsapp.ts");
   assert.match(transport, /from "\.\/whatsappRendering"/);
+  assert.match(transport, /text: \{ body: text\.slice\(0, WA_TEXT_MAX\) \}/);
   assert.match(transport, /buttons\.slice\(0, WA_BUTTON_MAX\)/);
   assert.match(transport, /title: b\.title\.slice\(0, WA_BUTTON_TITLE_MAX\)/);
   assert.match(transport, /rows\.slice\(0, WA_LIST_ROW_MAX\)/);
@@ -133,4 +134,21 @@ test("the buttons/list threshold matches the one the outbox actually applies", (
   const outbox = src("src/lib/botOutbox.ts");
   assert.match(outbox, /message\.options\.length <= 3/);
   assert.equal(WA_BUTTON_MAX, 3, "renderWhatsAppChoice must switch at the same count");
+});
+
+
+test("the text preview names the same 4096-character limit the sender enforces", () => {
+  const preview = src("src/components/WhatsAppPreview.tsx");
+  assert.match(preview, /CutBadge what="message at 4096 characters"/);
+  assert.doesNotMatch(preview, /CutBadge what="message at 1024 characters"/);
+});
+
+test("only the latest choice message remains actionable", () => {
+  const preview = src("src/components/WhatsAppPreview.tsx");
+  assert.match(preview, /const activeChoiceLineId = lines\.reduce<string \| null>/);
+  assert.equal(
+    (preview.match(/disabled=\{disabled \|\| entry\.id !== activeChoiceLineId\}/g) ?? []).length,
+    2,
+    "both reply buttons and list sheets must disable historical choices",
+  );
 });
