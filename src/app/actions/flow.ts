@@ -12,6 +12,8 @@ import { FlowPublishValidationError } from "@/lib/flowValidationServer";
 import { flowErrors, type FlowIssue } from "@/lib/flowValidation";
 import { builderTenantId, flowScope } from "@/lib/flowScope";
 import { withActingStaffScope } from "@/lib/actingScope";
+import { FLOW_CHANNELS, FLOW_ROUTE_KINDS, normalizeRoutePattern, type FlowRouteKind } from "@/lib/flowRouting";
+import type { FlowChannel } from "@/lib/flowValidation";
 
 /** Create a new draft from one of the shipped, compiler-checked templates. */
 export async function createFlow(formData: FormData) {
@@ -21,11 +23,14 @@ export async function createFlow(formData: FormData) {
     const template = flowTemplate(String(formData.get("templateId") ?? "general"));
     const requestedName = String(formData.get("name") ?? "").trim();
     const name = requestedName || template.name;
+    const requestedChannel = String(formData.get("channel") ?? "whatsapp") as FlowChannel;
+    const channel = FLOW_CHANNELS.includes(requestedChannel) ? requestedChannel : "whatsapp";
     const count = await prisma.botFlow.count({ where: scope });
     const flow = await prisma.botFlow.create({
       data: {
         name,
         definition: JSON.stringify(template.definition),
+        channel,
         active: count === 0,
         // Stamp the owner at creation. The db.ts guard does not while enforcement is
         // dormant, so every flow made since the 20260722146000 backfill was
@@ -185,6 +190,52 @@ export async function duplicateFlow(id: string) {
       data: { name: `${src.name} (copy)`, definition: src.definition, channel: src.channel, active: false, tenantId: await builderTenantId() },
     });
     revalidatePath("/bot-builder");
+  });
+}
+
+export async function addFlowRoute(formData: FormData) {
+  return withActingStaffScope(async () => {
+    const owner = await requireOwner();
+    const tenantId = await builderTenantId();
+    const channel = String(formData.get("channel") ?? "") as FlowChannel;
+    const kind = String(formData.get("kind") ?? "") as FlowRouteKind;
+    const pattern = normalizeRoutePattern(String(formData.get("pattern") ?? ""));
+    const flowId = String(formData.get("flowId") ?? "");
+    const priority = Math.max(0, Math.min(10_000, Number.parseInt(String(formData.get("priority") ?? "100"), 10) || 100));
+    if (!FLOW_CHANNELS.includes(channel) || !FLOW_ROUTE_KINDS.includes(kind) || pattern.length < 2 || !flowId) return;
+
+    const flow = await prisma.botFlow.findFirst({ where: { id: flowId, tenantId, channel } });
+    if (!flow) return;
+    const published = await prisma.botFlowVersion.findFirst({ where: { tenantId, flowId, channel }, select: { id: true } });
+    if (!published) return;
+    await prisma.botFlowRoute.upsert({
+      where: { tenantId_channel_kind_pattern: { tenantId, channel, kind, pattern } },
+      update: { flowId, priority, enabled: true },
+      create: { tenantId, channel, kind, pattern, flowId, priority },
+    });
+    await logAudit({ action: "bot.flow_route_saved", summary: `Chatbot ${channel} ${kind} route “${pattern}” → “${flow.name}”`, user: owner });
+    revalidatePath("/bot-builder/routes");
+  });
+}
+
+export async function setFlowRouteEnabled(id: string, enabled: boolean) {
+  return withActingStaffScope(async () => {
+    await requireOwner();
+    const tenantId = await builderTenantId();
+    await prisma.botFlowRoute.updateMany({ where: { id, tenantId }, data: { enabled } });
+    revalidatePath("/bot-builder/routes");
+  });
+}
+
+export async function deleteFlowRoute(id: string) {
+  return withActingStaffScope(async () => {
+    const owner = await requireOwner();
+    const tenantId = await builderTenantId();
+    const route = await prisma.botFlowRoute.findFirst({ where: { id, tenantId } });
+    if (!route) return;
+    await prisma.botFlowRoute.deleteMany({ where: { id, tenantId } });
+    await logAudit({ action: "bot.flow_route_deleted", summary: `Deleted chatbot ${route.channel} ${route.kind} route “${route.pattern}”`, user: owner });
+    revalidatePath("/bot-builder/routes");
   });
 }
 

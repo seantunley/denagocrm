@@ -1,11 +1,11 @@
 import { prisma } from "./db";
 import { DEFAULT_FLOW, type Flow } from "./flow";
-import { DEFAULT_TENANT_ID } from "./tenant";
-import { withTenantWrite, writeTenantId } from "./tenantWrite";
+import { withTenantWrite } from "./tenantWrite";
 import { flowErrors } from "./flowValidation";
 import { flowTenantWhere } from "./flowTenantScope";
 import { builderTenantId, runtimeFlowTenantId } from "./flowScope";
 import { FlowPublishValidationError, validateFlowForEnabledChannels } from "./flowValidationServer";
+import { resolveRoutedFlowVersion, type FlowEntryContext } from "./flowRouting";
 
 export type FlowSnapshot = {
   flow: Flow;
@@ -45,6 +45,7 @@ function parseFlow(definition: string): Flow | null {
 export async function resolveFlowSnapshot(
   channel: string,
   pinnedVersionId?: string | null,
+  entry?: FlowEntryContext | null,
 ): Promise<FlowSnapshot> {
   if (pinnedVersionId) {
     const pinned = await prisma.botFlowVersion.findFirst({ where: { id: pinnedVersionId, tenantId: runtimeFlowTenantId() } });
@@ -63,6 +64,11 @@ export async function resolveFlowSnapshot(
   // running against a real customer, and the same shape repeats on the legacy
   // fallback below.
   const tenantId = runtimeFlowTenantId();
+  const routed = await resolveRoutedFlowVersion(tenantId, channel, entry);
+  if (routed) {
+    const flow = parseFlow(routed.definition);
+    if (flow) return { flow, versionId: routed.id, flowId: routed.flowId };
+  }
   const publication =
     (await prisma.botFlowPublication.findFirst({ where: { tenantId, channel } })) ??
     (channel === "whatsapp"

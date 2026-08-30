@@ -79,7 +79,9 @@ export async function POST(req: NextRequest) {
       const endpointId = String(entry.id ?? "");
       await withChannelTenantScope(platform, endpointId, async () => {
         for (const ev of entry.messaging ?? []) {
-          const text: string = ev.message?.text ?? "";
+          const referral = ev.message?.referral ?? ev.referral ?? ev.postback?.referral ?? null;
+          const payload: string | undefined = ev.message?.quick_reply?.payload ?? ev.postback?.payload;
+          const text: string = ev.message?.text ?? ev.postback?.title ?? (referral ? "start" : "");
           const attachments = ((ev.message?.attachments ?? []) as any[])
             .map((a) => ({ type: String(a.type ?? "file"), url: String(a.payload?.url ?? "") }))
             .filter((a) => a.url);
@@ -92,9 +94,12 @@ export async function POST(req: NextRequest) {
             if (text) await recordDmEcho(platform, String(ev.recipient?.id ?? ""), text, ev.message?.mid ? String(ev.message.mid) : null);
             continue;
           }
-          if (!ev.message || (!text && attachments.length === 0)) continue;
+          if (!ev.message && !ev.postback && !referral) continue;
+          if (!text && !payload && attachments.length === 0) continue;
 
-          const outcome = await claimInboundBotEvent(platform, String(ev.message?.mid ?? ""));
+          const senderId = String(ev.sender?.id ?? "");
+          const providerId = String(ev.message?.mid ?? ev.postback?.mid ?? (senderId && ev.timestamp ? `${senderId}:entry:${ev.timestamp}` : ""));
+          const outcome = await claimInboundBotEvent(platform, providerId);
           if (outcome.status === "completed") continue; // genuinely done — ack it.
           if (outcome.status === "unidentified") {
             const { logError } = await import("@/lib/errorLog");
@@ -105,17 +110,19 @@ export async function POST(req: NextRequest) {
           // redelivery and lose the message, so ask to be sent it again instead.
           // Logged HERE, inside the tenant scope that owns it. At the outer
           // boundary the scope has unwound and the row files unattributed.
-          if (outcome.status === "leased") throw await noteLeasedInbound("meta-dm-webhook", platform, endpointId, `${platform} ${String(ev.message?.mid ?? "")}`);
+          if (outcome.status === "leased") throw await noteLeasedInbound("meta-dm-webhook", platform, endpointId, `${platform} ${providerId}`);
           const claim = outcome.claim;
           try {
             await withInboundBotEvent(claim, async () => {
-              const referral = ev.message.referral ?? ev.referral ?? ev.postback?.referral ?? null;
-              const senderId = String(ev.sender?.id ?? "");
               const receivedAfter = new Date(Date.now() - 1000);
-              await recordInboundDm(platform, senderId, text, referral, attachments, String(ev.message?.mid ?? ""));
+              await recordInboundDm(platform, senderId, text, referral, attachments, providerId);
               const fileUrl = attachments.length ? await latestPersistedDmAttachment(platform, senderId, receivedAfter) : undefined;
-              const payload: string | undefined = ev.message.quick_reply?.payload;
-              if (text || payload || fileUrl) await runDmFlow(platform, senderId, text, payload, fileUrl);
+              const entryContext = referral ? {
+                referralRef: referral.ref ? String(referral.ref) : undefined,
+                adId: referral.ad_id ? String(referral.ad_id) : undefined,
+                source: referral.source ? String(referral.source) : undefined,
+              } : undefined;
+              if (text || payload || fileUrl) await runDmFlow(platform, senderId, text, payload, fileUrl, entryContext);
             });
             await completeInboundBotEvent(claim);
           } catch (error) {
@@ -124,7 +131,7 @@ export async function POST(req: NextRequest) {
             await logError("meta-dm-webhook", error).catch(() => {});
             // Already logged, with its claim released. Rethrowing the raw error
             // made the outer boundary log the same failure a second time.
-            throw await noteInboundRetry("meta-dm-webhook", "failed", `${platform} ${String(ev.message?.mid ?? "")}`);
+            throw await noteInboundRetry("meta-dm-webhook", "failed", `${platform} ${providerId}`);
           }
         }
       }, () => console.warn(`[tenant-channel] skipped ${platform} DM: unmapped endpoint ${endpointId || "?"}`));

@@ -69,7 +69,7 @@ test("ownership gates every route into the bot, not just the flow runner", () =>
   const entry = run.slice(run.indexOf("export async function runWhatsAppBot"));
   const gate = entry.indexOf("decideInboundAct(");
   const voice = entry.indexOf("maybeAutoReply(digits, input.text, { voiceNote: true })");
-  const flow = entry.indexOf("runWhatsAppFlow(digits, input)");
+  const flow = entry.indexOf("runWhatsAppFlow(digits, input, opts.entryContext)");
   assert.ok(gate >= 0, "the entry point must consult ownership");
   assert.ok(gate < voice, "the voice-note path must be gated");
   assert.ok(gate < flow, "and so must the flow path");
