@@ -264,10 +264,10 @@ export async function runSecurityChecks(): Promise<RunbookRun> {
       weekErrors === 0
         ? undefined
         : unattributedErrors === 0
-          ? "Review Settings → System Log."
+          ? "Attributed errors are available in each owning workspace's Settings → System Log."
           : workspaceErrors === 0
             ? "These are cron, webhook and boot failures with no owning workspace. A platform administrator can review them in Platform Console → System errors."
-            : "Review Settings → System Log for this workspace's errors; the system-level ones are in Platform Console → System errors.",
+            : "Attributed errors are available in each owning workspace's Settings → System Log; system-level errors are in Platform Console → System errors.",
   });
 
   const passed = results.filter((r) => r.status === "pass").length;
