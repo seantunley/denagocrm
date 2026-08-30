@@ -1168,7 +1168,24 @@ model Communication {
 model Conversation {
   id              String    @id @default(cuid())
   tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
-  channel         String // email | whatsapp | messenger | instagram | x | call | note | other
+  channel         String // email | whatsapp | messenger | instagram | x | comment | call | note | other
+
+  /// The external object this thread mirrors, when it is not a person.
+  ///
+  /// A DM thread is one customer; a COMMENT thread is one post, with many
+  /// people in it and often nobody the CRM knows. `"facebook:<postId>"` keys
+  /// that thread so every comment on the post lands in the same place. NULL for
+  /// every conversation that is about a person, which is all of them today —
+  /// and because Postgres treats NULLs as distinct, the unique below constrains
+  /// only the rows that set it.
+  externalRef     String?
+
+  /// Comment threads only: stop taking new comments for this post.
+  ///
+  /// A Page `feed` subscription is Page-wide, so one busy campaign can bury an
+  /// inbox that otherwise works. Muting is per-post rather than global so the
+  /// noisy one can be silenced without going blind to the rest.
+  mutedAt         DateTime?
   subject         String?
   status          String    @default("open") // open | snoozed | closed
   unread          Boolean   @default(false) // has un-opened inbound messages
@@ -1207,6 +1224,12 @@ model Conversation {
   @@index([lastDirection, lastMessageAt])
   @@index([assignedToId, status])
   @@unique([tenantId, id])
+  // One thread per external object per workspace. Only rows that SET
+  // externalRef are constrained — NULLs are distinct in Postgres, so every
+  // person-shaped conversation is unaffected. This is what makes the
+  // find-or-create for a post's thread safe against two comments arriving at
+  // once on a cold post.
+  @@unique([tenantId, channel, externalRef])
 }
 
 /**

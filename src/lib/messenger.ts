@@ -103,16 +103,28 @@ export type MetaSendResult = { ok: boolean; error?: string; providerMessageId?: 
  */
 async function postToSendApi(
   message: unknown,
-  recipientId: string,
+  /**
+   * A person, or a COMMENT.
+   *
+   * `{ comment_id }` is Meta's private-reply form: it sends one direct message
+   * to whoever wrote that comment, without us ever knowing their messaging id —
+   * which is the only way to reach a commenter at all, since a commenter's
+   * Facebook id is not their Messenger id. `messaging_type` is omitted for it,
+   * because a private reply is not a reply within an existing thread; it is what
+   * OPENS one.
+   */
+  recipientId: string | { comment_id: string },
   humanise: (message: string) => string = (message) => message,
 ): Promise<MetaSendResult> {
   const token = await getPageToken();
   if (!token) return { ok: false, error: "Meta page token is not configured (Settings → Integrations)." };
+  const privateReply = typeof recipientId !== "string";
+  const recipient = privateReply ? recipientId : { id: recipientId };
   const res = await fetch(`${GRAPH}/me/messages?access_token=${encodeURIComponent(token)}`, {
     signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ recipient: { id: recipientId }, messaging_type: "RESPONSE", message }),
+    body: JSON.stringify({ recipient, ...(privateReply ? {} : { messaging_type: "RESPONSE" }), message }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => null);
@@ -143,6 +155,38 @@ export async function sendDirectMessage(
   text: string
 ): Promise<MetaSendResult> {
   return postToSendApi({ text }, recipientId, humaniseSendError);
+}
+
+/**
+ * Reply privately to a public comment — the one move that turns a comment into
+ * a customer.
+ *
+ * Meta allows exactly ONE direct message in response to a given comment, within
+ * SEVEN DAYS of it being written, and text only. After that single message the
+ * thread is an ordinary DM conversation with the usual 24-hour service window,
+ * so this is what converts "how much?" under an ad into a real conversation in
+ * the inbox — against a person we can then actually identify.
+ *
+ * The limits are Meta's and are not negotiable, so the caller must treat a
+ * refusal as final rather than retrying: a second attempt on the same comment
+ * will always fail.
+ */
+export async function sendPrivateReplyToComment(commentId: string, text: string): Promise<MetaSendResult> {
+  return postToSendApi({ text }, { comment_id: commentId }, humanisePrivateReplyError);
+}
+
+/** Meta's private-reply refusals, in words that say what to do instead. */
+function humanisePrivateReplyError(message: string): string {
+  if (/already|duplicate|one message/i.test(message)) {
+    return "Meta allows only one private reply per comment, and one has already been sent. Reply publicly instead.";
+  }
+  if (/7|seven|expired|too old/i.test(message)) {
+    return "This comment is more than 7 days old, which is Meta's limit for a private reply. Reply publicly instead.";
+  }
+  if (/permission|OAuth/i.test(message)) {
+    return `Meta has not granted the messaging permission needed to reply privately: ${message}`;
+  }
+  return message;
 }
 
 /** Sends a DM with tappable quick-reply chips (menu options). */

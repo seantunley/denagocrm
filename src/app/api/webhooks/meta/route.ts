@@ -11,6 +11,8 @@ import { runDmFlow } from "@/lib/flowDm";
 import { metaReceipt } from "@/lib/deliveryReceipts";
 import { applyReceipt } from "@/lib/messageReceipts";
 import { withChannelTenantScope, validateInSystemScope } from "@/lib/tenantScopeEntry";
+import { decideComment, type FeedChangeValue } from "@/lib/socialComments";
+import { recordPostCommentSafely } from "@/lib/commentThreads";
 import { inboundRetryResponse, noteInboundRetry, noteLeasedInbound } from "@/lib/webhookRetry";
 import { secretEquals } from "@/lib/secretCompare";
 import {
@@ -135,9 +137,42 @@ export async function POST(req: NextRequest) {
   }
   /* eslint-enable @typescript-eslint/no-explicit-any */
 
-  const entries = (body as { entry?: { changes?: { field: string; value: Record<string, unknown> }[] }[] }).entry ?? [];
+  const entries = (body as { entry?: { id?: string; changes?: { field: string; value: Record<string, unknown> }[] }[] }).entry ?? [];
   for (const entry of entries) {
     for (const change of entry.changes ?? []) {
+      /*
+       * COMMENTS ON POSTS — AND ON ADS.
+       *
+       * Meta's documentation: "Webhooks are not sent for Ad Posts, but are sent
+       * for Comments on Ad Posts." So a comment on a boosted post, or on a dark
+       * post created straight in Ads Manager, arrives here in exactly the same
+       * shape as one on an organic post. No special handling, and none needed.
+       *
+       * `feed` is a firehose — likes, reactions, shares, edits and deletions all
+       * come down it — so `decideComment` filters first. Without that the inbox
+       * fills with reaction noise on the first busy campaign, and people stop
+       * opening the inbox that currently works.
+       *
+       * The Page id is `entry.id`, which is both the tenant discriminator and
+       * the way to tell OUR reply apart from a customer's comment.
+       */
+      if (change.field === "feed") {
+        const pageId = String(entry.id ?? "");
+        const decision = decideComment(change.value as FeedChangeValue);
+        if (!decision.ok) continue;
+        await withChannelTenantScope(
+          "messenger",
+          pageId,
+          async () => {
+            await recordPostCommentSafely(decision.comment, { platform: "facebook", pageId });
+          },
+          // Matches the leadgen branch below. PR #578 replaces both of these
+          // console.warns with a System Log entry; deliberately not done here,
+          // so the two changes stay independent of each other.
+          () => console.warn(`[tenant-channel] skipped comment: unmapped page_id ${pageId || "?"}`),
+        );
+        continue;
+      }
       if (change.field !== "leadgen") continue;
       const leadgenId = String(change.value?.leadgen_id ?? "");
       if (!leadgenId) continue;
