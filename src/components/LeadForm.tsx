@@ -30,6 +30,14 @@ export type LeadFormProduct = {
 };
 
 type LeadDefaults = {
+  /**
+   * Present when this form is EDITING a lead.
+   *
+   * Declared so the offline path can tell an edit from a create without being
+   * told twice. See the offlineOperation comment below: inferring "create" from
+   * a missing optional id is what queued an edit as a new lead.
+   */
+  id?: string;
   title?: string;
   name?: string;
   email?: string | null;
@@ -131,11 +139,30 @@ export default function LeadForm({
       // Replaced on success — create redirects, edit re-renders with the saved
       // values — so a reset would only blank fields still on screen.
       resetOnSuccess={false}
-      offlineOperation={{
-        type: offlineRecordId ? "lead.update" : "lead.create",
-        recordId: offlineRecordId,
-        baseVersion: offlineBaseVersion,
-      }}
+      /*
+        A MISSING RECORD ID IS NOT EVIDENCE OF A CREATE.
+
+        This read `offlineRecordId ? "lead.update" : "lead.create"`, so the edit
+        modal on the lead detail page -- which passes updateLead and the lead's
+        own defaults, but never passed offlineRecordId -- queued its submission
+        as a NEW LEAD. Offline, a user with create permission got a duplicate on
+        replay; an edit-only user got a refusal after being told it was saved.
+
+        `defaults.id` is what actually distinguishes the two, so an edit that was
+        not given its offline identity now offers NO offline operation at all:
+        SaveForm refuses with "This operation requires an internet connection"
+        rather than queueing the wrong verb. A call site that forgets loses
+        offline support for that form -- it does not silently corrupt data.
+      */
+      offlineOperation={
+        defaults.id && !offlineRecordId
+          ? undefined
+          : {
+              type: offlineRecordId ? "lead.update" : "lead.create",
+              recordId: offlineRecordId,
+              baseVersion: offlineBaseVersion,
+            }
+      }
       className={cn(
         "space-y-4",
         variant === "compact" && "card max-w-3xl",

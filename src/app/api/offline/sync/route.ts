@@ -142,9 +142,30 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "This offline change is already being processed.", retry: true }, { status: 409 });
     }
 
-    const version = operation.baseVersion ? await liveVersion(operation) : null;
-    if (version && operation.baseVersion && version.toISOString() !== operation.baseVersion) {
-      const result = { error: "This record changed while the device was offline. Review the latest version before applying your change.", conflict: true };
+    /*
+     * A GUARDED RECORD THAT NO LONGER EXISTS IS A CONFLICT, NOT A FREE PASS.
+     *
+     * `liveVersion` returns null for two completely different situations: an
+     * operation that guards nothing (a create, an appended photo), and a guarded
+     * record that has since been DELETED. Treating both as "no version to
+     * compare" let the second walk straight past the check -- and the write
+     * underneath is an `updateMany`, which reports success for zero rows. The
+     * receipt was completed, the device discarded the technician's work, and
+     * nothing anywhere said it had landed on a row that was gone.
+     *
+     * The operation's own baseVersion is what separates them: it is present only
+     * when the device downloaded a version to guard.
+     */
+    const guarded = Boolean(operation.baseVersion && guardedRecordKey(operation));
+    const version = guarded ? await liveVersion(operation) : null;
+    const stale = guarded && (!version || version.toISOString() !== operation.baseVersion);
+    if (stale) {
+      const result = {
+        error: version
+          ? "This record changed while the device was offline. Review the latest version before applying your change."
+          : "That record no longer exists. It was deleted while this device was offline, so this change cannot be applied.",
+        conflict: true,
+      };
       await prisma.offlineMutationReceipt.update({
         where: { id: mutationId },
         data: { status: "rejected", result, completedAt: new Date() },

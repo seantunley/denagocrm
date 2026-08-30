@@ -51,6 +51,23 @@ export default function AccountMenu({
   compact?: boolean;
 }) {
   async function signOutSafely() {
+    /*
+     * DO NOT DESTROY UNSYNCED WORK FOR A SIGN-OUT THAT CANNOT HAPPEN.
+     *
+     * The purge below is irreversible and runs FIRST, deliberately — the next
+     * person on this device must not inherit the last one's records. But
+     * `logout()` is a Server Action, so offline it simply fails: the snapshots,
+     * the captured photos and every queued mutation were already gone, and the
+     * session was still signed in. A field user tapping Sign out at the end of a
+     * day with no signal lost the day's work and stayed logged in.
+     *
+     * Signing out is not urgent enough to be worth that. Offline it is refused,
+     * with the one instruction that makes it safe.
+     */
+    if (!navigator.onLine) {
+      toast.error("You are offline. Connect and let queued work synchronise before signing out.");
+      return;
+    }
     try {
       // Customer records and queued files must be gone BEFORE the authenticated
       // session is ended. Swallowing a storage failure would leave the next

@@ -133,7 +133,9 @@ export async function GET() {
        */
       prisma.pipelineStage.findMany({
         where: { isClosed: false },
-        select: { id: true, name: true },
+        // The gate columns come along so the device can tell whether a stage move
+        // is decidable offline at all -- see stageGated below.
+        select: { id: true, name: true, entryGateMode: true, exitGateMode: true },
         orderBy: { order: "asc" },
       }),
       prisma.product.findMany({
@@ -144,6 +146,24 @@ export async function GET() {
     ]);
 
     const fleetsById = await loadBillToFleets(prisma, deliveries.map((quote) => quote.fleetId));
+      /*
+       * A STAGE MOVE THIS DEVICE CANNOT PRE-VALIDATE IS NOT OFFERED.
+       *
+       * `gateStageMove` runs on replay and can refuse outright, or demand a
+       * reason or a remedy that only the pipeline board can capture. None of
+       * that is answerable from a cached snapshot, so a gated workspace was
+       * accepting stage changes it would later refuse -- with the form already
+       * reset.
+       *
+       * Whether ANY open stage is gated is the honest granularity: the rule
+       * depends on the lead's current stage as well as the target, and a device
+       * that cannot evaluate the rule cannot narrow it either. A workspace with
+       * gates off -- the default, and the common case -- is unaffected.
+       */
+      const stageGated = stages.some(
+        (stage) => stage.entryGateMode !== "off" || stage.exitGateMode !== "off",
+      );
+
     const snapshot: OfflineSnapshot = {
       tenantId,
       userId: user.id,
@@ -199,8 +219,8 @@ export async function GET() {
         scheduledFor: quote.deliveryScheduledFor?.toISOString() ?? null,
         updatedAt: quote.updatedAt.toISOString(),
       })),
-      can: { leadCreate, leadEdit, leadChangeStage, contactCreate, contactEdit, jobCardManage, deliveryManage },
-      options: { stages, products },
+      can: { leadCreate, leadEdit, leadChangeStage: leadChangeStage && !stageGated, contactCreate, contactEdit, jobCardManage, deliveryManage },
+      options: { stages: stages.map(({ id, name }) => ({ id, name })), products },
     };
     return NextResponse.json(snapshot, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {

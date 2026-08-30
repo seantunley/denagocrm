@@ -480,3 +480,75 @@ test("A LEAD ALREADY IN A CLOSED STAGE IS NOT OFFERED FOR EDITING", () => {
   const gate = workspace.slice(workspace.indexOf("{!can.leadEdit ?"), workspace.indexOf("Closed leads cannot be edited offline"));
   assert.match(gate, /^\{!can\.leadEdit \? readOnly\("leads"\)/);
 });
+
+/* ── round five ──────────────────────────────────────────────────────────── */
+
+test("A MISSING RECORD ID IS NOT EVIDENCE OF A CREATE", () => {
+  /*
+   * LeadForm read `offlineRecordId ? "lead.update" : "lead.create"`, and the edit
+   * modal on the lead detail page passed updateLead and the lead's defaults but
+   * never passed offlineRecordId. Offline it queued a NEW LEAD: a user with
+   * create permission got a duplicate on replay; an edit-only user got a refusal
+   * after being told it was saved.
+   */
+  const detail = src("src/app/(app)/leads/[id]/page.tsx");
+  assert.match(detail, /offlineRecordId=\{lead\.id\}/, "the edit modal must pass its identity");
+  assert.match(detail, /offlineBaseVersion=\{lead\.updatedAt\.toISOString\(\)\}/);
+
+  // …and the inference fails safe, so the next call site that forgets loses
+  // offline support rather than writing the wrong verb.
+  for (const form of ["src/components/LeadForm.tsx", "src/components/ContactForm.tsx"]) {
+    assert.match(src(form), /defaults\.id && !offlineRecordId\s*\r?\n?\s*\? undefined/, `${form} must refuse rather than guess`);
+    assert.match(src(form), /id\?: string;/, "an edit is identified by defaults.id");
+  }
+  // SaveForm is what turns "no operation" into a refusal the person can read.
+  assert.match(src("src/components/SaveForm.tsx"), /This operation requires an internet connection/);
+});
+
+test("SIGNING OUT OFFLINE DOES NOT DESTROY WORK THAT CANNOT SYNC", () => {
+  /*
+   * The purge is irreversible and runs first, on purpose. But `logout()` is a
+   * Server Action, so offline it fails AFTER the snapshots, photos and queued
+   * mutations are already gone — and the session stays signed in. A field user
+   * tapping Sign out at the end of a day with no signal lost the day's work and
+   * remained logged in.
+   */
+  const menu = src("src/components/AccountMenu.tsx");
+  assert.match(menu, /if \(!navigator\.onLine\) \{/);
+  const guard = menu.slice(menu.indexOf("if (!navigator.onLine) {"), menu.indexOf("await purgeOfflineData()"));
+  assert.match(guard, /return;/, "the refusal must come BEFORE the purge");
+  assert.match(menu, /Connect and let queued work synchronise before signing out/);
+});
+
+test("A STAGE MOVE THE DEVICE CANNOT PRE-VALIDATE IS NOT OFFERED", () => {
+  /*
+   * gateStageMove runs on replay and can refuse outright, or demand a reason or
+   * remedy that only the pipeline board can capture. None of that is answerable
+   * from a cached snapshot.
+   */
+  const bootstrap = src("src/app/api/offline/bootstrap/route.ts");
+  assert.match(bootstrap, /entryGateMode: true, exitGateMode: true/);
+  assert.match(bootstrap, /stage\.entryGateMode !== "off" \|\| stage\.exitGateMode !== "off"/);
+  assert.match(bootstrap, /leadChangeStage: leadChangeStage && !stageGated/);
+  // The snapshot type is unchanged — the gate columns are read and dropped.
+  assert.match(bootstrap, /stages: stages\.map\(\(\{ id, name \}\) => \(\{ id, name \}\)\)/);
+  // The refusal being avoided must still exist.
+  assert.match(src("src/app/actions/leads.ts"), /gateStageMove\(\{/);
+});
+
+test("A GUARDED RECORD THAT NO LONGER EXISTS IS A CONFLICT", () => {
+  /*
+   * liveVersion returns null for two different situations: an operation that
+   * guards nothing, and a guarded record that has been DELETED. Treating both as
+   * "nothing to compare" let the second past the check — and the write beneath
+   * is an updateMany, which reports success for zero rows. The receipt completed
+   * and the device discarded the technician's work.
+   */
+  const route = src("src/app/api/offline/sync/route.ts");
+  assert.match(route, /const guarded = Boolean\(operation\.baseVersion && guardedRecordKey\(operation\)\);/);
+  assert.match(route, /const stale = guarded && \(!version \|\| version\.toISOString\(\) !== operation\.baseVersion\);/);
+  assert.match(route, /That record no longer exists\./, "and the two cases must read differently");
+  // The write that made this silent: still an updateMany, which is why the guard
+  // above has to be the thing that catches it.
+  assert.match(src("src/app/actions/jobcards.ts"), /prisma\.jobCardInspectionItem\.updateMany\(/);
+});
