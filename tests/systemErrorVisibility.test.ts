@@ -35,10 +35,14 @@ test("the advice names a screen that can actually show them", () => {
   // Nothing attributable: saying "Review Settings → System Log" here is the bug.
   assert.match(body, /none belong to a workspace, so Settings → System Log will be empty/);
   assert.match(body, /Platform Console → System errors/);
-  // Some of each: both destinations, so neither half is lost.
-  assert.match(body, /Review Settings → System Log for this workspace's errors; the system-level ones are in Platform Console → System errors/);
-  // All attributable: the original advice, which was right for that case.
-  assert.match(body, /"Review Settings → System Log\."/);
+  // Some of each: both destinations, so neither half is lost. The count is
+  // install-wide, so it must never imply every attributed row belongs to the
+  // workspace of whichever administrator happens to read the stored run.
+  assert.match(body, /Attributed errors are available in each owning workspace's Settings → System Log; system-level errors are in Platform Console → System errors/);
+  assert.doesNotMatch(body, /this workspace's errors/);
+  // All attributable: name where those rows actually live without pretending
+  // the install-wide count belongs to one current workspace.
+  assert.match(body, /Attributed errors are available in each owning workspace's Settings → System Log\./);
 });
 
 test("the split does not depend on WHO ran the check", () => {
@@ -82,4 +86,11 @@ test("the System Log keeps excluding what it cannot attribute", () => {
   const page = systemLog();
   assert.match(page, /where: \{ tenantId: logTenantId \}/);
   assert.match(page, /Errors with no tenant/, "the reasoning stays stated where the filter is");
+});
+
+
+test("a capped display does not call its distinct-problem count exact", () => {
+  const page = consoleErrors();
+  assert.match(page, /Distinct problems\{total > MAX_ROWS \? " · displayed rows" : ""\}/);
+  assert.match(page, /the distinct-problem count covers only these displayed rows/);
 });
