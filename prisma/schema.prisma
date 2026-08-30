@@ -638,6 +638,27 @@ model BotSession {
   @@index([tenantId])
 }
 
+/** Curated, reviewable facts the chatbot may use as customer-facing sources. */
+model BotKnowledgeEntry {
+  id               String   @id @default(cuid())
+  tenantId         String
+  title            String
+  content          String
+  status           String   @default("draft") // draft | approved | expired
+  sourceType       String   @default("manual") // manual | library
+  sourceDocumentId String?
+  sourceLabel      String?
+  validFrom        DateTime?
+  validUntil       DateTime?
+  approvedAt       DateTime?
+  approvedBy       String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt @default(now())
+
+  @@index([tenantId, status, validFrom, validUntil])
+  @@index([tenantId, updatedAt])
+}
+
 model PipelineStage {
   id          String  @id @default(cuid())
   name        String
