@@ -9,6 +9,7 @@ import {
   CircleStop,
   FileQuestion,
   FileUp,
+  FlaskConical,
   GitBranch,
   Hand,
   ImageIcon,
@@ -47,6 +48,7 @@ import type { BookingAction, ConditionOperator, FlowNode, SlotAction } from "@/l
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { cn } from "@/lib/utils";
 import { BuilderSaveStatus, BuilderWorkspaceBar, BuilderWorkspaceShell } from "@/components/builder-workspace";
+import FlowSimulator from "@/components/FlowSimulator";
 
 type Pos = { x: number; y: number };
 type FlowData = { start: string; nodes: Record<string, FlowNode>; positions?: Record<string, Pos> };
@@ -194,7 +196,7 @@ function blankNode(type: FlowNode["type"], id: string): FlowNode {
   }
 }
 
-export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt }: { flowId: string; initial: FlowData; journeys?: FlowJourneyOption[]; updatedAt: string }) {
+export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt, businessName }: { flowId: string; initial: FlowData; journeys?: FlowJourneyOption[]; updatedAt: string; businessName: string }) {
   const router = useRouter();
   const [start, setStart] = useState(initial.start);
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState<Node<RFData>>(
@@ -226,6 +228,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt 
   const [fullscreen, setFullscreen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [testing, setTesting] = useState(false);
 
   const patch = useCallback((id: string, updater: (n: FlowNode) => FlowNode) => {
     setStatus("Unsaved changes");
@@ -335,6 +338,11 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt 
     }
     return [...vars].sort();
   }, [rfNodes]);
+  const currentDraftDefinition = useMemo(() => JSON.stringify({
+    start,
+    nodes: Object.fromEntries(rfNodes.map((node) => [node.id, node.data.flow])),
+    positions: Object.fromEntries(rfNodes.map((node) => [node.id, node.position])),
+  }), [rfNodes, start]);
 
   return (
     <BuilderWorkspaceShell fullscreen={fullscreen} className="min-h-[720px] md:h-[calc(100dvh-8rem)] md:min-h-0">
@@ -347,6 +355,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt 
             {inspectorOpen ? <PanelRightClose className="size-4" /> : <PanelRightOpen className="size-4" />} Inspector
           </button>
         </div>
+        <button type="button" onClick={() => setTesting((value) => !value)} className={cn("btn-secondary btn-sm", testing && "border-orange-400/40 text-orange-200")}><FlaskConical className="size-4" />{testing ? "Back to canvas" : "Test current canvas"}</button>
         <button type="button" onClick={onSave} className="btn-primary btn-sm"><Save className="size-4" />Save</button>
         <ConfirmActionDialog destructive title="Reset this flow?" description="Every node, connection and unsaved change will be replaced with the default flow." confirmLabel="Reset flow" onConfirm={async () => {
           // Reset can be refused for exactly the reason Save can. Announcing
@@ -370,6 +379,11 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt 
         </button>
       </BuilderWorkspaceBar>
 
+      {testing ? (
+        <div className="min-h-0 flex-1 overflow-auto bg-[#0b0f0e] p-3">
+          <FlowSimulator flowId={flowId} businessName={businessName} draftDefinition={currentDraftDefinition} />
+        </div>
+      ) : (
       <div className="relative flex min-h-0 flex-1">
         {paletteOpen && (
           <aside className="w-60 shrink-0 overflow-y-auto border-r border-white/[0.08] bg-[#111614] max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-[80] max-md:max-h-[72dvh] max-md:w-auto max-md:rounded-t-3xl max-md:border-t max-md:shadow-[0_-24px_70px_rgba(0,0,0,.55)]">
@@ -403,6 +417,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt 
           </aside>
         )}
       </div>
+      )}
     </BuilderWorkspaceShell>
   );
 }
