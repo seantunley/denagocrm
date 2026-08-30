@@ -1,0 +1,242 @@
+/// Guided capture checklists — one configurable list, any module.
+///
+/// ── WHY THIS EXISTS AT ALL ──────────────────────────────────────────────────
+///
+/// There were already two ways to record "a list of things somebody checked
+/// against a record", and neither was configurable:
+///
+///   Quote.deliveryChecklist   a JSON `{ item: boolean }` map. No photos, no
+///                             descriptions, and the item names live in code.
+///   JobCardInspectionItem     real rows, WITH a photo each — but a technician
+///                             types the label by hand on every job card, so
+///                             two people inspecting the same thing produce two
+///                             different lists and nothing can be compared.
+///
+/// Adding "delivery photos" as a third mechanism was the obvious move and the
+/// wrong one. This is the second: a TEMPLATE that is configured once, and a RUN
+/// that records what actually happened. It is deliberately the same shape the
+/// codebase already uses twice — Survey/SurveyResponse and
+/// CustomFieldDef/CustomFieldValue — because a third shape for the same idea is
+/// how the first two stopped agreeing with each other.
+///
+/// ── WHY NOT JUST EXTEND CustomFieldDef ──────────────────────────────────────
+///
+/// It looks like the same thing and is not. A custom field is an ATTRIBUTE: one
+/// value per record, editable whenever, no history. A checklist is an EVENT:
+/// performed once, at a moment, by a named person, producing evidence, and
+/// legitimately repeatable — a job card can be inspected at check-in AND at
+/// check-out, and both must survive. Folded into CustomFieldValue's
+/// `@@unique([defId, recordId])`, the second inspection would overwrite the
+/// first and "who photographed this, and when" would have nowhere to live.
+///
+/// ── HOW IT REACHES OTHER MODULES ────────────────────────────────────────────
+///
+/// A run addresses its subject by `hostType` + `hostId` rather than by a foreign
+/// key per module. That is the whole answer to "tie these lists to other
+/// modules": delivery handover, job-card check-in, job-card check-out and
+/// vehicle condition are four hosts over ONE table and ONE screen, and a fifth
+/// costs a registry entry rather than a migration. The journey engine already
+/// addresses its subjects this way.
+///
+/// The trade is a foreign key Postgres cannot enforce — nothing stops a row
+/// naming a quote that no longer exists. That is why every host is resolved
+/// through the registry in src/lib/checklists/hosts.ts, which is also where the
+/// permission and the tenant-ownership check for that host live. A dangling run
+/// is inert: it resolves to no record and renders nowhere.
+
+/// A configured list. One per situation, not one per record.
+model ChecklistTemplate {
+  id          String  @id @default(cuid())
+  tenantId    String
+  /// Which situation this list is for — a `HostId` from lib/checklists/hosts.ts
+  /// ("quote.delivery", "jobcard.checkin", …). Stored as text rather than an
+  /// enum so adding a host is a code change, not a migration on a live table.
+  host        String
+  name        String
+  description String?
+  active      Boolean @default(true)
+  /// Bumped on every edit that changes the ITEMS. Stamped onto each run so a
+  /// completed run can say which revision of the list it answered — see
+  /// ChecklistRun.templateVersion.
+  version     Int     @default(1)
+  sortOrder   Int     @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  items ChecklistItem[]
+  runs  ChecklistRun[]
+  revisions ChecklistTemplateRevision[]
+
+  /// The picker's query: the active lists for one host, in order.
+  @@index([tenantId, host, active, sortOrder])
+  @@unique([tenantId, id])
+}
+
+/// An immutable, server-authored copy of a template's questions.
+model ChecklistTemplateRevision {
+  id         String   @id @default(dbgenerated("gen_random_uuid()::text"))
+  tenantId   String
+  templateId String
+  version    Int
+  items      Json
+  createdAt  DateTime @default(now())
+
+  template ChecklistTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, templateId, version])
+  @@unique([tenantId, id])
+  @@index([templateId, version])
+}
+
+/// One step of a configured list.
+model ChecklistItem {
+  id          String  @id @default(cuid())
+  tenantId    String
+  templateId  String
+  label       String
+  /// Shown to the person capturing, as the guidance above the camera. This is
+  /// where "the plate on the frame under the seat, not the box" goes, and it is
+  /// the difference between a useful photo and a re-visit.
+  description String?
+  /// What this step collects — a `CaptureKind` from lib/checklists/types.ts.
+  capture     String  @default("photo")
+  required    Boolean @default(true)
+  minPhotos   Int     @default(1)
+  maxPhotos   Int     @default(1)
+  /// Optional visibility rule, in the SAME condition grammar the journey engine
+  /// and the dashboards already use. A step that only applies to a fleet order
+  /// should not be a fourth way of writing "if".
+  visibility  Json?
+  sortOrder   Int     @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  template ChecklistTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  entries  ChecklistEntry[]
+
+  @@index([templateId, sortOrder])
+  @@index([tenantId])
+  @@unique([tenantId, id])
+}
+
+/// One filled-in instance of a list, against one record.
+model ChecklistRun {
+  /// NO @default. The id is minted ON THE DEVICE.
+  ///
+  /// A handover happens in a driveway on one bar of signal. If the phone had to
+  /// ask the server for an id before the first photo could be attached to
+  /// anything, the whole capture would be blocked by the least reliable moment
+  /// of the job. A client-generated UUID lets the run and its entries exist
+  /// locally the instant the person taps Start, and `syncChecklistRun` upserts
+  /// them by that id — so a sync that runs twice converges instead of
+  /// duplicating.
+  id              String @id
+  tenantId        String
+  templateId      String
+  /// The template revision this run answered. Frozen, so a list edited in June
+  /// does not silently rewrite what a March handover recorded.
+  templateVersion Int
+
+  /// The subject. See the header note on why this is not a foreign key.
+  hostType String
+  hostId   String
+
+  startedAt     DateTime  @default(now())
+  startedById   String?
+  completedAt   DateTime?
+  completedById String?
+
+  template ChecklistTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  entries  ChecklistEntry[]
+
+  /// "The checklists on this record" — the record page's only query.
+  @@index([tenantId, hostType, hostId])
+  /// "Which runs are still unfinished" — the outstanding-work query, and what a
+  /// dashboard card or a stage gate asks.
+  @@index([tenantId, templateId, completedAt])
+  @@unique([tenantId, id])
+}
+
+/// One answered step.
+model ChecklistEntry {
+  /// Client-generated, for the same reason as ChecklistRun.id.
+  id     String @id
+  tenantId String
+  runId  String
+  /// SET NULL rather than Cascade: deleting a step from the template must not
+  /// delete the evidence somebody already captured against it. The snapshots
+  /// below are what keep the orphaned entry readable.
+  itemId String?
+  /// Immutable id of the revision item, even if the live ChecklistItem is later deleted.
+  itemIdSnapshot String
+
+  /// WHAT THE PERSON WAS ACTUALLY ASKED, frozen at capture time.
+  ///
+  /// The one everybody gets wrong. A delivery completed in March that recorded
+  /// "Serial number" must still read "Serial number" after someone renames the
+  /// step to "VIN / serial" in June — otherwise the printed handover note
+  /// retroactively changes what the customer signed for. Cheap now, impossible
+  /// to reconstruct later.
+  labelSnapshot       String
+  descriptionSnapshot String?
+  captureSnapshot     String
+  requiredSnapshot    Boolean @default(true)
+  minPhotosSnapshot   Int     @default(1)
+  maxPhotosSnapshot   Int     @default(1)
+  sortOrder           Int     @default(0)
+
+  /// pending | done | skipped | na
+  status     String  @default("pending")
+  note       String?
+  /// The answer for a text/number/boolean step, as text. Coerced on read by
+  /// `captureSnapshot`, the same way CustomFieldValue does it.
+  value      String?
+  /// Required when a REQUIRED step is skipped — a skip with no reason is a hole
+  /// in the record that nobody can account for afterwards.
+  skipReason String?
+  recordedAt DateTime?
+
+  run    ChecklistRun   @relation(fields: [runId], references: [id], onDelete: Cascade)
+  item   ChecklistItem? @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  photos ChecklistPhoto[]
+
+  @@index([runId, sortOrder])
+  @@index([tenantId])
+  @@unique([tenantId, id])
+  @@unique([tenantId, runId, itemIdSnapshot])
+}
+
+/// One photo that actually reached blob storage.
+///
+/// ── WHY THERE IS NO "pending" STATE HERE ────────────────────────────────────
+///
+/// A row exists only after the finalizer has verified the blob: that it belongs
+/// to this tenant, is an image, is within the size limit, and sits under this
+/// entry's own upload prefix. So every row is evidence that arrived.
+///
+/// The queue of photos still waiting to go up lives on the DEVICE, in IndexedDB,
+/// because that is the only place it can survive a tunnel — a "pending" row on
+/// the server would be a claim the server cannot check, cannot retry and cannot
+/// clear when the phone is lost. Completeness is therefore computed from what is
+/// here against the entry's `minPhotosSnapshot`, which is a fact rather than a
+/// promise.
+model ChecklistPhoto {
+  /// Client-generated: the device names the photo before it has connectivity to
+  /// upload it, so a retry after a crash re-sends the same one rather than a
+  /// duplicate.
+  id         String @id
+  tenantId   String
+  entryId    String
+  /// The verified blob URL.
+  url        String
+  /// When the CAMERA fired, not when the upload landed — those can be hours
+  /// apart on a bad signal, and the first is the one that describes the vehicle.
+  capturedAt DateTime
+  createdAt  DateTime @default(now())
+
+  entry ChecklistEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+
+  @@index([entryId])
+  @@index([tenantId])
+  @@unique([tenantId, id])
+}

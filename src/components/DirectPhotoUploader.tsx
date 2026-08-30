@@ -1,7 +1,6 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { upload } from "@vercel/blob/client";
 import { useRouter } from "next/navigation";
 import {
   getPhotoUploadPlan,
@@ -19,10 +18,17 @@ import {
   MAX_UPLOAD_TOTAL_BYTES,
   checkUploadPayload,
   MAX_PHOTO_BYTES,
-  PHOTO_JPEG_QUALITY,
-  PHOTO_MAX_EDGE,
-  fitWithinMaxEdge,
 } from "@/lib/photoBudget";
+/*
+ * `preparePhoto` and the blob-path arithmetic used to be written out in this
+ * file, which was fine while this component was the only thing sending a photo.
+ * It is not any more: the guided checklist runner sends them too, from a queue,
+ * long after the camera fired. The pathname a sender builds has to match the
+ * prefix `/api/photos/upload` checks before it will sign anything -- that check
+ * IS the tenant isolation on direct uploads -- so a second copy of it is how one
+ * screen silently loses the ability to upload while the other keeps working.
+ */
+import { preparePhoto, unsendablePhoto, uploadPhoto } from "@/lib/photoTransport";
 
 type Kind = "delivery" | "jobcard" | "jobcard-checkout" | "inspection";
 
@@ -46,39 +52,6 @@ function reasonOf(error: unknown): string {
     // Circular or otherwise unserialisable — fall through to the generic line.
   }
   return "the browser reported no reason";
-}
-
-async function preparePhoto(file: File): Promise<File> {
-  if (!file.type.startsWith("image/")) return file;
-  let bitmap: ImageBitmap;
-  try {
-    bitmap = await createImageBitmap(file);
-  } catch {
-    return file;
-  }
-  const { width, height } = fitWithinMaxEdge(bitmap.width, bitmap.height, PHOTO_MAX_EDGE);
-  if (width === bitmap.width && height === bitmap.height) {
-    bitmap.close();
-    return file;
-  }
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext("2d");
-  if (!context) {
-    bitmap.close();
-    return file;
-  }
-  context.drawImage(bitmap, 0, 0, width, height);
-  bitmap.close();
-  const blob = await new Promise<Blob | null>((resolve) =>
-    canvas.toBlob(resolve, "image/jpeg", PHOTO_JPEG_QUALITY),
-  );
-  if (!blob || blob.size >= file.size) return file;
-  return new File([blob], `${file.name.replace(/\.[^.]+$/, "") || "photo"}.jpg`, {
-    type: "image/jpeg",
-    lastModified: file.lastModified,
-  });
 }
 
 export default function DirectPhotoUploader({
@@ -210,21 +183,17 @@ export default function DirectPhotoUploader({
       for (const [index, original] of selected.entries()) {
         setStatus(`Preparing and uploading ${index + 1} of ${selected.length}…`);
         const file = await preparePhoto(original);
-        if (!file.type.startsWith("image/") || file.size <= 0 || file.size > MAX_PHOTO_BYTES) {
+        // The same bounds the route enforces, stated as a reason a person can act
+        // on rather than as a silent skip.
+        const unsendable = unsendablePhoto(file);
+        if (unsendable) {
           uploadFailures++;
+          firstFailure = firstFailure ?? unsendable;
           continue;
         }
         try {
-          const blob = await upload(
-            `uploads/${tenantId}/${kind}/${recordId}/${crypto.randomUUID()}-${file.name}`,
-            file,
-            {
-              access,
-              handleUploadUrl: "/api/photos/upload",
-              clientPayload: JSON.stringify({ kind, recordId, jobCardId }),
-            },
-          );
-          staged.push({ url: blob.url });
+          const url = await uploadPhoto({ kind, recordId, jobCardId, tenantId, access }, file);
+          staged.push({ url });
         } catch (error) {
           uploadFailures++;
           // KEEP THE REASON. This was a bare `catch {}`, so the one fact worth

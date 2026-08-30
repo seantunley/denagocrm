@@ -18,8 +18,9 @@ import MobileCompanionNav from "@/components/MobileCompanionNav";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import ConnectivityIndicator from "@/components/ConnectivityIndicator";
 
-type ShellUser = { name: string; role: string; permissions: string[]; avatarVersion?: string | null };
+type ShellUser = { id: string; name: string; role: string; permissions: string[]; avatarVersion?: string | null };
 
 /**
  * Help, Settings and the account menu, as one horizontal group.
@@ -28,7 +29,7 @@ type ShellUser = { name: string; role: string; permissions: string[]; avatarVers
  * rather than navigation, and moving them to the top-right returns the footer's
  * height to the nav — which is what runs out of room as modules are added.
  */
-function AccountCluster({ user, isOwner }: { user: ShellUser; isOwner: boolean }) {
+function AccountCluster({ user, isOwner, tenantId }: { user: ShellUser; isOwner: boolean; tenantId: string }) {
   return (
     // Held together as one object rather than three loose icons: a hairline
     // border and a barely-there fill, so it reads as a group without competing
@@ -36,7 +37,7 @@ function AccountCluster({ user, isOwner }: { user: ShellUser; isOwner: boolean }
     <div className="flex items-center gap-0.5 rounded-xl border border-sidebar-border/70 bg-sidebar-accent/25 p-1 transition-colors hover:border-sidebar-border">
       <SidebarHelpSettings isOwner={isOwner} permissions={user.permissions} compact />
       <div className="mx-0.5 h-5 w-px bg-sidebar-border/70" aria-hidden />
-      <AccountMenu user={user} isOwner={isOwner} compact />
+      <AccountMenu user={user} isOwner={isOwner} tenantId={tenantId} compact />
     </div>
   );
 }
@@ -86,6 +87,7 @@ export default function AppShell({
   enabledModules,
   brand,
   weatherCities,
+  tenantId,
   children,
 }: {
   user: ShellUser;
@@ -94,6 +96,7 @@ export default function AppShell({
   enabledModules?: string[];
   /** The tenant's clock/weather cities, resolved by the (app) layout. */
   weatherCities: WeatherCity[];
+  tenantId: string;
   /** The workspace brand, resolved from the SESSION's tenant by the (app)
    *  layout. Optional so every existing test render still compiles; undefined
    *  means the built-in assets, which is what an unbranded tenant gets. */
@@ -118,7 +121,9 @@ export default function AppShell({
           so the logo is still optically centred, and it CLIPS rather than
           growing into the cluster. */}
       <header className="fixed inset-x-0 top-0 z-40 flex h-12 items-center gap-2 border-b border-sidebar-border bg-sidebar/90 px-2 backdrop-blur-xl lg:hidden">
-        <div className="w-[7.5rem] shrink-0" aria-hidden />
+        <div className="w-[7.5rem] shrink-0">
+          <ConnectivityIndicator tenantId={tenantId} userId={user.id} />
+        </div>
         {/* min-w-0 lets the flex item shrink below its content, overflow-hidden
             clips what is left. Together the centre column can never grow past its
             own width, so the logo cannot reach the cluster whatever it contains. */}
@@ -130,7 +135,7 @@ export default function AppShell({
           />
         </div>
         <div className="flex w-[7.5rem] shrink-0 justify-end">
-          <AccountCluster user={user} isOwner={user.role === "owner"} />
+          <AccountCluster user={user} isOwner={user.role === "owner"} tenantId={tenantId} />
         </div>
       </header>
 
@@ -141,7 +146,8 @@ export default function AppShell({
         <div className="min-w-0 flex-1">
           <ClockWeather cities={weatherCities} />
         </div>
-        <AccountCluster user={user} isOwner={user.role === "owner"} />
+        <ConnectivityIndicator tenantId={tenantId} userId={user.id} />
+        <AccountCluster user={user} isOwner={user.role === "owner"} tenantId={tenantId} />
       </header>
 
       {/* Mobile drawer */}
