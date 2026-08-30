@@ -139,8 +139,12 @@ test("the buttons/list threshold matches the one the outbox actually applies", (
 
 test("the text preview names the same 4096-character limit the sender enforces", () => {
   const preview = src("src/components/WhatsAppPreview.tsx");
-  assert.match(preview, /CutBadge what="message at 4096 characters"/);
-  assert.doesNotMatch(preview, /CutBadge what="message at 1024 characters"/);
+  const textBranch = preview.slice(
+    preview.indexOf("const rendered = renderWhatsAppText"),
+    preview.indexOf('if (msg.type === "image")'),
+  );
+  assert.match(textBranch, /CutBadge what="message at 4096 characters"/);
+  assert.doesNotMatch(textBranch, /CutBadge what="message at 1024 characters"/);
 });
 
 test("only the latest choice message remains actionable", () => {
