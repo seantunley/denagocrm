@@ -74,6 +74,21 @@
       ]
     }
   },
+  "BotFlowEvaluation.BotFlowEvaluation_tenant_flow_fkey": {
+    "table": "BotFlowEvaluation",
+    "constraint": "BotFlowEvaluation_tenant_flow_fkey",
+    "columns": [
+      "tenantId",
+      "flowId"
+    ],
+    "references": {
+      "table": "BotFlow",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
   "BatteryCheck.BatteryCheck_tenantId_jobCardId_fkey": {
     "table": "BatteryCheck",
     "constraint": "BatteryCheck_tenantId_jobCardId_fkey",
