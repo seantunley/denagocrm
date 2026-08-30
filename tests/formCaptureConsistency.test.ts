@@ -24,9 +24,43 @@ test("mobile operational photo capture has one prominent, gallery-ready pattern"
 
   assert.match(component, /type="file"/);
   assert.match(component, /accept="image\/\*"/);
-  assert.match(component, /handleUploadUrl: "\/api\/photos\/upload"/);
   assert.match(jobcards, /<DirectPhotoUploader[^>]*label="Add condition photos"/);
-  assert.match(deliveries, /<DirectPhotoUploader[^>]*label="Add handover photos"/);
+  /*
+   * The delivery label is now CONDITIONAL, and the assertion follows it rather
+   * than pinning the literal it used to be. Guided handover gives the button a
+   * second job: once a note has been configured, further photos are additional
+   * to it, and "Add handover photos" would misdescribe what pressing it does.
+   *
+   * What this guard protects is unchanged — the deliveries screen offers ONE
+   * prominent capture control, through the shared uploader, and the first-time
+   * wording is still "Add handover photos". Matching `label=` up to its closing
+   * brace keeps a conditional expression readable to it while still failing if
+   * the uploader or the wording disappears.
+   */
+  assert.match(deliveries, /<DirectPhotoUploader/);
+  assert.match(
+    deliveries,
+    /label=(?:"Add handover photos"|\{[^}]*"Add handover photos"[^}]*\})/,
+    "the delivery screen must still offer 'Add handover photos' as its first-time label",
+  );
+
+  /*
+   * The upload URL moved to lib/photoTransport.ts when the guided checklist
+   * runner became a second thing that sends photos.
+   *
+   * The assertion follows it rather than being deleted, and it is now stronger
+   * than it was: the endpoint must appear in the shared transport, and must NOT
+   * appear in either sender. What this guard is really protecting is that there
+   * is ONE client-side sender — the blob pathname a caller builds has to match
+   * the prefix `/api/photos/upload` checks before it will sign anything, so a
+   * second hand-rolled copy of that string is how one screen silently loses the
+   * ability to upload while the other keeps working.
+   */
+  const transport = source("src", "lib", "photoTransport.ts");
+  assert.match(transport, /handleUploadUrl: "\/api\/photos\/upload"/);
+  assert.doesNotMatch(component, /handleUploadUrl:/, "the uploader must not hold its own endpoint");
+  const runner = source("src", "components", "checklists", "ChecklistRunner.tsx");
+  assert.doesNotMatch(runner, /handleUploadUrl:/, "the checklist runner must not hold its own endpoint");
 });
 
 test("the mobile capture sheet prioritises on-site work before record creation", () => {

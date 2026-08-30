@@ -1,0 +1,13 @@
+-- The checklist runs a customer ACTUALLY signed beside, frozen at completion.
+--
+-- The delivery note chose the newest completed run per template every time it
+-- rendered. A delivery checklist is repeatable by design, so re-running one
+-- after handover silently replaced the evidence shown next to a signature the
+-- customer had already given — the document changed after it was signed, which
+-- is the one thing a signed document must never do. The per-entry snapshots
+-- already froze template WORDING; nothing froze WHICH RUN.
+--
+-- Additive and empty on arrival. A delivery completed before this ships has no
+-- ids, and the note falls back to its previous selection for those — the same
+-- output it produces today, rather than a blank evidence section.
+ALTER TABLE "Quote" ADD COLUMN IF NOT EXISTS "deliveryHandoverRunIds" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];

@@ -51,21 +51,18 @@ test("offline edits are conflict checked and retries are idempotent", () => {
   assert.match(src("src/components/OfflineProvider.tsx"), /else if \(result\.retry\)/);
 });
 
-test("field workflows and delivery signatures are offline enabled", () => {
+test("field capture workflows are offline enabled", () => {
   const saveForm = src("src/components/SaveForm.tsx");
-  const proof = src("src/components/ProofOfDelivery.tsx");
   const jobs = src("src/app/(app)/jobcards/[id]/page.tsx");
   assert.match(saveForm, /offline\.queue\(offlineOperation, formData\)/);
-  assert.match(proof, /type: "delivery\.complete"/);
   assert.match(jobs, /type: "jobcard\.notes"/);
   assert.match(jobs, /type: "jobcard\.inspection"/);
   /*
    * PHOTOS ARE NOT QUEUED FROM THE ONLINE PAGES, and that is deliberate.
    *
    * DirectPhotoUploader sends a photo browser-to-Blob so a batch never travels
-   * in a Server Action body; there is no action to wrap in an outbox descriptor,
-   * and directPhotoUpload.test.ts asserts the old `.bind` forms are gone. Every
-   * photo kind is still capturable offline — from the workspace below, which is
+   * in a Server Action body; there is no action to wrap in an outbox descriptor.
+   * Every photo kind is still capturable offline — from the workspace, which is
    * the screen a field user is on when there is no connection.
    */
   assert.doesNotMatch(jobs, /type: "inspection\.photo"/);
@@ -75,6 +72,8 @@ test("field workflows and delivery signatures are offline enabled", () => {
   assert.match(workspace, /type: "jobcard\.inspection"/);
   assert.match(workspace, /type: "inspection\.photo"/);
   assert.match(workspace, /type: "delivery\.photo"/);
+  // …and RECORD writes are not offered at all — see the split test below.
+  assert.doesNotMatch(workspace, /type: "lead\.|type: "contact\.|type: "delivery\.complete"/);
   assert.match(src("src/app/api/offline/bootstrap/route.ts"), /inspectionItems:/);
 });
 
@@ -144,7 +143,7 @@ test("AN INSPECTION IS GUARDED BY THE ITEM, NOT ITS JOB CARD", () => {
   );
   assert.equal(guardedRecordKey({ type: "jobcard.notes", recordId: "job1" }), "job1");
   // Creates and photo APPENDS guard nothing — there is no version to collide.
-  assert.equal(guardedRecordKey({ type: "lead.create" }), null);
+  assert.equal(guardedRecordKey({ type: "jobcard.photo", recordId: "j1" }), null);
   assert.equal(guardedRecordKey({ type: "jobcard.photo", recordId: "job1" }), null);
   assert.equal(guardedRecordKey({ type: "delivery.photo", recordId: "q1" }), null);
 });
@@ -170,26 +169,6 @@ test("the item carries its own version, end to end", () => {
   // …and used as the base version by both screens that queue the operation.
   assert.match(src("src/app/(app)/offline/page.tsx"), /baseVersion: item\.updatedAt/);
   assert.match(src("src/app/(app)/jobcards/[id]/page.tsx"), /baseVersion: item\.updatedAt\.toISOString\(\)/);
-});
-
-test("A STAGE PICKER THE REPLAY WILL REFUSE IS NOT LEFT ENABLED", () => {
-  /*
-   * updateLead refuses a stage change without leads.change_stage. Left enabled,
-   * the picker took the change into the outbox, reported it saved, and had it
-   * refused on replay with the form long since reset.
-   */
-  const workspace = src("src/app/(app)/offline/page.tsx");
-  assert.match(workspace, /disabled=\{!can\.leadChangeStage\}/);
-  /*
-   * A disabled select posts NOTHING, and updateLead compares the submitted
-   * stageId against the stored one — so without carrying the current stage the
-   * replay would read the silence as a stage change and refuse it for exactly
-   * the reason being avoided.
-   */
-  assert.match(workspace, /!can\.leadChangeStage && <input type="hidden" name="stageId" value=\{lead\.stageId\}/);
-  assert.match(src("src/app/api/offline/bootstrap/route.ts"), /hasPermission\(user, "leads\.change_stage"\)/);
-  // The refusal being avoided must still exist.
-  assert.match(src("src/app/actions/leads.ts"), /You do not have permission to change the lead stage/);
 });
 
 test("A DISABLED MODULE WITHHOLDS ITS RECORDS, not just its buttons", () => {
@@ -293,22 +272,22 @@ test("an entry queued BEFORE the accepted one is not rebased", () => {
    * It was authored against the older version and is only awaiting a retry.
    * Advancing it would silently claim it had seen a change it never saw.
    */
-  const earlier = queued({ id: "a", createdAt: 100, operation: { type: "lead.update", recordId: "l1", baseVersion: "V1" } });
-  const accepted = queued({ id: "b", createdAt: 200, operation: { type: "lead.update", recordId: "l1", baseVersion: "V1" } });
+  const earlier = queued({ id: "a", createdAt: 100, operation: { type: "jobcard.notes", recordId: "l1", baseVersion: "V1" } });
+  const accepted = queued({ id: "b", createdAt: 200, operation: { type: "jobcard.notes", recordId: "l1", baseVersion: "V1" } });
   assert.deepEqual(chainableSiblings(accepted, [earlier, accepted], "l1", "V2"), []);
 });
 
 test("a conflicted or failed sibling stays where the person left it", () => {
   // Those are waiting for a human to look at them; rebasing would hide that.
-  const accepted = queued({ id: "a", createdAt: 100, operation: { type: "lead.update", recordId: "l1", baseVersion: "V1" } });
-  const conflicted = queued({ id: "b", createdAt: 200, status: "conflict", operation: { type: "lead.update", recordId: "l1", baseVersion: "V1" } });
-  const failed = queued({ id: "c", createdAt: 300, status: "failed", operation: { type: "lead.update", recordId: "l1", baseVersion: "V1" } });
+  const accepted = queued({ id: "a", createdAt: 100, operation: { type: "jobcard.notes", recordId: "l1", baseVersion: "V1" } });
+  const conflicted = queued({ id: "b", createdAt: 200, status: "conflict", operation: { type: "jobcard.notes", recordId: "l1", baseVersion: "V1" } });
+  const failed = queued({ id: "c", createdAt: 300, status: "failed", operation: { type: "jobcard.notes", recordId: "l1", baseVersion: "V1" } });
   assert.deepEqual(chainableSiblings(accepted, [accepted, conflicted, failed], "l1", "V2"), []);
 });
 
 test("re-running a sync rewrites nothing", () => {
-  const accepted = queued({ id: "a", createdAt: 100, operation: { type: "lead.update", recordId: "l1", baseVersion: "V1" } });
-  const already = queued({ id: "b", createdAt: 200, operation: { type: "lead.update", recordId: "l1", baseVersion: "V2" } });
+  const accepted = queued({ id: "a", createdAt: 100, operation: { type: "jobcard.notes", recordId: "l1", baseVersion: "V1" } });
+  const already = queued({ id: "b", createdAt: 200, operation: { type: "jobcard.notes", recordId: "l1", baseVersion: "V2" } });
   assert.deepEqual(chainableSiblings(accepted, [accepted, already], "l1", "V2"), []);
 });
 
@@ -325,7 +304,7 @@ test("a REJECTED replay advances nothing, so its siblings are refused too", () =
 test("capabilities fail closed for a snapshot cached before they existed", () => {
   // Every capability, whatever the list grows to, defaults to refusing.
   const values = Object.values(NO_OFFLINE_CAPABILITIES);
-  assert.ok(values.length >= 7, "each gated workflow needs its own capability");
+  assert.ok(values.length >= 2, "each gated workflow needs its own capability");
   assert.ok(values.every((allowed) => allowed === false));
   const workspace = src("src/app/(app)/offline/page.tsx");
   assert.match(workspace, /snapshot\?\.can \?\? NO_OFFLINE_CAPABILITIES/);
@@ -333,50 +312,23 @@ test("capabilities fail closed for a snapshot cached before they existed", () =>
 
 test("WRITE PERMISSION IS SHIPPED WITH THE DATA, not assumed from visibility", () => {
   /*
-   * getAccessible*Ids answers "what may they SEE". Every form was rendered on
-   * that answer alone, so a role with leads.view_owned and no leads.create was
-   * shown a create form that accepted the work, said "Saved on this device" and
-   * cleared itself — and the replay was refused hours later by the permission
-   * check that had been there the whole time, with the typed details gone.
+   * getAccessible*Ids answers "what may they SEE". Every capture form was
+   * rendered on that answer alone, so a role that could view job cards but not
+   * manage them was shown forms that accepted the work, said "Saved on this
+   * device" and cleared themselves — and the replay was refused hours later by
+   * the permission check that had been there the whole time.
    */
   const bootstrap = src("src/app/api/offline/bootstrap/route.ts");
-  for (const permission of [
-    "leads.create", "leads.edit", "contacts.create", "contacts.edit",
-    "jobcards.manage", "deliveries.manage",
-  ]) {
+  for (const permission of ["jobcards.manage", "deliveries.manage"]) {
     assert.ok(
       bootstrap.includes(`hasPermission(user, "${permission}")`),
       `${permission} must be resolved for the device`,
     );
   }
   const workspace = src("src/app/(app)/offline/page.tsx");
-  for (const gate of [
-    "can.leadCreate", "can.leadEdit", "can.contactCreate", "can.contactEdit",
-    "can.jobCardManage", "can.deliveryManage",
-  ]) {
+  for (const gate of ["can.jobCardManage", "can.deliveryManage"]) {
     assert.ok(workspace.includes(gate), `${gate} must gate its form`);
   }
-});
-
-test("SIGNING IS NOT OFFERED BEFORE THE DELIVERY IS SCHEDULED", () => {
-  /*
-   * The snapshot carries every signed, undelivered quote — scheduling is not one
-   * of its conditions. Offering the handover on an unscheduled quote walked the
-   * driver through the checklist and took the CUSTOMER'S signature in front of
-   * them, then let markDelivered refuse it on reconnect, for a signature the
-   * Pending list has no way to hand back.
-   */
-  const workspace = src("src/app/(app)/offline/page.tsx");
-  const deliveries = workspace.slice(
-    workspace.indexOf('tab === "Deliveries"'),
-    workspace.indexOf('tab === "Pending"'),
-  );
-  assert.match(deliveries, /delivery\.scheduledFor \? \(\s*<ProofOfDelivery/, "the handover must be behind the scheduled check");
-  assert.match(deliveries, /Customer signing becomes available here once the/, "and it must say why it is not offered");
-  // Photos do not require scheduling and stay available.
-  assert.match(deliveries, /type: "delivery\.photo"/);
-  // markDelivered is the refusal being avoided; it must still be there.
-  assert.match(src("src/app/actions/fulfilment.ts"), /Schedule the delivery before marking it delivered/);
 });
 
 /* ── the feature must not become a precondition for the app ──────────────── */
@@ -392,8 +344,8 @@ test("OFFLINE MODE CANNOT TAKE DOWN THE CRM FOR A TENANTLESS SESSION", () => {
    * sessions in dormant mode on purpose.
    */
   const layout = src("src/app/(app)/layout.tsx");
-  assert.match(layout, /await actingTenantId\(\)\.catch\(\(\) => null\)/,
-    "an unresolvable tenant must not throw out of the shell");
+  assert.match(layout, /const activeTenantId = await getActiveTenantId\(\);/,
+    "the null-able resolver, not the throwing one — this layout renders every page");
   assert.match(layout, /if \(!tenantId\) return <>\{children\}<\/>;/,
     "the shell must render without the provider");
   assert.match(layout, /<MaybeOffline tenantId=\{activeTenantId\} userId=\{user\.id\}>/);
@@ -443,70 +395,7 @@ test("AN EXPIRED SESSION LEAVES THE OUTBOX REPLAYABLE", () => {
 
 /* ── the pickers must only offer stages a replay accepts ─────────────────── */
 
-test("OFFLINE LEAD PICKERS OFFER OPEN STAGES ONLY", () => {
-  /*
-   * createLead and updateLead both run the chosen stage through
-   * validateOpenStage, which refuses a closed one outright — "Use Mark won or
-   * Mark lost instead". Shipping every stage put Won and Lost in the offline
-   * pickers: choose one, be told the lead was saved on the device, watch the
-   * form clear, and have the replay refuse it with the details gone.
-   *
-   * Won and lost are not edits to a stage field anyway — they are their own
-   * actions, with their own permissions and outcome fields, and neither exists
-   * offline.
-   */
-  const bootstrap = src("src/app/api/offline/bootstrap/route.ts");
-  const stageQuery = bootstrap.slice(bootstrap.indexOf("prisma.pipelineStage.findMany"));
-  assert.match(stageQuery.slice(0, 200), /where: \{ isClosed: false \}/);
-  // The refusal being avoided must still be there.
-  assert.match(src("src/app/actions/leads.ts"), /Use Mark won or Mark lost instead/);
-  assert.match(src("src/app/actions/leads.ts"), /await validateOpenStage\(data\.stageId\)/);
-});
-
-test("A LEAD ALREADY IN A CLOSED STAGE IS NOT OFFERED FOR EDITING", () => {
-  /*
-   * updateLead validates the submitted stage UNCONDITIONALLY — not only when it
-   * changes — so every edit to a won or lost lead is refused whatever else was
-   * typed. Shipping only open stages makes "this lead's stage is not among them"
-   * the exact test for a closed one, with no extra snapshot field to keep in
-   * step.
-   */
-  const workspace = src("src/app/(app)/offline/page.tsx");
-  assert.match(
-    workspace,
-    /!snapshot\.options\.stages\.some\(\(stage\) => stage\.id === lead\.stageId\)/,
-    "the closed case must be detected from the shipped options",
-  );
-  assert.match(workspace, /Closed leads cannot be edited offline/, "and explained rather than silently dropped");
-  // The permission gate still comes first — a role that cannot edit sees that
-  // reason, not a stage explanation.
-  const gate = workspace.slice(workspace.indexOf("{!can.leadEdit ?"), workspace.indexOf("Closed leads cannot be edited offline"));
-  assert.match(gate, /^\{!can\.leadEdit \? readOnly\("leads"\)/);
-});
-
 /* ── round five ──────────────────────────────────────────────────────────── */
-
-test("A MISSING RECORD ID IS NOT EVIDENCE OF A CREATE", () => {
-  /*
-   * LeadForm read `offlineRecordId ? "lead.update" : "lead.create"`, and the edit
-   * modal on the lead detail page passed updateLead and the lead's defaults but
-   * never passed offlineRecordId. Offline it queued a NEW LEAD: a user with
-   * create permission got a duplicate on replay; an edit-only user got a refusal
-   * after being told it was saved.
-   */
-  const detail = src("src/app/(app)/leads/[id]/page.tsx");
-  assert.match(detail, /offlineRecordId=\{lead\.id\}/, "the edit modal must pass its identity");
-  assert.match(detail, /offlineBaseVersion=\{lead\.updatedAt\.toISOString\(\)\}/);
-
-  // …and the inference fails safe, so the next call site that forgets loses
-  // offline support rather than writing the wrong verb.
-  for (const form of ["src/components/LeadForm.tsx", "src/components/ContactForm.tsx"]) {
-    assert.match(src(form), /defaults\.id && !offlineRecordId\s*\r?\n?\s*\? undefined/, `${form} must refuse rather than guess`);
-    assert.match(src(form), /id\?: string;/, "an edit is identified by defaults.id");
-  }
-  // SaveForm is what turns "no operation" into a refusal the person can read.
-  assert.match(src("src/components/SaveForm.tsx"), /This operation requires an internet connection/);
-});
 
 test("SIGNING OUT NEVER SILENTLY DISCARDS QUEUED WORK", () => {
   /*
@@ -525,12 +414,14 @@ test("SIGNING OUT NEVER SILENTLY DISCARDS QUEUED WORK", () => {
    */
   const menu = src("src/components/AccountMenu.tsx");
   const guard = menu.slice(menu.indexOf("async function signOutSafely"), menu.indexOf("await purgeOfflineData()"));
-  assert.match(guard, /const queued = offline\?\.pending \?\? 0;/, "the queue is the question, not connectivity");
-  assert.match(guard, /if \(queued > 0\) \{/);
+  assert.match(guard, /const outbox = offline\?\.pending \?\? 0;/, "the queue is the question, not connectivity");
+  assert.match(guard, /offlinePendingCount\(\{ tenantId, userId: user\.id \}\)/,
+    "guided checklists keep their own device store — both are purged, so both must be counted");
+  assert.match(guard, /if \(pending > 0\) \{/);
   assert.match(guard, /if \(!navigator\.onLine\) \{/, "connectivity still matters — logout() is a Server Action");
   assert.ok(
-    guard.indexOf("const queued") < guard.indexOf("if (!navigator.onLine)"),
-    "the work is checked before the connection — losing it is the worse failure",
+    guard.indexOf("const outbox") < guard.indexOf("if (!navigator.onLine)"),
+    "the work is counted before the connection is judged",
   );
   assert.ok(
     (guard.match(/return;/g) ?? []).length >= 2,
@@ -550,7 +441,7 @@ test("AN AMBIGUOUSLY APPLIED CHANGE IS NEVER SENT AGAIN", () => {
     id: "a",
     tenantId: "t1",
     userId: "u1",
-    operation: { type: "lead.create" },
+    operation: { type: "jobcard.photo", recordId: "job1" },
     fields: [],
     createdAt: 1_700_000_000_000,
     attempts: 1,
@@ -574,22 +465,6 @@ test("AN AMBIGUOUSLY APPLIED CHANGE IS NEVER SENT AGAIN", () => {
   assert.match(route, /may or may not have been applied/);
   // …and the device has to carry it through onto the queue entry.
   assert.match(src("src/components/OfflineProvider.tsx"), /indeterminate: result\.indeterminate === true/);
-});
-
-test("A STAGE MOVE THE DEVICE CANNOT PRE-VALIDATE IS NOT OFFERED", () => {
-  /*
-   * gateStageMove runs on replay and can refuse outright, or demand a reason or
-   * remedy that only the pipeline board can capture. None of that is answerable
-   * from a cached snapshot.
-   */
-  const bootstrap = src("src/app/api/offline/bootstrap/route.ts");
-  assert.match(bootstrap, /entryGateMode: true, exitGateMode: true/);
-  assert.match(bootstrap, /stage\.entryGateMode !== "off" \|\| stage\.exitGateMode !== "off"/);
-  assert.match(bootstrap, /leadChangeStage: leadChangeStage && !stageGated/);
-  // The snapshot type is unchanged — the gate columns are read and dropped.
-  assert.match(bootstrap, /stages: stages\.map\(\(\{ id, name \}\) => \(\{ id, name \}\)\)/);
-  // The refusal being avoided must still exist.
-  assert.match(src("src/app/actions/leads.ts"), /gateStageMove\(\{/);
 });
 
 test("A GUARDED RECORD THAT NO LONGER EXISTS IS A CONFLICT", () => {
@@ -636,28 +511,26 @@ const captured = (over: Partial<OfflineMutation> & Pick<OfflineMutation, "id" | 
 test("WHAT THE PERSON TYPED SURVIVES A REFUSAL", () => {
   const entry = captured({
     id: "a",
-    operation: { type: "lead.create" },
-    error: "You do not have permission to create leads",
+    operation: { type: "jobcard.notes", recordId: "job1", baseVersion: "V1" },
+    error: "You do not have permission to manage job cards",
     fields: [
-      { name: "name", kind: "text", value: "Jan Bekker" },
-      { name: "phone", kind: "text", value: "082 555 0134" },
-      { name: "notes", kind: "text", value: "Wants a finance quote" },
+      { name: "checkinNotes", kind: "text", value: "Scratch on the near-side panel" },
+      { name: "checkoutNotes", kind: "text", value: "Customer shown the repair" },
     ],
   });
   assert.deepEqual(
     recoverableFields(entry).map((f) => `${f.name}=${f.value}`),
-    ["name=Jan Bekker", "phone=082 555 0134", "notes=Wants a finance quote"],
+    ["checkinNotes=Scratch on the near-side panel", "checkoutNotes=Customer shown the repair"],
   );
   const text = recoveryText(entry);
-  assert.match(text, /lead\.create/);
-  assert.match(text, /name: Jan Bekker/);
-  assert.match(text, /notes: Wants a finance quote/);
+  assert.match(text, /jobcard\.notes/);
+  assert.match(text, /checkinNotes: Scratch on the near-side panel/);
 });
 
 test("plumbing and blanks are not shown back as if they were typed", () => {
   const entry = captured({
     id: "a",
-    operation: { type: "lead.create" },
+    operation: { type: "jobcard.photo", recordId: "job1" },
     fields: [
       { name: "name", kind: "text", value: "Jan" },
       { name: "source", kind: "text", value: "offline" },
@@ -686,12 +559,10 @@ test("RE-QUEUEING REBASES ONTO THE RECORD AS IT IS NOW", () => {
   const entry = captured({
     id: "a",
     status: "conflict",
-    operation: { type: "lead.update", recordId: "l1", baseVersion: "V1" },
+    operation: { type: "jobcard.notes", recordId: "l1", baseVersion: "V1" },
   });
   const snapshot = {
-    leads: [{ id: "l1", updatedAt: "V2" }],
-    contacts: [],
-    jobCards: [],
+    jobCards: [{ id: "l1", updatedAt: "V2", inspectionItems: [] }],
     deliveries: [],
   } as unknown as Parameters<typeof requeueBase>[1];
 
@@ -701,14 +572,14 @@ test("RE-QUEUEING REBASES ONTO THE RECORD AS IT IS NOW", () => {
 test("a record no longer on the device can be copied but not replayed", () => {
   // Nothing to rebase onto, so "Try again" is not offered — the honest answer is
   // to copy the details and re-enter them online.
-  const entry = captured({ id: "a", status: "conflict", operation: { type: "lead.update", recordId: "gone", baseVersion: "V1" } });
-  const snapshot = { leads: [], contacts: [], jobCards: [], deliveries: [] } as unknown as Parameters<typeof requeueBase>[1];
+  const entry = captured({ id: "a", status: "conflict", operation: { type: "jobcard.notes", recordId: "gone", baseVersion: "V1" } });
+  const snapshot = { jobCards: [], deliveries: [] } as unknown as Parameters<typeof requeueBase>[1];
   assert.deepEqual(requeueBase(entry, snapshot), { retryable: false });
   assert.deepEqual(requeueBase(entry, null), { retryable: false });
 });
 
 test("an unguarded change needs no version to be replayed", () => {
-  const entry = captured({ id: "a", operation: { type: "lead.create" } });
+  const entry = captured({ id: "a", operation: { type: "jobcard.photo", recordId: "job1" } });
   assert.deepEqual(requeueBase(entry, null), { retryable: true });
 });
 
@@ -721,8 +592,6 @@ test("an inspection re-queues against the ITEM's version", () => {
     operation: { type: "jobcard.inspection", recordId: "item1", parentId: "job1", baseVersion: "I1" },
   });
   const snapshot = {
-    leads: [],
-    contacts: [],
     deliveries: [],
     jobCards: [{ id: "job1", updatedAt: "J9", inspectionItems: [{ id: "item1", updatedAt: "I2" }] }],
   } as unknown as Parameters<typeof requeueBase>[1];
@@ -760,30 +629,6 @@ test("the Pending screen shows the fields and offers the way out", () => {
 
 /* ── round six ───────────────────────────────────────────────────────────── */
 
-test("MAKING THE STANDARD EDIT FORMS QUEUEABLE DID NOT SKIP THE STAGE GATE", () => {
-  /*
-   * Passing offlineRecordId turned the two standard lead edit routes into forms
-   * that queue — and their stage picker had no capability gate, unlike the
-   * offline workspace's. updateLead refuses a stage change without
-   * leads.change_stage, so an enabled picker was a promise the save could not
-   * keep: online the refusal is immediate and the form is still filled in;
-   * offline it arrives after the modal has closed.
-   */
-  const form = src("src/components/LeadForm.tsx");
-  assert.match(form, /disabled=\{!canChangeStage\}/);
-  assert.match(form, /name=\{canChangeStage \? "stageId" : undefined\}/);
-  // A disabled select posts nothing, and updateLead compares the submitted stage
-  // against the stored one — the silence would itself read as a change.
-  assert.match(form, /!canChangeStage && <input type="hidden" name="stageId" value=\{stageId\}/);
-  // Both edit call sites must resolve it; a create does not need it, so the
-  // default stays permissive.
-  assert.match(form, /canChangeStage = true,/);
-  for (const page of ["src/app/(app)/leads/[id]/page.tsx", "src/app/(app)/leads/[id]/edit/page.tsx"]) {
-    assert.match(src(page), /hasPermission\(user, "leads\.change_stage"\)/, `${page} must resolve the permission`);
-    assert.match(src(page), /canChangeStage=\{/, `${page} must pass it`);
-  }
-});
-
 test("A REDIRECT TO LOGIN IS NOT CACHED AS THE OFFLINE SHELL", () => {
   /*
    * With an expired session /offline redirects to /login and fetch FOLLOWS it,
@@ -797,4 +642,89 @@ test("A REDIRECT TO LOGIN IS NOT CACHED AS THE OFFLINE SHELL", () => {
   // The guard must sit on the branch that WRITES the shell.
   const shellBranch = worker.slice(worker.indexOf('if (url.pathname === "/offline")'), worker.indexOf("event.respondWith(fetch(event.request).catch("));
   assert.match(shellBranch, /response\.ok && !response\.redirected/);
+});
+
+/* ── the boundary of this feature ────────────────────────────────────────── */
+
+test("OFFLINE IS CAPTURE ONLY — records are not written from a cached snapshot", () => {
+  /*
+   * WHY THE LINE IS HERE.
+   *
+   * Everything offline can do is an APPEND, or a field write on a record the
+   * device already holds: photos, condition notes, inspection results. Those
+   * replay through one permission and one module gate, and both travel with the
+   * snapshot.
+   *
+   * Creating or editing a lead or a contact does not. `createLead` and
+   * `updateLead` between them enforce create permission, edit permission, a
+   * separate stage-change permission, open-stage validity, per-stage entry and
+   * exit gates that can demand a reason or a remedy, pipeline-move permission
+   * and assignment rules. `markDelivered` adds scheduling state and module
+   * entitlement. Every one is a rule the device would have to mirror from a
+   * snapshot and keep in step with the server for ever.
+   *
+   * Seven review rounds on the original pull request produced sixteen findings.
+   * Almost all of them were one bug — the device accepting work the server would
+   * refuse — and almost all of them were on that surface. This is where it is
+   * drawn instead.
+   */
+  const types = src("src/lib/offlineTypes.ts");
+  const operations = types.slice(types.indexOf("export type OfflineOperationType"), types.indexOf("export type OfflineDescriptor"));
+  for (const gone of ["lead.create", "lead.update", "contact.create", "contact.update", "delivery.complete"]) {
+    assert.ok(!operations.includes(`"${gone}"`), `${gone} is not part of offline capture`);
+  }
+  for (const kept of ["jobcard.notes", "jobcard.inspection", "jobcard.photo", "inspection.photo", "delivery.photo"]) {
+    assert.ok(operations.includes(`"${kept}"`), `${kept} must remain capturable`);
+  }
+
+  // The server half must agree, or a hand-made POST could still reach an action
+  // the UI no longer offers.
+  const route = src("src/app/api/offline/sync/route.ts");
+  const schema = route.slice(route.indexOf("const operationSchema"), route.indexOf("type Operation"));
+  for (const gone of ["lead.create", "lead.update", "contact.create", "contact.update", "delivery.complete"]) {
+    assert.ok(!schema.includes(`"${gone}"`), `${gone} must be rejected by the schema, not merely unrendered`);
+  }
+  assert.doesNotMatch(route, /createLead|updateLead|createContact|updateContact|markDelivered/,
+    "the replay must not be able to reach a record-writing action at all");
+
+  // And the record forms are online-only again.
+  for (const form of ["src/components/LeadForm.tsx", "src/components/ContactForm.tsx", "src/components/ProofOfDelivery.tsx"]) {
+    assert.doesNotMatch(src(form), /offlineOperation/, `${form} must not queue`);
+  }
+});
+
+test("THE SHARED COUNT IS REPAIRED BY THE SCREEN THAT WRITES THE QUEUE", () => {
+  /*
+   * `pending` is what the connectivity badge shows and what sign-out consults
+   * before it purges. The Pending tab deletes and re-queues entries directly, so
+   * without a way to repair the count from there, discarding the last entry left
+   * a device claiming work it no longer had — and while offline no sync would
+   * ever run to correct it, so sign-out stayed blocked on a phantom.
+   */
+  const provider = src("src/components/OfflineProvider.tsx");
+  assert.match(provider, /recount: \(\) => Promise<void>;/, "the provider must expose it");
+  assert.match(provider, /refreshSnapshot, recount \}\}/, "…and actually pass it through the context");
+
+  const workspace = src("src/app/(app)/offline/page.tsx");
+  const discard = workspace.slice(workspace.indexOf("await removeOfflineMutation(entry.id)"));
+  assert.match(discard.slice(0, 160), /await offline\.recount\(\)/, "discarding must repair the count");
+  const retry = workspace.slice(workspace.indexOf("await requeueOfflineMutation("));
+  assert.match(retry.slice(0, 600), /await offline\.recount\(\)/, "so must re-queueing");
+});
+
+test("THE SHELL RE-WARM APPLIES THE SAME REDIRECT CHECK AS THE NAVIGATION PATH", () => {
+  /*
+   * If the session expires while a newly registered worker is handling the owner
+   * announcement, this second fetch follows /offline → /login exactly as the
+   * navigation one did, and `ok` is true for a sign-in page.
+   */
+  const worker = src("public/sw.js");
+  const rewarm = worker.slice(worker.indexOf("async function claimShell"), worker.indexOf("async function forgetShell"));
+  assert.match(rewarm, /!fresh\.redirected && freshPath === SHELL_KEY/);
+  // Both paths, or the hole simply moves.
+  assert.equal(
+    (worker.match(/redirected/g) ?? []).length >= 2,
+    true,
+    "the navigation path and the re-warm path must both check it",
+  );
 });

@@ -17,11 +17,27 @@ const blobEnv = (overrides: Partial<NodeJS.ProcessEnv> = {}) => ({
   ...overrides,
 });
 
+/*
+ * THE SENDING HALF NOW LIVES IN lib/photoTransport.ts.
+ *
+ * It moved there when the guided checklist runner became a second thing that
+ * sends photos. The blob pathname a sender builds has to match the prefix
+ * /api/photos/upload checks before it will sign anything — that check IS the
+ * tenant isolation on direct uploads — so a second copy of it is how one screen
+ * silently loses the ability to upload while the other keeps working.
+ *
+ * These assertions follow the code rather than being deleted: the properties
+ * they guard are unchanged, only the file holding them.
+ */
+const transport = () => src("src/lib/photoTransport.ts");
+
 test("photo batches bypass Server Action request bodies one file at a time", () => {
   const uploader = src("src/components/DirectPhotoUploader.tsx");
-  assert.match(uploader, /from "@vercel\/blob\/client"/);
+  assert.match(transport(), /from "@vercel\/blob\/client"/);
+  // Still ONE REQUEST PER FILE, which is the property that keeps a batch under
+  // the Server Action body limit — and it is still this component's own loop.
   assert.match(uploader, /for \(const \[index, original\] of selected\.entries\(\)\)/);
-  assert.match(uploader, /handleUploadUrl: "\/api\/photos\/upload"/);
+  assert.match(transport(), /handleUploadUrl: "\/api\/photos\/upload"/);
   assert.match(uploader, /DIRECT_PHOTO_BATCH_LIMIT/);
   assert.match(src("src/lib/photoBudget.ts"), /DIRECT_PHOTO_BATCH_LIMIT = 12/);
 });
@@ -106,8 +122,12 @@ test("browser receives only the access mode and never a Blob write token", () =>
   // carries only `access` — the token stays server-side.
   assert.match(uploader, /const plan = await getPhotoUploadPlan\(\)/);
   assert.match(uploader, /const access = plan\.access/);
-  assert.match(uploader, /\{\s*access,\s*handleUploadUrl:/);
+  // The mode is handed to the shared transport, which is the only place that
+  // calls upload(). Hardcoding "public" there would file every photo in the
+  // wrong store the moment a deployment set BLOB_PRIVATE.
+  assert.match(transport(), /access: target\.access,\s*\r?\n\s*handleUploadUrl:/);
   assert.doesNotMatch(uploader, /BLOB_(?:PRIVATE_)?READ_WRITE_TOKEN/);
+  assert.doesNotMatch(transport(), /BLOB_(?:PRIVATE_)?READ_WRITE_TOKEN/);
   assert.doesNotMatch(actions, /return \{ transport: "direct", access: photoBlobToken/, "the token must never be returned to the browser");
   // The plan is now built inside asActionResult, so a failure is LOGGED rather
   // than thrown into a redacted void — but it still carries only the access
@@ -159,8 +179,19 @@ test("a deployment with no Blob store still captures photos", () => {
   // …and it must be chosen BEFORE any file is prepared or uploaded, so a
   // store-less deployment never makes a doomed upload call.
   const decision = uploader.indexOf('if (plan.transport === "form")');
-  const directUpload = uploader.indexOf("await upload(");
+  const directUpload = uploader.indexOf("await uploadPhoto(");
   assert.ok(decision !== -1 && decision < directUpload, "the fallback must short-circuit before the direct upload");
+
+  /*
+   * The checklist runner has NO form fallback — it drains a queue of blobs and
+   * there is no Server Action shaped to accept them. It must therefore refuse
+   * with a stated reason on a store-less deployment rather than making the
+   * doomed call this test exists to prevent.
+   */
+  const shared = transport();
+  assert.match(shared, /if \(plan\.transport !== "direct"\)/);
+  assert.match(shared, /no photo storage configured/);
+  assert.match(src("src/components/checklists/ChecklistRunner.tsx"), /await photoUploadAccess\(\)/);
 });
 
 test("a missing PRIVATE token still fails closed rather than downgrading", () => {

@@ -1,16 +1,21 @@
 export const OFFLINE_DB_VERSION = 1;
 export const OFFLINE_MAX_AGE_MS = 72 * 60 * 60 * 1000;
 
+/**
+ * WHAT MAY BE CAPTURED OFFLINE.
+ *
+ * Deliberately only appends and simple field writes on records the device
+ * already holds. Offline lead and contact creation/editing, and offline
+ * delivery SIGNING, are not here: those replay into actions enforcing
+ * permissions, open-stage validity, stage gates, pipeline rules, module
+ * entitlement and scheduling state, and every one of those is a rule the device
+ * would have to mirror and keep in step. They are a separate piece of work.
+ */
 export type OfflineOperationType =
-  | "lead.create"
-  | "lead.update"
-  | "contact.create"
-  | "contact.update"
   | "jobcard.notes"
   | "jobcard.inspection"
   | "jobcard.photo"
   | "inspection.photo"
-  | "delivery.complete"
   | "delivery.photo";
 
 export type OfflineDescriptor = {
@@ -44,9 +49,6 @@ export type OfflineDescriptor = {
  */
 export function guardedRecordKey(operation: OfflineDescriptor): string | null {
   switch (operation.type) {
-    case "lead.update":
-    case "contact.update":
-    case "delivery.complete":
     case "jobcard.notes":
     case "jobcard.inspection":
     case "inspection.photo":
@@ -68,18 +70,6 @@ export function guardedRecordKey(operation: OfflineDescriptor): string | null {
  * simply the last thing to run instead of the first.
  */
 export type OfflineCapabilities = {
-  leadCreate: boolean;
-  leadEdit: boolean;
-  /**
-   * Moving a lead between stages is its own permission, and `updateLead`
-   * refuses the change on its own. A role with `leads.edit` but not this one
-   * was still shown an enabled stage picker: the change was accepted into the
-   * outbox, reported saved, and refused on replay with the form long since
-   * reset. The picker is disabled instead.
-   */
-  leadChangeStage: boolean;
-  contactCreate: boolean;
-  contactEdit: boolean;
   jobCardManage: boolean;
   deliveryManage: boolean;
 };
@@ -93,11 +83,6 @@ export type OfflineCapabilities = {
  * permissive defaults on the strength of an old cache.
  */
 export const NO_OFFLINE_CAPABILITIES: OfflineCapabilities = {
-  leadCreate: false,
-  leadEdit: false,
-  leadChangeStage: false,
-  contactCreate: false,
-  contactEdit: false,
   jobCardManage: false,
   deliveryManage: false,
 };
@@ -222,7 +207,7 @@ export function recoveryText(entry: OfflineMutation): string {
  */
 export function requeueBase(
   entry: OfflineMutation,
-  snapshot: Pick<OfflineSnapshot, "leads" | "contacts" | "jobCards" | "deliveries"> | null,
+  snapshot: Pick<OfflineSnapshot, "jobCards" | "deliveries"> | null,
 ): { retryable: true; baseVersion?: string } | { retryable: false } {
   /*
    * AN AMBIGUOUS FAILURE IS NEVER RESENT.
@@ -242,8 +227,6 @@ export function requeueBase(
   if (!snapshot) return { retryable: false };
 
   const versions = new Map<string, string>();
-  for (const lead of snapshot.leads) versions.set(lead.id, lead.updatedAt);
-  for (const contact of snapshot.contacts) versions.set(contact.id, contact.updatedAt);
   for (const quote of snapshot.deliveries) versions.set(quote.id, quote.updatedAt);
   for (const job of snapshot.jobCards) {
     versions.set(job.id, job.updatedAt);
@@ -258,19 +241,6 @@ export type OfflineSnapshot = {
   tenantId: string;
   userId: string;
   capturedAt: number;
-  leads: Array<{
-    id: string; title: string; name: string; email: string | null; phone: string | null;
-    status: string; stage: string; stageId: string; source: string; color: string | null;
-    notes: string | null; quantity: number; valueCents: number; productId: string | null;
-    contactId: string | null; assignedToId: string | null; updatedAt: string;
-  }>;
-  contacts: Array<{
-    id: string; name: string; firstName: string; lastName: string | null; company: string | null;
-    email: string | null; phone: string | null; whatsapp: string | null; address: string | null;
-    suburb: string | null; city: string | null; province: string | null; postalCode: string | null;
-    source: string | null; notes: string | null; marketingOptOut: boolean; ownerId: string | null;
-    fleetId: string | null; isCompany: boolean; vatNumber: string | null; tags: string[]; updatedAt: string;
-  }>;
   jobCards: Array<{
     id: string; number: number; status: string; description: string; customer: string; vehicle: string;
     checkinNotes: string | null; checkoutNotes: string | null; updatedAt: string;
@@ -280,8 +250,4 @@ export type OfflineSnapshot = {
   /* What this user may write. Read it through NO_OFFLINE_CAPABILITIES: a
      snapshot cached before this field existed has no `can` at all. */
   can: OfflineCapabilities;
-  options: {
-    stages: Array<{ id: string; name: string }>;
-    products: Array<{ id: string; name: string }>;
-  };
 };

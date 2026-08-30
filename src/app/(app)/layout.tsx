@@ -56,28 +56,7 @@ export default async function AppLayout({
     redirect("/platform/tenants");
   }
 
-  /*
-   * A PARTITION KEY REQUIREMENT MUST NOT BECOME AN ACCESS REQUIREMENT.
-   *
-   * The offline outbox needs a non-null tenant to key its IndexedDB store, and
-   * `actingTenantId` is the right ladder for that — it applies the same
-   * enforced-scope/session/founding-tenant resolution as a server action, where
-   * the raw session claim deliberately returns null for legacy tokens.
-   *
-   * But it THROWS when it cannot resolve one, and this is the layout every
-   * authenticated page in the CRM renders through. A valid session with no `tid`
-   * claim, or a user with several memberships while enforcement is still
-   * dormant, would have taken down the entire app — for a feature that is one
-   * optional panel. `requireUser` and `getActiveTenantId` both continue to
-   * support tenantless sessions in dormant mode on purpose; this line quietly
-   * withdrew that support for everything.
-   *
-   * So the refusal is caught and the OFFLINE PROVIDER is what becomes
-   * conditional. No tenant means no partition, which means no offline workspace
-   * — and the rest of the CRM renders exactly as it did before this feature
-   * existed.
-   */
-  const activeTenantId = await actingTenantId().catch(() => null);
+  const activeTenantId = await getActiveTenantId();
   const [inboxWaiting, casesWaiting, permissions, enabledModules, brand] = await Promise.all([
     awaitingReplyCount(user).catch(() => 0),
     casesAwaitingCount(user).catch(() => 0),
@@ -88,7 +67,7 @@ export default async function AppLayout({
     // already known, and a staff member reaching the CRM on the platform's own
     // domain must still see their own brand. brandForTenant never throws; this
     // layout wraps every page in the workspace.
-    getActiveTenantId().then(brandForTenant).catch(() => DEFAULT_BRAND),
+    brandForTenant(activeTenantId).catch(() => DEFAULT_BRAND),
   ]);
 
   // Single-point route block: a page belonging to a disabled module is not
@@ -132,6 +111,7 @@ export default async function AppLayout({
       <MaybeOffline tenantId={activeTenantId} userId={user.id}>
         <AppShell
           user={{
+            id: user.id,
             name: user.name,
             role: user.role,
             permissions,
@@ -142,6 +122,10 @@ export default async function AppLayout({
           enabledModules={enabledModules ? [...enabledModules] : undefined}
           brand={{ logoUrl: brandLogoUrl(brand), displayName: brand.displayName }}
           weatherCities={weatherCities}
+          // AppShell needs a tenant for the checklist device store; the offline
+          // outbox needs one for its partition. Same value, and the empty string
+          // is what the tenantless dormant session already gets elsewhere.
+          tenantId={activeTenantId ?? ""}
         >
           {children}
           {modal}

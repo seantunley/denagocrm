@@ -25,6 +25,16 @@ import {
 type OfflineContextValue = {
   online: boolean;
   pending: number;
+  /**
+   * Re-read the outbox count.
+   *
+   * The Pending tab deletes and re-queues entries directly, and `pending` is
+   * what the connectivity badge shows and what sign-out consults before it
+   * purges. Without a way to repair it from there, discarding the last entry
+   * left a device claiming work it no longer had -- and, while offline, no sync
+   * would ever run to correct it.
+   */
+  recount: () => Promise<void>;
   syncing: boolean;
   queue: (operation: OfflineDescriptor, formData: FormData) => Promise<void>;
   syncNow: () => Promise<void>;
@@ -271,7 +281,7 @@ export default function OfflineProvider({
   }, [recount, refreshSnapshot, syncNow, tenantId, userId]);
 
   return (
-    <OfflineContext.Provider value={{ online, pending, syncing, queue, syncNow, snapshot, refreshSnapshot }}>
+    <OfflineContext.Provider value={{ online, pending, syncing, queue, syncNow, snapshot, refreshSnapshot, recount }}>
       {children}
       <Link
         href="/offline"

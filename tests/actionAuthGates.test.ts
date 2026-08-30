@@ -76,6 +76,15 @@ const APPROVED_GUARDS = [
   // fix; widening the walk to all of src/lib would make an approved-guard list
   // meaningless, since almost everything eventually reaches an auth helper.
   "resolveSignatureRequestAccess", "canAccessSignatureRequest", "canAccessRecipient",
+  // Checklist host access, for exactly the reason given just above: it lives in
+  // src/lib/checklists/hostRecords.ts, so the sibling-module delegation walk
+  // cannot see that it authorises. It dispatches on the host's model and calls
+  // requireQuoteAccess / requireJobCardAccess / requireVehicleAccess with the
+  // permission the host declares — and both the unknown-host branch and the
+  // switch default THROW rather than falling through, so there is no path that
+  // returns without having authorised. The test below pins that, so this entry
+  // cannot become a hole if somebody later adds a host and forgets its guard.
+  "requireChecklistHostAccess",
 ];
 const GUARD_CALL = new RegExp(`\\b(?:${APPROVED_GUARDS.join("|")})\\s*\\(`);
 
@@ -299,4 +308,43 @@ test("the proxy keeps its owner gate for /products and /trash (defence in depth)
   for (const prefix of ["/products", "/trash"]) {
     assert.equal(publicList.includes(`"${prefix}"`), false, `${prefix} must not be in PUBLIC_PATHS`);
   }
+});
+
+test("the checklist host gate authorises on every branch it can return from", () => {
+  /*
+   * `requireChecklistHostAccess` is on APPROVED_GUARDS, which means every
+   * checklist action's authorisation rests entirely on it. An allowlist entry is
+   * a permanent blind spot unless something checks the thing it vouches for — so
+   * this is that check.
+   *
+   * The property: there is no way OUT of that function except through a real
+   * record guard or a throw. A fifth host added to the catalogue without a
+   * resolver must hit the default and throw, not fall past the switch and return
+   * a happily authorised result to a caller that is about to write photographs
+   * onto somebody else's record.
+   */
+  const src = readFileSync(join(ROOT, "src", "lib", "checklists", "hostRecords.ts"), "utf8");
+  const body = stripComments(src.split("export async function requireChecklistHostAccess")[1] ?? "");
+  assert.ok(body.length > 0, "could not isolate requireChecklistHostAccess");
+
+  // Every `case` arm calls a record guard.
+  const arms = body.split(/case\s+"/).slice(1);
+  assert.ok(arms.length >= 3, `expected the host arms, found ${arms.length}`);
+  for (const arm of arms) {
+    const name = arm.slice(0, arm.indexOf('"'));
+    if (name.length === 0) continue;
+    assert.match(
+      arm.split("break;")[0] ?? "",
+      /require(?:Quote|JobCard|Vehicle)Access\s*\(/,
+      `the "${name}" host arm must call a record access guard`,
+    );
+  }
+
+  // And the two ways to leave without reaching an arm both throw.
+  assert.match(body, /if \(!host\) throw new Error/, "an unknown host must throw");
+  assert.match(
+    body.split("default:")[1] ?? "",
+    /throw new Error/,
+    "the switch default must throw, so a host with no resolver is refused",
+  );
 });

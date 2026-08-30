@@ -213,22 +213,61 @@ export async function runSecurityChecks(): Promise<RunbookRun> {
     fix: no2fa.length ? "Ask them to enable 2FA under Settings → My Account." : undefined,
   });
 
-  // NOT tenant-scoped, unlike Settings → System Log. This whole runbook is an
-  // install-wide operator report — it probes the deployment, lists every user's 2FA
-  // state and reaches blob storage — and it also runs from cron, where there is no
-  // session and so no tenant to scope to. Scoping this one line would leave the
-  // surface half-scoped while reading as fully scoped, which is worse than leaving
-  // it consistently install-wide. It exposes a COUNT, never error content.
-  const weekErrors = await basePrisma.errorLog.count({
-    where: { createdAt: { gte: new Date(Date.now() - 7 * 864e5) } },
-  });
+  /*
+   * NOT tenant-scoped, unlike Settings → System Log. This whole runbook is an
+   * install-wide operator report — it probes the deployment, lists every user's
+   * 2FA state and reaches blob storage — and it also runs from cron, where there
+   * is no session and so no tenant to scope to. Scoping this one line would
+   * leave the surface half-scoped while reading as fully scoped, which is worse
+   * than leaving it consistently install-wide. It exposes a COUNT, never
+   * content.
+   *
+   * ── THE COUNT WAS RIGHT AND THE ADVICE WAS NOT ──────────────────────────────
+   *
+   * "27 error(s) in the last 7 days. Fix: Review Settings → System Log." sent
+   * the reader to a screen that showed nothing at all, because every one of
+   * those 27 had `tenantId: null` and the System Log filters on the acting
+   * tenant and deliberately excludes nulls — a tenant cannot be told whose an
+   * unattributed error is.
+   *
+   * Both halves were behaving as designed and the sentence joining them was
+   * false. So the count is now SPLIT by whether an error can be traced to a
+   * workspace at all, and each part is sent where it can actually be read.
+   * Splitting on attribution rather than on the acting tenant also keeps this
+   * honest when cron produces the run: the stored answer does not depend on who
+   * happened to trigger it.
+   *
+   * Unattributed errors had no home in the product until this was written; they
+   * have one now, and it is where the System Log's own comment always said they
+   * belonged. See platform/(console)/errors.
+   */
+  const errorsSince = new Date(Date.now() - 7 * 864e5);
+  const [weekErrors, unattributedErrors] = await Promise.all([
+    basePrisma.errorLog.count({ where: { createdAt: { gte: errorsSince } } }),
+    basePrisma.errorLog.count({ where: { createdAt: { gte: errorsSince }, tenantId: null } }),
+  ]);
+  const workspaceErrors = weekErrors - unattributedErrors;
   add({
     id: "errors",
     group: "Accounts & sessions",
     label: "System errors this week",
     status: weekErrors === 0 ? "pass" : "warn",
-    detail: weekErrors === 0 ? "No errors logged in 7 days." : `${weekErrors} error(s) in the last 7 days.`,
-    fix: weekErrors ? "Review Settings → System Log." : undefined,
+    detail:
+      weekErrors === 0
+        ? "No errors logged in 7 days."
+        : unattributedErrors === 0
+          ? `${weekErrors} error(s) in the last 7 days.`
+          : workspaceErrors === 0
+            ? `${weekErrors} error(s) in the last 7 days — none belong to a workspace, so Settings → System Log will be empty.`
+            : `${weekErrors} error(s) in the last 7 days — ${workspaceErrors} from a workspace, ${unattributedErrors} system-level.`,
+    fix:
+      weekErrors === 0
+        ? undefined
+        : unattributedErrors === 0
+          ? "Attributed errors are available in each owning workspace's Settings → System Log."
+          : workspaceErrors === 0
+            ? "These are cron, webhook and boot failures with no owning workspace. A platform administrator can review them in Platform Console → System errors."
+            : "Attributed errors are available in each owning workspace's Settings → System Log; system-level errors are in Platform Console → System errors.",
   });
 
   const passed = results.filter((r) => r.status === "pass").length;

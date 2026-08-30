@@ -5,9 +5,7 @@ import { apiAuthErrorResponse, requireApiUser } from "@/lib/auth";
 import { actingTenantId } from "@/lib/actingTenant";
 import { prisma } from "@/lib/db";
 import { logError } from "@/lib/errorLog";
-import { createLead, updateLead } from "@/app/actions/leads";
-import { createContact, updateContact } from "@/app/actions/contacts";
-import { markDelivered, uploadDeliveryPhotos } from "@/app/actions/fulfilment";
+import { uploadDeliveryPhotos } from "@/app/actions/fulfilment";
 import { guardedRecordKey } from "@/lib/offlineTypes";
 import {
   saveConditionNotes,
@@ -21,9 +19,8 @@ export const runtime = "nodejs";
 
 const operationSchema = z.object({
   type: z.enum([
-    "lead.create", "lead.update", "contact.create", "contact.update",
     "jobcard.notes", "jobcard.inspection", "jobcard.photo", "inspection.photo",
-    "delivery.complete", "delivery.photo",
+    "delivery.photo",
   ]),
   recordId: z.string().min(1).max(100).optional(),
   parentId: z.string().min(1).max(100).optional(),
@@ -43,12 +40,6 @@ type Operation = z.infer<typeof operationSchema>;
 async function liveVersion(operation: Operation): Promise<Date | null> {
   const id = guardedRecordKey(operation);
   if (!id) return null;
-  if (operation.type === "lead.update") {
-    return (await prisma.lead.findUnique({ where: { id }, select: { updatedAt: true } }))?.updatedAt ?? null;
-  }
-  if (operation.type === "contact.update") {
-    return (await prisma.contact.findUnique({ where: { id }, select: { updatedAt: true } }))?.updatedAt ?? null;
-  }
   if (operation.type === "jobcard.notes") {
     return (await prisma.jobCard.findUnique({ where: { id }, select: { updatedAt: true } }))?.updatedAt ?? null;
   }
@@ -58,24 +49,11 @@ async function liveVersion(operation: Operation): Promise<Date | null> {
     // device downloaded is still the current one.
     return (await prisma.jobCardInspectionItem.findUnique({ where: { id }, select: { updatedAt: true } }))?.updatedAt ?? null;
   }
-  if (operation.type === "delivery.complete") {
-    return (await prisma.quote.findUnique({ where: { id }, select: { updatedAt: true } }))?.updatedAt ?? null;
-  }
   return null;
 }
 
 async function execute(operation: Operation, formData: FormData) {
   switch (operation.type) {
-    case "lead.create":
-      return createLead(formData);
-    case "lead.update":
-      if (!operation.recordId) throw new Error("Missing lead id.");
-      return updateLead(operation.recordId, formData);
-    case "contact.create":
-      return createContact(formData);
-    case "contact.update":
-      if (!operation.recordId) throw new Error("Missing contact id.");
-      return updateContact(operation.recordId, formData);
     case "jobcard.notes":
       if (!operation.recordId) throw new Error("Missing job card id.");
       return saveConditionNotes(operation.recordId, formData);
@@ -90,9 +68,6 @@ async function execute(operation: Operation, formData: FormData) {
       return operation.parentId === "checkout" || String(formData.get("category")) === "checkout"
         ? uploadCheckoutPhotos(operation.recordId, formData)
         : uploadJobCardPhotos(operation.recordId, formData);
-    case "delivery.complete":
-      if (!operation.recordId) throw new Error("Missing delivery id.");
-      return markDelivered(operation.recordId, formData);
     case "delivery.photo":
       if (!operation.recordId) throw new Error("Missing delivery id.");
       return uploadDeliveryPhotos(operation.recordId, formData);

@@ -50,7 +50,7 @@ const schemaPath = join(root, "prisma");
  * number in the explanation of a safety gate is how the gate stops being
  * understood. If this fails, update BOTH the number and the sentence.
  */
-export const SCHEMA_FILE_COUNT = 16;
+export const SCHEMA_FILE_COUNT = 17;
 
 // Arbitrary 32-bit constant. A session advisory lock on this key serialises
 // concurrent runs (e.g. two overlapping Vercel deploys) so they cannot apply
@@ -497,7 +497,7 @@ export function migrationRoleProblem({ role, canCreate, unpooledConfigured }) {
  *
  * Diffs against the schema DIRECTORY, not `schema.prisma` alone.
  *
- * The schema is split across 16 files (SCHEMA_FILE_COUNT below, which a test holds
+ * The schema is split across 17 files (SCHEMA_FILE_COUNT below, which a test holds
  * to the real number so this sentence cannot go stale), and this probe read one
  * of them. So the
  * integrity check — the gate that exists to stop a recorded-but-not-applied

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 import { ChevronsUpDown, KeyRound, LogOut, Settings, Trash2, UserRound } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
@@ -17,8 +18,18 @@ import { cn } from "@/lib/utils";
 import { purgeOfflineData } from "@/lib/offlineClient";
 import { useOptionalOffline } from "@/components/OfflineProvider";
 import { toast } from "sonner";
+import { clearChecklistDeviceData, offlinePendingCount } from "@/lib/checklists/deviceStore";
+import {
+  Dialog,
+  DialogClose,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  ResponsiveDialogContent,
+} from "@/components/ui/dialog";
 
 export type AccountMenuUser = {
+  id: string;
   name: string;
   role: string;
   avatarVersion?: string | null;
@@ -45,68 +56,69 @@ function initials(name: string) {
 export default function AccountMenu({
   user,
   isOwner,
+  tenantId,
   compact = false,
 }: {
   user: AccountMenuUser;
   isOwner: boolean;
+  tenantId: string;
   compact?: boolean;
 }) {
   const offline = useOptionalOffline();
+  const [discardCount, setDiscardCount] = useState(0);
+  const [discardOpen, setDiscardOpen] = useState(false);
 
+  /*
+   * TWO OFFLINE STORES, ONE SIGN-OUT.
+   *
+   * Guided checklists keep captured work in their own device store; the field
+   * outbox keeps queued mutations and photos in another. Sign-out purges BOTH
+   * before ending the session -- the next person on this device must not
+   * inherit the last one's records -- so everything rests on there being
+   * nothing left worth keeping, in either of them.
+   *
+   * BEING ONLINE IS NOT THAT ASSURANCE. A full outbox on a connected device is
+   * the ordinary state moments after coming back into signal, and failed or
+   * conflicted entries sit there indefinitely BY DESIGN waiting to be read.
+   *
+   * So: offline is refused outright, because `logout()` is a Server Action and
+   * would fail AFTER the purge, leaving the work gone and the session signed
+   * in. Online with work still queued asks, rather than deciding -- discarding
+   * a day of captured photos is the person's call to make explicitly.
+   */
   async function signOutSafely() {
-    /*
-     * DO NOT DESTROY UNSYNCED WORK TO SIGN SOMEBODY OUT.
-     *
-     * The purge below is irreversible and runs FIRST, deliberately — the next
-     * person on this device must not inherit the last one's records. Everything
-     * therefore depends on there being nothing left worth keeping.
-     *
-     * BEING ONLINE IS NOT THAT ASSURANCE, which is what the first version of
-     * this guard got wrong. A full outbox on a connected device is the ordinary
-     * state moments after coming back into signal, and failed or conflicted
-     * entries sit there indefinitely BY DESIGN, waiting for somebody to read
-     * them. Signing out then deleted a day of captured work and the photos with
-     * it. (Offline it was worse still: `logout()` is a Server Action, so it
-     * failed after the purge and left the session signed in.)
-     *
-     * The queue itself is the question, so the queue is what is asked. Signing
-     * out is never urgent enough to be worth silently discarding work.
-     */
-    // `useOptionalOffline` rather than the hook: the provider is only mounted
-    // when a workspace resolved, and where there is no provider there is no
-    // partition and so nothing queued to lose.
-    const queued = offline?.pending ?? 0;
-    if (queued > 0) {
+    const outbox = offline?.pending ?? 0;
+    const checklists = await offlinePendingCount({ tenantId, userId: user.id }).catch(() => 0);
+    const pending = outbox + checklists;
+
+    if (!navigator.onLine) {
       toast.error(
-        navigator.onLine
-          ? `${queued} offline change${queued === 1 ? "" : "s"} still to synchronise. Open the offline workspace, clear the queue, then sign out.`
-          : `You are offline with ${queued} unsynchronised change${queued === 1 ? "" : "s"}. Reconnect and let them sync before signing out.`,
+        pending > 0
+          ? `You are offline with ${pending} unsynchronised change${pending === 1 ? "" : "s"}. Reconnect and let them sync before signing out.`
+          : "You are offline. Reconnect before signing out.",
       );
       return;
     }
-    if (!navigator.onLine) {
-      // Nothing queued, but signing out still ends with a Server Action that
-      // cannot run — and the purge would already have taken the cached records.
-      toast.error("You are offline. Reconnect before signing out.");
+    if (pending > 0) {
+      setDiscardCount(pending);
+      setDiscardOpen(true);
       return;
     }
-    try {
-      // Customer records and queued files must be gone BEFORE the authenticated
-      // session is ended. Swallowing a storage failure would leave the next
-      // person using this device with the previous user's offline evidence.
-      await purgeOfflineData();
-      if ("caches" in window) {
-        const cache = await caches.open("denago-offline-v1");
-        // The owner stamp goes with the shell. Leaving it behind would make the
-        // worker believe the next arrival of this same user needs no
-        // invalidation, when there is no longer a shell it can vouch for.
-        await Promise.all([cache.delete("/offline"), cache.delete("/__offline-shell-owner")]);
-      }
-    } catch {
-      toast.error("Offline customer data could not be removed. Sign-out was stopped; free device storage and try again.");
-      return;
-    }
+    await purgeEverything();
     await logout();
+  }
+
+  /** Both stores and the cached shell, or the next user inherits one of them. */
+  async function purgeEverything() {
+    await clearChecklistDeviceData().catch(() => undefined);
+    await purgeOfflineData();
+    if ("caches" in window) {
+      const cache = await caches.open("denago-offline-v1");
+      // The owner stamp goes with the shell. Leaving it behind would make the
+      // worker believe the next arrival of this same user needs no
+      // invalidation, when there is no longer a shell it can vouch for.
+      await Promise.all([cache.delete("/offline"), cache.delete("/__offline-shell-owner")]);
+    }
   }
 
   const avatar = (
@@ -125,6 +137,7 @@ export default function AccountMenu({
   );
 
   return (
+    <>
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         {compact ? (
@@ -196,7 +209,13 @@ export default function AccountMenu({
           </DropdownMenuItem>
         )}
         <DropdownMenuSeparator />
-        <DropdownMenuItem variant="destructive" onSelect={() => void signOutSafely()}>
+        <DropdownMenuItem
+          variant="destructive"
+          onSelect={(event) => {
+            event.preventDefault();
+            void signOutSafely();
+          }}
+        >
           <LogOut className="size-4" />
           Sign out
         </DropdownMenuItem>
@@ -204,5 +223,32 @@ export default function AccountMenu({
         <DropdownMenuLabel className="py-1 text-[11px] font-normal text-muted-foreground">v{APP_VERSION}</DropdownMenuLabel>
       </DropdownMenuContent>
     </DropdownMenu>
+    <Dialog open={discardOpen} onOpenChange={setDiscardOpen}>
+      <ResponsiveDialogContent className="sm:max-w-md">
+        <DialogHeader className="text-left">
+          <DialogTitle>Discard offline work and sign out?</DialogTitle>
+          <DialogDescription>
+            {discardCount} offline checklist change{discardCount === 1 ? " is" : "s are"} still waiting to sync.
+            Signing out will permanently discard {discardCount === 1 ? "it" : "them"} from this device.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <DialogClose asChild>
+            <button type="button" className="btn-secondary">Keep my work</button>
+          </DialogClose>
+          <button
+            type="button"
+            className="btn-danger"
+            // BOTH stores, not just the checklists — the dialog was written when
+            // theirs was the only one on the device. Discarding half of what it
+            // offered to discard would leave the outbox for the next user.
+            onClick={() => void purgeEverything().then(() => logout())}
+          >
+            Discard and sign out
+          </button>
+        </div>
+      </ResponsiveDialogContent>
+    </Dialog>
+    </>
   );
 }

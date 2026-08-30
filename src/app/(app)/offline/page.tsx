@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import ProofOfDelivery from "@/components/ProofOfDelivery";
 import { useOffline } from "@/components/OfflineProvider";
 import { listOfflineMutations, removeOfflineMutation, requeueOfflineMutation } from "@/lib/offlineClient";
 import {
@@ -16,7 +15,7 @@ import { INSPECTION_STATUSES } from "@/lib/workshop-constants";
 import PhotoUploadField from "@/components/PhotoUploadField";
 import { PageHeader } from "@/components/page-header";
 
-const tabs = ["Leads", "Contacts", "Job cards", "Deliveries", "Pending"] as const;
+const tabs = ["Job cards", "Deliveries", "Pending"] as const;
 type Tab = (typeof tabs)[number];
 
 export default function OfflineWorkspacePage() {
@@ -62,11 +61,6 @@ export default function OfflineWorkspacePage() {
    * honest answer there is "refresh and I will tell you", not "go ahead".
    */
   const can = snapshot?.can ?? NO_OFFLINE_CAPABILITIES;
-  const readOnly = (what: string) => (
-    <p className="mt-3 text-xs text-amber-200">
-      Your role can view {what} but not change them, so there is nothing to queue here.
-    </p>
-  );
   return (
     <div className="space-y-5">
       <PageHeader
@@ -97,121 +91,6 @@ export default function OfflineWorkspacePage() {
         <div className="card text-sm text-muted-foreground">No offline dataset has been downloaded on this device. Connect once and choose Refresh offline data.</div>
       ) : (
         <>
-          {tab === "Leads" && (
-            <div className="space-y-4">
-              {can.leadCreate ? (
-              <form className="card grid gap-3 sm:grid-cols-2" onSubmit={(event) => void queue(event, { type: "lead.create" })}>
-                <h2 className="sm:col-span-2 font-semibold">New offline lead</h2>
-                <input name="name" required className="input" placeholder="Customer name" />
-                <input name="phone" className="input" placeholder="Phone" />
-                <input name="email" type="email" className="input" placeholder="Email" />
-                <select name="stageId" required className="input">
-                  {snapshot.options.stages.map((stage) => <option key={stage.id} value={stage.id}>{stage.name}</option>)}
-                </select>
-                <select name="productId" className="input"><option value="">Model undecided</option>{snapshot.options.products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select>
-                <input name="value" inputMode="decimal" className="input" placeholder="Estimated value (R)" />
-                <input type="hidden" name="source" value="offline" />
-                <input type="hidden" name="quantity" value="1" />
-                <textarea name="notes" className="input sm:col-span-2" placeholder="Notes" />
-                <button className="btn-primary sm:col-span-2">Save lead on this device</button>
-              </form>
-              ) : <div className="card text-sm text-muted-foreground">Your role cannot create leads, so new leads cannot be captured on this device.</div>}
-              <div className="grid gap-3 md:grid-cols-2">
-                {snapshot.leads.map((lead) => (
-                  <details key={lead.id} className="card">
-                    <summary className="cursor-pointer"><span className="font-semibold">{lead.title}</span><span className="ml-2 text-sm text-muted-foreground">{lead.name} · {lead.stage}</span></summary>
-                    {/*
-                      A LEAD IN A CLOSED STAGE CANNOT BE UPDATED AT ALL.
-
-                      `updateLead` runs the submitted stage through
-                      validateOpenStage UNCONDITIONALLY — not only when the stage
-                      changes — so every edit to a won or lost lead is refused
-                      whatever else was typed. The snapshot now carries only OPEN
-                      stages, which makes "this lead's stage is not among them"
-                      the exact test for a closed one, with no extra field.
-
-                      Offering the form anyway would take the work, say it was
-                      saved on the device, and lose it on replay.
-                    */}
-                    {!can.leadEdit ? readOnly("leads") : !snapshot.options.stages.some((stage) => stage.id === lead.stageId) ? (
-                      <p className="mt-3 text-xs text-amber-200">
-                        This lead is {lead.stage.toLowerCase()}. Closed leads cannot be edited offline —
-                        reopen it online first.
-                      </p>
-                    ) : (
-                    <form className="mt-3 grid gap-2 sm:grid-cols-2" onSubmit={(event) => void queue(event, { type: "lead.update", recordId: lead.id, baseVersion: lead.updatedAt })}>
-                      <input name="name" required className="input" defaultValue={lead.name} />
-                      <input name="phone" className="input" defaultValue={lead.phone ?? ""} placeholder="Phone" />
-                      <input name="email" type="email" className="input" defaultValue={lead.email ?? ""} placeholder="Email" />
-                      {/*
-                        Moving a lead between stages is its own permission, and
-                        updateLead refuses the change by itself. Left enabled,
-                        this picker took the change into the outbox, reported it
-                        saved, and had it refused on replay with the form long
-                        since reset. Disabled it posts nothing, so the current
-                        stage is carried in a hidden field — without it the
-                        replay would read the silence as a stage change and be
-                        refused for the very reason we are avoiding.
-                      */}
-                      <select name={can.leadChangeStage ? "stageId" : undefined} disabled={!can.leadChangeStage} className="input" defaultValue={lead.stageId} title={can.leadChangeStage ? undefined : "Your role cannot move leads between stages."}>{snapshot.options.stages.map((stage) => <option key={stage.id} value={stage.id}>{stage.name}</option>)}</select>
-                      {!can.leadChangeStage && <input type="hidden" name="stageId" value={lead.stageId} />}
-                      <select name="productId" className="input" defaultValue={lead.productId ?? ""}><option value="">Model undecided</option>{snapshot.options.products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select>
-                      <input name="value" className="input" inputMode="decimal" defaultValue={String(lead.valueCents / 100)} />
-                      <input name="title" className="input sm:col-span-2" defaultValue={lead.title} />
-                      <textarea name="notes" className="input sm:col-span-2" defaultValue={lead.notes ?? ""} />
-                      <input type="hidden" name="source" value={lead.source} /><input type="hidden" name="color" value={lead.color ?? ""} /><input type="hidden" name="quantity" value={lead.quantity} /><input type="hidden" name="contactId" value={lead.contactId ?? ""} /><input type="hidden" name="assignedToId" value={lead.assignedToId ?? ""} />
-                      <button className="btn-secondary btn-sm sm:col-span-2">Queue lead changes</button>
-                    </form>
-                    )}
-                  </details>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {tab === "Contacts" && (
-            <div className="space-y-4">
-              {can.contactCreate ? (
-              <form className="card grid gap-3 sm:grid-cols-2" onSubmit={(event) => void queue(event, { type: "contact.create" })}>
-                <h2 className="sm:col-span-2 font-semibold">New offline contact</h2>
-                <input name="firstName" required className="input" placeholder="First name / account name" />
-                <input name="lastName" className="input" placeholder="Last name" />
-                <input name="phone" className="input" placeholder="Phone" />
-                <input name="whatsapp" className="input" placeholder="WhatsApp" />
-                <input name="email" type="email" className="input sm:col-span-2" placeholder="Email" />
-                <textarea name="notes" className="input sm:col-span-2" placeholder="Notes" />
-                <button className="btn-primary sm:col-span-2">Save contact on this device</button>
-              </form>
-              ) : <div className="card text-sm text-muted-foreground">Your role cannot create contacts, so new contacts cannot be captured on this device.</div>}
-              <div className="grid gap-3 md:grid-cols-2">
-                {snapshot.contacts.map((contact) => (
-                  <details key={contact.id} className="card">
-                    <summary className="cursor-pointer"><span className="font-semibold">{contact.name}</span><span className="ml-2 text-xs text-muted-foreground">{contact.phone ?? contact.whatsapp ?? contact.email ?? "No contact channel"}</span></summary>
-                    {contact.fleetId ? <p className="mt-3 text-xs text-amber-200">Fleet membership changes require an online fleet lookup. Other downloaded details remain available for reference.</p> : !can.contactEdit ? readOnly("contacts") : (
-                      <form className="mt-3 grid gap-2 sm:grid-cols-2" onSubmit={(event) => void queue(event, { type: "contact.update", recordId: contact.id, baseVersion: contact.updatedAt })}>
-                        <input name="firstName" required className="input" defaultValue={contact.firstName} />
-                        <input name="lastName" className="input" defaultValue={contact.lastName ?? ""} />
-                        <input name="company" className="input" defaultValue={contact.company ?? ""} placeholder="Company" />
-                        <input name="vatNumber" className="input" defaultValue={contact.vatNumber ?? ""} placeholder="VAT number" />
-                        <input name="phone" className="input" defaultValue={contact.phone ?? ""} placeholder="Phone" />
-                        <input name="whatsapp" className="input" defaultValue={contact.whatsapp ?? ""} placeholder="WhatsApp" />
-                        <input name="email" type="email" className="input sm:col-span-2" defaultValue={contact.email ?? ""} placeholder="Email" />
-                        <input name="address" className="input sm:col-span-2" defaultValue={contact.address ?? ""} placeholder="Address" />
-                        <input name="suburb" className="input" defaultValue={contact.suburb ?? ""} placeholder="Suburb" />
-                        <input name="city" className="input" defaultValue={contact.city ?? ""} placeholder="City" />
-                        <input name="province" className="input" defaultValue={contact.province ?? ""} placeholder="Province" />
-                        <input name="postalCode" className="input" defaultValue={contact.postalCode ?? ""} placeholder="Postal code" />
-                        <textarea name="notes" className="input sm:col-span-2" defaultValue={contact.notes ?? ""} />
-                        <input type="hidden" name="contactKind" value={contact.isCompany ? "business" : "individual"} /><input type="hidden" name="source" value={contact.source ?? ""} /><input type="hidden" name="ownerId" value={contact.ownerId ?? ""} /><input type="hidden" name="tags" value={contact.tags.join(", ")} />{contact.marketingOptOut && <input type="hidden" name="marketingOptOut" value="on" />}
-                        <button className="btn-secondary btn-sm sm:col-span-2">Queue contact changes</button>
-                      </form>
-                    )}
-                  </details>
-                ))}
-              </div>
-            </div>
-          )}
-
           {tab === "Job cards" && (
             <div className="space-y-3">
               {!can.jobCardManage && (
@@ -278,34 +157,23 @@ export default function OfflineWorkspacePage() {
                 <div key={delivery.id} className="card">
                   <p className="font-semibold">Quote Q-{delivery.number}</p>
                   <p className="text-xs text-muted-foreground">{delivery.customer}{delivery.scheduledFor ? ` · ${new Date(delivery.scheduledFor).toLocaleString("en-ZA")}` : ""}</p>
-                  {can.deliveryManage && (<>
-                    {/*
-                      SIGNING IS OFFERED ONLY ONCE THE DELIVERY IS SCHEDULED, which
-                      is the same rule the online deliveries page applies.
-
-                      The snapshot carries every signed, undelivered quote, and
-                      scheduling is not one of them. Offering the handover on an
-                      unscheduled quote walked the driver through the checklist and
-                      took the CUSTOMER'S SIGNATURE in front of them, then let
-                      `markDelivered` refuse it on reconnect with "Schedule the
-                      delivery before marking it delivered" — a refusal nobody
-                      present could act on, for a signature the Pending list has no
-                      way to give back.
-                    */}
-                    {delivery.scheduledFor ? (
-                      <ProofOfDelivery quoteId={delivery.id} baseVersion={delivery.updatedAt} />
-                    ) : (
-                      <p className="mt-2 text-xs text-amber-200">
-                        Not scheduled yet. Customer signing becomes available here once the
-                        delivery is scheduled — photos can still be captured.
-                      </p>
-                    )}
-                    <form className="mt-3 border-t border-border pt-3" onSubmit={(event) => void queue(event, { type: "delivery.photo", recordId: delivery.id })}>
-                      <label className="mb-2 block text-xs font-semibold">Delivery photos</label>
-                      <PhotoUploadField required className="block w-full text-xs text-muted-foreground" />
-                      <button className="btn-secondary btn-sm mt-2 w-full">Queue delivery photos</button>
-                    </form>
-                  </>)}
+                  {can.deliveryManage && (
+                    <>
+                      {/*
+                        PHOTOS ONLY. Completing a delivery is a signature, and
+                        markDelivered enforces scheduling, module entitlement and
+                        permission before it will record one — rules a cached
+                        snapshot cannot evaluate. Offline signing is deliberately
+                        not part of this feature; the guided handover on the
+                        deliveries board is where a delivery is completed.
+                      */}
+                      <form className="mt-3 border-t border-border pt-3" onSubmit={(event) => void queue(event, { type: "delivery.photo", recordId: delivery.id })}>
+                        <label className="mb-2 block text-xs font-semibold">Delivery photos</label>
+                        <PhotoUploadField required className="block w-full text-xs text-muted-foreground" />
+                        <button className="btn-secondary btn-sm mt-2 w-full">Queue delivery photos</button>
+                      </form>
+                    </>
+                  )}
                 </div>
               ))}
             </div>
@@ -381,6 +249,9 @@ export default function OfflineWorkspacePage() {
                           onClick={async () => {
                             await requeueOfflineMutation(entry, requeue.baseVersion);
                             await reloadEntries();
+                            // The badge and the sign-out guard read the shared
+                            // count, and this screen writes the queue directly.
+                            await offline.recount();
                             if (offline.online) await offline.syncNow();
                           }}
                         >
@@ -391,7 +262,7 @@ export default function OfflineWorkspacePage() {
                           The record this belongs to is no longer on this device — copy the details and re-enter them online.
                         </span>
                       ))}
-                      <button type="button" className="btn-secondary btn-sm ml-auto" onClick={async () => { await removeOfflineMutation(entry.id); await reloadEntries(); }}>Discard</button>
+                      <button type="button" className="btn-secondary btn-sm ml-auto" onClick={async () => { await removeOfflineMutation(entry.id); await reloadEntries(); await offline.recount(); }}>Discard</button>
                     </div>
                   </div>
                 );

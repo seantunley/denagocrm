@@ -975,6 +975,11 @@ model Quote {
   deliveredByName      String? // driver / who handed the cart over
   deliveryChecklist    Json? // handover checklist { item: boolean }
   deliverySignatureRef String? // stored PNG of the customer's on-handover signature
+  /// The checklist runs the customer signed BESIDE, frozen at completion. The
+  /// delivery note re-picked the newest run per template on every render, so a
+  /// re-run after handover changed the evidence next to an existing signature.
+  /// Empty for deliveries completed before this existed; the note falls back.
+  deliveryHandoverRunIds String[] @default([])
   dealerSignedAt       DateTime?
   dealerSignedByName   String?
   dealerSignatureRef   String?

@@ -42,7 +42,21 @@ async function claimShell(owner) {
   // the network is there; if it is not, /offline.html remains the fallback.
   try {
     const fresh = await fetch(SHELL_KEY, { credentials: "include" });
-    if (fresh.ok) await cache.put(SHELL_KEY, fresh);
+    // THE SAME CHECK AS THE NAVIGATION PATH, and for the same reason: if the
+    // session expired while this ran, /offline redirects to /login and fetch
+    // FOLLOWS it, so `ok` is true and the body is a sign-in form. Storing that
+    // as the authenticated shell is the failure this whole re-warm exists to
+    // avoid.
+    const freshPath = (() => {
+      try {
+        return new URL(fresh.url || SHELL_KEY, self.location.origin).pathname;
+      } catch {
+        return null;
+      }
+    })();
+    if (fresh.ok && !fresh.redirected && freshPath === SHELL_KEY) {
+      await cache.put(SHELL_KEY, fresh);
+    }
   } catch {
     /* offline — leave it uncached rather than storing an error page */
   }
