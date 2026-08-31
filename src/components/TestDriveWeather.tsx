@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import ModalPortal from "@/components/ui/modal-portal";
 
 function wmo(code: number): { icon: string; label: string } {
   if (code === 0) return { icon: "☀️", label: "Clear" };
@@ -89,6 +90,7 @@ export default function TestDriveWeather({
         {summary}
       </button>
       {open && (
+        <ModalPortal>
         <div
           className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
           onClick={(e) => {
@@ -152,6 +154,7 @@ export default function TestDriveWeather({
             )}
           </div>
         </div>
+        </ModalPortal>
       )}
     </>
   );

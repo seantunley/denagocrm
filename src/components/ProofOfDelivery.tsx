@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import { markDelivered } from "@/app/actions/fulfilment";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
+import ModalPortal from "@/components/ui/modal-portal";
 
 const CHECKLIST = [
   "Battery fully charged",
@@ -55,6 +56,7 @@ export default function ProofOfDelivery({ quoteId }: { quoteId: string }) {
       </button>
 
       {open && (
+        <ModalPortal>
         <div
           className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 p-4 pt-10 overflow-y-auto"
           onPointerDown={(e) => e.target === e.currentTarget && setOpen(false)}
@@ -169,6 +171,7 @@ export default function ProofOfDelivery({ quoteId }: { quoteId: string }) {
             </SaveForm>
           </div>
         </div>
+        </ModalPortal>
       )}
     </>
   );
