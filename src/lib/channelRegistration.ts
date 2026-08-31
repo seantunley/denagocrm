@@ -217,13 +217,31 @@ export async function reconcileAllTenantChannels(
   const deadline = Date.now() + (opts.deadlineMs ?? 8_000);
   let discoveriesLeft = opts.maxDiscoveries ?? 3;
 
-  // Ordered, so a truncated sweep resumes predictably rather than depending on
-  // whatever order Postgres felt like returning.
-  const tenants = await basePrisma.tenant.findMany({
-    where: { active: true },
-    select: { id: true },
-    orderBy: { id: "asc" },
-  });
+  /*
+   * LEAST-RECENTLY-ATTEMPTED FIRST, WHICH IS WHAT MAKES THE RATIONING FAIR.
+   *
+   * A stable `id ASC` order does NOT resume anywhere — every run starts at the
+   * first tenant. With a fixed allowance that is a starvation bug, not a
+   * deferral: the same three tenants win the slots on every tick and the ones
+   * behind them are never reached at all.
+   *
+   * And it really does recur, because "wants discovery" is not self-clearing. A
+   * Messenger-only tenant — a Page with no linked Instagram account — is
+   * permanently missing its `instagram` row. Discovery succeeds, finds no
+   * Instagram, and the tenant asks again fifteen minutes later, forever.
+   *
+   * Two changes fix it together. Each ATTEMPT is stamped (see
+   * {@link discoveryAttempts}), so a tenant that has just been asked goes to the
+   * back of the queue; and an attempt inside {@link DISCOVERY_INTERVAL_MS} is
+   * not repeated, so a settled tenant stops competing for slots entirely. The
+   * order is then simply "whoever has waited longest", with never-attempted
+   * tenants first — which is exactly what the repair sweep is for.
+   */
+  const active = await basePrisma.tenant.findMany({ where: { active: true }, select: { id: true } });
+  const attempts = await discoveryAttempts(active.map((tenant) => tenant.id));
+  const tenants = [...active].sort(
+    (a, b) => (attempts.get(a.id) ?? 0) - (attempts.get(b.id) ?? 0) || a.id.localeCompare(b.id),
+  );
   let registered = 0;
   let retired = 0;
   let conflicts = 0;
@@ -251,9 +269,18 @@ export async function reconcileAllTenantChannels(
      * before counting the tenant as wanting anything — a tenant that has no
      * Meta integration is not perpetually waiting for one.
      */
-    const wants = await wantsMetaDiscovery(tenant.id).catch(() => false);
+    const wants = await wantsMetaDiscovery(tenant.id, attempts.get(tenant.id) ?? 0).catch(() => false);
     const allowDiscovery = wants && discoveriesLeft > 0;
-    if (allowDiscovery) discoveriesLeft -= 1;
+    if (allowDiscovery) {
+      discoveriesLeft -= 1;
+      // Stamped BEFORE the call, and for the ATTEMPT rather than the success.
+      // A tenant whose discovery keeps failing would otherwise stay at the head
+      // of the queue and hold a slot on every tick — the same starvation in a
+      // different costume. It costs a failing tenant one interval before it is
+      // retried; its WhatsApp half still reconciles every tick regardless, and
+      // saving the credential forces discovery immediately.
+      await stampDiscoveryAttempt(tenant.id).catch(() => undefined);
+    }
     if (wants && !allowDiscovery) skipped += 1;
 
     const outcomes = await reconcileTenantChannels(tenant.id, {
@@ -271,19 +298,65 @@ export async function reconcileAllTenantChannels(
   return { tenants: tenants.length, registered, retired, conflicts, skipped };
 }
 
+/** How long a tenant waits before Meta is asked about it again. */
+const DISCOVERY_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+/** Where the last attempt is remembered, per tenant. */
+const DISCOVERY_KEY = "META_DISCOVERY_ATTEMPTED_AT";
+
 /**
- * Whether this tenant has Meta channels left to discover AND the credential
- * that could discover them.
+ * Whether this tenant has Meta channels left to discover, the credential that
+ * could discover them, and has not just been asked.
  *
- * The token check is what stops a tenant with no Meta integration from wanting
- * discovery forever: it is missing both Meta rows and always will be, so
- * counting it as a candidate burned a slot on every tick and starved tenants
- * that genuinely needed one.
+ * All three conditions matter, and the third is the one that was missing:
+ *
+ *   * no missing channel  — nothing to look for;
+ *   * no token            — nothing to look WITH. A tenant with no Meta
+ *                           integration is missing both rows permanently, and
+ *                           would otherwise queue for a slot forever;
+ *   * asked recently      — the answer may legitimately BE "no Instagram". A
+ *                           Messenger-only tenant is permanently short one row,
+ *                           so without this it re-asks every fifteen minutes
+ *                           and holds a slot against tenants that have never
+ *                           been asked at all.
  */
-async function wantsMetaDiscovery(tenantId: string): Promise<boolean> {
+async function wantsMetaDiscovery(tenantId: string, lastAttempt: number): Promise<boolean> {
+  if (Date.now() - lastAttempt < DISCOVERY_INTERVAL_MS) return false;
   if ((await missingMetaChannels(tenantId)).length === 0) return false;
   const token = await resolveTenantCredential(tenantId, "META_PAGE_ACCESS_TOKEN");
   return Boolean(token && token.trim());
+}
+
+/**
+ * When Meta was last asked about each tenant. Missing means never, which sorts
+ * first — a tenant nobody has ever looked at is the one the repair sweep exists
+ * for.
+ *
+ * `basePrisma` with the tenant named explicitly: this runs in the cron's system
+ * scope, across tenants, so `putSetting`/`getSetting` would resolve the founding
+ * tenant for all of them and every tenant would share one timestamp.
+ */
+async function discoveryAttempts(tenantIds: readonly string[]): Promise<Map<string, number>> {
+  if (tenantIds.length === 0) return new Map();
+  const rows = await basePrisma.appSetting.findMany({
+    where: { key: DISCOVERY_KEY, tenantId: { in: [...tenantIds] } },
+    select: { tenantId: true, value: true },
+  });
+  const out = new Map<string, number>();
+  for (const row of rows) {
+    const at = Date.parse(row.value);
+    if (!Number.isNaN(at)) out.set(row.tenantId, at);
+  }
+  return out;
+}
+
+async function stampDiscoveryAttempt(tenantId: string): Promise<void> {
+  const value = new Date().toISOString();
+  await basePrisma.appSetting.upsert({
+    where: { tenantId_key: { tenantId, key: DISCOVERY_KEY } },
+    update: { value },
+    create: { tenantId, key: DISCOVERY_KEY, value },
+  });
 }
 
 /**

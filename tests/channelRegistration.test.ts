@@ -458,10 +458,48 @@ test("a tenant with no Meta token never consumes a discovery slot", () => {
   assert.match(source, /META_PAGE_ACCESS_TOKEN"\);\s*\r?\n\s*return Boolean\(token/);
 });
 
-test("the sweep iterates tenants in a stable order", () => {
-  // A truncated sweep should resume predictably rather than depending on
-  // whatever order Postgres felt like returning.
-  assert.match(read("src/lib/channelRegistration.ts"), /orderBy: \{ id: "asc" \}/);
+test("THE SWEEP CANNOT STARVE A TENANT — least-recently-attempted goes first", () => {
+  /*
+   * A stable `id ASC` order does not resume anywhere: every run starts at the
+   * first tenant, so with a fixed allowance the same three win the slots every
+   * tick and the ones behind them are never reached at all. That is starvation,
+   * not deferral, and the earlier comment claiming it "resumes predictably" was
+   * simply wrong — there is no cursor.
+   *
+   * It really recurs, too, because "wants discovery" does not self-clear: a
+   * Messenger-only tenant is permanently missing its `instagram` row, so it
+   * re-asks forever.
+   */
+  const source = read("src/lib/channelRegistration.ts");
+  assert.match(source, /attempts\.get\(a\.id\) \?\? 0\) - \(attempts\.get\(b\.id\) \?\? 0\)/);
+  assert.doesNotMatch(source, /orderBy: \{ id: "asc" \}/, "id order is what caused the starvation");
+});
+
+test("a tenant that was just asked stops competing for a slot", () => {
+  // The answer may legitimately BE "no Instagram". Without an interval, a
+  // Messenger-only tenant holds a slot against tenants never asked at all.
+  const source = read("src/lib/channelRegistration.ts");
+  assert.match(source, /if \(Date\.now\(\) - lastAttempt < DISCOVERY_INTERVAL_MS\) return false;/);
+});
+
+test("the ATTEMPT is stamped, not the success — a failing tenant cannot hold a slot", () => {
+  // Stamping only on success would leave a tenant whose discovery keeps failing
+  // at the head of the queue forever: the same starvation in a different
+  // costume.
+  const source = read("src/lib/channelRegistration.ts");
+  const stamp = source.indexOf("stampDiscoveryAttempt(tenant.id)");
+  const call = source.indexOf("reconcileTenantChannels(tenant.id, {");
+  assert.ok(stamp > 0 && call > 0);
+  assert.ok(stamp < call, "the attempt must be recorded before the provider call, not after it");
+});
+
+test("the attempt timestamp is per tenant, not shared", () => {
+  // This runs in the cron's SYSTEM scope, across tenants — putSetting/getSetting
+  // would resolve the founding tenant for every one of them and they would all
+  // share a single timestamp.
+  const source = read("src/lib/channelRegistration.ts");
+  assert.match(source, /basePrisma\.appSetting\.upsert/);
+  assert.match(source, /tenantId_key: \{ tenantId, key: DISCOVERY_KEY \}/);
 });
 
 // ── Which keys trigger it ───────────────────────────────────────────────────
