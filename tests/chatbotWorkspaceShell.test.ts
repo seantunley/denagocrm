@@ -33,7 +33,7 @@ test("Flowbot horizontal navigation restores a distinct icon for every tool", ()
   for (const icon of ["Bot", "GitBranch", "Route", "BookOpen", "FlaskConical", "Inbox", "BarChart3"]) {
     assert.match(nav, new RegExp(`icon: ${icon}\\b`));
   }
-  assert.match(nav, /<Icon className="size-4 shrink-0" aria-hidden="true" \/>/);
+  assert.match(nav, /<Icon className=\{`size-4 shrink-0/);
 });
 
 test("flow-specific simulator and evaluation tools remain owned by the flow workspace", () => {
@@ -51,9 +51,13 @@ test("workspace navigation remains a compact top bar with responsive mobile disc
   assert.match(nav, /aria-label=\{mobileOpen \? "Close Flowbot navigation" : "Open Flowbot navigation"\}/);
   assert.match(nav, /aria-expanded=\{mobileOpen\}/);
   assert.match(nav, /min-h-11/);
-  assert.match(nav, /border-b border-border\/80/);
+  assert.match(nav, /md:min-h-8/);
+  assert.match(nav, /border-b border-border\/70/);
   assert.match(nav, /overflow-x-auto/);
   assert.match(nav, /md:flex/);
+  assert.match(nav, /border-primary\/30 bg-primary\/10 text-primary/);
+  assert.match(nav, /border-l border-border\/60 pl-4/);
+  assert.doesNotMatch(nav, /bg-primary text-primary-foreground shadow-sm/);
   assert.doesNotMatch(nav, /<aside/);
   assert.doesNotMatch(nav, /w-56/);
 });
