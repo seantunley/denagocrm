@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { requireOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { basePrisma, prisma } from "@/lib/db";
-import { builderTenantId, flowScope } from "@/lib/flowScope";
+import { builderTenantId } from "@/lib/flowScope";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { parseEvaluationExpectation, parseEvaluationTurns } from "@/lib/flowEvaluationContract";
 import { evaluateFlowScenario, parseEvaluationFlow } from "@/lib/flowEvaluationRunner";
@@ -28,8 +28,7 @@ export async function createFlowEvaluation(flowId: string, formData: FormData) {
   return withActingStaffScope(async () => {
     const owner = await requireOwner();
     const tenantId = await builderTenantId();
-    const scope = await flowScope();
-    const flow = await prisma.botFlow.findFirst({ where: { id: flowId, ...scope }, select: { id: true } });
+    const flow = await prisma.botFlow.findFirst({ where: { id: flowId, tenantId }, select: { id: true } });
     if (!flow) return { error: "Flow not found." };
 
     const name = String(formData.get("name") ?? "").trim().slice(0, 120);
@@ -69,7 +68,7 @@ export async function createFlowEvaluation(flowId: string, formData: FormData) {
 async function runEvaluation(tenantId: string, evaluationId: string) {
   const evaluation = await prisma.botFlowEvaluation.findFirst({ where: { id: evaluationId, tenantId } });
   if (!evaluation) return { error: "Evaluation not found.", flowId: null, passed: false };
-  const flow = await prisma.botFlow.findFirst({ where: { id: evaluation.flowId, tenantId }, select: { definition: true } });
+  const flow = await prisma.botFlow.findFirst({ where: { id: evaluation.flowId, tenantId }, select: { definition: true, channel: true } });
   if (!flow) return { error: "Flow not found.", flowId: evaluation.flowId, passed: false };
 
   const version = evaluation.flowVersionId
@@ -94,7 +93,7 @@ async function runEvaluation(tenantId: string, evaluationId: string) {
   }
 
   try {
-    const result = await evaluateFlowScenario({ flow: parsed, turns: evaluation.turns, expectation: evaluation.expectation });
+    const result = await evaluateFlowScenario({ flow: parsed, channel: flow.channel, turns: evaluation.turns, expectation: evaluation.expectation });
     await prisma.botFlowEvaluation.updateMany({
       where: { id: evaluation.id, tenantId },
       data: { lastStatus: result.passed ? "passed" : "failed", lastRunAt: new Date(), lastResult: result },
@@ -116,7 +115,8 @@ export async function runFlowEvaluation(evaluationId: string, _formData?: FormDa
     const tenantId = await builderTenantId();
     const result = await runEvaluation(tenantId, evaluationId);
     if (result.flowId) revalidatePath(`/bot-builder/${result.flowId}/evaluations`);
-    return { success: result.passed ? "Evaluation passed" : `Evaluation did not pass${result.error ? `: ${result.error}` : ""}` };
+    if (!result.passed) return { error: result.error ?? "Evaluation did not pass." };
+    return { success: "Evaluation passed" };
   });
 }
 
@@ -126,13 +126,15 @@ export async function runAllFlowEvaluations(flowId: string, _formData?: FormData
     const tenantId = await builderTenantId();
     const flow = await prisma.botFlow.findFirst({ where: { id: flowId, tenantId }, select: { id: true } });
     if (!flow) return { error: "Flow not found." };
-    const evaluations = await prisma.botFlowEvaluation.findMany({ where: { tenantId, flowId }, select: { id: true }, orderBy: { createdAt: "asc" }, take: 50 });
+    const evaluations = await prisma.botFlowEvaluation.findMany({ where: { tenantId, flowId }, select: { id: true }, orderBy: { createdAt: "asc" }, take: 21 });
     if (!evaluations.length) return { error: "Save an evaluation first." };
+    if (evaluations.length > 20) return { error: "Run individual evaluations first: suite runs are limited to 20 cases to stay within the request deadline." };
     const results = [];
     for (const evaluation of evaluations) results.push(await runEvaluation(tenantId, evaluation.id));
     revalidatePath(`/bot-builder/${flowId}/evaluations`);
     const passed = results.filter((result) => result.passed).length;
-    return { success: `${passed} of ${results.length} evaluations passed` };
+    if (passed !== results.length) return { error: `${results.length - passed} of ${results.length} evaluations did not pass.` };
+    return { success: `All ${results.length} evaluations passed` };
   });
 }
 
