@@ -14,6 +14,7 @@ import { sendPushToAll } from "./push";
 import { resolveTenantActor } from "./tenantActor";
 import { currentInboundBotEventId } from "./botInboundEvent";
 import { cancelBotBooking, lookupBotBooking, rescheduleBotBooking } from "./botBookingSelfService";
+import { matchByPhone, waDigits } from "./whatsapp";
 import { enrollEntityInJourney } from "./journeyDirectEnrollment";
 
 type Match = { contactId: string | null; leadId: string | null };
@@ -65,7 +66,26 @@ async function ensureContact(source: string, vars: Record<string, string>, match
   // flow — would add another one every time.
   if (!identity.length) return match;
   {
-    const existing = await prisma.contact.findFirst({ where: { OR: identity } });
+    /*
+     * THE PHONE HALF MATCHES ON DIGITS, NOT ON THE EXACT STRING.
+     *
+     * `findFirst({ where: { OR: [{ phone }, { email }] } })` compared the typed
+     * phone with `=`. A customer who answers "0821234567" for a contact stored
+     * as "+27 82 123 4567" is the same person by every human standard and a
+     * different one by that test — so the booking flow created a duplicate
+     * Contact and hung the appointment off it, splitting one customer's history
+     * in two. This runs immediately before every service booking, demo and
+     * journey enrolment, so it was the single most duplicating lookup we had.
+     *
+     * `matchByPhone` already resolves an inbound number properly; reusing it
+     * here means the chatbot and the webhook agree about who somebody is
+     * instead of each deciding separately.
+     */
+    const typedPhone = vars.phone ? await matchByPhone(waDigits(vars.phone)) : null;
+    if (typedPhone?.contactId) return { contactId: typedPhone.contactId, leadId: match.leadId };
+    const existing = vars.email
+      ? await prisma.contact.findFirst({ where: { email: vars.email } })
+      : null;
     if (existing) return { contactId: existing.id, leadId: match.leadId };
   }
   const [first, ...rest] = (vars.name || "Customer").trim().split(/\s+/);
