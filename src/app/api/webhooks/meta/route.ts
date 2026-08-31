@@ -11,6 +11,7 @@ import { runDmFlow } from "@/lib/flowDm";
 import { metaReceipt } from "@/lib/deliveryReceipts";
 import { applyReceipt } from "@/lib/messageReceipts";
 import { withChannelTenantScope, validateInSystemScope } from "@/lib/tenantScopeEntry";
+import { reportUnmappedEndpoint } from "@/lib/channelRegistration";
 import { decideComment, type FeedChangeValue } from "@/lib/socialComments";
 import { recordPostCommentSafely } from "@/lib/commentThreads";
 import { inboundRetryResponse, noteInboundRetry, noteLeasedInbound } from "@/lib/webhookRetry";
@@ -138,7 +139,7 @@ export async function POST(req: NextRequest) {
             throw await noteInboundRetry("meta-dm-webhook", "failed", `${platform} ${providerId}`);
           }
         }
-      }, () => console.warn(`[tenant-channel] skipped ${platform} DM: unmapped endpoint ${endpointId || "?"}`));
+      }, () => reportUnmappedEndpoint(platform, endpointId, (entry.messaging ?? []).length));
     }
     } catch (error) {
       return inboundRetryResponse("meta-dm-webhook", error);
@@ -175,10 +176,11 @@ export async function POST(req: NextRequest) {
           async () => {
             await recordPostCommentSafely(decision.comment, { platform: "facebook", pageId });
           },
-          // Matches the leadgen branch below. PR #578 replaces both of these
-          // console.warns with a System Log entry; deliberately not done here,
-          // so the two changes stay independent of each other.
-          () => console.warn(`[tenant-channel] skipped comment: unmapped page_id ${pageId || "?"}`),
+          // Now that #578 has landed, a dropped comment goes to the System Log
+          // like every other unattributable inbound event — which is the point
+          // of that change: an endpoint nobody claims must be readable, not a
+          // console line on Vercel that nobody sees.
+          () => reportUnmappedEndpoint("messenger", pageId, 1),
         );
         continue;
       }
@@ -208,7 +210,7 @@ export async function POST(req: NextRequest) {
             source: "facebook", externalId: leadgenId, raw: change.value,
           }).catch(() => {});
         }
-      }, () => console.warn(`[tenant-channel] skipped leadgen: unmapped page_id ${pageId || "?"}`));
+      }, () => reportUnmappedEndpoint("messenger", pageId, 1));
     }
   }
   return NextResponse.json({ received: true });

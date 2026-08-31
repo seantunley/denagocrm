@@ -20,6 +20,7 @@ import { runSafeCampaignQueue } from "@/lib/marketingCampaignQueue";
 import { runSafeSurveyDistributionQueue } from "@/lib/surveyDistributionQueue";
 import { runRepairsDetectors } from "@/lib/repairsDetectors";
 import { runAiHealthIfDue, runBackupWatchdog } from "@/lib/systemHealth";
+import { reconcileAllTenantChannels } from "@/lib/channelRegistration";
 import { basePrisma } from "@/lib/db";
 import { expireReservations } from "@/lib/stockPlatform";
 import { resolveTenantActor } from "@/lib/tenantActor";
@@ -131,6 +132,20 @@ type OperationalResult = Awaited<ReturnType<typeof runOperationalQueues>>;
 
 async function runGlobalMaintenance() {
   await withSystemScope(async () => {
+    // Register any inbound channel endpoint whose credentials are stored but
+    // whose ChannelIdentity row is missing. This is the backstop that covers
+    // tenants configured BEFORE registration became automatic: nobody is going
+    // to re-save a working integration, so the repair cannot wait for them to.
+    //
+    // BOUNDED, because this runs in a `finally` after a sweep that may already
+    // have spent 45 of the route's 60 seconds, and the maintenance below it
+    // must not be starved. Meta discovery is the only part that can block on a
+    // slow provider, so it is capped per tick and the whole sweep stops on a
+    // deadline; a tenant it did not reach is repaired on the next tick, fifteen
+    // minutes later. A fully-registered tenant does no provider work at all.
+    await reconcileAllTenantChannels({ deadlineMs: 6_000, maxDiscoveries: 3 }).catch((e) =>
+      logError("channel-registration", e),
+    );
     await runAiHealthIfDue().catch((e) => logError("ai-health", e));
     await runBackupWatchdog().catch(() => {});
     await basePrisma.errorLog
