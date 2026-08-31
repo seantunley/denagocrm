@@ -6,7 +6,7 @@ import { prisma } from "@/lib/db";
 import { requireConversationAccess } from "@/lib/permissions";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { sendPrivateReplyToComment, sendPublicCommentReply } from "@/lib/messenger";
-import { commentDedupeKey } from "@/lib/socialComments";
+import { commentDedupeKey, privateReplyDedupeKey } from "@/lib/socialComments";
 import { setCommentThreadMuted } from "@/lib/commentThreads";
 import { logAudit } from "@/lib/audit";
 
@@ -68,12 +68,36 @@ export async function privateReplyToComment(
       });
       if (!thread) refuse("That comment thread no longer exists.");
 
+      /*
+       * ONE PER COMMENT, CHECKED BEFORE SENDING.
+       *
+       * Meta allows exactly one private reply to a comment, ever. RECORDING the
+       * reply afterwards does not stop a second person sending one — both read
+       * "no reply yet", both press the button, and the loser learns of it only
+       * from Meta's refusal, having already written a message that never
+       * arrived. The earlier version of this file claimed the record was the
+       * safeguard; it was not.
+       *
+       * So the check happens first, and the write below carries a UNIQUE key
+       * derived from the comment. The check is the courtesy — it produces a
+       * sentence instead of a constraint violation — and the key is the rule.
+       */
+      const replyKey = thread.tenantId ? privateReplyDedupeKey(thread.tenantId, commentId) : null;
+      if (replyKey) {
+        const already = await prisma.communication.findUnique({
+          where: { dedupeKey: replyKey },
+          select: { id: true },
+        });
+        if (already) {
+          refuse("Someone has already sent the one private reply Meta allows for this comment. Reply publicly instead.");
+        }
+      }
+
       const sent = await sendPrivateReplyToComment(commentId, body);
       if (!sent.ok) refuse(sent.error ?? "Meta refused the private reply.");
 
       // Filed on the COMMENT thread, not on a DM thread: no DM thread exists
-      // yet, and will not until they answer. Recording it here is what stops a
-      // second person sending the reply Meta would refuse anyway.
+      // yet, and will not until they answer.
       await prisma.communication.create({
         data: {
           type: "comment",
@@ -82,6 +106,10 @@ export async function privateReplyToComment(
           subject: "Private reply",
           conversationId: thread.id,
           messageId: sent.providerMessageId,
+          // WHICH comment this answers, so the screen can stop offering a reply
+          // Meta would refuse. `inReplyTo` already means exactly this.
+          inReplyTo: commentId,
+          ...(replyKey ? { dedupeKey: replyKey } : {}),
           userId: user.id,
           tenantId: thread.tenantId,
         },
@@ -146,6 +174,10 @@ export async function publicReplyToComment(
           subject: "Public reply",
           conversationId: thread.id,
           messageId: sent.providerMessageId,
+          // The comment this answers, same as the private reply. Public replies
+          // are not one-shot, so this is for reading the thread rather than for
+          // enforcement.
+          inReplyTo: commentId,
           ...(sent.providerMessageId && thread.tenantId
             ? { dedupeKey: commentDedupeKey(thread.tenantId, sent.providerMessageId) }
             : {}),

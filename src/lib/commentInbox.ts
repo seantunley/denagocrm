@@ -51,6 +51,13 @@ export type CommentThread = {
     body: string;
     at: Date;
     attachmentUrl: string | null;
+    /**
+     * Someone has already sent the one private reply Meta allows for this
+     * comment. Read from the replies themselves rather than assumed, so the
+     * screen stops offering an action that would be refused — including to a
+     * second person looking at the same post.
+     */
+    privateReplied: boolean;
   }[];
 };
 
@@ -100,6 +107,30 @@ export async function loadCommentThreads(
     },
   });
 
+  /*
+   * WHICH COMMENTS HAVE ALREADY HAD THEIR ONE PRIVATE REPLY.
+   *
+   * Its own query, and not read from the messages above, because those are
+   * capped at the newest few per thread — a reply sent last week to a comment
+   * further up would fall outside that window, and the button would come back
+   * offering an action Meta refuses. `inReplyTo` holds the comment each reply
+   * answers.
+   */
+  const repliedTo = new Set(
+    (
+      await prisma.communication.findMany({
+        where: {
+          conversationId: { in: threads.map((thread) => thread.id) },
+          type: "comment",
+          direction: "outbound",
+          subject: "Private reply",
+          inReplyTo: { not: null },
+        },
+        select: { inReplyTo: true },
+      })
+    ).map((row) => row.inReplyTo as string),
+  );
+
   return threads.map((thread) => {
     const platform = commentPlatform(thread.externalRef);
     const presentation = commentPlatformPresentation(platform);
@@ -128,6 +159,7 @@ export async function loadCommentThreads(
           body: message.body,
           at: message.occurredAt,
           attachmentUrl: message.attachmentUrl,
+          privateReplied: message.messageId !== null && repliedTo.has(message.messageId),
         }))
         // Newest-first out of the database so `take` keeps the RECENT ones;
         // oldest-first for reading, which is how a conversation is read.

@@ -172,6 +172,73 @@ test("a commenter can be answered PUBLICLY as well as privately", () => {
   assert.match(actions, /export async function privateReplyToComment/);
 });
 
+test("THE PUBLIC-REPLY BUTTON IS NOT RENDERED UNLESS META HAS GRANTED THE PERMISSION", () => {
+  /*
+   * Offering an action the provider will refuse is worse than offering none:
+   * somebody writes the answer, presses send, and learns only then that it was
+   * never possible. So the screen ASKS Meta which permissions are granted and
+   * renders accordingly, with a notice naming the one that is missing.
+   */
+  const list = read("src/components/CommentThreadList.tsx");
+  assert.match(list, /\{canReplyPublicly && \(/, "the button is conditional, not always rendered");
+
+  const page = read("src/app/(app)/comments/page.tsx");
+  assert.match(page, /pageCapabilities\(\)/, "the page asks rather than assumes");
+  assert.match(page, /canReplyPublicly=\{capabilities\.canManageEngagement\}/);
+  assert.match(page, /pages_manage_engagement/, "…and names what to enable when it is missing");
+});
+
+test("the capability is asked of Meta, cached, and fails closed", () => {
+  const caps = shipped("src/lib/metaCapabilities.ts");
+  assert.match(caps, /me\/permissions/, "granted permissions come from Meta, not from a guess");
+  assert.match(caps, /row\.status === "granted"/, "declined and expired must not count as granted");
+  // A probe must never break the screen it informs, and must never claim a
+  // capability it could not confirm.
+  assert.match(caps, /canManageEngagement: false, checkedAt: null/);
+});
+
+test("ONE PRIVATE REPLY PER COMMENT IS ENFORCED, not merely recorded", () => {
+  /*
+   * Recording the reply afterwards does not stop a SECOND person sending one:
+   * both read "no reply yet", both press the button, and the loser finds out
+   * from Meta's refusal having already written a message that never arrived.
+   */
+  const actions = shipped("src/app/actions/comments.ts");
+  // Checked before sending, so the ordinary case gets a sentence…
+  assert.match(actions, /privateReplyDedupeKey\(thread\.tenantId, commentId\)/);
+  assert.match(actions, /findUnique\(\{\s*where: \{ dedupeKey: replyKey \}/);
+  // …and written with a UNIQUE key, so a race is refused by the database.
+  assert.match(actions, /dedupeKey: replyKey/);
+  // The comment it answers is stored, so the screen can stop offering it.
+  assert.match(actions, /inReplyTo: commentId/);
+
+  const list = read("src/components/CommentThreadList.tsx");
+  assert.match(list, /comment\.privateReplied \?/, "a spent reply must not still offer the button");
+});
+
+test("the 'already replied' flag is read from ALL replies, not just the visible ones", () => {
+  // The thread renders only its newest few comments; a reply sent last week to
+  // a comment further up would fall outside that window and the button would
+  // come back offering something Meta refuses.
+  const loader = shipped("src/lib/commentInbox.ts");
+  assert.match(loader, /subject: "Private reply"/);
+  assert.match(loader, /inReplyTo: \{ not: null \}/);
+});
+
+test("A NEW COMMENT BRINGS AN ARCHIVED POST BACK", () => {
+  /*
+   * That is the whole difference between archiving and muting. A post that
+   * stayed hidden after a customer asked a fresh question would be a mute
+   * wearing the wrong label, and the question would never be seen.
+   */
+  const ingest = shipped("src/lib/commentThreads.ts");
+  assert.match(ingest, /status: "closed"/, "the reopen is conditional on it being archived");
+  assert.match(ingest, /data: \{ status: "open", unread: true \}/);
+  // INBOUND only — our own reply going out must not resurrect a thread somebody
+  // has just finished with. Answering it IS finishing with it.
+  assert.match(ingest, /if \(direction === "inbound"\)/);
+});
+
 test("the missing permission is NAMED, not surfaced as Meta's error code", () => {
   // Public replies need pages_manage_engagement, which this install has not
   // been granted. "(#200) Permissions error" tells nobody which permission or
@@ -198,10 +265,17 @@ test("archive and mute are different, and both exist", () => {
 test("the screen separates active from archived, and archiving does not stop ingestion", () => {
   const loader = shipped("src/lib/commentInbox.ts");
   assert.match(loader, /status: archived \? "closed" : \{ not: "closed" \}/);
-  // Only muting stops the webhook filing new comments; archiving is a queue
-  // decision, not a subscription one.
+  // Only MUTING stops the webhook filing new comments. Archiving is a queue
+  // decision, not a subscription one — so the ingest must not consult it as a
+  // reason to drop anything. It does read `status`, but only to REOPEN (see the
+  // test above); the muted check is the sole early return.
   const ingest = shipped("src/lib/commentThreads.ts");
-  assert.doesNotMatch(ingest, /status.*closed/, "an archived post must still take new comments");
+  assert.match(ingest, /if \(thread\.mutedAt\) return \{ status: "muted" \};/);
+  assert.doesNotMatch(
+    ingest,
+    /return \{ status: "archived"/,
+    "an archived post must still take new comments",
+  );
 });
 
 test("a post is collapsible, and only the ones with something new open themselves", () => {

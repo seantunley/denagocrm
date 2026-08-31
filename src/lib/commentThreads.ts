@@ -95,6 +95,28 @@ export async function recordPostComment(
     throw error;
   }
 
+  /*
+   * AN ARCHIVED POST COMES BACK WHEN SOMEBODY NEW COMMENTS.
+   *
+   * That is the whole difference between archiving and muting. Muting stops the
+   * comments arriving; archiving only says "I am done with this for now" — so a
+   * post that stays hidden after a customer asks a fresh question would be a
+   * mute wearing the wrong label, and the question would never be seen.
+   *
+   * INBOUND ONLY. Our own reply going out must not resurrect a thread somebody
+   * has just finished with; answering it IS finishing with it.
+   *
+   * Conditional on `status: "closed"` so an already-open thread is not written
+   * to on every comment, and so this cannot race a human archiving it a moment
+   * later into an unexpected reopen — the update simply matches nothing.
+   */
+  if (direction === "inbound") {
+    await basePrisma.conversation.updateMany({
+      where: { id: thread.id, tenantId, channel: "comment", status: "closed" },
+      data: { status: "open", unread: true },
+    });
+  }
+
   return { status: "filed", conversationId: thread.id, direction };
 }
 

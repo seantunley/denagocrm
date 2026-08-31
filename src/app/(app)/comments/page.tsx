@@ -5,6 +5,8 @@ import CommentThreadList from "@/components/CommentThreadList";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import AutoRefresh from "@/components/AutoRefresh";
 import Tabs from "@/components/Tabs";
+import { pageCapabilities } from "@/lib/metaCapabilities";
+import { Surface } from "@/components/visual-system";
 
 export const metadata = { title: "Comments — DenagoCRM" };
 
@@ -28,9 +30,13 @@ export const metadata = { title: "Comments — DenagoCRM" };
 export default async function CommentsPage() {
   await requireRoute("/comments");
 
-  const [active, archived] = await Promise.all([
+  const [active, archived, capabilities] = await Promise.all([
     loadCommentThreads({ archived: false }),
     loadCommentThreads({ archived: true }),
+    // Asked, not assumed. Public replies need pages_manage_engagement; if Meta
+    // has not granted it, the button is not rendered and the notice below says
+    // exactly how to change that.
+    pageCapabilities(),
   ]);
 
   const unread = active.filter((thread) => thread.unread).length;
@@ -58,13 +64,28 @@ export default async function CommentsPage() {
         ]}
       />
 
+      {!capabilities.canManageEngagement && (
+        <Surface className="border-amber-500/30 bg-amber-500/[0.06] p-4">
+          <p className="text-sm font-medium text-amber-200">Public replies are not enabled yet</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Replying <b>privately</b> works now. To also reply <b>under the post</b>, the Denago CRM app needs
+            Meta&apos;s <code className="rounded bg-muted px-1">pages_manage_engagement</code> permission:
+            request it in the Meta app dashboard under <b>App Review → Permissions and Features</b>, then
+            reconnect the Page in Settings → Integrations.
+            {capabilities.checkedAt
+              ? ` Last checked ${capabilities.checkedAt.toLocaleString("en-ZA")}.`
+              : " Meta has not been asked yet — this updates once the Page token is readable."}
+          </p>
+        </Surface>
+      )}
+
       <Tabs
         tabs={[
           {
             key: "active",
             label: "Active",
             count: unread,
-            content: <CommentThreadList threads={active} />,
+            content: <CommentThreadList threads={active} canReplyPublicly={capabilities.canManageEngagement} />,
           },
           {
             key: "archived",
@@ -73,6 +94,7 @@ export default async function CommentsPage() {
             content: (
               <CommentThreadList
                 threads={archived}
+                canReplyPublicly={capabilities.canManageEngagement}
                 emptyMessage="Nothing archived yet. Archive a post once you have dealt with its comments — it leaves this list but keeps listening, so a new comment brings it back."
               />
             ),

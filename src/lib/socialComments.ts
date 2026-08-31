@@ -202,6 +202,23 @@ export function commentDedupeKey(tenantId: string, commentId: string): string {
   return `fbcomment:${tenantId}:${commentId}`;
 }
 
+/**
+ * The key that makes "one private reply per comment" a fact, not a hope.
+ *
+ * Meta allows exactly ONE private reply to a given comment, ever. Recording the
+ * reply afterwards does not stop a second person sending one — both can read
+ * "no reply yet", both can press the button, and the loser finds out only when
+ * Meta refuses them, having already written a message that never arrived.
+ *
+ * `Communication.dedupeKey` is UNIQUE, so making the key a function of the
+ * comment means the database refuses the second write outright. The action also
+ * checks first, so the ordinary case gets a sentence rather than a constraint
+ * violation — but the check is the courtesy and the key is the rule.
+ */
+export function privateReplyDedupeKey(tenantId: string, commentId: string): string {
+  return `fbprivatereply:${tenantId}:${commentId}`;
+}
+
 /** What the thread is called in the inbox before anyone renames it. */
 export function commentThreadSubject(comment: IngestibleComment): string {
   return `Comment thread — post ${comment.postId.split("_").pop() ?? comment.postId}`;

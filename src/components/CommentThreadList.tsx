@@ -43,9 +43,18 @@ import type { CommentThread } from "@/lib/commentInbox";
 export default function CommentThreadList({
   threads,
   emptyMessage,
+  canReplyPublicly,
 }: {
   threads: CommentThread[];
   emptyMessage?: string;
+  /**
+   * Whether Meta has granted `pages_manage_engagement`. Asked, not assumed —
+   * see lib/metaCapabilities.ts. When it has not, the public-reply button is
+   * NOT rendered: offering an action the provider will refuse is worse than
+   * offering none, because somebody writes the answer first and finds out
+   * afterwards.
+   */
+  canReplyPublicly: boolean;
 }) {
   if (threads.length === 0) {
     return (
@@ -61,13 +70,19 @@ export default function CommentThreadList({
   return (
     <div className="space-y-3">
       {threads.map((thread) => (
-        <CommentThreadCard key={thread.conversationId} thread={thread} />
+        <CommentThreadCard key={thread.conversationId} thread={thread} canReplyPublicly={canReplyPublicly} />
       ))}
     </div>
   );
 }
 
-function CommentThreadCard({ thread }: { thread: CommentThread }) {
+function CommentThreadCard({
+  thread,
+  canReplyPublicly,
+}: {
+  thread: CommentThread;
+  canReplyPublicly: boolean;
+}) {
   const router = useRouter();
   // Open when there is something new, closed otherwise. A screen of expanded
   // posts is unreadable the moment a campaign runs, which is the case this
@@ -161,7 +176,12 @@ function CommentThreadCard({ thread }: { thread: CommentThread }) {
       {open && (
         <ul className="space-y-2 border-t border-border px-3 pb-3 pt-3">
           {thread.comments.map((comment) => (
-            <CommentRow key={comment.id} conversationId={thread.conversationId} comment={comment} />
+            <CommentRow
+              key={comment.id}
+              conversationId={thread.conversationId}
+              comment={comment}
+              canReplyPublicly={canReplyPublicly}
+            />
           ))}
         </ul>
       )}
@@ -174,9 +194,11 @@ type ReplyMode = "public" | "private" | null;
 function CommentRow({
   conversationId,
   comment,
+  canReplyPublicly,
 }: {
   conversationId: string;
   comment: CommentThread["comments"][number];
+  canReplyPublicly: boolean;
 }) {
   const router = useRouter();
   const [mode, setMode] = useState<ReplyMode>(null);
@@ -217,15 +239,30 @@ function CommentRow({
       {!outbound && comment.commentId && (
         <div className="mt-2">
           {mode === null ? (
-            <div className="flex flex-wrap gap-2">
-              <button type="button" className="btn-secondary btn-sm" onClick={() => setMode("public")}>
-                <Globe className="size-4" />
-                Reply publicly
-              </button>
-              <button type="button" className="btn-secondary btn-sm" onClick={() => setMode("private")}>
-                <Send className="size-4" />
-                Reply privately
-              </button>
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Only when Meta has actually granted the permission to write a
+                  comment. Otherwise the button is absent and the screen says
+                  what to enable — see the note above the list. */}
+              {canReplyPublicly && (
+                <button type="button" className="btn-secondary btn-sm" onClick={() => setMode("public")}>
+                  <Globe className="size-4" />
+                  Reply publicly
+                </button>
+              )}
+              {/* Meta allows ONE private reply per comment, ever. Once it is
+                  spent the button goes, rather than being offered to the next
+                  person who looks and refused by Meta after they have written
+                  their message. */}
+              {comment.privateReplied ? (
+                <span className="text-[11px] text-muted-foreground">
+                  Private reply already sent — Meta allows only one.
+                </span>
+              ) : (
+                <button type="button" className="btn-secondary btn-sm" onClick={() => setMode("private")}>
+                  <Send className="size-4" />
+                  Reply privately
+                </button>
+              )}
             </div>
           ) : (
             <div className="space-y-2">
