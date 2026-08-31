@@ -124,13 +124,14 @@ function actionLabel(action: string): string {
 }
 
 function dayKey(value: Date | string): string {
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
   return new Date(value).toISOString().slice(0, 10);
 }
 
 function fillTrend(rows: TrendRow[], filters: BotAnalyticsFilters): FlowTrendPoint[] {
   const byDay = new Map(rows.map((row) => [dayKey(row.day), row]));
   return Array.from({ length: filters.rangeDays }, (_, index) => {
-    const day = new Date(filters.occurredFrom);
+    const day = new Date(filters.occurredFrom.getTime() + 2 * 60 * 60 * 1000);
     day.setUTCDate(day.getUTCDate() + index);
     const key = day.toISOString().slice(0, 10);
     const row = byDay.get(key);
@@ -167,7 +168,7 @@ export async function getBotFlowAnalyticsReport(
   const selectedRow = versionRows.find((row) => row.id === filters.versionId);
   const versionIds = versions.map((version) => version.id);
 
-  if (!selectedVersion) {
+  if (versionIds.length === 0) {
     const empty = { started: 0, completed: 0, handedOff: 0, deliveryFailures: 0, nodes: [] };
     return { versions, selectedVersion: null, filters, summary: empty, allTime: empty, channels: [], nodes: [], trend: [], actions: [], versionPerformance: [] };
   }
@@ -176,9 +177,11 @@ export async function getBotFlowAnalyticsReport(
   const channelFilter = filters.channel ? Prisma.sql`AND "channel" = ${filters.channel}` : Prisma.empty;
   const joinedOccurredFilter = Prisma.sql`AND e."occurredAt" >= ${filters.occurredFrom}`;
   const joinedChannelFilter = filters.channel ? Prisma.sql`AND e."channel" = ${filters.channel}` : Prisma.empty;
+  const selectedVersionIds = selectedVersion ? [selectedVersion.id] : versionIds;
+  const selectedVersionsSql = Prisma.join(selectedVersionIds);
 
   const [summary, allTime, channels, trendRows, actionRows, versionRowsPerformance] = await Promise.all([
-    getBotFlowVersionAnalytics([selectedVersion.id], { occurredFrom: filters.occurredFrom, channel: filters.channel }),
+    getBotFlowVersionAnalytics(selectedVersionIds, { occurredFrom: filters.occurredFrom, channel: filters.channel }),
     getBotFlowVersionAnalytics(versionIds),
     basePrisma.$queryRaw<ChannelRow[]>(Prisma.sql`
       SELECT
@@ -189,7 +192,7 @@ export async function getBotFlowAnalyticsReport(
         COUNT(*) FILTER (WHERE "eventType" = 'crm_action') AS "crmActions"
       FROM "BotFlowEvent"
       WHERE "tenantId" = ${tenantId}
-        AND "flowVersionId" = ${selectedVersion.id}
+        AND "flowVersionId" IN (${selectedVersionsSql})
         ${occurredFilter}
         ${channelFilter}
       GROUP BY "channel"
@@ -197,24 +200,24 @@ export async function getBotFlowAnalyticsReport(
     `),
     basePrisma.$queryRaw<TrendRow[]>(Prisma.sql`
       SELECT
-        date_trunc('day', "occurredAt")::date AS "day",
+        to_char(date_trunc('day', "occurredAt" + INTERVAL '2 hours'), 'YYYY-MM-DD') AS "day",
         COUNT(*) FILTER (WHERE "eventType" = 'flow_started') AS "started",
         COUNT(*) FILTER (WHERE "eventType" = 'flow_completed') AS "completed",
         COUNT(*) FILTER (WHERE "eventType" = 'flow_handoff') AS "handedOff",
         COUNT(*) FILTER (WHERE "eventType" = 'crm_action') AS "crmActions"
       FROM "BotFlowEvent"
       WHERE "tenantId" = ${tenantId}
-        AND "flowVersionId" = ${selectedVersion.id}
+        AND "flowVersionId" IN (${selectedVersionsSql})
         ${occurredFilter}
         ${channelFilter}
-      GROUP BY date_trunc('day', "occurredAt")::date
+      GROUP BY date_trunc('day', "occurredAt" + INTERVAL '2 hours')
       ORDER BY "day"
     `),
     basePrisma.$queryRaw<ActionRow[]>(Prisma.sql`
       SELECT COALESCE("metadata" ->> 'action', 'other') AS "action", COUNT(*) AS "count"
       FROM "BotFlowEvent"
       WHERE "tenantId" = ${tenantId}
-        AND "flowVersionId" = ${selectedVersion.id}
+        AND "flowVersionId" IN (${selectedVersionsSql})
         AND "eventType" = 'crm_action'
         ${occurredFilter}
         ${channelFilter}
