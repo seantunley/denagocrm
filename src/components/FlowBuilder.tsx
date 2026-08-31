@@ -735,7 +735,17 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt,
                 >
                   <Background color="#25312d" gap={GRID_SIZE} size={1} />
                   <MiniMap pannable zoomable nodeStrokeWidth={2} className="!border !border-white/10 !bg-[#101613]" />
-                  <Controls showInteractive={false} className="!border-white/10 !bg-[#18201d] !text-white" />
+                  <Controls
+                    showInteractive={false}
+                    className={
+                      "!border-white/10 !bg-[#18201d] !text-white " +
+                      "[&_.react-flow__controls-button]:!border-white/10 " +
+                      "[&_.react-flow__controls-button]:!bg-[#18201d] " +
+                      "[&_.react-flow__controls-button]:!text-white " +
+                      "[&_.react-flow__controls-button:hover]:!bg-white/10 " +
+                      "[&_.react-flow__controls-button_svg]:!fill-current"
+                    }
+                  />
                   <Panel position="top-right" className="!m-3 hidden sm:block">
                     <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-[#111614]/90 px-2.5 py-1.5 text-[11px] text-slate-400 shadow-lg backdrop-blur">
                       <MousePointer2 className="size-3.5" />Drag nodes · connect handles · select to inspect
