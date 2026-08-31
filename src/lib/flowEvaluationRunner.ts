@@ -1,6 +1,6 @@
 import "server-only";
-import { coloursList, priceList } from "./botAnswers";
 import { runFlow, type Flow, type FlowInput, type FlowSession, type OutMsg } from "./flow";
+import { flowRuntimeVars } from "./flowSession";
 import {
   isEvaluationExpectation,
   isEvaluationTurn,
@@ -44,6 +44,7 @@ function pickChoice(messages: OutMsg[], label: string): string | null {
 
 export async function evaluateFlowScenario(input: {
   flow: Flow;
+  channel?: string;
   turns: unknown;
   expectation: unknown;
 }): Promise<FlowEvaluationResult> {
@@ -55,7 +56,8 @@ export async function evaluateFlowScenario(input: {
     : null;
   if (!turns?.length || !expectation) throw new Error("Evaluation data is malformed.");
 
-  let session: FlowSession | null = { nodeId: null, vars: { greeting: "Hi there 👋", first_name: "Test", name: "Test" } };
+  const fixedNow = new Date("2030-01-15T07:00:00.000Z");
+  let session: FlowSession | null = { nodeId: null, vars: { greeting: "Hi there 👋", first_name: "Test", name: "Test", ...flowRuntimeVars(input.channel ?? "whatsapp", fixedNow) } };
   let handedOff = false;
   let variables: Record<string, string> = session.vars;
   let lastMessages: OutMsg[] = [];
@@ -67,7 +69,9 @@ export async function evaluateFlowScenario(input: {
     trace.push(`Input: ${label}`);
     const currentSession = session;
     const result = await runFlow(input.flow, currentSession, turn, {
-      dynamicAnswer: async (source) => source === "colours" ? coloursList() : priceList(),
+      dynamicAnswer: async (source) => source === "colours"
+        ? "Available colours (evaluation fixture): Arctic White, Midnight Black."
+        : "Current range (evaluation fixture): City E-Bike — R29,999; Commuter E-Bike — R39,999.",
       aiReply: async () => ({ reply: "[Evaluation] Simulated AI answer from the deterministic flow suite.", handoff: false }),
       availableSlots: async () => [{ id: "2030-01-15_09:00", label: "Tue 15 Jan · 09:00 (simulated)" }],
       bookSlot: async (slotId, vars, nodeId) => { trace.push(`CRM: node ${nodeId} would reserve ${slotId}`); vars.slot = slotId; return { ok: true, label: slotId }; },
