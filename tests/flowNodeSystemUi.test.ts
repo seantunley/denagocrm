@@ -22,10 +22,60 @@ test("node system groups every existing node label without taxonomy drift", () =
   for (const group of ["Messages", "Customer input", "Logic & data", "AI & operations"]) assert.match(frame, new RegExp(group));
 
   const guideLabels = quotedLabels(frame, "const groups", "const routeLegend").filter((label) => !["Messages", "Customer input", "Logic & data", "AI & operations"].includes(label));
-  const builderLabels = quotedLabels(builder, "const TYPE_META", "function summary");
+  /*
+   * Scraped up to `const NODE_GROUPS`, not `function summary`.
+   *
+   * These markers bracket a region of source and pull every `label: "…"` out of
+   * it, so the region has to contain node labels and NOTHING ELSE. The canvas
+   * redesign added NODE_GROUPS — the palette's own category headings, each with a
+   * `label:` — between TYPE_META and `summary`, and those four headings were
+   * promptly read as four extra node types. The guide could never have listed
+   * them, so this failed the moment the redesign landed, and `main` went red.
+   *
+   * The guide side has always coped with the same hazard by FILTERING the four
+   * names out after the fact (just above). Moving the builder's end marker is the
+   * same fix made structurally: TYPE_META ends exactly where NODE_GROUPS begins,
+   * so the region now holds node labels only, whatever is appended after it.
+   */
+  const builderLabels = quotedLabels(builder, "const TYPE_META", "const NODE_GROUPS");
 
   assert.deepEqual([...guideLabels].sort(), [...builderLabels].sort(), "the guide must cover exactly the node labels FlowBuilder renders");
   assert.equal(new Set(guideLabels).size, guideLabels.length, "a node label must appear in exactly one guide group");
+});
+
+test("EVERY NODE TYPE SITS IN EXACTLY ONE PALETTE GROUP — none stranded, none twice", () => {
+  /*
+   * The invariant the drift above exposed. NODE_GROUPS is what the palette
+   * renders, so a type missing from it is a node the builder still knows how to
+   * draw but nobody can ADD — invisible, and invisible in a way no type error and
+   * no render test would catch, because the node type is perfectly valid.
+   *
+   * Checked here rather than left to the label comparison, which comes at the
+   * same question from the guide's side and would pass happily while a type sat
+   * in no group at all.
+   */
+  const builder = src("src/components/FlowBuilder.tsx");
+  const metaRegion = builder.slice(
+    builder.indexOf("const TYPE_META"),
+    builder.indexOf("const NODE_GROUPS"),
+  );
+  const groupRegion = builder.slice(
+    builder.indexOf("const NODE_GROUPS"),
+    builder.indexOf("function summary"),
+  );
+
+  const types = [...metaRegion.matchAll(/^\s{2}(\w+):\s*\{\s*icon:/gm)].map((match) => match[1]);
+  const grouped = [...groupRegion.matchAll(/"([^"]+)"/g)]
+    .map((match) => match[1])
+    .filter((value) => types.includes(value));
+
+  assert.ok(types.length > 0, "no node types found — the TYPE_META scrape has drifted");
+  assert.deepEqual(
+    [...grouped].sort(),
+    [...types].sort(),
+    "every node type in TYPE_META must appear in exactly one NODE_GROUPS entry",
+  );
+  assert.equal(new Set(grouped).size, grouped.length, "a node type is in two palette groups");
 });
 
 test("node system route legend matches the existing outcome-coloured handles", () => {
