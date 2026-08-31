@@ -6,16 +6,32 @@ import { requireOwner } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { putSetting, getSetting } from "@/lib/settings";
 import { getBotFaqs } from "@/lib/botAi";
-import { getBotKnowledgeEntries, type BotKnowledgeEntry, type BotKnowledgeStatus } from "@/lib/botKnowledge";
+import { type BotKnowledgeStatus } from "@/lib/botKnowledge";
 import { logAudit } from "@/lib/audit";
 import { withActingStaffScope } from "@/lib/actingScope";
+import { actingTenantId } from "@/lib/actingTenant";
 
 const clean = (value: FormDataEntryValue | null, max = 5000) => String(value ?? "").trim().slice(0, max);
 
-function dateBoundary(value: string, end = false): string | undefined {
+function dateBoundary(value: string, end = false): Date | undefined {
   if (!value) return undefined;
   const date = new Date(`${value}T${end ? "23:59:59.999" : "00:00:00.000"}+02:00`);
-  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+  return Number.isNaN(date.getTime()) ? undefined : date;
+}
+
+const revalidateKnowledge = () => {
+  revalidatePath("/chatbot");
+  revalidatePath("/chatbot/knowledge");
+};
+
+async function knowledgeSource(tenantId: string, sourceDocumentId: string | undefined) {
+  if (!sourceDocumentId) return { sourceType: "manual" as const, sourceDocumentId: null, sourceLabel: null };
+  const document = await prisma.libraryDocument.findFirst({
+    where: { id: sourceDocumentId, tenantId },
+    select: { name: true },
+  });
+  if (!document) return null;
+  return { sourceType: "library" as const, sourceDocumentId, sourceLabel: document.name };
 }
 
 export async function saveBotSettings(formData: FormData) {
@@ -72,37 +88,54 @@ export async function deleteFaq(id: string) {
 export async function addBotKnowledge(formData: FormData) {
   return withActingStaffScope(async () => {
     const owner = await requireOwner();
+    const tenantId = await actingTenantId();
     const title = clean(formData.get("title"), 180);
     const content = clean(formData.get("content"), 5000);
     if (!title || !content) return;
 
     const sourceDocumentId = clean(formData.get("sourceDocumentId"), 120) || undefined;
-    let sourceLabel: string | undefined;
-    if (sourceDocumentId) {
-      const document = await prisma.libraryDocument.findUnique({ where: { id: sourceDocumentId }, select: { name: true } });
-      if (!document) return;
-      sourceLabel = document.name;
-    }
+    const source = await knowledgeSource(tenantId, sourceDocumentId);
+    if (!source) return;
+    const validFrom = dateBoundary(clean(formData.get("validFrom"), 20));
+    const validUntil = dateBoundary(clean(formData.get("validUntil"), 20), true);
+    if (validFrom && validUntil && validUntil < validFrom) return;
 
-    const now = new Date().toISOString();
-    const entry: BotKnowledgeEntry = {
-      id: crypto.randomUUID(),
+    await prisma.botKnowledgeEntry.create({ data: {
+      tenantId,
       title,
       content,
       status: "draft",
-      sourceType: sourceDocumentId ? "library" : "manual",
-      sourceDocumentId,
-      sourceLabel,
-      validFrom: dateBoundary(clean(formData.get("validFrom"), 20)),
-      validUntil: dateBoundary(clean(formData.get("validUntil"), 20), true),
-      createdAt: now,
-      updatedAt: now,
-    };
-    const entries = await getBotKnowledgeEntries();
-    entries.unshift(entry);
-    await putSetting("BOT_KNOWLEDGE_ENTRIES", JSON.stringify(entries.slice(0, 250)));
+      ...source,
+      validFrom,
+      validUntil,
+    } });
     await logAudit({ action: "bot.knowledge_created", summary: `Added chatbot knowledge draft “${title}”`, user: owner });
-    revalidatePath("/chatbot");
+    revalidateKnowledge();
+  });
+}
+
+/** Editing an approved fact always returns it to Draft for a fresh review. */
+export async function updateBotKnowledge(id: string, formData: FormData) {
+  return withActingStaffScope(async () => {
+    const owner = await requireOwner();
+    const tenantId = await actingTenantId();
+    const title = clean(formData.get("title"), 180);
+    const content = clean(formData.get("content"), 5000);
+    if (!title || !content) return;
+    const current = await prisma.botKnowledgeEntry.findFirst({ where: { id, tenantId } });
+    if (!current) return;
+    const sourceDocumentId = clean(formData.get("sourceDocumentId"), 120) || undefined;
+    const source = await knowledgeSource(tenantId, sourceDocumentId);
+    if (!source) return;
+    const validFrom = dateBoundary(clean(formData.get("validFrom"), 20));
+    const validUntil = dateBoundary(clean(formData.get("validUntil"), 20), true);
+    if (validFrom && validUntil && validUntil < validFrom) return;
+    await prisma.botKnowledgeEntry.updateMany({
+      where: { id, tenantId },
+      data: { title, content, ...source, validFrom: validFrom ?? null, validUntil: validUntil ?? null, status: "draft", approvedAt: null, approvedBy: null },
+    });
+    await logAudit({ action: "bot.knowledge_updated", summary: `Updated chatbot knowledge “${current.title}” and returned it to draft`, user: owner });
+    revalidateKnowledge();
   });
 }
 
@@ -110,35 +143,36 @@ export async function setBotKnowledgeStatus(id: string, status: BotKnowledgeStat
   return withActingStaffScope(async () => {
     const owner = await requireOwner();
     if (!(["draft", "approved", "expired"] as BotKnowledgeStatus[]).includes(status)) return;
-    const entries = await getBotKnowledgeEntries();
-    const current = entries.find((entry) => entry.id === id);
+    const tenantId = await actingTenantId();
+    const current = await prisma.botKnowledgeEntry.findFirst({ where: { id, tenantId } });
     if (!current) return;
-    const now = new Date().toISOString();
-    const next = entries.map((entry) => entry.id === id ? {
-      ...entry,
-      status,
-      updatedAt: now,
-      ...(status === "approved" ? { approvedAt: now, approvedBy: owner.name } : {}),
-    } : entry);
-    await putSetting("BOT_KNOWLEDGE_ENTRIES", JSON.stringify(next));
+    const now = new Date();
+    await prisma.botKnowledgeEntry.updateMany({
+      where: { id, tenantId },
+      data: {
+        status,
+        ...(status === "approved" ? { approvedAt: now, approvedBy: owner.name } : {}),
+        ...(status === "draft" ? { approvedAt: null, approvedBy: null } : {}),
+      },
+    });
     await logAudit({
       action: `bot.knowledge_${status}`,
       summary: `${status === "approved" ? "Approved" : status === "expired" ? "Expired" : "Returned to draft"} chatbot knowledge “${current.title}”`,
       user: owner,
     });
-    revalidatePath("/chatbot");
+    revalidateKnowledge();
   });
 }
 
 export async function deleteBotKnowledge(id: string) {
   return withActingStaffScope(async () => {
     const owner = await requireOwner();
-    const entries = await getBotKnowledgeEntries();
-    const current = entries.find((entry) => entry.id === id);
+    const tenantId = await actingTenantId();
+    const current = await prisma.botKnowledgeEntry.findFirst({ where: { id, tenantId } });
     if (!current) return;
-    await putSetting("BOT_KNOWLEDGE_ENTRIES", JSON.stringify(entries.filter((entry) => entry.id !== id)));
+    await prisma.botKnowledgeEntry.deleteMany({ where: { id, tenantId } });
     await logAudit({ action: "bot.knowledge_deleted", summary: `Deleted chatbot knowledge “${current.title}”`, user: owner });
-    revalidatePath("/chatbot");
+    revalidateKnowledge();
   });
 }
 

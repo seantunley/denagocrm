@@ -22,6 +22,7 @@ function handoffBody(context?: FlowHandoffContext): string {
 export async function runTelegramFlow(chatId: number | string, text: string, callbackData?: string, fileUrl?: string) {
   if (!(await tgBotEnabled())) return;
   const key = String(chatId);
+  const startRef = text.match(/^\/start(?:\s+(.+))?$/i)?.[1]?.trim() || undefined;
   const result = await advanceFlow(
     "telegram",
     key,
@@ -37,6 +38,7 @@ export async function runTelegramFlow(chatId: number | string, text: string, cal
     async (messages, tx, tenantId, flowVersionId) => {
       await enqueueBotMessagesTx(tx, tenantId, { channel: "telegram", key, messages, flowVersionId });
     },
+    startRef ? { referralRef: startRef } : undefined,
   );
   if (!result.suppressed) await flushBotOutboxConversation("telegram", key);
 }
