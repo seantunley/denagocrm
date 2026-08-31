@@ -56,11 +56,11 @@ BEGIN
         IF COALESCE(btrim(item->>'id'), '') = '' OR COALESCE(btrim(item->>'title'), '') = '' OR COALESCE(btrim(item->>'content'), '') = '' THEN
           CONTINUE;
         END IF;
-        BEGIN created_at := NULLIF(item->>'createdAt', '')::timestamptz; EXCEPTION WHEN OTHERS THEN created_at := CURRENT_TIMESTAMP; END;
-        BEGIN updated_at := NULLIF(item->>'updatedAt', '')::timestamptz; EXCEPTION WHEN OTHERS THEN updated_at := created_at; END;
-        BEGIN valid_from := NULLIF(item->>'validFrom', '')::timestamptz; EXCEPTION WHEN OTHERS THEN valid_from := NULL; END;
-        BEGIN valid_until := NULLIF(item->>'validUntil', '')::timestamptz; EXCEPTION WHEN OTHERS THEN valid_until := NULL; END;
-        BEGIN approved_at := NULLIF(item->>'approvedAt', '')::timestamptz; EXCEPTION WHEN OTHERS THEN approved_at := NULL; END;
+        BEGIN created_at := NULLIF(item->>'createdAt', '')::timestamptz AT TIME ZONE 'UTC'; EXCEPTION WHEN OTHERS THEN created_at := CURRENT_TIMESTAMP AT TIME ZONE 'UTC'; END;
+        BEGIN updated_at := NULLIF(item->>'updatedAt', '')::timestamptz AT TIME ZONE 'UTC'; EXCEPTION WHEN OTHERS THEN updated_at := created_at; END;
+        BEGIN valid_from := NULLIF(item->>'validFrom', '')::timestamptz AT TIME ZONE 'UTC'; EXCEPTION WHEN OTHERS THEN valid_from := NULL; END;
+        BEGIN valid_until := NULLIF(item->>'validUntil', '')::timestamptz AT TIME ZONE 'UTC'; EXCEPTION WHEN OTHERS THEN valid_until := NULL; END;
+        BEGIN approved_at := NULLIF(item->>'approvedAt', '')::timestamptz AT TIME ZONE 'UTC'; EXCEPTION WHEN OTHERS THEN approved_at := NULL; END;
         IF valid_from IS NOT NULL AND valid_until IS NOT NULL AND valid_until < valid_from THEN valid_until := NULL; END IF;
 
         INSERT INTO "BotKnowledgeEntry" (
