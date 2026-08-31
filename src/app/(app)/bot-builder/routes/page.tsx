@@ -23,7 +23,7 @@ export default async function FlowRoutesPage() {
     prisma.botFlowPublication.findMany({ where: { tenantId }, select: { channel: true, flowId: true } }),
     prisma.botFlowVersion.findMany({ where: { tenantId }, select: { flowId: true, channel: true } }),
   ]);
-  const publishedKeys = new Set(publications.map((publication) => `${publication.channel}:${publication.flowId}`));
+  const publishedKeys = new Set(versions.map((version) => `${version.channel}:${version.flowId}`));
   const flowNames = new Map(flows.map((flow) => [flow.id, flow.name]));
   const defaults = new Map(publications.map((publication) => [publication.channel, publication.flowId]));
 
