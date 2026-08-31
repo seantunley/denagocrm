@@ -1,15 +1,28 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 
-const analyticsPage = readFileSync("src/app/(app)/bot-analytics/page.tsx", "utf8");
-const analyticsReport = readFileSync("src/lib/botFlowAnalyticsReport.ts", "utf8");
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const src = (file: string) => readFileSync(path.join(root, file), "utf8");
+const analyticsPage = src("src/app/(app)/bot-analytics/page.tsx");
+const analyticsReport = src("src/lib/botFlowAnalyticsReport.ts");
+const visualSystem = src("src/components/visual-system.tsx");
 
 test("Flowbot analytics keeps filters and navigation keyboard/touch friendly", () => {
   assert.match(analyticsPage, /aria-label="Analytics filters"/);
   assert.match(analyticsPage, /aria-current=\{flow\.id === selected\?\.id \? "page" : undefined\}/);
   assert.match(analyticsPage, /min-h-11/);
   assert.match(analyticsPage, /aria-live="polite"/);
+});
+
+test("Surface forwards section attributes used by analytics accessibility hooks", () => {
+  assert.match(visualSystem, /HTMLAttributes<HTMLElement>/);
+  assert.match(visualSystem, /\.\.\.props/);
+  assert.match(visualSystem, /<section[\s\S]*\{\.\.\.props\}/);
+  assert.match(analyticsPage, /id="analytics-attention"/);
+  assert.match(analyticsPage, /id="analytics-funnel"/);
 });
 
 test("Flowbot analytics contains wide data instead of overflowing the page", () => {
@@ -31,8 +44,6 @@ test("Flowbot analytics surfaces operational attention without changing report c
   assert.match(analyticsPage, /Needs attention/);
   assert.match(analyticsPage, /node\.handoffs > 0 \|\| node\.deliveryFailures > 0/);
   assert.match(analyticsPage, /No node-level handoffs or delivery failures in this view/);
-
-  // UI-7 may present existing report fields differently, but the analytics report remains the authority.
   assert.match(analyticsReport, /export async function getBotFlowAnalyticsReport/);
   assert.doesNotMatch(analyticsPage, /prisma\.botFlowEvent/);
 });
