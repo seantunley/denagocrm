@@ -3,7 +3,7 @@ import { getSetting } from "./settings";
 import { prisma } from "./db";
 import { logError } from "./errorLog";
 import { formatZAR } from "./format";
-import { getBotKnowledgeEntries, renderKnowledgeForPrompt, retrieveRelevantKnowledge } from "./botKnowledge";
+import { renderKnowledgeForPrompt, searchBotKnowledge } from "./botKnowledge";
 import { renderBotProductFacts } from "./botProductFacts";
 
 export type BotMsg = { role: "user" | "assistant"; content: string };
@@ -164,14 +164,13 @@ export async function generateBotReply(input: {
   if (!apiKey) return null;
 
   const latestQuestion = [...input.history].reverse().find((message) => message.role === "user")?.content ?? "";
-  const [brief, hours, products, faqs, knowledgeEntries] = await Promise.all([
+  const [brief, hours, products, faqs, relevantKnowledge] = await Promise.all([
     getSetting("BOT_AI_BRIEF"),
     getSetting("BOT_HOURS"),
     prisma.product.findMany({ where: { active: true }, include: { colors: true }, orderBy: { name: "asc" } }),
     getBotFaqs(),
-    getBotKnowledgeEntries(),
+    searchBotKnowledge(latestQuestion),
   ]);
-  const relevantKnowledge = retrieveRelevantKnowledge(knowledgeEntries, latestQuestion);
   const knowledgeText = renderKnowledgeForPrompt(relevantKnowledge);
   const productFacts = renderBotProductFacts(products);
 
