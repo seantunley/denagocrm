@@ -2,7 +2,8 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { Bot, FileUp, MessageCircle, Play, RotateCcw, Send, SlidersHorizontal, UserRound } from "lucide-react";
-import { DEFAULT_SIMULATOR_SCENARIO, simulateFlowTurn, type SimulatorScenario } from "@/app/actions/flowSimulator";
+import { simulateFlowTurn } from "@/app/actions/flowSimulator";
+import { DEFAULT_SIMULATOR_SCENARIO, type SimulatorScenario } from "@/lib/flowSimulatorScenario";
 import WhatsAppPreview, { type PreviewLine } from "@/components/WhatsAppPreview";
 import type { FlowSession, OutMsg } from "@/lib/flow";
 
