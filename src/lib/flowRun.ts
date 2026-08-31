@@ -16,7 +16,7 @@ import { withBotConversationWrite } from "./botTenant";
 import { loadBotSession, upsertBotSessionTx, deleteBotSessionTx, botStillOwnsTx } from "./botSessionStore";
 import { recordBotFlowEventsTx, type BotFlowEventInput } from "./botFlowAnalytics";
 import { completeInboundBotEventTx, currentInboundBotClaim } from "./botInboundEvent";
-import { decideInboundAct, type BotOwnership } from "./botOwnership";
+import { decideInboundAct, HUMAN_RESPONSIBILITY_HOURS, type BotOwnership } from "./botOwnership";
 import type { FlowEntryContext } from "./flowRouting";
 
 export const FLOW_MARKER = "🤖 Flow";
@@ -152,7 +152,7 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput, entryCon
     }
     if (events.length) await recordBotFlowEventsTx(tx, tenantId, events);
 
-    if (result.handedOff) await upsertBotSessionTx(tx, tenantId, { channel: "whatsapp", key: digits, nodeId: null, vars: storedVars(session.vars, snapshot.versionId, result.endedAt), status: "paused", ownership: "ai_handoff", expiresAt: new Date(Date.now() + 6 * 3600 * 1000) });
+    if (result.handedOff) await upsertBotSessionTx(tx, tenantId, { channel: "whatsapp", key: digits, nodeId: null, vars: storedVars(session.vars, snapshot.versionId, result.endedAt), status: "paused", ownership: "ai_handoff", expiresAt: new Date(Date.now() + HUMAN_RESPONSIBILITY_HOURS * 3600 * 1000) });
     else if (result.session) await upsertBotSessionTx(tx, tenantId, { channel: "whatsapp", key: digits, nodeId: result.session.nodeId, vars: storedVars(result.session.vars, snapshot.versionId), status: "active", ownership: "bot", expiresAt: new Date(Date.now() + 24 * 3600 * 1000) });
     else await deleteBotSessionTx(tx, tenantId, "whatsapp", digits);
   });
