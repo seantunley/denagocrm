@@ -70,7 +70,10 @@ test("human handoff carries configured reason and summary", async () => {
   const flow: Flow = { start: "h", nodes: { h: { id: "h", type: "handoff", text: "One moment", reason: "Sales", summary: "Interested in {{model}}" } } };
   const result = await runFlow(flow, { nodeId: null, vars: { model: "Rover XL" } }, { text: "" }, ctx({ handoff: async (_vars, handoffContext) => { context = handoffContext; } }));
   assert.equal(result.handedOff, true);
-  assert.deepEqual(context, { confidence: undefined, intent: undefined, reason: "Sales", summary: "Interested in Rover XL" });
+  // Only DEFINED keys, deliberately: a context carrying `confidence: undefined`
+  // reads as "a confidence was supplied and it was nothing", and consumers that
+  // iterate keys would render an empty chip for it.
+  assert.deepEqual(context, { reason: "Sales", summary: "Interested in Rover XL" });
 });
 
 test("advanced nodes participate in validation and variable discovery", () => {

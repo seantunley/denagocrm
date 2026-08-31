@@ -1,7 +1,9 @@
 import "server-only";
 
 import { lookup } from "node:dns/promises";
+import { lookup as lookupCb } from "node:dns";
 import { isIP } from "node:net";
+import { Agent } from "undici";
 import { prisma } from "./db";
 import { getSetting } from "./settings";
 import { logError } from "./errorLog";
@@ -67,6 +69,35 @@ async function safeHttpsUrl(raw: string): Promise<URL> {
   if (!addresses.length || addresses.some(({ address }) => unsafeIp(address))) throw new Error("API URL resolves to a private or reserved address");
   return url;
 }
+
+/**
+ * THE CHECK ABOVE ALONE IS NOT ENOUGH — fetch resolves DNS again.
+ *
+ * `safeHttpsUrl` validates the addresses IT resolved, but `fetch` performs its
+ * own, independent resolution when it connects. A hostname the flow author (or
+ * whoever their URL points at) controls, published with a short TTL, can answer
+ * with a public address for the check and 169.254.169.254 for the connect —
+ * classic DNS rebinding, and the guard never fires.
+ *
+ * So the same `unsafeIp` test runs a second time HERE, inside the dispatcher's
+ * connect-time lookup — on the exact address the socket is about to open to.
+ * There is no gap left between check and use, because the check has become part
+ * of the use.
+ */
+const guardedDispatcher = new Agent({
+  connect: {
+    lookup: (hostname, options, callback) => {
+      lookupCb(hostname, options, (err, address, family) => {
+        if (err) return callback(err, address, family);
+        const addresses = Array.isArray(address) ? address.map((entry) => entry.address) : [address];
+        if (addresses.some((ip) => unsafeIp(String(ip)))) {
+          return callback(Object.assign(new Error("API URL resolves to a private or reserved address"), { code: "EBLOCKED" }), address, family);
+        }
+        callback(null, address, family);
+      });
+    },
+  },
+});
 
 function requestHeaders(raw?: string): Headers {
   const headers = new Headers();
@@ -151,7 +182,10 @@ async function httpRequest(input: Parameters<NonNullable<FlowCtx["httpRequest"]>
     const body = input.method === "GET" || input.method === "DELETE" ? undefined : input.body ?? "";
     if (body && new TextEncoder().encode(body).byteLength > MAX_HTTP_BODY_BYTES) return { ok: false, reason: "API request body exceeds the 20 KB Flowbot limit" };
     if (body && !headers.has("content-type")) headers.set("content-type", "application/json");
-    const response = await fetch(url, { method: input.method, headers, body, signal: AbortSignal.timeout(10_000), redirect: "error" });
+    // `dispatcher` pins the connection to a connect-time re-check of the resolved
+    // address (see guardedDispatcher) — without it this fetch re-resolves DNS on
+    // its own and the safeHttpsUrl check can be rebound around.
+    const response = await fetch(url, { method: input.method, headers, body, signal: AbortSignal.timeout(10_000), redirect: "error", dispatcher: guardedDispatcher } as RequestInit & { dispatcher: Agent });
     const responseBody = await boundedText(response);
     return response.ok ? { ok: true, status: response.status, body: responseBody } : { ok: false, status: response.status, body: responseBody, reason: `API returned ${response.status}` };
   } catch (error) {

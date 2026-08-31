@@ -5,7 +5,7 @@ import { requireOwner } from "@/lib/auth";
 import { getSetting, putSetting } from "@/lib/settings";
 import { DEFAULT_FLOW, type Flow } from "@/lib/flow";
 import { FLOW_TEMPLATES } from "@/lib/flowTemplates";
-import { flowErrors, validateFlow } from "@/lib/flowValidation";
+import { flowErrors, flowWarnings, validateFlow } from "@/lib/flowValidation";
 import { enabledFlowChannels } from "@/lib/flowValidationServer";
 import { getFlowPublicationMeta, publishFlowSnapshot } from "@/lib/flowPublishing";
 import { createFlow, duplicateFlow, deleteFlow, renameFlow } from "@/app/actions/flow";
@@ -17,7 +17,6 @@ import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { FLOW_CHANNELS } from "@/lib/flowRouting";
 
 const channelLabel: Record<string, string> = { whatsapp: "WhatsApp", messenger: "Messenger", instagram: "Instagram", telegram: "Telegram" };
-const flowWarnings = <T extends { severity: string }>(issues: T[]) => issues.filter((issue) => issue.severity === "warning");
 
 function parseDraft(definition: string): Flow | null {
   try {
@@ -37,8 +36,13 @@ function nodeCount(definition?: string | null): number | null {
 export default async function BotBuilderPage() {
   const owner = await requireOwner();
   const scope = await flowScope();
+
   const tenantId = await builderTenantId();
   if ((await prisma.botFlow.count({ where: scope })) === 0) {
+    // The one-time import of the pre-BotFlow BOT_FLOW setting belongs to the
+    // founding tenant and nobody else. Settings still resolve to that tenant
+    // while enforcement is dormant, so importing it into another workspace
+    // would both leak the founding graph and clear the founding setting.
     const founding = tenantId === DEFAULT_TENANT_ID;
     const legacy = founding ? await getSetting("BOT_FLOW") : null;
     let definition = JSON.stringify(DEFAULT_FLOW);
@@ -46,8 +50,13 @@ export default async function BotBuilderPage() {
     if (legacy) {
       try {
         const f = JSON.parse(legacy);
-        if (f?.start && f?.nodes) { definition = legacy; name = "My flow"; }
-      } catch { /* keep default */ }
+        if (f?.start && f?.nodes) {
+          definition = legacy;
+          name = "My flow";
+        }
+      } catch {
+        /* keep default */
+      }
     }
     const seeded = await prisma.botFlow.create({ data: { name, definition, active: true, tenantId } });
     await publishFlowSnapshot(seeded.id, owner.id).catch(() => {});
@@ -59,7 +68,10 @@ export default async function BotBuilderPage() {
   const [flows, channels, publishedVersions, routes] = await Promise.all([
     prisma.botFlow.findMany({ where: scope, orderBy: [{ active: "desc" }, { updatedAt: "desc" }] }),
     enabledFlowChannels(),
-    prisma.botFlowVersion.findMany({ where: { tenantId, id: { in: liveVersionIds } }, select: { id: true, flowId: true, version: true, definition: true } }),
+    prisma.botFlowVersion.findMany({
+      where: { tenantId, id: { in: liveVersionIds } },
+      select: { id: true, flowId: true, version: true, definition: true },
+    }),
     prisma.botFlowRoute.findMany({ where: { tenantId }, select: { flowId: true, enabled: true } }),
   ]);
 
@@ -74,7 +86,9 @@ export default async function BotBuilderPage() {
 
   const validation = new Map(flows.map((flow) => {
     const parsed = parseDraft(flow.definition);
-    const issues = parsed ? validateFlow(parsed, channels) : [{ severity: "error" as const, code: "graph.shape", message: "Flow definition is malformed." }];
+    const issues = parsed
+      ? validateFlow(parsed, channels)
+      : [{ severity: "error" as const, code: "graph.shape", message: "Flow definition is malformed." }];
     return [flow.id, { parsed, issues, errors: flowErrors(issues), warnings: flowWarnings(issues) }];
   }));
 
@@ -155,9 +169,18 @@ export default async function BotBuilderPage() {
               {(blocked || check.warnings.length > 0) && <p className={`mt-2 text-xs ${blocked ? "text-red-300" : "text-amber-300"}`}>{blocked ? check.errors[0].message : `${check.warnings.length} warning${check.warnings.length === 1 ? "" : "s"} — review before publishing.`}</p>}
 
               <div className="mt-4 rounded-xl border border-border/80 bg-muted/20 p-3">
-                <div className="flex items-center justify-between gap-2"><p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Publish readiness</p><span className="text-[11px] text-muted-foreground">{draftNodes} draft nodes{live ? ` · live v${live.version}` : ""}</span></div>
-                <div className="mt-2 grid gap-1.5">{readyChecks.map((item) => <p key={item.label} className={`flex items-center gap-2 text-xs ${item.ok ? "text-emerald-300" : "text-muted-foreground"}`}><CheckCircle2 className={`size-3.5 ${item.ok ? "" : "opacity-30"}`} />{item.label}</p>)}</div>
-                <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 border-t border-border/70 pt-2 text-[11px] text-muted-foreground"><span>{routeInfo.enabled}/{routeInfo.total} routes enabled</span><span>{check.warnings.length} warnings</span><span>{liveNodes == null ? "No live snapshot" : `${liveNodes} live nodes`}</span></div>
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Publish readiness</p>
+                  <span className="text-[11px] text-muted-foreground">{draftNodes} draft nodes{live ? ` · live v${live.version}` : ""}</span>
+                </div>
+                <div className="mt-2 grid gap-1.5">
+                  {readyChecks.map((item) => <p key={item.label} className={`flex items-center gap-2 text-xs ${item.ok ? "text-emerald-300" : "text-muted-foreground"}`}><CheckCircle2 className={`size-3.5 ${item.ok ? "" : "opacity-30"}`} />{item.label}</p>)}
+                </div>
+                <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 border-t border-border/70 pt-2 text-[11px] text-muted-foreground">
+                  <span>{routeInfo.enabled}/{routeInfo.total} routes enabled</span>
+                  <span>{check.warnings.length} warnings</span>
+                  <span>{liveNodes == null ? "No live snapshot" : `${liveNodes} live nodes`}</span>
+                </div>
               </div>
 
               <div className="my-5 flex flex-1 items-center gap-2 text-muted-foreground" aria-hidden>{[0,1,2].map((step) => <span key={step} className="flex items-center gap-2"><span className="grid size-8 place-items-center rounded-lg border border-border bg-muted/40"><GitBranch className="size-3.5" /></span>{step < 2 && <span className="h-px w-5 bg-border" />}</span>)}</div>

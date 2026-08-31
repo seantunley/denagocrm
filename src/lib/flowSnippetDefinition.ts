@@ -13,11 +13,21 @@ export type FlowSnippet = {
 function remapNode(node: FlowNode, idMap: Map<string, string>): FlowNode {
   const next = (id?: string) => id ? idMap.get(id) : undefined;
   const id = idMap.get(node.id)!;
-  if (node.type === "choice") return { ...node, id, options: node.options.map((option) => ({ ...option, next: next(option.next) })) };
-  if (node.type === "condition") return { ...node, id, trueNext: next(node.trueNext), falseNext: next(node.falseNext) };
-  if (node.type === "switch") return { ...node, id, cases: node.cases.map((item) => ({ ...item, next: next(item.next) })), defaultNext: next(node.defaultNext) };
+  if (node.type === "choice") {
+    return { ...node, id, options: node.options.map((option) => ({ ...option, next: next(option.next) })) };
+  }
+  if (node.type === "condition") {
+    return { ...node, id, trueNext: next(node.trueNext), falseNext: next(node.falseNext) };
+  }
+  if (node.type === "switch") {
+    return { ...node, id, cases: node.cases.map((item) => ({ ...item, next: next(item.next) })), defaultNext: next(node.defaultNext) };
+  }
   if (node.type === "ai") return { ...node, id, handoffNext: next(node.handoffNext) };
   if (node.type === "handoff" || node.type === "end") return { ...node, id };
+  // Failure and no-capacity routes are edges too. Left unmapped, an inserted
+  // snippet's failure branch still pointed at the SOURCE snippet's node ids —
+  // dangling references in the pasted copy that validation then flags on a graph
+  // the user believes they copied intact.
   const routed = node as FlowNode & { next?: string; failureNext?: string; unavailableNext?: string };
   return {
     ...routed,
@@ -44,7 +54,9 @@ export function insertFlowSnippet(
   for (const oldId of Object.keys(snippet.nodes)) {
     let candidate = `${cleanPrefix}_${oldId}`.replace(/\W/g, "_").slice(0, 160);
     let suffix = 1;
-    while (existing.has(candidate) || [...idMap.values()].includes(candidate)) candidate = `${cleanPrefix}_${oldId}_${suffix++}`.replace(/\W/g, "_").slice(0, 160);
+    while (existing.has(candidate) || [...idMap.values()].includes(candidate)) {
+      candidate = `${cleanPrefix}_${oldId}_${suffix++}`.replace(/\W/g, "_").slice(0, 160);
+    }
     idMap.set(oldId, candidate);
   }
 
@@ -66,5 +78,9 @@ export function insertFlowSnippet(
     index += 1;
   }
 
-  return { definition: { start: target.start, nodes, positions: targetPositions }, insertedStart: idMap.get(snippet.start)!, insertedNodeIds: [...idMap.values()] };
+  return {
+    definition: { start: target.start, nodes, positions: targetPositions },
+    insertedStart: idMap.get(snippet.start)!,
+    insertedNodeIds: [...idMap.values()],
+  };
 }

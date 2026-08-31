@@ -19,11 +19,23 @@ export default async function FlowEditorPage({ params }: { params: Promise<{ id:
   if (!row) notFound();
 
   let flow: Flow = DEFAULT_FLOW;
-  try { const f = JSON.parse(row.definition); if (f?.start && f?.nodes) flow = f; } catch { /* use default so the owner can recover/reset the draft */ }
+  try {
+    const f = JSON.parse(row.definition);
+    if (f?.start && f?.nodes) flow = f;
+  } catch {
+    /* use default so the owner can recover/reset the draft */
+  }
 
   const [channels, journeys, reusableFlows, company] = await Promise.all([
     enabledFlowChannels(),
-    prisma.journey.findMany({ where: { status: "active", ...(await journeyScope()) }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
+    prisma.journey.findMany({
+      where: { status: "active", ...(await journeyScope()) },
+      select: { id: true, name: true },
+      orderBy: { name: "asc" },
+    }),
+    // Candidates for the Run-subflow picker: every other flow in THIS workspace.
+    // The picker may list an unpublished one — publication then refuses it with
+    // subflow.unavailable, which is a better conversation than an empty list.
     prisma.botFlow.findMany({ where: { ...scope, id: { not: id } }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
     getCompanyProfile(),
   ]);
@@ -32,8 +44,13 @@ export default async function FlowEditorPage({ params }: { params: Promise<{ id:
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <Link href="/bot-builder" className="text-sm text-orange-400 hover:underline">← All flows</Link>
-          <div className="flex items-center gap-3 mt-1 flex-wrap"><h1 className="text-2xl font-semibold tracking-[-0.035em]">{row.name}</h1>{row.active && <span className="badge bg-emerald-500/15 text-emerald-300">Published flow</span>}</div>
-          <p className="text-sm text-slate-400 mt-0.5">You are editing a draft. Save keeps these changes private; publish them from All flows when they are ready for customers.</p>
+          <div className="flex items-center gap-3 mt-1 flex-wrap">
+            <h1 className="text-2xl font-semibold tracking-[-0.035em]">{row.name}</h1>
+            {row.active && <span className="badge bg-emerald-500/15 text-emerald-300">Published flow</span>}
+          </div>
+          <p className="text-sm text-slate-400 mt-0.5">
+            You are editing a draft. Save keeps these changes private; publish them from All flows when they are ready for customers.
+          </p>
         </div>
         <Link href={`/bot-builder/${row.id}/test`} className="btn-secondary btn-sm"><FlaskConical className="size-4" />Test saved draft</Link>
       </div>
