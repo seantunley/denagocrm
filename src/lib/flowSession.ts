@@ -12,6 +12,7 @@ import { loadBotSession, upsertBotSessionTx, deleteBotSessionTx, botStillOwnsTx 
 import { recordBotFlowEventsTx, type BotFlowEventInput } from "./botFlowAnalytics";
 import { completeInboundBotEventTx, currentInboundBotClaim } from "./botInboundEvent";
 import { decideInboundAct, type BotOwnership } from "./botOwnership";
+import type { FlowEntryContext } from "./flowRouting";
 
 export type SessionState = {
   nodeId: string | null;
@@ -111,6 +112,7 @@ export async function advanceFlow(
   makeCtx: (state: SessionState) => FlowCtx,
   seedVars?: Record<string, string>,
   persistMessages?: PersistFlowMessages,
+  entryContext?: FlowEntryContext,
 ): Promise<ChannelResult> {
   const existing = await loadState(channel, key);
   const builtins = flowRuntimeVars(channel);
@@ -132,7 +134,7 @@ export async function advanceFlow(
 
   if (input.text.trim()) state.msgs.push({ role: "user", content: input.text });
 
-  const snapshot = await resolveFlowSnapshot(channel, restart ? null : state.flowVersionId);
+  const snapshot = await resolveFlowSnapshot(channel, restart ? null : state.flowVersionId, { text: input.text, ...entryContext });
   state.flowVersionId = snapshot.versionId;
   const actions: ActionObservation[] = [];
   const ctx = makeCtx(state);
