@@ -37,18 +37,22 @@ export async function generateFlowDraftAction(
     const generated = await generateFlowDraft({ instruction, currentDefinition: originalDefinition, channels, journeys });
     if (!generated) return { error: "The flow assistant could not produce a valid graph. Nothing was changed." };
 
-    const errors = flowErrors(generated.issues);
+    // Use the same async validator as apply/publish so generation cannot call a
+    // proposal clean while external Journey/channel checks would refuse it later.
+    const proposalIssues = await validateFlowForEnabledChannels(generated.flow);
+    const errors = flowErrors(proposalIssues);
     if (errors.length) {
       return {
         error: `The generated graph failed the compiler: ${errors.slice(0, 3).map((item) => item.message).join(" · ")}`,
-        warnings: generated.issues.filter((item) => item.severity === "warning").slice(0, 5).map((item) => item.message),
+        warnings: proposalIssues.filter((item) => item.severity === "warning").slice(0, 5).map((item) => item.message),
       };
     }
 
     const definition = JSON.stringify(generated.flow);
     const signed = signFlowProposal({ flowId, ownerId: owner.id, baseHash: flowDefinitionHash(originalDefinition), definition, instruction });
     const diff = diffFlowDefinitions(originalDefinition, definition);
-    const warnings = generated.issues.filter((item) => item.severity === "warning").slice(0, 5).map((item) => item.message);
+    if (!diff.comparable) return { error: "The saved draft could not be compared safely. Nothing was changed." };
+    const warnings = proposalIssues.filter((item) => item.severity === "warning").slice(0, 5).map((item) => item.message);
     return { ok: "Proposal ready. Review the changes before applying them.", proposal: { ...signed, ...diff }, ...(warnings.length ? { warnings } : {}) };
   });
 }
