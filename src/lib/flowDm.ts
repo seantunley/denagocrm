@@ -10,6 +10,7 @@ import { choiceId as encodeChoice, type FlowHandoffContext } from "./flow";
 import { flushBotOutboxConversation } from "./botOutbox";
 import { enqueueBotMessagesTx } from "./botOutboxWrite";
 import type { DmPlatform } from "./messenger";
+import type { FlowEntryContext } from "./flowRouting";
 
 async function dmBotEnabled(): Promise<boolean> {
   return (await getSetting("BOT_ENABLED")) === "true" && (await getSetting("BOT_DM_ENABLED")) === "true";
@@ -20,7 +21,7 @@ function handoffBody(context?: FlowHandoffContext): string {
   return "The assistant handed a chat over.";
 }
 
-export async function runDmFlow(platform: DmPlatform, senderId: string, text: string, payload?: string, fileUrl?: string): Promise<void> {
+export async function runDmFlow(platform: DmPlatform, senderId: string, text: string, payload?: string, fileUrl?: string, entryContext?: FlowEntryContext): Promise<void> {
   if (!senderId || !(await dmBotEnabled())) return;
   const actor = await resolveTenantActor();
   if (!actor) { console.error(`[bot] refusing to reply on ${platform}: no tenant actor, so the reply could not be recorded`); return; }
@@ -41,6 +42,7 @@ export async function runDmFlow(platform: DmPlatform, senderId: string, text: st
     async (messages, tx, tenantId, flowVersionId) => {
       await enqueueBotMessagesTx(tx, tenantId, { channel: platform, key: senderId, messages, flowVersionId, contactId: contact?.id ?? null, actorId: actor.id });
     },
+    entryContext,
   );
   if (!result.suppressed) await flushBotOutboxConversation(platform, senderId);
 }

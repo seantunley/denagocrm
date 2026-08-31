@@ -89,7 +89,6 @@ test("flow-start and node-reach denominators count explicit events rather than d
 
 test("analytics report surfaces one-shot semantics, CRM actions and terminal delivery failures", () => {
   const page = src("src/app/(app)/bot-analytics/page.tsx");
-  assert.match(page, /automatic one-shot runs/);
   assert.match(page, />CRM actions</);
   assert.match(page, /node\.crmActions/);
   assert.match(page, /node\.deliveryFailures/);

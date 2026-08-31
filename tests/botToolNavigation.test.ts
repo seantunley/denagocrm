@@ -17,10 +17,11 @@ test("every flow workspace exposes the new draft/version/block/analytics tools",
   assert.match(layout, /\/bot-analytics\?flowId=/);
 });
 
-test("chatbot settings and AI preview are mutually discoverable", () => {
+test("chatbot settings, knowledge and AI preview are mutually discoverable", () => {
   const layout = src("src/app/(app)/chatbot/layout.tsx");
   assert.match(layout, /Chatbot tools/);
-  assert.match(layout, /Settings &amp; knowledge/);
+  assert.match(layout, />Settings<\/Link>/);
+  assert.match(layout, /href="\/chatbot\/knowledge"/);
   assert.match(layout, /Test AI answers/);
   assert.match(layout, /Flow library/);
 });
