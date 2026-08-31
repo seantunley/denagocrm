@@ -1,0 +1,1 @@
+UI-3 responsive review target: verify the Flowbot canvas at 390px, 768px and 1440px on the Vercel preview. Palette and inspector become bottom sheets below the large breakpoint; the canvas itself must not introduce page-level horizontal overflow.
