@@ -12,7 +12,8 @@ test("chatbot-driving provider webhooks claim a stable provider event id", () =>
   assert.match(whatsapp, /claimInboundBotEvent\("whatsapp", String\(message\.id/);
 
   const meta = src("src/app/api/webhooks/meta/route.ts");
-  assert.match(meta, /claimInboundBotEvent\(platform, String\(ev\.message\?\.mid/);
+  assert.match(meta, /const providerId = String\(ev\.message\?\.mid \?\? ev\.postback\?\.mid \?\? ""\)/);
+  assert.match(meta, /claimInboundBotEvent\(platform, providerId\)/);
 
   const telegram = src("src/app/api/webhooks/telegram/route.ts");
   assert.match(telegram, /update_id\?: number/);
