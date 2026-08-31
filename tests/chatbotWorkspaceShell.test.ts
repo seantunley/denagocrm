@@ -7,7 +7,7 @@ import path from "node:path";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
 
-test("Flowbot workspace navigation covers configure, test and operate surfaces", () => {
+test("Flowbot workspace navigation covers all top-level surfaces without nested group chrome", () => {
   const nav = src("src/components/ChatbotWorkspaceNav.tsx");
   for (const route of [
     "/chatbot",
@@ -18,9 +18,11 @@ test("Flowbot workspace navigation covers configure, test and operate surfaces",
     "/inbox",
     "/bot-analytics",
   ]) assert.match(nav, new RegExp(route.replaceAll("/", "\\/")));
-  assert.match(nav, /Configure/);
-  assert.match(nav, /Test/);
-  assert.match(nav, /Operate/);
+  assert.match(nav, /Simulator/);
+  assert.doesNotMatch(nav, /NavGroup/);
+  assert.doesNotMatch(nav, />Configure</);
+  assert.doesNotMatch(nav, />Test</);
+  assert.doesNotMatch(nav, />Operate</);
 });
 
 test("flow-specific simulator and evaluation tools remain owned by the flow workspace", () => {
@@ -31,20 +33,27 @@ test("flow-specific simulator and evaluation tools remain owned by the flow work
   assert.match(layout, /\/bot-builder\/\$\{encoded\}\/evaluations/);
 });
 
-test("workspace navigation has active-state, mobile-drawer and touch-target affordances", () => {
+test("workspace navigation uses a compact top bar and responsive mobile disclosure", () => {
   const nav = src("src/components/ChatbotWorkspaceNav.tsx");
   assert.match(nav, /usePathname/);
   assert.match(nav, /aria-current=\{active \? "page"/);
-  assert.match(nav, /aria-label="Open Flowbot navigation"/);
-  assert.match(nav, /role="dialog"/);
-  assert.doesNotMatch(nav, /aria-modal="true"/);
-  assert.match(nav, /ModalPortal/);
-  assert.match(nav, /event\.key === "Escape"/);
+  assert.match(nav, /aria-label=\{mobileOpen \? "Close Flowbot navigation" : "Open Flowbot navigation"\}/);
+  assert.match(nav, /aria-expanded=\{mobileOpen\}/);
   assert.match(nav, /min-h-11/);
-  assert.match(nav, /sticky top-4/);
+  assert.match(nav, /border-b border-border\/80/);
+  assert.doesNotMatch(nav, /<aside/);
+  assert.doesNotMatch(nav, /w-56/);
 });
 
-test("chatbot, flow library and analytics reuse one shared workspace shell", () => {
+test("individual flow workspaces suppress global Flowbot navigation to protect canvas width", () => {
+  const nav = src("src/components/ChatbotWorkspaceNav.tsx");
+  assert.match(nav, /isFlowWorkspace/);
+  assert.match(nav, /pathname\.startsWith\("\/bot-builder\/"\)/);
+  assert.match(nav, /!pathname\.startsWith\("\/bot-builder\/routes"\)/);
+  assert.match(nav, /if \(isFlowWorkspace\) return null/);
+});
+
+test("chatbot, flow library and analytics reuse one full-width workspace shell", () => {
   for (const layout of [
     "src/app/(app)/chatbot/layout.tsx",
     "src/app/(app)/bot-builder/layout.tsx",
@@ -52,11 +61,13 @@ test("chatbot, flow library and analytics reuse one shared workspace shell", () 
   ]) {
     const source = src(layout);
     assert.match(source, /ChatbotWorkspaceNav/);
-    assert.match(source, /min-w-0 flex-1/);
+    assert.match(source, /<div className="min-w-0">/);
+    assert.doesNotMatch(source, /lg:flex/);
+    assert.doesNotMatch(source, /lg:gap-5/);
   }
 });
 
-test("individual flow workspace preserves tenant-scoped flow context", () => {
+test("individual flow workspace preserves tenant-scoped flow context in the focused toolbar", () => {
   const layout = src("src/app/(app)/bot-builder/[id]/layout.tsx");
   assert.match(layout, /const scope = await flowScope\(\)/);
   assert.match(layout, /findFirst\(\{ where: \{ id, \.\.\.scope \}/);
@@ -64,4 +75,6 @@ test("individual flow workspace preserves tenant-scoped flow context", () => {
   assert.match(layout, /flow\.name/);
   assert.match(layout, /flow\.channel/);
   assert.match(layout, /flow\.active \? "Live" : "Draft"/);
+  assert.match(layout, /<ArrowLeft/);
+  assert.match(layout, />Flows<\/Link>/);
 });
