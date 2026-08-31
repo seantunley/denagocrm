@@ -1,5 +1,5 @@
 import { AlertCircle, AlertTriangle, CheckCircle2, Info, type LucideIcon } from "lucide-react";
-import type { ReactNode } from "react";
+import type { HTMLAttributes, ReactNode } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
@@ -16,9 +16,8 @@ export function Surface({
   className,
   inset = false,
   level = "raised",
-}: {
-  children: ReactNode;
-  className?: string;
+  ...props
+}: HTMLAttributes<HTMLElement> & {
   inset?: boolean;
   level?: "raised" | "base" | "inset";
 }) {
@@ -31,6 +30,7 @@ export function Surface({
 
   return (
     <section
+      {...props}
       data-slot="surface"
       data-level={resolvedLevel}
       className={cn(
