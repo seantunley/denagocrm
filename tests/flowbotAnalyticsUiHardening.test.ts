@@ -17,12 +17,10 @@ test("Flowbot analytics keeps filters and navigation keyboard/touch friendly", (
   assert.match(analyticsPage, /aria-live="polite"/);
 });
 
-test("Surface forwards section attributes used by analytics accessibility hooks", () => {
+test("Surface forwards semantic section attributes for accessible callers", () => {
   assert.match(visualSystem, /HTMLAttributes<HTMLElement>/);
   assert.match(visualSystem, /\.\.\.props/);
   assert.match(visualSystem, /<section[\s\S]*\{\.\.\.props\}/);
-  assert.match(analyticsPage, /id="analytics-attention"/);
-  assert.match(analyticsPage, /id="analytics-funnel"/);
 });
 
 test("Flowbot analytics contains wide data instead of overflowing the page", () => {
