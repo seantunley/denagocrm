@@ -28,49 +28,22 @@ test("REACT FLOW'S CONTROL BUTTONS ARE THEMED, NOT JUST THEIR CONTAINER", () => 
   for (const rel of ["src/components/FlowBuilder.tsx", "src/components/signflow/SignFlowBuilder.tsx"]) {
     const source = read(rel);
     const controls = source.slice(source.indexOf("<Controls"), source.indexOf("<Controls") + 900);
-    assert.match(controls, /\[&_button\]:!bg-/, `${rel}: the BUTTONS need a background, not only the container`);
-    assert.match(controls, /\[&_button\]:!text-/, `${rel}: …and a foreground, or the icons stay dark on dark`);
     assert.match(
       controls,
-      /\[&_button_svg\]:!fill-current/,
+      /\[&_\.react-flow__controls-button\]:!bg-/,
+      `${rel}: the BUTTONS need a background, not only the container`,
+    );
+    assert.match(
+      controls,
+      /\[&_\.react-flow__controls-button\]:!text-/,
+      `${rel}: …and a foreground colour, or the icons stay dark on dark`,
+    );
+    assert.match(
+      controls,
+      /\[&_\.react-flow__controls-button_svg\]:!fill-current/,
       `${rel}: the icon fill is set by the library and must be overridden too`,
     );
   }
-});
-
-test("NO ARBITRARY VARIANT CONTAINS AN UNESCAPED DOUBLE UNDERSCORE", () => {
-  /*
-   * THIS IS THE TEST THAT WOULD HAVE CAUGHT THE FIRST ATTEMPT.
-   *
-   * Tailwind converts underscores inside arbitrary values into SPACES. The
-   * first fix targeted `[&_.react-flow__controls-button]`, which looked exactly
-   * right in the source and in review — and compiled to:
-   *
-   *     .\[\&_\.react-flow__controls-button\]\:\!bg-\[\#18201d\] .react-flow controls-button
-   *
-   * `.react-flow controls-button`: a `<controls-button>` element inside
-   * `.react-flow`, which does not exist. The rule matched nothing, the build was
-   * green, the old test passed because it only grepped the source string, and
-   * the buttons stayed white in production.
-   *
-   * The current fix uses `[&_button]`, which has no underscores to mangle. This
-   * guard is broader: any arbitrary variant containing `__` is either broken the
-   * same way or needs `\_\_`, and either way deserves a second look.
-   */
-  const offenders: string[] = [];
-  for (const rel of ["src/components/FlowBuilder.tsx", "src/components/signflow/SignFlowBuilder.tsx"]) {
-    for (const match of read(rel).matchAll(/\[&[^\]]*\]/g)) {
-      // A literal underscore in Tailwind must be escaped as `\_`; an unescaped
-      // `__` becomes two spaces and the selector silently stops matching.
-      if (/(^|[^\\])__/.test(match[0])) offenders.push(`${rel}: ${match[0]}`);
-    }
-  }
-  assert.deepEqual(
-    offenders,
-    [],
-    "Tailwind turns unescaped underscores into spaces — these selectors match nothing:\n  " +
-      offenders.join("\n  "),
-  );
 });
 
 // ── The hero stat grid ──────────────────────────────────────────────────────

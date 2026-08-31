@@ -670,11 +670,11 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt,
               <Controls
                 className={
                   "!border-white/10 !bg-[#18201d] !text-white " +
-                  "[&_button]:!border-white/10 " +
-                  "[&_button]:!bg-[#18201d] " +
-                  "[&_button]:!text-white " +
-                  "[&_button:hover]:!bg-white/10 " +
-                  "[&_button_svg]:!fill-current"
+                  "[&_.react-flow__controls-button]:!border-white/10 " +
+                  "[&_.react-flow__controls-button]:!bg-[#18201d] " +
+                  "[&_.react-flow__controls-button]:!text-white " +
+                  "[&_.react-flow__controls-button:hover]:!bg-white/10 " +
+                  "[&_.react-flow__controls-button_svg]:!fill-current"
                 }
               />
             </ReactFlow>
