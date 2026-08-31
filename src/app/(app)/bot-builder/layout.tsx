@@ -5,9 +5,9 @@ import ChatbotWorkspaceNav from "@/components/ChatbotWorkspaceNav";
 export default async function BotBuilderWorkspaceLayout({ children }: { children: ReactNode }) {
   await requireOwner();
   return (
-    <div className="lg:flex lg:items-start lg:gap-5">
+    <div className="min-w-0">
       <ChatbotWorkspaceNav />
-      <main className="min-w-0 flex-1">{children}</main>
+      <main className="min-w-0">{children}</main>
     </div>
   );
 }
