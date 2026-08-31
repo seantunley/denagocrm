@@ -455,6 +455,11 @@ function unstampedWrites(rel: string): string[] {
 
 const CUSTOMER_RECORD_WRITERS = [
   "src/app/actions/activities.ts",
+  // The private reply to a public comment. Stamped from the THREAD's owner
+  // rather than the acting scope, because Communication(tenantId,
+  // conversationId) → Conversation(tenantId, id) is a composite key and the
+  // thread is the side that already knows.
+  "src/app/actions/comments.ts",
   "src/app/actions/communications.ts",
   "src/app/actions/emails.ts",
   "src/app/actions/fulfilment.ts",
@@ -467,6 +472,9 @@ const CUSTOMER_RECORD_WRITERS = [
   "src/app/api/bookings/route.ts",
   "src/lib/bookingSlots.ts",
   "src/lib/bot.ts",
+  // Inbound comments on posts and ads. Stamped from the channel scope the Page
+  // id established, exactly as the DM and WhatsApp webhooks are.
+  "src/lib/commentThreads.ts",
   "src/lib/botOutbox.ts",
   "src/lib/flowActions.ts",
   "src/lib/governedSurveyRuntime.ts",
