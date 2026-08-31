@@ -4,7 +4,7 @@ import { routeMatches, type FlowEntryContext } from "./flowRouteRule";
 export { FLOW_CHANNELS, FLOW_ROUTE_KINDS, normalizeRoutePattern, routeMatches } from "./flowRouteRule";
 export type { FlowEntryContext, FlowRouteKind } from "./flowRouteRule";
 
-/** Return the newest immutable version of the first matching, enabled route. */
+/** Return the currently published immutable version of the first matching route. */
 export async function resolveRoutedFlowVersion(tenantId: string, channel: string, entry?: FlowEntryContext | null) {
   if (!entry) return null;
   const routes = await prisma.botFlowRoute.findMany({
@@ -13,8 +13,9 @@ export async function resolveRoutedFlowVersion(tenantId: string, channel: string
   });
   const route = routes.find((candidate) => routeMatches(candidate, entry));
   if (!route) return null;
-  return prisma.botFlowVersion.findFirst({
-    where: { tenantId, flowId: route.flowId, channel },
-    orderBy: [{ version: "desc" }, { createdAt: "desc" }],
+  const publication = await prisma.botFlowPublication.findUnique({
+    where: { tenantId_channel: { tenantId, channel } },
   });
+  if (!publication || publication.flowId !== route.flowId) return null;
+  return prisma.botFlowVersion.findFirst({ where: { id: publication.versionId, tenantId, flowId: route.flowId, channel } });
 }
