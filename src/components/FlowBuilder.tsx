@@ -20,9 +20,11 @@ import {
   PanelRightClose,
   PanelRightOpen,
   RotateCcw,
+  Redo2,
   Save,
   Sparkles,
   Upload,
+  Undo2,
   Workflow,
   Wrench,
   X,
@@ -36,6 +38,7 @@ import {
   Handle,
   Position,
   useNodesState,
+  type NodeChange,
   type Node,
   type Edge,
   type Connection,
@@ -47,11 +50,26 @@ import type { BookingAction, ConditionOperator, FlowNode, SlotAction } from "@/l
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { cn } from "@/lib/utils";
 import { BuilderSaveStatus, BuilderWorkspaceBar, BuilderWorkspaceShell } from "@/components/builder-workspace";
+import FlowLintPanel from "@/components/FlowLintPanel";
+import { validateFlow, type FlowChannel, type FlowIssue } from "@/lib/flowValidation";
 
 type Pos = { x: number; y: number };
 type FlowData = { start: string; nodes: Record<string, FlowNode>; positions?: Record<string, Pos> };
-type RFData = { flow: FlowNode; isStart: boolean };
+type RFData = { flow: FlowNode; isStart: boolean; issues?: FlowIssue[] };
+type EditorSnapshot = { start: string; nodes: Node<RFData>[] };
 export type FlowJourneyOption = { id: string; name: string };
+
+const AUTOSAVE_DELAY_MS = 1_200;
+const HISTORY_GROUP_MS = 700;
+const HISTORY_LIMIT = 50;
+
+function cloneSnapshot(snapshot: EditorSnapshot): EditorSnapshot {
+  return structuredClone(snapshot);
+}
+
+function flowStorageKey(flowId: string): string {
+  return `denagocrm:bot-flow-draft:${flowId}`;
+}
 
 const BUILTIN_VARIABLES = [
   "greeting", "first_name", "name", "known", "slot", "channel", "current_date", "current_time",
@@ -102,8 +120,14 @@ function NodeCard({ data }: NodeProps) {
   const n = d.flow;
   const meta = TYPE_META[n.type];
   const Icon = meta.icon;
+  const errors = d.issues?.filter((issue) => issue.severity === "error").length ?? 0;
+  const warnings = (d.issues?.length ?? 0) - errors;
   return (
-    <div className={cn("w-56 rounded-xl border bg-slate-950/95 text-slate-100 shadow-xl", d.isStart ? "border-orange-400/70 ring-2 ring-orange-400/15" : meta.tone)}>
+    <div className={cn(
+      "relative w-56 rounded-xl border bg-slate-950/95 text-slate-100 shadow-xl",
+      errors ? "border-red-400/80 ring-2 ring-red-400/20" : warnings ? "border-amber-400/70 ring-2 ring-amber-400/15" : d.isStart ? "border-orange-400/70 ring-2 ring-orange-400/15" : meta.tone,
+    )}>
+      {(errors > 0 || warnings > 0) && <span className={cn("absolute -right-2 -top-2 z-10 grid min-w-6 place-items-center rounded-full border border-slate-950 px-1.5 py-0.5 text-[10px] font-bold text-white", errors ? "bg-red-500" : "bg-amber-500")}>{errors || warnings}<span className="sr-only">{errors ? "errors" : "warnings"}</span></span>}
       <Handle type="target" position={Position.Left} id="in" style={{ background: "#64748b" }} />
       <div className={cn("flex items-center gap-1.5 rounded-t-[11px] px-3 py-2 text-xs font-semibold", meta.header)}>
         <Icon className="size-3.5" />
@@ -194,10 +218,10 @@ function blankNode(type: FlowNode["type"], id: string): FlowNode {
   }
 }
 
-export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt }: { flowId: string; initial: FlowData; journeys?: FlowJourneyOption[]; updatedAt: string }) {
+export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt, channels }: { flowId: string; initial: FlowData; journeys?: FlowJourneyOption[]; updatedAt: string; channels: FlowChannel[] }) {
   const router = useRouter();
   const [start, setStart] = useState(initial.start);
-  const [rfNodes, setRfNodes, onNodesChange] = useNodesState<Node<RFData>>(
+  const [rfNodes, setRfNodes, applyNodesChange] = useNodesState<Node<RFData>>(
     Object.values(initial.nodes).map((n, i) => ({
       id: n.id,
       type: "flowNode",
@@ -207,30 +231,224 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt 
   );
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [status, setStatus] = useState("Saved");
+  const [saveNonce, setSaveNonce] = useState(0);
+  const [pendingDestination, setPendingDestination] = useState<string | null>(null);
   // The draft stamp this canvas is working from. Every save is fenced against it,
   // and a successful save adopts the new one.
   const savedAt = useRef<string>(updatedAt);
-  // Leaving with unsaved work loses it silently. The canvas already tracks the
-  // state; it just never told the browser.
-  //
-  // Scope: beforeunload fires on a document unload, so this catches closing the
-  // tab and navigating away from the app — not in-app <Link> navigation, which
-  // never unloads. That is the larger share of accidental loss; a router-level
-  // guard for the rest is worth doing properly rather than half-doing here.
+  const current = useRef<EditorSnapshot>({ start: initial.start, nodes: [] });
+  const history = useRef<{ past: EditorSnapshot[]; future: EditorSnapshot[] }>({ past: [], future: [] });
+  const historyGroup = useRef<{ key: string; at: number } | null>(null);
+  const [historyDepth, setHistoryDepth] = useState({ undo: 0, redo: 0 });
+  const dirtyVersion = useRef(0);
+  const saving = useRef(false);
+  const saveAgain = useRef(false);
+  const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const recovered = useRef(false);
+  const blockedByConflict = useRef(false);
+
+  useEffect(() => {
+    current.current = { start, nodes: rfNodes };
+  }, [rfNodes, start]);
+
+  const updateHistoryDepth = useCallback(() => {
+    setHistoryDepth({ undo: history.current.past.length, redo: history.current.future.length });
+  }, []);
+
+  const remember = useCallback((key: string, force = false) => {
+    const now = Date.now();
+    const grouped = !force && historyGroup.current?.key === key && now - historyGroup.current.at < HISTORY_GROUP_MS;
+    historyGroup.current = { key, at: now };
+    if (grouped) return;
+    history.current.past.push(cloneSnapshot(current.current));
+    if (history.current.past.length > HISTORY_LIMIT) history.current.past.shift();
+    history.current.future = [];
+    updateHistoryDepth();
+  }, [updateHistoryDepth]);
+
+  const markDirty = useCallback(() => {
+    dirtyVersion.current += 1;
+    blockedByConflict.current = false;
+    setStatus("Unsaved changes");
+  }, []);
+
+  const restoreSnapshot = useCallback((snapshot: EditorSnapshot) => {
+    const restored = cloneSnapshot(snapshot);
+    current.current = restored;
+    setStart(restored.start);
+    setRfNodes(restored.nodes);
+    setSelectedId(null);
+    historyGroup.current = null;
+    markDirty();
+  }, [markDirty, setRfNodes]);
+
+  const undo = useCallback(() => {
+    const previous = history.current.past.pop();
+    if (!previous) return;
+    history.current.future.push(cloneSnapshot(current.current));
+    restoreSnapshot(previous);
+    updateHistoryDepth();
+  }, [restoreSnapshot, updateHistoryDepth]);
+
+  const redo = useCallback(() => {
+    const next = history.current.future.pop();
+    if (!next) return;
+    history.current.past.push(cloneSnapshot(current.current));
+    restoreSnapshot(next);
+    updateHistoryDepth();
+  }, [restoreSnapshot, updateHistoryDepth]);
+
+  const serialiseCurrent = useCallback(() => {
+    const nodes: Record<string, FlowNode> = {};
+    const positions: Record<string, Pos> = {};
+    for (const rn of current.current.nodes) {
+      nodes[rn.id] = rn.data.flow;
+      positions[rn.id] = rn.position;
+    }
+    return JSON.stringify({ start: current.current.start, nodes, positions });
+  }, []);
+
+  const persistDraft = useCallback(async (manual = false) => {
+    if (blockedByConflict.current && !manual) return;
+    if (saving.current) {
+      saveAgain.current = true;
+      return;
+    }
+    if (!manual && status === "Saved") return;
+    saving.current = true;
+    saveAgain.current = false;
+    const version = dirtyVersion.current;
+    const definition = serialiseCurrent();
+    setStatus("Saving…");
+    try {
+      const res = await saveFlow(flowId, definition, savedAt.current);
+      if (!res.ok) {
+        blockedByConflict.current = true;
+        setStatus(res.conflict ? "Not saved — this draft changed elsewhere" : res.error ?? "Save failed");
+        if (manual || res.conflict) toast.error(res.error ?? "Flow could not be saved");
+        return;
+      }
+      savedAt.current = res.updatedAt ?? savedAt.current;
+      if (dirtyVersion.current === version) {
+        setStatus("Saved");
+        try { window.localStorage.removeItem(flowStorageKey(flowId)); } catch { /* storage is optional */ }
+      } else {
+        setStatus("Unsaved changes");
+        saveAgain.current = true;
+      }
+      if (manual) toast.success("Flow saved");
+      return true;
+    } catch {
+      blockedByConflict.current = true;
+      setStatus("Save failed — check your connection and try again");
+      if (manual) toast.error("Flow could not be saved");
+      return false;
+    } finally {
+      saving.current = false;
+      if (saveAgain.current && !blockedByConflict.current) {
+        saveAgain.current = false;
+        setSaveNonce((value) => value + 1);
+      }
+    }
+  }, [flowId, serialiseCurrent, status]);
+
+  useEffect(() => {
+    if (recovered.current) return;
+    try {
+      const raw = window.localStorage.getItem(flowStorageKey(flowId));
+      if (!raw) return;
+      const stored = JSON.parse(raw) as { baseUpdatedAt?: string; definition?: string };
+      if (stored.baseUpdatedAt !== updatedAt || !stored.definition) return;
+      const parsed = JSON.parse(stored.definition) as FlowData;
+      if (!parsed.start || !parsed.nodes?.[parsed.start]) return;
+      const restoredNodes = Object.values(parsed.nodes).map((node, index) => ({
+        id: node.id,
+        type: "flowNode",
+        position: parsed.positions?.[node.id] ?? { x: (index % 4) * 300 + 40, y: Math.floor(index / 4) * 220 + 40 },
+        data: { flow: node, isStart: node.id === parsed.start },
+      } satisfies Node<RFData>));
+      const timer = window.setTimeout(() => {
+        if (recovered.current) return;
+        recovered.current = true;
+        history.current.past = [cloneSnapshot(current.current)];
+        history.current.future = [];
+        updateHistoryDepth();
+        setStart(parsed.start);
+        setRfNodes(restoredNodes);
+        current.current = { start: parsed.start, nodes: restoredNodes };
+        dirtyVersion.current += 1;
+        setStatus("Recovered unsaved changes");
+        toast.info("Recovered unsaved flow changes from this browser");
+      }, 0);
+      return () => window.clearTimeout(timer);
+    } catch {
+      try { window.localStorage.removeItem(flowStorageKey(flowId)); } catch { /* storage is optional */ }
+    }
+  }, [flowId, setRfNodes, updatedAt, updateHistoryDepth]);
+
+  useEffect(() => {
+    if (status === "Saved" || status === "Saving…" || blockedByConflict.current) return;
+    try {
+      window.localStorage.setItem(flowStorageKey(flowId), JSON.stringify({ baseUpdatedAt: savedAt.current, definition: serialiseCurrent() }));
+    } catch { /* private browsing and storage policies may refuse local persistence */ }
+    if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
+    autosaveTimer.current = setTimeout(() => void persistDraft(false), AUTOSAVE_DELAY_MS);
+    return () => { if (autosaveTimer.current) clearTimeout(autosaveTimer.current); };
+  }, [flowId, persistDraft, rfNodes, saveNonce, serialiseCurrent, start, status]);
   useEffect(() => {
     if (status === "Saved") return;
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    const guardLink = (event: MouseEvent) => {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const target = event.target instanceof Element ? event.target.closest("a[href]") : null;
+      if (!(target instanceof HTMLAnchorElement) || target.target === "_blank") return;
+      const destination = new URL(target.href, window.location.href);
+      if (destination.origin !== window.location.origin || destination.href === window.location.href || destination.hash && destination.pathname === window.location.pathname && destination.search === window.location.search) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setPendingDestination(`${destination.pathname}${destination.search}${destination.hash}`);
+    };
     window.addEventListener("beforeunload", warn);
-    return () => window.removeEventListener("beforeunload", warn);
-  }, [status]);
+    document.addEventListener("click", guardLink, true);
+    return () => {
+      window.removeEventListener("beforeunload", warn);
+      document.removeEventListener("click", guardLink, true);
+    };
+  }, [flowId, status]);
+
+  useEffect(() => {
+    const shortcut = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== "z") return;
+      const target = event.target;
+      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || (target instanceof HTMLElement && target.isContentEditable)) return;
+      if (event.shiftKey) {
+        if (!history.current.future.length) return;
+        event.preventDefault();
+        redo();
+      } else {
+        if (!history.current.past.length) return;
+        event.preventDefault();
+        undo();
+      }
+    };
+    window.addEventListener("keydown", shortcut);
+    return () => window.removeEventListener("keydown", shortcut);
+  }, [redo, undo]);
   const [fullscreen, setFullscreen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const focusCanvasNode = useRef<(nodeId: string) => void>(() => {});
 
   const patch = useCallback((id: string, updater: (n: FlowNode) => FlowNode) => {
-    setStatus("Unsaved changes");
+    remember(`node:${id}`);
+    markDirty();
     setRfNodes((ns) => ns.map((rn) => (rn.id === id ? { ...rn, data: { ...rn.data, flow: updater(rn.data.flow) } } : rn)));
-  }, [setRfNodes]);
+  }, [markDirty, remember, setRfNodes]);
+
+  const onNodesChange = useCallback((changes: NodeChange<Node<RFData>>[]) => {
+    applyNodesChange(changes);
+    if (changes.some((change) => change.type === "position" && !change.dragging)) markDirty();
+  }, [applyNodesChange, markDirty]);
 
   const edges: Edge[] = useMemo(() => {
     const out: Edge[] = [];
@@ -282,50 +500,64 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt 
   }, [patch]);
 
   function addNode(type: FlowNode["type"]) {
+    remember(`add:${type}`, true);
     const id = newId(type);
     setRfNodes((ns) => [...ns, { id, type: "flowNode", position: { x: 120 + Math.random() * 200, y: 120 + Math.random() * 200 }, data: { flow: blankNode(type, id), isStart: false } }]);
     setSelectedId(id);
-    setStatus("Unsaved changes");
+    markDirty();
     setInspectorOpen(true);
   }
 
   function removeNode(id: string) {
+    remember(`remove:${id}`, true);
     setRfNodes((ns) => ns.filter((n) => n.id !== id).map((n) => ({ ...n, data: { ...n.data, flow: clearRefs(n.data.flow, id) } })));
+    if (start === id) {
+      const nextStart = current.current.nodes.find((node) => node.id !== id)?.id ?? "";
+      setStart(nextStart);
+    }
     if (selectedId === id) setSelectedId(null);
-    setStatus("Unsaved changes");
+    markDirty();
   }
 
   function markStart(id: string) {
+    remember(`start:${id}`, true);
     setStart(id);
     setRfNodes((ns) => ns.map((n) => ({ ...n, data: { ...n.data, isStart: n.id === id } })));
-    setStatus("Unsaved changes");
+    markDirty();
   }
 
   async function onSave() {
-    setStatus("Saving…");
-    const nodes: Record<string, FlowNode> = {};
-    const positions: Record<string, Pos> = {};
-    for (const rn of rfNodes) {
-      nodes[rn.id] = rn.data.flow;
-      positions[rn.id] = rn.position;
-    }
-    const res = await saveFlow(flowId, JSON.stringify({ start, nodes, positions }), savedAt.current);
-    if (res.ok) {
-      savedAt.current = res.updatedAt ?? savedAt.current;
-      setStatus("Saved");
-    } else {
-      // A conflict must be loud. Silently keeping "Unsaved changes" would let the
-      // owner keep editing a draft the server has already refused.
-      setStatus(res.conflict ? "Not saved — this draft changed elsewhere" : res.error ?? "Save failed");
-      if (res.error) toast.error(res.error);
-    }
-    if (res.ok) {
-      toast.success("Flow saved");
-      router.refresh();
-    } else toast.error(res.error ?? "Flow could not be saved");
+    if (await persistDraft(true)) router.refresh();
   }
 
   const selected = rfNodes.find((n) => n.id === selectedId)?.data.flow ?? null;
+  const currentFlow = useMemo(() => ({
+    start,
+    nodes: Object.fromEntries(rfNodes.map((node) => [node.id, node.data.flow])),
+  }), [rfNodes, start]);
+  const liveIssues = useMemo(() => validateFlow(currentFlow, channels), [channels, currentFlow]);
+  const issuesByNode = useMemo(() => {
+    const grouped = new Map<string, FlowIssue[]>();
+    for (const issue of liveIssues) {
+      if (!issue.nodeId) continue;
+      grouped.set(issue.nodeId, [...(grouped.get(issue.nodeId) ?? []), issue]);
+    }
+    return grouped;
+  }, [liveIssues]);
+  const displayNodes = useMemo(() => rfNodes.map((node) => {
+    // Preserve the source object for the common valid-node case so React Flow
+    // can skip unnecessary node renders without relying on render-time caches.
+    if (!issuesByNode.has(node.id)) return node;
+    return { ...node, data: { ...node.data, issues: issuesByNode.get(node.id) ?? [] } };
+  }), [issuesByNode, rfNodes]);
+  const selectedIssues = selectedId ? issuesByNode.get(selectedId) ?? [] : [];
+
+  const focusIssue = useCallback((issue: FlowIssue) => {
+    if (!issue.nodeId || !rfNodes.some((node) => node.id === issue.nodeId)) return;
+    setSelectedId(issue.nodeId);
+    setInspectorOpen(true);
+    window.setTimeout(() => focusCanvasNode.current(issue.nodeId!), 0);
+  }, [rfNodes]);
   const nodeOptions = rfNodes.map((n) => ({ id: n.id, label: `${TYPE_META[n.data.flow.type].label}: ${summary(n.data.flow).slice(0, 24) || n.data.flow.type}` }));
   const knownVariables = useMemo(() => {
     const vars = new Set(BUILTIN_VARIABLES);
@@ -337,7 +569,24 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt 
   }, [rfNodes]);
 
   return (
-    <BuilderWorkspaceShell fullscreen={fullscreen} className="min-h-[720px] md:h-[calc(100dvh-8rem)] md:min-h-0">
+    <div className="space-y-4">
+      <FlowLintPanel issues={liveIssues} channels={channels} onSelectIssue={focusIssue} live />
+      <BuilderWorkspaceShell fullscreen={fullscreen} className="min-h-[720px] md:h-[calc(100dvh-8rem)] md:min-h-0">
+      <ConfirmActionDialog
+        destructive
+        open={pendingDestination !== null}
+        onOpenChange={(open) => { if (!open) setPendingDestination(null); }}
+        title="Leave with unsaved changes?"
+        description="Your latest flow edits have not been saved. Leaving now will discard the browser recovery copy."
+        confirmLabel="Leave flow"
+        onConfirm={() => {
+          const destination = pendingDestination;
+          if (!destination) return;
+          try { window.localStorage.removeItem(flowStorageKey(flowId)); } catch { /* storage is optional */ }
+          setPendingDestination(null);
+          router.push(destination);
+        }}
+      />
       <BuilderWorkspaceBar title="Conversation flow" description="Connect nodes to shape customer conversations and CRM hand-offs." status={<BuilderSaveStatus status={status} />}>
         <div className="flex items-center rounded-lg border border-white/10 bg-white/[0.035] p-0.5">
           <button type="button" onClick={() => setPaletteOpen((value) => !value)} className={cn("flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs text-slate-300 hover:bg-white/7", paletteOpen && "bg-primary/15 text-primary")}>
@@ -346,6 +595,10 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt 
           <button type="button" onClick={() => setInspectorOpen((value) => !value)} className={cn("flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs text-slate-300 hover:bg-white/7", inspectorOpen && "bg-primary/15 text-primary")}>
             {inspectorOpen ? <PanelRightClose className="size-4" /> : <PanelRightOpen className="size-4" />} Inspector
           </button>
+        </div>
+        <div className="flex items-center rounded-lg border border-white/10 bg-white/[0.035] p-0.5">
+          <button type="button" onClick={undo} disabled={!historyDepth.undo} className="grid size-8 place-items-center rounded-md text-slate-300 hover:bg-white/7 disabled:cursor-not-allowed disabled:opacity-35" title="Undo (Ctrl+Z)"><Undo2 className="size-4" /><span className="sr-only">Undo</span></button>
+          <button type="button" onClick={redo} disabled={!historyDepth.redo} className="grid size-8 place-items-center rounded-md text-slate-300 hover:bg-white/7 disabled:cursor-not-allowed disabled:opacity-35" title="Redo (Ctrl+Shift+Z)"><Redo2 className="size-4" /><span className="sr-only">Redo</span></button>
         </div>
         <button type="button" onClick={onSave} className="btn-primary btn-sm"><Save className="size-4" />Save</button>
         <ConfirmActionDialog destructive title="Reset this flow?" description="Every node, connection and unsaved change will be replaced with the default flow." confirmLabel="Reset flow" onConfirm={async () => {
@@ -386,7 +639,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt 
 
         <main className="min-w-0 flex-1 bg-[#0b0f0e] p-2 sm:p-3">
           <div className="h-full min-h-[32rem] overflow-hidden rounded-xl border border-white/[0.08] bg-[#0f1412]">
-            <ReactFlow nodes={rfNodes} edges={edges} nodeTypes={nodeTypes} onNodesChange={onNodesChange} onConnect={onConnect} onNodeClick={(_, node) => { setSelectedId(node.id); setInspectorOpen(true); }} onPaneClick={() => setSelectedId(null)} fitView proOptions={{ hideAttribution: true }}>
+            <ReactFlow deleteKeyCode={null} nodes={displayNodes} edges={edges} nodeTypes={nodeTypes} onInit={(instance) => { focusCanvasNode.current = (nodeId) => { void instance.fitView({ nodes: [{ id: nodeId }], duration: 250, maxZoom: 1.35, padding: 0.45 }); }; }} onNodesChange={onNodesChange} onNodeDragStart={(_, node) => remember(`drag:${node.id}`, true)} onNodeClick={(_, node) => { setSelectedId(node.id); setInspectorOpen(true); }} onConnect={onConnect} onPaneClick={() => setSelectedId(null)} fitView proOptions={{ hideAttribution: true }}>
               <Background color="#25312d" gap={20} />
               <Controls className="!border-white/10 !bg-[#18201d] !text-white" />
             </ReactFlow>
@@ -397,13 +650,24 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt 
           <aside className="w-80 shrink-0 overflow-y-auto border-l border-white/[0.08] bg-[#111614] max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-[81] max-md:max-h-[78dvh] max-md:w-auto max-md:rounded-t-3xl max-md:border-t max-md:shadow-[0_-24px_70px_rgba(0,0,0,.55)]">
             <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/[0.08] bg-[#111614]/95 px-4 py-3 backdrop-blur"><div><p className="text-sm font-semibold text-white">Inspector</p><p className="text-xs text-slate-400">Configure the selected node</p></div><button type="button" onClick={() => setInspectorOpen(false)} className="grid size-8 place-items-center rounded-lg text-slate-400 hover:bg-white/5 hover:text-white"><X className="size-4" /><span className="sr-only">Close inspector</span></button></div>
             <div className="p-4 pb-[max(1rem,env(safe-area-inset-bottom))] space-y-5">
-              {!selected ? <p className="text-sm leading-6 text-slate-400">Select a node to edit it. Drag from a node&apos;s output handle to another node to create a connection.</p> : <NodePanel key={selected.id} node={selected} isStart={selected.id === start} nodeOptions={nodeOptions.filter((option) => option.id !== selected.id)} variables={knownVariables} journeys={journeys} onChange={(next) => patch(selected.id, () => next)} onDelete={() => removeNode(selected.id)} onMakeStart={() => markStart(selected.id)} />}
+              {!selected ? <p className="text-sm leading-6 text-slate-400">Select a node to edit it. Drag from a node&apos;s output handle to another node to create a connection.</p> : <><NodeIssues issues={selectedIssues} /><NodePanel key={selected.id} node={selected} isStart={selected.id === start} nodeOptions={nodeOptions.filter((option) => option.id !== selected.id)} variables={knownVariables} journeys={journeys} onChange={(next) => patch(selected.id, () => next)} onDelete={() => removeNode(selected.id)} onMakeStart={() => markStart(selected.id)} /></>}
               <VariablesPanel variables={knownVariables} />
             </div>
           </aside>
         )}
       </div>
-    </BuilderWorkspaceShell>
+      </BuilderWorkspaceShell>
+    </div>
+  );
+}
+
+function NodeIssues({ issues }: { issues: FlowIssue[] }) {
+  if (!issues.length) return null;
+  return (
+    <div className="space-y-2 rounded-xl border border-white/10 bg-white/[0.025] p-3">
+      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Checks for this node</p>
+      {issues.map((issue, index) => <p key={`${issue.code}-${issue.channel ?? "all"}-${index}`} className={cn("text-xs leading-5", issue.severity === "error" ? "text-red-300" : "text-amber-300")}>{issue.message}{issue.channel ? <span className="block text-[10px] uppercase tracking-wide text-slate-500">{issue.channel}</span> : null}</p>)}
+    </div>
   );
 }
 
