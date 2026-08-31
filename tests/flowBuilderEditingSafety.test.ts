@@ -28,7 +28,9 @@ test("autosave uses the same optimistic concurrency fence as manual save", () =>
   assert.match(builder, /AUTOSAVE_DELAY_MS = 1_200/);
   assert.match(builder, /saveFlow\(flowId, definition, savedAt\.current\)/);
   assert.match(builder, /savedAt\.current = res\.updatedAt/);
-  assert.match(builder, /blockedByConflict\.current = Boolean\(res\.conflict\)/);
+  assert.match(builder, /blockedByConflict\.current = true/);
+  assert.match(builder, /setSaveNonce\(\(value\) => value \+ 1\)/);
+  assert.match(builder, /Save failed — check your connection and try again/);
   assert.match(builder, /if \(blockedByConflict\.current && !manual\) return/);
   assert.match(builder, /setTimeout\(\(\) => void persistDraft\(false\), AUTOSAVE_DELAY_MS\)/);
 });
@@ -45,7 +47,8 @@ test("internal links and document unloads both protect unsaved work", () => {
   assert.match(builder, /addEventListener\("beforeunload"/);
   assert.match(builder, /document\.addEventListener\("click", guardLink, true\)/);
   assert.match(builder, /closest\("a\[href\]"\)/);
-  assert.match(builder, /Leave and discard them\?/);
+  assert.match(builder, /Leave with unsaved changes\?/);
+  assert.doesNotMatch(builder, /window\.confirm/);
   assert.match(builder, /event\.stopImmediatePropagation\(\)/);
   assert.match(builder, /document\.removeEventListener\("click", guardLink, true\)/);
 });
