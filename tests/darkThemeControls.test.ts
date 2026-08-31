@@ -46,6 +46,43 @@ test("REACT FLOW'S CONTROL BUTTONS ARE THEMED, NOT JUST THEIR CONTAINER", () => 
   }
 });
 
+// ── The hero stat grid ──────────────────────────────────────────────────────
+
+test("A HERO'S STATS DIVIDE INTO THEIR COLUMNS — no orphan on a second row", async () => {
+  /*
+   * The ladder this replaced stopped at "4 or more → four columns", so five
+   * stats went four across with a lone fifth on a second row beside a wide
+   * empty cell. That is what the Chatbot page looked like, because it has five.
+   *
+   * Only that one page has five today, so this is mostly prevention: the next
+   * hero to gain a fifth stat inherits the fix instead of the defect.
+   */
+  const { statColumns } = await import("../src/components/workspace-hero");
+
+  // Every count up to eight must land on a width it divides by.
+  const columnsOf = (classes: string) => {
+    const widths = [...classes.matchAll(/grid-cols-(\d+)/g)].map((m) => Number(m[1]));
+    return widths[widths.length - 1];
+  };
+  for (const count of [1, 2, 3, 4, 5, 6]) {
+    assert.equal(count % columnsOf(statColumns(count)), 0, `${count} stats leave a gap`);
+  }
+
+  // Five abreast is tight on a small screen, so it must widen in two steps
+  // rather than jumping straight to five narrow columns.
+  assert.match(statColumns(5), /sm:grid-cols-3 lg:grid-cols-5/);
+  // Six reads better as two rows of three than as six cramped columns.
+  assert.match(statColumns(6), /lg:grid-cols-6/);
+});
+
+test("the column classes are written out, because Tailwind scans source text", () => {
+  // `grid-cols-${n}` compiles to nothing at all — the class never reaches the
+  // stylesheet and the grid silently falls back.
+  const source = read("src/components/workspace-hero.tsx");
+  const fn = source.slice(source.indexOf("export function statColumns"));
+  assert.doesNotMatch(fn.slice(0, fn.indexOf("\n}")), /grid-cols-\$\{/);
+});
+
 // ── The status pill ─────────────────────────────────────────────────────────
 
 test("A STATUS PILL NEVER WRAPS — it is the small item in a flex row", () => {
