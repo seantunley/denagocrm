@@ -8,6 +8,7 @@ import { enabledFlowChannels } from "@/lib/flowValidationServer";
 import FlowBuilder from "@/components/FlowBuilder";
 import FlowAiDraftForm from "@/components/FlowAiDraftForm";
 import { flowScope, journeyScope } from "@/lib/flowScope";
+import { getCompanyProfile } from "@/lib/companyProfile";
 
 export default async function FlowEditorPage({ params }: { params: Promise<{ id: string }> }) {
   await requireOwner();
@@ -24,13 +25,14 @@ export default async function FlowEditorPage({ params }: { params: Promise<{ id:
     /* use default so the owner can recover/reset the draft */
   }
 
-  const [channels, journeys] = await Promise.all([
+  const [channels, journeys, company] = await Promise.all([
     enabledFlowChannels(),
     prisma.journey.findMany({
       where: { status: "active", ...(await journeyScope()) },
       select: { id: true, name: true },
       orderBy: { name: "asc" },
     }),
+    getCompanyProfile(),
   ]);
   return (
     <div className="space-y-4">
@@ -48,7 +50,7 @@ export default async function FlowEditorPage({ params }: { params: Promise<{ id:
         <Link href={`/bot-builder/${row.id}/test`} className="btn-secondary btn-sm"><FlaskConical className="size-4" />Test saved draft</Link>
       </div>
       <FlowAiDraftForm flowId={row.id} />
-      <FlowBuilder flowId={row.id} initial={flow} journeys={journeys} updatedAt={row.updatedAt.toISOString()} channels={channels} />
+      <FlowBuilder flowId={row.id} initial={flow} journeys={journeys} updatedAt={row.updatedAt.toISOString()} channels={channels} businessName={company.name} />
     </div>
   );
 }

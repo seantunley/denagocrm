@@ -74,6 +74,36 @@
       ]
     }
   },
+  "BotFlowEvaluation.BotFlowEvaluation_tenant_flow_fkey": {
+    "table": "BotFlowEvaluation",
+    "constraint": "BotFlowEvaluation_tenant_flow_fkey",
+    "columns": [
+      "tenantId",
+      "flowId"
+    ],
+    "references": {
+      "table": "BotFlow",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "BotFlowEvaluation.BotFlowEvaluation_tenant_flowVersion_fkey": {
+    "table": "BotFlowEvaluation",
+    "constraint": "BotFlowEvaluation_tenant_flowVersion_fkey",
+    "columns": [
+      "tenantId",
+      "flowVersionId"
+    ],
+    "references": {
+      "table": "BotFlowVersion",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
   "BatteryCheck.BatteryCheck_tenantId_jobCardId_fkey": {
     "table": "BatteryCheck",
     "constraint": "BatteryCheck_tenantId_jobCardId_fkey",
@@ -98,6 +128,36 @@
     ],
     "references": {
       "table": "Vehicle",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "BotFlowRoute.BotFlowRoute_tenant_flow_fkey": {
+    "table": "BotFlowRoute",
+    "constraint": "BotFlowRoute_tenant_flow_fkey",
+    "columns": [
+      "tenantId",
+      "flowId"
+    ],
+    "references": {
+      "table": "BotFlow",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "BotFlowRoute.BotFlowRoute_tenant_publishedVersion_fkey": {
+    "table": "BotFlowRoute",
+    "constraint": "BotFlowRoute_tenant_publishedVersion_fkey",
+    "columns": [
+      "tenantId",
+      "publishedVersionId"
+    ],
+    "references": {
+      "table": "BotFlowVersion",
       "columns": [
         "tenantId",
         "id"
