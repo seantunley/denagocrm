@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState, type ComponentType } from "react";
+import { useState } from "react";
 import {
   BarChart3,
   Bot,
@@ -13,12 +13,13 @@ import {
   Inbox,
   Route,
   X,
+  type LucideIcon,
 } from "lucide-react";
 
 type WorkspaceItem = {
   label: string;
   href: string;
-  icon: ComponentType<{ className?: string; "aria-hidden"?: boolean }>;
+  icon: LucideIcon;
   exact?: boolean;
 };
 
