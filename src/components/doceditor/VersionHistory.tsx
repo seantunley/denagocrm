@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { publishBuilderVersion, restoreBuilderVersion, listBuilderVersionsAction } from "@/app/actions/docbuilder";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
+import ModalPortal from "@/components/ui/modal-portal";
 
 type Version = { id: string; version: number; label: string | null; publishedBy: string | null; publishedAt: string };
 
@@ -36,6 +37,7 @@ export function VersionHistory({ id, save }: { id: string; save: () => Promise<v
     <>
       <button type="button" className={btn} onClick={toggle} title="Version history">🕑 History</button>
       {open && (
+        <ModalPortal>
         <>
           <div className="fixed inset-0 z-40 bg-black/20" onClick={() => setOpen(false)} />
           <div className="fixed right-0 top-0 z-50 flex h-full w-80 flex-col border-l border-slate-200 bg-white shadow-xl">
@@ -74,6 +76,7 @@ export function VersionHistory({ id, save }: { id: string; save: () => Promise<v
             </div>
           </div>
         </>
+        </ModalPortal>
       )}
     </>
   );
