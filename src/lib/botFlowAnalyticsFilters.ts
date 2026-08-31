@@ -18,10 +18,10 @@ export type BotAnalyticsFilters = {
 };
 
 export function analyticsOccurredFrom(rangeDays: BotAnalyticsRangeDays, now = new Date()): Date {
-  const from = new Date(now);
+  const from = new Date(now.getTime() + 2 * 60 * 60 * 1000);
   from.setUTCHours(0, 0, 0, 0);
   from.setUTCDate(from.getUTCDate() - rangeDays + 1);
-  return from;
+  return new Date(from.getTime() - 2 * 60 * 60 * 1000);
 }
 
 export function normalizeBotAnalyticsFilters(
@@ -36,9 +36,7 @@ export function normalizeBotAnalyticsFilters(
   const channel = BOT_ANALYTICS_CHANNELS.includes(input.channel as BotAnalyticsChannel)
     ? input.channel as BotAnalyticsChannel
     : null;
-  const versionId = input.version && validVersionIds.includes(input.version)
-    ? input.version
-    : validVersionIds[0] ?? null;
+  const versionId = input.version && validVersionIds.includes(input.version) ? input.version : null;
 
   return {
     rangeDays,
@@ -47,4 +45,3 @@ export function normalizeBotAnalyticsFilters(
     occurredFrom: analyticsOccurredFrom(rangeDays, now),
   };
 }
-
