@@ -655,7 +655,28 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt,
           <div className="h-full min-h-[32rem] overflow-hidden rounded-xl border border-white/[0.08] bg-[#0f1412]">
             <ReactFlow deleteKeyCode={null} nodes={displayNodes} edges={edges} nodeTypes={nodeTypes} onInit={(instance) => { focusCanvasNode.current = (nodeId) => { void instance.fitView({ nodes: [{ id: nodeId }], duration: 250, maxZoom: 1.35, padding: 0.45 }); }; }} onNodesChange={onNodesChange} onNodeDragStart={(_, node) => remember(`drag:${node.id}`, true)} onNodeClick={(_, node) => { setSelectedId(node.id); setInspectorOpen(true); }} onConnect={onConnect} onPaneClick={() => setSelectedId(null)} fitView proOptions={{ hideAttribution: true }}>
               <Background color="#25312d" gap={20} />
-              <Controls className="!border-white/10 !bg-[#18201d] !text-white" />
+              {/*
+                The BUTTONS need theming, not just the container.
+
+                `@xyflow/react/dist/style.css` styles `.react-flow__controls-button`
+                itself — `background: #fefefe` with a light border and dark icon.
+                Colouring only the wrapper therefore left four white squares
+                sitting on the dark canvas, which is what this looked like.
+
+                Scoped arbitrary variants rather than a global stylesheet
+                override, so the sign-flow builder can keep its own palette
+                instead of inheriting this one by accident.
+              */}
+              <Controls
+                className={
+                  "!border-white/10 !bg-[#18201d] !text-white " +
+                  "[&_.react-flow__controls-button]:!border-white/10 " +
+                  "[&_.react-flow__controls-button]:!bg-[#18201d] " +
+                  "[&_.react-flow__controls-button]:!text-white " +
+                  "[&_.react-flow__controls-button:hover]:!bg-white/10 " +
+                  "[&_.react-flow__controls-button_svg]:!fill-current"
+                }
+              />
             </ReactFlow>
           </div>
         </main>
