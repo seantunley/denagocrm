@@ -12,7 +12,7 @@ test("every flow workspace exposes the new draft/version/block/analytics tools",
   assert.match(layout, /Flow tools/);
   assert.match(layout, /Draft/);
   assert.match(layout, /Versions/);
-  assert.match(layout, /Reusable blocks/);
+  assert.match(layout, /Blocks/);
   assert.match(layout, /Analytics/);
   assert.match(layout, /\/bot-analytics\?flowId=/);
 });
