@@ -35,9 +35,8 @@ test("routes select only an immutable version published for the same tenant, flo
   const code = src("src/lib/flowRouting.ts");
   assert.match(code, /where: \{ tenantId, channel, enabled: true \}/);
   assert.match(code, /orderBy: \[\{ priority: "asc" \}/);
-  assert.match(code, /botFlowPublication\.findUnique/);
-  assert.match(code, /publication\.flowId !== route\.flowId/);
-  assert.match(code, /id: publication\.versionId/);
+  assert.match(code, /id: route\.publishedVersionId/);
+  assert.match(code, /flowId: route\.flowId/);
 });
 
 test("provider entry metadata reaches routing on Meta, WhatsApp and Telegram", () => {
@@ -58,13 +57,15 @@ test("route writes require owner access, tenant ownership and an existing publis
   assert.match(add, /await requireOwner\(\)/);
   assert.match(add, /const tenantId = await builderTenantId\(\)/);
   assert.match(add, /where: \{ id: flowId, tenantId, channel \}/);
-  assert.match(add, /botFlowPublication\.findUnique/);
+  assert.match(add, /botFlowVersion\.findFirst/);
+  assert.match(add, /publishedVersionId: published\.id/);
   assert.match(add, /tenantId_channel_kind_pattern/);
 });
 
 test("route storage has composite tenant integrity and FORCE RLS", () => {
   const migration = src("prisma/migrations/20260830220000_bot_flow_entry_routes/migration.sql");
   assert.match(migration, /FOREIGN KEY \("tenantId", "flowId"\) REFERENCES "BotFlow"\("tenantId", "id"\)/);
+  assert.match(migration, /FOREIGN KEY \("tenantId", "publishedVersionId"\) REFERENCES "BotFlowVersion"\("tenantId", "id"\)/);
   assert.match(migration, /BotFlowRoute_tenant_isolation/);
   assert.match(migration, /FORCE ROW LEVEL SECURITY/);
   assert.match(migration, /priority_check/);
