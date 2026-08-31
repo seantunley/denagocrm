@@ -735,15 +735,21 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt,
                 >
                   <Background color="#25312d" gap={GRID_SIZE} size={1} />
                   <MiniMap pannable zoomable nodeStrokeWidth={2} className="!border !border-white/10 !bg-[#101613]" />
+                  {/* Targeting the library's own control-button CLASS does not
+                      work here: Tailwind turns underscores inside an arbitrary
+                      value into spaces, so that selector compiles to an element
+                      type that does not exist, and matches nothing. `[&_button]`
+                      has no underscores to mangle, and the controls container
+                      holds only these buttons. Guard: tests/darkThemeControls. */}
                   <Controls
                     showInteractive={false}
                     className={
                       "!border-white/10 !bg-[#18201d] !text-white " +
-                      "[&_.react-flow__controls-button]:!border-white/10 " +
-                      "[&_.react-flow__controls-button]:!bg-[#18201d] " +
-                      "[&_.react-flow__controls-button]:!text-white " +
-                      "[&_.react-flow__controls-button:hover]:!bg-white/10 " +
-                      "[&_.react-flow__controls-button_svg]:!fill-current"
+                      "[&_button]:!border-white/10 " +
+                      "[&_button]:!bg-[#18201d] " +
+                      "[&_button]:!text-white " +
+                      "[&_button:hover]:!bg-white/10 " +
+                      "[&_button_svg]:!fill-current"
                     }
                   />
                   <Panel position="top-right" className="!m-3 hidden sm:block">
