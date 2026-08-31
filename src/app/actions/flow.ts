@@ -206,12 +206,16 @@ export async function addFlowRoute(formData: FormData) {
 
     const flow = await prisma.botFlow.findFirst({ where: { id: flowId, tenantId, channel } });
     if (!flow) return { error: "Flow not found for this channel." };
-    const published = await prisma.botFlowPublication.findUnique({ where: { tenantId_channel: { tenantId, channel } }, select: { flowId: true } });
-    if (!published || published.flowId !== flowId) return { error: "Publish this flow as the channel default before routing traffic to it." };
+    const published = await prisma.botFlowVersion.findFirst({
+      where: { tenantId, flowId, channel },
+      select: { id: true },
+      orderBy: [{ version: "desc" }, { createdAt: "desc" }],
+    });
+    if (!published) return { error: "Publish this flow before routing traffic to it." };
     await prisma.botFlowRoute.upsert({
       where: { tenantId_channel_kind_pattern: { tenantId, channel, kind, pattern } },
-      update: { flowId, priority, enabled: true },
-      create: { tenantId, channel, kind, pattern, flowId, priority },
+      update: { flowId, publishedVersionId: published.id, priority, enabled: true },
+      create: { tenantId, channel, kind, pattern, flowId, publishedVersionId: published.id, priority },
     });
     await logAudit({ action: "bot.flow_route_saved", summary: `Chatbot ${channel} ${kind} route “${pattern}” → “${flow.name}”`, user: owner });
     revalidatePath("/bot-builder/routes");
