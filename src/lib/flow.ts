@@ -1,10 +1,11 @@
 /**
  * Channel-agnostic chatbot flow engine. The graph remains deterministic: AI can
- * answer or classify, but every CRM/Journey side effect is an explicit node
- * executed through a narrow callback supplied by the channel adapter.
+ * answer or classify, but every CRM/Journey/external side effect is an explicit
+ * node executed through a narrow callback supplied by the channel adapter.
  */
 
 export type FlowOption = { id: string; label: string; description?: string; next?: string };
+export type FlowSwitchCase = { id: string; value: string; label?: string; next?: string };
 export type CaptureFormat = "text" | "email" | "phone" | "number" | "date";
 export type ConditionOperator = "equals" | "not_equals" | "contains" | "exists" | "empty";
 export type FlowCondition = { variable: string; operator: ConditionOperator; value?: string };
@@ -12,16 +13,13 @@ export type BookingCreateAction = "service" | "demo" | "lead";
 export type BookingManageAction = "lookup" | "cancel";
 export type BookingAction = BookingCreateAction | BookingManageAction;
 export type SlotAction = "book" | "reschedule";
+export type FlowHttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
-/**
- * What a side-effecting action actually did.
- *
- * `unavailable` is a THIRD state, not a flavour of failure: "there are no
- * appointments left" is a valid request the business cannot satisfy right now,
- * while "the reservation failed" is a system/business failure. They deserve
- * different words to the customer, so the graph routes them separately.
- */
+/** What a side-effecting action actually did. */
 export type ActionOutcome = { ok: boolean; unavailable?: boolean; reason?: string };
+export type KnowledgeOutcome = ActionOutcome & { text?: string };
+export type ExtractOutcome = ActionOutcome & { values?: Record<string, string> };
+export type HttpOutcome = ActionOutcome & { status?: number; body?: string };
 
 export type FlowNode =
   | { id: string; type: "message"; text: string; next?: string }
@@ -30,12 +28,19 @@ export type FlowNode =
   | { id: string; type: "captureFile"; text: string; variable: string; next?: string }
   | { id: string; type: "image"; url: string; caption?: string; next?: string }
   | { id: string; type: "answer"; text?: string; answerSource?: "pricelist" | "colours"; next?: string }
+  | { id: string; type: "set"; variable: string; value: string; next?: string }
+  | { id: string; type: "switch"; variable: string; cases: FlowSwitchCase[]; defaultNext?: string }
+  | { id: string; type: "http"; method: FlowHttpMethod; url: string; headers?: string; body?: string; saveAs?: string; failureText?: string; next?: string; failureNext?: string }
+  | { id: string; type: "knowledge"; query: string; saveAs?: string; noMatchText?: string; next?: string; failureNext?: string }
+  | { id: string; type: "extract"; instruction: string; sourceVariable?: string; fields: string[]; failureText?: string; next?: string; failureNext?: string }
+  | { id: string; type: "delay"; seconds: number; next?: string }
+  | { id: string; type: "subflow"; flowId: string; failureText?: string; next?: string; failureNext?: string }
   | { id: string; type: "booking"; text?: string; failureText?: string; action?: BookingAction; next?: string; failureNext?: string; unavailableNext?: string }
   | { id: string; type: "slots"; text: string; noneText?: string; failureText?: string; action?: SlotAction; next?: string; failureNext?: string; unavailableNext?: string }
   | { id: string; type: "journey"; journeyId: string; text?: string; failureText?: string; next?: string; failureNext?: string; unavailableNext?: string }
   | { id: string; type: "condition"; condition: FlowCondition; trueNext?: string; falseNext?: string }
   | { id: string; type: "ai"; handoffNext?: string }
-  | { id: string; type: "handoff"; text?: string }
+  | { id: string; type: "handoff"; text?: string; reason?: string; summary?: string }
   | { id: string; type: "end" };
 
 export type Flow = { start: string; nodes: Record<string, FlowNode> };
@@ -67,6 +72,14 @@ export type FlowCtx = {
   bookSlot?: (slotId: string, vars: Record<string, string>, nodeId: string) => Promise<{ ok: boolean; label?: string }>;
   rescheduleSlot?: (slotId: string, vars: Record<string, string>, nodeId: string) => Promise<{ ok: boolean; label?: string }>;
   routeChoice?: (input: { prompt: string; text: string; options: FlowOption[]; vars: Record<string, string> }) => Promise<string | null>;
+  knowledgeAnswer?: (query: string, vars: Record<string, string>, nodeId: string) => Promise<KnowledgeOutcome>;
+  extractData?: (input: { text: string; instruction: string; fields: string[]; vars: Record<string, string>; nodeId: string }) => Promise<ExtractOutcome>;
+  httpRequest?: (input: { method: FlowHttpMethod; url: string; headers?: string; body?: string; vars: Record<string, string>; nodeId: string }) => Promise<HttpOutcome>;
+  loadSubflow?: (flowId: string) => Promise<Flow | null>;
+  /** Internal: allow a synchronous subflow to mutate an isolated vars object. */
+  mutateVars?: boolean;
+  /** Internal recursion guard for nested subflows. */
+  subflowDepth?: number;
   /** Pure observation hook; runners persist this in the analytics ledger. */
   recordAction?: (nodeId: string, action: string, ok: boolean) => void;
 };
@@ -86,21 +99,10 @@ export type FlowResult = {
   messages: OutMsg[];
   session: FlowSession | null;
   handedOff: boolean;
-  /**
-   * The last node this turn executed, for a turn that ENDED — handed off, or ran
-   * to completion. Null while the flow is still waiting, where `session.nodeId`
-   * already says where it stands.
-   *
-   * A handoff writes a session with `nodeId: null`, because the bot is no longer
-   * positioned anywhere, so the analytics trigger recorded `flow_handoff` against
-   * no node at all. That is the `handoffs` column the per-node funnel displays:
-   * every conversation handed off on its FIRST turn was counted in the summary and
-   * attributed to nothing in the graph, so the node that gives up on customers was
-   * invisible in the one report built to find it.
-   */
+  /** Last node executed on an ending turn, used by analytics attribution. */
   endedAt?: string | null;
 };
-const interpolate = (text: string, vars: Record<string, string>) => text.replace(/\{\{\s*(\w+)\s*\}\}/g, (_m, k) => vars[k] ?? "");
+export const interpolateFlowText = (text: string, vars: Record<string, string>) => text.replace(/\{\{\s*(\w+)\s*\}\}/g, (_m, k) => vars[k] ?? "");
 
 export function evaluateCondition(condition: FlowCondition, vars: Record<string, string>): boolean {
   const actual = (vars[condition.variable] ?? "").trim();
@@ -112,6 +114,12 @@ export function evaluateCondition(condition: FlowCondition, vars: Record<string,
     case "not_equals": return actual.toLocaleLowerCase() !== expected.toLocaleLowerCase();
     default: return actual.toLocaleLowerCase() === expected.toLocaleLowerCase();
   }
+}
+
+function switchTarget(node: Extract<FlowNode, { type: "switch" }>, vars: Record<string, string>): string | null {
+  const actual = (vars[node.variable] ?? "").trim().toLocaleLowerCase();
+  const hit = node.cases.find((item) => item.value.trim().toLocaleLowerCase() === actual);
+  return hit?.next ?? node.defaultNext ?? null;
 }
 
 const HANDOFF_KEYS = { confidence: "__handoff_confidence", intent: "__handoff_intent", reason: "__handoff_reason", summary: "__handoff_summary" } as const;
@@ -134,6 +142,13 @@ function rememberedHandoff(vars: Record<string, string>): FlowHandoffContext | u
   return context.confidence || context.intent || context.reason || context.summary ? context : undefined;
 }
 
+function explicitHandoff(node: Extract<FlowNode, { type: "handoff" }>, vars: Record<string, string>, remembered?: FlowHandoffContext): FlowHandoffContext | undefined {
+  const reason = node.reason ? interpolateFlowText(node.reason, vars).trim() : remembered?.reason;
+  const summary = node.summary ? interpolateFlowText(node.summary, vars).trim() : remembered?.summary;
+  const context: FlowHandoffContext = { ...remembered, reason: reason || undefined, summary: summary || undefined };
+  return context.confidence || context.intent || context.reason || context.summary ? context : undefined;
+}
+
 export const choiceId = (nodeId: string, optId: string) => `${nodeId}|${optId}`;
 function matchChoice(node: Extract<FlowNode, { type: "choice" }>, input: FlowInput): string | null {
   if (input.choiceId && input.choiceId.startsWith(`${node.id}|`)) {
@@ -142,78 +157,52 @@ function matchChoice(node: Extract<FlowNode, { type: "choice" }>, input: FlowInp
   }
   const t = input.text.trim().toLowerCase();
   const asNum = parseInt(t, 10);
-  if (!Number.isNaN(asNum) && node.options[asNum - 1]) return node.options[asNum - 1].next ?? null;
+  if (!Number.isNaN(asNum) && node.options[asNum - 1]) return node.options[asNum - 1]?.next ?? null;
   return node.options.find((o) => t && o.label.toLowerCase().replace(/[^a-z0-9 ]/g, "").includes(t))?.next ?? null;
 }
 async function semanticChoice(node: Extract<FlowNode, { type: "choice" }>, input: FlowInput, vars: Record<string, string>, ctx: FlowCtx) {
   if (!ctx.routeChoice || input.choiceId || !input.text.trim()) return null;
-  const optionId = await ctx.routeChoice({ prompt: interpolate(node.text, vars), text: input.text, options: node.options, vars });
+  const optionId = await ctx.routeChoice({ prompt: interpolateFlowText(node.text, vars), text: input.text, options: node.options, vars });
   return optionId ? node.options.find((o) => o.id === optionId)?.next ?? null : null;
 }
 
 async function runSlotSelection(node: Extract<FlowNode, { type: "slots" }>, input: FlowInput, vars: Record<string, string>, ctx: FlowCtx, messages: OutMsg[]) {
   const slotAction = node.action === "reschedule" ? "booking_reschedule" : "slot_booking";
-
-  // `next` is reachable ONLY after a reservation actually succeeded.
-  //
-  // This used to advance to `next` when the customer typed instead of tapping —
-  // so someone looking at the slot menu who replied "9am please" was sent straight
-  // to "You're booked…" with no booking made. A stale or malformed callback id did
-  // the same. Re-offer the times and keep waiting instead: an unparsed reply is
-  // not a selection.
   if (!input.choiceId?.startsWith(`${node.id}|`)) {
     const opts = ctx.availableSlots ? await ctx.availableSlots() : [];
     if (!opts.length) {
       messages.push({ type: "text", text: node.noneText || "We don't have open slots online right now — leave your details and the team will call you to book. 📞" });
       return { nodeId: node.unavailableNext ?? node.failureNext ?? null };
     }
-    messages.push({ type: "choice", text: interpolate(node.text, vars), options: opts.map((o) => ({ id: choiceId(node.id, o.id), label: o.label })) });
+    messages.push({ type: "choice", text: interpolateFlowText(node.text, vars), options: opts.map((o) => ({ id: choiceId(node.id, o.id), label: o.label })) });
     return { nodeId: node.id, wait: { messages, session: { nodeId: node.id, vars }, handedOff: false } as FlowResult };
   }
 
   const slotId = input.choiceId.slice(node.id.length + 1);
   const handler = node.action === "reschedule" ? ctx.rescheduleSlot : ctx.bookSlot;
-  const action = slotAction;
-  // The channel adapter did not supply a reservation handler, so nothing can be
-  // booked. Fail closed rather than reporting success for an action that never ran.
   if (!handler) {
     ctx.recordAction?.(node.id, slotAction, false);
-    if (node.failureText) messages.push({ type: "text", text: interpolate(node.failureText, vars) });
+    if (node.failureText) messages.push({ type: "text", text: interpolateFlowText(node.failureText, vars) });
     return { nodeId: node.failureNext ?? null };
   }
   const res = await handler(slotId, vars, node.id);
-  ctx.recordAction?.(node.id, action, res.ok);
+  ctx.recordAction?.(node.id, slotAction, res.ok);
   if (!res.ok) {
     const opts = ctx.availableSlots ? await ctx.availableSlots() : [];
     if (opts.length) {
       messages.push({ type: "choice", text: "That one just filled up — here are the next open times:", options: opts.map((o) => ({ id: choiceId(node.id, o.id), label: o.label })) });
       return { nodeId: node.id, wait: { messages, session: { nodeId: node.id, vars }, handedOff: false } as FlowResult };
     }
-    // No alternatives left, and the reservation failed. Falling through to `next`
-    // sent the customer the success text — "You're booked" — for a slot that was
-    // taken between showing the menu and their tap.
-    if (node.failureText) messages.push({ type: "text", text: interpolate(node.failureText, vars) });
+    if (node.failureText) messages.push({ type: "text", text: interpolateFlowText(node.failureText, vars) });
     return { nodeId: node.failureNext ?? null };
-  } else if (res.label) {
+  }
+  if (res.label) {
     vars.slot = res.label;
     if (node.action === "reschedule") vars.booking_slot = res.label;
   }
   return { nodeId: node.next ?? null };
 }
 
-/**
- * Where a side-effecting node goes, and what it says, once its action has either
- * worked or not.
- *
- * Both used to be unconditional: the node sent its text and moved to `next`
- * whatever happened. So a failed cancellation still said "Done — your booking has
- * been cancelled", and a Journey that refused to start still said it had. Telling
- * a customer an action succeeded when it did not is the worst failure this engine
- * can produce — worse than an error, because they act on it.
- *
- * `failureNext` is optional so existing graphs keep working; without one the node
- * still advances, but it stays silent rather than claiming success.
- */
 function actionOutcome(
   node: { text?: string; failureText?: string; next?: string; failureNext?: string; unavailableNext?: string },
   outcome: ActionOutcome,
@@ -221,25 +210,40 @@ function actionOutcome(
   messages: OutMsg[],
 ): string | null {
   if (outcome.ok) {
-    if (node.text) messages.push({ type: "text", text: interpolate(node.text, vars) });
+    if (node.text) messages.push({ type: "text", text: interpolateFlowText(node.text, vars) });
     return node.next ?? null;
   }
-  if (node.failureText) messages.push({ type: "text", text: interpolate(node.failureText, vars) });
-  // A failed action NEVER falls back to `next`. That fallback is precisely how a
-  // customer was told "Done — your booking has been cancelled" for a cancellation
-  // that did not happen. With no route defined the turn simply ends: saying
-  // nothing is recoverable, claiming success is not. The publish compiler refuses
-  // a new graph that leaves this undefined.
+  if (node.failureText) messages.push({ type: "text", text: interpolateFlowText(node.failureText, vars) });
   const route = outcome.unavailable ? node.unavailableNext ?? node.failureNext : node.failureNext;
   return route ?? null;
 }
 
+function delayKey(nodeId: string) { return `__flow_delay_${nodeId}`; }
+function startDelay(node: Extract<FlowNode, { type: "delay" }>, vars: Record<string, string>): FlowResult | null {
+  const seconds = Math.max(0, Math.min(604800, Math.floor(Number(node.seconds) || 0)));
+  if (!seconds) return null;
+  vars[delayKey(node.id)] = String(Date.now() + seconds * 1000);
+  return { messages: [], session: { nodeId: node.id, vars }, handedOff: false };
+}
+
+async function runSubflowNode(node: Extract<FlowNode, { type: "subflow" }>, vars: Record<string, string>, input: FlowInput, ctx: FlowCtx): Promise<{ outcome: ActionOutcome; messages: OutMsg[]; handedOff?: boolean }> {
+  if (!ctx.loadSubflow) return { outcome: { ok: false, reason: "Subflow execution is unavailable" }, messages: [] };
+  if ((ctx.subflowDepth ?? 0) >= 4) return { outcome: { ok: false, reason: "Subflow nesting limit reached" }, messages: [] };
+  const childFlow = await ctx.loadSubflow(node.flowId);
+  if (!childFlow) return { outcome: { ok: false, reason: "Published subflow not found" }, messages: [] };
+  const childVars = { ...vars };
+  const child = await runFlow(childFlow, { nodeId: null, vars: childVars }, input, { ...ctx, mutateVars: true, subflowDepth: (ctx.subflowDepth ?? 0) + 1 });
+  if (child.handedOff) return { outcome: { ok: true }, messages: child.messages, handedOff: true };
+  if (child.session) return { outcome: { ok: false, reason: "Subflow paused for customer input; use only synchronous subflows here" }, messages: child.messages };
+  Object.assign(vars, childVars);
+  return { outcome: { ok: true }, messages: child.messages };
+}
+
 export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput, ctx: FlowCtx): Promise<FlowResult> {
   const messages: OutMsg[] = [];
-  const vars = { ...session.vars };
+  const vars = ctx.mutateVars ? session.vars : { ...session.vars };
   let nodeId: string | null;
   let handoffContext = rememberedHandoff(vars);
-  // The node this turn last executed, so an ending turn can say where it ended.
   let lastNodeId: string | null = null;
 
   if (session.nodeId) {
@@ -248,20 +252,20 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
       nodeId = matchChoice(cur, input);
       if (!nodeId) nodeId = await semanticChoice(cur, input, vars, ctx);
       if (!nodeId) {
-        messages.push({ type: "choice", text: interpolate(cur.text, vars), options: cur.options.map((o) => ({ id: choiceId(cur.id, o.id), label: o.label, description: o.description })) });
+        messages.push({ type: "choice", text: interpolateFlowText(cur.text, vars), options: cur.options.map((o) => ({ id: choiceId(cur.id, o.id), label: o.label, description: o.description })) });
         return { messages, session: { nodeId: cur.id, vars }, handedOff: false };
       }
     } else if (cur?.type === "capture") {
       if (!validateCapture(cur.format, input.text)) {
         const hint = cur.format === "email" ? " (please enter a valid email)" : cur.format === "phone" ? " (please enter a valid phone number)" : cur.format === "number" ? " (please enter a number)" : "";
-        messages.push({ type: "text", text: interpolate(cur.text, vars) + hint });
+        messages.push({ type: "text", text: interpolateFlowText(cur.text, vars) + hint });
         return { messages, session: { nodeId: cur.id, vars }, handedOff: false };
       }
       vars[cur.variable] = input.text.trim();
       nodeId = cur.next ?? null;
     } else if (cur?.type === "captureFile") {
       if (!input.fileUrl) {
-        messages.push({ type: "text", text: interpolate(cur.text, vars) + " (please attach a photo or file)" });
+        messages.push({ type: "text", text: interpolateFlowText(cur.text, vars) + " (please attach a photo or file)" });
         return { messages, session: { nodeId: cur.id, vars }, handedOff: false };
       }
       vars[cur.variable] = input.fileUrl;
@@ -270,6 +274,18 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
       const selected = await runSlotSelection(cur, input, vars, ctx, messages);
       if (selected.wait) return selected.wait;
       nodeId = selected.nodeId;
+    } else if (cur?.type === "delay") {
+      const until = Number(vars[delayKey(cur.id)] || 0);
+      if (!until) {
+        const wait = startDelay(cur, vars);
+        if (wait) return wait;
+        nodeId = cur.next ?? null;
+      } else if (Date.now() < until) {
+        return { messages, session: { nodeId: cur.id, vars }, handedOff: false };
+      } else {
+        delete vars[delayKey(cur.id)];
+        nodeId = cur.next ?? null;
+      }
     } else if (cur?.type === "ai") {
       const ai = await ctx.aiReply(vars);
       messages.push({ type: "text", text: ai.reply });
@@ -282,32 +298,73 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
   } else nodeId = flow.start;
 
   let guard = 0;
-  while (nodeId && guard++ < 50) {
+  while (nodeId && guard++ < 75) {
     const node = flow.nodes[nodeId];
     if (!node) break;
     lastNodeId = node.id;
     if (node.type === "message") {
-      messages.push({ type: "text", text: interpolate(node.text, vars) }); nodeId = node.next ?? null;
+      messages.push({ type: "text", text: interpolateFlowText(node.text, vars) }); nodeId = node.next ?? null;
     } else if (node.type === "image") {
-      messages.push({ type: "image", url: node.url, caption: node.caption ? interpolate(node.caption, vars) : undefined }); nodeId = node.next ?? null;
+      messages.push({ type: "image", url: node.url, caption: node.caption ? interpolateFlowText(node.caption, vars) : undefined }); nodeId = node.next ?? null;
     } else if (node.type === "captureFile") {
-      messages.push({ type: "text", text: interpolate(node.text, vars) }); return { messages, session: { nodeId: node.id, vars }, handedOff: false };
+      messages.push({ type: "text", text: interpolateFlowText(node.text, vars) }); return { messages, session: { nodeId: node.id, vars }, handedOff: false };
     } else if (node.type === "answer") {
-      const text = node.answerSource ? await ctx.dynamicAnswer(node.answerSource) : interpolate(node.text ?? "", vars); if (text) messages.push({ type: "text", text }); nodeId = node.next ?? null;
+      const text = node.answerSource ? await ctx.dynamicAnswer(node.answerSource) : interpolateFlowText(node.text ?? "", vars); if (text) messages.push({ type: "text", text }); nodeId = node.next ?? null;
+    } else if (node.type === "set") {
+      vars[node.variable] = interpolateFlowText(node.value, vars); nodeId = node.next ?? null;
+    } else if (node.type === "switch") {
+      nodeId = switchTarget(node, vars);
+    } else if (node.type === "knowledge") {
+      const query = interpolateFlowText(node.query, vars).trim() || input.text.trim();
+      const outcome = ctx.knowledgeAnswer ? await ctx.knowledgeAnswer(query, vars, node.id) : { ok: false, reason: "Knowledge search unavailable" };
+      ctx.recordAction?.(node.id, "knowledge_answer", outcome.ok);
+      if (outcome.ok && outcome.text) {
+        messages.push({ type: "text", text: outcome.text });
+        if (node.saveAs) vars[node.saveAs] = outcome.text;
+        nodeId = node.next ?? null;
+      } else {
+        if (node.noMatchText) messages.push({ type: "text", text: interpolateFlowText(node.noMatchText, vars) });
+        nodeId = node.failureNext ?? null;
+      }
+    } else if (node.type === "extract") {
+      const source = node.sourceVariable ? vars[node.sourceVariable] ?? "" : input.text;
+      const outcome = ctx.extractData ? await ctx.extractData({ text: source, instruction: interpolateFlowText(node.instruction, vars), fields: node.fields, vars, nodeId: node.id }) : { ok: false, reason: "AI extraction unavailable" };
+      ctx.recordAction?.(node.id, "ai_extract", outcome.ok);
+      if (outcome.ok) {
+        for (const [key, value] of Object.entries(outcome.values ?? {})) if (node.fields.includes(key)) vars[key] = String(value);
+        nodeId = node.next ?? null;
+      } else {
+        if (node.failureText) messages.push({ type: "text", text: interpolateFlowText(node.failureText, vars) });
+        nodeId = node.failureNext ?? null;
+      }
+    } else if (node.type === "http") {
+      const outcome = ctx.httpRequest ? await ctx.httpRequest({ method: node.method, url: interpolateFlowText(node.url, vars), headers: node.headers ? interpolateFlowText(node.headers, vars) : undefined, body: node.body ? interpolateFlowText(node.body, vars) : undefined, vars, nodeId: node.id }) : { ok: false, reason: "API requests unavailable" };
+      ctx.recordAction?.(node.id, "http_request", outcome.ok);
+      if (outcome.ok) {
+        if (node.saveAs) vars[node.saveAs] = outcome.body ?? "";
+        nodeId = node.next ?? null;
+      } else {
+        if (node.failureText) messages.push({ type: "text", text: interpolateFlowText(node.failureText, vars) });
+        nodeId = node.failureNext ?? null;
+      }
+    } else if (node.type === "delay") {
+      const wait = startDelay(node, vars);
+      if (wait) return { ...wait, messages: [...messages, ...wait.messages] };
+      nodeId = node.next ?? null;
+    } else if (node.type === "subflow") {
+      const child = await runSubflowNode(node, vars, input, ctx);
+      messages.push(...child.messages);
+      ctx.recordAction?.(node.id, "subflow_run", child.outcome.ok);
+      if (child.handedOff) return { messages, session: null, handedOff: true, endedAt: node.id };
+      if (child.outcome.ok) nodeId = node.next ?? null;
+      else {
+        if (node.failureText) messages.push({ type: "text", text: interpolateFlowText(node.failureText, vars) });
+        nodeId = node.failureNext ?? null;
+      }
     } else if (node.type === "booking") {
-      // An action that FAILED must not fall through to the success text. The
-      // shipped cancellation node says "Done — your booking has been cancelled",
-      // and it used to say that whether or not anything was cancelled. Telling a
-      // customer their booking is gone when it is not is worse than any error.
       let outcome: ActionOutcome;
       if (node.action === "lookup" || node.action === "cancel") {
-        outcome = ctx.manageBooking
-          ? await ctx.manageBooking(node.action, vars, node.id)
-          : { ok: false, reason: "Booking management is unavailable" };
-        // The lookup result drives the route too. It was previously discarded, so a
-        // lookup that found nothing — or refused an unidentified customer — still
-        // continued down the success branch and relied on later condition nodes to
-        // catch it. That made the ENGINE unsafe even where the template was not.
+        outcome = ctx.manageBooking ? await ctx.manageBooking(node.action, vars, node.id) : { ok: false, reason: "Booking management is unavailable" };
         ctx.recordAction?.(node.id, `booking_${node.action}`, outcome.ok);
       } else {
         outcome = await ctx.createBooking(vars, node.action, node.id);
@@ -322,15 +379,12 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
       nodeId = actionOutcome(node, outcome, vars, messages);
     } else if (node.type === "slots") {
       const opts = ctx.availableSlots ? await ctx.availableSlots() : [];
-      // No slots is NOT the success path. It used to fall through to `next`, whose
-      // shipped text is "You're booked, {{name}}!" — after a turn in which nothing
-      // was booked at all.
       if (!opts.length) { messages.push({ type: "text", text: node.noneText || "We don't have open slots online right now — leave your details and the team will call you to book. 📞" }); nodeId = node.unavailableNext ?? node.failureNext ?? null; }
-      else { messages.push({ type: "choice", text: interpolate(node.text, vars), options: opts.map((o) => ({ id: choiceId(node.id, o.id), label: o.label })) }); return { messages, session: { nodeId: node.id, vars }, handedOff: false }; }
+      else { messages.push({ type: "choice", text: interpolateFlowText(node.text, vars), options: opts.map((o) => ({ id: choiceId(node.id, o.id), label: o.label })) }); return { messages, session: { nodeId: node.id, vars }, handedOff: false }; }
     } else if (node.type === "choice") {
-      messages.push({ type: "choice", text: interpolate(node.text, vars), options: node.options.map((o) => ({ id: choiceId(node.id, o.id), label: o.label, description: o.description })) }); return { messages, session: { nodeId: node.id, vars }, handedOff: false };
+      messages.push({ type: "choice", text: interpolateFlowText(node.text, vars), options: node.options.map((o) => ({ id: choiceId(node.id, o.id), label: o.label, description: o.description })) }); return { messages, session: { nodeId: node.id, vars }, handedOff: false };
     } else if (node.type === "capture") {
-      messages.push({ type: "text", text: interpolate(node.text, vars) }); return { messages, session: { nodeId: node.id, vars }, handedOff: false };
+      messages.push({ type: "text", text: interpolateFlowText(node.text, vars) }); return { messages, session: { nodeId: node.id, vars }, handedOff: false };
     } else if (node.type === "condition") {
       nodeId = evaluateCondition(node.condition, vars) ? node.trueNext ?? null : node.falseNext ?? null;
     } else if (node.type === "ai") {
@@ -338,7 +392,9 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
       if (ai.handoff) { handoffContext = rememberHandoff(vars, ai); nodeId = node.handoffNext ?? null; if (!nodeId) { await ctx.handoff(vars, handoffContext); return { messages, session: null, handedOff: true, endedAt: node.id }; } }
       else return { messages, session: { nodeId: node.id, vars }, handedOff: false };
     } else if (node.type === "handoff") {
-      if (node.text) messages.push({ type: "text", text: interpolate(node.text, vars) }); await ctx.handoff(vars, handoffContext); return { messages, session: null, handedOff: true, endedAt: node.id };
+      if (node.text) messages.push({ type: "text", text: interpolateFlowText(node.text, vars) });
+      await ctx.handoff(vars, explicitHandoff(node, vars, handoffContext));
+      return { messages, session: null, handedOff: true, endedAt: node.id };
     } else return { messages, session: null, handedOff: false, endedAt: node.id };
   }
   return { messages, session: null, handedOff: false, endedAt: lastNodeId };
