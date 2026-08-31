@@ -101,16 +101,83 @@ export function isEditableTarget(target: {
 }): boolean {
   if (target.isContentEditable) return true;
   const tag = (target.tagName ?? "").toLowerCase();
-  if (tag === "textarea") return !target.readOnly;
+  // A READONLY TEXTAREA IS STILL A TEXT FIELD. This read `!target.readOnly`,
+  // which meant a readonly textarea lost the native menu — and so lost the
+  // browser's own Copy, Select all and selection handling over its contents. Our
+  // menu cannot replace those: it copies the page's *selection*, and offers
+  // nothing for a caret sitting in a scrollable block of text.
+  //
+  // It also contradicted the readonly-input rule three lines down, which had
+  // already reasoned the point out correctly. Readonly fields in this app —
+  // generated references, API keys, rendered message bodies — exist precisely to
+  // be copied out of, and that is the one thing this broke.
+  if (tag === "textarea") return true;
   if (tag === "select") return true; // native option list — ours cannot replace it
   if (tag !== "input") return false;
-  // A readonly input still has no Paste, but it DOES have "Copy" and the
-  // browser's selection handling, and several read-only fields in this app exist
-  // precisely to be copied out of. Treat it as editable and leave it alone.
+  // A readonly input has no Paste, but it DOES have "Copy" and the browser's
+  // selection handling, for the same reason as the textarea above. Left alone.
   const type = (target.type ?? "text").toLowerCase();
   // Checkboxes, radios and buttons carry no text and no Paste — our menu is
   // strictly better on those, so they are not "editable" for this purpose.
   return !["checkbox", "radio", "button", "submit", "reset", "range", "color", "file"].includes(type);
+}
+
+/**
+ * Was this menu asked for by the KEYBOARD rather than the mouse?
+ *
+ * It decides where focus lands, and the two cases genuinely want different
+ * answers. A `role="menu"` opened from the keyboard must start on a usable
+ * `menuitem`, or Enter does nothing until an arrow key is pressed first — the
+ * menu announces itself to a screen reader and then ignores the obvious key. A
+ * menu opened by mouse must NOT preselect an item: no native context menu does,
+ * nor does Radix, and a highlighted first entry under the cursor invites an
+ * accidental Enter on "Open".
+ *
+ * A `contextmenu` event from the Menu key carries `button: 0` and `detail: 0`;
+ * from a real right-click it carries `button: 2`. Long-press on touch also
+ * reports 0/0 and is treated as keyboard here — harmless, since the only
+ * consequence is that the first item starts focused.
+ *
+ * NOTE: Shift+F10 — the other keyboard route — never reaches this menu at all,
+ * because `shouldUseNativeMenu` bails on a held Shift. That is the escape hatch
+ * working as intended: Shift+F10 gets the browser's own accessible menu, which
+ * is a fine outcome. The plain Menu key is the route into ours.
+ */
+export function isKeyboardInvocation(event: { button?: number; detail?: number }): boolean {
+  return (event.button ?? 0) !== 2 || (event.detail ?? 0) === 0;
+}
+
+/** The bit of an element this module needs; keeps the DOM out of here. */
+type Focusable = { focus: (options?: { preventScroll?: boolean }) => void };
+
+/**
+ * Put focus where the menu was opened FROM implies it should go, and return what
+ * received it.
+ *
+ * Lives here, rather than inline in the component, so the behaviour the review
+ * caught is covered by a test that runs the real code path instead of grepping
+ * the component for a line that looks right. (A selector that reads correctly in
+ * the source and matches nothing at runtime is a mistake this repo has already
+ * shipped once — see tests/darkThemeControls.test.ts.)
+ *
+ * Falls back to the container if the menu somehow has no items, because a menu
+ * with nothing focusable must still take the keyboard: Escape has to work.
+ */
+export function focusOnOpen<T extends Focusable>(
+  container: T & { querySelector: (selector: string) => Focusable | null },
+  keyboard: boolean,
+): "item" | "container" {
+  if (!keyboard) {
+    container.focus({ preventScroll: true });
+    return "container";
+  }
+  const first = container.querySelector("[data-menu-item]");
+  if (!first) {
+    container.focus({ preventScroll: true });
+    return "container";
+  }
+  first.focus({ preventScroll: true });
+  return "item";
 }
 
 /** A short, single-line version of a selection, for the menu label. */

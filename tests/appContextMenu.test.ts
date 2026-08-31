@@ -3,7 +3,9 @@ import test from "node:test";
 import {
   buildContextMenu,
   flattenSections,
+  focusOnOpen,
   isEditableTarget,
+  isKeyboardInvocation,
   placeMenu,
   shouldUseNativeMenu,
   truncate,
@@ -39,6 +41,97 @@ test("AN INPUT KEEPS THE NATIVE MENU — Paste cannot be reimplemented", () => {
 
   assert.equal(isEditableTarget({ tagName: "div" }), false);
   assert.equal(isEditableTarget({ tagName: "td" }), false);
+});
+
+test("A READONLY TEXTAREA KEEPS THE NATIVE MENU TOO — it is still a text field", () => {
+  /*
+   * This read `!target.readOnly`, so a readonly textarea was classified as NOT
+   * editable and lost the browser's menu — and with it Copy, Select all and the
+   * browser's selection handling over its contents. Our menu cannot stand in:
+   * it copies the page SELECTION, and offers nothing for a caret sitting in a
+   * scrollable block of text.
+   *
+   * It also contradicted the readonly-INPUT rule sitting a few lines below it,
+   * which had already reasoned the point out correctly. Readonly fields in this
+   * app — generated references, API keys, rendered message bodies — exist
+   * precisely to be copied out of, which is the one thing that broke.
+   */
+  assert.equal(isEditableTarget({ tagName: "textarea", readOnly: true }), true);
+  assert.equal(isEditableTarget({ tagName: "textarea", readOnly: false }), true);
+  assert.equal(isEditableTarget({ tagName: "TEXTAREA", readOnly: true }), true, "tag case");
+
+  // The same for a readonly text input, for the same reason.
+  assert.equal(isEditableTarget({ tagName: "input", type: "text", readOnly: true }), true);
+});
+
+test("KEYBOARD-OPENED MENUS ARE DISTINGUISHED FROM RIGHT-CLICKS", () => {
+  /*
+   * Focus depends on this. A menu opened from the Menu key must start ON an
+   * item, or Enter does nothing until an arrow key is pressed — a `role="menu"`
+   * that announces itself and then ignores the obvious key. A menu opened by
+   * mouse must NOT preselect one: no native menu does, nor does Radix, and a
+   * highlighted first row under the cursor is an accidental Enter away from
+   * "Open".
+   *
+   * The Menu key reports button 0 / detail 0; a real right-click reports
+   * button 2 with a non-zero detail.
+   */
+  assert.equal(isKeyboardInvocation({ button: 0, detail: 0 }), true, "Menu key");
+  assert.equal(isKeyboardInvocation({ button: 2, detail: 1 }), false, "right-click");
+  assert.equal(isKeyboardInvocation({ button: 2, detail: 2 }), false, "second right-click");
+
+  // Long-press on touch also reports 0/0. Treated as keyboard, which costs
+  // nothing: the only consequence is that the first item starts focused.
+  assert.equal(isKeyboardInvocation({ button: 0, detail: 0 }), true);
+
+  // A synthetic event missing either field must not be mistaken for a mouse
+  // right-click — defaulting the other way would reintroduce the dead Enter.
+  assert.equal(isKeyboardInvocation({}), true);
+  assert.equal(isKeyboardInvocation({ button: 2 }), true, "no detail — assume keyboard");
+});
+
+test("A KEYBOARD-OPENED MENU STARTS ON ITS FIRST ITEM, so Enter works at once", () => {
+  /*
+   * The regression the review caught. The component focused the `role="menu"`
+   * container in every case, so someone opening the menu with the Menu key
+   * landed on nothing selectable: Enter and Space did nothing until they pressed
+   * an arrow key first. A menu that declares role="menu" and implements arrows
+   * and Home/End owes the rest of that contract.
+   *
+   * Exercised through `focusOnOpen`, which is the function the component calls —
+   * not by grepping the component for a line that looks right. This repo has
+   * already shipped a fix that read correctly in the source and matched nothing
+   * at runtime.
+   */
+  const focused: string[] = [];
+  const item = { focus: () => focused.push("item") };
+  const container = {
+    focus: () => focused.push("container"),
+    querySelector: (selector: string) => (selector === "[data-menu-item]" ? item : null),
+  };
+
+  assert.equal(focusOnOpen(container, true), "item", "keyboard must land on an item");
+  assert.deepEqual(focused, ["item"]);
+
+  // The mouse keeps the container: no native context menu preselects an entry,
+  // and a highlighted first row under the cursor is one stray Enter from "Open".
+  focused.length = 0;
+  assert.equal(focusOnOpen(container, false), "container");
+  assert.deepEqual(focused, ["container"]);
+
+  // A menu with no items must still take focus, or Escape stops working.
+  focused.length = 0;
+  const empty = { focus: () => focused.push("container"), querySelector: () => null };
+  assert.equal(focusOnOpen(empty, true), "container");
+  assert.deepEqual(focused, ["container"]);
+});
+
+test("there is always a first item for keyboard focus to land on", () => {
+  // The focus fix depends on the menu never being empty. Even the barest target
+  // — no link, no image, no selection, no history — still has actions.
+  const bare = flattenSections(buildContextMenu({ canGoBack: false }));
+  assert.ok(bare.length > 0, "an empty menu would leave Enter dead again");
+  assert.equal(bare[0].id, "forward");
 });
 
 test("SHIFT+RIGHT-CLICK ALWAYS REACHES THE BROWSER — the escape hatch", () => {

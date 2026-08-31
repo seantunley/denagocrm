@@ -19,7 +19,9 @@ import ModalPortal from "@/components/ui/modal-portal";
 import {
   buildContextMenu,
   flattenSections,
+  focusOnOpen,
   isEditableTarget,
+  isKeyboardInvocation,
   placeMenu,
   shouldUseNativeMenu,
   type ContextMenuAction,
@@ -73,6 +75,8 @@ type OpenState = {
   sections: ContextMenuSection[];
   /** The route it was opened on — see the derived `open` below. */
   pathname: string;
+  /** Opened by the Menu key rather than a right-click; decides where focus goes. */
+  keyboard: boolean;
 };
 
 export default function AppContextMenu() {
@@ -147,6 +151,7 @@ export default function AppContextMenu() {
         y: event.clientY,
         sections,
         pathname: window.location.pathname,
+        keyboard: isKeyboardInvocation(event),
       });
     }
 
@@ -169,7 +174,21 @@ export default function AppContextMenu() {
         viewportHeight: window.innerHeight,
       }),
     );
-    menuRef.current.focus({ preventScroll: true });
+    /*
+     * WHERE FOCUS LANDS, and why it depends on how the menu was opened.
+     *
+     * This focused the container in every case, which left a keyboard user on a
+     * `role="menu"` with nothing selected: Enter and Space did nothing until an
+     * arrow key was pressed first. A menu that declares the role, and implements
+     * arrows and Home/End, has to honour the rest of that contract too.
+     *
+     * But focusing the first item unconditionally is wrong the other way. No
+     * native context menu preselects an entry on a right-click, and neither does
+     * Radix; a highlighted first row sitting under the cursor is both unfamiliar
+     * and an accidental Enter away from "Open". So the keyboard gets the first
+     * item, the mouse gets the container, and arrows work identically from both.
+     */
+    focusOnOpen(menuRef.current, open.keyboard);
   }, [open]);
 
   // Anything that moves the page out from under the menu closes it. Scroll is
