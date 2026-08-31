@@ -22,6 +22,7 @@ test("the signature binds the proposal to a flow, owner and base definition", ()
   for (const field of ["flowId", "ownerId", "baseHash", "definition", "instruction"]) assert.match(code, new RegExp(field));
   assert.match(code, /flowDefinitionHash/);
   assert.match(code, /SESSION_SECRET is not set/);
+  assert.match(code, /secret\.length >= 32/);
 });
 
 test("proposal diff reports added, removed, changed and start-node changes", () => {
@@ -29,4 +30,5 @@ test("proposal diff reports added, removed, changed and start-node changes", () 
   assert.match(code, /const removed =/);
   assert.match(code, /const changed =/);
   assert.match(code, /startChanged: before\.start !== after\.start/);
+  assert.match(code, /comparable: false/);
 });
