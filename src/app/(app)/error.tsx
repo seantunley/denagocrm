@@ -24,7 +24,7 @@ import { RotateCcw, ArrowLeft } from "lucide-react";
  * children — it does not re-fetch anything, so a segment that failed because a
  * query failed simply throws again on the same stale RSC output, and the button
  * appears to do nothing. Next's own docs put it plainly: "In most cases, you
- * should use unstable_retry() instead." `unstable_retry()` re-fetches and
+ * should use retry() instead." `retry()` re-fetches and
  * re-renders the segment inside a Transition, which preserves Client Component
  * state outside this boundary. Since almost everything that lands here is a
  * failed server query, that difference is the whole value of the button.
@@ -43,10 +43,14 @@ import { RotateCcw, ArrowLeft } from "lucide-react";
  */
 export default function AppError({
   error,
-  unstable_retry,
+  // `retry`, not `unstable_retry`: the prop was renamed when the API stabilised
+  // in Next 16.3. This file declares its OWN prop type rather than importing
+  // Next's, so TypeScript could not see the mismatch — the old name would have
+  // arrived undefined and Try again would have thrown on click.
+  retry,
 }: {
   error: Error & { digest?: string };
-  unstable_retry: () => void;
+  retry: () => void;
 }) {
   useEffect(() => {
     // Report once per error instance. A client-side crash produces no digest and
@@ -91,7 +95,7 @@ export default function AppError({
         <div className="mt-5 flex flex-wrap gap-2">
           <button
             type="button"
-            onClick={() => unstable_retry()}
+            onClick={() => retry()}
             className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90"
           >
             <RotateCcw className="size-4" aria-hidden />
