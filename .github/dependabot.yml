@@ -102,6 +102,21 @@ updates:
       # 0.35 changed its package exports), so it is upgraded by hand.
       - dependency-name: sharp
         update-types: [version-update:semver-major]
+      # eslint majors wait for the Next config to catch up.
+      #
+      # #593 (9 → 10) does not merely fail lint — lint cannot RUN. ESLint 10
+      # removed `context.getFilename()`, and the eslint-plugin-react bundled
+      # inside eslint-config-next still calls it, so every React file dies with
+      #   TypeError: Error while loading rule 'react/display-name':
+      #   contextOrFilename.getFilename is not a function
+      # Nothing in this repo can fix that; it is upstream's to release.
+      #
+      # Held here rather than by closing the PR, because closing a Dependabot PR
+      # tells it never to offer that version again — including the version we
+      # WILL want once eslint-config-next supports ESLint 10. Lift this ignore
+      # then, and let the bump come back through the normal weekly PR.
+      - dependency-name: eslint
+        update-types: [version-update:semver-major]
       # @types/node is PINNED TO THE RUNTIME, not to the newest types.
       #
       # Both CI workflows pin node-version: 22, so the types are held at ^22 to
