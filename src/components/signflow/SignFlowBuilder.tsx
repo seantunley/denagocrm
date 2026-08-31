@@ -184,11 +184,11 @@ export default function SignFlowBuilder({ workflowId, name, initial, staff }: { 
             <Controls
               className={
                 "!border-slate-700 !bg-slate-800 " +
-                "[&_.react-flow__controls-button]:!border-slate-700 " +
-                "[&_.react-flow__controls-button]:!bg-slate-800 " +
-                "[&_.react-flow__controls-button]:!text-slate-100 " +
-                "[&_.react-flow__controls-button:hover]:!bg-slate-700 " +
-                "[&_.react-flow__controls-button_svg]:!fill-current"
+                "[&_button]:!border-slate-700 " +
+                "[&_button]:!bg-slate-800 " +
+                "[&_button]:!text-slate-100 " +
+                "[&_button:hover]:!bg-slate-700 " +
+                "[&_button_svg]:!fill-current"
               }
             />
           </ReactFlow>

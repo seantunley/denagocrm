@@ -18,10 +18,75 @@ updates:
     open-pull-requests-limit: 5
     groups:
       # Everything non-breaking in one PR, reviewed once.
+      #
+      # This group is FIRST deliberately. Dependabot files an update into the
+      # first group that matches it, and this one matches every package — so
+      # minors and patches keep arriving as a single PR, and the lockstep groups
+      # below only ever collect majors, which is the case they exist for.
       minor-and-patch:
         update-types:
           - minor
           - patch
+
+      # ── LOCKSTEP FAMILIES ───────────────────────────────────────────────────
+      #
+      # Packages that are released together and MUST be upgraded together. Split
+      # across separate PRs, each half is broken on its own: #594 bumped
+      # @prisma/client to 7 and #595 bumped the prisma CLI to 7, and merging
+      # either one alone leaves the client and the generator a major apart —
+      # a broken build, from a green-looking PR.
+      #
+      # Only majors reach these groups (see above), which is exactly when a
+      # family splits: a minor bump moves them together inside the weekly PR
+      # anyway, but a major arrives per-package and needs recombining.
+      prisma:
+        patterns:
+          - "prisma"
+          - "@prisma/client"
+        update-types:
+          - major
+      blocknote:
+        patterns:
+          - "@blocknote/*"
+        update-types:
+          - major
+      tiptap:
+        patterns:
+          - "@tiptap/*"
+        update-types:
+          - major
+      plate:
+        patterns:
+          - "platejs"
+          - "@platejs/*"
+        update-types:
+          - major
+      signpdf:
+        patterns:
+          - "@signpdf/*"
+        update-types:
+          - major
+      simplewebauthn:
+        patterns:
+          - "@simplewebauthn/*"
+        update-types:
+          - major
+      next:
+        # `next` majors are ignored below, but eslint-config-next is pinned to
+        # next's exact version, so its major must not arrive on its own.
+        patterns:
+          - "next"
+          - "eslint-config-next"
+        update-types:
+          - major
+      react:
+        patterns:
+          - "react"
+          - "react-dom"
+          - "@types/react"
+          - "@types/react-dom"
+        update-types:
+          - major
     ignore:
       # Next major upgrades are a deliberate, tested migration — this repo runs
       # a Next version whose APIs differ from the defaults, so a bot PR bumping
@@ -36,6 +101,21 @@ updates:
       # Native module — a major bump needs a real build to verify (sharp 0.34 →
       # 0.35 changed its package exports), so it is upgraded by hand.
       - dependency-name: sharp
+        update-types: [version-update:semver-major]
+      # eslint majors wait for the Next config to catch up.
+      #
+      # #593 (9 → 10) does not merely fail lint — lint cannot RUN. ESLint 10
+      # removed `context.getFilename()`, and the eslint-plugin-react bundled
+      # inside eslint-config-next still calls it, so every React file dies with
+      #   TypeError: Error while loading rule 'react/display-name':
+      #   contextOrFilename.getFilename is not a function
+      # Nothing in this repo can fix that; it is upstream's to release.
+      #
+      # Held here rather than by closing the PR, because closing a Dependabot PR
+      # tells it never to offer that version again — including the version we
+      # WILL want once eslint-config-next supports ESLint 10. Lift this ignore
+      # then, and let the bump come back through the normal weekly PR.
+      - dependency-name: eslint
         update-types: [version-update:semver-major]
       # @types/node is PINNED TO THE RUNTIME, not to the newest types.
       #
