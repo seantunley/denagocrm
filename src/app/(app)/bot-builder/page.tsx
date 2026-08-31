@@ -39,6 +39,10 @@ export default async function BotBuilderPage() {
 
   const tenantId = await builderTenantId();
   if ((await prisma.botFlow.count({ where: scope })) === 0) {
+    // The one-time import of the pre-BotFlow BOT_FLOW setting belongs to the
+    // founding tenant and nobody else. Settings still resolve to that tenant
+    // while enforcement is dormant, so importing it into another workspace
+    // would both leak the founding graph and clear the founding setting.
     const founding = tenantId === DEFAULT_TENANT_ID;
     const legacy = founding ? await getSetting("BOT_FLOW") : null;
     let definition = JSON.stringify(DEFAULT_FLOW);
@@ -59,14 +63,14 @@ export default async function BotBuilderPage() {
     if (legacy) await putSetting("BOT_FLOW", "");
   }
 
-  const [flows, publicationMeta, channels, publishedVersions, routes] = await Promise.all([
+  const publicationMeta = await getFlowPublicationMeta();
+  const liveVersionIds = [...publicationMeta.values()].map((publication) => publication.versionId);
+  const [flows, channels, publishedVersions, routes] = await Promise.all([
     prisma.botFlow.findMany({ where: scope, orderBy: [{ active: "desc" }, { updatedAt: "desc" }] }),
-    getFlowPublicationMeta(),
     enabledFlowChannels(),
     prisma.botFlowVersion.findMany({
-      where: { tenantId },
+      where: { tenantId, id: { in: liveVersionIds } },
       select: { id: true, flowId: true, version: true, definition: true },
-      orderBy: [{ version: "desc" }, { createdAt: "desc" }],
     }),
     prisma.botFlowRoute.findMany({ where: { tenantId }, select: { flowId: true, enabled: true } }),
   ]);
@@ -182,7 +186,7 @@ export default async function BotBuilderPage() {
               <div className="my-5 flex flex-1 items-center gap-2 text-muted-foreground" aria-hidden>{[0,1,2].map((step) => <span key={step} className="flex items-center gap-2"><span className="grid size-8 place-items-center rounded-lg border border-border bg-muted/40"><GitBranch className="size-3.5" /></span>{step < 2 && <span className="h-px w-5 bg-border" />}</span>)}</div>
               <div className="flex gap-2 flex-wrap border-t border-border/70 pt-3">
                 <Link href={`/bot-builder/${f.id}`} className="btn-primary btn-sm"><Pencil className="size-3.5" />Edit draft</Link>
-                {(!f.active || pending) && !blocked && <PublishFlowButton flowId={f.id} label={f.active ? "Review & publish" : "Review & publish"} channel={channelLabel[f.channel] ?? f.channel} routeCount={routeInfo.total} warnings={check.warnings.length} draftNodes={draftNodes} liveNodes={liveNodes} liveVersion={live?.version ?? null} />}
+                {(!f.active || pending) && !blocked && <PublishFlowButton flowId={f.id} label="Review & publish" channel={channelLabel[f.channel] ?? f.channel} routeCount={routeInfo.total} warnings={check.warnings.length} draftNodes={draftNodes} liveNodes={liveNodes} liveVersion={live?.version ?? null} />}
                 {(!f.active || pending) && blocked && <span className="btn-secondary btn-sm cursor-not-allowed opacity-50" title="Fix publish errors first">Publish blocked</span>}
                 <form action={duplicateFlow.bind(null, f.id)}><button className="btn-secondary btn-sm"><Copy className="size-3.5" />Duplicate</button></form>
                 {!f.active && <form action={deleteFlow.bind(null, f.id)}><button className="btn-secondary btn-sm text-red-400" aria-label={`Delete ${f.name}`}><Trash2 className="size-3.5" /></button></form>}

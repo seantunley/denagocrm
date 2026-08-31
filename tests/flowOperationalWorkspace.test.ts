@@ -4,11 +4,13 @@ import test from "node:test";
 
 const read = (path: string) => readFile(`${process.cwd()}/${path}`, "utf8");
 
-test("routing workspace can preview first-match behavior", async () => {
+test("routing workspace can preview production first-match behavior", async () => {
   const page = await read("src/app/(app)/bot-builder/routes/page.tsx");
   const tester = await read("src/components/FlowRouteTester.tsx");
   assert.match(page, /FlowRouteTester/);
+  assert.match(page, /orderBy: \[\{ channel: "asc" \}, \{ priority: "asc" \}, \{ createdAt: "asc" \}\]/);
   assert.match(tester, /routeMatches/);
+  assert.doesNotMatch(tester, /\.sort\(/);
   assert.match(tester, /Test current routing/);
   assert.match(tester, /channel default will be used/);
 });
@@ -29,9 +31,11 @@ test("knowledge workspace filters by source and sort order", async () => {
   assert.match(source, /Preview AI use/);
 });
 
-test("handoff queue exposes reason wait time assignment and takeover before opening thread", async () => {
+test("handoff queue exposes live wait time assignment and takeover before opening thread", async () => {
   const source = await read("src/components/BotHandoffQueue.tsx");
   assert.match(source, /waitLabel/);
+  assert.match(source, /setInterval\(\(\) => setNow\(Date\.now\(\)\), 30_000\)/);
+  assert.match(source, /new Date\(item\.dueAt\)\.getTime\(\)/);
   assert.match(source, /item\.reason/);
   assert.match(source, /Assign to/);
   assert.match(source, /assignConversation/);
