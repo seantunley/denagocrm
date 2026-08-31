@@ -2,7 +2,7 @@
 
 import { requireOwner } from "@/lib/auth";
 import { generateBotReply } from "@/lib/botAi";
-import { getBotKnowledgeEntries, retrieveRelevantKnowledge } from "@/lib/botKnowledge";
+import { searchBotKnowledge } from "@/lib/botKnowledge";
 import { withActingStaffScope } from "@/lib/actingScope";
 
 export type BotPreviewState = {
@@ -33,13 +33,13 @@ export async function previewBotAnswer(
     const isCustomer = formData.get("isCustomer") === "on";
     if (!question) return { error: "Enter a customer question to test." };
 
-    const [decision, entries] = await Promise.all([
+    const [decision, relevantKnowledge] = await Promise.all([
       generateBotReply({
         history: [{ role: "user", content: question }],
         customerName,
         isCustomer,
       }),
-      getBotKnowledgeEntries(),
+      searchBotKnowledge(question),
     ]);
     if (!decision) {
       return {
@@ -48,7 +48,7 @@ export async function previewBotAnswer(
       };
     }
 
-    const knowledge = retrieveRelevantKnowledge(entries, question).map((entry) => ({
+    const knowledge = relevantKnowledge.map((entry) => ({
       id: entry.id,
       title: entry.title,
       sourceLabel: entry.sourceLabel,

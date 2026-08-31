@@ -19,6 +19,33 @@ const STAT_TONES = {
   danger: "text-red-300",
 };
 
+/**
+ * How many columns a given number of stats should sit in.
+ *
+ * The ladder this replaces stopped at "4 or more → four columns", so any page
+ * with FIVE stats got four across and a lone fifth on a second row beside a
+ * wide empty cell — which is what the Chatbot page looked like, because it has
+ * five.
+ *
+ * The rule is simply: pick a width the count divides by. Five goes in five,
+ * six in three (two tidy rows rather than six cramped columns), seven and eight
+ * in four. Anything beyond that keeps four and accepts a short last row, since
+ * a hero with nine stats has a bigger problem than its grid.
+ *
+ * The classes are written out rather than built from a template because
+ * Tailwind scans source text — `grid-cols-${n}` produces no CSS at all.
+ */
+export function statColumns(count: number): string {
+  if (count <= 1) return "sm:grid-cols-1";
+  if (count === 2) return "sm:grid-cols-2";
+  if (count === 3) return "sm:grid-cols-3";
+  if (count === 4) return "sm:grid-cols-4";
+  // Five abreast is tight on a small screen, so it widens in two steps.
+  if (count === 5) return "sm:grid-cols-3 lg:grid-cols-5";
+  if (count === 6) return "sm:grid-cols-3 lg:grid-cols-6";
+  return "sm:grid-cols-4";
+}
+
 const HERO_TONES = {
   primary: {
     surface: "border-primary/15 bg-gradient-to-br from-primary/[0.12] via-card to-card",
@@ -79,13 +106,11 @@ export function WorkspaceHero({
           {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2 lg:justify-end">{actions}</div> : null}
         </div>
 
+        {/* See statColumns: the count has to divide, or the last row is a gap. */}
         {stats.length > 0 ? (
           <div className={cn(
             "mt-2.5 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border/70 bg-border/70",
-            stats.length === 1 && "sm:grid-cols-1",
-            stats.length === 2 && "sm:grid-cols-2",
-            stats.length === 3 && "sm:grid-cols-3",
-            stats.length >= 4 && "sm:grid-cols-4",
+            statColumns(stats.length),
           )}>
             {stats.map((stat, index) => {
               const StatIcon = stat.icon;

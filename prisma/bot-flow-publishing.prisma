@@ -10,6 +10,7 @@ model BotFlowVersion {
   createdAt   DateTime @default(now())
 
   @@unique([tenantId, flowId, version])
+  @@unique([tenantId, id])
   @@index([tenantId, channel, createdAt])
   @@index([flowId])
 }

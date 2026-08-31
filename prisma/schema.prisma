@@ -612,6 +612,46 @@ model BotFlow {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt @default(now())
   @@index([tenantId])
+  @@unique([tenantId, id])
+}
+
+/** Selects a published flow when a new conversation matches an entry signal. */
+model BotFlowRoute {
+  id        String   @id @default(cuid())
+  tenantId String
+  channel   String
+  kind      String // keyword | referral | ad
+  pattern   String
+  flowId    String
+  publishedVersionId String
+  priority  Int      @default(100)
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt @default(now())
+
+  @@unique([tenantId, channel, kind, pattern])
+  @@index([tenantId, channel, enabled, priority])
+  @@index([tenantId, flowId])
+  @@index([tenantId, publishedVersionId])
+}
+
+/** Repeatable, owner-authored regression scenario for a flow draft or version. */
+model BotFlowEvaluation {
+  id              String   @id @default(cuid())
+  tenantId        String
+  flowId          String
+  flowVersionId   String?
+  name            String
+  turns           Json
+  expectation     Json
+  lastStatus      String   @default("never_run") // never_run | passed | failed | error
+  lastResult      Json?
+  lastRunAt       DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt @default(now())
+
+  @@index([tenantId, flowId, createdAt])
+  @@index([tenantId, lastStatus, lastRunAt])
 }
 
 /** Live state of a customer's position in a chatbot flow. */
@@ -636,6 +676,30 @@ model BotSession {
   // migration DROPPING the tenant-scoped index and restoring the global one.
   @@unique([tenantId, channel, key])
   @@index([tenantId])
+}
+
+/** Curated, reviewable facts the chatbot may use as customer-facing sources. */
+model BotKnowledgeEntry {
+  id               String   @id @default(cuid())
+  tenantId         String
+  title            String
+  content          String
+  status           String   @default("draft") // draft | approved | expired
+  sourceType       String   @default("manual") // manual | library
+  sourceDocumentId String?
+  sourceLabel      String?
+  validFrom        DateTime?
+  validUntil       DateTime?
+  approvedAt       DateTime?
+  approvedBy       String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt @default(now())
+
+  @@index([tenantId, status, validFrom, validUntil], map: "BotKnowledgeEntry_tenant_status_valid_idx")
+  // Descending, and named as the migration creates it: the workspace list and
+  // every retrieval leg order by `updatedAt` DESC. Declared here so the deployed
+  // index and the Prisma schema describe the same object instead of drifting.
+  @@index([tenantId, updatedAt(sort: Desc)], map: "BotKnowledgeEntry_tenant_updated_idx")
 }
 
 model PipelineStage {
@@ -1168,7 +1232,24 @@ model Communication {
 model Conversation {
   id              String    @id @default(cuid())
   tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
-  channel         String // email | whatsapp | messenger | instagram | x | call | note | other
+  channel         String // email | whatsapp | messenger | instagram | x | comment | call | note | other
+
+  /// The external object this thread mirrors, when it is not a person.
+  ///
+  /// A DM thread is one customer; a COMMENT thread is one post, with many
+  /// people in it and often nobody the CRM knows. `"facebook:<postId>"` keys
+  /// that thread so every comment on the post lands in the same place. NULL for
+  /// every conversation that is about a person, which is all of them today —
+  /// and because Postgres treats NULLs as distinct, the unique below constrains
+  /// only the rows that set it.
+  externalRef     String?
+
+  /// Comment threads only: stop taking new comments for this post.
+  ///
+  /// A Page `feed` subscription is Page-wide, so one busy campaign can bury an
+  /// inbox that otherwise works. Muting is per-post rather than global so the
+  /// noisy one can be silenced without going blind to the rest.
+  mutedAt         DateTime?
   subject         String?
   status          String    @default("open") // open | snoozed | closed
   unread          Boolean   @default(false) // has un-opened inbound messages
@@ -1207,6 +1288,12 @@ model Conversation {
   @@index([lastDirection, lastMessageAt])
   @@index([assignedToId, status])
   @@unique([tenantId, id])
+  // One thread per external object per workspace. Only rows that SET
+  // externalRef are constrained — NULLs are distinct in Postgres, so every
+  // person-shaped conversation is unaffected. This is what makes the
+  // find-or-create for a post's thread safe against two comments arriving at
+  // once on a cold post.
+  @@unique([tenantId, channel, externalRef])
 }
 
 /**

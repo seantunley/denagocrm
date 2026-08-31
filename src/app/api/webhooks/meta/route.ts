@@ -11,6 +11,8 @@ import { runDmFlow } from "@/lib/flowDm";
 import { metaReceipt } from "@/lib/deliveryReceipts";
 import { applyReceipt } from "@/lib/messageReceipts";
 import { withChannelTenantScope, validateInSystemScope } from "@/lib/tenantScopeEntry";
+import { decideComment, type FeedChangeValue } from "@/lib/socialComments";
+import { recordPostCommentSafely } from "@/lib/commentThreads";
 import { inboundRetryResponse, noteInboundRetry, noteLeasedInbound } from "@/lib/webhookRetry";
 import { secretEquals } from "@/lib/secretCompare";
 import {
@@ -79,7 +81,9 @@ export async function POST(req: NextRequest) {
       const endpointId = String(entry.id ?? "");
       await withChannelTenantScope(platform, endpointId, async () => {
         for (const ev of entry.messaging ?? []) {
-          const text: string = ev.message?.text ?? "";
+          const referral = ev.message?.referral ?? ev.referral ?? ev.postback?.referral ?? null;
+          const payload: string | undefined = ev.message?.quick_reply?.payload ?? ev.postback?.payload;
+          const text: string = ev.message?.text ?? ev.postback?.title ?? (referral ? "start" : "");
           const attachments = ((ev.message?.attachments ?? []) as any[])
             .map((a) => ({ type: String(a.type ?? "file"), url: String(a.payload?.url ?? "") }))
             .filter((a) => a.url);
@@ -92,9 +96,14 @@ export async function POST(req: NextRequest) {
             if (text) await recordDmEcho(platform, String(ev.recipient?.id ?? ""), text, ev.message?.mid ? String(ev.message.mid) : null);
             continue;
           }
-          if (!ev.message || (!text && attachments.length === 0)) continue;
+          if (!ev.message && !ev.postback && !referral) continue;
+          if (!text && !payload && attachments.length === 0) continue;
 
-          const outcome = await claimInboundBotEvent(platform, String(ev.message?.mid ?? ""));
+          const senderId = String(ev.sender?.id ?? "");
+          // Never synthesize an id from sender/time: retries can be delivered with a
+          // different timestamp and would duplicate CRM side effects.
+          const providerId = String(ev.message?.mid ?? ev.postback?.mid ?? "");
+          const outcome = await claimInboundBotEvent(platform, providerId);
           if (outcome.status === "completed") continue; // genuinely done — ack it.
           if (outcome.status === "unidentified") {
             const { logError } = await import("@/lib/errorLog");
@@ -105,17 +114,19 @@ export async function POST(req: NextRequest) {
           // redelivery and lose the message, so ask to be sent it again instead.
           // Logged HERE, inside the tenant scope that owns it. At the outer
           // boundary the scope has unwound and the row files unattributed.
-          if (outcome.status === "leased") throw await noteLeasedInbound("meta-dm-webhook", platform, endpointId, `${platform} ${String(ev.message?.mid ?? "")}`);
+          if (outcome.status === "leased") throw await noteLeasedInbound("meta-dm-webhook", platform, endpointId, `${platform} ${providerId}`);
           const claim = outcome.claim;
           try {
             await withInboundBotEvent(claim, async () => {
-              const referral = ev.message.referral ?? ev.referral ?? ev.postback?.referral ?? null;
-              const senderId = String(ev.sender?.id ?? "");
               const receivedAfter = new Date(Date.now() - 1000);
-              await recordInboundDm(platform, senderId, text, referral, attachments, String(ev.message?.mid ?? ""));
+              await recordInboundDm(platform, senderId, text, referral, attachments, providerId);
               const fileUrl = attachments.length ? await latestPersistedDmAttachment(platform, senderId, receivedAfter) : undefined;
-              const payload: string | undefined = ev.message.quick_reply?.payload;
-              if (text || payload || fileUrl) await runDmFlow(platform, senderId, text, payload, fileUrl);
+              const entryContext = referral ? {
+                referralRef: referral.ref ? String(referral.ref) : undefined,
+                adId: referral.ad_id ? String(referral.ad_id) : undefined,
+                source: referral.source ? String(referral.source) : undefined,
+              } : undefined;
+              if (text || payload || fileUrl) await runDmFlow(platform, senderId, text, payload, fileUrl, entryContext);
             });
             await completeInboundBotEvent(claim);
           } catch (error) {
@@ -124,7 +135,7 @@ export async function POST(req: NextRequest) {
             await logError("meta-dm-webhook", error).catch(() => {});
             // Already logged, with its claim released. Rethrowing the raw error
             // made the outer boundary log the same failure a second time.
-            throw await noteInboundRetry("meta-dm-webhook", "failed", `${platform} ${String(ev.message?.mid ?? "")}`);
+            throw await noteInboundRetry("meta-dm-webhook", "failed", `${platform} ${providerId}`);
           }
         }
       }, () => console.warn(`[tenant-channel] skipped ${platform} DM: unmapped endpoint ${endpointId || "?"}`));
@@ -135,9 +146,42 @@ export async function POST(req: NextRequest) {
   }
   /* eslint-enable @typescript-eslint/no-explicit-any */
 
-  const entries = (body as { entry?: { changes?: { field: string; value: Record<string, unknown> }[] }[] }).entry ?? [];
+  const entries = (body as { entry?: { id?: string; changes?: { field: string; value: Record<string, unknown> }[] }[] }).entry ?? [];
   for (const entry of entries) {
     for (const change of entry.changes ?? []) {
+      /*
+       * COMMENTS ON POSTS — AND ON ADS.
+       *
+       * Meta's documentation: "Webhooks are not sent for Ad Posts, but are sent
+       * for Comments on Ad Posts." So a comment on a boosted post, or on a dark
+       * post created straight in Ads Manager, arrives here in exactly the same
+       * shape as one on an organic post. No special handling, and none needed.
+       *
+       * `feed` is a firehose — likes, reactions, shares, edits and deletions all
+       * come down it — so `decideComment` filters first. Without that the inbox
+       * fills with reaction noise on the first busy campaign, and people stop
+       * opening the inbox that currently works.
+       *
+       * The Page id is `entry.id`, which is both the tenant discriminator and
+       * the way to tell OUR reply apart from a customer's comment.
+       */
+      if (change.field === "feed") {
+        const pageId = String(entry.id ?? "");
+        const decision = decideComment(change.value as FeedChangeValue);
+        if (!decision.ok) continue;
+        await withChannelTenantScope(
+          "messenger",
+          pageId,
+          async () => {
+            await recordPostCommentSafely(decision.comment, { platform: "facebook", pageId });
+          },
+          // Matches the leadgen branch below. PR #578 replaces both of these
+          // console.warns with a System Log entry; deliberately not done here,
+          // so the two changes stay independent of each other.
+          () => console.warn(`[tenant-channel] skipped comment: unmapped page_id ${pageId || "?"}`),
+        );
+        continue;
+      }
       if (change.field !== "leadgen") continue;
       const leadgenId = String(change.value?.leadgen_id ?? "");
       if (!leadgenId) continue;

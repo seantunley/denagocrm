@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { unstable_rethrow } from "next/navigation";
-import { Bot, Hand, UserRound } from "lucide-react";
+import { Bot, Clock3, Hand, UserRound } from "lucide-react";
 import {
   assignConversation,
   addConversationNote,
@@ -27,7 +27,7 @@ export default function ConversationCollab({
   const [pending, startTransition] = useTransition();
   const [note, setNote] = useState("");
   const [assignee, setAssignee] = useState(collaboration.assignee?.id ?? "");
-  const [botMode, setBotMode] = useState<"bot" | "human">(collaboration.bot.mode);
+  const [botMode, setBotMode] = useState<"bot" | "handoff" | "human">(collaboration.bot.mode);
 
   const run = (work: () => Promise<{ error?: string; success?: string } | void>) => {
     startTransition(async () => {
@@ -74,19 +74,26 @@ export default function ConversationCollab({
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card px-3 py-2.5">
           {botMode === "human"
             ? <Hand className="size-4 shrink-0 text-amber-400" />
-            : <Bot className="size-4 shrink-0 text-emerald-400" />}
+            : botMode === "handoff"
+              ? <Clock3 className="size-4 shrink-0 text-red-400" />
+              : <Bot className="size-4 shrink-0 text-emerald-400" />}
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <p className="text-xs font-medium text-foreground">Conversation control</p>
-              <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${botMode === "human" ? "bg-amber-500/15 text-amber-300" : "bg-emerald-500/15 text-emerald-300"}`}>
-                {botMode === "human" ? "Human handling" : "Bot available"}
+              <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${botMode === "human" ? "bg-amber-500/15 text-amber-300" : botMode === "handoff" ? "bg-red-500/15 text-red-300" : "bg-emerald-500/15 text-emerald-300"}`}>
+                {botMode === "human" ? "Human handling" : botMode === "handoff" ? "Needs human" : "Bot available"}
               </span>
             </div>
             <p className="mt-0.5 text-[10px] leading-4 text-muted-foreground">
               {botMode === "human"
                 ? "Automation is paused for this customer. Returning it to the bot starts a fresh flow on their next message."
-                : "A staff reply automatically takes over and pauses automated replies."}
+                : botMode === "handoff"
+                  ? `${collaboration.bot.handoff?.reason ?? "The bot requested help."}${collaboration.bot.handoff?.overdue ? " · SLA overdue" : ""}`
+                  : "A staff reply automatically takes over and pauses automated replies."}
             </p>
+            {botMode === "handoff" && collaboration.bot.handoff?.summary ? (
+              <p className="mt-1 text-[10px] leading-4 text-foreground/80">{collaboration.bot.handoff.summary}</p>
+            ) : null}
           </div>
           {canAct && (
             <button

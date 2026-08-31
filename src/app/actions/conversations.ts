@@ -76,7 +76,15 @@ export async function setConversationBotMode(
     const identity = await botIdentityForConversation(conversationId);
     if (!identity) refuse("Automation control is not available for this conversation.");
 
-    if (mode === "human") await pauseBotConversation(identity);
+    if (mode === "human") {
+      await pauseBotConversation(identity);
+      // Claiming an unassigned handoff also claims its inbox work item. Never
+      // overwrite a colleague who was explicitly assigned before the click.
+      await prisma.conversation.updateMany({
+        where: { id: conversationId, assignedToId: null },
+        data: { assignedToId: actor.id, assignedAt: new Date() },
+      });
+    }
     else await resumeBotConversation(identity);
 
     await logAudit({

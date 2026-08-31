@@ -31,8 +31,7 @@ test("preview shows confidence, intent and staff handoff context", () => {
 
 test("preview exposes only approved/current knowledge matches", () => {
   const action = src("src/app/actions/botPreview.ts");
-  assert.match(action, /getBotKnowledgeEntries\(\)/);
-  assert.match(action, /retrieveRelevantKnowledge\(entries, question\)/);
+  assert.match(action, /searchBotKnowledge\(question\)/);
   const ui = src("src/components/BotAiPreviewConsole.tsx");
   assert.match(ui, /Approved Knowledge matched/);
 });

@@ -17,6 +17,7 @@ import { loadBotSession, upsertBotSessionTx, deleteBotSessionTx, botStillOwnsTx 
 import { recordBotFlowEventsTx, type BotFlowEventInput } from "./botFlowAnalytics";
 import { completeInboundBotEventTx, currentInboundBotClaim } from "./botInboundEvent";
 import { decideInboundAct, type BotOwnership } from "./botOwnership";
+import type { FlowEntryContext } from "./flowRouting";
 
 export const FLOW_MARKER = "🤖 Flow";
 const FLOW_VERSION_VAR = "__flow_version";
@@ -84,7 +85,7 @@ function actionEvents(digits: string, flowVersionId: string | null, actions: Act
   return actions.filter((a) => a.ok).map((a) => ({ channel: "whatsapp", conversationKey: digits, flowVersionId, nodeId: a.nodeId, eventType: "crm_action", metadata: { action: a.action } }));
 }
 
-export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise<boolean> {
+export async function runWhatsAppFlow(digits: string, input: FlowInput, entryContext?: FlowEntryContext): Promise<boolean> {
   const match = await matchByPhone(digits);
   const existing = await loadSession(digits);
   // Same rule as DM/Telegram, from the same module — but `status === "paused"`
@@ -110,7 +111,7 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise
   const actor = await resolveTenantActor();
   if (!actor) { console.error("[bot] refusing to reply on whatsapp: no tenant actor, so the reply could not be recorded"); return true; }
 
-  const snapshot = await resolveFlowSnapshot("whatsapp", restart ? null : existing?.flowVersionId ?? null);
+  const snapshot = await resolveFlowSnapshot("whatsapp", restart ? null : existing?.flowVersionId ?? null, { text: input.text, ...entryContext });
   const actions: ActionObservation[] = [];
   const result = await runFlow(snapshot.flow, session, input, buildCtx(digits, match, actions));
 
@@ -160,7 +161,7 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise
   return true;
 }
 
-export async function runWhatsAppBot(digits: string, input: FlowInput, opts: { voiceNote?: boolean } = {}): Promise<void> {
+export async function runWhatsAppBot(digits: string, input: FlowInput, opts: { voiceNote?: boolean; entryContext?: FlowEntryContext } = {}): Promise<void> {
   // Ownership gates EVERY route into the bot, not just the flow runner.
   //
   // maybeAutoReply never reads BotSession — its only brake is botShouldPause, a
@@ -182,6 +183,6 @@ export async function runWhatsAppBot(digits: string, input: FlowInput, opts: { v
   }
 
   if (opts.voiceNote) { await maybeAutoReply(digits, input.text, { voiceNote: true }); return; }
-  if (await isFlowEnabled()) { await runWhatsAppFlow(digits, input); return; }
+  if (await isFlowEnabled()) { await runWhatsAppFlow(digits, input, opts.entryContext); return; }
   await maybeAutoReply(digits, input.text);
 }

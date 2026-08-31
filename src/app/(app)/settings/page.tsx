@@ -46,6 +46,7 @@ import { PUSH_KINDS } from "@/lib/push";
 import Link from "next/link";
 import { getNextStepScheduling } from "@/lib/nextStepConfig";
 import { saveNextStepScheduling } from "@/app/actions/settings";
+import { connectTelegram, disconnectTelegram } from "@/app/actions/bot";
 import ProductsPage from "../products/page";
 import { addStockLabel, removeStockLabel } from "@/app/actions/stock";
 import { getStockLabels } from "@/lib/stockLabels";
@@ -1250,6 +1251,73 @@ export default async function SettingsPage({
                   {setting("WA_ACCESS_TOKEN") ? <ClearSecret settingKey="WA_ACCESS_TOKEN" label="WhatsApp access token" /> : null}
                 </SaveForm>
               </div>
+            </Row>
+
+            {/*
+              Telegram belongs HERE, with the other customer channels.
+
+              It used to live only in the chatbot page's sidebar, so the one
+              screen called "customer channels" listed every channel except this
+              one. Worse, `TENANT_CREDENTIAL_INTEGRATIONS` offered a second door
+              that could not work: it stores TELEGRAM_BOT_TOKEN in
+              TenantIntegrationCredential, while `resolveTelegramTenant` matches
+              an inbound update by scanning TELEGRAM_WEBHOOK_SECRET rows in
+              AppSetting — so a token saved that way had no secret to be found
+              by, and Telegram could never deliver. That entry is gone; this is
+              the only door now, and it is the one that provisions.
+
+              `connectTelegram` is not a plain save. It stores the token, mints a
+              per-tenant webhook secret, calls Telegram's setWebhook, and records
+              whether that call succeeded — which is why the badge below can tell
+              "token stored" apart from "actually receiving".
+            */}
+            <Row
+              title="Telegram"
+              status={
+                !setting("TELEGRAM_BOT_TOKEN") ? (
+                  <span className="badge bg-amber-500/15 text-amber-300">Not set up</span>
+                ) : setting("BOT_TG_ENABLED") === "true" ? (
+                  <span className="badge bg-emerald-500/15 text-emerald-300">Connected</span>
+                ) : (
+                  // The half-configured state, said out loud. A stored token with
+                  // no registered webhook receives nothing, and silently looking
+                  // connected is exactly how WhatsApp lost eighteen days.
+                  <span className="badge bg-amber-500/15 text-amber-300">Token saved · webhook not registered</span>
+                )
+              }
+            >
+              <p className="text-xs text-muted-foreground mb-4">
+                Create a bot with <b>@BotFather</b> in Telegram, then paste the token it gives you.
+                Connecting registers the webhook with Telegram for you — unlike WhatsApp and Meta,
+                nothing needs configuring on their side. The bot runs the same published chatbot flow.
+              </p>
+              {!setting("TELEGRAM_BOT_TOKEN") ? (
+                <form action={connectTelegram} className="flex gap-2 items-end">
+                  <div className="flex-1">
+                    <label className="label">Bot token</label>
+                    <input
+                      name="token"
+                      type="password"
+                      autoComplete="new-password"
+                      className="input"
+                      placeholder="123456789:ABCdef…"
+                    />
+                  </div>
+                  <button className="btn-primary">Connect</button>
+                </form>
+              ) : (
+                <div className="space-y-3">
+                  {setting("BOT_TG_ENABLED") !== "true" && (
+                    <p className="text-xs text-amber-300">
+                      Telegram did not accept the webhook registration, so nothing will arrive.
+                      Disconnect and reconnect with a fresh token from @BotFather.
+                    </p>
+                  )}
+                  <form action={disconnectTelegram}>
+                    <button className="btn-secondary">Disconnect</button>
+                  </form>
+                </div>
+              )}
             </Row>
 
             <Row
