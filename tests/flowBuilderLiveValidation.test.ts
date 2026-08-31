@@ -18,8 +18,9 @@ test("the editor validates the current graph rather than only the saved server d
 
 test("live issues are grouped onto their affected canvas cards", () => {
   const builder = src("src/components/FlowBuilder.tsx");
-  assert.match(builder, /issuesByNode/);
-  assert.match(builder, /issues: issuesByNode\.get\(node\.id\) \?\? \[\]/);
+  assert.match(builder, /const issuesByNode = useMemo/);
+  assert.match(builder, /grouped\.set\(issue\.nodeId/);
+  assert.match(builder, /data: issues \? \{ \.\.\.node\.data, issues \} : node\.data/);
   assert.match(builder, /errors \? "border-red-400\/80/);
   assert.match(builder, /warnings \? "border-amber-400\/70/);
   assert.match(builder, /Checks for this node/);
