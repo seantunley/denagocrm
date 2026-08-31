@@ -348,15 +348,11 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt,
     }
     return grouped;
   }, [liveIssues]);
-  const displayNodeCache = useRef(new Map<string, { source: Node<RFData>; issueKey: string; display: Node<RFData> }>());
   const displayNodes = useMemo(() => rfNodes.map((node) => {
-    const issues = issuesByNode.get(node.id) ?? [];
-    const issueKey = issues.map((issue) => `${issue.severity}:${issue.code}:${issue.message}`).join("|");
-    const cached = displayNodeCache.current.get(node.id);
-    if (cached?.source === node && cached.issueKey === issueKey) return cached.display;
-    const display = { ...node, data: { ...node.data, issues } };
-    displayNodeCache.current.set(node.id, { source: node, issueKey, display });
-    return display;
+    // Preserve the source object for the common valid-node case so React Flow
+    // can skip unnecessary node renders without relying on render-time caches.
+    if (!issuesByNode.has(node.id)) return node;
+    return { ...node, data: { ...node.data, issues: issuesByNode.get(node.id) ?? [] } };
   }), [issuesByNode, rfNodes]);
   const selectedIssues = selectedId ? issuesByNode.get(selectedId) ?? [] : [];
 
