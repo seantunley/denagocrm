@@ -8,15 +8,23 @@ import { withActingStaffScope } from "@/lib/actingScope";
 import { sendPrivateReplyToComment, sendPublicCommentReply } from "@/lib/messenger";
 import { commentDedupeKey, privateReplyDedupeKey } from "@/lib/socialComments";
 import { setCommentThreadMuted } from "@/lib/commentThreads";
+import { deleteCommunicationsAndReconcile } from "@/lib/conversations";
+import { isDedupeKeyConflict } from "@/lib/inboundMessageKey";
 import { logAudit } from "@/lib/audit";
 
 /**
  * What can be done with a public comment from inside the CRM.
  *
- * Phase one is deliberately narrow: file it, silence a noisy post, and convert
- * a commenter into a conversation. Replying PUBLICLY, hiding and deleting all
- * need `pages_manage_engagement`, which this install has not been granted — so
- * they are not offered rather than offered and failing.
+ * File it, answer the person privately or publicly, archive the post once it is
+ * dealt with, and silence one that is running hot.
+ *
+ * The PUBLIC reply needs `pages_manage_engagement`, which not every install
+ * has. The screen asks Meta what is actually granted
+ * (lib/metaCapabilities.ts) and does not render that button until it is —
+ * offering an action the provider will refuse is worse than offering none. The
+ * action below still translates a refusal into the exact thing to change,
+ * because a server action is reachable directly and must not depend on the UI
+ * having hidden it.
  */
 
 /**
@@ -30,12 +38,13 @@ import { logAudit } from "@/lib/audit";
  * messaging id, and once they answer, the thread is an ordinary DM against a
  * person the CRM can identify.
  *
- * ── ONE SHOT ────────────────────────────────────────────────────────────────
+ * ── ONE SHOT, AND THE CRM OWNS IT ───────────────────────────────────────────
  *
- * Meta permits exactly one private reply per comment, within seven days. A
- * refusal is therefore FINAL — retrying the same comment will always fail — so
- * the outcome is recorded on the thread either way, and the person is told
- * plainly rather than being left to press the button again.
+ * Meta permits exactly one private reply per comment, within seven days. The
+ * reservation below means this CRM decides who gets that one attempt, rather
+ * than letting two people both call Meta and leaving Meta to refuse the second
+ * — by which point the loser has already written a message that went nowhere.
+ * See the block inside the function for why the ordering is the whole point.
  */
 export async function privateReplyToComment(
   conversationId: string,
@@ -69,50 +78,80 @@ export async function privateReplyToComment(
       if (!thread) refuse("That comment thread no longer exists.");
 
       /*
-       * ONE PER COMMENT, CHECKED BEFORE SENDING.
+       * ONE PER COMMENT — RESERVED BEFORE THE SEND, NOT RECORDED AFTER IT.
        *
-       * Meta allows exactly one private reply to a comment, ever. RECORDING the
-       * reply afterwards does not stop a second person sending one — both read
-       * "no reply yet", both press the button, and the loser learns of it only
-       * from Meta's refusal, having already written a message that never
-       * arrived. The earlier version of this file claimed the record was the
-       * safeguard; it was not.
+       * Meta allows exactly one private reply to a comment, ever. An earlier
+       * version checked for an existing reply, sent, and then wrote the row with
+       * a unique key — and claimed the key prevented the race. It did not: two
+       * requests can both find nothing, both reach Meta, and only then collide
+       * on the insert. A constraint that is evaluated after the side effect
+       * cannot prevent the side effect.
        *
-       * So the check happens first, and the write below carries a UNIQUE key
-       * derived from the comment. The check is the courtesy — it produces a
-       * sentence instead of a constraint violation — and the key is the rule.
+       * So the row is written FIRST and acts as the reservation. The unique
+       * `dedupeKey` means exactly one caller can create it; the loser is refused
+       * before it ever calls Meta. What happens next depends on what Meta says:
+       *
+       *   refused WITH a response  → it definitely did not send. Release the
+       *                              reservation so a corrected attempt is
+       *                              possible.
+       *   no response at all       → we do not know whether it sent. KEEP the
+       *                              reservation. A retry that duplicated a
+       *                              delivered message is worse than a reply
+       *                              that has to be checked by hand.
+       *
+       * `deleteCommunicationsAndReconcile` rather than a bare delete, so the
+       * thread's counters and last-message state do not drift when a reservation
+       * is released.
        */
       const replyKey = thread.tenantId ? privateReplyDedupeKey(thread.tenantId, commentId) : null;
-      if (replyKey) {
-        const already = await prisma.communication.findUnique({
-          where: { dedupeKey: replyKey },
-          select: { id: true },
+      if (!replyKey) refuse("This comment thread has no workspace, so a reply cannot be recorded against it.");
+
+      try {
+        await prisma.communication.create({
+          data: {
+            type: "comment",
+            direction: "outbound",
+            body,
+            subject: "Private reply",
+            conversationId: thread.id,
+            // WHICH comment this answers, so the screen can stop offering a
+            // reply Meta would refuse. `inReplyTo` already means exactly this.
+            inReplyTo: commentId,
+            dedupeKey: replyKey,
+            userId: user.id,
+            tenantId: thread.tenantId,
+          },
         });
-        if (already) {
-          refuse("Someone has already sent the one private reply Meta allows for this comment. Reply publicly instead.");
+      } catch (error) {
+        if (isDedupeKeyConflict(error)) {
+          refuse(
+            "Someone has already sent the one private reply Meta allows for this comment. Reply publicly instead.",
+          );
         }
+        throw error;
       }
 
-      const sent = await sendPrivateReplyToComment(commentId, body);
-      if (!sent.ok) refuse(sent.error ?? "Meta refused the private reply.");
+      let sent: Awaited<ReturnType<typeof sendPrivateReplyToComment>>;
+      try {
+        sent = await sendPrivateReplyToComment(commentId, body);
+      } catch {
+        // No response — a timeout or a dropped connection. Meta may have
+        // accepted it. The reservation stays, so nobody sends a second one.
+        refuse(
+          "The reply could not be confirmed with Meta. It may have been delivered, so it has not been sent again — check the conversation on Facebook.",
+        );
+      }
 
-      // Filed on the COMMENT thread, not on a DM thread: no DM thread exists
-      // yet, and will not until they answer.
-      await prisma.communication.create({
-        data: {
-          type: "comment",
-          direction: "outbound",
-          body,
-          subject: "Private reply",
-          conversationId: thread.id,
-          messageId: sent.providerMessageId,
-          // WHICH comment this answers, so the screen can stop offering a reply
-          // Meta would refuse. `inReplyTo` already means exactly this.
-          inReplyTo: commentId,
-          ...(replyKey ? { dedupeKey: replyKey } : {}),
-          userId: user.id,
-          tenantId: thread.tenantId,
-        },
+      if (!sent.ok) {
+        await deleteCommunicationsAndReconcile({ dedupeKey: replyKey });
+        refuse(sent.error ?? "Meta refused the private reply.");
+      }
+
+      // Confirmed. Stamp the provider's id onto the reservation that is already
+      // there — the row was the reservation, so there is nothing more to insert.
+      await prisma.communication.updateMany({
+        where: { dedupeKey: replyKey },
+        data: { messageId: sent.providerMessageId },
       });
 
       await logAudit({

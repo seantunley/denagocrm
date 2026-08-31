@@ -197,23 +197,63 @@ test("the capability is asked of Meta, cached, and fails closed", () => {
   assert.match(caps, /canManageEngagement: false, checkedAt: null/);
 });
 
-test("ONE PRIVATE REPLY PER COMMENT IS ENFORCED, not merely recorded", () => {
+test("THE ONE-SHOT IS RESERVED BEFORE THE SEND, NOT RECORDED AFTER IT", () => {
   /*
-   * Recording the reply afterwards does not stop a SECOND person sending one:
-   * both read "no reply yet", both press the button, and the loser finds out
-   * from Meta's refusal having already written a message that never arrived.
+   * The earlier version checked for an existing reply, sent, and then wrote the
+   * row with a unique key — and claimed the key prevented the race. It did not:
+   * two requests can both find nothing, both reach Meta, and only then collide
+   * on the insert. A constraint evaluated AFTER the side effect cannot prevent
+   * the side effect.
+   *
+   * So the row is created first and IS the reservation. Order is the whole
+   * property, which is why this test asserts position rather than presence.
    */
   const actions = shipped("src/app/actions/comments.ts");
-  // Checked before sending, so the ordinary case gets a sentence…
-  assert.match(actions, /privateReplyDedupeKey\(thread\.tenantId, commentId\)/);
-  assert.match(actions, /findUnique\(\{\s*where: \{ dedupeKey: replyKey \}/);
-  // …and written with a UNIQUE key, so a race is refused by the database.
-  assert.match(actions, /dedupeKey: replyKey/);
+  const fn = actions.slice(
+    actions.indexOf("export async function privateReplyToComment"),
+    actions.indexOf("export async function publicReplyToComment"),
+  );
+
+  const reserve = fn.indexOf("dedupeKey: replyKey");
+  const send = fn.indexOf("sendPrivateReplyToComment(commentId, body)");
+  assert.ok(reserve > 0 && send > 0, "both the reservation and the send must exist");
+  assert.ok(
+    reserve < send,
+    "the reservation must be written BEFORE Meta is called, or it cannot prevent a second send",
+  );
+
+  // The loser of the race is refused by the unique constraint, not by a read.
+  assert.match(fn, /isDedupeKeyConflict\(error\)/);
+  // A refusal WITH a response definitely did not send, so the reservation is
+  // released — through the reconciling delete, so thread counters do not drift.
+  assert.match(fn, /deleteCommunicationsAndReconcile\(\{ dedupeKey: replyKey \}\)/);
   // The comment it answers is stored, so the screen can stop offering it.
-  assert.match(actions, /inReplyTo: commentId/);
+  assert.match(fn, /inReplyTo: commentId/);
 
   const list = read("src/components/CommentThreadList.tsx");
   assert.match(list, /comment\.privateReplied \?/, "a spent reply must not still offer the button");
+});
+
+test("a send with NO response keeps the reservation — an unknown outcome is not retried", () => {
+  /*
+   * A timeout or dropped connection means Meta may have accepted it. Releasing
+   * the reservation there would let somebody send a second copy of a message
+   * that was already delivered, which is worse than a reply somebody has to
+   * check by hand. Same reasoning as the offline outbox's `indeterminate`.
+   */
+  const actions = shipped("src/app/actions/comments.ts");
+  const fn = actions.slice(
+    actions.indexOf("export async function privateReplyToComment"),
+    actions.indexOf("export async function publicReplyToComment"),
+  );
+  const thrown = fn.indexOf("} catch {");
+  const released = fn.indexOf("deleteCommunicationsAndReconcile");
+  assert.ok(thrown > 0, "the send must be wrapped, so a thrown error is distinguishable from a refusal");
+  assert.ok(
+    thrown < released,
+    "the no-response branch must come first and must NOT release the reservation",
+  );
+  assert.match(fn, /could not be confirmed with Meta/);
 });
 
 test("the 'already replied' flag is read from ALL replies, not just the visible ones", () => {
