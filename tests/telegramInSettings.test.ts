@@ -100,6 +100,35 @@ test("the override page no longer offers a Telegram token it cannot make work", 
   );
 });
 
+test("THE READ PATH AGREES WITH THE WRITE PATH — a non-founding tenant can use Telegram", () => {
+  /*
+   * `resolveTenantCredential` is for the OVERRIDE mechanism and returns null
+   * for a non-founding tenant that has none:
+   *
+   *     if (override !== null) return override;
+   *     if (tenantId !== DEFAULT_TENANT_ID) return null;
+   *
+   * Telegram does not use overrides. `connectTelegram` writes the token and the
+   * per-tenant webhook secret through `putSetting`, and `resolveTelegramTenant`
+   * matches an inbound update against those same per-tenant secret rows. Reading
+   * through the override helper therefore meant tenant B could connect a bot,
+   * see the token stored, and have the webhook registration AND every send
+   * report "not configured" — the channel dead for everyone but the founding
+   * tenant, which is the opposite of what removing the override entry claimed.
+   */
+  const transport = shipped("src/lib/telegramTransport.ts");
+  assert.match(
+    transport,
+    /async function token\(\): Promise<string \| null> \{\s*return getSetting\("TELEGRAM_BOT_TOKEN"\);/,
+    "the token must come from the acting tenant's own AppSetting row",
+  );
+  assert.doesNotMatch(
+    transport,
+    /resolveTenantCredential/,
+    "the override helper refuses a non-founding tenant that has no override",
+  );
+});
+
 test("Telegram's tenancy still works, because the secret is what identifies the workspace", () => {
   // The reason removing the override is safe rather than a regression:
   // `putSetting` already scopes to the acting workspace, so `connectTelegram`
