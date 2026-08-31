@@ -3,6 +3,8 @@ import { Prisma } from "@prisma/client";
 import { basePrisma } from "./db";
 import { actingTenantId } from "./actingTenant";
 import { currentTenantScope } from "./tenantScope";
+import { tenantEnforcing } from "./tenantEnforcement";
+import { DEFAULT_TENANT_ID } from "./tenant";
 
 export type BotKnowledgeStatus = "draft" | "approved" | "expired";
 export type BotKnowledgeEntry = {
@@ -68,6 +70,7 @@ function toEntry(row: KnowledgeRow): BotKnowledgeEntry {
 async function knowledgeTenantId(): Promise<string> {
   const ambient = currentTenantScope()?.tenantId;
   if (ambient) return ambient;
+  if (!tenantEnforcing()) return DEFAULT_TENANT_ID;
   return actingTenantId();
 }
 
@@ -147,8 +150,8 @@ export function retrieveRelevantKnowledge(
 
 /**
  * Tenant-scoped hybrid retrieval. The GIN-backed full-text leg contributes the
- * strongest candidates; a small recent leg preserves phrase/prefix matching for
- * terminology PostgreSQL tokenisation does not recognise.
+ * strongest candidates; the lexical leg preserves phrase/prefix matching for
+ * terminology PostgreSQL tokenisation does not recognise across the full base.
  */
 export async function searchBotKnowledge(query: string, now = new Date(), limit = 6): Promise<BotKnowledgeEntry[]> {
   const queryTerms = [...terms(query)].slice(0, 20);
@@ -156,31 +159,32 @@ export async function searchBotKnowledge(query: string, now = new Date(), limit 
   const tenantId = await knowledgeTenantId();
   const tsQuery = queryTerms.join(" | ");
   const rows = await basePrisma.$queryRaw<RankedKnowledgeRow[]>(Prisma.sql`
-    WITH eligible AS (
+    WITH candidates AS (
       SELECT "id", "title", "content", "status", "sourceType", "sourceDocumentId", "sourceLabel",
              "validFrom", "validUntil", "approvedAt", "approvedBy", "createdAt", "updatedAt",
-             to_tsvector('simple', "title" || ' ' || "content") AS document
+             ts_rank_cd(to_tsvector('simple', "title" || ' ' || "content"), to_tsquery('simple', ${tsQuery}))::double precision AS "ftsRank"
         FROM "BotKnowledgeEntry"
        WHERE "tenantId" = ${tenantId}
          AND "status" = 'approved'
          AND ("validFrom" IS NULL OR "validFrom" <= ${now})
          AND ("validUntil" IS NULL OR "validUntil" >= ${now})
-    ), candidates AS (
-      SELECT *, ts_rank_cd(document, to_tsquery('simple', ${tsQuery}))::double precision AS "ftsRank"
-        FROM eligible
-       WHERE document @@ to_tsquery('simple', ${tsQuery})
+         AND to_tsvector('simple', "title" || ' ' || "content") @@ to_tsquery('simple', ${tsQuery})
        ORDER BY "ftsRank" DESC, "updatedAt" DESC
        LIMIT 80
-    ), recent AS (
-      SELECT *, 0::double precision AS "ftsRank"
-        FROM eligible
-       ORDER BY "updatedAt" DESC
-       LIMIT 40
+    ), lexical AS (
+      SELECT "id", "title", "content", "status", "sourceType", "sourceDocumentId", "sourceLabel",
+             "validFrom", "validUntil", "approvedAt", "approvedBy", "createdAt", "updatedAt",
+             0::double precision AS "ftsRank"
+        FROM "BotKnowledgeEntry"
+       WHERE "tenantId" = ${tenantId}
+         AND "status" = 'approved'
+         AND ("validFrom" IS NULL OR "validFrom" <= ${now})
+         AND ("validUntil" IS NULL OR "validUntil" >= ${now})
     )
     SELECT DISTINCT ON ("id")
            "id", "title", "content", "status", "sourceType", "sourceDocumentId", "sourceLabel",
            "validFrom", "validUntil", "approvedAt", "approvedBy", "createdAt", "updatedAt", "ftsRank"
-      FROM (SELECT * FROM candidates UNION ALL SELECT * FROM recent) combined
+      FROM (SELECT * FROM candidates UNION ALL SELECT * FROM lexical) combined
      ORDER BY "id", "ftsRank" DESC
   `);
   const ranks = new Map(rows.map((row) => [row.id, Number(row.ftsRank) || 0]));
