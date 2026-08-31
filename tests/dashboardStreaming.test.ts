@@ -95,7 +95,7 @@ test("the card boundary uses the framework primitive, not a hand-rolled class", 
    * See node_modules/next/dist/docs/.../catchError.md.
    */
   const boundary = code("src/components/dashboard/CardBoundary.tsx");
-  assert.match(boundary, /unstable_catchError/, "use the framework's boundary");
+  assert.match(boundary, /catchError/, "use the framework's boundary");
   assert.match(boundary, /from "next\/error"/);
   assert.match(boundary, /"use client"/, "an error boundary cannot be a server component");
   assert.doesNotMatch(
@@ -118,10 +118,10 @@ test("a contained card failure still reaches the server", () => {
 });
 
 test("a failed card can be retried on its own", () => {
-  // unstable_retry re-fetches and re-renders just this boundary's children, so
+  // retry re-fetches and re-renders just this boundary's children, so
   // one failed card does not need a whole-page reload to recover.
   const boundary = code("src/components/dashboard/CardBoundary.tsx");
-  assert.match(boundary, /unstable_retry\(\)/);
+  assert.match(boundary, /retry\(\)/);
 });
 
 test("a failed card says nothing about why", () => {
