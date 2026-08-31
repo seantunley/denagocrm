@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowLeft, GitBranch, Route, Signpost, ToggleLeft } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ExternalLink, GitBranch, Route, Signpost, ToggleLeft } from "lucide-react";
 import { requireOwner } from "@/lib/auth";
 import { builderTenantId, flowScope } from "@/lib/flowScope";
 import { prisma } from "@/lib/db";
@@ -9,6 +9,7 @@ import { StatusPill, Surface } from "@/components/visual-system";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
+import FlowRouteTester from "@/components/FlowRouteTester";
 
 const channelLabel: Record<string, string> = { whatsapp: "WhatsApp", messenger: "Messenger", instagram: "Instagram", telegram: "Telegram" };
 const kindLabel: Record<string, string> = { keyword: "Keyword phrase", referral: "Referral code", ad: "Ad ID" };
@@ -20,12 +21,24 @@ export default async function FlowRoutesPage() {
   const [routes, flows, publications, versions] = await Promise.all([
     prisma.botFlowRoute.findMany({ where: { tenantId }, orderBy: [{ channel: "asc" }, { priority: "asc" }, { createdAt: "asc" }] }),
     prisma.botFlow.findMany({ where: scope, select: { id: true, name: true, channel: true }, orderBy: { name: "asc" } }),
-    prisma.botFlowPublication.findMany({ where: { tenantId }, select: { channel: true, flowId: true } }),
-    prisma.botFlowVersion.findMany({ where: { tenantId }, select: { flowId: true, channel: true } }),
+    prisma.botFlowPublication.findMany({ where: { tenantId }, select: { channel: true, flowId: true, versionId: true } }),
+    prisma.botFlowVersion.findMany({ where: { tenantId }, select: { id: true, flowId: true, channel: true, version: true }, orderBy: { version: "desc" } }),
   ]);
   const publishedKeys = new Set(versions.map((version) => `${version.channel}:${version.flowId}`));
   const flowNames = new Map(flows.map((flow) => [flow.id, flow.name]));
   const defaults = new Map(publications.map((publication) => [publication.channel, publication.flowId]));
+  const latestVersionByFlow = new Map<string, (typeof versions)[number]>();
+  for (const version of versions) if (!latestVersionByFlow.has(version.flowId)) latestVersionByFlow.set(version.flowId, version);
+
+  const testRoutes = routes.map((route) => ({
+    id: route.id,
+    channel: route.channel,
+    kind: route.kind,
+    pattern: route.pattern,
+    priority: route.priority,
+    enabled: route.enabled,
+    flowName: flowNames.get(route.flowId) ?? "Deleted flow",
+  }));
 
   return (
     <div className="space-y-5">
@@ -45,6 +58,7 @@ export default async function FlowRoutesPage() {
       <Surface className="p-5">
         <h2 className="text-sm font-semibold">How selection works</h2>
         <p className="mt-1 text-xs leading-5 text-muted-foreground">On a new conversation or explicit restart, enabled routes are checked from the lowest priority number upward. The first match wins. If none match, the channel’s default published flow runs; channels with no default retain the existing WhatsApp fallback.</p>
+        <div className="mt-4"><FlowRouteTester routes={testRoutes} /></div>
       </Surface>
 
       <div className="grid gap-4 lg:grid-cols-2">
@@ -71,10 +85,14 @@ export default async function FlowRoutesPage() {
         <div className="flex items-center justify-between gap-3"><h2 className="font-semibold">Configured routes</h2><span className="text-xs text-muted-foreground">First enabled match wins</span></div>
         {routes.length === 0 ? <p className="mt-4 text-sm text-muted-foreground">No entry routes yet. Every channel currently uses its default publication.</p> : (
           <ResponsiveEntityTable className="mt-4">
-            <table className="w-full min-w-[720px] text-left text-sm">
-              <thead className="text-xs uppercase text-muted-foreground"><tr><th className="pb-2">Priority</th><th className="pb-2">Channel</th><th className="pb-2">Signal</th><th className="pb-2">Match</th><th className="pb-2">Published flow</th><th className="pb-2 text-right">Actions</th></tr></thead>
+            <table className="w-full min-w-[820px] text-left text-sm">
+              <thead className="text-xs uppercase text-muted-foreground"><tr><th className="pb-2">Priority</th><th className="pb-2">Channel</th><th className="pb-2">Signal</th><th className="pb-2">Match</th><th className="pb-2">Published flow</th><th className="pb-2">Version</th><th className="pb-2 text-right">Actions</th></tr></thead>
               <tbody className="divide-y divide-border">
-                {routes.map((route) => <tr key={route.id} className={route.enabled ? "" : "opacity-55"}><td className="py-3 font-mono text-xs">{route.priority}</td><td className="py-3">{channelLabel[route.channel] ?? route.channel}</td><td className="py-3">{kindLabel[route.kind] ?? route.kind}</td><td className="py-3 font-mono text-xs">{route.pattern}</td><td className="py-3">{flowNames.get(route.flowId) ?? "Deleted flow"}</td><td className="py-3"><div className="flex justify-end gap-2"><form action={setFlowRouteEnabled.bind(null, route.id, !route.enabled)}><button className="btn-secondary btn-sm">{route.enabled ? "Disable" : "Enable"}</button></form><form action={deleteFlowRoute.bind(null, route.id)}><button className="btn-secondary btn-sm text-red-300">Delete</button></form></div></td></tr>)}
+                {routes.map((route) => {
+                  const latest = latestVersionByFlow.get(route.flowId);
+                  const drifted = Boolean(latest && latest.id !== route.publishedVersionId);
+                  return <tr key={route.id} className={route.enabled ? "" : "opacity-55"}><td className="py-3 font-mono text-xs">{route.priority}</td><td className="py-3">{channelLabel[route.channel] ?? route.channel}</td><td className="py-3">{kindLabel[route.kind] ?? route.kind}</td><td className="py-3 font-mono text-xs">{route.pattern}</td><td className="py-3"><Link href={`/bot-builder/${route.flowId}`} className="inline-flex items-center gap-1 font-medium text-primary hover:underline">{flowNames.get(route.flowId) ?? "Deleted flow"}<ExternalLink className="size-3" /></Link></td><td className="py-3">{latest ? <span className={`inline-flex items-center gap-1 text-xs ${drifted ? "text-amber-300" : "text-muted-foreground"}`}>{drifted && <AlertTriangle className="size-3.5" />}v{latest.version}{drifted ? " · route pinned older" : ""}</span> : <span className="text-xs text-red-300">Missing snapshot</span>}</td><td className="py-3"><div className="flex justify-end gap-2"><form action={setFlowRouteEnabled.bind(null, route.id, !route.enabled)}><button className="btn-secondary btn-sm">{route.enabled ? "Disable" : "Enable"}</button></form><form action={deleteFlowRoute.bind(null, route.id)}><button className="btn-secondary btn-sm text-red-300">Delete</button></form></div></td></tr>;
+                })}
               </tbody>
             </table>
           </ResponsiveEntityTable>
