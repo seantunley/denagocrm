@@ -4,6 +4,7 @@ import { DEFAULT_TENANT_ID } from "./tenant";
 import { botIdentityForRecord } from "./botConversationControl";
 import { conversationIdsForThreads } from "./inboxConversations";
 import { type ThreadCollaboration, type ThreadIdentity } from "./inboxThreads";
+import { handoffContext } from "./botHandoff";
 
 /**
  * Joining the inbox's THREADS to the Conversation rows that carry collaboration.
@@ -101,7 +102,7 @@ export async function collaborationForThreads(
             key: target.key,
           })),
         },
-        select: { tenantId: true, channel: true, key: true, ownership: true },
+        select: { tenantId: true, channel: true, key: true, ownership: true, vars: true, updatedAt: true },
       })
     : [];
   // `status: "paused"` alone cannot say WHO owns the thread. Since conversation
@@ -111,16 +112,21 @@ export async function collaborationForThreads(
   // alone believing a colleague had it, while the customer sat waiting. That is
   // close to the opposite of the truth: a handoff is precisely the case that
   // needs a person to pick it up.
-  const humanOwned = new Set(
-    pausedSessions
-      .filter((session) => session.ownership === "human")
-      .map((session) => `${session.tenantId}:${session.channel}:${session.key}`),
-  );
+  const sessionByTarget = new Map(pausedSessions.map((session) => [
+    `${session.tenantId}:${session.channel}:${session.key}`,
+    session,
+  ]));
   const botByConversation = new Map(
-    botTargets.map((target) => [
-      target.conversationId,
-      humanOwned.has(`${target.tenantId}:${target.channel}:${target.key}`) ? "human" as const : "bot" as const,
-    ]),
+    botTargets.map((target) => {
+      const session = sessionByTarget.get(`${target.tenantId}:${target.channel}:${target.key}`);
+      const mode = session && session.ownership === "human" ? "human" as const
+        : session && session.ownership === "ai_handoff" ? "handoff" as const
+        : "bot" as const;
+      return [target.conversationId, {
+        mode,
+        handoff: mode === "handoff" && session ? handoffContext(session.vars, session.updatedAt) : null,
+      }] as const;
+    }),
   );
   const supportedConversations = new Set(botTargets.map((target) => target.conversationId));
 
@@ -134,7 +140,8 @@ export async function collaborationForThreads(
       notes: notesByConversation.get(conversation.id) ?? [],
       bot: {
         supported: supportedConversations.has(conversation.id),
-        mode: botByConversation.get(conversation.id) ?? "bot",
+        mode: botByConversation.get(conversation.id)?.mode ?? "bot",
+        handoff: botByConversation.get(conversation.id)?.handoff ?? null,
       },
       draft: draftByConversation.get(conversation.id) ?? null,
     });
