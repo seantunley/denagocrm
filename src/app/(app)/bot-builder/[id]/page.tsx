@@ -7,6 +7,7 @@ import { DEFAULT_FLOW, type Flow } from "@/lib/flow";
 import { enabledFlowChannels } from "@/lib/flowValidationServer";
 import FlowBuilder from "@/components/FlowBuilder";
 import FlowAiDraftForm from "@/components/FlowAiDraftForm";
+import FlowNodeSystemFrame from "@/components/FlowNodeSystemFrame";
 import { flowScope, journeyScope } from "@/lib/flowScope";
 import { getCompanyProfile } from "@/lib/companyProfile";
 
@@ -50,7 +51,9 @@ export default async function FlowEditorPage({ params }: { params: Promise<{ id:
         <Link href={`/bot-builder/${row.id}/test`} className="btn-secondary btn-sm"><FlaskConical className="size-4" />Test saved draft</Link>
       </div>
       <FlowAiDraftForm flowId={row.id} />
-      <FlowBuilder flowId={row.id} initial={flow} journeys={journeys} updatedAt={row.updatedAt.toISOString()} channels={channels} businessName={company.name} />
+      <FlowNodeSystemFrame>
+        <FlowBuilder flowId={row.id} initial={flow} journeys={journeys} updatedAt={row.updatedAt.toISOString()} channels={channels} businessName={company.name} />
+      </FlowNodeSystemFrame>
     </div>
   );
 }
