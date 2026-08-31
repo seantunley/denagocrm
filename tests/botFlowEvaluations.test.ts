@@ -38,7 +38,7 @@ test("saved evaluations are tenant-owned, RLS forced, bounded, and flow-fenced",
   assert.match(migration, /ENABLE ROW LEVEL SECURITY/);
   assert.match(migration, /FORCE ROW LEVEL SECURITY/);
   assert.match(migration, /"tenantId" = current_setting\('app\.current_tenant', true\)/);
-  assert.match(migration, /BotFlowEvaluation_flowVersionId_fkey[\s\S]+ON DELETE RESTRICT/);
+  assert.match(migration, /BotFlowEvaluation_tenant_flowVersion_fkey[\s\S]+FOREIGN KEY \("tenantId", "flowVersionId"\)[\s\S]+ON DELETE RESTRICT/);
 });
 
 test("evaluation actions validate every flow and version against the acting tenant", () => {
