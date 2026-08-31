@@ -62,6 +62,25 @@ test("route writes require owner access, tenant ownership and an existing publis
   assert.match(add, /tenantId_channel_kind_pattern/);
 });
 
+test("publishing a flow atomically advances every route for that flow and channel", () => {
+  const code = src("src/lib/flowPublishing.ts");
+  const publish = code.slice(code.indexOf("export async function publishFlowSnapshot"));
+  const transactionAt = publish.indexOf("return withTenantWrite(async (tx)");
+  const snapshotAt = publish.indexOf("tx.botFlowVersion.create");
+  const publicationAt = publish.indexOf("tx.botFlowPublication.upsert");
+  const routesAt = publish.indexOf("tx.botFlowRoute.updateMany");
+
+  assert.ok(transactionAt >= 0 && snapshotAt > transactionAt);
+  assert.ok(publicationAt > snapshotAt && routesAt > publicationAt);
+  assert.match(publish, /where: \{ tenantId, flowId: flow\.id, channel: flow\.channel \}/);
+  assert.match(publish, /data: \{ publishedVersionId: snapshot\.id \}/);
+  assert.doesNotMatch(
+    publish.slice(routesAt, publish.indexOf("return { versionId", routesAt)),
+    /enabled:/,
+    "disabled routes must advance too, or re-enabling one can restore a stale version",
+  );
+});
+
 test("route storage has composite tenant integrity and FORCE RLS", () => {
   const migration = src("prisma/migrations/20260830220000_bot_flow_entry_routes/migration.sql");
   assert.match(migration, /FOREIGN KEY \("tenantId", "flowId"\) REFERENCES "BotFlow"\("tenantId", "id"\)/);
