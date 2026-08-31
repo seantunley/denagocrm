@@ -1,11 +1,12 @@
 import Link from "next/link";
-import { AlertTriangle, ArrowLeft, ChevronDown, ExternalLink, GitBranch, Route, Signpost, ToggleLeft } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ChevronDown, ExternalLink, GitBranch, Signpost, ToggleLeft } from "lucide-react";
 import { requireOwner } from "@/lib/auth";
 import { builderTenantId, flowScope } from "@/lib/flowScope";
 import { prisma } from "@/lib/db";
 import { FLOW_CHANNELS } from "@/lib/flowRouting";
 import { addFlowRoute, deleteFlowRoute, setFlowRouteEnabled } from "@/app/actions/flow";
 import { StatusPill, Surface } from "@/components/visual-system";
+import { PageHeader } from "@/components/page-header";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 import FlowRouteTester from "@/components/FlowRouteTester";
@@ -44,14 +45,13 @@ export default async function FlowRoutesPage() {
 
   return (
     <div className="space-y-3">
-      <header className="flex flex-wrap items-start justify-between gap-3 border-b border-border/80 pb-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 text-primary"><Route className="size-4" aria-hidden="true" /><span className="text-[11px] font-semibold uppercase tracking-[0.14em]">Conversation entry</span></div>
-          <h1 className="mt-1 text-xl font-semibold tracking-tight">Flow routing</h1>
-          <p className="mt-1 max-w-3xl text-xs leading-5 text-muted-foreground">Choose which published flow starts for each channel, keyword phrase, referral code or ad. Existing conversations stay pinned to the immutable version on which they began.</p>
-        </div>
+      <PageHeader
+        title="Flow routing"
+        description="Choose which published flow starts for each channel, keyword phrase, referral code or ad. Existing conversations stay pinned to the immutable version on which they began."
+        className="border-b border-border/80 pb-3"
+      >
         <Link href="/bot-builder" className="btn-secondary btn-sm min-h-11 sm:min-h-9"><ArrowLeft className="size-4" />Flow library</Link>
-      </header>
+      </PageHeader>
 
       <div className="flex flex-wrap gap-x-5 gap-y-2 text-xs text-muted-foreground" aria-label="Routing summary">
         <span className="inline-flex items-center gap-1.5"><Signpost className="size-3.5" aria-hidden="true" /><strong className="text-foreground">{routes.length}</strong> routes</span>
