@@ -11,7 +11,7 @@ import { flowScope } from "@/lib/flowScope";
 
 const pct = (part: number, total: number) => total > 0 ? `${Math.round((part / total) * 1000) / 10}%` : "—";
 const channelLabel = (channel: string) => channel === "whatsapp" ? "WhatsApp" : channel === "instagram" ? "Instagram" : channel === "messenger" ? "Messenger" : channel === "telegram" ? "Telegram" : channel;
-const shortDate = (value: string | Date) => new Date(value).toLocaleDateString("en-ZA", { day: "numeric", month: "short", timeZone: "UTC" });
+const shortDate = (value: string | Date) => new Date(value).toLocaleDateString("en-ZA", { day: "numeric", month: "short", timeZone: "Africa/Johannesburg" });
 
 type Search = { flowId?: string; range?: string; channel?: string; version?: string };
 
@@ -27,7 +27,7 @@ export default async function BotAnalyticsPage({ searchParams }: { searchParams:
   const selected = flows.find((flow) => flow.id === params.flowId) ?? flows[0] ?? null;
   const report = selected ? await getBotFlowAnalyticsReport(selected.id, params) : null;
   const scopeLabel = report
-    ? `Version ${report.selectedVersion?.version ?? "—"} · last ${report.filters.rangeDays} days${report.filters.channel ? ` · ${channelLabel(report.filters.channel)}` : ""}`
+    ? `${report.selectedVersion ? `Version ${report.selectedVersion.version}` : "All versions"} · last ${report.filters.rangeDays} days${report.filters.channel ? ` · ${channelLabel(report.filters.channel)}` : ""}`
     : "";
 
   return (
@@ -53,7 +53,7 @@ export default async function BotAnalyticsPage({ searchParams }: { searchParams:
             {flows.map((flow) => (
               <Link
                 key={flow.id}
-                href={`/bot-analytics?flowId=${encodeURIComponent(flow.id)}&range=${report?.filters.rangeDays ?? 30}`}
+                href={`/bot-analytics?flowId=${encodeURIComponent(flow.id)}&range=${report?.filters.rangeDays ?? 30}${report?.filters.channel ? `&channel=${encodeURIComponent(report.filters.channel)}` : ""}`}
                 className={flow.id === selected?.id ? "btn-primary btn-sm" : "btn-secondary btn-sm"}
               >
                 {flow.name}{flow.active ? " · live" : ""}
@@ -73,8 +73,9 @@ export default async function BotAnalyticsPage({ searchParams }: { searchParams:
               <label>
                 <span className="label">Published version</span>
                 <select name="version" className="input" defaultValue={report.selectedVersion?.id ?? ""}>
+                  <option value="">All versions</option>
                   {report.versions.map((version) => (
-                    <option key={version.id} value={version.id}>Version {version.version} · {version.publishedAt.toLocaleDateString("en-ZA")}</option>
+                    <option key={version.id} value={version.id}>Version {version.version} · {shortDate(version.publishedAt)}</option>
                   ))}
                 </select>
               </label>
@@ -93,7 +94,7 @@ export default async function BotAnalyticsPage({ searchParams }: { searchParams:
               </label>
               <button type="submit" className="btn-primary h-10"><CalendarDays className="size-4" />Apply filters</button>
             </form>
-            <p className="mt-3 text-xs text-muted-foreground">Showing {scopeLabel}. Date boundaries use UTC calendar days.</p>
+            <p className="mt-3 text-xs text-muted-foreground">Showing {scopeLabel}. Date boundaries use South African calendar days.</p>
           </Surface>
 
           <div className="grid gap-4 lg:grid-cols-2">
@@ -103,7 +104,7 @@ export default async function BotAnalyticsPage({ searchParams }: { searchParams:
                   <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Selected published version</p>
                   <h2 className="mt-1 text-lg font-semibold">{selected.name}</h2>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    {report.selectedVersion ? `Version ${report.selectedVersion.version} · published ${report.selectedVersion.publishedAt.toLocaleDateString("en-ZA")}` : "No immutable published version yet"}
+                    {report.selectedVersion ? `Version ${report.selectedVersion.version} · published ${shortDate(report.selectedVersion.publishedAt)}` : "All immutable published versions"}
                   </p>
                 </div>
                 {selected.active && <StatusPill tone="success">Live flow</StatusPill>}
@@ -183,7 +184,7 @@ export default async function BotAnalyticsPage({ searchParams }: { searchParams:
                 <tbody className="divide-y divide-border">
                   {report.versionPerformance.map((version) => (
                     <tr key={version.id} className={version.id === report.selectedVersion?.id ? "bg-orange-500/5" : "hover:bg-muted/20"}>
-                      <td data-primary className="px-5 py-3"><p className="font-medium">Version {version.version}{version.id === report.selectedVersion?.id ? " · selected" : ""}</p><p className="text-[10px] text-muted-foreground">{version.publishedAt.toLocaleDateString("en-ZA")}</p></td>
+                      <td data-primary className="px-5 py-3"><p className="font-medium">Version {version.version}{version.id === report.selectedVersion?.id ? " · selected" : ""}</p><p className="text-[10px] text-muted-foreground">{shortDate(version.publishedAt)}</p></td>
                       <td data-label="Runs" className="px-3 py-3 text-right font-medium">{version.started}</td>
                       <td data-label="Completed" className="px-3 py-3 text-right">{version.completed} · {pct(version.completed, version.started)}</td>
                       <td data-label="Handoff" className="px-3 py-3 text-right">{version.handedOff} · {pct(version.handedOff, version.started)}</td>
