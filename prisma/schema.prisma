@@ -655,8 +655,11 @@ model BotKnowledgeEntry {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt @default(now())
 
-  @@index([tenantId, status, validFrom, validUntil])
-  @@index([tenantId, updatedAt])
+  @@index([tenantId, status, validFrom, validUntil], map: "BotKnowledgeEntry_tenant_status_valid_idx")
+  // Descending, and named as the migration creates it: the workspace list and
+  // every retrieval leg order by `updatedAt` DESC. Declared here so the deployed
+  // index and the Prisma schema describe the same object instead of drifting.
+  @@index([tenantId, updatedAt(sort: Desc)], map: "BotKnowledgeEntry_tenant_updated_idx")
 }
 
 model PipelineStage {
