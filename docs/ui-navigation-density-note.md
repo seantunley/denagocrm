@@ -1,1 +1,0 @@
-Flowbot navigation density correction verification target: compact top-level workspace navigation, no permanent nested Flowbot side rail, focused flow toolbar, and collapsed route-creation controls. Verify at 390px, 768px and 1440px with keyboard navigation and no page-level horizontal overflow.
