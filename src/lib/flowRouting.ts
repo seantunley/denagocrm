@@ -13,9 +13,7 @@ export async function resolveRoutedFlowVersion(tenantId: string, channel: string
   });
   const route = routes.find((candidate) => routeMatches(candidate, entry));
   if (!route) return null;
-  const publication = await prisma.botFlowPublication.findUnique({
-    where: { tenantId_channel: { tenantId, channel } },
+  return prisma.botFlowVersion.findFirst({
+    where: { id: route.publishedVersionId, tenantId, flowId: route.flowId, channel },
   });
-  if (!publication || publication.flowId !== route.flowId) return null;
-  return prisma.botFlowVersion.findFirst({ where: { id: publication.versionId, tenantId, flowId: route.flowId, channel } });
 }
