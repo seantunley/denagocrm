@@ -7,6 +7,7 @@ import { runFlow, type Flow, type FlowInput, type FlowSession, type OutMsg } fro
 import { flowScope } from "@/lib/flowScope";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { getCompanyProfile } from "@/lib/companyProfile";
+import { DEFAULT_SIMULATOR_SCENARIO, type SimulatorScenario } from "@/lib/flowSimulatorScenario";
 
 export type SimulatorTurnInput = {
   flowId: string;
@@ -16,24 +17,7 @@ export type SimulatorTurnInput = {
   text?: string;
   choiceId?: string;
   fileUrl?: string;
-  simulateAiHandoff?: boolean;
   scenario?: SimulatorScenario;
-};
-export type SimulatorScenario = {
-  ai: "answer" | "handoff" | "timeout";
-  crm: "success" | "failure";
-  slots: "available" | "none" | "race_lost";
-  bookingIdentity: "verified" | "unverified";
-  bookingLookup: "found" | "missing";
-  journey: "success" | "failure";
-};
-export const DEFAULT_SIMULATOR_SCENARIO: SimulatorScenario = {
-  ai: "answer",
-  crm: "success",
-  slots: "available",
-  bookingIdentity: "verified",
-  bookingLookup: "found",
-  journey: "success",
 };
 export type SimulatorTurnResult = { ok: boolean; error?: string; messages: OutMsg[]; session: FlowSession | null; handedOff: boolean; trace: string[]; vars: Record<string, string> };
 
@@ -57,8 +41,7 @@ export async function simulateFlowTurn(input: SimulatorTurnInput): Promise<Simul
     if (!flow) return { ok: false, error: "Flow data is malformed.", messages: [], session: null, handedOff: false, trace: [], vars: {} };
 
     const scenario = { ...DEFAULT_SIMULATOR_SCENARIO, ...input.scenario };
-    const company = await getCompanyProfile();
-    const session: FlowSession = input.session ?? { nodeId: null, vars: { greeting: `Hi there 👋 Welcome to ${company.name}!`, first_name: "Test", name: "Test" } };
+    const session: FlowSession = input.session ?? { nodeId: null, vars: { greeting: `Hi there 👋 Welcome to ${(await getCompanyProfile()).name}!`, first_name: "Test", name: "Test" } };
     const trace: string[] = [`Enter: ${session.nodeId ?? flow.start}`, `Scenario: AI ${scenario.ai} · CRM ${scenario.crm} · slots ${scenario.slots}`];
     const turn: FlowInput = { text: input.text ?? "", ...(input.choiceId ? { choiceId: input.choiceId } : {}), ...(input.fileUrl ? { fileUrl: input.fileUrl } : {}) };
 
@@ -68,9 +51,9 @@ export async function simulateFlowTurn(input: SimulatorTurnInput): Promise<Simul
         aiReply: async () => {
           if (scenario.ai === "timeout") {
             trace.push("AI: simulated provider timeout");
-            throw new Error("Simulated AI provider timeout.");
+            return { reply: "Let me get one of our team to help — I'll pass this on now 👍", handoff: true };
           }
-          const handoff = scenario.ai === "handoff" || Boolean(input.simulateAiHandoff);
+          const handoff = scenario.ai === "handoff";
           trace.push(handoff ? "AI: simulated handoff" : "AI: simulated answer");
           return { reply: handoff ? "[Simulator] AI would hand this conversation to a person." : "[Simulator] AI response — production uses approved knowledge and live CRM product facts.", handoff };
         },
@@ -81,7 +64,11 @@ export async function simulateFlowTurn(input: SimulatorTurnInput): Promise<Simul
         ],
         bookSlot: async (slotId, _vars, nodeId) => {
           trace.push(`CRM: node ${nodeId} would reserve slot ${slotId}`);
-          if (scenario.crm === "failure" || scenario.slots === "race_lost") return { ok: false };
+          if (scenario.slots === "race_lost") {
+            trace.push(`Slots: ${slotId} was taken before the simulated reservation completed`);
+            return { ok: false, reason: "simulated slot race lost" };
+          }
+          if (scenario.crm === "failure") return { ok: false, reason: "simulated CRM refusal" };
           return { ok: true, label: simulatedSlotLabel(slotId) };
         },
         rescheduleSlot: async (slotId, vars, nodeId) => {
