@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { requireOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { basePrisma, prisma } from "@/lib/db";
-import { builderTenantId } from "@/lib/flowScope";
+import { builderTenantId, flowScope } from "@/lib/flowScope";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { parseEvaluationExpectation, parseEvaluationTurns } from "@/lib/flowEvaluationContract";
 import { evaluateFlowScenario, parseEvaluationFlow } from "@/lib/flowEvaluationRunner";
@@ -28,7 +28,8 @@ export async function createFlowEvaluation(flowId: string, formData: FormData) {
   return withActingStaffScope(async () => {
     const owner = await requireOwner();
     const tenantId = await builderTenantId();
-    const flow = await prisma.botFlow.findFirst({ where: { id: flowId, tenantId }, select: { id: true } });
+    const scope = await flowScope();
+    const flow = await prisma.botFlow.findFirst({ where: { id: flowId, ...scope }, select: { id: true } });
     if (!flow) return { error: "Flow not found." };
 
     const name = String(formData.get("name") ?? "").trim().slice(0, 120);
