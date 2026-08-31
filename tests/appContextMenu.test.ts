@@ -73,21 +73,44 @@ test("KEYBOARD-OPENED MENUS ARE DISTINGUISHED FROM RIGHT-CLICKS", () => {
    * highlighted first row under the cursor is an accidental Enter away from
    * "Open".
    *
-   * The Menu key reports button 0 / detail 0; a real right-click reports
-   * button 2 with a non-zero detail.
+   * `button` is the whole signal: 2 is the secondary button, so a right-click
+   * reports 2 and the Menu key reports 0.
+   *
+   * THE CASE THAT WAS WRONG, and is now first. An earlier version also accepted
+   * `detail === 0` as evidence of the keyboard, and `contextmenu` ALWAYS reports
+   * detail 0 — it is a click count, and only for click/dblclick/mousedown/
+   * mouseup. So every ordinary right-click was classified as keyboard and
+   * preselected the first item, which is precisely what the detection exists to
+   * prevent.
+   *
+   * The tests that covered it asserted `detail: 1` and `detail: 2` for
+   * right-clicks — values a contextmenu event never carries. They described a
+   * browser that does not exist and passed against it, which is why the bug
+   * survived with coverage sitting on top of it.
    */
-  assert.equal(isKeyboardInvocation({ button: 0, detail: 0 }), true, "Menu key");
-  assert.equal(isKeyboardInvocation({ button: 2, detail: 1 }), false, "right-click");
-  assert.equal(isKeyboardInvocation({ button: 2, detail: 2 }), false, "second right-click");
+  assert.equal(
+    isKeyboardInvocation({ button: 2, detail: 0 }),
+    false,
+    "a REAL right-click: button 2, detail 0 — the shape every browser actually sends",
+  );
 
-  // Long-press on touch also reports 0/0. Treated as keyboard, which costs
+  assert.equal(isKeyboardInvocation({ button: 0 }), true, "Menu key");
+  assert.equal(isKeyboardInvocation({ button: 2 }), false, "right-click");
+
+  // detail is not consulted at all now. Pinned so it cannot creep back in as a
+  // signal: no value of it may change the answer for a given button.
+  for (const detail of [0, 1, 2, 3]) {
+    assert.equal(isKeyboardInvocation({ button: 2, detail }), false, `button 2, detail ${detail}`);
+    assert.equal(isKeyboardInvocation({ button: 0, detail }), true, `button 0, detail ${detail}`);
+  }
+
+  // Long-press on touch reports button 0. Treated as keyboard, which costs
   // nothing: the only consequence is that the first item starts focused.
-  assert.equal(isKeyboardInvocation({ button: 0, detail: 0 }), true);
+  assert.equal(isKeyboardInvocation({ button: 0 }), true);
 
-  // A synthetic event missing either field must not be mistaken for a mouse
-  // right-click — defaulting the other way would reintroduce the dead Enter.
+  // An event with no button defaults to keyboard: a preselected item is a small
+  // oddity, a dead Enter key is a broken menu.
   assert.equal(isKeyboardInvocation({}), true);
-  assert.equal(isKeyboardInvocation({ button: 2 }), true, "no detail — assume keyboard");
 });
 
 test("A KEYBOARD-OPENED MENU STARTS ON ITS FIRST ITEM, so Enter works at once", () => {

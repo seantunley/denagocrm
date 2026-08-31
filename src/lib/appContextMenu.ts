@@ -133,10 +133,24 @@ export function isEditableTarget(target: {
  * nor does Radix, and a highlighted first entry under the cursor invites an
  * accidental Enter on "Open".
  *
- * A `contextmenu` event from the Menu key carries `button: 0` and `detail: 0`;
- * from a real right-click it carries `button: 2`. Long-press on touch also
- * reports 0/0 and is treated as keyboard here — harmless, since the only
- * consequence is that the first item starts focused.
+ * `button` IS THE WHOLE SIGNAL, and it has to be — 2 is the secondary button, so
+ * a real right-click reports 2 and the Menu key reports 0.
+ *
+ * An earlier version also accepted `detail === 0` as evidence of the keyboard.
+ * That was wrong, and wrong in the direction that breaks the mouse. `detail` is
+ * a CLICK COUNT, and only for click/dblclick/mousedown/mouseup; every other UI
+ * event reports 0, `contextmenu` included. So an ordinary right-click arrives as
+ * `button: 2, detail: 0` and was classified as keyboard — preselecting the first
+ * item on every right-click, the exact thing the paragraph above says not to do.
+ *
+ * The tests that covered it were no better: they asserted `detail: 1` and
+ * `detail: 2` for right-clicks, values a `contextmenu` event never carries. They
+ * described a browser that does not exist and passed against it.
+ *
+ * Long-press on touch reports `button: 0` and is treated as keyboard here —
+ * harmless, since the only consequence is that the first item starts focused.
+ * An event with no `button` at all defaults to keyboard for the same reason:
+ * a preselected item is a small oddity, a dead Enter key is a broken menu.
  *
  * NOTE: Shift+F10 — the other keyboard route — never reaches this menu at all,
  * because `shouldUseNativeMenu` bails on a held Shift. That is the escape hatch
@@ -144,7 +158,10 @@ export function isEditableTarget(target: {
  * is a fine outcome. The plain Menu key is the route into ours.
  */
 export function isKeyboardInvocation(event: { button?: number; detail?: number }): boolean {
-  return (event.button ?? 0) !== 2 || (event.detail ?? 0) === 0;
+  // `detail` is accepted because the caller hands over the whole MouseEvent, and
+  // is deliberately NOT consulted — see above. Leaving it in the signature keeps
+  // the trap documented at the place someone would reach for it again.
+  return (event.button ?? 0) !== 2;
 }
 
 /** The bit of an element this module needs; keeps the DOM out of here. */
