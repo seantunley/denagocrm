@@ -623,6 +623,7 @@ model BotFlowRoute {
   kind      String // keyword | referral | ad
   pattern   String
   flowId    String
+  publishedVersionId String
   priority  Int      @default(100)
   enabled   Boolean  @default(true)
   createdAt DateTime @default(now())
@@ -631,6 +632,7 @@ model BotFlowRoute {
   @@unique([tenantId, channel, kind, pattern])
   @@index([tenantId, channel, enabled, priority])
   @@index([tenantId, flowId])
+  @@index([tenantId, publishedVersionId])
 }
 
 /** Live state of a customer's position in a chatbot flow. */
