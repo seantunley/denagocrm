@@ -35,8 +35,9 @@ test("routes select only an immutable version published for the same tenant, flo
   const code = src("src/lib/flowRouting.ts");
   assert.match(code, /where: \{ tenantId, channel, enabled: true \}/);
   assert.match(code, /orderBy: \[\{ priority: "asc" \}/);
-  assert.match(code, /where: \{ tenantId, flowId: route\.flowId, channel \}/);
-  assert.match(code, /version: "desc"/);
+  assert.match(code, /botFlowPublication\.findUnique/);
+  assert.match(code, /publication\.flowId !== route\.flowId/);
+  assert.match(code, /id: publication\.versionId/);
 });
 
 test("provider entry metadata reaches routing on Meta, WhatsApp and Telegram", () => {
@@ -57,7 +58,7 @@ test("route writes require owner access, tenant ownership and an existing publis
   assert.match(add, /await requireOwner\(\)/);
   assert.match(add, /const tenantId = await builderTenantId\(\)/);
   assert.match(add, /where: \{ id: flowId, tenantId, channel \}/);
-  assert.match(add, /botFlowVersion\.findFirst/);
+  assert.match(add, /botFlowPublication\.findUnique/);
   assert.match(add, /tenantId_channel_kind_pattern/);
 });
 
