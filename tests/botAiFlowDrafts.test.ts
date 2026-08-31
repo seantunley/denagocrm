@@ -18,7 +18,8 @@ test("AI flow generation is a draft-only pure generator with a strict JSON contr
 
 test("only compiler-clean generated graphs may become signed proposals", () => {
   const action = src("src/app/actions/flowAi.ts");
-  assert.match(action, /const errors = flowErrors\(generated\.issues\)/);
+  assert.match(action, /const proposalIssues = await validateFlowForEnabledChannels\(generated\.flow\)/);
+  assert.match(action, /const errors = flowErrors\(proposalIssues\)/);
   const errorsAt = action.indexOf("const errors = flowErrors");
   const proposalAt = action.indexOf("signFlowProposal", errorsAt);
   assert.ok(errorsAt >= 0 && proposalAt > errorsAt);
