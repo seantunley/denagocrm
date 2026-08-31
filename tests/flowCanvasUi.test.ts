@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
-const source = await readFile(new URL("../src/components/FlowBuilder.tsx", import.meta.url), "utf8");
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const source = readFileSync(path.join(root, "src/components/FlowBuilder.tsx"), "utf8");
 
 test("Flowbot canvas has a searchable categorised node palette", () => {
   assert.match(source, /const NODE_GROUPS/);
@@ -15,7 +18,7 @@ test("Flowbot canvas has a searchable categorised node palette", () => {
 });
 
 test("Flowbot nodes can be dragged from the palette onto a snapped canvas", () => {
-  assert.match(source, /draggable/);
+  assert.match(source, /draggable=\{true\}/);
   assert.match(source, /application\/x-flowbot-node/);
   assert.match(source, /screenToFlowPosition/);
   assert.match(source, /snapToGrid/);
