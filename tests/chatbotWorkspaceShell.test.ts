@@ -7,7 +7,7 @@ import path from "node:path";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
 
-test("Flowbot workspace navigation covers all top-level surfaces without nested group chrome", () => {
+test("Flowbot workspace navigation covers all top-level surfaces in grouped horizontal clusters", () => {
   const nav = src("src/components/ChatbotWorkspaceNav.tsx");
   for (const route of [
     "/chatbot",
@@ -21,10 +21,19 @@ test("Flowbot workspace navigation covers all top-level surfaces without nested 
   assert.match(nav, /Answer preview/);
   assert.doesNotMatch(nav, /label: "Simulator"/);
   assert.match(src("src/app/(app)/chatbot/preview/page.tsx"), /title="Answer preview"/);
-  assert.doesNotMatch(nav, /NavGroup/);
-  assert.doesNotMatch(nav, />Configure</);
-  assert.doesNotMatch(nav, />Test</);
-  assert.doesNotMatch(nav, />Operate</);
+  assert.match(nav, /label: "Configure"/);
+  assert.match(nav, /label: "Test"/);
+  assert.match(nav, /label: "Operate"/);
+  assert.match(nav, /workspaceGroups\.map/);
+  assert.doesNotMatch(nav, /<aside/);
+});
+
+test("Flowbot horizontal navigation restores a distinct icon for every tool", () => {
+  const nav = src("src/components/ChatbotWorkspaceNav.tsx");
+  for (const icon of ["Bot", "GitBranch", "Route", "BookOpen", "FlaskConical", "Inbox", "BarChart3"]) {
+    assert.match(nav, new RegExp(`icon: ${icon}\\b`));
+  }
+  assert.match(nav, /<Icon className="size-4 shrink-0" aria-hidden="true" \/>/);
 });
 
 test("flow-specific simulator and evaluation tools remain owned by the flow workspace", () => {
@@ -35,7 +44,7 @@ test("flow-specific simulator and evaluation tools remain owned by the flow work
   assert.match(layout, /\/bot-builder\/\$\{encoded\}\/evaluations/);
 });
 
-test("workspace navigation uses a compact top bar and responsive mobile disclosure", () => {
+test("workspace navigation remains a compact top bar with responsive mobile disclosure", () => {
   const nav = src("src/components/ChatbotWorkspaceNav.tsx");
   assert.match(nav, /usePathname/);
   assert.match(nav, /aria-current=\{active \? "page"/);
@@ -43,6 +52,8 @@ test("workspace navigation uses a compact top bar and responsive mobile disclosu
   assert.match(nav, /aria-expanded=\{mobileOpen\}/);
   assert.match(nav, /min-h-11/);
   assert.match(nav, /border-b border-border\/80/);
+  assert.match(nav, /overflow-x-auto/);
+  assert.match(nav, /md:flex/);
   assert.doesNotMatch(nav, /<aside/);
   assert.doesNotMatch(nav, /w-56/);
 });
