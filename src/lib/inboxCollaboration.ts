@@ -119,8 +119,8 @@ export async function collaborationForThreads(
   const botByConversation = new Map(
     botTargets.map((target) => {
       const session = sessionByTarget.get(`${target.tenantId}:${target.channel}:${target.key}`);
-      const mode = session?.ownership === "human" ? "human" as const
-        : session?.ownership === "ai_handoff" ? "handoff" as const
+      const mode = session && session.ownership === "human" ? "human" as const
+        : session && session.ownership === "ai_handoff" ? "handoff" as const
         : "bot" as const;
       return [target.conversationId, {
         mode,
