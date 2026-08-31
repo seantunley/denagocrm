@@ -9,6 +9,7 @@ import { integrationsUsingCredentialKey } from "@/lib/integrationFlow";
 import { clearIntegrationVerification } from "@/lib/integrationConnection";
 import { logAuditStrict } from "@/lib/audit";
 import { withActingStaffScope } from "@/lib/actingScope";
+import { keyNamesAnInboundEndpoint, reconcileTenantChannels } from "@/lib/channelRegistration";
 
 const OVERRIDES_PATH = "/settings/integration-overrides";
 
@@ -57,6 +58,14 @@ export async function saveTenantCredentialOverride(formData: FormData): Promise<
     // The stored bundle changed, so any verification verdict about it is now
     // about a credential that no longer exists.
     await invalidateVerificationForKey(tenantId, key);
+    // An override naming a DIFFERENT inbound endpoint than the platform default
+    // is precisely the case that must not be missed: this tenant now owns a
+    // phone number or Page the webhook will present, and until it is registered
+    // every event from it is discarded unattributed. `force` because the token
+    // may name a different Page than the one already on file.
+    if (keyNamesAnInboundEndpoint(key)) {
+      await reconcileTenantChannels(tenantId, { force: true }).catch(() => undefined);
+    }
     // Never log the value itself (secret or not) — only that an override for
     // this key was set, mirroring how the global page's saveSetting action never
     // writes a credential value into an audit entry either.
@@ -91,6 +100,12 @@ export async function clearTenantCredentialOverride(key: string): Promise<void> 
     // Reverting to the platform default is just as much a change to what the
     // bundle IS — the old verdict was about the override that just went away.
     await invalidateVerificationForKey(tenantId, key);
+    // And it changes which endpoints this tenant owns. Clearing an override
+    // must RETIRE the endpoint it named, or the row keeps routing inbound
+    // events here and blocks every other workspace from ever claiming it.
+    if (keyNamesAnInboundEndpoint(key)) {
+      await reconcileTenantChannels(tenantId, { force: true }).catch(() => undefined);
+    }
     await logAuditStrict({
       action: "tenant_credential.override_cleared",
       summary: `Cleared the tenant override for ${key}`,
