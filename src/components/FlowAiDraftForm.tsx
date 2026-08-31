@@ -67,6 +67,7 @@ function ProposalReview({ flowId, proposal, onReject }: { flowId: string; propos
     } else if (state.error) toast.error(state.error);
   }, [router, state.error, state.ok]);
 
+  if (state.ok) return null;
   const total = proposal.added.length + proposal.removed.length + proposal.changed.length + Number(proposal.startChanged);
   return (
     <div className="mt-4 rounded-xl border border-orange-400/25 bg-[#111614] p-4">
