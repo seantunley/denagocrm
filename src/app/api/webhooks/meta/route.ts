@@ -11,6 +11,9 @@ import { runDmFlow } from "@/lib/flowDm";
 import { metaReceipt } from "@/lib/deliveryReceipts";
 import { applyReceipt } from "@/lib/messageReceipts";
 import { withChannelTenantScope, validateInSystemScope } from "@/lib/tenantScopeEntry";
+import { reportUnmappedEndpoint } from "@/lib/channelRegistration";
+import { decideComment, type FeedChangeValue } from "@/lib/socialComments";
+import { recordPostCommentSafely } from "@/lib/commentThreads";
 import { inboundRetryResponse, noteInboundRetry, noteLeasedInbound } from "@/lib/webhookRetry";
 import { secretEquals } from "@/lib/secretCompare";
 import {
@@ -136,7 +139,7 @@ export async function POST(req: NextRequest) {
             throw await noteInboundRetry("meta-dm-webhook", "failed", `${platform} ${providerId}`);
           }
         }
-      }, () => console.warn(`[tenant-channel] skipped ${platform} DM: unmapped endpoint ${endpointId || "?"}`));
+      }, () => reportUnmappedEndpoint(platform, endpointId, (entry.messaging ?? []).length));
     }
     } catch (error) {
       return inboundRetryResponse("meta-dm-webhook", error);
@@ -144,9 +147,43 @@ export async function POST(req: NextRequest) {
   }
   /* eslint-enable @typescript-eslint/no-explicit-any */
 
-  const entries = (body as { entry?: { changes?: { field: string; value: Record<string, unknown> }[] }[] }).entry ?? [];
+  const entries = (body as { entry?: { id?: string; changes?: { field: string; value: Record<string, unknown> }[] }[] }).entry ?? [];
   for (const entry of entries) {
     for (const change of entry.changes ?? []) {
+      /*
+       * COMMENTS ON POSTS — AND ON ADS.
+       *
+       * Meta's documentation: "Webhooks are not sent for Ad Posts, but are sent
+       * for Comments on Ad Posts." So a comment on a boosted post, or on a dark
+       * post created straight in Ads Manager, arrives here in exactly the same
+       * shape as one on an organic post. No special handling, and none needed.
+       *
+       * `feed` is a firehose — likes, reactions, shares, edits and deletions all
+       * come down it — so `decideComment` filters first. Without that the inbox
+       * fills with reaction noise on the first busy campaign, and people stop
+       * opening the inbox that currently works.
+       *
+       * The Page id is `entry.id`, which is both the tenant discriminator and
+       * the way to tell OUR reply apart from a customer's comment.
+       */
+      if (change.field === "feed") {
+        const pageId = String(entry.id ?? "");
+        const decision = decideComment(change.value as FeedChangeValue);
+        if (!decision.ok) continue;
+        await withChannelTenantScope(
+          "messenger",
+          pageId,
+          async () => {
+            await recordPostCommentSafely(decision.comment, { platform: "facebook", pageId });
+          },
+          // Now that #578 has landed, a dropped comment goes to the System Log
+          // like every other unattributable inbound event — which is the point
+          // of that change: an endpoint nobody claims must be readable, not a
+          // console line on Vercel that nobody sees.
+          () => reportUnmappedEndpoint("messenger", pageId, 1),
+        );
+        continue;
+      }
       if (change.field !== "leadgen") continue;
       const leadgenId = String(change.value?.leadgen_id ?? "");
       if (!leadgenId) continue;
@@ -173,7 +210,7 @@ export async function POST(req: NextRequest) {
             source: "facebook", externalId: leadgenId, raw: change.value,
           }).catch(() => {});
         }
-      }, () => console.warn(`[tenant-channel] skipped leadgen: unmapped page_id ${pageId || "?"}`));
+      }, () => reportUnmappedEndpoint("messenger", pageId, 1));
     }
   }
   return NextResponse.json({ received: true });

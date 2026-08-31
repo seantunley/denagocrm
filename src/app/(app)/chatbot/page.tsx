@@ -9,9 +9,6 @@ import {
   addFaq,
   deleteFaq,
   whisperConfigured,
-  connectTelegram,
-  disconnectTelegram,
-  telegramStatus,
 } from "@/app/actions/bot";
 import ClearSecret from "@/components/ClearSecret";
 import { Bot, BrainCircuit, BookOpenCheck, GitBranch, MessagesSquare, Radio } from "lucide-react";
@@ -20,12 +17,13 @@ import { StatusPill, Surface } from "@/components/visual-system";
 
 export default async function ChatbotSettingsPage() {
   await requireOwner();
-  const [settings, botFaqs, knowledge, hasWhisper, tg] = await Promise.all([
+  // `libraryDocuments` went on main; `tg` went here, when Telegram moved to
+  // Settings → Integrations. Both removals stand.
+  const [settings, botFaqs, knowledge, hasWhisper] = await Promise.all([
     prisma.appSetting.findMany(),
     getBotFaqs(),
     getBotKnowledgeEntries(),
     whisperConfigured(),
-    telegramStatus(),
   ]);
   const setting = (key: string) => {
     const raw = settings.find((s) => s.key === key)?.value ?? "";
@@ -143,11 +141,19 @@ export default async function ChatbotSettingsPage() {
             <Link href="/chatbot/knowledge" className="btn-secondary btn-sm mt-3 w-full"><BookOpenCheck className="size-3.5" />Open knowledge workspace</Link>
           </Surface>
 
-          <Surface className="p-5">
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">Telegram {tg.connected && <span className="text-emerald-400 normal-case">· connected{tg.enabled ? " & live" : ""}</span>}</p>
-            <p className="text-xs text-muted-foreground mb-2">Create a bot with @BotFather, paste the token and Connect — it runs the same published flow.</p>
-            {!tg.connected ? <form action={connectTelegram} className="flex gap-2"><input name="token" className="input flex-1" placeholder="123456789:ABCdef..." /><button className="btn-primary btn-sm shrink-0">Connect</button></form> : <form action={disconnectTelegram}><button className="btn-secondary btn-sm">Disconnect</button></form>}
-          </Surface>
+          {/*
+            Telegram is not here at all, and that is the point.
+
+            A channel is configured in Settings → Integrations, like WhatsApp,
+            Meta and X. Telegram had its own card on this page — the only
+            channel with a second home — and was correspondingly missing from
+            the screen that lists customer channels, so people looking in the
+            obvious place concluded it was unsupported.
+
+            What DOES belong on this page is how the bot behaves, not where it
+            connects: the master switch, the guided-flow toggle, and the
+            Messenger/Instagram DM toggle above are all bot behaviour.
+          */}
         </aside>
       </div>
     </div>

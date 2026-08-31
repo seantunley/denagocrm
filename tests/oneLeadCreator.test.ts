@@ -69,14 +69,13 @@ test("a transaction cannot smuggle a second path in", () => {
   assert.deepEqual(offenders, [], `these create a lead on a transaction client outside ${HOME}`);
 });
 
-test("every inbound channel goes through the one creator", () => {
-  // Named individually: these are the four that were missing something, and a
+test("every channel that creates a lead goes through the one creator", () => {
+  // Named individually: these are the ones that were missing something, and a
   // silent revert to a local create is exactly the regression this guards.
   for (const [rel, what] of [
     ["src/lib/leadIntake.ts", "website / Lead Ads intake"],
     ["src/app/actions/leads.ts", "the staff form"],
-    ["src/lib/whatsapp.ts", "inbound WhatsApp"],
-    ["src/lib/messenger.ts", "Facebook / Instagram DMs"],
+    ["src/lib/messenger.ts", "Facebook / Instagram ad-attributed DMs"],
     ["src/lib/flowActions.ts", "the chatbot"],
   ] as const) {
     assert.match(
@@ -85,6 +84,34 @@ test("every inbound channel goes through the one creator", () => {
       `${what} (${rel}) must create its lead through ${HOME}`,
     );
   }
+});
+
+test("inbound WhatsApp creates NO lead — receiving a message is not sales intent", () => {
+  /*
+   * WhatsApp is deliberately absent from the list above.
+   *
+   * It used to create a Lead in the first pipeline stage for every unrecognised
+   * number, before anyone knew what the message was about — so a customer
+   * messaging to book a service arrived as a sales lead, was pushed as one, and
+   * was enrolled in every `lead_created` journey. The flow's booking node then
+   * created the service request beside it.
+   *
+   * It creates a Contact now, and the flow's `booking` node decides between
+   * "service", "demo" and "lead" once the conversation says which. Messenger and
+   * Instagram already worked this way: a Contact always, a Lead only for an
+   * ad-attributed DM.
+   *
+   * The absence is the assertion. The whole-tree guard above already forbids
+   * `prisma.lead.create` outside the creator, so WhatsApp cannot smuggle one in
+   * by another route either.
+   */
+  const source = shipped("src/lib/whatsapp.ts");
+  assert.doesNotMatch(
+    source,
+    /createLeadRecord(IfPipelineReady)?\(/,
+    "an inbound WhatsApp message must not presume sales intent",
+  );
+  assert.match(source, /prisma\.contact\.create/, "but the message still needs a person to hang off");
 });
 
 test("the creator owns everything a new lead owes the workspace", () => {

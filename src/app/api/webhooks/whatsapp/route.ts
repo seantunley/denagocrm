@@ -8,6 +8,7 @@ import { transcribeVoice } from "@/lib/transcribe";
 import { saveFile } from "@/lib/storage";
 import { runWhatsAppBot } from "@/lib/flowRun";
 import { withChannelTenantScope, validateInSystemScope } from "@/lib/tenantScopeEntry";
+import { reportUnmappedEndpoint } from "@/lib/channelRegistration";
 import { resolveChannelTenant } from "@/lib/channelTenant";
 import { logError } from "@/lib/errorLog";
 import { inboundRetryResponse, noteInboundRetry, noteLeasedInbound } from "@/lib/webhookRetry";
@@ -145,7 +146,7 @@ export async function POST(req: NextRequest) {
             throw await noteInboundRetry("whatsapp-webhook", "failed", `whatsapp ${String(message.id ?? "")}`);
           }
         }
-      }, () => console.warn(`[tenant-channel] skipped WhatsApp inbound: unmapped phone_number_id ${phoneNumberId ?? "?"}`));
+      }, () => reportUnmappedEndpoint("whatsapp", phoneNumberId, value?.messages?.length ?? 0));
     }
   }
   } catch (error) {
