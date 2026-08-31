@@ -16,7 +16,7 @@ const workspaceItems: WorkspaceItem[] = [
   { label: "Flows", href: "/bot-builder" },
   { label: "Routing", href: "/bot-builder/routes" },
   { label: "Knowledge", href: "/chatbot/knowledge" },
-  { label: "Simulator", href: "/chatbot/preview" },
+  { label: "Answer preview", href: "/chatbot/preview" },
   { label: "Handoffs", href: "/inbox" },
   { label: "Analytics", href: "/bot-analytics" },
 ];
