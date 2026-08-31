@@ -28,11 +28,27 @@ test("Flowbot nodes can be dragged from the palette onto a snapped canvas", () =
 test("Flowbot canvas exposes navigation aids and preserves dark React Flow controls", () => {
   assert.match(source, /<MiniMap pannable zoomable/);
   assert.match(source, /<Controls\s+showInteractive=\{false\}/);
-  assert.ok(source.includes("[&_.react-flow__controls-button]:!border-white/10"));
-  assert.ok(source.includes("[&_.react-flow__controls-button]:!bg-[#18201d]"));
-  assert.ok(source.includes("[&_.react-flow__controls-button]:!text-white"));
-  assert.ok(source.includes("[&_.react-flow__controls-button:hover]:!bg-white/10"));
-  assert.ok(source.includes("[&_.react-flow__controls-button_svg]:!fill-current"));
+  /*
+   * These asserted the selector that DOES NOT WORK, and so defended the bug.
+   *
+   * Tailwind turns underscores inside an arbitrary value into spaces, so the
+   * class this used to require compiled to a descendant of `.react-flow` with an
+   * element type that does not exist — a rule matching nothing, and four white
+   * buttons on the dark canvas. Asserting `source.includes(...)` could never
+   * catch that: it proves the string was typed, never that it styles anything.
+   *
+   * `[&_button]` has no underscores to mangle. Verified in the emitted CSS
+   * (`.\[\&_button\]\:\!bg-\[\#18201d\] button`), not in the source.
+   *
+   * The intent of this test — dark controls, not white ones — is unchanged and
+   * is now actually enforced. The stronger guard, which fails on ANY arbitrary
+   * variant containing an unescaped `__`, lives in tests/darkThemeControls.
+   */
+  assert.ok(source.includes("[&_button]:!border-white/10"));
+  assert.ok(source.includes("[&_button]:!bg-[#18201d]"));
+  assert.ok(source.includes("[&_button]:!text-white"));
+  assert.ok(source.includes("[&_button:hover]:!bg-white/10"));
+  assert.ok(source.includes("[&_button_svg]:!fill-current"));
   assert.match(source, /Build your first conversation step/);
   assert.match(source, /Open node palette/);
 });
