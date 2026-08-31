@@ -348,10 +348,16 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt,
     }
     return grouped;
   }, [liveIssues]);
-  const displayNodes = useMemo(() => rfNodes.map((node) => ({
-    ...node,
-    data: { ...node.data, issues: issuesByNode.get(node.id) ?? [] },
-  })), [issuesByNode, rfNodes]);
+  const displayNodeCache = useRef(new Map<string, { source: Node<RFData>; issueKey: string; display: Node<RFData> }>());
+  const displayNodes = useMemo(() => rfNodes.map((node) => {
+    const issues = issuesByNode.get(node.id) ?? [];
+    const issueKey = issues.map((issue) => `${issue.severity}:${issue.code}:${issue.message}`).join("|");
+    const cached = displayNodeCache.current.get(node.id);
+    if (cached?.source === node && cached.issueKey === issueKey) return cached.display;
+    const display = { ...node, data: { ...node.data, issues } };
+    displayNodeCache.current.set(node.id, { source: node, issueKey, display });
+    return display;
+  }), [issuesByNode, rfNodes]);
   const selectedIssues = selectedId ? issuesByNode.get(selectedId) ?? [] : [];
 
   const focusIssue = useCallback((issue: FlowIssue) => {
