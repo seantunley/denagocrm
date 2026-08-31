@@ -16,12 +16,13 @@ export type FlowProposalDiff = {
   removed: string[];
   changed: string[];
   startChanged: boolean;
+  comparable: boolean;
 };
 
 const proposalSecret = (): string => {
   const secret = process.env.SESSION_SECRET;
-  if (secret) return secret;
-  if (process.env.NODE_ENV === "production") throw new Error("SESSION_SECRET is not set — AI flow proposals cannot be signed.");
+  if (secret && secret.length >= 32) return secret;
+  if (process.env.NODE_ENV === "production") throw new Error("SESSION_SECRET is not set (or too short) — AI flow proposals cannot be signed.");
   return "local-development-flow-proposal-secret";
 };
 
@@ -73,11 +74,16 @@ function parse(definition: string): Flow | null {
 export function diffFlowDefinitions(beforeDefinition: string, afterDefinition: string): FlowProposalDiff {
   const before = parse(beforeDefinition);
   const after = parse(afterDefinition);
-  if (!before || !after) return { added: [], removed: [], changed: [], startChanged: false };
+  if (!before || !after) return { added: [], removed: [], changed: [], startChanged: false, comparable: false };
+  const label = (flow: Flow, id: string) => {
+    const node = flow.nodes[id] as unknown as Record<string, unknown>;
+    const detail = String(node?.text ?? node?.prompt ?? node?.action ?? node?.type ?? "node").replace(/\s+/g, " ").slice(0, 72);
+    return `${id} — ${detail}`;
+  };
   const beforeIds = new Set(Object.keys(before.nodes));
   const afterIds = new Set(Object.keys(after.nodes));
-  const added = [...afterIds].filter((id) => !beforeIds.has(id)).sort();
-  const removed = [...beforeIds].filter((id) => !afterIds.has(id)).sort();
-  const changed = [...beforeIds].filter((id) => afterIds.has(id) && JSON.stringify(before.nodes[id]) !== JSON.stringify(after.nodes[id])).sort();
-  return { added, removed, changed, startChanged: before.start !== after.start };
+  const added = [...afterIds].filter((id) => !beforeIds.has(id)).sort().map((id) => label(after, id));
+  const removed = [...beforeIds].filter((id) => !afterIds.has(id)).sort().map((id) => label(before, id));
+  const changed = [...beforeIds].filter((id) => afterIds.has(id) && JSON.stringify(before.nodes[id]) !== JSON.stringify(after.nodes[id])).sort().map((id) => `${label(before, id)} → ${label(after, id).split(" — ").slice(1).join(" — ")}`);
+  return { added, removed, changed, startChanged: before.start !== after.start, comparable: true };
 }
