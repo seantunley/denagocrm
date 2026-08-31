@@ -9,6 +9,7 @@ import { probeIntegration, type ProbeWarning } from "@/lib/integrationProbe";
 import { recordIntegrationVerified, recordIntegrationFailure } from "@/lib/integrationConnection";
 import { commitVerifiedCredentials } from "@/lib/integrationCommit";
 import { withActingStaffScope } from "@/lib/actingScope";
+import { reconcileTenantChannels } from "@/lib/channelRegistration";
 
 const OVERRIDES_PATH = "/settings/integration-overrides";
 
@@ -115,6 +116,12 @@ export async function verifyAndSaveIntegration(
       return { kind: "failed", code: outcome.code, message: outcome.message, goToStep: outcome.blameStep };
     }
 
+    // The credentials are stored and proven, so the endpoints they name are now
+    // this workspace's — register them before telling the owner they are
+    // connected. Without this the wizard ends on a green "Connected" screen for
+    // an integration whose inbound half is discarded (channelRegistration.ts).
+    await reconcileTenantChannels(tenantId, { force: true }).catch(() => undefined);
+
     await logAuditStrict({
       action: "integration.connected",
       summary: `Verified and connected ${flow.label}`,
@@ -182,6 +189,11 @@ export async function retestIntegration(integrationId: string): Promise<FlowResu
     }
 
     await recordIntegrationVerified(tenantId, integrationId);
+    // "Test connection" is the button an owner presses when messages are not
+    // arriving, so it is exactly where a missing registration should be
+    // repaired — and it is the one path an EXISTING tenant can trigger by hand
+    // without re-entering a working credential.
+    await reconcileTenantChannels(tenantId, { force: true }).catch(() => undefined);
     await logAuditStrict({
       action: "integration.reverified",
       summary: `Re-tested ${flow.label} and it is working again`,

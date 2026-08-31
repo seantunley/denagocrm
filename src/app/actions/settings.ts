@@ -22,6 +22,7 @@ import {
   type WeatherCity,
 } from "@/lib/weatherCities";
 import { isManagedSecret, isRegeneratable, keepBlankSubmit } from "@/lib/settingsSecrets";
+import { keyNamesAnInboundEndpoint, reconcileTenantChannels } from "@/lib/channelRegistration";
 import { setNextStepScheduling } from "@/lib/nextStepConfig";
 import { PUSH_KINDS } from "@/lib/push";
 import { logAuditStrict } from "@/lib/audit";
@@ -576,8 +577,28 @@ export async function saveSetting(formData: FormData) {
       return { success: "Left blank — the saved value is unchanged" };
     }
     await putSetting(key, value);
+    // A credential that names an inbound endpoint must register that endpoint,
+    // or the webhook carrying it is dropped unattributed under enforcement —
+    // see channelRegistration.ts. This is the path the founding tenant's
+    // WhatsApp number is saved through, and it is the one that was missing.
+    await registerInboundEndpointsFor(key);
     revalidatePath("/settings");
   });
+}
+
+/**
+ * Reconcile this workspace's inbound channel endpoints after a credential save.
+ *
+ * Deliberately swallowing: `reconcileTenantChannels` already logs its own
+ * failures, and a save the owner made correctly must not report an error
+ * because Meta was unreachable while we were deriving a Page id from it. The
+ * cron sweep repairs anything this misses.
+ */
+async function registerInboundEndpointsFor(key: string): Promise<void> {
+  if (!keyNamesAnInboundEndpoint(key)) return;
+  const tenantId = await getActiveTenantId();
+  if (!tenantId) return;
+  await reconcileTenantChannels(tenantId, { force: true }).catch(() => undefined);
 }
 
 /** Reveal a stored secret to the owner on demand — so the value is NEVER in the
@@ -599,6 +620,11 @@ export async function clearSecret(key: string, _formData?: FormData): Promise<vo
     void _formData;
     if (!isManagedSecret(key)) throw new Error("Not a clearable secret.");
     await putSetting(key, "");
+    // Disconnecting must RETIRE the endpoint, not merely stop using it. A row
+    // left active keeps routing inbound events into this workspace, and — worse
+    // — permanently blocks any other workspace from claiming that endpoint,
+    // because registration correctly refuses to steal a row it does not own.
+    await registerInboundEndpointsFor(key);
     revalidatePath("/settings");
   });
 }

@@ -3,6 +3,7 @@ import {
   ChartColumnIncreasing,
   Target,
   MessageSquare,
+  MessagesSquare,
   CalendarDays,
   SquareKanban,
   FileText,
@@ -68,6 +69,12 @@ export function buildNav(
   const socialLinks: NavLink[] = [];
   if (can("inbox.view", "inbox.reply")) {
     socialLinks.push({ href: "/inbox", label: "Inbox", icon: MessageSquare });
+    // Its own screen, beside the inbox rather than inside it. Private
+    // conversations and public comments are different work — see
+    // src/app/(app)/comments/page.tsx. Same grant, so anyone who can see the
+    // inbox can see these; the rule in ROUTE_RULES says the same thing, so a
+    // visible link never leads to a redirect.
+    socialLinks.push({ href: "/comments", label: "Comments", icon: MessagesSquare });
   }
   if (socialLinks.length) groups.push({ key: "social", label: "Social", links: socialLinks });
 
