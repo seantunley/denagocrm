@@ -76,6 +76,9 @@ async function knowledgeTenantId(): Promise<string> {
 
 export async function getBotKnowledgeEntries(): Promise<BotKnowledgeEntry[]> {
   const tenantId = await knowledgeTenantId();
+  // Deliberately use the system client: this helper also serves channel workers
+  // before a Prisma tenant extension exists. basePrisma bypasses RLS, so the
+  // concrete tenantId predicate below is mandatory and must never be removed.
   const rows = await basePrisma.botKnowledgeEntry.findMany({
     where: { tenantId },
     orderBy: [{ updatedAt: "desc" }, { id: "asc" }],
@@ -152,6 +155,15 @@ export function retrieveRelevantKnowledge(
  * Tenant-scoped hybrid retrieval. The GIN-backed full-text leg contributes the
  * strongest candidates; the lexical leg preserves phrase/prefix matching for
  * terminology PostgreSQL tokenisation does not recognise across the full base.
+ *
+ * The lexical leg intentionally remains complete rather than reintroducing the
+ * old false-negative cap: this workspace is an operator-curated fact corpus, not
+ * a document-chunk store. Consequently the current implementation is sized for
+ * hundreds (not tens of thousands) of approved entries per tenant. At document-
+ * corpus scale this must move to a bounded pg_trgm/vector candidate query before
+ * increasing that product limit. The FTS LIMIT is ranking work, not a result cap.
+ * basePrisma is intentional for pre-scope channel workers; every leg therefore
+ * carries the same explicit tenantId predicate because RLS is bypassed here.
  */
 export async function searchBotKnowledge(query: string, now = new Date(), limit = 6): Promise<BotKnowledgeEntry[]> {
   const queryTerms = [...terms(query)].slice(0, 20);
