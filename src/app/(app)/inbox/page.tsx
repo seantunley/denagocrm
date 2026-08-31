@@ -1,4 +1,4 @@
-import { ExternalLink, Hand, Inbox, Star } from "lucide-react";
+import { ExternalLink, Inbox, Star } from "lucide-react";
 import { basePrisma } from "@/lib/db";
 import { activeTenantPredicate } from "@/lib/tenantPredicate";
 import { getActiveTenantId, requireUser } from "@/lib/auth";
@@ -134,7 +134,7 @@ export default async function InboxPage() {
           { label: "Reply due", value: awaiting, detail: "Customer sent the latest message", tone: awaiting ? "primary" : "default" },
           { label: "Archived", value: archivedList.length, detail: "Finished or hidden threads" },
         ]}
-        actions={<a href="#handoffs" className="btn-secondary btn-sm"><Hand className="size-4" /> {handoffThreads.length} handoffs</a>}
+        actions={<a href="/messages" target="_blank" rel="noreferrer" className="btn-primary btn-sm">Open Messages app <ExternalLink className="size-4" /></a>}
       />
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -154,8 +154,9 @@ export default async function InboxPage() {
       </div>
 
       <Tabs
+        initialKey="all"
         tabs={[
-          { key: "handoffs", label: "Bot handoffs", count: handoffThreads.length, content: <div id="handoffs"><SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={handoffThreads} empty="No chatbot handoffs need attention." /></div> },
+          { key: "handoffs", label: "Bot handoffs", count: handoffThreads.length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={handoffThreads} empty="No chatbot handoffs need attention." /> },
           { key: "all", label: "All", count: unread, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList} empty="No conversations yet. Messages appear here as soon as a connected customer channel receives one." /> },
           { key: "whatsapp", label: "WhatsApp", count: threadList.filter((thread) => thread.channel === "whatsapp" && thread.unread).length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "whatsapp")} empty="No WhatsApp conversations yet. Connect the WhatsApp Business number in Settings → Integrations." /> },
           { key: "messenger", label: "Messenger", count: threadList.filter((thread) => thread.channel === "messenger" && thread.unread).length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "messenger")} empty="No Messenger conversations yet." /> },
