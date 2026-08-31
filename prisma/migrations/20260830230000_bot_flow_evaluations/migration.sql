@@ -1,5 +1,7 @@
 CREATE UNIQUE INDEX IF NOT EXISTS "BotFlow_tenantId_id_key"
   ON "BotFlow"("tenantId", "id");
+CREATE UNIQUE INDEX IF NOT EXISTS "BotFlowVersion_tenantId_id_key"
+  ON "BotFlowVersion"("tenantId", "id");
 
 CREATE TABLE IF NOT EXISTS "BotFlowEvaluation" (
   "id" TEXT NOT NULL,
@@ -19,8 +21,8 @@ CREATE TABLE IF NOT EXISTS "BotFlowEvaluation" (
     FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE,
   CONSTRAINT "BotFlowEvaluation_tenant_flow_fkey"
     FOREIGN KEY ("tenantId", "flowId") REFERENCES "BotFlow"("tenantId", "id") ON DELETE CASCADE ON UPDATE CASCADE,
-  CONSTRAINT "BotFlowEvaluation_flowVersionId_fkey"
-    FOREIGN KEY ("flowVersionId") REFERENCES "BotFlowVersion"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+  CONSTRAINT "BotFlowEvaluation_tenant_flowVersion_fkey"
+    FOREIGN KEY ("tenantId", "flowVersionId") REFERENCES "BotFlowVersion"("tenantId", "id") ON DELETE RESTRICT ON UPDATE CASCADE,
   CONSTRAINT "BotFlowEvaluation_name_check" CHECK (char_length("name") BETWEEN 1 AND 120),
   CONSTRAINT "BotFlowEvaluation_turns_check" CHECK (jsonb_typeof("turns") = 'array' AND jsonb_array_length("turns") <= 12),
   CONSTRAINT "BotFlowEvaluation_expectation_check" CHECK (jsonb_typeof("expectation") = 'object'),
