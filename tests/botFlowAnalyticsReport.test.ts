@@ -77,13 +77,13 @@ test("report filters immutable versions by bounded date range and channel", () =
   assert.match(page, /Published version/);
   assert.match(page, /All channels/);
   assert.match(page, /Last \{days\} days/);
-  assert.match(page, /Date boundaries use UTC calendar days/);
+  assert.match(page, /Date boundaries use South African calendar days/);
 });
 
 test("report adds daily trend, CRM outcomes, and zero-safe version comparison", () => {
   const report = src("src/lib/botFlowAnalyticsReport.ts");
   const page = src("src/app/(app)/bot-analytics/page.tsx");
-  assert.match(report, /date_trunc\('day', "occurredAt"\)/);
+  assert.match(report, /date_trunc\('day', "occurredAt" \+ INTERVAL '2 hours'\)/);
   assert.match(report, /"metadata" ->> 'action'/);
   assert.match(report, /LEFT JOIN "BotFlowEvent" e/);
   assert.match(report, /COUNT\(e\."id"\)/);
