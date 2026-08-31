@@ -20,6 +20,7 @@ test("Flowbot workspace navigation covers all top-level surfaces without nested 
   ]) assert.match(nav, new RegExp(route.replaceAll("/", "\\/")));
   assert.match(nav, /Answer preview/);
   assert.doesNotMatch(nav, /label: "Simulator"/);
+  assert.match(src("src/app/(app)/chatbot/preview/page.tsx"), /title="Answer preview"/);
   assert.doesNotMatch(nav, /NavGroup/);
   assert.doesNotMatch(nav, />Configure</);
   assert.doesNotMatch(nav, />Test</);
