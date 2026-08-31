@@ -18,11 +18,11 @@ test("Flowbot canvas has a searchable categorised node palette", () => {
 });
 
 test("Flowbot nodes can be dragged from the palette onto a snapped canvas", () => {
-  assert.match(source, /draggable=\{true\}/);
-  assert.match(source, /application\/x-flowbot-node/);
-  assert.match(source, /screenToFlowPosition/);
-  assert.match(source, /snapToGrid/);
-  assert.match(source, /snapGrid=\{\[GRID_SIZE, GRID_SIZE\]\}/);
+  assert.match(source, /<button key=\{type\} type="button" draggable onDragStart=\{\(event\) => onPaletteDragStart\(event, type\)\}/);
+  assert.match(source, /event\.dataTransfer\.setData\("application\/x-flowbot-node", type\)/);
+  assert.match(source, /flowInstance\.current\.screenToFlowPosition/);
+  assert.match(source, /\{ snapToGrid: true \}/);
+  assert.match(source, /snapToGrid[\s\S]*snapGrid=\{\[GRID_SIZE, GRID_SIZE\]\}/);
 });
 
 test("Flowbot canvas exposes navigation aids and onboarding", () => {
