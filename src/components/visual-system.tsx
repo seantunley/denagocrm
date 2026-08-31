@@ -1,5 +1,5 @@
 import { AlertCircle, AlertTriangle, CheckCircle2, Info, type LucideIcon } from "lucide-react";
-import type { ReactNode } from "react";
+import type { HTMLAttributes, ReactNode } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
@@ -16,9 +16,8 @@ export function Surface({
   className,
   inset = false,
   level = "raised",
-}: {
-  children: ReactNode;
-  className?: string;
+  ...props
+}: HTMLAttributes<HTMLElement> & {
   inset?: boolean;
   level?: "raised" | "base" | "inset";
 }) {
@@ -31,6 +30,7 @@ export function Surface({
 
   return (
     <section
+      {...props}
       data-slot="surface"
       data-level={resolvedLevel}
       className={cn(
@@ -209,19 +209,6 @@ export function StatusPill({
   };
 
   return (
-    /*
-     * `shrink-0` and `whitespace-nowrap` are load-bearing, not decoration.
-     *
-     * A pill is nearly always the small right-hand item of a flex row whose
-     * left-hand side is a heading and a paragraph. Without `shrink-0` flexbox
-     * is free to shrink it below the width of its own text, and the text then
-     * wraps — so "0 live" rendered as a tall green CIRCLE with the number above
-     * the word, on the Chatbot page's Knowledge workspace card.
-     *
-     * Fixed here rather than at that one call site: every StatusPill in a flex
-     * row has the same exposure, and a label that wraps has already stopped
-     * being a pill.
-     */
     <span data-slot="status-pill" data-tone={tone} className={cn("inline-flex shrink-0 items-center whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-medium leading-4", tones[tone], className)}>
       {children}
     </span>

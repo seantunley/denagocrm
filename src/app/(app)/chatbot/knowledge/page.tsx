@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { BookOpenCheck, Clock3, Database, FileCheck2, Search } from "lucide-react";
+import { BookOpenCheck, Clock3, Database, FileCheck2, Library, Search, SlidersHorizontal } from "lucide-react";
 import { requireOwner } from "@/lib/auth";
 import { actingTenantId } from "@/lib/actingTenant";
 import { prisma } from "@/lib/db";
@@ -8,7 +8,7 @@ import { addBotKnowledge, deleteBotKnowledge, setBotKnowledgeStatus, updateBotKn
 import { StatusPill, Surface } from "@/components/visual-system";
 import { WorkspaceHero } from "@/components/workspace-hero";
 
-type Props = { searchParams: Promise<{ q?: string; status?: string }> };
+type Props = { searchParams: Promise<{ q?: string; status?: string; source?: string; sort?: string }> };
 
 const statusTone = (entry: { status: BotKnowledgeStatus }, current: boolean) => current ? "success" : entry.status === "draft" ? "warning" : "neutral";
 const dateValue = (value?: string) => value?.slice(0, 10) ?? "";
@@ -23,13 +23,24 @@ export default async function BotKnowledgePage({ searchParams }: Props) {
   ]);
   const q = (params.q ?? "").trim().toLocaleLowerCase("en-ZA");
   const status = ["draft", "approved", "expired"].includes(params.status ?? "") ? params.status : "all";
-  const filtered = entries.filter((entry) => {
-    const effectiveStatus = entry.status === "approved" && !knowledgeIsCurrent(entry) ? "expired" : entry.status;
-    return (status === "all" || effectiveStatus === status) && (!q || `${entry.title}\n${entry.content}\n${entry.sourceLabel ?? ""}`.toLocaleLowerCase("en-ZA").includes(q));
-  });
+  const source = ["manual", "library"].includes(params.source ?? "") ? params.source : "all";
+  const sort = ["updated", "title", "status"].includes(params.sort ?? "") ? params.sort : "updated";
+  const filtered = entries
+    .filter((entry) => {
+      const effectiveStatus = entry.status === "approved" && !knowledgeIsCurrent(entry) ? "expired" : entry.status;
+      return (status === "all" || effectiveStatus === status)
+        && (source === "all" || entry.sourceType === source)
+        && (!q || `${entry.title}\n${entry.content}\n${entry.sourceLabel ?? ""}`.toLocaleLowerCase("en-ZA").includes(q));
+    })
+    .sort((a, b) => sort === "title"
+      ? a.title.localeCompare(b.title, "en-ZA")
+      : sort === "status"
+        ? a.status.localeCompare(b.status) || a.title.localeCompare(b.title, "en-ZA")
+        : b.updatedAt.localeCompare(a.updatedAt));
   const approved = entries.filter((entry) => knowledgeIsCurrent(entry)).length;
   const drafts = entries.filter((entry) => entry.status === "draft").length;
   const expired = entries.filter((entry) => entry.status === "expired" || (entry.status === "approved" && !knowledgeIsCurrent(entry))).length;
+  const sourced = entries.filter((entry) => entry.sourceType === "library").length;
 
   return (
     <div className="space-y-5">
@@ -42,16 +53,19 @@ export default async function BotKnowledgePage({ searchParams }: Props) {
           { label: "Approved & current", value: approved, icon: FileCheck2, tone: "success" },
           { label: "Awaiting review", value: drafts, icon: Clock3 },
           { label: "Expired", value: expired, icon: Database },
+          { label: "Library sourced", value: sourced, icon: Library },
         ]}
         actions={<Link href="/chatbot/preview" className="btn-primary btn-sm">Test an AI answer</Link>}
       />
 
       <Surface className="p-5">
         <div className="flex flex-wrap items-end justify-between gap-3">
-          <form className="flex min-w-0 flex-1 flex-wrap items-end gap-2" action="/chatbot/knowledge">
-            <div className="min-w-56 flex-1"><label className="label" htmlFor="knowledge-search">Search</label><div className="relative"><Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" /><input id="knowledge-search" name="q" className="input pl-9" defaultValue={params.q ?? ""} placeholder="Warranty, delivery, finance…" /></div></div>
-            <div><label className="label" htmlFor="knowledge-status">Status</label><select id="knowledge-status" name="status" className="input min-w-36" defaultValue={status}><option value="all">All statuses</option><option value="draft">Draft</option><option value="approved">Approved</option><option value="expired">Expired</option></select></div>
-            <button className="btn-secondary btn-sm">Filter</button>
+          <form className="grid min-w-0 flex-1 gap-2 sm:grid-cols-[minmax(14rem,1fr)_9rem_9rem_10rem_auto]" action="/chatbot/knowledge">
+            <div><label className="label" htmlFor="knowledge-search">Search</label><div className="relative"><Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" /><input id="knowledge-search" name="q" className="input pl-9" defaultValue={params.q ?? ""} placeholder="Warranty, delivery, finance…" /></div></div>
+            <div><label className="label" htmlFor="knowledge-status">Status</label><select id="knowledge-status" name="status" className="input" defaultValue={status}><option value="all">All</option><option value="draft">Draft</option><option value="approved">Approved</option><option value="expired">Expired</option></select></div>
+            <div><label className="label" htmlFor="knowledge-source">Source</label><select id="knowledge-source" name="source" className="input" defaultValue={source}><option value="all">All</option><option value="manual">Manual</option><option value="library">Library</option></select></div>
+            <div><label className="label" htmlFor="knowledge-sort">Sort</label><select id="knowledge-sort" name="sort" className="input" defaultValue={sort}><option value="updated">Recently updated</option><option value="title">Title A–Z</option><option value="status">Status</option></select></div>
+            <button className="btn-secondary btn-sm self-end"><SlidersHorizontal className="size-3.5" />Apply</button>
           </form>
           <span className="text-xs text-muted-foreground">{filtered.length} of {entries.length} entries</span>
         </div>
@@ -59,7 +73,7 @@ export default async function BotKnowledgePage({ searchParams }: Props) {
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_24rem] xl:items-start">
         <div className="space-y-3">
-          {filtered.length === 0 ? <Surface className="p-8 text-center text-sm text-muted-foreground">No knowledge entries match this view.</Surface> : null}
+          {filtered.length === 0 ? <Surface className="p-8 text-center text-sm text-muted-foreground"><p>No knowledge entries match this view.</p><Link href="/chatbot/knowledge" className="mt-3 inline-flex text-xs font-medium text-primary hover:underline">Clear filters</Link></Surface> : null}
           {filtered.map((entry) => {
             const current = knowledgeIsCurrent(entry);
             const statusLabel = entry.status === "approved" && !current ? "Expired by date" : entry.status;
@@ -67,8 +81,8 @@ export default async function BotKnowledgePage({ searchParams }: Props) {
               <Surface key={entry.id} className="p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2"><h2 className="text-sm font-semibold">{entry.title}</h2><StatusPill tone={statusTone(entry, current)}>{statusLabel}</StatusPill></div>
-                    <p className="mt-1 text-[11px] text-muted-foreground">{entry.sourceLabel ? `Source: ${entry.sourceLabel}` : "Manual source"}{entry.approvedBy ? ` · approved by ${entry.approvedBy}` : ""}</p>
+                    <div className="flex flex-wrap items-center gap-2"><h2 className="text-sm font-semibold">{entry.title}</h2><StatusPill tone={statusTone(entry, current)}>{statusLabel}</StatusPill><StatusPill tone="neutral">{entry.sourceType === "library" ? "Library" : "Manual"}</StatusPill></div>
+                    <p className="mt-1 text-[11px] text-muted-foreground">{entry.sourceLabel ? `Source: ${entry.sourceLabel}` : "Manual source"}{entry.approvedBy ? ` · approved by ${entry.approvedBy}` : ""} · updated {new Date(entry.updatedAt).toLocaleDateString("en-ZA")}</p>
                   </div>
                   <form action={deleteBotKnowledge.bind(null, entry.id)}><button className="btn-secondary btn-sm text-red-300" aria-label={`Delete ${entry.title}`}>Delete</button></form>
                 </div>
@@ -78,6 +92,7 @@ export default async function BotKnowledgePage({ searchParams }: Props) {
                   {entry.status !== "approved" ? <form action={setBotKnowledgeStatus.bind(null, entry.id, "approved")}><button className="btn-primary btn-sm">Approve</button></form> : null}
                   {entry.status === "approved" ? <form action={setBotKnowledgeStatus.bind(null, entry.id, "expired")}><button className="btn-secondary btn-sm">Expire</button></form> : null}
                   {entry.status === "expired" ? <form action={setBotKnowledgeStatus.bind(null, entry.id, "draft")}><button className="btn-secondary btn-sm">Return to draft</button></form> : null}
+                  {current ? <Link href={`/chatbot/preview?q=${encodeURIComponent(entry.title)}`} className="btn-secondary btn-sm">Preview AI use</Link> : null}
                 </div>
                 <details className="mt-3 rounded-lg border border-border bg-muted/25">
                   <summary className="cursor-pointer list-none px-3 py-2 text-xs font-medium [&::-webkit-details-marker]:hidden">Edit entry</summary>
