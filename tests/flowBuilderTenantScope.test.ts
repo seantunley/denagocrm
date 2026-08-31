@@ -252,7 +252,10 @@ test("no BotFlow access uses a method that cannot carry the tenant predicate", (
 });
 
 test("every BotFlow query names the tenant it is for", () => {
-  const scoped = /await flowScope\(\)|flowTenantWhere\(/;
+  // A strict explicit `tenantId` predicate is at least as safe as flowScope(),
+  // and is required when the following write uses a composite tenant FK that
+  // cannot accept flowScope's legacy NULL-tolerant branch.
+  const scoped = /await flowScope\(\)|flowTenantWhere\(|where:\s*\{[^}\n]*tenantId/;
   const unscoped: string[] = [];
   for (const file of flowCallSites()) {
     const code = src(file);

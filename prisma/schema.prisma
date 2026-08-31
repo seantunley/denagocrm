@@ -635,6 +635,25 @@ model BotFlowRoute {
   @@index([tenantId, publishedVersionId])
 }
 
+/** Repeatable, owner-authored regression scenario for a flow draft or version. */
+model BotFlowEvaluation {
+  id              String   @id @default(cuid())
+  tenantId        String
+  flowId          String
+  flowVersionId   String?
+  name            String
+  turns           Json
+  expectation     Json
+  lastStatus      String   @default("never_run") // never_run | passed | failed | error
+  lastResult      Json?
+  lastRunAt       DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt @default(now())
+
+  @@index([tenantId, flowId, createdAt])
+  @@index([tenantId, lastStatus, lastRunAt])
+}
+
 /** Live state of a customer's position in a chatbot flow. */
 model BotSession {
   id        String   @id @default(cuid())
