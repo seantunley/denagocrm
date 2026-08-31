@@ -95,7 +95,7 @@ test("the canvas carries the stamp it loaded and adopts the one it is given", ()
   const builder = src("src/components/FlowBuilder.tsx");
   assert.match(builder, /const savedAt = useRef<string>\(updatedAt\)/);
   // Required, not optional — the page always knows what it loaded.
-  assert.match(builder, /updatedAt: string \}/, "the canvas cannot be constructed without a stamp");
+  assert.match(builder, /updatedAt: string;/, "the canvas cannot be constructed without a stamp");
   assert.match(builder, /saveFlow\(flowId, definition, savedAt\.current\)/);
   assert.match(builder, /const definition = serialiseCurrent\(\)/, "manual and automatic saves must serialise the same graph");
   assert.match(builder, /savedAt\.current = res\.updatedAt/, "a successful save must advance the stamp");
