@@ -209,7 +209,7 @@ export function StatusPill({
   };
 
   return (
-    <span data-slot="status-pill" data-tone={tone} className={cn("inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium leading-4", tones[tone], className)}>
+    <span data-slot="status-pill" data-tone={tone} className={cn("inline-flex shrink-0 items-center whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-medium leading-4", tones[tone], className)}>
       {children}
     </span>
   );
