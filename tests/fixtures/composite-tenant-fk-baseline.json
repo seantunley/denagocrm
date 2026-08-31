@@ -134,6 +134,36 @@
       ]
     }
   },
+  "BotFlowRoute.BotFlowRoute_tenant_flow_fkey": {
+    "table": "BotFlowRoute",
+    "constraint": "BotFlowRoute_tenant_flow_fkey",
+    "columns": [
+      "tenantId",
+      "flowId"
+    ],
+    "references": {
+      "table": "BotFlow",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "BotFlowRoute.BotFlowRoute_tenant_publishedVersion_fkey": {
+    "table": "BotFlowRoute",
+    "constraint": "BotFlowRoute_tenant_publishedVersion_fkey",
+    "columns": [
+      "tenantId",
+      "publishedVersionId"
+    ],
+    "references": {
+      "table": "BotFlowVersion",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
   "Campaign.Campaign_tenantId_productId_fkey": {
     "table": "Campaign",
     "constraint": "Campaign_tenantId_productId_fkey",

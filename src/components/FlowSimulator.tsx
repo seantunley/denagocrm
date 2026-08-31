@@ -3,6 +3,7 @@
 import { useMemo, useState, useTransition } from "react";
 import { Bot, FileUp, MessageCircle, Play, RotateCcw, Send, SlidersHorizontal, UserRound } from "lucide-react";
 import { simulateFlowTurn } from "@/app/actions/flowSimulator";
+import { DEFAULT_SIMULATOR_SCENARIO, type SimulatorScenario } from "@/lib/flowSimulatorScenario";
 import WhatsAppPreview, { type PreviewLine } from "@/components/WhatsAppPreview";
 import type { FlowSession, OutMsg } from "@/lib/flow";
 
@@ -30,8 +31,11 @@ const line = (role: ChatLine["role"], text: string, msg?: OutMsg): ChatLine => (
 export default function FlowSimulator({
   flowId,
   businessName,
+  draftDefinition,
 }: {
   flowId: string;
+  /** When supplied by the editor, simulate this in-memory graph instead of the saved row. */
+  draftDefinition?: string;
   /*
    * REQUIRED, and resolved by the page from the acting tenant's Company
    * Profile. This used to default to "Denago Cape Town", which the sole call
@@ -60,7 +64,7 @@ export default function FlowSimulator({
   const [text, setText] = useState("");
   const [started, setStarted] = useState(false);
   const [ended, setEnded] = useState(false);
-  const [simulateAiHandoff, setSimulateAiHandoff] = useState(false);
+  const [scenario, setScenario] = useState<SimulatorScenario>(DEFAULT_SIMULATOR_SCENARIO);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
@@ -87,9 +91,10 @@ export default function FlowSimulator({
       if (customerLabel) setChat((current) => [...current, line("customer", customerLabel)]);
       const result = await simulateFlowTurn({
         flowId,
+        draftDefinition,
         session,
         ...input,
-        simulateAiHandoff,
+        scenario,
       });
       if (!result.ok) {
         setError(result.error ?? "Simulation failed.");
@@ -139,6 +144,18 @@ export default function FlowSimulator({
     );
   }
 
+  function changeScenario<K extends keyof SimulatorScenario>(key: K, value: SimulatorScenario[K]) {
+    setScenario((current) => ({ ...current, [key]: value }));
+    setSession(null);
+    setChat([]);
+    setChoices([]);
+    setTrace([]);
+    setVars({});
+    setError(null);
+    setStarted(false);
+    setEnded(false);
+  }
+
   return (
     <div className="grid min-h-[680px] gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
       <section className="flex min-h-[620px] flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#0f1412]">
@@ -166,10 +183,6 @@ export default function FlowSimulator({
                 <SlidersHorizontal className="size-3.5" /> Plain
               </button>
             </div>
-            <label className="flex items-center gap-2 text-xs text-slate-400">
-              <input type="checkbox" checked={simulateAiHandoff} onChange={(event) => setSimulateAiHandoff(event.target.checked)} />
-              AI hands off
-            </label>
             <button type="button" onClick={start} disabled={pending} className="btn-secondary btn-sm">
               {started ? <RotateCcw className="size-3.5" /> : <Play className="size-3.5" />}{started ? "Restart" : "Start"}
             </button>
@@ -263,6 +276,18 @@ export default function FlowSimulator({
       </section>
 
       <aside className="space-y-4">
+        <section className="rounded-2xl border border-orange-400/20 bg-orange-500/[0.04] p-4">
+          <p className="text-xs font-semibold uppercase tracking-wide text-orange-200">Scenario</p>
+          <p className="mt-1 text-[11px] leading-5 text-slate-400">Changing a scenario restarts the test. No provider or CRM is called.</p>
+          <div className="mt-3 grid gap-3">
+            <ScenarioSelect label="AI outcome" value={scenario.ai} onChange={(value) => changeScenario("ai", value as SimulatorScenario["ai"])} options={[["answer", "Answers"], ["handoff", "Hands off"], ["timeout", "Times out"]]} />
+            <ScenarioSelect label="CRM actions" value={scenario.crm} onChange={(value) => changeScenario("crm", value as SimulatorScenario["crm"])} options={[["success", "Succeed"], ["failure", "Fail"]]} />
+            <ScenarioSelect label="Workshop slots" value={scenario.slots} onChange={(value) => changeScenario("slots", value as SimulatorScenario["slots"])} options={[["available", "Available"], ["none", "Fully booked"], ["race_lost", "Taken before booking"]]} />
+            <ScenarioSelect label="Customer identity" value={scenario.bookingIdentity} onChange={(value) => changeScenario("bookingIdentity", value as SimulatorScenario["bookingIdentity"])} options={[["verified", "Verified"], ["unverified", "Unverified"]]} />
+            <ScenarioSelect label="Booking lookup" value={scenario.bookingLookup} onChange={(value) => changeScenario("bookingLookup", value as SimulatorScenario["bookingLookup"])} options={[["found", "Booking found"], ["missing", "No booking"]]} />
+            <ScenarioSelect label="Journey enrolment" value={scenario.journey} onChange={(value) => changeScenario("journey", value as SimulatorScenario["journey"])} options={[["success", "Succeeds"], ["failure", "Fails"]]} />
+          </div>
+        </section>
         <section className="rounded-2xl border border-white/10 bg-[#111614] p-4">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Execution trace</p>
           <div className="mt-3 max-h-80 space-y-1.5 overflow-y-auto font-mono text-[11px] leading-5 text-slate-400">
@@ -279,5 +304,14 @@ export default function FlowSimulator({
         </section>
       </aside>
     </div>
+  );
+}
+
+function ScenarioSelect({ label, value, onChange, options }: { label: string; value: string; onChange: (value: string) => void; options: Array<[string, string]> }) {
+  return (
+    <label className="grid grid-cols-[7.5rem_minmax(0,1fr)] items-center gap-2 text-xs text-slate-300">
+      <span>{label}</span>
+      <select className="input btn-sm" value={value} onChange={(event) => onChange(event.target.value)}>{options.map(([option, text]) => <option key={option} value={option}>{text}</option>)}</select>
+    </label>
   );
 }

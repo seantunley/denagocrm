@@ -26,8 +26,10 @@ export default function ConfirmActionDialog({
   onConfirm,
   destructive = false,
   success,
+  open: controlledOpen,
+  onOpenChange,
 }: {
-  trigger: ReactNode;
+  trigger?: ReactNode;
   title: string;
   description: string;
   confirmLabel?: string;
@@ -39,8 +41,15 @@ export default function ConfirmActionDialog({
   destructive?: boolean;
   /** Shown when the action succeeds without a message of its own. */
   success?: string;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = controlledOpen ?? internalOpen;
+  const setOpen = (next: boolean) => {
+    if (controlledOpen === undefined) setInternalOpen(next);
+    onOpenChange?.(next);
+  };
   const [busy, setBusy] = useState(false);
 
   async function handleConfirm() {
@@ -66,7 +75,7 @@ export default function ConfirmActionDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!busy || next) setOpen(next); }}>
-      <DialogTrigger asChild>{trigger}</DialogTrigger>
+      {trigger ? <DialogTrigger asChild>{trigger}</DialogTrigger> : null}
       <ResponsiveDialogContent className="sm:max-w-md" aria-busy={busy}>
         <DialogHeader className="text-left">
           <span

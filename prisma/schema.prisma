@@ -615,6 +615,26 @@ model BotFlow {
   @@unique([tenantId, id])
 }
 
+/** Selects a published flow when a new conversation matches an entry signal. */
+model BotFlowRoute {
+  id        String   @id @default(cuid())
+  tenantId String
+  channel   String
+  kind      String // keyword | referral | ad
+  pattern   String
+  flowId    String
+  publishedVersionId String
+  priority  Int      @default(100)
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt @default(now())
+
+  @@unique([tenantId, channel, kind, pattern])
+  @@index([tenantId, channel, enabled, priority])
+  @@index([tenantId, flowId])
+  @@index([tenantId, publishedVersionId])
+}
+
 /** Repeatable, owner-authored regression scenario for a flow draft or version. */
 model BotFlowEvaluation {
   id              String   @id @default(cuid())
@@ -656,6 +676,30 @@ model BotSession {
   // migration DROPPING the tenant-scoped index and restoring the global one.
   @@unique([tenantId, channel, key])
   @@index([tenantId])
+}
+
+/** Curated, reviewable facts the chatbot may use as customer-facing sources. */
+model BotKnowledgeEntry {
+  id               String   @id @default(cuid())
+  tenantId         String
+  title            String
+  content          String
+  status           String   @default("draft") // draft | approved | expired
+  sourceType       String   @default("manual") // manual | library
+  sourceDocumentId String?
+  sourceLabel      String?
+  validFrom        DateTime?
+  validUntil       DateTime?
+  approvedAt       DateTime?
+  approvedBy       String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt @default(now())
+
+  @@index([tenantId, status, validFrom, validUntil], map: "BotKnowledgeEntry_tenant_status_valid_idx")
+  // Descending, and named as the migration creates it: the workspace list and
+  // every retrieval leg order by `updatedAt` DESC. Declared here so the deployed
+  // index and the Prisma schema describe the same object instead of drifting.
+  @@index([tenantId, updatedAt(sort: Desc)], map: "BotKnowledgeEntry_tenant_updated_idx")
 }
 
 model PipelineStage {
