@@ -98,7 +98,9 @@ export async function POST(req: NextRequest) {
           if (!text && !payload && attachments.length === 0) continue;
 
           const senderId = String(ev.sender?.id ?? "");
-          const providerId = String(ev.message?.mid ?? ev.postback?.mid ?? (senderId && ev.timestamp ? `${senderId}:entry:${ev.timestamp}` : ""));
+          // Never synthesize an id from sender/time: retries can be delivered with a
+          // different timestamp and would duplicate CRM side effects.
+          const providerId = String(ev.message?.mid ?? ev.postback?.mid ?? "");
           const outcome = await claimInboundBotEvent(platform, providerId);
           if (outcome.status === "completed") continue; // genuinely done — ack it.
           if (outcome.status === "unidentified") {
