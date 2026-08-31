@@ -223,6 +223,8 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt 
   );
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [status, setStatus] = useState("Saved");
+  const [saveNonce, setSaveNonce] = useState(0);
+  const [pendingDestination, setPendingDestination] = useState<string | null>(null);
   // The draft stamp this canvas is working from. Every save is fenced against it,
   // and a successful save adopts the new one.
   const savedAt = useRef<string>(updatedAt);
@@ -313,7 +315,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt 
     try {
       const res = await saveFlow(flowId, definition, savedAt.current);
       if (!res.ok) {
-        blockedByConflict.current = Boolean(res.conflict);
+        blockedByConflict.current = true;
         setStatus(res.conflict ? "Not saved — this draft changed elsewhere" : res.error ?? "Save failed");
         if (manual || res.conflict) toast.error(res.error ?? "Flow could not be saved");
         return;
@@ -327,18 +329,23 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt 
         saveAgain.current = true;
       }
       if (manual) toast.success("Flow saved");
+      return true;
+    } catch {
+      blockedByConflict.current = true;
+      setStatus("Save failed — check your connection and try again");
+      if (manual) toast.error("Flow could not be saved");
+      return false;
     } finally {
       saving.current = false;
       if (saveAgain.current && !blockedByConflict.current) {
         saveAgain.current = false;
-        setStatus("Unsaved changes");
+        setSaveNonce((value) => value + 1);
       }
     }
   }, [flowId, serialiseCurrent, status]);
 
   useEffect(() => {
     if (recovered.current) return;
-    recovered.current = true;
     try {
       const raw = window.localStorage.getItem(flowStorageKey(flowId));
       if (!raw) return;
@@ -353,6 +360,11 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt 
         data: { flow: node, isStart: node.id === parsed.start },
       } satisfies Node<RFData>));
       const timer = window.setTimeout(() => {
+        if (recovered.current) return;
+        recovered.current = true;
+        history.current.past = [cloneSnapshot(current.current)];
+        history.current.future = [];
+        updateHistoryDepth();
         setStart(parsed.start);
         setRfNodes(restoredNodes);
         current.current = { start: parsed.start, nodes: restoredNodes };
@@ -364,7 +376,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt 
     } catch {
       try { window.localStorage.removeItem(flowStorageKey(flowId)); } catch { /* storage is optional */ }
     }
-  }, [flowId, setRfNodes, updatedAt]);
+  }, [flowId, setRfNodes, updatedAt, updateHistoryDepth]);
 
   useEffect(() => {
     if (status === "Saved" || status === "Saving…" || blockedByConflict.current) return;
@@ -374,7 +386,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt 
     if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
     autosaveTimer.current = setTimeout(() => void persistDraft(false), AUTOSAVE_DELAY_MS);
     return () => { if (autosaveTimer.current) clearTimeout(autosaveTimer.current); };
-  }, [flowId, persistDraft, rfNodes, serialiseCurrent, start, status]);
+  }, [flowId, persistDraft, rfNodes, saveNonce, serialiseCurrent, start, status]);
   useEffect(() => {
     if (status === "Saved") return;
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
@@ -383,13 +395,10 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt 
       const target = event.target instanceof Element ? event.target.closest("a[href]") : null;
       if (!(target instanceof HTMLAnchorElement) || target.target === "_blank") return;
       const destination = new URL(target.href, window.location.href);
-      if (destination.origin !== window.location.origin || destination.href === window.location.href) return;
-      if (window.confirm("This flow still has unsaved changes. Leave and discard them?")) {
-        try { window.localStorage.removeItem(flowStorageKey(flowId)); } catch { /* storage is optional */ }
-        return;
-      }
+      if (destination.origin !== window.location.origin || destination.href === window.location.href || destination.hash && destination.pathname === window.location.pathname && destination.search === window.location.search) return;
       event.preventDefault();
       event.stopImmediatePropagation();
+      setPendingDestination(`${destination.pathname}${destination.search}${destination.hash}`);
     };
     window.addEventListener("beforeunload", warn);
     document.addEventListener("click", guardLink, true);
@@ -493,6 +502,10 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt 
   function removeNode(id: string) {
     remember(`remove:${id}`, true);
     setRfNodes((ns) => ns.filter((n) => n.id !== id).map((n) => ({ ...n, data: { ...n.data, flow: clearRefs(n.data.flow, id) } })));
+    if (start === id) {
+      const nextStart = current.current.nodes.find((node) => node.id !== id)?.id ?? "";
+      setStart(nextStart);
+    }
     if (selectedId === id) setSelectedId(null);
     markDirty();
   }
@@ -505,8 +518,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt 
   }
 
   async function onSave() {
-    await persistDraft(true);
-    router.refresh();
+    if (await persistDraft(true)) router.refresh();
   }
 
   const selected = rfNodes.find((n) => n.id === selectedId)?.data.flow ?? null;
@@ -522,6 +534,21 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt 
 
   return (
     <BuilderWorkspaceShell fullscreen={fullscreen} className="min-h-[720px] md:h-[calc(100dvh-8rem)] md:min-h-0">
+      <ConfirmActionDialog
+        destructive
+        open={pendingDestination !== null}
+        onOpenChange={(open) => { if (!open) setPendingDestination(null); }}
+        title="Leave with unsaved changes?"
+        description="Your latest flow edits have not been saved. Leaving now will discard the browser recovery copy."
+        confirmLabel="Leave flow"
+        onConfirm={() => {
+          const destination = pendingDestination;
+          if (!destination) return;
+          try { window.localStorage.removeItem(flowStorageKey(flowId)); } catch { /* storage is optional */ }
+          setPendingDestination(null);
+          router.push(destination);
+        }}
+      />
       <BuilderWorkspaceBar title="Conversation flow" description="Connect nodes to shape customer conversations and CRM hand-offs." status={<BuilderSaveStatus status={status} />}>
         <div className="flex items-center rounded-lg border border-white/10 bg-white/[0.035] p-0.5">
           <button type="button" onClick={() => setPaletteOpen((value) => !value)} className={cn("flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs text-slate-300 hover:bg-white/7", paletteOpen && "bg-primary/15 text-primary")}>
@@ -574,7 +601,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt 
 
         <main className="min-w-0 flex-1 bg-[#0b0f0e] p-2 sm:p-3">
           <div className="h-full min-h-[32rem] overflow-hidden rounded-xl border border-white/[0.08] bg-[#0f1412]">
-            <ReactFlow nodes={rfNodes} edges={edges} nodeTypes={nodeTypes} onNodesChange={onNodesChange} onNodeDragStart={(_, node) => remember(`drag:${node.id}`, true)} onNodeClick={(_, node) => { setSelectedId(node.id); setInspectorOpen(true); }} onConnect={onConnect} onPaneClick={() => setSelectedId(null)} fitView proOptions={{ hideAttribution: true }}>
+            <ReactFlow deleteKeyCode={null} nodes={rfNodes} edges={edges} nodeTypes={nodeTypes} onNodesChange={onNodesChange} onNodeDragStart={(_, node) => remember(`drag:${node.id}`, true)} onNodeClick={(_, node) => { setSelectedId(node.id); setInspectorOpen(true); }} onConnect={onConnect} onPaneClick={() => setSelectedId(null)} fitView proOptions={{ hideAttribution: true }}>
               <Background color="#25312d" gap={20} />
               <Controls className="!border-white/10 !bg-[#18201d] !text-white" />
             </ReactFlow>
