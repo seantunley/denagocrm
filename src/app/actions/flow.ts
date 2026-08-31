@@ -202,12 +202,12 @@ export async function addFlowRoute(formData: FormData) {
     const pattern = normalizeRoutePattern(String(formData.get("pattern") ?? ""));
     const flowId = String(formData.get("flowId") ?? "");
     const priority = Math.max(0, Math.min(10_000, Number.parseInt(String(formData.get("priority") ?? "100"), 10) || 100));
-    if (!FLOW_CHANNELS.includes(channel) || !FLOW_ROUTE_KINDS.includes(kind) || pattern.length < 2 || !flowId) return;
+    if (!FLOW_CHANNELS.includes(channel) || !FLOW_ROUTE_KINDS.includes(kind) || pattern.length < 2 || !flowId) return { error: "Complete every route field with a valid value." };
 
     const flow = await prisma.botFlow.findFirst({ where: { id: flowId, tenantId, channel } });
-    if (!flow) return;
-    const published = await prisma.botFlowVersion.findFirst({ where: { tenantId, flowId, channel }, select: { id: true } });
-    if (!published) return;
+    if (!flow) return { error: "Flow not found for this channel." };
+    const published = await prisma.botFlowPublication.findUnique({ where: { tenantId_channel: { tenantId, channel } }, select: { flowId: true } });
+    if (!published || published.flowId !== flowId) return { error: "Publish this flow as the channel default before routing traffic to it." };
     await prisma.botFlowRoute.upsert({
       where: { tenantId_channel_kind_pattern: { tenantId, channel, kind, pattern } },
       update: { flowId, priority, enabled: true },
@@ -215,6 +215,7 @@ export async function addFlowRoute(formData: FormData) {
     });
     await logAudit({ action: "bot.flow_route_saved", summary: `Chatbot ${channel} ${kind} route “${pattern}” → “${flow.name}”`, user: owner });
     revalidatePath("/bot-builder/routes");
+    return { success: "Route saved" };
   });
 }
 
