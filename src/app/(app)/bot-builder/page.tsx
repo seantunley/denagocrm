@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Copy, GitBranch, Layers3, Pencil, Plus, Radio, Trash2 } from "lucide-react";
+import { Copy, GitBranch, Layers3, Pencil, Plus, Radio, Route, Trash2 } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { requireOwner } from "@/lib/auth";
 import { getSetting, putSetting } from "@/lib/settings";
@@ -14,6 +14,9 @@ import { WorkspaceHero } from "@/components/workspace-hero";
 import { EmptyState, StatusPill, Surface } from "@/components/visual-system";
 import { builderTenantId, flowScope } from "@/lib/flowScope";
 import { DEFAULT_TENANT_ID } from "@/lib/tenant";
+import { FLOW_CHANNELS } from "@/lib/flowRouting";
+
+const channelLabel: Record<string, string> = { whatsapp: "WhatsApp", messenger: "Messenger", instagram: "Instagram", telegram: "Telegram" };
 
 function parseDraft(definition: string): Flow | null {
   try {
@@ -92,7 +95,7 @@ export default async function BotBuilderPage() {
           { label: "Drafts / changes", value: pendingDrafts, icon: Pencil },
           { label: "Channels checked", value: channels.length, icon: GitBranch },
         ]}
-        actions={<form action={createFlow}><input type="hidden" name="templateId" value="general" /><input type="hidden" name="name" value="New flow" /><button className="btn-primary btn-sm"><Plus className="size-4" />Blank-ish flow</button></form>}
+        actions={<div className="flex flex-wrap gap-2"><Link href="/bot-builder/routes" className="btn-secondary btn-sm"><Route className="size-4" />Routing</Link><form action={createFlow} className="flex gap-2"><input type="hidden" name="templateId" value="general" /><input type="hidden" name="name" value="New flow" /><select name="channel" className="input h-9 w-32 text-xs" aria-label="New flow channel">{FLOW_CHANNELS.map((channel) => <option key={channel} value={channel}>{channelLabel[channel]}</option>)}</select><button className="btn-primary btn-sm"><Plus className="size-4" />Blank-ish flow</button></form></div>}
       />
 
       <Surface className="p-5">
@@ -111,6 +114,8 @@ export default async function BotBuilderPage() {
               <input type="hidden" name="name" value={template.name} />
               <div className="flex items-center gap-2"><span className="grid size-8 place-items-center rounded-lg border border-border bg-card"><GitBranch className="size-4" /></span><p className="font-medium">{template.name}</p></div>
               <p className="mt-3 flex-1 text-xs leading-5 text-muted-foreground">{template.description}</p>
+              <label className="label mt-3" htmlFor={`template-channel-${template.id}`}>Channel</label>
+              <select id={`template-channel-${template.id}`} name="channel" className="input h-9 text-xs">{FLOW_CHANNELS.map((channel) => <option key={channel} value={channel}>{channelLabel[channel]}</option>)}</select>
               <button className="btn-secondary btn-sm mt-4 w-full"><Plus className="size-3.5" />Use template</button>
             </form>
           ))}
@@ -129,6 +134,7 @@ export default async function BotBuilderPage() {
                 <form action={renameFlow.bind(null, f.id)} className="flex-1 min-w-0"><input name="name" defaultValue={f.name} className="bg-transparent font-semibold text-foreground w-full outline-none focus:bg-muted rounded px-1 -mx-1" /></form>
                 <div className="flex items-center gap-1.5 flex-wrap justify-end">
                   {f.active && <StatusPill tone="success">Live</StatusPill>}
+                  <StatusPill tone="neutral">{channelLabel[f.channel] ?? f.channel}</StatusPill>
                   {pending && <StatusPill tone="warning">Draft changed</StatusPill>}
                   {blocked && <StatusPill tone="danger">{check.errors.length} error{check.errors.length === 1 ? "" : "s"}</StatusPill>}
                 </div>

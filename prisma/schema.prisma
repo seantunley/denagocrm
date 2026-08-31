@@ -612,6 +612,27 @@ model BotFlow {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt @default(now())
   @@index([tenantId])
+  @@unique([tenantId, id])
+}
+
+/** Selects a published flow when a new conversation matches an entry signal. */
+model BotFlowRoute {
+  id        String   @id @default(cuid())
+  tenantId String
+  channel   String
+  kind      String // keyword | referral | ad
+  pattern   String
+  flowId    String
+  publishedVersionId String
+  priority  Int      @default(100)
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt @default(now())
+
+  @@unique([tenantId, channel, kind, pattern])
+  @@index([tenantId, channel, enabled, priority])
+  @@index([tenantId, flowId])
+  @@index([tenantId, publishedVersionId])
 }
 
 /** Live state of a customer's position in a chatbot flow. */
