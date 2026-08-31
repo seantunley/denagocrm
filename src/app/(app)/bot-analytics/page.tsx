@@ -197,7 +197,7 @@ export default async function BotAnalyticsPage({ searchParams }: { searchParams:
               </div>
             </Surface>
 
-            <Surface className="min-w-0 p-5" id="analytics-attention">
+            <Surface className="min-w-0 p-5">
               <div className="flex items-start gap-3">
                 <span className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-amber-500/20 bg-amber-500/10 text-amber-300"><AlertTriangle className="size-5" aria-hidden="true" /></span>
                 <div>
@@ -248,7 +248,7 @@ export default async function BotAnalyticsPage({ searchParams }: { searchParams:
             </ResponsiveEntityTable>
           </Surface>
 
-          <Surface className="min-w-0 overflow-hidden" id="analytics-funnel">
+          <Surface className="min-w-0 overflow-hidden">
             <div className="border-b border-border px-4 py-4 sm:px-5">
               <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Selected-version funnel</p>
               <h2 className="mt-1 text-lg font-semibold">Where conversations progress or stop</h2>
