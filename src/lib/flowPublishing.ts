@@ -197,6 +197,16 @@ export async function publishFlowSnapshot(
       },
     });
 
+    // A route selects a flow, not a one-time release of that flow. Advance every
+    // matching rule in the same transaction as the channel default so one click
+    // on Publish cannot leave routed customers on the previous version. Include
+    // disabled routes as well: re-enabling a rule later must not revive stale
+    // conversation behaviour.
+    await tx.botFlowRoute.updateMany({
+      where: { tenantId, flowId: flow.id, channel: flow.channel },
+      data: { publishedVersionId: snapshot.id },
+    });
+
     return { versionId: snapshot.id, version, channel: flow.channel };
   });
 }
