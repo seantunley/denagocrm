@@ -19,7 +19,7 @@ test("flow simulator runs the real engine but imports no CRM write helpers", () 
 
 test("simulated AI and handoff are explicit test effects", () => {
   const action = src("src/app/actions/flowSimulator.ts");
-  assert.match(action, /simulateAiHandoff/);
+  assert.match(action, /scenario\.ai === "handoff"/);
   assert.match(action, /\[Simulator\] AI response/);
   assert.match(action, /Handoff: would pause bot and notify team/);
 });
@@ -58,8 +58,9 @@ test("the editor can simulate the current in-memory canvas", () => {
 
 test("the simulator exposes failure, availability, identity and Journey scenarios", () => {
   const action = src("src/app/actions/flowSimulator.ts");
-  for (const value of ["race_lost", "unverified", "missing", "simulated CRM refusal", "simulated Journey refusal", "AI provider timeout"]) {
-    assert.match(action, new RegExp(value, "i"));
+  const scenarios = src("src/lib/flowSimulatorScenario.ts");
+  for (const value of ["race_lost", "unverified", "missing", "simulated CRM refusal", "simulated Journey refusal", "simulated provider timeout"]) {
+    assert.match(`${action}\n${scenarios}`, new RegExp(value, "i"));
   }
   const ui = src("src/components/FlowSimulator.tsx");
   for (const label of ["CRM actions", "Workshop slots", "Customer identity", "Booking lookup", "Journey enrolment"]) {
@@ -69,7 +70,6 @@ test("the simulator exposes failure, availability, identity and Journey scenario
 
 test("the simulator greeting comes from the acting workspace Company Profile", () => {
   const action = src("src/app/actions/flowSimulator.ts");
-  assert.match(action, /const company = await getCompanyProfile\(\)/);
-  assert.match(action, /Welcome to \$\{company\.name\}/);
+  assert.match(action, /input\.session \?\? .*await getCompanyProfile\(\)/);
   assert.doesNotMatch(action, /Welcome to Denago Cape Town/);
 });
