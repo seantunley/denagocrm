@@ -110,9 +110,10 @@ later.
    argument is at the top of `emailInlineStyles.ts`. Do not add MJML without
    reading it; the frame it would replace is verified and tracking-aware.
 
-2. **Subscription groups — still open.** Channel-level unsubscribe exists
-   (`unsubscribeLinks.ts`, `List-Unsubscribe` headers); the marketing-vs-service
-   *group* distinction has not been compared against their model yet.
+2. **Subscription groups — COMPARED AND DECIDED**, see
+   [Item 2 completed](#item-2-completed-subscription-groups--read-compared-decided-2026-09-01).
+   No group entities; consolidate the three preference stores, then per-channel
+   opt-out, then a minimal preference page.
 
 3. **`emailo` — DELIVERED NATIVELY, not ported.** Their editor's value is
    email-safe building blocks, and porting the package would have brought its
@@ -125,4 +126,120 @@ later.
    (`emailPreviewHtml`) instead of iframing raw editor HTML. Guarded by
    `tests/emailComposerBlocks.test.ts`.
 
-4. **Segment operators — still open.** No write-up yet.
+4. **Segment operators — DELTA WRITTEN UP AND DECIDED**, see
+   [Item 4 completed](#item-4-completed-segment-operator-delta--written-up-2026-09-01).
+   Three operators worth taking: `within_days`, `opened_campaign`/`clicked_campaign`,
+   `random_bucket`.
+
+---
+
+## Item 2 completed: subscription groups — read, compared, decided (2026-09-01)
+
+Read from `packages/backend-lib/src/subscriptionGroups.ts` and
+`subscriptionManagementPage.ts` at `dittofeed/dittofeed@main`.
+
+### Their model
+
+A `SubscriptionGroup` is an admin-defined entity per **channel** (email, SMS,
+…), typed `OptIn` or `OptOut`, with a per-user assignment. On top of that:
+
+- an HMAC-signed preference-page URL per recipient (`generateSubscriptionHash`
+  over workspace + user + identifier, keyed by a per-workspace secret) — no
+  session needed, not guessable, and the same mechanism signs one-click
+  subscribe/unsubscribe links;
+- a **preference centre** grouping a user's subscriptions by channel, with
+  per-group checkboxes and an unsubscribe-all;
+- every change recorded as an event, and groups usable **inside segments**
+  (`SubscriptionGroup` / `SubscriptionGroupUnsubscribed` nodes).
+
+### What we already have, mapped against it
+
+| capability | Dittofeed | us |
+|---|---|---|
+| marketing vs service/transactional survive independently | groups | **already ours** — `canContactPerson` gates by `purpose`; service reminders and signing mail are not touched by `marketingOptOut` |
+| unsubscribe is one click, RFC 8058 headers | yes | **already ours** (`unsubscribeLinks.ts`) |
+| consent audit trail | change events | **already ours**, stronger for POPIA — `ConsentRecord` is a ledger |
+| per-channel marketing opt-out (email vs SMS separately) | yes | no — one `marketingOptOut` boolean kills both |
+| preference centre | yes | no — our unsubscribe page is a kill switch with no way back or narrower choice |
+| arbitrary named groups ("newsletter", "product news") | yes | no |
+| groups as audience-rule operands | yes | no |
+| one store of truth for the preference | one assignment table | **three overlapping stores** — `Contact.marketingOptOut`, latest `ConsentRecord`, and TWO `PortalPreference` flags; `communicationPolicy.ts` itself carries the "until they are consolidated" comment |
+
+### The decision
+
+**Do not port `SubscriptionGroup` as an entity.** Admin-defined groups are
+machinery for senders running many distinct lists. Our tenants run one
+marketing stream per channel; a groups admin screen would be surface area
+without demand, and every eligibility check would grow a join for a
+distinction nobody here expresses.
+
+**Adopt three specific things, as follow-up work in this order:**
+
+1. **Consolidate the three preference stores** onto `ConsentRecord` as the
+   single truth (typed `marketing_email`, `marketing_sms`), with
+   `marketingOptOut` kept as a derived, backwards-compatible read. This is our
+   own recorded debt, and their design's real lesson is that ONE assignment
+   store is what makes everything else cheap.
+2. **Per-channel marketing opt-out**, which falls out of (1) — the unsubscribe
+   route records `marketing_email` withdrawn instead of nuking both channels.
+   An email unsubscribe silencing SMS is over-compliance that costs reach.
+3. **A minimal preference page** on the existing unsubscribe route: after the
+   one-click unsubscribe has already taken effect (compliance stays blunt and
+   immediate — nothing is put behind a second click), show the per-channel
+   state with the option to resubscribe or narrow. Token-authenticated by the
+   existing recipient token; their HMAC scheme is only needed for links that
+   outlive a campaign, which ours do not.
+
+Not adopted: arbitrary groups, group-typed segments (until (1)–(3) exist and
+someone asks), OptIn-typed groups (South African marketing consent is opt-out
+per POPIA s69 for existing customers; our `ConsentRecord` already models
+explicit grants where they are required).
+
+---
+
+## Item 4 completed: segment operator delta — written up (2026-09-01)
+
+Read from `packages/isomorphic-lib/src/types.ts` (`SegmentOperatorType`,
+`SegmentNodeType`) against `src/lib/marketingAudiences.ts`.
+
+### The two vocabularies
+
+**Ours**: `equals / not_equals / contains / in / is_empty / is_not_empty /
+greater_than / greater_or_equal / less_than / less_or_equal` over contact
+fields, composed with AND/OR groups and exclusions (depth ≤ 6, ≤ 100 rules) —
+plus bespoke domain rules that are really pre-joined segments: `has_vehicle`,
+`service_due`, `due_soon`, `overdue`, `won`, `bought_before`, `vehicle_model`,
+`source`, `province`.
+
+**Theirs**: trait operators `Equals / NotEquals / Exists / NotExists /
+GreaterThanOrEqual / LessThan` plus **time** (`Within`, `HasBeen` — "has had
+value X for ≥ N seconds", `AbsoluteTimestamp`) and **behavioural nodes**
+(`Performed`, `LastPerformed`, `KeyedPerformed` — event counts and recency over
+their ClickHouse event store), `Broadcast`, `Email` (engagement),
+`RandomBucket`, `Manual`, `Everyone`, `Includes`.
+
+### Where their set is genuinely richer, and what it is worth to us
+
+| theirs | what it expresses | our position |
+|---|---|---|
+| `Within` / `AbsoluteTimestamp` | "created/changed in the last N days" | **worth adding** — we have no generic recency operator; `service_due` is the only time-aware rule and it is bespoke. One `within_days` operator over date fields covers "new contacts this month" and "no purchase since…" |
+| `HasBeen` | "has been in state X for ≥ N days" | skip — expressible as `within_days` negation for every case a dealership has named |
+| `Performed` family | event-based behaviour | skip the general mechanism — it is what their ClickHouse is FOR and we deliberately did not take that engine. The two behaviours worth having are engagement, below |
+| `Email` engagement | opened / clicked | **worth adding** — we already RECORD `CampaignEvent` opens and clicks per contact and cannot segment on them. `opened_campaign` / `clicked_campaign` (any, or a named campaign) is a join we already own |
+| `RandomBucket` | deterministic holdout % | **worth adding, cheapest of all** — a stable hash of contact id modulo 100 gives holdout groups for measuring whether campaigns work; no schema, no state |
+| `SubscriptionGroup` nodes | groups in segments | follows the item-2 decision: not until groups exist |
+
+**Decision:** three additive operators to `marketingAudiences.ts` when
+marketing next gets attention — `within_days`, `opened_campaign` /
+`clicked_campaign`, `random_bucket`. Each is a pure addition to
+`ALLOWED_OPERATORS` + `compare`/query plumbing, none needs schema, and the
+audience editor already renders arbitrary rules. Nothing else in their operator
+set earns its keep against our data model.
+
+---
+
+**The queue is now fully dispositioned**: emailo delivered natively, MJML
+superseded on the merits, subscription groups decided (consolidate → per-channel
+→ preference page, no group entities), segment operators decided (three
+operators, named). Follow-up build work is listed above by name; none of it is
+blocked on further Dittofeed reading.
