@@ -99,7 +99,7 @@ export default async function DashboardPage({
             New lead
           </Link>
           <Link
-            href="/activities/new"
+            href="/activities"
             className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-border/70 bg-card/50 px-4 py-2 text-sm font-medium text-foreground transition hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
           >
             <CirclePlus className="size-4 text-muted-foreground" aria-hidden="true" />
