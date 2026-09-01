@@ -232,7 +232,7 @@ thin real consumer, document the intended shape in `docs/seams.md`, and stop:
 | --- | --- |
 | **External capture** | Email, WhatsApp, calls and meeting notes will need to be pulled into the project record. Not yet scoped. Build a `CaptureAdapter` — normalised inbound message, participant resolution, project attribution, deduplication — and implement exactly one (inbound email) to prove it. |
 | **Annotation** | Comments pinned to a coordinate on a floor plan, a render or a photograph, revision-aware. Media and documents must expose stable page/region addressing from the start. |
-| **Structured selections** | Finishes, fabrics, fixtures — an option set, a client selection, a lock date, a cost. Near-certain for an interiors practice, absent from this brief. |
+| **Structured selections** | Finishes, fabrics, fixtures, hardware — an option set presented to the client, a selection, a lock date, a cost, a supplier. Absent from the source brief, but for an interiors practice this is close to the centre of the client relationship and it will be asked for. It attaches to scope items, so make sure they can carry it. |
 
 ### 3.4 Visually exceptional
 
@@ -353,7 +353,14 @@ is close to impossible to retrofit. Argue it in an ADR if you disagree — befor
   contact-stage fields, the consultation bookings, and the denial outcome with its
   six-month revisit reminder.
 - **Project** — created under a client; the scoping root for everything below. Carries
-  its journey version, current phase, scope areas, size, timeline, style direction.
+  its journey version, current phase, size, timeline, style direction.
+- **ProjectArea** and **ScopeItem** — the project decomposes by *area of the home* and,
+  within each, the *work required*: wall panelling, furniture, wallpaper, lighting,
+  electrical, flooring, painting. This is not a text field on the project. Costing,
+  supplier engagement, manufacturing, production and snagging all key off scope items,
+  and every one of the physical phases is really a state machine running per item rather
+  than per project. Get this wrong and the Costing and Manufacturing phases have nothing
+  to attach to.
 - **ProjectMembership** — for staff *and* for clients, separately typed. The only thing
   granting a client any visibility.
 - **PhaseDefinition / JourneyVersion / PhaseTransition** — the stage machine of §2.4.
@@ -372,7 +379,10 @@ is close to impossible to retrofit. Argue it in an ADR if you disagree — befor
   **ClientAction** for what the portal asks of the client (upload POP, sign onboarding,
   choose Option A or B, supply information).
 - **Supplier / SupplierEngagement** — supplier records and their project-linked
-  correspondence.
+  correspondence, engaged against scope items.
+- **SnagItem** — Snagging & Finishing is a named phase, so the snag list is an entity,
+  not a note: area, scope item, description, photograph, owner, state, date resolved.
+  Close Out asserts that every one is closed.
 - **Proposal / ProposalOption** — Phase 1 and the optional Phase 2 with Options A and B,
   including the deferred re-offer at Implementation.
 - **Invoice / ProofOfPayment / PaymentVerification** — issuance, client upload, staff
