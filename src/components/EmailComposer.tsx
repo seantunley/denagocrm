@@ -186,7 +186,7 @@ export default function EmailComposer({
           <div>
             <label className="label">Message</label>
             <input type="hidden" name="bodyHtml" value={body} />
-            <RichTextEditor value={body} onChange={setBody} />
+            <RichTextEditor value={body} onChange={setBody} emailTools />
             <AiCheckButton
               getDraft={() => body.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()}
               contactId={contactId}
