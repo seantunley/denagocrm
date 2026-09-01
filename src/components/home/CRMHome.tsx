@@ -183,19 +183,48 @@ export default async function CRMHome({ hasCustomDashboard }: { hasCustomDashboa
           </p>
         </div>
 
+        {/*
+          EACH ACTION IS GATED ON THE PERMISSION ITS DESTINATION ENFORCES.
+
+          Everything else on this screen already gates — the metrics, the agenda
+          and the pipeline all hang off seesLeads/seesQuotes/seesActivities, and
+          the "Custom dashboard" link below is conditional too. These two were the
+          exception, so the most prominent control on the home screen was the one
+          a constrained user could not use: /leads/new calls
+          requirePermission("leads.create") and /calendar calls
+          requireAnyPermission("activities.view", "activities.manage"), and both
+          redirect to `/`.
+
+          Not a security question — both destinations guarded themselves before
+          this change and still do. It is the difference between a screen that
+          offers what you can do and one that offers what you cannot.
+
+          The rule is the house one, stated on the nav that offers these same
+          destinations (components/nav-config.ts): the guard "applies on the page,
+          so this link cannot appear for someone /fleets bounces". nav-config
+          gates /calendar on exactly the pair below, and CommandMenu gates
+          /leads/new on leads.create.
+
+          `seesActivities` is reused rather than re-derived: it is already the
+          exact pair /calendar enforces.
+        */}
         <div className="flex flex-wrap items-center gap-2">
-          <Link
-            href="/leads/new"
-            className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground shadow-sm transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
-          >
-            <Plus className="size-4" /> New lead
-          </Link>
-          <Link
-            href="/calendar"
-            className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-border/70 bg-card px-4 py-2.5 text-sm font-medium text-foreground transition hover:bg-muted/60"
-          >
-            <CalendarDays className="size-4 text-muted-foreground" /> Calendar
-          </Link>
+          {grants(access, "leads.create") && (
+            <Link
+              href="/leads/new"
+              className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground shadow-sm transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+            >
+              <Plus className="size-4" /> New lead
+            </Link>
+          )}
+          {seesActivities && (
+            <Link
+              href="/calendar"
+              className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-border/70 bg-card px-4 py-2.5 text-sm font-medium text-foreground transition hover:bg-muted/60"
+            >
+              <CalendarDays className="size-4 text-muted-foreground" /> Calendar
+            </Link>
+          )}
           {hasCustomDashboard && (
             <Link
               href="/d/home"
