@@ -290,11 +290,11 @@ The brand identity is supplied by the practice and is not yet in hand, so:
 - **Media handling is a first-class subsystem, not an `<img>` tag.** Photographs, videos
   of existing spaces, inspiration imagery, moodboards, floor plans, progress photography.
   That means: resumable direct-to-storage uploads that survive a phone on site with bad
-  signal; server-side derivative generation off the request path; AVIF and WebP at
-  DPR-aware widths, never upscaled; blur or dominant-colour placeholders; colour profiles
-  preserved; EXIF orientation respected and GPS **stripped**; video transcoded with
-  poster frames. A soft image on a Retina display fails this brief as badly as a broken
-  link.
+  signal; derivatives generated off the request path; AVIF and WebP at DPR-aware widths,
+  never upscaled; blur or dominant-colour placeholders; colour profiles preserved; EXIF
+  orientation respected and GPS **stripped**; video delegated to a managed platform with
+  signed playback. Section 6 specifies how. A soft image on a Retina display fails this
+  brief as badly as a broken link.
 - **Typography and space carry the design**, not chrome. A modular scale, real rhythm,
   generous margins, hairline rules. Restraint reads as expensive.
 - **Motion is functional and fast** — 150–250ms, entrances and state changes only, fully
@@ -356,20 +356,95 @@ an audit trail. Drafts are invisible to clients — prove it in the test suite.
 
 ## 6. Stack
 
-Start here; justify any deviation in `docs/adr/0001-stack.md`.
+This is decided, not a starting suggestion. It mirrors a production system the practice's
+developer already runs, which means its failure modes are known rather than theoretical.
+Justify any deviation in `docs/adr/0001-stack.md` before writing code.
 
-- **Next.js (latest stable), App Router, TypeScript strict**
-- **PostgreSQL** — non-negotiable; RLS is the security model
-- **Prisma** for schema and migrations, with raw SQL for policies and anything Prisma
-  cannot express
-- **Tailwind CSS v4** driven entirely by the token layer, with a small owned component
-  set — no wholesale UI framework that will fight the brand later
-- **Zod** at every trust boundary: request bodies, forms, environment, webhooks, external
-  API responses
-- **Argon2id** passwords, opaque server-side sessions
-- **Object storage with direct, resumable uploads**, private by default
-- **A real background job runner** with retries and idempotency — email, derivatives,
-  transcodes, scans, scheduled reminders and digests never run inline in a request
+### 6.1 The core
+
+- **Next.js (latest stable), App Router, React, TypeScript strict**
+- **PostgreSQL** — non-negotiable; RLS is the security model. Neon or equivalent managed
+  Postgres, with a role that has RLS enforced and is **not** the schema owner.
+- **Prisma** for schema and migrations, with raw SQL migrations for policies and anything
+  Prisma cannot express
+- **Tailwind CSS v4** driven entirely by the token layer, plus Radix primitives and a
+  small owned component set — no wholesale UI framework that will fight the brand later
+- **Zod** at every trust boundary: request bodies, forms, environment, webhooks, and
+  external API responses
+- **Own the authentication.** Opaque server-side sessions, `jose` for token handling,
+  **argon2id** for password hashing (bcrypt is acceptable if it matches existing
+  practice, but argon2id is the better default), and **passkeys for staff** — WebAuthn is
+  a better fit than passwords for a small team that logs in daily, and it removes a whole
+  class of credential risk.
+- **Vercel** for hosting, in the region closest to the practice with acceptable latency.
+  Database region matters far less than media edge presence — see 6.3.
+- **Vercel Cron plus a database-backed outbox** for background work. Events are written
+  in the same transaction as the change that caused them and drained by a scheduled
+  endpoint, so nothing is lost when a request dies. Retries and idempotency are required,
+  not optional.
+
+### 6.2 Files do not live in the database
+
+**Nothing binary goes into Postgres.** No `bytea` columns, no base64. The database stores
+*rows about* files — storage key, checksum, MIME type, byte size, dimensions, duration,
+derivative references, uploader, project, client visibility — and object storage holds the
+bytes. A video in a database column bloats every backup and every replica, and still
+cannot be streamed, because scrubbing needs HTTP range requests.
+
+- **Documents and images: object storage, private by default.** Vercel Blob is adequate
+  and simple; Cloudflare R2 is the alternative if egress cost becomes visible, since a
+  client portal serves the same imagery repeatedly. Sit both behind the `StorageAdapter`
+  so the choice is a swap, not a migration.
+- **Upload direct from the browser to storage.** File bytes never pass through a route
+  handler — it is slow, it is expensive, and serverless request body limits will stop it
+  anyway. Mint an upload token server-side after an authorisation check; the client
+  uploads to storage; the server records the resulting object.
+- **Uploads must be resumable.** A designer is standing in a client's lounge on one bar of
+  signal. A dropped upload resumes; it does not start again.
+- **Serve through an authorising route**, which checks access and then redirects to a
+  short-lived signed URL bound to the requesting principal. No public buckets. Never a
+  storage URL in a page's HTML.
+
+### 6.3 Video is a specialist problem — delegate it
+
+Site walkthroughs shot on a phone are a first-class input to this system, and the naive
+implementation fails badly.
+
+**Use a managed video platform — Cloudflare Stream or Mux. Do not build a transcoding
+pipeline.** Both provide, in one integration: `tus` resumable direct upload from the
+phone, transcoding, adaptive-bitrate HLS, poster frames, and — critically — **signed
+playback tokens**, so a client's video is unplayable by anyone the platform has not
+authorised. Cloudflare Stream is cheaper and simpler and has South African edge presence;
+Mux is preferable if engagement analytics are ever wanted. Either way the practice's own
+database stores only the asset id, the playback policy, and the metadata.
+
+**Do not transcode on the application host.** ffmpeg inside a serverless function will
+hit memory and duration limits, and you would be paying compute rates to do a worse job.
+
+Ingest completion arrives by **webhook**, which must be signature-verified, idempotent,
+and unable to change anything about a project beyond the media asset it names.
+
+### 6.4 Images: pre-generate, do not optimise on the fly
+
+Private storage plus short-lived signed URLs composes badly with an on-the-fly image
+optimiser, which needs to fetch the original itself. Instead, generate derivatives with
+`sharp` in a background job at fixed widths, in AVIF and WebP, and store them beside the
+original. Deterministic, no per-transformation billing, and it works with the access
+model rather than around it. Strip GPS, honour EXIF orientation, preserve colour profile,
+never upscale.
+
+### 6.5 Two operational things that are not optional
+
+- **Backups must cover the blob store, not only the database.** A database backup without
+  the files it references is not a backup, and the failure is silent until the day it
+  matters. Verify coverage on a schedule; a backup that has never been restored is a
+  hypothesis.
+- **RLS and connection pooling interact badly, and the bug is the worst one available.**
+  With a pooler in transaction mode, session-level settings do not survive between
+  requests, so tenant context must be set with `SET LOCAL` **inside the transaction** that
+  uses it. Set it at session level and a pooled connection will eventually serve one
+  workspace's data under another's context. Write the test that proves the context cannot
+  leak between transactions before you rely on RLS for anything.
 
 **Read the installed documentation before writing code against any of these.** Framework
 majors move faster than training data; `node_modules/<pkg>/` and the docs for the
@@ -441,10 +516,12 @@ another client's home.
 3. **The access layer.** Request-scoped data accessor no route can bypass, enforced by a
    lint rule; deny-by-default `can(principal, action, resource)` policy layer.
 4. **Audit.** Append-only, with no update or delete path in the application.
-5. **Storage and media.** Private object storage, resumable direct uploads, signed URLs
-   bound to a principal and expiring, byte-level content sniffing, checksums, EXIF
-   orientation honoured and **GPS stripped**, derivative generation and video poster
-   frames off the request path.
+5. **Storage and media**, per section 6.2–6.4. Private object storage behind a
+   `StorageAdapter`; resumable direct-from-browser uploads; an authorising route that
+   redirects to short-lived signed URLs bound to the requesting principal; byte-level
+   content sniffing; checksums; EXIF orientation honoured and **GPS stripped**;
+   `sharp` derivatives generated in a job; video delegated to Cloudflare Stream or Mux
+   with signature-verified, idempotent ingest webhooks and signed playback.
 6. **Jobs and transactional email.** A real job runner with retries and idempotency;
    outbound email for invitations and notifications. Nothing slow runs in a request.
 7. **The module registry.** Manifests, boundary lint, and the test that boots the app
