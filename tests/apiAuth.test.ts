@@ -38,6 +38,17 @@ const PUBLIC_PREFIXES = [
   // parameters, and returns the caller's own Host header plus an HMAC of it, so
   // there is nothing behind it to reach.
   "brand/domain-check",
+  // CSP violation reports. PUBLIC BY NECESSITY: a browser posts these with no
+  // credentials, and the violations most worth seeing happen on /login, where
+  // there is no session to authenticate with. Requiring a guard would leave the
+  // endpoint collecting nothing from exactly the page it exists to watch.
+  //
+  // It is a write endpoint, so it is bounded instead of guarded: POST only, a
+  // byte cap applied BEFORE JSON.parse, per-IP rate limiting, a fixed set of
+  // extracted and truncated fields, no echo of input, and an unvarying 204 so a
+  // caller cannot tell accepted from throttled from malformed. See the route's
+  // header comment, and tests/cspReporting.test.ts which pins each of those.
+  "csp-report",
 ];
 
 // NOTE: this proves an authENTICATION guard is invoked; it does not prove
