@@ -1,0 +1,96 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;450;500&display=swap">
+  <style>
+    body { margin: 0; background: #FAF8F5; -webkit-font-smoothing: antialiased; }
+    a { color: #14110F; } a:hover { color: #3A3532; }
+    .serif { font-family: 'Instrument Serif', Georgia, 'Times New Roman', serif; font-weight: 400; }
+    .sans { font-family: 'IBM Plex Sans', 'Helvetica Neue', Arial, sans-serif; }
+    .mono { font-family: 'IBM Plex Mono', ui-monospace, Menlo, monospace; }
+    .label { font-size: 9px; letter-spacing: 0.22em; color: #8A8177; }
+    .area { display: flex; gap: 14px; padding: 14px 0; border-bottom: 1px solid #E8E3DE; }
+    .ph { background: #E8E3DE; display: flex; align-items: center; justify-content: center; }
+    .phl { font-size: 8px; letter-spacing: 0.14em; color: #8A8177; text-align: center; line-height: 1.8; }
+  </style>
+</helmet>
+
+<div style="width: 390px; background: #FAF8F5; display: flex; flex-direction: column; padding: 30px 28px 24px; box-sizing: border-box;">
+
+  <div style="display: flex; align-items: baseline; gap: 12px;">
+    <div class="mono label">I</div>
+    <div class="mono label">THE BRIEF</div>
+  </div>
+  <div style="height: 1px; background: #14110F; margin: 12px 0 26px;"></div>
+
+  <div class="serif" style="font-size: 27px; line-height: 1.25; color: #14110F; letter-spacing: -0.005em; text-wrap: pretty;">
+    &ldquo;We want the ground floor to feel like one continuous space &mdash; calm, warm, and properly ours.&rdquo;
+  </div>
+  <div class="sans" style="font-size: 12px; color: #6B635E; margin-top: 14px;">In your words, 2 September 2026</div>
+
+  <div style="height: 1px; background: #CFC8C2; margin: 28px 0 0;"></div>
+
+  <div class="mono label" style="margin: 24px 0 4px;">AREAS &amp; SCOPE</div>
+
+  <div class="area">
+    <div class="mono" style="font-size: 10px; color: #A79F99; width: 22px; flex-shrink: 0; padding-top: 6px;">A</div>
+    <div style="flex-grow: 1;">
+      <div class="serif" style="font-size: 20px; color: #14110F;">Living room</div>
+      <div class="sans" style="font-size: 13px; line-height: 1.55; color: #6B635E; margin-top: 4px;">Wall panelling &middot; Lighting &middot; Flooring &middot; Furniture</div>
+    </div>
+  </div>
+  <div class="area">
+    <div class="mono" style="font-size: 10px; color: #A79F99; width: 22px; flex-shrink: 0; padding-top: 6px;">B</div>
+    <div style="flex-grow: 1;">
+      <div class="serif" style="font-size: 20px; color: #14110F;">Kitchen &amp; scullery</div>
+      <div class="sans" style="font-size: 13px; line-height: 1.55; color: #6B635E; margin-top: 4px;">Joinery &middot; Lighting &middot; Electrical &middot; Painting</div>
+    </div>
+  </div>
+  <div class="area">
+    <div class="mono" style="font-size: 10px; color: #A79F99; width: 22px; flex-shrink: 0; padding-top: 6px;">C</div>
+    <div style="flex-grow: 1;">
+      <div class="serif" style="font-size: 20px; color: #14110F;">Entrance hall</div>
+      <div class="sans" style="font-size: 13px; line-height: 1.55; color: #6B635E; margin-top: 4px;">Wallpaper &middot; Lighting &middot; Flooring</div>
+    </div>
+  </div>
+
+  <div style="display: flex; align-items: center; gap: 0; margin: 22px 0 4px;">
+    <div style="width: 1px; height: 9px; background: #A79F99;"></div>
+    <div style="height: 1px; background: #A79F99; flex-grow: 1;"></div>
+    <div class="mono" style="font-size: 10px; color: #6B635E; padding: 0 10px;">180 m&sup2; approx.</div>
+    <div style="height: 1px; background: #A79F99; flex-grow: 1;"></div>
+    <div style="width: 1px; height: 9px; background: #A79F99;"></div>
+  </div>
+
+  <div class="mono label" style="margin: 30px 0 12px;">AS FOUND</div>
+  <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px;">
+    <div class="ph" style="height: 150px;"><div class="mono phl">PHOTOGRAPH<br>LIVING ROOM</div></div>
+    <div class="ph" style="height: 150px;"><div class="mono phl">PHOTOGRAPH<br>KITCHEN</div></div>
+  </div>
+  <div class="ph" style="height: 118px; margin-top: 8px;"><div class="mono phl">PHOTOGRAPH &middot; ENTRANCE HALL</div></div>
+
+  <div class="mono label" style="margin: 30px 0 12px;">INSPIRATION</div>
+  <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;">
+    <div class="ph" style="height: 104px;"><div class="mono phl">IMAGE 01</div></div>
+    <div class="ph" style="height: 104px;"><div class="mono phl">IMAGE 02</div></div>
+    <div class="ph" style="height: 104px;"><div class="mono phl">IMAGE 03</div></div>
+  </div>
+
+  <div style="height: 1px; background: #CFC8C2; margin: 30px 0 18px;"></div>
+  <div style="display: flex; justify-content: space-between; align-items: baseline;">
+    <div class="mono label">TIMELINE</div>
+    <div class="serif" style="font-size: 20px; color: #14110F;">Ready by December 2026</div>
+  </div>
+
+  <div class="mono" style="font-size: 9px; letter-spacing: 0.14em; color: #A79F99; margin-top: 34px;">MVR / 2026 / KLOOF ROAD / 03</div>
+
+</div>
+</x-dc>
+</body>
+</html>

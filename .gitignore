@@ -58,3 +58,6 @@ data-export.json
 backups/
 .poll-fb2.mjs
 .claude/worktrees/
+
+# Seeded design-canvas output (regenerated from the .dc.html working files)
+docs/mvr-platform/design/mvr-client-onboarding.html
