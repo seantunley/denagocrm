@@ -1,19 +1,15 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { animate, motion, useReducedMotion } from "framer-motion";
-import { Area, AreaChart, ResponsiveContainer } from "recharts";
-import { TrendingDown, TrendingUp, Target as TargetIcon } from "lucide-react";
+import { ArrowRight, Target as TargetIcon, TrendingDown, TrendingUp } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-
-/* ── count-up number ─────────────────────────────────────────────── */
 
 function CountUp({ value, format }: { value: number; format?: (n: number) => string }) {
   const reduced = useReducedMotion();
   const [display, setDisplay] = useState(reduced ? value : 0);
-  const ref = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
     if (reduced) {
@@ -21,22 +17,16 @@ function CountUp({ value, format }: { value: number; format?: (n: number) => str
       return;
     }
     const controls = animate(0, value, {
-      duration: 0.9,
+      duration: 0.6,
       ease: [0.22, 1, 0.36, 1],
-      onUpdate: (v) => setDisplay(v),
+      onUpdate: setDisplay,
     });
     return () => controls.stop();
   }, [value, reduced]);
 
   const fmt = format ?? ((n: number) => String(Math.round(n)));
-  return (
-    <span ref={ref} className="tabular-nums">
-      {fmt(display)}
-    </span>
-  );
+  return <span className="tabular-nums">{fmt(display)}</span>;
 }
-
-/* ── staggered entrance container ────────────────────────────────── */
 
 export function Stagger({ children, className }: { children: React.ReactNode; className?: string }) {
   const reduced = useReducedMotion();
@@ -45,7 +35,7 @@ export function Stagger({ children, className }: { children: React.ReactNode; cl
       className={className}
       initial={reduced ? false : "hidden"}
       animate="show"
-      variants={{ show: { transition: { staggerChildren: 0.06 } } }}
+      variants={{ show: { transition: { staggerChildren: 0.035 } } }}
     >
       {children}
     </motion.div>
@@ -57,8 +47,8 @@ export function StaggerItem({ children, className }: { children: React.ReactNode
     <motion.div
       className={className}
       variants={{
-        hidden: { opacity: 0, y: 10 },
-        show: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 260, damping: 24 } },
+        hidden: { opacity: 0, y: 4 },
+        show: { opacity: 1, y: 0, transition: { duration: 0.18 } },
       }}
     >
       {children}
@@ -66,15 +56,13 @@ export function StaggerItem({ children, className }: { children: React.ReactNode
   );
 }
 
-/* ── stat card with sparkline ────────────────────────────────────── */
-
 export type SparkStat = {
   label: string;
   value: number;
   display?: "int" | "zar";
-  delta: number | null; // % vs same days last month
+  delta: number | null;
   href: string;
-  spark: number[]; // daily series
+  spark: number[];
   tone?: "default" | "warn";
 };
 
@@ -87,247 +75,139 @@ const zarCompact = (n: number) =>
 
 export function StatSparkCard({ stat, icon }: { stat: SparkStat; icon: React.ReactNode }) {
   const up = (stat.delta ?? 0) >= 0;
-  const data = stat.spark.map((v, i) => ({ i, v }));
   const fmt = stat.display === "zar" ? zarCompact : undefined;
-  const reduced = useReducedMotion();
-  const cardRef = useRef<HTMLAnchorElement>(null);
-  // Subtle 3D tilt toward the cursor — pure transform, zero re-renders
-  function onMove(e: React.MouseEvent<HTMLAnchorElement>) {
-    const el = cardRef.current;
-    if (!el || reduced) return;
-    const r = el.getBoundingClientRect();
-    const rx = ((e.clientY - r.top) / r.height - 0.5) * -5;
-    const ry = ((e.clientX - r.left) / r.width - 0.5) * 5;
-    el.style.transform = `perspective(700px) rotateX(${rx}deg) rotateY(${ry}deg) translateY(-2px)`;
-  }
-  function onLeave() {
-    if (cardRef.current) cardRef.current.style.transform = "";
-  }
+
   return (
     <Link
       href={stat.href}
-      ref={cardRef}
-      onMouseMove={onMove}
-      onMouseLeave={onLeave}
-      className="group relative block min-w-0 overflow-hidden rounded-xl border border-border bg-card p-4 shadow-sm transition-[transform,border-color,box-shadow] duration-150 will-change-transform hover:border-primary/40 hover:shadow-lg hover:shadow-black/20"
+      className="group block min-w-0 rounded-xl px-2 py-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 sm:px-3"
     >
-      {/* sparkline sits behind the content, anchored to the bottom */}
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12 opacity-60 transition-opacity group-hover:opacity-90">
-        <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={data} margin={{ top: 4, right: 0, left: 0, bottom: 0 }}>
-            <defs>
-              <linearGradient id={`spark-${stat.label.replace(/\W/g, "")}`} x1="0" y1="0" x2="0" y2="1">
-                <stop
-                  offset="0%"
-                  stopColor={stat.tone === "warn" ? "var(--warning)" : "var(--primary)"}
-                  stopOpacity={0.3}
-                />
-                <stop offset="100%" stopColor="var(--primary)" stopOpacity={0} />
-              </linearGradient>
-            </defs>
-            <Area
-              type="monotone"
-              dataKey="v"
-              stroke={stat.tone === "warn" ? "var(--warning)" : "var(--primary)"}
-              strokeWidth={1.5}
-              strokeOpacity={0.7}
-              fill={`url(#spark-${stat.label.replace(/\W/g, "")})`}
-              isAnimationActive={false}
-            />
-          </AreaChart>
-        </ResponsiveContainer>
+      <div className="flex items-center gap-2">
+        <span className={cn("text-muted-foreground/55 [&_svg]:size-3.5", stat.tone === "warn" && "text-amber-400")}>{icon}</span>
+        <p className="truncate text-xs font-medium text-muted-foreground transition-colors group-hover:text-foreground">{stat.label}</p>
       </div>
-
-      <div className="relative">
-        <div className="flex items-center justify-between gap-2">
-          <p className="truncate text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-            {stat.label}
-          </p>
-          <span
-            className={cn(
-              "shrink-0 [&_svg]:size-4",
-              stat.tone === "warn" ? "text-amber-400" : "text-primary/70"
-            )}
-          >
-            {icon}
-          </span>
-        </div>
-        <div className="mt-1.5 flex items-baseline gap-2">
-          <p className="text-2xl font-semibold text-foreground">
-            <CountUp value={stat.value} format={fmt} />
-          </p>
-          {stat.delta !== null && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span
-                  className={cn(
-                    "flex cursor-default items-center gap-0.5 text-xs font-medium tabular-nums",
-                    up ? "text-emerald-400" : "text-red-400"
-                  )}
-                >
-                  {up ? <TrendingUp className="size-3" /> : <TrendingDown className="size-3" />}
-                  {Math.abs(stat.delta)}%
-                </span>
-              </TooltipTrigger>
-              <TooltipContent>vs the same days last month</TooltipContent>
-            </Tooltip>
-          )}
-        </div>
+      <div className="mt-3 flex items-end gap-2">
+        <p className="text-[1.85rem] font-semibold leading-none tracking-[-0.04em] text-foreground sm:text-[2.15rem]">
+          <CountUp value={stat.value} format={fmt} />
+        </p>
+        {stat.delta !== null && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className={cn("mb-0.5 inline-flex items-center gap-0.5 text-[11px] font-semibold tabular-nums", up ? "text-emerald-400" : "text-red-400")}>
+                {up ? <TrendingUp className="size-3" /> : <TrendingDown className="size-3" />}
+                {Math.abs(stat.delta)}%
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>vs the same days last month</TooltipContent>
+          </Tooltip>
+        )}
       </div>
     </Link>
   );
 }
-
-/* ── pipeline snapshot: stacked stage bar ────────────────────────── */
 
 export type PipeSeg = { name: string; color: string; count: number; value: number };
 
 export function PipelineSnapshot({ segments, totalValue }: { segments: PipeSeg[]; totalValue: string }) {
-  const reduced = useReducedMotion();
-  const total = segments.reduce((s, x) => s + x.count, 0);
-  if (total === 0) {
-    return (
-      <p className="py-3 text-xs text-muted-foreground/70">
-        No open leads yet — new ones will appear here.
-      </p>
-    );
-  }
+  const total = segments.reduce((sum, segment) => sum + segment.count, 0);
+  const active = segments.filter((segment) => segment.count > 0);
+
+  if (total === 0) return <p className="py-2 text-sm text-muted-foreground">No open leads yet.</p>;
+
   return (
-    <Link href="/leads" className="group block">
-      <div className="flex h-3.5 w-full gap-px overflow-hidden rounded-full">
-        {segments
-          .filter((s) => s.count > 0)
-          .map((s, i) => (
-            <Tooltip key={s.name}>
-              <TooltipTrigger asChild>
-                <motion.span
-                  className="h-full transition-[filter] group-hover:brightness-110"
-                  style={{ background: s.color }}
-                  initial={reduced ? false : { flexBasis: 0 }}
-                  animate={{ flexBasis: `${(s.count / total) * 100}%` }}
-                  transition={{ duration: 0.7, delay: i * 0.05, ease: [0.22, 1, 0.36, 1] }}
-                />
-              </TooltipTrigger>
-              <TooltipContent>
-                {s.name}: {s.count} lead{s.count === 1 ? "" : "s"}
-              </TooltipContent>
-            </Tooltip>
-          ))}
-      </div>
-      <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1">
-        {segments.map((s) => (
-          <span key={s.name} className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-            <span className="size-2 rounded-full" style={{ background: s.color }} />
-            {s.name}
-            <span className="font-medium tabular-nums text-foreground">{s.count}</span>
-          </span>
-        ))}
-        <span className="ml-auto text-[11px] font-medium tabular-nums text-muted-foreground">
-          {totalValue} open
+    <Link href="/leads" className="group block focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50">
+      <div className="mb-4 flex items-end justify-between gap-4">
+        <div>
+          <p className="text-2xl font-semibold tracking-[-0.035em] text-foreground">{totalValue}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{total} active {total === 1 ? "lead" : "leads"}</p>
+        </div>
+        <span className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground transition-colors group-hover:text-foreground">
+          View pipeline <ArrowRight className="size-3.5" />
         </span>
+      </div>
+
+      <div className="mb-4 flex h-1.5 w-full gap-1 overflow-hidden rounded-full bg-background/55" aria-hidden="true">
+        {active.map((segment) => (
+          <span key={segment.name} className="h-full min-w-1 rounded-full" style={{ background: segment.color, flexGrow: segment.count, flexBasis: 0 }} />
+        ))}
+      </div>
+
+      <div className="space-y-1">
+        {segments.map((segment) => (
+          <div key={segment.name} className="flex items-center justify-between gap-3 py-1.5 text-xs">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="size-1.5 shrink-0 rounded-full" style={{ background: segment.color }} />
+              <span className="truncate text-muted-foreground">{segment.name}</span>
+            </div>
+            <span className="font-semibold tabular-nums text-foreground">{segment.count}</span>
+          </div>
+        ))}
       </div>
     </Link>
   );
 }
 
-/* ── target progress rings ───────────────────────────────────────── */
-
 export type RingDef = {
   label: string;
   actual: number;
-  target: number; // 0 = not set
+  target: number;
   display: "int" | "zar";
   color: string;
 };
 
-function Ring({ def, index }: { def: RingDef; index: number }) {
-  const reduced = useReducedMotion();
-  const pctRaw = def.target > 0 ? def.actual / def.target : 0;
-  const pct = Math.min(1, pctRaw);
-  const R = 30;
-  const C = 2 * Math.PI * R;
-  const hit = def.target > 0 && def.actual >= def.target;
+function TargetRow({ def }: { def: RingDef }) {
+  const raw = def.target > 0 ? def.actual / def.target : 0;
+  const pct = Math.max(0, Math.min(100, Math.round(raw * 100)));
   const fmt = def.display === "zar" ? zarCompact : (n: number) => String(Math.round(n));
+  const hit = def.target > 0 && def.actual >= def.target;
 
   return (
-    <div className="flex min-w-0 flex-col items-center gap-1.5">
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <div
-            className={cn(
-              "relative size-[76px] cursor-default",
-              hit && "drop-shadow-[0_0_10px_rgba(52,211,153,0.4)]"
-            )}
-          >
-            {hit && (
-              <motion.span
-                className="absolute -right-1 -top-1 text-sm"
-                initial={reduced ? false : { scale: 0, rotate: -30 }}
-                animate={{ scale: [0, 1.4, 1], rotate: 0 }}
-                transition={{ delay: 1.2 + index * 0.12, duration: 0.5 }}
-              >
-                ✨
-              </motion.span>
-            )}
-            <svg viewBox="0 0 76 76" className="size-full -rotate-90">
-              <circle cx="38" cy="38" r={R} fill="none" stroke="var(--muted)" strokeWidth="6" />
-              {def.target > 0 && (
-                <motion.circle
-                  cx="38"
-                  cy="38"
-                  r={R}
-                  fill="none"
-                  stroke={hit ? "var(--success)" : def.color}
-                  strokeWidth="6"
-                  strokeLinecap="round"
-                  strokeDasharray={C}
-                  initial={reduced ? { strokeDashoffset: C * (1 - pct) } : { strokeDashoffset: C }}
-                  animate={{ strokeDashoffset: C * (1 - pct) }}
-                  transition={{ duration: 1, delay: 0.15 + index * 0.12, ease: [0.22, 1, 0.36, 1] }}
-                />
-              )}
-            </svg>
-            <div className="absolute inset-0 flex items-center justify-center">
-              <span
-                className={cn(
-                  "text-[13px] font-semibold tabular-nums",
-                  hit ? "text-emerald-400" : "text-foreground"
-                )}
-              >
-                {def.target > 0 ? `${Math.round(pctRaw * 100)}%` : "—"}
-              </span>
-            </div>
-          </div>
-        </TooltipTrigger>
-        <TooltipContent>
-          {def.target > 0
-            ? `${fmt(def.actual)} of ${fmt(def.target)} target${hit ? " — hit! 🎉" : ""}`
-            : "No target set for this month"}
-        </TooltipContent>
-      </Tooltip>
-      <span className="max-w-full truncate text-[11px] text-muted-foreground">{def.label}</span>
+    <div className="py-2.5">
+      <div className="mb-2 flex items-center justify-between gap-4">
+        <div>
+          <p className="text-xs font-medium text-foreground">{def.label}</p>
+          <p className="mt-0.5 text-[11px] tabular-nums text-muted-foreground">
+            {def.target > 0 ? `${fmt(def.actual)} / ${fmt(def.target)}` : "No target set"}
+          </p>
+        </div>
+        {def.target > 0 && <span className={cn("text-xs font-semibold tabular-nums", hit ? "text-emerald-400" : "text-foreground")}>{Math.round(raw * 100)}%</span>}
+      </div>
+      <div className="h-1 overflow-hidden rounded-full bg-background/65">
+        {def.target > 0 && (
+          <motion.div
+            className={cn("h-full rounded-full", hit && "bg-emerald-400")}
+            style={hit ? undefined : { background: def.color }}
+            initial={{ width: 0 }}
+            animate={{ width: `${pct}%` }}
+            transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
+          />
+        )}
+      </div>
     </div>
   );
 }
 
 export function TargetRings({ rings }: { rings: RingDef[] }) {
-  const anySet = rings.some((r) => r.target > 0);
-  return (
-    <div>
-      <div className="grid grid-cols-4 gap-2">
-        {rings.map((r, i) => (
-          <Ring key={r.label} def={r} index={i} />
-        ))}
+  const anySet = rings.some((ring) => ring.target > 0);
+
+  if (!anySet) {
+    return (
+      <div className="py-2">
+        <div className="flex items-start gap-3">
+          <span className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
+            <TargetIcon className="size-4" />
+          </span>
+          <div>
+            <p className="text-sm font-medium text-foreground">No targets set</p>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">Add monthly goals to make this section useful.</p>
+            <Link href="/targets" className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline">
+              Set targets <ArrowRight className="size-3.5" />
+            </Link>
+          </div>
+        </div>
       </div>
-      {!anySet && (
-        <Link
-          href="/targets"
-          className="mt-2 flex items-center justify-center gap-1.5 text-xs text-primary hover:underline"
-        >
-          <TargetIcon className="size-3.5" />
-          Set this month&apos;s targets
-        </Link>
-      )}
-    </div>
-  );
+    );
+  }
+
+  return <div className="divide-y divide-border/30">{rings.map((ring) => <TargetRow key={ring.label} def={ring} />)}</div>;
 }
