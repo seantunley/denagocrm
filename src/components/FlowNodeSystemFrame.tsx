@@ -33,6 +33,7 @@ const groups: Array<{
       { label: "Menu", detail: "Offer named choices with one route per option.", icon: GitBranch },
       { label: "Send image", detail: "Send existing media to the customer.", icon: ImageIcon },
       { label: "Answer", detail: "Return an existing structured answer source.", icon: Sparkles },
+      { label: "Knowledge answer", detail: "Answer only from approved, current Flowbot knowledge.", icon: Sparkles },
     ],
   },
   {
@@ -48,9 +49,20 @@ const groups: Array<{
     description: "Make branching and state changes readable on the canvas.",
     nodes: [
       { label: "Condition", detail: "Route Yes/No using an existing condition.", icon: GitBranch },
-      { label: "Workshop slots", detail: "Offer available workshop slots and explicit fallbacks.", icon: CalendarDays },
+      { label: "Switch", detail: "Route one variable across several exact-value cases.", icon: GitBranch },
+      { label: "Set variable", detail: "Set or update flow data deterministically.", icon: Database },
+      { label: "Wait", detail: "Hold quietly; the flow resumes with the customer's next message after the time passes.", icon: CalendarDays },
+    ],
+  },
+  {
+    label: "CRM & automation",
+    description: "Act on business systems through explicit, auditable nodes.",
+    nodes: [
       { label: "CRM / booking action", detail: "Run the existing CRM booking action and expose outcomes.", icon: Wrench },
+      { label: "Workshop slots", detail: "Offer available workshop slots and explicit fallbacks.", icon: CalendarDays },
       { label: "Start Journey", detail: "Enrol the customer in an existing Journey.", icon: Workflow },
+      { label: "API request", detail: "Call a protected HTTPS endpoint and store the response.", icon: Workflow },
+      { label: "Run subflow", detail: "Execute a reusable published flow.", icon: Workflow },
     ],
   },
   {
@@ -58,6 +70,7 @@ const groups: Array<{
     description: "Make automated and human ownership boundaries obvious.",
     nodes: [
       { label: "AI answer", detail: "Use the existing grounded AI answer behaviour.", icon: Bot },
+      { label: "AI extract", detail: "Extract only named structured fields from customer text.", icon: Sparkles },
       { label: "Hand off", detail: "Transfer the conversation to staff.", icon: Hand },
       { label: "End", detail: "Terminate the current flow explicitly.", icon: CircleStop },
     ],
@@ -106,7 +119,7 @@ export default function FlowNodeSystemFrame({ children }: { children: ReactNode 
         </div>
 
         {guideOpen ? (
-          <div id="flow-node-guide" className="mt-3 grid gap-3 border-t border-border/70 pt-3 md:grid-cols-2 xl:grid-cols-4">
+          <div id="flow-node-guide" className="mt-3 grid gap-3 border-t border-border/70 pt-3 md:grid-cols-2 xl:grid-cols-5">
             {groups.map((group) => (
               <section key={group.label} className="rounded-xl border border-border/70 bg-muted/20 p-3">
                 <h3 className="text-xs font-semibold">{group.label}</h3>

@@ -19,9 +19,13 @@ test("node system groups every existing node label without taxonomy drift", () =
   const frame = src("src/components/FlowNodeSystemFrame.tsx");
   const builder = src("src/components/FlowBuilder.tsx");
 
-  for (const group of ["Messages", "Customer input", "Logic & data", "AI & operations"]) assert.match(frame, new RegExp(group));
+  // The guide's group headings. "CRM & automation" arrived with the advanced
+  // nodes; every heading must be listed here, because the scrape below cannot
+  // tell a group's label from a node's and filters headings out by name.
+  const GUIDE_GROUPS = ["Messages", "Customer input", "Logic & data", "CRM & automation", "AI & operations"];
+  for (const group of GUIDE_GROUPS) assert.match(frame, new RegExp(group.replace("&", "\\&")));
 
-  const guideLabels = quotedLabels(frame, "const groups", "const routeLegend").filter((label) => !["Messages", "Customer input", "Logic & data", "AI & operations"].includes(label));
+  const guideLabels = quotedLabels(frame, "const groups", "const routeLegend").filter((label) => !GUIDE_GROUPS.includes(label));
   /*
    * Scraped up to `const NODE_GROUPS`, not `function summary`.
    *

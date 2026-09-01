@@ -26,13 +26,17 @@ export default async function FlowEditorPage({ params }: { params: Promise<{ id:
     /* use default so the owner can recover/reset the draft */
   }
 
-  const [channels, journeys, company] = await Promise.all([
+  const [channels, journeys, reusableFlows, company] = await Promise.all([
     enabledFlowChannels(),
     prisma.journey.findMany({
       where: { status: "active", ...(await journeyScope()) },
       select: { id: true, name: true },
       orderBy: { name: "asc" },
     }),
+    // Candidates for the Run-subflow picker: every other flow in THIS workspace.
+    // The picker may list an unpublished one — publication then refuses it with
+    // subflow.unavailable, which is a better conversation than an empty list.
+    prisma.botFlow.findMany({ where: { ...scope, id: { not: id } }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
     getCompanyProfile(),
   ]);
   return (
@@ -52,7 +56,7 @@ export default async function FlowEditorPage({ params }: { params: Promise<{ id:
       </div>
       <FlowAiDraftForm flowId={row.id} />
       <FlowNodeSystemFrame>
-        <FlowBuilder flowId={row.id} initial={flow} journeys={journeys} updatedAt={row.updatedAt.toISOString()} channels={channels} businessName={company.name} />
+        <FlowBuilder flowId={row.id} initial={flow} journeys={journeys} flows={reusableFlows} updatedAt={row.updatedAt.toISOString()} channels={channels} businessName={company.name} />
       </FlowNodeSystemFrame>
     </div>
   );

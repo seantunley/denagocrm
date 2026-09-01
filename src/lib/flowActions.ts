@@ -16,6 +16,7 @@ import { currentInboundBotEventId } from "./botInboundEvent";
 import { cancelBotBooking, lookupBotBooking, rescheduleBotBooking } from "./botBookingSelfService";
 import { matchByPhone, waDigits } from "./whatsapp";
 import { enrollEntityInJourney } from "./journeyDirectEnrollment";
+import { flowRuntimeTools } from "./flowRuntimeTools";
 
 type Match = { contactId: string | null; leadId: string | null };
 import type { ActionOutcome } from "./flow";
@@ -141,6 +142,10 @@ async function createDemo(source: string, vars: Record<string, string>, match: M
 
 export function crmActions(source: string, match: Match) {
   return {
+    // Knowledge, AI-extract, outbound HTTPS and subflow loading — the runtime
+    // half lives in flowRuntimeTools so the simulator can supply non-networking
+    // stand-ins for exactly the same FlowCtx surface.
+    ...flowRuntimeTools(),
     availableSlots: () => availableSlots(),
     bookSlot: async (slotId: string, vars: Record<string, string>, nodeId: string): Promise<{ ok: boolean; label?: string }> => {
       const [date, time] = slotId.split("_");

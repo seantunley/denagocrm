@@ -1,7 +1,7 @@
 /**
  * Channel-agnostic chatbot flow engine. The graph remains deterministic: AI can
- * answer or classify, but every CRM/Journey side effect is an explicit node
- * executed through a narrow callback supplied by the channel adapter.
+ * answer or classify, but every CRM/Journey/external side effect is an explicit
+ * node executed through a narrow callback supplied by the channel adapter.
  */
 
 export type FlowOption = { id: string; label: string; description?: string; next?: string };
@@ -12,6 +12,8 @@ export type BookingCreateAction = "service" | "demo" | "lead";
 export type BookingManageAction = "lookup" | "cancel";
 export type BookingAction = BookingCreateAction | BookingManageAction;
 export type SlotAction = "book" | "reschedule";
+export type FlowSwitchCase = { id: string; value: string; label?: string; next?: string };
+export type FlowHttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 /**
  * What a side-effecting action actually did.
@@ -22,6 +24,9 @@ export type SlotAction = "book" | "reschedule";
  * different words to the customer, so the graph routes them separately.
  */
 export type ActionOutcome = { ok: boolean; unavailable?: boolean; reason?: string };
+export type KnowledgeOutcome = ActionOutcome & { text?: string };
+export type ExtractOutcome = ActionOutcome & { values?: Record<string, string> };
+export type HttpOutcome = ActionOutcome & { status?: number; body?: string };
 
 export type FlowNode =
   | { id: string; type: "message"; text: string; next?: string }
@@ -30,12 +35,19 @@ export type FlowNode =
   | { id: string; type: "captureFile"; text: string; variable: string; next?: string }
   | { id: string; type: "image"; url: string; caption?: string; next?: string }
   | { id: string; type: "answer"; text?: string; answerSource?: "pricelist" | "colours"; next?: string }
+  | { id: string; type: "set"; variable: string; value: string; next?: string }
+  | { id: string; type: "switch"; variable: string; cases: FlowSwitchCase[]; defaultNext?: string }
+  | { id: string; type: "http"; method: FlowHttpMethod; url: string; headers?: string; body?: string; saveAs?: string; failureText?: string; next?: string; failureNext?: string }
+  | { id: string; type: "knowledge"; query: string; saveAs?: string; noMatchText?: string; next?: string; failureNext?: string }
+  | { id: string; type: "extract"; instruction: string; sourceVariable?: string; fields: string[]; failureText?: string; next?: string; failureNext?: string }
+  | { id: string; type: "delay"; seconds: number; next?: string }
+  | { id: string; type: "subflow"; flowId: string; failureText?: string; next?: string; failureNext?: string }
   | { id: string; type: "booking"; text?: string; failureText?: string; action?: BookingAction; next?: string; failureNext?: string; unavailableNext?: string }
   | { id: string; type: "slots"; text: string; noneText?: string; failureText?: string; action?: SlotAction; next?: string; failureNext?: string; unavailableNext?: string }
   | { id: string; type: "journey"; journeyId: string; text?: string; failureText?: string; next?: string; failureNext?: string; unavailableNext?: string }
   | { id: string; type: "condition"; condition: FlowCondition; trueNext?: string; falseNext?: string }
   | { id: string; type: "ai"; handoffNext?: string }
-  | { id: string; type: "handoff"; text?: string }
+  | { id: string; type: "handoff"; text?: string; reason?: string; summary?: string }
   | { id: string; type: "end" };
 
 export type Flow = { start: string; nodes: Record<string, FlowNode> };
@@ -67,6 +79,14 @@ export type FlowCtx = {
   bookSlot?: (slotId: string, vars: Record<string, string>, nodeId: string) => Promise<{ ok: boolean; label?: string }>;
   rescheduleSlot?: (slotId: string, vars: Record<string, string>, nodeId: string) => Promise<{ ok: boolean; label?: string }>;
   routeChoice?: (input: { prompt: string; text: string; options: FlowOption[]; vars: Record<string, string> }) => Promise<string | null>;
+  knowledgeAnswer?: (query: string, vars: Record<string, string>, nodeId: string) => Promise<KnowledgeOutcome>;
+  extractData?: (input: { text: string; instruction: string; fields: string[]; vars: Record<string, string>; nodeId: string }) => Promise<ExtractOutcome>;
+  httpRequest?: (input: { method: FlowHttpMethod; url: string; headers?: string; body?: string; vars: Record<string, string>; nodeId: string }) => Promise<HttpOutcome>;
+  loadSubflow?: (flowId: string) => Promise<Flow | null>;
+  /** Internal: a synchronous subflow works on the caller-supplied vars object. */
+  mutateVars?: boolean;
+  /** Internal recursion guard for nested subflows. */
+  subflowDepth?: number;
   /** Pure observation hook; runners persist this in the analytics ledger. */
   recordAction?: (nodeId: string, action: string, ok: boolean) => void;
 };
@@ -101,6 +121,65 @@ export type FlowResult = {
   endedAt?: string | null;
 };
 const interpolate = (text: string, vars: Record<string, string>) => text.replace(/\{\{\s*(\w+)\s*\}\}/g, (_m, k) => vars[k] ?? "");
+
+function switchTarget(node: Extract<FlowNode, { type: "switch" }>, vars: Record<string, string>): string | null {
+  const actual = (vars[node.variable] ?? "").trim().toLocaleLowerCase();
+  const hit = node.cases.find((item) => item.value.trim().toLocaleLowerCase() === actual);
+  return hit?.next ?? node.defaultNext ?? null;
+}
+
+/**
+ * The handoff a NODE asks for, merged over whatever the AI remembered.
+ *
+ * Only defined values are set: a context object carrying `reason: undefined`
+ * reads as "a reason was supplied and it was nothing", and the inbox renders
+ * that as an empty chip rather than omitting the row.
+ */
+function explicitHandoff(node: Extract<FlowNode, { type: "handoff" }>, vars: Record<string, string>, remembered?: FlowHandoffContext): FlowHandoffContext | undefined {
+  const reason = node.reason ? interpolate(node.reason, vars).trim() : remembered?.reason;
+  const summary = node.summary ? interpolate(node.summary, vars).trim() : remembered?.summary;
+  const context: FlowHandoffContext = {};
+  if (remembered?.confidence) context.confidence = remembered.confidence;
+  if (remembered?.intent) context.intent = remembered.intent;
+  if (reason) context.reason = reason;
+  if (summary) context.summary = summary;
+  return Object.keys(context).length ? context : undefined;
+}
+
+/**
+ * A Wait node HOLDS; it never schedules.
+ *
+ * The deadline is written into the session vars and nothing else happens: no
+ * timer, no queue, no delivery when it expires. The flow moves on only when the
+ * customer's NEXT message arrives after the deadline — so time-driven outreach
+ * remains impossible here and stays where it lives, in Journeys. See the
+ * architecture guard in tests/botFlowJourneyBridge.test.ts before widening this.
+ */
+function delayKey(nodeId: string) {
+  return `__flow_delay_${nodeId}`;
+}
+function startDelay(node: Extract<FlowNode, { type: "delay" }>, vars: Record<string, string>): FlowResult | null {
+  const seconds = Math.max(0, Math.min(604800, Math.floor(Number(node.seconds) || 0)));
+  if (!seconds) return null;
+  vars[delayKey(node.id)] = String(Date.now() + seconds * 1000);
+  return { messages: [], session: { nodeId: node.id, vars }, handedOff: false };
+}
+
+async function runSubflowNode(node: Extract<FlowNode, { type: "subflow" }>, vars: Record<string, string>, input: FlowInput, ctx: FlowCtx): Promise<{ outcome: ActionOutcome; messages: OutMsg[]; handedOff?: boolean }> {
+  if (!ctx.loadSubflow) return { outcome: { ok: false, reason: "Subflow execution is unavailable" }, messages: [] };
+  if ((ctx.subflowDepth ?? 0) >= 4) return { outcome: { ok: false, reason: "Subflow nesting limit reached" }, messages: [] };
+  const childFlow = await ctx.loadSubflow(node.flowId);
+  if (!childFlow) return { outcome: { ok: false, reason: "Published subflow not found" }, messages: [] };
+  // The child works on a COPY. Its writes reach the parent only after it ran to
+  // completion — a child that failed or paused half-way must not leave half its
+  // variables behind in the parent's session.
+  const childVars = { ...vars };
+  const child = await runFlow(childFlow, { nodeId: null, vars: childVars }, input, { ...ctx, mutateVars: true, subflowDepth: (ctx.subflowDepth ?? 0) + 1 });
+  if (child.handedOff) return { outcome: { ok: true }, messages: child.messages, handedOff: true };
+  if (child.session) return { outcome: { ok: false, reason: "Subflow paused for customer input; use only synchronous subflows here" }, messages: child.messages };
+  Object.assign(vars, childVars);
+  return { outcome: { ok: true }, messages: child.messages };
+}
 
 export function evaluateCondition(condition: FlowCondition, vars: Record<string, string>): boolean {
   const actual = (vars[condition.variable] ?? "").trim();
@@ -236,7 +315,7 @@ function actionOutcome(
 
 export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput, ctx: FlowCtx): Promise<FlowResult> {
   const messages: OutMsg[] = [];
-  const vars = { ...session.vars };
+  const vars = ctx.mutateVars ? session.vars : { ...session.vars };
   let nodeId: string | null;
   let handoffContext = rememberedHandoff(vars);
   // The node this turn last executed, so an ending turn can say where it ended.
@@ -266,6 +345,20 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
       }
       vars[cur.variable] = input.fileUrl;
       nodeId = cur.next ?? null;
+    } else if (cur?.type === "delay") {
+      const until = Number(vars[delayKey(cur.id)] || 0);
+      if (!until) {
+        const wait = startDelay(cur, vars);
+        if (wait) return wait;
+        nodeId = cur.next ?? null;
+      } else if (Date.now() < until) {
+        // Still inside the hold: say nothing, stay put. The customer's message is
+        // deliberately not answered here — a Wait that talks is not a wait.
+        return { messages, session: { nodeId: cur.id, vars }, handedOff: false };
+      } else {
+        delete vars[delayKey(cur.id)];
+        nodeId = cur.next ?? null;
+      }
     } else if (cur?.type === "slots") {
       const selected = await runSlotSelection(cur, input, vars, ctx, messages);
       if (selected.wait) return selected.wait;
@@ -282,7 +375,7 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
   } else nodeId = flow.start;
 
   let guard = 0;
-  while (nodeId && guard++ < 50) {
+  while (nodeId && guard++ < 75) {
     const node = flow.nodes[nodeId];
     if (!node) break;
     lastNodeId = node.id;
@@ -294,6 +387,62 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
       messages.push({ type: "text", text: interpolate(node.text, vars) }); return { messages, session: { nodeId: node.id, vars }, handedOff: false };
     } else if (node.type === "answer") {
       const text = node.answerSource ? await ctx.dynamicAnswer(node.answerSource) : interpolate(node.text ?? "", vars); if (text) messages.push({ type: "text", text }); nodeId = node.next ?? null;
+    } else if (node.type === "set") {
+      vars[node.variable] = interpolate(node.value, vars);
+      nodeId = node.next ?? null;
+    } else if (node.type === "switch") {
+      nodeId = switchTarget(node, vars);
+    } else if (node.type === "knowledge") {
+      const query = interpolate(node.query, vars).trim() || input.text.trim();
+      const outcome = ctx.knowledgeAnswer ? await ctx.knowledgeAnswer(query, vars, node.id) : { ok: false, reason: "Knowledge search unavailable" };
+      ctx.recordAction?.(node.id, "knowledge_answer", outcome.ok);
+      if (outcome.ok && outcome.text) {
+        messages.push({ type: "text", text: outcome.text });
+        if (node.saveAs) vars[node.saveAs] = outcome.text;
+        nodeId = node.next ?? null;
+      } else {
+        // No approved knowledge matched. Like every fallible action, "it did not
+        // work" must not continue into text written for the case where it did.
+        if (node.noMatchText) messages.push({ type: "text", text: interpolate(node.noMatchText, vars) });
+        nodeId = node.failureNext ?? null;
+      }
+    } else if (node.type === "extract") {
+      const source = node.sourceVariable ? (vars[node.sourceVariable] ?? "") : input.text;
+      const outcome = ctx.extractData ? await ctx.extractData({ text: source, instruction: interpolate(node.instruction, vars), fields: node.fields, vars, nodeId: node.id }) : { ok: false, reason: "AI extraction unavailable" };
+      ctx.recordAction?.(node.id, "ai_extract", outcome.ok);
+      if (outcome.ok) {
+        // Only the CONFIGURED fields may be written. The model is told the same
+        // thing, but a vars namespace is not defended by a prompt.
+        for (const [key, value] of Object.entries(outcome.values ?? {})) if (node.fields.includes(key)) vars[key] = String(value);
+        nodeId = node.next ?? null;
+      } else {
+        if (node.failureText) messages.push({ type: "text", text: interpolate(node.failureText, vars) });
+        nodeId = node.failureNext ?? null;
+      }
+    } else if (node.type === "http") {
+      const outcome = ctx.httpRequest ? await ctx.httpRequest({ method: node.method, url: interpolate(node.url, vars), headers: node.headers ? interpolate(node.headers, vars) : undefined, body: node.body ? interpolate(node.body, vars) : undefined, vars, nodeId: node.id }) : { ok: false, reason: "API requests unavailable" };
+      ctx.recordAction?.(node.id, "http_request", outcome.ok);
+      if (outcome.ok) {
+        if (node.saveAs) vars[node.saveAs] = outcome.body ?? "";
+        nodeId = node.next ?? null;
+      } else {
+        if (node.failureText) messages.push({ type: "text", text: interpolate(node.failureText, vars) });
+        nodeId = node.failureNext ?? null;
+      }
+    } else if (node.type === "delay") {
+      const wait = startDelay(node, vars);
+      if (wait) return { ...wait, messages: [...messages, ...wait.messages] };
+      nodeId = node.next ?? null;
+    } else if (node.type === "subflow") {
+      const child = await runSubflowNode(node, vars, input, ctx);
+      messages.push(...child.messages);
+      ctx.recordAction?.(node.id, "subflow_run", child.outcome.ok);
+      if (child.handedOff) return { messages, session: null, handedOff: true, endedAt: node.id };
+      if (child.outcome.ok) nodeId = node.next ?? null;
+      else {
+        if (node.failureText) messages.push({ type: "text", text: interpolate(node.failureText, vars) });
+        nodeId = node.failureNext ?? null;
+      }
     } else if (node.type === "booking") {
       // An action that FAILED must not fall through to the success text. The
       // shipped cancellation node says "Done — your booking has been cancelled",
@@ -338,7 +487,7 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
       if (ai.handoff) { handoffContext = rememberHandoff(vars, ai); nodeId = node.handoffNext ?? null; if (!nodeId) { await ctx.handoff(vars, handoffContext); return { messages, session: null, handedOff: true, endedAt: node.id }; } }
       else return { messages, session: { nodeId: node.id, vars }, handedOff: false };
     } else if (node.type === "handoff") {
-      if (node.text) messages.push({ type: "text", text: interpolate(node.text, vars) }); await ctx.handoff(vars, handoffContext); return { messages, session: null, handedOff: true, endedAt: node.id };
+      if (node.text) messages.push({ type: "text", text: interpolate(node.text, vars) }); await ctx.handoff(vars, explicitHandoff(node, vars, handoffContext)); return { messages, session: null, handedOff: true, endedAt: node.id };
     } else return { messages, session: null, handedOff: false, endedAt: node.id };
   }
   return { messages, session: null, handedOff: false, endedAt: lastNodeId };

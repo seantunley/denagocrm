@@ -53,7 +53,7 @@ import {
 } from "@xyflow/react";
 import { saveFlow, resetFlow } from "@/app/actions/flow";
 import { uploadCampaignImage } from "@/app/actions/campaigns";
-import type { BookingAction, ConditionOperator, FlowNode, SlotAction } from "@/lib/flow";
+import type { BookingAction, ConditionOperator, FlowHttpMethod, FlowNode, SlotAction } from "@/lib/flow";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { cn } from "@/lib/utils";
 import { BuilderSaveStatus, BuilderWorkspaceBar, BuilderWorkspaceShell } from "@/components/builder-workspace";
@@ -66,6 +66,7 @@ type FlowData = { start: string; nodes: Record<string, FlowNode>; positions?: Re
 type RFData = { flow: FlowNode; isStart: boolean; issues?: FlowIssue[] };
 type EditorSnapshot = { start: string; nodes: Node<RFData>[] };
 export type FlowJourneyOption = { id: string; name: string };
+export type FlowOptionRef = { id: string; name: string };
 
 const AUTOSAVE_DELAY_MS = 1_200;
 const HISTORY_GROUP_MS = 700;
@@ -87,13 +88,20 @@ const BUILTIN_VARIABLES = [
   "journey_started", "journey_reason", "journey_run_id",
 ];
 
-const TYPE_META: Record<string, { icon: LucideIcon; label: string; tone: string; header: string; handle: string; description: string }> = {
+const TYPE_META: Record<FlowNode["type"], { icon: LucideIcon; label: string; tone: string; header: string; handle: string; description: string }> = {
   message: { icon: MessageSquare, label: "Message", tone: "border-sky-400/40", header: "bg-sky-500/15 text-sky-200", handle: "#38bdf8", description: "Send text to the customer" },
   choice: { icon: GitBranch, label: "Menu", tone: "border-violet-400/40", header: "bg-violet-500/15 text-violet-200", handle: "#a78bfa", description: "Offer buttons or a list of choices" },
   capture: { icon: FileQuestion, label: "Ask & save", tone: "border-cyan-400/40", header: "bg-cyan-500/15 text-cyan-200", handle: "#22d3ee", description: "Ask a question and store the answer" },
   captureFile: { icon: FileUp, label: "Get a file", tone: "border-cyan-400/40", header: "bg-cyan-500/15 text-cyan-200", handle: "#22d3ee", description: "Capture an uploaded file" },
   image: { icon: ImageIcon, label: "Send image", tone: "border-violet-400/40", header: "bg-violet-500/15 text-violet-200", handle: "#a78bfa", description: "Send an image with an optional caption" },
   answer: { icon: Sparkles, label: "Answer", tone: "border-blue-400/40", header: "bg-blue-500/15 text-blue-200", handle: "#60a5fa", description: "Send a static or product-backed answer" },
+  knowledge: { icon: Sparkles, label: "Knowledge answer", tone: "border-blue-400/40", header: "bg-blue-500/15 text-blue-200", handle: "#60a5fa", description: "Answer from approved Flowbot knowledge" },
+  set: { icon: FileQuestion, label: "Set variable", tone: "border-fuchsia-400/40", header: "bg-fuchsia-500/15 text-fuchsia-200", handle: "#e879f9", description: "Set or update flow data" },
+  switch: { icon: GitBranch, label: "Switch", tone: "border-fuchsia-400/40", header: "bg-fuchsia-500/15 text-fuchsia-200", handle: "#e879f9", description: "Route one value across multiple branches" },
+  http: { icon: Workflow, label: "API request", tone: "border-indigo-400/40", header: "bg-indigo-500/15 text-indigo-200", handle: "#818cf8", description: "Call an HTTPS endpoint and store its response" },
+  extract: { icon: Sparkles, label: "AI extract", tone: "border-orange-400/50", header: "bg-orange-500/15 text-orange-200", handle: "#fb923c", description: "Extract structured fields from customer text" },
+  delay: { icon: CalendarDays, label: "Wait", tone: "border-slate-400/50", header: "bg-slate-500/15 text-slate-200", handle: "#94a3b8", description: "Hold quietly; the flow resumes with the next message after the time passes" },
+  subflow: { icon: Workflow, label: "Run subflow", tone: "border-teal-400/40", header: "bg-teal-500/15 text-teal-200", handle: "#2dd4bf", description: "Run a reusable published flow" },
   slots: { icon: CalendarDays, label: "Workshop slots", tone: "border-emerald-400/40", header: "bg-emerald-500/15 text-emerald-200", handle: "#34d399", description: "Offer real booking availability" },
   booking: { icon: Wrench, label: "CRM / booking action", tone: "border-emerald-400/40", header: "bg-emerald-500/15 text-emerald-200", handle: "#34d399", description: "Create, find or update CRM work" },
   journey: { icon: Workflow, label: "Start Journey", tone: "border-teal-400/40", header: "bg-teal-500/15 text-teal-200", handle: "#2dd4bf", description: "Enrol the customer in a Journey" },
@@ -104,10 +112,11 @@ const TYPE_META: Record<string, { icon: LucideIcon; label: string; tone: string;
 };
 
 const NODE_GROUPS: { label: string; types: FlowNode["type"][] }[] = [
-  { label: "Messages", types: ["message", "image", "answer", "choice"] },
+  { label: "Messages", types: ["message", "image", "answer", "knowledge", "choice"] },
   { label: "Customer input", types: ["capture", "captureFile"] },
-  { label: "Logic & data", types: ["condition", "slots", "booking", "journey"] },
-  { label: "AI & operations", types: ["ai", "handoff", "end"] },
+  { label: "Logic & data", types: ["condition", "switch", "set", "delay"] },
+  { label: "CRM & automation", types: ["booking", "slots", "journey", "http", "subflow"] },
+  { label: "AI & operations", types: ["ai", "extract", "handoff", "end"] },
 ];
 
 function summary(n: FlowNode): string {
@@ -127,6 +136,13 @@ function summary(n: FlowNode): string {
     const op = n.condition.operator.replace("_", " ");
     return `{{${n.condition.variable || "variable"}}} ${op}${n.condition.value ? ` “${n.condition.value}”` : ""}`;
   }
+  if (n.type === "knowledge") return n.query ? `Approved knowledge: ${n.query.slice(0, 38)}` : "Answer current message from approved knowledge";
+  if (n.type === "set") return `{{${n.variable || "variable"}}} = ${n.value.slice(0, 34)}`;
+  if (n.type === "switch") return `{{${n.variable || "variable"}}} · ${n.cases.length} case${n.cases.length === 1 ? "" : "s"}`;
+  if (n.type === "http") return `${n.method} ${n.url || "(set URL)"}`.slice(0, 55);
+  if (n.type === "extract") return `${n.fields.length} field${n.fields.length === 1 ? "" : "s"}: ${n.fields.join(", ")}`.slice(0, 55);
+  if (n.type === "delay") return `Wait ${n.seconds}s (quiet hold — resumes on the next message)`;
+  if (n.type === "subflow") return n.flowId ? "Run published reusable flow" : "Choose a subflow";
   if (n.type === "ai") return "Chats, grounded in your prices & brief";
   if (n.type === "choice") return n.text.slice(0, 50);
   return "";
@@ -171,6 +187,18 @@ function NodeCard({ data }: NodeProps) {
             <Handle type="source" position={Position.Right} id="false" className="!size-3 !border-2 !border-slate-950 transition-transform hover:!scale-125" style={{ background: "#f87171" }} />
           </div>
         </div>
+      ) : n.type === "switch" ? (
+        <div className="pb-1">
+          {n.cases.map((item) => (
+            <div key={item.id} className="relative border-t border-slate-800 px-3 py-1 text-[11px] text-fuchsia-200">
+              {item.label || item.value || "Case"}
+              <Handle type="source" position={Position.Right} id={`case:${item.id}`} className="!size-3 !border-2 !border-slate-950 transition-transform hover:!scale-125" style={{ background: meta.handle }} />
+            </div>
+          ))}
+          <div className="relative border-t border-slate-800 px-3 py-1 text-[11px] text-slate-400">Default
+            <Handle type="source" position={Position.Right} id="default" className="!size-3 !border-2 !border-slate-950 transition-transform hover:!scale-125" style={{ background: "#94a3b8" }} />
+          </div>
+        </div>
       ) : n.type === "ai" ? (
         <Handle type="source" position={Position.Right} id="handoff" className="!size-3 !border-2 !border-slate-950 transition-transform hover:!scale-125" style={{ background: meta.handle }} />
       ) : FALLIBLE.has(n.type) ? (
@@ -207,17 +235,24 @@ function blankNode(type: FlowNode["type"], id: string): FlowNode {
     case "captureFile": return { id, type, text: "Please send a photo", variable: "photo" };
     case "image": return { id, type, url: "" };
     case "answer": return { id, type, answerSource: "pricelist" };
+    case "knowledge": return { id, type, query: "", noMatchText: "I couldn't find an approved answer for that." };
+    case "set": return { id, type, variable: "status", value: "new" };
+    case "switch": return { id, type, variable: "channel", cases: [{ id: "c1", value: "whatsapp", label: "WhatsApp" }] };
+    case "http": return { id, type, method: "GET", url: "", failureText: "I couldn't reach that service just now." };
+    case "extract": return { id, type, instruction: "Extract the requested customer details from their message.", fields: ["intent"], failureText: "I couldn't reliably read those details." };
+    case "delay": return { id, type, seconds: 300 };
+    case "subflow": return { id, type, flowId: "", failureText: "I couldn't complete that reusable flow." };
     case "slots": return { id, type, action: "book", text: "Here are our next open times — pick one:", noneText: "We're fully booked online — the team will call you." };
     case "booking": return { id, type, action: "service", text: "Thanks — the team will confirm shortly." };
     case "journey": return { id, type, journeyId: "", text: "You're all set — we'll keep you updated." };
     case "condition": return { id, type, condition: { variable: "channel", operator: "equals", value: "whatsapp" } };
     case "ai": return { id, type };
-    case "handoff": return { id, type, text: "Let me get a team member to help — one moment." };
+    case "handoff": return { id, type, text: "Let me get a team member to help — one moment.", reason: "Flow requested human assistance" };
     default: return { id, type: "end" };
   }
 }
 
-export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt, channels, businessName }: { flowId: string; initial: FlowData; journeys?: FlowJourneyOption[]; updatedAt: string; channels: FlowChannel[]; businessName: string }) {
+export default function FlowBuilder({ flowId, initial, journeys = [], flows = [], updatedAt, channels, businessName }: { flowId: string; initial: FlowData; journeys?: FlowJourneyOption[]; flows?: FlowOptionRef[]; updatedAt: string; channels: FlowChannel[]; businessName: string }) {
   const router = useRouter();
   const [start, setStart] = useState(initial.start);
   const [rfNodes, setRfNodes, applyNodesChange] = useNodesState<Node<RFData>>(
@@ -475,6 +510,9 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt,
       else if (n.type === "condition") {
         add("true", n.trueNext, { label: "Yes", style: { stroke: "#34d399" }, labelStyle: { fill: "#86efac", fontSize: 10 }, labelBgStyle: { fill: "#0f172a" } });
         add("false", n.falseNext, { label: "No", style: { stroke: "#f87171" }, labelStyle: { fill: "#fca5a5", fontSize: 10 }, labelBgStyle: { fill: "#0f172a" } });
+      } else if (n.type === "switch") {
+        n.cases.forEach((item) => add(`case:${item.id}`, item.next, { label: (item.label || item.value).slice(0, 24), labelStyle: { fill: "#f0abfc", fontSize: 10 }, labelBgStyle: { fill: "#0f172a" } }));
+        add("default", n.defaultNext, { label: "Default", labelStyle: { fill: "#cbd5e1", fontSize: 10 }, labelBgStyle: { fill: "#0f172a" } });
       } else if (n.type === "ai") add("handoff", n.handoffNext, { label: "handoff", style: { stroke: "#f59e0b" }, labelStyle: { fill: "#fbbf24", fontSize: 10 }, labelBgStyle: { fill: "#0f172a" } });
       else if (n.type !== "handoff" && n.type !== "end") add("out", (n as { next?: string }).next);
       const routed = n as { failureNext?: string; unavailableNext?: string };
@@ -494,6 +532,13 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt,
       if (n.type === "condition") {
         if (c.sourceHandle === "true") return { ...n, trueNext: c.target! };
         if (c.sourceHandle === "false") return { ...n, falseNext: c.target! };
+      }
+      if (n.type === "switch") {
+        if (c.sourceHandle === "default") return { ...n, defaultNext: c.target! };
+        if (c.sourceHandle!.startsWith("case:")) {
+          const cid = c.sourceHandle!.slice(5);
+          return { ...n, cases: n.cases.map((item) => (item.id === cid ? { ...item, next: c.target! } : item)) };
+        }
       }
       if (n.type === "ai" && c.sourceHandle === "handoff") return { ...n, handoffNext: c.target! };
       if (c.sourceHandle === "failure") return { ...n, failureNext: c.target! } as FlowNode;
@@ -581,7 +626,9 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt,
     const vars = new Set(BUILTIN_VARIABLES);
     for (const rn of rfNodes) {
       const node = rn.data.flow;
-      if (node.type === "capture" || node.type === "captureFile") if (node.variable) vars.add(node.variable);
+      if ((node.type === "capture" || node.type === "captureFile" || node.type === "set") && node.variable) vars.add(node.variable);
+      if ((node.type === "http" || node.type === "knowledge") && node.saveAs) vars.add(node.saveAs);
+      if (node.type === "extract") node.fields.forEach((field) => field && vars.add(field));
     }
     return [...vars].sort();
   }, [rfNodes]);
@@ -775,7 +822,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], updatedAt,
               <aside className="w-80 shrink-0 overflow-y-auto border-l border-white/[0.08] bg-[#111614] max-lg:fixed max-lg:inset-x-0 max-lg:bottom-0 max-lg:z-[81] max-lg:max-h-[78dvh] max-lg:w-auto max-lg:rounded-t-3xl max-lg:border-t max-lg:shadow-[0_-24px_70px_rgba(0,0,0,.55)]">
                 <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/[0.08] bg-[#111614]/95 px-4 py-3 backdrop-blur"><div><p className="text-sm font-semibold text-white">Inspector</p><p className="text-xs text-slate-400">Configure the selected node</p></div><button type="button" onClick={() => setInspectorOpen(false)} className="grid size-10 place-items-center rounded-lg text-slate-400 hover:bg-white/5 hover:text-white"><X className="size-4" /><span className="sr-only">Close inspector</span></button></div>
                 <div className="space-y-5 p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
-                  {!selected ? <p className="text-sm leading-6 text-slate-400">Select a node to edit it. Drag from a node&apos;s output handle to another node to create a connection.</p> : <><NodeIssues issues={selectedIssues} /><NodePanel key={selected.id} node={selected} isStart={selected.id === start} nodeOptions={nodeOptions.filter((option) => option.id !== selected.id)} variables={knownVariables} journeys={journeys} onChange={(next) => patch(selected.id, () => next)} onDelete={() => removeNode(selected.id)} onDuplicate={() => duplicateNode(selected.id)} onMakeStart={() => markStart(selected.id)} /></>}
+                  {!selected ? <p className="text-sm leading-6 text-slate-400">Select a node to edit it. Drag from a node&apos;s output handle to another node to create a connection.</p> : <><NodeIssues issues={selectedIssues} /><NodePanel key={selected.id} node={selected} isStart={selected.id === start} nodeOptions={nodeOptions.filter((option) => option.id !== selected.id)} variables={knownVariables} journeys={journeys} flows={flows} onChange={(next) => patch(selected.id, () => next)} onDelete={() => removeNode(selected.id)} onDuplicate={() => duplicateNode(selected.id)} onMakeStart={() => markStart(selected.id)} /></>}
                   <VariablesPanel variables={knownVariables} />
                 </div>
               </aside>
@@ -802,6 +849,7 @@ function RotateCcwIcon() { return <RotateCcw className="size-4" />; }
 function clearRefs(n: FlowNode, removedId: string): FlowNode {
   if (n.type === "choice") return { ...n, options: n.options.map((o) => (o.next === removedId ? { ...o, next: undefined } : o)) };
   if (n.type === "condition") return { ...n, trueNext: n.trueNext === removedId ? undefined : n.trueNext, falseNext: n.falseNext === removedId ? undefined : n.falseNext };
+  if (n.type === "switch") return { ...n, cases: n.cases.map((item) => (item.next === removedId ? { ...item, next: undefined } : item)), defaultNext: n.defaultNext === removedId ? undefined : n.defaultNext };
   if (n.type === "ai") return n.handoffNext === removedId ? { ...n, handoffNext: undefined } : n;
   const routed = n as { next?: string; failureNext?: string; unavailableNext?: string };
   const cleared: Record<string, undefined> = {};
@@ -811,7 +859,7 @@ function clearRefs(n: FlowNode, removedId: string): FlowNode {
   return Object.keys(cleared).length ? ({ ...n, ...cleared } as FlowNode) : n;
 }
 
-const FALLIBLE = new Set(["booking", "slots", "journey"]);
+const FALLIBLE = new Set(["booking", "slots", "journey", "http", "knowledge", "extract", "subflow"]);
 
 function TargetPicker({ value, onPick, nodeOptions }: { value?: string; onPick: (value?: string) => void; nodeOptions: { id: string; label: string }[] }) {
   return <select className="input btn-sm" value={value ?? ""} onChange={(event) => onPick(event.target.value || undefined)}><option value="">— (ends here) —</option>{nodeOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select>;
@@ -821,13 +869,13 @@ function VariablesPanel({ variables }: { variables: string[] }) {
   return (
     <div className="border-t border-white/8 pt-4">
       <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Variables</p>
-      <p className="mt-1 text-xs text-slate-500">Use these in messages as <code>{"{{variable}}"}</code> or in a Condition node.</p>
+      <p className="mt-1 text-xs text-slate-500">Use these in messages as <code>{"{{variable}}"}</code> or in a Condition, Switch or action node.</p>
       <div className="mt-2 flex flex-wrap gap-1.5">{variables.map((variable) => <code key={variable} className="rounded-md border border-white/8 bg-white/[0.035] px-1.5 py-1 text-[11px] text-slate-300">{`{{${variable}}}`}</code>)}</div>
     </div>
   );
 }
 
-function NodePanel({ node, isStart, nodeOptions, variables, journeys, onChange, onDelete, onDuplicate, onMakeStart }: { node: FlowNode; isStart: boolean; nodeOptions: { id: string; label: string }[]; variables: string[]; journeys: FlowJourneyOption[]; onChange: (n: FlowNode) => void; onDelete: () => void; onDuplicate: () => void; onMakeStart: () => void }) {
+function NodePanel({ node, isStart, nodeOptions, variables, journeys, flows, onChange, onDelete, onDuplicate, onMakeStart }: { node: FlowNode; isStart: boolean; nodeOptions: { id: string; label: string }[]; variables: string[]; journeys: FlowJourneyOption[]; flows: FlowOptionRef[]; onChange: (n: FlowNode) => void; onDelete: () => void; onDuplicate: () => void; onMakeStart: () => void }) {
   const meta = TYPE_META[node.type];
   const Icon = meta.icon;
   return (
@@ -841,6 +889,7 @@ function NodePanel({ node, isStart, nodeOptions, variables, journeys, onChange, 
       </div>
 
       {(node.type === "message" || node.type === "handoff") && <div><label className="label">Message</label><textarea className="input" rows={4} value={node.text ?? ""} onChange={(e) => onChange({ ...node, text: e.target.value })} /></div>}
+      {node.type === "handoff" && <><div><label className="label">Handoff reason</label><input className="input" value={node.reason ?? ""} onChange={(e) => onChange({ ...node, reason: e.target.value || undefined })} placeholder="Sales enquiry" /></div><div><label className="label">Staff summary</label><textarea className="input" rows={3} value={node.summary ?? ""} onChange={(e) => onChange({ ...node, summary: e.target.value || undefined })} placeholder="Include {{variables}} collected by the flow" /><p className="mt-1 text-xs text-slate-500">The live conversation lands in the Inbox; this controls why, and with what context, it is handed over.</p></div></>}
       {node.type === "capture" && <><div><label className="label">Question to ask</label><textarea className="input" rows={3} value={node.text} onChange={(e) => onChange({ ...node, text: e.target.value })} /></div><div className="grid grid-cols-2 gap-2"><div><label className="label">Save as</label><input className="input" value={node.variable} onChange={(e) => onChange({ ...node, variable: e.target.value.replace(/\W/g, "") })} placeholder="name" /></div><div><label className="label">Type</label><select className="input" value={node.format ?? "text"} onChange={(e) => onChange({ ...node, format: e.target.value === "text" ? undefined : (e.target.value as "email" | "phone" | "number" | "date") })}><option value="text">Text</option><option value="email">Email</option><option value="phone">Phone</option><option value="number">Number</option><option value="date">Date</option></select></div></div><p className="text-xs text-slate-500">Use it later as <code>{`{{${node.variable || "name"}}}`}</code>. Name / phone / email feed the CRM action &amp; booking.</p></>}
       {node.type === "captureFile" && <><div><label className="label">What to ask for</label><textarea className="input" rows={2} value={node.text} onChange={(e) => onChange({ ...node, text: e.target.value })} placeholder="Please send a photo of the cart" /></div><div><label className="label">Save file as</label><input className="input" value={node.variable} onChange={(e) => onChange({ ...node, variable: e.target.value.replace(/\W/g, "") })} placeholder="photo" /><p className="mt-1 text-xs text-slate-500">The uploaded file is saved and linked on the lead/booking.</p></div></>}
       {node.type === "image" && <><div><label className="label">Image</label><input className="input" value={node.url} onChange={(e) => onChange({ ...node, url: e.target.value })} placeholder="Paste an image URL, or upload →" /><label className="btn-secondary btn-sm mt-1.5 inline-flex cursor-pointer"><Upload className="size-3.5" /> Upload<input type="file" accept="image/*" className="hidden" onChange={async (e) => { const f = e.target.files?.[0]; e.target.value = ""; if (!f) return; const fd = new FormData(); fd.set("file", f); const url = await uploadCampaignImage(fd); if (url) onChange({ ...node, url }); }} /></label></div>{node.url && <img src={node.url} alt="" className="max-h-32 rounded-lg border border-slate-800" />}<div><label className="label">Caption (optional)</label><input className="input" value={node.caption ?? ""} onChange={(e) => onChange({ ...node, caption: e.target.value })} /></div></>}
@@ -850,9 +899,16 @@ function NodePanel({ node, isStart, nodeOptions, variables, journeys, onChange, 
       {node.type === "ai" && <p className="text-xs text-slate-400">Chats conversationally, grounded in approved CRM/product facts and Approved Knowledge. Connect the amber dot to a node to control where it goes when confidence requires a handoff (otherwise it notifies the team).</p>}
       {node.type === "booking" && <><div><label className="label">Action</label><select className="input" value={node.action ?? "service"} onChange={(e) => onChange({ ...node, action: e.target.value as BookingAction })}><option value="service">Create service request</option><option value="demo">Create demo / test-drive lead</option><option value="lead">Create lead / enquiry</option><option value="lookup">Find customer&apos;s next service booking</option><option value="cancel">Cancel {"{{booking_id}}"}</option></select><p className="mt-1 text-xs text-slate-500">{node.action === "lookup" ? <>Read-only. Sets <code>{"{{booking_identity}}"}</code> (verified | unverified) and <code>{"{{booking_found}}"}</code>, <code>{"{{booking_id}}"}</code>, <code>{"{{booking_slot}}"}</code> and <code>{"{{booking_summary}}"}</code> from an existing customer record.</> : node.action === "cancel" ? <>Cancels only the future customer-owned booking in <code>{"{{booking_id}}"}</code> and retains its Activity history.</> : <>Built from captured fields (name, phone, email, service, model). For a real dated service booking use Workshop slots.</>}</p></div><div><label className="label">Message after action (optional)</label><textarea className="input" rows={3} value={node.text ?? ""} onChange={(e) => onChange({ ...node, text: e.target.value })} /></div></>}
       {node.type === "journey" && <><div><label className="label">Journey</label><select className="input" value={node.journeyId} onChange={(e) => onChange({ ...node, journeyId: e.target.value })}><option value="">Select an active Journey…</option>{journeys.map((journey) => <option key={journey.id} value={journey.id}>{journey.name}</option>)}</select><p className="mt-1 text-xs text-slate-500">Enrols exactly this existing CRM customer/lead in the selected active Journey. Flow continues immediately; waits and later lifecycle actions stay in Journey. Retries reuse the same event identity.</p></div><div><label className="label">Message after enrolment (optional)</label><textarea className="input" rows={3} value={node.text ?? ""} onChange={(e) => onChange({ ...node, text: e.target.value })} /></div></>}
+      {node.type === "knowledge" && <><div><label className="label">Knowledge query (optional)</label><textarea className="input" rows={3} value={node.query} onChange={(e) => onChange({ ...node, query: e.target.value })} placeholder="Leave blank to use the customer's current message" /><p className="mt-1 text-xs text-slate-500">Only approved, currently-valid Flowbot Knowledge entries can be returned.</p></div><div><label className="label">Also save answer as</label><input className="input" value={node.saveAs ?? ""} onChange={(e) => onChange({ ...node, saveAs: e.target.value.replace(/\W/g, "") || undefined })} placeholder="knowledge_answer" /></div><div><label className="label">If nothing matches, say</label><textarea className="input" rows={2} value={node.noMatchText ?? ""} onChange={(e) => onChange({ ...node, noMatchText: e.target.value || undefined })} /></div></>}
+      {node.type === "set" && <><div><label className="label">Variable</label><input className="input" value={node.variable} onChange={(e) => onChange({ ...node, variable: e.target.value.replace(/\W/g, "") })} placeholder="status" /></div><div><label className="label">Value</label><textarea className="input" rows={3} value={node.value} onChange={(e) => onChange({ ...node, value: e.target.value })} placeholder="Use {{variables}} if needed" /></div></>}
+      {node.type === "switch" && <><div><label className="label">Variable</label><input className="input" list={`flow-vars-${node.id}`} value={node.variable} onChange={(e) => onChange({ ...node, variable: e.target.value.replace(/\W/g, "") })} placeholder="intent" /><datalist id={`flow-vars-${node.id}`}>{variables.map((variable) => <option key={variable} value={variable} />)}</datalist></div><div className="space-y-2"><label className="label">Cases</label>{node.cases.map((item) => <div key={item.id} className="rounded-lg border border-slate-800 p-2"><div className="flex gap-1.5"><input className="input btn-sm flex-1" value={item.value} onChange={(e) => onChange({ ...node, cases: node.cases.map((x) => x.id === item.id ? { ...x, value: e.target.value } : x) })} placeholder="Value" /><button type="button" onClick={() => onChange({ ...node, cases: node.cases.filter((x) => x.id !== item.id) })} className="px-1 text-muted-foreground hover:text-red-400"><X className="size-4" /><span className="sr-only">Remove case</span></button></div><div className="mt-1.5"><TargetPicker nodeOptions={nodeOptions} value={item.next} onPick={(v) => onChange({ ...node, cases: node.cases.map((x) => x.id === item.id ? { ...x, next: v } : x) })} /></div></div>)}<button type="button" className="btn-secondary btn-sm w-full" onClick={() => onChange({ ...node, cases: [...node.cases, { id: `c${Date.now().toString(36)}`, value: "" }] })}>+ Add case</button><div><label className="label">Default →</label><TargetPicker nodeOptions={nodeOptions} value={node.defaultNext} onPick={(v) => onChange({ ...node, defaultNext: v })} /></div></div><p className="text-xs text-slate-500">Matching is exact and case-insensitive. Anything unmatched follows Default.</p></>}
+      {node.type === "http" && <><div className="grid grid-cols-[90px_1fr] gap-2"><div><label className="label">Method</label><select className="input" value={node.method} onChange={(e) => onChange({ ...node, method: e.target.value as FlowHttpMethod })}>{["GET", "POST", "PUT", "PATCH", "DELETE"].map((method) => <option key={method}>{method}</option>)}</select></div><div><label className="label">HTTPS URL</label><input className="input" value={node.url} onChange={(e) => onChange({ ...node, url: e.target.value })} placeholder="https://api.example.com/…" /></div></div><div><label className="label">Headers (JSON)</label><textarea className="input font-mono text-xs" rows={3} value={node.headers ?? ""} onChange={(e) => onChange({ ...node, headers: e.target.value || undefined })} placeholder={'{"Authorization":"Bearer …"}'} /></div>{node.method !== "GET" && node.method !== "DELETE" && <div><label className="label">Body</label><textarea className="input font-mono text-xs" rows={4} value={node.body ?? ""} onChange={(e) => onChange({ ...node, body: e.target.value || undefined })} placeholder={'{"customer":"{{name}}"}'} /></div>}<div><label className="label">Save response as</label><input className="input" value={node.saveAs ?? ""} onChange={(e) => onChange({ ...node, saveAs: e.target.value.replace(/\W/g, "") || undefined })} placeholder="api_response" /></div><p className="text-xs text-slate-500">HTTPS only; redirects, local/private addresses and oversized responses are blocked by the runtime.</p></>}
+      {node.type === "extract" && <><div><label className="label">What to extract</label><textarea className="input" rows={3} value={node.instruction} onChange={(e) => onChange({ ...node, instruction: e.target.value })} /></div><div><label className="label">Source variable (optional)</label><input className="input" list={`flow-vars-${node.id}`} value={node.sourceVariable ?? ""} onChange={(e) => onChange({ ...node, sourceVariable: e.target.value.replace(/\W/g, "") || undefined })} placeholder="Blank = current customer message" /><datalist id={`flow-vars-${node.id}`}>{variables.map((variable) => <option key={variable} value={variable} />)}</datalist></div><div><label className="label">Output fields</label><input className="input" value={node.fields.join(", ")} onChange={(e) => onChange({ ...node, fields: e.target.value.split(",").map((v) => v.trim().replace(/\W/g, "")).filter(Boolean).slice(0, 12) })} placeholder="name, city, vehicle_interest" /></div><p className="text-xs text-slate-500">The model may only return these named fields and is instructed never to invent missing values.</p></>}
+      {node.type === "delay" && <><div><label className="label">Wait (seconds)</label><input className="input" type="number" min={1} max={604800} value={node.seconds} onChange={(e) => onChange({ ...node, seconds: Number(e.target.value) })} /></div><p className="text-xs text-slate-500">A QUIET HOLD, not a scheduled follow-up: the bot stays silent, and the flow resumes with the customer&apos;s next message after the time has passed. Nothing is sent when the timer expires — for a timed follow-up, use a Journey. Maximum: 7 days.</p></>}
+      {node.type === "subflow" && <><div><label className="label">Published flow</label><select className="input" value={node.flowId} onChange={(e) => onChange({ ...node, flowId: e.target.value })}><option value="">Choose a reusable flow…</option>{flows.map((flow) => <option key={flow.id} value={flow.id}>{flow.name}</option>)}</select></div><p className="text-xs text-slate-500">Runs the latest PUBLISHED version of the selected flow. Synchronous only: a child that stops to wait for customer input follows the failure route instead.</p></>}
       {node.type === "choice" && <div className="space-y-2"><div><label className="label">Prompt</label><textarea className="input" rows={2} value={node.text} onChange={(e) => onChange({ ...node, text: e.target.value })} /></div><label className="label">Options</label>{node.options.map((o, i) => <div key={o.id} className="space-y-1.5 rounded-lg border border-slate-800 p-2"><div className="flex gap-1.5"><input className="input btn-sm flex-1" value={o.label} onChange={(e) => onChange({ ...node, options: node.options.map((x) => x.id === o.id ? { ...x, label: e.target.value } : x) })} /><button onClick={() => onChange({ ...node, options: node.options.filter((x) => x.id !== o.id) })} className="px-1 text-muted-foreground hover:text-red-400"><X className="size-4" /><span className="sr-only">Remove option</span></button></div><TargetPicker nodeOptions={nodeOptions} value={o.next} onPick={(v) => onChange({ ...node, options: node.options.map((x) => x.id === o.id ? { ...x, next: v } : x) })} />{i === 2 && node.options.length > 3 && <p className="text-[10px] text-amber-400">WhatsApp shows &gt;3 options as a list.</p>}</div>)}<button onClick={() => onChange({ ...node, options: [...node.options, { id: `o${Date.now().toString(36)}`, label: `Option ${node.options.length + 1}` }] })} className="btn-secondary btn-sm w-full">+ Add option</button></div>}
 
-      {(node.type === "message" || node.type === "answer" || node.type === "capture" || node.type === "captureFile" || node.type === "image" || node.type === "booking" || node.type === "slots" || node.type === "journey") && <div><label className="label">Then go to</label><TargetPicker nodeOptions={nodeOptions} value={(node as { next?: string }).next} onPick={(v) => onChange({ ...node, next: v } as FlowNode)} /></div>}
+      {(["message", "answer", "capture", "captureFile", "image", "set", "http", "knowledge", "extract", "delay", "subflow", "booking", "slots", "journey"] as FlowNode["type"][]).includes(node.type) && <div><label className="label">Then go to</label><TargetPicker nodeOptions={nodeOptions} value={(node as { next?: string }).next} onPick={(v) => onChange({ ...node, next: v } as FlowNode)} /></div>}
       {FALLIBLE.has(node.type) && (
         <div className="space-y-2 rounded-lg border border-amber-900/40 bg-amber-950/20 p-2">
           <p className="text-[11px] text-amber-300">This action can fail. Publishing is refused if a failure would continue into a node that tells the customer it worked.</p>

@@ -28,7 +28,7 @@ function simulatedSlotLabel(slotId: string): string {
   const [date, time] = slotId.split("_"); return date && time ? `${date} · ${time}` : slotId || "Simulated slot";
 }
 
-/** Production graph engine + explicitly non-writing effects. */
+/** Production graph engine + explicitly non-writing, non-networking effects. */
 export async function simulateFlowTurn(input: SimulatorTurnInput): Promise<SimulatorTurnResult> {
   return withActingStaffScope(async () => {
     await requireOwner();
@@ -108,6 +108,26 @@ export async function simulateFlowTurn(input: SimulatorTurnInput): Promise<Simul
         },
         createBooking: async (_vars, action, nodeId) => { trace.push(`CRM: node ${nodeId} would create ${action ?? "service"}`); return { ok: scenario.crm === "success", reason: scenario.crm === "failure" ? "simulated CRM refusal" : undefined }; },
         handoff: async () => { trace.push("Handoff: would pause bot and notify team"); },
+        knowledgeAnswer: async (query) => {
+          trace.push(`Knowledge: would search approved entries for “${query.slice(0, 80)}”`);
+          return { ok: true, text: "[Simulator] Grounded answer from approved Flowbot Knowledge." };
+        },
+        extractData: async ({ fields, text }) => {
+          trace.push(`AI extract: would read ${fields.join(", ")} from ${text.slice(0, 60) || "current message"}`);
+          return scenario.ai === "timeout" ? { ok: false, reason: "simulated provider timeout" } : { ok: true, values: Object.fromEntries(fields.map((field) => [field, `[simulated ${field}]`])) };
+        },
+        httpRequest: async ({ method, url }) => {
+          // The one effect that could reach OUT of the simulator. It never does:
+          // the trace says what would have been called, and the scenario decides
+          // the outcome, so a flow under test cannot hit a live API.
+          trace.push(`API: ${method} ${url} (network call suppressed by simulator)`);
+          return scenario.crm === "failure" ? { ok: false, status: 503, reason: "simulated API failure" } : { ok: true, status: 200, body: '{"simulated":true}' };
+        },
+        loadSubflow: async (flowId) => {
+          trace.push(`Subflow: would run ${flowId}`);
+          const child = await prisma.botFlow.findFirst({ where: { id: flowId, ...scope }, select: { definition: true } });
+          return child ? parseFlow(child.definition) : null;
+        },
       });
 
       for (const message of result.messages) trace.push(message.type === "choice" ? `Output: menu (${message.options.length} options)` : `Output: ${message.type}`);
