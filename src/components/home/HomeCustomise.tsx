@@ -164,7 +164,26 @@ export default function HomeCustomise() {
 
   useEffect(() => {
     if (!ready) return;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
+    /*
+     * THE WRITE IS GUARDED, LIKE THE READ.
+     *
+     * `readPrefs` already try/catches, and the write needs it for the same
+     * reasons and one more. `setItem` throws — not returns — when storage is
+     * unavailable or full: Safari private browsing, a browser set to block site
+     * data, and QuotaExceededError all raise here. Unhandled inside an effect,
+     * that propagates to the nearest error boundary and takes the whole home
+     * screen down. Failing to remember a layout preference must not cost the
+     * user the page it decorates.
+     *
+     * `applyPrefs` runs REGARDLESS, outside the try: the preference is still
+     * valid for this session even when it cannot be persisted for the next, so
+     * the customiser keeps working and simply forgets on reload.
+     */
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
+    } catch {
+      // Not remembering is acceptable; crashing the home screen is not.
+    }
     const root = document.querySelector<HTMLElement>("[data-home-root]");
     if (root) applyPrefs(root, prefs);
   }, [prefs, ready]);

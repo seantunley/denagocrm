@@ -24,6 +24,7 @@ const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
 
 const HOME = "src/components/home/CRMHome.tsx";
 const PAGE = "src/app/(app)/page.tsx";
+const CUSTOMISE = "src/components/home/HomeCustomise.tsx";
 
 /**
  * Comment-stripped, because this codebase explains its security decisions in
@@ -88,14 +89,40 @@ test("the gate is the SAME pair the destination enforces, not a near miss", () =
   );
 });
 
-test("a conditional action stays conditional — the custom-dashboard link", () => {
-  // This one was already gated before the fix and is the pattern the other two
-  // were missing; it is pinned so the fix cannot be "made consistent" by
-  // deleting it instead.
+test("THE RETIRED CUSTOM-DASHBOARD BRANCH IS GONE, NOT JUST UNREACHABLE", () => {
+  /*
+   * This test previously pinned the /d/home link as the example the other two
+   * actions should have followed. Both ends of it have since been retired: the
+   * reserved `home` slug now redirect("/")s, and the page passed
+   * hasCustomDashboard a hard-coded false — so the link could not render, and
+   * pointed back at its own page if it had.
+   *
+   * Asserting its ABSENCE rather than deleting the test: a dead branch that
+   * reads as a live feature is what this is guarding against, and re-adding the
+   * link without a live destination should fail.
+   */
   const code = stripComments(src(HOME));
-  const at = code.indexOf('href="/d/home"');
-  assert.ok(at > 0, "expected the custom dashboard link");
-  assert.match(code.slice(Math.max(0, at - 400), at), /hasCustomDashboard/);
+  assert.doesNotMatch(code, /href="\/d\/home"/, "the /d/home link is retired — its slug redirects to /");
+  assert.doesNotMatch(code, /hasCustomDashboard/, "…and so is the prop that gated it");
+  assert.doesNotMatch(stripComments(src(PAGE)), /hasCustomDashboard/, "the page must not pass it either");
+});
+
+test("losing storage must not cost the user the home screen", () => {
+  /*
+   * `localStorage.setItem` THROWS rather than returning falsy when storage is
+   * unavailable or full — Safari private browsing, blocked site data,
+   * QuotaExceededError. Unhandled inside an effect that runs on every
+   * preference change, it reaches the nearest error boundary and takes the home
+   * screen down. The read was already guarded; the write was not.
+   */
+  const code = stripComments(src(CUSTOMISE));
+  const at = code.indexOf("localStorage.setItem");
+  assert.ok(at > 0, "the customiser must persist preferences");
+  const around = code.slice(Math.max(0, at - 200), at + 200);
+  assert.match(around, /try\s*\{/, "the write must be inside a try");
+  assert.match(around, /catch/, "…with a catch that swallows it");
+  // The preference must still apply to the live page even when it cannot be saved.
+  assert.match(code.slice(at, at + 400), /applyPrefs/, "applyPrefs must run regardless of the write");
 });
 
 test("THE HOME PAGE AUTHENTICATES EXPLICITLY, not as a side effect of a data call", () => {

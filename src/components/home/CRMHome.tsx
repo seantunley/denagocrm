@@ -3,7 +3,6 @@ import {
   ArrowRight,
   CalendarDays,
   CheckCircle2,
-  ChevronRight,
   CircleDollarSign,
   Clock3,
   Gauge,
@@ -36,7 +35,20 @@ const activityIcon = (type: string) => {
   return Clock3;
 };
 
-export default async function CRMHome({ hasCustomDashboard }: { hasCustomDashboard: boolean }) {
+/**
+ * `hasCustomDashboard` is GONE rather than defaulted.
+ *
+ * It gated a "Custom dashboard" link to /d/home, and both ends of that were
+ * retired in the same breath: the reserved `home` slug now `redirect("/")`s
+ * (app/(app)/d/[slug]/page.tsx), and the page passed the prop a hard-coded
+ * `false`. So the link could not render, and would have pointed back at the page
+ * it was rendered on if it had.
+ *
+ * Keeping the prop with a default would have preserved a switch nothing can
+ * flip, for a destination that no longer exists — the kind of dead branch that
+ * reads as a live feature to whoever finds it next.
+ */
+export default async function CRMHome() {
   const { user, access } = await dashboardViewer();
   const { now, todayStart, period } = await dashboardWindow();
   const seesLeads = grants(access, "leads.view_all", "leads.view_owned");
@@ -223,14 +235,6 @@ export default async function CRMHome({ hasCustomDashboard }: { hasCustomDashboa
               className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-border/70 bg-card px-4 py-2.5 text-sm font-medium text-foreground transition hover:bg-muted/60"
             >
               <CalendarDays className="size-4 text-muted-foreground" /> Calendar
-            </Link>
-          )}
-          {hasCustomDashboard && (
-            <Link
-              href="/d/home"
-              className="inline-flex min-h-11 items-center rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground transition hover:bg-muted/50 hover:text-foreground"
-            >
-              Custom dashboard <ChevronRight className="ml-1 size-4" />
             </Link>
           )}
         </div>

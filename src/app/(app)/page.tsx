@@ -20,7 +20,7 @@ export default async function HomePage() {
       <div className="mb-3 flex justify-end">
         <HomeCustomise />
       </div>
-      <CRMHome hasCustomDashboard={false} />
+      <CRMHome />
     </div>
   );
 }
