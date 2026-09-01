@@ -36,19 +36,21 @@ to the rest.
   the foundation you lay now — the security model, the module boundaries, the data
   model, the design system — does not have to be torn up in three months. Read them to
   understand what you are building *towards*. Do not build them.
-- **Section 8 is the work list.** It is deliberately small: the kernel, and one module
-  covering step 1 (Contact) of the Introduction Phase.
-- **Section 8.3 lists what is explicitly out of scope.** It is longer than the work list.
+- **Section 8 is the work list.** The kernel, full user access control, one module —
+  the **Introduction Phase**, which is the practice's client onboarding process, end to
+  end — and a **deliberately narrow client portal** that exists to demonstrate it.
+- **Section 8.5 lists what is explicitly out of scope.** It is longer than the work list.
   That is intentional.
 
 Do not build a second module because it looked quick. Do not stub screens for phases
-that are out of scope. Do not build the client portal. Do not add a dashboard nobody
-asked for. **If you finish early, deepen the tests and the documentation** — the point of
-this build is to prove the foundation holds, and a passing hostile test suite is worth
-more here than another feature.
+that are out of scope. Do not widen the portal beyond the five screens in section 8.4.
+Do not add a dashboard nobody asked for. **If you finish early, deepen the tests, or make the
+onboarding experience better** — those are the two things this build is being judged on.
 
-The measure of success is not how much exists at the end. It is whether module two can
-be built entirely inside the seams this build creates, without touching the kernel.
+The build has exactly two measures of success. First: whether module two can be built
+entirely inside the seams this one creates, without touching the kernel. Second: whether
+Michean can put the onboarding flow in front of a prospective client and have it raise
+her practice rather than embarrass it.
 
 ## 1. What this is
 
@@ -242,10 +244,10 @@ Modular structurally, or it will not survive a deadline.
 
   ```
   modules/
-    contact/      ← the only module in this build
-    enquiries/    projects/     journey/      comms/
-    updates/      documents/    suppliers/    finance/
-    tasks/        selections/   portal/       ← later, not now
+    onboarding/   portal/       ← this build
+    projects/     journey/      comms/        updates/
+    documents/    suppliers/    finance/      tasks/
+    selections/   snagging/     ← later, not now
   ```
 
   The names beyond `contact` are indicative, not a commitment. Propose the boundaries you
@@ -428,7 +430,7 @@ hidden. Never infer visibility from the absence of a flag. The worst possible fa
 this product is a client seeing an internal cost discussion, an unissued drawing, or
 another client's home.
 
-## 8. The work — the foundation and module one
+## 8. The work — foundation, access control, onboarding, demo portal
 
 ### 8.1 The foundation
 
@@ -438,94 +440,173 @@ another client's home.
    **proven by test** — the application role must not be able to bypass it.
 3. **The access layer.** Request-scoped data accessor no route can bypass, enforced by a
    lint rule; deny-by-default `can(principal, action, resource)` policy layer.
-4. **Identity.** Both principal types exist in the model — `StaffUser` and `ClientUser` —
-   with separate session audiences, memberships, and RLS policies. **Staff authentication
-   is implemented. Client authentication is not**, because module one has no client-facing
-   surface. The client half is proven by tests that construct a client principal directly
-   and assert it can reach nothing. Build the wall before there is anything on the other
-   side of it; it is far harder to insert later.
-5. **Audit.** Append-only, with no update or delete path in the application.
-6. **Storage and media.** Private object storage, resumable direct uploads, signed URLs
+4. **Audit.** Append-only, with no update or delete path in the application.
+5. **Storage and media.** Private object storage, resumable direct uploads, signed URLs
    bound to a principal and expiring, byte-level content sniffing, checksums, EXIF
    orientation honoured and **GPS stripped**, derivative generation and video poster
    frames off the request path.
-7. **Jobs.** A real runner with retries and idempotency. Nothing slow runs in a request.
-8. **The module registry.** Manifests, boundary lint, and the test that boots the app
-   with an empty module set. Module one is the first consumer and therefore the proof.
-9. **A gate primitive.** Generic requirement evaluation: given a set of declared
-   requirements and a subject, return what is satisfied and what is missing. Modules
-   declare requirements into it; the kernel knows nothing about phases.
-10. **The journey definition as data.** All eleven phases declared, versioned, with a
-    project pinning its version — but only the Introduction Phase's requirements
-    populated. The other ten are named and empty.
-11. **The design system.** Tokens, brand injection, the neutral default brand, the base
-    component set, and the staff density mode. The client density mode is defined in the
-    token layer but has no surface yet.
+6. **Jobs and transactional email.** A real job runner with retries and idempotency;
+   outbound email for invitations and notifications. Nothing slow runs in a request.
+7. **The module registry.** Manifests, boundary lint, and the test that boots the app
+   with an empty module set.
+8. **A gate primitive.** Generic requirement evaluation: given declared requirements and
+   a subject, return what is satisfied and what is missing. Modules declare requirements
+   into it; the kernel knows nothing about phases.
+9. **The journey definition as data.** All eleven phases declared, versioned, with a
+   project pinning its version — but only the Introduction Phase's requirements
+   populated. The other ten are named and empty.
+10. **The design system.** Tokens, brand injection, the neutral default brand, the base
+    component set, and both density modes — staff and client.
 
-### 8.2 Module one — `contact`
+### 8.2 User access control — in full, from the start
 
-Step 1 of the Introduction Phase from the source document, complete and real:
+This is foundation, not a feature, and it ships complete:
 
-- **Create a client profile** and capture the client's existing contact details.
-- **Create a project under that client.**
-- **Capture the mandatory intake**, all of it: what the client wants to achieve; the
-  scope as **areas of the home with the work required in each** (wall panelling,
-  furniture, wallpaper, lighting, electrical, flooring, painting and similar);
-  approximate size of the project area; style inspiration and preferred direction; the
-  client's intended timeline; the floor plan, or an explicit record that measurements
-  will be taken during Part One of the consultation.
-- **Upload photographs and videos of the existing space, and inspiration images** —
-  from a phone, on site, on a poor connection. This is the hardest part of module one and
-  the part most likely to be done badly. It is in scope precisely because it exercises
-  the media subsystem end to end.
-- **Book the in-person consultation** — a scheduled event against the project with a date,
-  an attending representative, and a record that it was booked. Nothing more: no
-  calendar integration, no reminders.
-- **Declare the intake requirements as gate requirements**, so the project cannot advance
-  out of Introduction until they are met, and the UI shows exactly what is outstanding.
-  The advance itself is blocked and audited; where it advances *to* is out of scope.
-- **Audit every one of the above.**
+- **Two principal types**, `StaffUser` and `ClientUser`, with separate session audiences,
+  separate cookies, separate lifetimes, and no code path that promotes one into the other.
+- **Staff roles** as *capabilities*, not role-string comparisons scattered through the
+  code. `can(principal, action, resource)` is the only question anyone asks. Start with
+  three roles — director, designer, coordinator — and make adding a fourth a data change.
+- **Per-project membership** for staff *and* clients, separately typed. Membership is the
+  only thing that grants access to a project. A director's elevated capabilities still do
+  not make them a member of every project by accident — decide that explicitly and write
+  the decision down.
+- **A staff administration surface**: invite a team member, assign their role, add and
+  remove them from projects, deactivate them. Invitations are single-use, expiring, and
+  audited.
+- **Client access issued deliberately.** Under the source process a client receives portal
+  access only once their consultation is approved. Model that as an explicit grant with an
+  actor and a timestamp — never as a side effect of a record existing.
+- **Every access decision audited**: grants, revocations, role changes, and denied
+  attempts.
 
-The whole module is staff-facing. The client has no login at this stage of the real
-process either — under the source document, portal access is issued only after the
-consultation is approved. That is why Contact is the right first module: it proves the
-foundation without needing the portal.
+### 8.3 Module one — `onboarding`: the Introduction Phase, end to end
 
-### 8.3 Explicitly NOT in this build
+The practice's client onboarding process, from first contact to the signed onboarding
+document, exactly as the source document describes it.
 
-The consultation workflow itself, the approve/deny decision and its six-month revisit
-reminder, the design proposal, invoicing, proof of payment, payment verification, the
-onboarding document, signatures, the client portal, client login, internal messaging,
-channels, threads, direct messages, tasks, client-facing updates of any kind, the weekly
-update engine, suppliers, snagging, structured selections, annotation, email or WhatsApp
-capture, search, real-time delivery, notifications beyond what module one needs, mobile
-apps, AI features, reporting and analytics.
+**1. Contact.** Create a client profile with contact details; create a project under that
+client; capture the mandatory intake — what the client wants to achieve, the scope as
+**areas of the home with the work required in each** (wall panelling, furniture,
+wallpaper, lighting, electrical, flooring, painting and similar), approximate size,
+style inspiration and preferred direction, the client's intended timeline, and the floor
+plan or an explicit record that measurements will be taken on site. **Photographs and
+videos of the existing space and inspiration images upload from a phone, on site, on a
+poor connection** — this is the hardest part of the module and the part most often done
+badly. Book the in-person consultation.
 
-Every one of these has a seam or a section above describing where it will attach. None
-of them is built now. If you believe one of them is genuinely required to make module
-one work, say so in your first response and argue it — do not quietly include it.
+**2. Consultation.** Part One on site and Part Two online, each scheduled against the
+project with an attending representative; capture on-site photographs, videos and
+measurements; record budget and timeline from Part Two. No calendar integration.
 
-### 8.4 Definition of done
+**3. The decision.** Approve or deny.
+- **Approved** → the client is granted portal access and invited by email.
+- **Denied** → a professionally worded explanation from a template, the client retained
+  in the database, and **a reminder scheduled six months out** for a consultant to revisit.
+  Build the reminder as a real scheduled job, not a flag someone has to notice.
 
-The build is finished when a person can sign in as MVR staff, create a client, create a
-project, complete the intake with photographs and video taken on a phone, book the
-consultation, see precisely what is still outstanding before the project can progress —
-and when the following all pass in `npm run verify`:
+**4. Design Proposal.** Issue the Phase 1 proposal document with the commencement-fee
+invoice and banking details. The client uploads **proof of payment**; a staff member
+**verifies receipt** — an audited, immutable decision with financial consequence, where
+reversing it writes a new record rather than editing the old one. The client may opt into
+**Phase 2, Option A or Option B**, or defer, in which case the deferral is recorded so the
+Implementation Phase can ask again.
+
+**5. Onboarding document.** Issued to the client, who **signs** it. A signature is a
+record of assent with signer, artifact hash, timestamp and evidence — not a picture of a
+name. Typed or drawn is fine; the integrity of the record is what matters. On completion,
+the Introduction Phase's gate is satisfied and the project may advance to Conceptual.
+Where it advances *to* is out of scope: Conceptual is an empty phase in this build.
+
+Every step above declares its requirements into the gate primitive, so the phase cannot
+be completed with anything outstanding, and every step is audited.
+
+### 8.4 The demonstration portal — narrow, and exceptional
+
+The portal exists in this build to demonstrate onboarding, and to prove the wall. It has
+**five screens and no more**:
+
+1. **Invitation and first sign-in** — the client's first contact with the practice's
+   software.
+2. **Project overview** — where their project is, what has happened, what happens next.
+3. **The proposal** — read the document, see the fee, see the banking details, choose
+   Phase 2 Option A or B or defer.
+4. **Actions** — what the practice needs from them: upload proof of payment, sign the
+   onboarding document. Clear, singular, impossible to misread.
+5. **Documents** — what has been issued to them, downloadable through a signed URL.
+
+No messaging, no gallery, no history feed, no settings beyond the minimum, no notification
+preferences.
+
+**This is the part that has to be visually stunning**, and "stunning" here means specific
+things rather than more decoration:
+
+- **The first sign-in is the moment the practice is judged.** A client who has just paid a
+  commencement fee for interior design opens this on a phone, probably in the evening. It
+  should feel like the practice, not like software.
+- **Their own photographs are the page.** The imagery captured during Contact is the
+  material — full-bleed, colour-accurate, sharp on a Retina screen, never upscaled, never
+  letterboxed into a card. An interiors client's own home, well presented, is worth more
+  than any illustration.
+- **Progress reads at a glance.** Eleven phases is a lot; show where they are and what is
+  next without a chart that looks like project-management software. Restraint.
+- **The two asks are unmistakable.** Uploading proof of payment and signing the onboarding
+  document are the only things the client must do. They should be obvious in a glance and
+  finishable in under a minute, including on a phone.
+- **Signing feels considered, not transactional.** It is the moment the relationship
+  becomes formal.
+
+The brand identity is not yet available, so all of this must be stunning **in the neutral
+default brand** and must survive the real identity being dropped in later. Type, space,
+imagery and restraint — not colour and effects.
+
+### 8.5 Explicitly NOT in this build
+
+Everything from the Conceptual Phase onward: Conceptual, Scheming, Costing, Supplier
+Communication, Technical, Implementation, Manufacturing, Production, Snagging & Finishing
+and Close Out. Internal messaging, channels, threads, direct messages, tasks and requests.
+Client-facing updates of any kind, milestone updates, automated updates and the weekly
+update engine. Suppliers. Snagging. Structured selections. Annotation and markup. Email
+or WhatsApp capture. Monthly Implementation invoicing. Payment gateways. Search. Real-time
+delivery. Mobile apps. AI features. Reporting and analytics. Any portal screen not listed
+in 8.4.
+
+Every one of these has a seam or a section above describing where it will attach. None is
+built now. If you believe one is genuinely required to make onboarding work, say so in
+your first response and argue it — do not quietly include it.
+
+### 8.6 Definition of done
+
+A person can sign in as MVR staff, invite a colleague and set their access, create a
+client, create a project, complete the intake with photographs and video taken on a
+phone, book and record both parts of the consultation, approve the client, watch the
+invitation arrive, and then — as that client, on a phone — sign in, read the proposal,
+choose a Phase 2 option, upload proof of payment and sign the onboarding document, while
+staff verify the payment and see the phase gate close. A denied client instead receives
+their explanation and appears six months later on someone's list.
+
+And all of this passes in `npm run verify`:
 
 - A query run without workspace context returns zero rows. RLS proven, not assumed.
-- Staff of one workspace cannot reach another's client, project or media — via API,
-  server action, an id in a URL, or a signed URL minted for someone else.
-- A client principal, constructed directly in tests, can reach nothing at all.
+- A client sees their own project and **nothing else** — no other client, no other
+  project, no internal field, no unissued document — via API, server action, an id in a
+  URL, an export, an email, or a signed URL minted for someone else.
+- A staff member without project membership cannot reach that project's data, whatever
+  their role.
 - A session of one audience is rejected when presented for the other.
-- The project cannot leave Introduction with an unmet requirement, through any path,
+- A client principal cannot reach any staff route, and revoking access takes effect
+  immediately on the next request, not at session expiry.
+- The Introduction Phase cannot be completed with an unmet requirement, through any path,
   including one that calls the transition directly.
+- Payment verification and signature records cannot be edited or deleted through any
+  application path.
 - Uploads whose declared type does not match their bytes are rejected; GPS is stripped
   from every stored photograph; signed URLs expire and are bound to their principal.
 - Every mutating route rejects a request without CSRF protection.
-- The app builds and all tests pass with `contact` disabled.
+- The app builds and all tests pass with the optional modules disabled.
 - No component contains a raw colour, font name or magic pixel value.
 - Contrast, keyboard navigation and focus order pass automated accessibility checks; the
-  intake and upload flow is usable one-handed on a phone.
+  intake, upload, payment and signing flows are all usable one-handed on a phone.
 
 A control without a test that fails when the control is removed is not done.
 
@@ -550,18 +631,21 @@ A control without a test that fails when the control is removed is not done.
 
 Do not write code yet. Reply with:
 
-1. **A one-line confirmation of scope**: the foundation plus the `contact` module, and
-   nothing from section 8.3.
+1. **A one-line confirmation of scope**: the foundation, full access control, the
+   `onboarding` module, the five-screen demonstration portal, and nothing from 8.5.
 2. Anything contradictory, under-specified, or over-engineered for the stated scale —
    including anything in the source document you think will not survive contact with how
-   the practice actually works, and anything in section 8.3 you believe module one
+   the practice actually works, and anything in section 8.5 you believe onboarding
    genuinely cannot work without.
 3. Your proposed module boundaries for the whole system, and the schema for this build.
 4. The journey definition as data: the eleven phases, how Introduction's requirements are
-   declared by the `contact` module, and how a transition is evaluated and refused.
-5. The security model: RLS policy shape, principal types, session design, the
-   authorisation surface, and specifically how the internal/client wall will be enforced
-   in the database rather than in application code — including how it holds before the
-   client half of the system exists.
-6. The token architecture and how a supplied brand is injected.
-7. The build order, and what you need from me at each step.
+   declared by the `onboarding` module, and how a transition is evaluated and refused.
+5. The security model: RLS policy shape, principal types, session design, the capability
+   and membership model, and specifically how the internal/client wall is enforced in the
+   database rather than in application code.
+6. **How you intend to make the onboarding experience and the portal genuinely
+   exceptional** — the visual direction, the two or three moments you will spend
+   disproportionate effort on, and what you will deliberately leave plain. This is half
+   of what the build is judged on; treat it with the same seriousness as the schema.
+7. The token architecture and how a supplied brand is injected later without a rework.
+8. The build order, and what you need from me at each step.
