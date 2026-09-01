@@ -274,7 +274,10 @@ thin real consumer, document the intended shape in `docs/seams.md`, and stop:
 For an interiors practice, imagery *is* the product. The interface has to be the calibre
 of the work it displays.
 
-The brand identity is supplied by the practice and is not yet in hand, so:
+**What the practice has supplied so far:** the MVR logo as vector artwork. It is
+**monochrome** — a single ink, solid black, with the wordmark converted to outlines, so
+there is no typeface to match and no colour information in the file. **No palette has
+been supplied yet.** So:
 
 - **Every visual value is a token** — colour, type scale, spacing, radii, shadow, motion.
   A hex code, font name or magic pixel value inside a component is a defect; add a check
@@ -286,15 +289,19 @@ The brand identity is supplied by the practice and is not yet in hand, so:
   brand can produce unreadable text.
 - **The default brand is a finished, restrained neutral** — near-black ink, warm paper
   white, one accent, a fine serif for display against a precise grotesque for interface —
-  that looks deliberate on day one and disappears when the real identity lands.
+  that looks deliberate on day one and disappears when the real identity lands. A
+  monochrome mark suits this exactly: build the system so that when MVR's palette
+  arrives, **one accent token changes** and nothing else does.
+- **Convert the supplied logo to optimised SVG** with a defined safe area, a minimum
+  legible size, and light-ground and dark-ground lockups. Never a raster logo, never a
+  PDF served to a browser.
 - **Media handling is a first-class subsystem, not an `<img>` tag.** Photographs, videos
   of existing spaces, inspiration imagery, moodboards, floor plans, progress photography.
   That means: resumable direct-to-storage uploads that survive a phone on site with bad
   signal; derivatives generated off the request path; AVIF and WebP at DPR-aware widths,
   never upscaled; blur or dominant-colour placeholders; colour profiles preserved; EXIF
-  orientation respected and GPS **stripped**; video delegated to a managed platform with
-  signed playback. Section 6 specifies how. A soft image on a Retina display fails this
-  brief as badly as a broken link.
+  orientation respected and GPS **stripped**. Video is a later module — section 6.3. A
+  soft image on a Retina display fails this brief as badly as a broken link.
 - **Typography and space carry the design**, not chrome. A modular scale, real rhythm,
   generous margins, hairline rules. Restraint reads as expensive.
 - **Motion is functional and fast** — 150–250ms, entrances and state changes only, fully
@@ -405,24 +412,32 @@ cannot be streamed, because scrubbing needs HTTP range requests.
   short-lived signed URL bound to the requesting principal. No public buckets. Never a
   storage URL in a page's HTML.
 
-### 6.3 Video is a specialist problem — delegate it
+### 6.3 Video is a later module — define the seam, build nothing
 
-Site walkthroughs shot on a phone are a first-class input to this system, and the naive
-implementation fails badly.
+The source document lists videos of the existing space among the Contact-stage
+requirements, and they will be needed. **They are not in this build.** Define the
+`VideoAdapter` interface, leave it unimplemented, and record the intended provider below
+so the decision does not have to be relitigated when the media module is built.
 
-**Use a managed video platform — Cloudflare Stream or Mux. Do not build a transcoding
-pipeline.** Both provide, in one integration: `tus` resumable direct upload from the
-phone, transcoding, adaptive-bitrate HLS, poster frames, and — critically — **signed
-playback tokens**, so a client's video is unplayable by anyone the platform has not
-authorised. Cloudflare Stream is cheaper and simpler and has South African edge presence;
-Mux is preferable if engagement analytics are ever wanted. Either way the practice's own
-database stores only the asset id, the playback policy, and the metadata.
+When that module arrives, the naive implementation fails badly, so:
 
-**Do not transcode on the application host.** ffmpeg inside a serverless function will
-hit memory and duration limits, and you would be paying compute rates to do a worse job.
+**Cloudflare Stream is the intended provider, subject to review when the module is
+built. Do not build a transcoding pipeline.** It provides, in one integration: `tus`
+resumable direct upload from the phone, transcoding, adaptive-bitrate HLS, poster
+frames, and — critically — **signed playback tokens**, so a client's video is unplayable
+by anyone the platform has not authorised. It is cheap, simple, and has South African
+edge presence. Mux is the alternative if per-title analytics or finer control over the
+encoding ladder is ever wanted.
 
-Ingest completion arrives by **webhook**, which must be signature-verified, idempotent,
-and unable to change anything about a project beyond the media asset it names.
+**Do not transcode on the application host**, whenever that day comes. ffmpeg inside a
+serverless function will hit memory and duration limits, and you would be paying compute
+rates to do a worse job.
+
+The adapter interface written now must therefore assume: the application stores a
+provider name, a provider asset id, a playback policy and metadata — never a
+provider-shaped URL, never a provider-shaped id assumed elsewhere in the code, never a
+provider SDK type crossing a module boundary. Ingest completion will arrive by webhook,
+so the seam must anticipate an asset that is referenced before it is playable.
 
 ### 6.4 Images: pre-generate, do not optimise on the fly
 
@@ -520,8 +535,8 @@ another client's home.
    `StorageAdapter`; resumable direct-from-browser uploads; an authorising route that
    redirects to short-lived signed URLs bound to the requesting principal; byte-level
    content sniffing; checksums; EXIF orientation honoured and **GPS stripped**;
-   `sharp` derivatives generated in a job; video delegated to Cloudflare Stream or Mux
-   with signature-verified, idempotent ingest webhooks and signed playback.
+   `sharp` derivatives generated in a job. **Images only**; the `VideoAdapter` interface
+   is defined and left unimplemented per section 6.3.
 6. **Jobs and transactional email.** A real job runner with retries and idempotency;
    outbound email for invitations and notifications. Nothing slow runs in a request.
 7. **The module registry.** Manifests, boundary lint, and the test that boots the app
@@ -567,14 +582,22 @@ client; capture the mandatory intake — what the client wants to achieve, the s
 **areas of the home with the work required in each** (wall panelling, furniture,
 wallpaper, lighting, electrical, flooring, painting and similar), approximate size,
 style inspiration and preferred direction, the client's intended timeline, and the floor
-plan or an explicit record that measurements will be taken on site. **Photographs and
-videos of the existing space and inspiration images upload from a phone, on site, on a
-poor connection** — this is the hardest part of the module and the part most often done
-badly. Book the in-person consultation.
+plan or an explicit record that measurements will be taken on site. **Photographs of the existing space
+and inspiration images upload from a phone, on site, on a poor connection** — this is the
+hardest part of the module and the part most often done badly. Book the in-person
+consultation.
+
+*Flagged deviation from the source document:* it lists **videos** among the Contact
+requirements. Video is deferred to a later module (section 6.3), so the intake declares
+photographs and images as gate requirements and does not yet require video. Raise this
+in your first response if you think it blocks real use.
+
+The consultation's on-site capture has the same constraint: photographs and
+measurements now, video when the media module lands.
 
 **2. Consultation.** Part One on site and Part Two online, each scheduled against the
-project with an attending representative; capture on-site photographs, videos and
-measurements; record budget and timeline from Part Two. No calendar integration.
+project with an attending representative; capture on-site photographs and measurements;
+record budget and timeline from Part Two. No calendar integration.
 
 **3. The decision.** Approve or deny.
 - **Approved** → the client is granted portal access and invited by email.
@@ -645,7 +668,7 @@ and Close Out. Internal messaging, channels, threads, direct messages, tasks and
 Client-facing updates of any kind, milestone updates, automated updates and the weekly
 update engine. Suppliers. Snagging. Structured selections. Annotation and markup. Email
 or WhatsApp capture. Monthly Implementation invoicing. Payment gateways. Search. Real-time
-delivery. Mobile apps. AI features. Reporting and analytics. Any portal screen not listed
+delivery. **Video capture, storage and playback of any kind.** Mobile apps. AI features. Reporting and analytics. Any portal screen not listed
 in 8.4.
 
 Every one of these has a seam or a section above describing where it will attach. None is
