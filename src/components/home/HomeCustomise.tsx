@@ -44,11 +44,53 @@ function readPrefs(): HomePrefs {
   }
 }
 
+/**
+ * CRMHome stays a server component so its permission-scoped data never moves to
+ * the browser. This client helper only personalises presentation. The markers are
+ * attached after hydration to the deliberately stable, top-level home regions;
+ * no data or permissions are changed when a section is hidden.
+ */
+function markHomeRegions(root: HTMLElement) {
+  const home = root.querySelector<HTMLElement>("main");
+  if (!home) return;
+
+  const children = Array.from(home.children) as HTMLElement[];
+  const metrics = children.find((child) => child.tagName === "SECTION");
+  const grids = children.filter((child) => child.tagName === "DIV" && child.classList.contains("grid"));
+  const workspace = grids[0];
+  const lower = grids[1];
+
+  if (metrics) metrics.dataset.homeSection = "metrics";
+  if (workspace) workspace.dataset.homeSection = "workspace";
+  if (lower) {
+    lower.dataset.homeLower = "true";
+    const lowerSections = Array.from(lower.children) as HTMLElement[];
+    if (lowerSections[0]) lowerSections[0].dataset.homeSection = "attention";
+    if (lowerSections[1]) lowerSections[1].dataset.homeSection = "movement";
+  }
+
+  home.querySelectorAll<HTMLElement>("section").forEach((element) => {
+    element.dataset.homeCard = "true";
+  });
+  home.querySelectorAll<HTMLElement>("li").forEach((element) => {
+    element.dataset.homeRow = "true";
+  });
+}
+
+function applyPrefs(root: HTMLElement, prefs: HomePrefs) {
+  root.dataset.homeDensity = prefs.density;
+  root.querySelectorAll<HTMLElement>("[data-home-section]").forEach((element) => {
+    element.hidden = prefs.hidden.includes(element.dataset.homeSection ?? "");
+  });
+}
+
 export default function HomeCustomise() {
   const [prefs, setPrefs] = useState<HomePrefs>(DEFAULT_PREFS);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
+    const root = document.querySelector<HTMLElement>("[data-home-root]");
+    if (root) markHomeRegions(root);
     setPrefs(readPrefs());
     setReady(true);
   }, []);
@@ -56,13 +98,8 @@ export default function HomeCustomise() {
   useEffect(() => {
     if (!ready) return;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
-
     const root = document.querySelector<HTMLElement>("[data-home-root]");
-    if (root) root.dataset.homeDensity = prefs.density;
-
-    document.querySelectorAll<HTMLElement>("[data-home-section]").forEach((element) => {
-      element.hidden = prefs.hidden.includes(element.dataset.homeSection ?? "");
-    });
+    if (root) applyPrefs(root, prefs);
   }, [prefs, ready]);
 
   const hidden = useMemo(() => new Set(prefs.hidden), [prefs.hidden]);
@@ -85,7 +122,7 @@ export default function HomeCustomise() {
       <style>{`
         [data-home-root][data-home-density="compact"] [data-home-card] { padding-top: 1rem !important; padding-bottom: 1rem !important; }
         [data-home-root][data-home-density="compact"] [data-home-row] { padding-top: .7rem !important; padding-bottom: .7rem !important; }
-        [data-home-root][data-home-density="compact"] { row-gap: 1rem !important; }
+        [data-home-root][data-home-density="compact"] main { row-gap: 1rem !important; }
         [data-home-lower]:has(> [data-home-section="attention"][hidden]) > [data-home-section="movement"],
         [data-home-lower]:has(> [data-home-section="movement"][hidden]) > [data-home-section="attention"] { grid-column: 1 / -1; }
       `}</style>
@@ -94,7 +131,7 @@ export default function HomeCustomise() {
         <SheetTrigger asChild>
           <button
             type="button"
-            className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-border/70 bg-card px-3.5 py-2.5 text-sm font-medium text-foreground transition hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+            className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-border/70 bg-card px-3.5 py-2 text-sm font-medium text-foreground transition hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
           >
             <SlidersHorizontal className="size-4 text-muted-foreground" />
             Customise home
@@ -104,7 +141,7 @@ export default function HomeCustomise() {
           <SheetHeader className="border-b border-border/60 px-5 py-5">
             <SheetTitle className="text-lg">Customise home</SheetTitle>
             <SheetDescription>
-              Keep the home screen focused on the information you actually use. These preferences are saved in this browser.
+              Keep the landing page focused on what you use. Preferences are saved in this browser and never change your access to CRM data.
             </SheetDescription>
           </SheetHeader>
 
