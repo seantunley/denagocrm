@@ -274,10 +274,14 @@ thin real consumer, document the intended shape in `docs/seams.md`, and stop:
 For an interiors practice, imagery *is* the product. The interface has to be the calibre
 of the work it displays.
 
-**What the practice has supplied so far:** the MVR logo as vector artwork. It is
-**monochrome** — a single ink, solid black, with the wordmark converted to outlines, so
-there is no typeface to match and no colour information in the file. **No palette has
-been supplied yet.** So:
+**The practice's identity is monochrome, and that is the palette.** The MVR logo is
+supplied as vector artwork in a single ink, solid black, with the wordmark converted to
+outlines — no typeface to match, no colour information, and no separate palette exists.
+This is a decision, not a gap: **the client's own photographs supply every colour on the
+page**, and for an interiors practice that is the correct instinct. Build it as a
+deliberate monochrome system rather than a placeholder waiting to be replaced.
+
+So:
 
 - **Every visual value is a token** — colour, type scale, spacing, radii, shadow, motion.
   A hex code, font name or magic pixel value inside a component is a defect; add a check
@@ -287,11 +291,40 @@ been supplied yet.** So:
   Validate the palette on the way in (it lands in a stylesheet; it is untrusted) and
   *derive* readable foregrounds from luminance rather than storing them, so no supplied
   brand can produce unreadable text.
-- **The default brand is a finished, restrained neutral** — near-black ink, warm paper
-  white, one accent, a fine serif for display against a precise grotesque for interface —
-  that looks deliberate on day one and disappears when the real identity lands. A
-  monochrome mark suits this exactly: build the system so that when MVR's palette
-  arrives, **one accent token changes** and nothing else does.
+- **The palette is a warm monochrome scale, not black on white.** Pure `#000` on `#FFF`
+  reads as clinical, and an interiors practice is the wrong client for clinical. Use a
+  warm near-black against a warm paper white, so the photographs sit on something that
+  feels like paper rather than a screen. These are the starting tokens; refine them
+  deliberately, and keep the contrast check in CI honest:
+
+  | Token | Hex | On paper | Use |
+  | --- | --- | --- | --- |
+  | `ink-900` | `#14110F` | 17.7:1 | Primary text, the mark |
+  | `ink-700` | `#3A3532` | 11.4:1 | Secondary text, headings on tint |
+  | `ink-500` | `#6B635E` | 5.6:1 | Supporting text, labels — the lightest text-safe ink |
+  | `ink-400` | `#8A8177` | 3.6:1 | Large text only, never body copy |
+  | `ink-300` | `#A79F99` | 2.5:1 | Rules, borders, disabled — **never text** |
+  | `ink-200` | `#CFC8C2` | 1.6:1 | Hairlines, dividers |
+  | `ink-100` | `#E8E3DE` | 1.2:1 | Tints, hover grounds |
+  | `paper` | `#FAF8F5` | — | Page ground |
+  | `surface` | `#FFFFFF` | — | Cards, imagery grounds |
+
+- **Two functional colours only, and they are not decoration.** `danger` `#8C2F1F`
+  (7.8:1) and `success` `#3F5C3A` (7.1:1) — deep oxide and deep moss, desaturated enough
+  to sit inside a monochrome system. They appear for system state alone: a failed
+  upload, a verified payment. They never brand anything, never fill a chart, never
+  accent a heading. Status must also be legible without colour, so pair them with a word
+  or a mark every time.
+- **Keep one `accent` token, currently resolving to `ink-900`.** If MVR ever supplies a
+  colour, that single token changes and nothing else does. Never inline `ink-900` where
+  you mean "the accent".
+- **The scale must invert cleanly** for the dense staff shell: `paper` on `ink-900` is
+  17.7:1, `ink-200` on `ink-900` is 11.4:1, `ink-400` on `ink-900` is 4.9:1. Define the
+  scale so a dark surface is a token remapping, not a second stylesheet.
+- **Monochrome raises the bar on everything else.** With no colour to lean on,
+  hierarchy comes from type scale, weight, space and rule weight alone — which is exactly
+  how a good monograph works, and exactly why sloppy spacing will be obvious. Hairlines
+  at `ink-200`, generous margins, a real baseline rhythm, and restraint.
 - **Convert the supplied logo to optimised SVG** with a defined safe area, a minimum
   legible size, and light-ground and dark-ground lockups. Never a raster logo, never a
   PDF served to a browser.
@@ -547,8 +580,10 @@ another client's home.
 9. **The journey definition as data.** All eleven phases declared, versioned, with a
    project pinning its version — but only the Introduction Phase's requirements
    populated. The other ten are named and empty.
-10. **The design system.** Tokens, brand injection, the neutral default brand, the base
-    component set, and both density modes — staff and client.
+10. **The design system.** Tokens, the monochrome palette of section 3.4, the logo as
+    optimised SVG with both ground lockups, the base component set, and both density
+    modes — staff and client. Brand values stay injectable even though the palette is
+    settled, so a future change is configuration rather than a refactor.
 
 ### 8.2 User access control — in full, from the start
 
@@ -656,9 +691,9 @@ things rather than more decoration:
 - **Signing feels considered, not transactional.** It is the moment the relationship
   becomes formal.
 
-The brand identity is not yet available, so all of this must be stunning **in the neutral
-default brand** and must survive the real identity being dropped in later. Type, space,
-imagery and restraint — not colour and effects.
+The practice's identity is monochrome (section 3.4), so all of this must be stunning
+**without colour**. Type, space, imagery and restraint carry it — the client's own
+photographs of their home are the only colour on the page, and that is the point.
 
 ### 8.5 Explicitly NOT in this build
 
