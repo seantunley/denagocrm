@@ -8,11 +8,15 @@ Fill in the three bracketed values at the top before you send it.
 
 ---
 
-You are building the **MVR Communication System** for Michean Van Riel Interiors (Pty)
+You are starting the **MVR Communication System** for Michean Van Riel Interiors (Pty)
 Ltd, a high-end interior design practice in South Africa. Read this entire brief before
 writing a single file. Read the attached source document too — it is the practice's own
 working overview of the process this platform has to serve. When you are ready, produce
 a plan and wait for approval. Do not scaffold on the strength of this message alone.
+
+**This build is the foundation plus one module.** Not the platform. Section 0.5 defines
+the scope and it is binding; sections 1 to 7 exist so that the foundation you lay is the
+right shape for what comes later.
 
 ## 0. The variables
 
@@ -21,6 +25,30 @@ a plan and wait for approval. Do not scaffold on the strength of this message al
 - **Data residency:** `[South Africa unless stated otherwise — POPIA applies either way]`
 
 Ask for any that are blank before planning. Everything else here is decided.
+
+## 0.5 The scope of THIS build — read this twice
+
+This prompt does **not** build the MVR Communication System. It builds **the foundation
+and exactly one module**, as a proof that the foundation is right before anyone commits
+to the rest.
+
+- **Sections 1–7 are context, not a work list.** They describe the whole system so that
+  the foundation you lay now — the security model, the module boundaries, the data
+  model, the design system — does not have to be torn up in three months. Read them to
+  understand what you are building *towards*. Do not build them.
+- **Section 8 is the work list.** It is deliberately small: the kernel, and one module
+  covering step 1 (Contact) of the Introduction Phase.
+- **Section 8.3 lists what is explicitly out of scope.** It is longer than the work list.
+  That is intentional.
+
+Do not build a second module because it looked quick. Do not stub screens for phases
+that are out of scope. Do not build the client portal. Do not add a dashboard nobody
+asked for. **If you finish early, deepen the tests and the documentation** — the point of
+this build is to prove the foundation holds, and a passing hostile test suite is worth
+more here than another feature.
+
+The measure of success is not how much exists at the end. It is whether module two can
+be built entirely inside the seams this build creates, without touching the kernel.
 
 ## 1. What this is
 
@@ -214,10 +242,15 @@ Modular structurally, or it will not survive a deadline.
 
   ```
   modules/
-    clients/      enquiries/    projects/     journey/
-    comms/        updates/      documents/    media/
-    suppliers/    finance/      tasks/        portal/
+    contact/      ← the only module in this build
+    enquiries/    projects/     journey/      comms/
+    updates/      documents/    suppliers/    finance/
+    tasks/        selections/   portal/       ← later, not now
   ```
+
+  The names beyond `contact` are indicative, not a commitment. Propose the boundaries you
+  think are right — but propose them, because module one's shape is only defensible in
+  relation to the ones that follow it.
 
 - **Modules are switchable per deployment.** Disabling one removes its routes,
   navigation, jobs and portal surfaces and leaves an app that builds, passes tests and
@@ -395,55 +428,106 @@ hidden. Never infer visibility from the absence of a flag. The worst possible fa
 this product is a client seeing an internal cost discussion, an unissued drawing, or
 another client's home.
 
-## 8. What to build first
+## 8. The work — the foundation and module one
 
-**Phase 0 — hardened walking skeleton.** One vertical slice, end to end:
+### 8.1 The foundation
 
-1. Repository, CI, environment validation, secret scanning, formatting, strict lint.
-2. Kernel: database with RLS proven, scoped accessor, policy layer, staff auth, client
-   auth, audit, storage adapter, media pipeline, job runner, design tokens, base
-   components.
-3. Module registry, manifests, boundary lint, empty-module-set boot test.
-4. `clients` + `projects`: create a client, create a project under them, add staff and
-   client members.
-5. `journey`: the eleven phases as a versioned definition, with gate evaluation and
-   audited transitions.
-6. `comms`: project channels and object-anchored threads, internal only, with the wall
-   tested from every angle.
-7. `media` + `documents`: upload from a phone on site, derivatives, revisions, issue to
-   client, signed download.
-8. `updates`: draft, publish, client reads it.
-9. `portal`: login, project overview, phase progress, documents, updates, and the
-   client's outstanding actions. Beautiful — this screen is the product demo.
+1. **Repository and CI.** Strict TypeScript, lint, formatting, environment validation at
+   boot, secret scanning, and a single `npm run verify` that CI runs on every push.
+2. **Database and tenancy.** Postgres, workspace scoping on every table, RLS enabled and
+   **proven by test** — the application role must not be able to bypass it.
+3. **The access layer.** Request-scoped data accessor no route can bypass, enforced by a
+   lint rule; deny-by-default `can(principal, action, resource)` policy layer.
+4. **Identity.** Both principal types exist in the model — `StaffUser` and `ClientUser` —
+   with separate session audiences, memberships, and RLS policies. **Staff authentication
+   is implemented. Client authentication is not**, because module one has no client-facing
+   surface. The client half is proven by tests that construct a client principal directly
+   and assert it can reach nothing. Build the wall before there is anything on the other
+   side of it; it is far harder to insert later.
+5. **Audit.** Append-only, with no update or delete path in the application.
+6. **Storage and media.** Private object storage, resumable direct uploads, signed URLs
+   bound to a principal and expiring, byte-level content sniffing, checksums, EXIF
+   orientation honoured and **GPS stripped**, derivative generation and video poster
+   frames off the request path.
+7. **Jobs.** A real runner with retries and idempotency. Nothing slow runs in a request.
+8. **The module registry.** Manifests, boundary lint, and the test that boots the app
+   with an empty module set. Module one is the first consumer and therefore the proof.
+9. **A gate primitive.** Generic requirement evaluation: given a set of declared
+   requirements and a subject, return what is satisfied and what is missing. Modules
+   declare requirements into it; the kernel knows nothing about phases.
+10. **The journey definition as data.** All eleven phases declared, versioned, with a
+    project pinning its version — but only the Introduction Phase's requirements
+    populated. The other ten are named and empty.
+11. **The design system.** Tokens, brand injection, the neutral default brand, the base
+    component set, and the staff density mode. The client density mode is defined in the
+    token layer but has no surface yet.
 
-**Phase 1:** the full Introduction Phase including consultation scheduling, approve/deny
-with the six-month revisit reminder, proposal, invoice, POP upload and verification,
-onboarding signature. Then tasks and requests, suppliers, and the weekly update
-obligation engine.
+### 8.2 Module one — `contact`
 
-**Phase 2:** direct and group messaging, real-time delivery, presence, mobile push,
-search — the path off the practice's current chat tools.
+Step 1 of the Introduction Phase from the source document, complete and real:
 
-**Phase 0 is not done until a hostile test suite passes**, written alongside the
-features rather than after:
+- **Create a client profile** and capture the client's existing contact details.
+- **Create a project under that client.**
+- **Capture the mandatory intake**, all of it: what the client wants to achieve; the
+  scope as **areas of the home with the work required in each** (wall panelling,
+  furniture, wallpaper, lighting, electrical, flooring, painting and similar);
+  approximate size of the project area; style inspiration and preferred direction; the
+  client's intended timeline; the floor plan, or an explicit record that measurements
+  will be taken during Part One of the consultation.
+- **Upload photographs and videos of the existing space, and inspiration images** —
+  from a phone, on site, on a poor connection. This is the hardest part of module one and
+  the part most likely to be done badly. It is in scope precisely because it exercises
+  the media subsystem end to end.
+- **Book the in-person consultation** — a scheduled event against the project with a date,
+  an attending representative, and a record that it was booked. Nothing more: no
+  calendar integration, no reminders.
+- **Declare the intake requirements as gate requirements**, so the project cannot advance
+  out of Introduction until they are met, and the UI shows exactly what is outstanding.
+  The advance itself is blocked and audited; where it advances *to* is out of scope.
+- **Audit every one of the above.**
 
-- A client cannot read another project's data — via API, server action, an id in a URL,
-  or a signed URL minted for someone else.
-- A query without tenant context returns zero rows. RLS proven, not assumed.
-- No internal thread, message, note or task is reachable by any client principal —
-  through the portal, an export, a notification, a webhook or search.
-- Drafts and unissued revisions are invisible to clients.
-- A staff session cookie cannot authenticate a portal route, or the reverse.
-- A phase cannot advance with an unmet gate, through any path.
-- An automated update composed from a project with internal notes contains none of them.
-- Signed URLs expire and are bound to their principal.
+The whole module is staff-facing. The client has no login at this stage of the real
+process either — under the source document, portal access is issued only after the
+consultation is approved. That is why Contact is the right first module: it proves the
+foundation without needing the portal.
+
+### 8.3 Explicitly NOT in this build
+
+The consultation workflow itself, the approve/deny decision and its six-month revisit
+reminder, the design proposal, invoicing, proof of payment, payment verification, the
+onboarding document, signatures, the client portal, client login, internal messaging,
+channels, threads, direct messages, tasks, client-facing updates of any kind, the weekly
+update engine, suppliers, snagging, structured selections, annotation, email or WhatsApp
+capture, search, real-time delivery, notifications beyond what module one needs, mobile
+apps, AI features, reporting and analytics.
+
+Every one of these has a seam or a section above describing where it will attach. None
+of them is built now. If you believe one of them is genuinely required to make module
+one work, say so in your first response and argue it — do not quietly include it.
+
+### 8.4 Definition of done
+
+The build is finished when a person can sign in as MVR staff, create a client, create a
+project, complete the intake with photographs and video taken on a phone, book the
+consultation, see precisely what is still outstanding before the project can progress —
+and when the following all pass in `npm run verify`:
+
+- A query run without workspace context returns zero rows. RLS proven, not assumed.
+- Staff of one workspace cannot reach another's client, project or media — via API,
+  server action, an id in a URL, or a signed URL minted for someone else.
+- A client principal, constructed directly in tests, can reach nothing at all.
+- A session of one audience is rejected when presented for the other.
+- The project cannot leave Introduction with an unmet requirement, through any path,
+  including one that calls the transition directly.
+- Uploads whose declared type does not match their bytes are rejected; GPS is stripped
+  from every stored photograph; signed URLs expire and are bound to their principal.
 - Every mutating route rejects a request without CSRF protection.
-- Uploads with mismatched declared and actual content type are rejected; GPS is stripped.
-- The app builds and tests pass with every optional module disabled.
-- Contrast, keyboard navigation and focus order pass automated accessibility checks.
+- The app builds and all tests pass with `contact` disabled.
+- No component contains a raw colour, font name or magic pixel value.
+- Contrast, keyboard navigation and focus order pass automated accessibility checks; the
+  intake and upload flow is usable one-handed on a phone.
 
-Wire these into a single `npm run verify` that CI runs on every push and that must be
-green before anything merges.
+A control without a test that fails when the control is removed is not done.
 
 ## 9. How to work
 
@@ -466,13 +550,18 @@ green before anything merges.
 
 Do not write code yet. Reply with:
 
-1. Anything contradictory, under-specified, or over-engineered for the stated scale —
-   including anything in the source document that you think will not survive contact with
-   how the practice actually works.
-2. Your module boundaries and the Phase 0 schema.
-3. The journey definition as data: phases, gates, and how a phase advance is evaluated.
-4. The security model: RLS policy shape, principal types, session design, the
-   authorisation surface, and specifically how the internal/client wall is enforced in
-   the database rather than in application code.
-5. The token architecture and how a supplied brand is injected.
-6. The Phase 0 build order, and what you need from me at each step.
+1. **A one-line confirmation of scope**: the foundation plus the `contact` module, and
+   nothing from section 8.3.
+2. Anything contradictory, under-specified, or over-engineered for the stated scale —
+   including anything in the source document you think will not survive contact with how
+   the practice actually works, and anything in section 8.3 you believe module one
+   genuinely cannot work without.
+3. Your proposed module boundaries for the whole system, and the schema for this build.
+4. The journey definition as data: the eleven phases, how Introduction's requirements are
+   declared by the `contact` module, and how a transition is evaluated and refused.
+5. The security model: RLS policy shape, principal types, session design, the
+   authorisation surface, and specifically how the internal/client wall will be enforced
+   in the database rather than in application code — including how it holds before the
+   client half of the system exists.
+6. The token architecture and how a supplied brand is injected.
+7. The build order, and what you need from me at each step.
