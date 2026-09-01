@@ -109,71 +109,69 @@ export const dashboardBySlug = cache(async (slug: string): Promise<LoadedDashboa
   };
 });
 
-function defaultCard(id: DashboardCardId, span?: 1 | 2 | 3): CardConfig {
-  const index = DEFAULT_LAYOUT.indexOf(id);
-  return {
+function catalogueDefaultCards(): Map<DashboardCardId, CardConfig> {
+  const cards: CardConfig[] = DEFAULT_LAYOUT.map((id, index) => ({
     id: `card-${index + 1}`,
     type: "builtin",
     card: id,
-    // A builtin has a catalogue width, but the command-centre composition may
-    // deliberately narrow it inside a one-column context rail. Width is therefore
-    // a property of the card UNTIL the layout gives it a stronger constraint.
-    span: span ?? cardById(id)?.span ?? 1,
-  };
+    span: cardById(id)?.span ?? 1,
+  }));
+  return new Map(cards.map((card) => [card.card as DashboardCardId, card]));
 }
 
-function defaultSections(): SectionConfig[] {
+function place(
+  cards: Map<DashboardCardId, CardConfig>,
+  id: DashboardCardId,
+  span?: 1 | 2 | 3,
+): CardConfig {
+  const base = cards.get(id);
+  if (!base) throw new Error(`Default dashboard card ${id} is missing from the catalogue.`);
+  return span ? { ...base, span } : { ...base };
+}
+
+function defaultSections(cards: Map<DashboardCardId, CardConfig>): SectionConfig[] {
   return [
-    // Quiet system warnings stay at the very top and disappear when healthy.
     {
       id: "section-alerts",
       columnSpan: 3,
-      cards: [defaultCard("system-alerts", 3)],
+      cards: [place(cards, "system-alerts", 3)],
     },
-    // One uninterrupted KPI band. It establishes context without becoming the
-    // page's dominant interaction surface.
     {
       id: "section-kpis",
       columnSpan: 3,
-      cards: [defaultCard("sales-stats", 3)],
+      cards: [place(cards, "sales-stats", 3)],
     },
-    // The working column: what needs doing now. This is intentionally two thirds
-    // of the desktop canvas so the agenda no longer competes with tiny widgets.
     {
       id: "section-work",
       title: "Work queue",
       columnSpan: 2,
-      cards: [defaultCard("sales-agenda", 2), defaultCard("needs-attention", 2)],
+      cards: [place(cards, "sales-agenda", 2), place(cards, "needs-attention", 2)],
     },
-    // The context rail: useful business state, never the visual hero. Every card
-    // is one column here even if its standalone catalogue width is larger.
     {
       id: "section-context",
       title: "Sales context",
       columnSpan: 1,
       cards: [
-        defaultCard("new-leads", 1),
-        defaultCard("pipeline-snapshot", 1),
-        defaultCard("month-targets", 1),
-        defaultCard("out-for-signature", 1),
+        place(cards, "new-leads", 1),
+        place(cards, "pipeline-snapshot", 1),
+        place(cards, "month-targets", 1),
+        place(cards, "out-for-signature", 1),
       ],
     },
     {
       id: "section-recent",
       title: "Recent activity",
       columnSpan: 3,
-      cards: [defaultCard("latest-activity", 3)],
+      cards: [place(cards, "latest-activity", 3)],
     },
-    // Automotive-only cards keep their own group and disappear wholesale as
-    // their module/permission gates remove the cards from the rendered slots.
     {
       id: "section-service",
       title: "Service operations",
       columnSpan: 3,
       cards: [
-        defaultCard("service-stats", 3),
-        defaultCard("service-agenda", 2),
-        defaultCard("service-due", 1),
+        place(cards, "service-stats", 3),
+        place(cards, "service-agenda", 2),
+        place(cards, "service-due", 1),
       ],
     },
   ];
@@ -181,14 +179,12 @@ function defaultSections(): SectionConfig[] {
 
 /**
  * A new user's home dashboard is a designed command centre, not a catalogue dump.
- *
  * Every builtin still appears exactly once and the config stays fully editable;
- * the difference is that the default now expresses hierarchy through sections:
- * KPIs establish context, today's work owns the main column, and pipeline/targets
- * sit in a narrow supporting rail. A user who customises the page takes control
- * of this ordinary config and may rearrange it like any other dashboard.
+ * the hierarchy comes from groups: context across the top, today's work in the
+ * main column, and pipeline/targets in a narrow supporting rail.
  */
 export function defaultDashboard(): LoadedDashboard {
+  const cards = catalogueDefaultCards();
   return {
     id: null,
     shared: false,
@@ -204,7 +200,7 @@ export function defaultDashboard(): LoadedDashboard {
           title: DEFAULT_DASHBOARD_TITLE,
           path: DEFAULT_DASHBOARD_SLUG,
           columns: 3,
-          sections: defaultSections(),
+          sections: defaultSections(cards),
         },
       ],
     },
