@@ -1,4 +1,5 @@
 import CRMHome from "@/components/home/CRMHome";
+import HomeCustomise from "@/components/home/HomeCustomise";
 import { requireUser } from "@/lib/auth";
 
 /**
@@ -13,5 +14,13 @@ export default async function HomePage() {
   // resolve the current user. The landing page should never depend on that side
   // effect for protection.
   await requireUser();
-  return <CRMHome hasCustomDashboard={false} />;
+
+  return (
+    <div data-home-root className="w-full">
+      <div className="mb-3 flex justify-end">
+        <HomeCustomise />
+      </div>
+      <CRMHome hasCustomDashboard={false} />
+    </div>
+  );
 }
