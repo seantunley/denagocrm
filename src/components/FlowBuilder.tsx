@@ -40,7 +40,6 @@ import {
   Background,
   Controls,
   Handle,
-  MiniMap,
   Panel,
   Position,
   useNodesState,
@@ -781,7 +780,6 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
                   proOptions={{ hideAttribution: true }}
                 >
                   <Background color="#25312d" gap={GRID_SIZE} size={1} />
-                  <MiniMap pannable zoomable nodeStrokeWidth={2} className="!border !border-white/10 !bg-[#101613]" />
                   {/* Targeting the library's own control-button CLASS does not
                       work here: Tailwind turns underscores inside an arbitrary
                       value into spaces, so that selector compiles to an element
