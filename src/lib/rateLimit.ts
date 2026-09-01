@@ -100,55 +100,87 @@ export function rateLimitKey(scope: string, identifier: string): string {
  * is the same bucket a request with no forwarding headers already got.
  */
 /**
+ * Is a proxy we TRUST in front of this process?
+ *
+ * The whole question, made explicit instead of inferred from the shape of a
+ * header. `X-Forwarded-For` is only evidence of anything when something we
+ * trust wrote it; on a directly-exposed deployment the caller writes the entire
+ * header themselves, and no amount of parsing rescues that.
+ *
+ * `VERCEL` is set in every Vercel runtime. `TRUST_PROXY_HEADERS` is the escape
+ * hatch for a self-hosted deployment that genuinely does sit behind a proxy
+ * that overwrites the header — opt-in, because getting this wrong silently
+ * turns rate limiting off rather than breaking anything visibly.
+ */
+function behindTrustedProxy(): boolean {
+  return Boolean(process.env.VERCEL) || process.env.TRUST_PROXY_HEADERS === "true";
+}
+
+/**
  * The caller's IP from a header bag — pure, so the rule is testable.
  *
- * Split out of `getRequestIp` because the interesting part is a parsing
- * decision, and the only thing standing between it and a test was `headers()`
- * needing a request scope. See `getRequestIp` for why the order is what it is.
+ * ── WHY THE TRUST BOUNDARY IS A PARAMETER ───────────────────────────────────
+ *
+ * An earlier version of this took the RIGHTMOST `X-Forwarded-For` entry, on the
+ * reasoning that the leftmost is client-controlled. Both halves of that were
+ * wrong for this deployment, and the correction matters more than the code:
+ *
+ *   - Vercel's documented behaviour is that it **overwrites** `X-Forwarded-For`
+ *     and does not forward external IPs, "to prevent IP spoofing". So the
+ *     original leftmost read was never spoofable here — the audit finding that
+ *     prompted this was mistaken about the platform.
+ *   - "Rightmost is the trusted hop" is not a general rule either. It identifies
+ *     the nearest proxy, which is only the client when the chain is exactly one
+ *     hop deep; and with no trusted proxy at all the attacker supplies every
+ *     entry, so rightmost is exactly as forged as leftmost.
+ *
+ * What is actually true: a forwarded header means something only when a trusted
+ * proxy wrote it. So trust is decided by DEPLOYMENT, not by parsing.
+ *
+ *   1. `x-vercel-forwarded-for` — set by the platform edge, and per Vercel's
+ *      docs the variant that survives when another proxy sits on top.
+ *   2. `x-forwarded-for`, LEFTMOST, but only behind a trusted proxy — because
+ *      that proxy replaced the header, so its first entry is the real client.
+ *   3. Otherwise `unknown`. Not a failure: an unidentifiable caller shares one
+ *      bucket, which is strictly better than letting a caller mint unlimited
+ *      buckets by inventing header values.
+ *
+ * NOTE for the enterprise "Trusted Proxy" feature: it makes Vercel honour a
+ * customer-supplied `X-Forwarded-For`. If that is ever enabled, the leftmost
+ * entry becomes caller-controlled again and this must be revisited.
  */
-export function clientIpFrom(incoming: { get(name: string): string | null }): string {
-  const platform = incoming.get("x-vercel-forwarded-for")?.trim();
+export function clientIpFrom(
+  incoming: { get(name: string): string | null },
+  options: { trustedProxy: boolean },
+): string {
+  const first = (value: string | null | undefined): string =>
+    (value ?? "").split(",")[0]?.trim() ?? "";
+
+  const platform = first(incoming.get("x-vercel-forwarded-for"));
   if (platform) return platform;
-  const chain = (incoming.get("x-forwarded-for") ?? "")
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-  return chain[chain.length - 1] || incoming.get("x-real-ip")?.trim() || "unknown";
+
+  if (options.trustedProxy) {
+    return first(incoming.get("x-forwarded-for")) || incoming.get("x-real-ip")?.trim() || "unknown";
+  }
+
+  // No trusted proxy: every forwarding header is caller-controlled, so none of
+  // them may key a limit. One shared bucket, deliberately.
+  return "unknown";
 }
 
 export async function getRequestIp(): Promise<string> {
   try {
     const incoming = await headers();
     /*
-     * NEVER THE LEFTMOST `X-Forwarded-For` ENTRY.
+     * The rule itself lives in `clientIpFrom`, with the reasoning — including
+     * the correction that Vercel OVERWRITES `X-Forwarded-For` to prevent
+     * spoofing, so the original leftmost read was never forgeable here.
      *
-     * This read `split(",")[0]`, and that is the one position in the header a
-     * CLIENT controls. `X-Forwarded-For` is a list each proxy appends to, so the
-     * leftmost value is whatever the original caller sent — including a caller
-     * who invented it. Anyone could pick their own rate-limit bucket by sending
-     * `X-Forwarded-For: 1.2.3.4`, and a fresh one per request by changing it.
-     *
-     * The account-keyed limit still caught credential stuffing against a single
-     * login, so what this actually cost was the defence against PASSWORD
-     * SPRAYING — one attempt each across many accounts, which by design never
-     * trips a per-account counter. Every public throttle keyed on this function
-     * had the same hole.
-     *
-     * Order below, most trustworthy first:
-     *   1. `x-vercel-forwarded-for` — set by the platform edge, and stripped
-     *      from client requests before a handler ever sees it, so it cannot be
-     *      forged from outside.
-     *   2. The RIGHTMOST entry of `x-forwarded-for` — the value appended by the
-     *      hop nearest us, i.e. by infrastructure we trust rather than by the
-     *      caller. If the platform replaces the header outright this is the same
-     *      value as the leftmost; if it appends, this is the real one. Correct
-     *      either way, which is the point.
-     *   3. `x-real-ip`, then the shared "unknown" bucket.
-     *
-     * A rate limiter must never be the thing that fails a request, so this still
-     * degrades to a shared bucket rather than throwing (see the note above).
+     * A rate limiter must never be the thing that fails a request, so an
+     * unreadable header bag degrades to the shared "unknown" bucket rather than
+     * throwing (see the note above `getRequestIp`).
      */
-    return clientIpFrom(incoming);
+    return clientIpFrom(incoming, { trustedProxy: behindTrustedProxy() });
   } catch {
     return "unknown";
   }
