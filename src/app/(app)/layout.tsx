@@ -1,6 +1,5 @@
 import { redirect } from "next/navigation";
 import { getActiveTenantId, requireUser } from "@/lib/auth";
-import { actingTenantId } from "@/lib/actingTenant";
 import { brandForTenant, brandLogoUrl, brandStyle, DEFAULT_BRAND } from "@/lib/tenantBrand";
 import { getSetting } from "@/lib/settings";
 import { WEATHER_CITIES_KEY, parseWeatherCities } from "@/lib/weatherCities";
