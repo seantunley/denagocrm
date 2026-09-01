@@ -20,10 +20,36 @@ import crypto from "node:crypto";
  * carrying it can only have come from a server holding this deployment's secret.
  * Timing-safe compared, because it costs one line.
  */
-export function domainProof(hostname: string): string {
+/**
+ * A key of its own, derived from `SESSION_SECRET` rather than being it.
+ *
+ * `/api/brand/domain-check` is PUBLIC and returns this HMAC for a hostname the
+ * caller chooses, which makes it a signing oracle. It was keyed on
+ * `SESSION_SECRET` directly — the same key that signs session JWTs. That was
+ * safe, and provably so: the fixed `domain-check:` prefix, the lowercasing and
+ * host normalisation mean the signed message can never take the shape of a JWT
+ * signing input (`base64url.base64url`, which contains `.` and uppercase).
+ *
+ * But the safety came from the message format, so it would quietly expire the
+ * day somebody changed the format. HKDF separates the keys instead: this key
+ * cannot verify or forge a session token no matter what is signed with it,
+ * because it is not that key. Structural, rather than argued.
+ *
+ * No new environment variable — one fewer secret to deploy, rotate and get
+ * wrong, and rotating `SESSION_SECRET` correctly rotates this too. The proof is
+ * recomputed on both sides at verification time and never stored, so changing
+ * the key changes nothing for domains already verified.
+ */
+function proofKey(): Buffer {
   const secret = process.env.SESSION_SECRET;
   if (!secret) throw new Error("SESSION_SECRET is not set — domain verification cannot be proven");
-  return crypto.createHmac("sha256", secret).update(`domain-check:${hostname.toLowerCase()}`).digest("hex");
+  return Buffer.from(
+    crypto.hkdfSync("sha256", Buffer.from(secret, "utf8"), Buffer.alloc(0), Buffer.from("denago:domain-check:v1", "utf8"), 32),
+  );
+}
+
+export function domainProof(hostname: string): string {
+  return crypto.createHmac("sha256", proofKey()).update(`domain-check:${hostname.toLowerCase()}`).digest("hex");
 }
 
 /** Constant-time compare, tolerant of a garbage response body. */

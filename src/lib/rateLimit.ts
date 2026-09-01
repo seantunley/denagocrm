@@ -99,11 +99,56 @@ export function rateLimitKey(scope: string, identifier: string): string {
  * degrades instead: an unidentifiable caller shares the "unknown" bucket, which
  * is the same bucket a request with no forwarding headers already got.
  */
+/**
+ * The caller's IP from a header bag — pure, so the rule is testable.
+ *
+ * Split out of `getRequestIp` because the interesting part is a parsing
+ * decision, and the only thing standing between it and a test was `headers()`
+ * needing a request scope. See `getRequestIp` for why the order is what it is.
+ */
+export function clientIpFrom(incoming: { get(name: string): string | null }): string {
+  const platform = incoming.get("x-vercel-forwarded-for")?.trim();
+  if (platform) return platform;
+  const chain = (incoming.get("x-forwarded-for") ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  return chain[chain.length - 1] || incoming.get("x-real-ip")?.trim() || "unknown";
+}
+
 export async function getRequestIp(): Promise<string> {
   try {
     const incoming = await headers();
-    const forwarded = incoming.get("x-forwarded-for")?.split(",")[0]?.trim();
-    return forwarded || incoming.get("x-real-ip") || "unknown";
+    /*
+     * NEVER THE LEFTMOST `X-Forwarded-For` ENTRY.
+     *
+     * This read `split(",")[0]`, and that is the one position in the header a
+     * CLIENT controls. `X-Forwarded-For` is a list each proxy appends to, so the
+     * leftmost value is whatever the original caller sent — including a caller
+     * who invented it. Anyone could pick their own rate-limit bucket by sending
+     * `X-Forwarded-For: 1.2.3.4`, and a fresh one per request by changing it.
+     *
+     * The account-keyed limit still caught credential stuffing against a single
+     * login, so what this actually cost was the defence against PASSWORD
+     * SPRAYING — one attempt each across many accounts, which by design never
+     * trips a per-account counter. Every public throttle keyed on this function
+     * had the same hole.
+     *
+     * Order below, most trustworthy first:
+     *   1. `x-vercel-forwarded-for` — set by the platform edge, and stripped
+     *      from client requests before a handler ever sees it, so it cannot be
+     *      forged from outside.
+     *   2. The RIGHTMOST entry of `x-forwarded-for` — the value appended by the
+     *      hop nearest us, i.e. by infrastructure we trust rather than by the
+     *      caller. If the platform replaces the header outright this is the same
+     *      value as the leftmost; if it appends, this is the real one. Correct
+     *      either way, which is the point.
+     *   3. `x-real-ip`, then the shared "unknown" bucket.
+     *
+     * A rate limiter must never be the thing that fails a request, so this still
+     * degrades to a shared bucket rather than throwing (see the note above).
+     */
+    return clientIpFrom(incoming);
   } catch {
     return "unknown";
   }

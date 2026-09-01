@@ -24,6 +24,18 @@ import {
   rateLimitKey,
   registerRateLimitAttempt,
 } from "@/lib/rateLimit";
+
+/**
+ * A real bcrypt hash, at the same cost factor as a real password (12), of a
+ * random value nobody holds — so no submitted password can ever match it.
+ *
+ * Its only job is to make the sign-in path spend identical work whether or not
+ * the email exists. See the comparison in `signIn` for why that matters.
+ * Hardcoded rather than generated at boot: a fresh hash per process costs ~100ms
+ * of cold start, and there is nothing secret about a hash of a value that was
+ * discarded the moment it was printed.
+ */
+const TIMING_DECOY_HASH = "$2b$12$sOeVwx/GKaLIJ4GYSEES7eWTdhS7Lmf0C/kB7jE/A7Gm.9ea5YVbe";
 import {
   bumpUserSessionVersion,
   getUserSecurityState,
@@ -97,7 +109,24 @@ export async function login(
 
   const user = await basePrisma.user.findUnique({ where: { email } });
   const security = user ? await getUserSecurityState(user.id) : null;
-  const passwordOk = Boolean(user && security && !security.disabledAt && await bcrypt.compare(password, user.passwordHash));
+  /*
+   * THE COMPARISON ALWAYS RUNS, even when there is no such user.
+   *
+   * `user && … && await bcrypt.compare(…)` short-circuits, so an unknown email
+   * skipped bcrypt entirely and answered in a fraction of the time a known one
+   * took — bcrypt at cost 12 is deliberately ~100ms. That is a user-enumeration
+   * oracle measurable over the network, and it defeated the point of the
+   * uniform "Invalid email or password." message below: the wording said
+   * nothing, the timing said which.
+   *
+   * Hashing the supplied password against a fixed decoy costs the same work and
+   * discards the result. The decoy is a real cost-12 hash of a value nobody can
+   * present, so it cannot be matched — `bcrypt.compare` returning false here is
+   * the only outcome, and it returns it in the same time a genuine mismatch
+   * would take.
+   */
+  const passwordMatches = await bcrypt.compare(password, user?.passwordHash ?? TIMING_DECOY_HASH);
+  const passwordOk = Boolean(user && security && !security.disabledAt && passwordMatches);
 
   if (!user || !passwordOk) {
     await Promise.all([
