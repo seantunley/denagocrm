@@ -283,3 +283,21 @@ export async function archiveMarketingTemplate(id: string) {
   await logAuditStrict({ action: "template.archived", summary: "Archived marketing template", entityType: "EmailTemplate", entityId: id, user });
   revalidatePath("/marketing/templates");
 }
+
+/**
+ * Render a draft template body exactly as a campaign send would.
+ *
+ * Read-only on purpose: no rows written, no audit entry — it is the same
+ * permission gate as every template action followed by a pure render. The body
+ * comes from the editor the caller is typing into, and the result goes into a
+ * SANDBOXED iframe, so the only consumer of this HTML is an inert document.
+ */
+export async function previewMarketingEmailTemplate(bodyHtml: string): Promise<string> {
+  const { tenantId } = await contentContext("campaigns.manage_templates");
+  const { emailPreviewHtml } = await import("@/lib/campaigns");
+  const { emailBrand } = await import("@/lib/emailBrand");
+  // Cap what a preview will chew on; a template body near this size has bigger
+  // problems than its preview, and this action runs on every debounced keystroke.
+  const body = String(bodyHtml ?? "").slice(0, 200_000);
+  return emailPreviewHtml(body, await emailBrand(tenantId));
+}

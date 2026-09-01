@@ -8,13 +8,7 @@ import {
   saveBotSettings,
   addFaq,
   deleteFaq,
-  addBotKnowledge,
-  setBotKnowledgeStatus,
-  deleteBotKnowledge,
   whisperConfigured,
-  connectTelegram,
-  disconnectTelegram,
-  telegramStatus,
 } from "@/app/actions/bot";
 import ClearSecret from "@/components/ClearSecret";
 import { Bot, BrainCircuit, BookOpenCheck, GitBranch, MessagesSquare, Radio } from "lucide-react";
@@ -23,13 +17,13 @@ import { StatusPill, Surface } from "@/components/visual-system";
 
 export default async function ChatbotSettingsPage() {
   await requireOwner();
-  const [settings, botFaqs, knowledge, libraryDocuments, hasWhisper, tg] = await Promise.all([
+  // `libraryDocuments` went on main; `tg` went here, when Telegram moved to
+  // Settings → Integrations. Both removals stand.
+  const [settings, botFaqs, knowledge, hasWhisper] = await Promise.all([
     prisma.appSetting.findMany(),
     getBotFaqs(),
     getBotKnowledgeEntries(),
-    prisma.libraryDocument.findMany({ select: { id: true, name: true }, orderBy: { updatedAt: "desc" }, take: 100 }),
     whisperConfigured(),
-    telegramStatus(),
   ]);
   const setting = (key: string) => {
     const raw = settings.find((s) => s.key === key)?.value ?? "";
@@ -136,46 +130,30 @@ export default async function ChatbotSettingsPage() {
 
           <Surface className="p-5">
             <div className="flex items-start justify-between gap-3">
-              <div><p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Approved knowledge</p><p className="mt-1 text-xs text-muted-foreground">Curated facts and policy excerpts retrieved only when relevant. Drafts are never shown to the AI.</p></div>
+              <div><p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Knowledge workspace</p><p className="mt-1 text-xs text-muted-foreground">Curate, search, review and expire the facts the assistant is allowed to use.</p></div>
               <StatusPill tone="success">{approvedKnowledge.length} live</StatusPill>
             </div>
-            <ul className="mt-3 space-y-2">
-              {knowledge.length === 0 && <li className="text-xs text-muted-foreground">No knowledge entries yet. Add warranty, delivery, finance, service or product facts below.</li>}
-              {knowledge.slice(0, 30).map((entry) => {
-                const current = knowledgeIsCurrent(entry);
-                const statusLabel = entry.status === "approved" && !current ? "Expired by date" : entry.status;
-                return (
-                  <li key={entry.id} className="rounded-xl border border-border bg-muted/35 p-3">
-                    <div className="flex items-start gap-2"><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-1.5"><p className="text-xs font-semibold text-foreground">{entry.title}</p><span className={`rounded-full px-1.5 py-0.5 text-[10px] ${current ? "bg-emerald-500/15 text-emerald-300" : entry.status === "draft" ? "bg-amber-500/15 text-amber-300" : "bg-slate-500/15 text-slate-400"}`}>{statusLabel}</span></div>{entry.sourceLabel && <p className="mt-0.5 text-[10px] text-muted-foreground">Source: {entry.sourceLabel}</p>}</div><form action={deleteBotKnowledge.bind(null, entry.id)}><button className="text-xs text-muted-foreground hover:text-red-400" aria-label={`Delete ${entry.title}`}>✕</button></form></div>
-                    <p className="mt-2 line-clamp-5 whitespace-pre-wrap text-xs text-muted-foreground">{entry.content}</p>
-                    {(entry.validFrom || entry.validUntil) && <p className="mt-1 text-[10px] text-muted-foreground">{entry.validFrom ? `From ${new Date(entry.validFrom).toLocaleDateString("en-ZA")}` : ""}{entry.validFrom && entry.validUntil ? " · " : ""}{entry.validUntil ? `Until ${new Date(entry.validUntil).toLocaleDateString("en-ZA")}` : ""}</p>}
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      {entry.status !== "approved" && <form action={setBotKnowledgeStatus.bind(null, entry.id, "approved")}><button className="btn-primary btn-sm">Approve</button></form>}
-                      {entry.status === "approved" && <form action={setBotKnowledgeStatus.bind(null, entry.id, "expired")}><button className="btn-secondary btn-sm">Expire</button></form>}
-                      {entry.status === "expired" && <form action={setBotKnowledgeStatus.bind(null, entry.id, "draft")}><button className="btn-secondary btn-sm">Return to draft</button></form>}
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-            <details className="mt-3 rounded-lg border border-border bg-muted/40">
-              <summary className="px-3 py-2 text-sm font-medium cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">+ Add knowledge draft</summary>
-              <form action={addBotKnowledge} className="space-y-2 p-3 pt-1">
-                <input name="title" className="input" required maxLength={180} placeholder="Warranty coverage — batteries" />
-                <textarea name="content" className="input" rows={5} required maxLength={5000} placeholder="Paste the precise fact or approved excerpt the assistant may rely on. This is the customer-facing source of truth after approval." />
-                <div><label className="label">Library source (optional)</label><select name="sourceDocumentId" className="input"><option value="">Manual / no document</option>{libraryDocuments.map((doc) => <option key={doc.id} value={doc.id}>{doc.name}</option>)}</select></div>
-                <div className="grid grid-cols-2 gap-2"><div><label className="label">Valid from</label><input type="date" name="validFrom" className="input" /></div><div><label className="label">Valid until</label><input type="date" name="validUntil" className="input" /></div></div>
-                <p className="text-[10px] leading-4 text-muted-foreground">New entries are always Draft. Review them, then click Approve separately.</p>
-                <button className="btn-primary btn-sm">Add draft</button>
-              </form>
-            </details>
+            <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
+              <div className="rounded-lg bg-muted/35 p-2"><b className="block text-base text-foreground">{knowledge.length}</b><span className="text-muted-foreground">Total</span></div>
+              <div className="rounded-lg bg-muted/35 p-2"><b className="block text-base text-amber-300">{knowledge.filter((entry) => entry.status === "draft").length}</b><span className="text-muted-foreground">Draft</span></div>
+              <div className="rounded-lg bg-muted/35 p-2"><b className="block text-base text-slate-300">{knowledge.filter((entry) => entry.status === "expired" || (entry.status === "approved" && !knowledgeIsCurrent(entry))).length}</b><span className="text-muted-foreground">Expired</span></div>
+            </div>
+            <Link href="/chatbot/knowledge" className="btn-secondary btn-sm mt-3 w-full"><BookOpenCheck className="size-3.5" />Open knowledge workspace</Link>
           </Surface>
 
-          <Surface className="p-5">
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">Telegram {tg.connected && <span className="text-emerald-400 normal-case">· connected{tg.enabled ? " & live" : ""}</span>}</p>
-            <p className="text-xs text-muted-foreground mb-2">Create a bot with @BotFather, paste the token and Connect — it runs the same published flow.</p>
-            {!tg.connected ? <form action={connectTelegram} className="flex gap-2"><input name="token" className="input flex-1" placeholder="123456789:ABCdef..." /><button className="btn-primary btn-sm shrink-0">Connect</button></form> : <form action={disconnectTelegram}><button className="btn-secondary btn-sm">Disconnect</button></form>}
-          </Surface>
+          {/*
+            Telegram is not here at all, and that is the point.
+
+            A channel is configured in Settings → Integrations, like WhatsApp,
+            Meta and X. Telegram had its own card on this page — the only
+            channel with a second home — and was correspondingly missing from
+            the screen that lists customer channels, so people looking in the
+            obvious place concluded it was unsupported.
+
+            What DOES belong on this page is how the bot behaves, not where it
+            connects: the master switch, the guided-flow toggle, and the
+            Messenger/Instagram DM toggle above are all bot behaviour.
+          */}
         </aside>
       </div>
     </div>

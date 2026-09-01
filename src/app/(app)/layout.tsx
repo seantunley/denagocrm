@@ -12,6 +12,7 @@ import { assertPathModuleEnabled } from "@/lib/modules/routeGuard";
 import { tenantEnforcing } from "@/lib/tenantEnforcement";
 import { currentTenantScope } from "@/lib/tenantScope";
 import AppShell from "@/components/AppShell";
+import AppContextMenu from "@/components/AppContextMenu";
 import OfflineProvider from "@/components/OfflineProvider";
 
 /**
@@ -99,6 +100,10 @@ export default async function AppLayout({
   return (
     <>
       {style && <style>{style}</style>}
+      {/* The app's right-click menu. Mounted once here rather than per page: it
+          listens on `document` and stands aside wherever RecordContextMenu, a
+          flow canvas or a text input has already claimed the click. */}
+      <AppContextMenu />
       {/* Resolved here, in the SERVER layout, for the same reason `brand` is:
           getSetting reads the tenant from the request scope, which a client
           component has no access to. */}

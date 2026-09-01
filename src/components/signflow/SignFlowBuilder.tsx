@@ -178,7 +178,19 @@ export default function SignFlowBuilder({ workflowId, name, initial, staff }: { 
           <ReactFlow nodes={rfNodes} edges={edges} nodeTypes={nodeTypes} onNodesChange={onNodesChange} onConnect={onConnect}
             onNodeClick={(_, n) => setSelectedId(n.id)} onPaneClick={() => setSelectedId(null)} fitView proOptions={{ hideAttribution: true }}>
             <Background color="#1e293b" gap={18} />
-            <Controls className="!border-slate-700 !bg-slate-800" />
+            {/* Same defect as the chatbot flow builder: React Flow styles
+                `.react-flow__controls-button` itself, so theming only the
+                wrapper leaves white buttons on a dark canvas. */}
+            <Controls
+              className={
+                "!border-slate-700 !bg-slate-800 " +
+                "[&_button]:!border-slate-700 " +
+                "[&_button]:!bg-slate-800 " +
+                "[&_button]:!text-slate-100 " +
+                "[&_button:hover]:!bg-slate-700 " +
+                "[&_button_svg]:!fill-current"
+              }
+            />
           </ReactFlow>
         </div>
         <div className="card max-h-80 w-full shrink-0 overflow-y-auto md:max-h-none md:w-72">

@@ -12,17 +12,18 @@ test("every flow workspace exposes the new draft/version/block/analytics tools",
   assert.match(layout, /Flow tools/);
   assert.match(layout, /Draft/);
   assert.match(layout, /Versions/);
-  assert.match(layout, /Reusable blocks/);
+  assert.match(layout, /Blocks/);
   assert.match(layout, /Analytics/);
   assert.match(layout, /\/bot-analytics\?flowId=/);
 });
 
-test("chatbot settings and AI preview are mutually discoverable", () => {
-  const layout = src("src/app/(app)/chatbot/layout.tsx");
-  assert.match(layout, /Chatbot tools/);
-  assert.match(layout, /Settings &amp; knowledge/);
-  assert.match(layout, /Test AI answers/);
-  assert.match(layout, /Flow library/);
+test("chatbot settings, knowledge and AI preview are mutually discoverable", () => {
+  const nav = src("src/components/ChatbotWorkspaceNav.tsx");
+  assert.match(nav, /href: "\/chatbot"/);
+  assert.match(nav, /href: "\/chatbot\/knowledge"/);
+  assert.match(nav, /href: "\/chatbot\/preview"/);
+  assert.match(nav, /href: "\/bot-builder"/);
+  assert.match(nav, /href: "\/bot-builder\/routes"/);
 });
 
 test("tool navigation is implemented as nested route layouts rather than duplicated page controls", () => {

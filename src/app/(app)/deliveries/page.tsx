@@ -65,6 +65,25 @@ export default async function DeliveriesPage() {
     include: { contact: true, lead: { include: { product: true } }, items: true, fees: true },
     orderBy: { updatedAt: "asc" },
   });
+  /**
+   * Which column a quote belongs in.
+   *
+   * DECLARED HERE, ABOVE ITS FIRST USE, AND THAT IS THE WHOLE POINT.
+   *
+   * It used to live further down, next to the other render helpers, while the
+   * checklist prefetch below called it. `const` is not hoisted — the binding
+   * exists but is in the temporal dead zone until its declaration runs — so
+   * `/deliveries` threw `ReferenceError: Cannot access 'colOf' before
+   * initialization` on EVERY request, and the page never rendered for anyone.
+   *
+   * It read as an intermittent fault only because the error page gives an opaque
+   * digest, so two attempts looked like two mysteries rather than one certainty.
+   * The prefetch was added with the guided delivery checklists (#562); the
+   * helper had always been below it, and nothing before that had reached up.
+   */
+  const colOf = (quote: (typeof quotes)[number]): Col =>
+    !quote.invoicedAt ? "invoice" : !quote.depositPaidAt ? "deposit" : !quote.deliveryScheduledFor ? "schedule" : "deliver";
+
   const checklistByQuote = new Map<string, {
     templates: Awaited<ReturnType<typeof templatesForHostRecord>>;
     runs: Awaited<ReturnType<typeof runsForHost>>;
@@ -116,9 +135,6 @@ export default async function DeliveriesPage() {
     delivered: { label: "Handed over", cls: "border-border bg-muted/40 text-muted-foreground" },
     sold: { label: "Handed over", cls: "border-border bg-muted/40 text-muted-foreground" },
   };
-
-  const colOf = (quote: (typeof quotes)[number]): Col =>
-    !quote.invoicedAt ? "invoice" : !quote.depositPaidAt ? "deposit" : !quote.deliveryScheduledFor ? "schedule" : "deliver";
 
   const count = (key: Col) => quotes.filter((quote) => colOf(quote) === key).length;
   const quoteTotal = (quote: (typeof quotes)[number]) =>

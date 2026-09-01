@@ -114,9 +114,32 @@ test("simulator mocks Journey enrolment and never invokes the Journey engine", (
   assert.doesNotMatch(simulator, /enrollEntityInJourney|enqueueJourneyRun|scheduleJourney/);
 });
 
-test("Flow never gains its own scheduler or wait node", () => {
+test("Flow never gains its own scheduler — and its Wait node cannot become one", () => {
+  /*
+   * THE RULE THIS GUARDS: Journeys are the only thing in the product that acts
+   * over time. This test used to enforce that by banning the STRING
+   * `type: "delay"` outright — a proxy for the rule, wider than the rule.
+   *
+   * The Wait node the flow engine now has does not violate the rule it was a
+   * proxy for, and the assertions below pin WHY, rather than pinning the proxy:
+   *
+   *   - No timers, no queues. `startDelay` writes a deadline into the session
+   *     vars and returns. Nothing runs when the deadline passes.
+   *   - Nothing is ever SENT because time passed. The flow resumes only when the
+   *     customer's next message arrives after the deadline — a quiet hold, not a
+   *     follow-up. Timed outreach still has exactly one home: Journeys.
+   *
+   * If a future change makes Wait self-resuming — a setTimeout, a cron row, an
+   * enqueue — these assertions are the tripwire, and the answer is still "that
+   * is a Journey".
+   */
   const flow = src("src/lib/flow.ts");
-  assert.doesNotMatch(flow, /type: "wait"|type: "delay"|setTimeout\(|scheduleJourney/);
+  assert.doesNotMatch(flow, /setTimeout\(|setInterval\(|scheduleJourney|enqueue/i, "the flow engine must not schedule anything");
+  assert.doesNotMatch(flow, /type: "wait"/, "a second wait-flavoured node type would need this argument made again");
+  // The hold parks the session and emits nothing; expiry is checked on the next
+  // inbound message, never by a timer.
+  assert.match(flow, /return \{ messages: \[\], session: \{ nodeId: node\.id, vars \}, handedOff: false \};/);
+  assert.match(flow, /Date\.now\(\) < until/, "expiry is evaluated at message time");
   const oneEngine = src("tests/oneAutomationEngine.test.ts");
   assert.match(oneEngine, /exactly one automation engine/i);
 });

@@ -1,8 +1,29 @@
 "use client";
 
 import { useEffect } from "react";
-import { unstable_catchError, type ErrorInfo } from "next/error";
+import { catchError, type ErrorInfo } from "next/error";
 import { AlertTriangle, RotateCcw } from "lucide-react";
+
+/**
+ * What can safely be said about a thrown value.
+ *
+ * Next 16.3 types `ErrorInfo.error` as `unknown` rather than `Error`, and that
+ * is honest: a `throw` can carry anything, and the previous signature let this
+ * file read `.message` off a string or a number without complaint. Narrowing
+ * here rather than casting means the report degrades to nulls instead of
+ * producing "undefined" strings when something unusual is thrown.
+ */
+function describe(error: unknown): { message: string | null; stack: string | null; digest: string | null } {
+  if (error instanceof Error) {
+    const digest = (error as Error & { digest?: unknown }).digest;
+    return {
+      message: error.message,
+      stack: error.stack?.slice(0, 4000) ?? null,
+      digest: typeof digest === "string" ? digest : null,
+    };
+  }
+  return { message: typeof error === "string" ? error : null, stack: null, digest: null };
+}
 
 /**
  * ONE BAD CARD COSTS EXACTLY ONE CARD — kept true once cards stream.
@@ -26,7 +47,7 @@ import { AlertTriangle, RotateCcw } from "lucide-react";
  *     boundary catches them like any other failure, so a card that redirects
  *     would render "could not be loaded" instead of redirecting. Next's own
  *     wrapper knows to let those through.
- *   - `unstable_retry()` re-fetches and re-renders the boundary's children. A
+ *   - `retry()` re-fetches and re-renders the boundary's children. A
  *     class component can only clear its own error state, which cannot recover a
  *     Server Component error — the card would fail again immediately.
  *   - The error state clears automatically on client navigation, so a card that
@@ -46,17 +67,18 @@ import { AlertTriangle, RotateCcw } from "lucide-react";
  * and leave no trace anywhere. It reports to the same endpoint the page-level
  * boundary uses.
  */
-function CardFallback({ title }: { title?: string }, { error, unstable_retry }: ErrorInfo) {
+function CardFallback({ title }: { title?: string }, { error, retry }: ErrorInfo) {
   useEffect(() => {
     // Same endpoint as app/(app)/error.tsx. A contained failure still has to be
     // findable: this is the only record that a card failed at all.
+    const { message, stack, digest } = describe(error);
     fetch("/api/client-error", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        digest: (error as { digest?: string })?.digest ?? null,
-        message: `dashboard card "${title ?? "untitled"}": ${error?.message ?? "unknown"}`,
-        stack: error?.stack?.slice(0, 4000) ?? null,
+        digest,
+        message: `dashboard card "${title ?? "untitled"}": ${message ?? "unknown"}`,
+        stack,
         path: typeof window === "undefined" ? null : window.location.pathname,
       }),
       keepalive: true,
@@ -79,7 +101,7 @@ function CardFallback({ title }: { title?: string }, { error, unstable_retry }: 
       <div className="mt-2 flex items-center gap-3">
         <button
           type="button"
-          onClick={() => unstable_retry()}
+          onClick={() => retry()}
           className="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"
         >
           <RotateCcw className="size-3.5" aria-hidden />
@@ -91,4 +113,4 @@ function CardFallback({ title }: { title?: string }, { error, unstable_retry }: 
   );
 }
 
-export const CardBoundary = unstable_catchError(CardFallback);
+export const CardBoundary = catchError(CardFallback);

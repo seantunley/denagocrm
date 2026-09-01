@@ -8,6 +8,7 @@ import { transcribeVoice } from "@/lib/transcribe";
 import { saveFile } from "@/lib/storage";
 import { runWhatsAppBot } from "@/lib/flowRun";
 import { withChannelTenantScope, validateInSystemScope } from "@/lib/tenantScopeEntry";
+import { reportUnmappedEndpoint } from "@/lib/channelRegistration";
 import { resolveChannelTenant } from "@/lib/channelTenant";
 import { logError } from "@/lib/errorLog";
 import { inboundRetryResponse, noteInboundRetry, noteLeasedInbound } from "@/lib/webhookRetry";
@@ -83,11 +84,17 @@ export async function POST(req: NextRequest) {
             await withInboundBotEvent(claim, async () => {
               const from: string = message.from;
               const profileName: string | null = contactsMeta.find((c: any) => c.wa_id === from)?.profile?.name ?? null;
+              const referral = message.referral ?? null;
+              const entryContext = referral ? {
+                referralRef: referral.source_url ? String(referral.source_url) : undefined,
+                adId: referral.source_id ? String(referral.source_id) : undefined,
+                source: referral.source_type ? String(referral.source_type) : undefined,
+              } : undefined;
 
               if (message.type === "text") {
                 const text = message.text?.body ?? "";
                 await recordInboundWhatsApp(from, profileName, text, String(message.id ?? ""));
-                await runWhatsAppBot(from, { text });
+                await runWhatsAppBot(from, { text }, { entryContext });
               } else if (message.type === "interactive") {
                 const btn = message.interactive?.button_reply;
                 const list = message.interactive?.list_reply;
@@ -95,7 +102,7 @@ export async function POST(req: NextRequest) {
                 const title: string = btn?.title ?? list?.title ?? "";
                 if (!id) return;
                 await recordInboundWhatsApp(from, profileName, `👆 ${title}`, String(message.id ?? ""));
-                await runWhatsAppBot(from, { text: title, choiceId: id });
+                await runWhatsAppBot(from, { text: title, choiceId: id }, { entryContext });
               } else if (message.type === "image" || message.type === "document" || message.type === "video") {
                 const media = message.image ?? message.document ?? message.video;
                 const caption: string = media?.caption ?? "";
@@ -119,7 +126,7 @@ export async function POST(req: NextRequest) {
                   }
                 }
                 await recordInboundWhatsApp(from, profileName, `📎 ${caption || "[file]"}`, String(message.id ?? ""));
-                await runWhatsAppBot(from, { text: caption, fileUrl });
+                await runWhatsAppBot(from, { text: caption, fileUrl }, { entryContext });
               } else if (message.type === "audio" || message.type === "voice") {
                 const mediaId: string | undefined = message.audio?.id ?? message.voice?.id;
                 if (!mediaId) return;
@@ -127,7 +134,7 @@ export async function POST(req: NextRequest) {
                 const transcript = media ? await transcribeVoice(media.buffer, media.contentType).catch(() => null) : null;
                 const logged = transcript ? `🎤 ${transcript}` : "🎤 [Voice note]";
                 await recordInboundWhatsApp(from, profileName, logged, String(message.id ?? ""));
-                await runWhatsAppBot(from, { text: transcript ?? "[The customer sent a voice note.]" }, { voiceNote: true });
+                await runWhatsAppBot(from, { text: transcript ?? "[The customer sent a voice note.]" }, { voiceNote: true, entryContext });
               }
             });
             await completeInboundBotEvent(claim);
@@ -139,7 +146,7 @@ export async function POST(req: NextRequest) {
             throw await noteInboundRetry("whatsapp-webhook", "failed", `whatsapp ${String(message.id ?? "")}`);
           }
         }
-      }, () => console.warn(`[tenant-channel] skipped WhatsApp inbound: unmapped phone_number_id ${phoneNumberId ?? "?"}`));
+      }, () => reportUnmappedEndpoint("whatsapp", phoneNumberId, value?.messages?.length ?? 0));
     }
   }
   } catch (error) {

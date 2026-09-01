@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { saveMySignature } from "@/app/actions/signing";
+import ModalPortal from "@/components/ui/modal-portal";
 
 /**
  * Capture (or replace) the signer's reusable signature.
@@ -91,6 +92,7 @@ export default function SignatureCapture({
       {error && <p className="mt-2 text-sm text-red-400">{error}</p>}
 
       {padOpen && (
+        <ModalPortal>
         <div
           className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4"
           onPointerDown={(e) => e.target === e.currentTarget && setPadOpen(false)}
@@ -151,6 +153,7 @@ export default function SignatureCapture({
             {error && <p className="mt-2 text-sm text-red-400">{error}</p>}
           </div>
         </div>
+        </ModalPortal>
       )}
     </div>
   );

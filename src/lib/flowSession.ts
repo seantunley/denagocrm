@@ -11,7 +11,8 @@ import { type TenantWriteTx } from "./tenantWrite";
 import { loadBotSession, upsertBotSessionTx, deleteBotSessionTx, botStillOwnsTx } from "./botSessionStore";
 import { recordBotFlowEventsTx, type BotFlowEventInput } from "./botFlowAnalytics";
 import { completeInboundBotEventTx, currentInboundBotClaim } from "./botInboundEvent";
-import { decideInboundAct, type BotOwnership } from "./botOwnership";
+import { decideInboundAct, HUMAN_RESPONSIBILITY_HOURS, type BotOwnership } from "./botOwnership";
+import type { FlowEntryContext } from "./flowRouting";
 
 export type SessionState = {
   nodeId: string | null;
@@ -111,6 +112,7 @@ export async function advanceFlow(
   makeCtx: (state: SessionState) => FlowCtx,
   seedVars?: Record<string, string>,
   persistMessages?: PersistFlowMessages,
+  entryContext?: FlowEntryContext,
 ): Promise<ChannelResult> {
   const existing = await loadState(channel, key);
   const builtins = flowRuntimeVars(channel);
@@ -132,7 +134,7 @@ export async function advanceFlow(
 
   if (input.text.trim()) state.msgs.push({ role: "user", content: input.text });
 
-  const snapshot = await resolveFlowSnapshot(channel, restart ? null : state.flowVersionId);
+  const snapshot = await resolveFlowSnapshot(channel, restart ? null : state.flowVersionId, { text: input.text, ...entryContext });
   state.flowVersionId = snapshot.versionId;
   const actions: ActionObservation[] = [];
   const ctx = makeCtx(state);
@@ -181,7 +183,7 @@ export async function advanceFlow(
     if (result.handedOff) {
       // The BOT handed off. A person has not taken this yet, so an explicit
       // "menu"/"restart" may still bring the customer back — but a greeting may not.
-      await upsertBotSessionTx(tx, tenantId, { channel, key, nodeId: null, vars: storedState(state, result.endedAt), status: "paused", ownership: "ai_handoff", expiresAt: new Date(Date.now() + 6 * 3600 * 1000) });
+      await upsertBotSessionTx(tx, tenantId, { channel, key, nodeId: null, vars: storedState(state, result.endedAt), status: "paused", ownership: "ai_handoff", expiresAt: new Date(Date.now() + HUMAN_RESPONSIBILITY_HOURS * 3600 * 1000) });
       return;
     }
 

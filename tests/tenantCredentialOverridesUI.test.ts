@@ -27,7 +27,19 @@ const EXPECTED_KEYS_BY_INTEGRATION: Record<string, string[]> = {
   x: ["X_CLIENT_ID", "X_CLIENT_SECRET", "X_WEBHOOK_SECRET", "X_ACCOUNT_ID", "X_USERNAME", "X_ACCESS_TOKEN", "X_REFRESH_TOKEN", "XAI_API_KEY", "XAI_MODEL", "XAI_DRAFTS_ENABLED"],
   whatsapp: ["WA_PHONE_NUMBER_ID", "WA_ACCESS_TOKEN"],
   meta: ["META_PAGE_ACCESS_TOKEN"],
-  telegram: ["TELEGRAM_BOT_TOKEN"],
+  // TELEGRAM IS DELIBERATELY ABSENT.
+  //
+  // Storing a bot token as an override put it in TenantIntegrationCredential,
+  // but an inbound Telegram update carries no id for OUR bot —
+  // `resolveTelegramTenant` identifies the workspace by matching the update's
+  // secret against TELEGRAM_WEBHOOK_SECRET rows in AppSetting. A token saved
+  // through this page had no secret to be found by and no registered webhook,
+  // so Telegram had nowhere to deliver: a stored credential and a channel that
+  // silently received nothing.
+  //
+  // Telegram is already per-tenant without it — `connectTelegram` writes the
+  // token AND the secret through `putSetting` (which scopes to the acting
+  // workspace) and then calls setWebhook. It lives in Settings → Integrations.
   smtp: ["SMTP_HOST", "SMTP_PORT", "SMTP_SECURE", "SMTP_USER", "SMTP_PASS", "SMTP_FROM"],
   imap: ["IMAP_HOST", "IMAP_PORT", "IMAP_SECURE", "IMAP_USER", "IMAP_PASS"],
   sms: ["BULKSMS_TOKEN_ID", "BULKSMS_TOKEN_SECRET"],

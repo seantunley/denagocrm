@@ -1,4 +1,4 @@
-import { resolveTenantCredential } from "./settings";
+import { getSetting } from "./settings";
 import { currentTenantScope } from "./tenantScope";
 import { saveFile } from "./storage";
 
@@ -6,8 +6,38 @@ const OUTBOUND_TIMEOUT_MS = 15_000;
 const INBOUND_FILE_MAX_BYTES = 20 * 1024 * 1024;
 const api = (token: string, method: string) => `https://api.telegram.org/bot${token}/${method}`;
 
+/**
+ * The acting workspace's bot token, from ITS OWN AppSetting row.
+ *
+ * ── WHY NOT resolveTenantCredential ─────────────────────────────────────────
+ *
+ * That helper is for the override mechanism, and it does this:
+ *
+ *     const override = await lookupOverride(tenantId, key);
+ *     if (override !== null) return override;
+ *     if (tenantId !== DEFAULT_TENANT_ID) return null;   // <-- here
+ *     return getSetting(key);
+ *
+ * A non-founding tenant with no override gets NULL and never reaches its own
+ * AppSetting row. But Telegram does not use overrides at all: `connectTelegram`
+ * writes the token AND the per-tenant webhook secret through `putSetting`,
+ * which scopes to the acting workspace, and `resolveTelegramTenant` identifies
+ * an inbound update by scanning those same per-tenant secret rows.
+ *
+ * So reading through the override helper meant tenant B could connect a bot,
+ * see the token stored, and have every send and the webhook registration itself
+ * report "not configured" — the whole channel dead for everyone except the
+ * founding tenant. `getSetting` reads the acting tenant's row, which is exactly
+ * where the connect flow put it, and makes the read side agree with the write
+ * side.
+ *
+ * Legacy override rows are therefore no longer consulted for Telegram. They are
+ * left in place rather than deleted — they are dead data now, and removing
+ * stored credentials belongs in a deliberate cleanup rather than a side effect
+ * of this change.
+ */
 async function token(): Promise<string | null> {
-  return resolveTenantCredential(currentTenantScope()?.tenantId ?? null, "TELEGRAM_BOT_TOKEN");
+  return getSetting("TELEGRAM_BOT_TOKEN");
 }
 
 export type TelegramSendResult = { ok: boolean; error?: string };

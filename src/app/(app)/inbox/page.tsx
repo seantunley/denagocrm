@@ -1,4 +1,4 @@
-import { ExternalLink, Inbox, MessageSquare, Star } from "lucide-react";
+import { ExternalLink, Inbox, Star } from "lucide-react";
 import { basePrisma } from "@/lib/db";
 import { activeTenantPredicate } from "@/lib/tenantPredicate";
 import { getActiveTenantId, requireUser } from "@/lib/auth";
@@ -7,7 +7,8 @@ import { accessibleInboxWhere, hasPermission } from "@/lib/permissions";
 import AutoRefresh from "@/components/AutoRefresh";
 import Tabs from "@/components/Tabs";
 import SocialThreadList from "@/components/SocialThreadList";
-import { buildInboxThreads } from "@/lib/inboxThreads";
+import BotHandoffQueue, { type HandoffQueueItem } from "@/components/BotHandoffQueue";
+import { buildInboxThreads, threadCollaborationKey } from "@/lib/inboxThreads";
 import { loadInboxComms } from "@/lib/inboxQuery";
 import { deliveryStateForMessages } from "@/lib/botOutbox";
 import { collaborationForThreads } from "@/lib/inboxCollaboration";
@@ -21,37 +22,12 @@ export const metadata = { title: "Social inbox — DenagoCRM" };
 
 export default async function InboxPage() {
   const user = await requireUser();
-  // The workspace this person is signed in to, resolved identically whether
-  // tenant enforcement is off, observing or on.
   const workspaceTenantId = (await getActiveTenantId()) ?? DEFAULT_TENANT_ID;
   const scopeWhere = await accessibleInboxWhere(user);
   const channelWhere = { type: { in: ["whatsapp", "messenger", "instagram", "x"] } };
   const [activeComms, archivedComms, reviews, placeId] = await Promise.all([
-    // Threads are chosen by their own recency, then their messages are loaded —
-    // so a busy conversation can no longer evict a quiet one from the queue.
     loadInboxComms({ ...channelWhere, ...scopeWhere }, { archived: false }),
     loadInboxComms({ ...channelWhere, ...scopeWhere }, { archived: true }),
-    // Reviews are tenant-owned. This read runs on the bypass client, so the
-    // predicate the RLS extension would have added has to be added by hand.
-    //
-    // `activeTenantPredicate` alone is NOT enough, and the reason is the mode
-    // this actually ships in. It returns `{}` while enforcement is dormant —
-    // correct as a general rule, because filtering on a tenant nobody told us
-    // about would hide legacy rows written before the column existed. But an
-    // unscoped read is not a migration mechanism: it means that for the whole
-    // dormant period — which is every day until enforcement is switched on —
-    // this page shows every workspace's reviews to every workspace.
-    //
-    // The migration beside this change backfills every tenantless review onto
-    // the founding tenant, so there are no legacy rows left for a filter to
-    // hide. That is what makes filtering safe here, and it is why the two must
-    // land together.
-    //
-    // So the tenant comes from the SESSION — the workspace this person is signed
-    // in to — which is resolved the same way in every enforcement mode.
-    // activeTenantPredicate is still spread last, so under enforcement the
-    // established scope wins and the scopeless-owner case still throws rather
-    // than quietly widening to every tenant.
     basePrisma.googleReview.findMany({
       where: { tenantId: workspaceTenantId, ...activeTenantPredicate("inbox Google reviews") },
       orderBy: { publishedAt: "desc" },
@@ -62,19 +38,11 @@ export default async function InboxPage() {
 
   const threadList = buildInboxThreads(activeComms);
   const archivedList = buildInboxThreads(archivedComms);
-
-  // What actually became of each outbound message. Without this the bubbles can
-  // only report the customer's side, so anything still queued or permanently
-  // rejected renders identically to a message that was delivered.
   const delivery = await deliveryStateForMessages(
     [...threadList, ...archivedList].flatMap((thread) =>
       thread.messages.filter((message) => message.direction === "outbound").map((message) => message.id),
     ),
   );
-
-  // Assignment and notes for the threads already resolved above — so the join
-  // inherits their scoping rather than asking about conversations of its own.
-  // Staff and the reply permission are loaded once for every thread's panel.
   const [collaboration, staff, canCollaborate] = await Promise.all([
     collaborationForThreads([...threadList, ...archivedList]),
     listActingTenantStaff(),
@@ -83,39 +51,64 @@ export default async function InboxPage() {
   const collabStaff = staff.map((person) => ({ id: person.id, name: person.name }));
   const unread = threadList.filter((thread) => thread.unread).length;
   const awaiting = threadList.filter((thread) => thread.awaiting).length;
+  const handoffThreads = threadList.filter((thread) => collaboration.get(thread.key)?.bot.mode === "handoff");
+  const humanThreads = threadList.filter((thread) => collaboration.get(thread.key)?.bot.mode === "human");
+  const handoffItems: HandoffQueueItem[] = handoffThreads.flatMap((thread) => {
+    const key = threadCollaborationKey(thread);
+    const collab = key ? collaboration.get(key) : undefined;
+    const handoff = collab?.bot.handoff;
+    if (!collab || !handoff) return [];
+    return [{
+      key: thread.key,
+      conversationId: collab.conversationId,
+      name: thread.name,
+      channel: thread.channel,
+      reason: handoff.reason,
+      summary: handoff.summary,
+      intent: handoff.intent,
+      confidence: handoff.confidence,
+      requestedAt: handoff.requestedAt.toISOString(),
+      dueAt: handoff.dueAt.toISOString(),
+      overdue: handoff.overdue,
+      assigneeId: collab.assignee?.id ?? null,
+      assigneeName: collab.assignee?.name ?? null,
+    }];
+  });
+  const overdueHandoffs = handoffItems.filter((item) => item.overdue).length;
   const channelCount = (channel: string) => threadList.filter((thread) => thread.channel === channel).length;
+
+  const handoffsPanel = (
+    <div className="space-y-4">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Surface className="p-4"><p className="text-[10px] uppercase tracking-wide text-muted-foreground">Waiting</p><p className="mt-1 text-2xl font-semibold text-amber-300">{handoffItems.length}</p><p className="mt-1 text-[11px] text-muted-foreground">Bot asked for a person</p></Surface>
+        <Surface className="p-4"><p className="text-[10px] uppercase tracking-wide text-muted-foreground">SLA overdue</p><p className={`mt-1 text-2xl font-semibold ${overdueHandoffs ? "text-red-300" : "text-emerald-300"}`}>{overdueHandoffs}</p><p className="mt-1 text-[11px] text-muted-foreground">Past the handoff target</p></Surface>
+        <Surface className="p-4"><p className="text-[10px] uppercase tracking-wide text-muted-foreground">Human handling</p><p className="mt-1 text-2xl font-semibold text-sky-300">{humanThreads.length}</p><p className="mt-1 text-[11px] text-muted-foreground">Automation currently paused</p></Surface>
+      </div>
+      <div>
+        <div className="mb-3"><h2 className="text-sm font-semibold">Waiting for takeover</h2><p className="mt-1 text-xs text-muted-foreground">Reason, wait time, channel and assignment are visible without opening the conversation.</p></div>
+        <BotHandoffQueue items={handoffItems} staff={collabStaff} canAct={canCollaborate} />
+      </div>
+      {humanThreads.length ? <div><div className="mb-3"><h2 className="text-sm font-semibold">Human handling</h2><p className="mt-1 text-xs text-muted-foreground">These conversations are already claimed or manually paused; open one to return it to the bot when resolved.</p></div><SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={humanThreads} empty="No conversations are currently human-controlled." /></div> : null}
+    </div>
+  );
 
   const reviewsPanel = (
     <Surface className="max-w-4xl p-5">
       <SectionHeading title="Latest Google reviews" description="Recent public feedback from your connected Google Business profile." />
       {reviews.length === 0 ? (
-        <EmptyState
-          icon={Star}
-          title="No reviews yet"
-          description={placeId
-            ? "New reviews appear here within six hours and trigger a push notification."
-            : "Connect your Places API key and Place ID in Settings → Integrations to pull reviews in."}
-          className="mt-4 py-8"
-        />
+        <EmptyState icon={Star} title="No reviews yet" description={placeId ? "New reviews appear here within six hours and trigger a push notification." : "Connect your Places API key and Place ID in Settings → Integrations to pull reviews in."} className="mt-4 py-8" />
       ) : (
         <ul className="mt-4 grid gap-3 sm:grid-cols-2">
           {reviews.map((review) => (
             <li key={review.id} className="rounded-xl border border-border/70 bg-muted/[0.16] p-4">
-              <div className="flex items-center justify-between gap-3">
-                <p className="truncate text-sm font-semibold">{review.author}</p>
-                <span className="shrink-0 text-xs font-medium text-amber-300">{review.rating}/5 ★</span>
-              </div>
+              <div className="flex items-center justify-between gap-3"><p className="truncate text-sm font-semibold">{review.author}</p><span className="shrink-0 text-xs font-medium text-amber-300">{review.rating}/5 ★</span></div>
               {review.text ? <p className="mt-2 line-clamp-4 text-xs leading-5 text-muted-foreground">{review.text}</p> : <p className="mt-2 text-xs italic text-muted-foreground">Rating only</p>}
               <p className="mt-3 text-[10px] text-muted-foreground/70">{formatDateTime(review.publishedAt)}</p>
             </li>
           ))}
         </ul>
       )}
-      {placeId ? (
-        <a href={`https://search.google.com/local/reviews?placeid=${encodeURIComponent(placeId)}`} target="_blank" className="btn-secondary btn-sm mt-4 inline-flex">
-          Reply on Google <ExternalLink className="size-3.5" />
-        </a>
-      ) : null}
+      {placeId ? <a href={`https://search.google.com/local/reviews?placeid=${encodeURIComponent(placeId)}`} target="_blank" className="btn-secondary btn-sm mt-4 inline-flex">Reply on Google <ExternalLink className="size-3.5" /></a> : null}
     </Surface>
   );
 
@@ -131,9 +124,9 @@ export default async function InboxPage() {
           { label: "Active threads", value: threadList.length, detail: "Across connected channels" },
           { label: "Unread", value: unread, detail: unread ? "Needs attention" : "You're caught up", tone: unread ? "warning" : "success" },
           { label: "Reply due", value: awaiting, detail: "Customer sent the latest message", tone: awaiting ? "primary" : "default" },
-          { label: "Archived", value: archivedList.length, detail: "Finished or hidden threads" },
+          { label: "Bot handoffs", value: handoffItems.length, detail: overdueHandoffs ? `${overdueHandoffs} overdue` : "Within SLA", tone: overdueHandoffs ? "warning" : handoffItems.length ? "primary" : "success" },
         ]}
-        actions={<a href="/messages" target="_blank" className="btn-primary btn-sm"><MessageSquare className="size-4" /> Open Messages app <ExternalLink className="size-3.5" /></a>}
+        actions={<a href="/messages" target="_blank" rel="noreferrer" className="btn-primary btn-sm">Open Messages app <ExternalLink className="size-4" /></a>}
       />
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -153,7 +146,9 @@ export default async function InboxPage() {
       </div>
 
       <Tabs
+        initialKey="all"
         tabs={[
+          { key: "handoffs", label: "Bot handoffs", count: handoffThreads.length, content: handoffsPanel },
           { key: "all", label: "All", count: unread, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList} empty="No conversations yet. Messages appear here as soon as a connected customer channel receives one." /> },
           { key: "whatsapp", label: "WhatsApp", count: threadList.filter((thread) => thread.channel === "whatsapp" && thread.unread).length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "whatsapp")} empty="No WhatsApp conversations yet. Connect the WhatsApp Business number in Settings → Integrations." /> },
           { key: "messenger", label: "Messenger", count: threadList.filter((thread) => thread.channel === "messenger" && thread.unread).length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "messenger")} empty="No Messenger conversations yet." /> },
