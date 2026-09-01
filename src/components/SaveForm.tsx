@@ -8,6 +8,8 @@ import { useCloseModal } from "@/components/Modal";
 import { ACTION_NOT_DELIVERED } from "@/components/actionError";
 import { cn } from "@/lib/utils";
 import type { ActionResult } from "@/lib/actionResultTypes";
+import type { OfflineDescriptor } from "@/lib/offlineTypes";
+import { useOptionalOffline } from "@/components/OfflineProvider";
 
 /**
  * A form that TELLS YOU WHAT HAPPENED.
@@ -85,6 +87,7 @@ export function SaveForm({
   onSaved,
   resetOnSuccess = true,
   closeModalOnSuccess = true,
+  offlineOperation,
   ...rest
 }: {
   /** Server action. Returns `{ error }` for an expected refusal; throws only on a bug. */
@@ -108,10 +111,13 @@ export function SaveForm({
   resetOnSuccess?: boolean;
   /** Close the enclosing modal after a successful save. No-op outside a modal. */
   closeModalOnSuccess?: boolean;
+  /** Explicitly allow this form to be stored in the tenant/user offline outbox. */
+  offlineOperation?: OfflineDescriptor;
 } & Omit<React.FormHTMLAttributes<HTMLFormElement>, "action" | "onSubmit">) {
   const [pending, setPending] = useState(false);
   const closeModal = useCloseModal();
   const router = useRouter();
+  const offline = useOptionalOffline();
 
   return (
     <form
@@ -126,6 +132,17 @@ export function SaveForm({
         const formData = new FormData(form);
         setPending(true);
         try {
+          if (offline && !offline.online) {
+            if (!offlineOperation) {
+              toast.error("This operation requires an internet connection.");
+              return;
+            }
+            await offline.queue(offlineOperation, formData);
+            if (resetOnSuccess) form.reset();
+            if (closeModalOnSuccess) closeModal();
+            onSaved?.();
+            return;
+          }
           const result = await action(formData);
           if (result && typeof result === "object" && "error" in result && result.error) {
             toast.error(String(result.error));

@@ -1,18 +1,151 @@
-/* Denago CRM service worker — push notifications + installability (rev 5) */
+/* Denago CRM service worker — push, installability and secure offline shell (rev 5) */
+
+const OFFLINE_CACHE = "denago-offline-v1";
+const OFFLINE_ASSETS = ["/offline.html", "/icons/icon-192.png", "/icons/icon-512.png"];
+
+/*
+ * THE CACHED SHELL NAMES A USER, SO IT CANNOT OUTLIVE THEM.
+ *
+ * The /offline response is server-rendered for whoever fetched it and carries
+ * their tenantId and userId in the markup. OfflineProvider reads those to pick
+ * an IndexedDB partition — so a shell cached for one user, served later to
+ * another, points the app straight at the first user's cached CRM records. On a
+ * shared device that is a cross-user disclosure, and the sign-out path cannot
+ * prevent it: a session that simply EXPIRES never runs it.
+ *
+ * The shell is therefore stamped with its owner, and the app announces the
+ * signed-in identity from every authenticated page it renders. A mismatch means
+ * the device has changed hands: the shell is dropped, and re-warmed for the new
+ * owner while the network is still there, so switching users does not silently
+ * cost them offline mode.
+ *
+ * RESIDUAL, AND INHERENT: within the 72-hour data lifetime, someone holding an
+ * unlocked device on which a user was signed in can read that user's cached
+ * records offline, because offline there is no session to check. Bounding it
+ * further needs at-rest encryption behind a device secret, which is a larger
+ * change than this feature.
+ */
+const SHELL_KEY = "/offline";
+const SHELL_OWNER_KEY = "/__offline-shell-owner";
+
+async function cachedShellOwner(cache) {
+  const stamped = await cache.match(SHELL_OWNER_KEY);
+  return stamped ? stamped.text() : null;
+}
+
+async function claimShell(owner) {
+  const cache = await caches.open(OFFLINE_CACHE);
+  if ((await cachedShellOwner(cache)) === owner) return;
+  await cache.delete(SHELL_KEY);
+  await cache.put(SHELL_OWNER_KEY, new Response(owner));
+  // Re-warm for the new owner. This runs from a page that has just rendered, so
+  // the network is there; if it is not, /offline.html remains the fallback.
+  try {
+    const fresh = await fetch(SHELL_KEY, { credentials: "include" });
+    // THE SAME CHECK AS THE NAVIGATION PATH, and for the same reason: if the
+    // session expired while this ran, /offline redirects to /login and fetch
+    // FOLLOWS it, so `ok` is true and the body is a sign-in form. Storing that
+    // as the authenticated shell is the failure this whole re-warm exists to
+    // avoid.
+    const freshPath = (() => {
+      try {
+        return new URL(fresh.url || SHELL_KEY, self.location.origin).pathname;
+      } catch {
+        return null;
+      }
+    })();
+    if (fresh.ok && !fresh.redirected && freshPath === SHELL_KEY) {
+      await cache.put(SHELL_KEY, fresh);
+    }
+  } catch {
+    /* offline — leave it uncached rather than storing an error page */
+  }
+}
+
+async function forgetShell() {
+  const cache = await caches.open(OFFLINE_CACHE);
+  await Promise.all([cache.delete(SHELL_KEY), cache.delete(SHELL_OWNER_KEY)]);
+}
+
+self.addEventListener("message", (event) => {
+  const data = event.data;
+  if (!data || typeof data !== "object") return;
+  if (data.type === "offline-shell-owner" && typeof data.owner === "string" && data.owner) {
+    event.waitUntil(claimShell(data.owner));
+  } else if (data.type === "offline-shell-forget") {
+    event.waitUntil(forgetShell());
+  }
+});
 
 // Take over as soon as a new worker is deployed, instead of waiting for every
 // tab to close — otherwise notification icon/badge changes never reach an
 // installed PWA that's always open.
-self.addEventListener("install", () => self.skipWaiting());
-self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
+self.addEventListener("install", (event) => {
+  event.waitUntil(caches.open(OFFLINE_CACHE).then((cache) => cache.addAll(OFFLINE_ASSETS)).then(() => self.skipWaiting()));
+});
+self.addEventListener("activate", (event) => {
+  event.waitUntil(
+    caches.keys()
+      .then((keys) => Promise.all(keys.filter((key) => key.startsWith("denago-offline-") && key !== OFFLINE_CACHE).map((key) => caches.delete(key))))
+      .then(() => self.clients.claim())
+  );
+});
 
-// Chrome only fires beforeinstallprompt (and considers the app installable) when
-// a service worker with a fetch handler is present. This is a deliberate no-op
-// pass-through: we do NOT call event.respondWith, so every request is handled by
-// the browser exactly as if no worker existed — no caching, no offline, no change
-// to network behaviour. Its mere presence is what unlocks installability.
-self.addEventListener("fetch", () => {
-  /* pass-through: let the browser handle the request normally */
+// Dynamic CRM pages remain network-only. The one authenticated offline workspace
+// shell may be cached after a successful visit; its customer records are never in
+// CacheStorage — they live in the tenant/user-partitioned IndexedDB store.
+self.addEventListener("fetch", (event) => {
+  if (event.request.method !== "GET") return;
+  const url = new URL(event.request.url);
+  if (url.origin !== self.location.origin) return;
+  if (url.pathname.startsWith("/_next/static/") || url.pathname.startsWith("/icons/")) {
+    event.respondWith(
+      caches.match(event.request).then((cached) => cached || fetch(event.request).then((response) => {
+        if (response.ok) {
+          const copy = response.clone();
+          event.waitUntil(caches.open(OFFLINE_CACHE).then((cache) => cache.put(event.request, copy)));
+        }
+        return response;
+      }))
+    );
+    return;
+  }
+  if (event.request.mode !== "navigate") return;
+  if (url.pathname === "/offline") {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          /*
+           * A 200 IS NOT PROOF THIS IS THE SHELL.
+           *
+           * When the session has expired, /offline redirects to /login and fetch
+           * FOLLOWS it — so `response.ok` is true and the body is the login
+           * page. Caching that overwrote the authenticated shell with a sign-in
+           * form, and the next time the device lost connectivity the fallback
+           * served it: no workspace, no queued work reachable, and no way to
+           * sign in either, because signing in needs the network.
+           *
+           * `redirected` catches the followed hop and the pathname check catches
+           * a rewrite that did not set it.
+           */
+          const finalPath = (() => {
+            try {
+              return new URL(response.url || event.request.url).pathname;
+            } catch {
+              return null;
+            }
+          })();
+          if (response.ok && !response.redirected && finalPath === SHELL_KEY) {
+            const copy = response.clone();
+            event.waitUntil(caches.open(OFFLINE_CACHE).then((cache) => cache.put(SHELL_KEY, copy)));
+          }
+          return response;
+        })
+        .catch(async () => (await caches.match(SHELL_KEY)) || (await caches.match("/offline.html")))
+    );
+    return;
+  }
+  event.respondWith(fetch(event.request).catch(() => caches.match("/offline.html")));
 });
 
 /**

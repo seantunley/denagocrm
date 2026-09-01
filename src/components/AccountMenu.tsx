@@ -15,6 +15,9 @@ import {
 import { logout } from "@/app/login/actions";
 import { APP_VERSION } from "@/lib/version";
 import { cn } from "@/lib/utils";
+import { purgeOfflineData } from "@/lib/offlineClient";
+import { useOptionalOffline } from "@/components/OfflineProvider";
+import { toast } from "sonner";
 import { clearChecklistDeviceData, offlinePendingCount } from "@/lib/checklists/deviceStore";
 import {
   Dialog,
@@ -61,19 +64,63 @@ export default function AccountMenu({
   tenantId: string;
   compact?: boolean;
 }) {
+  const offline = useOptionalOffline();
   const [discardCount, setDiscardCount] = useState(0);
   const [discardOpen, setDiscardOpen] = useState(false);
 
+  /*
+   * TWO OFFLINE STORES, ONE SIGN-OUT.
+   *
+   * Guided checklists keep captured work in their own device store; the field
+   * outbox keeps queued mutations and photos in another. Sign-out purges BOTH
+   * before ending the session -- the next person on this device must not
+   * inherit the last one's records -- so everything rests on there being
+   * nothing left worth keeping, in either of them.
+   *
+   * BEING ONLINE IS NOT THAT ASSURANCE. A full outbox on a connected device is
+   * the ordinary state moments after coming back into signal, and failed or
+   * conflicted entries sit there indefinitely BY DESIGN waiting to be read.
+   *
+   * So: offline is refused outright, because `logout()` is a Server Action and
+   * would fail AFTER the purge, leaving the work gone and the session signed
+   * in. Online with work still queued asks, rather than deciding -- discarding
+   * a day of captured photos is the person's call to make explicitly.
+   */
   async function signOutSafely() {
-    const pending = await offlinePendingCount({ tenantId, userId: user.id });
+    const outbox = offline?.pending ?? 0;
+    const checklists = await offlinePendingCount({ tenantId, userId: user.id }).catch(() => 0);
+    const pending = outbox + checklists;
+
+    if (!navigator.onLine) {
+      toast.error(
+        pending > 0
+          ? `You are offline with ${pending} unsynchronised change${pending === 1 ? "" : "s"}. Reconnect and let them sync before signing out.`
+          : "You are offline. Reconnect before signing out.",
+      );
+      return;
+    }
     if (pending > 0) {
       setDiscardCount(pending);
       setDiscardOpen(true);
       return;
     }
-    await clearChecklistDeviceData();
+    await purgeEverything();
     await logout();
   }
+
+  /** Both stores and the cached shell, or the next user inherits one of them. */
+  async function purgeEverything() {
+    await clearChecklistDeviceData().catch(() => undefined);
+    await purgeOfflineData();
+    if ("caches" in window) {
+      const cache = await caches.open("denago-offline-v1");
+      // The owner stamp goes with the shell. Leaving it behind would make the
+      // worker believe the next arrival of this same user needs no
+      // invalidation, when there is no longer a shell it can vouch for.
+      await Promise.all([cache.delete("/offline"), cache.delete("/__offline-shell-owner")]);
+    }
+  }
+
   const avatar = (
     <Avatar className={cn("rounded-md", compact ? "size-7" : "size-7")}>
       {user.avatarVersion ? (
@@ -192,7 +239,10 @@ export default function AccountMenu({
           <button
             type="button"
             className="btn-danger"
-            onClick={() => void clearChecklistDeviceData().then(() => logout())}
+            // BOTH stores, not just the checklists — the dialog was written when
+            // theirs was the only one on the device. Discarding half of what it
+            // offered to discard would leave the outbox for the next user.
+            onClick={() => void purgeEverything().then(() => logout())}
           >
             Discard and sign out
           </button>

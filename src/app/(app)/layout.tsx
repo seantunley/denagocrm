@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { requireUser, getActiveTenantId } from "@/lib/auth";
+import { getActiveTenantId, requireUser } from "@/lib/auth";
 import { brandForTenant, brandLogoUrl, brandStyle, DEFAULT_BRAND } from "@/lib/tenantBrand";
 import { getSetting } from "@/lib/settings";
 import { WEATHER_CITIES_KEY, parseWeatherCities } from "@/lib/weatherCities";
@@ -12,6 +12,32 @@ import { tenantEnforcing } from "@/lib/tenantEnforcement";
 import { currentTenantScope } from "@/lib/tenantScope";
 import AppShell from "@/components/AppShell";
 import AppContextMenu from "@/components/AppContextMenu";
+import OfflineProvider from "@/components/OfflineProvider";
+
+/**
+ * The offline outbox, when there is a workspace to key it by.
+ *
+ * Written as a component rather than inlined so the children are built ONCE.
+ * Duplicating the whole <AppShell> tree across both arms of a ternary is how the
+ * two copies drift, and one of them is only ever rendered by the sessions
+ * nobody tests with.
+ */
+function MaybeOffline({
+  tenantId,
+  userId,
+  children,
+}: {
+  tenantId: string | null;
+  userId: string;
+  children: React.ReactNode;
+}) {
+  if (!tenantId) return <>{children}</>;
+  return (
+    <OfflineProvider tenantId={tenantId} userId={userId}>
+      {children}
+    </OfflineProvider>
+  );
+}
 
 export default async function AppLayout({
   children,
@@ -80,24 +106,35 @@ export default async function AppLayout({
       {/* Resolved here, in the SERVER layout, for the same reason `brand` is:
           getSetting reads the tenant from the request scope, which a client
           component has no access to. */}
-      <AppShell
-        user={{
-          id: user.id,
-          name: user.name,
-          role: user.role,
-          permissions,
-          avatarVersion: user.avatarRef ? user.avatarUpdatedAt?.toISOString() ?? "current" : null,
-        }}
-        inboxWaiting={inboxWaiting}
-        casesWaiting={casesWaiting}
-        enabledModules={enabledModules ? [...enabledModules] : undefined}
-        brand={{ logoUrl: brandLogoUrl(brand), displayName: brand.displayName }}
-        weatherCities={weatherCities}
-        tenantId={activeTenantId ?? ""}
-      >
-        {children}
-        {modal}
-      </AppShell>
+      {/*
+        The shell renders either way. Without a resolvable tenant there is no
+        partition to store offline work in, so the provider is omitted rather
+        than handed an empty key that would collide with every other tenantless
+        session on the device.
+      */}
+      <MaybeOffline tenantId={activeTenantId} userId={user.id}>
+        <AppShell
+          user={{
+            id: user.id,
+            name: user.name,
+            role: user.role,
+            permissions,
+            avatarVersion: user.avatarRef ? user.avatarUpdatedAt?.toISOString() ?? "current" : null,
+          }}
+          inboxWaiting={inboxWaiting}
+          casesWaiting={casesWaiting}
+          enabledModules={enabledModules ? [...enabledModules] : undefined}
+          brand={{ logoUrl: brandLogoUrl(brand), displayName: brand.displayName }}
+          weatherCities={weatherCities}
+          // AppShell needs a tenant for the checklist device store; the offline
+          // outbox needs one for its partition. Same value, and the empty string
+          // is what the tenantless dormant session already gets elsewhere.
+          tenantId={activeTenantId ?? ""}
+        >
+          {children}
+          {modal}
+        </AppShell>
+      </MaybeOffline>
     </>
   );
 }
