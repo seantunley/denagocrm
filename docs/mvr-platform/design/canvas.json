@@ -1,10 +1,10 @@
 {
   "artboards": [
     { "file": "Main.dc.html",     "title": "Cover",        "x": 0,    "y": 0, "w": 390, "h": 844 },
-    { "file": "Contents.dc.html", "title": "Contents",     "x": 520,  "y": 0, "w": 390, "h": 920 },
-    { "file": "Brief.dc.html",    "title": "The brief",    "x": 1040, "y": 0, "w": 390, "h": 1620 },
-    { "file": "Proposal.dc.html", "title": "The proposal", "x": 1560, "y": 0, "w": 390, "h": 1700 },
-    { "file": "Signing.dc.html",  "title": "Signing",      "x": 2080, "y": 0, "w": 390, "h": 880 }
+    { "file": "Contents.dc.html", "title": "Contents",     "x": 520,  "y": 0, "w": 390, "h": 800 },
+    { "file": "Brief.dc.html",    "title": "The brief",    "x": 1040, "y": 0, "w": 390, "h": 1300 },
+    { "file": "Proposal.dc.html", "title": "The proposal", "x": 1560, "y": 0, "w": 390, "h": 1240 },
+    { "file": "Signing.dc.html",  "title": "Signing",      "x": 2080, "y": 0, "w": 390, "h": 844 }
   ],
   "launch": { "view": "canvas" }
 }
