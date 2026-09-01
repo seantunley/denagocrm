@@ -108,7 +108,10 @@ test("THE CHALLENGE COOKIE IS NOT SIGNED WITH THE SESSION KEY ITSELF", () => {
    * from the payload shape, so it expires the day somebody adds a claim.
    */
   const code = stripComments(src(WEBAUTHN));
-  assert.match(code, /hkdfSync/, "the signing key must be derived, not reused");
+  // `crypto.hkdfSync(` rather than a bare `hkdfSync`: the loose form is
+  // satisfied by any identifier CONTAINING it, which a mutation run proved by
+  // renaming the call to `NOThkdfSync` and leaving this test green.
+  assert.match(code, /crypto\.hkdfSync\(/, "the signing key must be derived, not reused");
   assert.match(code, /denago:webauthn-challenge:v1/, "…with a purpose-specific info string");
   // The raw secret must never be the key material handed to sign()/jwtVerify().
   assert.doesNotMatch(
@@ -165,8 +168,16 @@ test("A DISABLED ACCOUNT IS REFUSED CLEANLY, AND STILL REFUSED", () => {
    * not a way in. The important half of this test is the second assertion:
    * catching the throw must not become "handle it by continuing".
    */
+  /*
+   * ANCHORED ON THE CALL, NOT THE NAME. The first occurrence of
+   * "createSessionCookie" in this file is the IMPORT, so slicing from it left
+   * `after` holding almost the whole route — including the unrelated
+   * `req.json().catch` and the verification try/catch — and the assertions below
+   * passed against those. Mutation testing caught it: deleting the try/catch
+   * outright still left this test green. `await ` pins it to the invocation.
+   */
   const code = stripComments(src(AUTH_VERIFY));
-  const call = code.indexOf("createSessionCookie");
+  const call = code.indexOf("await createSessionCookie(");
   assert.ok(call > 0, "the route must still mint the session through createSessionCookie");
   const after = code.slice(call);
   assert.match(after, /catch/, "the disabled-user throw must be caught");
