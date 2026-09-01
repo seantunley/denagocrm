@@ -6,12 +6,16 @@ import {
   SESSION_COOKIE,
   sessionCookieOptions,
 } from "@/lib/session";
-import { buildCsp, buildCspReportOnly, newCspNonce } from "@/lib/csp";
+import { buildCsp, buildCspReportOnly, newCspNonce, CSP_REPORT_PATH } from "@/lib/csp";
 
 // /api/cron authenticates itself with the intake API key
 const PUBLIC_PATHS = [
   "/login",
   "/api/auth/passkey/auth", // passkey (WebAuthn) login options + verify — pre-session
+  // CSP violation reports. Necessarily unauthenticated: a browser posts them
+  // with no credentials, and the violations worth seeing most happen on /login
+  // where there is no session yet. Bounded hard at the route — see its header.
+  "/api/csp-report",
   "/api/webhooks",
   "/api/intake",
   "/api/cron",
@@ -90,6 +94,10 @@ function allow(req: NextRequest, csp: Csp): NextResponse {
   // The resource directives ride along as report-only until a preview deploy
   // has exercised the weather widget, address autocomplete and library upload.
   res.headers.set("Content-Security-Policy-Report-Only", csp.reportOnly);
+  // Names the group the policies' `report-to csp-endpoint` directive refers to.
+  // `report-uri` needs nothing extra; `report-to` is inert without this header,
+  // so a browser that has dropped the legacy directive would report nowhere.
+  res.headers.set("Reporting-Endpoints", `csp-endpoint="${CSP_REPORT_PATH}"`);
   return res;
 }
 

@@ -87,7 +87,15 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
         <details className="card">
           <summary className="font-semibold cursor-pointer text-sm">Preview email</summary>
           <div className="mt-3 rounded-lg overflow-hidden border border-border bg-white">
-            <iframe title="Email preview" srcDoc={campaign.htmlBody} className="w-full h-[480px]" />
+            {/* `sandbox` is load-bearing, not decoration. A srcDoc iframe with
+                no sandbox runs IN THIS ORIGIN, and campaign HTML is stored
+                exactly as its author typed it — there is no sanitiser between
+                the compose box and here. The CSP blocks un-nonced inline script
+                today, but that makes one header the only thing standing between
+                a marketing-level author and script executing as whoever opens
+                this page, which may be an owner. An empty sandbox is a second,
+                independent control: no scripts, no forms, no same-origin. */}
+            <iframe title="Email preview" sandbox="" srcDoc={campaign.htmlBody} className="w-full h-[480px]" />
           </div>
         </details>
       )}

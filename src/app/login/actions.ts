@@ -24,6 +24,28 @@ import {
   rateLimitKey,
   registerRateLimitAttempt,
 } from "@/lib/rateLimit";
+
+/**
+ * A real bcrypt hash, at the same cost factor as a real password (12), of a
+ * random value nobody holds — so no submitted password can ever match it.
+ *
+ * Its only job is to make the sign-in path spend identical work whether or not
+ * the email exists. See the comparison in `signIn` for why that matters.
+ * Hardcoded rather than generated at boot: a fresh hash per process costs ~100ms
+ * of cold start, and there is nothing secret about a hash of a value that was
+ * discarded the moment it was printed.
+ */
+const TIMING_DECOY_HASH = "$2b$12$sOeVwx/GKaLIJ4GYSEES7eWTdhS7Lmf0C/kB7jE/A7Gm.9ea5YVbe";
+
+/**
+ * A user id that cannot exist, so the failed-login `UPDATE` can run on the path
+ * where there is no user and match nothing.
+ *
+ * Ids in this schema are cuids; a bare zero string is not one and never
+ * collides. See the failure branch in `signIn` for why the statement runs at
+ * all when there is nobody to record against.
+ */
+const NO_SUCH_USER_ID = "0";
 import {
   bumpUserSessionVersion,
   getUserSecurityState,
@@ -96,14 +118,67 @@ export async function login(
   }
 
   const user = await basePrisma.user.findUnique({ where: { email } });
-  const security = user ? await getUserSecurityState(user.id) : null;
-  const passwordOk = Boolean(user && security && !security.disabledAt && await bcrypt.compare(password, user.passwordHash));
+  /*
+   * THE SECURITY READ IS UNCONDITIONAL, for the same reason the hash comparison
+   * below is.
+   *
+   * This was `user ? await getUserSecurityState(user.id) : null`, so a known
+   * email cost a database round trip that an unknown email did not. With
+   * bcrypt's ~100ms difference removed (below), that residue became the
+   * measurable signal instead — smaller, but the same class of leak, and enough
+   * to keep the claim of "identical work" false.
+   *
+   * Passing a sentinel id keeps the query, its plan and its round trip on both
+   * paths; it simply matches no row and returns null, which the check below
+   * already treats as "cannot sign in".
+   *
+   * (The wasted read is real — these four columns live on the "User" row the
+   * `findUnique` above already fetched — but they are not on the Prisma model,
+   * so removing it means modelling them first. That is a refactor, not a
+   * security fix, and it would change this file's behaviour for the OTP paths
+   * too. Symmetry is what the timing needs; the extra read is a cost both
+   * branches now pay equally.)
+   */
+  const security = await getUserSecurityState(user?.id ?? NO_SUCH_USER_ID);
+  /*
+   * THE COMPARISON ALWAYS RUNS, even when there is no such user.
+   *
+   * `user && … && await bcrypt.compare(…)` short-circuits, so an unknown email
+   * skipped bcrypt entirely and answered in a fraction of the time a known one
+   * took — bcrypt at cost 12 is deliberately ~100ms. That is a user-enumeration
+   * oracle measurable over the network, and it defeated the point of the
+   * uniform "Invalid email or password." message below: the wording said
+   * nothing, the timing said which.
+   *
+   * Hashing the supplied password against a fixed decoy costs the same work and
+   * discards the result. The decoy is a real cost-12 hash of a value nobody can
+   * present, so it cannot be matched — `bcrypt.compare` returning false here is
+   * the only outcome, and it returns it in the same time a genuine mismatch
+   * would take.
+   */
+  const passwordMatches = await bcrypt.compare(password, user?.passwordHash ?? TIMING_DECOY_HASH);
+  const passwordOk = Boolean(user && security && !security.disabledAt && passwordMatches);
 
   if (!user || !passwordOk) {
+    /*
+     * THE FAILURE ACCOUNTING RUNS FOR BOTH, and that is the point.
+     *
+     * `user ? recordFailedLogin(user.id) : Promise.resolve()` performed an
+     * `UPDATE` for a known email and nothing at all for an unknown one — a
+     * second, smaller timing signal underneath the bcrypt one, and the reason
+     * "identical work" was not yet true after the decoy hash was added.
+     *
+     * Passing a sentinel id keeps the statement, its plan and its round trip on
+     * both paths; it simply matches no row. Honest limit, stated rather than
+     * glossed: an `UPDATE` touching zero rows still skips the heap write and
+     * the WAL record, so the two are very close rather than provably equal.
+     * The remaining difference is a fraction of one round trip, against an
+     * endpoint rate-limited per account AND per IP.
+     */
     await Promise.all([
       registerRateLimitAttempt(accountKey, LOGIN_POLICY),
       registerRateLimitAttempt(ipKey, LOGIN_POLICY),
-      user ? recordFailedLogin(user.id) : Promise.resolve(),
+      recordFailedLogin(user?.id ?? NO_SUCH_USER_ID),
     ]);
     return { error: "Invalid email or password." };
   }
