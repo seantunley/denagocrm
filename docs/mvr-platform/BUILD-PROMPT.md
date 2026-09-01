@@ -656,40 +656,94 @@ Where it advances *to* is out of scope: Conceptual is an empty phase in this bui
 Every step above declares its requirements into the gate primitive, so the phase cannot
 be completed with anything outstanding, and every step is audited.
 
-### 8.4 The demonstration portal — narrow, and exceptional
+### 8.4 The demonstration portal — the design concept
 
-The portal exists in this build to demonstrate onboarding, and to prove the wall. It has
-**five screens and no more**:
+The portal exists in this build to demonstrate onboarding and to prove the wall. **It is
+five surfaces and no more**, and it is built to one specific idea rather than to taste.
 
-1. **Invitation and first sign-in** — the client's first contact with the practice's
-   software.
-2. **Project overview** — where their project is, what has happened, what happens next.
-3. **The proposal** — read the document, see the fee, see the banking details, choose
-   Phase 2 Option A or B or defer.
-4. **Actions** — what the practice needs from them: upload proof of payment, sign the
-   onboarding document. Clear, singular, impossible to misread.
-5. **Documents** — what has been issued to them, downloadable through a signed URL.
+#### The idea: the portal is not a dashboard, it is a book about their home
 
-No messaging, no gallery, no history feed, no settings beyond the minimum, no notification
-preferences.
+MVR's onboarding takes a great deal from the client — photographs of their house, their
+ambitions, their style, their budget — and returns nothing until the proposal. Then the
+Conceptual through Technical phases go quiet for weeks. The standard answer is a
+dashboard with status badges and a progress bar. **Do not build that.**
 
-**This is the part that has to be visually stunning**, and "stunning" here means specific
-things rather than more decoration:
+Instead, everything captured during Contact and the consultation is composed into a
+single continuous, properly typeset document about the client's own project. Their rooms.
+Their photographs. Their own words about what they want to achieve. Each phase adds a
+spread; the document grows for the life of the project, and at Close Out the client owns
+a finished volume recording the transformation of their home.
 
-- **The first sign-in is the moment the practice is judged.** A client who has just paid a
-  commencement fee for interior design opens this on a phone, probably in the evening. It
-  should feel like the practice, not like software.
-- **Their own photographs are the page.** The imagery captured during Contact is the
-  material — full-bleed, colour-accurate, sharp on a Retina screen, never upscaled, never
-  letterboxed into a card. An interiors client's own home, well presented, is worth more
-  than any illustration.
-- **Progress reads at a glance.** Eleven phases is a lot; show where they are and what is
-  next without a chart that looks like project-management software. Restraint.
-- **The two asks are unmistakable.** Uploading proof of payment and signing the onboarding
-  document are the only things the client must do. They should be obvious in a glance and
-  finishable in under a minute, including on a phone.
-- **Signing feels considered, not transactional.** It is the moment the relationship
-  becomes formal.
+This is not decoration. It earns its place five times over: it reuses data already
+collected instead of burying it in a form; it gives the quiet internal phases something
+visible to do; it is native to a monochrome palette, where imagery and type must carry
+everything; it extends unchanged to milestone updates and the weekly personalised
+updates of the later phases; and no competitor has one, because every competitor ships a
+dashboard.
+
+**The metaphor is typographic, never physical.** Adopt a book's conventions — folios,
+contents, section openers, hairline rules, generous margins. Never its physics. No
+page-curl, no paper texture, no drop shadows, no skeuomorphism of any kind. That line is
+where this concept stays elegant or turns to kitsch, and it is not a matter of taste.
+
+#### The five surfaces
+
+1. **Invitation and first sign-in.** The email is not "Your account is ready". It is one
+   photograph of the client's own room, one line — *Your project has begun* — and a link.
+   Magic link, then set a passkey; never a password in an email. Sign-in opens on a
+   **cover**: their photograph full-bleed, their address in the display serif, the MVR
+   mark small.
+2. **The brief.** What they told MVR they want to achieve, in their own words, set
+   seriously. Their areas and the work required in each. Their inspiration images. This
+   is the emotional beat of the whole build — a client seeing their own words treated
+   with care — and it is nearly free, because the data is already captured.
+3. **The proposal**, bound in as the next spread rather than attached as a file: the fee,
+   the phases, the banking details, and the Phase 2 Option A / Option B / defer choice.
+   The PDF remains downloadable.
+4. **The asks.** Never a task list. **One thing at a time**, and completing each one turns
+   the page: choose the Phase 2 option, upload proof of payment, sign the onboarding
+   document. Each must be finishable in under a minute on a phone.
+5. **Documents** — what has been issued, downloadable through a signed URL.
+
+**Signing** is full-screen and quiet, set in the same type as everything else. On
+completion the book gains its next section opener — **Conceptual** — which is how the
+client learns the work has actually begun.
+
+**Progress is the contents page, not a bar.** Eleven chapters, the current one marked,
+the rest in `ink-300`. A table of contents *is* a progress indicator, and it reads as
+considered rather than as project-management software. Never a percentage.
+
+The only ornament is drawing-set language: hairline rules at `ink-200`, dimension ticks,
+and a small folio on each spread — `MVR / 2026 / KLOOF ROAD / 03`.
+
+#### Rules that are not negotiable
+
+- **Design the sparse case first.** A client with four photographs must look as composed
+  as one with forty. Build the layouts against the thin project, not the showcase one.
+- **No percentages, no confetti, no gamification, no emoji, no "Welcome, Jane!"** The tone
+  is a practice writing to a client, not an application celebrating at them.
+- **Their photographs are the page** — full-bleed, colour-accurate, sharp on a Retina
+  screen, never upscaled, never letterboxed into a card with a shadow.
+- **Motion is the page transition and almost nothing else** — a short cross-fade with a
+  slight vertical settle, 150–250ms, honouring `prefers-reduced-motion`. Never a spinner
+  where a page turn will do.
+- **A phone in the evening on a South African connection is the target device.** Full-bleed
+  imagery makes that a real constraint: AVIF, DPR-aware widths, placeholders, and a
+  first meaningful paint that does not wait on a photograph.
+- **The staff side stays dense and fast.** The book is the client's view only; never make
+  a designer paginate through a document to do their job.
+
+#### Two things worth building because they pay twice
+
+- **Coach the photograph at capture** — wide, from the corner, landscape, whole room.
+  These images become the "before" at Close Out and the practice's own archive, so a
+  small piece of guidance in the capture UI improves an asset MVR keeps forever.
+- **Design the denial.** A declined enquiry receives a properly typeset letter signed by
+  Michean, not a dead end — and the six-month revisit means the relationship stays open.
+  Nobody builds this, and it costs almost nothing.
+
+No messaging, no gallery, no history feed, no settings beyond the minimum, no
+notification preferences.
 
 The practice's identity is monochrome (section 3.4), so all of this must be stunning
 **without colour**. Type, space, imagery and restraint carry it — the client's own
