@@ -4,20 +4,68 @@ import { prisma } from "@/lib/db";
 import { createSessionCookie } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { rpConfig, readChallenge, clearChallenge } from "@/lib/webauthn";
+import {
+  PASSKEY_POLICY,
+  checkRateLimit,
+  clearRateLimit,
+  getRequestIp,
+  rateLimitKey,
+  registerRateLimitAttempt,
+} from "@/lib/rateLimit";
 
+/**
+ * Passkey login. Public by necessity — it runs before any session exists.
+ *
+ * The throttling and the failure trail below are NOT a brute-force guard: an
+ * assertion cannot be forged without the private key, so attempt count is not
+ * what stands between a caller and a session. They exist because this route had
+ * neither, while the password path next door had both — see PASSKEY_POLICY.
+ */
 export async function POST(req: NextRequest) {
-  const { rpID, origin } = await rpConfig();
-  const stashed = await readChallenge();
-  if (!stashed) {
-    return NextResponse.json({ error: "Challenge expired — try again." }, { status: 400 });
+  const ip = await getRequestIp();
+  const ipKey = rateLimitKey("passkey-auth-verify-ip", ip);
+
+  // Checked BEFORE any work — the point is to stop doing the work.
+  if (!(await checkRateLimit(ipKey)).allowed) {
+    return NextResponse.json({ error: "Too many attempts. Try again later." }, { status: 429 });
   }
 
-  const body = await req.json();
-  const response = body.response;
+  /**
+   * One exit for every rejection, so a new early-return can't be added later
+   * that skips the accounting — which is exactly how this route came to have
+   * none. Records the attempt and leaves a trail; the audit write is
+   * best-effort by construction inside logAudit.
+   */
+  const fail = async (
+    message: string,
+    status: number,
+    actor?: { id: string; name: string } | null,
+  ) => {
+    await registerRateLimitAttempt(ipKey, PASSKEY_POLICY);
+    await logAudit({
+      action: "passkey.login_failed",
+      summary: `Failed passkey sign-in attempt: ${message}`,
+      user: actor ?? null,
+      userName: actor?.name ?? "Unknown",
+      metadata: { ip },
+    });
+    return NextResponse.json({ error: message }, { status });
+  };
+
+  const { rpID, origin } = await rpConfig();
+  // "auth", not any challenge: a registration ceremony's cookie is refused here
+  // rather than relying on the attestation/assertion shape mismatch to catch it.
+  const stashed = await readChallenge("auth");
+  if (!stashed) {
+    return await fail("Challenge expired — try again.", 400);
+  }
+
+  const body = await req.json().catch(() => null);
+  const response = body?.response;
   // The browser returns the raw credential id (base64url) that was used.
   const credentialId: string | undefined = response?.id;
   if (!credentialId) {
-    return NextResponse.json({ error: "No credential returned." }, { status: 400 });
+    return await fail("No credential returned.", 400);
   }
 
   const passkey = await prisma.passkey.findUnique({
@@ -25,7 +73,7 @@ export async function POST(req: NextRequest) {
     include: { user: true },
   });
   if (!passkey) {
-    return NextResponse.json({ error: "Unrecognised passkey." }, { status: 400 });
+    return await fail("Unrecognised passkey.", 400);
   }
 
   let verification;
@@ -45,14 +93,11 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch (e) {
-    return NextResponse.json(
-      { error: e instanceof Error ? e.message : "Verification failed" },
-      { status: 400 }
-    );
+    return await fail(e instanceof Error ? e.message : "Verification failed", 400, passkey.user);
   }
 
   if (!verification.verified) {
-    return NextResponse.json({ error: "Could not verify the passkey." }, { status: 400 });
+    return await fail("Could not verify the passkey.", 400, passkey.user);
   }
 
   // Advance the signature counter (clone/replay detection) and record use.
@@ -65,15 +110,32 @@ export async function POST(req: NextRequest) {
   });
 
   const user = passkey.user;
-  await createSessionCookie(
-    {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-    },
-    { pwa: Boolean(body.pwa) }
-  );
+  /**
+   * A disabled account is refused HERE, by createSessionCookie, which throws
+   * rather than minting anything — the check this route does not make itself and
+   * does not need to.
+   *
+   * It was previously uncaught, so an offboarded user presenting a valid passkey
+   * got an unhandled 500. That failed CLOSED (no session), so it was never a way
+   * in; it was a confusing error and an unhelpful log line. Catch it and refuse
+   * cleanly. Deliberately NOT reimplementing the disabled/sessionVersion checks
+   * here: they live in one place and are re-run on every request thereafter.
+   */
+  try {
+    await createSessionCookie(
+      {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+      },
+      { pwa: Boolean(body?.pwa) }
+    );
+  } catch {
+    return await fail("This account can no longer sign in.", 403, user);
+  }
+
+  await clearRateLimit(ipKey);
   await clearChallenge();
   await logAudit({
     action: "passkey.login",

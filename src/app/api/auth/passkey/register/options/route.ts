@@ -29,6 +29,6 @@ export async function POST() {
     },
   });
 
-  await stashChallenge(options.challenge, { uid: user.id });
+  await stashChallenge("reg", options.challenge, { uid: user.id });
   return NextResponse.json(options);
 }
