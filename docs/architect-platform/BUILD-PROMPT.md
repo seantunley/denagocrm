@@ -1,312 +1,468 @@
-# Build prompt — Architect practice platform
+# Build prompt — MVR Communication System
 
-Paste everything below the line into a fresh Claude Code session opened on an **empty
-repository**. It is written to be executed, not admired: it ends with a definition of
-done that can be checked mechanically.
+Paste everything below the rule into a fresh Claude Code session opened on an **empty
+repository**, and attach `MVR_Communication_System_Overview.pdf` to that session. This
+brief restates the document, but the document governs.
 
-Fill in the four bracketed values at the top before you send it.
+Fill in the three bracketed values at the top before you send it.
 
 ---
 
-You are building the software platform for a high-end architectural practice. Read this
-entire brief before writing a single file. When you are ready, produce a plan first and
-wait for approval — do not start scaffolding on the strength of this message alone.
+You are building the **MVR Communication System** for Michean Van Riel Interiors (Pty)
+Ltd, a high-end interior design practice in South Africa. Read this entire brief before
+writing a single file. Read the attached source document too — it is the practice's own
+working overview of the process this platform has to serve. When you are ready, produce
+a plan and wait for approval. Do not scaffold on the strength of this message alone.
 
 ## 0. The variables
 
-- **Practice name:** `[FIRM NAME]`
-- **Primary jurisdiction / data residency:** `[e.g. South Africa — POPIA; or EU — GDPR]`
-- **Expected scale year one:** `[e.g. 12 staff, 40 active projects, 300 client users]`
-- **Deployment target:** `[e.g. Vercel + Neon; or AWS eu-west-1]`
+- **Expected scale year one:** `[e.g. 8 staff, 25 active projects, 60 client users]`
+- **Deployment target:** `[e.g. Vercel + Neon eu-central; or AWS af-south-1]`
+- **Data residency:** `[South Africa unless stated otherwise — POPIA applies either way]`
 
-If any of these are still blank, ask for them before planning. Everything else in this
-brief is decided.
+Ask for any that are blank before planning. Everything else here is decided.
 
 ## 1. What this is
 
-One platform holding **everything that passes between the practice and its clients**:
+One platform holding the whole life of a project, from first enquiry to close out. It
+has three pillars, and they are not equally weighted.
 
-- **Projects** — the spine. Every other object hangs off a project.
-- **Milestones and programme** — stages of work with dates, dependencies, status,
-  and a client-legible view of "where we are".
-- **Documents** — drawings, reports, certificates, correspondence. Versioned, issued,
-  and access-controlled.
-- **Updates** — the practice publishes progress; clients read it and respond.
-- **Communications** — the full record of what was said, by whom, when, against which
-  project. Email in and out at minimum.
-- **The client portal** — the product's face. A client logs in and understands the
-  state of their building in under ten seconds, without a phone call.
+**The spine is internal team communication.** The design process — Conceptual,
+Scheming, Costing, Supplier Communication, Technical — is predominantly internal work,
+and today that conversation is scattered across WhatsApp, calls and inboxes. The
+platform's central job is to hold that conversation *against the project*, so the
+practice has a single internal view of where every project stands and why. Every other
+feature exists to give that conversation something to be about.
 
-This is not a generic CRM with an architecture skin. The unit of work is the *project*,
-the audience is *two distinct populations* (practice staff and clients), and the
-material is *drawings and decisions*.
+**The structure is a gated project journey.** Eleven phases, each with entry conditions
+that must actually be met before a project advances. This is what turns a chat log into
+a managed process.
 
-## 2. The three constraints that outrank everything
+**The face is the client portal.** Clients see progress, receive updates, read and sign
+documents, upload proof of payment, and make the decisions the process asks of them —
+and see nothing else, ever.
 
-Every design decision is settled by these, in this order.
+The document is explicit that this does **not** replace personal contact: calls,
+meetings and WhatsApp continue. The platform is the *record* — where decisions,
+documents and progress live, whatever channel the conversation happened on.
 
-### 2.1 Secure by construction, not by review
+## 2. The project journey — the core domain
 
-A client of this practice can see their project and **nothing else, ever**, and that
-must be true even when a route handler is written carelessly. Security lives in layers
-that do not depend on the caller remembering:
+Eleven phases:
 
-1. **Postgres row-level security** as the last line of defence. The application
-   connects as a role that has RLS enforced (`NOLOGIN BYPASSRLS` is not that role);
-   every tenant- and project-scoped table carries a policy keyed off session GUCs set
-   at connection checkout. A query that forgets its `WHERE` clause returns nothing, not
-   everything. Write the test that proves this before you write the second feature.
-2. **A scoped data accessor.** No route or server action touches the raw database
-   client. They receive a request-scoped context carrying the authenticated principal,
-   and all reads/writes go through accessors that cannot be constructed without it.
-   Make the unscoped client physically hard to reach — a lint rule that fails the build
-   on direct import outside the data layer.
-3. **Deny-by-default authorisation.** A central policy layer answers `can(principal,
-   action, resource)`. New resources are inaccessible until a policy is written for
-   them. Never the inverse.
-4. **Two separate identity domains.** Staff and client portal users are different
-   principal types, with different session cookies, different names, different
-   lifetimes, and no code path that can promote one into the other. The portal is the
-   internet-facing attack surface: treat every byte it accepts as hostile. Client
-   sessions get shorter expiry, stricter re-auth on sensitive actions, and their own
-   rate limits.
-5. **Append-only audit.** Who saw which document, who approved what, who changed a
-   date. Writes only; no update or delete path exists in the application at all. For a
-   practice carrying professional indemnity, this is a product feature, not plumbing.
+**Introduction → Conceptual → Scheming → Costing → Supplier Communication → Technical →
+Implementation → Manufacturing → Production → Snagging & Finishing → Close Out**
 
-Beyond the layers: argon2id or scrypt password hashing, sessions as opaque server-side
-records (not self-describing tokens), CSRF protection on every mutation, a real
-Content-Security-Policy with no `unsafe-inline`, strict security headers, per-route
-rate limiting, secrets never in the repo (add secret scanning to CI on day one),
-structured logs that carry ids and never PII or file contents, and dependency updates
-on a schedule.
+Client communication changes character across them, and the system must know which
+regime it is in:
 
-Uploads deserve their own paragraph. Files are the highest-risk input this system takes:
-store them in **private** object storage — never a public bucket, not once, not for
-"just the thumbnails"; serve them only through short-lived signed URLs minted after an
-authorisation check; validate content by sniffing bytes rather than trusting the
-extension or `Content-Type`; store a checksum; strip or quarantine anything active
-(SVG, HTML, PDF with embedded JS); and leave a documented seam for malware scanning
-even if the scanner itself comes later.
+| Phases | Client experience |
+| --- | --- |
+| Introduction | Intensive, personal, high-touch onboarding |
+| Conceptual → Technical | Predominantly internal work; client receives **automated or milestone** updates |
+| Implementation | Client chooses their level of MVR involvement; monthly invoicing cycle |
+| Manufacturing → Close Out | **Personalised weekly updates** as physical results appear |
 
-### 2.2 Modular
+### 2.1 Introduction Phase, in detail
 
-The build is modular, and the modularity has to be structural or it will not survive
-contact with a deadline.
+**1. Contact.** A representative creates a client profile and a project under it, then
+captures, as mandatory fields before the project may advance: what the client wants to
+achieve; the scope (areas of the home and work required — wall panelling, furniture,
+wallpaper, lighting, electrical, flooring, painting and similar); approximate size of
+the project area; style inspiration and preferred direction; **photographs and videos of
+the existing space plus inspiration images**; the client's intended timeline; the floor
+plan (or a note that measurements will be taken on site); and a booked in-person
+consultation. Current channel: WhatsApp and direct calls.
 
-- **A kernel that knows nothing about modules.** Identity, sessions, authorisation
-  primitives, tenancy, audit, storage, notifications, jobs, the design system. The
-  kernel never imports from a module.
-- **Modules are self-contained slices**, each owning its schema, its policies, its
-  routes, its UI, its migrations, its tests, and declaring what it exposes:
+**2. Consultation**, 3–7 days after contact, in two parts. *Part One* on site:
+photographs, videos, measurements where no adequate floor plan exists, and scheduling of
+Part Two. *Part Two* online: budget and timeline. Then MVR reviews and either approves
+or denies.
+
+- **Approved** → the client is issued portal access and moves on.
+- **Denied** → a professionally worded explanation; where appropriate the client is
+  retained in the MVR database with **a reminder six months out** for a consultant to
+  revisit.
+
+**3. Design Proposal.** Phase 1 (Interior Design and Full Technical Documentation) is
+mandatory; Phase 2 Implementation Services is optional with **Option A or Option B**.
+The proposal is shared; an invoice for the Phase 1 commencement fee is issued with
+banking details; the client **uploads proof of payment**; MVR **verifies receipt** before
+the project advances. The client may opt into Phase 2 here — and if they decline, they
+are asked again when the project reaches Implementation.
+
+**4. Onboarding document.** Issued to the client, who must **sign and complete** it.
+Only then does the project enter Conceptual.
+
+### 2.2 The internal phases
+
+Conceptual, Scheming, Costing, Supplier Communication and Technical share a shape:
+internal progress and team conversation recorded against the project and visible to the
+relevant MVR members, with the client receiving an appropriate automated or milestone
+update as things move. **Supplier Communication** additionally makes suppliers
+first-class: supplier correspondence and project-specific supplier information linked to
+the project, with the client updated where supplier progress materially affects them.
+
+### 2.3 Implementation onward
+
+**Implementation:** the client selects their Phase 2 option (or is asked again if they
+passed earlier); invoices are issued **monthly**; the client uploads proof of payment
+monthly; MVR verifies and maintains the payment record.
+
+**Manufacturing, Production, Snagging & Finishing:** internal progress recorded, and a
+**personalised weekly update** to the client — personalised, meaning written by a human,
+not generated.
+
+**Close Out:** final snagging and outstanding actions complete, final documents retained,
+final payment status confirmed, project marked complete — and the client and project
+remain in the database for future reference and appropriate relationship or marketing
+communication.
+
+### 2.4 How to model this — read carefully
+
+The source document is a **working overview**, not a frozen specification. The phases,
+their required fields and their gates *will* change. So:
+
+- **The journey is data, not control flow.** A journey definition holds the ordered
+  phases and, per phase, its entry requirements: required fields, required artifacts,
+  required approvals, required verified payments. Advancing is a single transition
+  operation that evaluates the gate, refuses with a legible list of what is missing, and
+  writes an audit record of who advanced it and when.
+- **Journey definitions are versioned, and a project pins the version it started under.**
+  Editing the journey must never retroactively invalidate a project in flight.
+- **`if (project.phase === 'COSTING')` scattered through the codebase is the failure
+  mode.** Behaviour that varies by phase is looked up from the phase definition —
+  including which client-communication regime applies.
+- **Gates are evaluated server-side and enforced at the data layer.** A phase advance
+  that skips a gate must be impossible, not merely absent from the UI.
+
+## 3. The four constraints that outrank everything
+
+### 3.1 The wall between internal and client-visible
+
+This is the highest-stakes decision in the product, and it is settled: **internal
+conversation and client-facing communication are separate object types, in separate
+tables, with separate policies and separate routes.** A client-visible thread cannot
+physically hold an internal message. There is no `isInternal` boolean deciding it,
+because a boolean is one bad default, one careless join or one sloppy migration away
+from showing a client what the team said about their budget.
+
+Surfacing something internal to the client is an explicit act that **creates a new
+published object** — staff compose or promote content into a client-facing update. The
+internal original stays internal.
+
+This wall runs through everything, including the parts that are easy to forget: search
+indexes, notification emails, exports, activity feeds, webhooks, and any AI feature that
+ever summarises a project. Write the hostile tests for all of them.
+
+### 3.2 Secure by construction
+
+A client sees their project and nothing else, and that holds even when a route handler
+is written carelessly on a Friday. Security lives in layers that never depend on the
+caller remembering:
+
+1. **Postgres row-level security** as the last line. The application connects as a role
+   with RLS enforced; scoped tables carry policies keyed off session variables set at
+   connection checkout. A query that forgets its `WHERE` returns nothing, not everything.
+   Prove it with a test before the second feature exists.
+2. **A request-scoped data accessor.** No route or server action touches the raw client;
+   they receive a context carrying the authenticated principal, and all access goes
+   through accessors that cannot be constructed without one. Enforce with a lint rule
+   that fails the build on direct import outside the data layer.
+3. **Deny-by-default authorisation** through a central `can(principal, action, resource)`
+   policy layer. New resources are unreachable until a policy exists.
+4. **Two identity domains.** Staff and client users are different principal types with
+   different cookies, lifetimes and rate limits, and no code path promotes one into the
+   other. Access to a project is granted per membership — never globally, never by role
+   alone.
+5. **Append-only audit.** Who viewed which document, who verified a payment, who
+   advanced a phase, who published an update, who signed what. No update or delete path
+   exists in the application. For a practice invoicing against signed proposals, this is
+   the product.
+
+Then the baseline: argon2id password hashing, opaque server-side sessions, CSRF on every
+mutation, a real CSP with no `unsafe-inline`, strict security headers, per-route rate
+limiting, environment validated at boot, secret scanning in CI from day one, structured
+logs carrying ids and never PII or file contents, scheduled dependency updates.
+
+**Uploads and money need their own paragraph.** Clients upload proof of payment — an
+unauthenticated-adjacent file arriving from outside, attached to a financial decision.
+So: private object storage only, never a public bucket; short-lived signed URLs minted
+only after an authorisation check and bound to the principal they were issued to; content
+type sniffed from bytes, never trusted from the extension or header; checksums stored;
+anything active (SVG, HTML, PDF with embedded JS) stripped or quarantined; a documented
+seam for malware scanning. Payment *verification* is a human decision with financial
+consequence: it is recorded with actor, timestamp and evidence, it is immutable, and
+reversing it is a new record rather than an edit.
+
+POPIA applies. Client photographs of private homes are personal information. Retention,
+export, and deletion-on-request need to be designed in, not bolted on — and the Close Out
+requirement to retain projects for future marketing communication needs a lawful basis
+and an opt-out recorded against the client.
+
+### 3.3 Modular
+
+Modular structurally, or it will not survive a deadline.
+
+- **A kernel that knows nothing about modules:** identity, sessions, authorisation,
+  tenancy, audit, storage, media processing, notifications, jobs, real-time transport,
+  search, the design system. The kernel never imports a module.
+- **Modules own their slice** — schema, policies, routes, UI, migrations, tests — and
+  declare it in a manifest: id, name, dependencies, navigation and portal surfaces,
+  policy actions, jobs, migrations. Composition happens through the registry; modules
+  never reach into each other's internals, only published contracts.
 
   ```
   modules/
-    projects/     manifest.ts  schema.prisma  policy.ts  server/  ui/  tests/
-    documents/
-    milestones/
-    updates/
-    comms/
-    portal/
+    clients/      enquiries/    projects/     journey/
+    comms/        updates/      documents/    media/
+    suppliers/    finance/      tasks/        portal/
   ```
 
-- **A module manifest** declaring id, human name, dependencies on other modules, the
-  navigation and portal surfaces it contributes, the policy actions it defines, and its
-  migrations. Composition happens through the registry; modules never import each
-  other's internals, only their published contracts.
-- **Modules are switchable per deployment.** Disabling one removes its routes, its
-  navigation, its jobs and its portal surfaces, and leaves an app that still builds,
-  still passes tests, and never renders a dead link. Enforce it with a test that boots
-  the app with an empty module set.
-- **Enforce the boundaries in CI.** A dependency-direction lint rule (kernel ↛ module,
-  module ↛ module internals) that fails the build. Written conventions decay; a failing
-  check does not.
+- **Modules are switchable per deployment.** Disabling one removes its routes,
+  navigation, jobs and portal surfaces and leaves an app that builds, passes tests and
+  renders no dead links. Prove it with a test that boots with an empty module set.
+- **Enforce boundaries in CI** with a dependency-direction rule that fails the build.
+  Conventions decay; failing checks do not.
 
-Build these four extension points into the kernel now, with one real consumer each, and
-leave them unimplemented beyond that. They are what the practice will ask for next, and
-retrofitting any of them is a rewrite:
+Three things are **seams, not features**, in the first build — build the joint, ship one
+thin real consumer, document the intended shape in `docs/seams.md`, and stop:
 
-| Seam | Why it must exist on day one |
+| Seam | Why it must exist now |
 | --- | --- |
-| **Approvals** | A client signing off a stage, a revision, or a variation. Needs an approvable-object interface, an immutable decision record, and a signature adapter. |
-| **Annotation** | Comments anchored to a coordinate on a document page or image, revision-aware. Needs documents to expose stable page/region addressing from the start. |
-| **Structured decisions** | Finishes, fixtures, specification choices — an option set, a selection, a lock date, a cost. |
-| **Money** | Fee stages, invoices against milestones, payment state. Milestones must be able to carry a monetary obligation without a schema migration. |
+| **External capture** | Email, WhatsApp, calls and meeting notes will need to be pulled into the project record. Not yet scoped. Build a `CaptureAdapter` — normalised inbound message, participant resolution, project attribution, deduplication — and implement exactly one (inbound email) to prove it. |
+| **Annotation** | Comments pinned to a coordinate on a floor plan, a render or a photograph, revision-aware. Media and documents must expose stable page/region addressing from the start. |
+| **Structured selections** | Finishes, fabrics, fixtures — an option set, a client selection, a lock date, a cost. Near-certain for an interiors practice, absent from this brief. |
 
-Do not build these features. Build the joints they will attach to, ship one thin real
-use of each seam so it is proven rather than theoretical, and document the intended
-shape in `docs/seams.md`.
+### 3.4 Visually exceptional
 
-Similarly, **file handling is an adapter, not a hardcoding.** The practice's actual
-formats are not yet confirmed and may include PDF drawing sets, CAD and BIM files
-(DWG, RVT, IFC), high-resolution renders and site photography, or files that live in
-Dropbox / SharePoint / Google Drive today. So: a `StorageAdapter` interface (local disk
-for dev, object storage for production, external-provider sync later) and a
-`PreviewAdapter` interface (`canPreview(mime) → renderer`) with PDF and image
-implemented now, everything else registering later without touching the document model.
-Documents store bytes, checksums, MIME and revision lineage — never format-specific
-assumptions.
+For an interiors practice, imagery *is* the product. The interface has to be the calibre
+of the work it displays.
 
-### 2.3 Visually exceptional
+The brand identity is supplied by the practice and is not yet in hand, so:
 
-Clients of a high-end practice judge the platform the way they judge a building. The
-interface has to be the calibre of the work it displays.
-
-The brand identity will be supplied by the practice and is **not yet available**, so:
-
-- **Every visual value is a token.** Colour, type scale, spacing, radii, shadow,
-  motion. A hex code, a font name or a magic pixel value anywhere in a component is a
-  defect. Add a check that greps for them and fails.
-- **Brand is configuration, injected at runtime** — palette, typefaces, logo, wordmark,
-  radius and density — resolved once and exposed as CSS custom properties. Swapping the
-  brand must be one config change, not a find-and-replace. Validate the palette on the
-  way in (it lands in a stylesheet: it is untrusted input) and *derive* readable
-  foreground colours from luminance rather than storing them, so no supplied brand can
-  produce unreadable text.
+- **Every visual value is a token** — colour, type scale, spacing, radii, shadow, motion.
+  A hex code, font name or magic pixel value inside a component is a defect; add a check
+  that greps for them and fails.
+- **Brand is runtime configuration** — palette, typefaces, logo, wordmark, radius,
+  density — resolved once into CSS custom properties. Swapping it is one config change.
+  Validate the palette on the way in (it lands in a stylesheet; it is untrusted) and
+  *derive* readable foregrounds from luminance rather than storing them, so no supplied
+  brand can produce unreadable text.
 - **The default brand is a finished, restrained neutral** — near-black ink, warm paper
-  white, one accent, a fine serif for display and a precise grotesque for interface —
-  that looks deliberate the day it ships and vanishes the day the real identity
-  arrives.
-- **Sharp means sharp.** Renders and drawings are the content, so: an image pipeline
-  producing AVIF and WebP at device-pixel-ratio-aware widths, never upscaling, blur or
-  dominant-colour placeholders, colour profile preserved on renders, lazy loading below
-  the fold and priority loading for the hero. A soft render on a Retina display fails
-  the brief exactly as badly as a broken link.
-- **Typography and space carry the design**, not chrome. A modular type scale, a real
-  baseline rhythm, generous margins, hairline rules. Restraint reads as expensive;
-  gradients and drop shadows read as a template.
-- **Motion is functional and fast** — 150–250ms, entrances and state changes only,
-  fully honouring `prefers-reduced-motion`.
-- **Two surfaces, one system.** Staff get a dense, keyboard-driven working environment.
-  Clients get a calm, spacious, near-editorial reading experience. Same tokens, same
-  components, different density and rhythm — controlled by a density token, not a
-  forked component library.
-- **WCAG 2.2 AA is a floor, verified in CI** — contrast, focus visibility, keyboard
-  paths, semantics, a genuinely usable portal on a phone. Test it with automation *and*
-  a keyboard.
+  white, one accent, a fine serif for display against a precise grotesque for interface —
+  that looks deliberate on day one and disappears when the real identity lands.
+- **Media handling is a first-class subsystem, not an `<img>` tag.** Photographs, videos
+  of existing spaces, inspiration imagery, moodboards, floor plans, progress photography.
+  That means: resumable direct-to-storage uploads that survive a phone on site with bad
+  signal; server-side derivative generation off the request path; AVIF and WebP at
+  DPR-aware widths, never upscaled; blur or dominant-colour placeholders; colour profiles
+  preserved; EXIF orientation respected and GPS **stripped**; video transcoded with
+  poster frames. A soft image on a Retina display fails this brief as badly as a broken
+  link.
+- **Typography and space carry the design**, not chrome. A modular scale, real rhythm,
+  generous margins, hairline rules. Restraint reads as expensive.
+- **Motion is functional and fast** — 150–250ms, entrances and state changes only, fully
+  honouring `prefers-reduced-motion`.
+- **Two surfaces, one system.** Staff get a dense, keyboard-driven working environment;
+  clients get a calm, near-editorial reading experience. Same tokens, same components,
+  different density — controlled by a density token, not a forked component library.
+- **WCAG 2.2 AA is a floor, verified in CI.** The portal must be genuinely good on a
+  phone; the site-capture flow must be usable one-handed on site.
 
-## 3. Stack
+## 4. Internal communication — the spine
 
-Start from this and justify any deviation in `docs/adr/0001-stack.md`:
+The practice intends to **move off its current chat tools in phases**. That does not
+mean building Slack in week one; it means never building anything that would have to be
+thrown away to get there. Async-first in the first release, with the transport, data
+model and permission model already correct for real-time.
 
-- **Next.js (latest stable) with the App Router, TypeScript in strict mode**
+Four shapes, all of them internal-only:
+
+1. **Threads anchored to objects** — a discussion attached to a document revision, a
+   milestone, a costing item, a supplier, a media asset. This is what chat cannot do and
+   what makes the record defensible. Polymorphic anchoring, resolved through the module
+   registry so a module can declare its types discussable without the comms module
+   knowing they exist.
+2. **Project channels** — a running conversation per project, where joining a project
+   grants its history.
+3. **Direct and small-group messages** — person to person, not attached to a project.
+   These need the strictest access rules in the system: never visible to any client
+   principal under any circumstance, never surfaced in a project export.
+4. **Tasks and requests** — a message that is also an accountable item with an owner, a
+   due date and a state, rolling up to a per-person dashboard. This is how "the team is
+   working on it" becomes something a director can see.
+
+Design for the endgame from the start: a message model that carries edits, reactions,
+attachments and threading; a real-time transport (websocket or equivalent) with
+authorisation on subscribe, not just on read; unread and mention state per user;
+notification preferences and digests; and **permission-filtered search** — filtering at
+query time, never post-filtering results, because a search index is the most common way
+an access-control model gets quietly bypassed.
+
+## 5. Client-facing updates — the other half
+
+Two distinct regimes, one publishing model.
+
+- **Milestone and automated updates** during the internal phases. Triggered by phase
+  advance or a defined event, composed from a template. **Critical:** an automated update
+  may interpolate only fields explicitly marked client-safe. It never reads internal
+  threads, internal notes, or anything not marked for publication. Default to requiring
+  staff approval before send; allow genuinely mechanical notices (a phase advance) to go
+  unattended only where the template contains no free text.
+- **Personalised weekly updates** during Manufacturing, Production, and Snagging &
+  Finishing. Written by a named human. The system's job is to make sure it happens: a
+  scheduled obligation against a named owner, escalating when overdue, visible as a
+  metric. A practice that promises weekly updates and misses them is worse off than one
+  that never promised.
+
+Every published update is an object with an author, a publication state, an audience and
+an audit trail. Drafts are invisible to clients — prove it in the test suite.
+
+## 6. Stack
+
+Start here; justify any deviation in `docs/adr/0001-stack.md`.
+
+- **Next.js (latest stable), App Router, TypeScript strict**
 - **PostgreSQL** — non-negotiable; RLS is the security model
-- **Prisma** for schema and migrations, with raw SQL migrations for policies and
-  anything Prisma cannot express
-- **Tailwind CSS v4**, driven entirely by the token layer, with a small owned component
-  set — no wholesale UI framework adoption that fights the brand later
-- **Zod** at every trust boundary: request bodies, form data, environment, webhook
-  payloads, and external API responses
-- **Argon2id** for passwords; server-side opaque sessions
-- **A real background job runner** with retries and idempotency — email, image
-  derivatives, scans and notifications never run inline in a request
+- **Prisma** for schema and migrations, with raw SQL for policies and anything Prisma
+  cannot express
+- **Tailwind CSS v4** driven entirely by the token layer, with a small owned component
+  set — no wholesale UI framework that will fight the brand later
+- **Zod** at every trust boundary: request bodies, forms, environment, webhooks, external
+  API responses
+- **Argon2id** passwords, opaque server-side sessions
+- **Object storage with direct, resumable uploads**, private by default
+- **A real background job runner** with retries and idempotency — email, derivatives,
+  transcodes, scans, scheduled reminders and digests never run inline in a request
 
-**Read the installed documentation before you write code against any of these.**
-Framework majors move faster than model training data; `node_modules/<pkg>/` and the
-official docs for the *installed* version are the source of truth, and a confidently
-wrong API from memory costs more than the five minutes of reading. When the installed
-version disagrees with what you remember, the installed version is right.
+**Read the installed documentation before writing code against any of these.** Framework
+majors move faster than training data; `node_modules/<pkg>/` and the docs for the
+*installed* version are the source of truth. When the installed version disagrees with
+what you remember, the installed version is right.
 
-## 4. Domain model — get these right, the rest follows
+## 7. Domain model
 
-**Workspace scoping from day one.** Even though this launches for one practice, every
-table carries a workspace/tenant id and every policy keys off it. It costs almost
-nothing now; it is close to impossible to retrofit, and it is what makes a second
-practice — or a hard separation between the practice and a subsidiary — a configuration
-change rather than a rebuild. (Say so in an ADR; if you disagree, argue it there before
-building.)
+**Workspace scoping from day one.** Every table carries a workspace id and every policy
+keys off it, even though this launches for one practice. It costs almost nothing now and
+is close to impossible to retrofit. Argue it in an ADR if you disagree — before building.
 
-Core entities:
-
-- **Project** — code, name, client(s), address, stage, status, team, dates, cover
-  image. The scoping root for everything below.
-- **ProjectMember** — a person's relationship to a project, and the *only* thing that
-  grants a client any visibility. Access is granted per project, never globally.
-- **Milestone** — a programme item: title, stage, planned/actual dates, dependencies,
-  status, visibility to client, and a nullable monetary obligation (see the money seam).
-- **Document** and **DocumentRevision** — the document is the identity, the revision is
-  the file. Revisions are immutable, numbered, checksummed, and carry an *issue* record:
-  who issued it, to whom, when, and under what purpose. Superseding never destroys.
-- **Update** — a published post against a project: title, rich body, attachments,
-  publish state, audience. Drafts are never visible to clients.
-- **Communication** — a message in the record: direction, channel, participants,
-  content, project link, timestamps.
-- **Approval** *(seam)* — a decision record against any approvable object: who, what,
-  which revision, when, and the evidence.
+- **Client** — the profile: people, contact details, source, marketing consent, status
+  (prospect / active / archived / revisit-due).
+- **Enquiry** — first contact through the approve/deny decision, carrying the mandatory
+  contact-stage fields, the consultation bookings, and the denial outcome with its
+  six-month revisit reminder.
+- **Project** — created under a client; the scoping root for everything below. Carries
+  its journey version, current phase, scope areas, size, timeline, style direction.
+- **ProjectMembership** — for staff *and* for clients, separately typed. The only thing
+  granting a client any visibility.
+- **PhaseDefinition / JourneyVersion / PhaseTransition** — the stage machine of §2.4.
+- **Milestone** — a programme item with dates, status and client visibility.
+- **MediaAsset** — photograph, video, inspiration image, floor plan, moodboard item;
+  derivatives, checksum, capture context, EXIF handling, client visibility.
+- **Document / DocumentRevision / DocumentIssue** — the document is the identity, the
+  revision is the file; revisions immutable, numbered, checksummed; issuing records who
+  sent what to whom and why. Superseding never destroys.
+- **Signature** — the signed onboarding document and anything else requiring assent:
+  signer, artifact, evidence, timestamp.
+- **Update** — a published client-facing post: author, body, attachments, audience,
+  publication state, regime (automated / milestone / weekly personalised).
+- **Thread / Message / Channel / DirectConversation** — internal only, per §4.
+- **Task** — owner, due date, state, origin; assignable to staff, and separately, a
+  **ClientAction** for what the portal asks of the client (upload POP, sign onboarding,
+  choose Option A or B, supply information).
+- **Supplier / SupplierEngagement** — supplier records and their project-linked
+  correspondence.
+- **Proposal / ProposalOption** — Phase 1 and the optional Phase 2 with Options A and B,
+  including the deferred re-offer at Implementation.
+- **Invoice / ProofOfPayment / PaymentVerification** — issuance, client upload, staff
+  verification, monthly recurrence during Implementation.
 - **AuditEvent** — actor, action, resource, metadata, timestamp. Append-only.
-- **Principal** — split cleanly into `StaffUser` and `ClientUser`, sharing nothing but
-  a contact record.
+- **Principal** — `StaffUser` and `ClientUser`, sharing nothing but a contact record.
 
-Model the **visibility of every client-facing object explicitly**. Never infer "the
-client can see it" from the absence of a flag; a new column must default to hidden. The
-worst possible failure of this product is a client seeing an internal note, a draft
-drawing, or another client's project.
+**Model client visibility explicitly on every client-facing object**, and default it to
+hidden. Never infer visibility from the absence of a flag. The worst possible failure of
+this product is a client seeing an internal cost discussion, an unissued drawing, or
+another client's home.
 
-## 5. What to build first
+## 8. What to build first
 
-**Phase 0 — the walking skeleton.** One vertical slice, fully hardened, end to end:
+**Phase 0 — hardened walking skeleton.** One vertical slice, end to end:
 
 1. Repository, CI, environment validation, secret scanning, formatting, strict lint.
-2. Kernel: database with RLS enabled and proven, scoped accessor, policy layer, staff
-   auth, client auth, audit, storage adapter, job runner, design tokens, base
+2. Kernel: database with RLS proven, scoped accessor, policy layer, staff auth, client
+   auth, audit, storage adapter, media pipeline, job runner, design tokens, base
    components.
-3. Module registry, manifests, boundary lint, and the empty-module-set boot test.
-4. `projects` module: create a project, add staff and a client member, view it.
-5. `milestones` module: a programme on a project, staff-editable, client-visible.
-6. `documents` module: upload → revision → issue → client downloads it through a
-   signed URL, with every step audited.
-7. `updates` module: draft, publish, client reads it.
-8. `portal`: login, project overview, programme, documents, updates. Beautiful. Not a
-   placeholder — this screen is the product demo.
+3. Module registry, manifests, boundary lint, empty-module-set boot test.
+4. `clients` + `projects`: create a client, create a project under them, add staff and
+   client members.
+5. `journey`: the eleven phases as a versioned definition, with gate evaluation and
+   audited transitions.
+6. `comms`: project channels and object-anchored threads, internal only, with the wall
+   tested from every angle.
+7. `media` + `documents`: upload from a phone on site, derivatives, revisions, issue to
+   client, signed download.
+8. `updates`: draft, publish, client reads it.
+9. `portal`: login, project overview, phase progress, documents, updates, and the
+   client's outstanding actions. Beautiful — this screen is the product demo.
 
-**Phase 0 is not done until a hostile test suite passes**, and these tests are written
-alongside the features, not after:
+**Phase 1:** the full Introduction Phase including consultation scheduling, approve/deny
+with the six-month revisit reminder, proposal, invoice, POP upload and verification,
+onboarding signature. Then tasks and requests, suppliers, and the weekly update
+obligation engine.
 
-- A client user cannot read another project's data — through the API, through a server
-  action, through an id in a URL, through a signed URL that was minted for someone else.
-- A query run without tenant context returns zero rows (RLS proven, not assumed).
-- A draft update and an unissued revision are invisible to clients.
-- A staff session cookie cannot authenticate against portal routes, and the reverse.
-- Signed URLs expire, and are bound to the principal they were issued to.
+**Phase 2:** direct and group messaging, real-time delivery, presence, mobile push,
+search — the path off the practice's current chat tools.
+
+**Phase 0 is not done until a hostile test suite passes**, written alongside the
+features rather than after:
+
+- A client cannot read another project's data — via API, server action, an id in a URL,
+  or a signed URL minted for someone else.
+- A query without tenant context returns zero rows. RLS proven, not assumed.
+- No internal thread, message, note or task is reachable by any client principal —
+  through the portal, an export, a notification, a webhook or search.
+- Drafts and unissued revisions are invisible to clients.
+- A staff session cookie cannot authenticate a portal route, or the reverse.
+- A phase cannot advance with an unmet gate, through any path.
+- An automated update composed from a project with internal notes contains none of them.
+- Signed URLs expire and are bound to their principal.
 - Every mutating route rejects a request without CSRF protection.
-- The app builds and its tests pass with every optional module disabled.
+- Uploads with mismatched declared and actual content type are rejected; GPS is stripped.
+- The app builds and tests pass with every optional module disabled.
 - Contrast, keyboard navigation and focus order pass automated accessibility checks.
 
 Wire these into a single `npm run verify` that CI runs on every push and that must be
 green before anything merges.
 
-**Deliberately not in phase 0:** approvals, markup, selections, invoicing, CAD/BIM
-preview, mobile apps, AI features, third-party sync. Their seams exist; their features
-wait.
+## 9. How to work
 
-## 6. How to work
-
-- **Plan before building.** Produce the phase 0 plan, the module list, the schema, and
-  the security model as documents. Get them approved. Then build.
-- **Small, coherent, reviewable commits** with messages that explain *why*.
-- **Write down decisions.** `docs/adr/` for anything a future maintainer would
-  otherwise have to reverse-engineer. Comments explain the reasoning that the code
-  cannot.
+- **Plan before building.** Produce the module list, the schema, the journey definition
+  and the security model as documents. Get them approved. Then build.
+- **Small, coherent commits** with messages explaining *why*.
+- **Write decisions down** in `docs/adr/`. Comments explain reasoning the code cannot.
 - **Every security control needs a test that fails when the control is removed.** An
   untested control is a comment.
-- **Never weaken a check to make something pass.** Not the type checker, not the lint
-  rule, not the CSP, not a test. If a control is wrong, argue it and change it
-  deliberately, in its own commit.
+- **Never weaken a check to make something pass** — not the type checker, not the lint
+  rule, not the CSP, not a test. If a control is wrong, change it deliberately, in its
+  own commit, with the argument written down.
 - **A fix for a defect found in review targets the main branch**, not the branch that
-  introduced it — a stacked fix is only safe while its base is unmerged, and nothing
-  watches for that changing. After any merge, verify the change actually reached the
-  branch that deploys.
-- **Ask when the answer changes the architecture.** Proceed with a stated assumption
-  when it does not.
+  introduced it. A stacked fix is safe only while its base is unmerged, and nothing
+  watches for that changing. After any merge, verify the change reached the branch that
+  deploys.
+- **Ask when the answer changes the architecture; assume, and say so, when it does not.**
 
-## 7. Your first response
+## 10. Your first response
 
 Do not write code yet. Reply with:
 
-1. Anything in this brief that is contradictory, under-specified, or that you would
-   push back on — including anything you think is over-engineered for the stated scale.
-2. Your proposed module boundaries and the schema for phase 0.
-3. The security model: RLS policy shape, principal types, session design, and the
-   authorisation surface.
-4. The token architecture and how a supplied brand is injected.
-5. The phase 0 build order, and what you will need from me at each step.
+1. Anything contradictory, under-specified, or over-engineered for the stated scale —
+   including anything in the source document that you think will not survive contact with
+   how the practice actually works.
+2. Your module boundaries and the Phase 0 schema.
+3. The journey definition as data: phases, gates, and how a phase advance is evaluated.
+4. The security model: RLS policy shape, principal types, session design, the
+   authorisation surface, and specifically how the internal/client wall is enforced in
+   the database rather than in application code.
+5. The token architecture and how a supplied brand is injected.
+6. The Phase 0 build order, and what you need from me at each step.
