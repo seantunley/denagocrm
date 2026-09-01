@@ -1,3 +1,5 @@
+import Link from "next/link";
+import { CalendarDays, CirclePlus, ListTodo, Plus, UserRoundPlus } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { formatDate } from "@/lib/format";
 import { FollowUpPrompts } from "@/components/proactive/NextStep";
@@ -10,30 +12,13 @@ import {
 import { dashboardViewer, dashboardWindow, plannedActivities, grants } from "@/lib/dashboard/data";
 
 /**
- * The home screen: the user's own dashboard.
+ * The home screen is a command centre first and a report second.
  *
- * This page used to be ~890 lines of queries and markup, then a thin shell over
- * a flat list of twelve fixed cards. It is now a shell over a CONFIG — tabs,
- * sections, and cards the user built — and the only thing that makes it "home"
- * is which dashboard it resolves to.
- *
- * ── NOT YET TAKEN CONTROL ───────────────────────────────────────────────────
- *
- * A user with no stored dashboard gets `defaultDashboard()`, which is generated
- * from the card catalogue rather than read from the database. Nothing is written
- * until their first edit. That matters for two reasons: a brand-new user's home
- * screen is exactly what it has always been with no migration to run, and a
- * default that IMPROVES in a later release reaches everyone who never customised
- * theirs, instead of freezing at whatever the catalogue looked like on the day
- * they signed up.
- *
- * ── WHAT IS NOT A CARD, AND WHY ─────────────────────────────────────────────
- *
- * The greeting and the follow-up prompts sit outside the dashboard entirely.
- * The prompts are an INTERACTION — mark it done, or do not — rather than a
- * summary, and they are about the viewer's own overdue work. A user who
- * rearranged them off their screen would silently stop being asked about it.
- * Everything that is a summary is a card; these two are not.
+ * The configurable dashboard remains intact below this shell. The shell itself is
+ * deliberately opinionated: greeting, date, workload and the three actions a
+ * salesperson reaches for most often. Those are navigation affordances rather
+ * than dashboard cards, so they should not disappear because somebody rearranged
+ * their reporting layout.
  */
 export default async function DashboardPage({
   searchParams,
@@ -43,14 +28,9 @@ export default async function DashboardPage({
   const { tab } = await searchParams;
   const { user, access } = await dashboardViewer();
 
-  // The stored home dashboard, or the generated one. `dashboardBySlug` is
-  // scoped to the session user, so this can only ever be the caller's own.
   const dashboard = (await dashboardBySlug(DEFAULT_DASHBOARD_SLUG)) ?? defaultDashboard();
-
   const { todayStart, now } = await dashboardWindow();
 
-  // The viewer's OWN overdue items. Inherently self-scoped — assignedToId is the
-  // caller — so this shows nobody else's work regardless of permissions.
   const myOverdue = await prisma.activity.findMany({
     where: { status: "planned", dueDate: { lt: todayStart }, assignedToId: user.id },
     orderBy: { dueDate: "asc" },
@@ -58,9 +38,6 @@ export default async function DashboardPage({
     include: { lead: true },
   });
 
-  // Drawn from the same query the agenda card uses (memoised, so it is free
-  // here), and shown only to someone who may see activities at all — otherwise
-  // the subtitle would quietly report the size of a queue they cannot open.
   const seesActivities = grants(access, "activities.view", "activities.manage");
   const dueTodayCount = seesActivities ? (await plannedActivities()).today.length : null;
 
@@ -69,9 +46,22 @@ export default async function DashboardPage({
   );
   const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
   const firstName = user.name.split(/\s+/)[0];
+  const dateLabel = now.toLocaleDateString("en-ZA", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    timeZone: "Africa/Johannesburg",
+  });
+
+  const workloadLabel =
+    dueTodayCount === null
+      ? null
+      : dueTodayCount === 0
+        ? "Your agenda is clear today"
+        : `${dueTodayCount} ${dueTodayCount === 1 ? "action" : "actions"} need your attention today`;
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-7 pb-8">
       <FollowUpPrompts
         prompts={myOverdue.map((a) => ({
           id: a.id,
@@ -83,18 +73,47 @@ export default async function DashboardPage({
         }))}
       />
 
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight text-foreground">
-          {greeting}, {firstName}
-        </h1>
-        {dueTodayCount !== null && (
-          <p className="mt-0.5 text-sm text-muted-foreground">
-            {dueTodayCount === 0
-              ? "Nothing on the agenda today — a clean slate."
-              : `${dueTodayCount} ${dueTodayCount === 1 ? "item" : "items"} on today's agenda.`}
-          </p>
-        )}
-      </div>
+      <header className="flex flex-col gap-5 border-b border-border/50 pb-6 xl:flex-row xl:items-end xl:justify-between">
+        <div className="min-w-0">
+          <div className="mb-2 flex items-center gap-2 text-sm text-muted-foreground">
+            <CalendarDays className="size-4" aria-hidden="true" />
+            <span>{dateLabel}</span>
+          </div>
+          <h1 className="text-3xl font-semibold tracking-[-0.03em] text-foreground sm:text-4xl">
+            {greeting}, {firstName}
+          </h1>
+          {workloadLabel && (
+            <p className="mt-2 flex items-center gap-2 text-sm text-muted-foreground sm:text-base">
+              <ListTodo className="size-4 shrink-0 text-primary" aria-hidden="true" />
+              {workloadLabel}
+            </p>
+          )}
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <Link
+            href="/leads/new"
+            className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+          >
+            <UserRoundPlus className="size-4" aria-hidden="true" />
+            New lead
+          </Link>
+          <Link
+            href="/activities/new"
+            className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-border/70 bg-card/50 px-4 py-2 text-sm font-medium text-foreground transition hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+          >
+            <CirclePlus className="size-4 text-muted-foreground" aria-hidden="true" />
+            Add task
+          </Link>
+          <Link
+            href="/activities"
+            className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-border/70 bg-card/50 px-4 py-2 text-sm font-medium text-foreground transition hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+          >
+            <Plus className="size-4 text-muted-foreground" aria-hidden="true" />
+            Log activity
+          </Link>
+        </div>
+      </header>
 
       <DashboardScreen dashboard={dashboard} tab={tab} />
     </div>
