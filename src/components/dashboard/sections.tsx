@@ -62,6 +62,19 @@ export function SectionCard({
   children: React.ReactNode;
 }) {
   return (
+    /*
+     * `h-full` is NOT what makes a card with `rows: 2` two rows tall, and
+     * assuming it was is how the blank gaps under tall cards survived a fix.
+     * `height: 100%` resolves only against a containing block with a DEFINITE
+     * height; the placement box around a dashboard card has `height: auto` (the
+     * grid is `items-start`), so it computed to `auto` and the panel stayed at
+     * its content height inside a box that had been made 22rem tall. The height
+     * a card asks for is handed to THIS element directly — see CARD_MIN_HEIGHT
+     * in components/dashboard/cards/placement.ts.
+     *
+     * It stays because SectionCard is also used in cells that are genuinely
+     * stretched, where a percentage does resolve and this is what fills them.
+     */
     <section className="flex h-full min-w-0 flex-col rounded-2xl border border-border/55 bg-card/35 p-5 shadow-[0_1px_0_rgba(255,255,255,0.02)] backdrop-blur-sm">
       <div className="mb-4 flex min-h-7 items-center justify-between gap-3">
         <h2 className="text-sm font-semibold tracking-tight text-foreground">{title}</h2>

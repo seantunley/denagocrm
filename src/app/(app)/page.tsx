@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { CalendarDays, CirclePlus, ListTodo, Plus, UserRoundPlus } from "lucide-react";
+import { CalendarDays, ListTodo, Plus, UserRoundPlus } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { formatDate } from "@/lib/format";
 import { FollowUpPrompts } from "@/components/proactive/NextStep";
@@ -28,6 +28,16 @@ export default async function DashboardPage({
   const { tab } = await searchParams;
   const { user, access } = await dashboardViewer();
 
+  /*
+   * The stored home dashboard, or a GENERATED default. `dashboardBySlug` is
+   * scoped to the session user, so this can only ever be the caller's own.
+   *
+   * Nothing is written until the user's first edit, and that is deliberate:
+   * a default that improves in a later release then reaches everyone who never
+   * customised theirs, instead of freezing at whatever the catalogue looked like
+   * on the day they signed up. Persisting `defaultDashboard()` here to "fix" the
+   * missing row would quietly take that away.
+   */
   const dashboard = (await dashboardBySlug(DEFAULT_DASHBOARD_SLUG)) ?? defaultDashboard();
   const { todayStart, now } = await dashboardWindow();
 
@@ -90,28 +100,54 @@ export default async function DashboardPage({
           )}
         </div>
 
+        {/*
+          EACH ACTION IS GATED ON THE PERMISSION ITS DESTINATION ENFORCES.
+
+          The rule is the house one, stated on the nav that offers these same two
+          destinations (components/nav-config.ts): the guard "applies on the page,
+          so this link cannot appear for someone /fleets bounces". Ungated, these
+          were three prominent primary actions that a constrained user could click
+          and be silently redirected to `/` by — `/leads/new` calls
+          requirePermission("leads.create"), and `/activities` calls
+          requireAnyPermission("activities.view", "activities.manage").
+
+          Not a security question — both destinations guard themselves and did so
+          throughout. It is the difference between a screen that offers what you
+          can do and one that offers what you cannot.
+
+          `seesActivities` is deliberately reused rather than re-derived: it is
+          already the exact pair /activities enforces, and the workload line above
+          is gated on it for the same reason.
+        */}
         <div className="flex flex-wrap gap-2">
-          <Link
-            href="/leads/new"
-            className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
-          >
-            <UserRoundPlus className="size-4" aria-hidden="true" />
-            New lead
-          </Link>
-          <Link
-            href="/activities"
-            className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-border/70 bg-card/50 px-4 py-2 text-sm font-medium text-foreground transition hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
-          >
-            <CirclePlus className="size-4 text-muted-foreground" aria-hidden="true" />
-            Add task
-          </Link>
-          <Link
-            href="/activities"
-            className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-border/70 bg-card/50 px-4 py-2 text-sm font-medium text-foreground transition hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
-          >
-            <Plus className="size-4 text-muted-foreground" aria-hidden="true" />
-            Log activity
-          </Link>
+          {grants(access, "leads.create") && (
+            <Link
+              href="/leads/new"
+              className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+            >
+              <UserRoundPlus className="size-4" aria-hidden="true" />
+              New lead
+            </Link>
+          )}
+          {/*
+            ONE button, not two. "Add task" and "Log activity" were separate
+            buttons with separate icons pointing at the SAME url, so one of them
+            was always a duplicate of the other.
+
+            They both still land on the agenda rather than a create form, because
+            there is no /activities/new — the route takes only `who`, `q` and
+            `type`. Worth a dedicated create route or modal later; that is a
+            product call, not something to invent while removing a duplicate.
+          */}
+          {seesActivities && (
+            <Link
+              href="/activities"
+              className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-border/70 bg-card/50 px-4 py-2 text-sm font-medium text-foreground transition hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+            >
+              <Plus className="size-4 text-muted-foreground" aria-hidden="true" />
+              Log activity
+            </Link>
+          )}
         </div>
       </header>
 
