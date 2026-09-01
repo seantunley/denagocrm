@@ -26,7 +26,10 @@ test("Flowbot nodes can be dragged from the palette onto a snapped canvas", () =
 });
 
 test("Flowbot canvas exposes navigation aids and preserves dark React Flow controls", () => {
-  assert.match(source, /<MiniMap pannable zoomable/);
+  // The MiniMap was removed at Sean's request (2026-09-01) — it read as clutter
+  // in the corner of the canvas. Pinned ABSENT so a library upgrade or a copied
+  // example does not quietly bring it back.
+  assert.doesNotMatch(source, /<MiniMap/);
   assert.match(source, /<Controls\s+showInteractive=\{false\}/);
   /*
    * These asserted the selector that DOES NOT WORK, and so defended the bug.
