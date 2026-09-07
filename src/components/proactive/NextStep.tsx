@@ -325,7 +325,7 @@ export function CompleteActivityButton({ activityId }: { activityId: string }) {
            */
           onClose={() => {
             setNextStep(null);
-            void refreshAfterNextStep();
+            void refreshAfterNextStep(nextStep.leadId);
           }}
         />
       )}
@@ -521,7 +521,7 @@ export function FollowUpPrompts({ prompts }: { prompts: OverduePrompt[] }) {
            */
           onClose={() => {
             setNextStep(null);
-            void refreshAfterNextStep();
+            void refreshAfterNextStep(nextStep.leadId);
           }}
         />
       )}

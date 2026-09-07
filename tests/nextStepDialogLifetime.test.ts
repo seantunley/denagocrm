@@ -52,8 +52,21 @@ test("the completion action does NOT revalidate when a next step is needed", () 
   const body = fn.slice(0, fn.indexOf("export async function", 10));
   assert.match(
     body,
-    /if\s*\(\s*!needsNextStep\s*\)\s*revalidateActivityViews\(\)/,
+    /if\s*\(\s*!needsNextStep\s*\)\s*\{?\s*revalidateActivityViews\(\)/,
     "the refresh must be conditional — this is the whole fix",
+  );
+  /*
+   * The record pages are inside the SAME guard now.
+   *
+   * They were not, and that is why this test passed while the dialog still
+   * vanished: finishActivity called revalidateRecordPages unconditionally, and
+   * revalidatePath in a Server Action refreshes the CURRENT tree regardless of
+   * which path it names. The conditional pinned here was real but incomplete.
+   */
+  assert.match(
+    body,
+    /if\s*\(\s*!needsNextStep\s*\)\s*\{[\s\S]*?revalidateRecordPages\(activity\)[\s\S]*?\}/,
+    "the record pages must be deferred with the views, not left to finishActivity",
   );
   // A bare revalidatePath left behind in this function would reintroduce it.
   assert.doesNotMatch(
@@ -80,7 +93,9 @@ test("both dialog call sites refresh when the dialog closes", () => {
   const component = code("src/components/proactive/NextStep.tsx");
   const closers = component.match(/onClose=\{\(\) => \{/g) ?? [];
   assert.equal(closers.length, 2, "both call sites must use the refreshing onClose");
-  const refreshes = component.match(/refreshAfterNextStep\(\)/g) ?? [];
+  // `(` not `()`: the deferred refresh now takes the lead id it skipped while
+  // the dialog was open, so an empty-parens match would fail a correct call.
+  const refreshes = component.match(/refreshAfterNextStep\(/g) ?? [];
   assert.equal(refreshes.length, 2, "…and each must actually call it");
   // The old one-liner must be gone from both.
   assert.doesNotMatch(component, /onClose=\{\(\) => setNextStep\(null\)\}/);
@@ -93,7 +108,7 @@ test("the refresh runs on dismissal too, not only on completion", () => {
   for (const block of component.split("onClose={() => {").slice(1)) {
     const handler = block.slice(0, block.indexOf("}}"));
     assert.match(handler, /setNextStep\(null\)/);
-    assert.match(handler, /refreshAfterNextStep\(\)/);
+    assert.match(handler, /refreshAfterNextStep\(/);
     assert.doesNotMatch(handler, /if\s*\(/, "the refresh must not be conditional on how it closed");
   }
 });

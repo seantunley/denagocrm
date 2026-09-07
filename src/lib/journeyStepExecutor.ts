@@ -11,6 +11,7 @@ import { logAudit } from "./audit";
 import { emitJourneyEvent } from "./journeyEvents";
 import { emitLeadJourneyEvent } from "./leadJourneyEvents";
 import { markReferralEarned } from "./referrals";
+import { cancelPlannedActivitiesForLostLead } from "./leadClose";
 import { canContactPerson, nextCommunicationWindow } from "./communicationPolicy";
 import { JourneyContext, journeyTemplateVars } from "./journeyContext";
 import { AbortJourney } from "./journeyControlFlow";
@@ -420,6 +421,14 @@ export async function executeJourneyStep(args: {
       // bookkeeping failure must not undo that by failing the step.
       if (step.type === "lead_mark_won" && leadId) {
         await markReferralEarned(leadId).catch(() => {});
+      }
+      // A journey marking a lead lost must clear its agenda exactly as a rep
+      // doing it by hand does — otherwise the automated path is the one that
+      // leaves the dead tasks behind. Gated on `applied`, so a step that matched
+      // nothing cancels nothing. Best-effort like the referral above: the lead IS
+      // lost, and failing to tidy must not fail the step and retry the close.
+      if (step.type === "lead_mark_lost" && leadId) {
+        await cancelPlannedActivitiesForLostLead(leadId).catch(() => {});
       }
       // Re-enters the engine, which is the point: a `lead_won` journey should
       // fire whether the win came from a rep, a signed quote, or this step.
