@@ -114,6 +114,24 @@ test("the cluster reads as one object", () => {
   assert.doesNotMatch(cluster, /bg-primary|shadow-lg|border-primary/);
 });
 
+test("THE TRIGGER ITSELF SAYS WHO YOU ARE, AND STILL FITS A PHONE", () => {
+  /*
+   * The top bar showed an avatar and nothing else, so the surface everybody looks
+   * at could not answer "which account am I in?" without being opened.
+   *
+   * The breakpoint is the other half and is not decoration: AccountCluster renders
+   * in BOTH the mobile header and the desktop top bar (test 1), and a full name
+   * plus role does not fit beside the burger and search on a phone. Dropping the
+   * `sm:` guard would push the mobile header's columns out — which is what test 12
+   * measures — so the name column must be present AND conditional.
+   */
+  const menu = src("src/components/AccountMenu.tsx");
+  const trigger = menu.slice(menu.indexOf("<DropdownMenuTrigger"), menu.indexOf("<DropdownMenuContent"));
+  assert.match(trigger, /\{user\.name\}/, "the trigger must show the name");
+  assert.match(trigger, /\{user\.role\}/, "…and the role under it");
+  assert.match(trigger, /hidden min-w-0 sm:block/, "…hidden below sm, where there is no room");
+});
+
 test("an avatar-only trigger still says who you are", () => {
   // The sidebar showed the name next to the avatar. Behind an avatar alone it
   // has to be in the menu, or you cannot tell which account you are signed into.
