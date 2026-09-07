@@ -96,8 +96,21 @@ test("the cluster reads as one object", () => {
   const shell = src("src/components/AppShell.tsx");
   const cluster = shell.slice(shell.indexOf("function AccountCluster("), shell.indexOf("function SidebarInner("));
   assert.match(cluster, /rounded-xl border border-sidebar-border\/70/, "a hairline holds it together");
-  assert.match(cluster, /bg-sidebar-accent\/25/, "and a barely-there fill");
-  // Subtle means it must not read as a button or compete with the page.
+  /*
+   * A SOLID accent fill, not a fraction of one.
+   *
+   * This asserted `bg-sidebar-accent/25` and called it "a barely-there fill".
+   * Barely-there was too literal: the bar behind it is oklch(0.171) and
+   * --sidebar-accent is oklch(0.246), so the whole gap is 0.075 and every alpha
+   * below 100% spends most of it on the background underneath. /25 landed around
+   * 0.190 — not a group, just a slightly less dark rectangle.
+   *
+   * The negative is the load-bearing half: reintroducing any alpha fails here,
+   * because that is the change that silently makes the cluster disappear again.
+   */
+  assert.match(cluster, /bg-sidebar-accent(?![/\d])/, "the fill is the accent at full strength");
+  assert.doesNotMatch(cluster, /bg-sidebar-accent\/\d/, "not a fraction of it — that is what made it invisible");
+  // Distinct still must not mean loud: it is a grouping, not a call to action.
   assert.doesNotMatch(cluster, /bg-primary|shadow-lg|border-primary/);
 });
 
