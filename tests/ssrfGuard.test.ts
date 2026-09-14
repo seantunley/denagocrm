@@ -4,7 +4,7 @@ import http from "node:http";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { Agent } from "undici";
+import { Agent, fetch as undiciFetch } from "undici";
 import {
   isPrivateIp,
   isBlockedHost,
@@ -130,9 +130,12 @@ test("undici still honours a custom connect.lookup", async () => {
         }),
       },
     });
-    const res = await fetch(`http://localhost:${server.port}/`, {
+    // undici's fetch, matching production (lib/safeFetch.ts). Pairing an npm
+    // undici Agent with Node's GLOBAL fetch pairs two different copies of
+    // undici, which is the failure described on the test below.
+    const res = await undiciFetch(`http://localhost:${server.port}/`, {
       dispatcher: permissive,
-    } as RequestInit & { dispatcher: Agent });
+    });
     assert.equal(res.status, 200);
     assert.equal(await res.text(), "ok");
     assert.ok(called, "undici must call the custom lookup");
@@ -146,16 +149,19 @@ test("the real pinnedAgent refuses to connect to loopback, for the right reason"
   // End to end, through real undici: our filter must actually stop the socket.
   //
   // The `cause` assertion is the point. A bare "it rejected" would pass even
-  // when the dispatcher is not working AT ALL — which is exactly what happens
-  // on undici 8, where global fetch rejects a v8 Agent with "invalid
-  // onRequestStart method" before our lookup is ever consulted. A guard test
-  // that cannot tell "we blocked it" from "the plumbing is broken" is worse
-  // than no test, because it reports green while the guard is inert.
+  // when the dispatcher is not working AT ALL — which is exactly what happened
+  // on undici 8 while this used Node's GLOBAL fetch: it rejected a v8 Agent with
+  // "invalid onRequestStart method" before our lookup was ever consulted. A
+  // guard test that cannot tell "we blocked it" from "the plumbing is broken" is
+  // worse than no test, because it reports green while the guard is inert.
+  //
+  // That is also why the fix was to move production onto undici's own fetch
+  // rather than to relax this assertion — the assertion was right.
   const server = await loopbackServer();
   try {
-    const error = await fetch(`http://localhost:${server.port}/`, {
+    const error = await undiciFetch(`http://localhost:${server.port}/`, {
       dispatcher: pinnedAgent,
-    } as RequestInit & { dispatcher: Agent }).then(
+    }).then(
       () => null,
       (e: Error & { cause?: Error }) => e,
     );
@@ -175,12 +181,46 @@ test("safeFetch still routes every request through the pinned dispatcher", () =>
   // without `dispatcher: pinnedAgent` would silently bypass the connect-time
   // check and leave only the pre-flight one, reopening the rebinding window.
   const code = read("src/lib/safeFetch.ts");
-  const fetches = [...code.matchAll(/\bfetch\(/g)];
+  /*
+   * No `\b`, and case-insensitive, so this counts `undiciFetch(` too. The old
+   * `/\bfetch\(/` counted ZERO once production moved to undici's fetch: there is
+   * no word boundary between the `i` and the `F` of `undiciFetch`. An exact-count
+   * assertion is what caught that — a "no unguarded fetch" assertion would have
+   * gone green by matching nothing at all.
+   */
+  const fetches = [...code.matchAll(/fetch\(/gi)];
   assert.equal(fetches.length, 1, "expected exactly one fetch in safeFetch");
+  // …and it must be undici's, or the dispatcher below is silently inert.
+  assert.match(code, /await undiciFetch\(/, "the request must go through undici's own fetch");
+  assert.doesNotMatch(
+    code,
+    /await fetch\(/,
+    "Node's global fetch cannot drive an npm-undici Agent — see the comment in safeFetch",
+  );
   assert.match(code, /dispatcher: pinnedAgent/);
   assert.match(code, /redirect: "manual"/, "redirects must stay manually validated");
   assert.match(code, /await assertResolvesPublic\(u\.hostname\)/);
   assert.match(code, /signal: AbortSignal\.timeout/, "an outbound fetch must be bounded");
+});
+
+test("THE FLOWBOT HTTP TOOL IS GUARDED THE SAME WAY — and was untested until now", () => {
+  /*
+   * lib/flowRuntimeTools.ts runs arbitrary author-supplied URLs from a chatbot
+   * flow, which makes it the most exposed outbound fetch in the app. It got its
+   * own connect-time re-check (`guardedDispatcher`) in #616 and NO test — so the
+   * undici-8 swap that broke lib/safeFetch would have broken this silently.
+   *
+   * Source-level, deliberately: driving the real thing needs a flow runtime, a
+   * database and a live socket. What can regress here is the WIRING — the pair
+   * coming apart — and that is exactly what source can see.
+   */
+  const code = read("src/lib/flowRuntimeTools.ts");
+  assert.match(code, /await undiciFetch\(url,/, "the outbound call must use undici's own fetch");
+  assert.match(code, /dispatcher: guardedDispatcher/, "…with the connect-time guard attached");
+  // Both halves must come from ONE undici, which is the whole lesson of the v8
+  // break: a global-fetch call here would reject the Agent before it is asked.
+  assert.match(code, /import \{ Agent, fetch as undiciFetch \} from "undici"/);
+  assert.match(code, /redirect: "error"/, "a redirect must not escape the vetted address");
 });
 
 test("the guard carries no server-only marker, so it stays testable", () => {
