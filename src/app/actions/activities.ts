@@ -10,6 +10,7 @@ import {
   type PermissionUser,
 } from "@/lib/permissions";
 import { requireUser } from "@/lib/auth";
+import { futureActivityRefusal, isFutureDay } from "@/lib/activityDay";
 import { resolveAssignableUser } from "@/lib/tenantActor";
 import { logAudit } from "@/lib/audit";
 import { reserveSlot } from "@/lib/bookingSlots";
@@ -203,7 +204,27 @@ export async function scheduleActivity(formData: FormData) {
 }
 
 async function finishActivity(id: string, note: string) {
-  const { user } = await requireActivityAccess(id);
+  const { user, activity: scheduled } = await requireActivityAccess(id);
+  /*
+   * THE ONE CHOKEPOINT. Six places in the UI offer a "done" control — the two
+   * activity lists, the lead timeline, the activity panel, the calendar and the
+   * dashboard agenda — and every one of them arrives here, through either
+   * `completeActivity` or `completeActivityAssess`. Guarding here covers all of
+   * them; guarding in a component covers one and invites the next one to forget.
+   *
+   * Completing work scheduled for a day that has not started is not a typo the
+   * user meant: it silently inflates completion stats, marks a lead as followed
+   * up when nobody called, and removes the item from tomorrow's agenda so it
+   * never gets done.
+   *
+   * NOT applied to `testDrives.ts`, which also sets an activity done. That path
+   * records a test drive actually being RETURNED — a real-world event that has
+   * happened — rather than a person ticking a box early, and refusing it would
+   * block the return being logged.
+   */
+  if (isFutureDay(scheduled.dueDate)) {
+    throw new Error(futureActivityRefusal(scheduled.dueDate));
+  }
   const activity = await prisma.activity.update({
     where: { id },
     data: { status: "done", doneAt: new Date() },

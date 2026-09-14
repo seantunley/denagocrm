@@ -32,6 +32,9 @@ import {
   XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
+import { isFutureDay } from "@/lib/activityDay";
+import { useActivityTypes } from "@/components/ActivityTypesProvider";
+import { findActivityType, type ActivityType } from "@/lib/activityTypes";
 import {
   cancelActivity,
   completeActivity,
@@ -143,8 +146,19 @@ const DEFAULT_EVENT_TYPE = {
   dot: "bg-slate-400",
 };
 
-function eventType(type: string) {
-  return EVENT_TYPES[type] ?? DEFAULT_EVENT_TYPE;
+/**
+ * The chip's colour, icon and NAME for an activity type.
+ *
+ * Tone and icon come from the built-in map — a custom type has no colour of its
+ * own and gets the neutral default. The LABEL is looked up in the workspace's
+ * type list first, because a type the tenant invented ("Golf Day") would
+ * otherwise render as the generic "Activity" here, in the type filter, and in
+ * the search haystack, while the form that created it said Golf Day.
+ */
+function eventType(type: string, types?: readonly ActivityType[]) {
+  const base = EVENT_TYPES[type] ?? DEFAULT_EVENT_TYPE;
+  const configured = types ? findActivityType(types, type) : null;
+  return configured ? { ...base, label: configured.label } : base;
 }
 
 function initials(name: string) {
@@ -179,7 +193,8 @@ function EventCard({
   onOpen: (event: CalendarWorkspaceEvent) => void;
   onDragStart: (eventId: string) => void;
 }) {
-  const config = eventType(event.type);
+  const activityTypes = useActivityTypes();
+  const config = eventType(event.type, activityTypes);
   const Icon = event.workshop ? Wrench : config.icon;
   const done = event.status === "done";
 
@@ -218,7 +233,7 @@ function EventCard({
               </p>
               {!compact && (
                 <div className="mt-1.5 flex min-w-0 items-center gap-2 text-[11px] opacity-70">
-                  <span className="truncate">{event.who ?? eventType(event.type).label}</span>
+                  <span className="truncate">{event.who ?? config.label}</span>
                   <span aria-hidden="true">·</span>
                   <span className="truncate">{event.assignee}</span>
                 </div>
@@ -358,6 +373,8 @@ export default function CalendarWorkspace({
   const [rescheduleValue, setRescheduleValue] = useState("");
   const [isPending, startTransition] = useTransition();
 
+  const activityTypes = useActivityTypes();
+
   const owners = useMemo(
     () =>
       Array.from(new Set(events.map((event) => event.assignee))).sort(),
@@ -379,7 +396,7 @@ export default function CalendarWorkspace({
           event.context,
           event.assignee,
           event.location,
-          eventType(event.type).label,
+          eventType(event.type, activityTypes).label,
         ]
           .filter(Boolean)
           .join(" ")
@@ -756,7 +773,7 @@ export default function CalendarWorkspace({
               <option value="">All activity types</option>
               {types.map((value) => (
                 <option key={value} value={value}>
-                  {eventType(value).label}
+                  {eventType(value, activityTypes).label}
                 </option>
               ))}
             </select>
@@ -1297,7 +1314,7 @@ export default function CalendarWorkspace({
                         ? "border-red-500/30 bg-red-500/10 text-red-200"
                         : selectedEvent.status === "done"
                           ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
-                          : eventType(selectedEvent.type).tone,
+                          : eventType(selectedEvent.type, activityTypes).tone,
                     )}
                   >
                     <span
@@ -1307,14 +1324,14 @@ export default function CalendarWorkspace({
                           ? "bg-red-400"
                           : selectedEvent.status === "done"
                             ? "bg-emerald-400"
-                            : eventType(selectedEvent.type).dot,
+                            : eventType(selectedEvent.type, activityTypes).dot,
                       )}
                     />
                     {selectedEvent.status === "done"
                       ? "Completed"
                       : selectedEvent.overdue
                         ? "Overdue"
-                        : eventType(selectedEvent.type).label}
+                        : eventType(selectedEvent.type, activityTypes).label}
                   </span>
                 </div>
                 <DialogTitle className="mt-2 text-xl leading-tight">
@@ -1433,14 +1450,20 @@ export default function CalendarWorkspace({
                         <XCircle className="size-4" />
                         Cancel
                       </Button>
-                      <Button
-                        type="button"
-                        onClick={completeSelected}
-                        disabled={isPending}
-                      >
-                        <Check className="size-4" />
-                        Complete
-                      </Button>
+                      {/* Not offered before the day arrives. `selectedEvent.dueDate`
+                          is an ISO STRING here, hence the Date(). finishActivity
+                          refuses it server-side either way; this stops the calendar
+                          presenting a button that can only fail. */}
+                      {!isFutureDay(new Date(selectedEvent.dueDate)) && (
+                        <Button
+                          type="button"
+                          onClick={completeSelected}
+                          disabled={isPending}
+                        >
+                          <Check className="size-4" />
+                          Complete
+                        </Button>
+                      )}
                     </div>
                   )}
               </div>
