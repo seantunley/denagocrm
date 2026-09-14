@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { ChevronsUpDown, KeyRound, LogOut, Settings, Trash2, UserRound } from "lucide-react";
+import { ChevronDown, KeyRound, LogOut, Settings, Trash2, UserRound } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   DropdownMenu,
@@ -14,7 +14,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { logout } from "@/app/login/actions";
 import { APP_VERSION } from "@/lib/version";
-import { cn } from "@/lib/utils";
 import { clearChecklistDeviceData, offlinePendingCount } from "@/lib/checklists/deviceStore";
 import {
   Dialog,
@@ -47,8 +46,10 @@ function initials(name: string) {
  * ONE implementation. Two copies of a menu containing "Sign out" is the kind of
  * thing that drifts — one gains an item and the other quietly does not.
  *
- * `compact` is the top-bar form: avatar only, no name column, and the panel opens
- * downward because a bar at the top of the page cannot open one upwards.
+ * `compact` now means only "opens downward" — a bar at the top of the page cannot
+ * open a panel upwards. It used to also select an avatar-only trigger, but that
+ * left the signed-in name invisible on the one surface everybody looks at, so
+ * there is a single trigger and the name column simply drops below `sm`.
  */
 export default function AccountMenu({
   user,
@@ -75,15 +76,15 @@ export default function AccountMenu({
     await logout();
   }
   const avatar = (
-    <Avatar className={cn("rounded-md", compact ? "size-7" : "size-7")}>
+    <Avatar className="size-7 rounded-full">
       {user.avatarVersion ? (
         <AvatarImage
           src={`/api/profile/avatar?v=${encodeURIComponent(user.avatarVersion)}`}
           alt=""
-          className="rounded-md object-cover"
+          className="rounded-full object-cover"
         />
       ) : null}
-      <AvatarFallback className="rounded-md bg-primary/15 text-[11px] font-semibold text-primary">
+      <AvatarFallback className="rounded-full bg-primary/15 text-[11px] font-semibold text-primary">
         {initials(user.name)}
       </AvatarFallback>
     </Avatar>
@@ -93,24 +94,26 @@ export default function AccountMenu({
     <>
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        {compact ? (
-          <button
-            type="button"
-            aria-label={`Account — ${user.name}`}
-            className="grid place-items-center rounded-lg p-0.5 transition-colors hover:bg-sidebar-accent data-[state=open]:bg-sidebar-accent"
-          >
-            {avatar}
-          </button>
-        ) : (
-          <button className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-sidebar-accent">
-            {avatar}
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-[13px] font-medium text-sidebar-foreground">{user.name}</p>
-              <p className="truncate text-[11px] capitalize text-muted-foreground">{user.role}</p>
-            </div>
-            <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
-          </button>
-        )}
+        {/* ONE trigger. The name column is hidden below `sm` rather than being a
+            second variant: this renders in both the mobile header and the desktop
+            top bar, and a full name plus role does not fit next to the burger and
+            search on a phone. The dropdown still carries the name for that case. */}
+        <button
+          type="button"
+          aria-label={`Account — ${user.name}`}
+          className="flex items-center gap-2 rounded-lg p-0.5 text-left transition-colors hover:bg-sidebar-accent data-[state=open]:bg-sidebar-accent sm:pr-1.5"
+        >
+          {avatar}
+          <span className="hidden min-w-0 sm:block">
+            <span className="block truncate text-[13px] font-medium leading-tight text-sidebar-foreground">
+              {user.name}
+            </span>
+            <span className="block truncate text-[11px] capitalize leading-tight text-muted-foreground">
+              {user.role}
+            </span>
+          </span>
+          <ChevronDown className="hidden size-3.5 shrink-0 text-muted-foreground sm:block" aria-hidden />
+        </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="end"
@@ -119,8 +122,8 @@ export default function AccountMenu({
         collisionPadding={16}
         className="w-[13.5rem]"
       >
-        {/* Who you are signed in as. Obvious in the sidebar, where the name sat
-            next to the avatar; not obvious behind an avatar-only trigger. */}
+        {/* Who you are signed in as — now the fallback for phones, where the
+            trigger's name column is hidden and the avatar stands alone. */}
         {compact && (
           <>
             <DropdownMenuLabel className="pb-1">

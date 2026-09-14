@@ -34,7 +34,11 @@ function AccountCluster({ user, isOwner, tenantId }: { user: ShellUser; isOwner:
     // Held together as one object rather than three loose icons: a hairline
     // border and a barely-there fill, so it reads as a group without competing
     // with the page. The divider separates "app help" from "you".
-    <div className="flex items-center gap-0.5 rounded-xl border border-sidebar-border/70 bg-sidebar-accent/25 p-1 transition-colors hover:border-sidebar-border">
+    // Solid `sidebar-accent` rather than a fraction of it: the bar behind this is
+    // oklch(0.171) and the accent is oklch(0.246), so every alpha below 100% was
+    // spending most of that 0.075 gap on the background it sits over. At /25 it
+    // landed ~0.190 — a step too small to read as a group at all.
+    <div className="flex items-center gap-0.5 rounded-xl border border-sidebar-border/70 bg-sidebar-accent p-1 transition-colors hover:border-sidebar-border hover:brightness-110">
       <SidebarHelpSettings isOwner={isOwner} permissions={user.permissions} compact />
       <div className="mx-0.5 h-5 w-px bg-sidebar-border/70" aria-hidden />
       <AccountMenu user={user} isOwner={isOwner} tenantId={tenantId} compact />

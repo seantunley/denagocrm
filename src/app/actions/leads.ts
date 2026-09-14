@@ -9,6 +9,7 @@ import { recordReferral, markReferralEarned } from "@/lib/referrals";
 import { logAudit, logAuditStrict, GOVERNANCE_TX } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
 import { createLeadRecord } from "@/lib/leadCreate";
+import { cancelPlannedActivitiesForLostLead } from "@/lib/leadClose";
 import { triggerSurvey } from "@/lib/surveys";
 import { removeTimelinePin } from "@/lib/timelinePins";
 import { customerRecordTenantId } from "@/lib/customerRecordTenant";
@@ -1453,12 +1454,20 @@ export async function markLost(leadId: string, formData: FormData) {
     const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
     const lead = await prisma.lead.update({
       where: { id: leadId },
-      data: { status: "lost", lostReason: reason },
+      // `lostAt` was never written by anything, while reports/page.tsx filters
+      // lost leads on it — so the lost-leads report could only ever come back
+      // empty. Set here, where the transition actually happens.
+      data: { status: "lost", lostReason: reason, lostAt: new Date() },
     });
+    // The lead leaves the board; its planned work has to leave the agenda with
+    // it, or it keeps asking to be done from a lead nobody can see.
+    const cancelled = await cancelPlannedActivitiesForLostLead(leadId);
     await emitLeadJourneyEvent("lead_lost", leadId);
     await logAuditStrict({
       action: "lead.lost",
-      summary: `Marked lead “${lead.title}” as lost — ${reason}`,
+      summary:
+        `Marked lead “${lead.title}” as lost — ${reason}` +
+        (cancelled > 0 ? ` (${cancelled} planned ${cancelled === 1 ? "activity" : "activities"} cancelled)` : ""),
       leadId,
       contactId: lead.contactId,
       user,

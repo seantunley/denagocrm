@@ -231,12 +231,24 @@ async function finishActivity(id: string, note: string) {
       },
     });
   }
-  revalidateRecordPages(activity);
+  /*
+   * NO REVALIDATION HERE — the caller decides when it is safe.
+   *
+   * This used to call revalidateRecordPages(activity), which quietly defeated
+   * the deferral in completeActivityAssess below. `revalidatePath` in a Server
+   * Action does not only mark the named path: it invalidates the client Router
+   * Cache and the action's response refreshes the CURRENT tree. So revalidating
+   * /leads/:id still re-rendered the dashboard, unmounted the agenda row, and
+   * took the "What's next?" dialog with it — the same "pops up and immediately
+   * disappears" the comment below describes as already fixed. It was fixed one
+   * level too high.
+   */
   return activity;
 }
 
 export async function completeActivity(id: string, formData: FormData) {
-  await finishActivity(id, String(formData.get("note") ?? ""));
+  const activity = await finishActivity(id, String(formData.get("note") ?? ""));
+  revalidateRecordPages(activity);
   revalidatePath(String(formData.get("revalidate") ?? "/activities"));
   revalidatePath("/activities");
   revalidatePath("/");
@@ -266,9 +278,11 @@ function revalidateActivityViews() {
  * needsNextStep, because that unmounts the row holding the dialog open. The
  * client calls this when the dialog closes, however it closed.
  */
-export async function refreshAfterNextStep(): Promise<void> {
+export async function refreshAfterNextStep(leadId?: string | null): Promise<void> {
   await requireUser();
   revalidateActivityViews();
+  // The lead page was skipped along with the views while the dialog was open.
+  if (leadId) revalidatePath(`/leads/${leadId}`);
 }
 
 export async function completeActivityAssess(
@@ -304,7 +318,13 @@ export async function completeActivityAssess(
    * decision, and the client calls router.refresh() when the dialog closes —
    * whether it was completed or dismissed.
    */
-  if (!needsNextStep) revalidateActivityViews();
+  // Record pages go with the views, for the reason given in finishActivity:
+  // revalidating ANY path refreshes the current tree, so these cannot run while
+  // the dialog is open either.
+  if (!needsNextStep) {
+    revalidateActivityViews();
+    revalidateRecordPages(activity);
+  }
 
   return {
     done: true,
