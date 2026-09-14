@@ -75,6 +75,39 @@ export const API_KEY_POLICY: RateLimitPolicy = {
   blockMs: 5 * 60 * 1000,
 };
 
+/**
+ * The passkey (WebAuthn) login ceremony — both halves, keyed per IP.
+ *
+ * NOT a brute-force guard, and it would be a poor one: forging an assertion
+ * needs the private key, so guessing buys nothing no matter how many attempts
+ * are allowed. It exists for the two things the 2026-09-01 retest found actually
+ * missing, both of which the password path had and this one did not:
+ *
+ *   1. A ceiling on unauthenticated work. Both routes are in PUBLIC_PATHS, and
+ *      each call ran a challenge generation or a database lookup plus signature
+ *      verification, for anyone, unbounded.
+ *   2. Somewhere for a failed attempt to be RECORDED. `/login` throttles and
+ *      calls recordFailedLogin; the passkey route logged successes only, so a
+ *      sustained campaign against it left no trace anywhere. The monitoring gap
+ *      was the more valuable half of that finding.
+ *
+ * DELIBERATELY GENEROUS, and the reason is the constrained user rather than the
+ * attacker. Staff sit behind one office NAT, so this bucket is shared by
+ * everyone in the building: a tight limit modelled on one person's behaviour
+ * (LOGIN_POLICY's 5) would lock out colleagues who had done nothing. 30 per 15
+ * minutes still bounds a script to a trivial rate, while an office of ten each
+ * signing in twice never approaches it.
+ *
+ * Verification follows the LOGIN_POLICY pattern — count FAILURES, clear on
+ * success — so an ordinary signing-in staffer never accumulates against it at
+ * all. Options has no notion of failure and counts every call.
+ */
+export const PASSKEY_POLICY: RateLimitPolicy = {
+  limit: 30,
+  windowMs: 15 * 60 * 1000,
+  blockMs: 15 * 60 * 1000,
+};
+
 function retryAfter(blockedUntil: Date | null, now: Date): number {
   if (!blockedUntil) return 0;
   return Math.max(0, Math.ceil((blockedUntil.getTime() - now.getTime()) / 1000));
