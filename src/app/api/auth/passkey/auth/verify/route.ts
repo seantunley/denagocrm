@@ -87,9 +87,12 @@ export async function POST(req: NextRequest) {
         id: passkey.credentialId,
         publicKey: new Uint8Array(passkey.publicKey),
         counter: Number(passkey.counter),
-        transports: passkey.transports
-          ? (passkey.transports.split(",") as import("@simplewebauthn/server").AuthenticatorTransportFuture[])
-          : undefined,
+        // No cast: SimpleWebAuthn v14 widened `transports` to plain `string[]`.
+        // The assertion here existed only to narrow into v13's
+        // `AuthenticatorTransportFuture[]`, a type v14 removed — so the fix is to
+        // delete the cast rather than to chase its replacement. `split` already
+        // returns exactly what the credential now wants.
+        transports: passkey.transports ? passkey.transports.split(",") : undefined,
       },
     });
   } catch (e) {
