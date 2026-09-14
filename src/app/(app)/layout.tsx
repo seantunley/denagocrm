@@ -3,6 +3,7 @@ import { requireUser, getActiveTenantId } from "@/lib/auth";
 import { brandForTenant, brandLogoUrl, brandStyle, DEFAULT_BRAND } from "@/lib/tenantBrand";
 import { getSetting } from "@/lib/settings";
 import { WEATHER_CITIES_KEY, parseWeatherCities } from "@/lib/weatherCities";
+import { ACTIVITY_TYPES_KEY, resolveActivityTypes } from "@/lib/activityTypes";
 import { awaitingReplyCount } from "@/lib/inboxCount";
 import { casesAwaitingCount } from "@/lib/helpdesk";
 import { getUserPermissionList } from "@/lib/permissions";
@@ -61,6 +62,12 @@ export default async function AppLayout({
 
   const weatherCities = parseWeatherCities(await getSetting(WEATHER_CITIES_KEY));
 
+  // The workspace's activity types, resolved HERE for the same reason: the type
+  // pickers are client components scattered across the app, and none of them can
+  // reach the tenant. `resolveActivityTypes` is total — an unreadable setting
+  // gives the built-in seven rather than an empty picker.
+  const activityTypes = resolveActivityTypes(await getSetting(ACTIVITY_TYPES_KEY));
+
 
   // The accent override, or nothing. `brandStyle` returns null for an unbranded
   // tenant, so this renders NO element and the shell is byte-for-byte what it was
@@ -93,6 +100,7 @@ export default async function AppLayout({
         enabledModules={enabledModules ? [...enabledModules] : undefined}
         brand={{ logoUrl: brandLogoUrl(brand), displayName: brand.displayName }}
         weatherCities={weatherCities}
+        activityTypes={activityTypes}
         tenantId={activeTenantId ?? ""}
       >
         {children}

@@ -3,16 +3,7 @@ import ModalTrigger from "@/components/Modal";
 import ActivityTypeFields from "@/components/ActivityTypeFields";
 import { formatDue } from "@/lib/format";
 import { isFutureDay } from "@/lib/activityDay";
-
-export const activityIcons: Record<string, string> = {
-  call: "📞",
-  email: "✉️",
-  meeting: "🤝",
-  whatsapp: "💬",
-  test_drive: "🚗",
-  follow_up: "🔁",
-  todo: "☑️",
-};
+import { ActivityTypeIcon } from "@/components/ActivityTypesProvider";
 
 type ActivityItem = {
   id: string;
@@ -147,9 +138,10 @@ export default function ActivityPanel({
             const dueToday = !overdue && a.dueDate <= today;
             return (
               <li key={a.id} className="flex items-start gap-3">
-                <span className="text-lg leading-6 w-7 text-center shrink-0">
-                  {activityIcons[a.type] ?? "☑️"}
-                </span>
+                <ActivityTypeIcon
+                  type={a.type}
+                  className="text-lg leading-6 w-7 text-center shrink-0"
+                />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium">{a.summary}</p>
                   <p className="text-xs text-slate-400">
@@ -299,7 +291,7 @@ export default function ActivityPanel({
           <ul className="space-y-1">
             {recent.map((a) => (
               <li key={a.id} className="text-xs text-slate-500 line-through">
-                {activityIcons[a.type]} {a.summary}
+                <ActivityTypeIcon type={a.type} /> {a.summary}
               </li>
             ))}
           </ul>

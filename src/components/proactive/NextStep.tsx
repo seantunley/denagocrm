@@ -33,6 +33,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { useActivityTypes } from "@/components/ActivityTypesProvider";
+import { pickableActivityTypes } from "@/lib/activityTypes";
 import { cn } from "@/lib/utils";
 
 const input =
@@ -58,6 +60,7 @@ export function NextStepDialog({
 }) {
   const [mode, setMode] = useState<"choose" | "followup" | "lost">("choose");
   const [fuType, setFuType] = useState("call");
+  const activityTypes = useActivityTypes();
   const [fuWhen, setFuWhen] = useState(defaultFollowUp());
   const [lostReason, setLostReason] = useState("");
   const [shake, setShake] = useState(false);
@@ -189,12 +192,16 @@ export function NextStepDialog({
               <div>
                 <label className="mb-1 block text-xs font-medium text-muted-foreground">Type</label>
                 <select className={input} value={fuType} onChange={(e) => setFuType(e.target.value)}>
-                  <option value="call">Call</option>
-                  <option value="whatsapp">WhatsApp</option>
-                  <option value="email">Email</option>
-                  <option value="meeting">Meeting</option>
-                  <option value="test_drive">Test drive</option>
-                  <option value="todo">To-do</option>
+                  {/* `follow_up` stays out: this IS the follow-up flow, and that
+                      type carries a required note this compact form has no room
+                      for. Everything else the workspace uses is offered. */}
+                  {pickableActivityTypes(activityTypes)
+                    .filter((type) => type.key !== "follow_up")
+                    .map((type) => (
+                      <option key={type.key} value={type.key}>
+                        {type.emoji} {type.label}
+                      </option>
+                    ))}
                 </select>
               </div>
               <div>
