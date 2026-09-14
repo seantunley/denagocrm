@@ -1,15 +1,18 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import DashboardScreen from "@/components/dashboard/DashboardScreen";
 import { dashboardBySlug } from "@/lib/dashboard/store";
 
 /**
- * A named dashboard.
+ * A named custom dashboard.
+ *
+ * `home` is reserved for the product home screen at `/`. Keeping an old saved
+ * dashboard addressable at `/d/home` made it look as though the redesign had
+ * reverted whenever that legacy route was opened. Other named dashboards remain
+ * fully available through this route.
  *
  * `dashboardBySlug` resolves against the SESSION user only, so a slug belonging
  * to somebody else is indistinguishable here from one that does not exist —
- * both are `null`, both are a 404. That is deliberate: a "you are not allowed to
- * see this dashboard" response would confirm that a colleague has one called
- * `commissions`, which is a small disclosure but a free one to avoid.
+ * both are `null`, both are a 404.
  */
 export default async function NamedDashboardPage({
   params,
@@ -19,6 +22,8 @@ export default async function NamedDashboardPage({
   searchParams: Promise<{ tab?: string }>;
 }) {
   const { slug } = await params;
+  if (slug === "home") redirect("/");
+
   const { tab } = await searchParams;
   const dashboard = await dashboardBySlug(slug);
   if (!dashboard) notFound();
