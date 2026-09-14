@@ -3,7 +3,7 @@ import "server-only";
 import { lookup } from "node:dns/promises";
 import { lookup as lookupCb } from "node:dns";
 import { isIP } from "node:net";
-import { Agent } from "undici";
+import { Agent, fetch as undiciFetch } from "undici";
 import { prisma } from "./db";
 import { getSetting } from "./settings";
 import { logError } from "./errorLog";
@@ -112,7 +112,13 @@ function requestHeaders(raw?: string): Headers {
   return headers;
 }
 
-async function boundedText(response: Response): Promise<string> {
+/*
+ * Structural, not `Response`. This is handed undici's Response now (see
+ * httpRequest), whose Headers iterator differs from the DOM lib's by a
+ * `[Symbol.dispose]` it does not need — and nothing here touches headers at all.
+ * Naming only what it reads keeps it usable from either fetch.
+ */
+async function boundedText(response: { body?: { getReader(): ReadableStreamDefaultReader<Uint8Array> } | null }): Promise<string> {
   const reader = response.body?.getReader();
   if (!reader) return "";
   const decoder = new TextDecoder();
@@ -185,7 +191,12 @@ async function httpRequest(input: Parameters<NonNullable<FlowCtx["httpRequest"]>
     // `dispatcher` pins the connection to a connect-time re-check of the resolved
     // address (see guardedDispatcher) — without it this fetch re-resolves DNS on
     // its own and the safeHttpsUrl check can be rebound around.
-    const response = await fetch(url, { method: input.method, headers, body, signal: AbortSignal.timeout(10_000), redirect: "error", dispatcher: guardedDispatcher } as RequestInit & { dispatcher: Agent });
+    //
+    // undici's OWN fetch, for the reason spelled out in lib/safeFetch.ts: a
+    // dispatcher only works when it comes from the same undici as the fetch
+    // driving it, and Node's global fetch is backed by the copy bundled into
+    // Node. Pairing the two across a major fails before the guard is reached.
+    const response = await undiciFetch(url, { method: input.method, headers, body, signal: AbortSignal.timeout(10_000), redirect: "error", dispatcher: guardedDispatcher });
     const responseBody = await boundedText(response);
     return response.ok ? { ok: true, status: response.status, body: responseBody } : { ok: false, status: response.status, body: responseBody, reason: `API returned ${response.status}` };
   } catch (error) {
