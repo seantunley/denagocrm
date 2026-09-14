@@ -32,6 +32,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
+import { isFutureDay } from "@/lib/activityDay";
 import {
   cancelActivity,
   completeActivity,
@@ -1433,14 +1434,20 @@ export default function CalendarWorkspace({
                         <XCircle className="size-4" />
                         Cancel
                       </Button>
-                      <Button
-                        type="button"
-                        onClick={completeSelected}
-                        disabled={isPending}
-                      >
-                        <Check className="size-4" />
-                        Complete
-                      </Button>
+                      {/* Not offered before the day arrives. `selectedEvent.dueDate`
+                          is an ISO STRING here, hence the Date(). finishActivity
+                          refuses it server-side either way; this stops the calendar
+                          presenting a button that can only fail. */}
+                      {!isFutureDay(new Date(selectedEvent.dueDate)) && (
+                        <Button
+                          type="button"
+                          onClick={completeSelected}
+                          disabled={isPending}
+                        >
+                          <Check className="size-4" />
+                          Complete
+                        </Button>
+                      )}
                     </div>
                   )}
               </div>

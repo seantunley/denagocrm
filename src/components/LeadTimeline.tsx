@@ -10,6 +10,7 @@ import {
   toggleLeadNotePin,
 } from "@/app/actions/timelinePins";
 import { formatDateTime } from "@/lib/format";
+import { isFutureDay } from "@/lib/activityDay";
 import {
   getTimelinePins,
   type TimelinePinKind,
@@ -405,7 +406,9 @@ export default async function LeadTimeline({
           {!canComplete && pinButton}
         </div>
 
-        {item.pending && item.activityId && (
+        {/* `!isFutureDay` — the tick is not offered before the day arrives, matching
+            the refusal in finishActivity. `when` IS the activity's dueDate here. */}
+        {item.pending && item.activityId && !isFutureDay(item.when) && (
           <div className="mt-2 flex flex-wrap items-center gap-2">
             {pinButton}
             <form

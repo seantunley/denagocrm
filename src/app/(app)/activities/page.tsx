@@ -21,6 +21,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cancelActivity, completeActivity } from "@/app/actions/activities";
+import { isFutureDay } from "@/lib/activityDay";
 import { QuickCreateButton } from "@/components/QuickCreateButton";
 import { buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -269,7 +270,7 @@ export default async function ActivitiesPage({
                     title={activity.summary}
                     detail={relatedLabel}
                     meta={`${formatDue(activity.dueDate)} · ${activity.assignedTo.name}`}
-                    action={canManage ? (
+                    action={canManage && !isFutureDay(activity.dueDate) ? (
                       <form action={completeActivity.bind(null, activity.id)}>
                         <input type="hidden" name="revalidate" value="/activities" />
                         <button className={buttonVariants({ variant: "outline", size: "sm" })} aria-label={`Complete ${activity.summary}`}><Check className="size-4" />Done</button>
@@ -532,7 +533,7 @@ export default async function ActivitiesPage({
                                   </span>
                                 </div>
 
-                                {canManage && (
+                                {canManage && !isFutureDay(activity.dueDate) && (
                                   <div className="flex items-center gap-2">
                                     <form
                                       action={completeActivity.bind(null, activity.id)}
