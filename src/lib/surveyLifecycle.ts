@@ -71,6 +71,52 @@ export function surveyDormantReason(survey: {
   return "deactivated";
 }
 
+/** What each trigger fires on, as a phrase that completes "… automatically X". */
+const TRIGGER_PHRASE: Record<string, string> = {
+  job_complete: "when a job card is completed",
+  delivery: "when a cart is delivered",
+  won: "when a deal is won",
+};
+
+/**
+ * What the editor tells you this survey does on its own.
+ *
+ * Lives HERE, beside the predicate it depends on, rather than inside the page:
+ * as a page-local function it could not be imported, so the only thing a test
+ * could check was that the source mentioned the right identifiers — and a
+ * mutation that made the dormant branch permanently unreachable passed. A rule
+ * about what we claim to customers deserves to be executed by its test.
+ *
+ * Returns undefined when there is nothing automatic to say.
+ */
+export function surveyAutoSendNote(survey: {
+  status: string;
+  active: boolean;
+  trigger: string | null;
+  deletedAt?: Date | null;
+  delayHours: number;
+}): string | undefined {
+  if (!survey.trigger) return undefined;
+  const when = TRIGGER_PHRASE[survey.trigger];
+  if (!when) return undefined;
+
+  const dormant = surveyDormantReason(survey);
+  if (dormant) {
+    return `Set up to email customers automatically ${when} — but it is not sending: ${dormant}.`;
+  }
+
+  const hours = survey.delayHours;
+  const delay =
+    hours > 0
+      ? ` It waits ${
+          hours % 24 === 0
+            ? `${hours / 24} day${hours / 24 === 1 ? "" : "s"}`
+            : `${hours} hour${hours === 1 ? "" : "s"}`
+        } after the event before sending.`
+      : "";
+  return `⚠ LIVE: this emails customers automatically ${when}, with nobody pressing send.${delay}`;
+}
+
 export function validateSurveyQuestions(questions: unknown[]) {
   const errors: string[] = [];
   if (questions.length === 0) errors.push("Add at least one question");

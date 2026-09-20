@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { isSurveyArmed, surveyDormantReason } from "../src/lib/surveyLifecycle";
+import { isSurveyArmed, surveyAutoSendNote, surveyDormantReason } from "../src/lib/surveyLifecycle";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
@@ -102,29 +102,49 @@ test("THE SURVEYS LIST WARNS BEFORE A CUSTOMER DOES", () => {
   assert.match(page, /auto-sending/, "it counts what actually auto-sends");
 });
 
-test("THE EDITOR NO LONGER CLAIMS A DRAFT SENDS AUTOMATICALLY", () => {
-  const page = stripComments(src("src/app/(app)/surveys/[id]/page.tsx"));
-
-  // The old note was printed for any survey with a trigger configured.
-  assert.ok(
-    !/survey\.trigger\s*\?\s*AUTO_NOTE\[survey\.trigger\]/.test(page),
-    "the note is no longer unconditional on the trigger alone",
-  );
-  assert.match(page, /surveyDormantReason/, "it distinguishes set-up from sending");
+test("THE EDITOR NOTE DOES NOT CLAIM A DRAFT SENDS AUTOMATICALLY", () => {
+  /*
+   * Driven, not grepped. This lived in the page as a local function, where the
+   * only thing a test could reach was the source text — and a mutation that
+   * made the dormant branch permanently unreachable passed, because both
+   * strings still appeared in the file. It moved beside the predicate so the
+   * rule can actually be executed.
+   */
+  const draft = surveyAutoSendNote({ ...ARMED, status: "draft", delayHours: 0 })!;
+  assert.match(draft, /not sending/, "a draft says it is not sending");
+  assert.match(draft, /not published \(draft\)/, "and says why");
+  assert.ok(!/LIVE/.test(draft), "a draft is never announced as live");
 });
 
-test("THE NOTE READS DIFFERENTLY WHEN IT IS LIVE", () => {
-  /*
-   * Both states must be reachable and must not read the same — the whole
-   * failure was two different situations rendering identically.
-   */
-  const page = src("src/app/(app)/surveys/[id]/page.tsx");
-  const fn = page.slice(page.indexOf("function autoSendNote"), page.indexOf("export default"));
+test("THE NOTE IS UNMISTAKABLE WHEN IT IS LIVE", () => {
+  const live = surveyAutoSendNote({ ...ARMED, delayHours: 0 })!;
+  assert.match(live, /LIVE/);
+  assert.match(live, /emails customers automatically when a cart is delivered/);
+  assert.match(live, /nobody pressing send/);
 
-  assert.match(fn, /LIVE/, "the armed case is unmistakable");
-  assert.match(fn, /not sending/, "the dormant case says it is not sending");
-  assert.ok(
-    fn.indexOf("LIVE") !== fn.indexOf("not sending"),
-    "they are genuinely different strings",
-  );
+  // The two states must not read the same — the whole failure was two different
+  // situations rendering identically.
+  assert.notEqual(live, surveyAutoSendNote({ ...ARMED, active: false, delayHours: 0 }));
+});
+
+test("THE NOTE CARRIES THE DELAY ONLY WHEN THERE IS ONE", () => {
+  assert.ok(!/waits/.test(surveyAutoSendNote({ ...ARMED, delayHours: 0 })!));
+  assert.match(surveyAutoSendNote({ ...ARMED, delayHours: 48 })!, /waits 2 days/);
+  assert.match(surveyAutoSendNote({ ...ARMED, delayHours: 24 })!, /waits 1 day\b/);
+  assert.match(surveyAutoSendNote({ ...ARMED, delayHours: 3 })!, /waits 3 hours/);
+  assert.match(surveyAutoSendNote({ ...ARMED, delayHours: 1 })!, /waits 1 hour\b/);
+});
+
+test("NOTHING AUTOMATIC TO SAY MEANS NOTHING IS SAID", () => {
+  assert.equal(surveyAutoSendNote({ ...ARMED, trigger: null, delayHours: 0 }), undefined);
+  // A trigger stored by a newer release, or edited by hand, must not render a
+  // half-built sentence with a blank where the event should be.
+  assert.equal(surveyAutoSendNote({ ...ARMED, trigger: "teleported", delayHours: 0 }), undefined);
+});
+
+test("THE EDITOR USES THE SHARED NOTE, NOT A LOCAL COPY", () => {
+  const page = stripComments(src("src/app/(app)/surveys/[id]/page.tsx"));
+  assert.match(page, /autoNote=\{surveyAutoSendNote\(survey\)\}/);
+  // The old map printed a sentence for any configured trigger, live or not.
+  assert.ok(!/AUTO_NOTE/.test(page), "the unconditional local map is gone");
 });

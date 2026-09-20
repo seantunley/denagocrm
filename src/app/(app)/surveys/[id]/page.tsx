@@ -8,49 +8,9 @@ import SurveySendPanel from "@/components/SurveySendPanel";
 import { npsFromScores, surveyTypeLabel, type SurveyQuestion } from "@/lib/surveyTypes";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
-import { surveyDormantReason } from "@/lib/surveyLifecycle";
+import { surveyAutoSendNote } from "@/lib/surveyLifecycle";
 
 export const dynamic = "force-dynamic";
-
-const AUTO_NOTE: Record<string, string> = {
-  job_complete: "when a job card is completed",
-  delivery: "when a cart is delivered",
-  won: "when a deal is won",
-};
-
-/**
- * What this survey does on its own, said in the present tense when it is true.
- *
- * The old version printed "This survey also sends automatically when a cart is
- * delivered" for anything with a trigger CONFIGURED, live or not. Read on a
- * draft it was false; read on the live one it was true but sounded like setup,
- * which is how a test survey emailed a customer without anyone expecting it.
- */
-function autoSendNote(survey: {
-  status: string;
-  active: boolean;
-  trigger: string | null;
-  deletedAt?: Date | null;
-  delayHours: number;
-}): string | undefined {
-  if (!survey.trigger) return undefined;
-  const when = AUTO_NOTE[survey.trigger];
-  if (!when) return undefined;
-
-  const delay =
-    survey.delayHours > 0
-      ? ` It waits ${
-          survey.delayHours % 24 === 0
-            ? `${survey.delayHours / 24} day${survey.delayHours / 24 === 1 ? "" : "s"}`
-            : `${survey.delayHours} hour${survey.delayHours === 1 ? "" : "s"}`
-        } after the event before sending.`
-      : "";
-
-  const dormant = surveyDormantReason(survey);
-  return dormant
-    ? `Set up to email customers automatically ${when} — but it is not sending: ${dormant}.`
-    : `⚠ LIVE: this emails customers automatically ${when}, with nobody pressing send.${delay}`;
-}
 
 export default async function SurveyEditorPage({
   params,
@@ -105,7 +65,7 @@ export default async function SurveyEditorPage({
 
       <SurveySendPanel
         surveyId={survey.id}
-        autoNote={autoSendNote(survey)}
+        autoNote={surveyAutoSendNote(survey)}
       />
 
       <div>
