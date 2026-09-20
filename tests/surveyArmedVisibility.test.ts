@@ -83,9 +83,15 @@ test("A DORMANT TRIGGER SAYS WHY, INSTEAD OF LOOKING LIVE", () => {
 test("THE SURVEYS LIST WARNS BEFORE A CUSTOMER DOES", () => {
   const page = stripComments(src("src/app/(app)/surveys/page.tsx"));
 
-  assert.match(page, /isSurveyArmed/, "the list asks the real question");
-  assert.match(page, /FeedbackBanner/, "and says so at the top of the page, not only per row");
-  assert.match(page, /surveyDormantReason/, "a configured-but-dormant trigger is labelled as such");
+  // Anchored on the CALL and the JSX, not the import: `/FeedbackBanner/` alone
+  // matches the import line, so deleting the banner from the page left this
+  // test green. Every assertion here has to name something that only exists
+  // when the feature is actually rendered.
+  assert.match(page, /isSurveyArmed\)/, "the list filters with the real predicate");
+  assert.match(page, /<FeedbackBanner/, "and says so at the top of the page, not only per row");
+  assert.match(page, /armed\.length > 0 &&/, "the banner is conditional on something being armed");
+  assert.match(page, /isSurveyArmed\(s\) &&/, "and the row carries its own badge");
+  assert.match(page, /surveyDormantReason\(s\)/, "a configured-but-dormant trigger is labelled as such");
 
   // The hero stat used to count `active`, which is not what makes a survey
   // send: a survey can be active and unpublished.
