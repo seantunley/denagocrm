@@ -40,8 +40,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: false, skipped: routeBudget.reason }, { status: 503 });
   }
 
-  const runs = await runCronPerTenant(
-    async (_tenantId, budget) => {
+  const runs = await runCronPerTenant(async (_tenantId, budget) => {
       if (budget.shouldStop(AUTO_RESEARCH_RESERVE_MS)) return { researched: 0, skipped: "insufficient-budget" as const };
       return { researched: await runAutoResearch(budget) };
     },
