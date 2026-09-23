@@ -135,32 +135,56 @@ because it multiplies everything else.
 
 Autosuspend set to **60 seconds**, and the cron cadence changed:
 
-| Route | Was | Now |
-|---|---|---|
-| `bot-outbox` | 5 min | **5 min — unchanged** (chatbot replying to customers) |
-| `signing-jobs` | 5 min | 15 min |
-| `journeys` | 15 min | 30 min |
-| `automations` | 15 min | 30 min |
-| `statistics` | 15 min | 30 min |
+| Route | Was | Now | Why |
+|---|---|---|---|
+| `signing-jobs` | 5 min | **15 min** | This cron *delivers* — see below |
+| `bot-outbox` | 5 min | **30 min** | Recovery only |
+| `journeys` | 15 min | 30 min | Batch |
+| `automations` | 15 min | 30 min | Batch |
+| `statistics` | 15 min | 30 min | Batch |
+
+### `bot-outbox` does not deliver anything — it recovers
+
+Worth recording, because the first draft of this note got it wrong and nearly
+paid ~27 compute hours a month for it.
+
+A customer's message arrives by **webhook**, and the bot's reply is enqueued and
+sent **inline in that same request** (`flushBotOutboxConversation`, called from
+`flowDm.ts`, `flowRun.ts`, `telegram.ts`). Staff replies typed in the CRM flush
+inline too. Nothing waits for this cron to make its *first* attempt.
+
+The cron only picks up sends that **failed** — a provider blip, a rate limit —
+and rows orphaned by a crash between enqueue and flush. The retry backoff already
+caps at 15 minutes, and a conversation that receives another inbound message
+drains inline anyway. So a half-hour sweep costs nothing a customer can see.
+
+### `signing-jobs` is the opposite, and keeps the faster interval
+
+`runSigningJobs` is called from its cron **and nowhere else**. When somebody
+signs, the next signer's "your turn" email does not exist until that cron runs —
+so its interval is customer-visible latency, not a recovery window. It holds the
+15-minute floor on purpose.
 
 ### Projected effect
 
-`bot-outbox` stays at five minutes, so **it alone sets the wake cadence** — the
-database is dragged up 12 times an hour regardless of what the other jobs do.
-Each wake costs roughly the work (a few seconds) plus the 60-second autosuspend
-delay, so about **70 seconds awake per 5 minutes ≈ 23% duty cycle**.
+`signing-jobs` at 15 minutes now sets the wake cadence: 4 wakes an hour, each
+costing the work plus the 60-second autosuspend delay.
 
 | | Compute hours/day @ 0.25 CU | Per 30 days |
 |---|---|---|
 | Before (never suspends) | **6.0** | ~180 |
-| After | **~1.4** | **~41** |
-| *(if `bot-outbox` also moved to 15 min)* | *~0.5* | *~14* |
+| After | **~0.5** | **~14** |
+| *(if `signing-jobs` also moved to 30 min)* | *~0.3* | *~8* |
 
-**Estimated saving: ~75%.** The other cron changes contribute only a little on
-their own — they shorten some wakes and remove work, but they cannot create gaps
-longer than five minutes while `bot-outbox` keeps that beat. Keeping prompt
-chatbot replies costs roughly **27 compute hours a month**; that is the price of
-the decision, and it is a reasonable one.
+**Estimated saving: ~92%.**
+
+Note the shape of this: moving `bot-outbox` from 15 to 30 minutes saves almost
+nothing on its own, because `signing-jobs` still wakes the database on the
+quarter hour regardless. It was done because a slower sweep is free, not because
+it moves the number. **The only lever left is `signing-jobs`**, and dropping it to
+30 minutes buys roughly 6 compute hours a month at the price of signing
+notifications arriving up to half an hour late. That is not obviously worth it
+for a live signing workflow.
 
 ### The next ceiling: open browser tabs
 

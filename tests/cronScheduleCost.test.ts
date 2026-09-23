@@ -29,36 +29,49 @@ const scheduleOf = (route: string) => crons.find((cron) => cron.path === `/api/c
  * saving is undone by a one-line change in a file nobody reviews for cost.
  */
 
-test("THE SHORTEST INTERVAL IS WHAT THE DATABASE COSTS", () => {
+test("NOTHING RUNS MORE OFTEN THAN EVERY QUARTER HOUR", () => {
   /*
-   * bot-outbox is DELIBERATELY the only sub-15-minute cron: it is the chatbot
-   * replying to customers on WhatsApp, and a slower queue is a visible product
-   * regression. It alone therefore sets the wake cadence — roughly a minute
-   * awake (the 60s autosuspend delay) every five, about a fifth of the day.
+   * The shortest interval in this file IS the database bill. Whatever runs
+   * most often decides how often the compute is dragged awake, and the gaps
+   * between runs are the only time it gets to sleep — so ONE fast cron undoes
+   * the saving no matter how leisurely everything else is.
    *
-   * Adding a SECOND five-minute cron would not make things twice as bad, it
-   * would make them no better than before if it landed on the off-beat minutes: the
-   * gaps are what let the database sleep, and a new job that fills them takes
-   * the saving back to zero. That is the regression this test exists to catch.
+   * Fifteen minutes is the floor because, with a 60-second autosuspend delay,
+   * it leaves roughly thirteen minutes of sleep in every quarter hour. A single
+   * five-minute job would cut that to four, and take a ~92% saving back to
+   * ~78% on its own.
+   *
+   * Nothing here needs to be faster. Bot replies and staff replies are sent
+   * inline on the webhook that prompted them; these crons are recovery and
+   * batch work. If something genuinely does need a shorter interval, that is a
+   * real decision with a real monthly cost — change this test deliberately and
+   * update docs/neon-compute-2026-09-23.md with the new arithmetic.
    */
-  const frequent = crons.filter((cron) => /^\*\/(\d+) \* \* \* \*$/.test(cron.schedule));
   const minutes = (cron: Cron) => Number(/^\*\/(\d+)/.exec(cron.schedule)![1]);
+  const tooFast = crons
+    .filter((cron) => /^\*\/(\d+) \* \* \* \*$/.test(cron.schedule))
+    .filter((cron) => minutes(cron) < 15);
 
-  const subQuarterHour = frequent.filter((cron) => minutes(cron) < 15);
   assert.deepEqual(
-    subQuarterHour.map((cron) => cron.path),
-    ["/api/cron/bot-outbox"],
-    "bot-outbox is the ONLY cron allowed to run more often than every 15 minutes — " +
-      "anything else joining it fills the gaps the database sleeps in. If this is a " +
-      "deliberate product decision, change the test and the cost note with it.",
+    tooFast.map((cron) => cron.path),
+    [],
+    "a cron running more often than every 15 minutes fills the gaps the database " +
+      "sleeps in — see docs/neon-compute-2026-09-23.md before adding one",
   );
 });
 
 test("THE INTERVALS ARE THE ONES THE COST NOTE ASSUMES", () => {
-  assert.equal(scheduleOf("bot-outbox"), "*/5 * * * *", "chatbot replies stay prompt");
-  assert.equal(scheduleOf("signing-jobs"), "*/15 * * * *", "signing email may wait a quarter hour");
-  for (const route of ["journeys", "automations", "statistics"]) {
-    assert.equal(scheduleOf(route), "*/30 * * * *", `${route} is not realtime`);
+  /*
+   * signing-jobs is the FASTEST thing here, and deliberately so: unlike the bot
+   * outbox it has no inline path at all. runSigningJobs is called from this cron
+   * and nowhere else, so when somebody signs, the next signer's "your turn"
+   * email does not exist until the cron runs. That makes its interval a
+   * customer-visible latency, not a recovery window — which is why it holds the
+   * 15-minute floor while everything else sits at 30.
+   */
+  assert.equal(scheduleOf("signing-jobs"), "*/15 * * * *", "signing email is DELIVERED by this cron, not just retried");
+  for (const route of ["bot-outbox", "journeys", "automations", "statistics"]) {
+    assert.equal(scheduleOf(route), "*/30 * * * *", `${route} is recovery or batch work, not realtime`);
   }
 
   // The daily/monthly jobs cost nothing worth reasoning about — pinned only so
