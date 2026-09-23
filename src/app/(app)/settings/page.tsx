@@ -699,7 +699,7 @@ export default async function SettingsPage({
               }
             >
               <p className="text-xs text-muted-foreground mb-4">
-                Customer replies land on their record automatically (checked every 15 minutes,
+                Customer replies land on their record automatically (checked every 30 minutes,
                 read-only — nothing is moved or marked in the mailbox). Unknown senders are left
                 alone. Usually the same details as SMTP with port 993.
               </p>
