@@ -62,6 +62,8 @@ import {
   SettingsWorkspace,
 } from "@/components/settings-workspace";
 import ProfileSettingsForms from "@/components/ProfileSettingsForms";
+import ChatGptConnect from "@/components/settings/ChatGptConnect";
+import { codexStatus, type CodexStatus } from "@/lib/codex";
 
 export default async function SettingsPage({
   searchParams,
@@ -76,6 +78,11 @@ export default async function SettingsPage({
   // The preview must render what the send path renders, glyph URLs included.
   const signatureCompany = signatureCompanyFrom(profile, await tenantOrigin(await getActiveTenantId()));
   const enabled = await getEnabledModuleIds();
+  // Owner-only: the connection card renders in the owner's Integrations tab, and
+  // a read that fails must not take the whole settings page down with it.
+  const chatGpt: CodexStatus = isAdmin
+    ? await codexStatus().catch((): CodexStatus => ({ state: "disconnected" }))
+    : { state: "disconnected" };
   const automotiveOn = enabled.has("automotive");
   const commerceOn = enabled.has("commerce");
   const marketingOn = enabled.has("marketing");
@@ -1494,6 +1501,41 @@ export default async function SettingsPage({
                   </label>
                   <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
                 </SaveForm>
+              </div>
+            </Row>
+
+            <Row
+              title="ChatGPT subscription (research)"
+              status={
+                chatGpt.state === "connected" ? (
+                  <span className="badge bg-emerald-500/15 text-emerald-300">Connected</span>
+                ) : (
+                  <span className="badge bg-amber-500/15 text-amber-300">Not connected</span>
+                )
+              }
+            >
+              <p className="text-xs text-muted-foreground mb-4">
+                Run 🔎 lead research on your ChatGPT Plus or Pro plan instead of paying per token.
+                Sign in once with your ChatGPT account. While connected, research — the button and
+                automatic research — uses ChatGPT only. The ✨ message check and the WhatsApp bot
+                still use the Anthropic key.
+              </p>
+              <div className="space-y-3">
+                <ChatGptConnect initial={chatGpt} />
+                {chatGpt.state === "connected" && (
+                  <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
+                    <input type="hidden" name="key" value="CODEX_MODEL" />
+                    <div className="flex-1">
+                      <label className="label">Model</label>
+                      <input
+                        name="value"
+                        className="input font-mono"
+                        defaultValue={chatGpt.model}
+                      />
+                    </div>
+                    <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
+                  </SaveForm>
+                )}
               </div>
             </Row>
 

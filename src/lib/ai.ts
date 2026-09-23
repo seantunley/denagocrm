@@ -3,6 +3,7 @@ import { prisma } from "./db";
 import { logError } from "./errorLog";
 import { recordAiUsage } from "./systemHealth";
 import { inheritedTenantId } from "./tenantWrite";
+import { codexRespond, isCodexConnected } from "./codex";
 
 export async function isAiConfigured(): Promise<boolean> {
   return Boolean(await getSetting("ANTHROPIC_API_KEY"));
@@ -158,6 +159,49 @@ export type ResearchResult =
       transient?: true;
     };
 
+/**
+ * DROP THE NARRATION THE PROMPT ALREADY FORBIDS.
+ *
+ * The prompt says "no preamble" and models write one anyway — "I'll research
+ * this lead across multiple angles." — as their own text. It is a documented
+ * habit, not a prompt bug, so it is handled here rather than argued with in the
+ * system prompt. Shared by both research providers, so a ChatGPT briefing and an
+ * Anthropic one land in the same card.
+ *
+ * It has to be stripped, not tolerated: joined with "" the preamble is glued
+ * directly onto the first label ("...multiple angles.Company: ...") so NO line
+ * matches a label, ResearchBriefing drops to its verbatim fallback, and the whole
+ * briefing renders as one undifferentiated wall instead of the Company/Role/Fit
+ * card. One stray sentence costs the card.
+ *
+ * Only ever cuts a PREFIX, and only when a label exists after it, so a briefing
+ * with no labels at all ("No reliable information found.") is left exactly as
+ * written.
+ */
+async function stripResearchPreamble(summary: string): Promise<string> {
+  const labelStart = summary.search(/(?:Company|Role|Fit):/i);
+  if (labelStart <= 0) return summary;
+  // LOGGED ONLY WHEN IT IS BIG ENOUGH TO BE RESEARCH RATHER THAN NARRATION.
+  //
+  // A one-line "I'll research this lead…" prefix is on most calls, so logging
+  // every strip would file a row per research run and bury real errors in the
+  // System Log. A LONG prefix means this is cutting actual prose, and that is
+  // worth a row precisely because the discarded text is gone from the note.
+  if (labelStart > 200) {
+    await logError(
+      "ai-research",
+      "Discarded a long prefix before the first label",
+      `${labelStart} chars dropped: ${summary.slice(0, 160)}…`,
+    );
+  }
+  return summary.slice(labelStart).trim();
+}
+
+/** Research can run: on a connected ChatGPT subscription, or on the Anthropic key. */
+export async function isResearchConfigured(): Promise<boolean> {
+  return (await isCodexConnected()) || (await isAiConfigured());
+}
+
 export async function aiResearch(
   input: {
     name: string;
@@ -165,8 +209,16 @@ export async function aiResearch(
   },
   options: { model?: string; maxSearches?: number } = {},
 ): Promise<ResearchResult> {
-  const apiKey = await getSetting("ANTHROPIC_API_KEY");
-  if (!apiKey) return { error: "AI Assist is not configured (Settings → Integrations)." };
+  // A workspace that has connected its ChatGPT subscription researches on that
+  // instead of pay-per-token Anthropic credit (lib/codex.ts). There is
+  // deliberately NO fallback to Anthropic when ChatGPT fails: the point of
+  // connecting it is that research stops spending API credit, and a silent
+  // fallback would bring the bill straight back without anyone choosing it.
+  const useChatGpt = await isCodexConnected();
+  const apiKey = useChatGpt ? null : await getSetting("ANTHROPIC_API_KEY");
+  if (!useChatGpt && !apiKey) {
+    return { error: "AI Assist is not configured (Settings → Integrations)." };
+  }
   const domain = input.email?.split("@")[1]?.toLowerCase();
   const corporate = domain && !FREE_MAIL.has(domain) ? domain : null;
 
@@ -196,7 +248,7 @@ export async function aiResearch(
       signal: AbortSignal.timeout(90000),
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": apiKey,
+        "x-api-key": apiKey ?? "",
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify(body),
@@ -270,7 +322,24 @@ export async function aiResearch(
     const MAX_CONTINUATIONS = 4;
     let summary = "";
 
-    for (let attempt = 0; attempt <= MAX_CONTINUATIONS; attempt++) {
+    if (useChatGpt) {
+      // Same prompt, same briefing format, same checks after — only the
+      // transport differs. The search budget is an Anthropic tool parameter
+      // with no Responses equivalent; on a flat-rate plan it is also not the
+      // cost it is on the API.
+      const reply = await codexRespond({
+        instructions: String(requestBody.system),
+        prompt: String(messages[0].content),
+        webSearch: true,
+      });
+      if ("error" in reply) {
+        return reply.transient ? { error: reply.error, transient: true } : { error: reply.error };
+      }
+      summary = await stripResearchPreamble(reply.text);
+      stopReason = reply.incomplete ? "max_tokens" : "end_turn";
+    }
+
+    for (let attempt = 0; !useChatGpt && attempt <= MAX_CONTINUATIONS; attempt++) {
       const res = await callApi({ ...requestBody, messages });
       if (!res.ok) {
         const text = await res.text().catch(() => "");
@@ -305,40 +374,7 @@ export async function aiResearch(
         .join("")
         .trim();
 
-      // DROP THE NARRATION THE PROMPT ALREADY FORBIDS.
-      //
-      // The prompt says "no preamble" and this model writes one anyway — "I'll
-      // research this lead across multiple angles." — as its own text block. It
-      // is a documented habit of the model, not a prompt bug, so it is handled
-      // here rather than argued with in the system prompt.
-      //
-      // It has to be stripped, not tolerated: joined with "" the preamble is
-      // glued directly onto the first label ("...multiple angles.Company: ...")
-      // so NO line matches a label, ResearchBriefing drops to its verbatim
-      // fallback, and the whole briefing renders as one undifferentiated wall
-      // instead of the Company/Role/Fit card. One stray sentence costs the card.
-      //
-      // Only ever cuts a PREFIX, and only when a label exists after it, so a
-      // briefing with no labels at all ("No reliable information found.")
-      // is left exactly as written.
-      const labelStart = summary.search(/(?:Company|Role|Fit):/i);
-      if (labelStart > 0) {
-        // LOGGED ONLY WHEN IT IS BIG ENOUGH TO BE RESEARCH RATHER THAN NARRATION.
-        //
-        // The model prefixes a one-line "I'll research this lead…" on most calls,
-        // so logging every strip would file a row per research run and bury real
-        // errors in the System Log — the opposite of diagnosable. A LONG prefix is
-        // a different thing: it means this is cutting actual prose, and that is
-        // worth a row precisely because the discarded text is gone from the note.
-        if (labelStart > 200) {
-          await logError(
-            "ai-research",
-            "Discarded a long prefix before the first label",
-            `${labelStart} chars dropped: ${summary.slice(0, 160)}…`,
-          );
-        }
-        summary = summary.slice(labelStart).trim();
-      }
+      summary = await stripResearchPreamble(summary);
 
       // Only a paused turn is worth resuming. Any other stop_reason means the
       // model is done and whatever text exists is the answer.
@@ -444,7 +480,7 @@ export async function aiResearch(
  */
 export async function runAutoResearch(): Promise<number> {
   if ((await getSetting("AI_AUTO_RESEARCH")) !== "true") return 0;
-  if (!(await isAiConfigured())) return 0;
+  if (!(await isResearchConfigured())) return 0;
   const since = new Date(Date.now() - 48 * 60 * 60 * 1000);
   const leads = await prisma.lead.findMany({
     where: {
