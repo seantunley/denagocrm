@@ -62,15 +62,20 @@ test("NOTHING RUNS MORE OFTEN THAN EVERY QUARTER HOUR", () => {
 
 test("THE INTERVALS ARE THE ONES THE COST NOTE ASSUMES", () => {
   /*
-   * signing-jobs is the FASTEST thing here, and deliberately so: unlike the bot
-   * outbox it has no inline path at all. runSigningJobs is called from this cron
-   * and nowhere else, so when somebody signs, the next signer's "your turn"
-   * email does not exist until the cron runs. That makes its interval a
-   * customer-visible latency, not a recovery window — which is why it holds the
-   * 15-minute floor while everything else sits at 30.
+   * signing-jobs is different in kind from the others: unlike the bot outbox it
+   * has no inline path at all. runSigningJobs is called from this cron and
+   * nowhere else, so when somebody signs, the next signer's "your turn" email
+   * does not exist until the cron runs. Its interval is customer-visible
+   * latency, not a recovery window.
+   *
+   * It runs every 30 minutes anyway, by decision. Neon's plan fixes the
+   * scale-to-zero delay at 5 minutes, so each wake keeps the database up for
+   * ~5 minutes; at 15 minutes this one job held the database awake ~35% of the
+   * day, at 30 it is ~18% — about 30 compute hours a month, bought with signing
+   * emails that may take up to half an hour. Tightening it again is a real
+   * cost, not a free tweak.
    */
-  assert.equal(scheduleOf("signing-jobs"), "*/15 * * * *", "signing email is DELIVERED by this cron, not just retried");
-  for (const route of ["bot-outbox", "journeys", "automations", "statistics"]) {
+  for (const route of ["signing-jobs", "bot-outbox", "journeys", "automations", "statistics"]) {
     assert.equal(scheduleOf(route), "*/30 * * * *", `${route} is recovery or batch work, not realtime`);
   }
 

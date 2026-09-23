@@ -204,3 +204,19 @@ not to touch the crons again.
 1. Verify autosuspend and compute size in the console. ✅
 2. Set autosuspend to 60s. Watch for two days.
 3. If still high, the open-tab refresh intervals are the remaining driver.
+
+## Update — `signing-jobs` to 30 minutes (23 Sep)
+
+Neon's plan does not allow changing scale-to-zero: it is on or off, fixed at
+**5 minutes**. So each wake keeps the database up for ~5 minutes, not ~1, and
+the interval of the most frequent job matters far more than the 1-minute
+projection above assumed.
+
+| `signing-jobs` | Awake | CU-h/day | /30 days |
+|---|---|---|---|
+| 15 min | ~35% | ~2.1 | ~63 |
+| **30 min (now)** | ~18% | **~1.1** | **~33** |
+
+Every frequent job now runs on the half hour. The cost of the change: after
+somebody signs, the next signer's email can take up to 30 minutes to arrive,
+because `runSigningJobs` has no inline path — the cron is the only delivery.
