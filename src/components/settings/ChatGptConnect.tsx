@@ -75,10 +75,15 @@ export default function ChatGptConnect({ initial }: { initial: CodexStatus }) {
 
   function disconnect() {
     start(async () => {
-      await disconnectChatGpt();
+      const { revoked } = await disconnectChatGpt();
       setStatus({ state: "disconnected" });
       setTestResult(null);
-      toast.success("ChatGPT disconnected.");
+      if (revoked) toast.success("ChatGPT disconnected and its sign-in revoked.");
+      else {
+        toast.warning(
+          "Disconnected here, but OpenAI couldn't be reached to revoke the sign-in. You can also remove it from your ChatGPT account's security settings.",
+        );
+      }
     });
   }
 

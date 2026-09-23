@@ -5,7 +5,12 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import {
   REFRESH_MARGIN_MS,
+  CODEX_DEFAULT_MODEL,
+  CODEX_MODEL_FALLBACKS,
   accountIdFromToken,
+  isModelRejection,
+  isRetiredModel,
+  modelCandidates,
   needsRefresh,
   parseCodexStream,
   renewedByAnotherHolder,
@@ -51,6 +56,46 @@ test("A TOKEN IS RENEWED BEFORE IT EXPIRES, NOT AFTER", () => {
   assert.equal(needsRefresh({ expires: Number.NaN }, now), true, "unknown expiry is treated as expired");
 });
 
+test("THE DEFAULT MODEL IS ONE CHATGPT SIGN-IN STILL SERVES", () => {
+  // gpt-5.4 was the default, and OpenAI withdrew it from ChatGPT-authenticated
+  // Codex on 31 August 2026: every fresh connection failed on its first call.
+  assert.equal(CODEX_DEFAULT_MODEL, "gpt-5.6-terra", "OpenAI's named replacement for gpt-5.4");
+  assert.equal(isRetiredModel(CODEX_DEFAULT_MODEL, new Date("2026-09-23")), false);
+  assert.equal(CODEX_MODEL_FALLBACKS[0], CODEX_DEFAULT_MODEL, "the default is tried first");
+  for (const model of CODEX_MODEL_FALLBACKS) {
+    assert.equal(isRetiredModel(model, new Date("2026-09-23")), false, `${model} is not a retired fallback`);
+  }
+});
+
+test("A STORED RETIRED MODEL IS SKIPPED, NOT TRIED", () => {
+  const today = new Date("2026-09-23T10:00:00Z");
+  // A workspace connected before 31 Aug, still set to gpt-5.4, goes straight to Terra.
+  assert.equal(modelCandidates("gpt-5.4", today)[0], "gpt-5.6-terra");
+  assert.equal(modelCandidates("gpt-5.4-mini", today)[0], "gpt-5.6-terra");
+
+  // gpt-5.5 still works today, and stops being tried on the day it retires.
+  assert.equal(modelCandidates("gpt-5.5", today)[0], "gpt-5.5");
+  assert.equal(modelCandidates("gpt-5.5", new Date("2026-10-14T00:00:00Z"))[0], "gpt-5.6-terra");
+
+  // A live choice is honoured, and nothing is tried twice.
+  const candidates = modelCandidates("gpt-6-sol", today);
+  assert.equal(candidates[0], "gpt-6-sol");
+  assert.equal(new Set(candidates).size, candidates.length);
+  assert.deepEqual(modelCandidates(null, today), [...CODEX_MODEL_FALLBACKS]);
+});
+
+test("ONLY A REFUSED MODEL WALKS THE LIST", () => {
+  assert.equal(isModelRejection(400, '{"detail":"The model gpt-5.4 is not supported with ChatGPT accounts"}'), true);
+  assert.equal(isModelRejection(404, "model_not_found: The model does not exist"), true);
+  assert.equal(isModelRejection(400, "Model gpt-6-sol is not available on your plan"), true);
+
+  // These fail the same way whatever model is asked for.
+  assert.equal(isModelRejection(429, "model usage limit reached"), false, "a usage limit is not a model problem");
+  assert.equal(isModelRejection(401, "invalid model token"), false, "nor an expired sign-in");
+  assert.equal(isModelRejection(503, "model overloaded"), false, "nor an outage");
+  assert.equal(isModelRejection(400, "instructions are not valid"), false, "nor a bad request about something else");
+});
+
 test("A REQUEST THAT WAITED FOR THE LOCK USES THE PAIR ALREADY RENEWED", () => {
   const now = 1_000_000_000;
   const fresh = now + 60 * 60 * 1000;
@@ -89,14 +134,29 @@ test("THE STREAM'S FINISHED TEXT COMES FROM THE COMPLETED EVENT", () => {
   assert.equal(parsed.failed, null);
 });
 
-test("A STREAM CUT SHORT STILL YIELDS WHAT WAS WRITTEN", () => {
+test("A STREAM CUT SHORT IS INCOMPLETE, HOWEVER FINISHED ITS TEXT LOOKS", () => {
+  /*
+   * The first version of this test reproduced the bug and asserted the wrong
+   * thing about it: deltas with no terminal event came back as complete text,
+   * and research saved a briefing cut off mid-sentence as the finished note.
+   * Only a terminal event says the answer is whole.
+   */
   const parsed = parseCodexStream(
     sse(
-      { type: "response.output_text.delta", delta: "Company: " },
-      { type: "response.output_text.delta", delta: "Acme" },
+      { type: "response.output_text.delta", delta: "Company: Acme builds estates" },
+      { type: "response.output_text.delta", delta: " in Cape Town. Role: Director of" },
     ),
   );
-  assert.equal(parsed.text, "Company: Acme");
+  assert.equal(parsed.incomplete, true, "no response.completed means not finished");
+  assert.equal(parsed.failed, null);
+  assert.equal(parsed.text, "Company: Acme builds estates in Cape Town. Role: Director of", "what arrived is kept, for the log");
+
+  assert.equal(parseCodexStream("").incomplete, true, "an empty stream is not a finished answer either");
+
+  // And research turns that into a refusal, not a saved note.
+  const ai = stripComments(src("src/lib/ai.ts"));
+  assert.match(ai, /stopReason = reply\.incomplete \? "max_tokens" : "end_turn";/);
+  assert.match(ai, /if \(stopReason === "max_tokens"\) \{[\s\S]{0,400}return \{ error: "Research was cut off/);
 });
 
 test("A TRUNCATED ANSWER IS FLAGGED, SO IT IS NOT SAVED AS FINISHED", () => {
@@ -146,6 +206,38 @@ test("THE REQUEST MATCHES WHAT THE CHATGPT BACKEND REQUIRES", () => {
   assert.match(codex, /stream: true,/, "and only streams");
   assert.match(codex, /"chatgpt-account-id": tokens\.accountId/);
   assert.match(codex, /tools: input\.webSearch \? \[\{ type: "web_search" \}\] : \[\]/);
+
+  // Current upstream Codex (codex-rs core/src/client.rs): the header is
+  // hyphenated, and ChatGPT derives Responses cache affinity from it.
+  assert.match(codex, /"session-id": sessionId,/);
+  assert.ok(!/session_id:/.test(codex), "not the underscored name the first version sent");
+  // Upstream sends OpenAI-Beta only on its WebSocket transport.
+  assert.ok(!/OpenAI-Beta|responses=experimental/.test(codex), "no unconfirmed beta header on HTTP");
+});
+
+test("A REFUSED MODEL IS REPLACED BY ONE THAT ANSWERS, AND THE CHANGE IS SAVED", () => {
+  const call = codex.slice(codex.indexOf("export async function codexRespond"), codex.indexOf("export async function testCodexConnection"));
+  assert.match(call, /for \(const model of modelCandidates\(configured\)\)/, "every call walks the candidates");
+  assert.match(call, /if \(isModelRejection\(res\.status, text\)\) \{[\s\S]{0,120}continue;/, "an HTTP refusal tries the next");
+  assert.match(call, /if \(isModelRejection\(400, parsed\.failed\)\) \{[\s\S]{0,120}continue;/, "so does a refusal inside the stream");
+  assert.match(
+    call,
+    /if \(model !== \(configured \?\? CODEX_DEFAULT_MODEL\)\) \{\s*await putSetting\(CODEX_MODEL_KEY, model\);/,
+    "the model that answered is saved, migrating a stored gpt-5.4",
+  );
+});
+
+test("DISCONNECT REVOKES THE SIGN-IN AT OPENAI BEFORE FORGETTING IT", () => {
+  const disconnect = codex.slice(codex.indexOf("export async function disconnectCodex"), codex.indexOf("async function postTokenForm"));
+  const revokeAt = disconnect.indexOf("await revokeAtOpenAi(tokens)");
+  const clearAt = disconnect.indexOf('putSetting(CODEX_TOKENS_KEY, ""');
+  assert.ok(revokeAt > 0 && clearAt > revokeAt, "revoke first, then clear — once cleared there is nothing left to revoke with");
+  // As upstream codex-rs login/src/auth/revoke.rs.
+  assert.match(disconnect, /`\$\{AUTH_BASE\}\/oauth\/revoke`/);
+  assert.match(disconnect, /token_type_hint: useRefresh \? "refresh_token" : "access_token"/);
+  assert.match(disconnect, /\.\.\.\(useRefresh \? \{ client_id: CLIENT_ID \} : \{\}\)/);
+  // Best-effort: a failed revoke is logged, and the local copy is still cleared.
+  assert.ok(!/if \(!revoked\)[^\n]*return/.test(disconnect), "an unreachable OpenAI does not block disconnecting");
 });
 
 test("THE SIGN-IN IS STORED AS A CREDENTIAL, ENCRYPTED AT REST", () => {

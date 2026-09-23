@@ -5,12 +5,79 @@
  */
 
 /**
- * The model research runs on when a workspace has not chosen one. GPT-5.4 is the
- * model OpenAI named when it opened ChatGPT sign-in to third-party agents; which
- * models a given plan actually exposes varies, so this is a setting, and the
- * Test button on the settings screen shows immediately if it is not available.
+ * The model research runs on when a workspace has not chosen one.
+ *
+ * gpt-5.6-terra: OpenAI's named replacement for gpt-5.4 when it retired gpt-5.4
+ * from ChatGPT-authenticated Codex on 31 August 2026. This default USED to be
+ * gpt-5.4, so every fresh connection would have failed on its first call.
+ *
+ * Not gpt-6-sol, although OpenAI's model list now leads with it: the changelog
+ * has GPT-6 Sol and Luna "rolling out" from 22 September 2026, so an account
+ * that has not received them yet would be refused. Terra is the one every
+ * ChatGPT-signed-in account has had since the gpt-5.4 retirement.
  */
-export const CODEX_DEFAULT_MODEL = "gpt-5.4";
+export const CODEX_DEFAULT_MODEL = "gpt-5.6-terra";
+
+/**
+ * What to try, in order, if the chosen model is refused.
+ *
+ * MODELS RETIRE ON A SCHEDULE AND A STORED CHOICE DOES NOT KNOW. A workspace
+ * that picked a model, or relied on a default that later retired, would lose
+ * research on the day OpenAI switched it off, with an error nobody reads until
+ * the notes stop appearing. So a refusal walks down this list, and the model
+ * that answers is saved.
+ *
+ * This table will itself age. When OpenAI publishes a new lineup, update it
+ * here, most broadly available first.
+ */
+export const CODEX_MODEL_FALLBACKS = [
+  "gpt-5.6-terra",
+  "gpt-6-sol",
+  "gpt-5.6-luna",
+  "gpt-6-luna",
+  "gpt-6-astra",
+] as const;
+
+/**
+ * Models OpenAI has announced it is withdrawing from ChatGPT-authenticated
+ * Codex, and the day it happens. From that day a stored choice of one of these
+ * is skipped rather than tried, so nobody pays a failed call to learn it is gone.
+ * (gpt-5.4 and gpt-5.4-mini: OpenAI changelog, 31 July 2026. gpt-5.5: OpenAI
+ * models page.)
+ */
+export const CODEX_RETIRED_MODELS: Readonly<Record<string, string>> = {
+  "gpt-5.4": "2026-08-31",
+  "gpt-5.4-mini": "2026-08-31",
+  "gpt-5.5": "2026-10-14",
+};
+
+export function isRetiredModel(model: string, now = new Date()): boolean {
+  const date = CODEX_RETIRED_MODELS[model.trim().toLowerCase()];
+  return Boolean(date) && now.toISOString().slice(0, 10) >= date;
+}
+
+/**
+ * The configured model first — unless it has retired — then the fallbacks,
+ * without repeats. A workspace still set to gpt-5.4 therefore starts at Terra.
+ */
+export function modelCandidates(configured: string | null | undefined, now = new Date()): string[] {
+  const chosen = configured?.trim();
+  const usable = chosen && !isRetiredModel(chosen, now) ? [chosen] : [];
+  return [...new Set([...usable, ...CODEX_MODEL_FALLBACKS])];
+}
+
+/**
+ * Is this failure the backend refusing the MODEL — retired, unknown, or not on
+ * this plan — rather than anything else?
+ *
+ * Only then is it worth trying another model. A usage limit (429), an outage
+ * (5xx) or an expired sign-in (401) fails the same way whatever model is asked
+ * for, and walking the list would just spend three calls learning that.
+ */
+export function isModelRejection(status: number, message: string): boolean {
+  if (status === 401 || status === 429 || status >= 500) return false;
+  return /model/i.test(message) && /not (found|supported|available)|unsupported|unknown|invalid|retired|does not exist|no longer|deprecated|access/i.test(message);
+}
 
 export type CodexTokens = {
   access: string;
@@ -70,18 +137,22 @@ export function accountIdFromToken(token: string | undefined | null): string | n
  * Folds a Responses API event stream into the answer text.
  *
  * The backend streams whether or not you want it to. The finished text is taken
- * from the terminal `response.completed` event when there is one — it is the
- * authoritative whole — and otherwise from the accumulated
- * `response.output_text.delta` events, so a stream cut short still yields what
- * was written.
+ * from the terminal `response.completed` event — it is the authoritative whole.
  *
- * `incomplete` is the equivalent of Anthropic's `max_tokens` stop: text exists
- * but it was cut off, and must not be saved as a finished briefing.
+ * ONLY `response.completed` MEANS FINISHED. A stream that ends WITHOUT a
+ * terminal event — the connection dropped, the function timed out, the backend
+ * stopped mid-answer — is marked `incomplete`, even though the deltas that did
+ * arrive read like a briefing. The first version returned those deltas as
+ * complete, and research saved a sentence cut off halfway as the finished note.
+ * The text is still returned so the caller can log what arrived, but
+ * `incomplete` is the equivalent of Anthropic's `max_tokens` stop: it must never
+ * be saved as research.
  */
 export function parseCodexStream(raw: string): { text: string; incomplete: boolean; failed: string | null } {
   let deltas = "";
   let completedText: string | null = null;
   let incomplete = false;
+  let terminal = false;
   let failed: string | null = null;
 
   for (const line of raw.split(/\r?\n/)) {
@@ -101,22 +172,26 @@ export function parseCodexStream(raw: string): { text: string; incomplete: boole
         if (typeof event.delta === "string") deltas += event.delta;
         break;
       case "response.completed":
+        terminal = true;
         completedText = outputText(event.response);
         break;
       case "response.incomplete":
+        terminal = true;
         incomplete = true;
         completedText = outputText(event.response) || null;
         break;
       case "response.failed":
+        terminal = true;
         failed = errorText(event.response) ?? "response.failed";
         break;
       case "error":
+        terminal = true;
         failed = errorText(event) ?? "error";
         break;
     }
   }
 
-  return { text: (completedText ?? deltas).trim(), incomplete, failed };
+  return { text: (completedText ?? deltas).trim(), incomplete: incomplete || !terminal, failed };
 }
 
 function outputText(response: unknown): string {

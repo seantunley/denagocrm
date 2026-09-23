@@ -8,6 +8,8 @@ import { currentTenantScope } from "./tenantScope";
 import {
   CODEX_DEFAULT_MODEL,
   accountIdFromToken,
+  isModelRejection,
+  modelCandidates,
   needsRefresh,
   parseCodexStream,
   renewedByAnotherHolder,
@@ -72,8 +74,9 @@ export async function isCodexConnected(): Promise<boolean> {
   return Boolean(await readTokens());
 }
 
+/** The model the next call will try first — a retired stored choice is skipped. */
 export async function codexModel(): Promise<string> {
-  return (await getSetting(CODEX_MODEL_KEY))?.trim() || CODEX_DEFAULT_MODEL;
+  return modelCandidates(await getSetting(CODEX_MODEL_KEY))[0];
 }
 
 export type CodexStatus =
@@ -210,11 +213,50 @@ export async function pollCodexLogin(): Promise<
   return { state: "connected" };
 }
 
-export async function disconnectCodex(): Promise<void> {
+/**
+ * Disconnect: revoke the login AT OPENAI, then forget it here.
+ *
+ * Clearing the stored tokens alone leaves the refresh token valid at OpenAI.
+ * If a copy of it ever existed elsewhere — a leaked backup, a log line — it
+ * would keep working after the owner believed they had disconnected. Upstream
+ * Codex revokes on logout for exactly this reason (codex-rs
+ * login/src/auth/revoke.rs), and this does the same: the refresh token, falling
+ * back to the access token, at /oauth/revoke.
+ *
+ * Best-effort, as upstream: a failed revoke is logged and the local copy is
+ * cleared anyway. Refusing to disconnect because OpenAI was unreachable would
+ * leave the owner unable to remove a login they no longer trust.
+ */
+export async function disconnectCodex(): Promise<{ revoked: boolean }> {
+  const tokens = await readTokens();
+  const revoked = tokens ? await revokeAtOpenAi(tokens) : true;
   await basePrisma.$transaction(async (tx) => {
     await putSetting(CODEX_TOKENS_KEY, "", tx);
     await putSetting(CODEX_DEVICE_KEY, "", tx);
   });
+  return { revoked };
+}
+
+async function revokeAtOpenAi(tokens: CodexTokens): Promise<boolean> {
+  const useRefresh = Boolean(tokens.refresh);
+  const res = await fetch(`${AUTH_BASE}/oauth/revoke`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      token: useRefresh ? tokens.refresh : tokens.access,
+      token_type_hint: useRefresh ? "refresh_token" : "access_token",
+      // Upstream sends the client id with a refresh token only.
+      ...(useRefresh ? { client_id: CLIENT_ID } : {}),
+    }),
+    signal: AbortSignal.timeout(10_000),
+  }).catch((error: unknown) => error as Error);
+
+  if (res instanceof Error || !res.ok) {
+    const detail = res instanceof Error ? res.message : `${res.status} ${(await res.text().catch(() => "")).slice(0, 200)}`;
+    await logError("codex-auth", "Could not revoke the ChatGPT sign-in at OpenAI; cleared locally anyway", detail);
+    return false;
+  }
+  return true;
 }
 
 async function postTokenForm(
@@ -321,6 +363,14 @@ export type CodexResult =
  *
  * The backend only streams, and requires `store: false`. The stream is read to
  * the end and folded into text by `parseCodexStream`.
+ *
+ * Headers follow current upstream Codex (codex-rs core/src/client.rs):
+ * `session-id` — hyphenated; ChatGPT derives Responses cache affinity from it —
+ * and no `OpenAI-Beta`, which upstream sends only on its WebSocket transport.
+ *
+ * A model the backend refuses (retired, not on this plan, not rolled out yet)
+ * is not the end of the call: the next candidate is tried, and whichever
+ * answers is saved as the workspace's model.
  */
 export async function codexRespond(input: {
   instructions: string;
@@ -329,17 +379,18 @@ export async function codexRespond(input: {
 }): Promise<CodexResult> {
   let auth = await accessToken();
   if ("error" in auth) return { error: auth.error };
-  const model = await codexModel();
 
-  const send = (tokens: CodexTokens) =>
+  const configured = (await getSetting(CODEX_MODEL_KEY))?.trim() || null;
+  const sessionId = crypto.randomUUID();
+
+  const send = (tokens: CodexTokens, model: string) =>
     fetch(RESPONSES_URL, {
       method: "POST",
       headers: headers({
         Authorization: `Bearer ${tokens.access}`,
         "Content-Type": "application/json",
         Accept: "text/event-stream",
-        "OpenAI-Beta": "responses=experimental",
-        session_id: crypto.randomUUID(),
+        "session-id": sessionId,
         ...(tokens.accountId ? { "chatgpt-account-id": tokens.accountId } : {}),
       }),
       body: JSON.stringify({
@@ -355,37 +406,65 @@ export async function codexRespond(input: {
       signal: AbortSignal.timeout(90_000),
     }).catch((error: unknown) => error as Error);
 
-  let res = await send(auth.tokens);
+  const refusals: string[] = [];
+  for (const model of modelCandidates(configured)) {
+    let res = await send(auth.tokens, model);
 
-  // An access token can be revoked before its stated expiry. Renew once and
-  // retry; a second 401 is a real answer.
-  if (!(res instanceof Error) && res.status === 401) {
-    auth = await accessToken(true);
-    if ("error" in auth) return { error: auth.error };
-    res = await send(auth.tokens);
+    // An access token can be revoked before its stated expiry. Renew once and
+    // retry; a second 401 is a real answer.
+    if (!(res instanceof Error) && res.status === 401) {
+      auth = await accessToken(true);
+      if ("error" in auth) return { error: auth.error };
+      res = await send(auth.tokens, model);
+    }
+
+    if (res instanceof Error) {
+      await logError("codex-research", res, "responses request");
+      return { error: "Could not reach ChatGPT.", transient: true };
+    }
+    const text = await res.text().catch(() => "");
+    if (!res.ok) {
+      if (isModelRejection(res.status, text)) {
+        refusals.push(`${model} (${res.status})`);
+        continue;
+      }
+      await logError("codex-research", `ChatGPT backend ${res.status}`, text.slice(0, 300));
+      // 429 is the plan's usage limit. It lifts on its own; the sweep should
+      // stop for now rather than work down the list.
+      const transient = res.status === 429 || res.status >= 500;
+      return transient
+        ? { error: `ChatGPT is unavailable or over its usage limit (${res.status}).`, transient: true }
+        : { error: `ChatGPT refused the request (${res.status}).` };
+    }
+
+    const parsed = parseCodexStream(text);
+    if (parsed.failed) {
+      if (isModelRejection(400, parsed.failed)) {
+        refusals.push(`${model} (${parsed.failed.slice(0, 60)})`);
+        continue;
+      }
+      await logError("codex-research", "ChatGPT response failed", parsed.failed.slice(0, 300));
+      return { error: `ChatGPT could not answer: ${parsed.failed.slice(0, 120)}` };
+    }
+
+    // The model that answered is not the one the workspace had — it retired,
+    // or was never on this plan. Save the one that works, so the next call
+    // goes straight to it, and leave a row saying so.
+    if (model !== (configured ?? CODEX_DEFAULT_MODEL)) {
+      await putSetting(CODEX_MODEL_KEY, model);
+      await logError(
+        "codex-research",
+        `Research model switched to ${model}`,
+        `Was ${configured ?? `the default (${CODEX_DEFAULT_MODEL})`}. Refused: ${refusals.join(", ") || "retired, skipped"}.`,
+      );
+    }
+    return { text: parsed.text, incomplete: parsed.incomplete };
   }
 
-  if (res instanceof Error) {
-    await logError("codex-research", res, "responses request");
-    return { error: "Could not reach ChatGPT.", transient: true };
-  }
-  const text = await res.text().catch(() => "");
-  if (!res.ok) {
-    await logError("codex-research", `ChatGPT backend ${res.status}`, text.slice(0, 300));
-    // 429 is the plan's usage limit. It lifts on its own; the sweep should stop
-    // for now rather than work down the list.
-    const transient = res.status === 429 || res.status >= 500;
-    return transient
-      ? { error: `ChatGPT is unavailable or over its usage limit (${res.status}).`, transient: true }
-      : { error: `ChatGPT refused the request (${res.status}).` };
-  }
-
-  const parsed = parseCodexStream(text);
-  if (parsed.failed) {
-    await logError("codex-research", "ChatGPT response failed", parsed.failed.slice(0, 300));
-    return { error: `ChatGPT could not answer: ${parsed.failed.slice(0, 120)}` };
-  }
-  return { text: parsed.text, incomplete: parsed.incomplete };
+  await logError("codex-research", "Every research model was refused", refusals.join(", "));
+  return {
+    error: `ChatGPT refused every research model (${refusals.join(", ")}). Set one your plan offers in Settings.`,
+  };
 }
 
 /**

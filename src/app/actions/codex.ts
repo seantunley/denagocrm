@@ -41,13 +41,16 @@ export async function pollChatGptLogin() {
 
 export async function disconnectChatGpt() {
   const user = await requireOwner();
-  await disconnectCodex();
+  const { revoked } = await disconnectCodex();
   await logAudit({
     action: "integration.chatgpt_disconnected",
-    summary: "Disconnected the ChatGPT subscription; research falls back to the Anthropic key",
+    summary: revoked
+      ? "Disconnected the ChatGPT subscription and revoked its sign-in at OpenAI; research falls back to the Anthropic key"
+      : "Disconnected the ChatGPT subscription; OpenAI could not be reached to revoke the sign-in, so it was only cleared here",
     user,
   });
   revalidatePath("/settings");
+  return { revoked };
 }
 
 export async function testChatGpt() {
