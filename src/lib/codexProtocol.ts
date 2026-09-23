@@ -136,8 +136,18 @@ export function accountIdFromToken(token: string | undefined | null): string | n
 /**
  * Folds a Responses API event stream into the answer text.
  *
- * The backend streams whether or not you want it to. The finished text is taken
- * from the terminal `response.completed` event — it is the authoritative whole.
+ * WHERE THE TEXT ACTUALLY IS. The ChatGPT backend, with `store: false`, sends a
+ * `response.completed` whose `output` is an EMPTY array — measured on a live
+ * call, 23 September 2026. The answer arrives as `response.output_item.done`
+ * events, one per output item, and as `response.output_text.delta` pieces. The
+ * first version took the text from `response.completed` alone, so every call
+ * came back as "" and research reported "No usable research came back" on an
+ * answer that had in fact been written, searched and cited.
+ *
+ * So the text is taken, in order of authority: the completed event's output
+ * when it has any (the public API populates it), then the finished output
+ * items, then the raw deltas. An empty string at one level falls through to the
+ * next — it is not an answer.
  *
  * ONLY `response.completed` MEANS FINISHED. A stream that ends WITHOUT a
  * terminal event — the connection dropped, the function timed out, the backend
@@ -150,7 +160,8 @@ export function accountIdFromToken(token: string | undefined | null): string | n
  */
 export function parseCodexStream(raw: string): { text: string; incomplete: boolean; failed: string | null } {
   let deltas = "";
-  let completedText: string | null = null;
+  let itemsText = "";
+  let completedText = "";
   let incomplete = false;
   let terminal = false;
   let failed: string | null = null;
@@ -171,6 +182,9 @@ export function parseCodexStream(raw: string): { text: string; incomplete: boole
       case "response.output_text.delta":
         if (typeof event.delta === "string") deltas += event.delta;
         break;
+      case "response.output_item.done":
+        itemsText += outputText({ output: [event.item] });
+        break;
       case "response.completed":
         terminal = true;
         completedText = outputText(event.response);
@@ -178,7 +192,7 @@ export function parseCodexStream(raw: string): { text: string; incomplete: boole
       case "response.incomplete":
         terminal = true;
         incomplete = true;
-        completedText = outputText(event.response) || null;
+        completedText = outputText(event.response);
         break;
       case "response.failed":
         terminal = true;
@@ -191,7 +205,9 @@ export function parseCodexStream(raw: string): { text: string; incomplete: boole
     }
   }
 
-  return { text: (completedText ?? deltas).trim(), incomplete: incomplete || !terminal, failed };
+  // `||`, not `??`: an empty completed output is exactly the case that was
+  // silently discarding the answer.
+  return { text: (completedText || itemsText || deltas).trim(), incomplete: incomplete || !terminal, failed };
 }
 
 function outputText(response: unknown): string {

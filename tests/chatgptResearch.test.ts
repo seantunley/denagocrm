@@ -134,6 +134,54 @@ test("THE STREAM'S FINISHED TEXT COMES FROM THE COMPLETED EVENT", () => {
   assert.equal(parsed.failed, null);
 });
 
+test("THE REAL CHATGPT STREAM: THE ANSWER IS IN THE OUTPUT ITEMS, NOT THE COMPLETED EVENT", () => {
+  /*
+   * The event sequence of a live call to the ChatGPT backend on 23 September
+   * 2026 (store:false, web search on), reduced to its shape. response.completed
+   * carries `output: []`. The first parser took the text from there alone, got
+   * "", and research said "No usable research came back" about an answer that
+   * had been searched, written and cited.
+   */
+  const answer = "Company: Acme builds lifestyle estates in Cape Town.";
+  const raw = sse(
+    { type: "response.created" },
+    { type: "response.in_progress" },
+    { type: "response.output_item.added", item: { type: "web_search_call" } },
+    { type: "response.web_search_call.in_progress" },
+    { type: "response.web_search_call.searching" },
+    { type: "response.web_search_call.completed" },
+    { type: "response.output_item.done", item: { type: "web_search_call" } },
+    { type: "response.output_item.added", item: { type: "message" } },
+    { type: "response.content_part.added" },
+    { type: "response.output_text.delta", delta: "Company: Acme builds " },
+    { type: "response.output_text.delta", delta: "lifestyle estates" },
+    { type: "response.output_text.delta", delta: " in Cape Town." },
+    { type: "response.output_text.annotation.added" },
+    { type: "response.output_text.done", text: answer },
+    { type: "response.content_part.done" },
+    {
+      type: "response.output_item.done",
+      item: { type: "message", content: [{ type: "output_text", text: answer }] },
+    },
+    { type: "response.completed", response: { status: "completed", output: [] } },
+  );
+
+  const parsed = parseCodexStream(raw);
+  assert.equal(parsed.text, answer, "the answer is found despite the empty completed output");
+  assert.equal(parsed.incomplete, false, "and it is complete — response.completed arrived");
+  assert.equal(parsed.failed, null);
+
+  // With no output items either, the deltas are the last resort.
+  const deltasOnly = parseCodexStream(
+    sse(
+      { type: "response.output_text.delta", delta: "Company: " },
+      { type: "response.output_text.delta", delta: "Acme" },
+      { type: "response.completed", response: { output: [] } },
+    ),
+  );
+  assert.equal(deltasOnly.text, "Company: Acme");
+});
+
 test("A STREAM CUT SHORT IS INCOMPLETE, HOWEVER FINISHED ITS TEXT LOOKS", () => {
   /*
    * The first version of this test reproduced the bug and asserted the wrong
