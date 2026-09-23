@@ -39,6 +39,7 @@ const SECRET_KEYS = [
   "TELEGRAM_BOT_TOKEN",
   "SMTP_PASS",
   "META_PAGE_ACCESS_TOKEN",
+  "CODEX_OAUTH_TOKENS",
 ];
 
 async function probe(path: string, init?: RequestInit): Promise<number> {
