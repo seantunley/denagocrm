@@ -171,6 +171,16 @@ test("THE REAL CHATGPT STREAM: THE ANSWER IS IN THE OUTPUT ITEMS, NOT THE COMPLE
   assert.equal(parsed.incomplete, false, "and it is complete — response.completed arrived");
   assert.equal(parsed.failed, null);
 
+  // The finished item is authoritative on its own: a stream that delivers the
+  // message whole, with no deltas, must still yield it.
+  const itemOnly = parseCodexStream(
+    sse(
+      { type: "response.output_item.done", item: { type: "message", content: [{ type: "output_text", text: answer }] } },
+      { type: "response.completed", response: { output: [] } },
+    ),
+  );
+  assert.equal(itemOnly.text, answer, "the output item alone is enough");
+
   // With no output items either, the deltas are the last resort.
   const deltasOnly = parseCodexStream(
     sse(
