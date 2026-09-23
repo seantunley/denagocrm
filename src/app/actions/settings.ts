@@ -21,6 +21,14 @@ import {
   serialiseWeatherCities,
   type WeatherCity,
 } from "@/lib/weatherCities";
+import {
+  ACTIVITY_TYPES_KEY,
+  isSystemActivityType,
+  resolveActivityTypes,
+  serialiseActivityTypes,
+  SYSTEM_ACTIVITY_TYPES,
+  type ActivityType,
+} from "@/lib/activityTypes";
 import { isManagedSecret, isRegeneratable, keepBlankSubmit } from "@/lib/settingsSecrets";
 import { keyNamesAnInboundEndpoint, reconcileTenantChannels } from "@/lib/channelRegistration";
 import { setNextStepScheduling } from "@/lib/nextStepConfig";
@@ -681,6 +689,70 @@ export async function saveWeatherCities(cities: unknown): Promise<ActionResult> 
 
     await putSetting(WEATHER_CITIES_KEY, serialiseWeatherCities(cleaned));
     // The strip renders in the (app) layout, so every signed-in page shows it.
+    revalidatePath("/", "layout");
+  });
+}
+
+// ---- Activity types ----
+
+/**
+ * The activity types this workspace can schedule.
+ *
+ * OWNER ONLY and tenant-scoped by `putSetting`, same as the weather cities: the
+ * action decides who may write, the storage layer decides WHICH tenant, and it
+ * throws rather than guessing when the request carries no scope.
+ *
+ * TWO THINGS THIS REFUSES, both of which would break the app quietly:
+ *
+ * 1. Losing a built-in. `test_drive` is what a test-drive booking completes and
+ *    `follow_up` carries a required note and auto-pin; a list that dropped one
+ *    would leave those code paths writing a type nothing can render. The
+ *    built-ins are re-seeded from SYSTEM_ACTIVITY_TYPES rather than trusted from
+ *    the client, so a malformed or hostile payload cannot delete one — it can
+ *    only rename or hide it, which is what the screen actually offers.
+ *
+ * 2. Hiding everything. An empty picker is a workspace that cannot schedule
+ *    anything, reachable by ticking seven checkboxes, and the way back is this
+ *    same screen — which is fine, but the rep hitting it at 16:00 has no idea
+ *    that is where to go.
+ *
+ * `serialiseActivityTypes` stores only the DIFFERENCE from the defaults, so a
+ * workspace that renames nothing writes `[]` and keeps inheriting future
+ * built-in changes rather than freezing today's labels.
+ */
+export async function saveActivityTypes(types: unknown): Promise<ActionResult> {
+  return asActionResult(async () => {
+    await requireOwner();
+
+    if (!Array.isArray(types)) refuse("Could not read that list of activity types.");
+
+    const submitted = types as ActivityType[];
+
+    // Re-seed every built-in from the source of truth, carrying across only the
+    // label/emoji/hidden the client asked for. A built-in the payload omitted is
+    // restored untouched rather than lost.
+    const merged: ActivityType[] = SYSTEM_ACTIVITY_TYPES.map((system) => {
+      const sent = submitted.find(
+        (type) => type && typeof type === "object" && type.key === system.key
+      );
+      return sent ? { ...system, label: sent.label, emoji: sent.emoji, hidden: sent.hidden === true } : { ...system };
+    });
+
+    for (const type of submitted) {
+      if (!type || typeof type !== "object") continue;
+      if (isSystemActivityType(type.key)) continue;
+      merged.push(type);
+    }
+
+    const cleaned = resolveActivityTypes(serialiseActivityTypes(merged));
+
+    if (cleaned.every((type) => type.hidden)) {
+      refuse("Leave at least one activity type visible — otherwise nothing can be scheduled.");
+    }
+
+    await putSetting(ACTIVITY_TYPES_KEY, serialiseActivityTypes(cleaned));
+    // The list is resolved in the (app) layout and handed to every type picker
+    // in the app, so the whole shell has to re-render.
     revalidatePath("/", "layout");
   });
 }

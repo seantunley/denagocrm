@@ -19,6 +19,8 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import ConnectivityIndicator from "@/components/ConnectivityIndicator";
+import { ActivityTypesProvider } from "@/components/ActivityTypesProvider";
+import type { ActivityType } from "@/lib/activityTypes";
 
 type ShellUser = { id: string; name: string; role: string; permissions: string[]; avatarVersion?: string | null };
 
@@ -91,6 +93,7 @@ export default function AppShell({
   enabledModules,
   brand,
   weatherCities,
+  activityTypes,
   tenantId,
   children,
 }: {
@@ -100,6 +103,11 @@ export default function AppShell({
   enabledModules?: string[];
   /** The tenant's clock/weather cities, resolved by the (app) layout. */
   weatherCities: WeatherCity[];
+  /**
+   * The tenant's activity types, resolved by the (app) layout. Optional so every
+   * existing test render still compiles; undefined means the built-in seven.
+   */
+  activityTypes?: ActivityType[];
   tenantId: string;
   /** The workspace brand, resolved from the SESSION's tenant by the (app)
    *  layout. Optional so every existing test render still compiles; undefined
@@ -112,6 +120,7 @@ export default function AppShell({
 
   return (
     <TooltipProvider delayDuration={250}>
+    <ActivityTypesProvider types={activityTypes}>
     <div className="min-h-screen">
       <CommandMenu isAdmin={user.role === "owner"} permissions={user.permissions} enabledModules={enabledModules} />
       <QuickCreateDialog />
@@ -186,6 +195,7 @@ export default function AppShell({
         </div>
       </main>
     </div>
+    </ActivityTypesProvider>
     </TooltipProvider>
   );
 }
