@@ -4,6 +4,14 @@ import { logError } from "./errorLog";
 import { recordAiUsage } from "./systemHealth";
 import { inheritedTenantId } from "./tenantWrite";
 import { codexRespond, isCodexConnected } from "./codex";
+import {
+  CHATGPT_RESEARCH_FORMAT_NOTE,
+  RESEARCH_INSTRUCTIONS,
+  corporateDomain,
+  researchLeadMessage,
+  stripInlineCitations,
+} from "./researchPrompt";
+import type { CronSliceContext } from "./tenantCron";
 
 export async function isAiConfigured(): Promise<boolean> {
   return Boolean(await getSetting("ANTHROPIC_API_KEY"));
@@ -62,11 +70,6 @@ export async function aiCheckDraft(input: {
     return { error: "AI check failed — logged in the System Log." };
   }
 }
-
-const FREE_MAIL = new Set([
-  "gmail.com","yahoo.com","outlook.com","hotmail.com","icloud.com","live.com",
-  "webmail.co.za","mweb.co.za","telkomsa.net","vodamail.co.za","aol.com",
-]);
 
 /**
  * HubSpot-style enrichment: given a name + email, Claude searches the web and
@@ -144,6 +147,13 @@ function capSummary(summary: string): string {
  * Research on the lead and gets Opus with the full search budget.
  */
 export const AUTO_RESEARCH_MODEL = "claude-haiku-4-5";
+
+/**
+ * How much of a cron tick must be left to start another lead. A ChatGPT
+ * research call measured up to ~80 seconds; this leaves room for the slowest
+ * plus the writes after it.
+ */
+export const AUTO_RESEARCH_RESERVE_MS = 120_000;
 export const AUTO_RESEARCH_MAX_SEARCHES = 3;
 
 export type ResearchResult =
@@ -219,8 +229,7 @@ export async function aiResearch(
   if (!useChatGpt && !apiKey) {
     return { error: "AI Assist is not configured (Settings → Integrations)." };
   }
-  const domain = input.email?.split("@")[1]?.toLowerCase();
-  const corporate = domain && !FREE_MAIL.has(domain) ? domain : null;
+  const corporate = corporateDomain(input.email);
 
   /**
    * SERVER-SIDE WEB SEARCH DOES NOT ALWAYS FINISH IN ONE RESPONSE.
@@ -281,41 +290,14 @@ export async function aiResearch(
         // This task needs the model to READ a handful of pages and synthesise
         // them, and the basic tool puts them straight into context where it can.
         tools: [{ type: "web_search_20250305", name: "web_search", max_uses: options.maxSearches ?? 8 }],
-        system:
-          "You research sales leads for Denago Cape Town, a South African electric golf-cart dealership.\n\n" +
-          "SEARCH HARD BEFORE YOU CONCLUDE ANYTHING. Work several angles, not one or two: the person's name plus LinkedIn, the name plus \"South Africa\", the name plus any employer you turn up, and the company's own website and public social profiles (Facebook, Instagram, X/Twitter). LinkedIn is usually the most reliable source for a current role — search for it directly rather than relying on whatever a generic web search happens to surface. Two searches is not a search.\n\n" +
-          // THE OLD PROMPT TALKED ITSELF OUT OF THE ANSWER, AND THIS MODEL OBEYED.
-          //
-          // It said to research the person "only if confidently identifiable" and
-          // offered "No reliable information found." as the out. For a common
-          // name that made bailing the COMPLIANT reply — measured: two searches,
-          // eighteen results in hand, and it answered with the one-liner. The
-          // July note on the same contact instead named the prominent match and
-          // said so. Closing the hatch and demanding attribution restored it:
-          // six searches, and the full Hungry Lion / Digicloud briefing.
-          "WHEN SEVERAL PEOPLE SHARE THE NAME, REPORT THE BEST-EVIDENCED ONE — do not discard the research. Name the most prominent public match, say plainly that it is a name match rather than a confirmed identity, and give the evidence so the salesperson can judge for themselves. Throwing away a strong public match because you cannot prove it is the same person is the failure to avoid here; inventing detail is the other. You avoid both the same way: attribute. Say what the source is and what it actually supports.\n\n" +
-          "Then respond with up to three lines, EXACTLY in this order, each on its own line, each starting with its label and a colon:\n" +
-          "Company: what it does, how big it is, where it operates, and anything else that helps someone walk into the conversation informed\n" +
-          "Role: the person's role and employer, stated plainly if confirmed, plus prior roles or other ventures if you found them\n" +
-          "Fit: why they might want an electric cart (estate, lodge, farm, resort...), and how to approach them\n" +
-          "WRITE IT TO BE READ, NOT TO BE COMPLETE. A salesperson skims this in the thirty seconds before they make contact, so lead each label with the single most useful fact and put the supporting detail after it. Two to four ordinary sentences per label is the target. Full stops, not semicolons: a chain of clauses strung together with semicolons is the failure here — it is technically thorough and nobody can read it. Cut the corporate trivia that will not change how they open the conversation (founding dates, store counts, subsidiary history) unless it is genuinely the hook. A note that reads as thin is a failed one; so is one that has to be re-read. Never pad to reach a length — depth comes from what you found, not from wordcount.\n" +
-          "One more formatting rule, and it is absolute: NEVER put a line break inside a label's text. Each label is exactly one line, however long, because a stray newline breaks the card this renders into.\n" +
-          "Omit a label entirely if you genuinely found nothing for it — do not write \"Company: not found\". Use \"No reliable information found.\" ONLY if the searches genuinely returned nothing usable about anyone of this name: it is the last resort, not the safe default.\n\n" +
-          "STATE WHAT YOU FOUND PLAINLY. When a LinkedIn profile or the company's own page directly confirms a role or fact, say it as fact — \"is the CEO of X\", never \"might be tied to X\" or \"possibly works at X\" — because the source said so directly, not because you're certain in the abstract. Reserve hedging (\"appears to be\", \"likely\") for evidence that is genuinely indirect, stale, or where more than one person shares this name and you can't tell which one is the lead. Never fabricate. No preamble, no other text outside the labeled lines.",
+        system: RESEARCH_INSTRUCTIONS,
     };
 
     // The opening turn. It lives in `messages` — NOT in `requestBody` — because
     // every call spreads `{ ...requestBody, messages }`, so a copy left behind in
     // the body would be silently replaced by this array and the continuation
     // would resend a conversation the prompt had fallen out of.
-    messages.push({
-      role: "user",
-      content: `Lead: ${input.name}${input.email ? ` <${input.email}>` : ""}\n${
-        corporate
-          ? `Company domain to research: ${corporate}`
-          : "Personal email — research the person (South Africa) only if confidently identifiable."
-      }\nCheck LinkedIn for "${input.name}"${corporate ? ` at the company on ${corporate}` : " (South Africa)"} to confirm their role.`,
-    });
+    messages.push({ role: "user", content: researchLeadMessage(input.name, input.email) });
     // Bounded: a paused turn is resumed at most this many times. The cap exists
     // so a model that keeps pausing cannot spin — and each pass carries the same
     // 90s timeout, so the ceiling is wall-clock as well as count.
@@ -327,15 +309,27 @@ export async function aiResearch(
       // transport differs. The search budget is an Anthropic tool parameter
       // with no Responses equivalent; on a flat-rate plan it is also not the
       // cost it is on the API.
+      // HIGH REASONING, LONG ANSWERS, ON THE BEST MODEL. On a flat-rate plan
+      // there is no per-call cost to economise on, and the defaults showed:
+      // the first ChatGPT briefing on the Petrow Agri lead was two thin
+      // sentences a label beside an Opus note that named the directors. Sol at
+      // high effort, with the registry angle in the prompt, found them too —
+      // at 50 to 80 seconds a call, which is why the timeout is generous and
+      // automatic research has its own cron route.
       const reply = await codexRespond({
-        instructions: String(requestBody.system),
+        instructions: RESEARCH_INSTRUCTIONS + CHATGPT_RESEARCH_FORMAT_NOTE,
         prompt: String(messages[0].content),
         webSearch: true,
+        reasoningEffort: "high",
+        verbosity: "high",
+        timeoutMs: 150_000,
       });
       if ("error" in reply) {
         return reply.transient ? { error: reply.error, transient: true } : { error: reply.error };
       }
-      summary = await stripResearchPreamble(reply.text);
+      // Its search writes inline citation links into the prose, which the card
+      // shows as raw text. The prompt asks it not to; this makes sure.
+      summary = await stripResearchPreamble(stripInlineCitations(reply.text));
       stopReason = reply.incomplete ? "max_tokens" : "end_turn";
     }
 
@@ -478,7 +472,7 @@ export async function aiResearch(
  * Lost leads are skipped: a lead marked lost within minutes of arriving is
  * usually the spam, and researching it is paying to learn nothing.
  */
-export async function runAutoResearch(): Promise<number> {
+export async function runAutoResearch(budget?: Pick<CronSliceContext, "shouldStop">): Promise<number> {
   if ((await getSetting("AI_AUTO_RESEARCH")) !== "true") return 0;
   if (!(await isResearchConfigured())) return 0;
   const since = new Date(Date.now() - 48 * 60 * 60 * 1000);
@@ -495,6 +489,10 @@ export async function runAutoResearch(): Promise<number> {
   });
   let done = 0;
   for (const lead of leads) {
+    // Only start a lead there is time to finish. A call cut off by the
+    // platform leaves the lead unmarked, so the next tick simply tries it —
+    // but it was a wasted call, and on the API a paid one.
+    if (budget?.shouldStop(AUTO_RESEARCH_RESERVE_MS)) break;
     const result = await aiResearch(
       { name: lead.name, email: lead.email },
       { model: AUTO_RESEARCH_MODEL, maxSearches: AUTO_RESEARCH_MAX_SEARCHES },

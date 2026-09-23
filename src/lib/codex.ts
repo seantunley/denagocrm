@@ -444,6 +444,11 @@ export async function codexRespond(input: {
   instructions: string;
   prompt: string;
   webSearch?: boolean;
+  /** Both accepted by the ChatGPT backend (verified live, 23 Sep 2026). */
+  reasoningEffort?: "low" | "medium" | "high" | "xhigh";
+  verbosity?: "low" | "medium" | "high";
+  /** Research at high effort runs 50–80 seconds; the default suits short calls. */
+  timeoutMs?: number;
 }): Promise<CodexResult> {
   let auth = await accessToken();
   if ("error" in auth) return { error: auth.error };
@@ -468,10 +473,12 @@ export async function codexRespond(input: {
         tools: input.webSearch ? [{ type: "web_search" }] : [],
         tool_choice: "auto",
         parallel_tool_calls: false,
+        ...(input.reasoningEffort ? { reasoning: { effort: input.reasoningEffort } } : {}),
+        ...(input.verbosity ? { text: { verbosity: input.verbosity } } : {}),
         store: false,
         stream: true,
       }),
-      signal: AbortSignal.timeout(90_000),
+      signal: AbortSignal.timeout(input.timeoutMs ?? 90_000),
     }).catch((error: unknown) => error as Error);
 
   const refusals: string[] = [];

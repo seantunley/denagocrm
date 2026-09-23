@@ -42,6 +42,13 @@ import { Car, Check, FileText } from "lucide-react";
 
 const RESEARCH_SUBJECT = "🔎 AI research";
 
+/**
+ * The Research button's server action runs in this page's function. Research on
+ * the ChatGPT subscription measured 50–80 seconds (Sol, high reasoning, ~10 web
+ * searches), so the limit is stated rather than left to a platform default.
+ */
+export const maxDuration = 300;
+
 export default async function LeadDetailPage({
   params,
   searchParams,
