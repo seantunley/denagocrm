@@ -323,7 +323,7 @@ test("the next-step scheduling control survived the screen that hosted it", () =
 });
 
 test("a stage_entered event is judged against the stage that was ENTERED", () => {
-  // Events are drained by a cron every 15 minutes. Judging the event against
+  // Events are drained by a cron every 30 minutes. Judging the event against
   // the lead's stage NOW means a rep who moves a lead twice inside that window
   // has the first event silently match nothing.
   const code = shipped("src/lib/journeyTriggers.ts");
