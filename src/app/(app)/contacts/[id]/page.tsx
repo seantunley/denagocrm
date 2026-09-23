@@ -39,6 +39,9 @@ import { StatusPill } from "@/components/visual-system";
 
 const RESEARCH_SUBJECT = "🔎 AI research";
 
+/** See the lead page: the Research button's action can run 50–80 seconds. */
+export const maxDuration = 300;
+
 export default async function ContactDetailPage({
   params,
 }: {

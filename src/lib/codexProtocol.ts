@@ -7,16 +7,20 @@
 /**
  * The model research runs on when a workspace has not chosen one.
  *
- * gpt-5.6-terra: OpenAI's named replacement for gpt-5.4 when it retired gpt-5.4
- * from ChatGPT-authenticated Codex on 31 August 2026. This default USED to be
- * gpt-5.4, so every fresh connection would have failed on its first call.
+ * gpt-6-sol, chosen on evidence. On the same lead, 23 September 2026: Terra
+ * (the previous default) wrote two thin sentences a label; Astra was richer but
+ * 20 seconds slower and ignored the no-links instruction; Sol with high
+ * reasoning found the company's registry directors and the family business —
+ * close to the Opus note it was being compared with — and followed the
+ * formatting rules.
  *
- * Not gpt-6-sol, although OpenAI's model list now leads with it: the changelog
- * has GPT-6 Sol and Luna "rolling out" from 22 September 2026, so an account
- * that has not received them yet would be refused. Terra is the one every
- * ChatGPT-signed-in account has had since the gpt-5.4 retirement.
+ * Sol is still rolling out (OpenAI changelog, 22 September 2026). An account
+ * without it is refused with "model is not supported when using Codex with a
+ * ChatGPT account" — seen live, and recognised by isModelRejection — and falls
+ * through to Terra, which every ChatGPT-signed-in account has had since the
+ * gpt-5.4 retirement.
  */
-export const CODEX_DEFAULT_MODEL = "gpt-5.6-terra";
+export const CODEX_DEFAULT_MODEL = "gpt-6-sol";
 
 /**
  * What to try, in order, if the chosen model is refused.
@@ -31,11 +35,11 @@ export const CODEX_DEFAULT_MODEL = "gpt-5.6-terra";
  * here, most broadly available first.
  */
 export const CODEX_MODEL_FALLBACKS = [
-  "gpt-5.6-terra",
   "gpt-6-sol",
-  "gpt-5.6-luna",
-  "gpt-6-luna",
+  "gpt-5.6-terra",
   "gpt-6-astra",
+  "gpt-6-luna",
+  "gpt-5.6-luna",
 ] as const;
 
 /**

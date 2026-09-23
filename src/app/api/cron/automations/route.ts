@@ -14,7 +14,6 @@ import { getEnabledModuleIds } from "@/lib/modules/enabled";
 import type { ModuleId } from "@/lib/modules/registry";
 import { logError } from "@/lib/errorLog";
 import { warmUpForCron } from "@/lib/cronPreflight";
-import { runAutoResearch } from "@/lib/ai";
 import { runActivityReminders } from "@/lib/activityReminders";
 import { runSafeCampaignQueue } from "@/lib/marketingCampaignQueue";
 import { runSafeSurveyDistributionQueue } from "@/lib/surveyDistributionQueue";
@@ -89,7 +88,10 @@ async function runOperationalQueues(tenantId: string | null, budget: CronSliceCo
   const googleReviews = on("marketing") ? await phase("google-reviews", syncGoogleReviews, -1) : null;
   const inboundEmail = await phase("imap-sync", syncInboundEmail, -1);
   const activityReminders = await phase("activity-reminders", runActivityReminders, -1);
-  const aiResearch = await phase("ai-auto-research", runAutoResearch, -1);
+  // Automatic lead research moved to /api/cron/research. A research call on the
+  // ChatGPT subscription takes 50–80 seconds; this route is killed at 60, and
+  // everything after that phase — the campaign and survey queues — would have
+  // died with it.
   const campaignSent = on("marketing") ? await phase("campaign-queue", runSafeCampaignQueue, -1) : null;
   const surveyQueue = on("marketing")
     ? await phase("survey-distribution-queue", runSafeSurveyDistributionQueue, -1)
@@ -116,7 +118,6 @@ async function runOperationalQueues(tenantId: string | null, budget: CronSliceCo
     fbLeads,
     googleReviews,
     inboundEmail,
-    aiResearch,
     campaignSent,
     surveyQueue,
     activityReminders,

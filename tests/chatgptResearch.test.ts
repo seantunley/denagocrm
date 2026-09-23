@@ -59,7 +59,11 @@ test("A TOKEN IS RENEWED BEFORE IT EXPIRES, NOT AFTER", () => {
 test("THE DEFAULT MODEL IS ONE CHATGPT SIGN-IN STILL SERVES", () => {
   // gpt-5.4 was the default, and OpenAI withdrew it from ChatGPT-authenticated
   // Codex on 31 August 2026: every fresh connection failed on its first call.
-  assert.equal(CODEX_DEFAULT_MODEL, "gpt-5.6-terra", "OpenAI's named replacement for gpt-5.4");
+  // Sol, chosen on a side-by-side on a real lead (Terra thin, Astra slower and
+  // leaking links, Sol found the registry directors). Terra is the fallback,
+  // because Sol is still rolling out.
+  assert.equal(CODEX_DEFAULT_MODEL, "gpt-6-sol");
+  assert.equal(CODEX_MODEL_FALLBACKS[1], "gpt-5.6-terra", "an account without Sol falls through to Terra next");
   assert.equal(isRetiredModel(CODEX_DEFAULT_MODEL, new Date("2026-09-23")), false);
   assert.equal(CODEX_MODEL_FALLBACKS[0], CODEX_DEFAULT_MODEL, "the default is tried first");
   for (const model of CODEX_MODEL_FALLBACKS) {
@@ -69,13 +73,15 @@ test("THE DEFAULT MODEL IS ONE CHATGPT SIGN-IN STILL SERVES", () => {
 
 test("A STORED RETIRED MODEL IS SKIPPED, NOT TRIED", () => {
   const today = new Date("2026-09-23T10:00:00Z");
-  // A workspace connected before 31 Aug, still set to gpt-5.4, goes straight to Terra.
-  assert.equal(modelCandidates("gpt-5.4", today)[0], "gpt-5.6-terra");
-  assert.equal(modelCandidates("gpt-5.4-mini", today)[0], "gpt-5.6-terra");
+  // A workspace connected before 31 Aug, still set to gpt-5.4, goes straight to
+  // the current default instead of paying a refused call to learn it is gone.
+  assert.equal(modelCandidates("gpt-5.4", today)[0], CODEX_DEFAULT_MODEL);
+  assert.equal(modelCandidates("gpt-5.4-mini", today)[0], CODEX_DEFAULT_MODEL);
+  assert.ok(!modelCandidates("gpt-5.4", today).includes("gpt-5.4"), "the retired model is not tried at all");
 
   // gpt-5.5 still works today, and stops being tried on the day it retires.
   assert.equal(modelCandidates("gpt-5.5", today)[0], "gpt-5.5");
-  assert.equal(modelCandidates("gpt-5.5", new Date("2026-10-14T00:00:00Z"))[0], "gpt-5.6-terra");
+  assert.equal(modelCandidates("gpt-5.5", new Date("2026-10-14T00:00:00Z"))[0], CODEX_DEFAULT_MODEL);
 
   // A live choice is honoured, and nothing is tried twice.
   const candidates = modelCandidates("gpt-6-sol", today);

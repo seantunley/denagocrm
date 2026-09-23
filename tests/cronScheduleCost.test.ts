@@ -75,7 +75,7 @@ test("THE INTERVALS ARE THE ONES THE COST NOTE ASSUMES", () => {
    * emails that may take up to half an hour. Tightening it again is a real
    * cost, not a free tweak.
    */
-  for (const route of ["signing-jobs", "bot-outbox", "journeys", "automations", "statistics"]) {
+  for (const route of ["signing-jobs", "bot-outbox", "journeys", "automations", "statistics", "research"]) {
     assert.equal(scheduleOf(route), "*/30 * * * *", `${route} is recovery or batch work, not realtime`);
   }
 
@@ -95,7 +95,7 @@ test("EVERY FREQUENT CRON STILL WAKES THE DATABASE ON PURPOSE", () => {
    * INTERVAL, not the warm-up. This pins that distinction so the next person
    * reading the bill removes the right thing.
    */
-  for (const route of ["bot-outbox", "signing-jobs", "journeys", "automations", "statistics"]) {
+  for (const route of ["bot-outbox", "signing-jobs", "journeys", "automations", "statistics", "research"]) {
     const code = src(`src/app/api/cron/${route}/route.ts`);
     assert.match(code, /warmUpForCron\(/, `${route} wakes the database before sweeping`);
   }
@@ -113,4 +113,26 @@ test("NOTHING STILL TELLS A CUSTOMER THE OLD CADENCE", () => {
     !/checked every 15 minutes/.test(settings),
     "no screen promises the old 15-minute inbox sweep",
   );
+});
+
+test("AUTOMATIC RESEARCH HAS ITS OWN JOB, SO A SLOW CALL CANNOT KILL THE SENDING QUEUES", () => {
+  /*
+   * A research call on the ChatGPT subscription measured 50 to 80 seconds. As a
+   * phase of /api/cron/automations — killed at 60 — one new lead would have
+   * taken down the campaign and survey queues that run after it.
+   */
+  const automations = src("src/app/api/cron/automations/route.ts");
+  const automationsCode = automations.replace(/\/\/[^\n]*/g, "");
+  assert.ok(!/runAutoResearch/.test(automationsCode), "the sending job no longer runs research");
+
+  const research = src("src/app/api/cron/research/route.ts");
+  assert.match(research, /export const maxDuration = 300;/, "the research job has Vercel's full five minutes");
+  assert.match(research, /runAutoResearch\(budget\)/, "and hands the sweep its budget");
+  assert.match(research, /warmUpForCron\("research"/);
+
+  const ai = src("src/lib/ai.ts");
+  const sweep = ai.slice(ai.indexOf("export async function runAutoResearch"));
+  const guardAt = sweep.indexOf("if (budget?.shouldStop(AUTO_RESEARCH_RESERVE_MS)) break;");
+  const callAt = sweep.indexOf("await aiResearch(");
+  assert.ok(guardAt > 0 && callAt > guardAt, "a lead is only started with time to finish it");
 });

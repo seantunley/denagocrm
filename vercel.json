@@ -25,6 +25,10 @@
       "schedule": "*/30 * * * *"
     },
     {
+      "path": "/api/cron/research",
+      "schedule": "*/30 * * * *"
+    },
+    {
       "path": "/api/cron/backup",
       "schedule": "0 2 * * *"
     },
