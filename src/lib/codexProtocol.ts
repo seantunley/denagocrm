@@ -29,6 +29,22 @@ export function needsRefresh(tokens: Pick<CodexTokens, "expires">, now = Date.no
 }
 
 /**
+ * After waiting for the renewal lock: did whoever held it already renew?
+ *
+ * The refresh token is single-use. A request that waited while another renewed
+ * holds a now-spent refresh token in memory; presenting it would look like
+ * theft to OpenAI and revoke the login. If the stored pair has changed since
+ * this request first read it, and is fresh, use it instead of renewing again.
+ */
+export function renewedByAnotherHolder(
+  stored: Pick<CodexTokens, "access" | "expires">,
+  seenBefore: Pick<CodexTokens, "access">,
+  now = Date.now(),
+): boolean {
+  return stored.access !== seenBefore.access && !needsRefresh(stored, now);
+}
+
+/**
  * The ChatGPT account id carried inside an OpenAI token.
  *
  * The id and access tokens are JWTs with an `https://api.openai.com/auth`

@@ -10,6 +10,7 @@ import {
   accountIdFromToken,
   needsRefresh,
   parseCodexStream,
+  renewedByAnotherHolder,
   type CodexTokens,
 } from "./codexProtocol";
 
@@ -288,8 +289,7 @@ async function accessToken(forceRefresh = false): Promise<{ tokens: CodexTokens 
 
       const latest = await readTokens();
       if (!latest) return { error: "ChatGPT is not connected." };
-      // Renewed by whoever held the lock before us.
-      if (latest.access !== current.access && !needsRefresh(latest)) return { tokens: latest };
+      if (renewedByAnotherHolder(latest, current)) return { tokens: latest };
 
       const renewed = await postTokenForm(
         new URLSearchParams({ grant_type: "refresh_token", refresh_token: latest.refresh, client_id: CLIENT_ID }),

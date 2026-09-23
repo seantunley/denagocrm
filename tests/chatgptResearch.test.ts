@@ -8,6 +8,7 @@ import {
   accountIdFromToken,
   needsRefresh,
   parseCodexStream,
+  renewedByAnotherHolder,
 } from "../src/lib/codexProtocol";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -48,6 +49,17 @@ test("A TOKEN IS RENEWED BEFORE IT EXPIRES, NOT AFTER", () => {
   assert.equal(needsRefresh({ expires: now + REFRESH_MARGIN_MS - 1000 }, now), true, "inside the margin");
   assert.equal(needsRefresh({ expires: now - 1 }, now), true, "already expired");
   assert.equal(needsRefresh({ expires: Number.NaN }, now), true, "unknown expiry is treated as expired");
+});
+
+test("A REQUEST THAT WAITED FOR THE LOCK USES THE PAIR ALREADY RENEWED", () => {
+  const now = 1_000_000_000;
+  const fresh = now + 60 * 60 * 1000;
+  // Somebody renewed while we waited: the stored access token changed and is fresh.
+  assert.equal(renewedByAnotherHolder({ access: "new", expires: fresh }, { access: "old" }, now), true);
+  // Nobody did: same token as we first saw, so we are the one to renew.
+  assert.equal(renewedByAnotherHolder({ access: "old", expires: now }, { access: "old" }, now), false);
+  // Changed but already stale again (a long wait): renew rather than use it.
+  assert.equal(renewedByAnotherHolder({ access: "new", expires: now }, { access: "old" }, now), false);
 });
 
 test("THE STREAM'S FINISHED TEXT COMES FROM THE COMPLETED EVENT", () => {
@@ -119,6 +131,11 @@ test("TOKEN RENEWAL IS SERIALISED, BECAUSE THE REFRESH TOKEN IS SINGLE-USE", () 
   assert.ok(lockAt > 0, "renewal takes a per-workspace lock");
   assert.ok(rereadAt > lockAt, "and re-reads the tokens AFTER taking it");
   assert.ok(refreshAt > rereadAt, "so a waiter uses the pair the first holder stored, instead of spending it again");
+  const shortCircuitAt = renew.indexOf("if (renewedByAnotherHolder(latest, current)) return { tokens: latest };");
+  assert.ok(
+    shortCircuitAt > rereadAt && shortCircuitAt < refreshAt,
+    "the waiter returns the stored pair BEFORE it would present its spent refresh token",
+  );
   assert.match(renew, /putSetting\(CODEX_TOKENS_KEY, JSON\.stringify\(renewed\.tokens\), tx\)/, "the new pair is stored inside the lock");
   assert.match(renew, /if \(renewed\.revoked\) await putSetting\(CODEX_TOKENS_KEY, "", tx\)/, "a dead login is cleared, not retried forever");
 });
