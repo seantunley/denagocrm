@@ -308,12 +308,21 @@ export async function aiResearch(
     // every call spreads `{ ...requestBody, messages }`, so a copy left behind in
     // the body would be silently replaced by this array and the continuation
     // would resend a conversation the prompt had fallen out of.
+    //
+    // THE SAME ESCAPE HATCH, STILL OPEN HERE. The system prompt had "only if
+    // confidently identifiable" removed in August (see above) — and this
+    // per-lead line kept it, word for word, for every personal-email lead. A
+    // model that weighs the latest instruction most — GPT-5.6 Terra, on the
+    // ChatGPT subscription — took it and answered the one-liner, where the same
+    // lead's earlier Opus note had listed the name matches for the rep to rule
+    // out. The personal-email line now points at the name-match rule instead of
+    // contradicting it.
     messages.push({
       role: "user",
       content: `Lead: ${input.name}${input.email ? ` <${input.email}>` : ""}\n${
         corporate
           ? `Company domain to research: ${corporate}`
-          : "Personal email — research the person (South Africa) only if confidently identifiable."
+          : "Personal email, so there is no company domain — research the person, South Africa first. If you cannot confirm which person this is, report the best-evidenced name matches as your instructions describe; do not stop at \"No reliable information found.\" while matches exist."
       }\nCheck LinkedIn for "${input.name}"${corporate ? ` at the company on ${corporate}` : " (South Africa)"} to confirm their role.`,
     });
     // Bounded: a paused turn is resumed at most this many times. The cap exists
