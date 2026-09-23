@@ -185,7 +185,7 @@ const codex = stripComments(src("src/lib/codex.ts"));
 
 test("TOKEN RENEWAL IS SERIALISED, BECAUSE THE REFRESH TOKEN IS SINGLE-USE", () => {
   const renew = codex.slice(codex.indexOf("async function accessToken"), codex.indexOf("export type CodexResult"));
-  const lockAt = renew.indexOf("pg_advisory_xact_lock");
+  const lockAt = renew.indexOf("return withCodexLock(async (tx) => {");
   const rereadAt = renew.indexOf("const latest = await readTokens()");
   const refreshAt = renew.indexOf('grant_type: "refresh_token"');
   assert.ok(lockAt > 0, "renewal takes a per-workspace lock");
@@ -225,6 +225,60 @@ test("A REFUSED MODEL IS REPLACED BY ONE THAT ANSWERS, AND THE CHANGE IS SAVED",
     /if \(model !== \(configured \?\? CODEX_DEFAULT_MODEL\)\) \{\s*await putSetting\(CODEX_MODEL_KEY, model\);/,
     "the model that answered is saved, migrating a stored gpt-5.4",
   );
+});
+
+test("EVERY WRITE OF THE SIGN-IN HOLDS THE SAME LOCK", () => {
+  /*
+   * Renew, disconnect and connect each do network I/O between reading the
+   * sign-in and writing it, so any two can overlap. A renewal already talking to
+   * OpenAI when the owner clicked Disconnect wrote its new pair AFTER the clear,
+   * and the workspace came back connected while the screen said otherwise. The
+   * same happened to a sign-in poll mid-exchange.
+   *
+   * The rule that closes it: one lock, and the only way to write sign-in state
+   * is the `tx` that lock hands out.
+   */
+  const helper = codex.slice(codex.indexOf("function withCodexLock"), codex.indexOf("async function accessToken"));
+  assert.match(helper, /return basePrisma\.\$transaction\(\s*async \(tx\) => \{\s*await tx\.\$executeRaw`SELECT pg_advisory_xact_lock/, "the lock is taken first, inside the transaction");
+
+  assert.equal((codex.match(/\$transaction\(/g) ?? []).length, 1, "the lock's transaction is the only one — no side door");
+
+  // Each write, as the statement it sits in (up to the `;`).
+  const writes = [...codex.matchAll(/putSetting\(CODEX_(TOKENS|DEVICE)_KEY,[^;]*;/g)].map((match) => match[0]);
+  assert.ok(writes.length >= 6, "every sign-in write site is covered");
+  for (const write of writes) {
+    assert.match(write, /, tx\)/, `written through the lock's transaction: ${write}`);
+  }
+});
+
+test("A DISCONNECT READS AFTER THE LOCK, SO IT REVOKES WHAT A RENEWAL JUST STORED", () => {
+  const disconnect = codex.slice(codex.indexOf("export async function disconnectCodex"), codex.indexOf("async function revokeAtOpenAi"));
+  const lockAt = disconnect.indexOf("return withCodexLock(async (tx) => {");
+  const readAt = disconnect.indexOf("const tokens = await readTokens();");
+  assert.ok(lockAt > 0, "disconnect takes the sign-in lock");
+  assert.ok(readAt > lockAt, "and reads the tokens only once it holds it — the renewed pair, not the one it replaced");
+});
+
+test("A SIGN-IN THAT FINISHES AFTER A DISCONNECT IS REVOKED, NOT STORED", () => {
+  const poll = codex.slice(codex.indexOf("export async function pollCodexLogin"), codex.indexOf("export async function disconnectCodex"));
+  const exchangeAt = poll.indexOf('grant_type: "authorization_code"');
+  const lockAt = poll.indexOf("return withCodexLock(async (tx) => {", exchangeAt);
+  const recheckAt = poll.indexOf("const still = await readPendingLogin();", lockAt);
+  const storeAt = poll.indexOf("putSetting(CODEX_TOKENS_KEY, JSON.stringify(tokens.tokens), tx)");
+  assert.ok(lockAt > exchangeAt, "the result of the exchange is written under the lock");
+  assert.ok(recheckAt > lockAt && storeAt > recheckAt, "after checking the sign-in is still the one in progress");
+  assert.match(
+    poll.slice(recheckAt, storeAt),
+    /if \(!still \|\| still\.deviceAuthId !== pending\.deviceAuthId\) \{\s*await revokeAtOpenAi\(tokens\.tokens\);\s*return \{ state: "expired" as const \};/,
+    "an abandoned sign-in's tokens are revoked at OpenAI and never stored",
+  );
+});
+
+test("THE TEST BUTTON DOES NOT CALL AN INTERRUPTED ANSWER WORKING", () => {
+  const check = codex.slice(codex.indexOf("export async function testCodexConnection"));
+  const incompleteAt = check.indexOf("if (result.incomplete) {");
+  const okAt = check.indexOf("return { ok: true");
+  assert.ok(incompleteAt > 0 && okAt > incompleteAt, "an incomplete stream fails the test before success is reported");
 });
 
 test("DISCONNECT REVOKES THE SIGN-IN AT OPENAI BEFORE FORGETTING IT", () => {
@@ -277,7 +331,7 @@ test("EVERY PIECE OF CHATGPT STATE IS PER WORKSPACE", () => {
 
   // The renewal lock is per workspace too, so one tenant's renewal never waits
   // on another's.
-  assert.match(codex, /`codex-refresh:\$\{currentTenantScope\(\)\?\.tenantId/);
+  assert.match(codex, /`codex-signin:\$\{currentTenantScope\(\)\?\.tenantId/);
 });
 
 test("EVERY CHATGPT ACTION IS OWNER-ONLY", () => {

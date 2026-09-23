@@ -2,7 +2,7 @@ import "server-only";
 
 import crypto from "node:crypto";
 import { basePrisma } from "./db";
-import { getSetting, putSetting } from "./settings";
+import { getSetting, putSetting, type SettingsTx } from "./settings";
 import { logError } from "./errorLog";
 import { currentTenantScope } from "./tenantScope";
 import {
@@ -151,7 +151,7 @@ export async function startCodexLogin(): Promise<
   }
 
   const pending: PendingLogin = { deviceAuthId, userCode, startedAt: Date.now() };
-  await putSetting(CODEX_DEVICE_KEY, JSON.stringify(pending));
+  await withCodexLock((tx) => putSetting(CODEX_DEVICE_KEY, JSON.stringify(pending), tx));
   const interval = Number(body?.interval);
   return {
     userCode,
@@ -183,7 +183,11 @@ export async function pollCodexLogin(): Promise<
   const text = await res.text().catch(() => "");
   if (!res.ok) {
     await logError("codex-auth", `Device authorization failed (${res.status})`, text.slice(0, 300));
-    await putSetting(CODEX_DEVICE_KEY, "");
+    await withCodexLock(async (tx) => {
+      // Only clear THIS sign-in; a newer one may have been started meanwhile.
+      const still = await readPendingLogin();
+      if (still?.deviceAuthId === pending.deviceAuthId) await putSetting(CODEX_DEVICE_KEY, "", tx);
+    });
     return { error: `OpenAI rejected the sign-in (${res.status}). Start again.` };
   }
 
@@ -206,11 +210,20 @@ export async function pollCodexLogin(): Promise<
   );
   if ("error" in tokens) return { error: tokens.error };
 
-  await basePrisma.$transaction(async (tx) => {
+  return withCodexLock(async (tx) => {
+    // The exchange above took time. If the owner pressed Disconnect, or started
+    // a different sign-in, meanwhile, this sign-in is no longer wanted: storing
+    // it would reconnect a workspace the owner just disconnected. Revoke the
+    // tokens rather than leave a live login nobody holds.
+    const still = await readPendingLogin();
+    if (!still || still.deviceAuthId !== pending.deviceAuthId) {
+      await revokeAtOpenAi(tokens.tokens);
+      return { state: "expired" as const };
+    }
     await putSetting(CODEX_TOKENS_KEY, JSON.stringify(tokens.tokens), tx);
     await putSetting(CODEX_DEVICE_KEY, "", tx);
+    return { state: "connected" as const };
   });
-  return { state: "connected" };
 }
 
 /**
@@ -228,13 +241,16 @@ export async function pollCodexLogin(): Promise<
  * leave the owner unable to remove a login they no longer trust.
  */
 export async function disconnectCodex(): Promise<{ revoked: boolean }> {
-  const tokens = await readTokens();
-  const revoked = tokens ? await revokeAtOpenAi(tokens) : true;
-  await basePrisma.$transaction(async (tx) => {
+  return withCodexLock(async (tx) => {
+    // Read AFTER taking the lock. A renewal that was already running has
+    // finished by now, so this is its new pair — the one that must be revoked —
+    // not the pair it replaced.
+    const tokens = await readTokens();
+    const revoked = tokens ? await revokeAtOpenAi(tokens) : true;
     await putSetting(CODEX_TOKENS_KEY, "", tx);
     await putSetting(CODEX_DEVICE_KEY, "", tx);
+    return { revoked };
   });
-  return { revoked };
 }
 
 async function revokeAtOpenAi(tokens: CodexTokens): Promise<boolean> {
@@ -303,6 +319,40 @@ async function postTokenForm(
   };
 }
 
+/* ── One lock for everything that changes the sign-in ──────────────── */
+
+/**
+ * Runs `fn` holding this workspace's ChatGPT sign-in lock, inside a transaction
+ * whose `tx` is the only way to write the sign-in state.
+ *
+ * EVERY WRITE OF THE SIGN-IN GOES THROUGH HERE — renew, disconnect, connect,
+ * starting or rejecting a sign-in. Each of them does network I/O between reading
+ * the state and writing it, and any two of them can overlap:
+ *
+ * - A renewal already talking to OpenAI when the owner clicks Disconnect would
+ *   write its freshly rotated pair AFTER the clear, and the workspace would be
+ *   connected again with the screen saying it was not.
+ * - A sign-in poll mid-exchange when the owner clicks Disconnect would do the
+ *   same with a brand-new login.
+ *
+ * Holding one lock across all of them serialises them, and each re-reads the
+ * state AFTER acquiring it, so whichever starts second sees the first one's
+ * final result instead of the state from before it began.
+ *
+ * The timeout covers the OpenAI calls made while holding it; the default five
+ * seconds would abort a renewal after OpenAI had already rotated the token.
+ */
+function withCodexLock<T>(fn: (tx: SettingsTx) => Promise<T>): Promise<T> {
+  const lockKey = `codex-signin:${currentTenantScope()?.tenantId ?? "none"}`;
+  return basePrisma.$transaction(
+    async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey})::bigint)`;
+      return fn(tx);
+    },
+    { timeout: 45_000, maxWait: 45_000 },
+  );
+}
+
 /* ── A usable access token ─────────────────────────────────────────── */
 
 /**
@@ -324,32 +374,26 @@ async function accessToken(forceRefresh = false): Promise<{ tokens: CodexTokens 
   if (!current) return { error: "ChatGPT is not connected." };
   if (!forceRefresh && !needsRefresh(current)) return { tokens: current };
 
-  const lockKey = `codex-refresh:${currentTenantScope()?.tenantId ?? "none"}`;
-  return basePrisma.$transaction(
-    async (tx) => {
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey})::bigint)`;
+  return withCodexLock(async (tx) => {
+    // Re-read under the lock: a Disconnect that finished first leaves nothing
+    // here, and a renewal that finished first leaves a fresh pair to use.
+    const latest = await readTokens();
+    if (!latest) return { error: "ChatGPT is not connected." };
+    if (renewedByAnotherHolder(latest, current)) return { tokens: latest };
 
-      const latest = await readTokens();
-      if (!latest) return { error: "ChatGPT is not connected." };
-      if (renewedByAnotherHolder(latest, current)) return { tokens: latest };
-
-      const renewed = await postTokenForm(
-        new URLSearchParams({ grant_type: "refresh_token", refresh_token: latest.refresh, client_id: CLIENT_ID }),
-        latest,
-      );
-      if ("error" in renewed) {
-        // A dead login is cleared, so the screens say "disconnected" instead
-        // of every research call failing on a token that can never work again.
-        if (renewed.revoked) await putSetting(CODEX_TOKENS_KEY, "", tx);
-        return { error: renewed.error };
-      }
-      await putSetting(CODEX_TOKENS_KEY, JSON.stringify(renewed.tokens), tx);
-      return { tokens: renewed.tokens };
-    },
-    // The token call can take a while; the default 5s interactive transaction
-    // timeout would abort the renewal after OpenAI had already rotated the token.
-    { timeout: 45_000, maxWait: 45_000 },
-  );
+    const renewed = await postTokenForm(
+      new URLSearchParams({ grant_type: "refresh_token", refresh_token: latest.refresh, client_id: CLIENT_ID }),
+      latest,
+    );
+    if ("error" in renewed) {
+      // A dead login is cleared, so the screens say "disconnected" instead
+      // of every research call failing on a token that can never work again.
+      if (renewed.revoked) await putSetting(CODEX_TOKENS_KEY, "", tx);
+      return { error: renewed.error };
+    }
+    await putSetting(CODEX_TOKENS_KEY, JSON.stringify(renewed.tokens), tx);
+    return { tokens: renewed.tokens };
+  });
 }
 
 /* ── The call ──────────────────────────────────────────────────────── */
@@ -481,6 +525,11 @@ export async function testCodexConnection(): Promise<{ ok: true; reply: string }
     webSearch: true,
   });
   if ("error" in result) return { ok: false, error: result.error };
+  // The same rule research follows: an answer with no finished signal is not
+  // an answer. Without this, a connection dropping mid-reply showed "Working".
+  if (result.incomplete) {
+    return { ok: false, error: "ChatGPT's test response was interrupted before it finished." };
+  }
   if (!result.text.trim()) return { ok: false, error: "ChatGPT answered, but with no text." };
   return { ok: true, reply: result.text.trim().slice(0, 400) };
 }
