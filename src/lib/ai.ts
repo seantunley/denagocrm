@@ -130,10 +130,41 @@ function capSummary(summary: string): string {
   return kept.join("\n").trim();
 }
 
-export async function aiResearch(input: {
-  name: string;
-  email?: string | null;
-}): Promise<{ summary: string } | { error: string }> {
+/**
+ * What an AUTOMATIC research run costs, as opposed to one somebody clicked for.
+ *
+ * September's own ledger (AI_TOKENS_2026-09) put a research call at ~144,000
+ * input tokens: the web-search results are read into context, and every extra
+ * search adds pages. On Opus 5 that is the most expensive call this app makes,
+ * and the scheduled sweep made it for every new lead — spam included — without
+ * anybody asking. Haiku reads the same pages at a fraction of the price, and
+ * three searches find the company and the LinkedIn profile, which is what the
+ * card actually shows. A salesperson who wants the deep version presses
+ * Research on the lead and gets Opus with the full search budget.
+ */
+export const AUTO_RESEARCH_MODEL = "claude-haiku-4-5";
+export const AUTO_RESEARCH_MAX_SEARCHES = 3;
+
+export type ResearchResult =
+  | { summary: string }
+  | {
+      error: string;
+      /**
+       * The failure was the API's, not the lead's: out of credit, rate-limited,
+       * or overloaded. The next call will fail the same way for every lead, so
+       * a sweep should STOP rather than work down the list — and the lead has
+       * not been researched, so it should not lose its turn.
+       */
+      transient?: true;
+    };
+
+export async function aiResearch(
+  input: {
+    name: string;
+    email?: string | null;
+  },
+  options: { model?: string; maxSearches?: number } = {},
+): Promise<ResearchResult> {
   const apiKey = await getSetting("ANTHROPIC_API_KEY");
   if (!apiKey) return { error: "AI Assist is not configured (Settings → Integrations)." };
   const domain = input.email?.split("@")[1]?.toLowerCase();
@@ -173,7 +204,7 @@ export async function aiResearch(input: {
 
   try {
     const requestBody = {
-        model: "claude-opus-5",
+        model: options.model ?? "claude-opus-5",
         // MAX_TOKENS IS SHARED WITH THE SEARCH, WHICH IS WHY 700 PRODUCED STUBS.
         //
         // The model's `server_tool_use` blocks — one per web search, up to
@@ -197,7 +228,7 @@ export async function aiResearch(input: {
         // answered "No reliable information found." while holding 29 results.
         // This task needs the model to READ a handful of pages and synthesise
         // them, and the basic tool puts them straight into context where it can.
-        tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 8 }],
+        tools: [{ type: "web_search_20250305", name: "web_search", max_uses: options.maxSearches ?? 8 }],
         system:
           "You research sales leads for Denago Cape Town, a South African electric golf-cart dealership.\n\n" +
           "SEARCH HARD BEFORE YOU CONCLUDE ANYTHING. Work several angles, not one or two: the person's name plus LinkedIn, the name plus \"South Africa\", the name plus any employer you turn up, and the company's own website and public social profiles (Facebook, Instagram, X/Twitter). LinkedIn is usually the most reliable source for a current role — search for it directly rather than relying on whatever a generic web search happens to surface. Two searches is not a search.\n\n" +
@@ -244,7 +275,13 @@ export async function aiResearch(input: {
       if (!res.ok) {
         const text = await res.text().catch(() => "");
         await logError("ai-research", `Anthropic API ${res.status}`, text.slice(0, 300));
-        return { error: `Research failed (${res.status}).` };
+        // Out of credit arrives as a 400 invalid_request_error, not a 402, so
+        // the status alone cannot tell it apart from a malformed request.
+        const transient =
+          res.status === 429 || res.status >= 500 || /credit balance/i.test(text);
+        return transient
+          ? { error: `Research failed (${res.status}).`, transient: true }
+          : { error: `Research failed (${res.status}).` };
       }
       const json = await res.json();
       void recordAiUsage(json.usage);
@@ -385,23 +422,54 @@ export async function aiResearch(input: {
 }
 
 /**
- * Auto-research: new leads (last 48h) that have an email and no research
- * note yet get a briefing filed automatically. Max 5 per cron run.
+ * Auto-research: new leads (last 48h) that have an email get ONE briefing
+ * attempt, filed automatically. Max 5 per cron run.
+ *
+ * ONE ATTEMPT, NOT ONE SUCCESS. The sweep used to select leads with no research
+ * and `continue` past any failure, so a lead whose research came back empty —
+ * which is exactly what a spam lead with a made-up name does — stayed eligible
+ * and was researched again on every run for 48 hours. Each retry was a full,
+ * paid call. `researchedAt` is now stamped on every attempt that reached the
+ * model, and the sweep selects on it, so a lead gets one try. The Research
+ * button on the lead still works for a second look.
+ *
+ * STOP ON THE API'S FAILURE, NOT THE LEAD'S. When the account is out of credit
+ * every call fails identically, and working down the list turned that into
+ * several hundred logged 400s a day (381 on 7 Sep, 389 on 8 Sep). A transient
+ * failure ends the run and leaves the lead unmarked — it has not actually been
+ * researched — so the next run picks it up once credit is back.
+ *
+ * Lost leads are skipped: a lead marked lost within minutes of arriving is
+ * usually the spam, and researching it is paying to learn nothing.
  */
 export async function runAutoResearch(): Promise<number> {
   if ((await getSetting("AI_AUTO_RESEARCH")) !== "true") return 0;
   if (!(await isAiConfigured())) return 0;
   const since = new Date(Date.now() - 48 * 60 * 60 * 1000);
   const leads = await prisma.lead.findMany({
-    where: { createdAt: { gte: since }, email: { not: null }, research: null },
+    where: {
+      createdAt: { gte: since },
+      email: { not: null },
+      research: null,
+      researchedAt: null,
+      status: { not: "lost" },
+    },
     orderBy: { createdAt: "desc" },
-    take: 20,
+    take: 5,
   });
   let done = 0;
   for (const lead of leads) {
-    if (done >= 5) break;
-    const result = await aiResearch({ name: lead.name, email: lead.email });
-    if ("error" in result) continue;
+    const result = await aiResearch(
+      { name: lead.name, email: lead.email },
+      { model: AUTO_RESEARCH_MODEL, maxSearches: AUTO_RESEARCH_MAX_SEARCHES },
+    );
+    if ("error" in result) {
+      if (result.transient) break;
+      // The model ran and found nothing usable. That call was paid for; spend
+      // no more on this lead automatically.
+      await prisma.lead.update({ where: { id: lead.id }, data: { researchedAt: new Date() } });
+      continue;
+    }
     const researchedAt = new Date();
     await prisma.researchNote.create({
       // THE LEAD OWNS ITS RESEARCH. This runs on the automations cron, so there
