@@ -2,6 +2,7 @@ import { scheduleActivity, completeActivity, cancelActivity, updateActivity } fr
 import ModalTrigger from "@/components/Modal";
 import ActivityTypeFields from "@/components/ActivityTypeFields";
 import { formatDue } from "@/lib/format";
+import { isFutureDay } from "@/lib/activityDay";
 
 export const activityIcons: Record<string, string> = {
   call: "📞",
@@ -184,7 +185,8 @@ export default function ActivityPanel({
                     )}
                   </p>
                 </div>
-                <form
+                {/* Not offered before the day arrives — finishActivity refuses it. */}
+                {!isFutureDay(a.dueDate) && <form
                   action={completeActivity.bind(null, a.id)}
                   className="flex items-center gap-1.5"
                 >
@@ -197,7 +199,7 @@ export default function ActivityPanel({
                   <button className="btn-secondary btn-sm" title="Mark done">
                     ✓ Done
                   </button>
-                </form>
+                </form>}
                 <ModalTrigger
                   label="✎"
                   title="Edit activity"
