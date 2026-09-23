@@ -121,10 +121,23 @@ async function readPendingLogin(): Promise<PendingLogin | null> {
  * Nothing is held open on the server: the browser polls `pollCodexLogin` every
  * few seconds. A serverless function cannot wait 15 minutes for a human, and
  * does not need to.
+ *
+ * THE WHOLE START RUNS UNDER THE SIGN-IN LOCK, the request to OpenAI included —
+ * not just the final write. Otherwise a Connect still waiting on OpenAI when
+ * another tab pressed Disconnect would come back and write a fresh pending
+ * sign-in after the Disconnect had finished, putting the workspace back into a
+ * sign-in the owner had just cancelled. Holding the lock across that one short
+ * request is the same trade renewal and revoke already make.
  */
 export async function startCodexLogin(): Promise<
   { userCode: string; verificationUrl: string; intervalMs: number } | { error: string }
 > {
+  return withCodexLock((tx) => startCodexLoginLocked(tx));
+}
+
+async function startCodexLoginLocked(
+  tx: SettingsTx,
+): Promise<{ userCode: string; verificationUrl: string; intervalMs: number } | { error: string }> {
   const res = await fetch(`${AUTH_BASE}/api/accounts/deviceauth/usercode`, {
     method: "POST",
     headers: headers({ "Content-Type": "application/json" }),
@@ -151,7 +164,7 @@ export async function startCodexLogin(): Promise<
   }
 
   const pending: PendingLogin = { deviceAuthId, userCode, startedAt: Date.now() };
-  await withCodexLock((tx) => putSetting(CODEX_DEVICE_KEY, JSON.stringify(pending), tx));
+  await putSetting(CODEX_DEVICE_KEY, JSON.stringify(pending), tx);
   const interval = Number(body?.interval);
   return {
     userCode,
@@ -163,12 +176,23 @@ export async function startCodexLogin(): Promise<
 /**
  * One poll. "pending" until the owner approves at OpenAI, then exchanges the
  * approval for tokens and stores them.
+ *
+ * The browser says WHICH sign-in it is waiting on — the code it is showing. Two
+ * tabs can each press Connect; the lock makes them take turns, but the second
+ * still replaces the first, and the first tab would otherwise go on showing a
+ * code the server has dropped while polling for somebody else's. It is told it
+ * has been superseded instead.
  */
-export async function pollCodexLogin(): Promise<
-  { state: "pending" } | { state: "connected" } | { state: "expired" } | { error: string }
+export async function pollCodexLogin(shownUserCode: string): Promise<
+  | { state: "pending" }
+  | { state: "connected" }
+  | { state: "expired" }
+  | { state: "superseded" }
+  | { error: string }
 > {
   const pending = await readPendingLogin();
   if (!pending) return { state: "expired" };
+  if (pending.userCode !== shownUserCode) return { state: "superseded" };
 
   const res = await fetch(`${AUTH_BASE}/api/accounts/deviceauth/token`, {
     method: "POST",

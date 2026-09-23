@@ -274,6 +274,38 @@ test("A SIGN-IN THAT FINISHES AFTER A DISCONNECT IS REVOKED, NOT STORED", () => 
   );
 });
 
+test("STARTING A SIGN-IN HOLDS THE LOCK FOR THE WHOLE REQUEST, NOT JUST THE WRITE", () => {
+  /*
+   * A Connect still waiting on OpenAI for its device code when another tab
+   * pressed Disconnect came back and wrote a fresh pending sign-in AFTER the
+   * Disconnect had finished — the workspace was back in a sign-in the owner had
+   * just cancelled. Only the final write had been locked.
+   */
+  assert.match(codex, /return withCodexLock\(\(tx\) => startCodexLoginLocked\(tx\)\);/, "start runs entirely inside the lock");
+  assert.equal((codex.match(/startCodexLoginLocked\(/g) ?? []).length, 2, "defined once, called once — only through the lock");
+
+  const locked = codex.slice(codex.indexOf("async function startCodexLoginLocked"), codex.indexOf("export async function pollCodexLogin"));
+  const fetchAt = locked.indexOf("/api/accounts/deviceauth/usercode");
+  const writeAt = locked.indexOf("putSetting(CODEX_DEVICE_KEY, JSON.stringify(pending), tx)");
+  assert.ok(fetchAt > 0 && writeAt > fetchAt, "the OpenAI request and the write are both inside the locked body");
+});
+
+test("A TAB SHOWING A REPLACED CODE IS TOLD, NOT LEFT POLLING FOR SOMEONE ELSE'S", () => {
+  // Two Connects take turns under the lock, but the second still replaces the
+  // first. The first tab must not go on showing a dead code.
+  const poll = codex.slice(codex.indexOf("export async function pollCodexLogin"), codex.indexOf("export async function disconnectCodex"));
+  const compareAt = poll.indexOf('if (pending.userCode !== shownUserCode) return { state: "superseded" };');
+  const fetchAt = poll.indexOf("/api/accounts/deviceauth/token");
+  assert.ok(compareAt > 0 && fetchAt > compareAt, "the tab's own code is checked before polling OpenAI");
+
+  const actions = stripComments(src("src/app/actions/codex.ts"));
+  assert.match(actions, /typeof shownUserCode !== "string"/, "the code from the browser is validated");
+
+  const card = stripComments(src("src/components/settings/ChatGptConnect.tsx"));
+  assert.match(card, /pollChatGptLogin\(shownCode\)/, "the card polls with the code it is displaying");
+  assert.match(card, /result\.state === "superseded"/, "and handles being replaced");
+});
+
 test("THE TEST BUTTON DOES NOT CALL AN INTERRUPTED ANSWER WORKING", () => {
   const check = codex.slice(codex.indexOf("export async function testCodexConnection"));
   const incompleteAt = check.indexOf("if (result.incomplete) {");
@@ -336,7 +368,7 @@ test("EVERY PIECE OF CHATGPT STATE IS PER WORKSPACE", () => {
 
 test("EVERY CHATGPT ACTION IS OWNER-ONLY", () => {
   const actions = stripComments(src("src/app/actions/codex.ts"));
-  const exported = [...actions.matchAll(/export async function (\w+)\(\) \{([\s\S]*?)\n\}/g)];
+  const exported = [...actions.matchAll(/export async function (\w+)\([^)]*\) \{([\s\S]*?)\n\}/g)];
   assert.deepEqual(
     exported.map((match) => match[1]).sort(),
     ["disconnectChatGpt", "pollChatGptLogin", "startChatGptLogin", "testChatGpt"],

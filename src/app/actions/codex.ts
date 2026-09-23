@@ -25,9 +25,14 @@ export async function startChatGptLogin() {
   return startCodexLogin();
 }
 
-export async function pollChatGptLogin() {
+export async function pollChatGptLogin(shownUserCode: unknown) {
   const user = await requireOwner();
-  const result = await pollCodexLogin();
+  // From the browser, so checked here: only ever compared with the stored code,
+  // never forwarded, but a non-string must not reach it.
+  if (typeof shownUserCode !== "string" || !shownUserCode.trim() || shownUserCode.length > 64) {
+    return { state: "expired" as const };
+  }
+  const result = await pollCodexLogin(shownUserCode.trim());
   if ("state" in result && result.state === "connected") {
     await logAudit({
       action: "integration.chatgpt_connected",

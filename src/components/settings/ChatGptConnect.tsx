@@ -22,10 +22,11 @@ export default function ChatGptConnect({ initial }: { initial: CodexStatus }) {
   // Poll while a sign-in is pending — including one resumed after a reload.
   useEffect(() => {
     if (status.state !== "pending") return;
+    const shownCode = status.userCode;
     let cancelled = false;
     const tick = async () => {
       if (cancelled) return;
-      const result = await pollChatGptLogin().catch(() => ({ state: "pending" as const }));
+      const result = await pollChatGptLogin(shownCode).catch(() => ({ state: "pending" as const }));
       if (cancelled) return;
       if ("error" in result) {
         toast.error(result.error);
@@ -36,6 +37,11 @@ export default function ChatGptConnect({ initial }: { initial: CodexStatus }) {
         window.location.reload();
       } else if (result.state === "expired") {
         toast.error("The sign-in code expired. Start again.");
+        setStatus({ state: "disconnected" });
+      } else if (result.state === "superseded") {
+        // Another tab (or another owner) pressed Connect after this one. That
+        // code is the live one; this code would never complete.
+        toast.info("A newer ChatGPT sign-in was started elsewhere. Use that code, or start again here.");
         setStatus({ state: "disconnected" });
       } else {
         timer = window.setTimeout(tick, intervalMs);
