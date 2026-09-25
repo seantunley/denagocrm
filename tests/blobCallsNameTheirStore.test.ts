@@ -22,6 +22,9 @@ import ts from "typescript";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
+/** SDK exports that make no request, so have no store to choose. */
+const PURE_HELPERS = new Set(["presignUrl", "getDownloadUrl"]);
+
 function sourceFiles(dir: string): string[] {
   const out: string[] = [];
   for (const name of readdirSync(dir)) {
@@ -41,7 +44,10 @@ function tokenlessBlobCalls(file: string, text = readFileSync(file, "utf8")): st
     if (!ts.isImportDeclaration(statement) || (statement.moduleSpecifier as ts.StringLiteral).text !== "@vercel/blob") continue;
     const bindings = statement.importClause?.namedBindings;
     if (bindings && ts.isNamedImports(bindings)) {
-      for (const el of bindings.elements) if (!el.isTypeOnly) imported.add(el.name.text);
+      // presignUrl and getDownloadUrl are pure — they sign or rewrite a URL
+      // locally from material a token-bearing call already returned, and make no
+      // request of their own — so there is no store for them to choose.
+      for (const el of bindings.elements) if (!el.isTypeOnly && !PURE_HELPERS.has(el.name.text)) imported.add(el.name.text);
     }
   }
   const bad: string[] = [];
