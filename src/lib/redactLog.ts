@@ -11,7 +11,8 @@ import { redactUrl } from "./redactUrl";
  * enforced where logs are WRITTEN, not left to each of the ~130 call sites.
  *
  * What a pattern can recognise is redacted here: email addresses, phone numbers,
- * South African ID numbers, and (via redactUrl) credential tokens in links. A
+ * South African ID numbers, messaging-platform user ids (Messenger/Instagram), and
+ * (via redactUrl) credential tokens in links. A
  * NAME cannot be recognised by pattern, so call sites log record ids, never
  * names — that part is enforced by review and by tests on the known writers.
  *
@@ -31,6 +32,14 @@ const PHONE = /\+\d[\d\s().-]{7,17}\d|\b0[1-9]\d(?:[\s-]?\d){7}\b|\b27[1-9]\d{8}
 /** 13 digits that read as a South African ID: YYMMDD, then 7 more. */
 const SA_ID_SHAPE = /\b\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{7}\b/g;
 
+/**
+ * A customer's id on a messaging platform: a Messenger PSID or Instagram-scoped
+ * id is 15–17 digits. Those are what the bot outbox put in production's System
+ * Log (as the conversation key). No id or timestamp of ours is that long, and a
+ * card number would be caught too.
+ */
+const PLATFORM_USER_ID = /\b\d{15,20}\b/g;
+
 /** The ID number's last digit is a Luhn check digit; a timestamp rarely passes it. */
 function luhnValid(digits: string): boolean {
   let sum = 0;
@@ -48,6 +57,7 @@ function luhnValid(digits: string): boolean {
 export function redactForLog(text: string): string {
   return redactUrl(text)
     .replace(EMAIL, "[email]")
+    .replace(PLATFORM_USER_ID, "[user-id]")
     .replace(SA_ID_SHAPE, (match) => (luhnValid(match) ? "[id-number]" : match))
     .replace(PHONE, "[phone]");
 }

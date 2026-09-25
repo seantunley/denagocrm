@@ -31,6 +31,11 @@ test("EMAIL ADDRESSES, PHONE NUMBERS AND ID NUMBERS ARE REDACTED", () => {
     ["mobile 0821234567.", "mobile [phone]."],
     ["UK +44 20 7946 0958", "UK [phone]"],
     ["ID 8001015009087 on file", "ID [id-number] on file"],
+    // The real shape found in production's System Log: the bot outbox's context
+    // `channel:conversationKey:outboxId:failureCode`, where the key is the
+    // customer's Messenger/Instagram id (17 digits). Not a phone number.
+    ["messenger:24681357913579246:cmtmsv4i20005gm0ar2f14nd9:provider_error", "messenger:[user-id]:cmtmsv4i20005gm0ar2f14nd9:provider_error"],
+    ["instagram:178414123456789:c1:rate_limited", "instagram:[user-id]:c1:rate_limited"],
   ];
   for (const [input, expected] of cases) assert.equal(redactForLog(input), expected, input);
 });
@@ -101,7 +106,8 @@ test("the console is redacted at server start, and the System Log on every write
 test("THE KNOWN WRITERS LOG IDS, NOT CLIENTS — what a pattern can't catch", () => {
   // SMTP logged the recipient and the subject (which often names the customer),
   // SMS the number, and the bot outbox the conversation key — the customer's
-  // phone number on WhatsApp. That last one put 2 numbers in production's log.
+  // phone number on WhatsApp, their Messenger/Instagram id elsewhere. That last
+  // one put 2 customer ids in production's log.
   const email = src("src/lib/email.ts");
   assert.ok(!/logError\("smtp", err, `[^`]*\$\{input\.(to|subject)\}/.test(email), "no recipient or subject in the SMTP log");
   assert.ok(!/logError\("sms", err, `[^`]*\$\{to\}/.test(src("src/lib/sms.ts")), "no number in the SMS log");
