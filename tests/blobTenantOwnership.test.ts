@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { blobBelongsToTenant, libraryUploadPrefix } from "../src/lib/storage";
+import { blobBelongsToTenant, isLibraryUpload, libraryUploadPrefix } from "../src/lib/storage";
 
 /**
  * Audit P2-4 — public blob storage.
@@ -59,14 +59,44 @@ test("THE LIBRARY'S OWN FILES PASS THE CHECK — the path shape the library real
   assert.equal(blobBelongsToTenant(`${libraryUploadPrefix(A)}brochure-x9Y8z7.pdf`, "tenant_b"), false);
 });
 
+test("ONLY A FILE IN THE LIBRARY FOLDER IS A LIBRARY UPLOAD", () => {
+  // Signed and registered by the same rule. Ownership is not enough: a record
+  // document or inspection photo is also this workspace's, and registering one
+  // into the Library would let a library user download it past the record's
+  // own permissions (review finding on #654).
+  assert.equal(isLibraryUpload(`uploads/${A}/library/brochure-x9Y8z7.pdf`, A), true);
+  for (const p of [
+    `uploads/${A}/document/quote:q1/invoice.pdf`, // a record document of the same workspace
+    `uploads/${A}/inspection/jc1/photo.jpg`, // an inspection photo of the same workspace
+    `uploads/${A}/legacy.pdf`,
+    `uploads/${A}/library/`, // the folder itself
+    `uploads/${A}/library/nested/x.pdf`,
+    `uploads/${A}/library/../document/quote:q1/invoice.pdf`,
+    `uploads/tenant_b/library/brochure.pdf`, // another workspace's library
+    "library/Denago EV Price List-a1B2c3.pdf", // legacy: readable, never registrable
+  ]) {
+    assert.equal(isLibraryUpload(p, A), false, `"${p}" is not a library upload of ${A}`);
+  }
+  // Legacy files stay readable by their owner even though they can't be registered.
+  assert.equal(blobBelongsToTenant("library/Denago EV Price List-a1B2c3.pdf", FOUNDING), true);
+});
+
+test("registration refuses a file the library upload route did not sign", () => {
+  const lib = code("src/app/actions/library.ts");
+  // After ownership, and on the STORE's pathname, not anything the caller sent.
+  assert.match(
+    lib,
+    /const owned = await assertOwnedBlob\(file\.url, expectedTenantId\);\s*if \(!isLibraryUpload\(owned\.pathname, expectedTenantId\)\) \{\s*throw/,
+  );
+});
+
 test("the library upload route signs only this workspace's library folder", () => {
   const route = code("src/app/api/library/upload/route.ts");
   assert.match(route, /tenantId = await withActingStaffScope\(\(\) => actingTenantId\(\)\);/);
-  assert.match(route, /const prefix = libraryUploadPrefix\(tenantId\);/);
   assert.match(
     route,
-    /if \(!pathname\.startsWith\(prefix\) \|\| pathname\.slice\(prefix\.length\)\.includes\("\/"\)\) \{\s*throw/,
-    "anything outside the prefix, or nested below it, is refused before a token exists",
+    /if \(!isLibraryUpload\(pathname, tenantId\)\) \{\s*throw/,
+    "anything outside the library folder, or nested below it, is refused before a token exists",
   );
   // And the browser asks the server where that is, rather than choosing a path.
   const uploader = code("src/components/LibraryUploader.tsx");

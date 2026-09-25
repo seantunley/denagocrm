@@ -6,7 +6,7 @@ import { withActingTenantWrite } from "@/lib/actingScope";
 import { requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
-import { MAX_BLOB_BYTES, assertOwnedBlob, libraryUploadPrefix } from "@/lib/storage";
+import { MAX_BLOB_BYTES, assertOwnedBlob, isLibraryUpload, libraryUploadPrefix } from "@/lib/storage";
 import { actingScopeClass, withActingStaffScope } from "@/lib/actingScope";
 import { actingTenantId } from "@/lib/actingTenant";
 
@@ -73,6 +73,14 @@ async function resolveUpload(file: UploadedFileMeta) {
   }
   const expectedTenantId = scope.tenantId;
   const owned = await assertOwnedBlob(file.url, expectedTenantId);
+  // "Yours" is not "a Library file" either. A record document or an inspection
+  // photo of this workspace passes the check above; registered here, it would
+  // be downloadable through library permissions by someone the record's own
+  // permissions keep out. Only a file the library upload route signed — directly
+  // in this workspace's library folder — may be registered.
+  if (!isLibraryUpload(owned.pathname, expectedTenantId)) {
+    throw new Error("That file was not uploaded to the library. Upload it here and try again.");
+  }
   if (owned.size > MAX_BLOB_BYTES) {
     throw new Error(`That file is too large to store (limit ${Math.floor(MAX_BLOB_BYTES / (1024 * 1024))} MB).`);
   }

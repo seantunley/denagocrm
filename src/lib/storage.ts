@@ -248,6 +248,20 @@ export function libraryUploadPrefix(tenantId: string): string {
 }
 
 /**
+ * Is this pathname a Library upload of `tenantId`'s: a plain file directly in
+ * its library folder? Checked when the upload is signed AND when the file is
+ * registered. Ownership alone is not enough at registration: every record file
+ * and photo of the workspace is also "ours", and registering one into the
+ * Library would let a library user download it past the record's permissions.
+ * The legacy `library/<file>` shape stays readable but is never registrable.
+ */
+export function isLibraryUpload(pathname: string, tenantId: string): boolean {
+  const prefix = libraryUploadPrefix(tenantId);
+  const name = pathname.startsWith(prefix) ? pathname.slice(prefix.length) : "";
+  return name.length > 0 && !name.includes("/");
+}
+
+/**
  * {@link blobBelongsToTenant} with the "caller made no claim" case folded in, so
  * the two enforcement points ({@link assertOwnedBlob} and {@link readFile}'s
  * private branch) cannot drift on the one decision that matters.

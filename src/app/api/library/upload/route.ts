@@ -4,7 +4,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { actingTenantId } from "@/lib/actingTenant";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { hasPermission } from "@/lib/permissions";
-import { libraryUploadPrefix } from "@/lib/storage";
+import { isLibraryUpload } from "@/lib/storage";
 
 /** Issues short-lived tokens so the browser can upload library files straight to Blob storage. */
 export async function POST(request: Request): Promise<NextResponse> {
@@ -27,7 +27,6 @@ export async function POST(request: Request): Promise<NextResponse> {
   } catch {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  const prefix = libraryUploadPrefix(tenantId);
 
   const body = (await request.json()) as HandleUploadBody;
   try {
@@ -35,8 +34,9 @@ export async function POST(request: Request): Promise<NextResponse> {
       body,
       request,
       onBeforeGenerateToken: async (pathname) => {
-        // A plain file name directly under the prefix: no sub-folders, no "..".
-        if (!pathname.startsWith(prefix) || pathname.slice(prefix.length).includes("/")) {
+        // A plain file name directly in this workspace's library folder: no
+        // sub-folders, no "..". Registration checks the same rule.
+        if (!isLibraryUpload(pathname, tenantId)) {
           throw new Error("Library files must be uploaded into this workspace's library.");
         }
         return {
