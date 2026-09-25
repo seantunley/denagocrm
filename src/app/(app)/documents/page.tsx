@@ -18,9 +18,11 @@ import {
 } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { contactName, formatDate } from "@/lib/format";
+import type { Prisma } from "@prisma/client";
 import {
   getAccessibleContactIds,
   getAccessibleDocumentIds,
+  getAccessibleJobCardIds,
   getAccessibleQuoteIds,
   getAccessibleVehicleIds,
   hasPermission,
@@ -35,6 +37,7 @@ import {
   inFolder,
   parseFolder,
   placeDocument,
+  RECENT_DAYS,
   uploadTargetFor,
   type DocFacts,
   type Folder,
@@ -58,6 +61,14 @@ import { WorkspaceHero } from "@/components/workspace-hero";
 import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
+
+/** Rows DISPLAYED at once. Counts, folders and search cover every file. */
+const LIST_LIMIT = 300;
+
+/** The start of the Recent folder's window. Read per request (the page is dynamic). */
+function recentCutoff(): Date {
+  return new Date(Date.now() - RECENT_DAYS * 86_400_000);
+}
 
 type TreeLinkProps = {
   target: Folder;
@@ -117,12 +128,13 @@ export default async function DocumentsPage({
   const view = params.view === "list" ? "list" : "grid";
   const folder = parseFolder(params.folder, params.sub);
 
-  const [documentIds, contactIds, vehicleIds, quoteIds, canUpload, canManage, canTemplates, automotiveOn, tenantId] =
+  const [documentIds, contactIds, vehicleIds, quoteIds, jobCardIds, canUpload, canManage, canTemplates, automotiveOn, tenantId] =
     await Promise.all([
       getAccessibleDocumentIds(user),
       getAccessibleContactIds(user),
       getAccessibleVehicleIds(user),
       getAccessibleQuoteIds(user),
+      getAccessibleJobCardIds(user),
       hasPermission(user, "documents.upload"),
       hasPermission(user, "documents.manage"),
       hasPermission(user, "document_templates.manage"),
@@ -132,44 +144,72 @@ export default async function DocumentsPage({
       getActiveTenantId(),
     ]);
 
-  // Every file the viewer may see — the tree needs all of them to count its
-  // folders, not only the ones in the folder that is open.
-  const docs = await prisma.document.findMany({
-    where: {
-      AND: [
-        ...(documentIds === null ? [] : [{ id: { in: documentIds } }]),
-        ...(versions === "all" ? [] : [{ replacedById: null }]),
-        // When automotive is off, drop automotive-owned paperwork: vehicle- or
-        // job-card-linked docs, plus delivery paperwork. Null-safe positive
-        // filter — see nonAutomotiveDocumentWhere().
-        ...(automotiveOn ? [] : [nonAutomotiveDocumentWhere()]),
-      ],
-    },
-    orderBy: { createdAt: "desc" },
-    take: 2000,
-    select: {
-      id: true,
-      fileName: true,
-      mimeType: true,
-      sizeBytes: true,
-      tag: true,
-      createdAt: true,
-      replacedById: true,
-      contactId: true,
-      vehicleId: true,
-      jobCardId: true,
-      quoteId: true,
-      uploadedBy: { select: { name: true } },
-    },
-  });
+  // Every file the viewer may see: the permission filter, current versions, and
+  // the automotive rule — the same three conditions the old flat list used.
+  const visibleWhere: Prisma.DocumentWhereInput = {
+    AND: [
+      ...(documentIds === null ? [] : [{ id: { in: documentIds } }]),
+      ...(versions === "all" ? [] : [{ replacedById: null }]),
+      // When automotive is off, drop automotive-owned paperwork: vehicle- or
+      // job-card-linked docs, plus delivery paperwork. Null-safe positive
+      // filter — see nonAutomotiveDocumentWhere().
+      ...(automotiveOn ? [] : [nonAutomotiveDocumentWhere()]),
+    ],
+  };
+  const recentSince = recentCutoff();
 
-  const ids = (pick: (doc: (typeof docs)[number]) => string | null) =>
-    [...new Set(docs.map(pick).filter((id): id is string => Boolean(id)))];
+  /*
+   * THE TREE COUNTS EVERY FILE, NOT THE NEWEST 2,000.
+   *
+   * The first version loaded up to 2,000 documents and did its foldering and
+   * searching in memory, so past that number older files — and whole older
+   * customer folders — silently dropped out, and search could not find them.
+   *
+   * Placement depends only on a document's links, so the tree is counted from
+   * the database grouped BY those links: one row per combination, however many
+   * documents share it. That covers every visible file and stays small — its
+   * size is the number of records with paperwork, not the number of files.
+   */
+  const [groups, recentCount] = await Promise.all([
+    prisma.document.groupBy({
+      by: ["contactId", "quoteId", "vehicleId", "jobCardId", "tag"],
+      where: visibleWhere,
+      _count: { _all: true },
+    }),
+    prisma.document.count({ where: { AND: [visibleWhere, { createdAt: { gte: recentSince } }] } }),
+  ]);
+  const facts: DocFacts[] = groups.map((group) => ({
+    contactId: group.contactId,
+    quoteId: group.quoteId,
+    vehicleId: group.vehicleId,
+    jobCardId: group.jobCardId,
+    tag: group.tag,
+    count: group._count._all,
+  }));
 
+  const ids = (pick: (row: DocFacts) => string | null) =>
+    [...new Set(facts.map(pick).filter((id): id is string => Boolean(id)))];
+  const openable = (all: string[], accessible: string[] | null) =>
+    accessible === null ? all : all.filter((id) => accessible.includes(id));
+
+  // LABELS ONLY FOR RECORDS THE VIEWER MAY OPEN. A document is visible if any
+  // of its links is, so its quote, job card or vehicle may be hidden from this
+  // viewer; loading those labels anyway would put "Quote Q-1010" in a folder
+  // tree for someone who may not open Q-1010. Unlabelled links are treated as
+  // absent by placeDocument.
   const [vehicles, jobCards, quotes] = await Promise.all([
-    prisma.vehicle.findMany({ where: { id: { in: ids((doc) => doc.vehicleId) } }, select: { id: true, model: true, contactId: true } }),
-    prisma.jobCard.findMany({ where: { id: { in: ids((doc) => doc.jobCardId) } }, select: { id: true, number: true, contactId: true } }),
-    prisma.quote.findMany({ where: { id: { in: ids((doc) => doc.quoteId) } }, select: { id: true, number: true, contactId: true } }),
+    prisma.vehicle.findMany({
+      where: { id: { in: openable(ids((row) => row.vehicleId), vehicleIds) } },
+      select: { id: true, model: true, contactId: true },
+    }),
+    prisma.jobCard.findMany({
+      where: { id: { in: openable(ids((row) => row.jobCardId), jobCardIds) } },
+      select: { id: true, number: true, contactId: true },
+    }),
+    prisma.quote.findMany({
+      where: { id: { in: openable(ids((row) => row.quoteId), quoteIds) } },
+      select: { id: true, number: true, contactId: true },
+    }),
   ]);
 
   // Customer NAMES only for customers the viewer may see. A file reachable
@@ -177,7 +217,7 @@ export default async function DocumentsPage({
   // "Other records" instead of a folder that would disclose the name.
   const candidateContactIds = [
     ...new Set([
-      ...ids((doc) => doc.contactId),
+      ...ids((row) => row.contactId),
       ...vehicles.map((vehicle) => vehicle.contactId),
       ...jobCards.map((jobCard) => jobCard.contactId),
       ...quotes.map((quote) => quote.contactId).filter((id): id is string => Boolean(id)),
@@ -199,24 +239,69 @@ export default async function DocumentsPage({
     quotes: new Map(quotes.map((quote) => [quote.id, { number: quote.number, contactId: quote.contactId }])),
   };
 
-  const facts = (doc: (typeof docs)[number]): DocFacts => doc;
-  const tree = buildFolderTree(docs.map(facts), labels);
-  const inThisFolder = docs.filter((doc) => inFolder(facts(doc), folder, labels));
+  const tree = { ...buildFolderTree(facts, labels), recent: recentCount };
 
-  // The types present in this folder, for the filter chips.
-  const typeCounts = new Map<string, number>();
-  for (const doc of inThisFolder) {
-    const key = doc.tag ?? "untagged";
-    typeCounts.set(key, (typeCounts.get(key) ?? 0) + 1);
-  }
-  const shown = inThisFolder.filter(
-    (doc) =>
-      (!type || (doc.tag ?? "untagged") === type) &&
-      (!q || doc.fileName.toLowerCase().includes(q.toLowerCase())),
-  );
+  /*
+   * THE OPEN FOLDER, AS A DATABASE QUERY.
+   *
+   * A folder is the set of link combinations that place into it, so it becomes
+   * an OR over those combinations and the file list, type counts, search and
+   * sort all run in the database across every file — an old file is found as
+   * readily as a new one. Only the rows DISPLAYED are capped, and the page says
+   * so when there are more.
+   */
+  const folderWhere: Prisma.DocumentWhereInput | null = (() => {
+    if (folder.kind === "all") return visibleWhere;
+    if (folder.kind === "recent") return { AND: [visibleWhere, { createdAt: { gte: recentSince } }] };
+    const combos = new Map<string, Prisma.DocumentWhereInput>();
+    for (const row of facts) {
+      if (!inFolder(row, folder, labels)) continue;
+      const links = { contactId: row.contactId, quoteId: row.quoteId, vehicleId: row.vehicleId, jobCardId: row.jobCardId };
+      combos.set(JSON.stringify(links), links);
+    }
+    return combos.size ? { AND: [visibleWhere, { OR: [...combos.values()] }] } : null;
+  })();
 
-  const filedOn = (doc: (typeof docs)[number]): string | null => {
-    const placement = placeDocument(facts(doc), labels);
+  const typeGroups = folderWhere
+    ? await prisma.document.groupBy({ by: ["tag"], where: folderWhere, _count: { _all: true } })
+    : [];
+  const typeCounts = new Map(typeGroups.map((group) => [group.tag ?? "untagged", group._count._all]));
+  const folderTotal = [...typeCounts.values()].reduce((sum, n) => sum + n, 0);
+
+  const listWhere: Prisma.DocumentWhereInput | null = folderWhere && {
+    AND: [
+      folderWhere,
+      ...(type ? [{ tag: type === "untagged" ? null : type }] : []),
+      ...(q ? [{ fileName: { contains: q, mode: "insensitive" as const } }] : []),
+    ],
+  };
+  const [shown, matching] = listWhere
+    ? await Promise.all([
+        prisma.document.findMany({
+          where: listWhere,
+          orderBy: { createdAt: "desc" },
+          take: LIST_LIMIT,
+          select: {
+            id: true,
+            fileName: true,
+            mimeType: true,
+            sizeBytes: true,
+            tag: true,
+            createdAt: true,
+            replacedById: true,
+            contactId: true,
+            vehicleId: true,
+            jobCardId: true,
+            quoteId: true,
+            uploadedBy: { select: { name: true } },
+          },
+        }),
+        prisma.document.count({ where: listWhere }),
+      ])
+    : [[], 0];
+
+  const filedOn = (doc: DocFacts): string | null => {
+    const placement = placeDocument(doc, labels);
     if (placement.kind === "company") return null;
     const customer = placement.kind === "customer" ? labels.contacts.get(placement.customerId) : null;
     return customer ? `${customer} › ${placement.subLabel}` : placement.subLabel;
@@ -467,7 +552,9 @@ export default async function DocumentsPage({
                   </span>
                 ))}
                 <span className="ml-auto text-[12px] text-muted-foreground">
-                  {browserDocs.length} of {inThisFolder.length} file{inThisFolder.length === 1 ? "" : "s"}
+                  {matching === folderTotal
+                    ? `${folderTotal} file${folderTotal === 1 ? "" : "s"}`
+                    : `${matching} of ${folderTotal} files match`}
                 </span>
               </nav>
 
@@ -540,6 +627,11 @@ export default async function DocumentsPage({
               )}
             </Surface>
 
+            {matching > browserDocs.length && (
+              <p className="rounded-lg border border-border bg-card/60 px-3 py-2 text-[12px] text-muted-foreground">
+                Showing the newest {browserDocs.length} of {matching}. Search or pick a type to find older files — search covers all of them.
+              </p>
+            )}
             <DocumentBrowser
               docs={browserDocs}
               view={view}

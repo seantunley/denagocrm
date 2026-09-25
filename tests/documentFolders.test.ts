@@ -26,7 +26,7 @@ const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
 const now = new Date("2026-09-25T12:00:00Z");
 const daysAgo = (days: number) => new Date(now.getTime() - days * 86_400_000);
 
-const doc = (id: string, links: Partial<DocFacts> = {}, age = 1): DocFacts => ({
+const doc = (id: string, links: Partial<DocFacts> = {}, age = 1): DocFacts & { id: string } => ({
   id,
   contactId: null,
   vehicleId: null,
@@ -103,6 +103,52 @@ test("A FILE ON A CUSTOMER AND A QUOTE GOES IN THE QUOTE'S FOLDER", () => {
   assert.deepEqual(placeDocument(doc("h", { contactId: "gavin", quoteId: "qHidden" }), labels), {
     kind: "customer", customerId: "gavin", sub: "quote:qHidden", subLabel: "Quote Q-2000",
   });
+});
+
+test("A RECORD THE VIEWER MAY NOT OPEN IS NEVER NAMED", () => {
+  /*
+   * Review finding: the first version loaded quote numbers, job-card numbers and
+   * vehicle names for every link, without checking the viewer's access to those
+   * records. A document is visible if ANY link is, so someone who can see a file
+   * through its customer — but not its quote — saw "Quote Q-5000" in the tree.
+   *
+   * The label maps now hold only openable records, and a link without a label
+   * is treated as absent. "qLocked" below is not in the map: it is a quote this
+   * viewer may not open.
+   */
+  // Visible customer, locked quote: the file shows under the customer's General.
+  assert.deepEqual(placeDocument(doc("a", { contactId: "gavin", quoteId: "qLocked" }), labels), {
+    kind: "customer", customerId: "gavin", sub: "general", subLabel: "General",
+  });
+  // Nothing openable at all (e.g. the uploader of a file on a record since
+  // lost): no record is named.
+  const locked = placeDocument(doc("b", { quoteId: "qLocked" }), labels);
+  assert.deepEqual(locked, { kind: "other", sub: "restricted", subLabel: "On records you can't open" });
+
+  const tree = buildFolderTree([doc("a", { contactId: "gavin", quoteId: "qLocked" }), doc("b", { quoteId: "qLocked" })], labels, now);
+  assert.ok(!JSON.stringify(tree).includes("qLocked"), "the locked quote's id appears nowhere in the tree");
+  assert.ok(!JSON.stringify(tree).includes("Q-5000"), "nor its number");
+  // The restricted folder is a real, openable folder that uploads cannot target.
+  assert.deepEqual(parseFolder("other", "restricted"), { kind: "other", sub: "restricted" });
+  assert.equal(uploadTargetFor(parseFolder("other", "restricted")), null);
+});
+
+test("GROUPED ROWS ARE COUNTED BY THEIR SIZE", () => {
+  // The page counts its tree from rows grouped by link, so no file is left out
+  // however many there are. A row standing for 1,500 files counts as 1,500.
+  const tree = buildFolderTree(
+    [
+      { contactId: "gavin", quoteId: "q1010", vehicleId: null, jobCardId: null, tag: "delivery-photo", count: 1500 },
+      { contactId: "gavin", quoteId: "q1010", vehicleId: null, jobCardId: null, tag: "invoice", count: 2 },
+      { contactId: null, quoteId: null, vehicleId: null, jobCardId: null, tag: null, count: 700 },
+    ],
+    labels,
+    now,
+  );
+  assert.equal(tree.all, 2202);
+  assert.equal(tree.company, 700);
+  assert.deepEqual(tree.customers[0].subs.map((s) => `${s.label}:${s.count}`), ["Quote Q-1010:1502"]);
+  assert.equal(tree.recent, 0, "grouped rows carry no date; the page counts Recent separately");
 });
 
 test("A HIDDEN CUSTOMER'S NAME NEVER BECOMES A FOLDER", () => {
@@ -223,7 +269,41 @@ test("THE PAGE STARTS FROM THE SAME PERMISSION-FILTERED FILES AS BEFORE", () => 
     /contactIds === null \? candidateContactIds : candidateContactIds\.filter\(\(id\) => contactIds\.includes\(id\)\)/,
     "customer names are only fetched for customers the viewer may see",
   );
-  assert.match(page, /const inThisFolder = docs\.filter\(\(doc\) => inFolder\(/, "the folder narrows the permitted list");
+  // The folder is built from the SAME permitted set, and only narrows it.
+  assert.match(page, /return combos\.size \? \{ AND: \[visibleWhere, \{ OR: \[\.\.\.combos\.values\(\)\] \}\] \} : null;/);
+  assert.match(page, /if \(!inFolder\(row, folder, labels\)\) continue;/);
+});
+
+test("NO FILE DROPS OUT PAST THE NEWEST 2,000", () => {
+  /*
+   * Review finding: the page loaded up to 2,000 documents and did foldering and
+   * search in memory, so older files — and whole older customer folders —
+   * vanished past that number, and search could not find them.
+   */
+  assert.ok(!/take: 2000/.test(page), "no cap on what the tree or search can see");
+  assert.match(
+    page,
+    /prisma\.document\.groupBy\(\{\s*by: \["contactId", "quoteId", "vehicleId", "jobCardId", "tag"\],\s*where: visibleWhere,/,
+    "the tree is counted by the database over every visible file",
+  );
+  assert.match(page, /\.\.\.\(q \? \[\{ fileName: \{ contains: q, mode: "insensitive" as const \} \}\] : \[\]\),/, "search runs in the database");
+  assert.match(page, /prisma\.document\.count\(\{ where: listWhere \}\)/, "the page knows how many match, beyond what it shows");
+  assert.match(page, /Showing the newest \{browserDocs\.length\} of \{matching\}/, "and says so when the list is capped");
+});
+
+test("RECORD LABELS ARE LOADED ONLY FOR RECORDS THE VIEWER MAY OPEN", () => {
+  for (const [model, accessible] of [
+    ["vehicle", "vehicleIds"],
+    ["jobCard", "jobCardIds"],
+    ["quote", "quoteIds"],
+  ]) {
+    assert.match(
+      page,
+      new RegExp(`prisma\\.${model}\\.findMany\\(\\{\\s*where: \\{ id: \\{ in: openable\\(ids\\(\\(row\\) => row\\.\\w+\\), ${accessible}\\) \\} \\},`),
+      `${model} labels are filtered by the viewer's access`,
+    );
+  }
+  assert.match(page, /getAccessibleJobCardIds\(user\)/);
 });
 
 test("PREVIEWS AND UPLOADS GO THROUGH THE CHECKED PATHS", () => {

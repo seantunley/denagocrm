@@ -15,24 +15,32 @@
  * permission rule (see `placeDocument`), are executed by tests rather than read.
  */
 
+/**
+ * A document's links — or a GROUP of documents sharing the same links, with
+ * `count` saying how many. The page counts its tree from grouped rows so that
+ * no file is left out however many there are (see the Documents page).
+ */
 export type DocFacts = {
-  id: string;
   contactId: string | null;
   vehicleId: string | null;
   jobCardId: string | null;
   quoteId: string | null;
   tag: string | null;
-  createdAt: Date;
+  /** Only needed for the Recent folder; grouped rows leave it out. */
+  createdAt?: Date;
+  /** How many documents this row stands for. Defaults to one. */
+  count?: number;
 };
 
 /**
  * What the page knows about the records files are filed against.
  *
- * `contacts` holds ONLY customers the viewer may see. That restriction is the
- * point: a file can be visible through a quote the viewer can access while the
- * customer behind that quote is not, and naming a folder after that customer
- * would disclose a name the viewer has no right to. Such files are placed under
- * "Other records", labelled by the record they are on.
+ * EVERY MAP HOLDS ONLY RECORDS THE VIEWER MAY OPEN — customers, vehicles, job
+ * cards and quotes alike. A document is visible if ANY of its links is, so a
+ * viewer can see a file whose customer or quote is hidden from them. Naming a
+ * folder after a hidden customer would disclose the name; titling one "Quote
+ * Q-1010" would disclose the quote. So a link to a record the viewer cannot
+ * open is treated as if it were not there (see `placeDocument`).
  */
 export type RecordLabels = {
   contacts: ReadonlyMap<string, string>;
@@ -62,29 +70,38 @@ export type Placement =
  * then vehicle — and "General" only when the customer is all there is. The
  * customer is the file's own, falling back to the record's.
  */
+export const RESTRICTED_SUB = "restricted";
+
 export function placeDocument(doc: DocFacts, labels: RecordLabels): Placement {
+  // Only links to records the viewer may open count (see RecordLabels).
+  const quote = doc.quoteId ? labels.quotes.get(doc.quoteId) : undefined;
+  const jobCard = doc.jobCardId ? labels.jobCards.get(doc.jobCardId) : undefined;
+  const vehicle = doc.vehicleId ? labels.vehicles.get(doc.vehicleId) : undefined;
+
   let recordCustomerId: string | null = null;
   let sub: SubKey;
   let subLabel: string;
 
-  if (doc.quoteId) {
-    const quote = labels.quotes.get(doc.quoteId);
-    recordCustomerId = quote?.contactId ?? null;
+  if (quote && doc.quoteId) {
+    recordCustomerId = quote.contactId;
     sub = `quote:${doc.quoteId}`;
-    subLabel = quote ? `Quote Q-${quote.number}` : "Quote";
-  } else if (doc.jobCardId) {
-    const jobCard = labels.jobCards.get(doc.jobCardId);
-    recordCustomerId = jobCard?.contactId ?? null;
+    subLabel = `Quote Q-${quote.number}`;
+  } else if (jobCard && doc.jobCardId) {
+    recordCustomerId = jobCard.contactId;
     sub = `jobcard:${doc.jobCardId}`;
-    subLabel = jobCard ? `Job card #${jobCard.number}` : "Job card";
-  } else if (doc.vehicleId) {
-    const vehicle = labels.vehicles.get(doc.vehicleId);
-    recordCustomerId = vehicle?.contactId ?? null;
+    subLabel = `Job card #${jobCard.number}`;
+  } else if (vehicle && doc.vehicleId) {
+    recordCustomerId = vehicle.contactId;
     sub = `vehicle:${doc.vehicleId}`;
-    subLabel = vehicle?.label ?? "Vehicle";
-  } else if (doc.contactId) {
+    subLabel = vehicle.label;
+  } else if (doc.contactId && labels.contacts.has(doc.contactId)) {
     sub = "general";
     subLabel = "General";
+  } else if (doc.contactId || doc.quoteId || doc.jobCardId || doc.vehicleId) {
+    // Filed on records, none of which this viewer may open — reachable, for
+    // example, as the uploader of a file on a record they have since lost. Name
+    // none of them.
+    return { kind: "other", sub: RESTRICTED_SUB, subLabel: "On records you can't open" };
   } else {
     return { kind: "company" };
   }
@@ -107,7 +124,7 @@ export type Folder =
   | { kind: "customer"; customerId: string; sub: SubKey | null };
 
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
-const SUB = /^(general|(quote|vehicle|jobcard):[A-Za-z0-9_-]{1,64})$/;
+const SUB = /^(general|restricted|(quote|vehicle|jobcard):[A-Za-z0-9_-]{1,64})$/;
 
 /**
  * `?folder=` and `?sub=` into a Folder. Anything malformed is "all files" — a
@@ -147,7 +164,9 @@ export const RECENT_DAYS = 30;
 
 export function inFolder(doc: DocFacts, folder: Folder, labels: RecordLabels, now = new Date()): boolean {
   if (folder.kind === "all") return true;
-  if (folder.kind === "recent") return now.getTime() - doc.createdAt.getTime() <= RECENT_DAYS * 86_400_000;
+  if (folder.kind === "recent") {
+    return Boolean(doc.createdAt) && now.getTime() - doc.createdAt!.getTime() <= RECENT_DAYS * 86_400_000;
+  }
   const placement = placeDocument(doc, labels);
   if (folder.kind === "company") return placement.kind === "company";
   if (folder.kind === "other") {
@@ -179,24 +198,27 @@ export function buildFolderTree(docs: readonly DocFacts[], labels: RecordLabels,
   let company = 0;
   let recent = 0;
 
-  const addSub = (subs: Map<SubKey, SubFolder>, key: SubKey, label: string) => {
+  const addSub = (subs: Map<SubKey, SubFolder>, key: SubKey, label: string, n: number) => {
     const existing = subs.get(key);
-    if (existing) existing.count += 1;
-    else subs.set(key, { key, label, count: 1 });
+    if (existing) existing.count += n;
+    else subs.set(key, { key, label, count: n });
   };
 
+  let all = 0;
   for (const doc of docs) {
-    if (now.getTime() - doc.createdAt.getTime() <= RECENT_DAYS * 86_400_000) recent += 1;
+    const n = doc.count ?? 1;
+    all += n;
+    if (doc.createdAt && now.getTime() - doc.createdAt.getTime() <= RECENT_DAYS * 86_400_000) recent += n;
     const placement = placeDocument(doc, labels);
     if (placement.kind === "company") {
-      company += 1;
+      company += n;
     } else if (placement.kind === "other") {
-      other.count += 1;
-      addSub(other.subs, placement.sub, placement.subLabel);
+      other.count += n;
+      addSub(other.subs, placement.sub, placement.subLabel, n);
     } else {
       const folder = customers.get(placement.customerId) ?? { count: 0, subs: new Map() };
-      folder.count += 1;
-      addSub(folder.subs, placement.sub, placement.subLabel);
+      folder.count += n;
+      addSub(folder.subs, placement.sub, placement.subLabel, n);
       customers.set(placement.customerId, folder);
     }
   }
@@ -208,7 +230,7 @@ export function buildFolderTree(docs: readonly DocFacts[], labels: RecordLabels,
     );
 
   return {
-    all: docs.length,
+    all,
     recent,
     company,
     customers: [...customers.entries()]

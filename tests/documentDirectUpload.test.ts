@@ -105,7 +105,7 @@ test("REGISTERING A STORED FILE RE-CHECKS EVERYTHING AND TRUSTS NOTHING FROM THE
     'await requirePermission("documents.upload");',
     "const tenantId = await actingTenantId();",
     "const user = await authorizeDocumentTarget(target, tenantId);",
-    "const blob = await assertOwnedBlob(url, tenantId);",
+    "blob = await assertOwnedBlob(url, tenantId);",
     "if (!blob.pathname.startsWith(prefix))",
     "await prisma.document.create(",
   ].map((needle) => body.indexOf(needle));
@@ -121,6 +121,28 @@ test("REGISTERING A STORED FILE RE-CHECKS EVERYTHING AND TRUSTS NOTHING FROM THE
   // A refused file is removed — only through the ownership-checking delete.
   assert.match(body, /await deleteOwnedBlob\(url, tenantId, prefix\)/);
   assert.ok(!/\bdeleteFile\(/.test(body), "never the unchecked delete, which could remove another workspace's file");
+});
+
+test("ONCE THE ROW EXISTS, NOTHING MAY DELETE ITS FILE", () => {
+  /*
+   * Review finding: the audit write sat inside the same try as the insert, so a
+   * failing audit would have run the clean-up and deleted a file a freshly
+   * written Document row pointed at — a document that opens to "missing".
+   */
+  const actions = stripComments(src("src/app/actions/documents.ts"));
+  const body = actions.slice(
+    actions.indexOf("export async function registerUploadedDocument"),
+    actions.indexOf("export async function deleteDocument"),
+  );
+  const createAt = body.indexOf("doc = await prisma.document.create(");
+  const afterCreate = body.slice(body.indexOf("} catch (error) {", createAt));
+  // The only call to discard() after the insert is the insert's own catch.
+  assert.equal((afterCreate.match(/discard\(/g) ?? []).length, 1, "only a failed insert may discard the file");
+  const auditAt = body.indexOf("await logAudit(");
+  const insertCatchEnd = body.indexOf("return discard(error);", createAt) + "return discard(error);".length;
+  assert.ok(auditAt > insertCatchEnd, "the audit write is outside every clean-up path");
+  // And the delete itself lives only in discard().
+  assert.equal((body.match(/deleteOwnedBlob\(/g) ?? []).length, 1);
 });
 
 test("EVERY TARGET IS CHECKED FOR ACCESS AND FOR WORKSPACE", () => {
