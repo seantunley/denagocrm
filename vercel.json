@@ -43,6 +43,10 @@
     {
       "path": "/api/cron/competitor-watch",
       "schedule": "0 5 * * *"
+    },
+    {
+      "path": "/api/cron/private-storage",
+      "schedule": "20 * * * *"
     }
   ]
 }

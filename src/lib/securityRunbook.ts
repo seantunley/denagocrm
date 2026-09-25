@@ -289,6 +289,35 @@ export async function runSecurityChecks(): Promise<RunbookRun> {
     fix: privateProof?.ok ? undefined : "Check BLOB_PRIVATE_READ_WRITE_TOKEN is the private store's read-write token.",
   });
 
+  // Whether anything is still in the public store, where a link alone opens it.
+  // The hourly private-storage job empties it once BLOB_PRIVATE is on.
+  if (process.env.BLOB_READ_WRITE_TOKEN && process.env.BLOB_PRIVATE_READ_WRITE_TOKEN) {
+    try {
+      const { blobMigrationIo, countPublicClientFiles } = await import("./privateMigration");
+      const left = await countPublicClientFiles(
+        blobMigrationIo(process.env.BLOB_READ_WRITE_TOKEN, process.env.BLOB_PRIVATE_READ_WRITE_TOKEN),
+      );
+      add({
+        id: "public-store-empty",
+        group: "Data protection",
+        label: "No files left in the public store",
+        status: left === 0 ? "pass" : "warn",
+        detail:
+          left === 0
+            ? "Every stored file is in the private store (campaign and bot images stay public by design)."
+            : `${left} file(s) are still in the public store, where a link alone opens them.`,
+        fix:
+          left === 0
+            ? undefined
+            : process.env.BLOB_PRIVATE === "true"
+              ? "The hourly private-storage job is moving them; check the System Log if this does not fall."
+              : "Set BLOB_PRIVATE=true and redeploy; the hourly private-storage job then moves them.",
+      });
+    } catch {
+      /* the store is unreachable; the round-trip check above reports that */
+    }
+  }
+
   const passed = results.filter((r) => r.status === "pass").length;
   const warned = results.filter((r) => r.status === "warn").length;
   const failed = results.filter((r) => r.status === "fail").length;
