@@ -91,10 +91,12 @@ test("/api/stored: signed in, the viewer's own workspace, never cached, never HT
 });
 
 test("backups download through an owner-only route, backups/ objects only", () => {
-  const route = src("src/app/api/backups/file/route.ts");
+  // Not under api/backups/: .gitignore ignores every `backups/` directory, so a
+  // route there is silently never committed and the link 404s in production.
+  const route = src("src/app/api/backup-file/route.ts");
   assert.match(route, /await requireApiOwner\(\);/);
   assert.match(route, /!pathname\.startsWith\("backups\/"\)/);
-  assert.match(src("src/app/(app)/settings/backup-recovery/page.tsx"), /href=\{`\/api\/backups\/file\?ref=\$\{encodeURIComponent\(blob\.url\)\}`\}/);
+  assert.match(src("src/app/(app)/settings/backup-recovery/page.tsx"), /href=\{`\/api\/backup-file\?ref=\$\{encodeURIComponent\(blob\.url\)\}`\}/);
 });
 
 /* ── printed documents, outside services, public assets ───────────── */
