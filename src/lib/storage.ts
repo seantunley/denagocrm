@@ -108,6 +108,10 @@ export async function saveFile(
       access: "public", // unguessable URL; downloads still go through our auth route
       contentType,
       addRandomSuffix: false,
+      // EXPLICIT, never the SDK default. With BLOB_STORE_ID in the environment
+      // the SDK authenticates by OIDC to THAT store — the private one — so a
+      // token-less call here would send every "public" upload to the wrong store.
+      token: publicToken(),
     });
     return blob.url;
   }
@@ -603,6 +607,15 @@ export async function deleteOwnedBlob(
 
 const storeTokens = () => ({ publicToken: publicToken(), privateToken: privateToken() });
 
+/**
+ * The token for the store we currently WRITE to: private when BLOB_PRIVATE is on,
+ * else public. Every Blob SDK call passes a token explicitly — see saveFile — and
+ * readers of what the app wrote (backups) use this one.
+ */
+export function activeBlobToken(): string | undefined {
+  return activeStoreToken(privateMode(), storeTokens());
+}
+
 /** Whether the store we currently WRITE to has a usable token (see backupBlobs). */
 export function activeBlobWriteTokenPresent(): boolean {
   return activeWriteTokenPresent(privateMode(), storeTokens());
@@ -627,7 +640,8 @@ export async function putManagedBlob(
     return { url: blob.url, pathname: blob.pathname };
   }
   if (!publicToken()) throw new Error("Blob storage is not configured");
-  const blob = await put(pathname, data, { access: "public", contentType, addRandomSuffix: false, allowOverwrite: false });
+  // Explicit token for the same reason as saveFile: never let BLOB_STORE_ID pick the store.
+  const blob = await put(pathname, data, { access: "public", contentType, addRandomSuffix: false, allowOverwrite: false, token: publicToken() });
   return { url: blob.url, pathname: blob.pathname };
 }
 

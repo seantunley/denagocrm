@@ -1,5 +1,6 @@
 import "server-only";
 import { list } from "@vercel/blob";
+import { activeBlobToken } from "./storage";
 import { prisma, basePrisma } from "./db";
 import { getSetting, putSetting, encryptValue, decryptValue } from "./settings";
 
@@ -165,7 +166,10 @@ export async function runSecurityChecks(): Promise<RunbookRun> {
   });
 
   try {
-    const { blobs } = await list({ prefix: "backups/database/" });
+    // Explicit store: a token-less list() is redirected by BLOB_STORE_ID.
+    const token = activeBlobToken();
+    if (!token) throw new Error("Blob storage is not configured");
+    const { blobs } = await list({ prefix: "backups/database/", token });
     const newest = blobs.sort((a, b) => b.pathname.localeCompare(a.pathname))[0];
     const ageH = newest ? (Date.now() - new Date(newest.uploadedAt).getTime()) / 36e5 : Infinity;
     add({

@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { requireOwner } from "@/lib/auth";
 import { getSetting } from "@/lib/settings";
+import { activeBlobToken } from "@/lib/storage";
 import { RunBackupControl, VerifyBackupControl } from "@/components/BackupControls";
 import { Button } from "@/components/ui/button";
 import { SettingsWorkspace } from "@/components/settings-workspace";
@@ -43,10 +44,14 @@ type BackupResult = {
 type VerifyResult = { pathname?: string; verifiedAt?: string; ok?: boolean; assetExceptions?: number };
 
 async function listAll(prefix: string): Promise<ListBlobResultBlob[]> {
+  // The store backups are written to, named explicitly: a token-less list() is
+  // redirected by BLOB_STORE_ID to whichever store that names.
+  const token = activeBlobToken();
+  if (!token) throw new Error("Blob storage is not configured");
   const blobs: ListBlobResultBlob[] = [];
   let cursor: string | undefined;
   do {
-    const page = await list({ prefix, cursor, limit: 1000 });
+    const page = await list({ prefix, cursor, limit: 1000, token });
     blobs.push(...page.blobs);
     cursor = page.hasMore ? page.cursor : undefined;
   } while (cursor);
