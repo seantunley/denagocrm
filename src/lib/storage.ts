@@ -382,6 +382,60 @@ export async function readFile(ref: string, expectedTenantId?: string | null): P
 }
 
 /**
+ * {@link readFile}, as a stream — for sending a file to a browser.
+ *
+ * WHY IT EXISTS: Vercel caps a function's response body at 4.5 MB unless the
+ * response is streamed. /api/files built its response from readFile's Buffer, so
+ * any document over 4.5 MB could be stored but never opened again. Streaming the
+ * object straight through removes that ceiling, and holds no more of the file in
+ * memory than the chunk in flight.
+ *
+ * SAME OWNERSHIP RULES AS readFile, deliberately line for line: the private
+ * store's pathname is checked against `expectedTenantId` before the get; the
+ * public path goes through assertOwnedBlob, which proves the object is in OUR
+ * store and in this workspace. No size cap is needed — nothing is buffered.
+ */
+export async function openFileStream(
+  ref: string,
+  expectedTenantId?: string | null,
+): Promise<ReadableStream<Uint8Array>> {
+  if (!isBlobRef(ref)) {
+    const { createReadStream } = await import("fs");
+    const { Readable } = await import("stream");
+    return Readable.toWeb(createReadStream(path.join(UPLOAD_DIR, ref))) as ReadableStream<Uint8Array>;
+  }
+
+  if (privateToken()) {
+    try {
+      const pathname = new URL(ref).pathname.replace(/^\/+/, "");
+      if (!ownedByExpected(pathname, expectedTenantId)) {
+        throw new BlobNotYoursError("Refusing a stored file that belongs to another workspace");
+      }
+      const result = await get(pathname, { access: "private", token: privateToken() });
+      if (result?.stream) return result.stream;
+    } catch (error) {
+      if (error instanceof BlobNotYoursError) throw error;
+      // A miss: try the public path, exactly as readFile does.
+    }
+  }
+
+  await assertOwnedBlob(ref, expectedTenantId);
+  // The timeout covers getting a response, NOT the body. AbortSignal.timeout on
+  // the fetch would also abort the stream, cutting a large file off part-way
+  // through for anyone on a slow connection — the case streaming exists for.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), BLOB_FETCH_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(ref, { signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!res.ok) throw new Error(`Blob fetch failed: ${res.status}`);
+  return res.body ?? new ReadableStream({ start: (stream) => stream.close() });
+}
+
+/**
  * A pathname as {@link putManagedBlob} returns it: folder segments inside our
  * own store. Returns the value rather than a boolean, for classifyRef's reason —
  * a caller cannot use the result without having gone through the check.

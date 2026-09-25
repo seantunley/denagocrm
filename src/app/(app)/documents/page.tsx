@@ -13,7 +13,6 @@ import {
   List,
   Search,
   Settings2,
-  Upload,
   User,
   Users,
 } from "lucide-react";
@@ -27,7 +26,7 @@ import {
   hasPermission,
   requireAnyPermission,
 } from "@/lib/permissions";
-import { uploadDocument } from "@/app/actions/documents";
+import { getActiveTenantId } from "@/lib/auth";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { nonAutomotiveDocumentWhere } from "@/lib/modules/registry";
 import {
@@ -41,7 +40,7 @@ import {
   type Folder,
   type RecordLabels,
 } from "@/lib/documentFolders";
-import DocumentBrowser, { type BrowserDoc } from "@/components/documents/DocumentBrowser";
+import DocumentBrowser, { DocumentUploader, type BrowserDoc } from "@/components/documents/DocumentBrowser";
 import { type MoveTargets } from "@/components/RepoRow";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -118,7 +117,7 @@ export default async function DocumentsPage({
   const view = params.view === "list" ? "list" : "grid";
   const folder = parseFolder(params.folder, params.sub);
 
-  const [documentIds, contactIds, vehicleIds, quoteIds, canUpload, canManage, canTemplates, automotiveOn] =
+  const [documentIds, contactIds, vehicleIds, quoteIds, canUpload, canManage, canTemplates, automotiveOn, tenantId] =
     await Promise.all([
       getAccessibleDocumentIds(user),
       getAccessibleContactIds(user),
@@ -128,6 +127,9 @@ export default async function DocumentsPage({
       hasPermission(user, "documents.manage"),
       hasPermission(user, "document_templates.manage"),
       isModuleEnabled("automotive"),
+      // Only names the folder uploads are written under; the upload route and
+      // the register action resolve and check the workspace themselves.
+      getActiveTenantId(),
     ]);
 
   // Every file the viewer may see — the tree needs all of them to count its
@@ -315,15 +317,7 @@ export default async function DocumentsPage({
           action={canTemplates ? <Link href="/document-studio" className={buttonVariants({ variant: "outline", size: "sm" })}><Settings2 className="size-4" />Studio</Link> : undefined}
         />
         {canUpload && uploadTarget && (
-          <form action={uploadDocument} className="rounded-2xl border border-primary/20 bg-primary/[0.06] p-3">
-            <input type="hidden" name="revalidate" value="/documents" />
-            {uploadTarget.kind === "record" && <input type="hidden" name={uploadTarget.field} value={uploadTarget.id} />}
-            <label className="mb-2 block text-xs font-semibold text-foreground">{uploadHint}</label>
-            <div className="flex items-center gap-2">
-              <input type="file" name="file" required className="min-w-0 flex-1 text-xs text-muted-foreground file:mr-2 file:rounded-lg file:border-0 file:bg-muted file:px-2.5 file:py-1.5 file:text-xs file:text-foreground" />
-              <Button size="sm" type="submit"><Upload className="size-4" />Upload</Button>
-            </div>
-          </form>
+          <DocumentUploader target={uploadTarget} tenantId={tenantId} hint={uploadHint} />
         )}
         <form className="flex gap-2" role="search">
           {params.folder && <input type="hidden" name="folder" value={params.folder} />}
@@ -550,6 +544,7 @@ export default async function DocumentsPage({
               docs={browserDocs}
               view={view}
               uploadTarget={uploadTarget}
+              uploadTenantId={tenantId}
               uploadHint={uploadHint}
               canUpload={canUpload}
               canManage={canManage}

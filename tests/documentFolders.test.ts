@@ -233,8 +233,6 @@ test("PREVIEWS AND UPLOADS GO THROUGH THE CHECKED PATHS", () => {
   assert.ok(!/blob\.vercel-storage|storedName/.test(browser), "no direct storage reference");
   assert.match(browser, /src=\{`\/api\/files\/\$\{doc\.id\}`\}/);
   assert.match(browser, /src=\{`\/api\/files\/\$\{previewing\.id\}`\}/);
-  // Uploads use the existing action, which authorises the target server-side.
-  assert.match(browser, /await uploadDocument\(form\);/);
-  assert.match(browser, /if \(uploadTarget\.kind === "record"\) form\.set\(uploadTarget\.field, uploadTarget\.id\);/);
-  assert.match(browser, /const MAX_UPLOAD_BYTES = 4 \* 1024 \* 1024;/, "files the platform would refuse are explained, not failed silently");
+  // Uploads go through the shared hook: direct to storage, then registered.
+  assert.match(browser, /useDocumentUploads\(acceptsUploads \? uploadTarget : null, uploadTenantId\)/);
 });

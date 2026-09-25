@@ -15,8 +15,8 @@ import {
   Upload,
   XCircle,
 } from "lucide-react";
-import { uploadDocument } from "@/app/actions/documents";
 import { ManageDocumentDialog, type MoveTargets } from "@/components/RepoRow";
+import { formatSize, useDocumentUploads, type UploadState } from "@/components/documents/useDocumentUploads";
 import RecordContextMenu from "@/components/RecordContextMenu";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -35,35 +35,75 @@ export type BrowserDoc = {
   superseded: boolean;
 };
 
-/**
- * Uploads go through a Server Action, and Vercel refuses any function request
- * body over 4.5 MB before the action runs — whatever the app's own limit says.
- * Checked here so a bigger file gets a plain explanation instead of a generic
- * failure. Large files need a direct-to-storage upload, as photos have; that is
- * a separate change.
- */
-const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
-
 /** Only these are served inline by /api/files — everything else downloads. */
 const isImage = (doc: BrowserDoc) => /^image\/(png|jpe?g|gif|webp|avif)$/i.test(doc.mimeType);
 const isPdf = (doc: BrowserDoc) => /^application\/pdf$/i.test(doc.mimeType);
-
-function formatSize(bytes: number) {
-  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
 
 function DocIcon({ doc, className }: { doc: BrowserDoc; className?: string }) {
   const Icon = isImage(doc) ? ImageIcon : isPdf(doc) ? FileText : FileIcon;
   return <Icon className={className} />;
 }
 
-type UploadState = { name: string; status: "waiting" | "uploading" | "done" | "failed"; message?: string };
+function UploadProgress({ uploads }: { uploads: UploadState[] }) {
+  if (uploads.length === 0) return null;
+  return (
+    <ul className="mb-3 space-y-1 rounded-xl border border-border bg-card p-3 text-[12px]">
+      {uploads.map((item, index) => (
+        <li key={`${item.name}-${index}`} className="flex items-center gap-2">
+          {item.status === "uploading" && <Loader2 className="size-3.5 shrink-0 animate-spin text-primary" />}
+          {item.status === "waiting" && <Loader2 className="size-3.5 shrink-0 text-muted-foreground" />}
+          {item.status === "done" && <CheckCircle2 className="size-3.5 shrink-0 text-emerald-400" />}
+          {item.status === "failed" && <XCircle className="size-3.5 shrink-0 text-destructive" />}
+          <span className="truncate">{item.name}</span>
+          {item.message && <span className="shrink-0 text-muted-foreground">· {item.message}</span>}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * Upload into a folder without the browser around it — the phone's quick capture.
+ * Same path as the desktop drop zone: straight to storage, then registered.
+ */
+export function DocumentUploader({
+  target,
+  tenantId,
+  hint,
+}: {
+  target: UploadTarget;
+  tenantId: string | null;
+  hint: string;
+}) {
+  const { uploads, uploadFiles } = useDocumentUploads(target, tenantId);
+  const picker = useRef<HTMLInputElement>(null);
+  return (
+    <div className="rounded-2xl border border-primary/20 bg-primary/[0.06] p-3">
+      <p className="mb-2 text-xs font-semibold text-foreground">{hint}</p>
+      <input
+        ref={picker}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={(event) => {
+          void uploadFiles([...(event.target.files ?? [])]);
+          event.target.value = "";
+        }}
+      />
+      <Button size="sm" className="w-full" onClick={() => picker.current?.click()}>
+        <Upload className="size-4" />
+        Choose files
+      </Button>
+      {uploads.length > 0 && <div className="mt-2"><UploadProgress uploads={uploads} /></div>}
+    </div>
+  );
+}
 
 export default function DocumentBrowser({
   docs,
   view,
   uploadTarget,
+  uploadTenantId,
   uploadHint,
   canUpload,
   canManage,
@@ -73,6 +113,8 @@ export default function DocumentBrowser({
   view: "grid" | "list";
   /** Where a file dropped here is filed; null where this folder cannot take uploads. */
   uploadTarget: UploadTarget | null;
+  /** The workspace the upload path is written under; the server checks it. */
+  uploadTenantId: string | null;
   uploadHint: string;
   canUpload: boolean;
   canManage: boolean;
@@ -81,44 +123,12 @@ export default function DocumentBrowser({
   const router = useRouter();
   const [previewing, setPreviewing] = useState<BrowserDoc | null>(null);
   const [managing, setManaging] = useState<BrowserDoc | null>(null);
-  const [uploads, setUploads] = useState<UploadState[]>([]);
   const [dragging, setDragging] = useState(false);
   const [, startRefresh] = useTransition();
   const picker = useRef<HTMLInputElement>(null);
 
   const acceptsUploads = canUpload && uploadTarget !== null;
-
-  async function uploadFiles(files: File[]) {
-    if (!acceptsUploads || !uploadTarget || files.length === 0) return;
-    setUploads(files.map((file) => ({ name: file.name, status: "waiting" })));
-
-    // One at a time: each is its own authorised Server Action call, and a folder
-    // of photos in parallel would stack up requests against the same limit.
-    for (let index = 0; index < files.length; index++) {
-      const file = files[index];
-      const set = (patch: Partial<UploadState>) =>
-        setUploads((current) => current.map((item, i) => (i === index ? { ...item, ...patch } : item)));
-
-      if (file.size > MAX_UPLOAD_BYTES) {
-        set({ status: "failed", message: `${formatSize(file.size)} — files over 4 MB can't be uploaded here yet` });
-        continue;
-      }
-      set({ status: "uploading" });
-      const form = new FormData();
-      form.set("file", file);
-      form.set("revalidate", "/documents");
-      if (uploadTarget.kind === "record") form.set(uploadTarget.field, uploadTarget.id);
-      try {
-        await uploadDocument(form);
-        set({ status: "done" });
-      } catch {
-        // Server Action errors are redacted in production, so the cause is not
-        // available here; the audit trail and System Log have it.
-        set({ status: "failed", message: "upload failed — you may not have access to file here" });
-      }
-    }
-    startRefresh(() => router.refresh());
-  }
+  const { uploads, uploadFiles } = useDocumentUploads(acceptsUploads ? uploadTarget : null, uploadTenantId);
 
   const onDrop = (event: React.DragEvent) => {
     event.preventDefault();
@@ -170,20 +180,7 @@ export default function DocumentBrowser({
         </div>
       )}
 
-      {uploads.length > 0 && (
-        <ul className="mb-3 space-y-1 rounded-xl border border-border bg-card p-3 text-[12px]">
-          {uploads.map((item, index) => (
-            <li key={`${item.name}-${index}`} className="flex items-center gap-2">
-              {item.status === "uploading" && <Loader2 className="size-3.5 animate-spin text-primary" />}
-              {item.status === "waiting" && <Loader2 className="size-3.5 text-muted-foreground" />}
-              {item.status === "done" && <CheckCircle2 className="size-3.5 text-emerald-400" />}
-              {item.status === "failed" && <XCircle className="size-3.5 text-destructive" />}
-              <span className="truncate">{item.name}</span>
-              {item.message && <span className="shrink-0 text-muted-foreground">· {item.message}</span>}
-            </li>
-          ))}
-        </ul>
-      )}
+      <UploadProgress uploads={uploads} />
 
       {docs.length === 0 ? (
         <p className="rounded-xl border border-border bg-card/50 py-12 text-center text-sm text-muted-foreground">

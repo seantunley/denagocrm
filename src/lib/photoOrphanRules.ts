@@ -8,7 +8,10 @@
  */
 
 /** Only the direct-upload namespace. Legacy files live at other shapes. */
-export const PHOTO_KINDS = ["delivery", "jobcard", "jobcard-checkout", "inspection"] as const;
+export const PHOTO_KINDS = ["delivery", "jobcard", "jobcard-checkout", "inspection", "document"] as const;
+// `document`: direct document uploads (lib/documentUpload.ts) share this shape —
+// uploads/<tenant>/document/<target>/<file> — and the same claim rule: a stored
+// file with no Document row after the grace period was never registered.
 
 /**
  * How long a staged object may go unclaimed.
