@@ -9,6 +9,7 @@ import { softDeleteRecord } from "@/lib/trash";
 import { MAX_BLOB_BYTES, assertOwnedBlob, isLibraryUpload, libraryUploadPrefix } from "@/lib/storage";
 import { actingScopeClass, withActingStaffScope } from "@/lib/actingScope";
 import { actingTenantId } from "@/lib/actingTenant";
+import { photoBlobAccess, type PhotoBlobAccess } from "@/lib/photoBlob";
 
 export type UploadedFileMeta = {
   url: string;
@@ -93,12 +94,15 @@ async function resolveUpload(file: UploadedFileMeta) {
 /**
  * The folder the browser must upload library files into: this workspace's own
  * namespace, the only place resolveUpload accepts a file from and the only
- * pathname /api/library/upload will sign.
+ * pathname /api/library/upload will sign — and whether the active store is the
+ * private one. `access` must match the store the route signs for, or the
+ * upload is refused; hard-coding "public" is what would have kept Library files
+ * publicly readable after the private store was switched on.
  */
-export async function getLibraryUploadPrefix(): Promise<string> {
+export async function getLibraryUploadPlan(): Promise<{ prefix: string; access: PhotoBlobAccess }> {
   return withActingStaffScope(async () => {
     await requirePermission("library.manage");
-    return libraryUploadPrefix(await actingTenantId());
+    return { prefix: libraryUploadPrefix(await actingTenantId()), access: photoBlobAccess() };
   });
 }
 

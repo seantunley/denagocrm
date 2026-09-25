@@ -3,6 +3,7 @@ import { list } from "@vercel/blob";
 import { activeBlobToken } from "./storage";
 import { prisma, basePrisma } from "./db";
 import { getSetting, putSetting, encryptValue, decryptValue } from "./settings";
+import { privateStoreStatus } from "./storage";
 
 export type CheckStatus = "pass" | "warn" | "fail";
 export type CheckResult = {
@@ -202,6 +203,31 @@ export async function runSecurityChecks(): Promise<RunbookRun> {
       detail: "Blob storage not reachable from this environment.",
     });
   }
+
+  // Files are encrypted at rest either way; the question is whether a file's
+  // link alone opens it. Checked with the real token, because the token is a
+  // Sensitive env var nobody can read back to verify by hand.
+  const privateStore = await privateStoreStatus();
+  add({
+    id: "files-private",
+    group: "Data protection",
+    label: "Files need a login to open",
+    status: privateStore.state === "active" ? "pass" : privateStore.state === "unreachable" ? "fail" : "warn",
+    detail:
+      privateStore.state === "active"
+        ? "New files go to the private store; a file's link alone does not open it."
+        : privateStore.state === "ready"
+          ? "The private store is connected and its token works, but new files still go to the public store (BLOB_PRIVATE is off)."
+          : privateStore.state === "unreachable"
+            ? `The private store's token was rejected: ${privateStore.error}`
+            : "Files are in a public store: anyone with a file's link can download it.",
+    fix:
+      privateStore.state === "active"
+        ? undefined
+        : privateStore.state === "ready"
+          ? "Set BLOB_PRIVATE=true and redeploy."
+          : "Check BLOB_PRIVATE_READ_WRITE_TOKEN is the private store's read-write token.",
+  });
 
   /* ── Accounts & sessions ────────────────────────────────────── */
   const users = await prisma.user.findMany({ select: { name: true, totpEnabledAt: true } });

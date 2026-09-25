@@ -100,9 +100,18 @@ test("the library upload route signs only this workspace's library folder", () =
   );
   // And the browser asks the server where that is, rather than choosing a path.
   const uploader = code("src/components/LibraryUploader.tsx");
-  assert.match(uploader, /upload\(`\$\{await getLibraryUploadPrefix\(\)\}\$\{file\.name\}`/);
+  assert.match(uploader, /const \{ prefix, access \} = await getLibraryUploadPlan\(\);\s*const blob = await upload\(`\$\{prefix\}\$\{file\.name\}`, file, \{\s*access,/);
   assert.ok(!uploader.includes("`library/"), "no upload to the old, unowned path");
-  assert.match(code("src/app/actions/library.ts"), /return libraryUploadPrefix\(await actingTenantId\(\)\);/);
+  assert.match(code("src/app/actions/library.ts"), /return \{ prefix: libraryUploadPrefix\(await actingTenantId\(\)\), access: photoBlobAccess\(\) \};/);
+});
+
+test("LIBRARY UPLOADS GO TO THE PRIVATE STORE WHEN IT IS ON, like every other upload", () => {
+  // The Library route signed for the default (public) store and the uploader
+  // hard-coded access "public", so switching BLOB_PRIVATE on would have left
+  // every new Library file publicly readable by URL.
+  const route = code("src/app/api/library/upload/route.ts");
+  assert.match(route, /token: photoBlobToken\(\),/);
+  assert.ok(!code("src/components/LibraryUploader.tsx").includes('access: "public"'));
 });
 
 test("a library download streams, and a failed one is logged, not only answered", () => {

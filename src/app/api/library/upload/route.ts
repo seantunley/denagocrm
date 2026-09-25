@@ -5,6 +5,7 @@ import { actingTenantId } from "@/lib/actingTenant";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { hasPermission } from "@/lib/permissions";
 import { isLibraryUpload } from "@/lib/storage";
+import { photoBlobToken } from "@/lib/photoBlob";
 
 /** Issues short-lived tokens so the browser can upload library files straight to Blob storage. */
 export async function POST(request: Request): Promise<NextResponse> {
@@ -33,6 +34,10 @@ export async function POST(request: Request): Promise<NextResponse> {
     const jsonResponse = await handleUpload({
       body,
       request,
+      // The ACTIVE store's token, as the photo and document routes use: the
+      // private store once BLOB_PRIVATE is on. Without it this route signed for
+      // the default (public) store whatever the flag said.
+      token: photoBlobToken(),
       onBeforeGenerateToken: async (pathname) => {
         // A plain file name directly in this workspace's library folder: no
         // sub-folders, no "..". Registration checks the same rule.
