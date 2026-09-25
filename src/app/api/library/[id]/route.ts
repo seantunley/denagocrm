@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { hasAnyPermission } from "@/lib/permissions";
 import { readFile } from "@/lib/storage";
+import { logError } from "@/lib/errorLog";
 
 /** Downloads a specific library document version. */
 export async function GET(
@@ -43,7 +44,11 @@ export async function GET(
         "X-Content-Type-Options": "nosniff",
       },
     });
-  } catch {
+  } catch (error) {
+    // Logged, not only answered. Every library download failed here for six
+    // weeks — the ownership check refused `library/<name>` — and the only trace
+    // was a 404 in each user's browser.
+    await logError("library-download", error, `version=${version.id}`, { tenantId: version.tenantId });
     return NextResponse.json({ error: "File missing in storage" }, { status: 404 });
   }
 }

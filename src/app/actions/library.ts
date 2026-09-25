@@ -6,8 +6,9 @@ import { withActingTenantWrite } from "@/lib/actingScope";
 import { requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
-import { MAX_BLOB_BYTES, assertOwnedBlob } from "@/lib/storage";
+import { MAX_BLOB_BYTES, assertOwnedBlob, libraryUploadPrefix } from "@/lib/storage";
 import { actingScopeClass, withActingStaffScope } from "@/lib/actingScope";
+import { actingTenantId } from "@/lib/actingTenant";
 
 export type UploadedFileMeta = {
   url: string;
@@ -79,6 +80,18 @@ async function resolveUpload(file: UploadedFileMeta) {
     sizeBytes: owned.size,
     mimeType: owned.contentType || file.mimeType || "application/octet-stream",
   };
+}
+
+/**
+ * The folder the browser must upload library files into: this workspace's own
+ * namespace, the only place resolveUpload accepts a file from and the only
+ * pathname /api/library/upload will sign.
+ */
+export async function getLibraryUploadPrefix(): Promise<string> {
+  return withActingStaffScope(async () => {
+    await requirePermission("library.manage");
+    return libraryUploadPrefix(await actingTenantId());
+  });
 }
 
 /**

@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { blobBelongsToTenant } from "../src/lib/storage";
+import { blobBelongsToTenant, libraryUploadPrefix } from "../src/lib/storage";
 
 /**
  * Audit P2-4 — public blob storage.
@@ -39,6 +39,44 @@ test("a legacy object belongs to the founding tenant, and to nobody else", () =>
   // necessarily belongs to it. That is a fact about the deployment's history.
   assert.equal(blobBelongsToTenant("uploads/legacy.pdf", FOUNDING), true);
   assert.equal(blobBelongsToTenant("uploads/legacy.pdf", A), false);
+});
+
+test("THE LIBRARY'S OWN FILES PASS THE CHECK — the path shape the library really writes", () => {
+  /*
+   * Every test above used `uploads/…` paths. The library wrote `library/<name>`,
+   * so from 2026-08-12, when the download route started passing the row's
+   * tenant, every library download 404'd and every new library file was
+   * refused at registration. Nothing here noticed, because nothing here used the
+   * path the library actually produces.
+   */
+  // The ten files production holds: legacy, founding tenant, like uploads/<file>.
+  assert.equal(blobBelongsToTenant("library/Denago EV Price List-a1B2c3.pdf", FOUNDING), true);
+  assert.equal(blobBelongsToTenant("library/Denago EV Price List-a1B2c3.pdf", A), false);
+  assert.equal(blobBelongsToTenant("library/nested/x.pdf", FOUNDING), false, "only the flat legacy shape");
+  // New library files: inside the uploading workspace's namespace.
+  assert.equal(libraryUploadPrefix(A), `uploads/${A}/library/`);
+  assert.equal(blobBelongsToTenant(`${libraryUploadPrefix(A)}brochure-x9Y8z7.pdf`, A), true);
+  assert.equal(blobBelongsToTenant(`${libraryUploadPrefix(A)}brochure-x9Y8z7.pdf`, "tenant_b"), false);
+});
+
+test("the library upload route signs only this workspace's library folder", () => {
+  const route = code("src/app/api/library/upload/route.ts");
+  assert.match(route, /tenantId = await withActingStaffScope\(\(\) => actingTenantId\(\)\);/);
+  assert.match(route, /const prefix = libraryUploadPrefix\(tenantId\);/);
+  assert.match(
+    route,
+    /if \(!pathname\.startsWith\(prefix\) \|\| pathname\.slice\(prefix\.length\)\.includes\("\/"\)\) \{\s*throw/,
+    "anything outside the prefix, or nested below it, is refused before a token exists",
+  );
+  // And the browser asks the server where that is, rather than choosing a path.
+  const uploader = code("src/components/LibraryUploader.tsx");
+  assert.match(uploader, /upload\(`\$\{await getLibraryUploadPrefix\(\)\}\$\{file\.name\}`/);
+  assert.ok(!uploader.includes("`library/"), "no upload to the old, unowned path");
+  assert.match(code("src/app/actions/library.ts"), /return libraryUploadPrefix\(await actingTenantId\(\)\);/);
+});
+
+test("a failed library download is logged, not only answered", () => {
+  assert.match(code("src/app/api/library/[id]/route.ts"), /await logError\("library-download", error,/);
 });
 
 test("a path outside uploads/ is never a per-tenant upload", () => {
