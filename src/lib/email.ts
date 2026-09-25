@@ -96,6 +96,11 @@ export async function sendEmail(input: {
       host: config.host,
       port: config.port,
       secure: config.secure,
+      // ENCRYPTED OR NOT AT ALL. Without implicit TLS (465), nodemailer upgraded
+      // with STARTTLS only if the server offered it, and otherwise sent the
+      // password and the customer's mail in clear text. requireTLS makes a server
+      // that can't upgrade a failed send instead.
+      requireTLS: !config.secure,
       auth: config.user ? { user: config.user, pass: config.pass ?? "" } : undefined,
     });
     await transporter.sendMail({

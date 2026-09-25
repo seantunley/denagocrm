@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { upload } from "@vercel/blob/client";
 import {
-  getLibraryUploadPrefix,
+  getLibraryUploadPlan,
   registerLibraryDocuments,
   registerLibraryVersion,
   type UploadedFileMeta,
@@ -14,9 +14,11 @@ const CATEGORIES = ["Brochure", "Price list", "Spec sheet", "Warranty", "Other"]
 
 async function uploadDirect(file: File): Promise<UploadedFileMeta> {
   // Into this workspace's own folder: the only place the library accepts files
-  // from. The old `library/<name>` is refused by the ownership check.
-  const blob = await upload(`${await getLibraryUploadPrefix()}${file.name}`, file, {
-    access: "public",
+  // from. The old `library/<name>` is refused by the ownership check. The store
+  // (private or public) is the server's choice, as for every other upload.
+  const { prefix, access } = await getLibraryUploadPlan();
+  const blob = await upload(`${prefix}${file.name}`, file, {
+    access,
     handleUploadUrl: "/api/library/upload",
   });
   return {
