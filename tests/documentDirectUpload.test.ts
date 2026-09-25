@@ -169,7 +169,10 @@ test("DOWNLOADS STREAM, WITH THE SAME OWNERSHIP CHECKS", () => {
   assert.ok(!/readFile\(/.test(route), "the buffered read — capped at 4.5 MB by Vercel — is gone from this route");
 
   const storage = stripComments(src("src/lib/storage.ts"));
-  const stream = storage.slice(storage.indexOf("export async function openFileStream"), storage.indexOf("export function managedBlobPathname"));
+  // openFileStream is a wrapper; the reading, with its checks, is openStoredFile.
+  assert.match(storage, /return \(await openStoredFile\(ref, expectedTenantId\)\)\.stream;/);
+  const stream = storage.slice(storage.indexOf("export async function openStoredFile"), storage.indexOf("export function isStoredFileRef"));
+  assert.ok(stream.length > 500, "found openStoredFile");
   assert.match(stream, /if \(!ownedByExpected\(pathname, expectedTenantId\)\) \{\s*throw new BlobNotYoursError/, "private store: workspace checked before the read");
   assert.match(stream, /if \(error instanceof BlobNotYoursError\) throw error;/, "a refusal is not treated as a miss");
   assert.match(stream, /await assertOwnedBlob\(ref, expectedTenantId\);/, "public path: proven ours and this workspace's");
