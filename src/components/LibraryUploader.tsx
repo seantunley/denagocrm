@@ -27,10 +27,13 @@ async function uploadDirect(file: File): Promise<UploadedFileMeta> {
   };
 }
 
-export function AddDocumentsForm() {
+export function AddDocumentsForm({ defaultCategory }: { defaultCategory?: string | null } = {}) {
   const router = useRouter();
   const [files, setFiles] = useState<File[]>([]);
-  const [category, setCategory] = useState("Brochure");
+  // The Documents page opens this inside a category; start there.
+  const [category, setCategory] = useState(
+    defaultCategory && CATEGORIES.includes(defaultCategory) ? defaultCategory : "Brochure",
+  );
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState("");

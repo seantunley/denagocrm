@@ -4,10 +4,10 @@
  *
  *   Customers › Gavin Tagg › Quote Q-1010
  *   Customers › Gavin Tagg › General
- *   Company files
+ *   Unfiled
  *
  * Every Document already points at a customer, vehicle, job card or quote (or at
- * nothing, for company files). The page used to ignore that and list every file
+ * nothing, while unfiled). The page used to ignore that and list every file
  * newest-first, which is why it read as an unorganised pile. This module turns
  * the links into a tree.
  *
@@ -116,12 +116,27 @@ export function placeDocument(doc: DocFacts, labels: RecordLabels): Placement {
 
 /* ── The current folder, from the URL ─────────────────────────────── */
 
+/**
+ * `company` is the UNFILED folder: documents attached to no record. It used to be
+ * labelled "Company files", which competed with the Document Library for the
+ * same job — so company documents now live in the Library (`library`, below,
+ * merged into this page), and this folder is the inbox of files still waiting
+ * to be filed on a customer.
+ */
 export type Folder =
   | { kind: "all" }
   | { kind: "recent" }
   | { kind: "company" }
+  | { kind: "library"; category: string | null }
   | { kind: "other"; sub: SubKey | null }
   | { kind: "customer"; customerId: string; sub: SubKey | null };
+
+/** A Library category from the URL: free text, but bounded and printable. */
+function cleanCategory(category: string | undefined): string | null {
+  const value = category?.trim();
+  if (!value || value.length > 60 || /[\u0000-\u001f\u007f]/.test(value)) return null;
+  return value;
+}
 
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
 const SUB = /^(general|restricted|(quote|vehicle|jobcard):[A-Za-z0-9_-]{1,64})$/;
@@ -132,10 +147,11 @@ const SUB = /^(general|restricted|(quote|vehicle|jobcard):[A-Za-z0-9_-]{1,64})$/
  * never more than that: the folder only narrows a list that was already
  * permission-filtered.
  */
-export function parseFolder(folder: string | undefined, sub: string | undefined): Folder {
+export function parseFolder(folder: string | undefined, sub: string | undefined, category?: string): Folder {
   const cleanSub = sub && SUB.test(sub) ? sub : null;
   if (folder === "recent") return { kind: "recent" };
   if (folder === "company") return { kind: "company" };
+  if (folder === "library") return { kind: "library", category: cleanCategory(category) };
   if (folder === "other") return { kind: "other", sub: cleanSub };
   if (folder?.startsWith("customer:")) {
     const customerId = folder.slice("customer:".length);
@@ -144,9 +160,27 @@ export function parseFolder(folder: string | undefined, sub: string | undefined)
   return { kind: "all" };
 }
 
+/**
+ * The folder actually shown, given what the viewer may see. The page is two
+ * halves with separate permissions: record documents (documents.*) and the
+ * Library (library.*). Library-only access always lands in the Library; without
+ * library access, asking for the Library by URL shows All files instead.
+ */
+export function resolveFolder(
+  requested: Folder,
+  access: { canSeeDocuments: boolean; canLibrary: boolean },
+): Folder {
+  if (requested.kind === "library") return access.canLibrary ? requested : { kind: "all" };
+  return access.canSeeDocuments ? requested : { kind: "library", category: null };
+}
+
 export function folderHref(folder: Folder, extra: Record<string, string | undefined> = {}): string {
   const params = new URLSearchParams();
   if (folder.kind === "recent" || folder.kind === "company") params.set("folder", folder.kind);
+  if (folder.kind === "library") {
+    params.set("folder", "library");
+    if (folder.category) params.set("cat", folder.category);
+  }
   if (folder.kind === "other") {
     params.set("folder", "other");
     if (folder.sub) params.set("sub", folder.sub);
@@ -164,6 +198,8 @@ export const RECENT_DAYS = 30;
 
 export function inFolder(doc: DocFacts, folder: Folder, labels: RecordLabels, now = new Date()): boolean {
   if (folder.kind === "all") return true;
+  // The Library is its own store (LibraryDocument); no Document is ever in it.
+  if (folder.kind === "library") return false;
   if (folder.kind === "recent") {
     return Boolean(doc.createdAt) && now.getTime() - doc.createdAt!.getTime() <= RECENT_DAYS * 86_400_000;
   }
@@ -252,7 +288,7 @@ export function buildFolderTree(docs: readonly DocFacts[], labels: RecordLabels,
  * fields `uploadDocument` reads — or null where the folder does not say where a
  * file belongs (the whole of Other records, which spans many records).
  *
- * All files and Recent upload into Company files. That is what an upload from
+ * All files and Recent upload into Unfiled. That is what an upload from
  * the old flat page did — it was filed against nothing — and the phone's quick
  * "capture a document" relies on it, so it is kept rather than taken away.
  *

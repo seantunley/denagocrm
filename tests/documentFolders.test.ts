@@ -9,6 +9,7 @@ import {
   inFolder,
   parseFolder,
   placeDocument,
+  resolveFolder,
   uploadTargetFor,
   type DocFacts,
   type RecordLabels,
@@ -69,7 +70,7 @@ test("A FILE GOES IN THE FOLDER OF THE RECORD IT IS FILED ON", () => {
   assert.deepEqual(placeDocument(doc("d", { jobCardId: "j1" }), labels), {
     kind: "customer", customerId: "gavin", sub: "jobcard:j1", subLabel: "Job card #42",
   });
-  assert.deepEqual(placeDocument(doc("e"), labels), { kind: "company" }, "a file on no record is a company file");
+  assert.deepEqual(placeDocument(doc("e"), labels), { kind: "company" }, "a file on no record is unfiled");
 });
 
 test("A FILE ON A CUSTOMER AND A QUOTE GOES IN THE QUOTE'S FOLDER", () => {
@@ -288,7 +289,8 @@ test("NO FILE DROPS OUT PAST THE NEWEST 2,000", () => {
   );
   assert.match(page, /\.\.\.\(q \? \[\{ fileName: \{ contains: q, mode: "insensitive" as const \} \}\] : \[\]\),/, "search runs in the database");
   assert.match(page, /prisma\.document\.count\(\{ where: listWhere \}\)/, "the page knows how many match, beyond what it shows");
-  assert.match(page, /Showing the newest \{browserDocs\.length\} of \{matching\}/, "and says so when the list is capped");
+  assert.match(page, /\{listMatching > listDocs\.length && \(/, "and says so when the list is capped");
+  assert.match(page, /const listMatching = inLibrary \? libraryMatching : matching;/);
 });
 
 test("RECORD LABELS ARE LOADED ONLY FOR RECORDS THE VIEWER MAY OPEN", () => {
@@ -311,8 +313,106 @@ test("PREVIEWS AND UPLOADS GO THROUGH THE CHECKED PATHS", () => {
   // Every thumbnail, preview and download is the permission-checked file route —
   // never a storage URL, which would bypass the access check.
   assert.ok(!/blob\.vercel-storage|storedName/.test(browser), "no direct storage reference");
-  assert.match(browser, /src=\{`\/api\/files\/\$\{doc\.id\}`\}/);
-  assert.match(browser, /src=\{`\/api\/files\/\$\{previewing\.id\}`\}/);
+  // One helper names the route: /api/files for a record document, /api/library
+  // for a Library item — both check access before serving a byte.
+  assert.match(
+    browser,
+    /const fileHref = \(doc: BrowserDoc\) => \(doc\.library \? `\/api\/library\/\$\{doc\.library\.versionId\}` : `\/api\/files\/\$\{doc\.id\}`\);/,
+  );
+  assert.equal(browser.match(/`\/api\/(files|library)\//g)?.length, 2, "no file URL is built anywhere but fileHref");
+  assert.match(browser, /src=\{fileHref\(doc\)\}/);
+  assert.match(browser, /src=\{fileHref\(previewing\)\}/);
   // Uploads go through the shared hook: direct to storage, then registered.
   assert.match(browser, /useDocumentUploads\(acceptsUploads \? uploadTarget : null, uploadTenantId\)/);
+});
+
+/* ── the Library, merged in ────────────────────────────────────────── */
+
+test("EACH HALF OF THE PAGE OPENS ONLY FOR ITS OWN PERMISSION", () => {
+  const library = parseFolder("library", undefined, "Price list");
+  const customer = parseFolder("customer:gavin", "quote:q1010");
+  const both = { canSeeDocuments: true, canLibrary: true };
+  const libraryOnly = { canSeeDocuments: false, canLibrary: true };
+  const documentsOnly = { canSeeDocuments: true, canLibrary: false };
+
+  assert.deepEqual(resolveFolder(library, both), { kind: "library", category: "Price list" });
+  assert.deepEqual(resolveFolder(customer, both), customer);
+  // Library-only access: every record folder becomes the Library, so a URL
+  // cannot put a customer's folder in front of them.
+  assert.deepEqual(resolveFolder(customer, libraryOnly), { kind: "library", category: null });
+  assert.deepEqual(resolveFolder({ kind: "company" }, libraryOnly), { kind: "library", category: null });
+  assert.deepEqual(resolveFolder(library, libraryOnly), library);
+  // No library access: the Library by URL shows All files instead.
+  assert.deepEqual(resolveFolder(library, documentsOnly), { kind: "all" });
+
+  // And the page queries no record documents at all for library-only access,
+  // stated outright rather than left to getAccessibleDocumentIds.
+  assert.match(page, /\.\.\.\(canSeeDocuments \? \[\] : \[\{ id: \{ in: \[\] as string\[\] \} \}\]\),/);
+  assert.match(page, /const folder = resolveFolder\(parseFolder\(params\.folder, params\.sub, params\.cat\), \{ canSeeDocuments, canLibrary \}\);/);
+  // The Library's rows are only read with library access.
+  assert.match(page, /\] = canLibrary\s*\? await Promise\.all\(\[\s*prisma\.libraryDocument\.groupBy/);
+});
+
+test("THE LIBRARY FOLDER IN THE URL", () => {
+  assert.deepEqual(parseFolder("library", undefined), { kind: "library", category: null });
+  assert.deepEqual(parseFolder("library", undefined, "  Brochure "), { kind: "library", category: "Brochure" });
+  assert.deepEqual(parseFolder("library", undefined, "x".repeat(61)), { kind: "library", category: null }, "bounded");
+  assert.deepEqual(parseFolder("library", undefined, "a\u0000b"), { kind: "library", category: null }, "printable");
+  assert.equal(folderHref({ kind: "library", category: "Price list" }), "/documents?folder=library&cat=Price+list");
+  assert.equal(folderHref({ kind: "library", category: null }), "/documents?folder=library");
+
+  // No record Document is ever in the Library, and nothing uploads into it as one:
+  // Library items are LibraryDocuments, added through the Library's own form.
+  assert.equal(inFolder(doc("1"), parseFolder("library", undefined), labels, now), false);
+  assert.equal(uploadTargetFor(parseFolder("library", undefined)), null);
+});
+
+test("OLD LIBRARY LINKS AND THE NAV LEAD TO THE MERGED PAGE", () => {
+  const redirectPage = src("src/app/(app)/library/page.tsx");
+  assert.match(redirectPage, /redirect\(folderHref\(\{ kind: "library", category: cat\?\.trim\(\) \|\| null \}\)\)/);
+  // The layout's library permission check still guards the redirect.
+  assert.match(src("src/app/(app)/library/layout.tsx"), /requireAnyPermission\("library\.view", "library\.manage"\)/);
+
+  // EVERY guard on the way to the page admits library access — the page's own
+  // and its layout's. The layout was missed at first, and library-only users
+  // were bounced to the dashboard before the page could show them the Library.
+  for (const file of ["src/app/(app)/documents/layout.tsx", "src/app/(app)/documents/page.tsx"]) {
+    const guard = src(file).match(/requireAnyPermission\(([^)]*)\)/)?.[1] ?? "";
+    assert.match(guard, /"library\.view",\s*"library\.manage"/, `${file} admits library access`);
+  }
+
+  const nav = src("src/components/nav-config.ts");
+  assert.ok(!nav.includes('href: "/library"'), "no second nav entry for the Library");
+  assert.match(nav, /"document_templates\.manage", "library\.view", "library\.manage"\)\) \{\s*crmLinks\.push\(\{ href: "\/documents"/);
+
+  // Changes made from the Documents page refresh the Documents page.
+  const actions = src("src/app/actions/library.ts");
+  assert.ok(!actions.includes('revalidatePath("/library")'));
+  assert.equal(actions.match(/revalidatePath\("\/documents"\)/g)?.length, 3);
+});
+
+test("ON A PHONE, A LIBRARY ITEM KEEPS ITS VERSIONS AND ACTIONS", () => {
+  // Review finding on #653: the mobile list turned every Library item into a
+  // bare download link, so New version, Remove and the version history — all
+  // available on a phone on the old /library page — became desktop-only.
+  const mobile = page.slice(page.indexOf("<MobileOnly"), page.indexOf("</MobileOnly>"));
+  assert.ok(mobile.length > 0, "the mobile section was found");
+  assert.match(mobile, /doc\.library \? \(/, "Library items get their own mobile card");
+  assert.match(mobile, /<div className="pt-2">\{doc\.library\.actions\}<\/div>/, "with the same actions panel as the desktop preview");
+  assert.match(mobile, /href=\{`\/api\/library\/\$\{doc\.library\.versionId\}`\}/, "and still a one-tap download of the latest");
+  // The panel carries the controls; the mobile page must not decide them itself.
+  const actions = src("src/components/documents/LibraryItemActions.tsx");
+  assert.match(actions, /<NewVersionForm documentId=\{documentId\}/);
+  assert.match(actions, /action=\{deleteLibraryDocument\.bind\(null, documentId\)\}/);
+  assert.match(actions, /href=\{`\/api\/library\/\$\{v\.id\}`\}/, "every version downloadable");
+});
+
+test("LIBRARY AND PORTAL DOWNLOADS STREAM, AS /api/files DOES", () => {
+  // A buffered response over 4.5 MB fails on Vercel. Both routes keep their
+  // ownership check: openFileStream makes the same checks readFile did.
+  for (const route of ["src/app/api/library/[id]/route.ts", "src/app/api/portal/documents/[id]/route.ts"]) {
+    const source = src(route);
+    assert.ok(!/\breadFile\(/.test(source), `${route} no longer buffers the file`);
+    assert.match(source, /await openFileStream\(\w+\.storedName, \w+\.tenantId\)/, `${route} streams, with the row's tenant`);
+  }
 });

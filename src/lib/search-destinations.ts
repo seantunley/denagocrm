@@ -17,12 +17,12 @@ export function getSearchDestinations({
 }): SearchDestination[] {
   const { topLinks, groups } = buildNav(isAdmin, permissions);
   const destinations: SearchDestination[] = [
-    ...topLinks.map((item) => ({ ...item, group: "Workspace", keywords: [] as string[] })),
+    ...topLinks.map((item) => ({ ...item, group: "Workspace", keywords: item.keywords ?? [] })),
     ...groups.flatMap((group) =>
       group.links.map((item) => ({
         ...item,
         group: group.label,
-        keywords: [] as string[],
+        keywords: item.keywords ?? [],
       })),
     ),
     {

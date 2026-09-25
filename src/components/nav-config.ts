@@ -38,7 +38,8 @@ import {
 } from "lucide-react";
 import { isPathEnabled } from "@/lib/modules/registry";
 
-export type NavLink = { href: string; label: string; icon: LucideIcon };
+/** `keywords`: other words search should find the link by (e.g. an old name). */
+export type NavLink = { href: string; label: string; icon: LucideIcon; keywords?: string[] };
 export type NavGroup = { key: string; label: string; links: NavLink[] };
 
 /**
@@ -91,8 +92,10 @@ export function buildNav(
   if (can("fleets.view", "fleets.manage")) crmLinks.push({ href: "/fleets", label: "Fleets", icon: Building2 });
   if (can("activities.view", "activities.manage")) crmLinks.push({ href: "/activities", label: "Activities", icon: ListChecks });
   if (can("contacts.view_all", "contacts.view_owned")) crmLinks.push({ href: "/health", label: "Customer Health", icon: HeartPulse });
-  if (can("documents.view_all", "documents.view_owned", "documents.upload", "documents.manage", "document_templates.manage")) {
-    crmLinks.push({ href: "/documents", label: "Documents", icon: FolderOpen });
+  // One entry for Documents and the Library merged into it. The page opens
+  // library-only access straight on the Library, the only part it can see.
+  if (can("documents.view_all", "documents.view_owned", "documents.upload", "documents.manage", "document_templates.manage", "library.view", "library.manage")) {
+    crmLinks.push({ href: "/documents", label: "Documents", icon: FolderOpen, keywords: ["document library", "brochures", "price lists", "spec sheets"] });
   }
   if (crmLinks.length) groups.push({ key: "crm", label: "CRM", links: crmLinks });
 
@@ -146,7 +149,6 @@ export function buildNav(
   if (automationLinks.length) groups.push({ key: "automation", label: "Automation", links: automationLinks });
 
   const platformLinks: NavLink[] = [];
-  if (can("library.view", "library.manage")) platformLinks.push({ href: "/library", label: "Document library", icon: Library });
   if (can("document_templates.manage")) platformLinks.push({ href: "/document-studio", label: "Document Studio", icon: FileText });
   if (platformLinks.length) groups.push({ key: "platform", label: "Platform", links: platformLinks });
 

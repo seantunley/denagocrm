@@ -1,7 +1,6 @@
 import Link from "next/link";
 import {
   BookOpen,
-  Building2,
   ChevronRight,
   Clock3,
   FileText,
@@ -9,8 +8,10 @@ import {
   FolderOpen,
   FolderTree,
   History,
+  Inbox,
   LayoutGrid,
   List,
+  Plus,
   Search,
   Settings2,
   User,
@@ -25,6 +26,7 @@ import {
   getAccessibleJobCardIds,
   getAccessibleQuoteIds,
   getAccessibleVehicleIds,
+  hasAnyPermission,
   hasPermission,
   requireAnyPermission,
 } from "@/lib/permissions";
@@ -38,12 +40,16 @@ import {
   parseFolder,
   placeDocument,
   RECENT_DAYS,
+  resolveFolder,
   uploadTargetFor,
   type DocFacts,
   type Folder,
   type RecordLabels,
 } from "@/lib/documentFolders";
 import DocumentBrowser, { DocumentUploader, type BrowserDoc } from "@/components/documents/DocumentBrowser";
+import LibraryItemActions from "@/components/documents/LibraryItemActions";
+import { AddDocumentsForm } from "@/components/LibraryUploader";
+import ModalTrigger from "@/components/Modal";
 import { type MoveTargets } from "@/components/RepoRow";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -112,21 +118,31 @@ function FolderLink({ target, icon: Icon, label, count, active, depth = 0, keep 
 export default async function DocumentsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; versions?: string; folder?: string; sub?: string; type?: string; view?: string }>;
+  searchParams: Promise<{ q?: string; versions?: string; folder?: string; sub?: string; cat?: string; type?: string; view?: string }>;
 }) {
+  // The Document Library is merged into this page, so its permissions open it
+  // too. Each half is then shown only to someone allowed it (below).
   const user = await requireAnyPermission(
     "documents.view_all",
     "documents.view_owned",
     "documents.upload",
     "documents.manage",
-    "document_templates.manage"
+    "document_templates.manage",
+    "library.view",
+    "library.manage",
   );
   const params = await searchParams;
   const q = params.q?.trim() || undefined;
   const versions = params.versions === "all" ? "all" : undefined;
   const type = params.type || undefined;
   const view = params.view === "list" ? "list" : "grid";
-  const folder = parseFolder(params.folder, params.sub);
+
+  const [canSeeDocuments, canLibrary, canLibraryManage] = await Promise.all([
+    hasAnyPermission(user, "documents.view_all", "documents.view_owned", "documents.upload", "documents.manage", "document_templates.manage"),
+    hasAnyPermission(user, "library.view", "library.manage"),
+    hasPermission(user, "library.manage"),
+  ]);
+  const folder = resolveFolder(parseFolder(params.folder, params.sub, params.cat), { canSeeDocuments, canLibrary });
 
   const [documentIds, contactIds, vehicleIds, quoteIds, jobCardIds, canUpload, canManage, canTemplates, automotiveOn, tenantId] =
     await Promise.all([
@@ -148,6 +164,10 @@ export default async function DocumentsPage({
   // the automotive rule — the same three conditions the old flat list used.
   const visibleWhere: Prisma.DocumentWhereInput = {
     AND: [
+      // Library-only access: no record documents at all. Stated here rather than
+      // left to what getAccessibleDocumentIds returns for someone with no
+      // document permission.
+      ...(canSeeDocuments ? [] : [{ id: { in: [] as string[] } }]),
       ...(documentIds === null ? [] : [{ id: { in: documentIds } }]),
       ...(versions === "all" ? [] : [{ replacedById: null }]),
       // When automotive is off, drop automotive-owned paperwork: vehicle- or
@@ -319,6 +339,85 @@ export default async function DocumentsPage({
     superseded: doc.replacedById !== null,
   }));
 
+  /*
+   * THE LIBRARY, MERGED IN.
+   *
+   * Brochures, price lists and spec sheets used to live on a separate page,
+   * while "Company files" here took files attached to nothing — two places for
+   * the same kind of document. The Library is now a section of this page. It
+   * keeps its own store (LibraryDocument, versioned), its own permissions
+   * (library.view / library.manage) and its own actions, because email
+   * attachments and the chatbot's knowledge read it directly.
+   */
+  // An uncategorised item is shown under "Other", as the old Library page did.
+  const libraryWhere: Prisma.LibraryDocumentWhereInput = {
+    AND: [
+      ...(folder.kind === "library" && folder.category
+        ? [folder.category === "Other" ? { OR: [{ category: "Other" }, { category: null }] } : { category: folder.category }]
+        : []),
+      ...(q ? [{ name: { contains: q, mode: "insensitive" as const } }] : []),
+    ],
+  };
+  const [libraryCategories, libraryRows, libraryMatching] = canLibrary
+    ? await Promise.all([
+        prisma.libraryDocument.groupBy({ by: ["category"], _count: { _all: true } }),
+        folder.kind === "library"
+          ? prisma.libraryDocument.findMany({
+              where: libraryWhere,
+              orderBy: { name: "asc" },
+              take: LIST_LIMIT,
+              include: {
+                versions: { orderBy: { version: "desc" }, include: { uploadedBy: { select: { name: true } } } },
+              },
+            })
+          : Promise.resolve([]),
+        folder.kind === "library" ? prisma.libraryDocument.count({ where: libraryWhere }) : Promise.resolve(0),
+      ])
+    : [[], [], 0];
+  const libraryTotal = libraryCategories.reduce((sum, group) => sum + group._count._all, 0);
+  const libraryCategoryCounts = [
+    ...libraryCategories
+      .reduce((counts, group) => {
+        const category = group.category || "Other";
+        return counts.set(category, (counts.get(category) ?? 0) + group._count._all);
+      }, new Map<string, number>())
+      .entries(),
+  ]
+    .map(([category, count]) => ({ category, count }))
+    .sort((a, b) => a.category.localeCompare(b.category));
+
+  const libraryDocs: BrowserDoc[] = libraryRows
+    .filter((doc) => doc.versions.length > 0)
+    .map((doc) => {
+      const latest = doc.versions[0];
+      return {
+        id: doc.id,
+        fileName: doc.name,
+        mimeType: latest.mimeType,
+        sizeBytes: latest.sizeBytes,
+        tag: doc.category,
+        createdAt: formatDate(doc.updatedAt),
+        uploadedBy: latest.uploadedBy.name,
+        filedOn: `Library · v${latest.version}${doc.versions.length > 1 ? ` of ${doc.versions.length}` : ""}`,
+        superseded: false,
+        library: {
+          versionId: latest.id,
+          actions: (
+            <LibraryItemActions documentId={doc.id} name={doc.name} versions={doc.versions} canManage={canLibraryManage} />
+          ),
+        },
+      };
+    });
+
+  // What the main panel shows: the Library's items in the Library, record
+  // documents everywhere else.
+  const inLibrary = folder.kind === "library";
+  const listDocs = inLibrary ? libraryDocs : browserDocs;
+  const listMatching = inLibrary ? libraryMatching : matching;
+  const listTotal = inLibrary
+    ? folder.category ? libraryCategoryCounts.find((group) => group.category === folder.category)?.count ?? 0 : libraryTotal
+    : folderTotal;
+
   // Destinations for "move to a different record" — unchanged from the old page.
   const [moveContacts, moveVehicles, moveQuotes] = canManage
     ? await Promise.all([
@@ -361,7 +460,11 @@ export default async function DocumentsPage({
 
   const crumbs: { label: string; href?: string }[] = [{ label: "Documents", href: "/documents" }];
   if (folder.kind === "recent") crumbs.push({ label: "Recent" });
-  if (folder.kind === "company") crumbs.push({ label: "Company files" });
+  if (folder.kind === "company") crumbs.push({ label: "Unfiled" });
+  if (folder.kind === "library") {
+    crumbs.push({ label: "Library", href: folder.category ? folderHref({ kind: "library", category: null }) : undefined });
+    if (folder.category) crumbs.push({ label: folder.category });
+  }
   if (folder.kind === "customer") {
     crumbs.push({ label: "Customers" });
     crumbs.push({
@@ -377,14 +480,23 @@ export default async function DocumentsPage({
   const uploadTarget = uploadTargetFor(folder);
   const uploadHint =
     folder.kind === "company"
-      ? "Drop files here to add them to Company files — shared with everyone who can see documents."
+      ? "Drop files here to add them to Unfiled — move each onto its customer or record afterwards."
       : folder.kind === "all" || folder.kind === "recent"
-        ? "Drop files here to add them to Company files, or open a customer to file them there."
+        ? "Drop files here to add them to Unfiled, or open a customer to file them there. Brochures and price lists go in the Library."
       : folder.kind === "customer"
         ? `Drop files here to file them on ${activeSubLabel && folder.sub !== "general" ? activeSubLabel : activeCustomer?.name ?? "this customer"}.`
         : folder.kind === "other" && activeSubLabel
           ? `Drop files here to file them on ${activeSubLabel}.`
-          : "Open a customer or Company files to upload into it.";
+          : "Open a customer to upload into it.";
+
+  // Unfiled is an inbox, not a destination: it shows only while something is in
+  // it (or you are in it), so the tree does not invite filing things nowhere.
+  const showUnfiled = tree.company > 0 || folder.kind === "company";
+  const libraryAdd = inLibrary && canLibraryManage && (
+    <ModalTrigger label={<><Plus className="size-4" />Add to library</>} title="Add documents to library">
+      <AddDocumentsForm defaultCategory={folder.category} />
+    </ModalTrigger>
+  );
 
   // Links keep the view, type and history settings; a folder change clears the
   // search and the type filter, which belonged to the folder being left.
@@ -401,12 +513,14 @@ export default async function DocumentsPage({
           description="Capture a file quickly or find the document you need."
           action={canTemplates ? <Link href="/document-studio" className={buttonVariants({ variant: "outline", size: "sm" })}><Settings2 className="size-4" />Studio</Link> : undefined}
         />
-        {canUpload && uploadTarget && (
+        {!inLibrary && canUpload && uploadTarget && (
           <DocumentUploader target={uploadTarget} tenantId={tenantId} hint={uploadHint} />
         )}
+        {libraryAdd}
         <form className="flex gap-2" role="search">
           {params.folder && <input type="hidden" name="folder" value={params.folder} />}
           {params.sub && <input type="hidden" name="sub" value={params.sub} />}
+          {params.cat && <input type="hidden" name="cat" value={params.cat} />}
           {versions && <input type="hidden" name="versions" value="all" />}
           <div className="relative min-w-0 flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -415,25 +529,55 @@ export default async function DocumentsPage({
           <Button variant="secondary" type="submit">Find</Button>
         </form>
         <MobileSegmentNav items={[
-          { label: "All", href: folderHref({ kind: "all" }, { versions }), active: folder.kind === "all" },
-          { label: "Recent", href: folderHref({ kind: "recent" }, { versions }), active: folder.kind === "recent" },
-          { label: "Company", href: folderHref({ kind: "company" }, { versions }), active: folder.kind === "company" },
+          ...(canSeeDocuments
+            ? [
+                { label: "All", href: folderHref({ kind: "all" }, { versions }), active: folder.kind === "all" },
+                { label: "Recent", href: folderHref({ kind: "recent" }, { versions }), active: folder.kind === "recent" },
+              ]
+            : []),
+          ...(canSeeDocuments && showUnfiled
+            ? [{ label: "Unfiled", href: folderHref({ kind: "company" }, { versions }), active: folder.kind === "company" }]
+            : []),
+          ...(canLibrary
+            ? [{ label: "Library", href: folderHref({ kind: "library", category: null }), active: inLibrary }]
+            : []),
         ]} />
-        <MobileSection title={crumbs.at(-1)?.label ?? "Files"} detail={`${browserDocs.length} file${browserDocs.length === 1 ? "" : "s"}`}>
-          {browserDocs.length === 0 ? (
+        <MobileSection title={crumbs.at(-1)?.label ?? "Files"} detail={`${listDocs.length} file${listDocs.length === 1 ? "" : "s"}`}>
+          {listDocs.length === 0 ? (
             <div className="rounded-2xl border border-border bg-card py-10 text-center text-sm text-muted-foreground">No documents here.</div>
           ) : (
             <MobileTaskList>
-              {browserDocs.map((doc) => (
-                <MobileTaskCard
-                  key={doc.id}
-                  icon={FileText}
-                  title={doc.fileName}
-                  detail={doc.filedOn ?? "Company file"}
-                  meta={`${Math.max(1, Math.round(doc.sizeBytes / 1024))} KB · ${doc.createdAt}${doc.superseded ? " · Replaced" : ""}`}
-                  href={`/api/files/${doc.id}`}
-                />
-              ))}
+              {listDocs.map((doc) =>
+                doc.library ? (
+                  // A Library item keeps its versions, New version and Remove on
+                  // a phone too, as the old /library page did; the card itself
+                  // is not a link, so the panel below is reachable.
+                  <div key={doc.id}>
+                    <MobileTaskCard
+                      icon={FileText}
+                      title={doc.fileName}
+                      detail={doc.filedOn}
+                      meta={`${Math.max(1, Math.round(doc.sizeBytes / 1024))} KB · ${doc.createdAt}`}
+                      action={<a href={`/api/library/${doc.library.versionId}`} className="text-xs font-medium text-primary">Download</a>}
+                    />
+                    <details className="px-3 pb-3">
+                      <summary className="cursor-pointer text-xs font-medium text-primary">
+                        {canLibraryManage ? "Versions & actions" : "Versions"}
+                      </summary>
+                      <div className="pt-2">{doc.library.actions}</div>
+                    </details>
+                  </div>
+                ) : (
+                  <MobileTaskCard
+                    key={doc.id}
+                    icon={FileText}
+                    title={doc.fileName}
+                    detail={doc.filedOn ?? "Unfiled"}
+                    meta={`${Math.max(1, Math.round(doc.sizeBytes / 1024))} KB · ${doc.createdAt}${doc.superseded ? " · Replaced" : ""}`}
+                    href={`/api/files/${doc.id}`}
+                  />
+                ),
+              )}
             </MobileTaskList>
           )}
         </MobileSection>
@@ -444,33 +588,77 @@ export default async function DocumentsPage({
           icon={FolderTree}
           eyebrow="Business records"
           title="Documents"
-          description="Every file the CRM holds, organised by the customer and record it belongs to, plus shared company files."
+          description="Every file the CRM holds, organised by the customer and record it belongs to, plus the Library of brochures, price lists and spec sheets."
           stats={[
-            { label: "All files", value: tree.all, detail: versions ? "Including version history" : "Current versions", icon: Files, tone: "primary" },
-            { label: "Customers", value: tree.customers.length, detail: "With files on record", icon: Users, tone: "success" },
-            { label: "Company files", value: tree.company, detail: "Not tied to a customer", icon: Building2 },
-            { label: "Added · 30 days", value: tree.recent, detail: "Recently uploaded", icon: Clock3, tone: tree.recent > 0 ? "primary" : "default" },
+            ...(canSeeDocuments
+              ? [
+                  { label: "All files", value: tree.all, detail: versions ? "Including version history" : "Current versions", icon: Files, tone: "primary" as const },
+                  { label: "Customers", value: tree.customers.length, detail: "With files on record", icon: Users, tone: "success" as const },
+                ]
+              : []),
+            ...(canLibrary ? [{ label: "Library", value: libraryTotal, detail: "Brochures, price lists, spec sheets", icon: BookOpen }] : []),
+            ...(canSeeDocuments
+              ? [{ label: "Added · 30 days", value: tree.recent, detail: "Recently uploaded", icon: Clock3, tone: tree.recent > 0 ? ("primary" as const) : ("default" as const) }]
+              : []),
           ]}
-          actions={canTemplates ? (
+          actions={libraryAdd || (canTemplates ? (
             <Link href="/document-studio" className={buttonVariants({ variant: "outline", size: "sm" })}>
               <Settings2 className="size-4" />
               Templates & Studio
             </Link>
-          ) : undefined}
+          ) : undefined)}
         />
 
         <div className="grid items-start gap-5 lg:grid-cols-[17rem_minmax(0,1fr)]">
           <Surface className="sticky top-20 max-h-[calc(100vh-6rem)] overflow-y-auto p-2">
             <nav aria-label="Document folders" className="space-y-0.5">
-              <FolderLink keep={keep} target={{ kind: "all" }} icon={Files} label="All files" count={tree.all} active={folder.kind === "all"} />
-              <FolderLink keep={keep} target={{ kind: "recent" }} icon={Clock3} label="Recent" count={tree.recent} active={folder.kind === "recent"} />
-              <FolderLink keep={keep} target={{ kind: "company" }} icon={Building2} label="Company files" count={tree.company} active={folder.kind === "company"} />
+              {canSeeDocuments && (
+                <>
+                  <FolderLink keep={keep} target={{ kind: "all" }} icon={Files} label="All files" count={tree.all} active={folder.kind === "all"} />
+                  <FolderLink keep={keep} target={{ kind: "recent" }} icon={Clock3} label="Recent" count={tree.recent} active={folder.kind === "recent"} />
+                  {showUnfiled && (
+                    <FolderLink keep={keep} target={{ kind: "company" }} icon={Inbox} label="Unfiled" count={tree.company} active={folder.kind === "company"} />
+                  )}
+                </>
+              )}
 
-              <p className="px-2 pb-1 pt-3 text-[10.5px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-                Customers
-              </p>
-              {tree.customers.length === 0 && (
-                <p className="px-2 py-1 text-[12px] text-muted-foreground">No customer files yet.</p>
+              {canLibrary && (
+                <>
+                  <p className="px-2 pb-1 pt-3 text-[10.5px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                    Library
+                  </p>
+                  <FolderLink keep={keep}
+                    target={{ kind: "library", category: null }}
+                    icon={BookOpen}
+                    label="All library"
+                    count={libraryTotal}
+                    active={inLibrary && !folder.category}
+                  />
+                  {libraryCategoryCounts.map((group) => (
+                    <FolderLink keep={keep}
+                      key={group.category}
+                      target={{ kind: "library", category: group.category }}
+                      icon={FolderTree}
+                      label={group.category}
+                      count={group.count}
+                      depth={1}
+                      active={inLibrary && folder.category === group.category}
+                    />
+                  ))}
+                </>
+              )}
+
+              {/* Library-only access sees no record documents, so the tree
+                  below is empty for it; only the headings need hiding. */}
+              {canSeeDocuments && (
+                <>
+                  <p className="px-2 pb-1 pt-3 text-[10.5px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                    Customers
+                  </p>
+                  {tree.customers.length === 0 && (
+                    <p className="px-2 py-1 text-[12px] text-muted-foreground">No customer files yet.</p>
+                  )}
+                </>
               )}
               {tree.customers.map((customer) => {
                 const open = folder.kind === "customer" && folder.customerId === customer.id;
@@ -525,16 +713,6 @@ export default async function DocumentsPage({
                     ))}
                 </>
               )}
-
-              <div className="mt-3 border-t border-border pt-2">
-                <Link
-                  href="/library"
-                  className="flex items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                >
-                  <BookOpen className="size-4" />
-                  Brochures &amp; price lists
-                </Link>
-              </div>
             </nav>
           </Surface>
 
@@ -552,9 +730,9 @@ export default async function DocumentsPage({
                   </span>
                 ))}
                 <span className="ml-auto text-[12px] text-muted-foreground">
-                  {matching === folderTotal
-                    ? `${folderTotal} file${folderTotal === 1 ? "" : "s"}`
-                    : `${matching} of ${folderTotal} files match`}
+                  {listMatching === listTotal
+                    ? `${listTotal} file${listTotal === 1 ? "" : "s"}`
+                    : `${listMatching} of ${listTotal} files match`}
                 </span>
               </nav>
 
@@ -562,6 +740,7 @@ export default async function DocumentsPage({
                 <form className="flex min-w-64 flex-1 items-center gap-2" role="search">
                   {params.folder && <input type="hidden" name="folder" value={params.folder} />}
                   {params.sub && <input type="hidden" name="sub" value={params.sub} />}
+                  {params.cat && <input type="hidden" name="cat" value={params.cat} />}
                   {type && <input type="hidden" name="type" value={type} />}
                   {view === "list" && <input type="hidden" name="view" value="list" />}
                   {versions && <input type="hidden" name="versions" value="all" />}
@@ -589,16 +768,19 @@ export default async function DocumentsPage({
                     <List className="size-4" />
                   </Link>
                 </div>
-                <Link
-                  href={here({ versions: versions ? undefined : "all" })}
-                  className={buttonVariants({ variant: versions ? "secondary" : "outline", size: "sm" })}
-                >
-                  <History className="size-4" />
-                  {versions ? "Showing old versions" : "Version history"}
-                </Link>
+                {/* Library items carry their own version list in the preview. */}
+                {!inLibrary && (
+                  <Link
+                    href={here({ versions: versions ? undefined : "all" })}
+                    className={buttonVariants({ variant: versions ? "secondary" : "outline", size: "sm" })}
+                  >
+                    <History className="size-4" />
+                    {versions ? "Showing old versions" : "Version history"}
+                  </Link>
+                )}
               </div>
 
-              {typeCounts.size > 1 && (
+              {!inLibrary && typeCounts.size > 1 && (
                 <div className="flex flex-wrap gap-1.5">
                   <Link
                     href={here({ type: undefined })}
@@ -627,19 +809,21 @@ export default async function DocumentsPage({
               )}
             </Surface>
 
-            {matching > browserDocs.length && (
+            {listMatching > listDocs.length && (
               <p className="rounded-lg border border-border bg-card/60 px-3 py-2 text-[12px] text-muted-foreground">
-                Showing the newest {browserDocs.length} of {matching}. Search or pick a type to find older files — search covers all of them.
+                Showing {inLibrary ? "the first" : "the newest"} {listDocs.length} of {listMatching}. Search to find the rest — search covers all of them.
               </p>
             )}
             <DocumentBrowser
-              docs={browserDocs}
+              docs={listDocs}
               view={view}
-              uploadTarget={uploadTarget}
+              // The Library has its own uploader (Add to library, above): its
+              // files are versioned LibraryDocuments, not record Documents.
+              uploadTarget={inLibrary ? null : uploadTarget}
               uploadTenantId={tenantId}
               uploadHint={uploadHint}
-              canUpload={canUpload}
-              canManage={canManage}
+              canUpload={!inLibrary && canUpload}
+              canManage={!inLibrary && canManage}
               targets={targets}
             />
           </section>
