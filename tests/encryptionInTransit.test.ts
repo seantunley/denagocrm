@@ -60,6 +60,25 @@ test("A MAIL SERVER THAT CAN'T ENCRYPT IS REFUSED — the password is never sent
   }
 });
 
+test("Settings → Security says whether a file's link alone opens it, proven with the real token", async () => {
+  // The private store's token is a Sensitive env var: nobody can read it back to
+  // check it. The runbook tests it against the store instead.
+  const before = process.env.BLOB_PRIVATE_READ_WRITE_TOKEN;
+  delete process.env.BLOB_PRIVATE_READ_WRITE_TOKEN;
+  try {
+    const { privateStoreStatus } = await import("../src/lib/storage");
+    assert.deepEqual(await privateStoreStatus(), { state: "public" }, "no private token: files are public");
+  } finally {
+    if (before !== undefined) process.env.BLOB_PRIVATE_READ_WRITE_TOKEN = before;
+  }
+  const storage = src("src/lib/storage.ts");
+  assert.match(storage, /await list\(\{ limit: 1, token \}\);/, "reachability is a real call with the private token");
+  assert.match(storage, /return \{ state: privateMode\(\) \? "active" : "ready" \};/);
+  const runbook = src("src/lib/securityRunbook.ts");
+  assert.match(runbook, /const privateStore = await privateStoreStatus\(\);/);
+  assert.match(runbook, /id: "files-private",[\s\S]{0,200}status: privateStore\.state === "active" \? "pass" : privateStore\.state === "unreachable" \? "fail" : "warn",/);
+});
+
 test("real sends and the IMAP sync require encryption the same way", () => {
   assert.match(src("src/lib/email.ts"), /secure: config\.secure,[\s\S]{0,400}requireTLS: !config\.secure,/);
   assert.match(src("src/lib/integrationProbe.ts"), /secure: input\.secure,[\s\S]{0,300}requireTLS: !input\.secure,/);

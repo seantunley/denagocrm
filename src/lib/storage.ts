@@ -700,3 +700,26 @@ export async function listAllBackupBlobs(prefix: string): Promise<Array<{ pathna
   const priv = privateToken() ? await collectBlobs(prefix, privateToken()!) : [];
   return dedupeByPathname(pub, priv);
 }
+
+/**
+ * Where new files go, proven with the real token rather than assumed:
+ * - `public`: no private store token — a file's link alone opens it;
+ * - `unreachable`: a private token is set but the store rejects it;
+ * - `ready`: the private store answers, but BLOB_PRIVATE is off;
+ * - `active`: new files go to the private store.
+ *
+ * The token is a Sensitive env var that cannot be read back, so this is the only
+ * way to know it is the right one before anything depends on it.
+ */
+export async function privateStoreStatus(): Promise<
+  { state: "public" | "ready" | "active" } | { state: "unreachable"; error: string }
+> {
+  const token = privateToken();
+  if (!token) return { state: "public" };
+  try {
+    await list({ limit: 1, token });
+  } catch (error) {
+    return { state: "unreachable", error: error instanceof Error ? error.message.slice(0, 160) : "unknown error" };
+  }
+  return { state: privateMode() ? "active" : "ready" };
+}
