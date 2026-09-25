@@ -1,6 +1,6 @@
 import { getSetting } from "./settings";
 import { currentTenantScope } from "./tenantScope";
-import { saveFile } from "./storage";
+import { saveFile, shareableFileUrl } from "./storage";
 
 const OUTBOUND_TIMEOUT_MS = 15_000;
 const INBOUND_FILE_MAX_BYTES = 20 * 1024 * 1024;
@@ -80,7 +80,8 @@ export async function tgSendPhoto(
   url: string,
   caption?: string,
 ): Promise<TelegramSendResult> {
-  return postTelegram("sendPhoto", { chat_id: chatId, photo: url, ...(caption ? { caption } : {}) });
+  // Telegram downloads the photo itself: a private file gets a short-lived signed link.
+  return postTelegram("sendPhoto", { chat_id: chatId, photo: await shareableFileUrl(url), ...(caption ? { caption } : {}) });
 }
 
 export async function tgAnswerCallback(id: string): Promise<void> {

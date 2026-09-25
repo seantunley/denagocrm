@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Camera, Check, ChevronLeft, Images, Loader2, TriangleAlert, X } from "lucide-react";
+import { storedFileSrc } from "@/lib/storedFileSrc";
 import {
   Sheet,
   SheetContent,
@@ -1009,8 +1010,8 @@ function Step({
             <ul className="flex flex-wrap gap-2 pt-1">
               {entry.photos.map((photo) => (
                 <li key={photo.id} className="relative">
-                  {/* eslint-disable-next-line @next/next/no-img-element -- public evidence blob */}
-                  <img src={photo.url} alt={`Photo captured for ${entry.labelSnapshot}`} className="size-16 rounded-lg border border-border object-cover" />
+                  {/* eslint-disable-next-line @next/next/no-img-element -- stored evidence, served through /api/stored */}
+                  <img src={storedFileSrc(photo.url) ?? undefined} alt={`Photo captured for ${entry.labelSnapshot}`} className="size-16 rounded-lg border border-border object-cover" />
                   <button
                     type="button"
                     onClick={() => onDropServerPhoto(photo.id)}

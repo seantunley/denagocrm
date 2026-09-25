@@ -224,7 +224,7 @@ export default async function BackupsPage() {
                 </div>
                 <div className="flex items-start justify-end gap-2">
                   <VerifyBackupControl pathname={blob.pathname} />
-                  <Button asChild variant="outline" size="sm"><a href={blob.url} target="_blank" rel="noreferrer"><ArrowDownToLine className="size-3.5" />Encrypted file</a></Button>
+                  <Button asChild variant="outline" size="sm"><a href={`/api/backup-file?ref=${encodeURIComponent(blob.url)}`} target="_blank" rel="noreferrer"><ArrowDownToLine className="size-3.5" />Encrypted file</a></Button>
                 </div>
               </div>
             ))}

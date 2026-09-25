@@ -11,7 +11,7 @@ import { currentInboundBotEventId } from "./botInboundEvent";
 import { DEFAULT_TENANT_ID } from "./tenant";
 import { writeTenantId } from "./tenantWrite";
 import { createLeadRecordIfPipelineReady } from "./leadCreate";
-import { saveFile } from "./storage";
+import { saveFile, shareableFileUrl } from "./storage";
 import { resolveTenantActor } from "./tenantActor";
 import { currentTenantScope } from "./tenantScope";
 import { DerivedCredentialCache } from "./derivedCredentialCache";
@@ -272,7 +272,8 @@ export async function sendDirectAttachment(
   attachment: { type: "image" | "audio" | "video" | "file"; url: string }
 ): Promise<MetaSendResult> {
   return postToSendApi(
-    { attachment: { type: attachment.type, payload: { url: attachment.url, is_reusable: false } } },
+    // Meta downloads the file itself: a private file gets a short-lived signed link.
+    { attachment: { type: attachment.type, payload: { url: await shareableFileUrl(attachment.url), is_reusable: false } } },
     recipientId,
     humaniseSendError,
   );

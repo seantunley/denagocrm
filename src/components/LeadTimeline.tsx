@@ -1,4 +1,5 @@
 import { Check, Pin, PinOff } from "lucide-react";
+import { storedFileSrc } from "@/lib/storedFileSrc";
 import { completeActivity } from "@/app/actions/activities";
 import {
   addCommunication,
@@ -233,7 +234,8 @@ export default async function LeadTimeline({
         communication.direction ? ` (${communication.direction})` : ""
       }${communication.subject ? `: ${communication.subject}` : ""}`,
       body: communication.body,
-      image: communication.attachmentUrl ?? null,
+      // Through the app, not the raw storage link: private files have none.
+      image: storedFileSrc(communication.attachmentUrl),
       who: communication.user.name,
       when: communication.occurredAt,
       pinnedAt: pinnedAt("communication", communication.id),

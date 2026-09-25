@@ -301,6 +301,53 @@ export async function runSecurityChecks(): Promise<RunbookRun> {
             : "Attributed errors are available in each owning workspace's Settings → System Log; system-level errors are in Platform Console → System errors.",
   });
 
+  // The private file store, proven with the real token: write, read back, an
+  // anonymous fetch refused, and a signed link an outside service can use.
+  const { privateStoreRoundTrip } = await import("./storage");
+  const privateProof = await privateStoreRoundTrip();
+  add({
+    id: "private-store-roundtrip",
+    group: "Data protection",
+    label: "Private file store works end to end",
+    status: privateProof === null ? "warn" : privateProof.ok ? "pass" : "fail",
+    detail:
+      privateProof === null
+        ? "No private file store is configured (BLOB_PRIVATE_READ_WRITE_TOKEN)."
+        : privateProof.ok
+          ? "Wrote, read back and deleted a test file; it could not be opened without credentials, and a signed link opened it."
+          : `Failed at "${privateProof.step}": ${privateProof.error}`,
+    fix: privateProof?.ok ? undefined : "Check BLOB_PRIVATE_READ_WRITE_TOKEN is the private store's read-write token.",
+  });
+
+  // Whether anything is still in the public store, where a link alone opens it.
+  // The hourly private-storage job empties it once BLOB_PRIVATE is on.
+  if (process.env.BLOB_READ_WRITE_TOKEN && process.env.BLOB_PRIVATE_READ_WRITE_TOKEN) {
+    try {
+      const { blobMigrationIo, countPublicClientFiles } = await import("./privateMigration");
+      const left = await countPublicClientFiles(
+        blobMigrationIo(process.env.BLOB_READ_WRITE_TOKEN, process.env.BLOB_PRIVATE_READ_WRITE_TOKEN),
+      );
+      add({
+        id: "public-store-empty",
+        group: "Data protection",
+        label: "No files left in the public store",
+        status: left === 0 ? "pass" : "warn",
+        detail:
+          left === 0
+            ? "Every stored file is in the private store (campaign and bot images stay public by design)."
+            : `${left} file(s) are still in the public store, where a link alone opens them.`,
+        fix:
+          left === 0
+            ? undefined
+            : process.env.BLOB_PRIVATE === "true"
+              ? "The hourly private-storage job is moving them; check the System Log if this does not fall."
+              : "Set BLOB_PRIVATE=true and redeploy; the hourly private-storage job then moves them.",
+      });
+    } catch {
+      /* the store is unreachable; the round-trip check above reports that */
+    }
+  }
+
   const passed = results.filter((r) => r.status === "pass").length;
   const warned = results.filter((r) => r.status === "warn").length;
   const failed = results.filter((r) => r.status === "fail").length;

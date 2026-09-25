@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { CheckCircle2, ClipboardList, TriangleAlert } from "lucide-react";
 import { formatDateTime } from "@/lib/format";
+import { storedFileSrc } from "@/lib/storedFileSrc";
 import { hostById, hostHref } from "@/lib/checklists/hosts";
 import type { ChecklistRunRow, ChecklistTemplateRow } from "@/lib/checklists/store";
 import { CAPTURE_KINDS, outstanding, type CaptureKind } from "@/lib/checklists/types";
@@ -235,12 +236,12 @@ function RunRow({
         <ul className="flex flex-wrap gap-1.5">
           {photos.slice(0, 8).map((photo) => (
             <li key={photo.id}>
-              <a href={photo.url} target="_blank" rel="noreferrer">
+              <a href={storedFileSrc(photo.url) ?? undefined} target="_blank" rel="noreferrer">
                 {/* eslint-disable-next-line @next/next/no-img-element -- blob
                     storage is not a configured Next image domain, and a strip of
                     evidence thumbnails is not worth making it one. */}
                 <img
-                  src={photo.url}
+                  src={storedFileSrc(photo.url) ?? undefined}
                   alt={photo.entryLabel}
                   loading="lazy"
                   className="size-12 rounded-md border border-border object-cover"
