@@ -75,8 +75,12 @@ test("the library upload route signs only this workspace's library folder", () =
   assert.match(code("src/app/actions/library.ts"), /return libraryUploadPrefix\(await actingTenantId\(\)\);/);
 });
 
-test("a failed library download is logged, not only answered", () => {
-  assert.match(code("src/app/api/library/[id]/route.ts"), /await logError\("library-download", error,/);
+test("a library download streams, and a failed one is logged, not only answered", () => {
+  const route = code("src/app/api/library/[id]/route.ts");
+  // Two of production's ten library files are over the 4.5 MB buffered-response cap.
+  assert.match(route, /const stream = await openFileStream\(version\.storedName, version\.tenantId\);/);
+  assert.ok(!/\breadFile\(/.test(route));
+  assert.match(route, /await logError\("library-download", error,/);
 });
 
 test("a path outside uploads/ is never a per-tenant upload", () => {
