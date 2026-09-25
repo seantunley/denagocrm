@@ -111,7 +111,32 @@ export default function RepoRow({
         </Button>
       )}
 
-      <Dialog open={open} onOpenChange={setOpen}>
+      <ManageDocumentDialog doc={doc} targets={targets} open={open} onOpenChange={setOpen} />
+    </li>
+    </RecordContextMenu>
+  );
+}
+
+/**
+ * Rename and retag, re-file on another record, or upload a new version.
+ *
+ * Its own component so the Documents browser's preview panel can open it too,
+ * rather than keeping a second copy of these forms that drifts from this one.
+ * Every action re-checks the viewer's access server-side.
+ */
+export function ManageDocumentDialog({
+  doc,
+  targets,
+  open,
+  onOpenChange,
+}: {
+  doc: Pick<RepoDoc, "id" | "fileName" | "tag">;
+  targets: MoveTargets;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  return (
+      <Dialog open={open} onOpenChange={onOpenChange}>
         <ResponsiveDialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="truncate">Manage — {doc.fileName}</DialogTitle>
@@ -166,7 +191,5 @@ export default function RepoRow({
           </form>
         </ResponsiveDialogContent>
       </Dialog>
-    </li>
-    </RecordContextMenu>
   );
 }
