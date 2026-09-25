@@ -1,6 +1,6 @@
 import { subDays } from "date-fns";
 import { basePrisma } from "./db";
-import { redactUrl } from "./redactUrl";
+import { redactForLog } from "./redactLog";
 import { actingTenantId } from "./actingTenant";
 
 /**
@@ -117,16 +117,17 @@ export async function logError(
   options?: LogErrorOptions,
 ): Promise<void> {
   try {
-    // EVERY string that lands in ErrorLog goes through redactUrl first. The
-    // System Log is rendered to workspace owners and to platform admins, and a
-    // /signing, /approvals, /s or /api/track URL is a working credential — so it
-    // must be stripped at the write, not at each of the ~25 logError call sites.
-    // Message and stack are swept too: a failing fetch or a Prisma error commonly
-    // quotes the URL it was handed.
+    // EVERY string that lands in ErrorLog goes through redactForLog first. The
+    // System Log is rendered to workspace owners and to platform admins, so it
+    // must hold neither a working credential (a /signing, /approvals, /s or
+    // /api/track URL) nor client information (an email address, phone number or
+    // ID number) — stripped at the write, not at each of the ~130 call sites.
+    // Message and stack are swept too: a failing fetch, an SMTP rejection or a
+    // WhatsApp API error commonly quotes the URL, address or number it was handed.
     const raw =
       err instanceof Error ? err.message : typeof err === "string" ? err : JSON.stringify(err);
-    const message = redactUrl(raw);
-    const stack = err instanceof Error && err.stack ? redactUrl(err.stack).slice(0, 4000) : undefined;
+    const message = redactForLog(raw);
+    const stack = err instanceof Error && err.stack ? redactForLog(err.stack).slice(0, 4000) : undefined;
     const tenantId = options?.tenantId !== undefined ? options.tenantId : await tenantForError();
 
     await basePrisma.errorLog.create({
@@ -134,7 +135,7 @@ export async function logError(
         scope,
         message: message.slice(0, 1000),
         stack,
-        context: context ? redactUrl(context).slice(0, 1000) : context,
+        context: context ? redactForLog(context).slice(0, 1000) : context,
         tenantId,
       },
     });
@@ -168,6 +169,6 @@ export async function logError(
   } catch (loggingError) {
     // The logger must never become the caller's error, but its own failure must
     // still be observable when the database is unavailable. Do not recurse.
-    console.error("[error-log-write-failure]", { scope, context }, loggingError);
+    console.error("[error-log-write-failure]", { scope, context: context && redactForLog(context) }, loggingError);
   }
 }

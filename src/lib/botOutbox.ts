@@ -8,6 +8,7 @@ import { runInTenantScope } from "./tenantScope";
 import { type TenantWriteTx } from "./tenantWrite";
 import { botStillOwnsTx, pauseBotSessionTx } from "./botSessionStore";
 import { logAuditStrict } from "./audit";
+import { redactForLog } from "./redactLog";
 import { classifyDeliveryFailure, PERMANENT_FAILURES, staffReplyMatchesRow } from "./messageDelivery";
 import { metaEchoDedupeKey } from "./metaEcho";
 import { deleteCommunicationsAndReconcile } from "./conversations";
@@ -930,8 +931,10 @@ async function killMessageAndBacklog(row: OutboxRow, lastError: string, failureC
 }
 
 async function failDelivery(row: OutboxRow, error: string): Promise<"retry" | "dead"> {
-  const lastError = error.slice(0, 1000);
-  const failureCode = classifyDeliveryFailure(lastError);
+  // Classified on the provider's own text, STORED without client information:
+  // a WhatsApp or Messenger error can quote the customer's number.
+  const failureCode = classifyDeliveryFailure(error.slice(0, 1000));
+  const lastError = redactForLog(error).slice(0, 1000);
   if (row.attempts >= MAX_ATTEMPTS || PERMANENT_FAILURES.has(failureCode)) {
     // Kills the message, the backlog behind it, and repairs the conversation —
     // all in one transaction, so none of the three can commit without the others.
@@ -939,7 +942,9 @@ async function failDelivery(row: OutboxRow, error: string): Promise<"retry" | "d
     if (row.flowVersionId) {
       await recordBotFlowEvents([{ channel: row.channel, conversationKey: row.key, flowVersionId: row.flowVersionId, eventType: "delivery_failed", metadata: { outboxId: row.id, attempts: row.attempts, failureCode } }]);
     }
-    await logError("bot-outbox", new Error(lastError), `${row.channel}:${row.key}:${row.id}:${failureCode}`).catch(() => {});
+    // The outbox id, not row.key: the conversation key IS the customer's phone
+    // number on WhatsApp (and a handle elsewhere). The id leads to the row.
+    await logError("bot-outbox", new Error(lastError), `${row.channel}:${row.id}:${failureCode}`).catch(() => {});
     return "dead";
   }
   await prisma.botFlowOutbox.updateMany({

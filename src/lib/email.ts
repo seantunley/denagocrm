@@ -120,7 +120,9 @@ export async function sendEmail(input: {
   } catch (err) {
     await noteSmtpOutcome(config, err);
     const { logError } = await import("./errorLog");
-    await logError("smtp", err, `to: ${input.to} — ${input.subject}`);
+    // No recipient and no subject: both are client information (a subject
+    // often names the customer), and the error class is what diagnoses a send.
+    await logError("smtp", err, `send failed, ${input.to.split(",").length} recipient(s)`);
     return { ok: false, error: err instanceof Error ? err.message : "Failed to send email" };
   }
 }

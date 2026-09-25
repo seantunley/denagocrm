@@ -283,7 +283,10 @@ test("a failure is classified, stored and acted on", () => {
 
   const outbox = shipped("src/lib/botOutbox.ts");
   const fail = outbox.slice(outbox.indexOf("async function failDelivery"), outbox.indexOf("async function deliverClaimed"));
-  assert.match(fail, /failureCode = classifyDeliveryFailure\(lastError\)/);
+  // Classified on the provider's own text; STORED redacted of client information
+  // (tests/noClientDataInLogs.test.ts), which must not change the classification.
+  assert.match(fail, /failureCode = classifyDeliveryFailure\(error\.slice\(0, 1000\)\)/);
+  assert.match(fail, /const lastError = redactForLog\(error\)\.slice\(0, 1000\);/);
   // Stored on BOTH outcomes — a row that is going to be retried is exactly where
   // an operator looks to find out why.
   // The terminal path is #425's atomic killMessageAndBacklog, which now carries
