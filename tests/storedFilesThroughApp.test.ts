@@ -135,6 +135,23 @@ test("campaign and bot-flow images are public on purpose, under a path the migra
   assert.match(src("src/lib/storage.ts"), /put\(`uploads\/\$\{tenantId\}\/public\/\$\{crypto\.randomUUID\(\)\}\$\{ext\}`/);
 });
 
+test("with a private store, the browser is never redirected to a public link", async () => {
+  // The migration keeps paths and deletes the public copy, so a redirect to the
+  // public link would 404. The app reads private-first instead.
+  const { directReadUrl } = await import("../src/lib/storage");
+  const pub = "https://dsvd1rq8etdsnlzs.public.blob.vercel-storage.com/uploads/t1/sig.png";
+  const before = process.env.BLOB_PRIVATE_READ_WRITE_TOKEN;
+  try {
+    delete process.env.BLOB_PRIVATE_READ_WRITE_TOKEN;
+    assert.equal(directReadUrl(pub), pub, "no private store: the public link is fine");
+    process.env.BLOB_PRIVATE_READ_WRITE_TOKEN = "vercel_blob_rw_test_token";
+    assert.equal(directReadUrl(pub), null, "private store: stream through the app");
+  } finally {
+    if (before === undefined) delete process.env.BLOB_PRIVATE_READ_WRITE_TOKEN;
+    else process.env.BLOB_PRIVATE_READ_WRITE_TOKEN = before;
+  }
+});
+
 test("deleting a public link also deletes its migrated private copy", () => {
   assert.match(
     src("src/lib/storage.ts"),
