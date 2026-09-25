@@ -48,6 +48,7 @@ const labels: RecordLabels = {
   quotes: new Map([
     ["q1010", { number: 1010, contactId: "gavin" }],
     ["q1009", { number: 1009, contactId: "gavin" }],
+    ["q999", { number: 999, contactId: "gavin" }],
     ["qHidden", { number: 2000, contactId: "hidden" }],
     ["qNoCustomer", { number: 3000, contactId: null }],
   ]),
@@ -113,6 +114,19 @@ test("THE TREE COUNTS EVERY FOLDER AND ORDERS IT FOR READING", () => {
     gavin.subs.map((s) => `${s.label}:${s.count}`),
     ["General:1", "Quote Q-1009:1", "Quote Q-1010:2"],
     "General first, then records in numeric order — Q-1009 before Q-1010",
+  );
+
+  // Where plain alphabetical order would get it wrong: "Denago Rover" sorts
+  // before "General" alphabetically, and "Q-999" after "Q-1010".
+  const tricky = buildFolderTree(
+    [doc("a", { quoteId: "q1010" }), doc("b", { quoteId: "q999" }), doc("c", { vehicleId: "v1" }), doc("d", { contactId: "gavin" })],
+    labels,
+    now,
+  );
+  assert.deepEqual(
+    tricky.customers[0].subs.map((s) => s.label),
+    ["General", "Denago Rover", "Quote Q-999", "Quote Q-1010"],
+    "General is always first, and quote numbers sort as numbers",
   );
 });
 
