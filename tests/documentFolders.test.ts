@@ -391,6 +391,22 @@ test("OLD LIBRARY LINKS AND THE NAV LEAD TO THE MERGED PAGE", () => {
   assert.equal(actions.match(/revalidatePath\("\/documents"\)/g)?.length, 3);
 });
 
+test("ON A PHONE, A LIBRARY ITEM KEEPS ITS VERSIONS AND ACTIONS", () => {
+  // Review finding on #653: the mobile list turned every Library item into a
+  // bare download link, so New version, Remove and the version history — all
+  // available on a phone on the old /library page — became desktop-only.
+  const mobile = page.slice(page.indexOf("<MobileOnly"), page.indexOf("</MobileOnly>"));
+  assert.ok(mobile.length > 0, "the mobile section was found");
+  assert.match(mobile, /doc\.library \? \(/, "Library items get their own mobile card");
+  assert.match(mobile, /<div className="pt-2">\{doc\.library\.actions\}<\/div>/, "with the same actions panel as the desktop preview");
+  assert.match(mobile, /href=\{`\/api\/library\/\$\{doc\.library\.versionId\}`\}/, "and still a one-tap download of the latest");
+  // The panel carries the controls; the mobile page must not decide them itself.
+  const actions = src("src/components/documents/LibraryItemActions.tsx");
+  assert.match(actions, /<NewVersionForm documentId=\{documentId\}/);
+  assert.match(actions, /action=\{deleteLibraryDocument\.bind\(null, documentId\)\}/);
+  assert.match(actions, /href=\{`\/api\/library\/\$\{v\.id\}`\}/, "every version downloadable");
+});
+
 test("LIBRARY AND PORTAL DOWNLOADS STREAM, AS /api/files DOES", () => {
   // A buffered response over 4.5 MB fails on Vercel. Both routes keep their
   // ownership check: openFileStream makes the same checks readFile did.

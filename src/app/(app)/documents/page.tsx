@@ -547,16 +547,37 @@ export default async function DocumentsPage({
             <div className="rounded-2xl border border-border bg-card py-10 text-center text-sm text-muted-foreground">No documents here.</div>
           ) : (
             <MobileTaskList>
-              {listDocs.map((doc) => (
-                <MobileTaskCard
-                  key={doc.id}
-                  icon={FileText}
-                  title={doc.fileName}
-                  detail={doc.filedOn ?? "Unfiled"}
-                  meta={`${Math.max(1, Math.round(doc.sizeBytes / 1024))} KB · ${doc.createdAt}${doc.superseded ? " · Replaced" : ""}`}
-                  href={doc.library ? `/api/library/${doc.library.versionId}` : `/api/files/${doc.id}`}
-                />
-              ))}
+              {listDocs.map((doc) =>
+                doc.library ? (
+                  // A Library item keeps its versions, New version and Remove on
+                  // a phone too, as the old /library page did; the card itself
+                  // is not a link, so the panel below is reachable.
+                  <div key={doc.id}>
+                    <MobileTaskCard
+                      icon={FileText}
+                      title={doc.fileName}
+                      detail={doc.filedOn}
+                      meta={`${Math.max(1, Math.round(doc.sizeBytes / 1024))} KB · ${doc.createdAt}`}
+                      action={<a href={`/api/library/${doc.library.versionId}`} className="text-xs font-medium text-primary">Download</a>}
+                    />
+                    <details className="px-3 pb-3">
+                      <summary className="cursor-pointer text-xs font-medium text-primary">
+                        {canLibraryManage ? "Versions & actions" : "Versions"}
+                      </summary>
+                      <div className="pt-2">{doc.library.actions}</div>
+                    </details>
+                  </div>
+                ) : (
+                  <MobileTaskCard
+                    key={doc.id}
+                    icon={FileText}
+                    title={doc.fileName}
+                    detail={doc.filedOn ?? "Unfiled"}
+                    meta={`${Math.max(1, Math.round(doc.sizeBytes / 1024))} KB · ${doc.createdAt}${doc.superseded ? " · Replaced" : ""}`}
+                    href={`/api/files/${doc.id}`}
+                  />
+                ),
+              )}
             </MobileTaskList>
           )}
         </MobileSection>
