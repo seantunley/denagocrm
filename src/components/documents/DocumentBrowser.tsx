@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
+import { useRef, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import {
   CheckCircle2,
@@ -33,7 +33,21 @@ export type BrowserDoc = {
   uploadedBy: string;
   filedOn: string | null;
   superseded: boolean;
+  /**
+   * A Library item, not a record Document. It is served by its own
+   * permission-checked route and managed by its own actions (new version,
+   * delete), passed in as `actions` because the Library keeps versions and
+   * record documents do not.
+   */
+  library?: { versionId: string; actions: ReactNode };
 };
+
+/**
+ * Where a file is read from — always a permission-checked route, never a
+ * storage URL. Record documents: /api/files; Library items: /api/library, by
+ * the latest version's id.
+ */
+const fileHref = (doc: BrowserDoc) => (doc.library ? `/api/library/${doc.library.versionId}` : `/api/files/${doc.id}`);
 
 /** Only these are served inline by /api/files — everything else downloads. */
 const isImage = (doc: BrowserDoc) => /^image\/(png|jpe?g|gif|webp|avif)$/i.test(doc.mimeType);
@@ -189,7 +203,7 @@ export default function DocumentBrowser({
       ) : view === "grid" ? (
         <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
           {docs.map((doc) => (
-            <RecordContextMenu key={doc.id} label={doc.fileName} href={`/api/files/${doc.id}`} openInNewTab>
+            <RecordContextMenu key={doc.id} label={doc.fileName} href={fileHref(doc)} openInNewTab>
               <li>
                 <button
                   type="button"
@@ -200,7 +214,7 @@ export default function DocumentBrowser({
                     {isImage(doc) ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
-                        src={`/api/files/${doc.id}`}
+                        src={fileHref(doc)}
                         alt=""
                         loading="lazy"
                         className="size-full object-cover transition group-hover:scale-[1.02]"
@@ -233,7 +247,7 @@ export default function DocumentBrowser({
       ) : (
         <ul className="divide-y divide-border/50 rounded-xl border border-border bg-card">
           {docs.map((doc) => (
-            <RecordContextMenu key={doc.id} label={doc.fileName} href={`/api/files/${doc.id}`} openInNewTab>
+            <RecordContextMenu key={doc.id} label={doc.fileName} href={fileHref(doc)} openInNewTab>
               <li>
                 <button
                   type="button"
@@ -243,7 +257,7 @@ export default function DocumentBrowser({
                   <span className="flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted text-muted-foreground">
                     {isImage(doc) ? (
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img src={`/api/files/${doc.id}`} alt="" loading="lazy" className="size-full object-cover" />
+                      <img src={fileHref(doc)} alt="" loading="lazy" className="size-full object-cover" />
                     ) : (
                       <DocIcon doc={doc} className="size-4" />
                     )}
@@ -262,7 +276,7 @@ export default function DocumentBrowser({
                       )}
                     </span>
                     <span className="block truncate text-[11px] text-muted-foreground">
-                      {doc.filedOn ?? "Company file"} · {formatSize(doc.sizeBytes)} · {doc.createdAt} · {doc.uploadedBy}
+                      {doc.filedOn ?? "Unfiled"} · {formatSize(doc.sizeBytes)} · {doc.createdAt} · {doc.uploadedBy}
                     </span>
                   </span>
                 </button>
@@ -279,7 +293,7 @@ export default function DocumentBrowser({
               <SheetHeader className="border-b border-border">
                 <SheetTitle className="truncate pr-8">{previewing.fileName}</SheetTitle>
                 <SheetDescription>
-                  {previewing.filedOn ?? "Company file"}
+                  {previewing.filedOn ?? "Unfiled"}
                   {previewing.superseded ? " · old version" : ""}
                 </SheetDescription>
               </SheetHeader>
@@ -288,13 +302,13 @@ export default function DocumentBrowser({
                 {isImage(previewing) ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
-                    src={`/api/files/${previewing.id}`}
+                    src={fileHref(previewing)}
                     alt={previewing.fileName}
                     className="mx-auto max-h-[70vh] rounded-lg object-contain"
                   />
                 ) : isPdf(previewing) ? (
                   <iframe
-                    src={`/api/files/${previewing.id}`}
+                    src={fileHref(previewing)}
                     title={previewing.fileName}
                     className="h-[70vh] w-full rounded-lg border border-border bg-white"
                   />
@@ -317,7 +331,7 @@ export default function DocumentBrowser({
                 </dl>
                 <div className="flex flex-wrap gap-2">
                   <a
-                    href={`/api/files/${previewing.id}`}
+                    href={fileHref(previewing)}
                     target="_blank"
                     rel="noreferrer"
                     className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent"
@@ -326,14 +340,14 @@ export default function DocumentBrowser({
                     Open in new tab
                   </a>
                   <a
-                    href={`/api/files/${previewing.id}`}
+                    href={fileHref(previewing)}
                     download={previewing.fileName}
                     className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent"
                   >
                     <Download className="size-4" />
                     Download
                   </a>
-                  {canManage && !previewing.superseded && (
+                  {canManage && !previewing.superseded && !previewing.library && (
                     <Button
                       variant="outline"
                       size="sm"
@@ -347,6 +361,9 @@ export default function DocumentBrowser({
                     </Button>
                   )}
                 </div>
+                {/* A Library item's own actions: version history, new version,
+                    delete — rendered by the server with its permissions applied. */}
+                {previewing.library?.actions}
               </div>
             </>
           )}

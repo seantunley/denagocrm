@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { hasAnyPermission } from "@/lib/permissions";
-import { readFile } from "@/lib/storage";
+import { openFileStream } from "@/lib/storage";
 
 /** Downloads a specific library document version. */
 export async function GET(
@@ -32,8 +32,11 @@ export async function GET(
     // closed the write; this closes the read, so a version row that predates that
     // check — or is ever written by some future path that skips it — still cannot
     // hand over another workspace's object.
-    const buffer = await readFile(version.storedName, version.tenantId);
-    return new NextResponse(new Uint8Array(buffer), {
+    //
+    // STREAMED, as /api/files is: a buffered response over 4.5 MB fails on
+    // Vercel, and library uploads go direct to storage with no such limit.
+    const stream = await openFileStream(version.storedName, version.tenantId);
+    return new NextResponse(stream, {
       headers: {
         "Content-Type": inline ? version.mimeType : "application/octet-stream",
         "Content-Disposition": `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(

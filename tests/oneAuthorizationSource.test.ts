@@ -400,7 +400,7 @@ const EDGE_EXEMPT_NAV_ROUTES = new Set([
   "/referrals", "/stock",
   "/workshop-calendar", "/vehicles", "/service-due", "/warranty",
   "/jobcards", "/jobcards/insights", "/parts",
-  "/library", "/document-studio",
+  "/document-studio",
   "/audit",
 ]);
 

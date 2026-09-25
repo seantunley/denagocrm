@@ -145,7 +145,7 @@ export async function registerLibraryDocuments(
       : `Added ${added.length} documents to the library: ${added.join(", ")}`,
     user,
   });
-  revalidatePath("/library");
+  revalidatePath("/documents");
   });
 }
 
@@ -200,7 +200,7 @@ export async function registerLibraryVersion(
       summary: `Uploaded v${nextVersion} of “${document.name}”${note ? ` — ${note}` : ""}`,
       user,
     });
-    revalidatePath("/library");
+    revalidatePath("/documents");
   });
 }
 
@@ -217,6 +217,6 @@ export async function deleteLibraryDocument(id: string, formData: FormData) {
       summary: `Moved library document “${document.name}” to trash — ${reason}`,
       user,
     });
-    revalidatePath("/library");
+    revalidatePath("/documents");
   });
 }
