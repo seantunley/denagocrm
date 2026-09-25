@@ -36,6 +36,7 @@ import { budgetStopUpdate } from "./journeyRunState";
 import { withEnrolmentLock } from "./journeyArbitration";
 import { activeTenantPredicate } from "./tenantPredicate";
 import { inheritedTenantId } from "./tenantWrite";
+import { redactForLog } from "./redactLog";
 
 const MAX_RUN_ATTEMPTS = 3;
 const MAX_STEPS_PER_TICK = 20;
@@ -91,6 +92,9 @@ type StepLogArgs = {
 
 async function writeStepLog(args: StepLogArgs) {
   const done = ["completed", "skipped", "failed"].includes(args.status);
+  // A step's note is often an error a provider returned, which can quote the
+  // customer's address or number. The step log keeps no client information.
+  const note = args.note == null ? args.note : redactForLog(args.note);
   await prisma.journeyStepLog.upsert({
     // Keyed on the PATH, not the step id. `@@unique([runId, stepId])` could not
     // survive `repeat`: the same step id executes on every iteration, and the
@@ -108,13 +112,13 @@ async function writeStepLog(args: StepLogArgs) {
       stepId: args.stepId,
       stepType: args.stepType,
       status: args.status,
-      note: args.note,
+      note,
       output: args.output as Prisma.InputJsonValue | undefined,
       completedAt: done ? new Date() : null,
     },
     update: {
       status: args.status,
-      note: args.note,
+      note,
       output: args.output as Prisma.InputJsonValue | undefined,
       // A top-level back-edge can re-run the same path days later. Without this
       // reset the recorded duration would include the wait in between.
@@ -322,7 +326,7 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
       data: {
         status: "failed",
         completedAt: new Date(),
-        lastError: `Definition could not be read: ${message}`.slice(0, 1000),
+        lastError: redactForLog(`Definition could not be read: ${message}`).slice(0, 1000),
       },
     });
     return false;
@@ -937,7 +941,8 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
       attempts,
       stepsExecuted,
       nextRunAt: retry ? new Date(Date.now() + 5 * 60_000) : run.nextRunAt,
-      lastError: message.slice(0, 1000),
+      // A step's error can quote the customer's address or number.
+      lastError: redactForLog(message).slice(0, 1000),
     });
     return false;
   }
