@@ -5,7 +5,17 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
-import { saveFile } from "@/lib/storage";
+import { assertOwnedBlob, deleteOwnedBlob, saveFile } from "@/lib/storage";
+import { asActionResult, refuse, type ActionResult } from "@/lib/actionResult";
+import { actingTenantId } from "@/lib/actingTenant";
+import { logError } from "@/lib/errorLog";
+import {
+  MAX_DOCUMENT_BYTES,
+  cleanDocumentFileName,
+  documentUploadPrefix,
+  parseDocumentTarget,
+} from "@/lib/documentUpload";
+import { authorizeDocumentTarget } from "@/lib/documentUploadAuth";
 import { actingOwnerTenantId, withActingStaffScope } from "@/lib/actingScope";
 import { DOC_DEFS, defaultTemplate, mergeTemplate, isDocKey } from "@/lib/docTemplates";
 import {
@@ -119,6 +129,101 @@ export async function uploadDocument(formData: FormData) {
     });
     revalidatePath(String(formData.get("revalidate") ?? "/"));
   });
+}
+
+/**
+ * Record a document that the browser has already uploaded straight to storage.
+ *
+ * The second half of the direct upload (the first is /api/documents/upload).
+ * It exists because a Server Action cannot receive a file over 4.5 MB on Vercel;
+ * this one receives only the stored file's URL.
+ *
+ * NOTHING THE BROWSER SAYS IS TRUSTED:
+ * - Access is re-checked here, not assumed from the upload token.
+ * - The URL must be in OUR store, under THIS workspace (assertOwnedBlob).
+ * - Its path must be the one authorised for THIS target, so a file uploaded for
+ *   one record cannot be registered on another.
+ * - Size and type are read from the store, not the request.
+ * If any check fails the stored file is removed — through deleteOwnedBlob, which
+ * re-proves ownership first and refuses to touch anything that is not ours.
+ */
+export async function registerUploadedDocument(input: {
+  target: unknown;
+  url: unknown;
+  fileName: unknown;
+}): Promise<ActionResult> {
+  return asActionResult(async () => {
+    // Every document upload needs this, whatever it is filed on: checked first
+    // and explicitly, then narrowed to the record by authorizeDocumentTarget.
+    await requirePermission("documents.upload");
+    const tenantId = await actingTenantId();
+    let target;
+    try {
+      target = parseDocumentTarget(input.target);
+    } catch {
+      refuse("That upload was not for a recognised place.");
+    }
+    const user = await authorizeDocumentTarget(target, tenantId);
+    const url = String(input.url ?? "").trim();
+    if (!url) refuse("The upload did not finish.");
+    const prefix = documentUploadPrefix(tenantId, target);
+
+    // THE FILE MAY BE REMOVED ONLY WHILE NOTHING POINTS AT IT. Validation and
+    // the row insert each clean up on failure; once the Document row exists,
+    // nothing after it may delete the file. The first version kept the audit
+    // write inside the same try, so a failing audit would have deleted a file a
+    // freshly written row was pointing at — a document that opens to "missing".
+    const discard = async (error: unknown): Promise<never> => {
+      await logError("document-upload-register", error, `target=${JSON.stringify(target)}`, { tenantId, alert: false });
+      await deleteOwnedBlob(url, tenantId, prefix).catch(() => {
+        // Not ours, or already gone: nothing we may delete. The orphan sweep
+        // removes an unregistered file under our own prefix after a day.
+      });
+      refuse("The file uploaded but could not be filed. Try again, or check you can still access this record.");
+    };
+
+    let blob: Awaited<ReturnType<typeof assertOwnedBlob>>;
+    try {
+      blob = await assertOwnedBlob(url, tenantId);
+      if (!blob.pathname.startsWith(prefix)) throw new Error("Stored document is not bound to this record.");
+      if (blob.size <= 0) throw new Error("Stored document is empty.");
+      if (blob.size > MAX_DOCUMENT_BYTES) throw new Error("Stored document is over the size limit.");
+    } catch (error) {
+      return discard(error);
+    }
+
+    const fileName = cleanDocumentFileName(input.fileName);
+    let doc;
+    try {
+      doc = await prisma.document.create({
+        data: {
+          tenantId,
+          fileName,
+          storedName: url,
+          mimeType: blob.contentType || "application/octet-stream",
+          sizeBytes: blob.size,
+          contactId: target.kind === "record" && target.field === "contactId" ? target.id : null,
+          vehicleId: target.kind === "record" && target.field === "vehicleId" ? target.id : null,
+          jobCardId: target.kind === "record" && target.field === "jobCardId" ? target.id : null,
+          quoteId: target.kind === "record" && target.field === "quoteId" ? target.id : null,
+          uploadedById: user.id,
+        },
+        include: { vehicle: true, jobCard: true },
+      });
+    } catch (error) {
+      // The insert failed, so no row points at the file: safe to remove.
+      return discard(error);
+    }
+
+    // The row exists from here on. Neither of these may reach discard().
+    await logAudit({
+      action: "document.uploaded",
+      summary: `Uploaded document “${fileName}”`,
+      contactId: doc.contactId ?? doc.vehicle?.contactId ?? doc.jobCard?.contactId,
+      user,
+    });
+    revalidatePath("/documents");
+  }, { scope: "document-upload-register" });
 }
 
 export async function deleteDocument(id: string, revalidate: string, formData: FormData) {

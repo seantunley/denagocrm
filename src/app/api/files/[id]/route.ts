@@ -5,7 +5,7 @@ import { canAccessDocument } from "@/lib/permissions";
 import { portalCanAccessDocument } from "@/lib/portalAccess";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { isAutomotiveOwnedDocument } from "@/lib/modules/registry";
-import { readFile } from "@/lib/storage";
+import { openFileStream } from "@/lib/storage";
 
 export async function GET(
   _req: NextRequest,
@@ -39,8 +39,13 @@ export async function GET(
     // while nothing can put another workspace's object there. `doc.tenantId` is
     // passed verbatim — a document written before stamping is NULL and asserts
     // nothing, which is exactly today's behaviour, so no existing download changes.
-    const buffer = await readFile(doc.storedName, doc.tenantId);
-    return new NextResponse(new Uint8Array(buffer), {
+    //
+    // STREAMED, not buffered. Vercel caps a function's response body at 4.5 MB
+    // unless it is streamed, so building this response from a Buffer meant any
+    // document over 4.5 MB could be uploaded but never opened. The stream makes
+    // the same ownership checks readFile did (see openFileStream).
+    const stream = await openFileStream(doc.storedName, doc.tenantId);
+    return new NextResponse(stream, {
       headers: {
         "Content-Type": inline ? doc.mimeType : "application/octet-stream",
         "Content-Disposition": `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(doc.fileName)}`,
