@@ -373,6 +373,14 @@ test("OLD LIBRARY LINKS AND THE NAV LEAD TO THE MERGED PAGE", () => {
   // The layout's library permission check still guards the redirect.
   assert.match(src("src/app/(app)/library/layout.tsx"), /requireAnyPermission\("library\.view", "library\.manage"\)/);
 
+  // EVERY guard on the way to the page admits library access — the page's own
+  // and its layout's. The layout was missed at first, and library-only users
+  // were bounced to the dashboard before the page could show them the Library.
+  for (const file of ["src/app/(app)/documents/layout.tsx", "src/app/(app)/documents/page.tsx"]) {
+    const guard = src(file).match(/requireAnyPermission\(([^)]*)\)/)?.[1] ?? "";
+    assert.match(guard, /"library\.view",\s*"library\.manage"/, `${file} admits library access`);
+  }
+
   const nav = src("src/components/nav-config.ts");
   assert.ok(!nav.includes('href: "/library"'), "no second nav entry for the Library");
   assert.match(nav, /"document_templates\.manage", "library\.view", "library\.manage"\)\) \{\s*crmLinks\.push\(\{ href: "\/documents"/);
