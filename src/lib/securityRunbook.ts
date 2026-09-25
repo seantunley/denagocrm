@@ -271,6 +271,24 @@ export async function runSecurityChecks(): Promise<RunbookRun> {
             : "Attributed errors are available in each owning workspace's Settings → System Log; system-level errors are in Platform Console → System errors.",
   });
 
+  // The private file store, proven with the real token: write, read back, an
+  // anonymous fetch refused, and a signed link an outside service can use.
+  const { privateStoreRoundTrip } = await import("./storage");
+  const privateProof = await privateStoreRoundTrip();
+  add({
+    id: "private-store-roundtrip",
+    group: "Data protection",
+    label: "Private file store works end to end",
+    status: privateProof === null ? "warn" : privateProof.ok ? "pass" : "fail",
+    detail:
+      privateProof === null
+        ? "No private file store is configured (BLOB_PRIVATE_READ_WRITE_TOKEN)."
+        : privateProof.ok
+          ? "Wrote, read back and deleted a test file; it could not be opened without credentials, and a signed link opened it."
+          : `Failed at "${privateProof.step}": ${privateProof.error}`,
+    fix: privateProof?.ok ? undefined : "Check BLOB_PRIVATE_READ_WRITE_TOKEN is the private store's read-write token.",
+  });
+
   const passed = results.filter((r) => r.status === "pass").length;
   const warned = results.filter((r) => r.status === "warn").length;
   const failed = results.filter((r) => r.status === "fail").length;

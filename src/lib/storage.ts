@@ -558,6 +558,45 @@ export async function shareableFileUrl(ref: string): Promise<string> {
   return presignedUrl;
 }
 
+export type PrivateStoreProof = { ok: true } | { ok: false; step: string; error: string };
+
+/**
+ * Proves the private store works end to end with the REAL token, before
+ * anything depends on it: write, read back, a signed link an outside service can
+ * fetch, and — the point of it — an anonymous fetch of the file refused. Leaves
+ * nothing behind. Null when no private store is configured.
+ *
+ * The token is a Sensitive env var nobody can read back, so this (run from
+ * Settings → Security) is how it is known to be the right one.
+ */
+export async function privateStoreRoundTrip(): Promise<PrivateStoreProof | null> {
+  const token = privateToken();
+  if (!token) return null;
+  const pathname = `health/private-roundtrip-${crypto.randomUUID()}.txt`;
+  const body = `private store round trip ${pathname}`;
+  let step = "write";
+  try {
+    const written = await put(pathname, body, { access: "private", contentType: "text/plain", addRandomSuffix: false, token });
+    step = "read back";
+    const got = await get(pathname, { access: "private", token });
+    if (!got?.stream || (await streamToBuffer(got.stream, 4096)).toString("utf8") !== body) throw new Error("content differs");
+    step = "anonymous read refused";
+    const anonymous = await fetch(written.url, { signal: AbortSignal.timeout(10_000) });
+    if (anonymous.ok) throw new Error(`the file opened without credentials (HTTP ${anonymous.status})`);
+    step = "signed link for WhatsApp/Messenger";
+    const validUntil = Date.now() + 5 * 60_000;
+    const signed = await issueSignedToken({ pathname, operations: ["get"], validUntil, token });
+    const { presignedUrl } = await presignUrl(signed, { operation: "get", pathname, access: "private", validUntil });
+    const viaLink = await fetch(presignedUrl, { signal: AbortSignal.timeout(10_000) });
+    if (!viaLink.ok || (await viaLink.text()) !== body) throw new Error(`signed link returned HTTP ${viaLink.status}`);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, step, error: error instanceof Error ? error.message.slice(0, 200) : "unknown error" };
+  } finally {
+    await del(pathname, { token }).catch(() => {});
+  }
+}
+
 /**
  * A pathname as {@link putManagedBlob} returns it: folder segments inside our
  * own store. Returns the value rather than a boolean, for classifyRef's reason —

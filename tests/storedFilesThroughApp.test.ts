@@ -152,6 +152,24 @@ test("with a private store, the browser is never redirected to a public link", a
   }
 });
 
+test("Settings → Security proves the private store before anything depends on it", async () => {
+  const before = process.env.BLOB_PRIVATE_READ_WRITE_TOKEN;
+  delete process.env.BLOB_PRIVATE_READ_WRITE_TOKEN;
+  try {
+    const { privateStoreRoundTrip } = await import("../src/lib/storage");
+    assert.equal(await privateStoreRoundTrip(), null, "no private store: nothing to prove");
+  } finally {
+    if (before !== undefined) process.env.BLOB_PRIVATE_READ_WRITE_TOKEN = before;
+  }
+  const storage = src("src/lib/storage.ts");
+  // Every step a private file depends on, with the real token — and the file
+  // must NOT open anonymously, which is the whole point.
+  assert.match(storage, /step = "anonymous read refused";[\s\S]{0,200}if \(anonymous\.ok\) throw/);
+  assert.match(storage, /step = "signed link for WhatsApp\/Messenger";/);
+  assert.match(storage, /finally \{\s*await del\(pathname, \{ token \}\)\.catch/, "leaves nothing behind");
+  assert.match(src("src/lib/securityRunbook.ts"), /id: "private-store-roundtrip",/);
+});
+
 test("deleting a public link also deletes its migrated private copy", () => {
   assert.match(
     src("src/lib/storage.ts"),
