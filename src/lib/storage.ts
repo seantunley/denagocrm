@@ -227,9 +227,38 @@ export function blobBelongsToTenant(pathname: string, tenantId: string): boolean
   if (segments.length >= 3 && segments[0] === "uploads") return segments[1] === tenantId;
   // uploads/<file> — legacy, founding tenant only.
   if (segments.length === 2 && segments[0] === "uploads") return tenantId === DEFAULT_TENANT_ID;
+  // library/<file> — the Document Library's legacy form, founding tenant only,
+  // by the same rule. Library uploads were written here until 2026-09, so once
+  // this check started receiving the row's tenant (2026-08-12) every library
+  // download and new library file was refused. New ones go under
+  // libraryUploadPrefix(), and the upload route no longer signs this path.
+  if (segments.length === 2 && segments[0] === "library") return tenantId === DEFAULT_TENANT_ID;
   // Anything else (backups, managed paths) is not a per-tenant upload; those
   // callers do not pass an expected tenant and never reach this.
   return false;
+}
+
+/**
+ * Where a workspace's Document Library uploads go: inside its own namespace,
+ * so {@link blobBelongsToTenant} can answer for them. The library upload route
+ * signs nothing outside this prefix.
+ */
+export function libraryUploadPrefix(tenantId: string): string {
+  return `uploads/${tenantId}/library/`;
+}
+
+/**
+ * Is this pathname a Library upload of `tenantId`'s: a plain file directly in
+ * its library folder? Checked when the upload is signed AND when the file is
+ * registered. Ownership alone is not enough at registration: every record file
+ * and photo of the workspace is also "ours", and registering one into the
+ * Library would let a library user download it past the record's permissions.
+ * The legacy `library/<file>` shape stays readable but is never registrable.
+ */
+export function isLibraryUpload(pathname: string, tenantId: string): boolean {
+  const prefix = libraryUploadPrefix(tenantId);
+  const name = pathname.startsWith(prefix) ? pathname.slice(prefix.length) : "";
+  return name.length > 0 && !name.includes("/");
 }
 
 /**
