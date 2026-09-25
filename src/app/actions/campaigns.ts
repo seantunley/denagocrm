@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requirePermission, requireContactAccess } from "@/lib/permissions";
 import { sendEmail } from "@/lib/email";
-import { saveFile } from "@/lib/storage";
+import { savePublicAsset } from "@/lib/storage";
 import { resolveActingTenant } from "@/lib/tenantContext";
 import { withActingStaffScope } from "@/lib/actingScope";
 import {
@@ -74,7 +74,9 @@ export async function uploadCampaignImage(formData: FormData): Promise<string | 
     if (!file || !file.type.startsWith("image/")) return null;
     if (file.size > 5 * 1024 * 1024) return null;
     const buf = Buffer.from(await file.arrayBuffer());
-    return saveFile(buf, file.name, file.type, tenantId);
+    // Public on purpose: embedded in marketing emails and sent in bot flows, so
+    // recipients' mail clients and WhatsApp fetch it by link. Not client data.
+    return savePublicAsset(buf, file.name, file.type, tenantId);
   });
 }
 

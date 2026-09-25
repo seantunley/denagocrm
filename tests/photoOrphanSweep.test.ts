@@ -64,8 +64,11 @@ test("a claimed photo is recognised from BOTH places a URL can be stored", () =>
   // JobCardInspectionItem.photoStoredName holds inspection photos. Checking only
   // the first would delete every inspection photo ever taken.
   const lib = src("src/lib/photoOrphans.ts");
-  assert.ok(lib.includes("document.findFirst({ where: { storedName: url, tenantId }"));
-  assert.ok(lib.includes("jobCardInspectionItem.findFirst({ where: { photoStoredName: url, tenantId }"));
+  assert.ok(lib.includes("document.findFirst({ where: { storedName: claim, tenantId }"));
+  assert.ok(lib.includes("jobCardInspectionItem.findFirst({ where: { photoStoredName: claim, tenantId }"));
+  // Matched on the PATH: the private-store migration keeps paths but changes the
+  // host, so a record still holding the public link must claim the private copy.
+  assert.ok(lib.includes('const claim = { endsWith: `/${new URL(url).pathname.replace(/^\\/+/, "")}` };'));
 });
 
 test("a tenant-scoped sweep cannot delete past its own workspace", () => {

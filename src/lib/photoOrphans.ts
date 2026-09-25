@@ -43,9 +43,15 @@ export type { OrphanSweep } from "@/lib/photoOrphanRules";
  * inside the tenant ratchet rather than reaching across every workspace.
  */
 async function isClaimed(url: string, tenantId: string): Promise<boolean> {
+  // Matched on the object's PATH, not its full URL. The same file has a
+  // different host in the public and private stores, and the private-store
+  // migration keeps paths — so a record still holding the public link claims
+  // the private copy. Equality on the URL would have let the sweep delete every
+  // migrated photo whose record had not been repointed.
+  const claim = { endsWith: `/${new URL(url).pathname.replace(/^\/+/, "")}` };
   const [document, inspection] = await Promise.all([
-    basePrisma.document.findFirst({ where: { storedName: url, tenantId }, select: { id: true } }),
-    basePrisma.jobCardInspectionItem.findFirst({ where: { photoStoredName: url, tenantId }, select: { id: true } }),
+    basePrisma.document.findFirst({ where: { storedName: claim, tenantId }, select: { id: true } }),
+    basePrisma.jobCardInspectionItem.findFirst({ where: { photoStoredName: claim, tenantId }, select: { id: true } }),
   ]);
   return Boolean(document || inspection);
 }

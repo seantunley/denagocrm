@@ -14,6 +14,7 @@ import {
   WA_TEXT_MAX,
 } from "./whatsappRendering";
 import { customerRecordTenantId } from "./customerRecordTenant";
+import { shareableFileUrl } from "./storage";
 import { credentialOwnerTenantId, resolveIntegrationBundleForTenant, resolveTenantCredential } from "./settings";
 import { sendPushToAll } from "./push";
 import { resolveTenantActor } from "./tenantActor";
@@ -297,7 +298,8 @@ export async function sendWhatsAppImage(toDigits: string, url: string, caption?:
     signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${creds.token}` },
-    body: JSON.stringify({ messaging_product: "whatsapp", to: toDigits, type: "image", image: { link: url, ...(caption ? { caption } : {}) } }),
+    // WhatsApp downloads the image itself: a private file gets a short-lived signed link.
+    body: JSON.stringify({ messaging_product: "whatsapp", to: toDigits, type: "image", image: { link: await shareableFileUrl(url), ...(caption ? { caption } : {}) } }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => null);

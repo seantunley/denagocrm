@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, ImageUp, Star } from "lucide-react";
 import { requirePermission } from "@/lib/permissions";
+import { storedFileSrc } from "@/lib/storedFileSrc";
 import { prisma } from "@/lib/db";
 import {
   DOC_DEFS,
@@ -108,7 +109,7 @@ export default async function TemplateEditorPage({
             <p className="mb-2 text-sm font-semibold">Logo</p>
             <div className="mb-3 flex h-16 items-center rounded-lg bg-[#020617] px-4">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={template.logoUrl ?? "/branding/denago-logo-email.png"} alt="Current logo" className="h-10 w-auto object-contain" />
+              <img src={storedFileSrc(template.logoUrl) ?? "/branding/denago-logo-email.png"} alt="Current logo" className="h-10 w-auto object-contain" />
             </div>
             <form action={uploadTemplateLogo.bind(null, record.id)} className="flex items-center gap-2">
               <input type="file" name="file" accept="image/*" required className="block flex-1 text-xs text-muted-foreground" />

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
+import { storedFileSrc } from "@/lib/storedFileSrc";
 import {
   addJobCardItem,
   deleteJobCardItem,
@@ -401,9 +402,9 @@ export default async function JobCardDetailPage({
                       </SaveForm>
                       <StatusPill tone={meta.tone}>{meta.label}</StatusPill>
                       {item.photoStoredName ? (
-                        <a href={item.photoStoredName} target="_blank">
+                        <a href={storedFileSrc(item.photoStoredName) ?? undefined} target="_blank">
                           {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src={item.photoStoredName} alt={item.label} className="h-8 w-8 rounded object-cover border border-slate-700" />
+                          <img src={storedFileSrc(item.photoStoredName) ?? undefined} alt={item.label} className="h-8 w-8 rounded object-cover border border-slate-700" />
                         </a>
                       ) : (
                         <DirectPhotoUploader

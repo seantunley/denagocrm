@@ -4,6 +4,7 @@ import RowModal from "@/components/RowModal";
 import InboxReply from "@/components/InboxReply";
 import { markThreadRead, setThreadArchived } from "@/app/actions/communications";
 import { formatDateTime } from "@/lib/format";
+import { storedFileSrc } from "@/lib/storedFileSrc";
 import { threadCollaborationKey, type InboxThread, type ThreadCollaboration } from "@/lib/inboxThreads";
 import ConversationCollab from "@/components/ConversationCollab";
 import { EmptyState, StatusPill } from "@/components/visual-system";
@@ -132,16 +133,16 @@ export default function SocialThreadList({
                     className={`w-fit max-w-[82%] rounded-2xl px-3 py-2 text-sm leading-snug whitespace-pre-wrap ${message.direction === "inbound" ? "rounded-bl-md border border-border bg-muted text-foreground" : "ml-auto rounded-br-md bg-primary text-primary-foreground"}`}
                   >
                     {message.attachmentUrl && message.attachmentType === "image" ? (
-                      <a href={message.attachmentUrl} target="_blank">
+                      <a href={storedFileSrc(message.attachmentUrl) ?? undefined} target="_blank">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={message.attachmentUrl} alt="Attachment" className="my-1 max-h-48 rounded-md" />
+                        <img src={storedFileSrc(message.attachmentUrl) ?? undefined} alt="Attachment" className="my-1 max-h-48 rounded-md" />
                       </a>
                     ) : message.attachmentUrl && message.attachmentType === "audio" ? (
-                      <audio controls src={message.attachmentUrl} className="my-1 max-w-full" />
+                      <audio controls src={storedFileSrc(message.attachmentUrl) ?? undefined} className="my-1 max-w-full" />
                     ) : message.attachmentUrl && message.attachmentType === "video" ? (
-                      <video controls src={message.attachmentUrl} className="my-1 max-h-48 rounded-md" />
+                      <video controls src={storedFileSrc(message.attachmentUrl) ?? undefined} className="my-1 max-h-48 rounded-md" />
                     ) : message.attachmentUrl ? (
-                      <a href={message.attachmentUrl} target="_blank" className="underline">{message.body || "Attachment"}</a>
+                      <a href={storedFileSrc(message.attachmentUrl) ?? undefined} target="_blank" className="underline">{message.body || "Attachment"}</a>
                     ) : null}
                     {(!message.attachmentUrl || (message.body && !message.body.startsWith("🖼") && !message.body.startsWith("🎤") && !message.body.startsWith("🎬") && !message.body.startsWith("📎"))) && message.body}
                   </div>

@@ -1,6 +1,7 @@
 import { addCommunication, deleteCommunication } from "@/app/actions/communications";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import { formatDateTime } from "@/lib/format";
+import { storedFileSrc } from "@/lib/storedFileSrc";
 import PasteImageInput from "@/components/PasteImageInput";
 
 /* eslint-disable @next/next/no-img-element */
@@ -146,10 +147,10 @@ export default function CommsTimeline({
                   <p className="text-sm font-medium text-slate-300">{c.subject}</p>
                 )}
                 {c.attachmentUrl && (
-                  <a href={c.attachmentUrl} target="_blank">
+                  <a href={storedFileSrc(c.attachmentUrl) ?? undefined} target="_blank">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
-                      src={c.attachmentUrl}
+                      src={storedFileSrc(c.attachmentUrl) ?? undefined}
                       alt="Attachment"
                       className="mt-1 mb-1 max-h-36 rounded-lg border border-slate-700 hover:border-orange-500 transition-colors"
                     />
