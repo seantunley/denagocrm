@@ -49,33 +49,46 @@ export type Placement =
   | { kind: "customer"; customerId: string; sub: SubKey; subLabel: string }
   | { kind: "other"; sub: SubKey; subLabel: string };
 
+/**
+ * THE MOST SPECIFIC RECORD DECIDES THE FOLDER.
+ *
+ * A file can carry more than one link, and most do: delivery photos, signing
+ * paperwork, proofs of payment and invoices are all written with BOTH the
+ * customer and the quote set (measured on production, 25 September 2026 — every
+ * tagged document). The first version checked the customer first, so all of
+ * that landed in "General" and the quote folders sat nearly empty.
+ *
+ * So the sub-folder is the most specific record present — quote, then job card,
+ * then vehicle — and "General" only when the customer is all there is. The
+ * customer is the file's own, falling back to the record's.
+ */
 export function placeDocument(doc: DocFacts, labels: RecordLabels): Placement {
-  let customerId: string | null = null;
+  let recordCustomerId: string | null = null;
   let sub: SubKey;
   let subLabel: string;
 
-  if (doc.contactId) {
-    customerId = doc.contactId;
-    sub = "general";
-    subLabel = "General";
-  } else if (doc.vehicleId) {
-    const vehicle = labels.vehicles.get(doc.vehicleId);
-    customerId = vehicle?.contactId ?? null;
-    sub = `vehicle:${doc.vehicleId}`;
-    subLabel = vehicle?.label ?? "Vehicle";
-  } else if (doc.jobCardId) {
-    const jobCard = labels.jobCards.get(doc.jobCardId);
-    customerId = jobCard?.contactId ?? null;
-    sub = `jobcard:${doc.jobCardId}`;
-    subLabel = jobCard ? `Job card #${jobCard.number}` : "Job card";
-  } else if (doc.quoteId) {
+  if (doc.quoteId) {
     const quote = labels.quotes.get(doc.quoteId);
-    customerId = quote?.contactId ?? null;
+    recordCustomerId = quote?.contactId ?? null;
     sub = `quote:${doc.quoteId}`;
     subLabel = quote ? `Quote Q-${quote.number}` : "Quote";
+  } else if (doc.jobCardId) {
+    const jobCard = labels.jobCards.get(doc.jobCardId);
+    recordCustomerId = jobCard?.contactId ?? null;
+    sub = `jobcard:${doc.jobCardId}`;
+    subLabel = jobCard ? `Job card #${jobCard.number}` : "Job card";
+  } else if (doc.vehicleId) {
+    const vehicle = labels.vehicles.get(doc.vehicleId);
+    recordCustomerId = vehicle?.contactId ?? null;
+    sub = `vehicle:${doc.vehicleId}`;
+    subLabel = vehicle?.label ?? "Vehicle";
+  } else if (doc.contactId) {
+    sub = "general";
+    subLabel = "General";
   } else {
     return { kind: "company" };
   }
+  const customerId = doc.contactId ?? recordCustomerId;
 
   // Only a customer the viewer may see gets a named folder.
   if (customerId && labels.contacts.has(customerId)) {

@@ -72,6 +72,39 @@ test("A FILE GOES IN THE FOLDER OF THE RECORD IT IS FILED ON", () => {
   assert.deepEqual(placeDocument(doc("e"), labels), { kind: "company" }, "a file on no record is a company file");
 });
 
+test("A FILE ON A CUSTOMER AND A QUOTE GOES IN THE QUOTE'S FOLDER", () => {
+  /*
+   * The shape most real documents have: delivery photos, signing paperwork,
+   * proofs of payment and invoices are written with BOTH the customer and the
+   * quote set. The first version checked the customer first, filed all of them
+   * under "General", and left the quote folders nearly empty — and its fixtures
+   * only ever gave a file one link, so nothing noticed.
+   */
+  assert.deepEqual(placeDocument(doc("p", { contactId: "gavin", quoteId: "q1010", tag: "delivery-photo" }), labels), {
+    kind: "customer", customerId: "gavin", sub: "quote:q1010", subLabel: "Quote Q-1010",
+  });
+  assert.equal(
+    (placeDocument(doc("j", { contactId: "gavin", jobCardId: "j1" }), labels) as { sub: string }).sub,
+    "jobcard:j1",
+  );
+  assert.equal(
+    (placeDocument(doc("v", { contactId: "gavin", vehicleId: "v1" }), labels) as { sub: string }).sub,
+    "vehicle:v1",
+  );
+
+  const tree = buildFolderTree(
+    [doc("1", { contactId: "gavin", quoteId: "q1010" }), doc("2", { contactId: "gavin", quoteId: "q1010" }), doc("3", { contactId: "gavin" })],
+    labels,
+    now,
+  );
+  assert.deepEqual(tree.customers[0].subs.map((s) => `${s.label}:${s.count}`), ["General:1", "Quote Q-1010:2"]);
+
+  // The file's own customer names the folder, even when its quote's customer is hidden.
+  assert.deepEqual(placeDocument(doc("h", { contactId: "gavin", quoteId: "qHidden" }), labels), {
+    kind: "customer", customerId: "gavin", sub: "quote:qHidden", subLabel: "Quote Q-2000",
+  });
+});
+
 test("A HIDDEN CUSTOMER'S NAME NEVER BECOMES A FOLDER", () => {
   /*
    * A file can be visible through a quote while the customer behind that quote
