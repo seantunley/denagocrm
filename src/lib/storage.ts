@@ -22,7 +22,8 @@ import { DEFAULT_TENANT_ID } from "./tenant";
  * written to the private store; reads try the private store (authenticated get())
  * first and fall back to a public fetch, so legacy public blobs keep working. The
  * flag is opt-in so it can be verified on a preview deployment before flipping
- * production; existing public blobs are then migrated (scripts/migrate-blobs-private).
+ * production; existing public blobs are then moved to the private store at the
+ * same path by the hourly private-storage job (lib/privateMigration.ts).
  */
 
 const UPLOAD_DIR = path.join(process.cwd(), "storage", "uploads");
