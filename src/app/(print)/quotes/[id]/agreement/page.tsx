@@ -1,4 +1,6 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+import { builderDocRedirect } from "@/lib/docbuilder/quoteDocs";
+import { publishedBuilderTemplateFor } from "@/lib/docbuilder/published";
 import { prisma } from "@/lib/db";
 import { requireQuoteReadAccess } from "@/lib/permissions";
 import PrintActions from "@/components/PrintActions";
@@ -14,11 +16,16 @@ export default async function AgreementPrintPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ tpl?: string }>;
+  searchParams: Promise<{ tpl?: string; legacy?: string }>;
 }) {
   const { id } = await params;
   await requireQuoteReadAccess(id);
-  const { tpl: tplId } = await searchParams;
+  const search = await searchParams;
+  const tplId = search.tpl;
+  // Once the sales agreement layout is PUBLISHED in the document editor, it
+  // prints from there; until then, this page prints exactly as it always has.
+  const builderHref = await builderDocRedirect(id, "agreement", search, () => publishedBuilderTemplateFor("agreement"));
+  if (builderHref) redirect(builderHref);
   const quote = await prisma.quote.findUnique({
     where: { id },
     include: { items: true, fees: { orderBy: { sortOrder: "asc" } }, contact: true, lead: { include: { product: true } } },
