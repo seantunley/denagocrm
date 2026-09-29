@@ -173,22 +173,35 @@ function indemnityTemplate(): DocumentModel {
   ]);
 }
 
+/** Description + quantity only: a delivery note and a service report list what, not what it cost. */
+function packingList(): DocumentBlock {
+  const block = newBlock("lineItems");
+  if (block.type === "lineItems") block.columns = block.columns.filter((c) => c.key === "description" || c.key === "qty");
+  return block;
+}
+
+function onlyWhen(when: string, blocks: DocumentBlock[]): DocumentBlock {
+  const block = newBlock("conditional");
+  if (block.type === "conditional") {
+    block.when = when;
+    block.blocks = blocks;
+  }
+  return block;
+}
+
+// Mirrors the fixed delivery-note print: meta line, deliver-to / details cards,
+// packing list, the guided handover checklist and signature, sign-off lines.
 function deliveryTemplate(): DocumentModel {
   return documentModel("Delivery note", [
-    [banner("DELIVERY NOTE", "{{quote.number}}")],
+    [banner("DELIVERY NOTE", "{{delivery.number}}")],
+    [text("{{delivery.meta}}")],
     [
-      infoCard("DELIVER TO", "{{customer.name}}", "{{customer.phone}}\n{{customer.address}}"),
-      infoCard("FROM", "{{company.name}}", "{{company.address}}\n{{company.phone}}", INK),
+      infoCard("DELIVER TO", "{{customer.name}}", "{{delivery.deliverTo}}"),
+      infoCard("DELIVERY DETAILS", "", "{{delivery.details}}", INK),
     ],
-    [heading("Items delivered")],
-    [lineItems()],
-    [terms("HANDOVER CHECKLIST", [
-      "Vehicle inspected and free of visible damage at handover.",
-      "Charger and accessories supplied.",
-      "Operation, charging and safety explained to the customer.",
-      "Warranty and service schedule handed over.",
-    ])],
-    signatureStrip("Received by (customer) & date", "Delivered by (for {{company.name}}) & date"),
+    [packingList()],
+    [newBlock("handoverChecklist")],
+    signatureStrip("Received in good order — customer & date", "Driver & date"),
     [footer()],
   ]);
 }
@@ -211,21 +224,20 @@ function jobcardTemplate(): DocumentModel {
   ]);
 }
 
+// Mirrors the fixed service-report print: meta line, customer / vehicle cards,
+// work carried out, parts & labour, next service due, sign-off lines.
 function serviceReportTemplate(): DocumentModel {
   return documentModel("Service report", [
-    [banner("SERVICE REPORT", "{{jobcard.number}}")],
+    [banner("SERVICE REPORT", "{{service.number}}")],
+    [text("{{service.meta}}")],
     [
-      infoCard("CUSTOMER", "{{customer.name}}", "{{customer.phone}}"),
-      infoCard("VEHICLE", "{{vehicle}}", "VIN {{vehicle.vin}} · {{jobcard.km}}", INK),
+      infoCard("CUSTOMER", "{{customer.name}}", "{{service.customerLines}}"),
+      infoCard("VEHICLE", "{{vehicle}}", "{{service.vehicleLines}}", INK),
     ],
-    [text("Serviced: {{jobcard.completed}}"), text("Technician: {{technician}}", "right")],
-    [heading("Work performed & parts")],
-    [lineItems()],
-    [terms("NEXT SERVICE", [
-      "We recommend the next service per the maintenance schedule.",
-      "Use the company contact details in the footer to book.",
-    ])],
-    signatureStrip("Customer & date", "For {{company.name}} & date"),
+    [onlyWhen("service.hasSummary", [infoCard("WORK CARRIED OUT", "", "{{service.work}}", INK)])],
+    [onlyWhen("jobcard.lines.length > 0", [packingList()])],
+    [onlyWhen("service.hasNextDue", [infoCard("NEXT SERVICE DUE", "{{service.nextDue}}", "")])],
+    signatureStrip("Customer & date", "Technician & date"),
     [footer()],
   ]);
 }

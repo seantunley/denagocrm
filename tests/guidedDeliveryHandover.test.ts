@@ -11,6 +11,9 @@ const actionSource = readFileSync("src/app/actions/guidedDelivery.ts", "utf8");
 const pageSource = readFileSync("src/app/(app)/deliveries/page.tsx", "utf8");
 const completionSource = readFileSync("src/components/checklists/GuidedDeliveryCompletion.tsx", "utf8");
 const deliveryNoteSource = readFileSync("src/app/(print)/quotes/[id]/delivery-note/page.tsx", "utf8");
+// Which runs and which signature the note shows: one loader, shared by the fixed
+// layout and the document-editor layout so the two cannot pick differently.
+const deliveryEvidenceSource = readFileSync("src/lib/deliveryServicePrint.ts", "utf8");
 
 test("guided delivery is unavailable rather than implicitly complete with no template", () => {
   assert.deepEqual(deliveryHandoverReadiness([], []), {
@@ -73,15 +76,17 @@ test("embedded delivery-note review hides its nested print toolbar", () => {
 });
 
 test("the delivery note shows the guided snapshots being signed, then the stored signature", () => {
-  assert.match(deliveryNoteSource, /prisma\.checklistRun\.findMany/);
-  assert.match(deliveryNoteSource, /hostType: "quote\.delivery"/);
-  assert.match(deliveryNoteSource, /labelSnapshot/);
-  assert.match(deliveryNoteSource, /captureSnapshot/);
+  const loaderSource = deliveryEvidenceSource;
+  assert.match(deliveryNoteSource, /await loadDeliveryEvidence\(quote, requestedRuns\)/);
+  assert.match(loaderSource, /prisma\.checklistRun\.findMany/);
+  assert.match(loaderSource, /hostType: "quote\.delivery"/);
+  assert.match(loaderSource, /labelSnapshot/);
+  assert.match(loaderSource, /captureSnapshot/);
   // The selection moved into deliveryNoteRuns so it could be executed rather
   // than described — and so the note stops re-deciding, after signing, which run
   // the customer signed against.
-  assert.match(deliveryNoteSource, /deliveryNoteRuns\(guidedRuns, noteRunIds\)/);
-  assert.match(deliveryNoteSource, /tag: "delivery-signature"/);
+  assert.match(loaderSource, /deliveryNoteRuns\(guidedRuns, noteRunIds\)/);
+  assert.match(loaderSource, /tag: "delivery-signature"/);
   assert.match(deliveryNoteSource, /src=\{`\/api\/files\/\$\{signatureDoc\.id\}`\}/);
 });
 
@@ -176,9 +181,10 @@ test("the ids are re-verified against the quote, never trusted", () => {
 });
 
 test("the note never re-derives the selection for itself", () => {
-  const page = deliveryNoteSource;
+  const page = deliveryEvidenceSource;
   assert.match(page, /deliveryNoteRuns\(guidedRuns, noteRunIds\)/);
   assert.doesNotMatch(page, /latestRunByTemplate/, "a second copy of the rule is how the two drift apart");
+  assert.doesNotMatch(deliveryNoteSource, /latestRunByTemplate|deliveryNoteRuns\(/, "nor may the page keep its own");
 });
 
 /*
@@ -406,9 +412,9 @@ test("a signed note ignores the query parameter entirely", () => {
   // Once recorded, the stored ids are the whole answer — a link cannot restyle
   // a document somebody has already signed.
   assert.match(
-    deliveryNoteSource,
+    deliveryEvidenceSource,
     /quote\.deliveryHandoverRunIds\.length > 0\s*\r?\n?\s*\? quote\.deliveryHandoverRunIds/,
   );
   // And an unsigned preview only honours ids that are already this quote's runs.
-  assert.match(deliveryNoteSource, /previewRunIds\.filter\(\(id\) => guidedRuns\.some\(\(run\) => run\.id === id\)\)/);
+  assert.match(deliveryEvidenceSource, /previewRunIds\.filter\(\(id\) => guidedRuns\.some\(\(run\) => run\.id === id\)\)/);
 });

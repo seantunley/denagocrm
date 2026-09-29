@@ -1,4 +1,5 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+import { builderLayoutFor } from "@/lib/deliveryServicePrint";
 import { prisma } from "@/lib/db";
 import { requireJobCardReadAccess } from "@/lib/permissions";
 import PrintActions from "@/components/PrintActions";
@@ -18,6 +19,12 @@ export default async function ServiceReportPrintPage({
   const { id } = await params;
   await requireJobCardReadAccess(id);
   const { tpl: tplId } = await searchParams;
+  // SAFE SWITCH: once the service-report layout is published in the document
+  // editor (or Document Studio previews one with ?tpl=), that layout is the
+  // report. Until then everything below renders exactly as it always has.
+  if (await builderLayoutFor("service-report", tplId)) {
+    redirect(`/jobcards/${encodeURIComponent(id)}/service-report/document${tplId ? `?tpl=${encodeURIComponent(tplId)}` : ""}`);
+  }
   const jobCard = await prisma.jobCard.findUnique({
     where: { id },
     include: {

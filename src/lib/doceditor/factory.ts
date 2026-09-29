@@ -80,6 +80,8 @@ export function newBlock(type: BlockType): DocumentBlock {
       ] };
     case "conditional":
       return { id: uid(), type, ...emptyLayout, when: "", blocks: [] };
+    case "handoverChecklist":
+      return { id: uid(), type, ...emptyLayout };
   }
 }
 

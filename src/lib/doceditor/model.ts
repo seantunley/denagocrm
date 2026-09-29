@@ -196,6 +196,9 @@ export const footerBlockSchema = z.object({
   lines: z.array(z.object({ text: z.string() })).default([]),
 });
 
+/** Delivery handover checklist runs + customer signature, filled from the record (see ./handoverChecklist.ts). */
+export const handoverChecklistBlockSchema = z.object({ ...base, type: z.literal("handoverChecklist") });
+
 /** Conditional wrapper — nested blocks render only when `when` is truthy (safe expr engine). */
 export const conditionalBlockSchema = z.object({
   ...base, type: z.literal("conditional"),
@@ -207,7 +210,7 @@ export const blockSchema: z.ZodType<DocumentBlock> = z.lazy(() => z.discriminate
   textBlockSchema, headingBlockSchema, imageBlockSchema, dividerBlockSchema, spacerBlockSchema,
   pageBreakBlockSchema, pricingBlockSchema, tableBlockSchema,
   bannerBlockSchema, infoCardBlockSchema, lineItemsBlockSchema, totalBandBlockSchema, termsBlockSchema, footerBlockSchema,
-  conditionalBlockSchema,
+  conditionalBlockSchema, handoverChecklistBlockSchema,
 ])) as z.ZodType<DocumentBlock>;
 
 export type TextBlock = z.infer<typeof textBlockSchema>;
@@ -224,6 +227,7 @@ export type LineItemsBlock = z.infer<typeof lineItemsBlockSchema>;
 export type TotalBandBlock = z.infer<typeof totalBandBlockSchema>;
 export type TermsBlock = z.infer<typeof termsBlockSchema>;
 export type FooterBlock = z.infer<typeof footerBlockSchema>;
+export type HandoverChecklistBlock = z.infer<typeof handoverChecklistBlockSchema>;
 export type ConditionalBlock = {
   id: string; type: "conditional"; settings: LayoutSettings; locked: boolean; hidden: boolean;
   when: string; blocks: DocumentBlock[];
@@ -232,7 +236,7 @@ export type DocumentBlock =
   | TextBlock | HeadingBlock | ImageBlock | DividerBlock | SpacerBlock
   | PageBreakBlock | PricingBlock | TableBlock
   | BannerBlock | InfoCardBlock | LineItemsBlock | TotalBandBlock | TermsBlock | FooterBlock
-  | ConditionalBlock;
+  | ConditionalBlock | HandoverChecklistBlock;
 export type BlockType = DocumentBlock["type"];
 
 // ── columns / rows / pages ──────────────────────────────────────────
