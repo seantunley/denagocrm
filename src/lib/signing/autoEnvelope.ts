@@ -3,7 +3,7 @@ import { prisma } from "@/lib/db";
 import { payableTotalCents } from "@/lib/pricing";
 import { contactName } from "@/lib/format";
 import { listTenantStaff } from "@/lib/tenantActor";
-import { getBuilderTemplate } from "@/lib/docbuilder/store";
+import { getLiveBuilderTemplate } from "@/lib/docbuilder/store";
 import { type DocumentModel, type DocumentPage, type Recipient } from "@/lib/doceditor/model";
 import { readTemplateDocument } from "@/lib/doceditor/legacy";
 import {
@@ -456,7 +456,8 @@ export async function resolveEnvelope(opts: {
     // something other than what was selected, with nothing on screen to say so.
     // resolveEnvelope's null already surfaces as "Could not prepare the
     // document." in recordSigning.
-    const template = await getBuilderTemplate(templateId);
+    // What the customer signs is the PUBLISHED layout, never a half-edited draft.
+    const template = await getLiveBuilderTemplate(templateId);
     if (!template) return null;
     const read = readTemplateDocument(template.data, template.name);
     if (read.status !== "ok") return null;
