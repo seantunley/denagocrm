@@ -238,6 +238,8 @@ export const vehicleShowcaseBlockSchema = z.object({
   brand: z.string().default("DENAGO EV"),
   accent: colorField("#ea580c"),
   imageHeight: z.number().default(280),
+  /** "contain" shows the whole photo (cut-outs); "cover" fills the area (scenic photos). */
+  imageFit: z.enum(["contain", "cover"]).default("contain"),
   /**
    * Set ONLY on a signing snapshot, at send time (lib/signing/service.ts): the
    * vehicle exactly as the signer was shown it — null meaning there was none.
@@ -269,6 +271,8 @@ export const footerBandBlockSchema = z.object({
   subtitle: z.string().default("Authorised Denago EV Dealer"),
   bg: colorField("#020617"),
   accent: colorField("#ea580c"),
+  /** Optional band photo (e.g. a skyline). Only an inline `data:image/…` is ever rendered. */
+  bgImage: z.string().default(""),
 });
 
 /** Conditional wrapper — nested blocks render only when `when` is truthy (safe expr engine). */

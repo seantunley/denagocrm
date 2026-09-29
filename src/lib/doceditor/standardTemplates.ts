@@ -283,6 +283,7 @@ export function showcaseQuoteTemplate(): DocumentModel {
     if (block.type === "vehicleShowcase") {
       block.part = part;
       block.imageHeight = 280;
+      block.imageFit = "cover"; // scenic product photos fill the hero and fade into the page
     }
     return block;
   };

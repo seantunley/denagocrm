@@ -89,7 +89,7 @@ export function newBlock(type: BlockType): DocumentBlock {
         { icon: "user", label: "PREPARED BY", value: "{{preparedBy}}", sub: "Sales Consultant" },
       ] };
     case "vehicleShowcase":
-      return { id: uid(), type, ...emptyLayout, part: "full", brand: "DENAGO EV", accent: "#ea580c", imageHeight: 280 };
+      return { id: uid(), type, ...emptyLayout, part: "full", brand: "DENAGO EV", accent: "#ea580c", imageHeight: 280, imageFit: "contain" };
     case "totalsBox":
       return { id: uid(), type, ...emptyLayout, bg: "#020617", accent: "#ea580c", totalLabel: "TOTAL INCL. VAT", totalAmount: "{{quote.total}}", rows: [
         { label: "Subtotal (excl. VAT)", value: "{{quote.subtotal}}" },
@@ -102,7 +102,7 @@ export function newBlock(type: BlockType): DocumentBlock {
         nameLabel: "Customer Name", nameValue: "{{customer.name}}", signatureLabel: "Signature", dateLabel: "Date",
       };
     case "footerBand":
-      return { id: uid(), type, ...emptyLayout, subtitle: "Authorised Denago EV Dealer", bg: "#020617", accent: "#ea580c" };
+      return { id: uid(), type, ...emptyLayout, subtitle: "Authorised Denago EV Dealer", bg: "#020617", accent: "#ea580c", bgImage: "" };
   }
 }
 

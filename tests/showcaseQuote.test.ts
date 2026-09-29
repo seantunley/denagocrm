@@ -173,6 +173,32 @@ test("a sent quote keeps its vehicle: editing the product changes neither the si
   assert.ok(!later.includes(PNG_B));
 });
 
+test("band photos and the vehicle-photo fade: rendered under an overlay, and carried in the snapshot", () => {
+  const HEADER = "data:image/jpeg;base64,SEVBREVS";
+  const FOOTER = "data:image/jpeg;base64,Rk9PVEVS";
+  const doc = showcaseQuoteTemplate();
+  const blocks = [...doc.pages[0].rows.flatMap((r) => r.columns.flatMap((c) => c.blocks)), ...doc.pages[0].floatingBlocks.map((f) => f.block)];
+  for (const b of blocks) {
+    if (b.type === "showcaseHeader") b.bgImage = HEADER;
+    if (b.type === "footerBand") b.bgImage = FOOTER;
+  }
+  // Sent: the band photos travel inside the snapshot's own blocks.
+  const snapshot = parseDocument(JSON.parse(JSON.stringify(freezeVehicleShowcase(doc, showcaseFromProduct(
+    { name: "Denago EV Rover XL", description: null, showcaseTagline: null, showcaseSpecs: null }, PNG)))))!;
+  const html = renderSigningSheets(snapshot, ctx({})).pages.join("\n");
+  for (const img of [HEADER, FOOTER]) {
+    // Single-quoted: a double quote would end the style="…" attribute it sits in.
+    assert.ok(html.includes(`rgba(2,6,23,.38)),url('${img}')`), `${img} is rendered under the darkening overlay`);
+  }
+  assert.doesNotMatch(html, /style="[^"]*url\("/, "no double quote inside a style attribute");
+  assert.match(html, /object-fit:cover;object-position:center;-webkit-mask-image:linear-gradient\(to right,transparent/, "a filled photo fades in from the left");
+
+  const contained = showcaseQuoteTemplate();
+  for (const b of contained.pages[0].rows.flatMap((r) => r.columns.flatMap((c) => c.blocks))) if (b.type === "vehicleShowcase") b.imageFit = "contain";
+  const plain = renderDocumentHtml(contained, ctx({ showcase: showcaseFromProduct({ name: "Scout", description: null, showcaseTagline: null, showcaseSpecs: null }, PNG) }));
+  assert.doesNotMatch(plain, /mask-image/, "a contained cut-out is not faded");
+});
+
 test("the send and snapshot-render paths are wired to the frozen vehicle", () => {
   const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
   const read = (f: string) => readFileSync(path.join(root, f), "utf8");

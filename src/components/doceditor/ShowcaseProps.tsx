@@ -25,6 +25,30 @@ function Colour({ label, value, onChange }: { label: string; value: string; onCh
   return <div><label className={lbl}>{label}</label><input type="color" value={value} onChange={(e) => onChange(e.target.value)} className="h-8 w-full rounded border border-slate-300" /></div>;
 }
 
+/**
+ * A band's optional background photo, stored inline as a data URL in the block —
+ * so it is copied into every signing snapshot with the document and a signed
+ * quote can never change under a later re-upload.
+ */
+function BandImage({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const pick = (file: File | undefined) => {
+    if (!file) return;
+    if (!/^image\/(png|jpeg|webp)$/.test(file.type)) return void toast.error("Choose a PNG, JPG or WebP image.");
+    if (file.size > MAX_BAND_IMAGE_BYTES) return void toast.error("Band images must be 600 KB or smaller — export a compressed JPG.");
+    const reader = new FileReader();
+    reader.onload = () => onChange(String(reader.result ?? ""));
+    reader.readAsDataURL(file);
+  };
+  return (
+    <div className="mb-2">
+      <label className={lbl}>Background photo (optional)</label>
+      <input type="file" accept="image/png,image/jpeg,image/webp" className="w-full text-xs" onChange={(e) => pick(e.target.files?.[0])} />
+      {value ? <button type="button" className="mt-1 text-[11px] text-red-500 underline" onClick={() => onChange("")}>Remove photo</button> : null}
+      <p className={hint}>Fills the band behind a dark overlay so the text stays readable on any photo. Without one the band is a dark gradient.</p>
+    </div>
+  );
+}
+
 /** Properties for the showcase quotation blocks (see lib/doceditor/showcaseRender.ts). */
 export function ShowcaseProps({ block }: { block: ShowcaseBlock }) {
   const updateBlock = useEditor((s) => s.updateBlock);
@@ -39,14 +63,6 @@ export function ShowcaseProps({ block }: { block: ShowcaseBlock }) {
 
   switch (block.type) {
     case "showcaseHeader": {
-      const pickImage = (file: File | undefined) => {
-        if (!file) return;
-        if (!/^image\/(png|jpeg|webp)$/.test(file.type)) return void toast.error("Choose a PNG, JPG or WebP image.");
-        if (file.size > MAX_BAND_IMAGE_BYTES) return void toast.error("Band images must be 600 KB or smaller — export a compressed JPG.");
-        const reader = new FileReader();
-        reader.onload = () => set({ bgImage: String(reader.result ?? "") });
-        reader.readAsDataURL(file);
-      };
       return wrap("Header band", <>
         <Field label="Title" value={block.title} onChange={(title) => set({ title })} />
         <Field label="Number (supports {{quote.number}})" value={block.docNumber} onChange={(docNumber) => set({ docNumber })} />
@@ -55,10 +71,7 @@ export function ShowcaseProps({ block }: { block: ShowcaseBlock }) {
           <Colour label="Background" value={block.bg} onChange={(bg) => set({ bg })} />
           <Colour label="Accent" value={block.accent} onChange={(accent) => set({ accent })} />
         </div>
-        <label className={lbl}>Background photo (optional)</label>
-        <input type="file" accept="image/png,image/jpeg,image/webp" className="w-full text-xs" onChange={(e) => pickImage(e.target.files?.[0])} />
-        {block.bgImage ? <button type="button" className="mt-1 text-[11px] text-red-500 underline" onClick={() => set({ bgImage: "" })}>Remove photo</button> : null}
-        <p className={hint}>Shown behind the band with a dark overlay so the text stays readable. Without one the band is a dark gradient.</p>
+        <BandImage value={block.bgImage} onChange={(bgImage) => set({ bgImage })} />
         <label className="mt-2 flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={block.showLogo} onChange={(e) => set({ showLogo: e.target.checked })} /> Show logo</label>
       </>);
     }
@@ -94,6 +107,13 @@ export function ShowcaseProps({ block }: { block: ShowcaseBlock }) {
         </div>
         <Field label="Brand line" value={block.brand} onChange={(brand) => set({ brand })} />
         <div className="mb-3 grid grid-cols-2 gap-2">
+          <div className="col-span-2">
+            <label className={lbl}>Photo fit</label>
+            <select className={inp} value={block.imageFit} onChange={(e) => set({ imageFit: e.target.value })}>
+              <option value="cover">Fill the area, fade into the page (scenic photos)</option>
+              <option value="contain">Show the whole photo (cut-outs on white/transparent)</option>
+            </select>
+          </div>
           <div><label className={lbl}>Photo height (px)</label><input type="number" min={120} max={520} className={inp} value={block.imageHeight} onChange={(e) => set({ imageHeight: Number(e.target.value) || 280 })} /></div>
           <Colour label="Accent" value={block.accent} onChange={(accent) => set({ accent })} />
         </div>
@@ -133,6 +153,7 @@ export function ShowcaseProps({ block }: { block: ShowcaseBlock }) {
           <Colour label="Background" value={block.bg} onChange={(bg) => set({ bg })} />
           <Colour label="Accent" value={block.accent} onChange={(accent) => set({ accent })} />
         </div>
+        <BandImage value={block.bgImage} onChange={(bgImage) => set({ bgImage })} />
         <p className={hint}>Name, address, phone, website, email and Instagram come from Settings → Company.</p>
       </>);
   }

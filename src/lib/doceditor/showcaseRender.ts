@@ -112,11 +112,39 @@ function vehicleDetailsHtml(b: VehicleShowcaseBlock, v: VehicleShowcaseData): st
   </div>`;
 }
 
+/**
+ * A band's background: the uploaded photo, cover-fit and centred, under a navy
+ * overlay — dark on the left where the logo/name sit, lighter to the right, plus
+ * an overall darken so white and orange text stay readable on ANY photo. With
+ * no photo, the plain dark gradient.
+ */
+function bandBackground(bgCss: string, bgImage: string): string {
+  const img = bgImage.trim();
+  const layers = isDataImage(img)
+    ? `linear-gradient(90deg,rgba(2,6,23,.92) 0%,rgba(2,6,23,.62) 50%,rgba(2,6,23,.3) 100%),linear-gradient(rgba(2,6,23,.38),rgba(2,6,23,.38)),url('${img}')`
+    : `linear-gradient(115deg,${bgCss} 0%,${bgCss} 45%,#16233d 100%)`;
+  return `background-color:${bgCss};background-image:${layers};background-size:cover;background-position:center;background-repeat:no-repeat;${KEEP_BG}`;
+}
+const TEXT_SHADOW = "text-shadow:0 1px 6px rgba(2,6,23,.55);";
+
+/**
+ * The vehicle photo, fading softly into the white page along its LEFT edge so a
+ * scenic shot (vineyards, mountains behind the cart) blends into the page; on a
+ * plain white/transparent photo the fade is invisible. "cover" fills the area
+ * (scenic photos), "contain" shows the whole photo (cut-outs).
+ */
 function vehicleImageHtml(b: VehicleShowcaseBlock, v: VehicleShowcaseData, bound: boolean): string {
   const h = Math.max(120, Math.min(520, b.imageHeight || 280));
   const box = `height:${h}px;display:flex;align-items:center;justify-content:center;margin:8px 0 0;border-radius:12px;`;
   if (v.image && isDataImage(v.image)) {
-    return `<div style="${box}background:radial-gradient(ellipse at 50% 62%,#eef2f7 0%,#ffffff 72%);${KEEP_BG}"><img src="${esc(v.image)}" alt="${esc(v.name)}" style="max-width:100%;max-height:${h}px;object-fit:contain"/></div>`;
+    // Only a FILLED photo fades: faded, a contained cut-out would lose the front
+    // of the vehicle, and on a plain background there is nothing to blend.
+    const fade = "linear-gradient(to right,transparent 0%,rgba(0,0,0,.55) 16%,#000 38%)";
+    const style = b.imageFit === "cover"
+      ? `width:100%;height:${h}px;object-fit:cover;object-position:center;-webkit-mask-image:${fade};mask-image:${fade};`
+      : `max-width:100%;max-height:${h}px;object-fit:contain;`;
+    const backdrop = b.imageFit === "cover" ? "" : `background:radial-gradient(ellipse at 50% 62%,#eef2f7 0%,#ffffff 72%);${KEEP_BG}`;
+    return `<div style="${box}overflow:hidden;${backdrop}"><img src="${esc(v.image)}" alt="${esc(v.name)}" style="${style}display:block"/></div>`;
   }
   // No photo on a real quote: leave the space empty rather than show a broken image.
   if (bound) return "";
@@ -145,19 +173,16 @@ export function showcaseBlockHtml(block: ShowcaseBlock, ctx: RenderCtx, logoData
     case "showcaseHeader": {
       const bgCss = cssColor(block.bg, INK);
       const accentCss =cssColor(block.accent, ACCENT);
-      const photo = isDataImage(block.bgImage.trim())
-        ? `linear-gradient(90deg,rgba(2,6,23,.94) 0%,rgba(2,6,23,.72) 55%,rgba(2,6,23,.45) 100%),url("${block.bgImage.trim()}")`
-        : `linear-gradient(115deg,${bgCss} 0%,${bgCss} 45%,#16233d 100%)`;
       const logo = block.showLogo && logoDataUri
         ? `<img src="${esc(logoDataUri)}" alt="" style="height:36px;width:auto;display:block"/>`
         : `<div style="color:#fff;font-weight:800;font-size:16pt;letter-spacing:2px">${esc(tok("{{company.name}}", ctx))}</div>`;
-      return `<div style="border-radius:10px;overflow:hidden;background-color:${bgCss};background-image:${photo};background-size:cover;background-position:center;padding:16px 24px;display:flex;align-items:center;justify-content:space-between;gap:18px;margin:0 0 8px;${KEEP_BG}">
-        <div style="min-width:0">${logo}${block.tagline.trim() ? `<div style="color:#cbd5e1;font-size:7.5pt;font-weight:600;letter-spacing:3.5px;margin-top:9px;text-transform:uppercase">${esc(tok(block.tagline, ctx))}</div>` : ""}</div>
+      return `<div style="border-radius:10px;overflow:hidden;${bandBackground(bgCss, block.bgImage)}padding:16px 24px;display:flex;align-items:center;justify-content:space-between;gap:18px;margin:0 0 8px">
+        <div style="min-width:0">${logo}${block.tagline.trim() ? `<div style="color:#e2e8f0;font-size:7.5pt;font-weight:600;letter-spacing:3.5px;margin-top:9px;text-transform:uppercase;${TEXT_SHADOW}">${esc(tok(block.tagline, ctx))}</div>` : ""}</div>
         <div style="display:flex;align-items:stretch;gap:14px;flex:none">
           <div style="width:3px;background:${accentCss};border-radius:2px;${KEEP_BG}"></div>
           <div style="text-align:right">
-            <div style="color:#fff;font-weight:800;font-size:20pt;letter-spacing:3px;line-height:1.15">${esc(tok(block.title, ctx))}</div>
-            <div style="color:${accentCss};font-weight:800;font-size:13pt;letter-spacing:1px;white-space:nowrap">${esc(tok(block.docNumber, ctx))}</div>
+            <div style="color:#fff;font-weight:800;font-size:20pt;letter-spacing:3px;line-height:1.15;${TEXT_SHADOW}">${esc(tok(block.title, ctx))}</div>
+            <div style="color:${accentCss};font-weight:800;font-size:13pt;letter-spacing:1px;white-space:nowrap;${TEXT_SHADOW}">${esc(tok(block.docNumber, ctx))}</div>
           </div>
         </div>
       </div>`;
@@ -208,7 +233,8 @@ export function showcaseBlockHtml(block: ShowcaseBlock, ctx: RenderCtx, logoData
         ...contact.map(([ic, value]) => cell(icon(ic, accentCss,12), value)),
         ...(instagram ? [cell(`<svg width="12" height="12" viewBox="0 0 24 24" fill="${accentCss}" style="display:block;flex:none"><path d="${SOCIAL_ICON_PATHS.instagram}"/></svg>`, instagram)] : []),
       ];
-      return `<div style="background:${cssColor(block.bg, INK)};border-top:3px solid ${accentCss};border-radius:8px;box-sizing:border-box;height:${FOOTER_BAND_HEIGHT}px;overflow:hidden;padding:0 18px;display:flex;justify-content:space-between;align-items:center;gap:16px;${KEEP_BG}">
+      const bandBgCss = cssColor(block.bg, INK);
+      return `<div style="${bandBackground(bandBgCss, block.bgImage)}border-top:3px solid ${accentCss};border-radius:8px;box-sizing:border-box;height:${FOOTER_BAND_HEIGHT}px;overflow:hidden;padding:0 18px;display:flex;justify-content:space-between;align-items:center;gap:16px;${TEXT_SHADOW}">
         <div style="flex:none;max-width:40%">
           <div style="color:#fff;font-size:10.5pt;font-weight:800;line-height:1.25">${esc(company("name"))}</div>
           ${block.subtitle.trim() ? `<div style="color:${accentCss};font-size:7pt;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;margin-top:2px">${esc(tok(block.subtitle, ctx))}</div>` : ""}
