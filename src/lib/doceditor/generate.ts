@@ -83,7 +83,7 @@ async function resolve(templateId: string, quoteId?: string | null, jobCardId?: 
   } else if (jobCardId) {
     const jc = await prisma.jobCard.findUnique({
       where: { id: jobCardId },
-      include: { items: true, vehicle: true, contact: true, technician: true },
+      include: { items: true, vehicle: true, contact: true, technician: true, serviceRecord: { include: { performedBy: true } } },
     });
     if (jc) { ctx = buildJobCardContext(jc); title = `${doc.title} — Job #${jc.number}`; jId = jc.id; contactId = jc.contactId; }
   }
