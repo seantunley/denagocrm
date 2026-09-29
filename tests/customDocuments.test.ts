@@ -254,7 +254,7 @@ test("Document Studio makes new documents from custom templates and offers Conve
 });
 
 test("the migration is additive: two nullable columns on DocInstance, reentrant", () => {
-  const sql = readFileSync(path.join(root, "prisma/migrations/20260929120000_doc_instance_doc_editor_model/migration.sql"), "utf8")
+  const sql = readFileSync(path.join(root, "prisma/migrations/20260929130000_doc_instance_doc_editor_model/migration.sql"), "utf8")
     .replace(/^\s*--.*$/gm, "").trim();
   assert.deepEqual(sql.split(/;\s*/).filter(Boolean), [
     'ALTER TABLE "DocInstance" ADD COLUMN IF NOT EXISTS "docModelJson" JSONB',
