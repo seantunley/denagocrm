@@ -75,6 +75,20 @@ test("print page: builder only when published, and never for an old ?tpl= previe
   assert.match(src("src/lib/jobCardPrintDocument.ts"), /publishedBuilderTemplateFor\("jobcard"\)/);
 });
 
+/**
+ * Job-card read access is NOT permission to see an unpublished builder draft
+ * (that needs docbuilder.view/manage). The document route has no preview
+ * parameter at all: it takes no template id from the URL and only ever renders
+ * the PUBLISHED layout. If a preview is ever added here, it must gate on
+ * docbuilder.view/manage — this test is the reminder.
+ */
+test("the job card document route cannot be steered to an unpublished draft", () => {
+  const route = src("src/app/(print)/jobcards/[id]/print/document/route.ts");
+  const render = src("src/lib/jobCardPrintDocument.ts");
+  assert.doesNotMatch(route, /searchParams\.get\("(?!photos")/, "the only query parameter read is photos");
+  assert.doesNotMatch(route + render, /getBuilderTemplate\(|templateId/, "no draft or chosen-template path");
+});
+
 test("e-signing: job cards use the published layout only; otherwise the standard one", () => {
   const action = src("src/app/actions/recordSigning.ts");
   assert.match(action, /\(await publishedBuilderTemplateFor\("jobcard"\)\)\?\.id \?\? null/);
