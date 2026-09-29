@@ -223,6 +223,14 @@ export const infoStripBlockSchema = z.object({
     icon: showcaseIcon, label: z.string().default(""), value: z.string().default(""), sub: z.string().default(""),
   })).default([]),
 });
+/** A vehicle as the showcase shows it (lib/docbuilder/vehicleShowcase.ts VehicleShowcaseData). */
+export const frozenVehicleSchema = z.object({
+  name: z.string(),
+  tagline: z.string().default(""),
+  description: z.string().default(""),
+  image: z.string().nullable().default(null),
+  specs: z.array(z.object({ icon: showcaseIcon, label: z.string(), sub: z.string().default("") })).default([]),
+});
 /** The quote's primary vehicle — model, tagline, description, specs and photo come from its Product. */
 export const vehicleShowcaseBlockSchema = z.object({
   ...base, type: z.literal("vehicleShowcase"),
@@ -230,6 +238,14 @@ export const vehicleShowcaseBlockSchema = z.object({
   brand: z.string().default("DENAGO EV"),
   accent: colorField("#ea580c"),
   imageHeight: z.number().default(280),
+  /**
+   * Set ONLY on a signing snapshot, at send time (lib/signing/service.ts): the
+   * vehicle exactly as the signer was shown it — null meaning there was none.
+   * When present it renders INSTEAD of the live Product, so editing the product
+   * afterwards cannot change a document someone is signing or has signed.
+   * Absent on templates, which bind to the quote live.
+   */
+  frozen: frozenVehicleSchema.nullable().optional(),
 });
 export const totalsBoxBlockSchema = z.object({
   ...base, type: z.literal("totalsBox"),

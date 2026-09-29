@@ -6,6 +6,7 @@ import { formatDate } from "@/lib/format";
 import { getCompanyProfile, companyTokens } from "@/lib/companyProfile";
 import type { DocumentModel } from "@/lib/doceditor/model";
 import { freezeDocumentGlobals } from "@/lib/signing/freezeDocument";
+import { freezeQuoteShowcase } from "@/lib/docbuilder/vehicleShowcaseLoad";
 // newSignToken is superseded by newSignCapability: a capability is stored as a
 // digest plus ciphertext, never as the raw value. frozenBrand is kept — the
 // brand a document was signed under must not follow a later rebrand.
@@ -105,10 +106,15 @@ export async function createSignatureRequestFromDoc(opts: {
   // would claim about itself afterwards.
   const profile = await getCompanyProfile();
   const brand = frozenBrand(profile);
-  const frozenDoc = freezeDocumentGlobals(opts.doc, {
-    ...companyTokens(profile),
-    "date.today": formatDate(new Date()),
-  });
+  // The showcase vehicle is frozen the same way: its photo, tagline and specs
+  // are otherwise read live from the Product, which may be edited mid-signature.
+  const frozenDoc = await freezeQuoteShowcase(
+    freezeDocumentGlobals(opts.doc, {
+      ...companyTokens(profile),
+      "date.today": formatDate(new Date()),
+    }),
+    source.quoteId,
+  );
   // Whether the signer must prove who they are.
   //
   // The workspace policy decides the default — MONEY out of the box, so a quote

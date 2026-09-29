@@ -31,7 +31,17 @@ function logoDataUri(): string | undefined {
  * predating brandJson, and every render that is not of a signed request) falls
  * back to resolving live, exactly as before.
  */
-export async function bindCtx(quoteId: string | null, jobCardId: string | null, frozen?: FrozenBrand | null): Promise<RenderCtx> {
+export async function bindCtx(
+  quoteId: string | null,
+  jobCardId: string | null,
+  frozen?: FrozenBrand | null,
+  /**
+   * `liveVehicle: false` when rendering a signature request's SNAPSHOT: its
+   * vehicleShowcase blocks carry the vehicle frozen at send time, and the live
+   * Product must not be read at all (see freezeVehicleShowcase).
+   */
+  opts?: { liveVehicle?: boolean },
+): Promise<RenderCtx> {
   // Inject the editable Company Profile as {{company.*}} tokens so the brand footer
   // resolves dynamically — even when a document is sent for signing with NO linked
   // record (the signer sheets and final signed PDF re-render from snapshotJson, so an
@@ -50,7 +60,10 @@ export async function bindCtx(quoteId: string | null, jobCardId: string | null, 
     // The fleet is a separate, TENANT-SCOPED lookup rather than an include:
     // Quote.fleetId carries no foreign key (see the schema comment), so an id
     // from another workspace must fail to resolve rather than be joined in.
-    if (q) return withCompany(await withVehicleShowcase(buildQuoteContext(q, await loadBillToFleet(prisma, q.fleetId)), q));
+    if (q) {
+      const ctx = buildQuoteContext(q, await loadBillToFleet(prisma, q.fleetId));
+      return withCompany(opts?.liveVehicle === false ? ctx : await withVehicleShowcase(ctx, q));
+    }
   } else if (jobCardId) {
     const jc = await prisma.jobCard.findUnique({
       where: { id: jobCardId },
@@ -67,7 +80,7 @@ export async function renderRequestDocHtml(req: Pick<SignatureRequest, "snapshot
   const doc = parseDocument(req.snapshotJson);
   if (!doc) return "<p style='padding:24px;color:#64748b'>This document is unavailable.</p>";
   const frozen = parseFrozenBrand(req.brandJson);
-  const ctx = await bindCtx(req.quoteId, req.jobCardId, frozen);
+  const ctx = await bindCtx(req.quoteId, req.jobCardId, frozen, { liveVehicle: false });
   return renderDocumentHtml(doc, ctx, frozen?.logoUrl ?? logoDataUri());
 }
 
@@ -114,7 +127,7 @@ export async function renderRequestSigningSheets(req: Pick<SignatureRequest, "sn
   // The sheets the SIGNER is looking at. These must match the sealed PDF exactly
   // — it is rendered from the same snapshot — so they take the frozen brand too.
   const frozen = parseFrozenBrand(req.brandJson);
-  const ctx = await bindCtx(req.quoteId, req.jobCardId, frozen);
+  const ctx = await bindCtx(req.quoteId, req.jobCardId, frozen, { liveVehicle: false });
   return renderSigningSheets(doc, ctx, frozen?.logoUrl ?? logoDataUri());
 }
 

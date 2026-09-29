@@ -83,8 +83,13 @@ export async function updateProduct(id: string, formData: FormData) {
   });
 }
 
-/** Product photos are embedded into every quote PDF that shows them, so keep them modest. */
-const SHOWCASE_IMAGE_MAX_BYTES = 4 * 1024 * 1024;
+/**
+ * Product photos are embedded into every quote PDF that shows them AND frozen,
+ * as bytes, into each signature request's snapshot (freezeVehicleShowcase) — so
+ * this cap is also the ceiling on what one showcase adds to a snapshot. A
+ * web-optimised cut-out is typically 100–400 KB.
+ */
+const SHOWCASE_IMAGE_MAX_BYTES = 1.5 * 1024 * 1024;
 
 /**
  * The "Quote showcase" card: the tagline, spec icons and photo the showcase
@@ -111,7 +116,7 @@ export async function updateProductShowcase(id: string, formData: FormData) {
     let imageRef = product.showcaseImageRef;
     const upload = formData.get("showcaseImage");
     if (upload instanceof File && upload.size > 0) {
-      if (upload.size > SHOWCASE_IMAGE_MAX_BYTES) throw new Error("Product photos must be 4 MB or smaller.");
+      if (upload.size > SHOWCASE_IMAGE_MAX_BYTES) throw new Error("Product photos must be 1.5 MB or smaller — export a web-optimised PNG, JPG or WebP.");
       const buffer = Buffer.from(await upload.arrayBuffer());
       const mime = detectProfileImageMime(buffer); // sniffed from the bytes, not the browser's say-so
       if (!mime) throw new Error("That file is not a PNG, JPG or WebP image.");

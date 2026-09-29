@@ -7,6 +7,7 @@ import { parseDocument } from "../src/lib/doceditor/model";
 import { renderDocumentHtml, renderSigningSheets, type RenderCtx } from "../src/lib/doceditor/serialize";
 import { showcaseQuoteTemplate } from "../src/lib/doceditor/standardTemplates";
 import { ACCEPTANCE_GEOMETRY } from "../src/lib/doceditor/showcaseRender";
+import { freezeDocumentGlobals, freezeVehicleShowcase } from "../src/lib/signing/freezeDocument";
 import {
   modelName,
   parseVehicleSpecs,
@@ -130,6 +131,60 @@ test("the showcase layout keeps a customer signature and date on the acceptance 
     assert.ok(f.anchor.y >= card.y && f.anchor.y + f.height <= card.y + cardH, `${f.kind} sits within the card vertically`);
   }
   assert.ok(card.y + cardH <= 1123 - parsed.style.margin, "the card is on the sheet");
+});
+
+test("a sent quote keeps its vehicle: editing the product changes neither the signer view nor the sealed PDF", () => {
+  const PNG_B = "data:image/png;base64,QkJCQkJCQkI=";
+  const original = showcaseFromProduct({
+    name: "Denago EV Rover XL", description: "Original description.", showcaseTagline: "Original tagline",
+    showcaseSpecs: [{ icon: "seats", label: "4 SEATS", sub: "Comfortable seating" }],
+  }, PNG);
+  const edited = showcaseFromProduct({
+    name: "Denago EV Rover XL", description: "EDITED description.", showcaseTagline: "EDITED tagline",
+    showcaseSpecs: [{ icon: "seats", label: "9 SEATS", sub: "EDITED" }],
+  }, PNG_B);
+
+  // SEND: what service.ts stores as snapshotJson — globals frozen, then the vehicle.
+  const sent = freezeVehicleShowcase(freezeDocumentGlobals(showcaseQuoteTemplate(), { "company.name": "Denago Cape Town" }), original);
+  const snapshot = parseDocument(JSON.parse(JSON.stringify(sent)));
+  assert.ok(snapshot, "the frozen snapshot is a valid stored document");
+  assert.equal(JSON.stringify(snapshot).split(PNG).length - 1, 1, "the photo is stored once — the details block carries no copy");
+
+  // EDIT the product, then render the SAME snapshot. Even a context carrying the
+  // edited product (the worst case) must not reach the document.
+  const live = ctx({ showcase: edited });
+  const signerView = renderSigningSheets(snapshot, live).pages.join("\n");
+  const sealedPdf = renderDocumentHtml(snapshot, live, undefined, {
+    stampedFields: [{ page: 0, x: 500, y: 930, width: 200, height: 38, kind: "signature", image: PNG, label: "Jane Buyer" }],
+  });
+  for (const [surface, html] of [["signer view", signerView], ["sealed PDF", sealedPdf]] as const) {
+    assert.match(html, /Original tagline/, `${surface}: original tagline`);
+    assert.match(html, /Original description\./, `${surface}: original description`);
+    assert.match(html, /4 SEATS/, `${surface}: original specs`);
+    assert.ok(html.includes(`src="${PNG}"`), `${surface}: original photo`);
+    assert.doesNotMatch(html, /EDITED|9 SEATS/, `${surface}: nothing from the edited product`);
+    assert.ok(!html.includes(PNG_B), `${surface}: not the new photo`);
+  }
+
+  // Sent with NO vehicle: a product added to the quote later cannot appear.
+  const none = parseDocument(JSON.parse(JSON.stringify(freezeVehicleShowcase(showcaseQuoteTemplate(), null))))!;
+  const later = renderDocumentHtml(none, live);
+  assert.doesNotMatch(later, /EDITED|9 SEATS|>Rover XL</);
+  assert.ok(!later.includes(PNG_B));
+});
+
+test("the send and snapshot-render paths are wired to the frozen vehicle", () => {
+  const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const read = (f: string) => readFileSync(path.join(root, f), "utf8");
+  const service = read("src/lib/signing/service.ts");
+  assert.match(service, /const frozenDoc = await freezeQuoteShowcase\(/, "send time freezes the vehicle into the snapshot");
+  assert.match(service, /snapshotJson: frozenDoc/);
+  const render = read("src/lib/signing/render.ts");
+  for (const fn of ["renderRequestDocHtml", "renderRequestSigningSheets"]) {
+    const body = render.slice(render.indexOf(`function ${fn}`), render.indexOf("\n}\n", render.indexOf(`function ${fn}`)));
+    assert.match(body, /liveVehicle: false/, `${fn} must not read the live product`);
+  }
+  assert.match(read("src/lib/signing/complete.ts"), /bindCtx\([^)]*\{ liveVehicle: false \}\)/, "the sealed PDF must not read the live product");
 });
 
 test("design-time preview shows placeholders, and poisoned colours never break out", () => {

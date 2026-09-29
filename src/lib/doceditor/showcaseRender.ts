@@ -79,8 +79,13 @@ const SAMPLE_VEHICLE: VehicleShowcaseData = {
   ],
 };
 
-/** The vehicle to show: the record's, a name-only fallback, the sample (unbound), or null (hide). */
-function vehicleFor(ctx: RenderCtx): VehicleShowcaseData | null {
+/**
+ * The vehicle to show: the one FROZEN into a signing snapshot when there is one
+ * (authoritative — never the live product), else the record's, a name-only
+ * fallback, the sample (unbound), or null (hide).
+ */
+function vehicleFor(block: VehicleShowcaseBlock, ctx: RenderCtx): VehicleShowcaseData | null {
+  if (block.frozen !== undefined) return block.frozen ? readShowcase({ showcase: block.frozen }) : null;
   if (!ctx?.bound) return SAMPLE_VEHICLE;
   const found = readShowcase(ctx.vars);
   if (found) return found;
@@ -170,9 +175,9 @@ export function showcaseBlockHtml(block: ShowcaseBlock, ctx: RenderCtx, logoData
         </div>`).join("")}</div>`;
     }
     case "vehicleShowcase": {
-      const v = vehicleFor(ctx);
+      const v = vehicleFor(block, ctx);
       if (!v) return "";
-      const bound = Boolean(ctx?.bound);
+      const bound = Boolean(ctx?.bound) || block.frozen !== undefined;
       if (block.part === "details") return vehicleDetailsHtml(block, v);
       if (block.part === "image") return vehicleImageHtml(block, v, bound);
       const image = vehicleImageHtml(block, v, bound);

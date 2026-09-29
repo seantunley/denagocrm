@@ -31,7 +31,7 @@ export default function ProductShowcaseForm({
             <input name="showcaseTagline" className="input" maxLength={120} defaultValue={product.showcaseTagline ?? ""} placeholder="e.g. Lifted 4-seater · Forward-facing" />
           </div>
           <div>
-            <label className="label">Photo (PNG, JPG or WebP, up to 4 MB — a cut-out on white or transparent looks best)</label>
+            <label className="label">Photo (PNG, JPG or WebP, up to 1.5 MB — a web-optimised cut-out on white or transparent looks best)</label>
             {photo ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img src={photo} alt={product.name} className="mb-2 max-h-40 rounded border border-border bg-white object-contain" />
