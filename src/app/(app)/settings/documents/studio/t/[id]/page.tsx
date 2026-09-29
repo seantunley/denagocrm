@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { ArrowLeft, Rocket } from "lucide-react";
 import { requirePermission } from "@/lib/permissions";
 import { prisma } from "@/lib/db";
+import { listStudioClauses } from "@/lib/docTemplateStore";
 import { MERGE_FIELDS } from "@/lib/mergeFields";
 import { formatDateTime } from "@/lib/format";
 import StudioEditor from "@/components/StudioEditor";
@@ -23,7 +24,7 @@ export default async function StudioTemplatePage({
       where: { id },
       include: { versions: { orderBy: { version: "desc" }, take: 5 } },
     }),
-    prisma.reusableBlock.findMany({ orderBy: { name: "asc" } }),
+    listStudioClauses(),
   ]);
   if (!tpl) notFound();
   const latest = tpl.versions[0];
@@ -37,7 +38,7 @@ export default async function StudioTemplatePage({
     <div className="space-y-4">
       <div>
         <Link
-          href="/settings/documents?tab=studio"
+          href="/document-studio"
           className="mb-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
         >
           <ArrowLeft className="size-3.5" />

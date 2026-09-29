@@ -2,6 +2,7 @@ import "server-only";
 import { prisma } from "./db";
 import { getSetting } from "./settings";
 import { embedStoredImage } from "./storedImage";
+import { isDocEditorLibraryItem } from "./studioClauses";
 import { DOC_DEFS, defaultTemplate, mergeTemplate, type DocKey, type DocTemplate } from "./docTemplates";
 
 /** First run per type: seed a "Standard" template (from legacy settings if any). */
@@ -26,6 +27,15 @@ export async function listTemplates(key: DocKey) {
     where: { docType: key, deletedAt: null },
     orderBy: [{ isDefault: "desc" }, { name: "asc" }],
   });
+}
+
+/**
+ * Live Studio clauses, by name — every Studio clause list reads through here.
+ * Filtered in JS: a JSON-path `not` filter would also drop rows with no `kind`.
+ */
+export async function listStudioClauses() {
+  const rows = await prisma.reusableBlock.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } });
+  return rows.filter((row) => !isDocEditorLibraryItem(row));
 }
 
 export async function getTemplateRecord(id: string) {
