@@ -6,7 +6,7 @@ import { getBuilderTemplate } from "@/lib/docbuilder/store";
 import { requiredRecordKind } from "@/lib/docbuilder/recordBinding";
 import Link from "next/link";
 import { readTemplateDocument } from "@/lib/doceditor/legacy";
-import { DocEditor } from "@/components/doceditor/DocEditor";
+import { DocEditor, type PublishState } from "@/components/doceditor/DocEditor";
 import { DocEditorEnvProvider } from "@/components/doceditor/EditorContext";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { documentLogo } from "@/lib/doceditor/renderGlobals";
@@ -92,6 +92,19 @@ export default async function DocEditorPage({
     })),
   ];
 
+  // Does the saved draft match what real documents render (the published version)?
+  const published = template.publishedVersion == null
+    ? null
+    : await prisma.docBuilderVersion.findUnique({
+        where: { templateId_version: { templateId: template.id, version: template.publishedVersion } },
+        select: { data: true },
+      });
+  const publishState: PublishState = !published
+    ? "never"
+    : JSON.stringify(published.data) === JSON.stringify(template.data)
+      ? "live"
+      : "ahead";
+
   // The canvas shows the same embedded logo the printed document will carry.
   const company = await getCompanyProfile();
   const logoSrc = (await documentLogo(company.logoUrl)) ?? "";
@@ -102,6 +115,7 @@ export default async function DocEditorPage({
         id={template.id}
         initialDoc={initialDoc}
         records={records}
+        initialPublishState={publishState}
       />
     </DocEditorEnvProvider>
   );

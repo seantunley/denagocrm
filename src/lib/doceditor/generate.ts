@@ -1,6 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/db";
-import { getBuilderTemplate } from "@/lib/docbuilder/store";
+import { getBuilderTemplate, getLiveBuilderTemplate } from "@/lib/docbuilder/store";
 import { buildQuoteContext, buildJobCardContext } from "@/lib/docbuilder/merge";
 import { loadBillToFleet } from "@/lib/quoteBillTo";
 import { getCompanyProfile, companyTokens } from "@/lib/companyProfile";
@@ -50,8 +50,10 @@ export async function renderResolvedToPdf(r: Resolved): Promise<{ buffer: Buffer
 }
 
 /** Load a template + bind it to a quote/job card (shared by PDF and export). */
-async function resolve(templateId: string, quoteId?: string | null, jobCardId?: string | null): Promise<Resolved | null> {
-  const tpl = await getBuilderTemplate(templateId);
+async function resolve(templateId: string, quoteId?: string | null, jobCardId?: string | null, live = false): Promise<Resolved | null> {
+  // `live`: a document being filed against a record renders the PUBLISHED
+  // version; previews and the editor's own exports render the draft.
+  const tpl = live ? await getLiveBuilderTemplate(templateId) : await getBuilderTemplate(templateId);
   if (!tpl) return null;
   // Either failure ends the same way here — no PDF, a 404 from the route. This
   // path only reads, so there is nothing to protect beyond not rendering a
@@ -88,9 +90,9 @@ async function resolve(templateId: string, quoteId?: string | null, jobCardId?: 
  * flow after a recipient actually signs — never here.
  */
 export async function generateDocEditorPdf(opts: {
-  templateId: string; quoteId?: string | null; jobCardId?: string | null;
+  templateId: string; quoteId?: string | null; jobCardId?: string | null; live?: boolean;
 }): Promise<{ buffer: Buffer; title: string; quoteId: string | null; jobCardId: string | null; contactId: string | null } | null> {
-  const r = await resolve(opts.templateId, opts.quoteId, opts.jobCardId);
+  const r = await resolve(opts.templateId, opts.quoteId, opts.jobCardId, opts.live);
   if (!r) return null;
   return renderResolvedToPdf(r);
 }

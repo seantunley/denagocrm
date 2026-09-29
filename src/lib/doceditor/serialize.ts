@@ -164,7 +164,9 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
     case "table":
       return wrap(tableHtml(block));
     case "banner": {
-      const logoSrc = ctx?.logo || logoDataUri;
+      // Embedded images only: a logo LINK would have the customer's signing page
+      // (and a frozen document) load it from whatever host it names.
+      const logoSrc = [ctx?.logo, logoDataUri].find((src) => src && /^data:image\//i.test(src));
       const company = ctx?.tokens?.["company.name"] || "DENAGO";
       const logo = block.showLogo && logoSrc
         ? `<img src="${esc(logoSrc)}" alt="${esc(company)}" style="height:34px;width:auto"/>`
