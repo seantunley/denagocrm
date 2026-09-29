@@ -1,6 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/db";
-import { getBuilderTemplate, defaultBuilderTemplateId } from "@/lib/docbuilder/store";
+import { getBuilderTemplate, getLiveBuilderTemplate, defaultBuilderTemplateId } from "@/lib/docbuilder/store";
 import { readTemplateDocument } from "@/lib/doceditor/legacy";
 import { parseDocument } from "@/lib/doceditor/model";
 import { renderDocumentHtml } from "@/lib/doceditor/serialize";
@@ -75,7 +75,9 @@ export async function renderQuotePrintHtml(opts: {
 
   const templateId = opts.templateId ?? (await defaultBuilderTemplateId("quote"));
   if (!templateId) return null;
-  const template = await getBuilderTemplate(templateId);
+  // ?tpl= previews the layout being edited (its draft); a real quote prints the
+  // published version.
+  const template = opts.templateId ? await getBuilderTemplate(templateId) : await getLiveBuilderTemplate(templateId);
   if (!template) return null;
   // A legacy row must stop here rather than fall through to a blank layout —
   // this is the document the customer is handed.

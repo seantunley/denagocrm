@@ -8,7 +8,7 @@ import ModalPortal from "@/components/ui/modal-portal";
 type Version = { id: string; version: number; label: string | null; publishedBy: string | null; publishedAt: string };
 
 /** Version history drawer: publish an immutable snapshot, list history, restore. */
-export function VersionHistory({ id, save }: { id: string; save: () => Promise<void> }) {
+export function VersionHistory({ id, save, onPublished }: { id: string; save: () => Promise<void>; onPublished?: () => void }) {
   const [open, setOpen] = useState(false);
   const [versions, setVersions] = useState<Version[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
@@ -19,11 +19,17 @@ export function VersionHistory({ id, save }: { id: string; save: () => Promise<v
 
   const publish = async () => {
     setBusy("publish");
-    await save();                       // flush the current draft first
-    await publishBuilderVersion(id, label.trim() || undefined);
-    setLabel("");
-    await refresh();
-    setBusy(null);
+    try {
+      await save();                       // flush the current draft first
+      const result = await publishBuilderVersion(id, label.trim() || undefined);
+      if (result.ok) {
+        setLabel("");
+        onPublished?.();
+      }
+      await refresh();
+    } finally {
+      setBusy(null);
+    }
   };
   const restore = async (versionId: string) => {
     setBusy(versionId);

@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { requirePermission } from "@/lib/permissions";
 import { prisma } from "@/lib/db";
+import { isDocEditorLibraryItem } from "@/lib/studioClauses";
 import { MERGE_FIELDS } from "@/lib/mergeFields";
 import StudioEditor from "@/components/StudioEditor";
 import { saveReusableBlock } from "@/app/actions/studio";
@@ -13,7 +14,8 @@ export default async function StudioClausePage({ params }: { params: Promise<{ i
   await requirePermission("document_templates.manage");
   const { id } = await params;
   const clause = await prisma.reusableBlock.findUnique({ where: { id } });
-  if (!clause) notFound();
+  // A doc-editor library item is not BlockNote content; saving it here would overwrite it.
+  if (!clause || isDocEditorLibraryItem(clause)) notFound();
 
   async function save(data: { title: string; content: unknown }) {
     "use server";
@@ -24,7 +26,7 @@ export default async function StudioClausePage({ params }: { params: Promise<{ i
     <div className="space-y-4">
       <div>
         <Link
-          href="/settings/documents?tab=studio"
+          href="/document-studio"
           className="mb-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
         >
           <ArrowLeft className="size-3.5" />
