@@ -929,7 +929,9 @@ export function QuoteEditorDialog({
                         id="quote-customer"
                         className="input mt-1.5"
                         value={draft.contactId}
-                        disabled={!editable || Boolean(record?.leadLabel)}
+                        // Locked for a lead's quote only once it HAS a customer;
+                        // a lead with none yet must still be able to get one here.
+                        disabled={!editable || Boolean(record?.leadLabel && record?.contactId)}
                         onChange={(event) => setDraft((current) => ({ ...current, contactId: event.target.value }))}
                       >
                         <option value="">Select a customer…</option>
