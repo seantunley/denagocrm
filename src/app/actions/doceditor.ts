@@ -19,7 +19,7 @@ import {
 import { saveFile } from "@/lib/storage";
 import { actingOwnerTenantId, withActingStaffScope } from "@/lib/actingScope";
 
-const BASE = "/settings/documents/builder";
+const BASE = "/document-studio";
 
 function legacyRecord(formData: FormData): {
   kind: BuilderRecordKind;

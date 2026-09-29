@@ -89,7 +89,7 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
   {
     label: "Documents & Data",
     items: [
-      { key: "documents", label: "Documents", href: "/settings/documents", keywords: ["templates", "document studio"] },
+      { key: "documents", label: "Document Studio", href: "/document-studio", permission: "document_templates.manage", keywords: ["documents", "templates", "document studio", "document builder"] },
       { key: "signing-workflows", label: "Signing workflows", href: "/settings/signing-workflows", keywords: ["approval", "signing", "workflow", "e-sign"] },
       { key: "signing-security", label: "Signing security", href: "/settings/signing-security", keywords: ["otp", "one-time code", "verify signer", "identity", "timestamp", "e-sign", "two factor"] },
       { key: "backups", label: "Backup & recovery", href: "/settings/backup-recovery", keywords: ["backup", "restore", "disaster recovery"] },
