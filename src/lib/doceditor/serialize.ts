@@ -15,6 +15,7 @@ import { PAGE_SIZES } from "./model";
 import { plateToHtmlBody } from "@/lib/docbuilder/plateSerialize";
 import { evaluateCondition } from "@/lib/docbuilder/expr";
 import { brandFooterContent, SOCIAL_ICON_PATHS } from "@/lib/companyBrand";
+import { showcaseBlockHtml } from "./showcaseRender";
 
 export type RenderCtx = {
   tokens: Record<string, string>;
@@ -192,8 +193,12 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
             : "flex-end";
       return `<div style="display:flex;justify-content:${place};margin:6px 0"><div style="background:${cssColor(block.color, "#ea580c")};color:#fff;border-radius:6px;padding:10px 20px;display:flex;gap:16px;align-items:center;max-width:100%"><span style="font-size:${(9 * scale).toFixed(2)}pt;font-weight:700;letter-spacing:1px;white-space:nowrap">${esc(block.label)}</span><span style="font-size:${(16 * scale).toFixed(2)}pt;font-weight:800;white-space:nowrap">${esc(tok(block.amount, ctx))}</span></div></div>`;
     }
-    case "terms":
-      return `<div style="background:#f8fafc;border-radius:6px;padding:12px 14px;margin:4px 0">${block.title ? `<div style="font-size:8pt;font-weight:700;letter-spacing:1px;color:#64748b;margin-bottom:6px">${esc(block.title)}</div>` : ""}${block.items.map((it) => `<div style="font-size:9pt;color:#64748b;margin-bottom:3px">• ${esc(it.text)}</div>`).join("")}</div>`;
+    case "terms": {
+      // Optional coloured bullets (the showcase layout); unset renders exactly as before.
+      const dot = cssColor(block.accent, "");
+      const bullet = dot ? `<span style="color:${dot};font-weight:900">•</span>` : "•";
+      return `<div style="background:#f8fafc;border-radius:6px;padding:12px 14px;margin:4px 0">${block.title ? `<div style="font-size:8pt;font-weight:700;letter-spacing:1px;color:#64748b;margin-bottom:6px">${esc(block.title)}</div>` : ""}${block.items.map((it) => `<div style="font-size:9pt;color:#64748b;margin-bottom:3px">${bullet} ${esc(it.text)}</div>`).join("")}</div>`;
+    }
     case "footer": {
       if (block.variant === "simple") {
         return `<div style="border-top:1.5px solid ${cssColor(block.accent, "#ea580c")};padding-top:8px;margin:6px 0;text-align:center">${block.lines.map((l, i) => `<div style="font-size:${i === 0 ? 9 : 8}pt;font-weight:${i === 0 ? 700 : 400};color:${i === 0 ? "#334155" : "#64748b"}">${esc(tok(l.text, ctx))}</div>`).join("")}</div>`;
@@ -217,6 +222,10 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
       if (ctx?.bound && !evaluateCondition(block.when, ctx.vars)) return "";
       return `<div>${block.blocks.map((c) => blockHtml(c, ctx, style, logoDataUri)).join("")}</div>`;
     }
+
+    // Showcase quotation blocks — see ./showcaseRender.ts.
+    case "showcaseHeader": case "infoStrip": case "vehicleShowcase": case "totalsBox": case "acceptance": case "footerBand":
+      return showcaseBlockHtml(block, ctx, logoDataUri);
   }
 }
 
@@ -472,6 +481,16 @@ export function renderDocumentHtml(
       .doc-footer { padding: 0 ${m}px ${m}px; margin-bottom: 16px; }
       /* A document with no footer region still needs air under the last page. */
       body { padding-bottom: 16px; }
+      /* Floating blocks, overlay fields and signed stamps are positioned against
+         the printed content box (inside the @page margin). On screen that box is
+         inset by the padding above, so they must be too — otherwise every one
+         of them sits a margin up and to the left of where it prints. */
+      .doc-page > [style*="position:absolute"] { margin: ${m}px 0 0 ${m}px; }
+      /* The inline min-height is the PRINTED content height; with the margin
+         now drawn as padding, the on-screen sheet is the whole sheet. Without
+         this it was two margins short, and anything placed near the foot of
+         the page hung off the bottom of the white sheet. */
+      .doc-page { min-height: ${size.cssH} !important; }
     }
   </style></head><body>${[
     opts?.toolbarHtml ?? "",

@@ -4,6 +4,7 @@ import path from "path";
 import { prisma } from "@/lib/db";
 import { getBuilderTemplate } from "@/lib/docbuilder/store";
 import { buildQuoteContext, buildJobCardContext } from "@/lib/docbuilder/merge";
+import { withVehicleShowcase } from "@/lib/docbuilder/vehicleShowcaseLoad";
 import { loadBillToFleet } from "@/lib/quoteBillTo";
 import { getCompanyProfile, companyTokens } from "@/lib/companyProfile";
 import { htmlToPdf } from "@/lib/customDocs";
@@ -77,7 +78,7 @@ async function resolve(templateId: string, quoteId?: string | null, jobCardId?: 
       include: { items: true, fees: { orderBy: { sortOrder: "asc" } }, lead: { include: { product: true } }, contact: true, createdBy: true },
     });
     // Tenant-scoped fleet lookup, not an include — Quote.fleetId has no FK.
-    if (q) { ctx = buildQuoteContext(q, await loadBillToFleet(prisma, q.fleetId)); title = `${doc.title} — Q-${q.number}`; qId = q.id; contactId = q.contactId; }
+    if (q) { ctx = await withVehicleShowcase(buildQuoteContext(q, await loadBillToFleet(prisma, q.fleetId)), q); title = `${doc.title} — Q-${q.number}`; qId = q.id; contactId = q.contactId; }
   } else if (jobCardId) {
     const jc = await prisma.jobCard.findUnique({
       where: { id: jobCardId },

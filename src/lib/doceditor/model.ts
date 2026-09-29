@@ -186,6 +186,8 @@ export const termsBlockSchema = z.object({
   ...base, type: z.literal("terms"),
   title: z.string().default("TERMS"),
   items: z.array(z.object({ text: z.string() })).default([]),
+  /** Bullet colour. Unset keeps the original grey bullets, so stored templates render unchanged. */
+  accent: z.string().transform((value) => (isSafeCssColor(value) ? value : "")).optional(),
 });
 export const footerBlockSchema = z.object({
   ...base, type: z.literal("footer"),
@@ -194,6 +196,63 @@ export const footerBlockSchema = z.object({
   variant: z.enum(["brand", "simple"]).default("brand"),
   accent: colorField("#ea580c"),
   lines: z.array(z.object({ text: z.string() })).default([]),
+});
+
+// ── showcase quotation blocks (rendered by ./showcaseRender.ts) ──────
+/** Line icons the showcase blocks can draw — see SHOWCASE_ICONS in showcaseRender.ts. */
+export const showcaseIconNames = [
+  "calendar", "clock", "user", "seats", "range", "electric", "premium", "speed", "battery", "warranty", "charge",
+] as const;
+export type ShowcaseIcon = (typeof showcaseIconNames)[number];
+const showcaseIcon = z.enum(showcaseIconNames).catch("premium");
+export const showcaseHeaderBlockSchema = z.object({
+  ...base, type: z.literal("showcaseHeader"),
+  title: z.string().default("QUOTATION"),
+  docNumber: z.string().default("{{quote.number}}"),
+  tagline: z.string().default("PREMIUM ELECTRIC MOBILITY"),
+  bg: colorField("#020617"),
+  accent: colorField("#ea580c"),
+  /** Optional band photo. Only an inline `data:image/…` is ever rendered. */
+  bgImage: z.string().default(""),
+  showLogo: z.boolean().default(true),
+});
+export const infoStripBlockSchema = z.object({
+  ...base, type: z.literal("infoStrip"),
+  accent: colorField("#ea580c"),
+  items: z.array(z.object({
+    icon: showcaseIcon, label: z.string().default(""), value: z.string().default(""), sub: z.string().default(""),
+  })).default([]),
+});
+/** The quote's primary vehicle — model, tagline, description, specs and photo come from its Product. */
+export const vehicleShowcaseBlockSchema = z.object({
+  ...base, type: z.literal("vehicleShowcase"),
+  part: z.enum(["full", "details", "image"]).default("full"),
+  brand: z.string().default("DENAGO EV"),
+  accent: colorField("#ea580c"),
+  imageHeight: z.number().default(280),
+});
+export const totalsBoxBlockSchema = z.object({
+  ...base, type: z.literal("totalsBox"),
+  rows: z.array(z.object({ label: z.string(), value: z.string() })).default([]),
+  totalLabel: z.string().default("TOTAL INCL. VAT"),
+  totalAmount: z.string().default("{{quote.total}}"),
+  bg: colorField("#020617"),
+  accent: colorField("#ea580c"),
+});
+export const acceptanceBlockSchema = z.object({
+  ...base, type: z.literal("acceptance"),
+  title: z.string().default("ACCEPTANCE OF QUOTATION"),
+  text: z.string().default(""),
+  nameLabel: z.string().default("Customer Name"),
+  nameValue: z.string().default("{{customer.name}}"),
+  signatureLabel: z.string().default("Signature"),
+  dateLabel: z.string().default("Date"),
+});
+export const footerBandBlockSchema = z.object({
+  ...base, type: z.literal("footerBand"),
+  subtitle: z.string().default("Authorised Denago EV Dealer"),
+  bg: colorField("#020617"),
+  accent: colorField("#ea580c"),
 });
 
 /** Conditional wrapper — nested blocks render only when `when` is truthy (safe expr engine). */
@@ -208,6 +267,7 @@ export const blockSchema: z.ZodType<DocumentBlock> = z.lazy(() => z.discriminate
   pageBreakBlockSchema, pricingBlockSchema, tableBlockSchema,
   bannerBlockSchema, infoCardBlockSchema, lineItemsBlockSchema, totalBandBlockSchema, termsBlockSchema, footerBlockSchema,
   conditionalBlockSchema,
+  showcaseHeaderBlockSchema, infoStripBlockSchema, vehicleShowcaseBlockSchema, totalsBoxBlockSchema, acceptanceBlockSchema, footerBandBlockSchema,
 ])) as z.ZodType<DocumentBlock>;
 
 export type TextBlock = z.infer<typeof textBlockSchema>;
@@ -224,6 +284,14 @@ export type LineItemsBlock = z.infer<typeof lineItemsBlockSchema>;
 export type TotalBandBlock = z.infer<typeof totalBandBlockSchema>;
 export type TermsBlock = z.infer<typeof termsBlockSchema>;
 export type FooterBlock = z.infer<typeof footerBlockSchema>;
+export type ShowcaseHeaderBlock = z.infer<typeof showcaseHeaderBlockSchema>;
+export type InfoStripBlock = z.infer<typeof infoStripBlockSchema>;
+export type VehicleShowcaseBlock = z.infer<typeof vehicleShowcaseBlockSchema>;
+export type TotalsBoxBlock = z.infer<typeof totalsBoxBlockSchema>;
+export type AcceptanceBlock = z.infer<typeof acceptanceBlockSchema>;
+export type FooterBandBlock = z.infer<typeof footerBandBlockSchema>;
+export type ShowcaseBlock =
+  | ShowcaseHeaderBlock | InfoStripBlock | VehicleShowcaseBlock | TotalsBoxBlock | AcceptanceBlock | FooterBandBlock;
 export type ConditionalBlock = {
   id: string; type: "conditional"; settings: LayoutSettings; locked: boolean; hidden: boolean;
   when: string; blocks: DocumentBlock[];
@@ -232,7 +300,7 @@ export type DocumentBlock =
   | TextBlock | HeadingBlock | ImageBlock | DividerBlock | SpacerBlock
   | PageBreakBlock | PricingBlock | TableBlock
   | BannerBlock | InfoCardBlock | LineItemsBlock | TotalBandBlock | TermsBlock | FooterBlock
-  | ConditionalBlock;
+  | ConditionalBlock | ShowcaseBlock;
 export type BlockType = DocumentBlock["type"];
 
 // ── columns / rows / pages ──────────────────────────────────────────

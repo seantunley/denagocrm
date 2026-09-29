@@ -4,6 +4,7 @@ import type { DocumentBlock } from "@/lib/doceditor/model";
 import { computePricing } from "@/lib/doceditor/serialize";
 import { brandFooterContent, SOCIAL_ICON_PATHS, COMPANY_DEFAULTS } from "@/lib/companyBrand";
 import { ActiveRichText, ReadOnlyRichText } from "./RichText";
+import { ShowcaseBlockView } from "./ShowcaseBlockView";
 
 function money(amount: number, currency: string): string {
   const n = Math.abs(amount).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -148,7 +149,7 @@ export function BlockView({ block, active }: { block: DocumentBlock; active: boo
       return (
         <div style={{ background: "#f8fafc", borderRadius: 6, padding: "10px 12px" }}>
           {block.title ? <div style={{ fontSize: 8, fontWeight: 700, letterSpacing: 1, color: "#64748b", marginBottom: 5 }}>{block.title}</div> : null}
-          {block.items.map((it, i) => <div key={i} style={{ fontSize: 11, color: "#64748b", marginBottom: 2 }}>• {it.text}</div>)}
+          {block.items.map((it, i) => <div key={i} style={{ fontSize: 11, color: "#64748b", marginBottom: 2 }}><span style={block.accent ? { color: block.accent, fontWeight: 900 } : undefined}>•</span> {it.text}</div>)}
         </div>
       );
     case "footer": {
@@ -191,6 +192,9 @@ export function BlockView({ block, active }: { block: DocumentBlock; active: boo
         </div>
       );
     }
+
+    case "showcaseHeader": case "infoStrip": case "vehicleShowcase": case "totalsBox": case "acceptance": case "footerBand":
+      return <ShowcaseBlockView block={block} logo="/branding/denago-logo-email.png" />;
   }
   return null;
 }

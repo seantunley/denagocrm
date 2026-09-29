@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import { prisma } from "@/lib/db";
 import { buildQuoteContext, buildJobCardContext } from "@/lib/docbuilder/merge";
+import { withVehicleShowcase } from "@/lib/docbuilder/vehicleShowcaseLoad";
 import { loadBillToFleet } from "@/lib/quoteBillTo";
 import { parseDocument, type DocumentModel } from "@/lib/doceditor/model";
 import { renderDocumentHtml, renderSigningSheets, type RenderCtx, type StampField } from "@/lib/doceditor/serialize";
@@ -49,7 +50,7 @@ export async function bindCtx(quoteId: string | null, jobCardId: string | null, 
     // The fleet is a separate, TENANT-SCOPED lookup rather than an include:
     // Quote.fleetId carries no foreign key (see the schema comment), so an id
     // from another workspace must fail to resolve rather than be joined in.
-    if (q) return withCompany(buildQuoteContext(q, await loadBillToFleet(prisma, q.fleetId)));
+    if (q) return withCompany(await withVehicleShowcase(buildQuoteContext(q, await loadBillToFleet(prisma, q.fleetId)), q));
   } else if (jobCardId) {
     const jc = await prisma.jobCard.findUnique({
       where: { id: jobCardId },
