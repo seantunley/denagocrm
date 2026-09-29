@@ -358,10 +358,30 @@ async function fetchProfileName(platform: DmPlatform, userId: string): Promise<s
       `${GRAPH}/${userId}?fields=${fields}&access_token=${encodeURIComponent(token)}`,
       { cache: "no-store", signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS) }
     );
+    if (res.ok) {
+      const j = await res.json();
+      const name = platform === "instagram" ? j.name ?? j.username : [j.first_name, j.last_name].filter(Boolean).join(" ");
+      if (name) return name;
+    }
+  } catch {
+    // fall through to the conversation list
+  }
+  /*
+   * Without App Review, Meta refuses the profile lookup above for every customer
+   * who isn't a tester of the app, so 28 customers became "Messenger user".
+   * The Page's own conversation list still names its participants, so ask it.
+   * `/me` with a Page token is the Page.
+   */
+  try {
+    const res = await fetch(
+      `${GRAPH}/me/conversations?platform=${platform}&user_id=${encodeURIComponent(userId)}&fields=participants&access_token=${encodeURIComponent(token)}`,
+      { cache: "no-store", signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS) }
+    );
     if (!res.ok) return null;
     const j = await res.json();
-    if (platform === "instagram") return j.name ?? j.username ?? null;
-    return [j.first_name, j.last_name].filter(Boolean).join(" ") || null;
+    const participants: { id?: string; name?: string; username?: string }[] = j.data?.[0]?.participants?.data ?? [];
+    const customer = participants.find((person) => person.id === userId);
+    return customer?.name ?? customer?.username ?? null;
   } catch {
     return null;
   }
@@ -414,6 +434,23 @@ export async function recordInboundDm(
       contactId: contact.id,
       userName: "System",
     });
+  } else if (platform !== "x" && contact.lastName === "user" && (contact.firstName === "Messenger" || contact.firstName === "Instagram")) {
+    // Still the placeholder from before the name lookup worked: try again, so
+    // existing "Messenger user" contacts heal as those customers write back.
+    const profileName = await fetchProfileName(platform, senderId);
+    if (profileName) {
+      const [firstName, ...rest] = profileName.split(/\s+/);
+      contact = await prisma.contact.update({
+        where: { id: contact.id },
+        data: { firstName, lastName: rest.join(" ") || null },
+      });
+      await logAudit({
+        action: "contact.updated",
+        summary: `Named a ${platform} contact from Meta (was “${platform === "instagram" ? "Instagram" : "Messenger"} user”)`,
+        contactId: contact.id,
+        userName: "System",
+      });
+    }
   }
 
   // Ad-attributed conversation → make sure there's an open lead
