@@ -200,10 +200,10 @@ export function DocEditor({
       <BuilderWorkspaceBar
         identity={
           <Link
-            href="/settings/documents/builder"
+            href="/document-studio"
             className="text-xs text-slate-400 hover:text-white"
           >
-            ← Documents
+            ← Document Studio
           </Link>
         }
         title={
