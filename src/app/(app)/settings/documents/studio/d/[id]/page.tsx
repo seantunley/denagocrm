@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { ArrowLeft, FileDown, Lock } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { listStudioClauses } from "@/lib/docTemplateStore";
@@ -27,6 +27,8 @@ export default async function StudioDocPage({ params }: { params: Promise<{ id: 
     listStudioClauses(),
   ]);
   if (!doc || doc.deletedAt) notFound();
+  // Made in the document editor: its content is not BlockNote, so it opens there.
+  if (doc.docModelJson != null) redirect(`/doc-editor/document/${id}`);
   const allowed =
     (!doc.contactId || await canAccessContact(user, doc.contactId)) &&
     (!doc.leadId || await canAccessLead(user, doc.leadId)) &&
@@ -54,6 +56,7 @@ export default async function StudioDocPage({ params }: { params: Promise<{ id: 
           Documents
         </Link>
         <p className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase">Studio (legacy)</span>
           {final ? (
             <span className="inline-flex items-center gap-1 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[11px] font-semibold text-emerald-300">
               <Lock className="size-3" />

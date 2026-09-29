@@ -7,6 +7,7 @@ import {
   Plus,
   Rocket,
   ScrollText,
+  Sparkles,
   Star,
   Trash2,
   Workflow,
@@ -31,13 +32,13 @@ import {
   duplicateDocTemplate,
   setDefaultDocTemplate,
 } from "@/app/actions/documents";
-import {
-  createDocInstance,
-  createReusableBlock,
-  createStudioTemplate,
-} from "@/app/actions/studio";
+import { createReusableBlock } from "@/app/actions/studio";
+import { convertStudioTemplate, createCustomDocument } from "@/app/actions/customDocuments";
+import { createDocEditorTemplate } from "@/app/actions/doceditor";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { SaveForm } from "@/components/SaveForm";
+import { SaveSubmitButton } from "@/components/SaveSubmitButton";
 import BuilderSection from "./builder-section";
 
 export const dynamic = "force-dynamic";
@@ -100,7 +101,7 @@ export default async function DocumentStudioPage({
     );
   }
   const [canCreateDocument, canEditLayout, canSeeBuilder] = await Promise.all([
-    // createDocInstance requires documents.manage; don't offer a form that bounces.
+    // createCustomDocument requires documents.manage; don't offer a form that bounces.
     hasPermission(user, "documents.manage"),
     hasPermission(user, "docbuilder.manage"),
     hasAnyPermission(user, "docbuilder.view", "docbuilder.manage"),
@@ -113,6 +114,7 @@ export default async function DocumentStudioPage({
     clauses,
     instances,
     quoteBuilder,
+    customTemplates,
     pickers,
     ...typedLists
   ] = await Promise.all([
@@ -129,15 +131,25 @@ export default async function DocumentStudioPage({
       },
     }),
     listStudioClauses(),
-    prisma.docInstance.findMany({
-      where: { deletedAt: null },
-      orderBy: { updatedAt: "desc" },
-      take: 12,
-    }),
+    prisma.docInstance
+      .findMany({
+        where: { deletedAt: null },
+        orderBy: { updatedAt: "desc" },
+        take: 12,
+        select: { id: true, title: true, status: true, updatedAt: true, docModelJson: true },
+      })
+      // Which editor opens it: a document-editor model, or a legacy Studio one.
+      .then((rows) => rows.map(({ docModelJson, ...row }) => ({ ...row, editorDocument: docModelJson != null }))),
     prisma.docBuilderTemplate.findFirst({
       where: { key: "quote", deletedAt: null },
       orderBy: [{ isDefault: "desc" }, { updatedAt: "desc" }],
       select: { id: true },
+    }),
+    // Doc-editor templates a custom document can be made from.
+    prisma.docBuilderTemplate.findMany({
+      where: { key: "custom", deletedAt: null },
+      orderBy: { updatedAt: "desc" },
+      select: { id: true, name: true, publishedVersion: true, updatedAt: true },
     }),
     canCreateDocument ? loadPickers(user) : null,
     ...keys.map((key) => listTemplates(key)),
@@ -169,7 +181,7 @@ export default async function DocumentStudioPage({
         </Link>}
         stats={[
           { label: "Operational templates", value: operationalTemplateCount, detail: `${DOC_GROUPS.length} production groups`, icon: Workflow, tone: "primary" },
-          { label: "Studio templates", value: studioTemplates.length, detail: "Free-form layouts", icon: Layers3 },
+          { label: "Custom templates", value: customTemplates.length, detail: `${studioTemplates.length} legacy Studio`, icon: Layers3 },
           { label: "Reusable blocks", value: clauses.length, detail: "Shared clauses & content", icon: ScrollText },
           { label: "Recent documents", value: instances.length, detail: "Latest tracked instances", icon: FileText, tone: "success" },
         ]}
@@ -346,12 +358,15 @@ export default async function DocumentStudioPage({
 
       <section className="rounded-2xl border border-sky-500/25 bg-sky-500/[0.05] p-5">
         <h2 className="text-base font-semibold text-foreground">
-          2. Free-form Studio
+          2. Custom documents
         </h2>
         <p className="mt-1 max-w-4xl text-sm leading-6 text-muted-foreground">
-          This editor creates standalone documents from blocks, clauses and merge
-          fields. Use it for custom proposals, letters, handover packs and
-          documents without a dedicated CRM screen.
+          Standalone documents — proposals, letters, handover packs — made in the
+          document editor from a custom template and linked to a customer, quote
+          or deal. Each document is its own copy: editing it never changes the
+          template, and <strong>Finalise</strong> files the PDF and locks it.
+          The older Studio free-form editor is kept for existing documents; use
+          <strong> Convert to new editor</strong> to bring its templates across.
         </p>
       </section>
 
@@ -359,17 +374,17 @@ export default async function DocumentStudioPage({
         <section className="rounded-xl border border-border bg-card p-4 shadow-sm">
           <h3 className="mb-1 text-sm font-semibold">New document</h3>
           <p className="mb-3 text-xs text-muted-foreground">
-            Pick a template (or start blank) and link the customer — merge fields
+            Pick a custom template (or start blank) and link the customer — merge fields
             fill in automatically and are frozen into the document.
           </p>
-          <form action={createDocInstance} className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
-            <input name="title" required placeholder="Document title…" aria-label="Document title" className={`${input} xl:col-span-2`} />
+          <SaveForm action={createCustomDocument} success="Document created" className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+            <input name="title" placeholder="Document title (optional)…" aria-label="Document title" className={`${input} xl:col-span-2`} />
             <select name="templateId" aria-label="Template" className={input} defaultValue="">
               <option value="">Blank document</option>
-              {studioTemplates.map((template) => (
+              {customTemplates.map((template) => (
                 <option key={template.id} value={template.id}>
                   {template.name}
-                  {template.versions[0] ? ` (v${template.versions[0].version})` : " (draft)"}
+                  {template.publishedVersion ? ` (v${template.publishedVersion})` : " (draft)"}
                 </option>
               ))}
             </select>
@@ -398,11 +413,11 @@ export default async function DocumentStudioPage({
                 </option>
               ))}
             </select>
-            <Button type="submit">
+            <SaveSubmitButton>
               <Plus className="size-4" />
               Create document
-            </Button>
-          </form>
+            </SaveSubmitButton>
+          </SaveForm>
         </section>
       )}
 
@@ -410,18 +425,63 @@ export default async function DocumentStudioPage({
         <section className="rounded-xl border border-border bg-card p-4 shadow-sm">
           <div className="mb-3 flex items-center gap-2">
             <Rocket className="size-4 text-primary" />
-            <h3 className="text-sm font-semibold">Free-form templates</h3>
+            <h3 className="text-sm font-semibold">Custom templates</h3>
           </div>
+          <ul className="divide-y divide-border/50">
+            {customTemplates.length === 0 && (
+              <li className="py-3 text-xs text-muted-foreground">
+                No custom templates yet — create one, or convert a Studio template below.
+              </li>
+            )}
+            {customTemplates.map((template) => (
+              <li key={template.id} className="flex items-center gap-2 py-2">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[13px] font-medium">{template.name}</p>
+                  <p className="text-[11px] text-muted-foreground">
+                    {template.publishedVersion ? `v${template.publishedVersion} published` : "Not published — documents use the draft"}
+                    {" · "}edited {formatDate(template.updatedAt)}
+                  </p>
+                </div>
+                {canEditLayout && (
+                  <Button asChild variant="outline" size="sm">
+                    <Link href={`/doc-editor/${template.id}`}>
+                      <PenLine className="size-3.5" />
+                      Edit
+                    </Link>
+                  </Button>
+                )}
+              </li>
+            ))}
+          </ul>
+          {canEditLayout && (
+            <SaveForm action={createDocEditorTemplate} success="Template created" className="mt-3 flex gap-2">
+              <input type="hidden" name="key" value="custom" />
+              <input name="name" required placeholder="New custom template…" className={`${input} flex-1`} />
+              <SaveSubmitButton size="sm">
+                <Plus className="size-3.5" />
+                Create
+              </SaveSubmitButton>
+            </SaveForm>
+          )}
+
+          <div className="mt-5 flex items-center gap-2">
+            <h3 className="text-sm font-semibold">Studio free-form templates</h3>
+            <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase text-muted-foreground">Legacy</span>
+          </div>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+            The old free-form editor. <strong>Convert to new editor</strong> copies a
+            template into a new custom template; the original is kept unchanged.
+          </p>
           <ul className="divide-y divide-border/50">
             {studioTemplates.length === 0 && (
               <li className="py-3 text-xs text-muted-foreground">
-                No free-form templates yet.
+                No Studio templates.
               </li>
             )}
             {studioTemplates.map((template) => (
               <li
                 key={template.id}
-                className="flex items-center gap-2 py-2"
+                className="flex flex-wrap items-center gap-2 py-2"
               >
                 <div className="min-w-0 flex-1">
                   <Link
@@ -438,39 +498,40 @@ export default async function DocumentStudioPage({
                     {template._count.instances === 1 ? "" : "s"}
                   </p>
                 </div>
-                <Button asChild variant="outline" size="sm">
+                {canEditLayout && (
+                  <SaveForm
+                    action={convertStudioTemplate.bind(null, template.id)}
+                    success="Converted — opening it in the document editor"
+                    resetOnSuccess={false}
+                  >
+                    <SaveSubmitButton size="sm" title="Copy this template into the document editor as a custom template">
+                      <Sparkles className="size-3.5" />
+                      Convert to new editor
+                    </SaveSubmitButton>
+                  </SaveForm>
+                )}
+                <Button asChild variant="ghost" size="sm">
                   <Link
                     href={`/settings/documents/studio/t/${template.id}`}
                   >
                     <PenLine className="size-3.5" />
-                    Edit
+                    Edit (legacy)
                   </Link>
                 </Button>
               </li>
             ))}
           </ul>
-          <form action={createStudioTemplate} className="mt-3 flex gap-2">
-            <input
-              name="name"
-              required
-              placeholder="New free-form template…"
-              className={`${input} flex-1`}
-            />
-            <Button size="sm" type="submit">
-              <Plus className="size-3.5" />
-              Create
-            </Button>
-          </form>
         </section>
 
         <section className="rounded-xl border border-border bg-card p-4 shadow-sm">
           <div className="mb-3 flex items-center gap-2">
             <ScrollText className="size-4 text-primary" />
-            <h3 className="text-sm font-semibold">Reusable clauses</h3>
+            <h3 className="text-sm font-semibold">Clause library</h3>
           </div>
           <p className="mb-2 text-xs leading-5 text-muted-foreground">
-            Reusable clauses work only inside the free-form Studio. They are
-            copied into a document when inserted.
+            Insert a clause from the document editor&apos;s <strong>Library</strong> tab
+            (or a legacy Studio document). It is copied in when inserted, so
+            editing a clause here never changes existing documents.
           </p>
           <ul className="divide-y divide-border/50">
             {clauses.length === 0 && (
@@ -522,12 +583,12 @@ export default async function DocumentStudioPage({
 
       <section className="rounded-xl border border-border bg-card p-4 shadow-sm">
         <h3 className="mb-2 text-sm font-semibold">
-          Recent free-form documents
+          Recent custom documents
         </h3>
         <ul className="divide-y divide-border/50">
           {instances.length === 0 && (
             <li className="py-3 text-xs text-muted-foreground">
-              No free-form documents have been generated yet.
+              No custom documents have been created yet.
             </li>
           )}
           {instances.map((instance) => (
@@ -537,11 +598,16 @@ export default async function DocumentStudioPage({
             >
               <FileText className="size-4 text-muted-foreground" />
               <Link
-                href={`/settings/documents/studio/d/${instance.id}`}
+                href={instance.editorDocument ? `/doc-editor/document/${instance.id}` : `/settings/documents/studio/d/${instance.id}`}
                 className="min-w-0 flex-1 truncate text-[13px] font-medium hover:text-primary"
               >
                 {instance.title}
               </Link>
+              {!instance.editorDocument && (
+                <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase text-muted-foreground">
+                  Studio (legacy)
+                </span>
+              )}
               <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase text-muted-foreground">
                 {instance.status}
               </span>

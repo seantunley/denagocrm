@@ -106,6 +106,15 @@ export async function generateDocEditorPdf(opts: {
   return renderResolvedToPdf(r);
 }
 
+/**
+ * Render a stand-alone document (a custom document, not a template) to PDF with
+ * the record snapshot it was frozen with — null when it is linked to nothing.
+ * Same company tokens and renderer as a generated template.
+ */
+export async function renderModelToPdf(doc: DocumentModel, snapshot: RenderCtx): Promise<Buffer> {
+  return htmlToPdf(renderDocumentHtml(doc, await withCompany(snapshot), logoDataUri()));
+}
+
 export type ExportFormat = "html" | "email" | "doc";
 
 /** Export a template as static HTML, email-safe HTML, or a Word-openable .doc. */
