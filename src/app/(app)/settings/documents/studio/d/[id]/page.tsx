@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, FileDown, Lock } from "lucide-react";
 import { prisma } from "@/lib/db";
+import { listStudioClauses } from "@/lib/docTemplateStore";
 import {
   canAccessContact,
   canAccessLead,
@@ -23,7 +24,7 @@ export default async function StudioDocPage({ params }: { params: Promise<{ id: 
   const { id } = await params;
   const [doc, clauses] = await Promise.all([
     prisma.docInstance.findUnique({ where: { id }, include: { template: true } }),
-    prisma.reusableBlock.findMany({ orderBy: { name: "asc" } }),
+    listStudioClauses(),
   ]);
   if (!doc || doc.deletedAt) notFound();
   const allowed =
