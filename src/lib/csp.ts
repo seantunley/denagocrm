@@ -36,6 +36,9 @@ export const CSP_REPORT_PATH = "/api/csp-report";
  */
 const OPEN_METEO = "https://api.open-meteo.com"; // ClockWeather, TestDriveWeather
 const GOOGLE_MAPS = "https://maps.googleapis.com"; // LocationAutocomplete (Places)
+// The new Places API (AutocompletePlaces / GetPlace) calls this host, not
+// maps.googleapis.com. Reported from the lead scheduler, 2026-09-25.
+const GOOGLE_PLACES = "https://places.googleapis.com";
 const GOOGLE_STATIC = "https://maps.gstatic.com https://*.gstatic.com https://*.googleapis.com";
 const GOOGLE_FONTS_CSS = "https://fonts.googleapis.com";
 const GOOGLE_FONTS_FILES = "https://fonts.gstatic.com";
@@ -45,7 +48,7 @@ const VERCEL_BLOB = "https://*.vercel-storage.com"; // LibraryUploader uploads d
 function resourceDirectives(): string[] {
   return [
     "default-src 'self'",
-    `connect-src 'self' ${OPEN_METEO} ${GOOGLE_MAPS} ${VERCEL_BLOB}`,
+    `connect-src 'self' ${OPEN_METEO} ${GOOGLE_MAPS} ${GOOGLE_PLACES} ${VERCEL_BLOB}`,
     // data: for logos and signatures stamped into documents; blob: for the
     // signature pad's canvas capture.
     `img-src 'self' data: blob: ${GOOGLE_STATIC} ${VERCEL_BLOB}`,

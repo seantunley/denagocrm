@@ -65,6 +65,21 @@ test("it never tells a reporter anything — always 204", () => {
   assert.deepEqual([...new Set(statuses)], ["204"], "throttled, malformed and accepted must be indistinguishable");
 });
 
+test("the new Places API host is allowed, or address autocomplete breaks when connect-src is enforced", () => {
+  // AutocompletePlaces / GetPlace go to places.googleapis.com, not maps.googleapis.com.
+  assert.match(buildCspReportOnly(options), /connect-src [^;]*https:\/\/places\.googleapis\.com/);
+});
+
+test("a report says which script and whether it was really blocked; extension noise is dropped", () => {
+  const route = src("src/app/api/csp-report/route.ts");
+  assert.match(route, /raw\["source-file"\] \?\? raw\.sourceFile/, "report-uri and report-to spellings");
+  assert.match(route, /raw\.disposition/);
+  assert.match(route, /EXTENSION_SOURCE\.test\(source\)/);
+  const re = /^(chrome|moz|safari-web|ms-browser)-extension:/;
+  assert.ok(re.test("chrome-extension://abc/inject.js"));
+  assert.ok(!re.test("https://crm.denagocpt.co.za/_next/static/chunks/app.js"));
+});
+
 test("X-POWERED-BY IS NOT ANNOUNCED", () => {
   // Free to remove, and it hands a scanner the framework's CVE list.
   assert.match(src("next.config.ts"), /poweredByHeader:\s*false/);
