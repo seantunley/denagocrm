@@ -48,7 +48,6 @@ export default async function TenantOnboardingPage({ params }: { params: Promise
       brandTagline: true,
       brandPrimary: true,
       brandLogoRef: true,
-      _count: { select: { members: true } },
       domains: { select: { verifiedAt: true } },
     },
   });
@@ -57,9 +56,15 @@ export default async function TenantOnboardingPage({ params }: { params: Promise
   const granted = parseModuleCsv(tenant.modules);
   const identityDone = Boolean(tenant.brandDisplayName && tenant.brandPrimary && tenant.brandLogoRef);
   const domainDone = tenant.domains.some((domain) => domain.verifiedAt !== null);
-  const modulesDone = granted.size > 0;
-  const ownerDone = Boolean(tenant.ownerUserId && tenant._count.members > 0);
-  const readiness = [identityDone, domainDone, modulesDone, ownerDone];
+  // Not a readiness check: core CRM is always granted, so a tenant with no
+  // optional modules is a valid choice, not an unfinished step.
+  const modulesDone = true;
+  // The recorded owner must itself be a member of THIS tenant; another member
+  // existing says nothing about whether the owner can sign in to it.
+  const ownerDone = tenant.ownerUserId
+    ? (await basePrisma.tenantMember.count({ where: { tenantId: tenant.id, userId: tenant.ownerUserId } })) > 0
+    : false;
+  const readiness = [identityDone, domainDone, ownerDone];
   const completed = readiness.filter(Boolean).length;
 
   return (
@@ -114,7 +119,7 @@ export default async function TenantOnboardingPage({ params }: { params: Promise
 
       <section className="card space-y-4 p-5">
         <div className="flex items-start gap-3"><ShieldCheck className="size-5 shrink-0 text-primary" /><div><h2 className="font-semibold">5. Activate, then hand off to the tenant owner</h2><p className="text-xs text-muted-foreground">Activation is deliberately separate. It is allowed only when tenant isolation enforcement is on. The owner then completes these tenant-scoped settings while signed into this workspace.</p></div></div>
-        {!readiness.every(Boolean) && <p className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-200">Recommended before activation: complete identity, a verified domain, module grants and owner membership.</p>}
+        {!readiness.every(Boolean) && <p className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-200">Recommended before activation: complete identity, a verified domain and owner membership.</p>}
         <ul className="grid gap-2">
           <OwnerTask href="/settings/company" title="Company profile and document identity" description="Legal/trading name, address, contact details, social links, document logo and email signature." />
           <OwnerTask href="/settings/modules" title="Tenant module choices" description="Disable any granted packs the workspace does not want visible; entitlements cannot be exceeded." />

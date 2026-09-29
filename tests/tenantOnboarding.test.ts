@@ -14,6 +14,16 @@ test("onboarding scopes every readiness read to the requested tenant", () => {
   assert.doesNotMatch(page, /findFirst\(\{\s*select:/);
 });
 
+test("a core-only tenant is not held at 'not ready' for its module choice", () => {
+  assert.doesNotMatch(page, /granted\.size > 0/);
+  assert.match(page, /const readiness = \[identityDone, domainDone, ownerDone\]/);
+});
+
+test("owner readiness checks the recorded owner is a member of this tenant", () => {
+  assert.match(page, /tenantMember\.count\(\{ where: \{ tenantId: tenant\.id, userId: tenant\.ownerUserId \} \}\)/);
+  assert.doesNotMatch(page, /_count\.members > 0/);
+});
+
 test("onboarding covers every tenant-owned setup surface", () => {
   for (const subject of ["Identity and brand", "Module entitlement", "Domain and login", "Owner and team", "Company profile", "Pipeline", "Quote and tax", "Email and notifications", "Integrations and social inbox", "roles and security", "Data import"]) {
     assert.ok(page.includes(subject), `missing onboarding subject: ${subject}`);
