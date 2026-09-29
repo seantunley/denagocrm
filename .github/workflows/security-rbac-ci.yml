@@ -363,6 +363,19 @@ jobs:
       - name: Concurrency -- two people cannot silently overwrite one reply draft
         run: npm run test:draft-concurrency
 
+      # Added HERE and not only to validate:security, for the reason stated
+      # directly above: this workflow calls the suites individually, so a script
+      # reachable only through that chain is never run by the thing gating the
+      # merge.
+      #
+      # Two editors who both loaded revision 1 could both "succeed": the second
+      # overwrote the live items while its revision upsert found the row already
+      # there and did nothing, leaving the immutable snapshot disagreeing with
+      # the list it was supposed to snapshot. Only two real transactions racing
+      # can show it.
+      - name: Concurrency -- a checklist revision cannot disagree with its template
+        run: npm run test:checklist-concurrency
+
       # Two tenants, one shared phone number, one receipt. The structural tests can
       # assert that every query names a tenant; only a real database can show the
       # boundary holds. A phone number is not unique across tenants, which is what

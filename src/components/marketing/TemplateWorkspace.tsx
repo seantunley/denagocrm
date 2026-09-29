@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Editor } from "@tiptap/react";
 import RichTextEditor from "@/components/RichTextEditor";
@@ -41,6 +41,7 @@ import {
 } from "lucide-react";
 import {
   archiveMarketingTemplate,
+  previewMarketingEmailTemplate,
   publishMarketingTemplate,
   saveMarketingTemplate,
 } from "@/app/actions/marketingContent";
@@ -113,6 +114,8 @@ export default function TemplateWorkspace({ templates }: { templates: Template[]
   const [editorOpen, setEditorOpen] = useState(templates.length === 0);
   const [draft, setDraft] = useState({ ...EMPTY_DRAFT });
   const [previewMode, setPreviewMode] = useState<"rendered" | "plain">("rendered");
+  const [previewWidth, setPreviewWidth] = useState<"desktop" | "mobile">("desktop");
+  const [shellPreview, setShellPreview] = useState<string>("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -135,6 +138,26 @@ export default function TemplateWorkspace({ templates }: { templates: Template[]
   // than state: it changes on mount and teardown only, and rendering does not
   // depend on it, so state would be a re-render for nothing.
   const bodyEditor = useRef<Editor | null>(null);
+
+  /*
+   * The rendered preview is produced by the SEND PIPELINE — shell, brand,
+   * inlined styles — via a server action, debounced half a second behind
+   * typing. The iframe used to show the raw editor HTML, which previews a mail
+   * that will never be sent: no brand header, no footer, no inlined styles.
+   * Stale responses are dropped by sequence number, because two debounced
+   * renders can legitimately be in flight across one fast edit.
+   */
+  const previewSeq = useRef(0);
+  useEffect(() => {
+    if (!isEmail || !editorOpen || previewMode !== "rendered") return;
+    const seq = ++previewSeq.current;
+    const handle = setTimeout(() => {
+      previewMarketingEmailTemplate(draft.body)
+        .then((html) => { if (previewSeq.current === seq) setShellPreview(html); })
+        .catch(() => { /* keep the last good preview; typing continues */ });
+    }, 500);
+    return () => clearTimeout(handle);
+  }, [draft.body, isEmail, editorOpen, previewMode]);
   // `draft.body.trim()` was enough while the body was plain text. The rich editor
   // emits `<p></p>` for an EMPTY document, which is truthy — so an untouched
   // template would have looked saveable and gone out as a blank email. Measured
@@ -310,6 +333,7 @@ export default function TemplateWorkspace({ templates }: { templates: Template[]
                     onChange={(html) => setDraft((current) => ({ ...current, body: html }))}
                     placeholder="Hi {{first_name}}, write your reusable message here…"
                     onEditorReady={(editor) => { bodyEditor.current = editor; }}
+                    emailTools
                   />
                 )}
                 {isSms && <p className="mt-1 text-right text-[11px] tabular-nums text-muted-foreground">{draft.body.length} characters</p>}
@@ -331,13 +355,13 @@ export default function TemplateWorkspace({ templates }: { templates: Template[]
               <div className="sticky top-24 space-y-4">
                 <div className="flex items-center justify-between gap-3">
                   <div><p className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Preview</p><p className="mt-1 text-xs text-muted-foreground">See the reusable content before saving.</p></div>
-                  {isEmail && <div className="inline-flex rounded-lg border border-border bg-background/50 p-1 text-[11px]"><button type="button" className={`rounded-md px-2 py-1 ${previewMode === "rendered" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`} onClick={() => setPreviewMode("rendered")}>Rendered</button><button type="button" className={`rounded-md px-2 py-1 ${previewMode === "plain" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`} onClick={() => setPreviewMode("plain")}>Plain</button></div>}
+                  {isEmail && <div className="flex items-center gap-2"><div className="inline-flex rounded-lg border border-border bg-background/50 p-1 text-[11px]"><button type="button" className={`rounded-md px-2 py-1 ${previewMode === "rendered" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`} onClick={() => setPreviewMode("rendered")}>Rendered</button><button type="button" className={`rounded-md px-2 py-1 ${previewMode === "plain" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`} onClick={() => setPreviewMode("plain")}>Plain</button></div>{previewMode === "rendered" && <div className="inline-flex rounded-lg border border-border bg-background/50 p-1 text-[11px]"><button type="button" className={`rounded-md px-2 py-1 ${previewWidth === "desktop" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`} onClick={() => setPreviewWidth("desktop")}>Desktop</button><button type="button" className={`rounded-md px-2 py-1 ${previewWidth === "mobile" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`} onClick={() => setPreviewWidth("mobile")}>Mobile</button></div>}</div>}
                 </div>
 
                 {isEmail ? (
                   <div className="overflow-hidden rounded-2xl border border-border bg-background">
                     <div className="border-b border-border p-3"><div className="mb-1 flex items-center gap-2 text-[11px] text-muted-foreground"><Mail className="size-3.5" /> Email preview</div><p className="text-sm font-medium">{draft.subject.trim() || "Your email subject"}</p></div>
-                    {previewMode === "plain" ? <pre className="min-h-72 whitespace-pre-wrap break-words p-4 font-sans text-xs leading-5">{draft.plainTextBody || stripMarkup(draft.body) || "Your message preview will appear here."}</pre> : <iframe title="Template email preview" sandbox="" srcDoc={draft.body || "<div style='font-family: sans-serif; color: #777; padding: 20px'>Your message preview will appear here.</div>"} className="h-80 w-full bg-white" />}
+                    {previewMode === "plain" ? <pre className="min-h-72 whitespace-pre-wrap break-words p-4 font-sans text-xs leading-5">{draft.plainTextBody || stripMarkup(draft.body) || "Your message preview will appear here."}</pre> : <div className="flex justify-center bg-slate-200/70"><iframe title="Template email preview" sandbox="" srcDoc={shellPreview || "<div style='font-family: sans-serif; color: #777; padding: 20px'>Your branded preview renders here as you type.</div>"} className="h-96 bg-white transition-[width]" style={{ width: previewWidth === "mobile" ? 375 : "100%" }} /></div>}
                   </div>
                 ) : (
                   <div className="rounded-2xl border border-border bg-background/60 p-4"><div className="mb-4 flex items-center gap-2 text-[11px] text-muted-foreground"><MessageSquareText className="size-3.5" /> {isSms ? "SMS preview" : "Notification preview"}</div><div className="ml-auto max-w-[92%] rounded-2xl rounded-br-md bg-primary px-4 py-3 text-sm leading-5 text-primary-foreground">{draft.body || "Your message preview will appear here."}</div></div>

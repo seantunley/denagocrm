@@ -3,7 +3,7 @@ import { prisma } from "@/lib/db";
 import { portalCanAccessDocument } from "@/lib/portalAccess";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { isAutomotiveOwnedDocument } from "@/lib/modules/registry";
-import { readFile } from "@/lib/storage";
+import { openFileStream } from "@/lib/storage";
 
 export async function GET(
   _request: Request,
@@ -28,12 +28,13 @@ export async function GET(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
   try {
-    const bytes = await readFile(document.storedName, document.tenantId);
-    return new NextResponse(new Uint8Array(bytes), {
+    // STREAMED, as /api/files is: a buffered response over 4.5 MB fails on Vercel.
+    const stream = await openFileStream(document.storedName, document.tenantId);
+    return new NextResponse(stream, {
       headers: {
         "content-type": "application/octet-stream",
         "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(document.fileName)}`,
-        "content-length": String(bytes.length),
+        "content-length": String(document.sizeBytes),
         "cache-control": "private, no-store",
         "x-content-type-options": "nosniff",
       },

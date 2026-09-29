@@ -44,6 +44,29 @@ export const RESUME_COMMAND = /^\s*(menu|restart|start\s*over|start\s*again)\b/i
  */
 export const RESTART_COMMAND = /^\s*(menu|hi|hello|hey|start|restart|begin)\b/i;
 
+/**
+ * How long a session lives once A PERSON IS RESPONSIBLE for the conversation —
+ * whether they have claimed it yet or not.
+ *
+ * `human` and `ai_handoff` are the same commitment at two moments: the bot has
+ * stopped answering and somebody is expected to. They were given wildly
+ * different windows — a claimed takeover 7 days, an unclaimed handoff 6 hours —
+ * which inverted the priority. The conversation still waiting for a person
+ * expired 28x sooner than the one already being handled, and sooner than an
+ * ordinary in-progress bot session (12-24h).
+ *
+ * What that cost: the handoff queue reads BotSession and filters
+ * `expiresAt > now`, so an unclaimed handoff silently left the queue after six
+ * hours with no record it was never answered, and the customer's next message
+ * found no session and restarted the bot — as though they had never asked for a
+ * person. The oldest, most-neglected request was the first to disappear.
+ *
+ * The customer is not trapped by the longer window: RESUME_COMMAND still
+ * releases the bot on demand, which is the escape hatch that makes waiting for
+ * a human safe to hold open.
+ */
+export const HUMAN_RESPONSIBILITY_HOURS = 7 * 24;
+
 export function decideInboundAct(input: {
   /** null when there is no live session at all. */
   ownership: BotOwnership | null;

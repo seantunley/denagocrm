@@ -243,10 +243,12 @@ export function describeTriggers(specs: JourneyTriggerSpec[]): string {
  * Does this ONE trigger's own filter admit this event?
  *
  * Unchanged in substance from the single-trigger version, including the reason
- * `payload` is consulted first: events are drained by a cron every 15 minutes,
+ * `payload` is consulted first: events are drained by a cron every 30 minutes,
  * so a rep who moves a lead Qualified → Quoted inside that window would have the
  * Qualified event judged against "Quoted" and silently match nothing. The stage
- * recorded ON THE EVENT is the one that fired it.
+ * recorded ON THE EVENT is the one that fired it. (The window doubled when the
+ * cron moved from 15 to 30 minutes to let the database suspend — which makes
+ * reading the stage off the event more load-bearing, not less.)
  */
 export function triggerMatches(
   spec: JourneyTriggerSpec,

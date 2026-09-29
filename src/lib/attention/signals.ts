@@ -59,6 +59,14 @@ function agoHours(from: Date, now: Date): string {
   return `${Math.floor(hours / 24)}d`;
 }
 
+function inboundChannelLabel(channel: string): string {
+  if (channel === "x") return "X";
+  if (channel === "whatsapp") return "WhatsApp";
+  if (channel === "messenger") return "Messenger";
+  if (channel === "instagram") return "Instagram";
+  return channel;
+}
+
 function add(map: Map<string, AttentionSignal[]>, leadId: string, signal: AttentionSignal): void {
   const existing = map.get(leadId);
   if (existing) existing.push(signal);
@@ -243,7 +251,7 @@ export async function collectAttentionSignals(input: {
         key: attentionSignalKey("unanswered_inbound", row.id),
         category: ATTENTION_CATEGORY.unanswered_inbound,
         weight: ATTENTION_WEIGHTS.unanswered_inbound,
-        detail: `Customer wrote ${agoHours(row.lastMessageAt, now)} ago and has had no reply`,
+        detail: `Customer wrote on ${inboundChannelLabel(row.channel)} ${agoHours(row.lastMessageAt, now)} ago and has had no reply`,
         since: row.lastMessageAt.toISOString(),
         context: row.messages[0]?.body || row.subject || `Latest inbound ${row.channel} message`,
         actionHref: `/inbox?conversation=${row.id}`,

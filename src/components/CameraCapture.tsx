@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import type { ActionResult } from "@/lib/actionResultTypes";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import ModalPortal from "@/components/ui/modal-portal";
 
 type Shot = { url: string; blob: Blob };
 
@@ -156,6 +157,7 @@ export function CameraCapture({
       </button>
 
       {open && (
+        <ModalPortal>
         <div className="fixed inset-0 z-[100] flex flex-col bg-black/90 backdrop-blur-sm">
           <div className="flex items-center justify-between gap-2 border-b border-white/10 bg-[#0b0d10] px-3 py-2">
             <span className="text-sm font-semibold text-white">Take a photo</span>
@@ -220,6 +222,7 @@ export function CameraCapture({
             </button>
           </div>
         </div>
+        </ModalPortal>
       )}
     </>
   );

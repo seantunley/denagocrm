@@ -74,6 +74,36 @@
       ]
     }
   },
+  "BotFlowEvaluation.BotFlowEvaluation_tenant_flow_fkey": {
+    "table": "BotFlowEvaluation",
+    "constraint": "BotFlowEvaluation_tenant_flow_fkey",
+    "columns": [
+      "tenantId",
+      "flowId"
+    ],
+    "references": {
+      "table": "BotFlow",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "BotFlowEvaluation.BotFlowEvaluation_tenant_flowVersion_fkey": {
+    "table": "BotFlowEvaluation",
+    "constraint": "BotFlowEvaluation_tenant_flowVersion_fkey",
+    "columns": [
+      "tenantId",
+      "flowVersionId"
+    ],
+    "references": {
+      "table": "BotFlowVersion",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
   "BatteryCheck.BatteryCheck_tenantId_jobCardId_fkey": {
     "table": "BatteryCheck",
     "constraint": "BatteryCheck_tenantId_jobCardId_fkey",
@@ -98,6 +128,36 @@
     ],
     "references": {
       "table": "Vehicle",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "BotFlowRoute.BotFlowRoute_tenant_flow_fkey": {
+    "table": "BotFlowRoute",
+    "constraint": "BotFlowRoute_tenant_flow_fkey",
+    "columns": [
+      "tenantId",
+      "flowId"
+    ],
+    "references": {
+      "table": "BotFlow",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "BotFlowRoute.BotFlowRoute_tenant_publishedVersion_fkey": {
+    "table": "BotFlowRoute",
+    "constraint": "BotFlowRoute_tenant_publishedVersion_fkey",
+    "columns": [
+      "tenantId",
+      "publishedVersionId"
+    ],
+    "references": {
+      "table": "BotFlowVersion",
       "columns": [
         "tenantId",
         "id"
@@ -173,6 +233,113 @@
     ],
     "references": {
       "table": "SupportMailbox",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "ChecklistEntry.ChecklistEntry_tenant_item_fkey": {
+    "table": "ChecklistEntry",
+    "constraint": "ChecklistEntry_tenant_item_fkey",
+    "columns": [
+      "tenantId",
+      "itemId"
+    ],
+    "references": {
+      "table": "ChecklistItem",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "ChecklistEntry.ChecklistEntry_tenant_run_fkey": {
+    "table": "ChecklistEntry",
+    "constraint": "ChecklistEntry_tenant_run_fkey",
+    "columns": [
+      "tenantId",
+      "runId"
+    ],
+    "references": {
+      "table": "ChecklistRun",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "ChecklistItem.ChecklistItem_tenant_template_fkey": {
+    "table": "ChecklistItem",
+    "constraint": "ChecklistItem_tenant_template_fkey",
+    "columns": [
+      "tenantId",
+      "templateId"
+    ],
+    "references": {
+      "table": "ChecklistTemplate",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "ChecklistPhoto.ChecklistPhoto_tenant_entry_fkey": {
+    "table": "ChecklistPhoto",
+    "constraint": "ChecklistPhoto_tenant_entry_fkey",
+    "columns": [
+      "tenantId",
+      "entryId"
+    ],
+    "references": {
+      "table": "ChecklistEntry",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "ChecklistRun.ChecklistRun_tenant_revision_fkey": {
+    "table": "ChecklistRun",
+    "constraint": "ChecklistRun_tenant_revision_fkey",
+    "columns": [
+      "tenantId",
+      "templateId",
+      "templateVersion"
+    ],
+    "references": {
+      "table": "ChecklistTemplateRevision",
+      "columns": [
+        "tenantId",
+        "templateId",
+        "version"
+      ]
+    }
+  },
+  "ChecklistRun.ChecklistRun_tenant_template_fkey": {
+    "table": "ChecklistRun",
+    "constraint": "ChecklistRun_tenant_template_fkey",
+    "columns": [
+      "tenantId",
+      "templateId"
+    ],
+    "references": {
+      "table": "ChecklistTemplate",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "ChecklistTemplateRevision.ChecklistTemplateRevision_tenant_template_fkey": {
+    "table": "ChecklistTemplateRevision",
+    "constraint": "ChecklistTemplateRevision_tenant_template_fkey",
+    "columns": [
+      "tenantId",
+      "templateId"
+    ],
+    "references": {
+      "table": "ChecklistTemplate",
       "columns": [
         "tenantId",
         "id"

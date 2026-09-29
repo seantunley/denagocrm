@@ -8,7 +8,10 @@ import { rpConfig, readChallenge, clearChallenge } from "@/lib/webauthn";
 export async function POST(req: NextRequest) {
   const user = await requireUser();
   const { rpID, origin } = await rpConfig();
-  const stashed = await readChallenge();
+  // "reg", not any challenge: an authentication ceremony's cookie is refused
+  // here. The `uid` check below already bound this route to the signed-in user;
+  // the purpose check binds it to the CEREMONY, which `uid` cannot express.
+  const stashed = await readChallenge("reg");
   if (!stashed || stashed.uid !== user.id) {
     return NextResponse.json({ error: "Challenge expired — try again." }, { status: 400 });
   }

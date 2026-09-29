@@ -8,14 +8,9 @@ import SurveySendPanel from "@/components/SurveySendPanel";
 import { npsFromScores, surveyTypeLabel, type SurveyQuestion } from "@/lib/surveyTypes";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
+import { surveyAutoSendNote } from "@/lib/surveyLifecycle";
 
 export const dynamic = "force-dynamic";
-
-const AUTO_NOTE: Record<string, string> = {
-  job_complete: "This survey also sends automatically when a job card is completed.",
-  delivery: "This survey also sends automatically when a cart is delivered.",
-  won: "This survey also sends automatically when a deal is won.",
-};
 
 export default async function SurveyEditorPage({
   params,
@@ -70,18 +65,7 @@ export default async function SurveyEditorPage({
 
       <SurveySendPanel
         surveyId={survey.id}
-        autoNote={
-          survey.trigger
-            ? AUTO_NOTE[survey.trigger] +
-              (survey.delayHours > 0
-                ? ` It waits ${
-                    survey.delayHours % 24 === 0
-                      ? `${survey.delayHours / 24} day${survey.delayHours / 24 === 1 ? "" : "s"}`
-                      : `${survey.delayHours} hour${survey.delayHours === 1 ? "" : "s"}`
-                  } after the event before sending.`
-                : "")
-            : undefined
-        }
+        autoNote={surveyAutoSendNote(survey)}
       />
 
       <div>

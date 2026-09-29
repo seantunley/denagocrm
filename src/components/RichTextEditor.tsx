@@ -7,6 +7,9 @@ import { Table, TableRow, TableCell, TableHeader } from "@tiptap/extension-table
 import { TextStyle, Color } from "@tiptap/extension-text-style";
 import { useEffect, useRef, useState } from "react";
 import { TextPromptDialog } from "@/components/TextPromptDialog";
+import ModalPortal from "@/components/ui/modal-portal";
+import { EmailButton, EmailDivider, EmailSpacer } from "@/components/emailBlockNodes";
+import { EMAIL_BUTTON_COLORS } from "@/lib/emailBlockHtml";
 
 const COLORS = ["#1e293b", "#ea580c", "#2563eb", "#059669", "#dc2626"];
 
@@ -35,15 +38,83 @@ function Btn({
   );
 }
 
+/**
+ * The CTA-button dialog. Label and URL in one form rather than two chained
+ * prompts, plus the brand colour row and alignment — the four things a button
+ * has. Editing an existing button reopens the same dialog pre-filled.
+ */
+function EmailButtonDialog({
+  editor,
+  open,
+  onClose,
+}: {
+  editor: Editor;
+  open: boolean;
+  onClose: () => void;
+}) {
+  // Mounted only while open, so the form below seeds itself from the selected
+  // button in its useState INITIALIZERS — fresh state per open, no effect
+  // re-seeding state after render, nothing stale on the second open.
+  if (!open) return null;
+  return <EmailButtonForm editor={editor} onClose={onClose} />;
+}
+
+function EmailButtonForm({ editor, onClose }: { editor: Editor; onClose: () => void }) {
+  const editing = editor.isActive("emailButton");
+  const current = editing ? editor.getAttributes("emailButton") : {};
+  const [label, setLabel] = useState(String(current.label ?? ""));
+  const [url, setUrl] = useState(String(current.url === "#" ? "" : (current.url ?? "")));
+  const [color, setColor] = useState<string>(String(current.color ?? EMAIL_BUTTON_COLORS[0]));
+  const [align, setAlign] = useState<"left" | "center">(current.align === "left" ? "left" : "center");
+  const apply = () => {
+    const attrs = { label: label.trim() || "Open", url: url.trim(), color, align };
+    if (editing) editor.chain().focus().updateEmailButton(attrs).run();
+    else editor.chain().focus().insertEmailButton(attrs).run();
+    onClose();
+  };
+  return (
+    <ModalPortal>
+      <div className="fixed inset-0 z-[80] grid place-items-center bg-black/60 p-4" onPointerDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+        <div className="w-full max-w-sm rounded-xl border border-slate-700 bg-slate-900 p-4 shadow-xl">
+          <h3 className="text-sm font-semibold text-slate-100">{editing ? "Edit button" : "Insert button"}</h3>
+          <p className="mt-1 text-xs text-slate-400">Sent as an email-safe button that renders in every mail client, Outlook included.</p>
+          <label className="mt-3 block text-xs font-medium text-slate-300">Button text</label>
+          <input className="input mt-1 w-full" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Book your service" autoFocus />
+          <label className="mt-3 block text-xs font-medium text-slate-300">Destination URL</label>
+          <input className="input mt-1 w-full" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://… or {{portal_link}}" />
+          <div className="mt-3 flex items-center justify-between gap-3">
+            <div className="flex gap-1.5">
+              {EMAIL_BUTTON_COLORS.map((c) => (
+                <button key={c} type="button" title={`Button colour ${c}`} onClick={() => setColor(c)} className={`h-6 w-6 rounded border ${color === c ? "border-white ring-1 ring-white" : "border-slate-600"}`} style={{ backgroundColor: c }} />
+              ))}
+            </div>
+            <div className="inline-flex rounded-lg border border-slate-700 p-0.5 text-xs">
+              <button type="button" className={`rounded px-2 py-1 ${align === "left" ? "bg-slate-700 text-white" : "text-slate-400"}`} onClick={() => setAlign("left")}>Left</button>
+              <button type="button" className={`rounded px-2 py-1 ${align === "center" ? "bg-slate-700 text-white" : "text-slate-400"}`} onClick={() => setAlign("center")}>Centre</button>
+            </div>
+          </div>
+          <div className="mt-4 flex justify-end gap-2">
+            <button type="button" className="btn-secondary btn-sm" onClick={onClose}>Cancel</button>
+            <button type="button" className="btn-primary btn-sm" onClick={apply}>{editing ? "Update button" : "Insert button"}</button>
+          </div>
+        </div>
+      </div>
+    </ModalPortal>
+  );
+}
+
 function Toolbar({
   editor,
   onImageUpload,
+  emailTools,
 }: {
   editor: Editor;
   onImageUpload?: (file: File) => Promise<string | null>;
+  emailTools?: boolean;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
+  const [buttonDialogOpen, setButtonDialogOpen] = useState(false);
   return (
     <div className="flex flex-wrap gap-1 border-b border-slate-700 bg-slate-900 p-1.5 rounded-t-lg">
       <Btn title="Bold" label="B" active={editor.isActive("bold")} onClick={() => editor.chain().focus().toggleBold().run()} />
@@ -121,6 +192,20 @@ function Toolbar({
         />
       ))}
       <Btn title="Clear formatting" label="Tx" onClick={() => editor.chain().focus().clearNodes().unsetAllMarks().run()} />
+      {emailTools && (
+        <>
+          <span className="w-px bg-slate-700 mx-0.5" />
+          <Btn
+            title={editor.isActive("emailButton") ? "Edit the selected button" : "Insert an email-safe button"}
+            label={editor.isActive("emailButton") ? "✎ Button" : "▣ Button"}
+            active={editor.isActive("emailButton")}
+            onClick={() => setButtonDialogOpen(true)}
+          />
+          <Btn title="Insert a divider line" label="— Divider" onClick={() => editor.chain().focus().insertEmailDivider().run()} />
+          <Btn title="Insert vertical space" label="↕ Spacer" onClick={() => editor.chain().focus().insertEmailSpacer(24).run()} />
+          <EmailButtonDialog editor={editor} open={buttonDialogOpen} onClose={() => setButtonDialogOpen(false)} />
+        </>
+      )}
     </div>
   );
 }
@@ -131,6 +216,7 @@ export default function RichTextEditor({
   placeholder,
   onImageUpload,
   onEditorReady,
+  emailTools = false,
 }: {
   value: string;
   onChange: (html: string) => void;
@@ -149,6 +235,15 @@ export default function RichTextEditor({
    * unchanged and a parent holding the reference cannot keep a dead editor.
    */
   onEditorReady?: (editor: Editor | null) => void;
+  /**
+   * Email building blocks: bulletproof CTA button, divider, spacer.
+   *
+   * Opt-in per surface, because the blocks emit email-safe TABLE markup —
+   * exactly right for anything sent through SMTP, and exactly wrong for any
+   * future surface that renders its HTML on the web. Both email surfaces
+   * (the 1:1 composer and marketing templates) turn it on.
+   */
+  emailTools?: boolean;
 }) {
   const editor = useEditor({
     extensions: [
@@ -160,13 +255,18 @@ export default function RichTextEditor({
       TableRow,
       TableCell,
       TableHeader,
+      ...(emailTools ? [EmailButton, EmailDivider, EmailSpacer] : []),
     ],
     content: value,
     immediatelyRender: false,
     editorProps: {
       attributes: {
         class:
-          "prose-invert min-h-40 max-h-96 overflow-y-auto px-3 py-2 text-sm text-slate-100 outline-none [&_a]:text-orange-400 [&_a]:underline [&_table]:border-collapse [&_td]:border [&_td]:border-slate-600 [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-slate-600 [&_th]:px-2 [&_th]:py-1 [&_th]:bg-slate-800 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_h2]:text-lg [&_h2]:font-bold [&_img]:max-w-full",
+          // The last four rules: email BLOCKS (button/divider/spacer) are layout
+          // tables, so they must not inherit the bordered data-table styling
+          // above them, and a selected atom needs a visible outline or clicking
+          // it looks like nothing happened.
+          "prose-invert min-h-40 max-h-96 overflow-y-auto px-3 py-2 text-sm text-slate-100 outline-none [&_a]:text-orange-400 [&_a]:underline [&_table]:border-collapse [&_td]:border [&_td]:border-slate-600 [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-slate-600 [&_th]:px-2 [&_th]:py-1 [&_th]:bg-slate-800 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_h2]:text-lg [&_h2]:font-bold [&_img]:max-w-full [&_table[data-email-block]_td]:!border-0 [&_table[data-email-block]_td]:!px-0 [&_table[data-email-block]_td]:!py-0 [&_.ProseMirror-selectednode]:outline-2 [&_.ProseMirror-selectednode]:outline-dashed [&_.ProseMirror-selectednode]:outline-orange-500",
         "data-placeholder": placeholder ?? "",
       },
     },
@@ -194,7 +294,7 @@ export default function RichTextEditor({
 
   return (
     <div className="rounded-lg border border-slate-700 bg-slate-900 focus-within:border-orange-500">
-      <Toolbar editor={editor} onImageUpload={onImageUpload} />
+      <Toolbar editor={editor} onImageUpload={onImageUpload} emailTools={emailTools} />
       <EditorContent editor={editor} />
     </div>
   );

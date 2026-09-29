@@ -114,11 +114,14 @@ const WRITE_PATHS: Array<[string, string[]]> = [
  * above used to carry for `lead_created`.
  */
 test("every lead channel reaches the one creator", () => {
+  // Inbound WhatsApp is deliberately not here: it creates a Contact, never a
+  // Lead, because receiving a message is not evidence of sales intent. The
+  // chatbot's `booking` node creates the lead when the conversation establishes
+  // one, and it IS in this list. See tests/oneLeadCreator.test.ts.
   for (const [rel, what] of [
     ["src/lib/leadIntake.ts", "website / Lead Ads intake"],
     ["src/app/actions/leads.ts", "the staff form"],
-    ["src/lib/whatsapp.ts", "inbound WhatsApp"],
-    ["src/lib/messenger.ts", "Facebook / Instagram DMs"],
+    ["src/lib/messenger.ts", "Facebook / Instagram ad-attributed DMs"],
     ["src/lib/flowActions.ts", "the chatbot"],
   ] as const) {
     assert.match(
@@ -320,7 +323,7 @@ test("the next-step scheduling control survived the screen that hosted it", () =
 });
 
 test("a stage_entered event is judged against the stage that was ENTERED", () => {
-  // Events are drained by a cron every 15 minutes. Judging the event against
+  // Events are drained by a cron every 30 minutes. Judging the event against
   // the lead's stage NOW means a rep who moves a lead twice inside that window
   // has the first event silently match nothing.
   const code = shipped("src/lib/journeyTriggers.ts");

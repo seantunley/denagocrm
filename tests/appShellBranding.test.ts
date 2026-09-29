@@ -28,7 +28,8 @@ const shipped = (rel: string) =>
 
 test("the CRM shell resolves its brand from the session's tenant, not the hostname", () => {
   const code = shipped("src/app/(app)/layout.tsx");
-  assert.match(code, /getActiveTenantId\(\)\s*\.then\(brandForTenant\)/, "session tenant → brand");
+  assert.match(code, /activeTenantId = await getActiveTenantId\(\)/, "the session tenant is resolved once");
+  assert.match(code, /brandForTenant\(activeTenantId\)/, "session tenant → brand");
   assert.doesNotMatch(code, /brandForHost/, "hostname resolution belongs to the pre-auth pages only");
   assert.match(code, /\.catch\(\(\) => DEFAULT_BRAND\)/, "this layout wraps every page — it cannot throw");
 });

@@ -27,7 +27,7 @@ export const THREAD_PAGE_SIZE = 50;
 /** Messages materialised per thread for the list view. */
 export const MESSAGES_PER_THREAD = 8;
 
-const DM_CHANNELS = ["whatsapp", "messenger", "instagram"];
+const DM_CHANNELS = ["whatsapp", "messenger", "instagram", "x"];
 
 type ThreadKey = { contactId: string | null; leadId: string | null; type: string; lastAt: Date };
 

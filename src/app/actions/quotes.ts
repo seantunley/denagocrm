@@ -142,64 +142,66 @@ export async function createQuoteFromLead(leadId: string) {
 
 /** Creates a quote directly for an existing customer (no lead needed). */
 export async function createQuoteForContact(formData: FormData) {
-  const contactId = String(formData.get("contactId") ?? "").trim();
-  const productId = String(formData.get("productId") ?? "").trim() || null;
-  if (!contactId) throw new Error("Customer is required");
-  const user = await requireContactAccess(contactId, "quotes.create");
+  return withActingStaffScope(async () => {
+    const contactId = String(formData.get("contactId") ?? "").trim();
+    const productId = String(formData.get("productId") ?? "").trim() || null;
+    if (!contactId) throw new Error("Customer is required");
+    const user = await requireContactAccess(contactId, "quotes.create");
 
-  const product = productId
-    ? await prisma.product.findUnique({ where: { id: productId } })
-    : null;
-  const validDaysRaw = await getSetting("QUOTE_VALID_DAYS");
-  const validDays = validDaysRaw ? parseInt(validDaysRaw, 10) : 7;
-  const terms =
-    (await getSetting("QUOTE_TERMS")) ||
-    "Prices include VAT. Delivery arranged on acceptance. E&OE.";
-  // Advisory-locked allocation + insert in one transaction (#11). The bypass
-  // client carries no tenant, so the row and its children are stamped here.
-  const tenantId = await actingTenantId();
-  const quote = await basePrisma.$transaction(async (tx) => {
-    const number = await nextQuoteNumber(tx);
-    return tx.quote.create({
-      data: {
-        number,
-        tenantId,
-        contactId,
-        createdById: user.id,
-        validUntil: addDays(new Date(), isNaN(validDays) ? 7 : validDays),
-        terms,
-        items: product
-          ? {
-              create: [
-                {
-                  tenantId,
-                  description: product.name,
-                  qty: 1,
-                  unitPriceCents: product.basePriceCents,
-                  productId: product.id,
-                },
-              ],
-            }
-          : undefined,
-      },
-      include: { contact: true },
+    const product = productId
+      ? await prisma.product.findUnique({ where: { id: productId } })
+      : null;
+    const validDaysRaw = await getSetting("QUOTE_VALID_DAYS");
+    const validDays = validDaysRaw ? parseInt(validDaysRaw, 10) : 7;
+    const terms =
+      (await getSetting("QUOTE_TERMS")) ||
+      "Prices include VAT. Delivery arranged on acceptance. E&OE.";
+    // Advisory-locked allocation + insert in one transaction (#11). The bypass
+    // client carries no tenant, so the row and its children are stamped here.
+    const tenantId = await actingTenantId();
+    const quote = await basePrisma.$transaction(async (tx) => {
+      const number = await nextQuoteNumber(tx);
+      return tx.quote.create({
+        data: {
+          number,
+          tenantId,
+          contactId,
+          createdById: user.id,
+          validUntil: addDays(new Date(), isNaN(validDays) ? 7 : validDays),
+          terms,
+          items: product
+            ? {
+                create: [
+                  {
+                    tenantId,
+                    description: product.name,
+                    qty: 1,
+                    unitPriceCents: product.basePriceCents,
+                    productId: product.id,
+                  },
+                ],
+              }
+            : undefined,
+        },
+        include: { contact: true },
+      });
     });
+    await logAudit({
+      action: "quote.created",
+      // No fleet by construction — this path creates a quote for one person — so
+      // the resolver is passed null rather than asked to look one up.
+      summary: `Created quote Q-${quote.number} for ${quoteBillTo(quote, null).name || "customer"}`,
+      contactId,
+      user,
+    });
+    revalidatePath("/quotes");
+    // Lands in the editor like every other route to a new quote. NOTE: nothing in
+    // the UI calls this today, and it differs from createQuoteFromLead in ways
+    // that would surprise whoever wires it up — it prices at the product's base
+    // price rather than the lead's agreed value, and links no lead. Decide those
+    // before giving it a button.
+    redirect(`/quotes?edit=${quote.id}`);
   });
-  await logAudit({
-    action: "quote.created",
-    // No fleet by construction — this path creates a quote for one person — so
-    // the resolver is passed null rather than asked to look one up.
-    summary: `Created quote Q-${quote.number} for ${quoteBillTo(quote, null).name || "customer"}`,
-    contactId,
-    user,
-  });
-  revalidatePath("/quotes");
-  // Lands in the editor like every other route to a new quote. NOTE: nothing in
-  // the UI calls this today, and it differs from createQuoteFromLead in ways
-  // that would surprise whoever wires it up — it prices at the product's base
-  // price rather than the lead's agreed value, and links no lead. Decide those
-  // before giving it a button.
-  redirect(`/quotes?edit=${quote.id}`);
 }
 
 /**
@@ -964,30 +966,32 @@ export async function setQuoteStatus(quoteId: string, status: string) {
  * page, and requireQuoteReadAccess() throws NEXT_REDIRECT.
  */
 export async function quoteEditorRecord(id: string): Promise<QuoteEditorRecord | null> {
-  const user = await getCurrentUser();
-  if (!user) return null;
-  if (!(await hasAnyPermission(user, "quotes.view_all", "quotes.view_owned"))) return null;
-  if (!(await canAccessQuote(user, id))) return null;
+  return withActingStaffScope(async () => {
+    const user = await getCurrentUser();
+    if (!user) return null;
+    if (!(await hasAnyPermission(user, "quotes.view_all", "quotes.view_owned"))) return null;
+    if (!(await canAccessQuote(user, id))) return null;
 
-  const quote = await prisma.quote.findUnique({ where: { id }, include: QUOTE_EDITOR_INCLUDE });
-  if (!quote || quote.deletedAt) return null;
+    const quote = await prisma.quote.findUnique({ where: { id }, include: QUOTE_EDITOR_INCLUDE });
+    if (!quote || quote.deletedAt) return null;
 
-  // The version family: every revision reachable from this one, so the Versions
-  // tab and the superseded-successor link work the same as from the list.
-  const versions = await prisma.quote.findMany({
-    orderBy: { createdAt: "asc" },
-    select: QUOTE_VERSION_SELECT,
-    take: 2_000,
+    // The version family: every revision reachable from this one, so the Versions
+    // tab and the superseded-successor link work the same as from the list.
+    const versions = await prisma.quote.findMany({
+      orderBy: { createdAt: "asc" },
+      select: QUOTE_VERSION_SELECT,
+      take: 2_000,
+    });
+    // Tenant-scoped, so a fleet id from another workspace resolves to nothing and
+    // the quote reads as an ordinary customer quote rather than naming an account
+    // this caller has no business seeing.
+    const fleets = await loadBillToFleets(prisma, [quote.fleetId]);
+    return buildQuoteEditorRecord(
+      quote,
+      quoteVersionIndex(versions),
+      new Map([...fleets].map(([id, fleet]) => [id, fleet.name])),
+    );
   });
-  // Tenant-scoped, so a fleet id from another workspace resolves to nothing and
-  // the quote reads as an ordinary customer quote rather than naming an account
-  // this caller has no business seeing.
-  const fleets = await loadBillToFleets(prisma, [quote.fleetId]);
-  return buildQuoteEditorRecord(
-    quote,
-    quoteVersionIndex(versions),
-    new Map([...fleets].map(([id, fleet]) => [id, fleet.name])),
-  );
 }
 
 /**
@@ -1000,10 +1004,12 @@ export async function quoteEditorRecord(id: string): Promise<QuoteEditorRecord |
  * delete succeed.
  */
 export async function canDeleteQuote(id: string): Promise<boolean> {
-  const user = await getCurrentUser();
-  if (!user) return false;
-  if (!(await hasPermission(user, "quotes.delete"))) return false;
-  return canAccessQuote(user, id);
+  return withActingStaffScope(async () => {
+    const user = await getCurrentUser();
+    if (!user) return false;
+    if (!(await hasPermission(user, "quotes.delete"))) return false;
+    return canAccessQuote(user, id);
+  });
 }
 
 export async function deleteQuote(id: string, formData: FormData) {

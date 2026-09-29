@@ -67,7 +67,7 @@ export default function MessagesNav() {
             </SheetDescription>
           </SheetHeader>
           <div className="p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
-            <PushToggle />
+            <PushToggle mode="messages" />
           </div>
         </SheetContent>
       </Sheet>

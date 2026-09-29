@@ -3,6 +3,15 @@ import { prisma } from "./db";
 import { logError } from "./errorLog";
 import { recordAiUsage } from "./systemHealth";
 import { inheritedTenantId } from "./tenantWrite";
+import { codexRespond, isCodexConnected } from "./codex";
+import {
+  CHATGPT_RESEARCH_FORMAT_NOTE,
+  RESEARCH_INSTRUCTIONS,
+  corporateDomain,
+  researchLeadMessage,
+  stripInlineCitations,
+} from "./researchPrompt";
+import type { CronSliceContext } from "./tenantCron";
 
 export async function isAiConfigured(): Promise<boolean> {
   return Boolean(await getSetting("ANTHROPIC_API_KEY"));
@@ -61,11 +70,6 @@ export async function aiCheckDraft(input: {
     return { error: "AI check failed — logged in the System Log." };
   }
 }
-
-const FREE_MAIL = new Set([
-  "gmail.com","yahoo.com","outlook.com","hotmail.com","icloud.com","live.com",
-  "webmail.co.za","mweb.co.za","telkomsa.net","vodamail.co.za","aol.com",
-]);
 
 /**
  * HubSpot-style enrichment: given a name + email, Claude searches the web and
@@ -130,14 +134,102 @@ function capSummary(summary: string): string {
   return kept.join("\n").trim();
 }
 
-export async function aiResearch(input: {
-  name: string;
-  email?: string | null;
-}): Promise<{ summary: string } | { error: string }> {
-  const apiKey = await getSetting("ANTHROPIC_API_KEY");
-  if (!apiKey) return { error: "AI Assist is not configured (Settings → Integrations)." };
-  const domain = input.email?.split("@")[1]?.toLowerCase();
-  const corporate = domain && !FREE_MAIL.has(domain) ? domain : null;
+/**
+ * What an AUTOMATIC research run costs, as opposed to one somebody clicked for.
+ *
+ * September's own ledger (AI_TOKENS_2026-09) put a research call at ~144,000
+ * input tokens: the web-search results are read into context, and every extra
+ * search adds pages. On Opus 5 that is the most expensive call this app makes,
+ * and the scheduled sweep made it for every new lead — spam included — without
+ * anybody asking. Haiku reads the same pages at a fraction of the price, and
+ * three searches find the company and the LinkedIn profile, which is what the
+ * card actually shows. A salesperson who wants the deep version presses
+ * Research on the lead and gets Opus with the full search budget.
+ */
+export const AUTO_RESEARCH_MODEL = "claude-haiku-4-5";
+
+/**
+ * How much of a cron tick must be left to start another lead. A ChatGPT
+ * research call measured up to ~80 seconds; this leaves room for the slowest
+ * plus the writes after it.
+ */
+export const AUTO_RESEARCH_RESERVE_MS = 120_000;
+export const AUTO_RESEARCH_MAX_SEARCHES = 3;
+
+export type ResearchResult =
+  | { summary: string }
+  | {
+      error: string;
+      /**
+       * The failure was the API's, not the lead's: out of credit, rate-limited,
+       * or overloaded. The next call will fail the same way for every lead, so
+       * a sweep should STOP rather than work down the list — and the lead has
+       * not been researched, so it should not lose its turn.
+       */
+      transient?: true;
+    };
+
+/**
+ * DROP THE NARRATION THE PROMPT ALREADY FORBIDS.
+ *
+ * The prompt says "no preamble" and models write one anyway — "I'll research
+ * this lead across multiple angles." — as their own text. It is a documented
+ * habit, not a prompt bug, so it is handled here rather than argued with in the
+ * system prompt. Shared by both research providers, so a ChatGPT briefing and an
+ * Anthropic one land in the same card.
+ *
+ * It has to be stripped, not tolerated: joined with "" the preamble is glued
+ * directly onto the first label ("...multiple angles.Company: ...") so NO line
+ * matches a label, ResearchBriefing drops to its verbatim fallback, and the whole
+ * briefing renders as one undifferentiated wall instead of the Company/Role/Fit
+ * card. One stray sentence costs the card.
+ *
+ * Only ever cuts a PREFIX, and only when a label exists after it, so a briefing
+ * with no labels at all ("No reliable information found.") is left exactly as
+ * written.
+ */
+async function stripResearchPreamble(summary: string): Promise<string> {
+  const labelStart = summary.search(/(?:Company|Role|Fit):/i);
+  if (labelStart <= 0) return summary;
+  // LOGGED ONLY WHEN IT IS BIG ENOUGH TO BE RESEARCH RATHER THAN NARRATION.
+  //
+  // A one-line "I'll research this lead…" prefix is on most calls, so logging
+  // every strip would file a row per research run and bury real errors in the
+  // System Log. A LONG prefix means this is cutting actual prose, and that is
+  // worth a row precisely because the discarded text is gone from the note.
+  if (labelStart > 200) {
+    await logError(
+      "ai-research",
+      "Discarded a long prefix before the first label",
+      `${labelStart} chars dropped: ${summary.slice(0, 160)}…`,
+    );
+  }
+  return summary.slice(labelStart).trim();
+}
+
+/** Research can run: on a connected ChatGPT subscription, or on the Anthropic key. */
+export async function isResearchConfigured(): Promise<boolean> {
+  return (await isCodexConnected()) || (await isAiConfigured());
+}
+
+export async function aiResearch(
+  input: {
+    name: string;
+    email?: string | null;
+  },
+  options: { model?: string; maxSearches?: number } = {},
+): Promise<ResearchResult> {
+  // A workspace that has connected its ChatGPT subscription researches on that
+  // instead of pay-per-token Anthropic credit (lib/codex.ts). There is
+  // deliberately NO fallback to Anthropic when ChatGPT fails: the point of
+  // connecting it is that research stops spending API credit, and a silent
+  // fallback would bring the bill straight back without anyone choosing it.
+  const useChatGpt = await isCodexConnected();
+  const apiKey = useChatGpt ? null : await getSetting("ANTHROPIC_API_KEY");
+  if (!useChatGpt && !apiKey) {
+    return { error: "AI Assist is not configured (Settings → Integrations)." };
+  }
+  const corporate = corporateDomain(input.email);
 
   /**
    * SERVER-SIDE WEB SEARCH DOES NOT ALWAYS FINISH IN ONE RESPONSE.
@@ -165,7 +257,7 @@ export async function aiResearch(input: {
       signal: AbortSignal.timeout(90000),
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": apiKey,
+        "x-api-key": apiKey ?? "",
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify(body),
@@ -173,7 +265,7 @@ export async function aiResearch(input: {
 
   try {
     const requestBody = {
-        model: "claude-opus-5",
+        model: options.model ?? "claude-opus-5",
         // MAX_TOKENS IS SHARED WITH THE SEARCH, WHICH IS WHY 700 PRODUCED STUBS.
         //
         // The model's `server_tool_use` blocks — one per web search, up to
@@ -197,54 +289,62 @@ export async function aiResearch(input: {
         // answered "No reliable information found." while holding 29 results.
         // This task needs the model to READ a handful of pages and synthesise
         // them, and the basic tool puts them straight into context where it can.
-        tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 8 }],
-        system:
-          "You research sales leads for Denago Cape Town, a South African electric golf-cart dealership.\n\n" +
-          "SEARCH HARD BEFORE YOU CONCLUDE ANYTHING. Work several angles, not one or two: the person's name plus LinkedIn, the name plus \"South Africa\", the name plus any employer you turn up, and the company's own website and public social profiles (Facebook, Instagram, X/Twitter). LinkedIn is usually the most reliable source for a current role — search for it directly rather than relying on whatever a generic web search happens to surface. Two searches is not a search.\n\n" +
-          // THE OLD PROMPT TALKED ITSELF OUT OF THE ANSWER, AND THIS MODEL OBEYED.
-          //
-          // It said to research the person "only if confidently identifiable" and
-          // offered "No reliable information found." as the out. For a common
-          // name that made bailing the COMPLIANT reply — measured: two searches,
-          // eighteen results in hand, and it answered with the one-liner. The
-          // July note on the same contact instead named the prominent match and
-          // said so. Closing the hatch and demanding attribution restored it:
-          // six searches, and the full Hungry Lion / Digicloud briefing.
-          "WHEN SEVERAL PEOPLE SHARE THE NAME, REPORT THE BEST-EVIDENCED ONE — do not discard the research. Name the most prominent public match, say plainly that it is a name match rather than a confirmed identity, and give the evidence so the salesperson can judge for themselves. Throwing away a strong public match because you cannot prove it is the same person is the failure to avoid here; inventing detail is the other. You avoid both the same way: attribute. Say what the source is and what it actually supports.\n\n" +
-          "Then respond with up to three lines, EXACTLY in this order, each on its own line, each starting with its label and a colon:\n" +
-          "Company: what it does, how big it is, where it operates, and anything else that helps someone walk into the conversation informed\n" +
-          "Role: the person's role and employer, stated plainly if confirmed, plus prior roles or other ventures if you found them\n" +
-          "Fit: why they might want an electric cart (estate, lodge, farm, resort...), and how to approach them\n" +
-          "WRITE IT TO BE READ, NOT TO BE COMPLETE. A salesperson skims this in the thirty seconds before they make contact, so lead each label with the single most useful fact and put the supporting detail after it. Two to four ordinary sentences per label is the target. Full stops, not semicolons: a chain of clauses strung together with semicolons is the failure here — it is technically thorough and nobody can read it. Cut the corporate trivia that will not change how they open the conversation (founding dates, store counts, subsidiary history) unless it is genuinely the hook. A note that reads as thin is a failed one; so is one that has to be re-read. Never pad to reach a length — depth comes from what you found, not from wordcount.\n" +
-          "One more formatting rule, and it is absolute: NEVER put a line break inside a label's text. Each label is exactly one line, however long, because a stray newline breaks the card this renders into.\n" +
-          "Omit a label entirely if you genuinely found nothing for it — do not write \"Company: not found\". Use \"No reliable information found.\" ONLY if the searches genuinely returned nothing usable about anyone of this name: it is the last resort, not the safe default.\n\n" +
-          "STATE WHAT YOU FOUND PLAINLY. When a LinkedIn profile or the company's own page directly confirms a role or fact, say it as fact — \"is the CEO of X\", never \"might be tied to X\" or \"possibly works at X\" — because the source said so directly, not because you're certain in the abstract. Reserve hedging (\"appears to be\", \"likely\") for evidence that is genuinely indirect, stale, or where more than one person shares this name and you can't tell which one is the lead. Never fabricate. No preamble, no other text outside the labeled lines.",
+        tools: [{ type: "web_search_20250305", name: "web_search", max_uses: options.maxSearches ?? 8 }],
+        system: RESEARCH_INSTRUCTIONS,
     };
 
     // The opening turn. It lives in `messages` — NOT in `requestBody` — because
     // every call spreads `{ ...requestBody, messages }`, so a copy left behind in
     // the body would be silently replaced by this array and the continuation
     // would resend a conversation the prompt had fallen out of.
-    messages.push({
-      role: "user",
-      content: `Lead: ${input.name}${input.email ? ` <${input.email}>` : ""}\n${
-        corporate
-          ? `Company domain to research: ${corporate}`
-          : "Personal email — research the person (South Africa) only if confidently identifiable."
-      }\nCheck LinkedIn for "${input.name}"${corporate ? ` at the company on ${corporate}` : " (South Africa)"} to confirm their role.`,
-    });
+    messages.push({ role: "user", content: researchLeadMessage(input.name, input.email) });
     // Bounded: a paused turn is resumed at most this many times. The cap exists
     // so a model that keeps pausing cannot spin — and each pass carries the same
     // 90s timeout, so the ceiling is wall-clock as well as count.
     const MAX_CONTINUATIONS = 4;
     let summary = "";
 
-    for (let attempt = 0; attempt <= MAX_CONTINUATIONS; attempt++) {
+    if (useChatGpt) {
+      // Same prompt, same briefing format, same checks after — only the
+      // transport differs. The search budget is an Anthropic tool parameter
+      // with no Responses equivalent; on a flat-rate plan it is also not the
+      // cost it is on the API.
+      // HIGH REASONING, LONG ANSWERS, ON THE BEST MODEL. On a flat-rate plan
+      // there is no per-call cost to economise on, and the defaults showed:
+      // the first ChatGPT briefing on the Petrow Agri lead was two thin
+      // sentences a label beside an Opus note that named the directors. Sol at
+      // high effort, with the registry angle in the prompt, found them too —
+      // at 50 to 80 seconds a call, which is why the timeout is generous and
+      // automatic research has its own cron route.
+      const reply = await codexRespond({
+        instructions: RESEARCH_INSTRUCTIONS + CHATGPT_RESEARCH_FORMAT_NOTE,
+        prompt: String(messages[0].content),
+        webSearch: true,
+        reasoningEffort: "high",
+        verbosity: "high",
+        timeoutMs: 150_000,
+      });
+      if ("error" in reply) {
+        return reply.transient ? { error: reply.error, transient: true } : { error: reply.error };
+      }
+      // Its search writes inline citation links into the prose, which the card
+      // shows as raw text. The prompt asks it not to; this makes sure.
+      summary = await stripResearchPreamble(stripInlineCitations(reply.text));
+      stopReason = reply.incomplete ? "max_tokens" : "end_turn";
+    }
+
+    for (let attempt = 0; !useChatGpt && attempt <= MAX_CONTINUATIONS; attempt++) {
       const res = await callApi({ ...requestBody, messages });
       if (!res.ok) {
         const text = await res.text().catch(() => "");
         await logError("ai-research", `Anthropic API ${res.status}`, text.slice(0, 300));
-        return { error: `Research failed (${res.status}).` };
+        // Out of credit arrives as a 400 invalid_request_error, not a 402, so
+        // the status alone cannot tell it apart from a malformed request.
+        const transient =
+          res.status === 429 || res.status >= 500 || /credit balance/i.test(text);
+        return transient
+          ? { error: `Research failed (${res.status}).`, transient: true }
+          : { error: `Research failed (${res.status}).` };
       }
       const json = await res.json();
       void recordAiUsage(json.usage);
@@ -268,40 +368,7 @@ export async function aiResearch(input: {
         .join("")
         .trim();
 
-      // DROP THE NARRATION THE PROMPT ALREADY FORBIDS.
-      //
-      // The prompt says "no preamble" and this model writes one anyway — "I'll
-      // research this lead across multiple angles." — as its own text block. It
-      // is a documented habit of the model, not a prompt bug, so it is handled
-      // here rather than argued with in the system prompt.
-      //
-      // It has to be stripped, not tolerated: joined with "" the preamble is
-      // glued directly onto the first label ("...multiple angles.Company: ...")
-      // so NO line matches a label, ResearchBriefing drops to its verbatim
-      // fallback, and the whole briefing renders as one undifferentiated wall
-      // instead of the Company/Role/Fit card. One stray sentence costs the card.
-      //
-      // Only ever cuts a PREFIX, and only when a label exists after it, so a
-      // briefing with no labels at all ("No reliable information found.")
-      // is left exactly as written.
-      const labelStart = summary.search(/(?:Company|Role|Fit):/i);
-      if (labelStart > 0) {
-        // LOGGED ONLY WHEN IT IS BIG ENOUGH TO BE RESEARCH RATHER THAN NARRATION.
-        //
-        // The model prefixes a one-line "I'll research this lead…" on most calls,
-        // so logging every strip would file a row per research run and bury real
-        // errors in the System Log — the opposite of diagnosable. A LONG prefix is
-        // a different thing: it means this is cutting actual prose, and that is
-        // worth a row precisely because the discarded text is gone from the note.
-        if (labelStart > 200) {
-          await logError(
-            "ai-research",
-            "Discarded a long prefix before the first label",
-            `${labelStart} chars dropped: ${summary.slice(0, 160)}…`,
-          );
-        }
-        summary = summary.slice(labelStart).trim();
-      }
+      summary = await stripResearchPreamble(summary);
 
       // Only a paused turn is worth resuming. Any other stop_reason means the
       // model is done and whatever text exists is the answer.
@@ -385,23 +452,58 @@ export async function aiResearch(input: {
 }
 
 /**
- * Auto-research: new leads (last 48h) that have an email and no research
- * note yet get a briefing filed automatically. Max 5 per cron run.
+ * Auto-research: new leads (last 48h) that have an email get ONE briefing
+ * attempt, filed automatically. Max 5 per cron run.
+ *
+ * ONE ATTEMPT, NOT ONE SUCCESS. The sweep used to select leads with no research
+ * and `continue` past any failure, so a lead whose research came back empty —
+ * which is exactly what a spam lead with a made-up name does — stayed eligible
+ * and was researched again on every run for 48 hours. Each retry was a full,
+ * paid call. `researchedAt` is now stamped on every attempt that reached the
+ * model, and the sweep selects on it, so a lead gets one try. The Research
+ * button on the lead still works for a second look.
+ *
+ * STOP ON THE API'S FAILURE, NOT THE LEAD'S. When the account is out of credit
+ * every call fails identically, and working down the list turned that into
+ * several hundred logged 400s a day (381 on 7 Sep, 389 on 8 Sep). A transient
+ * failure ends the run and leaves the lead unmarked — it has not actually been
+ * researched — so the next run picks it up once credit is back.
+ *
+ * Lost leads are skipped: a lead marked lost within minutes of arriving is
+ * usually the spam, and researching it is paying to learn nothing.
  */
-export async function runAutoResearch(): Promise<number> {
+export async function runAutoResearch(budget?: Pick<CronSliceContext, "shouldStop">): Promise<number> {
   if ((await getSetting("AI_AUTO_RESEARCH")) !== "true") return 0;
-  if (!(await isAiConfigured())) return 0;
+  if (!(await isResearchConfigured())) return 0;
   const since = new Date(Date.now() - 48 * 60 * 60 * 1000);
   const leads = await prisma.lead.findMany({
-    where: { createdAt: { gte: since }, email: { not: null }, research: null },
+    where: {
+      createdAt: { gte: since },
+      email: { not: null },
+      research: null,
+      researchedAt: null,
+      status: { not: "lost" },
+    },
     orderBy: { createdAt: "desc" },
-    take: 20,
+    take: 5,
   });
   let done = 0;
   for (const lead of leads) {
-    if (done >= 5) break;
-    const result = await aiResearch({ name: lead.name, email: lead.email });
-    if ("error" in result) continue;
+    // Only start a lead there is time to finish. A call cut off by the
+    // platform leaves the lead unmarked, so the next tick simply tries it —
+    // but it was a wasted call, and on the API a paid one.
+    if (budget?.shouldStop(AUTO_RESEARCH_RESERVE_MS)) break;
+    const result = await aiResearch(
+      { name: lead.name, email: lead.email },
+      { model: AUTO_RESEARCH_MODEL, maxSearches: AUTO_RESEARCH_MAX_SEARCHES },
+    );
+    if ("error" in result) {
+      if (result.transient) break;
+      // The model ran and found nothing usable. That call was paid for; spend
+      // no more on this lead automatically.
+      await prisma.lead.update({ where: { id: lead.id }, data: { researchedAt: new Date() } });
+      continue;
+    }
     const researchedAt = new Date();
     await prisma.researchNote.create({
       // THE LEAD OWNS ITS RESEARCH. This runs on the automations cron, so there

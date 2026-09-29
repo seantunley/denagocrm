@@ -100,5 +100,6 @@ test("pruning is gated on a clean backup, exactly as the trash purge is", () => 
 
 test("logError still cannot throw — retention must not have changed that", () => {
   const body = bodyOf(CODE, "logError");
-  assert.match(body, /catch\s*\{/, "the error logger must never become the error");
+  assert.match(body, /catch\s*\(loggingError\)\s*\{/, "the error logger must never become the error");
+  assert.match(body, /console\.error\("\[error-log-write-failure\]"/, "a logger failure must remain visible without recursion");
 });

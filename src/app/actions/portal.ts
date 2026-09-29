@@ -111,6 +111,65 @@ async function createPortalNotification(contactId: string, title: string, body: 
   `;
 }
 
+/**
+ * Bind the workspace that owns THIS HOSTNAME around a pre-auth portal action.
+ *
+ * ── WHY SIGN-IN NEEDS THIS AND THE REST OF THE PORTAL DOES NOT ──────────────
+ *
+ * Every other portal action derives its workspace from the CONTACT, through
+ * `portalTenantId` — the customer is already identified, so the record is the
+ * honest source. Sign-in is the one step where there is no contact yet, and no
+ * staff session either. Production, 2026-08-27:
+ *
+ *   No tenant scope established for AppSetting   ·   POST /portal/login
+ *
+ * `requestPortalOtp` calls `isSmtpConfigured()` before anything else, and that
+ * reads AppSetting — a tenant-scoped model — so under enforcement the guarded
+ * client refuses and the whole page falls to the error boundary. The staff
+ * recovery cannot help here: `recoverStaffScopeFromSession` needs a staff
+ * cookie, and a customer signing in has none.
+ *
+ * ── THE HOSTNAME IS THE ONLY IDENTITY THE REQUEST CARRIES ───────────────────
+ *
+ * Which is exactly what `loginBrand()` already relies on to decide whose name to
+ * print on this page. The same fact decides whose settings to read, resolved by
+ * the same rule: a VERIFIED TenantDomain on an ACTIVE tenant. An unverified
+ * domain is a hostname somebody merely claimed.
+ *
+ * Queried directly rather than through `brandForHost`, which is wrapped in React
+ * `cache()` — an action has no request store, so the memo buys nothing and would
+ * put a `cache()` call on a path that exists precisely because actions lack one.
+ *
+ * ── IT NEVER INVENTS A WORKSPACE ────────────────────────────────────────────
+ *
+ * An already-bound scope wins. An unresolvable hostname runs a bare `fn()`, so
+ * the guards below refuse exactly as they do today rather than falling back to
+ * the founding tenant — a portal served on an unknown address must not be handed
+ * somebody's customer data.
+ *
+ * `runInTenantScope`, not `enterTenantScope`: a scope entered inside a callee
+ * does not reach the frame that called it, which is the same reason the staff
+ * actions have to bind an enclosing frame.
+ */
+async function withPortalHostScope<T>(fn: () => Promise<T>): Promise<T> {
+  const { currentTenantScope, runInTenantScope } = await import("@/lib/tenantScope");
+  if (currentTenantScope()) return fn();
+  const { headers } = await import("next/headers");
+  const raw = (await headers()).get("host");
+  const hostname = (raw ?? "").split(":")[0].trim().toLowerCase().replace(/^www\./, "");
+  if (!hostname) return fn();
+  const row = await basePrisma.tenantDomain
+    .findFirst({
+      where: { hostname, verifiedAt: { not: null }, tenant: { active: true } },
+      select: { tenantId: true },
+    })
+    // A database blip must not turn sign-in into an error boundary; failing to
+    // resolve leaves the guards to refuse, which is the outcome today anyway.
+    .catch(() => null);
+  if (!row?.tenantId) return fn();
+  return runInTenantScope({ tenantId: row.tenantId, system: false }, fn);
+}
+
 /** Step 1: email a 6-digit login code to a known customer. */
 export async function requestPortalOtp(
   _prev: PortalAuthState | undefined,
@@ -118,6 +177,13 @@ export async function requestPortalOtp(
 ): Promise<PortalAuthState> {
   const email = normEmail(str(formData.get("email")));
   if (!email || !email.includes("@")) return { error: "Enter your email address." };
+  // The shape is deliberate: validate what needs no database, then bind the
+  // workspace around everything that does. Splitting the body into its own
+  // function rather than nesting it keeps this diff to the wrapper.
+  return withPortalHostScope(() => issuePortalOtp(email));
+}
+
+async function issuePortalOtp(email: string): Promise<PortalAuthState> {
   if (!(await isSmtpConfigured())) return { error: "The customer portal isn't available right now." };
 
   const generic: PortalAuthState = { sent: true };
@@ -174,7 +240,14 @@ export async function verifyPortalOtp(
   const email = normEmail(str(formData.get("email")));
   const code = str(formData.get("code"));
   if (!/^\d{6}$/.test(code)) return { error: "Enter the 6-digit code." };
+  // Same binding as step 1, for the same reason: every read below goes through
+  // the GUARDED client, and there is still no contact and no staff session to
+  // resolve a workspace from. `redirect()` throws by design and propagates
+  // straight out through the scope, as it does everywhere else.
+  return withPortalHostScope(() => completePortalOtp(email, code));
+}
 
+async function completePortalOtp(email: string, code: string): Promise<PortalAuthState> {
   const ip = await getRequestIp();
   const verifyKey = rateLimitKey("portal-otp-verify", `${email}:${ip}`);
   if (!(await checkRateLimit(verifyKey)).allowed) {

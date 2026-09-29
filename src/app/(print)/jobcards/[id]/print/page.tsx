@@ -5,6 +5,7 @@ import { requireJobCardReadAccess } from "@/lib/permissions";
 import PrintActions from "@/components/PrintActions";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 import { getDocTemplate } from "@/lib/docTemplateStore";
+import { embedStoredImage } from "@/lib/storedImage";
 import { stageMeta, jobCardTotals, jobLineCents } from "@/lib/workshop-constants";
 
 export default async function JobCardPrintPage({
@@ -33,6 +34,8 @@ export default async function JobCardPrintPage({
   });
   if (!jobCard) notFound();
   const tpl = await getDocTemplate("jobcard", tplId);
+  // Embedded, not linked: a signature in the private store has no public link.
+  const signatureSrc = jobCard.signedAt ? await embedStoredImage(jobCard.signatureRef, jobCard.tenantId) : null;
   const conditionPhotos = jobCard.documents;
   const photoHref = showPhotos
     ? `/jobcards/${id}/print${tplId ? `?tpl=${tplId}` : ""}`
@@ -257,9 +260,9 @@ export default async function JobCardPrintPage({
         {/* Signatures */}
         {jobCard.signedAt ? (
           <div className="pt-8">
-            {jobCard.signatureRef?.startsWith("http") && (
+            {signatureSrc && (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={jobCard.signatureRef} alt="Signature" className="h-16 w-auto mb-1" />
+              <img src={signatureSrc} alt="Signature" className="h-16 w-auto mb-1" />
             )}
             <div className="border-t border-slate-900 pt-1.5 max-w-md">
               <p className="text-xs text-slate-600">

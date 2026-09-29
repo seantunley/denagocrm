@@ -385,10 +385,16 @@ export async function syncInboundEmail(): Promise<number> {
   if (!host || !user || !pass) return 0;
   if (!(await acquireSyncLock())) return 0; // another run is in progress
 
+  const secure = secureRaw !== "false";
   const client = new ImapFlow({
     host,
     port: portRaw ? parseInt(portRaw, 10) : 993,
-    secure: secureRaw !== "false",
+    secure,
+    // ENCRYPTED OR NOT AT ALL. IMAP_SECURE=false used to mean "upgrade with
+    // STARTTLS if the server offers it", so a server that didn't got the
+    // password and every customer email in clear text. Now STARTTLS is required
+    // and the sync fails instead. (imapflow rejects doSTARTTLS with secure.)
+    ...(secure ? {} : { doSTARTTLS: true }),
     auth: { user, pass },
     logger: false,
   });

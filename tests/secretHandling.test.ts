@@ -236,13 +236,15 @@ test("the instrumentation hook redacts the request path before logging it", () =
 
 test("logError redacts every column it persists, not just the context", () => {
   const code = codeOf("src/lib/errorLog.ts");
-  assert.match(code, /const message = redactUrl\(/, "the message column must be redacted");
-  assert.match(code, /redactUrl\(err\.stack\)/, "the stack column must be redacted");
+  // redactForLog = redactUrl (credential links) + client information.
+  assert.match(codeOf("src/lib/redactLog.ts"), /return redactUrl\(text\)/, "redactForLog still strips credential links");
+  assert.match(code, /const message = redactForLog\(/, "the message column must be redacted");
+  assert.match(code, /redactForLog\(err\.stack\)/, "the stack column must be redacted");
   const create = code.slice(code.indexOf("errorLog.create"));
   assert.match(
     create,
-    /context:\s*context\s*\?\s*redactUrl\(/,
-    "the context column must be written through redactUrl",
+    /context:\s*context\s*\?\s*redactForLog\(/,
+    "the context column must be written through redactForLog",
   );
 });
 

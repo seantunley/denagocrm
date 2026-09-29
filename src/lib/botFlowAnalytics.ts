@@ -43,6 +43,11 @@ export type BotFlowVersionAnalytics = {
   nodes: BotFlowNodeAnalytics[];
 };
 
+export type BotFlowAnalyticsQuery = {
+  occurredFrom?: Date;
+  channel?: string | null;
+};
+
 function safeMetadata(metadata: BotFlowEventInput["metadata"]): string | null {
   if (!metadata || !Object.keys(metadata).length) return null;
   const encoded = JSON.stringify(metadata);
@@ -121,11 +126,18 @@ const n = (value: bigint | number | null | undefined) => Number(value ?? 0);
  */
 export async function getBotFlowVersionAnalytics(
   flowVersionIds: string[],
+  filters: BotFlowAnalyticsQuery = {},
 ): Promise<BotFlowVersionAnalytics> {
   if (!flowVersionIds.length) {
     return { started: 0, completed: 0, handedOff: 0, deliveryFailures: 0, nodes: [] };
   }
   const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
+  const occurredFilter = filters.occurredFrom
+    ? Prisma.sql`AND "occurredAt" >= ${filters.occurredFrom}`
+    : Prisma.empty;
+  const channelFilter = filters.channel
+    ? Prisma.sql`AND "channel" = ${filters.channel}`
+    : Prisma.empty;
   const summaryRows = await basePrisma.$queryRaw<SummaryRow[]>(Prisma.sql`
     SELECT
       COUNT(*) FILTER (WHERE "eventType" = 'flow_started') AS "started",
@@ -135,6 +147,8 @@ export async function getBotFlowVersionAnalytics(
     FROM "BotFlowEvent"
     WHERE "tenantId" = ${tenantId}
       AND "flowVersionId" IN (${Prisma.join(flowVersionIds)})
+      ${occurredFilter}
+      ${channelFilter}
   `);
   const nodeRows = await basePrisma.$queryRaw<NodeRow[]>(Prisma.sql`
     SELECT
@@ -147,6 +161,8 @@ export async function getBotFlowVersionAnalytics(
     FROM "BotFlowEvent"
     WHERE "tenantId" = ${tenantId}
       AND "flowVersionId" IN (${Prisma.join(flowVersionIds)})
+      ${occurredFilter}
+      ${channelFilter}
       AND "nodeId" IS NOT NULL
     GROUP BY "nodeId"
     ORDER BY COUNT(*) FILTER (WHERE "eventType" = 'node_waiting') DESC

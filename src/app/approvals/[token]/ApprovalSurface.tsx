@@ -35,7 +35,13 @@ export function ApprovalSurface({ token, title, label, assignee, docHtml }: { to
         <div style={{ fontSize: 13, color: "#94a3b8" }}>Your approval is needed: <strong>{label}</strong>. Review the document, then approve or reject.</div>
       </div>
 
-      <iframe title="Document" srcDoc={docHtml} style={{ width: "100%", height: 560, border: "1px solid #334155", borderRadius: 10, background: "#fff" }} />
+      {/* Sandboxed: this page is reached with a token by someone OUTSIDE the
+          business, and the document it renders was composed inside it. Without
+          `sandbox` a srcDoc iframe executes in this origin — so document content
+          would run script on the page carrying the approver's token. Empty
+          value: no scripts, no forms, no same-origin. The document is read
+          here, never interacted with, so nothing is given up by that. */}
+      <iframe title="Document" sandbox="" srcDoc={docHtml} style={{ width: "100%", height: 560, border: "1px solid #334155", borderRadius: 10, background: "#fff" }} />
 
       <Card>
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>

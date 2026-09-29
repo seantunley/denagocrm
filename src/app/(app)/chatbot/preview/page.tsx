@@ -11,7 +11,7 @@ export default async function ChatbotPreviewPage() {
       <WorkspaceHero
         icon={BrainCircuit}
         eyebrow="Assistant evaluation"
-        title="Test chatbot answers"
+        title="Answer preview"
         description="Run real customer questions through the production answer decision without sending anything or changing customer, booking or lead data."
         stats={[
           { label: "Mode", value: "Read-only", icon: ShieldCheck, tone: "success" },

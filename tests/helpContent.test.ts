@@ -60,6 +60,21 @@ test("the search index covers the whole article set", () => {
   assert.equal(HELP_SEARCH_INDEX.length, HELP_ARTICLES.length);
 });
 
+test("X setup and the Attention Centre are documented as shipped", () => {
+  const x = getArticle("connect-x-social-inbox");
+  const attention = getArticle("attention-centre-guide");
+  assert.ok(x, "missing X integration setup article");
+  assert.ok(attention, "missing Attention Centre article");
+  const xText = JSON.stringify(x);
+  const attentionText = JSON.stringify(attention);
+  for (const required of ["dm.received", "post.mention.create", "post.reply.create", "offline.access", "Grok"]) {
+    assert.ok(xText.toLowerCase().includes(required.toLowerCase()), `X setup article is missing ${required}`);
+  }
+  assert.match(attentionText, /X DMs, mentions and replies/i);
+  assert.match(attentionText, /four hours/i);
+  assert.ok(searchArticles("connect X webhook").some((article) => article.slug === "connect-x-social-inbox"));
+});
+
 /**
  * The retired engine, specifically.
  *

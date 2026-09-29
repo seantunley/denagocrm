@@ -2,6 +2,7 @@ import crypto from "crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { withBotConversationWrite } from "./botTenant";
 import { type TenantWriteTx } from "./tenantWrite";
+import { redactForLog } from "./redactLog";
 
 export type InboundBotEventClaim = { rowId: string | null; leaseAttempt: number | null };
 
@@ -195,7 +196,9 @@ export async function retryInboundBotEvent(
   const rowId = claim.rowId;
   const leaseAttempt = claim.leaseAttempt;
   if (!rowId || leaseAttempt == null) return;
-  const message = (error instanceof Error ? error.message : String(error)).slice(0, 1000);
+  // Kept for retry diagnosis, so kept free of client information: a provider
+  // error can quote the customer's number.
+  const message = redactForLog(error instanceof Error ? error.message : String(error)).slice(0, 1000);
   await withBotConversationWrite(async (tx, tenantId) => {
     await tx.botInboundEvent.updateMany({
       where: { id: rowId, tenantId, status: "running", attempts: leaseAttempt },

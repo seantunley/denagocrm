@@ -113,28 +113,32 @@ test("reaching the candidate bound is itself ambiguous", () => {
   // PROVED — and that is the same answer as proving there are two.
   const wa = src("src/lib/whatsapp.ts");
   assert.match(wa, /const CANDIDATE_LIMIT = \d+;/);
-  assert.match(wa, /take: CANDIDATE_LIMIT/);
+  // The lookup is raw SQL now (digit normalisation cannot be expressed through
+  // the ORM), so the bound is a LIMIT rather than a `take`. Same guarantee.
+  assert.match(wa, /LIMIT \$\{CANDIDATE_LIMIT\}/);
   const lookup = wa.slice(wa.indexOf("export async function matchByPhone"), wa.indexOf("/** Logs an inbound WhatsApp"));
-  assert.doesNotMatch(lookup, /take: 2/, "rows are not identities, so two rows prove nothing");
+  assert.doesNotMatch(lookup, /LIMIT 2\b/, "rows are not identities, so two rows prove nothing");
   assert.match(wa, /const truncated = contacts\.length >= CANDIDATE_LIMIT \|\| leads\.length >= CANDIDATE_LIMIT;/);
   assert.match(wa, /const ambiguous = truncated \|\| distinctIdentities\(contacts, leads\) > 1;/);
   // Rows must stay lightweight, or the bound becomes a real page size.
-  assert.match(wa, /select: \{ id: true, contactId: true \}/);
+  assert.match(wa, /SELECT "id", "contactId" FROM "Lead"/);
 });
 
 test("the lookup matches the end of the number and picks deterministically", () => {
   const wa = src("src/lib/whatsapp.ts");
   const match = wa.slice(wa.indexOf("export async function matchByPhone"), wa.indexOf("/** Logs an inbound WhatsApp"));
 
-  assert.match(match, /phone: \{ endsWith: tail \}/);
-  assert.match(match, /whatsapp: \{ endsWith: tail \}/);
-  assert.match(match, /phone: \{ endsWith: digits\.slice\(-9\) \}/);
+  // Digits, not characters: `endsWith` needed a contiguous run, so a contact
+  // stored as "082 123 4567" never matched +27821234567. See phoneMatch.ts.
+  assert.match(match, /PHONE_TAIL_SQL\('"phone"'\)/);
+  assert.match(match, /PHONE_TAIL_SQL\('"whatsapp"'\)/);
+  assert.match(match, /SELECT "id", "contactId" FROM "Lead"/);
   assert.doesNotMatch(match, /contains:/, "contains matches a tail that is not the stored number's own");
 
   // `take: 1` with no ordering let Postgres choose, so the same inbound number
   // could resolve to different customers on different requests.
-  assert.match(match, /orderBy: \[\{ createdAt: "asc" \}, \{ id: "asc" \}\]/);
-  assert.doesNotMatch(match, /take: 1\b/);
+  assert.match(match, /ORDER BY "createdAt" ASC, "id" ASC/);
+  assert.doesNotMatch(match, /LIMIT 1\b/);
   // Both tables are read before identity is decided; returning early on a Contact
   // could not see a conflicting open Lead.
   assert.match(match, /const \[contacts, leads\] = await Promise\.all\(/);

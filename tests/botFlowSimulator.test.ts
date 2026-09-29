@@ -19,7 +19,7 @@ test("flow simulator runs the real engine but imports no CRM write helpers", () 
 
 test("simulated AI and handoff are explicit test effects", () => {
   const action = src("src/app/actions/flowSimulator.ts");
-  assert.match(action, /simulateAiHandoff/);
+  assert.match(action, /scenario\.ai === "handoff"/);
   assert.match(action, /\[Simulator\] AI response/);
   assert.match(action, /Handoff: would pause bot and notify team/);
 });
@@ -40,5 +40,36 @@ test("simulator UI exposes transcript, execution trace, variables and file input
   assert.match(ui, /Execution trace/);
   assert.match(ui, /Variables/);
   assert.match(ui, /sample-file\.jpg/);
-  assert.match(ui, /AI hands off/);
+  assert.match(ui, /AI outcome/);
+  assert.match(ui, /Times out/);
+});
+
+test("the editor can simulate the current in-memory canvas", () => {
+  const builder = src("src/components/FlowBuilder.tsx");
+  assert.match(builder, /currentDraftDefinition/);
+  assert.match(builder, /Test current canvas/);
+  assert.match(builder, /draftDefinition=\{currentDraftDefinition\}/);
+
+  const action = src("src/app/actions/flowSimulator.ts");
+  assert.match(action, /requestedDefinition \|\| row\.definition/);
+  assert.match(action, /requestedDefinition\.length > 250_000/);
+  assert.match(action, /const row = await prisma\.botFlow\.findFirst/, "an in-memory draft must not bypass tenant ownership");
+});
+
+test("the simulator exposes failure, availability, identity and Journey scenarios", () => {
+  const action = src("src/app/actions/flowSimulator.ts");
+  const scenarios = src("src/lib/flowSimulatorScenario.ts");
+  for (const value of ["race_lost", "unverified", "missing", "simulated CRM refusal", "simulated Journey refusal", "simulated provider timeout"]) {
+    assert.match(`${action}\n${scenarios}`, new RegExp(value, "i"));
+  }
+  const ui = src("src/components/FlowSimulator.tsx");
+  for (const label of ["CRM actions", "Workshop slots", "Customer identity", "Booking lookup", "Journey enrolment"]) {
+    assert.match(ui, new RegExp(label));
+  }
+});
+
+test("the simulator greeting comes from the acting workspace Company Profile", () => {
+  const action = src("src/app/actions/flowSimulator.ts");
+  assert.match(action, /input\.session \?\? .*await getCompanyProfile\(\)/);
+  assert.doesNotMatch(action, /Welcome to Denago Cape Town/);
 });

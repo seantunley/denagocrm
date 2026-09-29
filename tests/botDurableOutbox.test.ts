@@ -97,9 +97,29 @@ test("failed delivery is leased, retried with backoff and eventually dead-letter
   assert.match(code, /MAX_ATTEMPTS = 8/);
 });
 
-test("bot outbox recovery runs every five minutes", () => {
+test("bot outbox recovery runs every half hour", () => {
+  /*
+   * RECOVERY, not delivery — which is why a quarter hour is enough.
+   *
+   * A customer's message arrives by webhook, and the bot's reply is enqueued
+   * and sent INLINE in that same request (flushBotOutboxConversation, called
+   * from flowDm/flowRun/telegram). Staff replies typed in the CRM flush inline
+   * too. Nothing waits for this cron to have its first attempt.
+   *
+   * What the cron picks up is sends that FAILED — a provider blip, a rate
+   * limit — and rows orphaned by a crash between enqueue and flush. The
+   * backoff already caps at 15m (see retryAt), and a conversation that gets
+   * another inbound message drains inline before this sweep would reach it.
+   *
+   * It was every five minutes until the Neon bill showed what that cost: the
+   * shortest cron interval decides how often the database is dragged awake.
+   * A failed send now recovers within half an hour instead of five minutes,
+   * which is the trade that was made knowingly — a failure loud enough to
+   * matter is noticed by a person long before the sweep would have fixed it.
+   * See docs/neon-compute-2026-09-23.md.
+   */
   const vercel = JSON.parse(src("vercel.json")) as { crons: { path: string; schedule: string }[] };
-  assert.ok(vercel.crons.some((cron) => cron.path === "/api/cron/bot-outbox" && cron.schedule === "*/5 * * * *"));
+  assert.ok(vercel.crons.some((cron) => cron.path === "/api/cron/bot-outbox" && cron.schedule === "*/30 * * * *"));
   const route = src("src/app/api/cron/bot-outbox/route.ts");
   assert.match(route, /runCronPerTenant/);
   // The slice's tenant is PASSED THROUGH, not discarded. Dropping it is what made

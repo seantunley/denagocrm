@@ -94,6 +94,35 @@ matters for our audiences.
 3. **`emailo`** — the largest, and better attempted once MJML is in.
 4. **Segment operators** — a write-up whenever there is a gap.
 
-None of these is started. This document exists so the evaluation is not
-re-litigated from scratch, and so the licence position is recorded next to the
-decision rather than rediscovered later.
+This document exists so the evaluation is not re-litigated from scratch, and so
+the licence position is recorded next to the decision rather than rediscovered
+later.
+
+---
+
+## Status (updated 2026-09-01)
+
+1. **MJML — SUPERSEDED, deliberately.** The problem MJML was queued for was
+   solved another way during the campaign email work: `emailShell` in
+   `campaigns.ts` is the responsive, brand-aware frame, and
+   `src/lib/emailInlineStyles.ts` inlines styles on every body at send time —
+   covering ALL templates, not only ones authored in a new format. The full
+   argument is at the top of `emailInlineStyles.ts`. Do not add MJML without
+   reading it; the frame it would replace is verified and tracking-aware.
+
+2. **Subscription groups — still open.** Channel-level unsubscribe exists
+   (`unsubscribeLinks.ts`, `List-Unsubscribe` headers); the marketing-vs-service
+   *group* distinction has not been compared against their model yet.
+
+3. **`emailo` — DELIVERED NATIVELY, not ported.** Their editor's value is
+   email-safe building blocks, and porting the package would have brought its
+   dependency tree along. Instead: `src/lib/emailBlockHtml.ts` (bulletproof CTA
+   button, divider, spacer — pure generators, inline-styles-only, tracking- and
+   inliner-compatible) + `src/components/emailBlockNodes.ts` (Tiptap atoms that
+   render THROUGH the generators and parse their own output back, so saved
+   templates reopen editable). Both email surfaces have the tools, and the
+   template preview now renders through the real send pipeline
+   (`emailPreviewHtml`) instead of iframing raw editor HTML. Guarded by
+   `tests/emailComposerBlocks.test.ts`.
+
+4. **Segment operators — still open.** No write-up yet.

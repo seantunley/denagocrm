@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { saveCheckinAnnotation } from "@/app/actions/jobcards";
+import ModalPortal from "@/components/ui/modal-portal";
 
 /* ── Shape model ─────────────────────────────────────────────────────────────
    Coordinates are stored in the image's NATURAL pixel space so the markup can be
@@ -232,6 +233,7 @@ function AnnotatorModal({
   );
 
   return (
+    <ModalPortal>
     <div className="fixed inset-0 z-[100] flex flex-col bg-black/85 backdrop-blur-sm">
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-2 border-b border-white/10 bg-[#0b0d10] px-3 py-2">
@@ -323,6 +325,7 @@ function AnnotatorModal({
         Marking up “{fileName}” — the original photo is kept untouched.
       </p>
     </div>
+    </ModalPortal>
   );
 }
 

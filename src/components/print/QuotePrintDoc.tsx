@@ -1,5 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import { formatDate, formatZAR } from "@/lib/format";
+import { storedFileSrc } from "@/lib/storedFileSrc";
 import { documentTotals, feeRows, includedLines, lineNetCents } from "@/lib/pricing";
 import { quoteBillTo, type BillToFleet } from "@/lib/quoteBillTo";
 import { defaultTemplate, type DocTemplate } from "@/lib/docTemplates";
@@ -193,7 +194,7 @@ export default function QuotePrintDoc({
                     <>
                       {quote.signatureRef?.startsWith("http") && (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img src={quote.signatureRef} alt="Customer signature" className="h-14 w-auto mb-1" />
+                        <img src={storedFileSrc(quote.signatureRef) ?? undefined} alt="Customer signature" className="h-14 w-auto mb-1" />
                       )}
                       <div className="border-t-2 border-slate-900 pt-2">
                         <p className="text-xs text-slate-600">
@@ -217,7 +218,7 @@ export default function QuotePrintDoc({
                       <>
                         {quote.dealerSignatureRef?.startsWith("http") && (
                           // eslint-disable-next-line @next/next/no-img-element
-                          <img src={quote.dealerSignatureRef} alt="Denago signature" className="h-14 w-auto mb-1" />
+                          <img src={storedFileSrc(quote.dealerSignatureRef) ?? undefined} alt="Denago signature" className="h-14 w-auto mb-1" />
                         )}
                         <div className="border-t-2 border-slate-900 pt-2">
                           <p className="text-xs text-slate-600">

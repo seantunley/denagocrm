@@ -5,14 +5,15 @@ export type FlowIssue = { severity: "error" | "warning"; code: string; message: 
 
 const NODE_TYPES = new Set([
   "message", "choice", "capture", "captureFile", "image", "answer",
+  "set", "switch", "http", "knowledge", "extract", "delay", "subflow",
   "booking", "slots", "journey", "condition", "ai", "handoff", "end",
 ]);
 const BUILTIN_VARS = new Set([
   "greeting", "first_name", "name", "known", "slot", "channel", "current_date", "current_time",
-  "booking_found", "booking_id", "booking_slot", "booking_summary", "booking_cancelled", "booking_rescheduled",
+  "booking_identity", "booking_found", "booking_id", "booking_slot", "booking_summary", "booking_cancelled", "booking_rescheduled",
   "journey_started", "journey_reason", "journey_run_id",
 ]);
-const AUTO_TYPES = new Set<FlowNode["type"]>(["message", "image", "answer", "booking", "journey", "condition"]);
+const AUTO_TYPES = new Set<FlowNode["type"]>(["message", "image", "answer", "set", "switch", "http", "knowledge", "extract", "subflow", "booking", "journey", "condition"]);
 
 function issue(severity: FlowIssue["severity"], code: string, message: string, nodeId?: string, channel?: FlowChannel): FlowIssue {
   return { severity, code, message, ...(nodeId ? { nodeId } : {}), ...(channel ? { channel } : {}) };
@@ -33,6 +34,7 @@ function optionsOf(node: unknown): FlowOption[] {
 function refs(node: FlowNode): string[] {
   if (node.type === "choice") return optionsOf(node).flatMap((option) => option.next ? [option.next] : []);
   if (node.type === "condition") return [node.trueNext, node.falseNext].filter((value): value is string => Boolean(str(value)));
+  if (node.type === "switch") return [...node.cases.map((item) => item.next), node.defaultNext].filter((value): value is string => Boolean(str(value)));
   if (node.type === "ai") return str(node.handoffNext) ? [str(node.handoffNext)] : [];
   if (node.type === "handoff" || node.type === "end") return [];
   // Every outgoing edge, or the graph tooling silently ignores whole branches:
@@ -46,7 +48,7 @@ function refs(node: FlowNode): string[] {
 }
 
 /** Nodes that perform a customer-visible side effect which can legitimately fail. */
-const CAN_FAIL = new Set(["booking", "slots", "journey"]);
+const CAN_FAIL = new Set(["booking", "slots", "journey", "http", "knowledge", "extract", "subflow"]);
 function allText(node: FlowNode): string[] {
   const values: unknown[] = [];
   if (node.type === "message" || node.type === "handoff") values.push(node.text);
@@ -54,6 +56,13 @@ function allText(node: FlowNode): string[] {
   if (node.type === "slots") values.push(node.noneText);
   if (node.type === "image") values.push(node.caption);
   if (node.type === "answer" || node.type === "booking" || node.type === "journey") values.push(node.text);
+  if (node.type === "handoff") values.push(node.reason, node.summary);
+  if (node.type === "slots") values.push(node.failureText);
+  if (node.type === "set") values.push(node.value);
+  if (node.type === "http") values.push(node.url, node.headers, node.body, node.failureText);
+  if (node.type === "knowledge") values.push(node.query, node.noMatchText);
+  if (node.type === "extract") values.push(node.instruction, node.failureText);
+  if (node.type === "subflow") values.push(node.failureText);
   return values.map(str).filter(Boolean);
 }
 const referencedVars = (text: string) => [...text.matchAll(/\{\{\s*(\w+)\s*\}\}/g)].map((match) => match[1]);
@@ -118,9 +127,22 @@ function validateChoiceForChannel(nodeId: string, options: FlowOption[], channel
   return out;
 }
 
+/**
+ * Every variable a node WRITES. One definition, shared by the editor's
+ * suggestion list, the reuse warning and the unknown-variable checks — three
+ * places that silently disagree the moment a new writing node is added to only
+ * one of them.
+ */
+function producedVariables(node: FlowNode): string[] {
+  if (node.type === "capture" || node.type === "captureFile" || node.type === "set") return str(node.variable) ? [str(node.variable)] : [];
+  if (node.type === "http" || node.type === "knowledge") return str(node.saveAs) ? [str(node.saveAs)] : [];
+  if (node.type === "extract") return node.fields.map(str).filter(Boolean);
+  return [];
+}
+
 export function flowVariables(flow: Flow): string[] {
   const vars = new Set(BUILTIN_VARS);
-  for (const node of Object.values(flow.nodes)) if (node?.type === "capture" || node?.type === "captureFile") if (str(node.variable)) vars.add(str(node.variable));
+  for (const node of Object.values(flow.nodes)) for (const variable of producedVariables(node)) vars.add(variable);
   return [...vars].sort();
 }
 
@@ -141,11 +163,56 @@ export function validateFlow(flow: Flow, channels: FlowChannel[] = ["whatsapp"])
     const node = rawNode as FlowNode;
     if (id !== key) issues.push(issue("error", "node.id_mismatch", `Node key “${key}” does not match its id “${id}”.`, key));
 
-    if (node.type === "capture" || node.type === "captureFile") {
-      const variable = str(node.variable);
-      if (!variable || !/^\w+$/.test(variable)) issues.push(issue("error", "variable.invalid", "Captured variable names must contain only letters, numbers or underscores.", id));
-      else { if (captured.has(variable) && !BUILTIN_VARS.has(variable)) issues.push(issue("warning", "variable.reused", `Variable {{${variable}}} is captured more than once.`, id)); captured.add(variable); }
+    if (producedVariables(node).length || node.type === "capture" || node.type === "captureFile" || node.type === "set") {
+      for (const variable of producedVariables(node)) {
+        if (!/^\w+$/.test(variable)) issues.push(issue("error", "variable.invalid", "Captured variable names must contain only letters, numbers or underscores.", id));
+        else { if (captured.has(variable) && !BUILTIN_VARS.has(variable)) issues.push(issue("warning", "variable.reused", `Variable {{${variable}}} is captured more than once.`, id)); captured.add(variable); }
+      }
+      // A writing node whose variable is EMPTY writes nowhere at all.
+      if ((node.type === "capture" || node.type === "captureFile" || node.type === "set") && !str(node.variable)) issues.push(issue("error", "variable.invalid", "Captured variable names must contain only letters, numbers or underscores.", id));
     }
+
+    if (node.type === "switch") {
+      if (!/^\w+$/.test(str(node.variable))) issues.push(issue("error", "switch.variable", "Switch needs a valid variable name.", id));
+      if (!Array.isArray(node.cases) || !node.cases.length) issues.push(issue("error", "switch.empty", "Switch needs at least one case.", id));
+      const caseIds = new Set<string>();
+      const caseValues = new Set<string>();
+      for (const item of node.cases ?? []) {
+        const value = str(item.value).trim().toLocaleLowerCase();
+        if (!item.id || caseIds.has(item.id)) issues.push(issue("error", "switch.case_id", "Switch case ids must be non-empty and unique.", id));
+        if (!value || caseValues.has(value)) issues.push(issue("error", "switch.case_value", "Switch case values must be non-empty and unique.", id));
+        if (!item.next) issues.push(issue("warning", "switch.case_dead_end", `Switch case “${item.label || item.value || item.id}” has no destination.`, id));
+        caseIds.add(item.id);
+        caseValues.add(value);
+      }
+      if (!node.defaultNext) issues.push(issue("warning", "switch.default_dead_end", "Switch has no default destination — an unmatched value ends the conversation.", id));
+    }
+    if (node.type === "http") {
+      if (!["GET", "POST", "PUT", "PATCH", "DELETE"].includes(node.method)) issues.push(issue("error", "http.method", "API request uses an unsupported method.", id));
+      if (!str(node.url).trim()) issues.push(issue("error", "http.url", "API request needs an HTTPS URL.", id));
+      // A templated URL is validated for real at runtime, where the variables exist.
+      else if (!str(node.url).includes("{{") && !/^https:\/\//i.test(str(node.url))) issues.push(issue("error", "http.https", "API requests must use HTTPS.", id));
+      if (node.headers?.trim()) {
+        try {
+          const parsed = JSON.parse(node.headers);
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
+        } catch {
+          issues.push(issue("error", "http.headers", "API headers must be a JSON object.", id));
+        }
+      }
+    }
+    if (node.type === "extract") {
+      if (!node.instruction.trim()) issues.push(issue("error", "extract.instruction", "AI extract needs an instruction.", id));
+      if (!Array.isArray(node.fields) || !node.fields.length || node.fields.length > 12) issues.push(issue("error", "extract.fields", "AI extract needs 1–12 output fields.", id));
+      const unique = new Set<string>();
+      for (const field of node.fields ?? []) {
+        if (!/^\w+$/.test(field) || unique.has(field)) issues.push(issue("error", "extract.field", "AI extract fields must be unique valid variable names.", id));
+        unique.add(field);
+      }
+      if (node.sourceVariable && !/^\w+$/.test(node.sourceVariable)) issues.push(issue("error", "extract.source", "AI extract source variable is invalid.", id));
+    }
+    if (node.type === "delay" && (!Number.isFinite(node.seconds) || node.seconds < 1 || node.seconds > 604800)) issues.push(issue("error", "delay.range", "Wait must be between 1 second and 7 days.", id));
+    if (node.type === "subflow" && !str(node.flowId).trim()) issues.push(issue("error", "subflow.missing", "Run subflow needs a published flow selected.", id));
 
     if (node.type === "choice") {
       const rawOptions = runtimeNode.options; const options = optionsOf(node);
@@ -214,6 +281,12 @@ export function validateFlow(flow: Flow, channels: FlowChannel[] = ["whatsapp"])
     if (node.type === "condition") {
       const variable = str(node.condition?.variable);
       if (variable && !captured.has(variable)) issues.push(issue("warning", "condition.unknown_variable", `Condition checks {{${variable}}}, but no capture or built-in variable defines it.`, str(node.id)));
+    }
+    // A Switch on a variable nothing writes routes every customer to Default —
+    // the same branch-that-can-never-fire defect the condition check catches.
+    if (node.type === "switch") {
+      const variable = str(node.variable);
+      if (variable && !captured.has(variable)) issues.push(issue("warning", "switch.unknown_variable", `Switch routes on {{${variable}}}, but no capture or built-in variable defines it.`, str(node.id)));
     }
   }
   return issues;

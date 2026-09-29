@@ -38,6 +38,7 @@ import { saveSessionPolicy } from "@/app/actions/security";
 import { saveImapSettings } from "@/app/actions/emails";
 import { clearErrorLog } from "@/app/actions/ai";
 import { basePrisma } from "@/lib/db";
+import { resolveTenantCredential } from "@/lib/settings";
 import { formatDateTime } from "@/lib/format";
 import { ABSOLUTE_SESSION_HOURS } from "@/lib/session";
 import { decryptValue } from "@/lib/settings";
@@ -45,6 +46,7 @@ import { PUSH_KINDS } from "@/lib/push";
 import Link from "next/link";
 import { getNextStepScheduling } from "@/lib/nextStepConfig";
 import { saveNextStepScheduling } from "@/app/actions/settings";
+import { connectTelegram, disconnectTelegram } from "@/app/actions/bot";
 import ProductsPage from "../products/page";
 import { addStockLabel, removeStockLabel } from "@/app/actions/stock";
 import { getStockLabels } from "@/lib/stockLabels";
@@ -60,6 +62,8 @@ import {
   SettingsWorkspace,
 } from "@/components/settings-workspace";
 import ProfileSettingsForms from "@/components/ProfileSettingsForms";
+import ChatGptConnect from "@/components/settings/ChatGptConnect";
+import { codexStatus, type CodexStatus } from "@/lib/codex";
 
 export default async function SettingsPage({
   searchParams,
@@ -74,6 +78,11 @@ export default async function SettingsPage({
   // The preview must render what the send path renders, glyph URLs included.
   const signatureCompany = signatureCompanyFrom(profile, await tenantOrigin(await getActiveTenantId()));
   const enabled = await getEnabledModuleIds();
+  // Owner-only: the connection card renders in the owner's Integrations tab, and
+  // a read that fails must not take the whole settings page down with it.
+  const chatGpt: CodexStatus = isAdmin
+    ? await codexStatus().catch((): CodexStatus => ({ state: "disconnected" }))
+    : { state: "disconnected" };
   const automotiveOn = enabled.has("automotive");
   const commerceOn = enabled.has("commerce");
   const marketingOn = enabled.has("marketing");
@@ -125,6 +134,11 @@ export default async function SettingsPage({
       return ""; // encrypted value, key unavailable in this environment
     }
   };
+  const settingsTenantId = tab === "integrations" ? await getActiveTenantId() : null;
+  const xEntries = tab === "integrations"
+    ? await Promise.all(["X_ACCOUNT_ID", "X_USERNAME"].map(async (key) => [key, await resolveTenantCredential(settingsTenantId, key)] as const))
+    : [];
+  const xSetting = (key: string) => xEntries.find(([candidate]) => candidate === key)?.[1] ?? setting(key);
   const isOwner = isAdmin;
   // The System Log is TENANT-SCOPED. `basePrisma` bypasses the tenant guard, so the
   // unfiltered read this replaced handed every tenant owner every other tenant's
@@ -692,7 +706,7 @@ export default async function SettingsPage({
               }
             >
               <p className="text-xs text-muted-foreground mb-4">
-                Customer replies land on their record automatically (checked every 15 minutes,
+                Customer replies land on their record automatically (checked every 30 minutes,
                 read-only — nothing is moved or marked in the mailbox). Unknown senders are left
                 alone. Usually the same details as SMTP with port 993.
               </p>
@@ -1099,6 +1113,36 @@ export default async function SettingsPage({
         <div className="max-w-3xl">
           <div className="card p-0 divide-y divide-border/50">
             <Row
+              title="X"
+              status={xSetting("X_ACCOUNT_ID") ? <span className="badge bg-emerald-500/15 text-emerald-300">Connected @{xSetting("X_USERNAME") || "account"}</span> : <span className="badge bg-amber-500/15 text-amber-300">Not set up</span>}
+            >
+              <p className="text-xs text-muted-foreground mb-4">Receive and reply to DMs, capture mentions and replies, and create CRM leads in the Social inbox. One X account is connected per tenant.</p>
+              <div className="rounded-lg border border-border bg-background/40 p-4">
+                <div><label className="label">Webhook callback URL</label><code className="block text-sm bg-muted rounded-lg px-3 py-2">https://crm.denagocpt.co.za/api/webhooks/x{xSetting("X_ACCOUNT_ID") ? `?account_id=${xSetting("X_ACCOUNT_ID")}` : ""}</code></div>
+                {[
+                  { key: "X_CLIENT_ID", label: "OAuth 2 client ID", secret: false, hint: "From X Developer Portal" },
+                  { key: "X_CLIENT_SECRET", label: "OAuth 2 client secret", secret: true, hint: "Shown once in X Developer Portal" },
+                  { key: "X_WEBHOOK_SECRET", label: "Webhook signing secret", secret: true, hint: "X app consumer secret" },
+                  { key: "XAI_API_KEY", label: "Grok API key (optional)", secret: true, hint: "xai-…" },
+                  { key: "XAI_MODEL", label: "Grok model", secret: false, hint: "grok-4.6" },
+                  { key: "XAI_DRAFTS_ENABLED", label: "Allow Grok reply drafts (true/false)", secret: false, hint: "false" },
+                ].map((field) => (
+                  <SaveForm key={field.key} resetOnSuccess={false} action={saveSetting} className="mt-3 flex gap-2 items-end">
+                    <input type="hidden" name="key" value={field.key} />
+                    {field.secret ? <input type="hidden" name="keepIfBlank" value="1" /> : null}
+                    <div className="flex-1">
+                      <label className="label">{field.label}</label>
+                      <input name="value" type={field.secret ? "password" : "text"} autoComplete={field.secret ? "new-password" : undefined} className="input" defaultValue={field.secret ? undefined : setting(field.key)} placeholder={field.secret && setting(field.key) ? "•••••••• saved — leave blank to keep" : field.hint} />
+                    </div>
+                    <SaveButton className="btn-secondary">Save</SaveButton>
+                    {field.secret && setting(field.key) ? <ClearSecret settingKey={field.key} label={field.label} /> : null}
+                  </SaveForm>
+                ))}
+                <a href="/api/integrations/x/connect" className="btn-primary btn-sm mt-4 inline-flex">{xSetting("X_ACCOUNT_ID") ? "Reconnect X" : "Connect X account"}</a>
+              </div>
+            </Row>
+
+            <Row
               title="Facebook & Instagram (Meta)"
               status={
                 setting("META_PAGE_ACCESS_TOKEN") ? (
@@ -1214,6 +1258,73 @@ export default async function SettingsPage({
                   {setting("WA_ACCESS_TOKEN") ? <ClearSecret settingKey="WA_ACCESS_TOKEN" label="WhatsApp access token" /> : null}
                 </SaveForm>
               </div>
+            </Row>
+
+            {/*
+              Telegram belongs HERE, with the other customer channels.
+
+              It used to live only in the chatbot page's sidebar, so the one
+              screen called "customer channels" listed every channel except this
+              one. Worse, `TENANT_CREDENTIAL_INTEGRATIONS` offered a second door
+              that could not work: it stores TELEGRAM_BOT_TOKEN in
+              TenantIntegrationCredential, while `resolveTelegramTenant` matches
+              an inbound update by scanning TELEGRAM_WEBHOOK_SECRET rows in
+              AppSetting — so a token saved that way had no secret to be found
+              by, and Telegram could never deliver. That entry is gone; this is
+              the only door now, and it is the one that provisions.
+
+              `connectTelegram` is not a plain save. It stores the token, mints a
+              per-tenant webhook secret, calls Telegram's setWebhook, and records
+              whether that call succeeded — which is why the badge below can tell
+              "token stored" apart from "actually receiving".
+            */}
+            <Row
+              title="Telegram"
+              status={
+                !setting("TELEGRAM_BOT_TOKEN") ? (
+                  <span className="badge bg-amber-500/15 text-amber-300">Not set up</span>
+                ) : setting("BOT_TG_ENABLED") === "true" ? (
+                  <span className="badge bg-emerald-500/15 text-emerald-300">Connected</span>
+                ) : (
+                  // The half-configured state, said out loud. A stored token with
+                  // no registered webhook receives nothing, and silently looking
+                  // connected is exactly how WhatsApp lost eighteen days.
+                  <span className="badge bg-amber-500/15 text-amber-300">Token saved · webhook not registered</span>
+                )
+              }
+            >
+              <p className="text-xs text-muted-foreground mb-4">
+                Create a bot with <b>@BotFather</b> in Telegram, then paste the token it gives you.
+                Connecting registers the webhook with Telegram for you — unlike WhatsApp and Meta,
+                nothing needs configuring on their side. The bot runs the same published chatbot flow.
+              </p>
+              {!setting("TELEGRAM_BOT_TOKEN") ? (
+                <form action={connectTelegram} className="flex gap-2 items-end">
+                  <div className="flex-1">
+                    <label className="label">Bot token</label>
+                    <input
+                      name="token"
+                      type="password"
+                      autoComplete="new-password"
+                      className="input"
+                      placeholder="123456789:ABCdef…"
+                    />
+                  </div>
+                  <button className="btn-primary">Connect</button>
+                </form>
+              ) : (
+                <div className="space-y-3">
+                  {setting("BOT_TG_ENABLED") !== "true" && (
+                    <p className="text-xs text-amber-300">
+                      Telegram did not accept the webhook registration, so nothing will arrive.
+                      Disconnect and reconnect with a fresh token from @BotFather.
+                    </p>
+                  )}
+                  <form action={disconnectTelegram}>
+                    <button className="btn-secondary">Disconnect</button>
+                  </form>
+                </div>
+              )}
             </Row>
 
             <Row
@@ -1390,6 +1501,41 @@ export default async function SettingsPage({
                   </label>
                   <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
                 </SaveForm>
+              </div>
+            </Row>
+
+            <Row
+              title="ChatGPT subscription (research)"
+              status={
+                chatGpt.state === "connected" ? (
+                  <span className="badge bg-emerald-500/15 text-emerald-300">Connected</span>
+                ) : (
+                  <span className="badge bg-amber-500/15 text-amber-300">Not connected</span>
+                )
+              }
+            >
+              <p className="text-xs text-muted-foreground mb-4">
+                Run 🔎 lead research on your ChatGPT Plus or Pro plan instead of paying per token.
+                Sign in once with your ChatGPT account. While connected, research — the button and
+                automatic research — uses ChatGPT only. The ✨ message check and the WhatsApp bot
+                still use the Anthropic key.
+              </p>
+              <div className="space-y-3">
+                <ChatGptConnect initial={chatGpt} />
+                {chatGpt.state === "connected" && (
+                  <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
+                    <input type="hidden" name="key" value="CODEX_MODEL" />
+                    <div className="flex-1">
+                      <label className="label">Model</label>
+                      <input
+                        name="value"
+                        className="input font-mono"
+                        defaultValue={chatGpt.model}
+                      />
+                    </div>
+                    <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
+                  </SaveForm>
+                )}
               </div>
             </Row>
 

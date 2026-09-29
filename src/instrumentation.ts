@@ -1,4 +1,16 @@
 /**
+ * Runs once when a server instance starts. Every console method is routed
+ * through the log redactor, so the Vercel runtime log never receives an email
+ * address, phone number or ID number — from our own console calls, and from
+ * what Next.js and libraries print (an unhandled error's message included).
+ */
+export async function register() {
+  if (process.env.NEXT_RUNTIME !== "nodejs") return;
+  const { redactConsole } = await import("@/lib/redactLog");
+  redactConsole();
+}
+
+/**
  * Catches unhandled errors from server components, actions and routes and
  * files them in the ErrorLog (Settings → System Log).
  */

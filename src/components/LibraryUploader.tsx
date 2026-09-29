@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { upload } from "@vercel/blob/client";
 import {
+  getLibraryUploadPlan,
   registerLibraryDocuments,
   registerLibraryVersion,
   type UploadedFileMeta,
@@ -12,8 +13,12 @@ import {
 const CATEGORIES = ["Brochure", "Price list", "Spec sheet", "Warranty", "Other"];
 
 async function uploadDirect(file: File): Promise<UploadedFileMeta> {
-  const blob = await upload(`library/${file.name}`, file, {
-    access: "public",
+  // Into this workspace's own folder: the only place the library accepts files
+  // from. The old `library/<name>` is refused by the ownership check. The store
+  // (private or public) is the server's choice, as for every other upload.
+  const { prefix, access } = await getLibraryUploadPlan();
+  const blob = await upload(`${prefix}${file.name}`, file, {
+    access,
     handleUploadUrl: "/api/library/upload",
   });
   return {
@@ -24,10 +29,13 @@ async function uploadDirect(file: File): Promise<UploadedFileMeta> {
   };
 }
 
-export function AddDocumentsForm() {
+export function AddDocumentsForm({ defaultCategory }: { defaultCategory?: string | null } = {}) {
   const router = useRouter();
   const [files, setFiles] = useState<File[]>([]);
-  const [category, setCategory] = useState("Brochure");
+  // The Documents page opens this inside a category; start there.
+  const [category, setCategory] = useState(
+    defaultCategory && CATEGORIES.includes(defaultCategory) ? defaultCategory : "Brochure",
+  );
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState("");

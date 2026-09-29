@@ -47,9 +47,9 @@ Allowed node types and fields:
 - captureFile: {id,type:"captureFile",text,variable,next?}
 - image: {id,type:"image",url,caption?,next?}
 - answer: {id,type:"answer",text?,answerSource?:"pricelist"|"colours",next?}
-- booking: {id,type:"booking",action?:"service"|"demo"|"lead"|"lookup"|"cancel",text?,next?}
-- slots: {id,type:"slots",action?:"book"|"reschedule",text,noneText?,next?}
-- journey: {id,type:"journey",journeyId:"<one ACTIVE JOURNEY id below>",text?,next?}
+- booking: {id,type:"booking",action?:"service"|"demo"|"lead"|"lookup"|"cancel",text?,failureText?,next?,failureNext?,unavailableNext?}
+- slots: {id,type:"slots",action?:"book"|"reschedule",text,noneText?,failureText?,next?,failureNext?,unavailableNext?}
+- journey: {id,type:"journey",journeyId:"<one ACTIVE JOURNEY id below>",text?,failureText?,next?,failureNext?,unavailableNext?}
 - condition: {id,type:"condition",condition:{variable,operator:"equals"|"not_equals"|"contains"|"exists"|"empty",value?},trueNext?,falseNext?}
 - ai: {id,type:"ai",handoffNext?}
 - handoff: {id,type:"handoff",text?}
@@ -58,7 +58,7 @@ Allowed node types and fields:
 ACTIVE JOURNEYS — the ONLY journeyId values you may use:
 ${journeyList}
 
-Built-in variables: greeting, first_name, name, known, slot, channel, current_date, current_time.
+Built-in variables: greeting, first_name, name, known, slot, channel, current_date, current_time, booking_identity.
 Booking lookup: booking_found, booking_id, booking_slot, booking_summary.
 Booking cancellation: booking_cancelled. Successful reschedule: booking_slot, booking_rescheduled.
 Start Journey: journey_started, journey_reason, journey_run_id.
@@ -71,6 +71,7 @@ Rules:
 - A journey node may use ONLY an id from ACTIVE JOURNEYS above. Never invent, alter or infer an id from a Journey name.
 - If no active Journey can satisfy a requested delayed workflow, use a handoff or preserve the current graph; do not invent scheduling in Flow.
 - CRM writes happen only through booking(service|demo|lead|cancel), slots(book|reschedule), and explicit journey enrolment. booking(lookup) is read-only.
+- Every fallible booking, slots or journey action needs an honest failure route. Use failureText/failureNext; use unavailableNext only for a valid request with no capacity.
 - For cancel/reschedule, run booking(action="lookup") first and branch on booking_found before using booking_id.
 - slots(action="reschedule") atomically moves the existing Activity; never model “book new then cancel old”.
 - Use handoff when the requested action is unsupported.

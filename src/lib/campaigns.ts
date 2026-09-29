@@ -191,6 +191,22 @@ export function buildTrackedEmail(personalizedHtml: string, token: string, brand
   return emailShell(rewritten + pixel, unsubscribeUrl(token, brand), brand);
 }
 
+/**
+ * The template PREVIEW, rendered by the send pipeline itself.
+ *
+ * Same shell, same style inlining, same brand resolution as a real campaign
+ * send — the two deliberately omitted pieces are per-recipient: the tracking
+ * rewrite and the open pixel, which need a recipient token that does not exist
+ * yet. A preview that renders anything other than the send path is a preview of
+ * nothing, which is what the old raw-body iframe was: it showed editor HTML
+ * with no shell, no brand and no inlined styles, so the first honest look at a
+ * template was the copy in a customer's inbox.
+ */
+export function emailPreviewHtml(bodyHtml: string, brand?: EmailBrand): string {
+  const base = emailBase(brand);
+  return emailShell(inlineEmailStyles(bodyHtml), `${base}/unsubscribe/preview`, brand);
+}
+
 export function newToken() {
   return crypto.randomBytes(18).toString("hex");
 }

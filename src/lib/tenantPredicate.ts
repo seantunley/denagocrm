@@ -48,3 +48,37 @@ export function activeTenantPredicate(context: string): { tenantId?: string | nu
   }
   return {};
 }
+
+/**
+ * Async counterpart for USER/REQUEST helpers that can legitimately recover a
+ * staff Server Action or route-handler scope which was lost between async frames.
+ *
+ * Start with the synchronous rule above so an existing tenant scope, an explicit
+ * null/system scope, and dormant mode behave byte-for-byte as before. Recovery is
+ * attempted ONLY for the one state the synchronous function refuses: enforcement
+ * is on and this execution context has no scope at all.
+ *
+ * The recovery revalidates the signed staff session (revocation, disabled account,
+ * session version and tenant membership) and never invents a workspace. If it
+ * cannot prove one, rethrow the ORIGINAL contextual TenantScopeError so the caller
+ * still fails closed with the operation name that actually needed the boundary.
+ *
+ * Do NOT use this for a webhook/cron whose tenant comes from the record/provider.
+ * Those paths should bind that owner explicitly before calling their synchronous
+ * predicate. A genuinely sessionless missing-scope caller reaches recovery, finds
+ * no staff session, and still fails closed — but deriving a background owner from
+ * a user session would be the wrong abstraction even if one happened to exist.
+ */
+export async function recoverableActiveTenantPredicate(
+  context: string,
+): Promise<{ tenantId?: string | null }> {
+  try {
+    return activeTenantPredicate(context);
+  } catch (error) {
+    if (!(error instanceof TenantScopeError) || currentTenantScope()) throw error;
+    const { recoverStaffScopeFromSession } = await import("./scopeRecovery");
+    const recovered = await recoverStaffScopeFromSession();
+    if (!recovered?.tenantId) throw error;
+    return { tenantId: recovered.tenantId };
+  }
+}

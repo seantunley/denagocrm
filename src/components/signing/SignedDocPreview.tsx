@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { SignedDocView } from "@/app/actions/recordSigning";
+import ModalPortal from "@/components/ui/modal-portal";
 
 /**
  * The countersigned document, on screen, before it goes anywhere.
@@ -61,6 +62,7 @@ export default function SignedDocPreview({
   const approval = !recipient ? view.approval : null;
 
   return (
+    <ModalPortal>
     <div className="fixed inset-0 z-[60] flex flex-col bg-slate-950/85 p-3 sm:p-6" onClick={onClose}>
       <div
         className="mx-auto flex h-full w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-slate-700 bg-slate-900"
@@ -163,5 +165,6 @@ export default function SignedDocPreview({
         </div>
       </div>
     </div>
+    </ModalPortal>
   );
 }

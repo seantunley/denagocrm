@@ -23,6 +23,8 @@ import {
 } from "@/app/actions/quickCreate";
 import LocationAutocomplete from "@/components/LocationAutocomplete";
 import { readPwaActivityShortcut } from "@/lib/pwaShortcuts";
+import { useActivityTypes } from "@/components/ActivityTypesProvider";
+import { pickableActivityTypes } from "@/lib/activityTypes";
 
 export type QuickCreateKind = "lead" | "contact" | "calendar" | "quote" | "jobcard" | "vehicle";
 
@@ -65,6 +67,7 @@ export default function QuickCreateDialog() {
   const [optionsKind, setOptionsKind] = useState<QuickCreateKind | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [calendarType, setCalendarType] = useState<string>("call");
+  const activityTypes = useActivityTypes();
 
   useEffect(() => {
     const onOpen = (event: Event) => {
@@ -224,13 +227,11 @@ export default function QuickCreateDialog() {
                   <div>
                     <label className="label">Type</label>
                     <select name="type" className={input} value={calendarType} onChange={(e) => setCalendarType(e.target.value)}>
-                      <option value="call">Call</option>
-                      <option value="whatsapp">WhatsApp</option>
-                      <option value="email">Email</option>
-                      <option value="meeting">Meeting</option>
-                      <option value="test_drive">Test drive</option>
-                      <option value="follow_up">Follow-up</option>
-                      <option value="todo">To-do</option>
+                      {pickableActivityTypes(activityTypes).map((type) => (
+                        <option key={type.key} value={type.key}>
+                          {type.emoji} {type.label}
+                        </option>
+                      ))}
                     </select>
                   </div>
                   <div>

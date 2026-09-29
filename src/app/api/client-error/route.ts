@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { oneLine } from "@/lib/logSafe";
+import { logError } from "@/lib/errorLog";
 import { apiAuthErrorResponse, requireApiUser } from "@/lib/auth";
 import {
   getRequestIp,
@@ -37,10 +38,10 @@ import {
  *   - Control characters are stripped before logging, so a crafted message
  *     cannot forge a second log line.
  *
- * It stores nothing in the database on purpose. This is diagnostic output for
- * the platform log, not a feature; a table would need a retention policy, a
- * tenant column and a POPIA answer — a lot of machinery for something whose job
- * is to put a stack trace in front of whoever is on call.
+ * Reports are filed through logError, so they inherit tenant attribution,
+ * redaction, retention and the same Settings → System Log visibility as server
+ * failures. Caller text remains bounded and sanitized before it reaches that
+ * shared path.
  */
 
 /** Ten reports per five minutes, then a fifteen-minute block. A crash loop hits this at once. */
@@ -96,16 +97,17 @@ export async function POST(request: Request) {
 
   const ip = await getRequestIp();
 
-  // One greppable line with the identifiers needed to correlate: who, where, and
-  // the digest when there is one. The stack follows on its own lines, because a
-  // stack is only useful unmangled — the schema has already capped its length.
-  console.error(
-    `[client-error] user=${user.id} ip=${ip} ` +
-      `path=${oneLine(report.path ?? "unknown", 300)} ` +
-      `digest=${report.digest ? oneLine(report.digest, 120) : "none"} ` +
-      `message=${JSON.stringify(oneLine(report.message, 500))}`,
+  const message = oneLine(report.message || "Unknown client error", 500);
+  const clientError = new Error(message);
+  if (report.stack) clientError.stack = oneLine(report.stack, 4000).replace(/ at /g, "\n    at ");
+
+  await logError(
+    "client-error",
+    clientError,
+    `user=${user.id} ip=${ip} path=${oneLine(report.path ?? "unknown", 300)} ` +
+      `digest=${report.digest ? oneLine(report.digest, 120) : "none"}`,
+    { alert: false },
   );
-  if (report.stack) console.error(oneLine(report.stack, 4000).replace(/ at /g, "\n    at "));
 
   return new NextResponse(null, { status: 204 });
 }

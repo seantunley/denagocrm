@@ -16,7 +16,7 @@ import WhatsAppPanel from "@/components/WhatsAppPanel";
 import Tabs from "@/components/Tabs";
 import CopyButton from "@/components/CopyButton";
 import ResearchTabPanel from "@/components/ResearchTabPanel";
-import { isAiConfigured } from "@/lib/ai";
+import { isAiConfigured, isResearchConfigured } from "@/lib/ai";
 import { ensureReferralCode } from "@/lib/referrals";
 import { redeemReferral } from "@/app/actions/referrals";
 import { isWhatsAppConfigured } from "@/lib/whatsapp";
@@ -38,6 +38,9 @@ import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
 
 const RESEARCH_SUBJECT = "🔎 AI research";
+
+/** See the lead page: the Research button's action can run 50–80 seconds. */
+export const maxDuration = 300;
 
 export default async function ContactDetailPage({
   params,
@@ -159,6 +162,9 @@ export default async function ContactDetailPage({
   }));
   const path = `/contacts/${contact.id}`;
   const aiOn = await isAiConfigured();
+  // Research also runs on a connected ChatGPT subscription, which the email
+  // draft check (aiOn) does not use.
+  const researchOn = await isResearchConfigured();
 
   // Research is stored on the contact itself (Research tab). Legacy research
   // notes (pre-migration) are still filtered out of the comms timeline.
@@ -377,7 +383,7 @@ export default async function ContactDetailPage({
                   <ResearchTabPanel
                     notes={contact.researchNotes}
                     contactId={contact.id}
-                    configured={aiOn}
+                    configured={researchOn}
                     subjectLabel="customer"
                   />
                 ),

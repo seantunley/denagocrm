@@ -1,5 +1,5 @@
 import { contactName } from "./format";
-import { activeTenantPredicate } from "./tenantPredicate";
+import { recoverableActiveTenantPredicate } from "./tenantPredicate";
 
 /**
  * WHO A QUOTE IS ADDRESSED TO — the one answer, for every renderer.
@@ -25,7 +25,9 @@ import { activeTenantPredicate } from "./tenantPredicate";
  * its client as a parameter, so the cross-tenant case is a unit test rather than
  * a hope — the same reasoning as fleetRollup.ts and tenantPredicate.ts. Its
  * callers are server components and route handlers; that is where the boundary
- * belongs.
+ * belongs. The loader's async tenant predicate dynamically reaches the staff
+ * recovery path only when enforcement is on AND the current async frame has lost
+ * its scope; ordinary tests with an explicit scope never import that server path.
  */
 
 /** The Fleet columns the printed block uses. Nothing else is read. */
@@ -182,11 +184,16 @@ type FleetFinder = { findMany(args: any): Promise<any[]> };
  * document that then goes out to a customer.
  *
  * `db.ts`'s guard extension rewrites nothing while `tenantEnforcing()` is false,
- * which is production's state, so leaning on the client here would be leaning on
- * nothing. The client is a PARAMETER so the two-tenant case is a unit test; the
- * predicate is resolved here from the ambient scope and is deliberately not a
- * parameter — a caller that can pass the tenant is a caller that can pass the
- * wrong one.
+ * so leaning on the client in rollback/dormant mode would be leaning on nothing.
+ * The client is a PARAMETER so the two-tenant case is a unit test; the tenant
+ * predicate is resolved here and deliberately not accepted from the caller.
+ *
+ * The predicate is ASYNC because this loader is reached from Server Actions and
+ * route handlers as well as Server Components. An enforced request can lose only
+ * its AsyncLocalStorage carrier at those boundaries; in that case the shared
+ * recoverable predicate revalidates the signed staff session and restores the
+ * exact tenant VALUE for this explicit filter. Sessionless or genuinely
+ * unresolved callers still fail closed. Existing explicit scopes win unchanged.
  *
  * Batched by design: the quotes list renders 50 rows, and a per-row lookup would
  * be 50 round trips to print 50 names.
@@ -197,11 +204,12 @@ export async function loadBillToFleets(
 ): Promise<Map<string, BillToFleet>> {
   const ids = [...new Set(fleetIds.filter((id): id is string => Boolean(id)))];
   if (!ids.length) return new Map();
+  const tenant = await recoverableActiveTenantPredicate("quote bill-to fleet");
   const rows = (await client.fleet.findMany({
     where: {
       id: { in: ids },
       deletedAt: null,
-      ...activeTenantPredicate("quote bill-to fleet"),
+      ...tenant,
     },
     select: BILL_TO_FLEET_SELECT,
   })) as BillToFleet[];

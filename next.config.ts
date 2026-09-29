@@ -10,6 +10,16 @@ import type { NextConfig } from "next";
 const CHROMIUM_FILES = "./node_modules/@sparticuz/chromium/**/*";
 
 const nextConfig: NextConfig = {
+  /*
+   * Do not announce the framework in every response.
+   *
+   * `X-Powered-By: Next.js` went out on every request and told a scanner which
+   * framework — and so which CVE list — to try. It is low severity on its own
+   * (an attacker can usually fingerprint a site anyway) and it is also free to
+   * remove, which is the whole argument: there is no reason to hand it over.
+   * Flagged by an OWASP ZAP scan, 2026-09-01.
+   */
+  poweredByHeader: false,
   serverExternalPackages: ["@sparticuz/chromium", "puppeteer-core"],
   // A Server Action request body is capped at 1 MB by default, and the photo
   // upload actions accept twelve files of up to 4 MB each. Nothing declared a

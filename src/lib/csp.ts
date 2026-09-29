@@ -15,8 +15,19 @@
  * Promote by moving RESOURCE_DIRECTIVES into the enforced policy once a preview
  * deploy has been walked with the console open — the weather widget, an address
  * autocomplete, and a library upload are the three that matter.
+ *
+ * THAT PROMOTION NOW HAS EVIDENCE BEHIND IT. Both policies report to
+ * `/api/csp-report`, which files each violation in the System Log. Until that
+ * existed, "report-only" meant reported to NOBODY — a console line per visitor,
+ * discarded — so the plan above depended on someone happening to walk the right
+ * three pages with devtools open. An OWASP ZAP scan flagged the missing
+ * resource directives as a real gap; it is right, and the sequence is collect,
+ * read, then promote. Enforcing on inventory alone is what broke it last time.
  */
 export type CspOptions = { nonce: string; dev: boolean };
+
+/** Where both policies post violations. Kept next to the directives that name it. */
+export const CSP_REPORT_PATH = "/api/csp-report";
 
 /**
  * External origins the BROWSER reaches directly. Server-side fetches (Anthropic,
@@ -66,6 +77,23 @@ function enforcedDirectives({ nonce, dev }: CspOptions): string[] {
     // The document studio previews our own print pages in an iframe.
     "frame-src 'self' blob:",
     "upgrade-insecure-requests",
+    /*
+     * WHERE VIOLATIONS GO. Without this, a Report-Only policy reports to nobody:
+     * it writes a line to each visitor's console and is discarded, so the
+     * question the report-only policy exists to answer — "would enforcing the
+     * resource directives break anything?" — had no data behind it for months.
+     *
+     * Both spellings, deliberately. `report-uri` is deprecated and universally
+     * implemented; `report-to` is current and needs the `Reporting-Endpoints`
+     * response header (set in proxy.ts). A collector that speaks only one of
+     * them silently loses the browsers that speak the other.
+     *
+     * Present on the ENFORCED policy too, not just report-only: a violation the
+     * enforced policy actually blocked is the more urgent of the two, because
+     * something on the site just failed to load for a real person.
+     */
+    `report-uri ${CSP_REPORT_PATH}`,
+    "report-to csp-endpoint",
   ];
 }
 

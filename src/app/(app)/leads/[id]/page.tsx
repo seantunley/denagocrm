@@ -25,7 +25,7 @@ import WhatsAppPanel from "@/components/WhatsAppPanel";
 import Tabs from "@/components/Tabs";
 import ModalTrigger from "@/components/Modal";
 import ResearchTabPanel from "@/components/ResearchTabPanel";
-import { isAiConfigured } from "@/lib/ai";
+import { isAiConfigured, isResearchConfigured } from "@/lib/ai";
 import { isWhatsAppConfigured } from "@/lib/whatsapp";
 import { requireUser } from "@/lib/auth";
 import { listActingTenantStaff } from "@/lib/tenantActor";
@@ -41,6 +41,13 @@ import { leadAttribution, isAdClick } from "@/lib/attribution";
 import { Car, Check, FileText } from "lucide-react";
 
 const RESEARCH_SUBJECT = "🔎 AI research";
+
+/**
+ * The Research button's server action runs in this page's function. Research on
+ * the ChatGPT subscription measured 50–80 seconds (Sol, high reasoning, ~10 web
+ * searches), so the limit is stated rather than left to a platform default.
+ */
+export const maxDuration = 300;
 
 export default async function LeadDetailPage({
   params,
@@ -111,6 +118,9 @@ export default async function LeadDetailPage({
   }));
   const path = `/leads/${lead.id}`;
   const aiOn = await isAiConfigured();
+  // Research also runs on a connected ChatGPT subscription, which the email
+  // draft check (aiOn) does not use.
+  const researchOn = await isResearchConfigured();
 
   // Research is stored on the lead itself (Research tab). Legacy research
   // notes (pre-migration) are still filtered out of the comms timeline.
@@ -469,7 +479,7 @@ export default async function LeadDetailPage({
                   <ResearchTabPanel
                     notes={lead.researchNotes}
                     leadId={lead.id}
-                    configured={aiOn}
+                    configured={researchOn}
                     subjectLabel="lead"
                   />
                 ),

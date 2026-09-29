@@ -24,16 +24,29 @@ import { isSecretSettingKey } from "../src/lib/settings";
  */
 
 const EXPECTED_KEYS_BY_INTEGRATION: Record<string, string[]> = {
+  x: ["X_CLIENT_ID", "X_CLIENT_SECRET", "X_WEBHOOK_SECRET", "X_ACCOUNT_ID", "X_USERNAME", "X_ACCESS_TOKEN", "X_REFRESH_TOKEN", "XAI_API_KEY", "XAI_MODEL", "XAI_DRAFTS_ENABLED"],
   whatsapp: ["WA_PHONE_NUMBER_ID", "WA_ACCESS_TOKEN"],
   meta: ["META_PAGE_ACCESS_TOKEN"],
-  telegram: ["TELEGRAM_BOT_TOKEN"],
+  // TELEGRAM IS DELIBERATELY ABSENT.
+  //
+  // Storing a bot token as an override put it in TenantIntegrationCredential,
+  // but an inbound Telegram update carries no id for OUR bot —
+  // `resolveTelegramTenant` identifies the workspace by matching the update's
+  // secret against TELEGRAM_WEBHOOK_SECRET rows in AppSetting. A token saved
+  // through this page had no secret to be found by and no registered webhook,
+  // so Telegram had nowhere to deliver: a stored credential and a channel that
+  // silently received nothing.
+  //
+  // Telegram is already per-tenant without it — `connectTelegram` writes the
+  // token AND the secret through `putSetting` (which scopes to the acting
+  // workspace) and then calls setWebhook. It lives in Settings → Integrations.
   smtp: ["SMTP_HOST", "SMTP_PORT", "SMTP_SECURE", "SMTP_USER", "SMTP_PASS", "SMTP_FROM"],
   imap: ["IMAP_HOST", "IMAP_PORT", "IMAP_SECURE", "IMAP_USER", "IMAP_PASS"],
   sms: ["BULKSMS_TOKEN_ID", "BULKSMS_TOKEN_SECRET"],
   "google-reviews": ["GOOGLE_PLACES_API_KEY", "GOOGLE_PLACE_ID"],
 };
 
-test("TENANT_CREDENTIAL_INTEGRATIONS covers exactly the 7 integrations, each with the exact expected key set", () => {
+test("TENANT_CREDENTIAL_INTEGRATIONS covers every supported integration, each with the exact expected key set", () => {
   assert.deepEqual(
     TENANT_CREDENTIAL_INTEGRATIONS.map((integration) => integration.id).sort(),
     Object.keys(EXPECTED_KEYS_BY_INTEGRATION).sort(),
@@ -71,6 +84,11 @@ test("secret-vs-plain classification (isSecretSettingKey) matches what each fiel
     "BULKSMS_TOKEN_ID",
     "BULKSMS_TOKEN_SECRET",
     "GOOGLE_PLACES_API_KEY",
+    "X_CLIENT_SECRET",
+    "X_WEBHOOK_SECRET",
+    "X_ACCESS_TOKEN",
+    "X_REFRESH_TOKEN",
+    "XAI_API_KEY",
   ]);
   for (const integration of TENANT_CREDENTIAL_INTEGRATIONS) {
     for (const field of integration.fields) {

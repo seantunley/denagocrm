@@ -6,6 +6,7 @@ import { BrandMark } from "@/components/BrandLogo";
 import { assertPathModuleEnabled } from "@/lib/modules/routeGuard";
 import MessagesNav from "@/components/MessagesNav";
 import RegisterServiceWorker from "@/components/RegisterServiceWorker";
+import AppContextMenu from "@/components/AppContextMenu";
 
 export const metadata: Metadata = {
   title: "Denago Messages",
@@ -34,6 +35,10 @@ export default async function MessagesLayout({ children }: { children: React.Rea
   return (
     <div className="flex h-[100svh] flex-col overflow-hidden bg-background text-foreground">
       <RegisterServiceWorker />
+      {/* Same right-click menu as the CRM shell — this is the same staff, on a
+          phone. It stands aside inside the reply box, where Paste is the whole
+          point of right-clicking. */}
+      <AppContextMenu />
       <header className="flex h-14 shrink-0 items-center gap-2.5 border-b border-sidebar-border bg-sidebar/90 px-4 backdrop-blur-xl">
         <BrandMark
           logoUrl={logoUrl}

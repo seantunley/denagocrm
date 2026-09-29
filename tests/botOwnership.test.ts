@@ -69,7 +69,7 @@ test("ownership gates every route into the bot, not just the flow runner", () =>
   const entry = run.slice(run.indexOf("export async function runWhatsAppBot"));
   const gate = entry.indexOf("decideInboundAct(");
   const voice = entry.indexOf("maybeAutoReply(digits, input.text, { voiceNote: true })");
-  const flow = entry.indexOf("runWhatsAppFlow(digits, input)");
+  const flow = entry.indexOf("runWhatsAppFlow(digits, input, opts.entryContext)");
   assert.ok(gate >= 0, "the entry point must consult ownership");
   assert.ok(gate < voice, "the voice-note path must be gated");
   assert.ok(gate < flow, "and so must the flow path");
@@ -119,8 +119,8 @@ test("the simulator can reach the booking template's happy path", () => {
   // The template gates on booking_identity == "verified"; the stub never set it,
   // so the starter always fell to its security branch and an operator testing it
   // concluded the template was broken.
-  const stub = src("src/app/actions/flowSimulator.ts");
-  assert.match(stub, /vars\.booking_identity = "verified"/);
+  const stub = src("src/lib/flowSimulatorScenario.ts");
+  assert.match(stub, /bookingIdentity: "verified"/);
   // And the variable must be discoverable to anyone hand-building a flow.
   assert.match(src("src/components/FlowBuilder.tsx"), /booking_identity/);
 });

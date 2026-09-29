@@ -4,12 +4,12 @@ import { FlaskConical } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { requireOwner } from "@/lib/auth";
 import { DEFAULT_FLOW, type Flow } from "@/lib/flow";
-import { validateFlow } from "@/lib/flowValidation";
 import { enabledFlowChannels } from "@/lib/flowValidationServer";
 import FlowBuilder from "@/components/FlowBuilder";
 import FlowAiDraftForm from "@/components/FlowAiDraftForm";
-import FlowLintPanel from "@/components/FlowLintPanel";
+import FlowNodeSystemFrame from "@/components/FlowNodeSystemFrame";
 import { flowScope, journeyScope } from "@/lib/flowScope";
+import { getCompanyProfile } from "@/lib/companyProfile";
 
 export default async function FlowEditorPage({ params }: { params: Promise<{ id: string }> }) {
   await requireOwner();
@@ -26,16 +26,19 @@ export default async function FlowEditorPage({ params }: { params: Promise<{ id:
     /* use default so the owner can recover/reset the draft */
   }
 
-  const [channels, journeys] = await Promise.all([
+  const [channels, journeys, reusableFlows, company] = await Promise.all([
     enabledFlowChannels(),
     prisma.journey.findMany({
       where: { status: "active", ...(await journeyScope()) },
       select: { id: true, name: true },
       orderBy: { name: "asc" },
     }),
+    // Candidates for the Run-subflow picker: every other flow in THIS workspace.
+    // The picker may list an unpublished one — publication then refuses it with
+    // subflow.unavailable, which is a better conversation than an empty list.
+    prisma.botFlow.findMany({ where: { ...scope, id: { not: id } }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
+    getCompanyProfile(),
   ]);
-  const issues = validateFlow(flow, channels);
-
   return (
     <div className="space-y-4">
       <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -51,9 +54,10 @@ export default async function FlowEditorPage({ params }: { params: Promise<{ id:
         </div>
         <Link href={`/bot-builder/${row.id}/test`} className="btn-secondary btn-sm"><FlaskConical className="size-4" />Test saved draft</Link>
       </div>
-      <FlowLintPanel issues={issues} channels={channels} />
       <FlowAiDraftForm flowId={row.id} />
-      <FlowBuilder flowId={row.id} initial={flow} journeys={journeys} updatedAt={row.updatedAt.toISOString()} />
+      <FlowNodeSystemFrame>
+        <FlowBuilder flowId={row.id} initial={flow} journeys={journeys} flows={reusableFlows} updatedAt={row.updatedAt.toISOString()} channels={channels} businessName={company.name} />
+      </FlowNodeSystemFrame>
     </div>
   );
 }

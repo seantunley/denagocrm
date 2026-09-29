@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { CompleteActivityButton } from "@/components/proactive/NextStep";
 import { formatDate, contactName } from "@/lib/format";
+import { isFutureDay } from "@/lib/activityDay";
 import { cn } from "@/lib/utils";
 
 /**
@@ -132,8 +133,10 @@ export function ActivityRow({ a, highlightOverdue }: { a: DashActivity; highligh
           {overdue && <span className="text-destructive"> · {formatDate(a.dueDate)}</span>}
         </span>
       </p>
+      {/* The tick is not offered before the day arrives — finishActivity refuses
+          it, and a control that always refuses is worse than no control. */}
       <span className="shrink-0">
-        <CompleteActivityButton activityId={a.id} />
+        {!isFutureDay(a.dueDate) && <CompleteActivityButton activityId={a.id} />}
       </span>
     </li>
   );

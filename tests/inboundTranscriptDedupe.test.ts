@@ -214,5 +214,7 @@ test("every webhook hands its provider message id to the projection", () => {
   for (const call of calls) {
     assert.match(call, /message\.id/, `a WhatsApp projection call has no provider id: ${call}`);
   }
-  assert.match(src("src/app/api/webhooks/meta/route.ts"), /recordInboundDm\([^)]*ev\.message\?\.mid/);
+  const meta = src("src/app/api/webhooks/meta/route.ts");
+  assert.match(meta, /const providerId = String\(ev\.message\?\.mid/);
+  assert.match(meta, /recordInboundDm\([^)]*providerId/);
 });

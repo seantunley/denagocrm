@@ -95,7 +95,7 @@ test("the card boundary uses the framework primitive, not a hand-rolled class", 
    * See node_modules/next/dist/docs/.../catchError.md.
    */
   const boundary = code("src/components/dashboard/CardBoundary.tsx");
-  assert.match(boundary, /unstable_catchError/, "use the framework's boundary");
+  assert.match(boundary, /catchError/, "use the framework's boundary");
   assert.match(boundary, /from "next\/error"/);
   assert.match(boundary, /"use client"/, "an error boundary cannot be a server component");
   assert.doesNotMatch(
@@ -112,15 +112,16 @@ test("a contained card failure still reaches the server", () => {
   const boundary = code("src/components/dashboard/CardBoundary.tsx");
   assert.match(boundary, /\/api\/client-error/, "report to the same endpoint the page boundary uses");
   assert.match(boundary, /keepalive/, "the report must survive a navigation away");
-  assert.match(boundary, /\.catch\(\(\) => \{\}\)/, "a failing reporter must not break the fallback");
+  assert.match(boundary, /\.catch\(\(reportError\) => \{/, "a failing reporter must not break the fallback");
+  assert.match(boundary, /\[client-error-report-failure\]/, "reporting failure must remain visible in the browser console");
   assert.match(boundary, /dashboard card/, "the log line must say which card");
 });
 
 test("a failed card can be retried on its own", () => {
-  // unstable_retry re-fetches and re-renders just this boundary's children, so
+  // retry re-fetches and re-renders just this boundary's children, so
   // one failed card does not need a whole-page reload to recover.
   const boundary = code("src/components/dashboard/CardBoundary.tsx");
-  assert.match(boundary, /unstable_retry\(\)/);
+  assert.match(boundary, /retry\(\)/);
 });
 
 test("a failed card says nothing about why", () => {

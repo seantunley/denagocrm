@@ -21,6 +21,7 @@ import { readFile } from "@/lib/storage";
 import { resolveActingTenant } from "@/lib/tenantContext";
 import { parseReplyTo } from "@/lib/replyToAddresses";
 import { tenantOrigin } from "@/lib/tenantOrigin";
+import { withActingStaffScope } from "@/lib/actingScope";
 
 export type SendEmailState = { ok?: string; error?: string };
 
@@ -148,15 +149,17 @@ export async function sendEmailAction(
 export async function sendTestEmail(
   _prev: SendEmailState | undefined
 ): Promise<SendEmailState> {
-  const user = await requireOwner();
-  const result = await sendEmail({
-    to: user.email,
-    subject: "Denago CRM test email",
-    text: "Your SMTP settings are working. — Denago CRM",
+  return withActingStaffScope(async () => {
+    const user = await requireOwner();
+    const result = await sendEmail({
+      to: user.email,
+      subject: "Denago CRM test email",
+      text: "Your SMTP settings are working. — Denago CRM",
+    });
+    return result.ok
+      ? { ok: `Test email sent to ${user.email}.` }
+      : { error: result.error };
   });
-  return result.ok
-    ? { ok: `Test email sent to ${user.email}.` }
-    : { error: result.error };
 }
 
 // ---- SMTP settings ----

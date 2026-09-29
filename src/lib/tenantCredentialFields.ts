@@ -30,6 +30,23 @@ export type TenantCredentialIntegration = {
 
 export const TENANT_CREDENTIAL_INTEGRATIONS: readonly TenantCredentialIntegration[] = [
   {
+    id: "x",
+    label: "X",
+    description: "Receive X DMs, mentions and replies, reply from the inbox, and create CRM leads for this tenant.",
+    fields: [
+      { key: "X_CLIENT_ID", label: "OAuth 2 client ID", placeholder: "From X Developer Portal" },
+      { key: "X_CLIENT_SECRET", label: "OAuth 2 client secret", placeholder: "Shown once in X Developer Portal" },
+      { key: "X_WEBHOOK_SECRET", label: "Webhook signing secret", placeholder: "X app consumer secret" },
+      { key: "X_ACCOUNT_ID", label: "Connected X account ID", placeholder: "Filled by OAuth", required: false },
+      { key: "X_USERNAME", label: "Connected @username", placeholder: "Filled by OAuth", required: false },
+      { key: "X_ACCESS_TOKEN", label: "Access token", placeholder: "Filled by OAuth", required: false },
+      { key: "X_REFRESH_TOKEN", label: "Refresh token", placeholder: "Filled by OAuth", required: false },
+      { key: "XAI_API_KEY", label: "Grok API key (optional)", placeholder: "xai-…", required: false },
+      { key: "XAI_MODEL", label: "Grok model", placeholder: "grok-4.6", required: false },
+      { key: "XAI_DRAFTS_ENABLED", label: "Allow Grok reply drafts", placeholder: "false", required: false },
+    ],
+  },
+  {
     id: "whatsapp",
     label: "WhatsApp Business (Cloud API)",
     description:
@@ -48,15 +65,23 @@ export const TENANT_CREDENTIAL_INTEGRATIONS: readonly TenantCredentialIntegratio
       { key: "META_PAGE_ACCESS_TOKEN", label: "Page access token (System User)", placeholder: "EAAG…" },
     ],
   },
-  {
-    id: "telegram",
-    label: "Telegram",
-    description:
-      "Run the Telegram bot under this tenant's own bot token instead of the platform's shared bot.",
-    fields: [
-      { key: "TELEGRAM_BOT_TOKEN", label: "Bot token", placeholder: "123456789:AA…" },
-    ],
-  },
+  /*
+   * TELEGRAM IS DELIBERATELY NOT HERE.
+   *
+   * It was, and the entry could not work. Storing a bot token as an override
+   * puts it in `TenantIntegrationCredential`, but an inbound Telegram update
+   * carries no id for OUR bot — `resolveTelegramTenant` identifies the workspace
+   * by matching the update's secret token against `TELEGRAM_WEBHOOK_SECRET` rows
+   * in `AppSetting`. A token saved through this page therefore had no secret to
+   * be found by, and no webhook was ever registered for it, so Telegram had
+   * nowhere to deliver. The owner got a stored credential and a channel that
+   * silently received nothing.
+   *
+   * Telegram is already per-tenant without this: `connectTelegram` writes both
+   * the token AND the secret through `putSetting`, which scopes to the acting
+   * workspace, and then calls setWebhook. That is the whole flow, and it lives
+   * in Settings → Integrations with the other customer channels.
+   */
   {
     id: "smtp",
     label: "Outbound email (SMTP)",

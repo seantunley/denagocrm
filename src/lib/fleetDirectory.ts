@@ -2,7 +2,7 @@ import "server-only";
 import { prisma } from "./db";
 import { requireUser } from "./auth";
 import { hasAnyPermission } from "./permissions";
-import { activeTenantPredicate } from "./tenantPredicate";
+import { recoverableActiveTenantPredicate } from "./tenantPredicate";
 import { NO_FLEET_PICKER, type FleetPicker } from "./fleetTypes";
 
 /**
@@ -19,13 +19,12 @@ import { NO_FLEET_PICKER, type FleetPicker } from "./fleetTypes";
  * the answer is no, no query runs at all.
  *
  * TENANT. The tenant is named explicitly in the query. The db.ts guard scopes
- * nothing while enforcement is off (its documented default, and the state
- * production runs in), so a picker leaning on the guard would list every
- * workspace's fleet NAMES — a cross-tenant read of customer accounts, in a
- * dropdown, before anyone has saved anything. `activeTenantPredicate` gives the
- * active tenant under enforcement, throws when enforcement is on but this request
- * has no scope, and yields no filter only in the dormant single-tenant mode where
- * there is nothing yet to filter by.
+ * nothing while enforcement is off (its documented rollback mode), so a picker
+ * leaning on the guard would list every workspace's fleet NAMES. The async
+ * predicate preserves the ordinary ambient-scope rule and, when an enforced
+ * Server Action/API request lost only its ALS carrier, re-derives the same
+ * validated staff workspace before building the explicit predicate. A genuinely
+ * unresolved or sessionless request still fails closed.
  *
  * One helper, one query: every caller gets both gates instead of each page
  * hand-rolling a `fleet.findMany` that may or may not remember either.
@@ -33,8 +32,9 @@ import { NO_FLEET_PICKER, type FleetPicker } from "./fleetTypes";
 export async function fleetPicker(): Promise<FleetPicker> {
   const user = await requireUser();
   if (!(await hasAnyPermission(user, "fleets.view", "fleets.manage"))) return NO_FLEET_PICKER;
+  const tenant = await recoverableActiveTenantPredicate("fleet picker");
   const fleets = await prisma.fleet.findMany({
-    where: { ...activeTenantPredicate("fleet picker") },
+    where: { ...tenant },
     select: { id: true, name: true },
     orderBy: { name: "asc" },
     take: 500,

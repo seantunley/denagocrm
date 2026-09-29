@@ -189,7 +189,15 @@ test("the builder tenant is never resolved from writeTenantId alone", () => {
   // satisfies this rule; dropping the session rung entirely still fails it.
   assert.match(acting, /await getActiveTenantId(IfRequest)?\(\)/, "the builder must consult the session's workspace");
   assert.match(acting, /sessionTenantId \}\)|sessionTenantId,/, "…and must hand it to the rule");
-  assert.match(acting, /const enforcedTenantId = writeTenantId\(\);/, "…and an enforced scope must still be read");
+  // Matched as the ASSIGNMENT, not as a `const` declaration. writeTenantId() is
+  // now called inside a try, because it throws under enforcement when this
+  // execution context has lost its scope — which a Server Action can do between
+  // the auth chokepoint and here — and that throw is recovered from the session
+  // rather than failing a legitimate staff write. The rule this guard exists for
+  // is untouched: the enforced scope is still read, and the assertion below still
+  // proves it is the FIRST rung handed to decideBuilderTenant. Dropping the call
+  // altogether still fails here.
+  assert.match(acting, /enforcedTenantId = writeTenantId\(\);/, "…and an enforced scope must still be read");
   assert.match(
     acting,
     /decideBuilderTenant\(\{ enforcedTenantId, sessionTenantId \}\)/,
@@ -244,7 +252,10 @@ test("no BotFlow access uses a method that cannot carry the tenant predicate", (
 });
 
 test("every BotFlow query names the tenant it is for", () => {
-  const scoped = /await flowScope\(\)|flowTenantWhere\(/;
+  // A strict explicit `tenantId` predicate is at least as safe as flowScope(),
+  // and is required when the following write uses a composite tenant FK that
+  // cannot accept flowScope's legacy NULL-tolerant branch.
+  const scoped = /await flowScope\(\)|flowTenantWhere\(|where:\s*\{[^}\n]*tenantId/;
   const unscoped: string[] = [];
   for (const file of flowCallSites()) {
     const code = src(file);

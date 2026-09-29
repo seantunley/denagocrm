@@ -13,7 +13,8 @@ import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 import RecordContextMenu from "@/components/RecordContextMenu";
 import { BarChart3, MessageSquareText, Plus, Send, Star } from "lucide-react";
 import { WorkspaceHero } from "@/components/workspace-hero";
-import { SectionHeading, Surface } from "@/components/visual-system";
+import { FeedbackBanner, SectionHeading, StatusPill, Surface } from "@/components/visual-system";
+import { isSurveyArmed, surveyDormantReason } from "@/lib/surveyLifecycle";
 
 export const dynamic = "force-dynamic";
 
@@ -52,6 +53,11 @@ export default async function SurveysPage() {
   const triggerLabel = (t: string | null) =>
     TRIGGERS.find((x) => x.id === (t ?? ""))?.label ?? "Manual only";
 
+  // Which of these will email a customer with nobody pressing send. Asked with
+  // the same predicate the automation uses, so the page cannot claim one thing
+  // while the cron does another.
+  const armed = surveys.filter(isSurveyArmed);
+
   return (
     <div className="space-y-6">
       <WorkspaceHero
@@ -63,9 +69,42 @@ export default async function SurveysPage() {
           { label: "Responses", value: totalCompleted, detail: `${responseRate}% response rate`, icon: Send, tone: "primary" },
           { label: "Average CSAT", value: avgCsat === "—" ? "—" : `${avgCsat} / 5`, detail: "Service & sales ratings", icon: Star, tone: avgCsat === "—" ? "default" : "success" },
           { label: "NPS", value: nps === null ? "—" : nps, detail: nps === null ? "No scores yet" : "−100 to +100", icon: BarChart3 },
-          { label: "Surveys", value: surveys.length, detail: `${surveys.filter((survey) => survey.active).length} active`, icon: MessageSquareText },
+          {
+            label: "Surveys",
+            value: surveys.length,
+            // Was "N active", which counted `active` alone — a flag that is NOT
+            // what makes a survey send. A survey can be active and unpublished,
+            // and an owner reading "1 active" had no way to tell whether that
+            // meant "emails customers" or "exists".
+            detail: armed.length === 0 ? "None auto-sending" : `${armed.length} auto-sending`,
+            icon: MessageSquareText,
+            tone: armed.length > 0 ? "warning" : "default",
+          },
         ]}
       />
+
+      {/* A live automation that emails customers should not be something you
+          have to go looking for. Only rendered when something IS armed, so it
+          stays signal rather than furniture — and it names them, because
+          "something is sending" without "which" is just anxiety. */}
+      {armed.length > 0 && (
+        <FeedbackBanner
+          tone="warning"
+          title={`${armed.length} survey${armed.length === 1 ? "" : "s"} email customers automatically`}
+        >
+          <ul className="space-y-0.5">
+            {armed.map((survey) => (
+              <li key={survey.id}>
+                <Link href={`/surveys/${survey.id}`} className="font-medium underline underline-offset-2">
+                  {survey.title}
+                </Link>{" "}
+                — {triggerLabel(survey.trigger).replace(/^Automatically /, "sends ")}
+                {survey.delayHours > 0 && `, after ${survey.delayHours}h`}
+              </li>
+            ))}
+          </ul>
+        </FeedbackBanner>
+      )}
 
       <Surface className="p-5">
         <SectionHeading title={<span className="inline-flex items-center gap-2"><Plus className="size-4 text-primary" /> Create a survey</span>} description="Start with a proven format, then tailor its questions, trigger and delivery." />
@@ -123,6 +162,15 @@ export default async function SurveysPage() {
                     <Link href={`/surveys/${s.id}`} className="font-medium text-orange-400 hover:underline">
                       {s.title}
                     </Link>
+                    {/* The loud one. A survey that emails customers by itself is
+                        the single most important thing about a row, so it is
+                        stated on the row rather than inferred from a trigger
+                        column that looked the same for drafts. */}
+                    {isSurveyArmed(s) && (
+                      <StatusPill tone="warning" className="ml-2">
+                        Live · auto-sends
+                      </StatusPill>
+                    )}
                     {!s.active && (
                       <span className="badge bg-slate-800 text-slate-500 ml-2">inactive</span>
                     )}
@@ -132,7 +180,18 @@ export default async function SurveysPage() {
                       {surveyTypeLabel(s.type)}
                     </span>
                   </td>
-                  <td data-label="Sends" className="text-slate-400 text-xs">{triggerLabel(s.trigger)}</td>
+                  {/* The column that caused the surprise. It printed the
+                      configured trigger whether or not the survey was live, so
+                      "Automatically when a cart is delivered" read the same on a
+                      draft and on the one that was actually sending. The reason
+                      it is dormant is spelled out rather than left to the reader
+                      to work out from a status they cannot see from here. */}
+                  <td data-label="Sends" className="text-slate-400 text-xs">
+                    {triggerLabel(s.trigger)}
+                    {surveyDormantReason(s) && (
+                      <span className="block text-slate-500">— not sending: {surveyDormantReason(s)}</span>
+                    )}
+                  </td>
                   <td data-label="Sent" className="text-right">{live.length}</td>
                   <td data-label="Responses" className="text-right">{done}</td>
                   <td data-label="Rate" className="text-right">{rate}%</td>

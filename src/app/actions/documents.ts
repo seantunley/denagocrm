@@ -5,8 +5,18 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
-import { saveFile } from "@/lib/storage";
-import { actingOwnerTenantId } from "@/lib/actingScope";
+import { assertOwnedBlob, deleteOwnedBlob, saveFile } from "@/lib/storage";
+import { asActionResult, refuse, type ActionResult } from "@/lib/actionResult";
+import { actingTenantId } from "@/lib/actingTenant";
+import { logError } from "@/lib/errorLog";
+import {
+  MAX_DOCUMENT_BYTES,
+  cleanDocumentFileName,
+  documentUploadPrefix,
+  parseDocumentTarget,
+} from "@/lib/documentUpload";
+import { authorizeDocumentTarget } from "@/lib/documentUploadAuth";
+import { actingOwnerTenantId, withActingStaffScope } from "@/lib/actingScope";
 import { DOC_DEFS, defaultTemplate, mergeTemplate, isDocKey } from "@/lib/docTemplates";
 import {
   requirePermission,
@@ -79,227 +89,344 @@ async function uploadTargetTenantId(target: UploadTarget): Promise<string | null
 }
 
 export async function uploadDocument(formData: FormData) {
-  const { user, target } = await authorizeUploadTarget(formData);
-  const file = formData.get("file");
-  if (!(file instanceof File) || file.size === 0) return;
-  if (file.size > MAX_SIZE) throw new Error("File exceeds 25 MB limit");
+  return withActingStaffScope(async () => {
+    const { user, target } = await authorizeUploadTarget(formData);
+    const file = formData.get("file");
+    if (!(file instanceof File) || file.size === 0) return;
+    if (file.size > MAX_SIZE) throw new Error("File exceeds 25 MB limit");
 
-  const buffer = Buffer.from(await file.arrayBuffer());
-  const mimeType = file.type || "application/octet-stream";
-  // ONE resolution, used for BOTH the blob prefix and the row. It used to be
-  // computed inline for `saveFile` only, so the blob was filed under the right
-  // workspace while the Document row that points at it was written with
-  // `tenantId: null` — `scopeArgs` injects nothing while enforcement is dormant,
-  // so an omitted tenantId is a null, not a default.
-  const tenantId = await uploadTargetTenantId(target);
-  const storedName = await saveFile(buffer, file.name, mimeType, tenantId);
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const mimeType = file.type || "application/octet-stream";
+    // ONE resolution, used for BOTH the blob prefix and the row. It used to be
+    // computed inline for `saveFile` only, so the blob was filed under the right
+    // workspace while the Document row that points at it was written with
+    // `tenantId: null` — `scopeArgs` injects nothing while enforcement is dormant,
+    // so an omitted tenantId is a null, not a default.
+    const tenantId = await uploadTargetTenantId(target);
+    const storedName = await saveFile(buffer, file.name, mimeType, tenantId);
 
-  const doc = await prisma.document.create({
-    data: {
-      fileName: file.name,
-      storedName,
-      mimeType,
-      sizeBytes: file.size,
-      tenantId,
-      // Only the single authorized target — never trust the other id fields.
-      contactId: target.kind === "contact" ? target.contactId : null,
-      vehicleId: target.kind === "vehicle" ? target.vehicleId : null,
-      jobCardId: target.kind === "jobCard" ? target.jobCardId : null,
-      quoteId: target.kind === "quote" ? target.quoteId : null,
-      uploadedById: user.id,
-    },
-    include: { vehicle: true, jobCard: true },
+    const doc = await prisma.document.create({
+      data: {
+        fileName: file.name,
+        storedName,
+        mimeType,
+        sizeBytes: file.size,
+        tenantId,
+        // Only the single authorized target — never trust the other id fields.
+        contactId: target.kind === "contact" ? target.contactId : null,
+        vehicleId: target.kind === "vehicle" ? target.vehicleId : null,
+        jobCardId: target.kind === "jobCard" ? target.jobCardId : null,
+        quoteId: target.kind === "quote" ? target.quoteId : null,
+        uploadedById: user.id,
+      },
+      include: { vehicle: true, jobCard: true },
+    });
+    await logAudit({
+      action: "document.uploaded",
+      summary: `Uploaded document “${file.name}”`,
+      contactId: doc.contactId ?? doc.vehicle?.contactId ?? doc.jobCard?.contactId,
+      user,
+    });
+    revalidatePath(String(formData.get("revalidate") ?? "/"));
   });
-  await logAudit({
-    action: "document.uploaded",
-    summary: `Uploaded document “${file.name}”`,
-    contactId: doc.contactId ?? doc.vehicle?.contactId ?? doc.jobCard?.contactId,
-    user,
-  });
-  revalidatePath(String(formData.get("revalidate") ?? "/"));
+}
+
+/**
+ * Record a document that the browser has already uploaded straight to storage.
+ *
+ * The second half of the direct upload (the first is /api/documents/upload).
+ * It exists because a Server Action cannot receive a file over 4.5 MB on Vercel;
+ * this one receives only the stored file's URL.
+ *
+ * NOTHING THE BROWSER SAYS IS TRUSTED:
+ * - Access is re-checked here, not assumed from the upload token.
+ * - The URL must be in OUR store, under THIS workspace (assertOwnedBlob).
+ * - Its path must be the one authorised for THIS target, so a file uploaded for
+ *   one record cannot be registered on another.
+ * - Size and type are read from the store, not the request.
+ * If any check fails the stored file is removed — through deleteOwnedBlob, which
+ * re-proves ownership first and refuses to touch anything that is not ours.
+ */
+export async function registerUploadedDocument(input: {
+  target: unknown;
+  url: unknown;
+  fileName: unknown;
+}): Promise<ActionResult> {
+  return asActionResult(async () => {
+    // Every document upload needs this, whatever it is filed on: checked first
+    // and explicitly, then narrowed to the record by authorizeDocumentTarget.
+    await requirePermission("documents.upload");
+    const tenantId = await actingTenantId();
+    let target;
+    try {
+      target = parseDocumentTarget(input.target);
+    } catch {
+      refuse("That upload was not for a recognised place.");
+    }
+    const user = await authorizeDocumentTarget(target, tenantId);
+    const url = String(input.url ?? "").trim();
+    if (!url) refuse("The upload did not finish.");
+    const prefix = documentUploadPrefix(tenantId, target);
+
+    // THE FILE MAY BE REMOVED ONLY WHILE NOTHING POINTS AT IT. Validation and
+    // the row insert each clean up on failure; once the Document row exists,
+    // nothing after it may delete the file. The first version kept the audit
+    // write inside the same try, so a failing audit would have deleted a file a
+    // freshly written row was pointing at — a document that opens to "missing".
+    const discard = async (error: unknown): Promise<never> => {
+      await logError("document-upload-register", error, `target=${JSON.stringify(target)}`, { tenantId, alert: false });
+      await deleteOwnedBlob(url, tenantId, prefix).catch(() => {
+        // Not ours, or already gone: nothing we may delete. The orphan sweep
+        // removes an unregistered file under our own prefix after a day.
+      });
+      refuse("The file uploaded but could not be filed. Try again, or check you can still access this record.");
+    };
+
+    let blob: Awaited<ReturnType<typeof assertOwnedBlob>>;
+    try {
+      blob = await assertOwnedBlob(url, tenantId);
+      if (!blob.pathname.startsWith(prefix)) throw new Error("Stored document is not bound to this record.");
+      if (blob.size <= 0) throw new Error("Stored document is empty.");
+      if (blob.size > MAX_DOCUMENT_BYTES) throw new Error("Stored document is over the size limit.");
+    } catch (error) {
+      return discard(error);
+    }
+
+    const fileName = cleanDocumentFileName(input.fileName);
+    let doc;
+    try {
+      doc = await prisma.document.create({
+        data: {
+          tenantId,
+          fileName,
+          storedName: url,
+          mimeType: blob.contentType || "application/octet-stream",
+          sizeBytes: blob.size,
+          contactId: target.kind === "record" && target.field === "contactId" ? target.id : null,
+          vehicleId: target.kind === "record" && target.field === "vehicleId" ? target.id : null,
+          jobCardId: target.kind === "record" && target.field === "jobCardId" ? target.id : null,
+          quoteId: target.kind === "record" && target.field === "quoteId" ? target.id : null,
+          uploadedById: user.id,
+        },
+        include: { vehicle: true, jobCard: true },
+      });
+    } catch (error) {
+      // The insert failed, so no row points at the file: safe to remove.
+      return discard(error);
+    }
+
+    // The row exists from here on. Neither of these may reach discard().
+    await logAudit({
+      action: "document.uploaded",
+      summary: `Uploaded document “${fileName}”`,
+      contactId: doc.contactId ?? doc.vehicle?.contactId ?? doc.jobCard?.contactId,
+      user,
+    });
+    revalidatePath("/documents");
+  }, { scope: "document-upload-register" });
 }
 
 export async function deleteDocument(id: string, revalidate: string, formData: FormData) {
-  const user = await requireDocumentAccess(id, "documents.manage");
-  const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
-  // Tenant-scoped at the WRITE as well as at the gate — softDeleteRecord runs
-  // on basePrisma (RLS bypassed) and now applies the active tenant itself, so
-  // another tenant's document id is a no-op rather than a deletion.
-  const doc = await softDeleteRecord("document", id, reason, user.name);
-  // Nothing matched: the id belongs to another tenant, or it is already gone.
-  // Same destination requireDocumentAccess uses when its own gate refuses, so
-  // the two failure modes look identical from outside — and, critically, no
-  // audit entry is written for a deletion that did not happen.
-  if (!doc) redirect("/documents");
-  await logAudit({
-    action: "trash.deleted",
-    summary: `Moved document “${doc.fileName}” to trash — ${reason}`,
-    contactId: doc.contactId,
-    user,
+  return withActingStaffScope(async () => {
+    const user = await requireDocumentAccess(id, "documents.manage");
+    const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
+    // Tenant-scoped at the WRITE as well as at the gate — softDeleteRecord runs
+    // on basePrisma (RLS bypassed) and now applies the active tenant itself, so
+    // another tenant's document id is a no-op rather than a deletion.
+    const doc = await softDeleteRecord("document", id, reason, user.name);
+    // Nothing matched: the id belongs to another tenant, or it is already gone.
+    // Same destination requireDocumentAccess uses when its own gate refuses, so
+    // the two failure modes look identical from outside — and, critically, no
+    // audit entry is written for a deletion that did not happen.
+    if (!doc) redirect("/documents");
+    await logAudit({
+      action: "trash.deleted",
+      summary: `Moved document “${doc.fileName}” to trash — ${reason}`,
+      contactId: doc.contactId,
+      user,
+    });
+    revalidatePath(revalidate);
   });
-  revalidatePath(revalidate);
 }
 
 /* ── Typed generated-document templates ─────────────────────────── */
 
 export async function createDocTemplate(formData: FormData) {
-  const user = await requirePermission("document_templates.manage");
-  const docType = String(formData.get("docType") ?? "");
-  if (!isDocKey(docType)) return;
-  const name = String(formData.get("name") ?? "").trim() || "Untitled";
-  const baseId = String(formData.get("baseId") ?? "").trim();
-  let config: object = defaultTemplate(docType) as object;
-  if (baseId) {
-    const base = await prisma.docTemplateRecord.findUnique({ where: { id: baseId } });
-    if (base && base.docType === docType) config = mergeTemplate(docType, base.config) as object;
-  }
-  const hasDefault = await prisma.docTemplateRecord.count({
-    where: { docType, isDefault: true, deletedAt: null },
+  return withActingStaffScope(async () => {
+    const user = await requirePermission("document_templates.manage");
+    const docType = String(formData.get("docType") ?? "");
+    if (!isDocKey(docType)) return;
+    const name = String(formData.get("name") ?? "").trim() || "Untitled";
+    const baseId = String(formData.get("baseId") ?? "").trim();
+    let config: object = defaultTemplate(docType) as object;
+    if (baseId) {
+      const base = await prisma.docTemplateRecord.findUnique({ where: { id: baseId } });
+      if (base && base.docType === docType) config = mergeTemplate(docType, base.config) as object;
+    }
+    const hasDefault = await prisma.docTemplateRecord.count({
+      where: { docType, isDefault: true, deletedAt: null },
+    });
+    const rec = await prisma.docTemplateRecord.create({
+      data: { docType, name, config, isDefault: hasDefault === 0 },
+    });
+    await logAudit({ action: "doctemplate.created", summary: `Created ${DOC_DEFS[docType].label} template “${name}”`, user });
+    redirect(`/settings/documents/t/${rec.id}`);
   });
-  const rec = await prisma.docTemplateRecord.create({
-    data: { docType, name, config, isDefault: hasDefault === 0 },
-  });
-  await logAudit({ action: "doctemplate.created", summary: `Created ${DOC_DEFS[docType].label} template “${name}”`, user });
-  redirect(`/settings/documents/t/${rec.id}`);
 }
 
 export async function updateDocTemplate(id: string, formData: FormData) {
-  const user = await requirePermission("document_templates.manage");
-  const rec = await prisma.docTemplateRecord.findUniqueOrThrow({ where: { id } });
-  if (!isDocKey(rec.docType)) return;
-  const key = rec.docType;
-  const base = defaultTemplate(key);
-  const config = {
-    logoUrl: String(formData.get("logoUrl") ?? "").trim() || null,
-    intro: String(formData.get("intro") ?? "").trim() || null,
-    bodyText: String(formData.get("bodyText") ?? "").trim() || null,
-    terms: String(formData.get("terms") ?? "").trim() || null,
-    footerLines: String(formData.get("footerLines") ?? "")
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .slice(0, 4),
-    sections: Object.fromEntries(
-      DOC_DEFS[key].sections.map((section) => [section.id, formData.get(`section_${section.id}`) === "on"])
-    ),
-    signature: {
-      position: String(formData.get("sigPosition") ?? base.signature.position),
-      dealerCounterSign: formData.get("dealerCounterSign") === "on",
-    },
-  };
-  await prisma.docTemplateRecord.update({
-    where: { id },
-    data: { name: String(formData.get("name") ?? "").trim() || rec.name, config },
+  return withActingStaffScope(async () => {
+    const user = await requirePermission("document_templates.manage");
+    const rec = await prisma.docTemplateRecord.findUniqueOrThrow({ where: { id } });
+    if (!isDocKey(rec.docType)) return;
+    const key = rec.docType;
+    const base = defaultTemplate(key);
+    const config = {
+      logoUrl: String(formData.get("logoUrl") ?? "").trim() || null,
+      intro: String(formData.get("intro") ?? "").trim() || null,
+      bodyText: String(formData.get("bodyText") ?? "").trim() || null,
+      terms: String(formData.get("terms") ?? "").trim() || null,
+      footerLines: String(formData.get("footerLines") ?? "")
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .slice(0, 4),
+      sections: Object.fromEntries(
+        DOC_DEFS[key].sections.map((section) => [section.id, formData.get(`section_${section.id}`) === "on"])
+      ),
+      signature: {
+        position: String(formData.get("sigPosition") ?? base.signature.position),
+        dealerCounterSign: formData.get("dealerCounterSign") === "on",
+      },
+    };
+    await prisma.docTemplateRecord.update({
+      where: { id },
+      data: { name: String(formData.get("name") ?? "").trim() || rec.name, config },
+    });
+    await logAudit({ action: "doctemplate.saved", summary: `Updated ${DOC_DEFS[key].label} template “${rec.name}”`, user });
+    revalidatePath(`/settings/documents/t/${id}`);
   });
-  await logAudit({ action: "doctemplate.saved", summary: `Updated ${DOC_DEFS[key].label} template “${rec.name}”`, user });
-  revalidatePath(`/settings/documents/t/${id}`);
 }
 
 export async function setDefaultDocTemplate(id: string) {
-  const user = await requirePermission("document_templates.manage");
-  const rec = await prisma.docTemplateRecord.findUniqueOrThrow({ where: { id } });
-  await prisma.$transaction([
-    prisma.docTemplateRecord.updateMany({ where: { docType: rec.docType }, data: { isDefault: false } }),
-    prisma.docTemplateRecord.update({ where: { id }, data: { isDefault: true } }),
-  ]);
-  await logAudit({ action: "doctemplate.default", summary: `“${rec.name}” is now the default ${rec.docType} template`, user });
-  revalidatePath("/settings/documents");
+  return withActingStaffScope(async () => {
+    const user = await requirePermission("document_templates.manage");
+    const rec = await prisma.docTemplateRecord.findUniqueOrThrow({ where: { id } });
+    await prisma.$transaction([
+      prisma.docTemplateRecord.updateMany({ where: { docType: rec.docType }, data: { isDefault: false } }),
+      prisma.docTemplateRecord.update({ where: { id }, data: { isDefault: true } }),
+    ]);
+    await logAudit({ action: "doctemplate.default", summary: `“${rec.name}” is now the default ${rec.docType} template`, user });
+    revalidatePath("/settings/documents");
+  });
 }
 
 export async function duplicateDocTemplate(id: string) {
-  const user = await requirePermission("document_templates.manage");
-  const rec = await prisma.docTemplateRecord.findUniqueOrThrow({ where: { id } });
-  const copy = await prisma.docTemplateRecord.create({
-    data: { docType: rec.docType, name: `Copy of ${rec.name}`, config: rec.config as object },
+  return withActingStaffScope(async () => {
+    const user = await requirePermission("document_templates.manage");
+    const rec = await prisma.docTemplateRecord.findUniqueOrThrow({ where: { id } });
+    const copy = await prisma.docTemplateRecord.create({
+      data: { docType: rec.docType, name: `Copy of ${rec.name}`, config: rec.config as object },
+    });
+    await logAudit({ action: "doctemplate.created", summary: `Duplicated template “${rec.name}”`, user });
+    redirect(`/settings/documents/t/${copy.id}`);
   });
-  await logAudit({ action: "doctemplate.created", summary: `Duplicated template “${rec.name}”`, user });
-  redirect(`/settings/documents/t/${copy.id}`);
 }
 
 export async function deleteDocTemplate(id: string) {
-  const user = await requirePermission("document_templates.manage");
-  const rec = await prisma.docTemplateRecord.findUniqueOrThrow({ where: { id } });
-  if (rec.isDefault) return;
-  await prisma.docTemplateRecord.update({ where: { id }, data: { deletedAt: new Date() } });
-  await logAudit({ action: "doctemplate.deleted", summary: `Deleted template “${rec.name}”`, user });
-  revalidatePath("/settings/documents");
+  return withActingStaffScope(async () => {
+    const user = await requirePermission("document_templates.manage");
+    const rec = await prisma.docTemplateRecord.findUniqueOrThrow({ where: { id } });
+    if (rec.isDefault) return;
+    await prisma.docTemplateRecord.update({ where: { id }, data: { deletedAt: new Date() } });
+    await logAudit({ action: "doctemplate.deleted", summary: `Deleted template “${rec.name}”`, user });
+    revalidatePath("/settings/documents");
+  });
 }
 
 export async function uploadTemplateLogo(id: string, formData: FormData) {
-  const user = await requirePermission("document_templates.manage");
-  const rec = await prisma.docTemplateRecord.findUniqueOrThrow({ where: { id } });
-  if (!isDocKey(rec.docType)) return;
-  const file = formData.get("file");
-  if (!(file instanceof File) || file.size === 0) return;
-  if (file.size > 2 * 1024 * 1024 || !file.type.startsWith("image/")) return;
-  // The logo belongs to the TEMPLATE it is being put on, and the template row was
-  // already fetched and authorized above. Not the acting workspace: an owner
-  // editing another workspace's template would otherwise write that workspace's
-  // artwork under their own prefix.
-  const url = await saveFile(Buffer.from(await file.arrayBuffer()), file.name || "logo.png", file.type, rec.tenantId);
-  const config = { ...mergeTemplate(rec.docType, rec.config), logoUrl: url };
-  await prisma.docTemplateRecord.update({ where: { id }, data: { config: config as object } });
-  await logAudit({ action: "doctemplate.logo", summary: `Replaced the logo on template “${rec.name}”`, user });
-  revalidatePath(`/settings/documents/t/${id}`);
+  return withActingStaffScope(async () => {
+    const user = await requirePermission("document_templates.manage");
+    const rec = await prisma.docTemplateRecord.findUniqueOrThrow({ where: { id } });
+    if (!isDocKey(rec.docType)) return;
+    const file = formData.get("file");
+    if (!(file instanceof File) || file.size === 0) return;
+    if (file.size > 2 * 1024 * 1024 || !file.type.startsWith("image/")) return;
+    // The logo belongs to the TEMPLATE it is being put on, and the template row was
+    // already fetched and authorized above. Not the acting workspace: an owner
+    // editing another workspace's template would otherwise write that workspace's
+    // artwork under their own prefix.
+    const url = await saveFile(Buffer.from(await file.arrayBuffer()), file.name || "logo.png", file.type, rec.tenantId);
+    const config = { ...mergeTemplate(rec.docType, rec.config), logoUrl: url };
+    await prisma.docTemplateRecord.update({ where: { id }, data: { config: config as object } });
+    await logAudit({ action: "doctemplate.logo", summary: `Replaced the logo on template “${rec.name}”`, user });
+    revalidatePath(`/settings/documents/t/${id}`);
+  });
 }
 
 /* ── Document repository ─────────────────────────────────────────── */
 
 export async function renameDocument(id: string, formData: FormData) {
-  const user = await requireDocumentAccess(id, "documents.manage");
-  const fileName = String(formData.get("fileName") ?? "").trim();
-  const tag = String(formData.get("tag") ?? "").trim() || null;
-  if (!fileName) return;
-  await prisma.document.update({ where: { id }, data: { fileName, tag } });
-  await logAudit({ action: "document.updated", summary: `Renamed/re-tagged “${fileName}”`, user });
-  revalidatePath("/settings/documents");
+  return withActingStaffScope(async () => {
+    const user = await requireDocumentAccess(id, "documents.manage");
+    const fileName = String(formData.get("fileName") ?? "").trim();
+    const tag = String(formData.get("tag") ?? "").trim() || null;
+    if (!fileName) return;
+    await prisma.document.update({ where: { id }, data: { fileName, tag } });
+    await logAudit({ action: "document.updated", summary: `Renamed/re-tagged “${fileName}”`, user });
+    revalidatePath("/settings/documents");
+  });
 }
 
 export async function moveDocument(id: string, formData: FormData) {
-  const user = await requireDocumentAccess(id, "documents.manage");
-  const [kind, targetId] = String(formData.get("target") ?? "").split(":");
-  if (!targetId) return;
-  if (kind === "contact") await requireContactAccess(targetId, "documents.manage");
-  else if (kind === "vehicle") await requireVehicleAccess(targetId, "documents.manage");
-  else if (kind === "quote") await requireQuoteAccess(targetId, "documents.manage");
-  else return;
-  // Clear every OTHER link on every move — otherwise moving a contact-filed doc
-  // onto a vehicle/quote would keep the old contactId, leaving it linked to both
-  // (and document access is the union of linked records).
-  const data =
-    kind === "contact"
-      ? { contactId: targetId, vehicleId: null, jobCardId: null, quoteId: null }
-      : kind === "vehicle"
-        ? { vehicleId: targetId, contactId: null, jobCardId: null, quoteId: null }
-        : { quoteId: targetId, contactId: null, vehicleId: null, jobCardId: null };
-  const doc = await prisma.document.update({ where: { id }, data });
-  await logAudit({ action: "document.moved", summary: `Re-filed “${doc.fileName}”`, user });
-  revalidatePath("/settings/documents");
+  return withActingStaffScope(async () => {
+    const user = await requireDocumentAccess(id, "documents.manage");
+    const [kind, targetId] = String(formData.get("target") ?? "").split(":");
+    if (!targetId) return;
+    if (kind === "contact") await requireContactAccess(targetId, "documents.manage");
+    else if (kind === "vehicle") await requireVehicleAccess(targetId, "documents.manage");
+    else if (kind === "quote") await requireQuoteAccess(targetId, "documents.manage");
+    else return;
+    // Clear every OTHER link on every move — otherwise moving a contact-filed doc
+    // onto a vehicle/quote would keep the old contactId, leaving it linked to both
+    // (and document access is the union of linked records).
+    const data =
+      kind === "contact"
+        ? { contactId: targetId, vehicleId: null, jobCardId: null, quoteId: null }
+        : kind === "vehicle"
+          ? { vehicleId: targetId, contactId: null, jobCardId: null, quoteId: null }
+          : { quoteId: targetId, contactId: null, vehicleId: null, jobCardId: null };
+    const doc = await prisma.document.update({ where: { id }, data });
+    await logAudit({ action: "document.moved", summary: `Re-filed “${doc.fileName}”`, user });
+    revalidatePath("/settings/documents");
+  });
 }
 
 export async function uploadRepoDocument(formData: FormData) {
-  const user = await requirePermission("documents.manage");
-  const file = formData.get("file");
-  if (!(file instanceof File) || file.size === 0) return;
-  if (file.size > MAX_SIZE) throw new Error("File exceeds 25 MB limit");
-  const mimeType = file.type || "application/octet-stream";
-  // A repository upload is filed against no contact, vehicle, job card or quote —
-  // there is genuinely no parent to inherit from, so the acting workspace owns it.
-  const tenantId = await actingOwnerTenantId();
-  const storedName = await saveFile(Buffer.from(await file.arrayBuffer()), file.name, mimeType, tenantId);
-  await prisma.document.create({
-    data: {
-      fileName: file.name,
-      storedName,
-      mimeType,
-      sizeBytes: file.size,
-      tenantId,
-      tag: String(formData.get("tag") ?? "").trim() || null,
-      uploadedById: user.id,
-    },
+  return withActingStaffScope(async () => {
+    const user = await requirePermission("documents.manage");
+    const file = formData.get("file");
+    if (!(file instanceof File) || file.size === 0) return;
+    if (file.size > MAX_SIZE) throw new Error("File exceeds 25 MB limit");
+    const mimeType = file.type || "application/octet-stream";
+    // A repository upload is filed against no contact, vehicle, job card or quote —
+    // there is genuinely no parent to inherit from, so the acting workspace owns it.
+    const tenantId = await actingOwnerTenantId();
+    const storedName = await saveFile(Buffer.from(await file.arrayBuffer()), file.name, mimeType, tenantId);
+    await prisma.document.create({
+      data: {
+        fileName: file.name,
+        storedName,
+        mimeType,
+        sizeBytes: file.size,
+        tenantId,
+        tag: String(formData.get("tag") ?? "").trim() || null,
+        uploadedById: user.id,
+      },
+    });
+    await logAudit({ action: "document.uploaded", summary: `Uploaded “${file.name}” to the repository`, user });
+    revalidatePath("/settings/documents");
   });
-  await logAudit({ action: "document.uploaded", summary: `Uploaded “${file.name}” to the repository`, user });
-  revalidatePath("/settings/documents");
 }
 
 /**
@@ -351,41 +478,43 @@ async function replacementOwnerTenantId(old: {
 }
 
 export async function replaceDocument(id: string, formData: FormData) {
-  const user = await requireDocumentAccess(id, "documents.manage");
-  const file = formData.get("file");
-  if (!(file instanceof File) || file.size === 0) return;
-  if (file.size > MAX_SIZE) throw new Error("File exceeds 25 MB limit");
-  const old = await prisma.document.findUniqueOrThrow({ where: { id } });
-  const mimeType = file.type || old.mimeType;
-  // A new VERSION of an existing document belongs where the document already does.
-  // Taking the acting workspace here would split a version chain across two
-  // prefixes, so the old versions stop resolving for whoever ends up owning it.
-  // One value for the blob AND the row, as everywhere else in this change.
-  const tenantId = await replacementOwnerTenantId(old);
-  const storedName = await saveFile(Buffer.from(await file.arrayBuffer()), file.name || old.fileName, mimeType, tenantId);
-  const next = await prisma.document.create({
-    data: {
-      fileName: file.name || old.fileName,
-      storedName,
-      mimeType,
-      sizeBytes: file.size,
-      contactId: old.contactId,
-      vehicleId: old.vehicleId,
-      jobCardId: old.jobCardId,
-      quoteId: old.quoteId,
-      // Same workspace as the version it replaces — the reasoning above applies
-      // to the row exactly as it does to the blob prefix. NOT `old.tenantId`
-      // verbatim: see replacementOwnerTenantId.
-      tenantId,
-      tag: old.tag,
-      uploadedById: user.id,
-    },
+  return withActingStaffScope(async () => {
+    const user = await requireDocumentAccess(id, "documents.manage");
+    const file = formData.get("file");
+    if (!(file instanceof File) || file.size === 0) return;
+    if (file.size > MAX_SIZE) throw new Error("File exceeds 25 MB limit");
+    const old = await prisma.document.findUniqueOrThrow({ where: { id } });
+    const mimeType = file.type || old.mimeType;
+    // A new VERSION of an existing document belongs where the document already does.
+    // Taking the acting workspace here would split a version chain across two
+    // prefixes, so the old versions stop resolving for whoever ends up owning it.
+    // One value for the blob AND the row, as everywhere else in this change.
+    const tenantId = await replacementOwnerTenantId(old);
+    const storedName = await saveFile(Buffer.from(await file.arrayBuffer()), file.name || old.fileName, mimeType, tenantId);
+    const next = await prisma.document.create({
+      data: {
+        fileName: file.name || old.fileName,
+        storedName,
+        mimeType,
+        sizeBytes: file.size,
+        contactId: old.contactId,
+        vehicleId: old.vehicleId,
+        jobCardId: old.jobCardId,
+        quoteId: old.quoteId,
+        // Same workspace as the version it replaces — the reasoning above applies
+        // to the row exactly as it does to the blob prefix. NOT `old.tenantId`
+        // verbatim: see replacementOwnerTenantId.
+        tenantId,
+        tag: old.tag,
+        uploadedById: user.id,
+      },
+    });
+    await prisma.document.update({ where: { id }, data: { replacedById: next.id } });
+    await logAudit({
+      action: "document.versioned",
+      summary: `New version of “${old.fileName}” (previous kept in history)`,
+      user,
+    });
+    revalidatePath("/settings/documents");
   });
-  await prisma.document.update({ where: { id }, data: { replacedById: next.id } });
-  await logAudit({
-    action: "document.versioned",
-    summary: `New version of “${old.fileName}” (previous kept in history)`,
-    user,
-  });
-  revalidatePath("/settings/documents");
 }

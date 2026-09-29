@@ -4,6 +4,7 @@ import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { withActingTenantWrite, withActingStaffScope } from "@/lib/actingScope";
+import { actingTenantId } from "@/lib/actingTenant";
 import { activeTenantPredicate } from "@/lib/tenantPredicate";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
@@ -45,11 +46,11 @@ type CurrentKind = { isCompany: boolean; fleetId: string | null } | null;
  * TENANT. The lookup is scoped, not checked afterwards: a fleet id belonging to
  * another workspace simply does not resolve, so a forged select value can neither
  * link a contact into a stranger's fleet nor leak that fleet's name back through
- * the `company` field below. The predicate is named explicitly because the db.ts
- * guard scopes NOTHING while tenant enforcement is off (its documented default),
- * so relying on it here would be relying on a no-op. Same idiom as
- * quickCreate.ts's requireTenantRecord, which validates the other cross-record
- * selections on this form.
+ * the `company` field below. The tenant is resolved through `actingTenantId()`
+ * rather than the synchronous `activeTenantPredicate()` because this helper is
+ * also reached from createContact, a Server Action that may have lost its ambient
+ * ALS scope under enforcement. The awaited resolver can recover the validated
+ * staff session and still gives us the explicit predicate dormant mode requires.
  *
  * Returns the fleet, or null when nothing was chosen / it does not resolve. The
  * caller decides what an unresolved fleet means — for kind "fleet" it is a
@@ -65,8 +66,9 @@ async function resolveFleet(
   if (fleetId !== current?.fleetId && !(await hasAnyPermission(user, "fleets.view", "fleets.manage"))) {
     throw new ActionRefusal("You do not have access to fleet accounts");
   }
+  const tenantId = await actingTenantId();
   return prisma.fleet.findFirst({
-    where: { id: fleetId, ...activeTenantPredicate("contact fleet selection") },
+    where: { id: fleetId, tenantId },
     select: { id: true, name: true },
   });
 }

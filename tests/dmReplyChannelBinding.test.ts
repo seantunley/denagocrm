@@ -81,7 +81,7 @@ test("the recipient is resolved server-side from the channel, never sent by the 
   const action = src("src/app/actions/messenger.ts");
   assert.match(
     action,
-    /const recipientId = platform === "instagram" \? contact\.instagramId : contact\.messengerPsid;/,
+    /const recipientId = platform === "instagram" \? contact\.instagramId : platform === "x" \? contact\.xUserId : contact\.messengerPsid;/,
     "the participant id must be derived from the resolved channel",
   );
   assert.doesNotMatch(action, /formData\.get\("recipientId"\)/, "a client-supplied recipient is never trusted");
@@ -91,7 +91,7 @@ test("a channel the contact cannot receive on fails instead of falling back", ()
   const action = src("src/app/actions/messenger.ts");
   const guard = action.slice(action.indexOf("if (!recipientId)"), action.indexOf("let attachmentUrl"));
   // The failure must name the channel and must NOT reroute to the other one.
-  assert.match(guard, /has no \$\{platform === "instagram" \? "Instagram" : "Messenger"\} identity/);
+  assert.match(guard, /has no \$\{platform === "instagram" \? "Instagram" : platform === "x" \? "X" : "Messenger"\} identity/);
   assert.doesNotMatch(guard, /platform = "messenger"|platform = "instagram"/, "no silent cross-channel fallback");
 });
 
@@ -143,7 +143,7 @@ test("both inbox surfaces resolve conversations from the same function", () => {
 
 test("only the channels that need a conversation have one created for them", () => {
   const resolver = stripComments(src("src/lib/inboxConversations.ts"));
-  assert.match(resolver, /CHANNELS_REQUIRING_CONVERSATION = new Set\(\["messenger", "instagram"\]\)/);
+  assert.match(resolver, /CHANNELS_REQUIRING_CONVERSATION = new Set\(\["messenger", "instagram", "x"\]\)/);
   // WhatsApp replies address a phone number the server re-reads from the contact,
   // so creating rows on sight for them would be a write with no reader.
   assert.doesNotMatch(resolver, /"whatsapp"/);

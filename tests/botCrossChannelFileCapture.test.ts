@@ -37,9 +37,10 @@ test("Meta runs the flow for attachment-only messages using the persisted CRM at
   const code = src("src/app/api/webhooks/meta/route.ts");
   // The provider's mid travels with it now, so a redelivery reuses the transcript
   // rows instead of adding a second copy of the customer's message.
-  assert.match(code, /await recordInboundDm\(platform, senderId, text, referral, attachments, String\(ev\.message\?\.mid/);
+  assert.match(code, /const providerId = String\(ev\.message\?\.mid/);
+  assert.match(code, /await recordInboundDm\(platform, senderId, text, referral, attachments, providerId\)/);
   assert.match(code, /latestPersistedDmAttachment\(platform, senderId, receivedAfter\)/);
-  assert.match(code, /if \(text \|\| payload \|\| fileUrl\) await runDmFlow\(platform, senderId, text, payload, fileUrl\)/);
+  assert.match(code, /if \(text \|\| payload \|\| fileUrl\) await runDmFlow\(platform, senderId, text, payload, fileUrl, entryContext\)/);
   assert.doesNotMatch(code, /runDmFlow\([^\n]+attachments\[0\]\.url/, "temporary Meta CDN URLs must not become flow variables");
 });
 

@@ -1,8 +1,22 @@
-import { prisma } from "./db";
+import { Prisma } from "@prisma/client";
+import { basePrisma, prisma } from "./db";
+import { logAudit } from "./audit";
+import { activeTenantPredicate } from "./tenantPredicate";
+import { PHONE_TAIL_SQL, phoneTail } from "./phoneMatch";
+import {
+  WA_BODY_MAX,
+  WA_BUTTON_MAX,
+  WA_BUTTON_TITLE_MAX,
+  WA_LIST_BUTTON_MAX,
+  WA_LIST_DESCRIPTION_MAX,
+  WA_LIST_ROW_MAX,
+  WA_LIST_TITLE_MAX,
+  WA_TEXT_MAX,
+} from "./whatsappRendering";
 import { customerRecordTenantId } from "./customerRecordTenant";
+import { shareableFileUrl } from "./storage";
 import { credentialOwnerTenantId, resolveIntegrationBundleForTenant, resolveTenantCredential } from "./settings";
 import { sendPushToAll } from "./push";
-import { createLeadRecordIfPipelineReady } from "./leadCreate";
 import { resolveTenantActor } from "./tenantActor";
 import { inboundCommunicationKey, isDedupeKeyConflict } from "./inboundMessageKey";
 import { currentInboundBotEventId } from "./botInboundEvent";
@@ -132,11 +146,11 @@ export async function isWhatsAppConfigured(): Promise<boolean> {
  *     `withChannelTenantScope` adds no tenant predicate, so "more than one match"
  *     includes another workspace's customer.
  *
- * `endsWith` is what was meant. The ordering makes the pick deterministic. And
- * `ambiguous` reports what a single row cannot: that the number did not identify
- * ONE person. Ordinary conversation still uses the deterministic pick — an inbound
- * message must be filed somewhere — but an action that touches an existing booking
- * refuses it, because "probably this customer" is not identity.
+ * Matching the DIGIT TAIL is what was meant. The ordering makes the pick
+ * deterministic. And `ambiguous` reports what a single row cannot: that the number
+ * did not identify ONE person. Ordinary conversation still uses the deterministic
+ * pick — an inbound message must be filed somewhere — but an action that touches an
+ * existing booking refuses it, because "probably this customer" is not identity.
  *
  * Ambiguity is counted ACROSS both tables. Returning as soon as a Contact matched
  * meant one Contact and one unrelated open Lead on the same number read as
@@ -150,10 +164,12 @@ export async function isWhatsAppConfigured(): Promise<boolean> {
  * at that point the lookup cannot prove the number names one person, which is the
  * same answer as proving it names two.
  *
- * Known limitation: CRM phone fields are free-form, so `082 123 4567` still does
- * not match the digit tail. That predates this change — `contains` also required a
- * contiguous run — and fixing it properly means comparing normalised digits, which
- * needs a stored normalised column to stay indexable. Worth doing; not this.
+ * FIXED, and it was the biggest of the three: CRM phone fields are free-form, and
+ * both `contains` and `endsWith` needed a CONTIGUOUS digit run — so "082 123 4567"
+ * never matched the same person arriving as +27821234567, and the CRM filed a
+ * second record for a customer it already had. Non-digits are stripped before
+ * comparing now (phoneMatch.ts), and migration 82 indexes that same expression so
+ * the lookup stays a single index probe rather than a table scan.
  */
 export type PhoneMatch = { contactId: string | null; leadId: string | null; ambiguous: boolean };
 
@@ -167,26 +183,66 @@ export type PhoneMatch = { contactId: string | null; leadId: string | null; ambi
 const CANDIDATE_LIMIT = 50;
 
 export async function matchByPhone(digits: string): Promise<PhoneMatch> {
-  const variants = [digits, "0" + digits.slice(2), "+" + digits];
-  const tails = [...new Set(variants.map((v) => v.slice(-9)))];
+  /*
+   * DIGITS, NOT CHARACTERS.
+   *
+   * This compared the last 9 CHARACTERS with `endsWith`, which needs a
+   * contiguous run — so a contact stored as "082 123 4567" never matched the
+   * same person messaging from +27821234567, and the CRM greeted a customer it
+   * already knew as a stranger, then filed a second record for them. The rule
+   * now strips non-digits first (phoneMatch.ts), and migration 82 indexes
+   * exactly that expression so the lookup stays a single index probe.
+   */
+  const tail = phoneTail(digits);
+  // Too few digits to identify anybody. Matching on a short tail would match
+  // EVERY number ending in those digits, which is worse than matching none.
+  if (!tail) return { contactId: null, leadId: null, ambiguous: false };
+
+  /*
+   * RAW SQL, SO THE TENANT IS NAMED EXPLICITLY.
+   *
+   * The normalisation cannot be expressed through the ORM, and a raw query does
+   * not go through the guard that would otherwise scope it — so the predicate is
+   * written here rather than assumed. `activeTenantPredicate` gives the same
+   * answer the ORM path would: the scope's tenant when there is one, a hard
+   * refusal under enforcement without one, and no predicate at all while
+   * dormant, which keeps legacy installs behaving exactly as before.
+   *
+   * `basePrisma` also means the soft-delete filter is not applied for us, so
+   * `deletedAt IS NULL` is stated. Missing it would resurrect deleted customers
+   * as match candidates.
+   */
+  const scope = activeTenantPredicate("inbound phone match");
+  // `undefined` means dormant with no scope — the legacy path, where no tenant
+  // predicate applied and none should start applying now. Written as a literal
+  // in the query below rather than spliced in as a fragment, so the predicate is
+  // visible at the call site to a reader and to the tenant-access ratchet.
+  const unscoped = scope.tenantId === undefined;
+  const scopedTenantId = scope.tenantId ?? null;
+  const contactTail = Prisma.raw(PHONE_TAIL_SQL('"phone"'));
+  const whatsappTail = Prisma.raw(PHONE_TAIL_SQL('"whatsapp"'));
+  const leadTail = Prisma.raw(PHONE_TAIL_SQL('"phone"'));
+
   // Both tables, always. Stopping at the first matching Contact could not see an
   // unrelated open Lead on the same number, and that is a second person.
   // Oldest first: stable across requests, and the original record rather than a
   // later duplicate. Rows are {id, contactId} only, so the bound is a runaway
   // guard rather than a page size — see CANDIDATE_LIMIT.
   const [contacts, leads] = await Promise.all([
-    prisma.contact.findMany({
-      where: { OR: tails.flatMap((tail) => [{ phone: { endsWith: tail } }, { whatsapp: { endsWith: tail } }]) },
-      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-      take: CANDIDATE_LIMIT,
-      select: { id: true },
-    }),
-    prisma.lead.findMany({
-      where: { phone: { endsWith: digits.slice(-9) }, status: "open" },
-      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-      take: CANDIDATE_LIMIT,
-      select: { id: true, contactId: true },
-    }),
+    basePrisma.$queryRaw<Array<{ id: string }>>`
+      SELECT "id" FROM "Contact"
+      WHERE (${contactTail} = ${tail} OR ${whatsappTail} = ${tail})
+        AND "deletedAt" IS NULL
+        AND (${unscoped} OR "tenantId" IS NOT DISTINCT FROM ${scopedTenantId})
+      ORDER BY "createdAt" ASC, "id" ASC
+      LIMIT ${CANDIDATE_LIMIT}`,
+    basePrisma.$queryRaw<Array<{ id: string; contactId: string | null }>>`
+      SELECT "id", "contactId" FROM "Lead"
+      WHERE ${leadTail} = ${tail}
+        AND "status" = 'open'
+        AND (${unscoped} OR "tenantId" IS NOT DISTINCT FROM ${scopedTenantId})
+      ORDER BY "createdAt" ASC, "id" ASC
+      LIMIT ${CANDIDATE_LIMIT}`,
   ]);
 
   // Hitting the bound means candidates were dropped, so uniqueness cannot be
@@ -218,7 +274,7 @@ export async function sendWhatsAppText(
       messaging_product: "whatsapp",
       to: toDigits,
       type: "text",
-      text: { body: text },
+      text: { body: text.slice(0, WA_TEXT_MAX) },
     }),
   });
   if (!res.ok) {
@@ -242,7 +298,8 @@ export async function sendWhatsAppImage(toDigits: string, url: string, caption?:
     signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${creds.token}` },
-    body: JSON.stringify({ messaging_product: "whatsapp", to: toDigits, type: "image", image: { link: url, ...(caption ? { caption } : {}) } }),
+    // WhatsApp downloads the image itself: a private file gets a short-lived signed link.
+    body: JSON.stringify({ messaging_product: "whatsapp", to: toDigits, type: "image", image: { link: await shareableFileUrl(url), ...(caption ? { caption } : {}) } }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => null);
@@ -329,13 +386,15 @@ export async function sendWhatsAppButtons(
   body: string,
   buttons: { id: string; title: string }[]
 ) {
+  // The limits are imported, not written out here, so the builder's preview
+  // cannot disagree with what actually gets sent. Same numbers, same behaviour.
   return sendInteractive(toDigits, {
     type: "button",
-    body: { text: body.slice(0, 1024) },
+    body: { text: body.slice(0, WA_BODY_MAX) },
     action: {
-      buttons: buttons.slice(0, 3).map((b) => ({
+      buttons: buttons.slice(0, WA_BUTTON_MAX).map((b) => ({
         type: "reply",
-        reply: { id: b.id.slice(0, 256), title: b.title.slice(0, 20) },
+        reply: { id: b.id.slice(0, 256), title: b.title.slice(0, WA_BUTTON_TITLE_MAX) },
       })),
     },
   });
@@ -350,15 +409,15 @@ export async function sendWhatsAppList(
 ) {
   return sendInteractive(toDigits, {
     type: "list",
-    body: { text: body.slice(0, 1024) },
+    body: { text: body.slice(0, WA_BODY_MAX) },
     action: {
-      button: buttonLabel.slice(0, 20),
+      button: buttonLabel.slice(0, WA_LIST_BUTTON_MAX),
       sections: [
         {
-          rows: rows.slice(0, 10).map((r) => ({
+          rows: rows.slice(0, WA_LIST_ROW_MAX).map((r) => ({
             id: r.id.slice(0, 200),
-            title: r.title.slice(0, 24),
-            ...(r.description ? { description: r.description.slice(0, 72) } : {}),
+            title: r.title.slice(0, WA_LIST_TITLE_MAX),
+            ...(r.description ? { description: r.description.slice(0, WA_LIST_DESCRIPTION_MAX) } : {}),
           })),
         },
       ],
@@ -429,34 +488,53 @@ export async function recordInboundWhatsApp(
   providerMessageId?: string,
 ) {
   const match = await matchByPhone(fromDigits);
-  const { contactId } = match;
-  let { leadId } = match;
+  let { contactId } = match;
+  const { leadId } = match;
 
-  // unknown number → create a lead so nothing is lost
+  /*
+   * AN UNKNOWN NUMBER BECOMES A PERSON, NOT A SALES LEAD.
+   *
+   * This created a Lead in the first pipeline stage for every unrecognised
+   * number — before anyone, human or bot, knew what the message was about. A
+   * customer messaging to book a service therefore arrived as a sales lead, and
+   * the flow's `booking` node then correctly created the service request beside
+   * it, leaving a lead nobody wanted sitting in the pipeline. It had also
+   * already fired the "New lead" push and enrolled the person in every
+   * `lead_created` journey by then, so the wrong classification had consequences
+   * that outlived it.
+   *
+   * The flow engine already knows the difference — `BookingCreateAction` is
+   * "service" | "demo" | "lead" — so intent belongs to the node that establishes
+   * it, not to the act of receiving a message.
+   *
+   * MESSENGER AND INSTAGRAM ALREADY WORK THIS WAY. recordInboundDm creates a
+   * Contact for every unknown sender and a Lead only when the DM carries ad
+   * attribution, i.e. only when it genuinely IS a sales enquiry. This makes
+   * WhatsApp consistent with the channel that had it right.
+   *
+   * A Contact, not nothing: the message still needs a person to hang off, the
+   * inbox still shows who is talking, and a returning customer is recognised
+   * rather than filed twice.
+   */
   if (!contactId && !leadId) {
-    // Through the one lead creator. This used to be a bare prisma.lead.create
-    // plus an audit line, so an inbound WhatsApp lead fired NO `lead_created`
-    // automations and raised no "New lead" push — the rule a user configures as
-    // "when a new lead is created, notify me" did nothing for the channel most
-    // of them arrive on. (The "New WhatsApp message" push below is about the
-    // MESSAGE and sits on its own toggle; `lead_new` is the one whose settings
-    // description already promised "…website or WhatsApp lead arrives".)
-    //
-    // …IfPipelineReady keeps the old `if (firstStage)` guard: with no pipeline
-    // configured we still record the message below rather than losing it.
-    const title = `WhatsApp enquiry — ${profileName ?? fromDigits}`;
-    const lead = await createLeadRecordIfPipelineReady({
-      title,
-      name: profileName ?? `WhatsApp ${fromDigits}`,
-      phone: "+" + fromDigits,
-      source: "whatsapp",
-      audit: {
-        action: "lead.received",
-        summary: `Lead “${title}” created from inbound WhatsApp`,
-        userName: "System",
+    const [firstName, ...rest] = (profileName ?? "WhatsApp contact").trim().split(/\s+/);
+    const created = await prisma.contact.create({
+      data: {
+        firstName: firstName || "WhatsApp contact",
+        lastName: rest.join(" ") || null,
+        phone: "+" + fromDigits,
+        whatsapp: "+" + fromDigits,
+        source: "whatsapp",
+        notes: profileName ? null : "Created from an inbound WhatsApp message — name not yet available.",
       },
     });
-    if (lead) leadId = lead.id;
+    contactId = created.id;
+    await logAudit({
+      action: "contact.created",
+      summary: "Contact created from an inbound WhatsApp message",
+      contactId: created.id,
+      userName: "System",
+    });
   }
 
   // Tenant-aware actor: under enforcement, a member of THIS channel's tenant scope

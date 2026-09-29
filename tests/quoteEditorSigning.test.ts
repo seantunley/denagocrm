@@ -372,11 +372,14 @@ test("a signed quote prints what was signed, not the template as it stands today
   const source = shipped("src/lib/quotePrintDocument.ts");
   const start = source.indexOf("export async function renderQuotePrintHtml(");
   assert.notEqual(start, -1, "renderQuotePrintHtml not found — was it renamed?");
-  // Bound the end search FROM `start`: printToolbarHtml is declared after it, and
-  // an unbounded indexOf would happily slice backwards into nothing.
-  const end = source.indexOf("\nexport function printToolbarHtml", start);
-  assert.notEqual(end, -1, "printToolbarHtml not found — the slice would run to EOF");
-  const body = source.slice(start, end);
+  // printToolbarHtml used to be declared below this and bounded the slice; it has
+  // since moved to lib/printToolbar.ts, leaving renderQuotePrintHtml as the last
+  // export in this file — so EOF genuinely IS the end of its body. Assert that
+  // rather than trust it: append another export below and the slice would widen
+  // silently, and these assertions would start reading someone else's code.
+  const following = source.slice(start + 1).search(/^export /m);
+  assert.equal(following, -1, "an export now follows renderQuotePrintHtml — bound the slice to it");
+  const body = source.slice(start);
 
   assert.match(body, /parseDocument\(request\.snapshotJson\)/, "the frozen signed document must be what prints");
   const snapshot = body.search(/parseDocument\(request\.snapshotJson\)/);

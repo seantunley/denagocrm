@@ -6,7 +6,7 @@ export type InboxThread = {
   key: string;
   name: string;
   href: string | null;
-  channel: "whatsapp" | "messenger" | "instagram";
+  channel: "whatsapp" | "messenger" | "instagram" | "x";
   contactId: string | null;
   leadId: string | null;
   phone: string | null;
@@ -116,10 +116,11 @@ export type ThreadCollaboration = {
   conversationId: string;
   assignee: { id: string; name: string } | null;
   notes: { id: string; body: string; authorName: string; createdAt: Date }[];
-  /**
-   * `human` means the shared BotSession is paused and inbound turns are suppressed.
-   * Unsupported is explicit so the UI never shows a control it cannot enforce.
-   */
-  bot: { supported: boolean; mode: "bot" | "human" };
+  /** `handoff` is bot-requested and unclaimed; `human` is deliberately claimed. */
+  bot: {
+    supported: boolean;
+    mode: "bot" | "handoff" | "human";
+    handoff: import("./botHandoff").BotHandoffContext | null;
+  };
   draft: { ownerId: string; ownerName: string; body: string; updatedAt: Date } | null;
 };

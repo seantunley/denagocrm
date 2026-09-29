@@ -153,6 +153,11 @@ const CHANNEL_OF: Record<string, string> = {
   whatsapp: "whatsapp",
   messenger: "messenger",
   instagram: "instagram",
+  // Public comments on posts and ads. Its OWN channel, deliberately: a comment
+  // thread is a post with a crowd in it, not a customer, and mixing it into the
+  // DM mailbox would bury the private conversations that need answering under
+  // public chatter that mostly does not.
+  comment: "comment",
   call: "call",
   meeting: "note",
   note: "note",

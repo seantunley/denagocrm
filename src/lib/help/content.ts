@@ -5,7 +5,9 @@ import { HELP_CATEGORIES } from "./categories";
 import { gettingStartedArticles } from "./articles/getting-started";
 import { dashboardArticles } from "./articles/dashboards";
 import { tenantOnboardingArticles } from "./articles/tenant-onboarding";
+import { xAndAttentionArticles } from "./articles/x-and-attention";
 import { journeysArticles } from "./articles/journeys";
+import { offlineChecklistArticles } from "./articles/offline-checklists";
 import crm from "./data/crm.json";
 import sales from "./data/sales.json";
 import stock from "./data/stock.json";
@@ -47,6 +49,8 @@ export const HELP_ARTICLES: HelpArticle[] = [
   ...gettingStartedArticles,
   ...dashboardArticles,
   ...tenantOnboardingArticles,
+  ...offlineChecklistArticles,
+  ...xAndAttentionArticles,
   ...(crm as HelpArticle[]),
   ...(sales as HelpArticle[]),
   ...(stock as HelpArticle[]),

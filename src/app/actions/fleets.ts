@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { asActionResult, refuse } from "@/lib/actionResult";
 import { prisma } from "@/lib/db";
 import { withActingTenantWrite, withActingStaffScope } from "@/lib/actingScope";
-import { activeTenantPredicate } from "@/lib/tenantPredicate";
+import { actingTenantId } from "@/lib/actingTenant";
 import { logAudit } from "@/lib/audit";
 import { requirePermission, requireVehicleAccess, requireContactAccess } from "@/lib/permissions";
 import { parseFleetType } from "@/lib/fleetTypes";
@@ -19,8 +19,14 @@ import { parseFleetType } from "@/lib/fleetTypes";
  * fleet, read back its name, or park a vehicle in it. The tenant is named
  * explicitly because the db.ts guard scopes NOTHING while enforcement is off
  * (its documented default), so a mutation leaning on the guard alone is
- * unscoped in production today. Fleet is soft-delete registered, so the filtered
- * client also keeps a trashed fleet from resolving here.
+ * unscoped in that mode.
+ *
+ * `tenantFleet` is async, so resolve through `actingTenantId()` rather than the
+ * synchronous `activeTenantPredicate()`. Under enforcement a Server Action may
+ * have lost its ambient ALS scope; the awaited resolver can re-derive the same
+ * validated staff workspace and still gives us the explicit predicate dormant
+ * mode needs. This keeps the boundary without making update/delete actions depend
+ * on caller-frame scope propagation.
  *
  * Every fleet mutation below goes through this, including the ones that only
  * receive a fleet id as a bound argument — server actions are POST-reachable
@@ -28,8 +34,9 @@ import { parseFleetType } from "@/lib/fleetTypes";
  * not a substitute.
  */
 async function tenantFleet(id: string): Promise<{ id: string; name: string }> {
+  const tenantId = await actingTenantId();
   const fleet = await prisma.fleet.findFirst({
-    where: { id, ...activeTenantPredicate("fleet mutation") },
+    where: { id, tenantId },
     select: { id: true, name: true },
   });
   if (!fleet) refuse("That fleet is not available in this workspace");
@@ -43,13 +50,9 @@ function optional(formData: FormData, key: string): string | null {
 
 /**
  * Bound with {@link withActingStaffScope} because this action reads the tenant scope
- * SYNCHRONOUSLY (inheritedTenantId / activeTenantPredicate / writeTenantId), and a
- * sync reader cannot recover a missing scope the way an awaited one can.
- *
- * A Server Action has no React request store, so #513's holder is never filled, and
- * `enterWith` inside the auth chokepoint does not reach the frame that called it —
- * the action body therefore runs with no ambient scope and the sync reader throws.
- * Binding an ENCLOSING frame here is the only shape that reaches it.
+ * SYNCHRONOUSLY through `withActingTenantWrite`'s transaction boundary and creates
+ * a new tenant-owned root record. Binding an enclosing scope keeps every nested
+ * read/write on the same workspace.
  */
 export async function createFleet(formData: FormData) {
   return withActingStaffScope(async () => {
@@ -70,14 +73,10 @@ export async function createFleet(formData: FormData) {
   // this, and a fleet has no parent record to inherit from — the creator's
   // workspace IS the owner. So this takes the ACTING workspace, not
   // `withTenantWrite`: that resolves `writeTenantId() ?? DEFAULT_TENANT_ID`, and
-  // `writeTenantId()` is null while enforcement is dormant (every environment we
-  // run), so it stamped the FOUNDING tenant onto a second workspace's fleets. The
-  // fleet page, the fleets list and the contact form's fleet picker all name the
-  // tenant now, so that fleet becomes invisible to the workspace that created it
-  // the moment enforcement is turned on — while looking correctly owned until then.
-  // The generic is stated rather than inferred: `tx` is `any` (the helper cannot
-  // name a transaction client type), so the callback's return type infers as
-  // `unknown` and `fleet.id` below does not typecheck.
+  // `writeTenantId()` is null while enforcement is dormant, so it stamped the
+  // FOUNDING tenant onto a second workspace's fleets. The generic is stated
+  // rather than inferred: `tx` is `any` (the helper cannot name a transaction
+  // client type), so the callback's return type otherwise infers as `unknown`.
   const fleet = await withActingTenantWrite<{ id: string }>((tx, tenantId) =>
     tx.fleet.create({
       data: {
@@ -98,22 +97,24 @@ export async function createFleet(formData: FormData) {
 }
 
 export async function updateFleet(id: string, formData: FormData) {
-  const user = await requirePermission("fleets.manage");
-  const fleet = await tenantFleet(id);
-  // #15: reassigning the fleet's contact requires access to the destination contact.
-  const contactId = String(formData.get("contactId") ?? "").trim() || null;
-  if (contactId) await requireContactAccess(contactId, "fleets.manage");
-  await prisma.fleet.update({
-    where: { id: fleet.id },
-    data: {
-      name: String(formData.get("name") ?? "").trim() || "Untitled fleet",
-      type: parseFleetType(formData.get("type")),
-      contactId,
-      notes: String(formData.get("notes") ?? "").trim() || null,
-    },
+  return withActingStaffScope(async () => {
+    const user = await requirePermission("fleets.manage");
+    const fleet = await tenantFleet(id);
+    // #15: reassigning the fleet's contact requires access to the destination contact.
+    const contactId = String(formData.get("contactId") ?? "").trim() || null;
+    if (contactId) await requireContactAccess(contactId, "fleets.manage");
+    await prisma.fleet.update({
+      where: { id: fleet.id },
+      data: {
+        name: String(formData.get("name") ?? "").trim() || "Untitled fleet",
+        type: parseFleetType(formData.get("type")),
+        contactId,
+        notes: String(formData.get("notes") ?? "").trim() || null,
+      },
+    });
+    await logAudit({ action: "fleet.updated", summary: `Updated fleet "${fleet.name}"`, user });
+    revalidatePath(`/fleets/${id}`);
   });
-  await logAudit({ action: "fleet.updated", summary: `Updated fleet "${fleet.name}"`, user });
-  revalidatePath(`/fleets/${id}`);
 }
 
 /**
@@ -125,28 +126,30 @@ export async function updateFleet(id: string, formData: FormData) {
  * same audit line as its neighbour.
  */
 export async function updateFleetBusiness(id: string, formData: FormData) {
-  const user = await requirePermission("fleets.manage");
-  const fleet = await tenantFleet(id);
-  await prisma.fleet.update({
-    where: { id: fleet.id },
-    data: {
-      registrationNumber: optional(formData, "registrationNumber"),
-      vatNumber: optional(formData, "vatNumber"),
-      billingEmail: optional(formData, "billingEmail"),
-      billingPhone: optional(formData, "billingPhone"),
-      address: optional(formData, "address"),
-      suburb: optional(formData, "suburb"),
-      city: optional(formData, "city"),
-      province: optional(formData, "province"),
-      postalCode: optional(formData, "postalCode"),
-    },
+  return withActingStaffScope(async () => {
+    const user = await requirePermission("fleets.manage");
+    const fleet = await tenantFleet(id);
+    await prisma.fleet.update({
+      where: { id: fleet.id },
+      data: {
+        registrationNumber: optional(formData, "registrationNumber"),
+        vatNumber: optional(formData, "vatNumber"),
+        billingEmail: optional(formData, "billingEmail"),
+        billingPhone: optional(formData, "billingPhone"),
+        address: optional(formData, "address"),
+        suburb: optional(formData, "suburb"),
+        city: optional(formData, "city"),
+        province: optional(formData, "province"),
+        postalCode: optional(formData, "postalCode"),
+      },
+    });
+    await logAudit({
+      action: "fleet.updated",
+      summary: `Updated business details for fleet "${fleet.name}"`,
+      user,
+    });
+    revalidatePath(`/fleets/${id}`);
   });
-  await logAudit({
-    action: "fleet.updated",
-    summary: `Updated business details for fleet "${fleet.name}"`,
-    user,
-  });
-  revalidatePath(`/fleets/${id}`);
 }
 
 /**
@@ -182,18 +185,22 @@ export async function deleteFleet(id: string, formData: FormData) {
 }
 
 export async function assignVehicleToFleet(fleetId: string, formData: FormData) {
-  const vehicleId = String(formData.get("vehicleId") ?? "");
-  if (!vehicleId) return;
-  await requireVehicleAccess(vehicleId, "fleets.manage");
-  // The DESTINATION is checked too: vehicle access alone says nothing about the
-  // fleet it is being moved into.
-  const fleet = await tenantFleet(fleetId);
-  await prisma.vehicle.update({ where: { id: vehicleId }, data: { fleetId: fleet.id } });
-  revalidatePath(`/fleets/${fleetId}`);
+  return withActingStaffScope(async () => {
+    const vehicleId = String(formData.get("vehicleId") ?? "");
+    if (!vehicleId) return;
+    await requireVehicleAccess(vehicleId, "fleets.manage");
+    // The DESTINATION is checked too: vehicle access alone says nothing about the
+    // fleet it is being moved into.
+    const fleet = await tenantFleet(fleetId);
+    await prisma.vehicle.update({ where: { id: vehicleId }, data: { fleetId: fleet.id } });
+    revalidatePath(`/fleets/${fleetId}`);
+  });
 }
 
 export async function removeVehicleFromFleet(vehicleId: string, fleetId: string) {
-  await requireVehicleAccess(vehicleId, "fleets.manage");
-  await prisma.vehicle.update({ where: { id: vehicleId }, data: { fleetId: null } });
-  revalidatePath(`/fleets/${fleetId}`);
+  return withActingStaffScope(async () => {
+    await requireVehicleAccess(vehicleId, "fleets.manage");
+    await prisma.vehicle.update({ where: { id: vehicleId }, data: { fleetId: null } });
+    revalidatePath(`/fleets/${fleetId}`);
+  });
 }

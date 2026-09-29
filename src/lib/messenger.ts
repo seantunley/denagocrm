@@ -11,7 +11,7 @@ import { currentInboundBotEventId } from "./botInboundEvent";
 import { DEFAULT_TENANT_ID } from "./tenant";
 import { writeTenantId } from "./tenantWrite";
 import { createLeadRecordIfPipelineReady } from "./leadCreate";
-import { saveFile } from "./storage";
+import { saveFile, shareableFileUrl } from "./storage";
 import { resolveTenantActor } from "./tenantActor";
 import { currentTenantScope } from "./tenantScope";
 import { DerivedCredentialCache } from "./derivedCredentialCache";
@@ -28,7 +28,7 @@ const OUTBOUND_TIMEOUT_MS = 15_000;
 /** Largest inbound DM attachment we will pull into memory. */
 const ATTACHMENT_MAX_BYTES = 20 * 1024 * 1024;
 
-export type DmPlatform = "messenger" | "instagram";
+export type DmPlatform = "messenger" | "instagram" | "x";
 
 /** The tenant a Meta page-token lookup should prefer, or null (global). */
 function ambientTenantId(): string | null {
@@ -103,16 +103,28 @@ export type MetaSendResult = { ok: boolean; error?: string; providerMessageId?: 
  */
 async function postToSendApi(
   message: unknown,
-  recipientId: string,
+  /**
+   * A person, or a COMMENT.
+   *
+   * `{ comment_id }` is Meta's private-reply form: it sends one direct message
+   * to whoever wrote that comment, without us ever knowing their messaging id —
+   * which is the only way to reach a commenter at all, since a commenter's
+   * Facebook id is not their Messenger id. `messaging_type` is omitted for it,
+   * because a private reply is not a reply within an existing thread; it is what
+   * OPENS one.
+   */
+  recipientId: string | { comment_id: string },
   humanise: (message: string) => string = (message) => message,
 ): Promise<MetaSendResult> {
   const token = await getPageToken();
   if (!token) return { ok: false, error: "Meta page token is not configured (Settings → Integrations)." };
+  const privateReply = typeof recipientId !== "string";
+  const recipient = privateReply ? recipientId : { id: recipientId };
   const res = await fetch(`${GRAPH}/me/messages?access_token=${encodeURIComponent(token)}`, {
     signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ recipient: { id: recipientId }, messaging_type: "RESPONSE", message }),
+    body: JSON.stringify({ recipient, ...(privateReply ? {} : { messaging_type: "RESPONSE" }), message }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => null);
@@ -145,6 +157,93 @@ export async function sendDirectMessage(
   return postToSendApi({ text }, recipientId, humaniseSendError);
 }
 
+/**
+ * Reply privately to a public comment — the one move that turns a comment into
+ * a customer.
+ *
+ * Meta allows exactly ONE direct message in response to a given comment, within
+ * SEVEN DAYS of it being written, and text only. After that single message the
+ * thread is an ordinary DM conversation with the usual 24-hour service window,
+ * so this is what converts "how much?" under an ad into a real conversation in
+ * the inbox — against a person we can then actually identify.
+ *
+ * The limits are Meta's and are not negotiable, so the caller must treat a
+ * refusal as final rather than retrying: a second attempt on the same comment
+ * will always fail.
+ */
+export async function sendPrivateReplyToComment(commentId: string, text: string): Promise<MetaSendResult> {
+  return postToSendApi({ text }, { comment_id: commentId }, humanisePrivateReplyError);
+}
+
+/**
+ * Reply to a comment PUBLICLY, under the post, where everyone can see it.
+ *
+ * The other half of answering a commenter. A private reply reaches one person
+ * once; a public reply answers the question for everybody still reading, which
+ * on an ad is usually the larger audience. Both are worth having, and they are
+ * not substitutes.
+ *
+ * ── THIS NEEDS A PERMISSION THE APP DOES NOT HAVE ───────────────────────────
+ *
+ * Writing a comment requires `pages_manage_engagement`. Reading comments needs
+ * only `pages_read_engagement`, and receiving the webhook only
+ * `pages_manage_metadata` — both of which are already granted, which is why
+ * ingestion and private replies work today and this does not.
+ *
+ * Until it is granted, Meta refuses this with a permissions error. That refusal
+ * is translated below into the specific thing somebody has to do about it,
+ * rather than surfacing Meta's wording, because "(#200) Permissions error" tells
+ * nobody which permission or where to get it.
+ */
+export async function sendPublicCommentReply(commentId: string, message: string): Promise<MetaSendResult> {
+  const token = await getPageToken();
+  if (!token) return { ok: false, error: "Meta page token is not configured (Settings → Integrations)." };
+  const res = await fetch(
+    `${GRAPH}/${encodeURIComponent(commentId)}/comments?access_token=${encodeURIComponent(token)}`,
+    {
+      signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message }),
+    },
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => null);
+    return { ok: false, error: humanisePublicReplyError(err?.error?.message ?? `Graph API error ${res.status}`) };
+  }
+  const accepted = await res.json().catch(() => null);
+  return { ok: true, providerMessageId: typeof accepted?.id === "string" ? accepted.id : undefined };
+}
+
+/** Meta's public-reply refusals, named so somebody can act on them. */
+function humanisePublicReplyError(message: string): string {
+  if (/permission|#200|OAuth|scope/i.test(message)) {
+    return (
+      "Meta has not granted this app permission to write comments. Add " +
+      "pages_manage_engagement to the Denago CRM app (it needs App Review) and " +
+      "reconnect the Page. Replying privately works without it."
+    );
+  }
+  if (/deleted|does not exist|Unsupported get request|invalid/i.test(message)) {
+    return "That comment no longer exists on Facebook — it may have been deleted or hidden.";
+  }
+  return message;
+}
+
+/** Meta's private-reply refusals, in words that say what to do instead. */
+function humanisePrivateReplyError(message: string): string {
+  if (/already|duplicate|one message/i.test(message)) {
+    return "Meta allows only one private reply per comment, and one has already been sent. Reply publicly instead.";
+  }
+  if (/7|seven|expired|too old/i.test(message)) {
+    return "This comment is more than 7 days old, which is Meta's limit for a private reply. Reply publicly instead.";
+  }
+  if (/permission|OAuth/i.test(message)) {
+    return `Meta has not granted the messaging permission needed to reply privately: ${message}`;
+  }
+  return message;
+}
+
 /** Sends a DM with tappable quick-reply chips (menu options). */
 export async function sendDirectQuickReplies(
   platform: DmPlatform,
@@ -173,7 +272,8 @@ export async function sendDirectAttachment(
   attachment: { type: "image" | "audio" | "video" | "file"; url: string }
 ): Promise<MetaSendResult> {
   return postToSendApi(
-    { attachment: { type: attachment.type, payload: { url: attachment.url, is_reusable: false } } },
+    // Meta downloads the file itself: a private file gets a short-lived signed link.
+    { attachment: { type: attachment.type, payload: { url: await shareableFileUrl(attachment.url), is_reusable: false } } },
     recipientId,
     humaniseSendError,
   );
@@ -237,6 +337,19 @@ async function persistAttachment(
 }
 
 async function fetchProfileName(platform: DmPlatform, userId: string): Promise<string | null> {
+  if (platform === "x") {
+    const token = await resolveTenantCredential(ambientTenantId(), "X_ACCESS_TOKEN");
+    if (!token) return null;
+    try {
+      const res = await fetch(`https://api.x.com/2/users/${encodeURIComponent(userId)}`, {
+        headers: { Authorization: `Bearer ${token}` }, cache: "no-store",
+        signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
+      });
+      if (!res.ok) return null;
+      const json = await res.json();
+      return json.data?.name ?? json.data?.username ?? null;
+    } catch { return null; }
+  }
   const token = await getPageToken();
   if (!token) return null;
   try {
@@ -271,12 +384,19 @@ export async function recordInboundDm(
   /** The provider's message id (mid), so a redelivery reuses these rows. */
   providerMessageId?: string,
 ) {
-  const idField = platform === "instagram" ? "instagramId" : "messengerPsid";
-  let contact = await prisma.contact.findFirst({ where: { [idField]: senderId } });
+  const idField = platform === "instagram" ? "instagramId" : platform === "x" ? "xUserId" : "messengerPsid";
+  let contact = await prisma.contact.findFirst({
+    where: {
+      [idField]: senderId,
+      // X user ids are global to X, not page-scoped like Meta PSIDs. Bind the
+      // lookup explicitly even while ORM enforcement is dormant.
+      ...(platform === "x" ? { tenantId: writeTenantId() ?? DEFAULT_TENANT_ID } : {}),
+    },
+  });
 
   if (!contact) {
     const profileName = await fetchProfileName(platform, senderId);
-    const label = platform === "instagram" ? "Instagram" : "Messenger";
+    const label = platform === "instagram" ? "Instagram" : platform === "x" ? "X" : "Messenger";
     const [firstName, ...rest] = (profileName ?? `${label} user`).split(/\s+/);
     contact = await prisma.contact.create({
       data: {
@@ -284,6 +404,7 @@ export async function recordInboundDm(
         lastName: rest.join(" ") || null,
         source: platform,
         [idField]: senderId,
+        ...(platform === "x" ? { tenantId: writeTenantId() ?? DEFAULT_TENANT_ID } : {}),
         notes: profileName ? null : `Created from an inbound ${label} DM — name not yet available.`,
       },
     });
@@ -309,7 +430,7 @@ export async function recordInboundDm(
       // `lead_created` automations and raised no "New lead" push, and — because
       // it never set `position` while topPosition hands out DECREASING numbers —
       // it landed underneath every lead that came in through the web form.
-      const label = platform === "instagram" ? "Instagram" : "Facebook";
+      const label = platform === "instagram" ? "Instagram" : platform === "x" ? "X" : "Facebook";
       const who = `${contact.firstName}${contact.lastName ? ` ${contact.lastName}` : ""}`;
       const title = `${label} ad enquiry — ${who}`;
       // …IfPipelineReady keeps the old `if (firstStage)` guard: with no pipeline
@@ -317,7 +438,7 @@ export async function recordInboundDm(
       const lead = await createLeadRecordIfPipelineReady({
         title,
         name: who,
-        source: platform === "instagram" ? "instagram" : "facebook",
+        source: platform === "instagram" ? "instagram" : platform === "x" ? "x" : "facebook",
         contactId: contact.id,
         notes: [
           "Started a DM conversation from an ad.",

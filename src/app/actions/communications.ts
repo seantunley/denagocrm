@@ -19,6 +19,7 @@ import {
 // outside SOCIAL_CHANNELS (e.g. "note" or "email") must be rejected before it
 // can bulk-edit non-inbox records.
 import { isSocialChannel } from "@/lib/socialChannels";
+import { withActingStaffScope } from "@/lib/actingScope";
 
 async function assertCommunicationAccess(
   user: PermissionUser,
@@ -37,111 +38,115 @@ async function assertCommunicationAccess(
 }
 
 export async function addCommunication(formData: FormData) {
-  // Write grade. This creates a Communication (and can upload an image) against a
-  // contact or lead; it was gated on the VIEW list, so contacts.view_owned alone
-  // was enough to write to another team's record timeline.
-  const user = await requireAnyPermission(...CUSTOMER_RECORD_WRITE_PERMISSIONS);
-  const str = (k: string) => {
-    const v = String(formData.get(k) ?? "").trim();
-    return v === "" ? null : v;
-  };
-  const body = String(formData.get("body") ?? "").trim();
-  const file = formData.get("image");
-  const hasFile =
-    file &&
-    typeof file === "object" &&
-    (file as File).size > 0 &&
-    (file as File).size <= 4 * 1024 * 1024;
-  if (!body && !hasFile) return;
+  return withActingStaffScope(async () => {
+    // Write grade. This creates a Communication (and can upload an image) against a
+    // contact or lead; it was gated on the VIEW list, so contacts.view_owned alone
+    // was enough to write to another team's record timeline.
+    const user = await requireAnyPermission(...CUSTOMER_RECORD_WRITE_PERMISSIONS);
+    const str = (k: string) => {
+      const v = String(formData.get(k) ?? "").trim();
+      return v === "" ? null : v;
+    };
+    const body = String(formData.get("body") ?? "").trim();
+    const file = formData.get("image");
+    const hasFile =
+      file &&
+      typeof file === "object" &&
+      (file as File).size > 0 &&
+      (file as File).size <= 4 * 1024 * 1024;
+    if (!body && !hasFile) return;
 
-  // Access-check the client-supplied links BEFORE writing: without this a user
-  // could attach a communication to any contact/lead id they cannot otherwise
-  // see. Each supplied id must be individually accessible (owners pass through).
-  const contactId = str("contactId");
-  const leadId = str("leadId");
-  if (contactId && !(await canAccessContact(user, contactId)))
-    throw new Error("Contact access denied");
-  if (leadId && !(await canAccessLead(user, leadId)))
-    throw new Error("Lead access denied");
+    // Access-check the client-supplied links BEFORE writing: without this a user
+    // could attach a communication to any contact/lead id they cannot otherwise
+    // see. Each supplied id must be individually accessible (owners pass through).
+    const contactId = str("contactId");
+    const leadId = str("leadId");
+    if (contactId && !(await canAccessContact(user, contactId)))
+      throw new Error("Contact access denied");
+    if (leadId && !(await canAccessLead(user, leadId)))
+      throw new Error("Lead access denied");
 
-  // ONE owner for the row and its image, resolved once. The attachment belongs to
-  // the customer record the note is filed against, exactly as the Communication
-  // does — a note's photo cannot belong to a different workspace from the note.
-  //
-  // The upload MOVED to here, after the access checks. It used to run before them,
-  // so an unauthorised caller wrote a blob and only then was refused: an orphan
-  // object, written by someone with no right to the record it was aimed at. It
-  // also had to move to be namespaced at all — the owner is not known until the
-  // links are resolved, and resolving it from the session instead is the defect
-  // customerRecordTenantId exists to prevent.
-  const tenantId = await customerRecordTenantId({ contactId, leadId });
+    // ONE owner for the row and its image, resolved once. The attachment belongs to
+    // the customer record the note is filed against, exactly as the Communication
+    // does — a note's photo cannot belong to a different workspace from the note.
+    //
+    // The upload MOVED to here, after the access checks. It used to run before them,
+    // so an unauthorised caller wrote a blob and only then was refused: an orphan
+    // object, written by someone with no right to the record it was aimed at. It
+    // also had to move to be namespaced at all — the owner is not known until the
+    // links are resolved, and resolving it from the session instead is the defect
+    // customerRecordTenantId exists to prevent.
+    const tenantId = await customerRecordTenantId({ contactId, leadId });
 
-  let attachmentUrl: string | null = null;
-  if (hasFile && (file as File).type.startsWith("image/")) {
-    const { saveFile } = await import("@/lib/storage");
-    const f = file as File;
-    attachmentUrl = await saveFile(
-      Buffer.from(await f.arrayBuffer()),
-      f.name || "note.png",
-      f.type,
-      tenantId,
-    );
-  }
+    let attachmentUrl: string | null = null;
+    if (hasFile && (file as File).type.startsWith("image/")) {
+      const { saveFile } = await import("@/lib/storage");
+      const f = file as File;
+      attachmentUrl = await saveFile(
+        Buffer.from(await f.arrayBuffer()),
+        f.name || "note.png",
+        f.type,
+        tenantId,
+      );
+    }
 
-  const occurredAtRaw = str("occurredAt");
-  const communication = await prisma.communication.create({
-    data: {
-      type: str("type") ?? "note",
-      direction: str("direction"),
-      subject: str("subject"),
-      body: body || "🖼 Image",
-      attachmentUrl,
-      attachmentType: attachmentUrl ? "image" : null,
-      occurredAt: occurredAtRaw ? new Date(occurredAtRaw) : new Date(),
-      contactId,
-      leadId,
-      userId: user.id,
-      // Communication carries composite tenant foreign keys to Contact and Lead, so
-      // the owner is the customer record's, not the session's. Without this the row
-      // lands unowned while stamping is dormant and disappears at the flip.
-      // Resolved above, so the row and its attachment cannot disagree.
-      tenantId,
-    },
+    const occurredAtRaw = str("occurredAt");
+    const communication = await prisma.communication.create({
+      data: {
+        type: str("type") ?? "note",
+        direction: str("direction"),
+        subject: str("subject"),
+        body: body || "🖼 Image",
+        attachmentUrl,
+        attachmentType: attachmentUrl ? "image" : null,
+        occurredAt: occurredAtRaw ? new Date(occurredAtRaw) : new Date(),
+        contactId,
+        leadId,
+        userId: user.id,
+        // Communication carries composite tenant foreign keys to Contact and Lead, so
+        // the owner is the customer record's, not the session's. Without this the row
+        // lands unowned while stamping is dormant and disappears at the flip.
+        // Resolved above, so the row and its attachment cannot disagree.
+        tenantId,
+      },
+    });
+
+    if (formData.get("pin") === "on") {
+      await toggleTimelinePin("communication", communication.id, user.id);
+    }
+
+    revalidatePath(String(formData.get("revalidate") ?? "/"));
   });
-
-  if (formData.get("pin") === "on") {
-    await toggleTimelinePin("communication", communication.id, user.id);
-  }
-
-  revalidatePath(String(formData.get("revalidate") ?? "/"));
 }
 
 export async function toggleCommunicationPin(id: string, path: string) {
-  // Write grade — pinning writes a TimelinePin row and an audit entry. Its
-  // siblings in timelinePins.ts already demand contacts.edit / leads.edit to pin
-  // on the SAME timeline; a view permission here was the odd one out.
-  const user = await requireAnyPermission(...CUSTOMER_RECORD_WRITE_PERMISSIONS);
-  const communication = await prisma.communication.findUniqueOrThrow({
-    where: { id },
-    select: {
-      contactId: true,
-      leadId: true,
-      type: true,
-      body: true,
-    },
-  });
-  await assertCommunicationAccess(user, communication);
+  return withActingStaffScope(async () => {
+    // Write grade — pinning writes a TimelinePin row and an audit entry. Its
+    // siblings in timelinePins.ts already demand contacts.edit / leads.edit to pin
+    // on the SAME timeline; a view permission here was the odd one out.
+    const user = await requireAnyPermission(...CUSTOMER_RECORD_WRITE_PERMISSIONS);
+    const communication = await prisma.communication.findUniqueOrThrow({
+      where: { id },
+      select: {
+        contactId: true,
+        leadId: true,
+        type: true,
+        body: true,
+      },
+    });
+    await assertCommunicationAccess(user, communication);
 
-  const result = await toggleTimelinePin("communication", id, user.id);
-  const { logAudit } = await import("@/lib/audit");
-  await logAudit({
-    action: result.pinned ? "communication.pinned" : "communication.unpinned",
-    summary: `${result.pinned ? "Pinned" : "Unpinned"} ${communication.type} entry: “${communication.body.slice(0, 80)}${communication.body.length > 80 ? "…" : ""}”`,
-    contactId: communication.contactId,
-    leadId: communication.leadId,
-    user,
+    const result = await toggleTimelinePin("communication", id, user.id);
+    const { logAudit } = await import("@/lib/audit");
+    await logAudit({
+      action: result.pinned ? "communication.pinned" : "communication.unpinned",
+      summary: `${result.pinned ? "Pinned" : "Unpinned"} ${communication.type} entry: “${communication.body.slice(0, 80)}${communication.body.length > 80 ? "…" : ""}”`,
+      contactId: communication.contactId,
+      leadId: communication.leadId,
+      user,
+    });
+    revalidatePath(path);
   });
-  revalidatePath(path);
 }
 
 /**
@@ -154,24 +159,26 @@ export async function markThreadRead(
   leadId: string | null,
   channel: string,
 ) {
-  const user = await requireAnyPermission("inbox.view", "inbox.reply");
-  if (!contactId && !leadId) return;
-  if (!isSocialChannel(channel)) throw new Error("Unsupported channel");
-  if (contactId && !(await canAccessContact(user, contactId)))
-    throw new Error("Customer access denied");
-  if (leadId && !(await canAccessLead(user, leadId)))
-    throw new Error("Lead access denied");
-  await prisma.communication.updateMany({
-    where: {
-      type: channel,
-      direction: "inbound",
-      readAt: null,
-      ...(contactId ? { contactId } : { leadId }),
-    },
-    data: { readAt: new Date() },
+  return withActingStaffScope(async () => {
+    const user = await requireAnyPermission("inbox.view", "inbox.reply");
+    if (!contactId && !leadId) return;
+    if (!isSocialChannel(channel)) throw new Error("Unsupported channel");
+    if (contactId && !(await canAccessContact(user, contactId)))
+      throw new Error("Customer access denied");
+    if (leadId && !(await canAccessLead(user, leadId)))
+      throw new Error("Lead access denied");
+    await prisma.communication.updateMany({
+      where: {
+        type: channel,
+        direction: "inbound",
+        readAt: null,
+        ...(contactId ? { contactId } : { leadId }),
+      },
+      data: { readAt: new Date() },
+    });
+    revalidatePath("/inbox");
+    revalidatePath("/messages");
   });
-  revalidatePath("/inbox");
-  revalidatePath("/messages");
 }
 
 /**
@@ -186,22 +193,24 @@ export async function setThreadArchived(
   channel: string,
   archived: boolean,
 ) {
-  const user = await requirePermission("inbox.reply");
-  if (!contactId && !leadId) return;
-  if (!isSocialChannel(channel)) throw new Error("Unsupported channel");
-  if (contactId && !(await canAccessContact(user, contactId)))
-    throw new Error("Customer access denied");
-  if (leadId && !(await canAccessLead(user, leadId)))
-    throw new Error("Lead access denied");
-  await prisma.communication.updateMany({
-    where: {
-      type: channel,
-      ...(contactId ? { contactId } : { leadId }),
-    },
-    data: { archivedAt: archived ? new Date() : null },
+  return withActingStaffScope(async () => {
+    const user = await requirePermission("inbox.reply");
+    if (!contactId && !leadId) return;
+    if (!isSocialChannel(channel)) throw new Error("Unsupported channel");
+    if (contactId && !(await canAccessContact(user, contactId)))
+      throw new Error("Customer access denied");
+    if (leadId && !(await canAccessLead(user, leadId)))
+      throw new Error("Lead access denied");
+    await prisma.communication.updateMany({
+      where: {
+        type: channel,
+        ...(contactId ? { contactId } : { leadId }),
+      },
+      data: { archivedAt: archived ? new Date() : null },
+    });
+    revalidatePath("/inbox");
+    revalidatePath("/messages");
   });
-  revalidatePath("/inbox");
-  revalidatePath("/messages");
 }
 
 export async function deleteCommunication(
@@ -209,25 +218,27 @@ export async function deleteCommunication(
   path: string,
   formData: FormData,
 ) {
-  // Write grade — this is a hard delete of a customer's contact history. A view
-  // permission must never be able to destroy the record it can only look at.
-  const user = await requireAnyPermission(...CUSTOMER_RECORD_WRITE_PERMISSIONS);
-  const reason =
-    String(formData.get("reason") ?? "").trim() || "No reason given";
-  const communication = await prisma.communication.findUniqueOrThrow({
-    where: { id },
-    select: { contactId: true, leadId: true },
+  return withActingStaffScope(async () => {
+    // Write grade — this is a hard delete of a customer's contact history. A view
+    // permission must never be able to destroy the record it can only look at.
+    const user = await requireAnyPermission(...CUSTOMER_RECORD_WRITE_PERMISSIONS);
+    const reason =
+      String(formData.get("reason") ?? "").trim() || "No reason given";
+    const communication = await prisma.communication.findUniqueOrThrow({
+      where: { id },
+      select: { contactId: true, leadId: true },
+    });
+    await assertCommunicationAccess(user, communication);
+    await removeTimelinePin("communication", id);
+    const comm = await prisma.communication.delete({ where: { id } });
+    const { logAudit } = await import("@/lib/audit");
+    await logAudit({
+      action: "communication.deleted",
+      summary: `Deleted ${comm.type} entry (“${comm.body.slice(0, 80)}${comm.body.length > 80 ? "…" : ""}”) — ${reason}`,
+      contactId: comm.contactId,
+      leadId: comm.leadId,
+      user,
+    });
+    revalidatePath(path);
   });
-  await assertCommunicationAccess(user, communication);
-  await removeTimelinePin("communication", id);
-  const comm = await prisma.communication.delete({ where: { id } });
-  const { logAudit } = await import("@/lib/audit");
-  await logAudit({
-    action: "communication.deleted",
-    summary: `Deleted ${comm.type} entry (“${comm.body.slice(0, 80)}${comm.body.length > 80 ? "…" : ""}”) — ${reason}`,
-    contactId: comm.contactId,
-    leadId: comm.leadId,
-    user,
-  });
-  revalidatePath(path);
 }

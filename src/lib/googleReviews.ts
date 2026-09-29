@@ -75,7 +75,7 @@ export async function syncGoogleReviews(): Promise<number> {
 
   // Reviews change slowly and this Places call bills at the expensive tier —
   // sync at most every 6 hours (~120 calls/month, inside the free allowance)
-  // even though the cron fires every 15 minutes.
+  // even though the cron fires every 30 minutes.
   const last = await getSetting("GOOGLE_REVIEWS_LAST_SYNC");
   if (last && Date.now() - new Date(last).getTime() < 6 * 60 * 60 * 1000) return 0;
   // Multi-tenancy: putSetting stamps the owning tenant. Called from inside

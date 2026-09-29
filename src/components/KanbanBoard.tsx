@@ -46,6 +46,7 @@ import {
 import { toast } from "sonner";
 import LocationAutocomplete from "@/components/LocationAutocomplete";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import ModalPortal from "@/components/ui/modal-portal";
 import {
   assignLead,
   convertLeadToContact,
@@ -1449,6 +1450,7 @@ function NewQuoteDialog({
 
   if (!pending) return null;
   return (
+    <ModalPortal>
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
       <div className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl dark:bg-slate-900">
         <h2 className="text-base font-semibold">Raise a quote</h2>
@@ -1469,6 +1471,7 @@ function NewQuoteDialog({
         </div>
       </div>
     </div>
+    </ModalPortal>
   );
 }
 

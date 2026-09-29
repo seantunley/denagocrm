@@ -43,7 +43,7 @@ export const dashboardArticles: HelpArticle[] = [
         ["Month targets", "Progress rings against this month's targets."],
         ["Agenda", "Your team's planned activities for today and tomorrow."],
         ["Out for signature", "Quotes sent for signature and who they are waiting on. Hidden when nothing is out."],
-        ["Needs attention", "Open leads with no next step, and quotes left unsigned."],
+        ["Needs attention", "Open leads with a customer waiting, an overdue task, no next step, an expiring quote or too long in their current stage."],
         ["Latest activity", "New leads, logged conversations and quote events, newest first."],
         ["Service stats", "Open job cards, services completed, vehicles due and fleet size."],
         ["Workshop agenda", "Workshop activities booked for today and tomorrow."],

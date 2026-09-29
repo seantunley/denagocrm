@@ -3,6 +3,7 @@ import { prisma } from "./db";
 import { withStaffConversationScope } from "./actingScope";
 import { withBotConversationWrite } from "./botTenant";
 import { pauseBotSessionTx, releaseBotSessionTx } from "./botSessionStore";
+import { HUMAN_RESPONSIBILITY_HOURS } from "./botOwnership";
 
 export type BotOwnedChannel = "whatsapp" | "messenger" | "instagram";
 export type BotConversationIdentity = { channel: BotOwnedChannel; key: string };
@@ -82,7 +83,7 @@ export async function botIdentityForConversation(conversationId: string): Promis
  */
 export async function pauseBotConversation(
   identity: BotConversationIdentity,
-  hours = 7 * 24,
+  hours = HUMAN_RESPONSIBILITY_HOURS,
 ): Promise<void> {
   await withStaffConversationScope(() =>
     withBotConversationWrite(async (tx, tenantId) => {

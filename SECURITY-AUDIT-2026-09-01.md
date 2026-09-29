@@ -1,0 +1,321 @@
+# Security audit — DenagoCRM, 2026-09-01
+
+Conducted as an external review: nothing was accepted because a comment claimed
+it, only because the code or a live response demonstrated it. **Read-only
+throughout — no writes to production, no test accounts created, no
+authenticated session used.**
+
+---
+
+## Scope and method
+
+| | |
+|---|---|
+| API routes examined | 56 (every `route.ts` under `src/app/api`) |
+| Server Actions examined | 505 (every `export async function` under `src/app/actions`) |
+| Live black-box probes | 22 unauthenticated requests against `crm.denagocpt.co.za` |
+| Static analysis | injection sinks, HTML sinks, auth gates, crypto usage, upload/serve paths |
+| Dependency scan | `npm audit` |
+
+**What I did NOT do**, so the gaps are stated rather than implied:
+
+- No authenticated testing. I hold no credentials and would not create any in
+  production, so **role-to-role authorization was reviewed statically, not
+  exercised**. A permission that is checked with the wrong constant would pass
+  this audit.
+- No cross-tenant runtime probing (would require two real tenant sessions).
+- The two-tenant isolation harness was not run — it needs a scratch database.
+- No load/DoS testing against production.
+
+---
+
+## Status: all findings resolved (same day)
+
+| | finding | outcome |
+|---|---|---|
+| F1 | "Spoofable rate-limit identity" | **PREMISE WITHDRAWN — I was wrong.** Not exploitable on Vercel. Replaced with an explicit trust boundary; see below |
+| F2 | Two unsandboxed `srcDoc` iframes | **Fixed** — `sandbox=""` on both |
+| F3 | Login timing oracle | **Fixed, then fixed again** — decoy hash, plus the two conditional DB round trips review caught; see below |
+| F4 | Upload accepted any content type | **Fixed** — allow-list added |
+| F5 | 3 HIGH advisories (Prisma **CLI**) | **Not reachable in production**; clears with #611 |
+| F6a | `domainProof` keyed on `SESSION_SECRET` | **Fixed** — HKDF-derived key |
+| F6b | `readFile` traversal guard | **RETRACTED — I was wrong**, see below |
+
+Regression tests accompany every fix, and each was **mutation-tested**: it fails
+when its fix is reverted. Two of the original findings did not survive review —
+both corrections are recorded below rather than quietly dropped.
+
+### Addendum: OWASP ZAP scan, same day — triage
+
+An independent ZAP 2.17.0 scan of `/login` was run afterwards: **0 High**, 4
+Medium, 1 Low, 6 Informational. Triaged individually rather than accepted or
+dismissed wholesale — roughly half were real.
+
+| ZAP alert | verdict |
+|---|---|
+| **CSP: Wildcard Directive** (Med ×5) | **REAL** — resource directives are report-only. Fixed the *collection* half; promotion now has evidence. See below. |
+| **X-Powered-By** (Low ×2) | **REAL** — fixed, `poweredByHeader: false`. |
+| **Absence of Anti-CSRF Tokens** (Med ×2) | **False positive** — ZAP looks for named token fields and cannot see Next's Server Action protection. Verified in `node_modules`: the action handler enforces `isCsrfOriginAllowed` / origin-vs-host and rejects with *"Invalid Server Actions request"*. Second control: the session cookie is `SameSite=Lax`, so a cross-site POST carries no session. |
+| **Cross-Domain Misconfiguration** (Med ×5) | **False positive** — `ACAO: *` appears only on `/_next/static/*`, `/icons/*`, `robots.txt`: public files by definition, no credentials. Verified that API routes send **no** ACAO header at all. |
+| **CSP: style-src unsafe-inline** (Med ×5) | **Known and accepted**, with the reasoning already in `csp.ts`: ~205 React `style={{…}}` props across 41 files, and a nonce cannot cover a style *attribute*. CSS exfiltration is a far smaller prize than script execution, which stays nonce-gated. |
+| **User Controllable HTML Attribute** (Info ×3) | **False positive** — the flagged values are Next's own `$ACTION_1:0` / `$ACTION_KEY` hidden fields, rendered by React (which escapes attribute values). |
+| Cache-control, Retrieved from Cache (Info) | Non-issues — `manifest.webmanifest` and `robots.txt`, neither sensitive. |
+| Session Management Response (Info) | The passkey challenge cookie: `Secure; HttpOnly; SameSite=lax; Max-Age=300`. Correct. |
+
+**The finding worth having:** the Report-Only policy had **no `report-uri`** — so
+for months it reported to *nobody*, writing a console line per visitor and
+discarding it. The question it exists to answer ("would enforcing the resource
+directives break the site?") had no data behind it, and this app has already
+broken once by enforcing them on inventory alone (recorded in `csp.ts`).
+
+Fixed by collecting first: `/api/csp-report` now receives both wire formats
+(`report-uri`'s `{"csp-report":…}` and `report-to`'s array), files each
+violation in the System Log, and is bounded as a public write endpoint — POST
+only, byte cap before `JSON.parse`, per-IP limiting, fixed truncated fields,
+always 204. Verified live against the dev database: both formats collected,
+malformed and oversized bodies produced nothing, `GET` → 405.
+
+**Promotion of the resource directives to enforced is deliberately NOT in this
+change.** That is the second half, and it should be done on a week of real
+report data rather than on nerve.
+
+### F1's premise was wrong — the correction
+
+Peer review of the fix PR checked Vercel's documentation, which says the
+opposite of what I assumed:
+
+> *"If you are trying to use Vercel behind a proxy, we currently overwrite the
+> `X-Forwarded-For` header and **do not forward external IPs**. This restriction
+> is in place to prevent IP spoofing."*
+
+So on this deployment a client-supplied `X-Forwarded-For` never reaches the
+application, the original `split(",")[0]` was **not** spoofable, and there was
+no password-spraying exposure. **F1 was not a vulnerability.** I flagged the
+platform behaviour as unverified in the audit and then wrote the PR as though it
+were settled; the reviewer settled it, against me.
+
+My first fix was also wrong in the other direction. *"Take the rightmost entry"*
+is not a general rule: it names the nearest proxy rather than the client, and
+where no trusted proxy exists the caller supplies every entry, so rightmost is
+exactly as forged as leftmost. Encoding that in a security audit would have
+institutionalised a bad proxy-trust model.
+
+**What replaced it.** Trust is now a property of the *deployment*, not of the
+parsing:
+
+1. `x-vercel-forwarded-for` — platform-set; per Vercel's docs, the variant that
+   survives when another proxy sits on top.
+2. `x-forwarded-for`, **leftmost**, but only when behind a trusted proxy
+   (`VERCEL`, or `TRUST_PROXY_HEADERS=true` for self-hosting) — because that
+   proxy replaced the header, so its first entry *is* the client.
+3. Otherwise `unknown`: a single shared bucket, rather than letting a caller
+   mint unlimited buckets from headers they control.
+
+Net effect on production: unchanged behaviour, correct reasoning, and it no
+longer silently trusts forwarded headers if this app is ever deployed anywhere
+but Vercel. Noted for the future: Vercel's enterprise *Trusted Proxy* feature
+makes a customer-supplied `X-Forwarded-For` authoritative — enabling it would
+make the leftmost entry caller-controlled again.
+
+### F3 was incomplete — the correction
+
+The same review found the F3 fix stopped short of its own claim. Removing
+bcrypt's ~100 ms difference left two smaller ones: `getUserSecurityState` (a
+`SELECT`) and `recordFailedLogin` (an `UPDATE`) both ran **only when the email
+existed**. Two extra round trips on one path and none on the other is the same
+class of leak, just quieter — and my regression test only checked that
+`bcrypt.compare` always ran, so it could not have caught this.
+
+Both now run on both paths against a sentinel id that matches no row, and the
+test asserts the **shape of the whole path** rather than one call. Honest
+residual, stated rather than glossed: an `UPDATE` touching zero rows still skips
+the heap write and WAL record, so the paths are very close rather than provably
+equal — a fraction of one round trip, against an endpoint rate-limited per
+account *and* per IP.
+
+### F6b was a false finding — the correction
+
+I reported that `storage.readFile`'s local branch relied on an invariant rather
+than a check at the sink. **That was wrong, and I should have traced one call
+deeper before writing it.** `readFile` guards with `isBlobRef(ref)`, and
+`isBlobRef` is `classifyRef(ref) === "blob"` — `classifyRef` **throws** on
+anything that is neither a trusted blob ref nor a bare filename. The guard is at
+the sink; it is just reached through a predicate.
+
+Demonstrated rather than re-reasoned:
+
+```
+blocked: "../../etc/passwd"  -> Refusing an unrecognised storage reference
+blocked: "/etc/passwd"       -> Refusing an unrecognised storage reference
+blocked: "a/b.txt"           -> Refusing an unrecognised storage reference
+blocked: "x .jpg"       -> Refusing an unrecognised storage reference
+```
+
+No change was made to `storage.ts`.
+
+---
+
+## Findings
+
+Six issues. **None is a remote unauthenticated compromise**, and none is
+currently leaking data. Ranked by what an attacker could actually do.
+
+### F1 · WITHDRAWN — rate-limit identity (was: "evadable by a spoofed header")
+
+`src/lib/rateLimit.ts` read `x-forwarded-for.split(",")[0]`. I reported that as
+client-controlled and therefore evadable for password spraying.
+
+**That was wrong for this deployment, and the correction is above.** Vercel
+overwrites `X-Forwarded-For` specifically to prevent spoofing, so the value the
+application saw was always platform-supplied. No exposure existed.
+
+What shipped instead is a correctness and portability change: an explicit,
+configured trust boundary (`VERCEL` / `TRUST_PROXY_HEADERS`), preferring
+`x-vercel-forwarded-for`, falling back to the leftmost `X-Forwarded-For` only
+behind a trusted proxy, and refusing to key a limit on forwarded headers at all
+when there is none. Severity: **none — hardening**.
+
+### F2 · LOW–MEDIUM — Two `srcDoc` iframes have no `sandbox`
+
+| file | content | audience |
+|---|---|---|
+| `src/app/(app)/campaigns/[id]/page.tsx:90` | `campaign.htmlBody` | staff, incl. owners |
+| `src/app/approvals/[token]/ApprovalSurface.tsx:38` | `renderRequestDocHtml(...)` | **external approvers**, public token |
+
+An iframe with `srcdoc` and no `sandbox` runs **in the parent's origin**.
+`campaign.htmlBody` is stored raw — `src/app/actions/campaigns.ts:109` takes
+`formData.get("htmlBody")`, applies merge variables, and stores it with **no
+sanitisation** — and there is no HTML sanitiser anywhere in `src/lib`.
+
+**Why this is not currently exploitable:** the enforced CSP is genuinely strong
+and `srcdoc` frames **inherit the parent's policy**:
+
+```
+script-src 'self' 'nonce-<per-request>' 'strict-dynamic'; object-src 'none'
+```
+
+Inline `<script>` and `onerror=` handlers carry no nonce, so they are blocked.
+Verified live on production, not just in config.
+
+**Why it is still worth fixing:** the entire control is *one* header. Any future
+`'unsafe-inline'`, any nonce-propagation bug, any browser that doesn't inherit,
+and a marketing-level user's stored HTML executes as a viewing **owner** —
+privilege escalation inside a tenant. `sandbox=""` costs one attribute and is a
+second, independent control. (The email-template preview added in #620 already
+sets it; these two predate it.)
+
+---
+
+### F3 · LOW — Login timing distinguishes "no such user" from "wrong password"
+
+`src/app/login/actions.ts:100`
+
+```ts
+const passwordOk = Boolean(user && security && !security.disabledAt && await bcrypt.compare(password, user.passwordHash));
+```
+
+JavaScript short-circuits: when `user` is null, **`bcrypt.compare` never runs**.
+bcrypt is deliberately slow, so "unknown email" returns in a fraction of the time
+of "known email, wrong password" — a user-enumeration oracle, despite the
+correctly generic `"Invalid email or password."` message.
+
+**Fix:** always spend the work. Compare against a fixed dummy hash when the user
+is absent, then discard the result.
+
+---
+
+### F4 · LOW — `library/upload` accepts any content type, 100 MB
+
+`src/app/api/library/upload/route.ts:23-24` sets `maximumSizeInBytes` and
+`addRandomSuffix` but **no `allowedContentTypes`** — unlike
+`photos/upload:159`, which allow-lists five image types.
+
+**Not stored XSS**, and that is worth saying clearly: every serving route
+allow-lists what may render inline (`files/[id]:32` — images and PDF only;
+**SVG correctly excluded**), forcing everything else to
+`application/octet-stream` + `attachment` + `nosniff`. So an uploaded `.html`
+downloads, it does not execute.
+
+The residual risk is storage abuse and malware distribution under a trusted
+domain, by an authenticated user with `library` permission. Consider an
+allow-list matching what the library is for.
+
+---
+
+### F5 · LOW — 3 HIGH advisories, all in the Prisma **CLI** chain
+
+`npm audit`: `deepmerge-ts` stack exhaustion → `@prisma/config` → `prisma`.
+
+Build/migrate-time only, on our own config files — **not reachable by a
+production request**, and `@prisma/client` (the runtime) is unaffected. Cleared
+by the Prisma 7 upgrade already parked in **#611**.
+
+---
+
+### F6 · INFO — Two hardening notes
+
+- **`domainProof` shares `SESSION_SECRET`** (`src/lib/domainCheck.ts`). The
+  public, unauthenticated `/api/brand/domain-check` returns
+  `HMAC(SESSION_SECRET, "domain-check:" + host)`. **I chased this hard as a
+  potential JWT-forgery oracle and it is safe**: the fixed `domain-check:`
+  prefix, `toLowerCase()`, and host normalisation mean the signed message can
+  never take the shape of a JWT signing input. Still, a *separate* key would
+  make that safety structural rather than dependent on the message format never
+  changing.
+- ~~**`storage.readFile`'s local branch** lacks a traversal guard at the sink.~~
+  **Retracted — see the correction above.** `isBlobRef` routes through
+  `classifyRef`, which throws on any ref that is not a trusted blob URL or a
+  bare filename. Traversal attempts are refused before `fs.readFile` is reached,
+  and I verified it by running them. No change made.
+
+---
+
+## What I tried to break and could not
+
+Recorded because a clean result is only informative if the attempt was real.
+
+**Every unauthenticated probe was correctly refused** — 12 protected API routes
+returned `401`, 5 protected pages `307`'d to the right login (staff → `/login`,
+platform → `/platform/login`):
+
+```
+/api/audit/export 401   /api/quick-create 401   /api/contacts/{id}/export 401
+/api/cron/journeys 401  /api/cron/bot-outbox 401  /api/files/{id} 401
+/api/library/1 401      /api/export/ads-conversions 401  /api/me/signature 401
+```
+
+| area | result |
+|---|---|
+| **SQL injection** | **Zero** `queryRawUnsafe` / `executeRawUnsafe` / `Prisma.raw` in `src/`. Every raw query is a tagged template, which parameterises `${}` by construction. |
+| **Authorization coverage** | All 505 server actions reach a gate. My first two scans produced 61 then 27 "ungated" hits — **every one was a false positive** from wrapper indirection (`requirePlatformOwner`, `contentContext`, `operationContext`, `withPhotoActionScope`) or a row-level helper (`requireActivityAccess`, `requireLeadAccess`). |
+| **Cron authentication** | One shared `isAuthorizedCron`: header-only (never query string), length-checked then `timingSafeEqual`, **fails closed when `CRON_SECRET` is unset**. |
+| **Webhooks** | Meta/WhatsApp/X verify HMAC signatures; Telegram compares its secret header with `secretEquals` (length + `timingSafeEqual`). All fail closed. |
+| **Session** | `jose` JWT; `httpOnly`, `sameSite=lax`, `secure` in production; idle **and** absolute expiry; a session version for revocation; **throws in production if `SESSION_SECRET` is missing or < 16 chars**. |
+| **Authentication** | bcrypt; per-account **and** per-IP limiting; uniform error text; TOTP, email OTP with expiry and attempt caps, and backup codes consumed by **compare-and-swap** (so one code cannot mint two sessions). |
+| **Signing tokens** | `crypto.randomBytes(28)` — 224 bits. Timing-safe comparison, OTP expiry and attempt limits. |
+| **Credential storage** | AES-256-GCM, fresh 12-byte IV per value, auth tag retained; **refuses to store plaintext in production** if the key is missing. |
+| **Portal (customer) access** | Ownership-scoped parameterised queries — `contactId = ANY($scope)`, joined through vehicle/quote/fleet. No IDOR found on documents or uploads. |
+| **File serving** | Inline allow-list (images + PDF), everything else `attachment` + `octet-stream` + `nosniff`. **SVG excluded** — the detail most implementations miss. |
+| **Live headers** | CSP with per-request nonce + `strict-dynamic`; HSTS `max-age=63072000; includeSubDomains; preload`; `nosniff`; `X-Frame-Options: SAMEORIGIN`; `Permissions-Policy` denying microphone and geolocation. |
+| **Database isolation** | RLS is **load-bearing**: production connects as `crm_app` (`NOBYPASSRLS`), 175 tables, 162 tenant-scoped, zero unpoliced, zero missing grants, no `TRUNCATE`. Confirmed live today. |
+
+---
+
+## Recommended order
+
+1. **F1** — one function, and it is the only finding with a plausible attack
+   (password spraying). Verify Vercel's header behaviour at the same time.
+2. **F2** — two attributes; removes the single-control dependency on CSP.
+3. **F3** — one dummy-hash comparison.
+4. **F4 / F5 / F6** — hygiene, no urgency; F5 rides along with **#611**.
+
+**Overall:** this is a well-defended application. The controls that are hardest
+to retrofit — parameterised SQL everywhere, a real nonce CSP, database-level RLS
+actually enforcing, fail-closed secret handling, an inline-render allow-list —
+are all present and verified working in production. The findings are a
+header-parsing bug and a defence-in-depth gap, not architectural weaknesses.
+
+The honest caveat remains the scope limit: **authenticated, role-to-role
+authorization was reviewed by reading, not by exercising.** If you want that
+covered, the next step is a session as a deliberately low-privileged user
+against a non-production database.

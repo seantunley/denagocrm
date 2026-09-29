@@ -2,11 +2,18 @@
 
 import { useState } from "react";
 import LocationAutocomplete from "@/components/LocationAutocomplete";
+import { useActivityTypes } from "@/components/ActivityTypesProvider";
+import { activityTypeLocation, pickableActivityTypes } from "@/lib/activityTypes";
 
 /**
- * Type selector + conditional location: test drives and meetings happen
- * somewhere, so the 📍 field appears (required for test drives). When
- * `followUpNote` is set (the create flow), picking "Follow-up" reveals a
+ * Type selector + conditional location.
+ *
+ * The 📍 field is driven by the TYPE'S OWN location rule rather than a hardcoded
+ * `test_drive || meeting` check — that check was why a workspace wanting to book
+ * a "Golf Day" had to call it a meeting to get an address field. A custom type
+ * declares whether it takes a location when it is created, in settings.
+ *
+ * When `followUpNote` is set (the create flow), picking "Follow-up" reveals a
  * REQUIRED note field so the rep records what the customer said they'd get back
  * to us about.
  */
@@ -24,8 +31,28 @@ export default function ActivityTypeFields({
   noteClass?: string;
 }) {
   const [type, setType] = useState(defaultType);
-  const needsLocation = type === "test_drive" || type === "meeting";
+  const types = useActivityTypes();
+  const locationRule = activityTypeLocation(types, type);
   const isFollowUp = type === "follow_up";
+
+  /*
+    Hidden types are filtered out, EXCEPT the one this activity already has —
+    otherwise opening the edit form on an activity whose type was since hidden
+    would show a <select> matching no option, and the browser would silently
+    select the first one. Saving would then change the type without anybody
+    touching it. Same reason the assignee select keeps a blank option.
+
+    Follow-up carries invariants (a required note + auto-pin) that only the
+    create flow enforces, so it is offered only when `followUpNote` is set. The
+    edit form omits that prop, so editing a task into a noteless/unpinned
+    follow-up is impossible.
+  */
+  const options = types.filter(
+    (option) =>
+      option.key === defaultType ||
+      (pickableActivityTypes(types).includes(option) &&
+        (option.key !== "follow_up" || followUpNote))
+  );
 
   return (
     <>
@@ -37,32 +64,22 @@ export default function ActivityTypeFields({
           value={type}
           onChange={(e) => setType(e.target.value)}
         >
-          <option value="call">📞 Call</option>
-          <option value="email">✉️ Email</option>
-          <option value="meeting">🤝 Meeting</option>
-          <option value="whatsapp">💬 WhatsApp</option>
-          <option value="test_drive">🚗 Test drive</option>
-          {/*
-            Follow-up carries invariants (a required note + auto-pin) that only
-            the create flow enforces, so it is offered only when `followUpNote`
-            is set. The edit form omits that prop, so editing a task into a
-            noteless/unpinned follow-up is impossible.
-          */}
-          {(followUpNote || defaultType === "follow_up") && (
-            <option value="follow_up">🔁 Follow-up</option>
-          )}
-          <option value="todo">☑️ To-do</option>
+          {options.map((option) => (
+            <option key={option.key} value={option.key}>
+              {option.emoji} {option.label}
+            </option>
+          ))}
         </select>
       </div>
-      {needsLocation && (
+      {locationRule !== "none" && (
         <div className={locationClass}>
           <label className="label">
-            📍 Location {type === "test_drive" ? "*" : "(optional)"}
+            📍 Location {locationRule === "required" ? "*" : "(optional)"}
           </label>
           <LocationAutocomplete
             name="location"
             className="input"
-            required={type === "test_drive"}
+            required={locationRule === "required"}
             defaultValue={defaultLocation}
             placeholder="Address, estate or Google Maps link"
           />

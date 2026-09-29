@@ -6,8 +6,10 @@ import { withActingTenantWrite } from "@/lib/actingScope";
 import { requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
-import { MAX_BLOB_BYTES, assertOwnedBlob } from "@/lib/storage";
+import { MAX_BLOB_BYTES, assertOwnedBlob, isLibraryUpload, libraryUploadPrefix } from "@/lib/storage";
 import { actingScopeClass, withActingStaffScope } from "@/lib/actingScope";
+import { actingTenantId } from "@/lib/actingTenant";
+import { photoBlobAccess, type PhotoBlobAccess } from "@/lib/photoBlob";
 
 export type UploadedFileMeta = {
   url: string;
@@ -72,6 +74,14 @@ async function resolveUpload(file: UploadedFileMeta) {
   }
   const expectedTenantId = scope.tenantId;
   const owned = await assertOwnedBlob(file.url, expectedTenantId);
+  // "Yours" is not "a Library file" either. A record document or an inspection
+  // photo of this workspace passes the check above; registered here, it would
+  // be downloadable through library permissions by someone the record's own
+  // permissions keep out. Only a file the library upload route signed — directly
+  // in this workspace's library folder — may be registered.
+  if (!isLibraryUpload(owned.pathname, expectedTenantId)) {
+    throw new Error("That file was not uploaded to the library. Upload it here and try again.");
+  }
   if (owned.size > MAX_BLOB_BYTES) {
     throw new Error(`That file is too large to store (limit ${Math.floor(MAX_BLOB_BYTES / (1024 * 1024))} MB).`);
   }
@@ -79,6 +89,21 @@ async function resolveUpload(file: UploadedFileMeta) {
     sizeBytes: owned.size,
     mimeType: owned.contentType || file.mimeType || "application/octet-stream",
   };
+}
+
+/**
+ * The folder the browser must upload library files into: this workspace's own
+ * namespace, the only place resolveUpload accepts a file from and the only
+ * pathname /api/library/upload will sign — and whether the active store is the
+ * private one. `access` must match the store the route signs for, or the
+ * upload is refused; hard-coding "public" is what would have kept Library files
+ * publicly readable after the private store was switched on.
+ */
+export async function getLibraryUploadPlan(): Promise<{ prefix: string; access: PhotoBlobAccess }> {
+  return withActingStaffScope(async () => {
+    await requirePermission("library.manage");
+    return { prefix: libraryUploadPrefix(await actingTenantId()), access: photoBlobAccess() };
+  });
 }
 
 /**
@@ -145,7 +170,7 @@ export async function registerLibraryDocuments(
       : `Added ${added.length} documents to the library: ${added.join(", ")}`,
     user,
   });
-  revalidatePath("/library");
+  revalidatePath("/documents");
   });
 }
 
@@ -154,65 +179,69 @@ export async function registerLibraryVersion(
   note: string | null,
   file: UploadedFileMeta
 ) {
-  const user = await requirePermission("library.manage");
-  const meta = await resolveUpload(file);
-  const document = await prisma.libraryDocument.findUniqueOrThrow({
-    where: { id: documentId },
-    include: { versions: { orderBy: { version: "desc" }, take: 1 } },
-  });
-  const nextVersion = (document.versions[0]?.version ?? 0) + 1;
-  // Atomic: new version + the document's updatedAt bump in ONE transaction. The doc
-  // was already authorised via the scoped findUniqueOrThrow above.
-  //
-  // USER-ORIGINATED, WITH A PARENT. A version is a CHILD of the document, so it
-  // inherits the DOCUMENT's tenant, not the uploader's. That distinction is the
-  // #470 contact-tags invariant and it is load-bearing here: an owner with access
-  // to another workspace's document who uploads a revision must not re-own the
-  // revision away from the document that holds it. LibraryDocument carries
-  // `@@unique([tenantId, id])` precisely so `(tenantId, documentId)` can become a
-  // composite FK — a version whose tenant disagrees with its document breaks that
-  // FK at the enforcement flip, and until then simply hides the newest revision
-  // from the workspace that owns the document.
-  //
-  // `?? actingTenantId` covers the legacy row: LibraryDocument.tenantId is still
-  // nullable and nothing stamped it before this window, so an un-owned parent
-  // falls back to the acting workspace rather than writing a tenantless child.
-  await withActingTenantWrite(async (tx, actingTenantId) => {
-    const tenantId = document.tenantId ?? actingTenantId;
-    await tx.libraryVersion.create({
-      data: {
-        documentId,
-        version: nextVersion,
-        fileName: file.fileName,
-        storedName: file.url,
-        mimeType: meta.mimeType,
-        sizeBytes: meta.sizeBytes,
-        note,
-        uploadedById: user.id,
-        tenantId,
-      },
+  return withActingStaffScope(async () => {
+    const user = await requirePermission("library.manage");
+    const meta = await resolveUpload(file);
+    const document = await prisma.libraryDocument.findUniqueOrThrow({
+      where: { id: documentId },
+      include: { versions: { orderBy: { version: "desc" }, take: 1 } },
     });
-    await tx.libraryDocument.update({ where: { id: documentId }, data: { updatedAt: new Date() } });
+    const nextVersion = (document.versions[0]?.version ?? 0) + 1;
+    // Atomic: new version + the document's updatedAt bump in ONE transaction. The doc
+    // was already authorised via the scoped findUniqueOrThrow above.
+    //
+    // USER-ORIGINATED, WITH A PARENT. A version is a CHILD of the document, so it
+    // inherits the DOCUMENT's tenant, not the uploader's. That distinction is the
+    // #470 contact-tags invariant and it is load-bearing here: an owner with access
+    // to another workspace's document who uploads a revision must not re-own the
+    // revision away from the document that holds it. LibraryDocument carries
+    // `@@unique([tenantId, id])` precisely so `(tenantId, documentId)` can become a
+    // composite FK — a version whose tenant disagrees with its document breaks that
+    // FK at the enforcement flip, and until then simply hides the newest revision
+    // from the workspace that owns the document.
+    //
+    // `?? actingTenantId` covers the legacy row: LibraryDocument.tenantId is still
+    // nullable and nothing stamped it before this window, so an un-owned parent
+    // falls back to the acting workspace rather than writing a tenantless child.
+    await withActingTenantWrite(async (tx, actingTenantId) => {
+      const tenantId = document.tenantId ?? actingTenantId;
+      await tx.libraryVersion.create({
+        data: {
+          documentId,
+          version: nextVersion,
+          fileName: file.fileName,
+          storedName: file.url,
+          mimeType: meta.mimeType,
+          sizeBytes: meta.sizeBytes,
+          note,
+          uploadedById: user.id,
+          tenantId,
+        },
+      });
+      await tx.libraryDocument.update({ where: { id: documentId }, data: { updatedAt: new Date() } });
+    });
+    await logAudit({
+      action: "document.uploaded",
+      summary: `Uploaded v${nextVersion} of “${document.name}”${note ? ` — ${note}` : ""}`,
+      user,
+    });
+    revalidatePath("/documents");
   });
-  await logAudit({
-    action: "document.uploaded",
-    summary: `Uploaded v${nextVersion} of “${document.name}”${note ? ` — ${note}` : ""}`,
-    user,
-  });
-  revalidatePath("/library");
 }
 
 export async function deleteLibraryDocument(id: string, formData: FormData) {
-  const user = await requirePermission("library.manage");
-  const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
-  const document = await softDeleteRecord("libraryDocument", id, reason, user.name);
-  // Nothing matched — another tenant's id, or already gone. Never audit a
-  // deletion that did not happen.
-  if (!document) return;
-  await logAudit({
-    action: "trash.deleted",
-    summary: `Moved library document “${document.name}” to trash — ${reason}`,
-    user,
+  return withActingStaffScope(async () => {
+    const user = await requirePermission("library.manage");
+    const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
+    const document = await softDeleteRecord("libraryDocument", id, reason, user.name);
+    // Nothing matched — another tenant's id, or already gone. Never audit a
+    // deletion that did not happen.
+    if (!document) return;
+    await logAudit({
+      action: "trash.deleted",
+      summary: `Moved library document “${document.name}” to trash — ${reason}`,
+      user,
+    });
+    revalidatePath("/documents");
   });
-  revalidatePath("/library");
 }

@@ -144,6 +144,16 @@ export default async function IntegrationOverridesPage() {
               >
                 <p className="text-xs text-muted-foreground mb-4">{integration.description}</p>
 
+                {integration.id === "x" && (
+                  <div className="mb-5 rounded-lg border border-border bg-background/40 p-4">
+                    <p className="text-sm font-medium">Connect one X account to this workspace</p>
+                    <p className="mt-1 text-xs text-muted-foreground">OAuth securely grants DM read/write plus mention and reply capture. Tokens and the account mapping are stored only for the acting tenant.</p>
+                    <a href="/api/integrations/x/connect" className="btn-primary btn-sm mt-3 inline-flex">
+                      {hasOverride.X_ACCOUNT_ID ? "Reconnect X" : "Connect X account"}
+                    </a>
+                  </div>
+                )}
+
                 {connection && (
                   <div
                     className={`mb-4 rounded-md border p-3 text-xs ${

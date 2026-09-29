@@ -9,7 +9,7 @@ This module adds versioned, multi-step journeys without removing the existing si
 - `JourneyEvent` is the durable event inbox. Unique dedupe keys prevent duplicate enrollment for the same business event.
 - `JourneyRun` stores resumable execution state, the next due time, retry state and the lead/contact context.
 - `JourneyStepLog` records each step result for operator visibility and recovery.
-- `/api/cron/journeys` processes journey work every five minutes independently of the general CRM automation cron.
+- `/api/cron/journeys` processes journey work every 30 minutes independently of the general CRM automation cron.
 
 The engine supports:
 

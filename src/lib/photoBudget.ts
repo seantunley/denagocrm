@@ -25,8 +25,19 @@ export const PHOTO_MAX_EDGE = 1600;
 /** JPEG quality for re-encoded photos. Visually lossless for this purpose. */
 export const PHOTO_JPEG_QUALITY = 0.82;
 
-/** Most photos per upload. Unchanged — this was never the problem. */
-export const MAX_PHOTOS = 12;
+/**
+ * Most photos accepted per batch, by the direct uploader and the legacy upload
+ * actions alike. Direct uploads send one file per request, so raising the count
+ * does not grow any single HTTP body — the limit is about how much a person can
+ * usefully queue at once, not about the request size ceiling.
+ *
+ * Kept as a literal that MAX_PHOTOS derives from, rather than the other way
+ * round, so the config-contract test has one number to assert against.
+ */
+export const DIRECT_PHOTO_BATCH_LIMIT = 12;
+
+/** Legacy upload actions use the same application-wide count. */
+export const MAX_PHOTOS = DIRECT_PHOTO_BATCH_LIMIT;
 
 /** Largest single file, after shrinking. */
 export const MAX_PHOTO_BYTES = 4 * 1024 * 1024;

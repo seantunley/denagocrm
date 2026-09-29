@@ -3,6 +3,7 @@ import { requireUser, getActiveTenantId } from "@/lib/auth";
 import { brandForTenant, brandLogoUrl, brandStyle, DEFAULT_BRAND } from "@/lib/tenantBrand";
 import { getSetting } from "@/lib/settings";
 import { WEATHER_CITIES_KEY, parseWeatherCities } from "@/lib/weatherCities";
+import { ACTIVITY_TYPES_KEY, resolveActivityTypes } from "@/lib/activityTypes";
 import { awaitingReplyCount } from "@/lib/inboxCount";
 import { casesAwaitingCount } from "@/lib/helpdesk";
 import { getUserPermissionList } from "@/lib/permissions";
@@ -11,6 +12,7 @@ import { assertPathModuleEnabled } from "@/lib/modules/routeGuard";
 import { tenantEnforcing } from "@/lib/tenantEnforcement";
 import { currentTenantScope } from "@/lib/tenantScope";
 import AppShell from "@/components/AppShell";
+import AppContextMenu from "@/components/AppContextMenu";
 
 export default async function AppLayout({
   children,
@@ -29,6 +31,7 @@ export default async function AppLayout({
     redirect("/platform/tenants");
   }
 
+  const activeTenantId = await getActiveTenantId();
   const [inboxWaiting, casesWaiting, permissions, enabledModules, brand] = await Promise.all([
     awaitingReplyCount(user).catch(() => 0),
     casesAwaitingCount(user).catch(() => 0),
@@ -39,9 +42,7 @@ export default async function AppLayout({
     // already known, and a staff member reaching the CRM on the platform's own
     // domain must still see their own brand. brandForTenant never throws; this
     // layout wraps every page in the workspace.
-    getActiveTenantId()
-      .then(brandForTenant)
-      .catch(() => DEFAULT_BRAND),
+    brandForTenant(activeTenantId).catch(() => DEFAULT_BRAND),
   ]);
 
   // Single-point route block: a page belonging to a disabled module is not
@@ -61,6 +62,12 @@ export default async function AppLayout({
 
   const weatherCities = parseWeatherCities(await getSetting(WEATHER_CITIES_KEY));
 
+  // The workspace's activity types, resolved HERE for the same reason: the type
+  // pickers are client components scattered across the app, and none of them can
+  // reach the tenant. `resolveActivityTypes` is total — an unreadable setting
+  // gives the built-in seven rather than an empty picker.
+  const activityTypes = resolveActivityTypes(await getSetting(ACTIVITY_TYPES_KEY));
+
 
   // The accent override, or nothing. `brandStyle` returns null for an unbranded
   // tenant, so this renders NO element and the shell is byte-for-byte what it was
@@ -73,11 +80,16 @@ export default async function AppLayout({
   return (
     <>
       {style && <style>{style}</style>}
+      {/* The app's right-click menu. Mounted once here rather than per page: it
+          listens on `document` and stands aside wherever RecordContextMenu, a
+          flow canvas or a text input has already claimed the click. */}
+      <AppContextMenu />
       {/* Resolved here, in the SERVER layout, for the same reason `brand` is:
           getSetting reads the tenant from the request scope, which a client
           component has no access to. */}
       <AppShell
         user={{
+          id: user.id,
           name: user.name,
           role: user.role,
           permissions,
@@ -88,6 +100,8 @@ export default async function AppLayout({
         enabledModules={enabledModules ? [...enabledModules] : undefined}
         brand={{ logoUrl: brandLogoUrl(brand), displayName: brand.displayName }}
         weatherCities={weatherCities}
+        activityTypes={activityTypes}
+        tenantId={activeTenantId ?? ""}
       >
         {children}
         {modal}

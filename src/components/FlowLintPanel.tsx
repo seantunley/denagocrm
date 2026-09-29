@@ -1,3 +1,5 @@
+"use client";
+
 import { AlertTriangle, CheckCircle2, CircleX } from "lucide-react";
 import type { FlowChannel, FlowIssue } from "@/lib/flowValidation";
 
@@ -11,9 +13,13 @@ const channelLabel: Record<FlowChannel, string> = {
 export default function FlowLintPanel({
   issues,
   channels,
+  onSelectIssue,
+  live = false,
 }: {
   issues: FlowIssue[];
   channels: FlowChannel[];
+  onSelectIssue?: (issue: FlowIssue) => void;
+  live?: boolean;
 }) {
   const errors = issues.filter((item) => item.severity === "error");
   const warnings = issues.filter((item) => item.severity === "warning");
@@ -22,7 +28,7 @@ export default function FlowLintPanel({
     return (
       <div className="flex items-center gap-2 rounded-xl border border-emerald-500/25 bg-emerald-500/8 px-4 py-3 text-sm text-emerald-200">
         <CheckCircle2 className="size-4 shrink-0" />
-        <span>Ready to publish for {channels.map((channel) => channelLabel[channel]).join(", ")}.</span>
+        <span>{live ? "Current canvas is ready" : "Ready to publish"} for {channels.map((channel) => channelLabel[channel]).join(", ")}.</span>
       </div>
     );
   }
@@ -40,13 +46,16 @@ export default function FlowLintPanel({
       <div className="border-t border-white/8 px-4 py-3">
         <ul className="space-y-2">
           {issues.map((item, index) => (
-            <li key={`${item.code}-${item.nodeId ?? "flow"}-${item.channel ?? "all"}-${index}`} className="flex gap-2 text-xs leading-5 text-slate-300">
+            <li key={`${item.code}-${item.nodeId ?? "flow"}-${item.channel ?? "all"}-${index}`}>
+              <button type="button" disabled={!item.nodeId || !onSelectIssue} onClick={() => onSelectIssue?.(item)} className="flex w-full gap-2 rounded-lg px-2 py-1 text-left text-xs leading-5 text-slate-300 enabled:hover:bg-white/5 disabled:cursor-default">
               <span className={item.severity === "error" ? "text-red-400" : "text-amber-400"}>{item.severity === "error" ? "Error" : "Warning"}</span>
               <span>
                 {item.message}
                 {item.nodeId ? <span className="text-slate-500"> · node {item.nodeId}</span> : null}
                 {item.channel ? <span className="text-slate-500"> · {channelLabel[item.channel]}</span> : null}
               </span>
+              {item.nodeId && onSelectIssue ? <span className="ml-auto shrink-0 text-[10px] text-orange-300">Show node →</span> : null}
+              </button>
             </li>
           ))}
         </ul>

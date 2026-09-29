@@ -14,12 +14,12 @@ import { getEnabledModuleIds } from "@/lib/modules/enabled";
 import type { ModuleId } from "@/lib/modules/registry";
 import { logError } from "@/lib/errorLog";
 import { warmUpForCron } from "@/lib/cronPreflight";
-import { runAutoResearch } from "@/lib/ai";
 import { runActivityReminders } from "@/lib/activityReminders";
 import { runSafeCampaignQueue } from "@/lib/marketingCampaignQueue";
 import { runSafeSurveyDistributionQueue } from "@/lib/surveyDistributionQueue";
 import { runRepairsDetectors } from "@/lib/repairsDetectors";
 import { runAiHealthIfDue, runBackupWatchdog } from "@/lib/systemHealth";
+import { reconcileAllTenantChannels } from "@/lib/channelRegistration";
 import { basePrisma } from "@/lib/db";
 import { expireReservations } from "@/lib/stockPlatform";
 import { resolveTenantActor } from "@/lib/tenantActor";
@@ -88,7 +88,10 @@ async function runOperationalQueues(tenantId: string | null, budget: CronSliceCo
   const googleReviews = on("marketing") ? await phase("google-reviews", syncGoogleReviews, -1) : null;
   const inboundEmail = await phase("imap-sync", syncInboundEmail, -1);
   const activityReminders = await phase("activity-reminders", runActivityReminders, -1);
-  const aiResearch = await phase("ai-auto-research", runAutoResearch, -1);
+  // Automatic lead research moved to /api/cron/research. A research call on the
+  // ChatGPT subscription takes 50–80 seconds; this route is killed at 60, and
+  // everything after that phase — the campaign and survey queues — would have
+  // died with it.
   const campaignSent = on("marketing") ? await phase("campaign-queue", runSafeCampaignQueue, -1) : null;
   const surveyQueue = on("marketing")
     ? await phase("survey-distribution-queue", runSafeSurveyDistributionQueue, -1)
@@ -115,7 +118,6 @@ async function runOperationalQueues(tenantId: string | null, budget: CronSliceCo
     fbLeads,
     googleReviews,
     inboundEmail,
-    aiResearch,
     campaignSent,
     surveyQueue,
     activityReminders,
@@ -131,6 +133,20 @@ type OperationalResult = Awaited<ReturnType<typeof runOperationalQueues>>;
 
 async function runGlobalMaintenance() {
   await withSystemScope(async () => {
+    // Register any inbound channel endpoint whose credentials are stored but
+    // whose ChannelIdentity row is missing. This is the backstop that covers
+    // tenants configured BEFORE registration became automatic: nobody is going
+    // to re-save a working integration, so the repair cannot wait for them to.
+    //
+    // BOUNDED, because this runs in a `finally` after a sweep that may already
+    // have spent 45 of the route's 60 seconds, and the maintenance below it
+    // must not be starved. Meta discovery is the only part that can block on a
+    // slow provider, so it is capped per tick and the whole sweep stops on a
+    // deadline; a tenant it did not reach is repaired on the next tick, fifteen
+    // minutes later. A fully-registered tenant does no provider work at all.
+    await reconcileAllTenantChannels({ deadlineMs: 6_000, maxDiscoveries: 3 }).catch((e) =>
+      logError("channel-registration", e),
+    );
     await runAiHealthIfDue().catch((e) => logError("ai-health", e));
     await runBackupWatchdog().catch(() => {});
     await basePrisma.errorLog

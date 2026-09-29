@@ -1,7 +1,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import crypto from "crypto";
-import { put, del, get, head, list } from "@vercel/blob";
+import { put, del, get, head, list, issueSignedToken, presignUrl } from "@vercel/blob";
 import {
   activeStoreToken,
   activeWriteTokenPresent,
@@ -22,7 +22,8 @@ import { DEFAULT_TENANT_ID } from "./tenant";
  * written to the private store; reads try the private store (authenticated get())
  * first and fall back to a public fetch, so legacy public blobs keep working. The
  * flag is opt-in so it can be verified on a preview deployment before flipping
- * production; existing public blobs are then migrated (scripts/migrate-blobs-private).
+ * production; existing public blobs are then moved to the private store at the
+ * same path by the hourly private-storage job (lib/privateMigration.ts).
  */
 
 const UPLOAD_DIR = path.join(process.cwd(), "storage", "uploads");
@@ -108,6 +109,10 @@ export async function saveFile(
       access: "public", // unguessable URL; downloads still go through our auth route
       contentType,
       addRandomSuffix: false,
+      // EXPLICIT, never the SDK default. With BLOB_STORE_ID in the environment
+      // the SDK authenticates by OIDC to THAT store — the private one — so a
+      // token-less call here would send every "public" upload to the wrong store.
+      token: publicToken(),
     });
     return blob.url;
   }
@@ -115,6 +120,34 @@ export async function saveFile(
   await fs.mkdir(UPLOAD_DIR, { recursive: true });
   await fs.writeFile(path.join(UPLOAD_DIR, localName), buffer);
   return localName;
+}
+
+/**
+ * Store a file that is MEANT to be public: an image embedded in a marketing email
+ * or sent in a bot flow, which recipients' mail clients and WhatsApp fetch by link.
+ * Those cannot be private or expire, and they are marketing material, not client
+ * data. Everything else goes through {@link saveFile}, which is private once
+ * BLOB_PRIVATE is on.
+ *
+ * Written under `uploads/<tenant>/public/`, a path the private-store migration
+ * leaves alone. Without a public store (local dev) it falls back to saveFile.
+ */
+export async function savePublicAsset(
+  buffer: Buffer,
+  originalName: string,
+  contentType: string,
+  tenantId: string,
+): Promise<string> {
+  const token = publicToken();
+  if (!token) return saveFile(buffer, originalName, contentType, tenantId);
+  const ext = path.extname(originalName).slice(0, 12);
+  const blob = await put(`uploads/${tenantId}/public/${crypto.randomUUID()}${ext}`, buffer, {
+    access: "public",
+    contentType,
+    addRandomSuffix: false,
+    token,
+  });
+  return blob.url;
 }
 
 /**
@@ -227,9 +260,38 @@ export function blobBelongsToTenant(pathname: string, tenantId: string): boolean
   if (segments.length >= 3 && segments[0] === "uploads") return segments[1] === tenantId;
   // uploads/<file> — legacy, founding tenant only.
   if (segments.length === 2 && segments[0] === "uploads") return tenantId === DEFAULT_TENANT_ID;
+  // library/<file> — the Document Library's legacy form, founding tenant only,
+  // by the same rule. Library uploads were written here until 2026-09, so once
+  // this check started receiving the row's tenant (2026-08-12) every library
+  // download and new library file was refused. New ones go under
+  // libraryUploadPrefix(), and the upload route no longer signs this path.
+  if (segments.length === 2 && segments[0] === "library") return tenantId === DEFAULT_TENANT_ID;
   // Anything else (backups, managed paths) is not a per-tenant upload; those
   // callers do not pass an expected tenant and never reach this.
   return false;
+}
+
+/**
+ * Where a workspace's Document Library uploads go: inside its own namespace,
+ * so {@link blobBelongsToTenant} can answer for them. The library upload route
+ * signs nothing outside this prefix.
+ */
+export function libraryUploadPrefix(tenantId: string): string {
+  return `uploads/${tenantId}/library/`;
+}
+
+/**
+ * Is this pathname a Library upload of `tenantId`'s: a plain file directly in
+ * its library folder? Checked when the upload is signed AND when the file is
+ * registered. Ownership alone is not enough at registration: every record file
+ * and photo of the workspace is also "ours", and registering one into the
+ * Library would let a library user download it past the record's permissions.
+ * The legacy `library/<file>` shape stays readable but is never registrable.
+ */
+export function isLibraryUpload(pathname: string, tenantId: string): boolean {
+  const prefix = libraryUploadPrefix(tenantId);
+  const name = pathname.startsWith(prefix) ? pathname.slice(prefix.length) : "";
+  return name.length > 0 && !name.includes("/");
 }
 
 /**
@@ -289,6 +351,10 @@ const isBlobRef = (ref: string) => classifyRef(ref) === "blob";
  */
 export function directReadUrl(ref: string): string | null {
   if (!isTrustedBlobRef(ref) || isPrivateBlobRef(ref)) return null;
+  // With a private store, a public link may name a file that has been moved
+  // there (same path, public copy deleted): never send the browser to it — the
+  // app reads private-first instead.
+  if (privateToken()) return null;
   return ref;
 }
 
@@ -382,6 +448,161 @@ export async function readFile(ref: string, expectedTenantId?: string | null): P
 }
 
 /**
+ * {@link readFile}, as a stream — for sending a file to a browser.
+ *
+ * WHY IT EXISTS: Vercel caps a function's response body at 4.5 MB unless the
+ * response is streamed. /api/files built its response from readFile's Buffer, so
+ * any document over 4.5 MB could be stored but never opened again. Streaming the
+ * object straight through removes that ceiling, and holds no more of the file in
+ * memory than the chunk in flight.
+ *
+ * SAME OWNERSHIP RULES AS readFile, deliberately line for line: the private
+ * store's pathname is checked against `expectedTenantId` before the get; the
+ * public path goes through assertOwnedBlob, which proves the object is in OUR
+ * store and in this workspace. No size cap is needed — nothing is buffered.
+ */
+export async function openFileStream(
+  ref: string,
+  expectedTenantId?: string | null,
+): Promise<ReadableStream<Uint8Array>> {
+  return (await openStoredFile(ref, expectedTenantId)).stream;
+}
+
+/**
+ * {@link openFileStream}, with the content type the STORE reports — for a route
+ * that serves a file whose type no database row records (an attachment, a photo).
+ */
+export async function openStoredFile(
+  ref: string,
+  expectedTenantId?: string | null,
+): Promise<{ stream: ReadableStream<Uint8Array>; contentType: string }> {
+  if (!isBlobRef(ref)) {
+    const { createReadStream } = await import("fs");
+    const { Readable } = await import("stream");
+    return {
+      stream: Readable.toWeb(createReadStream(path.join(UPLOAD_DIR, ref))) as ReadableStream<Uint8Array>,
+      contentType: "application/octet-stream",
+    };
+  }
+
+  if (privateToken()) {
+    try {
+      const pathname = new URL(ref).pathname.replace(/^\/+/, "");
+      if (!ownedByExpected(pathname, expectedTenantId)) {
+        throw new BlobNotYoursError("Refusing a stored file that belongs to another workspace");
+      }
+      const result = await get(pathname, { access: "private", token: privateToken() });
+      if (result?.stream) return { stream: result.stream, contentType: result.blob.contentType };
+    } catch (error) {
+      if (error instanceof BlobNotYoursError) throw error;
+      // A miss: try the public path, exactly as readFile does.
+    }
+  }
+
+  await assertOwnedBlob(ref, expectedTenantId);
+  // The timeout covers getting a response, NOT the body. AbortSignal.timeout on
+  // the fetch would also abort the stream, cutting a large file off part-way
+  // through for anyone on a slow connection — the case streaming exists for.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), BLOB_FETCH_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(ref, { signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!res.ok) throw new Error(`Blob fetch failed: ${res.status}`);
+  return {
+    stream: res.body ?? new ReadableStream({ start: (stream) => stream.close() }),
+    contentType: res.headers.get("content-type") ?? "application/octet-stream",
+  };
+}
+
+/** Is `ref` one of OUR stored files (a Blob URL or a local upload name)? Shape only — reading it checks ownership. */
+export function isStoredFileRef(ref: string | null | undefined): boolean {
+  if (!ref) return false;
+  try {
+    classifyRef(ref);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** How long a link handed to WhatsApp, Messenger or Telegram stays valid. They fetch at send time. */
+const SHARE_LINK_TTL_MS = 60 * 60 * 1000;
+
+/**
+ * A URL an OUTSIDE service can fetch a stored file from — WhatsApp, Messenger
+ * and Telegram take media by link and download it themselves.
+ *
+ * A file in the private store has no public URL, so it gets a presigned GET link
+ * scoped to that one object and valid for an hour — minted at send time, so a
+ * retry gets a fresh one. A file still in the public store is already fetchable.
+ * Anything that is not one of our stored files (an outside URL the user typed)
+ * is passed through untouched.
+ *
+ * Looked up by PATHNAME in the private store first, the same rule readFile uses,
+ * so a legacy public URL whose object has been migrated still resolves.
+ */
+export async function shareableFileUrl(ref: string): Promise<string> {
+  if (!isTrustedBlobRef(ref)) return ref;
+  const token = privateToken();
+  if (!token) return ref;
+  const pathname = new URL(ref).pathname.replace(/^\/+/, "");
+  try {
+    await head(pathname, { token });
+  } catch {
+    // Not in the private store: a legacy public object, fetchable as it is.
+    // A private URL that is not found cannot be shared either way.
+    return ref;
+  }
+  const validUntil = Date.now() + SHARE_LINK_TTL_MS;
+  const signed = await issueSignedToken({ pathname, operations: ["get"], validUntil, token });
+  const { presignedUrl } = await presignUrl(signed, { operation: "get", pathname, access: "private", validUntil });
+  return presignedUrl;
+}
+
+export type PrivateStoreProof = { ok: true } | { ok: false; step: string; error: string };
+
+/**
+ * Proves the private store works end to end with the REAL token, before
+ * anything depends on it: write, read back, a signed link an outside service can
+ * fetch, and — the point of it — an anonymous fetch of the file refused. Leaves
+ * nothing behind. Null when no private store is configured.
+ *
+ * The token is a Sensitive env var nobody can read back, so this (run from
+ * Settings → Security) is how it is known to be the right one.
+ */
+export async function privateStoreRoundTrip(): Promise<PrivateStoreProof | null> {
+  const token = privateToken();
+  if (!token) return null;
+  const pathname = `health/private-roundtrip-${crypto.randomUUID()}.txt`;
+  const body = `private store round trip ${pathname}`;
+  let step = "write";
+  try {
+    const written = await put(pathname, body, { access: "private", contentType: "text/plain", addRandomSuffix: false, token });
+    step = "read back";
+    const got = await get(pathname, { access: "private", token });
+    if (!got?.stream || (await streamToBuffer(got.stream, 4096)).toString("utf8") !== body) throw new Error("content differs");
+    step = "anonymous read refused";
+    const anonymous = await fetch(written.url, { signal: AbortSignal.timeout(10_000) });
+    if (anonymous.ok) throw new Error(`the file opened without credentials (HTTP ${anonymous.status})`);
+    step = "signed link for WhatsApp/Messenger";
+    const validUntil = Date.now() + 5 * 60_000;
+    const signed = await issueSignedToken({ pathname, operations: ["get"], validUntil, token });
+    const { presignedUrl } = await presignUrl(signed, { operation: "get", pathname, access: "private", validUntil });
+    const viaLink = await fetch(presignedUrl, { signal: AbortSignal.timeout(10_000) });
+    if (!viaLink.ok || (await viaLink.text()) !== body) throw new Error(`signed link returned HTTP ${viaLink.status}`);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, step, error: error instanceof Error ? error.message.slice(0, 200) : "unknown error" };
+  } finally {
+    await del(pathname, { token }).catch(() => {});
+  }
+}
+
+/**
  * A pathname as {@link putManagedBlob} returns it: folder segments inside our
  * own store. Returns the value rather than a boolean, for classifyRef's reason —
  * a caller cannot use the result without having gone through the check.
@@ -462,12 +683,79 @@ export async function deleteFile(ref: string): Promise<void> {
       throw new Error(`No Blob token available to delete ${isPrivateBlobRef(ref) ? "private" : "public"} object`);
     }
     await del(ref, { token });
+    // A PUBLIC link may name a file that has been moved to the private store at
+    // the same path (the migration keeps paths, so old links in append-only
+    // records still resolve). Delete that copy too, or deleting the record would
+    // leave the file behind. Deleting a path that isn't there is a no-op.
+    if (!isPrivateBlobRef(ref) && privateToken()) {
+      await del(new URL(ref).pathname.replace(/^\/+/, ""), { token: privateToken() });
+    }
     return;
   }
   await fs.unlink(path.join(UPLOAD_DIR, ref)).catch(() => {});
 }
 
+/**
+ * May this stored object be deleted as cleanup for `requiredPrefix`?
+ *
+ * Pure, so the rule can be exercised directly rather than inferred from a call
+ * site. Both halves are load-bearing: ownership answers "is this the caller's
+ * workspace's object", the prefix answers "is it the one this record just
+ * staged" — a caller must not be able to tidy away an unrelated file of its own.
+ */
+export function mayCleanUpStoredBlob(pathname: string, tenantId: string, requiredPrefix: string): boolean {
+  if (!requiredPrefix) return false;
+  return blobBelongsToTenant(pathname, tenantId) && pathname.startsWith(requiredPrefix);
+}
+
+/**
+ * Delete a staged upload ONLY after proving it belongs to `tenantId` and to the
+ * record identified by `requiredPrefix`.
+ *
+ * WHY THIS EXISTS, and why cleanup must never call {@link deleteFile} directly
+ * on a client-supplied URL. The register* actions take blob URLs from the
+ * browser, verify each with {@link assertOwnedBlob}, and file it. Verification
+ * failure threw into a catch whose job was to tidy up the staged object — so a
+ * URL REJECTED as belonging to another workspace was handed straight to
+ * deleteFile, which has no tenant check and deletes with the application's own
+ * credentials. The cleanup path therefore undid the very protection the
+ * ownership check had just applied: any user who could stage a photo on their
+ * own record could delete another workspace's file by pasting its URL.
+ *
+ * Ordering it as verify-then-delete inside one helper is deliberate. A boolean
+ * flag at the call site would work until someone restructured the try/catch;
+ * here a caller cannot express the unsafe operation at all.
+ *
+ * `io` is a test seam in the style of {@link photoBlobAccess}'s `env` — the
+ * refusal path is the security boundary, so it has to be executable in a test
+ * without a Blob store to talk to.
+ */
+export async function deleteOwnedBlob(
+  ref: string,
+  tenantId: string,
+  requiredPrefix: string,
+  io: {
+    verify: (ref: string, tenantId?: string | null) => Promise<OwnedBlob>;
+    remove: (ref: string) => Promise<void>;
+  } = { verify: assertOwnedBlob, remove: deleteFile },
+): Promise<void> {
+  const blob = await io.verify(ref, tenantId);
+  if (!mayCleanUpStoredBlob(blob.pathname, tenantId, requiredPrefix)) {
+    throw new Error("Refusing to delete a stored file that is not bound to this record");
+  }
+  await io.remove(ref);
+}
+
 const storeTokens = () => ({ publicToken: publicToken(), privateToken: privateToken() });
+
+/**
+ * The token for the store we currently WRITE to: private when BLOB_PRIVATE is on,
+ * else public. Every Blob SDK call passes a token explicitly — see saveFile — and
+ * readers of what the app wrote (backups) use this one.
+ */
+export function activeBlobToken(): string | undefined {
+  return activeStoreToken(privateMode(), storeTokens());
+}
 
 /** Whether the store we currently WRITE to has a usable token (see backupBlobs). */
 export function activeBlobWriteTokenPresent(): boolean {
@@ -493,7 +781,8 @@ export async function putManagedBlob(
     return { url: blob.url, pathname: blob.pathname };
   }
   if (!publicToken()) throw new Error("Blob storage is not configured");
-  const blob = await put(pathname, data, { access: "public", contentType, addRandomSuffix: false, allowOverwrite: false });
+  // Explicit token for the same reason as saveFile: never let BLOB_STORE_ID pick the store.
+  const blob = await put(pathname, data, { access: "public", contentType, addRandomSuffix: false, allowOverwrite: false, token: publicToken() });
   return { url: blob.url, pathname: blob.pathname };
 }
 
@@ -521,6 +810,42 @@ export async function listActiveBackupBlobs(prefix: string): Promise<Array<{ pat
 }
 
 /**
+ * List staged uploads in the ACTIVE store, WITH their upload time.
+ *
+ * Separate from listActiveBackupBlobs because the orphan sweep needs to know how
+ * old an object is: deleting one that a phone is still in the middle of
+ * registering would destroy a photo somebody just took. collectBlobs drops
+ * uploadedAt, and widening it would give every backup caller a field it has no
+ * use for.
+ */
+export type UploadBlob = { pathname: string; url: string; uploadedAt: Date | null };
+export type UploadBlobPage = { blobs: UploadBlob[]; cursor: string | null };
+
+/**
+ * ONE PAGE at a time, and a cursor to resume from.
+ *
+ * Deliberately not a "collect everything then act" helper like its backup
+ * sibling. The orphan sweep runs on a cron budget, and a version that listed the
+ * whole namespace first spent that budget walking the store before deleting
+ * anything — so as storage grew it would do less and less real work per tick,
+ * and objects past the first page would never be reached at all. Handing back a
+ * page and a cursor lets the caller work, check its deadline, and resume.
+ */
+export async function listActiveUploadBlobPage(
+  prefix: string,
+  cursor?: string | null,
+  limit = 250,
+): Promise<UploadBlobPage> {
+  const token = activeStoreToken(privateMode(), storeTokens());
+  if (!token) return { blobs: [], cursor: null };
+  const page = await list({ prefix, cursor: cursor ?? undefined, limit, token });
+  return {
+    blobs: page.blobs.map((b) => ({ pathname: b.pathname, url: b.url, uploadedAt: b.uploadedAt ?? null })),
+    cursor: page.hasMore ? (page.cursor ?? null) : null,
+  };
+}
+
+/**
  * List blobs across BOTH stores (deduped by pathname). Use this ONLY for
  * restore/verify selection, where a legacy public backup must remain findable
  * after the cutover to the private store.
@@ -529,4 +854,27 @@ export async function listAllBackupBlobs(prefix: string): Promise<Array<{ pathna
   const pub = publicToken() ? await collectBlobs(prefix, publicToken()!) : [];
   const priv = privateToken() ? await collectBlobs(prefix, privateToken()!) : [];
   return dedupeByPathname(pub, priv);
+}
+
+/**
+ * Where new files go, proven with the real token rather than assumed:
+ * - `public`: no private store token — a file's link alone opens it;
+ * - `unreachable`: a private token is set but the store rejects it;
+ * - `ready`: the private store answers, but BLOB_PRIVATE is off;
+ * - `active`: new files go to the private store.
+ *
+ * The token is a Sensitive env var that cannot be read back, so this is the only
+ * way to know it is the right one before anything depends on it.
+ */
+export async function privateStoreStatus(): Promise<
+  { state: "public" | "ready" | "active" } | { state: "unreachable"; error: string }
+> {
+  const token = privateToken();
+  if (!token) return { state: "public" };
+  try {
+    await list({ limit: 1, token });
+  } catch (error) {
+    return { state: "unreachable", error: error instanceof Error ? error.message.slice(0, 160) : "unknown error" };
+  }
+  return { state: privateMode() ? "active" : "ready" };
 }

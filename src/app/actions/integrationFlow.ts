@@ -8,6 +8,8 @@ import { getIntegrationFlow, flowFieldKeys, VERIFY_STEP_ID, type FieldErrors } f
 import { probeIntegration, type ProbeWarning } from "@/lib/integrationProbe";
 import { recordIntegrationVerified, recordIntegrationFailure } from "@/lib/integrationConnection";
 import { commitVerifiedCredentials } from "@/lib/integrationCommit";
+import { withActingStaffScope } from "@/lib/actingScope";
+import { reconcileTenantChannels } from "@/lib/channelRegistration";
 
 const OVERRIDES_PATH = "/settings/integration-overrides";
 
@@ -60,72 +62,80 @@ export async function verifyAndSaveIntegration(
   integrationId: string,
   values: Record<string, string>,
 ): Promise<FlowResult> {
-  // A server action is a POST endpoint reachable directly, so the page's own
-  // guard is not enough — re-check, exactly as tenantCredentials.ts does.
-  const user = await requireTenantOwner();
+  return withActingStaffScope(async () => {
+    // A server action is a POST endpoint reachable directly, so the page's own
+    // guard is not enough — re-check, exactly as tenantCredentials.ts does.
+    const user = await requireTenantOwner();
 
-  const flow = getIntegrationFlow(integrationId);
-  if (!flow) {
-    return { kind: "failed", code: "invalid_input", message: "That integration has no guided setup.", goToStep: VERIFY_STEP_ID };
-  }
+    const flow = getIntegrationFlow(integrationId);
+    if (!flow) {
+      return { kind: "failed", code: "invalid_input", message: "That integration has no guided setup.", goToStep: VERIFY_STEP_ID };
+    }
 
-  const tenantId = await getActiveTenantId();
-  if (!tenantId) {
-    return {
-      kind: "failed",
-      code: "invalid_input",
-      message: "No active tenant is resolved for your account, so there is nothing to connect.",
-      goToStep: VERIFY_STEP_ID,
-    };
-  }
+    const tenantId = await getActiveTenantId();
+    if (!tenantId) {
+      return {
+        kind: "failed",
+        code: "invalid_input",
+        message: "No active tenant is resolved for your account, so there is nothing to connect.",
+        goToStep: VERIFY_STEP_ID,
+      };
+    }
 
-  // The validate → test → save decision itself lives in commitVerifiedCredentials
-  // (src/lib/integrationCommit.ts) with its side effects injected, so the
-  // "never persist an unverified credential" invariant can be unit-tested
-  // directly rather than asserted against this file's source text. Everything
-  // this action adds around it is auth, wiring, auditing and revalidation.
-  const outcome = await commitVerifiedCredentials(integrationId, values ?? {}, {
-    probe: (id, clean) => probeIntegration(id, clean),
-    saveBundle: (clean) => putTenantCredentialBundle(tenantId, clean),
-    recordVerified: () => recordIntegrationVerified(tenantId, integrationId),
-  });
+    // The validate → test → save decision itself lives in commitVerifiedCredentials
+    // (src/lib/integrationCommit.ts) with its side effects injected, so the
+    // "never persist an unverified credential" invariant can be unit-tested
+    // directly rather than asserted against this file's source text. Everything
+    // this action adds around it is auth, wiring, auditing and revalidation.
+    const outcome = await commitVerifiedCredentials(integrationId, values ?? {}, {
+      probe: (id, clean) => probeIntegration(id, clean),
+      saveBundle: (clean) => putTenantCredentialBundle(tenantId, clean),
+      recordVerified: () => recordIntegrationVerified(tenantId, integrationId),
+    });
 
-  if (outcome.kind === "unknown_integration") {
-    return { kind: "failed", code: "invalid_input", message: "That integration has no guided setup.", goToStep: VERIFY_STEP_ID };
-  }
+    if (outcome.kind === "unknown_integration") {
+      return { kind: "failed", code: "invalid_input", message: "That integration has no guided setup.", goToStep: VERIFY_STEP_ID };
+    }
 
-  if (outcome.kind === "invalid") {
-    // No provider call was made and nothing was written.
-    return { kind: "invalid", fieldErrors: outcome.fieldErrors, goToStep: outcome.goToStep };
-  }
+    if (outcome.kind === "invalid") {
+      // No provider call was made and nothing was written.
+      return { kind: "invalid", fieldErrors: outcome.fieldErrors, goToStep: outcome.goToStep };
+    }
 
-  if (outcome.kind === "failed") {
+    if (outcome.kind === "failed") {
+      await logAuditStrict({
+        action: "integration.connection_test_failed",
+        summary: `Connection test for ${flow.label} failed (${outcome.code})`,
+        entityType: "IntegrationConnection",
+        entityId: `${tenantId}:${integrationId}`,
+        user,
+        // Codes and step names only — never what was typed.
+        after: { integrationId, code: outcome.code, blameStep: outcome.blameStep },
+      });
+      revalidatePath(OVERRIDES_PATH);
+      return { kind: "failed", code: outcome.code, message: outcome.message, goToStep: outcome.blameStep };
+    }
+
+    // The credentials are stored and proven, so the endpoints they name are now
+    // this workspace's — register them before telling the owner they are
+    // connected. Without this the wizard ends on a green "Connected" screen for
+    // an integration whose inbound half is discarded (channelRegistration.ts).
+    await reconcileTenantChannels(tenantId, { force: true }).catch(() => undefined);
+
     await logAuditStrict({
-      action: "integration.connection_test_failed",
-      summary: `Connection test for ${flow.label} failed (${outcome.code})`,
+      action: "integration.connected",
+      summary: `Verified and connected ${flow.label}`,
       entityType: "IntegrationConnection",
       entityId: `${tenantId}:${integrationId}`,
       user,
-      // Codes and step names only — never what was typed.
-      after: { integrationId, code: outcome.code, blameStep: outcome.blameStep },
+      // The KEYS that were set, never what they were set to — same rule as
+      // tenant_credential.override_set in tenantCredentials.ts.
+      after: { integrationId, keys: outcome.savedKeys },
     });
+
     revalidatePath(OVERRIDES_PATH);
-    return { kind: "failed", code: outcome.code, message: outcome.message, goToStep: outcome.blameStep };
-  }
-
-  await logAuditStrict({
-    action: "integration.connected",
-    summary: `Verified and connected ${flow.label}`,
-    entityType: "IntegrationConnection",
-    entityId: `${tenantId}:${integrationId}`,
-    user,
-    // The KEYS that were set, never what they were set to — same rule as
-    // tenant_credential.override_set in tenantCredentials.ts.
-    after: { integrationId, keys: outcome.savedKeys },
+    return { kind: "connected", detail: outcome.detail, facts: outcome.facts, warnings: outcome.warnings };
   });
-
-  revalidatePath(OVERRIDES_PATH);
-  return { kind: "connected", detail: outcome.detail, facts: outcome.facts, warnings: outcome.warnings };
 }
 
 /**
@@ -139,53 +149,60 @@ export async function verifyAndSaveIntegration(
  * ordinary resolver, so it tests exactly what the send paths would use.
  */
 export async function retestIntegration(integrationId: string): Promise<FlowResult> {
-  const user = await requireTenantOwner();
+  return withActingStaffScope(async () => {
+    const user = await requireTenantOwner();
 
-  const flow = getIntegrationFlow(integrationId);
-  if (!flow) {
-    return { kind: "failed", code: "invalid_input", message: "That integration has no guided setup.", goToStep: VERIFY_STEP_ID };
-  }
+    const flow = getIntegrationFlow(integrationId);
+    if (!flow) {
+      return { kind: "failed", code: "invalid_input", message: "That integration has no guided setup.", goToStep: VERIFY_STEP_ID };
+    }
 
-  const tenantId = await getActiveTenantId();
-  if (!tenantId) {
-    return { kind: "failed", code: "invalid_input", message: "No active tenant is resolved for your account.", goToStep: VERIFY_STEP_ID };
-  }
+    const tenantId = await getActiveTenantId();
+    if (!tenantId) {
+      return { kind: "failed", code: "invalid_input", message: "No active tenant is resolved for your account.", goToStep: VERIFY_STEP_ID };
+    }
 
-  const bundle = await resolveIntegrationBundle(tenantId, integrationId);
-  if (!bundle) {
-    return {
-      kind: "failed",
-      code: "invalid_input",
-      message: "There are no credentials stored for this integration yet — run the setup first.",
-      goToStep: flow.steps[0].id,
-    };
-  }
+    const bundle = await resolveIntegrationBundle(tenantId, integrationId);
+    if (!bundle) {
+      return {
+        kind: "failed",
+        code: "invalid_input",
+        message: "There are no credentials stored for this integration yet — run the setup first.",
+        goToStep: flow.steps[0].id,
+      };
+    }
 
-  const clean: Record<string, string> = {};
-  for (const key of flowFieldKeys(flow)) clean[key] = String(bundle[key] ?? "").trim();
+    const clean: Record<string, string> = {};
+    for (const key of flowFieldKeys(flow)) clean[key] = String(bundle[key] ?? "").trim();
 
-  const result = await probeIntegration(integrationId, clean);
+    const result = await probeIntegration(integrationId, clean);
 
-  if (!result.ok) {
-    await recordIntegrationFailure(
-      tenantId,
-      integrationId,
-      { code: result.code, message: result.message, blameStep: result.blameStep },
-      Object.values(clean),
-    );
+    if (!result.ok) {
+      await recordIntegrationFailure(
+        tenantId,
+        integrationId,
+        { code: result.code, message: result.message, blameStep: result.blameStep },
+        Object.values(clean),
+      );
+      revalidatePath(OVERRIDES_PATH);
+      return { kind: "failed", code: result.code, message: result.message, goToStep: result.blameStep };
+    }
+
+    await recordIntegrationVerified(tenantId, integrationId);
+    // "Test connection" is the button an owner presses when messages are not
+    // arriving, so it is exactly where a missing registration should be
+    // repaired — and it is the one path an EXISTING tenant can trigger by hand
+    // without re-entering a working credential.
+    await reconcileTenantChannels(tenantId, { force: true }).catch(() => undefined);
+    await logAuditStrict({
+      action: "integration.reverified",
+      summary: `Re-tested ${flow.label} and it is working again`,
+      entityType: "IntegrationConnection",
+      entityId: `${tenantId}:${integrationId}`,
+      user,
+      after: { integrationId },
+    });
     revalidatePath(OVERRIDES_PATH);
-    return { kind: "failed", code: result.code, message: result.message, goToStep: result.blameStep };
-  }
-
-  await recordIntegrationVerified(tenantId, integrationId);
-  await logAuditStrict({
-    action: "integration.reverified",
-    summary: `Re-tested ${flow.label} and it is working again`,
-    entityType: "IntegrationConnection",
-    entityId: `${tenantId}:${integrationId}`,
-    user,
-    after: { integrationId },
+    return { kind: "connected", detail: result.detail, facts: result.facts, warnings: result.warnings };
   });
-  revalidatePath(OVERRIDES_PATH);
-  return { kind: "connected", detail: result.detail, facts: result.facts, warnings: result.warnings };
 }

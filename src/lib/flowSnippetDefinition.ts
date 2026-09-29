@@ -19,9 +19,23 @@ function remapNode(node: FlowNode, idMap: Map<string, string>): FlowNode {
   if (node.type === "condition") {
     return { ...node, id, trueNext: next(node.trueNext), falseNext: next(node.falseNext) };
   }
+  if (node.type === "switch") {
+    return { ...node, id, cases: node.cases.map((item) => ({ ...item, next: next(item.next) })), defaultNext: next(node.defaultNext) };
+  }
   if (node.type === "ai") return { ...node, id, handoffNext: next(node.handoffNext) };
   if (node.type === "handoff" || node.type === "end") return { ...node, id };
-  return { ...node, id, next: next(node.next) } as FlowNode;
+  // Failure and no-capacity routes are edges too. Left unmapped, an inserted
+  // snippet's failure branch still pointed at the SOURCE snippet's node ids —
+  // dangling references in the pasted copy that validation then flags on a graph
+  // the user believes they copied intact.
+  const routed = node as FlowNode & { next?: string; failureNext?: string; unavailableNext?: string };
+  return {
+    ...routed,
+    id,
+    next: next(routed.next),
+    ...(routed.failureNext ? { failureNext: next(routed.failureNext) } : {}),
+    ...(routed.unavailableNext ? { unavailableNext: next(routed.unavailableNext) } : {}),
+  } as FlowNode;
 }
 
 /**

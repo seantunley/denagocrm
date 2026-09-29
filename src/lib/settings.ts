@@ -35,6 +35,16 @@ const SECRET_KEYS = new Set([
   "ELEVENLABS_API_KEY",
   "TELEGRAM_BOT_TOKEN",
   "TELEGRAM_WEBHOOK_SECRET",
+  "X_CLIENT_SECRET",
+  "X_ACCESS_TOKEN",
+  "X_REFRESH_TOKEN",
+  "X_WEBHOOK_SECRET",
+  "XAI_API_KEY",
+  // A workspace's ChatGPT sign-in (lib/codex.ts). The refresh token is as good
+  // as the account's password for anything the Codex API can do, and the
+  // pending device login can be completed by whoever holds it.
+  "CODEX_OAUTH_TOKENS",
+  "CODEX_DEVICE_LOGIN",
 ]);
 
 const PREFIX = "enc:v1:";

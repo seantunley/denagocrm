@@ -9,64 +9,32 @@ const src = (rel: string) => readFileSync(path.join(root, rel), "utf8").replace(
 const shipped = (rel: string) =>
   src(rel).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 
-/**
- * "Send test notification" reported "No subscribed devices yet — enable
- * notifications first" on a screen whose own button read "Disable on this
- * device". Two devices were in the table at the time, and the tenant join
- * returned both.
- *
- * Two defects, and the second is why the first was invisible:
- *
- *   1. A Server Action does not inherit the tenant scope a page render
- *      establishes, so `pushRecipientsForCurrentScope()` found the scope CLOSED
- *      and correctly returned nobody. Same shape as #520.
- *   2. `sendPushToAll` returns a bare count, so a closed scope, missing VAPID
- *      keys, a rejected send and a genuinely empty table all arrive as `0` — and
- *      the one sentence written for the last of them was shown for all four.
- *
- * Source-patterned, and says so: the scope behaviour itself needs a request.
- */
-
 const action = src("src/app/actions/push.ts");
 const lib = src("src/lib/push.ts");
+const toggle = src("src/components/PushToggle.tsx");
+const rootWorker = src("public/sw.js");
+const messagesWorker = src("public/messages-sw.js");
+const register = src("src/components/RegisterServiceWorker.tsx");
+const messagesNav = src("src/components/MessagesNav.tsx");
 
 test("the test push binds a tenant scope, because a Server Action has none", () => {
-  // `withActingStaffScope` binds an ENCLOSING frame via runInTenantScope. An
-  // enterWith-style call inside the callee does not reach the caller — the
-  // lesson from the research-action failure, written down in the same week.
   assert.ok(action.includes("withActingStaffScope"), "sendTestPush must establish a scope");
   const sendTest = action.slice(action.indexOf("export async function sendTestPush("));
-  assert.match(
-    sendTest,
-    /return withActingStaffScope\(/,
-    "the scope must WRAP the body, not be entered inside it",
-  );
+  assert.match(sendTest, /return withActingStaffScope\(/);
 });
 
 test("a scopeless push is logged rather than dropped in silence", () => {
-  // Returning [] is correct — a push with no workspace must go to nobody, never
-  // to everybody. The defect was that it went nowhere and said nothing, so a
-  // wiring fault at one entry point was indistinguishable from a workspace that
-  // had never enabled notifications.
   const closed = lib.slice(lib.indexOf('if (s.mode === "closed")'), lib.indexOf('if (s.mode === "global")'));
   assert.ok(closed.includes("logError"), "a dropped push must be recorded");
   assert.ok(closed.includes("return []"), "and it must still fail closed");
-  // logError raises a push of its own for the first error in a 30-minute window,
-  // which would arrive back here in the same scopeless state.
   assert.ok(closed.includes("alert: false"), "the log must not recurse through the alerting push");
 });
 
-test("the four zero-send causes are reported as four different sentences", () => {
+test("the four zero-send causes are still distinguishable", () => {
   const sendTest = action.slice(action.indexOf("export async function sendTestPush("));
-  // Missing keys: nothing the person can fix from that screen, and nothing to do
-  // with subscriptions.
   assert.match(sendTest, /VAPID keys are missing/);
-  // Genuinely nobody subscribed — the only case the original sentence described.
   assert.match(sendTest, /No subscribed devices for this workspace/);
-  // Devices found, every send rejected. The original wording told the owner to
-  // enable notifications they had already enabled.
-  assert.match(sendTest, /rejected every one/);
-  // Partial delivery is a success with a caveat, not a failure.
+  assert.match(sendTest, /push service rejected every one/);
   assert.match(sendTest, /the rest were unreachable/);
 });
 
@@ -74,24 +42,103 @@ test("the count is measured before sending, so 'nobody' and 'failed' stay distin
   const sendTest = action.slice(action.indexOf("export async function sendTestPush("));
   const resolved = sendTest.indexOf("pushRecipientsForCurrentScope(");
   const sent = sendTest.indexOf("sendPushToAll(");
-  assert.ok(resolved >= 0 && sent >= 0, "both calls must be present");
-  assert.ok(resolved < sent, "the recipients must be counted before the send, not inferred from it");
+  assert.ok(resolved >= 0 && sent >= 0);
+  assert.ok(resolved < sent);
 });
 
 test("the fire-and-forget senders keep the cheap single count", () => {
-  // The diagnosis is for the one caller that reports back to a person. Making
-  // every push path resolve recipients twice would be a real cost for no benefit
-  // — nothing else displays the difference.
   const code = shipped("src/lib/push.ts");
   assert.match(code, /export async function sendPushToAll\([\s\S]*?\): Promise<number>/);
 });
 
 test("subscribing still needs no scope, because PushSubscription is a global model", () => {
-  // Worth pinning: the save path was NOT broken — a row was written today — and
-  // that is only true because PushSubscription is in GLOBAL_MODELS, so the guard
-  // does not demand a scope for it. If it ever leaves that list, subscribing
-  // breaks the same way sending did, and this test is where that shows up.
   const guard = src("src/lib/tenantGuard.ts");
   const globals = guard.slice(guard.indexOf("GLOBAL_MODELS"), guard.indexOf("export function isTenantScopedModel"));
-  assert.ok(globals.includes('"PushSubscription"'), "PushSubscription must remain a global model");
+  assert.ok(globals.includes('"PushSubscription"'));
+});
+
+test("Messages has its own service-worker registration and scope", () => {
+  assert.match(register, /register\("\/messages-sw\.js"/);
+  assert.match(register, /scope: "\/messages"/);
+  assert.doesNotMatch(register, /scope: "\/messages\/"/);
+  assert.match(register, /updateViaCache: "none"/);
+  assert.match(toggle, /const MESSAGES_SW = "\/messages-sw\.js"/);
+  assert.match(toggle, /mode === "messages"[\s\S]*?scope: "\/messages"/);
+  assert.match(messagesWorker, /self\.addEventListener\("push"/);
+  assert.match(messagesWorker, /messages-192\.png/);
+});
+
+test("Messages does not mistake the legacy root CRM subscription for enabled", () => {
+  const initialise = toggle.slice(
+    toggle.indexOf("async function initialise()"),
+    toggle.indexOf("async function enable()"),
+  );
+  assert.match(initialise, /const reg = await registrationForMode\(mode\)/);
+  assert.match(initialise, /const sub = await reg\.pushManager\.getSubscription\(\)/);
+  assert.match(initialise, /const legacy = await rootSubscription\(\)/);
+  assert.match(initialise, /setRepairNeeded\(true\)/);
+  assert.match(initialise, /old shared CRM notification channel/);
+});
+
+test("repair saves the Messages subscription before deleting the legacy root subscription", () => {
+  const repair = toggle.slice(
+    toggle.indexOf("async function enable()"),
+    toggle.indexOf("async function disable()"),
+  );
+  const save = repair.indexOf("syncPushSubscription(sub)");
+  const remove = repair.indexOf("removeLegacyRootSubscription(sub.endpoint)");
+  assert.ok(save >= 0 && remove > save, "the replacement must be durable before the old channel is removed");
+});
+
+test("the Messages test targets the exact subscription of the phone being tested", () => {
+  const clientTest = toggle.slice(toggle.indexOf("async function test()"));
+  assert.match(clientTest, /sendTestPush\(\{ mode, testId, endpoint: sub\.endpoint \}\)/);
+
+  const serverTest = action.slice(action.indexOf("export async function sendTestPush("));
+  assert.match(serverTest, /const targetEndpoint = options\.endpoint\?\.trim\(\)/);
+  assert.match(serverTest, /devices\.some\(\(device\) => device\.endpoint === targetEndpoint\)/);
+  assert.match(serverTest, /\{ endpoint: targetEndpoint \|\| undefined \}/);
+
+  const sender = lib.slice(lib.indexOf("export async function sendPushToAll("));
+  assert.match(sender, /endpoint\?: string \| null/);
+  assert.match(sender, /recipients\.filter\(\(sub\) => sub\.endpoint === options\.endpoint\)/);
+});
+
+test("Messages refuses the old broadcast-style test rather than reporting another phone as success", () => {
+  const sendTest = action.slice(action.indexOf("export async function sendTestPush("));
+  assert.match(sendTest, /if \(messagesMode && !targetEndpoint\)/);
+  assert.match(sendTest, /old notification test/);
+});
+
+test("the Messages PWA test follows the real social-DM kind and landing page", () => {
+  const sendTest = action.slice(action.indexOf("export async function sendTestPush("));
+  assert.match(sendTest, /const messagesMode = options\.mode === "messages"/);
+  assert.match(sendTest, /getSetting\("PUSH_DISABLED_KINDS"\)/);
+  assert.match(sendTest, /disabled\?\.includes\("dm"\)/);
+  assert.match(sendTest, /const baseUrl = messagesMode \? "\/messages" : "\/"/);
+  assert.match(sendTest, /const kind = messagesMode \? "dm" : undefined/);
+  assert.match(messagesNav, /<PushToggle mode="messages" \/>/);
+});
+
+test("provider acceptance is not presented as proof that this phone's worker received the push", () => {
+  for (const worker of [rootWorker, messagesWorker]) {
+    assert.match(worker, /push-test-displayed/);
+    assert.match(worker, /push-test-failed/);
+    assert.match(worker, /notifyOpenClients/);
+  }
+  assert.match(toggle, /navigator\.serviceWorker\.addEventListener\("message", onMessage\)/);
+  assert.match(toggle, /Waiting for this device to confirm display/);
+  assert.match(toggle, /worker never received it/);
+});
+
+test("the dedicated worker only acknowledges a test after showNotification resolves", () => {
+  const pushHandler = messagesWorker.slice(
+    messagesWorker.indexOf('self.addEventListener("push"'),
+    messagesWorker.indexOf('self.addEventListener("notificationclick"'),
+  );
+  const display = pushHandler.indexOf("showNotification(");
+  const success = pushHandler.indexOf('type: "push-test-displayed"');
+  const failure = pushHandler.indexOf('type: "push-test-failed"');
+  assert.ok(display >= 0 && success > display);
+  assert.ok(failure > display);
 });

@@ -1,14 +1,12 @@
 import Link from "next/link";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { Truck, FileText, Wallet, CalendarClock, PackageCheck, ArrowRight, Camera } from "lucide-react";
-import PhotoUploadField from "@/components/PhotoUploadField";
-import { MobilePhotoCapture } from "@/components/MobilePhotoCapture";
+import DirectPhotoUploader from "@/components/DirectPhotoUploader";
 import { prisma } from "@/lib/db";
 import {
   markInvoiced,
   markDepositPaid,
   scheduleDelivery,
-  uploadDeliveryPhotos,
 } from "@/app/actions/fulfilment";
 import ProofOfDelivery from "@/components/ProofOfDelivery";
 import { formatDate, formatZAR } from "@/lib/format";
@@ -27,6 +25,10 @@ import {
   MobileStatPair,
   MobileWorkspaceHeader,
 } from "@/components/mobile-workspace";
+import ChecklistCard from "@/components/checklists/ChecklistCard";
+import GuidedDeliveryCompletion from "@/components/checklists/GuidedDeliveryCompletion";
+import { deliveryHandoverReadiness, handoverRunSelection } from "@/lib/checklists/deliveryHandover";
+import { runsForHost, templatesForHostRecord } from "@/lib/checklists/store";
 
 export const metadata = { title: "Deliveries — DenagoCRM" };
 
@@ -63,6 +65,38 @@ export default async function DeliveriesPage() {
     include: { contact: true, lead: { include: { product: true } }, items: true, fees: true },
     orderBy: { updatedAt: "asc" },
   });
+  /**
+   * Which column a quote belongs in.
+   *
+   * DECLARED HERE, ABOVE ITS FIRST USE, AND THAT IS THE WHOLE POINT.
+   *
+   * It used to live further down, next to the other render helpers, while the
+   * checklist prefetch below called it. `const` is not hoisted — the binding
+   * exists but is in the temporal dead zone until its declaration runs — so
+   * `/deliveries` threw `ReferenceError: Cannot access 'colOf' before
+   * initialization` on EVERY request, and the page never rendered for anyone.
+   *
+   * It read as an intermittent fault only because the error page gives an opaque
+   * digest, so two attempts looked like two mysteries rather than one certainty.
+   * The prefetch was added with the guided delivery checklists (#562); the
+   * helper had always been below it, and nothing before that had reached up.
+   */
+  const colOf = (quote: (typeof quotes)[number]): Col =>
+    !quote.invoicedAt ? "invoice" : !quote.depositPaidAt ? "deposit" : !quote.deliveryScheduledFor ? "schedule" : "deliver";
+
+  const checklistByQuote = new Map<string, {
+    templates: Awaited<ReturnType<typeof templatesForHostRecord>>;
+    runs: Awaited<ReturnType<typeof runsForHost>>;
+  }>();
+  if (canManage) {
+    await Promise.all(quotes.filter((quote) => colOf(quote) === "deliver").map(async (quote) => {
+      const [templates, runs] = await Promise.all([
+        templatesForHostRecord("quote.delivery", quote.id),
+        runsForHost("quote.delivery", quote.id),
+      ]);
+      checklistByQuote.set(quote.id, { templates, runs });
+    }));
+  }
   // One batched, tenant-scoped lookup for the board — see lib/quoteBillTo.ts.
   const fleetsById = await loadBillToFleets(prisma, quotes.map((quote) => quote.fleetId));
   const docs = await prisma.document.findMany({
@@ -102,9 +136,6 @@ export default async function DeliveriesPage() {
     sold: { label: "Handed over", cls: "border-border bg-muted/40 text-muted-foreground" },
   };
 
-  const colOf = (quote: (typeof quotes)[number]): Col =>
-    !quote.invoicedAt ? "invoice" : !quote.depositPaidAt ? "deposit" : !quote.deliveryScheduledFor ? "schedule" : "deliver";
-
   const count = (key: Col) => quotes.filter((quote) => colOf(quote) === key).length;
   const quoteTotal = (quote: (typeof quotes)[number]) =>
     quotePricing(quote.items, quote.fees, {
@@ -121,7 +152,7 @@ export default async function DeliveriesPage() {
       <MobileOnly className="space-y-4">
         <MobileWorkspaceHeader
           title="Deliveries"
-          description="Capture handover photos and check what each delivery needs next."
+          description="Run the guided handover, review the delivery note and capture the customer signature on this device."
           action={<Link href="/quotes" className="btn-secondary btn-sm"><FileText className="size-4" />Quotes</Link>}
         />
         <MobileStatPair items={[
@@ -136,8 +167,12 @@ export default async function DeliveriesPage() {
               {quotes.map((quote) => {
                 const model = quote.lead?.product?.name ?? quote.items[0]?.description ?? "Vehicle";
                 const who = quoteBillTo(quote, fleetsById.get(quote.fleetId ?? "") ?? null).name || "Customer";
-                const stage = columns.find((column) => column.key === colOf(quote));
+                const stageKey = colOf(quote);
+                const stage = columns.find((column) => column.key === stageKey);
                 const photos = photoCount(quote.id);
+                const checklist = checklistByQuote.get(quote.id);
+                const handover = checklist ? deliveryHandoverReadiness(checklist.templates, checklist.runs) : null;
+                const handoverRuns = checklist ? handoverRunSelection(checklist.templates, checklist.runs) : [];
                 return (
                   <article key={quote.id} className="rounded-2xl border border-border bg-card p-3.5">
                     <div className="flex items-start gap-3">
@@ -151,7 +186,73 @@ export default async function DeliveriesPage() {
                       </div>
                     </div>
                     {canManage && (
-                      <MobilePhotoCapture action={uploadDeliveryPhotos.bind(null, quote.id)} label="Add handover photos" />
+                      <div className="mt-3 space-y-3">
+                        {stageKey === "deliver" && checklist && (
+                          <>
+                            <ChecklistCard
+                              tenantId={quote.tenantId ?? ""}
+                              userId={user.id}
+                              hostType="quote.delivery"
+                              hostId={quote.id}
+                              templates={checklist.templates}
+                              runs={checklist.runs}
+                            />
+                            {handover?.configured ? (
+                              handover.ready ? (
+                                <GuidedDeliveryCompletion quoteId={quote.id} runIds={handoverRuns} />
+                              ) : (
+                                <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5 text-[11px] text-amber-200">
+                                  Complete the guided handover above to unlock delivery-note review and customer signing.
+                                </p>
+                              )
+                            ) : (
+                              <div>
+                                <ProofOfDelivery quoteId={quote.id} />
+                                <p className="mt-1 text-[10px] text-muted-foreground/70">
+                                  No guided delivery checklist is configured, so the standard proof-of-delivery flow is available.
+                                </p>
+                              </div>
+                            )}
+                          </>
+                        )}
+                        <DirectPhotoUploader
+                          kind="delivery"
+                          recordId={quote.id}
+                          tenantId={quote.tenantId ?? ""}
+                          label={handover?.configured ? "Add additional handover photos" : "Add handover photos"}
+                        />
+                      </div>
+                    )}
+                    {(stageKey === "schedule" || stageKey === "deliver") && (
+                      <div className="mt-3 border-t border-border/60 pt-3">
+                        <Link
+                          href={`/quotes/${quote.id}/delivery-note`}
+                          className="btn-secondary btn-sm w-full justify-center"
+                        >
+                          <FileText className="size-4" />
+                          Review delivery note
+                        </Link>
+                        {/*
+                          THE LINK ONLY. Signing lives in the block above, which
+                          is the one that knows whether a guided handover is
+                          configured — and, when it is, will not sign until every
+                          checklist is complete.
+
+                          This section arrived from main carrying its own
+                          <ProofOfDelivery>. Keeping it here would have put two
+                          signing controls on the same card, and the second one
+                          did not consult the checklist at all: a delivery with a
+                          guided handover configured could have been signed off
+                          straight past it.
+                        */}
+                        <p className="mt-1.5 text-[10px] text-muted-foreground/70">
+                          {canManage
+                            ? stageKey === "deliver"
+                              ? "Review the note, then complete the handover above to capture the driver and customer signature."
+                              : "Customer signing becomes available here once the delivery is scheduled."
+                            : "Delivery note is available for review."}
+                        </p>
+                      </div>
                     )}
                   </article>
                 );
@@ -236,6 +337,9 @@ export default async function DeliveriesPage() {
                     // while the paperwork names the lodge is two answers.
                     const who = quoteBillTo(quote, fleetsById.get(quote.fleetId ?? "") ?? null).name || "—";
                     const photos = photoCount(quote.id);
+                    const checklist = checklistByQuote.get(quote.id);
+                    const handover = checklist ? deliveryHandoverReadiness(checklist.templates, checklist.runs) : null;
+                const handoverRuns = checklist ? handoverRunSelection(checklist.templates, checklist.runs) : [];
                     return (
                       <div key={quote.id} className="rounded-xl border border-border bg-card p-3 shadow-sm transition-colors hover:border-primary/30">
                         <div className="flex items-baseline justify-between gap-2">
@@ -303,17 +407,39 @@ export default async function DeliveriesPage() {
                           </a>
                         )}
                         {canManage && column.key === "deliver" && (
-                          <div className="mt-2.5 border-t border-border/60 pt-2.5">
-                            <ProofOfDelivery quoteId={quote.id} />
-                            <p className="mt-1 text-[10px] text-muted-foreground/70">Capture driver, handover checklist &amp; signature.</p>
-                            {/* Resets on success: an upload form that keeps its
-                                file selection invites the same photos being sent
-                                again. The action returns its own count-aware
-                                message, so no `success` prop is needed here. */}
-                            <SaveForm action={uploadDeliveryPhotos.bind(null, quote.id)} className="mt-1.5 space-y-1.5">
-                              <PhotoUploadField className="block w-full text-xs text-muted-foreground file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
-                              <SaveButton className="btn-secondary btn-sm w-full">📷 Add delivery photos</SaveButton>
-                            </SaveForm>
+                          <div className="mt-2.5 space-y-3 border-t border-border/60 pt-2.5">
+                            {checklist && (
+                              <ChecklistCard
+                                tenantId={quote.tenantId ?? ""}
+                                userId={user.id}
+                                hostType="quote.delivery"
+                                hostId={quote.id}
+                                templates={checklist.templates}
+                                runs={checklist.runs}
+                              />
+                            )}
+                            {handover?.configured ? (
+                              handover.ready ? (
+                                <GuidedDeliveryCompletion quoteId={quote.id} runIds={handoverRuns} />
+                              ) : (
+                                <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5 text-[10px] text-amber-200">
+                                  Complete the guided handover before customer signing is unlocked.
+                                </p>
+                              )
+                            ) : (
+                              <div>
+                                <ProofOfDelivery quoteId={quote.id} />
+                                <p className="mt-1 text-[10px] text-muted-foreground/70">
+                                  No guided delivery checklist is configured; using the standard proof-of-delivery flow.
+                                </p>
+                              </div>
+                            )}
+                            <DirectPhotoUploader
+                              kind="delivery"
+                              recordId={quote.id}
+                              tenantId={quote.tenantId ?? ""}
+                              label={handover?.configured ? "Add additional delivery photos" : "Add delivery photos"}
+                            />
                           </div>
                         )}
                       </div>

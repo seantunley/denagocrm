@@ -16,7 +16,8 @@ import { withBotConversationWrite } from "./botTenant";
 import { loadBotSession, upsertBotSessionTx, deleteBotSessionTx, botStillOwnsTx } from "./botSessionStore";
 import { recordBotFlowEventsTx, type BotFlowEventInput } from "./botFlowAnalytics";
 import { completeInboundBotEventTx, currentInboundBotClaim } from "./botInboundEvent";
-import { decideInboundAct, type BotOwnership } from "./botOwnership";
+import { decideInboundAct, HUMAN_RESPONSIBILITY_HOURS, type BotOwnership } from "./botOwnership";
+import type { FlowEntryContext } from "./flowRouting";
 
 export const FLOW_MARKER = "🤖 Flow";
 const FLOW_VERSION_VAR = "__flow_version";
@@ -84,7 +85,7 @@ function actionEvents(digits: string, flowVersionId: string | null, actions: Act
   return actions.filter((a) => a.ok).map((a) => ({ channel: "whatsapp", conversationKey: digits, flowVersionId, nodeId: a.nodeId, eventType: "crm_action", metadata: { action: a.action } }));
 }
 
-export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise<boolean> {
+export async function runWhatsAppFlow(digits: string, input: FlowInput, entryContext?: FlowEntryContext): Promise<boolean> {
   const match = await matchByPhone(digits);
   const existing = await loadSession(digits);
   // Same rule as DM/Telegram, from the same module — but `status === "paused"`
@@ -110,7 +111,7 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise
   const actor = await resolveTenantActor();
   if (!actor) { console.error("[bot] refusing to reply on whatsapp: no tenant actor, so the reply could not be recorded"); return true; }
 
-  const snapshot = await resolveFlowSnapshot("whatsapp", restart ? null : existing?.flowVersionId ?? null);
+  const snapshot = await resolveFlowSnapshot("whatsapp", restart ? null : existing?.flowVersionId ?? null, { text: input.text, ...entryContext });
   const actions: ActionObservation[] = [];
   const result = await runFlow(snapshot.flow, session, input, buildCtx(digits, match, actions));
 
@@ -151,7 +152,7 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise
     }
     if (events.length) await recordBotFlowEventsTx(tx, tenantId, events);
 
-    if (result.handedOff) await upsertBotSessionTx(tx, tenantId, { channel: "whatsapp", key: digits, nodeId: null, vars: storedVars(session.vars, snapshot.versionId, result.endedAt), status: "paused", ownership: "ai_handoff", expiresAt: new Date(Date.now() + 6 * 3600 * 1000) });
+    if (result.handedOff) await upsertBotSessionTx(tx, tenantId, { channel: "whatsapp", key: digits, nodeId: null, vars: storedVars(session.vars, snapshot.versionId, result.endedAt), status: "paused", ownership: "ai_handoff", expiresAt: new Date(Date.now() + HUMAN_RESPONSIBILITY_HOURS * 3600 * 1000) });
     else if (result.session) await upsertBotSessionTx(tx, tenantId, { channel: "whatsapp", key: digits, nodeId: result.session.nodeId, vars: storedVars(result.session.vars, snapshot.versionId), status: "active", ownership: "bot", expiresAt: new Date(Date.now() + 24 * 3600 * 1000) });
     else await deleteBotSessionTx(tx, tenantId, "whatsapp", digits);
   });
@@ -160,7 +161,7 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise
   return true;
 }
 
-export async function runWhatsAppBot(digits: string, input: FlowInput, opts: { voiceNote?: boolean } = {}): Promise<void> {
+export async function runWhatsAppBot(digits: string, input: FlowInput, opts: { voiceNote?: boolean; entryContext?: FlowEntryContext } = {}): Promise<void> {
   // Ownership gates EVERY route into the bot, not just the flow runner.
   //
   // maybeAutoReply never reads BotSession — its only brake is botShouldPause, a
@@ -182,6 +183,6 @@ export async function runWhatsAppBot(digits: string, input: FlowInput, opts: { v
   }
 
   if (opts.voiceNote) { await maybeAutoReply(digits, input.text, { voiceNote: true }); return; }
-  if (await isFlowEnabled()) { await runWhatsAppFlow(digits, input); return; }
+  if (await isFlowEnabled()) { await runWhatsAppFlow(digits, input, opts.entryContext); return; }
   await maybeAutoReply(digits, input.text);
 }

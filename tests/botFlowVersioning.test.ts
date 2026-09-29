@@ -54,7 +54,7 @@ test("shared channel sessions persist and resolve a pinned flow version", () => 
   const code = src("src/lib/flowSession.ts");
   assert.match(code, /flowVersionId: p\.fv \?\? null/);
   assert.match(code, /fv: state\.flowVersionId/);
-  assert.match(code, /resolveFlowSnapshot\(channel, restart \? null : state\.flowVersionId\)/);
+  assert.match(code, /resolveFlowSnapshot\(channel, restart \? null : state\.flowVersionId, \{ text: input\.text, \.\.\.entryContext \}\)/);
 });
 
 test("WhatsApp sessions persist and resolve their publication pin", () => {

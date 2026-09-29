@@ -2,16 +2,8 @@ import { scheduleActivity, completeActivity, cancelActivity, updateActivity } fr
 import ModalTrigger from "@/components/Modal";
 import ActivityTypeFields from "@/components/ActivityTypeFields";
 import { formatDue } from "@/lib/format";
-
-export const activityIcons: Record<string, string> = {
-  call: "📞",
-  email: "✉️",
-  meeting: "🤝",
-  whatsapp: "💬",
-  test_drive: "🚗",
-  follow_up: "🔁",
-  todo: "☑️",
-};
+import { isFutureDay } from "@/lib/activityDay";
+import { ActivityTypeIcon } from "@/components/ActivityTypesProvider";
 
 type ActivityItem = {
   id: string;
@@ -146,9 +138,10 @@ export default function ActivityPanel({
             const dueToday = !overdue && a.dueDate <= today;
             return (
               <li key={a.id} className="flex items-start gap-3">
-                <span className="text-lg leading-6 w-7 text-center shrink-0">
-                  {activityIcons[a.type] ?? "☑️"}
-                </span>
+                <ActivityTypeIcon
+                  type={a.type}
+                  className="text-lg leading-6 w-7 text-center shrink-0"
+                />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium">{a.summary}</p>
                   <p className="text-xs text-slate-400">
@@ -184,7 +177,8 @@ export default function ActivityPanel({
                     )}
                   </p>
                 </div>
-                <form
+                {/* Not offered before the day arrives — finishActivity refuses it. */}
+                {!isFutureDay(a.dueDate) && <form
                   action={completeActivity.bind(null, a.id)}
                   className="flex items-center gap-1.5"
                 >
@@ -197,7 +191,7 @@ export default function ActivityPanel({
                   <button className="btn-secondary btn-sm" title="Mark done">
                     ✓ Done
                   </button>
-                </form>
+                </form>}
                 <ModalTrigger
                   label="✎"
                   title="Edit activity"
@@ -297,7 +291,7 @@ export default function ActivityPanel({
           <ul className="space-y-1">
             {recent.map((a) => (
               <li key={a.id} className="text-xs text-slate-500 line-through">
-                {activityIcons[a.type]} {a.summary}
+                <ActivityTypeIcon type={a.type} /> {a.summary}
               </li>
             ))}
           </ul>

@@ -68,6 +68,10 @@ export const ROUTE_RULES = [
   { prefix: "/fleets", anyOf: ["fleets.view", "fleets.manage"] },
   // Survey admin (distinct from the public /s response pages).
   { prefix: "/surveys", anyOf: ["surveys.view", "surveys.manage"] },
+  // Public comments on posts and ads. The same grant as the inbox, and named
+  // here so the rule the edge applies matches the one the page applies —
+  // otherwise a visible nav link leads to a redirect.
+  { prefix: "/comments", anyOf: ["inbox.view", "inbox.reply"] },
   // Journeys. `journeys.manage` is a real, grantable key in the catalogue and it
   // is what the sidebar already shows the link on — but the pages and actions
   // demanded requireOwner() and no rule gated the prefix at all. An admin could

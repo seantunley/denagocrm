@@ -1,0 +1,67 @@
+import type { HelpArticle } from "../types";
+
+export const offlineChecklistArticles: HelpArticle[] = [
+  {
+    slug: "offline-status-and-sync",
+    title: "Working online and offline",
+    summary: "Read the permanent connection indicator, save work on your device and understand when it has reached the server.",
+    category: "getting-started",
+    audience: "everyone",
+    keywords: ["offline", "online", "sync", "pending", "device", "PWA", "connection"],
+    body: [
+      { type: "p", text: "Denago CRM always shows a connection badge in the app header. **Online** means the server can be reached; **Offline** means the browser has no connection. A number beside the badge is the count of checklist changes and photos still held on this device." },
+      { type: "table", headers: ["Badge", "Meaning"], rows: [["Online", "The app can send changes to the server."], ["Offline", "Supported checklist work is being saved only on this device."], ["Syncing", "Saved changes are being sent. Keep the app open until the badge returns to Online."], ["Online · number", "The connection is available, but that many changes still need to finish syncing."]] },
+      { type: "callout", tone: "warning", text: "A message saying **Saved on this device — waiting to sync** is not server confirmation. The evidence is confirmed only after the pending number clears." },
+      { type: "p", text: "Offline checklist data is separated by workspace and user, expires after **72 hours**, and is removed when you sign out. Reconnect and sync before that deadline. Do not clear the browser's site data while changes are pending." },
+      { type: "callout", tone: "info", text: "This is still the same installable web app. Nothing needs to be downloaded from an app store." },
+    ],
+  },
+  {
+    slug: "guided-checklists-capture",
+    title: "Capturing guided checklists and signatures",
+    summary: "Run a configured delivery, check-in, check-out or vehicle-condition list with photos, notes and answers.",
+    category: "getting-started",
+    audience: "everyone",
+    keywords: ["checklist", "delivery", "handover", "job card", "condition", "photos", "signature", "inspection"],
+    body: [
+      { type: "p", text: "Guided checklists appear on scheduled deliveries, workshop check-in and quality-check stages, and vehicle records. Each list opens as a one-step-at-a-time mobile sheet so the instruction stays beside the camera or answer control." },
+      { type: "steps", items: ["Open the delivery, job card or vehicle record and choose the checklist.", "Complete each visible step. Required photo steps show how many images are still needed; photo-and-note steps also require the note.", "Use **Skip this step** only when it genuinely does not apply. A required step needs a reason.", "Choose **Save for later** at any point. The same device restores the run, its answers and queued photos after a reload or app restart.", "Choose **Finish** only after the outstanding list is empty. The app saves the answers, uploads the evidence and asks the server to seal the completed run."] },
+      { type: "p", text: "A completed checklist is immutable. Its answers and photographs cannot be changed or removed afterward. Start a new run if more evidence must be recorded." },
+      { type: "callout", tone: "tip", text: "You can remove a photo before completion. The app removes the queued copy, an in-memory copy, or the already-registered server copy as appropriate." },
+      { type: "callout", tone: "info", text: "Customer or staff signatures captured by the existing proof-of-delivery and signing controls remain part of the handover record. Checklist evidence does not replace the signature; use both where the process requires both." },
+    ],
+  },
+  {
+    slug: "offline-sync-troubleshooting",
+    title: "Troubleshooting offline checklist sync",
+    summary: "Recover pending photos, understand failed items and safely handle shared devices, expiry and storage limits.",
+    category: "getting-started",
+    audience: "everyone",
+    keywords: ["offline error", "sync failed", "stuck photo", "storage", "72 hours", "shared device", "retry"],
+    body: [
+      { type: "h", text: "Pending count does not clear" },
+      { type: "steps", items: ["Confirm the header says **Online**.", "Open the same checklist on the same device. It restores the saved run automatically.", "Choose **Save for later** to retry immediately, or leave the sheet open when the connection returns.", "Read the error shown for a permanently failed photo. Remove and recapture only when the message identifies an invalid or unusable file."] },
+      { type: "h", text: "The app was closed or reloaded" },
+      { type: "p", text: "Reopen the same record and list on the same signed-in account. Run IDs, entry IDs, answers, notes, skip reasons and photo blobs are stored together, so they remain linked after a normal reload or restart." },
+      { type: "h", text: "Private browsing or storage is full" },
+      { type: "p", text: "Some private modes disable durable browser storage. The capture screen says when a photo is held only in memory. Keep the screen open and reconnect; if the device cannot retain the photo, closing the screen can lose that in-memory copy." },
+      { type: "h", text: "Shared device, sign-out and expiry" },
+      { type: "p", text: "Always sign out when handing the device to someone else. Signing out clears checklist drafts and photo blobs. A new tenant/user session also removes data belonging to another scope. Unsynced offline data expires after 72 hours." },
+      { type: "callout", tone: "warning", text: "Do not clear site data, uninstall the PWA or reset the browser while the badge shows pending work. Those actions delete the only local copy." },
+    ],
+  },
+  {
+    slug: "admin-configure-guided-checklists",
+    title: "Configuring guided checklists",
+    summary: "Create reusable lists for deliveries, workshop stages and vehicle condition reports without changing historic evidence.",
+    category: "admin",
+    audience: "admins",
+    keywords: ["configure checklist", "template", "required photo", "visibility", "revision", "settings"],
+    body: [
+      { type: "steps", items: ["Open **Settings → Checklists**.", "Choose the situation: delivery handover, workshop check-in, workshop check-out or vehicle condition.", "Add and order the steps. Choose photo, photo plus note, yes/no, text or number; then set required status and photo limits.", "Save and activate the list. It appears on records where the viewer has the host permission."] },
+      { type: "p", text: "Every material edit creates an immutable revision. A run always keeps the labels, instructions, capture types, required flags and photo limits from the revision it started with. The phone never decides those rules." },
+      { type: "p", text: "Deactivating a template stops new runs but does not strand work already started. A template that has been used cannot be deleted; deactivate it so historic evidence remains readable." },
+      { type: "callout", tone: "info", text: "Visibility rules are evaluated against the signed-in viewer and the host record before a run starts, then the applicable authoritative step set is validated again during sync." },
+    ],
+  },
+];

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useActionState } from "react";
 import AiCheckButton from "@/components/AiCheckButton";
+import ModalPortal from "@/components/ui/modal-portal";
 import Link from "next/link";
 import { sendEmailAction, type SendEmailState } from "@/app/actions/emails";
 import RichTextEditor from "@/components/RichTextEditor";
@@ -94,6 +95,7 @@ export default function EmailComposer({
       </button>
 
       {open && (
+        <ModalPortal>
         <div
           className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 p-4 pt-8 overflow-y-auto"
           onPointerDown={(e) => e.target === e.currentTarget && setOpen(false)}
@@ -184,7 +186,7 @@ export default function EmailComposer({
           <div>
             <label className="label">Message</label>
             <input type="hidden" name="bodyHtml" value={body} />
-            <RichTextEditor value={body} onChange={setBody} />
+            <RichTextEditor value={body} onChange={setBody} emailTools />
             <AiCheckButton
               getDraft={() => body.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()}
               contactId={contactId}
@@ -313,6 +315,7 @@ export default function EmailComposer({
             )}
           </div>
         </div>
+        </ModalPortal>
       )}
     </>
   );

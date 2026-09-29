@@ -1,5 +1,6 @@
 import "server-only";
 import { list } from "@vercel/blob";
+import { activeBlobToken } from "./storage";
 import { getSetting, putSetting } from "./settings";
 import { sendPushToAll } from "./push";
 import { logError } from "./errorLog";
@@ -115,8 +116,11 @@ export async function runAiHealthIfDue(): Promise<void> {
 
 export async function runBackupWatchdog(): Promise<void> {
   try {
-    if (!process.env.BLOB_READ_WRITE_TOKEN) return;
-    const { blobs } = await list({ prefix: "backups/database/" });
+    // The store backups are written to, named explicitly: a token-less list() is
+    // redirected by BLOB_STORE_ID to whichever store that names.
+    const token = activeBlobToken();
+    if (!token) return;
+    const { blobs } = await list({ prefix: "backups/database/", token });
     const newest = blobs.sort(
       (a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime()
     )[0];

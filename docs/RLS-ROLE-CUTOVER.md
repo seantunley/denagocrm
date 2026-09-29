@@ -1,6 +1,22 @@
 # Making Row Level Security load-bearing
 
-**Status:** the code and scripts are ready, and the role is now **proven end to end** against a real PostgreSQL — see [What is proven](#what-is-proven). The cutover itself is four steps on the Neon console and one environment variable, and it has not been done. Production still connects as `neondb_owner`, so every policy in production is still inert.
+**Status: THE CUTOVER IS DONE, and verified live on 2026-09-01.** A read-only
+census of `pg_stat_activity` showed every Vercel connection running as
+`crm_app` through the pooler, `rolbypassrls = false` — the only `neondb_owner`
+session was the audit script taking the census. Row Level Security is
+load-bearing in production. See
+[Post-cutover verification](#post-cutover-verification-2026-09-01) for the full
+audit, and keep running it after schema-bearing deploys: with a non-bypassing
+role live, the failure mode has inverted — a new table shipped without grants or
+policy no longer *leaks*, it *breaks*, as `42501` or a silently empty screen.
+
+Everything below is kept as written, because it is the reference for how the
+cutover was designed, what it depends on, and how to roll it back.
+
+Original status when this document was the plan: the code and scripts were
+ready, the role proven end to end against a real PostgreSQL — see
+[What is proven](#what-is-proven) — and production still connected as
+`neondb_owner`.
 
 ---
 
@@ -347,3 +363,46 @@ The role keeps existing and keeps its grants, so a second attempt starts at step
 **The tables with no `tenantId` are untouched.** `Organization`, `OrganizationMembership`, `PushSubscription` and `_ContactToTag` hold rows that belong to somebody and have no column for a policy to key on. This cutover leaves them exactly as exposed as they are today — no better, no worse. Giving them a tenant slice is a schema change and separate work.
 
 **`TENANT_ENFORCEMENT` is still off, and this does not turn it on.** The two are independent switches and they protect different things: enforcement scopes Prisma *model* operations in the application, RLS scopes *rows* in the database, and raw SQL is only covered by the second. The pre-flip gate is now green with an empty allowlist, which means enforcement is safe to flip *from the harness's point of view* — but that is a second decision, with its own deploy, and it should not ride along with this one.
+
+---
+
+## Post-cutover verification (2026-09-01)
+
+Run read-only as `neondb_owner` over `DATABASE_URL_UNPOOLED`, three weeks after
+the 2026-08-11 pre-cutover audit and after the cutover itself.
+
+**Who is connected** (`pg_stat_activity`): 5 pooled connections as **`crm_app`**
+(`application_name: pgbouncer` — Vercel), 1 direct as `neondb_owner` — the audit
+script itself. `crm_app` is `NOSUPERUSER NOBYPASSRLS`, `neondb_owner` retains
+`BYPASSRLS` for migrations, as designed.
+
+**`npm run check:rls-role`: all checks passed.**
+
+| question | 2026-08-11 (pre) | 2026-09-01 (post) |
+|---|---|---|
+| tables in `public` | 166 | **175** |
+| carrying a `tenantId` | 153 | **162** |
+| tenant tables RLS enabled + FORCE'd | all | all |
+| RLS enabled with no policy | 0 | 0 |
+| policies excluding `crm_app` | 0 | 0 |
+| tables missing a grant | — (role absent) | **0** |
+| TRUNCATE anywhere | — | 0 |
+| future tables covered (default ACL) | yes | yes |
+
+The nine tables added between the audits — the guided-checklist family,
+`BotKnowledgeEntry`, `BotFlowRoute`, `BotFlowEvaluation`, the X social-inbox and
+attention-centre work — were all created by `neondb_owner` through the normal
+migration path, so the `ALTER DEFAULT PRIVILEGES` rule granted every one of
+them automatically and their `tenantId` policies rode in with their migrations.
+Step 2's most-easily-skipped line has now carried three weeks of real schema
+churn without a single manual re-grant. That is the mechanism working, not luck
+— but it holds only while migrations run as `neondb_owner`, which is why
+`DATABASE_URL_UNPOOLED` must stay the owner.
+
+The 11 tables with no `tenantId` are the known global-by-design list. Unchanged,
+and unchanged in exposure.
+
+**Standing instruction:** after any deploy that carries a migration, re-run
+`check:rls-role` as the owner. Under a live non-bypassing role, the audit is no
+longer preparation — it is the difference between knowing a new table works and
+finding out from a customer's empty screen.

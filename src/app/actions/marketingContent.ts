@@ -14,6 +14,7 @@ import {
   type AudienceGroup,
 } from "@/lib/marketingAudiences";
 import { logAuditStrict } from "@/lib/audit";
+import { withActingStaffScope } from "@/lib/actingScope";
 
 // Keep historical categories readable/editable while making the governed
 // Marketing workspace's purpose-specific categories authoritative for new work.
@@ -72,49 +73,53 @@ export async function createMarketingAudience(formData: FormData) {
 }
 
 export async function updateMarketingAudience(id: string, formData: FormData) {
-  const { user, tenantId } = await contentContext("campaigns.manage_audiences");
-  const tree = validateAudienceTree(json<AudienceGroup>(formData.get("ruleTree")));
-  const submittedName = formData.get("name");
-  const name = submittedName === null ? undefined : String(submittedName).trim();
-  if (submittedName !== null && !name) throw new Error("Audience name is required");
-  await validateAudienceReferences(tree, tenantId);
+  return withActingStaffScope(async () => {
+    const { user, tenantId } = await contentContext("campaigns.manage_audiences");
+    const tree = validateAudienceTree(json<AudienceGroup>(formData.get("ruleTree")));
+    const submittedName = formData.get("name");
+    const name = submittedName === null ? undefined : String(submittedName).trim();
+    if (submittedName !== null && !name) throw new Error("Audience name is required");
+    await validateAudienceReferences(tree, tenantId);
 
-  const result = await saveAudienceVersion({ segmentId: id, tenantId, tree, userId: user.id, userName: user.name, name });
-  await logAuditStrict({ action: "audience.updated", summary: `Updated audience version ${result.version}`, entityType: "Segment", entityId: id, user, after: { ...result, name } });
-  revalidatePath("/marketing/audiences");
+    const result = await saveAudienceVersion({ segmentId: id, tenantId, tree, userId: user.id, userName: user.name, name });
+    await logAuditStrict({ action: "audience.updated", summary: `Updated audience version ${result.version}`, entityType: "Segment", entityId: id, user, after: { ...result, name } });
+    revalidatePath("/marketing/audiences");
+  });
 }
 
 export async function previewMarketingAudience(formData: FormData) {
-  const { tenantId } = await contentContext("campaigns.manage_audiences");
-  const tree = validateAudienceTree(json<AudienceGroup>(formData.get("ruleTree")));
-  const channel = String(formData.get("channel") ?? "any");
-  if (!new Set(["any", "email", "sms"]).has(channel)) throw new Error("Unsupported preview channel");
-  await validateAudienceReferences(tree, tenantId);
+  return withActingStaffScope(async () => {
+    const { tenantId } = await contentContext("campaigns.manage_audiences");
+    const tree = validateAudienceTree(json<AudienceGroup>(formData.get("ruleTree")));
+    const channel = String(formData.get("channel") ?? "any");
+    if (!new Set(["any", "email", "sms"]).has(channel)) throw new Error("Unsupported preview channel");
+    await validateAudienceReferences(tree, tenantId);
 
-  // Resolve once so the preview can explain reachability without three full
-  // database/evaluation passes. evaluateAudience itself remains tenant-scoped and
-  // excludes deleted/marketing-opted-out contacts.
-  const contacts = await evaluateAudience(tree, "any", tenantId);
-  const emailCount = contacts.filter((contact) => Boolean(contact.email)).length;
-  const smsCount = contacts.filter((contact) => Boolean(contact.whatsapp || contact.phone)).length;
-  const selected = channel === "email"
-    ? contacts.filter((contact) => Boolean(contact.email))
-    : channel === "sms"
-      ? contacts.filter((contact) => Boolean(contact.whatsapp || contact.phone))
-      : contacts;
+    // Resolve once so the preview can explain reachability without three full
+    // database/evaluation passes. evaluateAudience itself remains tenant-scoped and
+    // excludes deleted/marketing-opted-out contacts.
+    const contacts = await evaluateAudience(tree, "any", tenantId);
+    const emailCount = contacts.filter((contact) => Boolean(contact.email)).length;
+    const smsCount = contacts.filter((contact) => Boolean(contact.whatsapp || contact.phone)).length;
+    const selected = channel === "email"
+      ? contacts.filter((contact) => Boolean(contact.email))
+      : channel === "sms"
+        ? contacts.filter((contact) => Boolean(contact.whatsapp || contact.phone))
+        : contacts;
 
-  return {
-    total: contacts.length,
-    channelCount: selected.length,
-    emailCount,
-    smsCount,
-    contacts: selected.slice(0, 20).map((contact) => ({
-      id: contact.id,
-      name: `${contact.firstName} ${contact.lastName ?? ""}`.trim(),
-      email: contact.email,
-      phone: contact.whatsapp ?? contact.phone,
-    })),
-  };
+    return {
+      total: contacts.length,
+      channelCount: selected.length,
+      emailCount,
+      smsCount,
+      contacts: selected.slice(0, 20).map((contact) => ({
+        id: contact.id,
+        name: `${contact.firstName} ${contact.lastName ?? ""}`.trim(),
+        email: contact.email,
+        phone: contact.whatsapp ?? contact.phone,
+      })),
+    };
+  });
 }
 
 export async function archiveMarketingAudience(id: string) {
@@ -277,4 +282,22 @@ export async function archiveMarketingTemplate(id: string) {
   if (updated !== 1) throw new Error("Template not found or already archived");
   await logAuditStrict({ action: "template.archived", summary: "Archived marketing template", entityType: "EmailTemplate", entityId: id, user });
   revalidatePath("/marketing/templates");
+}
+
+/**
+ * Render a draft template body exactly as a campaign send would.
+ *
+ * Read-only on purpose: no rows written, no audit entry — it is the same
+ * permission gate as every template action followed by a pure render. The body
+ * comes from the editor the caller is typing into, and the result goes into a
+ * SANDBOXED iframe, so the only consumer of this HTML is an inert document.
+ */
+export async function previewMarketingEmailTemplate(bodyHtml: string): Promise<string> {
+  const { tenantId } = await contentContext("campaigns.manage_templates");
+  const { emailPreviewHtml } = await import("@/lib/campaigns");
+  const { emailBrand } = await import("@/lib/emailBrand");
+  // Cap what a preview will chew on; a template body near this size has bigger
+  // problems than its preview, and this action runs on every debounced keystroke.
+  const body = String(bodyHtml ?? "").slice(0, 200_000);
+  return emailPreviewHtml(body, await emailBrand(tenantId));
 }

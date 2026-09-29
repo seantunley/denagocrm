@@ -10,6 +10,7 @@ import {
   type PermissionUser,
 } from "@/lib/permissions";
 import { requireUser } from "@/lib/auth";
+import { futureActivityRefusal, isFutureDay } from "@/lib/activityDay";
 import { resolveAssignableUser } from "@/lib/tenantActor";
 import { logAudit } from "@/lib/audit";
 import { reserveSlot } from "@/lib/bookingSlots";
@@ -203,7 +204,27 @@ export async function scheduleActivity(formData: FormData) {
 }
 
 async function finishActivity(id: string, note: string) {
-  const { user } = await requireActivityAccess(id);
+  const { user, activity: scheduled } = await requireActivityAccess(id);
+  /*
+   * THE ONE CHOKEPOINT. Six places in the UI offer a "done" control — the two
+   * activity lists, the lead timeline, the activity panel, the calendar and the
+   * dashboard agenda — and every one of them arrives here, through either
+   * `completeActivity` or `completeActivityAssess`. Guarding here covers all of
+   * them; guarding in a component covers one and invites the next one to forget.
+   *
+   * Completing work scheduled for a day that has not started is not a typo the
+   * user meant: it silently inflates completion stats, marks a lead as followed
+   * up when nobody called, and removes the item from tomorrow's agenda so it
+   * never gets done.
+   *
+   * NOT applied to `testDrives.ts`, which also sets an activity done. That path
+   * records a test drive actually being RETURNED — a real-world event that has
+   * happened — rather than a person ticking a box early, and refusing it would
+   * block the return being logged.
+   */
+  if (isFutureDay(scheduled.dueDate)) {
+    throw new Error(futureActivityRefusal(scheduled.dueDate));
+  }
   const activity = await prisma.activity.update({
     where: { id },
     data: { status: "done", doneAt: new Date() },
@@ -231,12 +252,24 @@ async function finishActivity(id: string, note: string) {
       },
     });
   }
-  revalidateRecordPages(activity);
+  /*
+   * NO REVALIDATION HERE — the caller decides when it is safe.
+   *
+   * This used to call revalidateRecordPages(activity), which quietly defeated
+   * the deferral in completeActivityAssess below. `revalidatePath` in a Server
+   * Action does not only mark the named path: it invalidates the client Router
+   * Cache and the action's response refreshes the CURRENT tree. So revalidating
+   * /leads/:id still re-rendered the dashboard, unmounted the agenda row, and
+   * took the "What's next?" dialog with it — the same "pops up and immediately
+   * disappears" the comment below describes as already fixed. It was fixed one
+   * level too high.
+   */
   return activity;
 }
 
 export async function completeActivity(id: string, formData: FormData) {
-  await finishActivity(id, String(formData.get("note") ?? ""));
+  const activity = await finishActivity(id, String(formData.get("note") ?? ""));
+  revalidateRecordPages(activity);
   revalidatePath(String(formData.get("revalidate") ?? "/activities"));
   revalidatePath("/activities");
   revalidatePath("/");
@@ -266,9 +299,11 @@ function revalidateActivityViews() {
  * needsNextStep, because that unmounts the row holding the dialog open. The
  * client calls this when the dialog closes, however it closed.
  */
-export async function refreshAfterNextStep(): Promise<void> {
+export async function refreshAfterNextStep(leadId?: string | null): Promise<void> {
   await requireUser();
   revalidateActivityViews();
+  // The lead page was skipped along with the views while the dialog was open.
+  if (leadId) revalidatePath(`/leads/${leadId}`);
 }
 
 export async function completeActivityAssess(
@@ -304,7 +339,13 @@ export async function completeActivityAssess(
    * decision, and the client calls router.refresh() when the dialog closes —
    * whether it was completed or dismissed.
    */
-  if (!needsNextStep) revalidateActivityViews();
+  // Record pages go with the views, for the reason given in finishActivity:
+  // revalidating ANY path refreshes the current tree, so these cannot run while
+  // the dialog is open either.
+  if (!needsNextStep) {
+    revalidateActivityViews();
+    revalidateRecordPages(activity);
+  }
 
   return {
     done: true,

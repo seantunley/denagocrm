@@ -78,3 +78,46 @@ test("the portal never hands out another signer's token", () => {
   assert.doesNotMatch(recipientsBlock, /mode:\s*"insensitive"/, "no LIKE match on a signing recipient");
   assert.match(page, /r\.email\?\.toLowerCase\(\) === viewerEmail/, "the signer must be matched exactly");
 });
+
+/*
+ * SIGN-IN IS THE ONE PORTAL STEP WITH NO WORKSPACE TO INHERIT.
+ *
+ * Production, 2026-08-27:
+ *
+ *   No tenant scope established for AppSetting   ·   POST /portal/login
+ *
+ * `requestPortalOtp` calls `isSmtpConfigured()` before anything else, and that
+ * reads AppSetting — a tenant-scoped model. Every other portal action resolves
+ * its workspace from the CONTACT, but at sign-in there is no contact yet and no
+ * staff session either, so the guarded client refused and the page fell to the
+ * error boundary.
+ *
+ * The hostname is the only identity the request carries, which is already what
+ * decides whose name is printed on that page.
+ */
+test("both login legs bind the workspace that owns the hostname", () => {
+  const actions = src("src/app/actions/portal.ts");
+  assert.match(actions, /return withPortalHostScope\(\(\) => issuePortalOtp\(email\)\)/);
+  assert.match(actions, /return withPortalHostScope\(\(\) => completePortalOtp\(email, code\)\)/);
+  // An enclosing frame, not enterWith: a scope entered inside a callee does not
+  // reach the frame that called it, which is what made the staff actions fail
+  // the same way.
+  const helper = actions.slice(actions.indexOf("async function withPortalHostScope"));
+  const body = helper.slice(0, helper.indexOf("\n}"));
+  assert.match(body, /runInTenantScope\(\{ tenantId: row\.tenantId, system: false \}, fn\)/);
+  assert.doesNotMatch(body, /enterTenantScope/);
+});
+
+test("an unverified or unknown hostname is never honoured", () => {
+  const actions = src("src/app/actions/portal.ts");
+  const helper = actions.slice(actions.indexOf("async function withPortalHostScope"));
+  const body = helper.slice(0, helper.indexOf("\n}"));
+  // An unverified domain is a hostname somebody CLAIMED. Honouring it would let
+  // anyone point a name at this deployment and be handed a workspace.
+  assert.match(body, /verifiedAt: \{ not: null \}/, "the domain must be verified");
+  assert.match(body, /tenant: \{ active: true \}/, "and its tenant still active");
+  // The two short-circuits that make this safe: never widen, never invent.
+  assert.match(body, /if \(currentTenantScope\(\)\) return fn\(\);/, "an existing scope wins");
+  assert.match(body, /if \(!row\?\.tenantId\) return fn\(\);/, "an unresolved host must not be given one");
+  assert.doesNotMatch(body, /DEFAULT_TENANT_ID/, "and must never fall back to the founding tenant");
+});

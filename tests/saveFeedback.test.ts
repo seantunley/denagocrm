@@ -55,6 +55,10 @@ test("actionResult: only ActionRefusal's own message is shown; the rest is logge
   const code = src("src/lib/actionResult.ts");
   assert.match(code, /classifyFailure\(error, failureReference\(\)\)/, "the rules must be applied");
   assert.match(code, /console\.error\(/, "the real error must reach the runtime log");
+  assert.match(code, /await import\("\.\/errorLog"\)/, "the in-product System Log must receive the failure");
+  assert.match(code, /await logError\(/);
+  assert.match(code, /failure\.logLine/,
+    "the persisted entry must carry the same reference shown to the user");
   // Framework signals must still propagate, or redirect() and notFound() break.
   assert.match(code, /unstable_rethrow\(error\)/, "control-flow throws must keep propagating");
 

@@ -118,5 +118,6 @@ test("flow library suppresses publish controls while compiler errors exist", () 
   assert.match(page, /\(!f\.active \|\| pending\) && !blocked/);
 
   const editor = src("src/app/(app)/bot-builder/[id]/page.tsx");
-  assert.match(editor, /<FlowLintPanel issues=\{issues\} channels=\{channels\} \/>/);
+  assert.match(editor, /<FlowBuilder[\s\S]*channels=\{channels\}/);
+  assert.match(src("src/components/FlowBuilder.tsx"), /<FlowLintPanel issues=\{liveIssues\} channels=\{channels\}/);
 });

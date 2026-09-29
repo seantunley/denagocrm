@@ -175,6 +175,9 @@ const defaultSmtpVerifier: SmtpVerifier = async (input) => {
     host: input.host,
     port: input.port,
     secure: input.secure,
+    // The same rule as the real send (lib/email.ts), so a server the send would
+    // refuse for having no encryption also fails its connection test.
+    requireTLS: !input.secure,
     auth: input.user ? { user: input.user, pass: input.pass ?? "" } : undefined,
     connectionTimeout: PROBE_TIMEOUT_MS,
     greetingTimeout: PROBE_TIMEOUT_MS,
@@ -241,7 +244,7 @@ export function classifySmtpError(err: unknown, input: SmtpProbeInput): ProbeFai
   ) {
     return fail(
       "tls_failed",
-      `Connected to ${where}, but the encrypted handshake failed. This is nearly always the encryption setting not matching the port: use port 465 with encryption on, or port 587 with it off (the server then upgrades the connection itself).`,
+      `Connected to ${where}, but the encrypted handshake failed. The CRM only sends mail over an encrypted connection. This is nearly always the encryption setting not matching the port: use port 465 with encryption on, or port 587 with it off (the server then upgrades the connection itself — a server that can't is refused).`,
       "server",
       secrets,
     );
@@ -290,7 +293,7 @@ export async function probeSmtp(
       : `Opened ${how} to ${input.host}:${input.port}; the server accepts mail without signing in.`,
     [
       { label: "Server", value: `${input.host}:${input.port}` },
-      { label: "Encryption", value: input.secure ? "On (implicit TLS)" : "Negotiated (STARTTLS)" },
+      { label: "Encryption", value: input.secure ? "On (implicit TLS)" : "On (required STARTTLS)" },
       { label: "Sends as", value: input.from },
     ],
     [],

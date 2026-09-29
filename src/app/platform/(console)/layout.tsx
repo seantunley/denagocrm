@@ -52,6 +52,12 @@ export default async function PlatformConsoleLayout({
             >
               Admins
             </Link>
+            <Link
+              href="/platform/errors"
+              className="rounded-full px-3 py-1.5 font-medium text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+            >
+              System errors
+            </Link>
           </nav>
 
           <form action={platformLogout} className="shrink-0">

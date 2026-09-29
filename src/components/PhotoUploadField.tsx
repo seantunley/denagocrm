@@ -12,8 +12,8 @@ import {
 /**
  * A camera/file field that SHRINKS photos before they are submitted.
  *
- * Drop-in for the `<input type="file" name="files" multiple accept="image/*"
- * capture="environment">` fields the mobile capture flow uses. It keeps the same
+ * Drop-in for the `<input type="file" name="files" multiple accept="image/*">`
+ * fields the mobile capture flow uses. It keeps the same
  * name and the same enclosing `<form action={serverAction}>`; what changes is that
  * the files reaching the action are resized copies.
  *
@@ -231,7 +231,6 @@ export default function PhotoUploadField({
         multiple
         required={required}
         accept="image/*"
-        capture="environment"
         onChange={onPick}
         className={className}
       />
