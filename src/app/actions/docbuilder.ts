@@ -6,6 +6,7 @@ import { prisma } from "@/lib/db";
 import { requirePermission, requireAnyPermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { listBuilderVersions } from "@/lib/docbuilder/store";
+import { STANDARD_TEMPLATE_KEYS, standardTemplateFor, type StandardDocKey } from "@/lib/doceditor/standardTemplates";
 import { withActingStaffScope } from "@/lib/actingScope";
 
 const BASE = "/document-studio";
@@ -76,6 +77,50 @@ export async function publishBuilderVersion(id: string, label?: string): Promise
     revalidatePath(`/doc-editor/${id}`);
     revalidatePath(BASE);
     return { ok: true, version };
+  });
+}
+
+/**
+ * Replace the working draft with the current standard layout for its type.
+ *
+ * Seeding never overwrites an existing template, so a workspace keeps the layout
+ * it was first seeded with even after the standard layout improves. This is how
+ * the owner picks the new one up.
+ *
+ * It must not change what customers get. A template never published renders its
+ * DRAFT on real documents (getLiveBuilderTemplate's fallback), so that draft is
+ * first published as a version, keeping real documents exactly as they are.
+ * The reset layout then waits in the draft until someone presses Publish.
+ */
+export async function resetBuilderTemplateToStandard(id: string): Promise<{ ok: boolean; error?: string }> {
+  return withActingStaffScope(async () => {
+    const user = await requirePermission("docbuilder.manage");
+    const tpl = await prisma.docBuilderTemplate.findUnique({ where: { id } });
+    if (!tpl || tpl.deletedAt) return { ok: false, error: "That template no longer exists." };
+    if (!(STANDARD_TEMPLATE_KEYS as string[]).includes(tpl.key)) {
+      return { ok: false, error: "There is no standard layout for this kind of document." };
+    }
+    const standard = standardTemplateFor(tpl.key as StandardDocKey);
+    await prisma.$transaction(async (tx) => {
+      if (tpl.publishedVersion == null) {
+        const last = await tx.docBuilderVersion.findFirst({
+          where: { templateId: id }, orderBy: { version: "desc" }, select: { version: true },
+        });
+        const version = (last?.version ?? 0) + 1;
+        await tx.docBuilderVersion.create({
+          data: { templateId: id, version, data: tpl.data as object, label: "Before reset to standard", publishedBy: user.name },
+        });
+        await tx.docBuilderTemplate.update({ where: { id }, data: { status: "published", publishedVersion: version } });
+      }
+      await tx.docBuilderTemplate.update({ where: { id }, data: { data: standard as object } });
+    });
+    await logAudit({
+      action: "docbuilder.reset_standard",
+      summary: `Reset the draft of “${tpl.name}” to the standard ${tpl.key} layout (not live until published)`,
+      entityType: "DocBuilderTemplate", entityId: id, user,
+    });
+    revalidatePath(`/doc-editor/${id}`);
+    return { ok: true };
   });
 }
 
