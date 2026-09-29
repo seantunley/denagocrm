@@ -22,7 +22,7 @@ import {
   getAccessibleQuoteIds,
   hasAnyPermission,
   hasPermission,
-  requirePermission,
+  requireAnyPermission,
   type PermissionUser,
 } from "@/lib/permissions";
 import {
@@ -87,8 +87,18 @@ export default async function DocumentStudioPage({
 }: {
   searchParams: Promise<{ q?: string }>;
 }) {
-  const user = await requirePermission("document_templates.manage");
+  const user = await requireAnyPermission("document_templates.manage", "docbuilder.view", "docbuilder.manage");
   const { q } = await searchParams;
+  // A Builder-only user (the old Document Builder page's audience) gets the
+  // Builder section and nothing that needs document_templates.manage.
+  if (!(await hasPermission(user, "document_templates.manage"))) {
+    return (
+      <div className="space-y-7">
+        <WorkspaceHero icon={Layers3} eyebrow="Document operations" title="Document Studio" description="Document layouts you can open with your access." />
+        <BuilderSection user={user} q={q} />
+      </div>
+    );
+  }
   const [canCreateDocument, canEditLayout, canSeeBuilder] = await Promise.all([
     // createDocInstance requires documents.manage; don't offer a form that bounces.
     hasPermission(user, "documents.manage"),

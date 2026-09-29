@@ -78,3 +78,16 @@ test("doc-editor library items are not Studio clauses", () => {
     assert.doesNotMatch(code, /reusableBlock\.findMany/, `${rel} lists ReusableBlock unfiltered`);
   }
 });
+
+test("Builder-only users (docbuilder.view/manage) still reach Document Studio, and see only the Builder", () => {
+  // The old Document Builder page admitted docbuilder.view/manage. Redirecting it
+  // here behind document_templates.manage alone bounced those users to "/".
+  const grant = /requireAnyPermission\("document_templates\.manage", "docbuilder\.view", "docbuilder\.manage"\)/;
+  assert.match(src("src/app/(app)/document-studio/layout.tsx"), grant);
+  const page = src(STUDIO);
+  assert.match(page, grant);
+  const builderOnly = page.slice(page.indexOf('if (!(await hasPermission(user, "document_templates.manage")))'), page.indexOf("const [canCreateDocument"));
+  assert.match(builderOnly, /<BuilderSection user=\{user\} q=\{q\} \/>/);
+  assert.doesNotMatch(builderOnly, /createDocTemplate|customDocTemplate|listStudioClauses/);
+  assert.match(src("src/components/nav-config.ts"), /can\("document_templates\.manage", "docbuilder\.view", "docbuilder\.manage"\)\) platformLinks\.push\(\{ href: "\/document-studio"/);
+});
