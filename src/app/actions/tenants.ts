@@ -110,6 +110,10 @@ export async function createTenantAction(formData: FormData): Promise<ActionResu
       after: { name, slug, active: false, ownerId: created.ownerId, ownerEmail, inert: true },
     });
     revalidatePath(CONSOLE_PATH);
+    return {
+      success: "Tenant created — complete onboarding before activation",
+      redirectTo: `/platform/tenants/${created.tenantId}/onboarding`,
+    };
   });
 }
 
