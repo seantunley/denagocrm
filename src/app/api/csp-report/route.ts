@@ -64,14 +64,30 @@ const trim = (value: unknown, max: number): string =>
  * because both are configured, and a collector that understands only one of them
  * silently loses half the reports.
  */
-function violationsFrom(payload: unknown): Array<{ directive: string; blocked: string; document: string }> {
-  const out: Array<{ directive: string; blocked: string; document: string }> = [];
+type Violation = { directive: string; blocked: string; document: string; source: string; disposition: string };
+
+/**
+ * A browser extension's own script, running in our page. It trips our policy
+ * (a password manager's WebAssembly on /login, say) but it is not our code and
+ * no change to the site can fix it, so it is not worth a System Log row.
+ */
+const EXTENSION_SOURCE = /^(chrome|moz|safari-web|ms-browser)-extension:/;
+
+function violationsFrom(payload: unknown): Violation[] {
+  const out: Violation[] = [];
   const push = (raw: Record<string, unknown> | undefined) => {
     if (!raw) return;
     const directive = trim(raw["effective-directive"] ?? raw["violated-directive"] ?? raw.effectiveDirective, 100);
     const blocked = trim(raw["blocked-uri"] ?? raw.blockedURL, 300);
     const document = trim(raw["document-uri"] ?? raw.documentURL, 300);
-    if (directive || blocked) out.push({ directive, blocked, document });
+    // Which script did it. For `eval` the blocked-uri is just "eval", so without
+    // the source file a report says what happened but never where.
+    const source = trim(raw["source-file"] ?? raw.sourceFile, 300);
+    // "enforce" means something really failed for a visitor; "report" means it
+    // only would once the report-only directives are promoted.
+    const disposition = trim(raw.disposition, 20);
+    if (EXTENSION_SOURCE.test(source) || EXTENSION_SOURCE.test(blocked)) return;
+    if (directive || blocked) out.push({ directive, blocked, document, source, disposition });
   };
 
   if (Array.isArray(payload)) {
@@ -110,7 +126,9 @@ export async function POST(request: Request) {
     // pattern — not to reconstruct a session.
     await logError(
       "csp-violation",
-      `${violation.directive || "unknown directive"} blocked ${violation.blocked || "(inline)"}`,
+      `${violation.directive || "unknown directive"} blocked ${violation.blocked || "(inline)"}` +
+        (violation.disposition ? ` [${violation.disposition}]` : "") +
+        (violation.source ? ` from ${violation.source}` : ""),
       violation.document || undefined,
     ).catch(() => {});
   }
