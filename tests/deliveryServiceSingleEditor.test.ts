@@ -25,6 +25,27 @@ test("the layout resolver: ?tpl= previews only a builder template of the same ty
   assert.match(fn, /template = await publishedBuilderTemplateFor\(key\);/);
 });
 
+test("a record reader without Builder access cannot render an unpublished draft via ?tpl=", () => {
+  const code = src("src/lib/deliveryServicePrint.ts");
+  const fn = code.slice(code.indexOf("export async function builderLayoutFor"), code.indexOf("export async function printPathBlocked"));
+  // The permission check discards tpl BEFORE any draft is read…
+  const check = fn.indexOf("if (tplId && !(await canPreviewBuilderDraft())) tplId = null;");
+  assert.ok(check > 0, "?tpl= is ignored without Builder permission");
+  assert.ok(check < fn.indexOf("getBuilderTemplate(tplId)"), "checked before the draft is loaded");
+  // …and the check is the Builder permission, not the record access the caller already has.
+  assert.match(fn, /hasAnyPermission\(user, "docbuilder\.view", "docbuilder\.manage"\)/);
+  assert.match(fn, /return !!user && /, "no session, no draft");
+  // Nothing else on these print paths reads a draft directly.
+  for (const f of [
+    "src/app/(print)/quotes/[id]/delivery-note/page.tsx",
+    "src/app/(print)/quotes/[id]/delivery-note/document/route.ts",
+    "src/app/(print)/jobcards/[id]/service-report/page.tsx",
+    "src/app/(print)/jobcards/[id]/service-report/document/route.ts",
+  ]) {
+    assert.doesNotMatch(src(f), /getBuilderTemplate\(/, `${f} must go through builderLayoutFor`);
+  }
+});
+
 for (const [page, key, route] of [
   ["src/app/(print)/quotes/[id]/delivery-note/page.tsx", "delivery", "delivery-note/document"],
   ["src/app/(print)/jobcards/[id]/service-report/page.tsx", "service-report", "service-report/document"],

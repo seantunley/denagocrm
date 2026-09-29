@@ -1,5 +1,7 @@
 import "server-only";
 import { prisma } from "@/lib/db";
+import { getCurrentUser } from "@/lib/auth";
+import { hasAnyPermission } from "@/lib/permissions";
 import { getBuilderTemplate } from "@/lib/docbuilder/store";
 import { publishedBuilderTemplateFor } from "@/lib/docbuilder/published";
 import { deliveryNoteContext, serviceReportContext } from "@/lib/docbuilder/deliveryServiceContext";
@@ -29,6 +31,10 @@ import { isPathEnabled } from "@/lib/modules/registry";
  */
 export async function builderLayoutFor(key: "delivery" | "service-report", tplId?: string | null): Promise<DocumentModel | null> {
   let template;
+  // A draft is Document Studio's, not the record's: reading the quote or job
+  // card is not permission to see an unpublished layout. Without Builder access
+  // ?tpl= is ignored and the record prints as everyone else sees it.
+  if (tplId && !(await canPreviewBuilderDraft())) tplId = null;
   if (tplId) {
     // ?tpl= from Settings → Documents is a LEGACY template id; only a builder
     // template of this very type is previewed here (as its draft). Anything else
@@ -41,6 +47,11 @@ export async function builderLayoutFor(key: "delivery" | "service-report", tplId
   if (!template) return null;
   const read = readTemplateDocument(template.data, template.name);
   return read.status === "ok" ? read.doc : null;
+}
+
+async function canPreviewBuilderDraft(): Promise<boolean> {
+  const user = await getCurrentUser();
+  return !!user && (await hasAnyPermission(user, "docbuilder.view", "docbuilder.manage"));
 }
 
 /** Route handlers run no layout, so they repeat the (print) layout's module guard. */
