@@ -87,11 +87,19 @@ export async function publishBuilderVersion(id: string, label?: string): Promise
  * it was first seeded with even after the standard layout improves. This is how
  * the owner picks the new one up.
  *
- * It must not change what customers get. A template never published renders its
- * DRAFT on real documents (getLiveBuilderTemplate's fallback), so that draft is
- * first published as a version, keeping real documents exactly as they are.
+ * It must not change what customers get, and must not switch anything over:
+ *  - The old draft is always kept in history as a version, so it can be restored.
+ *  - Other document types move to this editor only when their layout HAS a
+ *    published version (the switch in #672–#675), so for them that saved version
+ *    stays UNPUBLISHED. Publishing it would turn the new renderer on.
+ *  - Quotes are the exception: they already render from this editor with no
+ *    switch, and a never-published quote layout renders its DRAFT. Replacing that
+ *    draft would change live quotes, so its old draft is published as-is first.
  * The reset layout then waits in the draft until someone presses Publish.
  */
+/** Types whose real documents render from this editor with no publish switch. */
+const RENDERED_WITHOUT_PUBLISH_SWITCH = new Set(["quote"]);
+
 export async function resetBuilderTemplateToStandard(id: string): Promise<{ ok: boolean; error?: string }> {
   return withActingStaffScope(async () => {
     const user = await requirePermission("docbuilder.manage");
@@ -102,17 +110,21 @@ export async function resetBuilderTemplateToStandard(id: string): Promise<{ ok: 
     }
     const standard = standardTemplateFor(tpl.key as StandardDocKey);
     await prisma.$transaction(async (tx) => {
-      if (tpl.publishedVersion == null) {
-        const last = await tx.docBuilderVersion.findFirst({
-          where: { templateId: id }, orderBy: { version: "desc" }, select: { version: true },
-        });
-        const version = (last?.version ?? 0) + 1;
-        await tx.docBuilderVersion.create({
-          data: { templateId: id, version, data: tpl.data as object, label: "Before reset to standard", publishedBy: user.name },
-        });
-        await tx.docBuilderTemplate.update({ where: { id }, data: { status: "published", publishedVersion: version } });
-      }
-      await tx.docBuilderTemplate.update({ where: { id }, data: { data: standard as object } });
+      const last = await tx.docBuilderVersion.findFirst({
+        where: { templateId: id }, orderBy: { version: "desc" }, select: { version: true },
+      });
+      const version = (last?.version ?? 0) + 1;
+      await tx.docBuilderVersion.create({
+        data: { templateId: id, version, data: tpl.data as object, label: "Before reset to standard", publishedBy: user.name },
+      });
+      const draftIsLive = RENDERED_WITHOUT_PUBLISH_SWITCH.has(tpl.key) && tpl.publishedVersion == null;
+      await tx.docBuilderTemplate.update({
+        where: { id },
+        data: {
+          data: standard as object,
+          ...(draftIsLive ? { status: "published", publishedVersion: version } : {}),
+        },
+      });
     });
     await logAudit({
       action: "docbuilder.reset_standard",

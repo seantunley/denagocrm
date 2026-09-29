@@ -15,14 +15,19 @@ test("reset needs docbuilder.manage and a type with a standard layout", () => {
   assert.match(reset, /STANDARD_TEMPLATE_KEYS as string\[\]\)\.includes\(tpl\.key\)/);
 });
 
-test("a never-published template is published as-is first, so real documents don't change", () => {
-  // getLiveBuilderTemplate renders the DRAFT of a never-published template;
-  // replacing that draft without this would change live quotes on the spot.
-  const publishFirst = reset.indexOf("if (tpl.publishedVersion == null)");
-  const replaceDraft = reset.indexOf("data: { data: standard as object }");
-  assert.ok(publishFirst > 0 && replaceDraft > publishFirst, "publish the current draft before replacing it");
-  assert.match(reset, /data: tpl\.data as object, label: "Before reset to standard"/);
+test("the old draft is always kept in history, in one transaction", () => {
   assert.match(reset, /prisma\.\$transaction\(async \(tx\)/);
+  assert.match(reset, /data: tpl\.data as object, label: "Before reset to standard"/);
+});
+
+test("reset never flips a document type onto the new renderer", () => {
+  // #672–#675 switch a type to this editor when its layout HAS a published
+  // version. So the saved old draft is published ONLY for quotes, which already
+  // render from this editor (a never-published quote renders its draft live).
+  assert.match(action, /const RENDERED_WITHOUT_PUBLISH_SWITCH = new Set\(\["quote"\]\)/);
+  assert.match(reset, /const draftIsLive = RENDERED_WITHOUT_PUBLISH_SWITCH\.has\(tpl\.key\) && tpl\.publishedVersion == null/);
+  assert.match(reset, /\.\.\.\(draftIsLive \? \{ status: "published", publishedVersion: version \} : \{\}\)/);
+  assert.equal((reset.match(/publishedVersion: version/g) ?? []).length, 1, "the only publish is the guarded one");
 });
 
 test("the editor offers reset only for types that have a standard layout", () => {
