@@ -118,6 +118,29 @@ export async function getBuilderTemplate(id: string) {
   return record;
 }
 
+/**
+ * The template as customers get it: its PUBLISHED version, not the working draft.
+ *
+ * The editor autosaves, so rendering `data` put every half-finished edit straight
+ * onto quotes, signing envelopes and filed PDFs, and Publish did nothing. Real
+ * documents now render the published snapshot. A template never published falls
+ * back to its draft, which is exactly what it rendered before this existed, so
+ * nothing changes for it until someone presses Publish.
+ *
+ * Previews of the layout being edited (the editor, ?tpl= in Document Studio, the
+ * editor's own export) keep using getBuilderTemplate and the draft.
+ */
+export async function getLiveBuilderTemplate(id: string) {
+  const record = await getBuilderTemplate(id);
+  if (!record || record.publishedVersion == null) return record;
+  const published = await prisma.docBuilderVersion.findUnique({
+    where: { templateId_version: { templateId: id, version: record.publishedVersion } },
+    select: { data: true },
+  });
+  // A missing snapshot would be data damage; render the draft rather than nothing.
+  return published ? { ...record, data: published.data } : record;
+}
+
 /** Version history for a template, newest first (metadata only — no data blob). */
 export async function listBuilderVersions(templateId: string) {
   try {

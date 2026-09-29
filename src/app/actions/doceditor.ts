@@ -164,6 +164,7 @@ export async function generateDocEditorDocument(formData: FormData) {
       templateId,
       quoteId,
       jobCardId,
+      live: true, // filed against a record, so the published layout
     });
     if (!result) refuse("Could not build that document — check the template.");
 
