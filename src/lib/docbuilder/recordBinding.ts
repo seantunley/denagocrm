@@ -1,22 +1,29 @@
-export type BuilderRecordKind = "quote" | "jobcard";
+export type BuilderRecordKind = "quote" | "jobcard" | "lead" | "warranty";
 
 const QUOTE_KEYS = new Set([
   "quote",
   "invoice",
   "agreement",
   "delivery",
-  "indemnity",
 ]);
 
 const JOB_CARD_KEYS = new Set([
   "jobcard",
   "service-report",
-  "warranty-claim",
+]);
+
+// The indemnity is signed before a test drive — there is no quote yet, only the
+// lead — and the warranty claim prints a WarrantyClaim, not a job card.
+const OWN_RECORD_KEYS = new Map<string, BuilderRecordKind>([
+  ["indemnity", "lead"],
+  ["warranty-claim", "warranty"],
 ]);
 
 export function requiredRecordKind(
   templateKey: string,
 ): BuilderRecordKind | "either" | null {
+  const own = OWN_RECORD_KEYS.get(templateKey);
+  if (own) return own;
   if (QUOTE_KEYS.has(templateKey)) return "quote";
   if (JOB_CARD_KEYS.has(templateKey)) return "jobcard";
   if (["proposal", "custom"].includes(templateKey)) return "either";
@@ -33,8 +40,8 @@ export function parseBuilderRecord(value: string | null | undefined): {
   if (separator < 1) return null;
   const kind = trimmed.slice(0, separator);
   const id = trimmed.slice(separator + 1).trim();
-  if ((kind !== "quote" && kind !== "jobcard") || !id) return null;
-  return { kind, id };
+  if (!["quote", "jobcard", "lead", "warranty"].includes(kind) || !id) return null;
+  return { kind: kind as BuilderRecordKind, id };
 }
 
 export function recordMatchesTemplate(
@@ -48,9 +55,13 @@ export function recordMatchesTemplate(
 export function bindingParams(record: string | null | undefined): {
   quoteId?: string;
   jobCardId?: string;
+  leadId?: string;
+  warrantyClaimId?: string;
 } {
   const parsed = parseBuilderRecord(record);
   if (!parsed) return {};
+  if (parsed.kind === "lead") return { leadId: parsed.id };
+  if (parsed.kind === "warranty") return { warrantyClaimId: parsed.id };
   return parsed.kind === "quote"
     ? { quoteId: parsed.id }
     : { jobCardId: parsed.id };
