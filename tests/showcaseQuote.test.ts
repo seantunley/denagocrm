@@ -6,7 +6,9 @@ import path from "node:path";
 import { parseDocument } from "../src/lib/doceditor/model";
 import { renderDocumentHtml, renderSigningSheets, type RenderCtx } from "../src/lib/doceditor/serialize";
 import { showcaseQuoteTemplate } from "../src/lib/doceditor/standardTemplates";
-import { ACCEPTANCE_GEOMETRY } from "../src/lib/doceditor/showcaseRender";
+import { ACCEPTANCE_GEOMETRY, SHOWCASE_INSET, acceptanceHeight } from "../src/lib/doceditor/showcaseRender";
+import { SHOWCASE_BAND_ASSETS } from "../src/lib/doceditor/showcaseAssets";
+import { existsSync } from "node:fs";
 import { freezeDocumentGlobals, freezeVehicleShowcase } from "../src/lib/signing/freezeDocument";
 import {
   modelName,
@@ -125,7 +127,11 @@ test("the showcase layout keeps a customer signature and date on the acceptance 
   const card = page.floatingBlocks.find((fb) => fb.block.type === "acceptance");
   assert.ok(card);
   const g = ACCEPTANCE_GEOMETRY;
-  const cardH = g.pad * 2 + g.titleH + g.textH + g.nameRowH + g.sigRowH + g.dateRowH;
+  const cardH = acceptanceHeight();
+  // The signature sits on the Signature line and the date on the Date line.
+  const sigLineTop = card.y + g.pad + g.headerH + g.headerGap + g.textH + g.nameRowH;
+  assert.ok(sig.anchor.y >= sigLineTop && sig.anchor.y + sig.height <= sigLineTop + g.sigRowH, "signature on the Signature line");
+  assert.ok(date.anchor.y >= sigLineTop + g.sigRowH && date.anchor.y + date.height <= sigLineTop + g.sigRowH + g.dateRowH, "date on the Date line");
   for (const f of [sig, date]) {
     assert.ok(f.anchor.x >= card.x && f.anchor.x + f.width <= card.x + card.width, `${f.kind} sits within the card horizontally`);
     assert.ok(f.anchor.y >= card.y && f.anchor.y + f.height <= card.y + cardH, `${f.kind} sits within the card vertically`);
@@ -188,7 +194,7 @@ test("band photos and the vehicle-photo fade: rendered under an overlay, and car
   const html = renderSigningSheets(snapshot, ctx({})).pages.join("\n");
   for (const img of [HEADER, FOOTER]) {
     // Single-quoted: a double quote would end the style="…" attribute it sits in.
-    assert.ok(html.includes(`rgba(2,6,23,.38)),url('${img}')`), `${img} is rendered under the darkening overlay`);
+    assert.match(html, new RegExp(`linear-gradient\\([^']*\\),url\\('${img.replace(/[+/.]/g, "\\$&")}'\\)`), `${img} is rendered under the overlay`);
   }
   assert.doesNotMatch(html, /style="[^"]*url\("/, "no double quote inside a style attribute");
   assert.match(html, /object-fit:cover;object-position:center;-webkit-mask-image:linear-gradient\(to right,transparent/, "a filled photo fades in from the left");
@@ -197,6 +203,57 @@ test("band photos and the vehicle-photo fade: rendered under an overlay, and car
   for (const b of contained.pages[0].rows.flatMap((r) => r.columns.flatMap((c) => c.blocks))) if (b.type === "vehicleShowcase") b.imageFit = "contain";
   const plain = renderDocumentHtml(contained, ctx({ showcase: showcaseFromProduct({ name: "Scout", description: null, showcaseTagline: null, showcaseSpecs: null }, PNG) }));
   assert.doesNotMatch(plain, /mask-image/, "a contained cut-out is not faded");
+});
+
+test("built-in Cape Town band photos: embedded as data URLs, frozen at send, never hot-linked", () => {
+  const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
+  for (const p of Object.values(SHOWCASE_BAND_ASSETS)) assert.ok(existsSync(path.join(root, "public", p)), `${p} ships in the repo`);
+  assert.ok(existsSync(path.join(root, "public/branding/quote/CREDITS.txt")), "the licence credits ship beside them");
+  const server = readFileSync(path.join(root, "src/lib/doceditor/showcaseAssetsServer.ts"), "utf8");
+  for (const p of Object.values(SHOWCASE_BAND_ASSETS)) {
+    const file = p.split("/").pop()!;
+    assert.ok(server.includes(`"${file}"`), `the server reads ${file} by a literal path (file tracing)`);
+  }
+
+  const HEADER = "data:image/jpeg;base64,SEVBREVSSU1H";
+  const FOOTER = "data:image/jpeg;base64,Rk9PVEVSSU1H";
+  const doc = showcaseQuoteTemplate();
+  // Live render of the template: the server supplies the asset tokens.
+  const live = renderDocumentHtml(doc, ctx({}, { "asset.showcaseHeader": HEADER, "asset.showcaseFooter": FOOTER }));
+  assert.ok(live.includes(`url('${HEADER}')`) && live.includes(`url('${FOOTER}')`));
+  assert.doesNotMatch(live, /\/branding\/quote\//, "a document never links the public file");
+
+  // Sent: service.ts resolves the asset tokens INTO the snapshot with the other globals.
+  const snapshot = parseDocument(JSON.parse(JSON.stringify(freezeDocumentGlobals(doc, { "asset.showcaseHeader": HEADER, "asset.showcaseFooter": FOOTER }))))!;
+  const signed = renderSigningSheets(snapshot, ctx({})).pages.join("\n"); // no asset tokens at render time
+  assert.ok(signed.includes(`url('${HEADER}')`) && signed.includes(`url('${FOOTER}')`), "the snapshot carries the photos itself");
+
+  // An upload overrides the default.
+  const uploaded = "data:image/png;base64,VVBMT0FE";
+  for (const b of doc.pages[0].rows.flatMap((r) => r.columns.flatMap((c) => c.blocks))) if (b.type === "showcaseHeader") b.bgImage = uploaded;
+  const overridden = renderDocumentHtml(doc, ctx({}, { "asset.showcaseHeader": HEADER }));
+  assert.ok(overridden.includes(`url('${uploaded}')`) && !overridden.includes(`url('${HEADER}')`));
+});
+
+test("one content column: every inset section shares the same left and right edges", () => {
+  const doc = showcaseQuoteTemplate();
+  const page = doc.pages[0];
+  assert.equal(doc.style.margin, 0, "bands run edge to edge");
+  const W = 794;
+  const [header, strip, hero, table, totals] = page.rows;
+  assert.deepEqual(header.settings.padding, { top: 0, right: 0, bottom: 0, left: 0 }, "header band is full-bleed");
+  for (const row of [strip, table, totals]) {
+    assert.equal(row.settings.padding?.left, SHOWCASE_INSET);
+    assert.equal(row.settings.padding?.right, SHOWCASE_INSET);
+  }
+  assert.equal(hero.settings.padding?.left, SHOWCASE_INSET, "hero text on the same left edge");
+  assert.equal(hero.settings.padding?.right, 0, "hero photo bleeds to the right edge");
+  const [terms, acceptance, footer] = page.floatingBlocks;
+  assert.equal(terms.x, SHOWCASE_INSET, "terms card on the left edge");
+  assert.equal(acceptance.x + acceptance.width, W - SHOWCASE_INSET, "acceptance card on the right edge");
+  assert.equal(terms.y, acceptance.y, "the two cards line up");
+  assert.deepEqual([footer.x, footer.width], [0, W], "footer band is full-bleed");
+  assert.ok(footer.y + 100 <= 1122.52, "footer band ends on the sheet");
 });
 
 test("the send and snapshot-render paths are wired to the frozen vehicle", () => {

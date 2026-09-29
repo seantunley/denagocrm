@@ -13,6 +13,10 @@ function money(amount: number, currency: string): string {
 
 /** Renders one block's CONTENT for the editing canvas. Chrome (handles, outline) is added by the wrapper. */
 export function BlockView({ block, active }: { block: DocumentBlock; active: boolean }) {
+  // Shared blocks drawn in the showcase quotation's style render its HTML, as the PDF does.
+  if ((block.type === "infoCard" || block.type === "lineItems" || block.type === "terms") && block.look === "showcase") {
+    return <ShowcaseBlockView block={block} logo="/branding/denago-logo-email.png" />;
+  }
   switch (block.type) {
     case "text":
     case "heading":
@@ -149,7 +153,7 @@ export function BlockView({ block, active }: { block: DocumentBlock; active: boo
       return (
         <div style={{ background: "#f8fafc", borderRadius: 6, padding: "10px 12px" }}>
           {block.title ? <div style={{ fontSize: 8, fontWeight: 700, letterSpacing: 1, color: "#64748b", marginBottom: 5 }}>{block.title}</div> : null}
-          {block.items.map((it, i) => <div key={i} style={{ fontSize: 11, color: "#64748b", marginBottom: 2 }}><span style={block.accent ? { color: block.accent, fontWeight: 900 } : undefined}>•</span> {it.text}</div>)}
+          {block.items.map((it, i) => <div key={i} style={{ fontSize: 11, color: "#64748b", marginBottom: 2 }}>• {it.text}</div>)}
         </div>
       );
     case "footer": {

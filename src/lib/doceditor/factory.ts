@@ -85,7 +85,7 @@ export function newBlock(type: BlockType): DocumentBlock {
     case "infoStrip":
       return { id: uid(), type, ...emptyLayout, accent: "#ea580c", items: [
         { icon: "calendar", label: "QUOTE DATE", value: "{{quote.date}}", sub: "" },
-        { icon: "clock", label: "VALID UNTIL", value: "{{quote.validUntil}}", sub: "" },
+        { icon: "calendarCheck", label: "VALID UNTIL", value: "{{quote.validUntil}}", sub: "" },
         { icon: "user", label: "PREPARED BY", value: "{{preparedBy}}", sub: "Sales Consultant" },
       ] };
     case "vehicleShowcase":
@@ -98,7 +98,7 @@ export function newBlock(type: BlockType): DocumentBlock {
     case "acceptance":
       return {
         id: uid(), type, ...emptyLayout, title: "ACCEPTANCE OF QUOTATION",
-        text: "I accept this quotation and its terms, and confirm the details above are correct.",
+        text: "I confirm acceptance of the above quotation and {{company.name}}’s terms and conditions.",
         nameLabel: "Customer Name", nameValue: "{{customer.name}}", signatureLabel: "Signature", dateLabel: "Date",
       };
     case "footerBand":

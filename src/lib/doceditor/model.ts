@@ -140,6 +140,13 @@ export const tableBlockSchema = z.object({
   headerBg: colorField("#020617"), headerColor: colorField("#ffffff"),
 });
 
+/**
+ * Visual style of a shared branded block. Unset = "standard", so every stored
+ * template renders byte-for-byte as before; "showcase" draws it in the showcase
+ * quotation's style (lib/doceditor/showcaseRender.ts).
+ */
+const blockLook = z.enum(["standard", "showcase"]).optional();
+
 // ── branded blocks (match the print templates) ──────────────────────
 export const bannerBlockSchema = z.object({
   ...base, type: z.literal("banner"),
@@ -155,6 +162,7 @@ export const infoCardBlockSchema = z.object({
   name: z.string().default("{{customer.name}}"),
   lines: z.string().default("{{customer.phone}}\n{{customer.email}}"),
   accent: colorField("#ea580c"),
+  look: blockLook,
 });
 export const lineItemColKeys = ["description", "qty", "unitPrice", "unitPriceExVat", "vat", "subtotal", "total"] as const;
 export const lineItemColumnSchema = z.object({
@@ -165,6 +173,7 @@ export const lineItemColumnSchema = z.object({
 });
 export const lineItemsBlockSchema = z.object({
   ...base, type: z.literal("lineItems"),
+  look: blockLook,
   headerBg: colorField("#020617"),
   headerColor: colorField("#ffffff"),
   vatRate: z.number().default(15),   // used by a "vat" column (prices are VAT-inclusive)
@@ -186,8 +195,7 @@ export const termsBlockSchema = z.object({
   ...base, type: z.literal("terms"),
   title: z.string().default("TERMS"),
   items: z.array(z.object({ text: z.string() })).default([]),
-  /** Bullet colour. Unset keeps the original grey bullets, so stored templates render unchanged. */
-  accent: z.string().transform((value) => (isSafeCssColor(value) ? value : "")).optional(),
+  look: blockLook,
 });
 export const footerBlockSchema = z.object({
   ...base, type: z.literal("footer"),
@@ -201,7 +209,7 @@ export const footerBlockSchema = z.object({
 // ── showcase quotation blocks (rendered by ./showcaseRender.ts) ──────
 /** Line icons the showcase blocks can draw — see SHOWCASE_ICONS in showcaseRender.ts. */
 export const showcaseIconNames = [
-  "calendar", "clock", "user", "seats", "range", "electric", "premium", "speed", "battery", "warranty", "charge",
+  "calendar", "calendarCheck", "clock", "user", "seats", "range", "electric", "premium", "speed", "battery", "warranty", "charge",
 ] as const;
 export type ShowcaseIcon = (typeof showcaseIconNames)[number];
 const showcaseIcon = z.enum(showcaseIconNames).catch("premium");

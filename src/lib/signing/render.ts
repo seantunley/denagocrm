@@ -4,6 +4,7 @@ import path from "path";
 import { prisma } from "@/lib/db";
 import { buildQuoteContext, buildJobCardContext } from "@/lib/docbuilder/merge";
 import { withVehicleShowcase } from "@/lib/docbuilder/vehicleShowcaseLoad";
+import { showcaseAssetTokens } from "@/lib/doceditor/showcaseAssetsServer";
 import { loadBillToFleet } from "@/lib/quoteBillTo";
 import { parseDocument, type DocumentModel } from "@/lib/doceditor/model";
 import { renderDocumentHtml, renderSigningSheets, type RenderCtx, type StampField } from "@/lib/doceditor/serialize";
@@ -49,8 +50,12 @@ export async function bindCtx(
   // still win on overlap; bound:false keeps conditionals as the placeholder layout.
   const withCompany = async (ctx: RenderCtx): Promise<RenderCtx> => {
     const company = frozen ? frozen.tokens : companyTokens(await getCompanyProfile());
-    if (!ctx) return { tokens: company, items: [], vars: {}, bound: false };
-    return { ...ctx, tokens: { ...company, ...ctx.tokens }, bound: true };
+    // + the showcase layout's built-in band photos ({{asset.*}}) as data URLs. A
+    // snapshot already carries them resolved (service.ts), so this only reaches
+    // live renders of a template.
+    const globals = { ...showcaseAssetTokens(), ...company };
+    if (!ctx) return { tokens: globals, items: [], vars: {}, bound: false };
+    return { ...ctx, tokens: { ...globals, ...ctx.tokens }, bound: true };
   };
   if (quoteId) {
     const q = await prisma.quote.findUnique({

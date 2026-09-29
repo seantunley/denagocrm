@@ -1,22 +1,32 @@
 /**
- * HTML for the showcase quotation blocks — the premium quote layout
- * (standardTemplates.showcaseQuoteTemplate). Called from serialize.ts blockHtml,
- * and from the editor canvas, so the page designed is the page printed.
+ * HTML for the showcase quotation — the premium quote layout
+ * (standardTemplates.showcaseQuoteTemplate): the six showcase blocks, plus the
+ * "showcase" look of the shared infoCard, lineItems and terms blocks. Called
+ * from serialize.ts blockHtml and from the editor canvas, so the page designed
+ * is the page printed.
  *
  * Same rules as serialize.ts: every text value through esc(), every colour
  * through cssColor(), and images only as inline `data:image/…` URLs (the PDF
  * renderer blocks outside hosts, and the private store has no public links).
+ * Icons are inline SVG — no icon fonts or CDNs — so they print and sign.
  */
 import { cssColor } from "./css";
-import type { AcceptanceBlock, ShowcaseBlock, ShowcaseIcon, VehicleShowcaseBlock } from "./model";
+import type {
+  AcceptanceBlock, InfoCardBlock, LineItemsBlock, ShowcaseBlock, ShowcaseIcon, TermsBlock, VehicleShowcaseBlock,
+} from "./model";
 import type { RenderCtx } from "./serialize";
+import { lineItemCell } from "./serialize";
+import { evaluateCondition } from "@/lib/docbuilder/expr";
 import { SOCIAL_ICON_PATHS } from "@/lib/companyBrand";
 import { modelName, readShowcase, type VehicleShowcaseData } from "@/lib/docbuilder/vehicleShowcase";
+import { SHOWCASE_BAND_ASSETS } from "./showcaseAssets";
 
-const INK = "#020617";
+const INK = "#0b1220";
 const ACCENT = "#ea580c";
 /** Keeps dark bands dark when printed from a browser with "background graphics" off. */
 const KEEP_BG = "-webkit-print-color-adjust:exact;print-color-adjust:exact;";
+/** The content column's inset from the page edge. The header/footer bands and the hero photo bleed past it. */
+export const SHOWCASE_INSET = 28;
 
 function esc(s: unknown): string {
   return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
@@ -30,41 +40,88 @@ function tok(s: string, ctx: RenderCtx): string {
   return (s ?? "").replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, k: string) => ctx?.tokens?.[k] ?? (ctx?.bound ? "" : `{{${k}}}`));
 }
 const isDataImage = (src: string) => /^data:image\/(png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=]+$/i.test(src);
-
-const ICON_PATHS: Record<ShowcaseIcon | "pin" | "phone" | "globe" | "mail", string> = {
-  calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
-  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
-  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/>',
-  seats: '<path d="M6 11V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v5"/><path d="M4 11h16v5H4zM6 16v4M18 16v4"/>',
-  range: '<path d="M12 21s-6-5.5-6-10a6 6 0 0 1 12 0c0 4.5-6 10-6 10z"/><circle cx="12" cy="11" r="2"/>',
-  electric: '<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>',
-  premium: '<path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1 6.2L12 17.3l-5.5 2.9 1-6.2L3 9.6l6.2-.9z"/>',
-  speed: '<path d="M4 16a8 8 0 1 1 16 0"/><path d="m12 16 4-5"/>',
-  battery: '<rect x="2" y="7" width="18" height="10" rx="2"/><path d="M22 11v2M6 10v4M10 10v4"/>',
-  warranty: '<path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z"/><path d="m9 12 2 2 4-4"/>',
-  charge: '<path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4"/>',
-  pin: '<path d="M12 21s-6-5.5-6-10a6 6 0 0 1 12 0c0 4.5-6 10-6 10z"/><circle cx="12" cy="11" r="2"/>',
-  phone: '<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/>',
-  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
-  mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
-};
-function icon(name: keyof typeof ICON_PATHS, color: string, size: number): string {
-  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${cssColor(color, ACCENT)}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:block">${ICON_PATHS[name] ?? ""}</svg>`;
+/** "Unit price (incl. VAT)" → "Unit price" + a smaller "(incl. VAT)", as the design sets qualifiers. */
+function withQualifier(text: string, qualifierStyle: string): string {
+  const m = /^(.*?)\s*(\([^)]*\))\s*$/.exec(text);
+  return m ? `${esc(m[1])} <span style="${qualifierStyle}">${esc(m[2])}</span>` : esc(text);
 }
 
+// ── icons ───────────────────────────────────────────────────────────
+/** Outline icons (stroked). */
+const LINE: Record<string, string> = {
+  calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
+  calendarCheck: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/><rect x="13" y="13.5" width="4" height="4" rx=".6"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/>',
+  phone: '<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/>',
+  mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
+  pin: '<path d="M12 21s-6-5.5-6-10a6 6 0 0 1 12 0c0 4.5-6 10-6 10z"/><circle cx="12" cy="11" r="2"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+  doc: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 11h6M9 14h6M9 17h4"/>',
+  checkbox: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="m7.5 12 3 3 6-6.5"/>',
+};
+/** Solid glyphs for the spec circles. */
+const GLYPH: Record<ShowcaseIcon, string> = {
+  seats: '<circle cx="9" cy="7.5" r="3.3"/><circle cx="16.8" cy="8.6" r="2.7"/><path d="M2.5 19.5c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6v1h-13z"/><path d="M15.2 13.9c.5-.1 1-.2 1.6-.2 2.9 0 4.7 2 4.7 4.8v2h-4.4v-1c0-2.2-.7-4.1-1.9-5.6z"/>',
+  range: '<path fill-rule="evenodd" d="M12 4.5A10 10 0 0 0 2.6 18l.3.6h18.2l.3-.6A10 10 0 0 0 12 4.5zm0 2.3a7.7 7.7 0 0 1 7.5 9.5h-15A7.7 7.7 0 0 1 12 6.8z"/><path d="M10.8 15.2l5.4-5.6 1 .9-4.7 6a1.7 1.7 0 1 1-1.7-1.3z"/>',
+  speed: '<path fill-rule="evenodd" d="M12 4.5A10 10 0 0 0 2.6 18l.3.6h18.2l.3-.6A10 10 0 0 0 12 4.5zm0 2.3a7.7 7.7 0 0 1 7.5 9.5h-15A7.7 7.7 0 0 1 12 6.8z"/><path d="M10.8 15.2l5.4-5.6 1 .9-4.7 6a1.7 1.7 0 1 1-1.7-1.3z"/>',
+  electric: '<path fill-rule="evenodd" d="M3 6.5h15a2 2 0 0 1 2 2v1h1.8v5H20v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2zm.3 2.3v6.4h14.4V8.8z"/><rect x="4.6" y="10.2" width="3.2" height="3.6"/><rect x="8.9" y="10.2" width="3.2" height="3.6"/><rect x="13.2" y="10.2" width="3.2" height="3.6"/>',
+  battery: '<path fill-rule="evenodd" d="M3 6.5h15a2 2 0 0 1 2 2v1h1.8v5H20v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2zm.3 2.3v6.4h14.4V8.8z"/><rect x="4.6" y="10.2" width="3.2" height="3.6"/><rect x="8.9" y="10.2" width="3.2" height="3.6"/><rect x="13.2" y="10.2" width="3.2" height="3.6"/>',
+  premium: '<path fill-rule="evenodd" d="M6.4 3.5h11.2l4.2 5.3L12 21 2.2 8.8zm1 2L5.2 8.1h3.4l1-2.6zm4 0-1 2.6h3.2l-1-2.6zm3.8 0 1 2.6h3.4l-2.2-2.6zM5.4 10l5.4 6.7-2-6.7zm5.3 0 1.3 5.3 1.3-5.3zm4.5 0-2 6.7 5.4-6.7z"/>',
+  warranty: '<path d="M12 2 4 5v6c0 5.2 3.4 9.3 8 11 4.6-1.7 8-5.8 8-11V5z"/>',
+  charge: '<path d="M8 2h2v5h4V2h2v5h2v5a6 6 0 0 1-5 5.9V22h-2v-4.1A6 6 0 0 1 6 12V7h2z"/>',
+  calendar: '<path d="M7 2h2v2h6V2h2v2h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2zm-2 8v10h14V10z"/>',
+  calendarCheck: '<path d="M7 2h2v2h6V2h2v2h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2zm-2 8v10h14V10z"/>',
+  clock: '<path d="M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20zm-1 5v6l5 3 1-1.6-4-2.4V7z"/>',
+  user: '<circle cx="12" cy="7.5" r="4.5"/><path d="M3.5 21c0-4.4 3.8-7.5 8.5-7.5s8.5 3.1 8.5 7.5z"/>',
+};
+function lineIcon(name: string, color: string, size: number): string {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${cssColor(color, INK)}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:block;flex:none">${LINE[name] ?? LINE.calendar}</svg>`;
+}
+function glyph(name: ShowcaseIcon, color: string, size: number): string {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="${cssColor(color, INK)}" style="display:block">${GLYPH[name] ?? GLYPH.premium}</svg>`;
+}
+
+// ── fixed geometry (overlay fields sit on these lines) ─────────────
 /**
  * Fixed geometry of the acceptance card, in px. The customer's signature and
  * date are OVERLAY fields at page coordinates, and only a card of known height
  * lets the template put them exactly on its lines — see showcaseQuoteTemplate.
  */
-export const ACCEPTANCE_GEOMETRY = { pad: 10, titleH: 18, textH: 28, nameRowH: 28, sigRowH: 44, dateRowH: 28, labelW: 84, gap: 8 } as const;
-/** Fixed too, so the band placed at the foot of the sheet can never spill onto a second page. */
-export const FOOTER_BAND_HEIGHT = 56;
+export const ACCEPTANCE_GEOMETRY = { pad: 12, padX: 14, headerH: 22, headerGap: 6, textH: 30, nameRowH: 30, sigRowH: 40, dateRowH: 30, labelW: 92, gap: 6 } as const;
 export function acceptanceHeight(): number {
   const g = ACCEPTANCE_GEOMETRY;
-  return g.pad * 2 + g.titleH + g.textH + g.nameRowH + g.sigRowH + g.dateRowH;
+  return g.pad * 2 + g.headerH + g.headerGap + g.textH + g.nameRowH + g.sigRowH + g.dateRowH;
 }
+/** Fixed too, so the band placed at the foot of the sheet can never spill onto a second page. */
+export const FOOTER_BAND_HEIGHT = 100;
 
+/** Card header used by the terms and acceptance cards: dark icon, orange rule, bold caps title. */
+function cardHeader(iconName: string, title: string, accentCss: string, height: number): string {
+  return `<div style="display:flex;align-items:center;gap:8px;height:${height}px">${lineIcon(iconName, INK, 17)}<span style="width:3px;height:15px;background:${accentCss};border-radius:1px;${KEEP_BG}"></span><span style="font-size:8.5pt;font-weight:800;letter-spacing:.8px;color:${INK};text-transform:uppercase">${esc(title)}</span></div>`;
+}
+const CARD = `background:#f3f4f6;border-radius:6px;${KEEP_BG}`;
+
+// ── bands ───────────────────────────────────────────────────────────
+/**
+ * A band's background: its photo (an upload, or the built-in Cape Town
+ * default), cover-fit and centred, under a navy overlay that is darkest where
+ * the text sits and light elsewhere so the scenery reads. With no photo, the
+ * plain dark gradient. The built-in defaults arrive as data URLs from the
+ * server (showcaseAssetsServer.ts); only the editor canvas sees their public
+ * path, never a PDF or signing page.
+ */
+function bandBackground(bgCss: string, raw: string, ctx: RenderCtx, overlay: string): string {
+  const img = tok(raw, ctx).trim();
+  const usable = isDataImage(img) || (Object.values(SHOWCASE_BAND_ASSETS) as string[]).includes(img);
+  const layers = usable ? `${overlay},url('${img}')` : `linear-gradient(115deg,${bgCss} 0%,${bgCss} 45%,#16233d 100%)`;
+  return `background-color:${bgCss};background-image:${layers};background-size:cover;background-position:center;background-repeat:no-repeat;${KEEP_BG}`;
+}
+const HEADER_OVERLAY = "linear-gradient(90deg,rgba(11,18,32,.86) 0%,rgba(11,18,32,.55) 34%,rgba(11,18,32,.18) 68%,rgba(11,18,32,.32) 100%),linear-gradient(rgba(11,18,32,.08),rgba(11,18,32,.08))";
+const FOOTER_OVERLAY = "linear-gradient(90deg,rgba(11,18,32,.82) 0%,rgba(11,18,32,.5) 40%,rgba(11,18,32,.42) 100%),linear-gradient(rgba(11,18,32,.12),rgba(11,18,32,.12))";
+const TEXT_SHADOW = "text-shadow:0 1px 3px rgba(0,0,0,.65),0 0 10px rgba(0,0,0,.35);";
+
+// ── vehicle ─────────────────────────────────────────────────────────
 /** Placeholder the template preview and the editor canvas show in place of a real vehicle. */
 const SAMPLE_VEHICLE: VehicleShowcaseData = {
   name: "Model name",
@@ -94,108 +151,136 @@ function vehicleFor(block: VehicleShowcaseBlock, ctx: RenderCtx): VehicleShowcas
 }
 
 function vehicleDetailsHtml(b: VehicleShowcaseBlock, v: VehicleShowcaseData): string {
-  const accentCss =cssColor(b.accent, ACCENT);
   const specs = v.specs.length
-    ? `<div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin-top:9px">${v.specs.map((s) => `<div style="text-align:center;min-width:0">
-        <div style="width:32px;height:32px;border-radius:50%;border:1.5px solid ${accentCss};margin:0 auto 4px;display:flex;align-items:center;justify-content:center">${icon(s.icon, accentCss, 16)}</div>
-        <div style="font-size:7.5pt;font-weight:800;color:#0f172a;letter-spacing:.5px;text-transform:uppercase;line-height:1.2">${esc(s.label)}</div>
-        ${s.sub ? `<div style="font-size:6.5pt;color:#64748b;line-height:1.3;margin-top:1px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(s.sub)}</div>` : ""}
+    ? `<div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin-top:12px">${v.specs.map((s) => `<div style="text-align:center;min-width:0">
+        <div style="width:42px;height:42px;border-radius:50%;border:1.3px solid ${INK};margin:0 auto 5px;display:flex;align-items:center;justify-content:center">${glyph(s.icon, INK, 22)}</div>
+        <div style="font-size:7.5pt;font-weight:800;color:${INK};text-transform:uppercase;line-height:1.2">${esc(s.label)}</div>
+        ${s.sub ? `<div style="font-size:6.5pt;color:#6b7280;line-height:1.3;margin-top:1px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(s.sub)}</div>` : ""}
       </div>`).join("")}</div>`
     : "";
-  return `<div style="margin:8px 0 0">
-    ${b.brand.trim() ? `<div style="font-size:8pt;font-weight:700;letter-spacing:3px;color:${accentCss};text-transform:uppercase">${esc(b.brand)}</div>` : ""}
-    <div style="font-size:28pt;font-weight:900;line-height:1.05;color:${INK};text-transform:uppercase;letter-spacing:.5px;margin:2px 0 4px">${esc(modelName(v.name, b.brand))}</div>
-    ${v.tagline ? `<div style="font-size:10.5pt;font-weight:600;color:#334155;line-height:1.3">${esc(v.tagline)}</div>` : ""}
-    <div style="width:40px;height:3px;background:${accentCss};border-radius:2px;margin:6px 0;${KEEP_BG}"></div>
-    ${v.description ? `<div style="font-size:9pt;line-height:1.4;color:#475569;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden">${esc(v.description)}</div>` : ""}
+  return `<div style="position:relative;z-index:1;margin:14px 0 0">
+    ${b.brand.trim() ? `<div style="font-size:10pt;font-weight:800;letter-spacing:.5px;color:${INK};text-transform:uppercase">${esc(b.brand)}</div>` : ""}
+    <div style="font-size:34pt;font-weight:900;line-height:1;color:${INK};text-transform:uppercase;letter-spacing:.3px;margin:1px 0 5px">${esc(modelName(v.name, b.brand))}</div>
+    ${v.tagline ? `<div style="font-size:10.5pt;font-weight:700;color:${INK};line-height:1.3;margin-bottom:4px">${esc(v.tagline)}</div>` : ""}
+    ${v.description ? `<div style="font-size:8.5pt;line-height:1.4;color:#4b5563;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden">${esc(v.description)}</div>` : ""}
     ${specs}
   </div>`;
 }
 
 /**
- * A band's background: the uploaded photo, cover-fit and centred, under a navy
- * overlay — dark on the left where the logo/name sit, lighter to the right, plus
- * an overall darken so white and orange text stay readable on ANY photo. With
- * no photo, the plain dark gradient.
- */
-function bandBackground(bgCss: string, bgImage: string): string {
-  const img = bgImage.trim();
-  const layers = isDataImage(img)
-    ? `linear-gradient(90deg,rgba(2,6,23,.92) 0%,rgba(2,6,23,.62) 50%,rgba(2,6,23,.3) 100%),linear-gradient(rgba(2,6,23,.38),rgba(2,6,23,.38)),url('${img}')`
-    : `linear-gradient(115deg,${bgCss} 0%,${bgCss} 45%,#16233d 100%)`;
-  return `background-color:${bgCss};background-image:${layers};background-size:cover;background-position:center;background-repeat:no-repeat;${KEEP_BG}`;
-}
-const TEXT_SHADOW = "text-shadow:0 1px 6px rgba(2,6,23,.55);";
-
-/**
- * The vehicle photo, fading softly into the white page along its LEFT edge so a
- * scenic shot (vineyards, mountains behind the cart) blends into the page; on a
- * plain white/transparent photo the fade is invisible. "cover" fills the area
- * (scenic photos), "contain" shows the whole photo (cut-outs).
+ * The vehicle photo. "cover" fills the hero (bleeding to the page edge when the
+ * row lets it) and fades softly into the white page along its LEFT edge, so a
+ * scenic shot blends in; "contain" shows a cut-out whole and unfaded — faded, a
+ * cut-out would lose the front of the vehicle.
  */
 function vehicleImageHtml(b: VehicleShowcaseBlock, v: VehicleShowcaseData, bound: boolean): string {
   const h = Math.max(120, Math.min(520, b.imageHeight || 280));
-  const box = `height:${h}px;display:flex;align-items:center;justify-content:center;margin:8px 0 0;border-radius:12px;`;
   if (v.image && isDataImage(v.image)) {
-    // Only a FILLED photo fades: faded, a contained cut-out would lose the front
-    // of the vehicle, and on a plain background there is nothing to blend.
-    const fade = "linear-gradient(to right,transparent 0%,rgba(0,0,0,.55) 16%,#000 38%)";
-    const style = b.imageFit === "cover"
-      ? `width:100%;height:${h}px;object-fit:cover;object-position:center;-webkit-mask-image:${fade};mask-image:${fade};`
-      : `max-width:100%;max-height:${h}px;object-fit:contain;`;
-    const backdrop = b.imageFit === "cover" ? "" : `background:radial-gradient(ellipse at 50% 62%,#eef2f7 0%,#ffffff 72%);${KEEP_BG}`;
-    return `<div style="${box}overflow:hidden;${backdrop}"><img src="${esc(v.image)}" alt="${esc(v.name)}" style="${style}display:block"/></div>`;
+    if (b.imageFit === "cover") {
+      // Reaches a quarter of its width back under the text column (which sits
+      // above it — see z-index on the details and PREPARED FOR card) so the fade
+      // happens behind the copy, as in the design.
+      const fade = "linear-gradient(to right,transparent 0%,rgba(0,0,0,.3) 16%,rgba(0,0,0,.85) 34%,#000 46%)";
+      return `<div style="position:relative;z-index:0;height:${h}px;overflow:hidden;margin-left:-25%;width:125%"><img src="${esc(v.image)}" alt="${esc(v.name)}" style="display:block;width:100%;height:${h}px;object-fit:cover;object-position:center;-webkit-mask-image:${fade};mask-image:${fade}"/></div>`;
+    }
+    return `<div style="height:${h}px;display:flex;align-items:center;justify-content:center;background:radial-gradient(ellipse at 50% 62%,#eef2f7 0%,#ffffff 72%);${KEEP_BG}"><img src="${esc(v.image)}" alt="${esc(v.name)}" style="display:block;max-width:100%;max-height:${h}px;object-fit:contain"/></div>`;
   }
   // No photo on a real quote: leave the space empty rather than show a broken image.
   if (bound) return "";
-  return `<div style="${box}border:1.5px dashed #cbd5e1;background:#f8fafc;color:#94a3b8;font-size:9pt;text-align:center;padding:12px">Vehicle photo of the quoted model</div>`;
+  return `<div style="height:${h}px;display:flex;align-items:center;justify-content:center;border:1.5px dashed #cbd5e1;background:#f8fafc;color:#94a3b8;font-size:9pt;text-align:center;padding:12px">Vehicle photo of the quoted model</div>`;
+}
+
+// ── showcase looks of shared blocks ─────────────────────────────────
+function preparedForHtml(b: InfoCardBlock, ctx: RenderCtx): string {
+  const lines = tok(b.lines, ctx).split("\n").map((l) => l.trim()).filter(Boolean);
+  const row = (text: string) => {
+    const ic = /@/.test(text) ? "mail" : /^[+\d()][\d\s()+-]{5,}$/.test(text) ? "phone" : "";
+    return `<div style="display:flex;align-items:center;gap:8px;font-size:9pt;color:#1f2937;line-height:1.5">${ic ? lineIcon(ic, INK, 13) : ""}<span>${esc(text)}</span></div>`;
+  };
+  return `<div style="${CARD}position:relative;z-index:1;margin-top:12px;border-left:4px solid ${cssColor(b.accent, ACCENT)};border-radius:4px;padding:11px 16px;background:rgba(243,244,246,.94)">
+    <div style="font-size:7.5pt;font-weight:800;letter-spacing:.8px;color:${cssColor(b.accent, ACCENT)};text-transform:uppercase">${esc(b.label)}</div>
+    <div style="font-size:13pt;font-weight:800;color:${INK};margin:2px 0 3px">${esc(tok(b.name, ctx))}</div>
+    ${lines.map(row).join("")}
+  </div>`;
+}
+
+function lineItemsHtml(b: LineItemsBlock, ctx: RenderCtx): string {
+  const rows = ctx?.items ?? [];
+  const cols = ctx?.bound ? b.columns.filter((c) => evaluateCondition(c.showIf, ctx.vars)) : b.columns;
+  const border = "1px solid #e5e7eb";
+  const head = cols.map((c, i) => {
+    const radius = i === 0 ? "border-top-left-radius:6px;" : i === cols.length - 1 ? "border-top-right-radius:6px;" : "";
+    return `<th style="text-align:${c.align};background:${cssColor(b.headerBg, INK)};color:${cssColor(b.headerColor, "#ffffff")};padding:9px 12px;font-size:7.5pt;font-weight:800;letter-spacing:.4px;text-transform:uppercase;white-space:nowrap;${radius}${KEEP_BG}">${withQualifier(c.header, "font-size:6pt;font-weight:600")}</th>`;
+  }).join("");
+  const cell = (c: (typeof cols)[number], i: number, row: number, value: string) =>
+    `<td style="text-align:${c.align};padding:9px 12px;font-size:9pt;color:#1f2937;border-bottom:${border};${i ? `border-left:${border};` : `border-left:${border};`}${i === cols.length - 1 ? `border-right:${border};` : ""}${row % 2 ? `background:#f8fafc;${KEEP_BG}` : ""}">${esc(value)}</td>`;
+  const body = rows.length
+    ? rows.map((r, ri) => `<tr>${cols.map((c, i) => cell(c, i, ri, lineItemCell(c.key, r, b.vatRate))).join("")}</tr>`).join("")
+    : `<tr><td colspan="${cols.length}" style="padding:9px 12px;color:#94a3b8;font-size:9pt;border:${border};border-top:none">Line items appear here when linked to a record</td></tr>`;
+  return `<table style="width:100%;border-collapse:separate;border-spacing:0;margin:8px 0 0"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function termsHtml(b: TermsBlock): string {
+  const dot = `<span style="width:5px;height:5px;border-radius:50%;background:${ACCENT};flex:none;margin-top:5px;${KEEP_BG}"></span>`;
+  // The same height as the acceptance card beside it (at least), so the pair reads as one row.
+  return `<div style="${CARD}box-sizing:border-box;min-height:${acceptanceHeight()}px;padding:12px 14px">
+    ${cardHeader("doc", b.title, ACCENT, 22)}
+    <div style="margin-top:6px">${b.items.map((it) => `<div style="display:flex;gap:7px;font-size:7.5pt;line-height:1.4;color:#4b5563;margin-bottom:3px">${dot}<span>${esc(it.text)}</span></div>`).join("")}</div>
+  </div>`;
+}
+
+/** The showcase look of a shared block (infoCard / lineItems / terms), for serialize.ts and the canvas. */
+export function showcaseLookHtml(block: InfoCardBlock | LineItemsBlock | TermsBlock, ctx: RenderCtx): string {
+  if (block.type === "infoCard") return preparedForHtml(block, ctx);
+  if (block.type === "lineItems") return lineItemsHtml(block, ctx);
+  return termsHtml(block);
 }
 
 function acceptanceHtml(b: AcceptanceBlock, ctx: RenderCtx): string {
   const g = ACCEPTANCE_GEOMETRY;
   const line = (label: string, height: number, value = "") =>
     `<div style="display:flex;align-items:flex-end;gap:${g.gap}px;height:${height}px">
-      <div style="width:${g.labelW}px;flex:none;font-size:8pt;color:#64748b;padding-bottom:3px;line-height:1.2">${esc(label)}</div>
-      <div style="flex:1;min-width:0;height:100%;border-bottom:1px solid #94a3b8;display:flex;align-items:flex-end;padding-bottom:3px;font-size:9.5pt;font-weight:600;color:#0f172a;line-height:1.2;white-space:nowrap;overflow:hidden">${esc(value)}</div>
+      <div style="width:${g.labelW}px;flex:none;font-size:8pt;font-weight:600;color:${INK};padding-bottom:3px;line-height:1.2">${esc(label)}</div>
+      <div style="flex:1;min-width:0;height:100%;border-bottom:1px solid #6b7280;display:flex;align-items:flex-end;padding-bottom:3px;font-size:9pt;font-weight:600;color:${INK};line-height:1.2;white-space:nowrap;overflow:hidden">${esc(value)}</div>
     </div>`;
-  // Styled to match the terms block it sits beside.
-  return `<div style="box-sizing:border-box;height:${acceptanceHeight()}px;overflow:hidden;background:#f8fafc;border-radius:6px;padding:${g.pad}px 14px;${KEEP_BG}">
-    <div style="height:${g.titleH}px;font-size:8pt;font-weight:700;letter-spacing:1px;color:#64748b;line-height:${g.titleH}px">${esc(b.title)}</div>
-    <div style="height:${g.textH}px;overflow:hidden;font-size:8pt;line-height:1.45;color:#475569">${esc(tok(b.text, ctx))}</div>
-    ${line(b.nameLabel, g.nameRowH, tok(b.nameValue, ctx))}
-    ${line(b.signatureLabel, g.sigRowH)}
-    ${line(b.dateLabel, g.dateRowH)}
+  const colon = (s: string) => (s.trim() && !s.trim().endsWith(":") ? `${s.trim()}:` : s);
+  return `<div style="${CARD}box-sizing:border-box;height:${acceptanceHeight()}px;overflow:hidden;padding:${g.pad}px ${g.padX}px">
+    ${cardHeader("checkbox", b.title, ACCENT, g.headerH)}
+    <div style="height:${g.textH}px;margin-top:${g.headerGap}px;overflow:hidden;font-size:7.5pt;line-height:1.45;color:#4b5563">${esc(tok(b.text, ctx))}</div>
+    ${line(colon(b.nameLabel), g.nameRowH, tok(b.nameValue, ctx))}
+    ${line(colon(b.signatureLabel), g.sigRowH)}
+    ${line(colon(b.dateLabel), g.dateRowH)}
   </div>`;
 }
 
+// ── the six showcase blocks ─────────────────────────────────────────
 export function showcaseBlockHtml(block: ShowcaseBlock, ctx: RenderCtx, logoDataUri?: string): string {
   switch (block.type) {
     case "showcaseHeader": {
       const bgCss = cssColor(block.bg, INK);
-      const accentCss =cssColor(block.accent, ACCENT);
+      const accentCss = cssColor(block.accent, ACCENT);
       const logo = block.showLogo && logoDataUri
-        ? `<img src="${esc(logoDataUri)}" alt="" style="height:36px;width:auto;display:block"/>`
-        : `<div style="color:#fff;font-weight:800;font-size:16pt;letter-spacing:2px">${esc(tok("{{company.name}}", ctx))}</div>`;
-      return `<div style="border-radius:10px;overflow:hidden;${bandBackground(bgCss, block.bgImage)}padding:16px 24px;display:flex;align-items:center;justify-content:space-between;gap:18px;margin:0 0 8px">
-        <div style="min-width:0">${logo}${block.tagline.trim() ? `<div style="color:#e2e8f0;font-size:7.5pt;font-weight:600;letter-spacing:3.5px;margin-top:9px;text-transform:uppercase;${TEXT_SHADOW}">${esc(tok(block.tagline, ctx))}</div>` : ""}</div>
+        ? `<img src="${esc(logoDataUri)}" alt="" style="height:46px;width:auto;display:block"/>`
+        : `<div style="color:#fff;font-weight:800;font-size:18pt;letter-spacing:2px;${TEXT_SHADOW}">${esc(tok("{{company.name}}", ctx))}</div>`;
+      return `<div style="${bandBackground(bgCss, block.bgImage, ctx, HEADER_OVERLAY)}box-sizing:border-box;min-height:118px;padding:20px ${SHOWCASE_INSET}px;display:flex;align-items:center;justify-content:space-between;gap:18px">
+        <div style="min-width:0">${logo}${block.tagline.trim() ? `<div style="color:#f1f5f9;font-size:7.5pt;font-weight:600;letter-spacing:3.5px;margin-top:10px;text-transform:uppercase;${TEXT_SHADOW}">${esc(tok(block.tagline, ctx))}</div>` : ""}</div>
         <div style="display:flex;align-items:stretch;gap:14px;flex:none">
           <div style="width:3px;background:${accentCss};border-radius:2px;${KEEP_BG}"></div>
           <div style="text-align:right">
-            <div style="color:#fff;font-weight:800;font-size:20pt;letter-spacing:3px;line-height:1.15;${TEXT_SHADOW}">${esc(tok(block.title, ctx))}</div>
-            <div style="color:${accentCss};font-weight:800;font-size:13pt;letter-spacing:1px;white-space:nowrap;${TEXT_SHADOW}">${esc(tok(block.docNumber, ctx))}</div>
+            <div style="color:#fff;font-weight:800;font-size:21pt;letter-spacing:1.5px;line-height:1.15;${TEXT_SHADOW}">${esc(tok(block.title, ctx))}</div>
+            <div style="color:${accentCss};font-weight:800;font-size:14pt;letter-spacing:1px;white-space:nowrap;${TEXT_SHADOW}">${esc(tok(block.docNumber, ctx))}</div>
           </div>
         </div>
       </div>`;
     }
     case "infoStrip": {
-      const accentCss =cssColor(block.accent, ACCENT);
       if (!block.items.length) return "";
-      return `<div style="display:grid;grid-template-columns:repeat(${block.items.length},1fr);border:1px solid #e2e8f0;border-radius:8px;margin:0 0 4px;background:#fff">${block.items.map((it, i) => `<div style="display:flex;gap:10px;align-items:center;padding:6px 14px;min-width:0;${i ? "border-left:1px solid #e2e8f0;" : ""}">
-          <div style="width:30px;height:30px;flex:none;border-radius:50%;background:#f1f5f9;display:flex;align-items:center;justify-content:center;${KEEP_BG}">${icon(it.icon, accentCss,16)}</div>
+      return `<div style="display:grid;grid-template-columns:repeat(${block.items.length},1fr);padding:10px 0;border-bottom:1px solid #e5e7eb">${block.items.map((it, i) => `<div style="display:flex;gap:10px;align-items:center;min-width:0;padding:0 14px;${i ? "border-left:1px solid #d1d5db;" : "padding-left:4px;"}">
+          ${lineIcon(it.icon, INK, 22)}
           <div style="min-width:0;line-height:1.3">
-            <div style="font-size:6.5pt;font-weight:700;letter-spacing:1.5px;color:#64748b;text-transform:uppercase">${esc(tok(it.label, ctx))}</div>
-            <div style="font-size:10pt;font-weight:700;color:#0f172a">${esc(tok(it.value, ctx))}</div>
-            ${it.sub.trim() ? `<div style="font-size:7.5pt;color:#64748b">${esc(tok(it.sub, ctx))}</div>` : ""}
+            <div style="font-size:6.5pt;font-weight:600;letter-spacing:1px;color:#6b7280;text-transform:uppercase">${esc(tok(it.label, ctx))}</div>
+            <div style="font-size:10pt;font-weight:800;color:${INK}">${esc(tok(it.value, ctx))}</div>
+            ${it.sub.trim() ? `<div style="font-size:7pt;color:#6b7280">${esc(tok(it.sub, ctx))}</div>` : ""}
           </div>
         </div>`).join("")}</div>`;
     }
@@ -211,35 +296,40 @@ export function showcaseBlockHtml(block: ShowcaseBlock, ctx: RenderCtx, logoData
         : vehicleDetailsHtml(block, v);
     }
     case "totalsBox": {
-      const rows = block.rows.map((r) => `<div style="display:flex;justify-content:space-between;gap:12px;padding:5px 14px;font-size:9pt;color:#475569;border-bottom:1px solid #eef2f7"><span>${esc(tok(r.label, ctx))}</span><span style="font-weight:600;color:#0f172a;white-space:nowrap">${esc(tok(r.value, ctx))}</span></div>`).join("");
-      return `<div style="border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;background:#fff;margin:10px 0 0">${rows}
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 14px;background:${cssColor(block.bg, INK)};${KEEP_BG}">
-          <span style="color:#fff;font-size:8.5pt;font-weight:700;letter-spacing:1.5px;white-space:nowrap">${esc(tok(block.totalLabel, ctx))}</span>
-          <span style="color:${cssColor(block.accent, ACCENT)};font-size:16pt;font-weight:800;white-space:nowrap">${esc(tok(block.totalAmount, ctx))}</span>
+      const accentCss = cssColor(block.accent, ACCENT);
+      const rows = block.rows.map((r) => `<div style="display:flex;justify-content:space-between;gap:16px;padding:3px 14px;font-size:9pt;color:${INK}"><span style="font-weight:700">${withQualifier(tok(r.label, ctx), "font-weight:400;color:#6b7280")}</span><span style="white-space:nowrap">${esc(tok(r.value, ctx))}</span></div>`).join("");
+      return `<div style="margin:10px 0 0">${rows ? `<div style="background:#f3f4f6;border-radius:4px;padding:5px 0;${KEEP_BG}">${rows}</div>` : ""}
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:6px;padding:9px 14px;border-radius:4px;border-left:6px solid ${accentCss};background:${cssColor(block.bg, INK)};${KEEP_BG}">
+          <span style="color:#fff;font-size:7.5pt;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;white-space:nowrap">${esc(tok(block.totalLabel, ctx))}</span>
+          <span style="color:${accentCss};font-size:18pt;font-weight:800;white-space:nowrap">${esc(tok(block.totalAmount, ctx))}</span>
         </div>
       </div>`;
     }
     case "acceptance":
       return acceptanceHtml(block, ctx);
     case "footerBand": {
-      const accentCss =cssColor(block.accent, ACCENT);
-      const company = (k: string) => tok(`{{company.${k}}}`, ctx).trim();
-      const contact = ([["pin", "address"], ["phone", "phone"], ["globe", "website"], ["mail", "email"]] as const)
-        .map(([ic, key]) => [ic, company(key)] as const)
-        .filter(([, value]) => value);
-      const instagram = company("instagram");
-      const cell = (glyph: string, text: string) => `<div style="display:flex;align-items:center;gap:6px;min-width:0;color:#cbd5e1;font-size:7.5pt;line-height:1.3">${glyph}<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(text)}</span></div>`;
-      const cells = [
-        ...contact.map(([ic, value]) => cell(icon(ic, accentCss,12), value)),
-        ...(instagram ? [cell(`<svg width="12" height="12" viewBox="0 0 24 24" fill="${accentCss}" style="display:block;flex:none"><path d="${SOCIAL_ICON_PATHS.instagram}"/></svg>`, instagram)] : []),
-      ];
+      const accentCss = cssColor(block.accent, ACCENT);
       const bandBgCss = cssColor(block.bg, INK);
-      return `<div style="${bandBackground(bandBgCss, block.bgImage)}border-top:3px solid ${accentCss};border-radius:8px;box-sizing:border-box;height:${FOOTER_BAND_HEIGHT}px;overflow:hidden;padding:0 18px;display:flex;justify-content:space-between;align-items:center;gap:16px;${TEXT_SHADOW}">
-        <div style="flex:none;max-width:40%">
-          <div style="color:#fff;font-size:10.5pt;font-weight:800;line-height:1.25">${esc(company("name"))}</div>
-          ${block.subtitle.trim() ? `<div style="color:${accentCss};font-size:7pt;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;margin-top:2px">${esc(tok(block.subtitle, ctx))}</div>` : ""}
+      const company = (k: string) => tok(`{{company.${k}}}`, ctx).trim();
+      const item = (ic: string, text: string, clamp = 1) => text
+        ? `<div style="display:flex;align-items:flex-start;gap:7px;min-width:0;color:#fff;font-size:7.5pt;line-height:1.35">${lineIcon(ic, accentCss, 13)}<span style="display:-webkit-box;-webkit-line-clamp:${clamp};-webkit-box-orient:vertical;overflow:hidden">${esc(text)}</span></div>`
+        : "";
+      const facebook = company("facebook");
+      const instagram = company("instagram");
+      const social = (net: "facebook" | "instagram") =>
+        `<span style="width:22px;height:22px;border-radius:50%;border:1.3px solid #fff;display:inline-flex;align-items:center;justify-content:center"><svg width="12" height="12" viewBox="0 0 24 24" fill="#fff" style="display:block"><path d="${SOCIAL_ICON_PATHS[net]}"/></svg></span>`;
+      const socials = [facebook ? social("facebook") : "", instagram ? social("instagram") : ""].filter(Boolean);
+      const handle = instagram || facebook;
+      return `<div style="${bandBackground(bandBgCss, block.bgImage, ctx, FOOTER_OVERLAY)}border-top:3px solid ${accentCss};box-sizing:border-box;height:${FOOTER_BAND_HEIGHT}px;overflow:hidden;padding:0 ${SHOWCASE_INSET}px;display:flex;align-items:center;gap:22px;${TEXT_SHADOW}">
+        <div style="flex:0 0 190px;min-width:0">
+          <div style="color:#fff;font-size:13pt;font-weight:800;line-height:1.25">${esc(company("name"))}</div>
+          ${block.subtitle.trim() ? `<div style="color:#fff;font-size:9pt;margin-top:3px">${esc(tok(block.subtitle, ctx))}</div>` : ""}
         </div>
-        <div style="display:grid;grid-template-columns:repeat(3,minmax(0,auto));gap:5px 16px;min-width:0">${cells.join("")}</div>
+        <div style="flex:1;min-width:0;display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:6px 18px;align-items:start">
+          <div style="display:grid;gap:5px;min-width:0">${item("pin", company("address"), 2)}${item("phone", company("phone"))}${item("globe", company("website"))}</div>
+          <div style="display:grid;gap:5px;min-width:0;padding-top:${company("address") ? 22 : 0}px">${item("mail", company("email"))}</div>
+        </div>
+        ${socials.length ? `<div style="flex:none;text-align:center"><div style="display:flex;gap:7px;justify-content:center">${socials.join("")}</div>${handle ? `<div style="color:#fff;font-size:7.5pt;margin-top:5px">${esc(handle)}</div>` : ""}</div>` : ""}
       </div>`;
     }
   }

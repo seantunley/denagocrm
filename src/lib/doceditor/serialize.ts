@@ -15,7 +15,7 @@ import { PAGE_SIZES } from "./model";
 import { plateToHtmlBody } from "@/lib/docbuilder/plateSerialize";
 import { evaluateCondition } from "@/lib/docbuilder/expr";
 import { brandFooterContent, SOCIAL_ICON_PATHS } from "@/lib/companyBrand";
-import { showcaseBlockHtml } from "./showcaseRender";
+import { showcaseBlockHtml, showcaseLookHtml } from "./showcaseRender";
 
 export type RenderCtx = {
   tokens: Record<string, string>;
@@ -106,7 +106,7 @@ function parseMoney(s?: string): number {
  * cells give inclusive unit price + inclusive line total; the excl-VAT and VAT
  * figures are derived so a table using them adds up (excl + VAT = incl).
  */
-function lineItemCell(key: string, row: { cells: { value: string }[] }, vatRate: number): string {
+export function lineItemCell(key: string, row: { cells: { value: string }[] }, vatRate: number): string {
   const factor = 1 + (vatRate || 0) / 100;
   const inclUnit = parseMoney(row.cells[2]?.value);
   const inclTotal = parseMoney(row.cells[3]?.value);
@@ -162,12 +162,14 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
       </div>`;
     }
     case "infoCard":
+      if (block.look === "showcase") return showcaseLookHtml(block, ctx);
       return `<div style="background:#f8fafc;border-left:3px solid ${cssColor(block.accent, "#ea580c")};border-radius:6px;padding:12px 14px">
         <div style="font-size:8pt;font-weight:700;letter-spacing:1px;color:${cssColor(block.accent, "#ea580c")}">${esc(block.label)}</div>
         <div style="font-size:12pt;font-weight:700;color:${cssColor(style.ink, "#020617")};margin:3px 0">${esc(tok(block.name, ctx))}</div>
         <div style="font-size:9pt;color:#64748b">${nl2br(tok(block.lines, ctx))}</div>
       </div>`;
     case "lineItems": {
+      if (block.look === "showcase") return showcaseLookHtml(block, ctx);
       const rows = ctx?.items ?? [];
       // Conditional columns: only when bound to a record, drop columns whose condition
       // is false. An unbound (globals-only) preview keeps all columns as a placeholder.
@@ -193,12 +195,9 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
             : "flex-end";
       return `<div style="display:flex;justify-content:${place};margin:6px 0"><div style="background:${cssColor(block.color, "#ea580c")};color:#fff;border-radius:6px;padding:10px 20px;display:flex;gap:16px;align-items:center;max-width:100%"><span style="font-size:${(9 * scale).toFixed(2)}pt;font-weight:700;letter-spacing:1px;white-space:nowrap">${esc(block.label)}</span><span style="font-size:${(16 * scale).toFixed(2)}pt;font-weight:800;white-space:nowrap">${esc(tok(block.amount, ctx))}</span></div></div>`;
     }
-    case "terms": {
-      // Optional coloured bullets (the showcase layout); unset renders exactly as before.
-      const dot = cssColor(block.accent, "");
-      const bullet = dot ? `<span style="color:${dot};font-weight:900">•</span>` : "•";
-      return `<div style="background:#f8fafc;border-radius:6px;padding:12px 14px;margin:4px 0">${block.title ? `<div style="font-size:8pt;font-weight:700;letter-spacing:1px;color:#64748b;margin-bottom:6px">${esc(block.title)}</div>` : ""}${block.items.map((it) => `<div style="font-size:9pt;color:#64748b;margin-bottom:3px">${bullet} ${esc(it.text)}</div>`).join("")}</div>`;
-    }
+    case "terms":
+      if (block.look === "showcase") return showcaseLookHtml(block, ctx);
+      return `<div style="background:#f8fafc;border-radius:6px;padding:12px 14px;margin:4px 0">${block.title ? `<div style="font-size:8pt;font-weight:700;letter-spacing:1px;color:#64748b;margin-bottom:6px">${esc(block.title)}</div>` : ""}${block.items.map((it) => `<div style="font-size:9pt;color:#64748b;margin-bottom:3px">• ${esc(it.text)}</div>`).join("")}</div>`;
     case "footer": {
       if (block.variant === "simple") {
         return `<div style="border-top:1.5px solid ${cssColor(block.accent, "#ea580c")};padding-top:8px;margin:6px 0;text-align:center">${block.lines.map((l, i) => `<div style="font-size:${i === 0 ? 9 : 8}pt;font-weight:${i === 0 ? 700 : 400};color:${i === 0 ? "#334155" : "#64748b"}">${esc(tok(l.text, ctx))}</div>`).join("")}</div>`;
@@ -267,7 +266,20 @@ function rowHtml(row: DocumentRow, ctx: RenderCtx, style: DocStyle, logoDataUri?
   const template = cols.map((c) => `${c.widthPercent}fr`).join(" ");
   const gap = row.settings?.gap ?? 16;
   const keep = row.settings?.keepTogether ? "break-inside:avoid;" : "";
-  return `<div style="display:grid;grid-template-columns:${template};gap:${gap}px;margin:2px 0;${keep}">${cols.map((c) => columnHtml(c, ctx, style, logoDataUri)).join("")}</div>`;
+  return `<div style="display:grid;grid-template-columns:${template};gap:${gap}px;${rowSpacing(row)}${keep}">${cols.map((c) => columnHtml(c, ctx, style, logoDataUri)).join("")}</div>`;
+}
+
+/**
+ * A row's own padding, when it sets one — the showcase layout uses it to inset
+ * content rows from a zero-margin page while its bands run edge to edge. A row
+ * that sets padding owns its spacing entirely (no default margin); every other
+ * row keeps the historical 2px margin, byte for byte. Shared with the canvas.
+ */
+export function rowSpacing(row: DocumentRow): string {
+  const p = row.settings?.padding;
+  if (!p) return "margin:2px 0;";
+  const n = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  return `margin:0;padding:${n(p.top)}px ${n(p.right)}px ${n(p.bottom)}px ${n(p.left)}px;`;
 }
 
 function overlayFieldHtml(f: OverlayField, recipientColor: string, margin: number): string {

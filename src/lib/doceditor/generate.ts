@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { getBuilderTemplate, getLiveBuilderTemplate } from "@/lib/docbuilder/store";
 import { buildQuoteContext, buildJobCardContext } from "@/lib/docbuilder/merge";
 import { withVehicleShowcase } from "@/lib/docbuilder/vehicleShowcaseLoad";
+import { showcaseAssetTokens } from "./showcaseAssetsServer";
 import { loadBillToFleet } from "@/lib/quoteBillTo";
 import { getCompanyProfile, companyTokens } from "@/lib/companyProfile";
 import { htmlToPdf } from "@/lib/customDocs";
@@ -21,7 +22,8 @@ import { renderDocumentHtml, renderEmailHtml, type RenderCtx } from "./serialize
  * otherwise be null. Record-specific tokens still win on any overlap.
  */
 async function withCompany(ctx: RenderCtx): Promise<RenderCtx> {
-  const company = companyTokens(await getCompanyProfile());
+  // + the showcase layout's built-in band photos ({{asset.*}}), embedded as data URLs.
+  const company = { ...showcaseAssetTokens(), ...companyTokens(await getCompanyProfile()) };
   // Unbound: carry company tokens only, but mark bound:false so conditionals/showIf
   // columns render as the placeholder layout rather than evaluating an empty scope.
   if (!ctx) return { tokens: company, items: [], vars: {}, bound: false };

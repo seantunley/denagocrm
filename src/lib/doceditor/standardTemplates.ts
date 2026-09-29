@@ -15,7 +15,8 @@ import {
   standardQuoteTemplate,
   uid,
 } from "./factory";
-import { ACCEPTANCE_GEOMETRY, FOOTER_BAND_HEIGHT, acceptanceHeight } from "./showcaseRender";
+import { ACCEPTANCE_GEOMETRY, FOOTER_BAND_HEIGHT, SHOWCASE_INSET, acceptanceHeight } from "./showcaseRender";
+import { SHOWCASE_FOOTER_IMAGE, SHOWCASE_HEADER_IMAGE } from "./showcaseAssets";
 
 export type StandardDocKey =
   | "quote"
@@ -260,37 +261,54 @@ function warrantyClaimTemplate(): DocumentModel {
  * the editor (Palette → Layouts), so the live default quote template is never
  * touched by this code.
  *
+ * GEOMETRY. The page has NO margin: the header and footer bands run edge to
+ * edge and the hero photo bleeds off the right edge, as in the design. Every
+ * other section shares one content column, inset SHOWCASE_INSET px each side —
+ * the content rows by their own padding, the floating cards by their x/width.
+ *
  * The bottom band (terms, acceptance, footer) is FLOATING at fixed page
  * coordinates, because the customer's signature and date are overlay fields at
  * page coordinates and must sit on the acceptance card's lines however long the
- * flowed content above is. The flow therefore has a height budget: about five
+ * flowed content above is. The flow therefore has a height budget: three
  * line-item/fee rows fit above the bottom band on one A4 sheet.
  */
 export function showcaseQuoteTemplate(): DocumentModel {
   const PAGE = PAGE_SIZES.A4;
-  const margin = 40;
-  const contentW = PAGE.w - margin * 2;
-  const gap = 12;
+  const inset = SHOWCASE_INSET;
+  const contentW = PAGE.w - inset * 2;
+  const gap = 14;
   const cardW = Math.floor((contentW - gap) / 2);
   // PAGE.h is the rounded A4 height (1123 vs the exact 1122.52), so stop a
-  // pixel short of the printable edge or the band spills onto a second sheet.
-  const footerY = PAGE.h - 1 - margin - FOOTER_BAND_HEIGHT;
-  const cardsY = footerY - 8 - acceptanceHeight();
-  const acceptX = margin + cardW + gap;
+  // pixel short of the sheet edge or the band spills onto a second sheet.
+  const footerY = PAGE.h - 1 - FOOTER_BAND_HEIGHT;
+  const cardsY = footerY - 14 - acceptanceHeight();
+  const acceptX = inset + cardW + gap;
+  const content = { top: 0, right: inset, bottom: 0, left: inset };
+  const padded = (blocks: DocumentBlock[], padding = content) => {
+    const row = newRow([newColumn(100, blocks)]);
+    row.settings = { ...row.settings, padding };
+    return row;
+  };
 
   const vehicle = (part: "details" | "image") => {
     const block = newBlock("vehicleShowcase");
     if (block.type === "vehicleShowcase") {
       block.part = part;
-      block.imageHeight = 280;
+      block.imageHeight = 356; // with the text column beside it, leaves room for three table rows
       block.imageFit = "cover"; // scenic product photos fill the hero and fade into the page
     }
     return block;
   };
+  const header = newBlock("showcaseHeader");
+  if (header.type === "showcaseHeader") header.bgImage = SHOWCASE_HEADER_IMAGE;
+  const footerBand = newBlock("footerBand");
+  if (footerBand.type === "footerBand") footerBand.bgImage = SHOWCASE_FOOTER_IMAGE;
+  const preparedFor = infoCard("PREPARED FOR", "{{customer.name}}", "{{customer.phone}}\n{{customer.email}}");
+  if (preparedFor.type === "infoCard") preparedFor.look = "showcase";
   const items = newBlock("lineItems");
-  items.settings = { fontScale: 0.85 }; // compact rows: more lines fit above the fixed bottom band
   if (items.type === "lineItems") {
-    items.headerBg = INK;
+    items.look = "showcase";
+    items.headerBg = "#0b1220";
     items.columns = [
       { key: "description", header: "Description", align: "left", showIf: "" },
       { key: "qty", header: "Qty", align: "right", showIf: "" },
@@ -299,54 +317,54 @@ export function showcaseQuoteTemplate(): DocumentModel {
     ];
   }
   const totals = newBlock("totalsBox");
-  totals.settings = { width: 48, horizontalAlignment: "right" };
-  // The standard quote's terms, with "E&OE." folded into the first line so the
-  // card stays the height of the acceptance card beside it.
+  totals.settings = { width: 46, horizontalAlignment: "right" };
+  // The standard quote's terms, each its own bullet.
   const quoteTerms = terms("QUOTATION TERMS", [
-    "Quote valid for 14 days. E&OE.",
+    "Quote valid for 14 days.",
     "50% deposit to secure build slot; balance on delivery.",
     "Prices are recommended retail, including 15% VAT, and subject to change without notice.",
     "Denago EVs are Low-Speed Vehicles for private-property use and are not road registered.",
+    "E & O.E.",
   ]);
-  if (quoteTerms.type === "terms") quoteTerms.accent = ACCENT;
+  if (quoteTerms.type === "terms") quoteTerms.look = "showcase";
 
   const customer = newRecipient({ name: "Customer", role: "signer", party: "customer", color: "#2563eb" });
   const g = ACCEPTANCE_GEOMETRY;
-  const lineX = acceptX + 14 + g.labelW + g.gap;
-  const lineW = cardW - 28 - g.labelW - g.gap;
-  const sigTop = cardsY + g.pad + g.titleH + g.textH + g.nameRowH;
+  const lineX = acceptX + g.padX + g.labelW + g.gap;
+  const lineW = cardW - g.padX * 2 - g.labelW - g.gap;
+  const sigTop = cardsY + g.pad + g.headerH + g.headerGap + g.textH + g.nameRowH;
+
+  const hero = newRow([newColumn(44, [preparedFor, vehicle("details")]), newColumn(56, [vehicle("image")])]);
+  // Inset on the left only: the photo bleeds to the right page edge.
+  hero.settings = { ...hero.settings, gap: 0, padding: { top: 0, right: 0, bottom: 0, left: inset } };
 
   const page = newPage([
-    newRow([newColumn(100, [newBlock("showcaseHeader")])]),
-    newRow([newColumn(100, [newBlock("infoStrip")])]),
-    newRow([
-      newColumn(56, [infoCard("PREPARED FOR", "{{customer.name}}", "{{customer.phone}}\n{{customer.email}}"), vehicle("details")]),
-      newColumn(44, [vehicle("image")]),
-    ]),
-    newRow([newColumn(100, [items])]),
-    newRow([newColumn(100, [totals])]),
+    padded([header], { top: 0, right: 0, bottom: 0, left: 0 }),
+    padded([newBlock("infoStrip")]),
+    hero,
+    padded([items]),
+    padded([totals]),
   ]);
   page.floatingBlocks = [
-    // -4: the terms block carries its own 4px top margin; this lines the two cards up.
-    { id: uid(), x: margin, y: cardsY - 4, width: cardW, block: quoteTerms },
+    { id: uid(), x: inset, y: cardsY, width: cardW, block: quoteTerms },
     { id: uid(), x: acceptX, y: cardsY, width: cardW, block: newBlock("acceptance") },
-    { id: uid(), x: margin, y: footerY, width: contentW, block: newBlock("footerBand") },
+    { id: uid(), x: 0, y: footerY, width: PAGE.w, block: footerBand },
   ];
   page.overlayFields = [
     newOverlayField("signature", {
       recipientId: customer.id, label: "Customer signature",
-      anchor: { mode: "page", blockId: null, x: lineX, y: sigTop + 4 }, width: lineW, height: g.sigRowH - 6,
+      anchor: { mode: "page", blockId: null, x: lineX, y: sigTop + 2 }, width: lineW, height: g.sigRowH - 4,
     }),
     newOverlayField("date", {
       recipientId: customer.id, label: "Date",
-      anchor: { mode: "page", blockId: null, x: lineX, y: sigTop + g.sigRowH + 2 }, width: Math.min(160, lineW), height: g.dateRowH - 2,
+      anchor: { mode: "page", blockId: null, x: lineX, y: sigTop + g.sigRowH + 1 }, width: Math.min(160, lineW), height: g.dateRowH - 2,
     }),
   ];
 
   return {
     schemaVersion: 1,
     title: "Showcase quotation",
-    style: { fontFamily: "sans", pageSize: "A4", margin, accent: ACCENT, ink: INK },
+    style: { fontFamily: "sans", pageSize: "A4", margin: 0, accent: ACCENT, ink: INK },
     recipients: [customer],
     pages: [page],
     header: [],
