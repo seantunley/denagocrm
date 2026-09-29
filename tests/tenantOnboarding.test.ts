@@ -17,6 +17,9 @@ test("onboarding scopes every readiness read to the requested tenant", () => {
 test("a core-only tenant is not held at 'not ready' for its module choice", () => {
   assert.doesNotMatch(page, /granted\.size > 0/);
   assert.match(page, /const readiness = \[identityDone, domainDone, ownerDone\]/);
+  // ...and it isn't shown as "done" either: a tick that can never be unticked
+  // claims someone reviewed the grants when nobody may have.
+  assert.doesNotMatch(page, /modulesDone/);
 });
 
 test("owner readiness checks the recorded owner is a member of this tenant", () => {

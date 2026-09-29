@@ -28,7 +28,7 @@ export const tenantOnboardingArticles: HelpArticle[] = [
         "Invite the team, apply least-privilege roles, require 2FA, and test record visibility with a non-owner account.",
         "Import only this tenant's data, test a complete lead-to-quote flow, and verify the Inbox and Attention Centre before launch.",
       ] },
-      { type: "callout", tone: "warning", text: "Readiness is calculated from the requested tenant's own branding, domain, module and membership records. Do not work around an incomplete check by reusing another tenant's settings, files, users, credentials or domains." },
+      { type: "callout", tone: "warning", text: "Readiness is calculated from the requested tenant's own branding, domain and owner membership. Module grants are not a readiness check: core CRM is always included, so any selection is valid. Do not work around an incomplete check by reusing another tenant's settings, files, users, credentials or domains." },
     ],
   },
 ];

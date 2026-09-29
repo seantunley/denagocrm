@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, CheckCircle2, Circle, ExternalLink, ShieldCheck } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Circle, ExternalLink, LayoutGrid, ShieldCheck } from "lucide-react";
 import { basePrisma } from "@/lib/db";
 import { requirePlatformAdmin } from "@/lib/platformAuth";
 import { MODULE_REGISTRY } from "@/lib/modules/registry";
@@ -56,9 +56,6 @@ export default async function TenantOnboardingPage({ params }: { params: Promise
   const granted = parseModuleCsv(tenant.modules);
   const identityDone = Boolean(tenant.brandDisplayName && tenant.brandPrimary && tenant.brandLogoRef);
   const domainDone = tenant.domains.some((domain) => domain.verifiedAt !== null);
-  // Not a readiness check: core CRM is always granted, so a tenant with no
-  // optional modules is a valid choice, not an unfinished step.
-  const modulesDone = true;
   // The recorded owner must itself be a member of THIS tenant; another member
   // existing says nothing about whether the owner can sign in to it.
   const ownerDone = tenant.ownerUserId
@@ -103,7 +100,7 @@ export default async function TenantOnboardingPage({ params }: { params: Promise
       </section>
 
       <section className="card space-y-4 p-5">
-        <div className="flex gap-3"><Status done={modulesDone} /><div><h2 className="font-semibold">2. Module entitlement</h2><p className="text-xs text-muted-foreground">Grant only the product areas this tenant is contracted to use. Core CRM remains mandatory.</p></div></div>
+        <div className="flex gap-3">{/* No status: core CRM is always granted, so any choice (even core-only) is valid and there is nothing to "complete". */}<LayoutGrid className="size-5 shrink-0 text-muted-foreground" /><div><h2 className="font-semibold">2. Module entitlement</h2><p className="text-xs text-muted-foreground">Grant only the product areas this tenant is contracted to use. Core CRM remains mandatory.</p></div></div>
         <SaveForm action={setTenantModulesAction.bind(null, tenant.id)} resetOnSuccess={false} closeModalOnSuccess={false} className="space-y-3">
           <div className="grid gap-2 sm:grid-cols-2">
             {OPTIONAL_MODULES.map((module) => <label key={module.id} className="flex gap-2 rounded-lg border border-border/60 p-3"><input type="checkbox" name="modules" value={module.id} defaultChecked={granted.has(module.id)} className="mt-0.5 size-4" /><span><span className="block text-sm font-medium">{module.label}</span><span className="block text-xs text-muted-foreground">{module.description}</span></span></label>)}
