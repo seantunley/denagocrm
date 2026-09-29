@@ -2,7 +2,7 @@ import "server-only";
 import { Prisma } from "@prisma/client";
 import { basePrisma } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
-import { formatDate } from "@/lib/format";
+import { documentGlobalTokens } from "@/lib/docbuilder/merge";
 import { getCompanyProfile, companyTokens } from "@/lib/companyProfile";
 import type { DocumentModel } from "@/lib/doceditor/model";
 import { freezeDocumentGlobals } from "@/lib/signing/freezeDocument";
@@ -105,9 +105,14 @@ export async function createSignatureRequestFromDoc(opts: {
   // would claim about itself afterwards.
   const profile = await getCompanyProfile();
   const brand = frozenBrand(profile);
+  // {{user.name}} is the member of staff sending it. The customer's signing page
+  // has no staff session to resolve it from later, so it is frozen here too.
+  const sender = opts.createdById
+    ? await basePrisma.user.findUnique({ where: { id: opts.createdById }, select: { name: true } }).catch(() => null)
+    : null;
   const frozenDoc = freezeDocumentGlobals(opts.doc, {
     ...companyTokens(profile),
-    "date.today": formatDate(new Date()),
+    ...documentGlobalTokens(sender?.name),
   });
   // Whether the signer must prove who they are.
   //
