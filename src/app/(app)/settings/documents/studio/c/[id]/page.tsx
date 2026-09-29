@@ -24,7 +24,7 @@ export default async function StudioClausePage({ params }: { params: Promise<{ i
     <div className="space-y-4">
       <div>
         <Link
-          href="/settings/documents?tab=studio"
+          href="/document-studio"
           className="mb-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
         >
           <ArrowLeft className="size-3.5" />

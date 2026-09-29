@@ -158,11 +158,11 @@ export default async function BuilderIndexPage({
     <div className="space-y-5">
       <div>
         <Link
-          href="/settings/documents"
+          href="/document-studio"
           className="mb-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
         >
           <ArrowLeft className="size-3.5" />
-          Documents
+          Document Studio
         </Link>
         <h1 className="text-xl font-semibold tracking-tight">
           Document Builder
