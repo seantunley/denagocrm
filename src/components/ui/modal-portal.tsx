@@ -2,6 +2,7 @@
 
 import { useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { RemoveScroll } from "react-remove-scroll";
 import { Layer } from "./layer";
 
 /**
@@ -61,5 +62,16 @@ export default function ModalPortal({ children }: { children: ReactNode }) {
   if (!hydrated) return null;
   // On the next layer up, so an overlay opened from inside a dialog (the signing
   // preview from the quote editor) shows above it — see ./layer.
-  return createPortal(<Layer>{children}</Layer>, document.body);
+  // RemoveScroll: an open Radix dialog (the quote editor) locks scrolling to
+  // ITSELF, so wheel/touch scrolling anywhere outside it is swallowed — and a
+  // ModalPortal overlay opened from inside it (the signing preview) is outside
+  // it. Sean could not scroll the preview down to sign (2026-09-30). Taking the
+  // lock here makes this overlay the active scroll area while it is open; the
+  // locks stack, so closing it hands scrolling back to the dialog beneath.
+  return createPortal(
+    <Layer>
+      <RemoveScroll allowPinchZoom>{children}</RemoveScroll>
+    </Layer>,
+    document.body,
+  );
 }
