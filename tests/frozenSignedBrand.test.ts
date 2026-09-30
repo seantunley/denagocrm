@@ -128,7 +128,9 @@ test("every renderer of a frozen document reads the frozen brand", () => {
     assert.notEqual(start, -1, `${fn} is gone — was it renamed?`);
     const body = code.slice(start, code.indexOf("\n}", start));
     assert.match(body, /parseFrozenBrand\(req\.brandJson\)/, `${fn} must read the frozen brand`);
-    assert.match(body, /bindCtx\(req\.quoteId, req\.jobCardId, frozen\)/, `${fn} must bind it`);
+    // (A trailing options argument is allowed — the snapshot renders also pass
+    // `{ liveVehicle: false }` so the frozen showcase vehicle is used.)
+    assert.match(body, /bindCtx\(req\.quoteId, req\.jobCardId, frozen[,)]/, `${fn} must bind it`);
     assert.match(body, /frozen\?\.logoUrl \?\? logoDataUri\(\)/, `${fn} must use the frozen logo`);
     assert.match(body, /"brandJson"/, `${fn} must select the column it reads`);
   }

@@ -2,6 +2,8 @@ import "server-only";
 import { prisma } from "@/lib/db";
 import { getBuilderTemplate, getLiveBuilderTemplate } from "@/lib/docbuilder/store";
 import { buildQuoteContext, buildJobCardContext } from "@/lib/docbuilder/merge";
+import { withVehicleShowcase } from "@/lib/docbuilder/vehicleShowcaseLoad";
+import { showcaseAssetTokens } from "./showcaseAssetsServer";
 import { loadBillToFleet } from "@/lib/quoteBillTo";
 import { loadLeadForDoc, loadWarrantyClaimForDoc } from "@/lib/docbuilder/leadWarrantyRecords";
 import { getCompanyProfile, companyTokens } from "@/lib/companyProfile";
@@ -21,7 +23,8 @@ import { defaultLogoDataUri as logoDataUri, documentLogo, embedDocImages, liveGl
  */
 async function withCompany(ctx: RenderCtx): Promise<RenderCtx> {
   const profile = await getCompanyProfile();
-  const company = { ...(await liveGlobalTokens()), ...companyTokens(profile) };
+  // + the showcase layout's built-in band photos ({{asset.*}}), embedded as data URLs.
+  const company = { ...showcaseAssetTokens(), ...(await liveGlobalTokens()), ...companyTokens(profile) };
   const logo = await documentLogo(profile.logoUrl);
   // Unbound: carry company tokens only, but mark bound:false so conditionals/showIf
   // columns render as the placeholder layout rather than evaluating an empty scope.
@@ -73,7 +76,7 @@ async function resolve(templateId: string, quoteId?: string | null, jobCardId?: 
       include: { items: true, fees: { orderBy: { sortOrder: "asc" } }, lead: { include: { product: true } }, contact: true, createdBy: true },
     });
     // Tenant-scoped fleet lookup, not an include — Quote.fleetId has no FK.
-    if (q) { ctx = buildQuoteContext(q, await loadBillToFleet(prisma, q.fleetId)); title = `${doc.title} — Q-${q.number}`; qId = q.id; contactId = q.contactId; }
+    if (q) { ctx = await withVehicleShowcase(buildQuoteContext(q, await loadBillToFleet(prisma, q.fleetId)), q); title = `${doc.title} — Q-${q.number}`; qId = q.id; contactId = q.contactId; }
   } else if (jobCardId) {
     const jc = await prisma.jobCard.findUnique({
       where: { id: jobCardId },
