@@ -117,44 +117,97 @@ function documentModel(title: string, blocks: DocumentBlock[][]): DocumentModel 
   };
 }
 
+// ── invoice / sales agreement: laid out as the fixed print pages print them ──
+
+const SLATE = "#64748b";
+
+/** Renders only when `when` is truthy against the bound record. */
+function conditional(when: string, blocks: DocumentBlock[]): DocumentBlock {
+  const block = newBlock("conditional");
+  if (block.type === "conditional") {
+    block.when = when;
+    block.blocks = blocks;
+  }
+  return block;
+}
+
+/** A labelled grey box of multi-line text (infoCard keeps the token's line breaks). */
+function textBox(label: string, body: string): DocumentBlock {
+  return infoCard(label, "", body, SLATE);
+}
+
+function italic(value: string): DocumentBlock {
+  const block = newBlock("text");
+  if (block.type === "text") block.value = [{ type: "p", children: [{ text: value, italic: true }] }];
+  return block;
+}
+
+/** A signature line with its label underneath. */
+function signLine(label: string): DocumentBlock {
+  const block = newBlock("text");
+  if (block.type === "text") {
+    block.value = [
+      { type: "p", children: [{ text: "" }] },
+      { type: "p", children: [{ text: "________________________________" }] },
+      { type: "p", children: [{ text: label }] },
+    ];
+  }
+  return block;
+}
+
+/** Subtotal and VAT above the total, only when the rows are ex-VAT (documentTotals). */
+function exclusiveTaxLines(): DocumentBlock {
+  const lines = newBlock("text");
+  if (lines.type === "text") {
+    lines.value = [
+      { type: "p", align: "right", children: [{ text: "Subtotal: {{quote.subtotal}}" }] },
+      { type: "p", align: "right", children: [{ text: "VAT: {{quote.vat}}" }] },
+    ];
+  }
+  const block = conditional("!quote.taxInclusive", [lines]);
+  block.settings = { width: 55, horizontalAlignment: "right" };
+  return block;
+}
+
 function invoiceTemplate(): DocumentModel {
   return documentModel("Standard invoice", [
-    [banner("INVOICE", "{{quote.number}}")],
-    [text("Invoice date: {{quote.date}}"), text("Prepared by: {{preparedBy}}", "right")],
+    [banner("INVOICE", "{{invoice.number}}")],
     [
-      infoCard("BILLED TO", "{{customer.name}}", "{{customer.phone}}\n{{customer.email}}\n{{customer.address}}"),
-      infoCard("FROM", "{{company.name}}", "{{company.address}}\n{{company.phone}} · {{company.email}}", INK),
+      text("Date: {{invoice.date}}"),
+      text("Reference: {{quote.number}}", "center"),
+      text("Billed to: {{customer.name}}", "right"),
+    ],
+    [conditional("invoice.intro", [italic("{{invoice.intro}}")])],
+    [
+      infoCard("BILLED TO", "{{customer.name}}", "{{invoice.billedTo}}"),
+      infoCard("INVOICE DETAILS", "Invoice {{invoice.number}}", "Quote {{quote.number}}\nStatus: {{quote.status}}", INK),
     ],
     [lineItems()],
-    [totalBand("TOTAL DUE INCL. VAT", "{{quote.total}}")],
-    [terms("BANKING & PAYMENT", [
-      "Bank: (add your banking details in the template)",
-      "Reference: use the document number shown above.",
-      "Prices include 15% VAT.",
-      "Payment due on presentation unless otherwise agreed.",
-    ])],
+    [exclusiveTaxLines()],
+    [totalBand("TOTAL INCL. VAT", "{{quote.total}}")],
+    // Both texts come from Settings → Documents → Invoice, as on the old page.
+    [conditional("invoice.paymentTerms", [textBox("PAYMENT TERMS", "{{invoice.paymentTerms}}")])],
+    [conditional("invoice.bankingDetails", [textBox("PAYMENT DETAILS", "{{invoice.bankingDetails}}")])],
+    [signLine("Received by · Date")],
     [footer()],
   ]);
 }
 
 function agreementTemplate(): DocumentModel {
   return documentModel("Sales agreement", [
-    [banner("SALES AGREEMENT", "{{quote.number}}")],
+    [banner("SALES AGREEMENT", "{{agreement.number}}")],
+    [text("Date: {{agreement.date}}"), text("Reference: {{quote.number}}", "right")],
+    [conditional("agreement.intro", [italic("{{agreement.intro}}")])],
     [
-      infoCard("BUYER", "{{customer.name}}", "{{customer.phone}}\n{{customer.email}}\n{{customer.address}}"),
-      infoCard("SELLER", "{{company.name}}", "{{company.address}}\n{{company.phone}}", INK),
+      infoCard("PURCHASER", "{{customer.name}}", "{{agreement.purchaser}}"),
+      infoCard("SELLER", "{{company.name}}", "{{company.tagline}}\n{{company.address}}", INK),
     ],
-    [heading("Vehicle & items")],
     [lineItems()],
-    [totalBand("TOTAL INCL. VAT", "{{quote.total}}")],
-    [terms("AGREEMENT CLAUSES", [
-      "The buyer agrees to purchase the vehicle(s) and items listed above at the stated price.",
-      "A 50% deposit secures the order; the balance is payable on delivery.",
-      "Denago EVs are Low-Speed Vehicles for private-property use and are not road registered.",
-      "Warranty: 12 months limited; battery 24 months.",
-      "This agreement is governed by the laws of South Africa.",
-    ])],
-    signatureStrip("Buyer signature & date", "For {{company.name}} & date"),
+    [exclusiveTaxLines()],
+    [totalBand("PURCHASE PRICE", "{{quote.total}}")],
+    // The clauses come from Settings → Documents → Sales agreement, as on the old page.
+    [conditional("agreement.clauses", [textBox("TERMS OF SALE", "{{agreement.clauses}}")])],
+    [signLine("Purchaser signature · Date"), signLine("For {{company.name}} · Date")],
     [footer()],
   ]);
 }
