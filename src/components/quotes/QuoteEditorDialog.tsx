@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   createContext,
   useCallback,
@@ -342,9 +342,8 @@ export function QuoteEditorDialog({
   initialContactId?: string;
   /**
    * Switch the editor to a different quote. Creating a revision produces a new
-   * quote, and pushing `/quotes?edit=<id>` cannot open it from here — the
-   * provider reads that param once, on mount, so a soft navigation within
-   * /quotes changes the URL and nothing else.
+   * quote; swapping in place avoids a navigation round trip, and the provider
+   * keeps `?edit=` in step with whatever it switches to.
    */
   onOpenQuote?: (quoteId: string) => void;
 }) {
@@ -1465,6 +1464,37 @@ export function QuoteEditorProvider({
   const [selection, setSelection] = useState<{ quoteId?: string; initialContactId?: string } | null>(
     initialQuoteId ? { quoteId: initialQuoteId } : null,
   );
+
+  /**
+   * `?edit=` ALWAYS names the quote on screen, or is absent.
+   *
+   * It used to be read once, at mount, and never written: opening a quote from
+   * the list, switching version or closing left whatever `?edit=` the page was
+   * first loaded with. Any full reload — F5, a phone resuming a discarded tab, a
+   * deploy turning router.refresh() into a hard navigation — then reopened THAT
+   * quote in place of the one being worked on. On 2026-09-30 the owner was
+   * editing Q-1026, the page reloaded onto a stale ?edit=Q-1022, and Q-1022 was
+   * saved and sent to its customer.
+   */
+  const selectedId = selection?.quoteId ?? null;
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("edit") === selectedId) return;
+    if (selectedId) url.searchParams.set("edit", selectedId);
+    else url.searchParams.delete("edit");
+    window.history.replaceState(null, "", url);
+  }, [selectedId]);
+
+  // And the other direction: a soft navigation to /quotes?edit=X while this page
+  // is mounted (a link on the mobile list) opens X. Read from the ROUTER's URL,
+  // not the server prop — a router.refresh() answer can arrive carrying the ?edit
+  // of a moment ago and would drag the editor back to it.
+  const editParam = useSearchParams().get("edit");
+  const [seenEditParam, setSeenEditParam] = useState(editParam);
+  if (editParam !== seenEditParam) {
+    setSeenEditParam(editParam);
+    if (editParam && editParam !== selectedId) setSelection({ quoteId: editParam });
+  }
   /**
    * `records` is what the PAGE rendered — the newest 200 quotes at the time it
    * loaded. Anything else has to be fetched: a revision has an id that did not

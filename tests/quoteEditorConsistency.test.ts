@@ -214,9 +214,8 @@ test("the lifecycle actions are reachable from every tab", () => {
 });
 
 test("a revision opens in the editor rather than navigating to a page", () => {
-  // createQuoteRevision returns a NEW quote id. Pushing /quotes?edit=<id> from
-  // inside /quotes only changes the URL — the provider reads that param once,
-  // on mount — so the id is handed to the provider instead.
+  // createQuoteRevision returns a NEW quote id, handed straight to the provider
+  // so the editor swaps in place (and the provider rewrites ?edit= to match).
   const action = shipped("src/app/actions/quotes.ts");
   const body = action.slice(action.indexOf("export async function createQuoteRevision("));
   assert.match(body.slice(0, body.indexOf("\nexport ")), /redirectTo: `\/quotes\?edit=\$\{revision\.id\}`/);

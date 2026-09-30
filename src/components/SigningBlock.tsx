@@ -238,7 +238,7 @@ export default function SigningBlock({
                 <button className="btn-secondary btn-sm" disabled={busy !== null} onClick={() => run("open", async () => { await openPreview(); return { ok: true }; })}>
                   👁 View document
                 </button>
-                <button className="btn-secondary btn-sm" disabled={busy !== null} onClick={() => run("resend", () => resendRecordSigning(kind, id))}>
+                <button className="btn-secondary btn-sm" disabled={busy !== null} onClick={() => run("resend", () => resendRecordSigning(kind, id, state.requestId))}>
                   {busy === "resend" ? "Sending…" : "✉️ Resend link"}
                 </button>
                 <a href={`/signatures/${state.requestId}`} className="btn-secondary btn-sm" title="Open in the Signatures hub">📊 Manage in hub</a>
@@ -320,7 +320,7 @@ export default function SigningBlock({
               ? "Preparing…"
               : kind === "quote"
                 ? "✍ Countersign & review"
-                : "Send for signing"}
+                : "👁 Review & send"}
           </button>
         </div>
       )}
@@ -344,11 +344,13 @@ export default function SigningBlock({
           // Raising an internal approval gate is a first send, never a resend —
           // the approver has not been asked yet (that is what `raised: false`
           // means), and sendRecordSigning is the path that materialises the step.
-          onRequestApproval={() => run("approval", () => sendRecordSigning(kind, id))}
+          onRequestApproval={() => run("approval", () => sendRecordSigning(kind, id, preview.requestId))}
           // A button labelled "Resend" must take the resend path. sendRecordSigning
           // is the FIRST send: dispatchRequest's claim excludes an already-"sent"
           // request, so it would have reported a delivery failure every time.
-          onSend={() => run("send", () => (preview.sent ? resendRecordSigning(kind, id) : sendRecordSigning(kind, id)))}
+          // Both carry the request this preview rendered: the server refuses to
+          // send any other document than the one on screen.
+          onSend={() => run("send", () => (preview.sent ? resendRecordSigning(kind, id, preview.requestId) : sendRecordSigning(kind, id, preview.requestId)))}
           onClose={() => { setPreview(null); setErr(null); setNote(null); refresh(); }}
         />
       )}

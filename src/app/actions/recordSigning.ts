@@ -401,13 +401,9 @@ export async function startRecordSigning(
       }
     }
 
-    // The workflow/cosign/signers branches below never call dispatchRequest (they
-    // hand off to an IN-PERSON/modal or a workflow-driven flow instead) — nothing
-    // is emailed/messaged, so they log "Started ... for signing", not "Sent".
-    // Only the final fallback actually attempts email/WhatsApp delivery; it logs
-    // "Sent" and gates that on notified > 0, so a send that reached nobody is
-    // never recorded as sent.
-    const logStartAudit = (verb: "Sent" | "Started") =>
+    // No branch below emails or messages anyone — they hand off to a review, an
+    // in-person or a workflow-driven flow — so they log "Started", never "Sent".
+    const logStartAudit = (verb: "Started") =>
       logAudit({
         action: "signing.send",
         summary: `${verb} “${envelope.title}” (${envelope.refLabel}) for signing`,
@@ -461,17 +457,17 @@ export async function startRecordSigning(
       };
     }
 
-    if (envelope.cosign) {
-      await logStartAudit("Started");
-      // Denago signs first, but not by being handed the customer's signing
-      // surface a second time. The envelope is left un-dispatched; countersigning
-      // and sending are two deliberate steps now.
-      return { ok: true, requestId, preview: true };
-    }
-
-    const { notified, unreachable } = await dispatchRequest(requestId);
-    if (notified > 0) await logStartAudit("Sent");
-    return { ok: true, requestId: requestId, notified, unreachable };
+    // STARTING NEVER SENDS. Whether or not the layout has a Denago block to
+    // countersign, the envelope is left un-dispatched and shown for review; only
+    // an explicit Send (sendRecordSigning) reaches the customer.
+    //
+    // This used to fall through to dispatchRequest() whenever the layout had no
+    // Denago party — a quote template with only a customer signature block. The
+    // "✍ Countersign & review" click then mailed the customer on the spot, with
+    // no review at all: on 2026-09-30 it sent Q-1022 to its customer from an
+    // editor the owner believed was showing a different quote.
+    await logStartAudit("Started");
+    return { ok: true, requestId, preview: true };
   });
 }
 
@@ -508,6 +504,17 @@ async function nextSigner(requestId: string) {
 
 const sameParty = (a: string | null, b: string | null) =>
   Boolean(a && b && a.trim().toLowerCase() === b.trim().toLowerCase());
+
+/**
+ * A send reaches a customer, so it must be the document the sender actually
+ * looked at. The card passes the request id it rendered; if the record's live
+ * request is a different one — a stale tab, a request discarded and restarted
+ * elsewhere, a card left over from another quote — refuse rather than mail
+ * something nobody reviewed.
+ */
+const notTheReviewedDocument = (liveRequestId: string, reviewedRequestId: string) =>
+  liveRequestId !== reviewedRequestId;
+const STALE_REVIEW = "This document changed since you opened it — close it and review it again before sending.";
 
 /**
  * Notify ONE named recipient and settle the request's send state around it.
@@ -675,7 +682,12 @@ export async function signedRecordDoc(kind: Kind, id: string): Promise<SignedDoc
 }
 
 /** Send the countersigned document to whoever is up next. */
-export async function sendRecordSigning(kind: Kind, id: string): Promise<Result> {
+export async function sendRecordSigning(
+  kind: Kind,
+  id: string,
+  /** The request whose document the sender is looking at — see notTheReviewedDocument. */
+  reviewedRequestId: string,
+): Promise<Result> {
   return withActingStaffScope(async () => {
     const user = await requireRecordSigningAccess(kind, id);
     const active = await checkRecordActive(kind, id);
@@ -686,6 +698,7 @@ export async function sendRecordSigning(kind: Kind, id: string): Promise<Result>
       jobCardId: kind === "jobcard" ? id : null,
     });
     if (!state || isRequestClosed(state.status)) return { ok: false, error: "No open document to send." };
+    if (notTheReviewedDocument(state.requestId, reviewedRequestId)) return { ok: false, error: STALE_REVIEW };
 
     const recipient = await nextSigner(state.requestId);
     if (!recipient) {
@@ -749,6 +762,8 @@ export async function sendRecordSigning(kind: Kind, id: string): Promise<Result>
 export async function resendRecordSigning(
   kind: Kind,
   id: string,
+  /** The request the resend button belongs to — see notTheReviewedDocument. */
+  reviewedRequestId: string,
 ): Promise<Result> {
   return withActingStaffScope(async () => {
     const user = await requireRecordSigningAccess(kind, id);
@@ -766,6 +781,7 @@ export async function resendRecordSigning(
     if (!state || isRequestClosed(state.status)) {
       return { ok: false, error: "No active request to resend." };
     }
+    if (notTheReviewedDocument(state.requestId, reviewedRequestId)) return { ok: false, error: STALE_REVIEW };
     // A resend deliberately re-notifies already-"sent" recipients — pass reminder so
     // notifyRecipient's at-most-once first-send claim doesn't skip them.
     //
