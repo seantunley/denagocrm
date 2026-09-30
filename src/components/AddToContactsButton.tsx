@@ -5,7 +5,7 @@ import { UserPlus } from "lucide-react";
 import { toast } from "sonner";
 import { convertLeadToContact } from "@/app/actions/leads";
 
-export default function AddToContactsButton({ leadId }: { leadId: string }) {
+export default function AddToContactsButton({ leadId, label = "Add to contacts" }: { leadId: string; label?: string }) {
   const [isPending, startTransition] = useTransition();
 
   function handleClick() {
@@ -30,7 +30,7 @@ export default function AddToContactsButton({ leadId }: { leadId: string }) {
       className="btn-secondary btn-sm inline-flex items-center gap-1"
     >
       <UserPlus className="size-3" />
-      {isPending ? "Adding…" : "Add to contacts"}
+      {isPending ? "Adding…" : label}
     </button>
   );
 }

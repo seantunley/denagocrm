@@ -16,7 +16,10 @@ import { plateToHtmlBody } from "@/lib/docbuilder/plateSerialize";
 import { evaluateCondition } from "@/lib/docbuilder/expr";
 import { brandFooterContent, SOCIAL_ICON_PATHS } from "@/lib/companyBrand";
 import { handoverChecklistHtml } from "./handoverChecklist";
+import { showcaseBlockHtml, showcaseLookHtml } from "./showcaseRender";
+import { layoutRowsFor, resolveOverflowGroups } from "./overflow";
 import { storedFileSrc } from "@/lib/storedFileSrc";
+import { DOCUMENT_FONT_FACE, DOCUMENT_FONT_FAMILY } from "./documentFont";
 
 export type RenderCtx = {
   tokens: Record<string, string>;
@@ -27,6 +30,8 @@ export type RenderCtx = {
   // preview — in which case conditionals and showIf columns must render as the
   // placeholder layout, NOT be evaluated against an empty scope.
   bound?: boolean;
+  /** Line-item rows the page layout is resolved for (see overflow.ts layoutRowsFor). Set by the renderers. */
+  layoutRows?: number;
   /**
    * The workspace's logo, already embedded (see doceditor/renderGlobals). WINS
    * over the renderer's `logoDataUri` argument, which every caller passes as the
@@ -35,6 +40,12 @@ export type RenderCtx = {
    */
   logo?: string;
 } | null;
+
+/** Lay a document out for its row count: overflow pages resolved, and the count handed to the blocks. */
+function laidOut(input: DocumentModel, ctx: RenderCtx): { doc: DocumentModel; ctx: RenderCtx } {
+  const rows = layoutRowsFor(input, ctx);
+  return { doc: resolveOverflowGroups(input, rows), ctx: ctx ? { ...ctx, layoutRows: rows } : ctx };
+}
 
 function esc(s: unknown): string {
   // Attribute-safe: also escape quotes so values interpolated into style/src/attr can't break out.
@@ -46,7 +57,9 @@ function tok(s: string, ctx: RenderCtx): string {
   return (s ?? "").replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, k: string) => ctx?.tokens?.[k] ?? `{{${k}}}`);
 }
 function fontStack(f: DocStyle["fontFamily"]): string {
-  return f === "serif" ? "Georgia, 'Times New Roman', serif" : f === "mono" ? "'Courier New', monospace" : "Helvetica, Arial, sans-serif";
+  // Sans leads with the embedded Geist (DOCUMENT_FONT_FACE): the PDF renderer has
+  // no Helvetica/Arial, and its fallback printed uneven, jagged letters.
+  return f === "serif" ? "Georgia, 'Times New Roman', serif" : f === "mono" ? "'Courier New', monospace" : `'${DOCUMENT_FONT_FAMILY}', Helvetica, Arial, sans-serif`;
 }
 function money(amount: number, currency: string): string {
   const sign = amount < 0 ? "-" : "";
@@ -114,7 +127,7 @@ function parseMoney(s?: string): number {
  * cells give inclusive unit price + inclusive line total; the excl-VAT and VAT
  * figures are derived so a table using them adds up (excl + VAT = incl).
  */
-function lineItemCell(key: string, row: { cells: { value: string }[] }, vatRate: number): string {
+export function lineItemCell(key: string, row: { cells: { value: string }[] }, vatRate: number): string {
   const factor = 1 + (vatRate || 0) / 100;
   const inclUnit = parseMoney(row.cells[2]?.value);
   const inclTotal = parseMoney(row.cells[3]?.value);
@@ -178,12 +191,14 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
       </div>`;
     }
     case "infoCard":
+      if (block.look === "showcase") return showcaseLookHtml(block, ctx);
       return `<div style="background:#f8fafc;border-left:3px solid ${cssColor(block.accent, "#ea580c")};border-radius:6px;padding:12px 14px">
         <div style="font-size:8pt;font-weight:700;letter-spacing:1px;color:${cssColor(block.accent, "#ea580c")}">${esc(block.label)}</div>
         <div style="font-size:12pt;font-weight:700;color:${cssColor(style.ink, "#020617")};margin:3px 0">${esc(tok(block.name, ctx))}</div>
         <div style="font-size:9pt;color:#64748b">${nl2br(tok(block.lines, ctx))}</div>
       </div>`;
     case "lineItems": {
+      if (block.look === "showcase") return showcaseLookHtml(block, ctx);
       const rows = ctx?.items ?? [];
       // Conditional columns: only when bound to a record, drop columns whose condition
       // is false. An unbound (globals-only) preview keeps all columns as a placeholder.
@@ -210,6 +225,7 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
       return `<div style="display:flex;justify-content:${place};margin:6px 0"><div style="background:${cssColor(block.color, "#ea580c")};color:#fff;border-radius:6px;padding:10px 20px;display:flex;gap:16px;align-items:center;max-width:100%"><span style="font-size:${(9 * scale).toFixed(2)}pt;font-weight:700;letter-spacing:1px;white-space:nowrap">${esc(block.label)}</span><span style="font-size:${(16 * scale).toFixed(2)}pt;font-weight:800;white-space:nowrap">${esc(tok(block.amount, ctx))}</span></div></div>`;
     }
     case "terms":
+      if (block.look === "showcase") return showcaseLookHtml(block, ctx);
       return `<div style="background:#f8fafc;border-radius:6px;padding:12px 14px;margin:4px 0">${block.title ? `<div style="font-size:8pt;font-weight:700;letter-spacing:1px;color:#64748b;margin-bottom:6px">${esc(block.title)}</div>` : ""}${block.items.map((it) => `<div style="font-size:9pt;color:#64748b;margin-bottom:3px">• ${esc(it.text)}</div>`).join("")}</div>`;
     case "footer": {
       if (block.variant === "simple") {
@@ -237,6 +253,11 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
       if (ctx?.bound && !evaluateCondition(block.when, ctx.vars)) return "";
       return `<div>${block.blocks.map((c) => blockHtml(c, ctx, style, logoDataUri)).join("")}</div>`;
     }
+
+    // Showcase quotation blocks — see ./showcaseRender.ts.
+    case "showcaseHeader": case "infoStrip": case "vehicleShowcase": case "totalsBox": case "acceptance": case "footerBand":
+      // The same embedded-only logo as the banner: the workspace's, else the built-in.
+      return showcaseBlockHtml(block, ctx, [ctx?.logo, logoDataUri].find((src) => src && /^data:image\//i.test(src)));
   }
 }
 
@@ -278,7 +299,20 @@ function rowHtml(row: DocumentRow, ctx: RenderCtx, style: DocStyle, logoDataUri?
   const template = cols.map((c) => `${c.widthPercent}fr`).join(" ");
   const gap = row.settings?.gap ?? 16;
   const keep = row.settings?.keepTogether ? "break-inside:avoid;" : "";
-  return `<div style="display:grid;grid-template-columns:${template};gap:${gap}px;margin:2px 0;${keep}">${cols.map((c) => columnHtml(c, ctx, style, logoDataUri)).join("")}</div>`;
+  return `<div style="display:grid;grid-template-columns:${template};gap:${gap}px;${rowSpacing(row)}${keep}">${cols.map((c) => columnHtml(c, ctx, style, logoDataUri)).join("")}</div>`;
+}
+
+/**
+ * A row's own padding, when it sets one — the showcase layout uses it to inset
+ * content rows from a zero-margin page while its bands run edge to edge. A row
+ * that sets padding owns its spacing entirely (no default margin); every other
+ * row keeps the historical 2px margin, byte for byte. Shared with the canvas.
+ */
+export function rowSpacing(row: DocumentRow): string {
+  const p = row.settings?.padding;
+  if (!p) return "margin:2px 0;";
+  const n = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  return `margin:0;padding:${n(p.top)}px ${n(p.right)}px ${n(p.bottom)}px ${n(p.left)}px;`;
 }
 
 function overlayFieldHtml(f: OverlayField, recipientColor: string, margin: number): string {
@@ -372,7 +406,9 @@ export function renderEmailHtml(doc: DocumentModel, ctx: RenderCtx, logoDataUri?
  * sheet-relative coordinates (matching the editor's origin — no margin subtract).
  * Overlay fields are intentionally omitted; the client renders live controls.
  */
-export function renderSigningSheets(doc: DocumentModel, ctx: RenderCtx, logoDataUri?: string): { width: number; height: number; margin: number; css: string; pages: string[] } {
+export function renderSigningSheets(input: DocumentModel, ctxIn: RenderCtx, logoDataUri?: string): { width: number; height: number; margin: number; css: string; pages: string[] } {
+  // A signing snapshot was laid out at send time (layoutRows), so this is fixed for it.
+  const { doc, ctx } = laidOut(input, ctxIn);
   const m = doc.style.margin;
   const size = PAGE_SIZES[doc.style.pageSize];
   const font = fontStack(doc.style.fontFamily);
@@ -385,7 +421,8 @@ export function renderSigningSheets(doc: DocumentModel, ctx: RenderCtx, logoData
     return `<div style="position:absolute;inset:0;padding:${m}px">${rows}</div>${floats}`;
   });
   const css = `
-    .sg-sheet { font-family:${font}; font-size:11pt; line-height:1.5; color:#1e293b; }
+    ${DOCUMENT_FONT_FACE}
+    .sg-sheet { font-family:${font}; font-size:11pt; line-height:1.5; color:#1e293b; -webkit-font-smoothing:antialiased; }
     .sg-sheet * { box-sizing:border-box; }
     .sg-sheet h1 { font-size:20pt; margin:0 0 8px; color:${cssColor(doc.style.ink, "#020617")}; }
     .sg-sheet h2 { font-size:15pt; margin:12px 0 6px; color:${cssColor(doc.style.ink, "#020617")}; }
@@ -399,8 +436,8 @@ export function renderSigningSheets(doc: DocumentModel, ctx: RenderCtx, logoData
 }
 
 export function renderDocumentHtml(
-  doc: DocumentModel,
-  ctx: RenderCtx,
+  input: DocumentModel,
+  ctxIn: RenderCtx,
   logoDataUri?: string,
   opts?: {
     hideOverlays?: boolean;
@@ -415,6 +452,9 @@ export function renderDocumentHtml(
     toolbarHtml?: string;
   },
 ): string {
+  // Bottom-pinned content that the bound line items would run into moves to a
+  // following page (overflow.ts). A signing snapshot was laid out at send time.
+  const { doc, ctx } = laidOut(input, ctxIn);
   const font = fontStack(doc.style.fontFamily);
   const m = doc.style.margin;
   const header = doc.header.length ? doc.header.map((b) => blockHtml(b, ctx, doc.style, logoDataUri)).join("") : "";
@@ -425,9 +465,10 @@ export function renderDocumentHtml(
   const pageCss = doc.style.pageSize === "A4" ? "A4" : "letter";
   const size = PAGE_SIZES[doc.style.pageSize];
   return `<!doctype html><html><head><meta charset="utf-8"><style>
+    ${DOCUMENT_FONT_FACE}
     @page { size: ${pageCss}; margin: ${m}px; }
     * { box-sizing: border-box; }
-    body { font-family: ${font}; font-size: 11pt; line-height: 1.5; color: #1e293b; margin: 0; }
+    body { font-family: ${font}; font-size: 11pt; line-height: 1.5; color: #1e293b; margin: 0; -webkit-font-smoothing: antialiased; }
     h1 { font-size: 20pt; margin: 0 0 8px; color: ${cssColor(doc.style.ink, "#020617")}; }
     h2 { font-size: 15pt; margin: 12px 0 6px; color: ${cssColor(doc.style.ink, "#020617")}; }
     h3 { font-size: 12pt; margin: 10px 0 4px; color: ${cssColor(doc.style.ink, "#020617")}; }
@@ -492,6 +533,16 @@ export function renderDocumentHtml(
       .doc-footer { padding: 0 ${m}px ${m}px; margin-bottom: 16px; }
       /* A document with no footer region still needs air under the last page. */
       body { padding-bottom: 16px; }
+      /* Floating blocks, overlay fields and signed stamps are positioned against
+         the printed content box (inside the @page margin). On screen that box is
+         inset by the padding above, so they must be too — otherwise every one
+         of them sits a margin up and to the left of where it prints. */
+      .doc-page > [style*="position:absolute"] { margin: ${m}px 0 0 ${m}px; }
+      /* The inline min-height is the PRINTED content height; with the margin
+         now drawn as padding, the on-screen sheet is the whole sheet. Without
+         this it was two margins short, and anything placed near the foot of
+         the page hung off the bottom of the white sheet. */
+      .doc-page { min-height: ${size.cssH} !important; }
     }
   </style></head><body>${[
     opts?.toolbarHtml ?? "",

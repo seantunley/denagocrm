@@ -6,6 +6,7 @@ import { brandFooterContent, SOCIAL_ICON_PATHS, COMPANY_DEFAULTS } from "@/lib/c
 import { storedFileSrc } from "@/lib/storedFileSrc";
 import { ActiveRichText, ReadOnlyRichText } from "./RichText";
 import { handoverChecklistHtml } from "@/lib/doceditor/handoverChecklist";
+import { ShowcaseBlockView } from "./ShowcaseBlockView";
 import { useDocEditorEnv } from "./EditorContext";
 
 /** The workspace's own logo (resolved server-side, same as the printed banner). */
@@ -32,6 +33,10 @@ function money(amount: number, currency: string): string {
 
 /** Renders one block's CONTENT for the editing canvas. Chrome (handles, outline) is added by the wrapper. */
 export function BlockView({ block, active }: { block: DocumentBlock; active: boolean }) {
+  // Shared blocks drawn in the showcase quotation's style render its HTML, as the PDF does.
+  if ((block.type === "infoCard" || block.type === "lineItems" || block.type === "terms") && block.look === "showcase") {
+    return <ShowcaseBlockView block={block} />;
+  }
   switch (block.type) {
     case "text":
     case "heading":
@@ -207,6 +212,9 @@ export function BlockView({ block, active }: { block: DocumentBlock; active: boo
         </div>
       );
     }
+
+    case "showcaseHeader": case "infoStrip": case "vehicleShowcase": case "totalsBox": case "acceptance": case "footerBand":
+      return <ShowcaseBlockView block={block} />;
   }
   return null;
 }

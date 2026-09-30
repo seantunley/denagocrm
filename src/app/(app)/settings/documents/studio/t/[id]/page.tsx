@@ -45,6 +45,9 @@ export default async function StudioTemplatePage({
           Document Studio
         </Link>
         <p className="text-sm text-muted-foreground">
+          <strong>Legacy Studio editor.</strong> New documents are made in the document
+          editor — use <em>Convert to new editor</em> in Document Studio to copy this
+          template there.{" "}
           Template — insert merge fields where customer data should appear; publishing freezes a
           version that new documents are generated from.
           {latest

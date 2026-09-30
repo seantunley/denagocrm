@@ -140,6 +140,13 @@ export const tableBlockSchema = z.object({
   headerBg: colorField("#020617"), headerColor: colorField("#ffffff"),
 });
 
+/**
+ * Visual style of a shared branded block. Unset = "standard", so every stored
+ * template renders byte-for-byte as before; "showcase" draws it in the showcase
+ * quotation's style (lib/doceditor/showcaseRender.ts).
+ */
+const blockLook = z.enum(["standard", "showcase"]).optional();
+
 // ── branded blocks (match the print templates) ──────────────────────
 export const bannerBlockSchema = z.object({
   ...base, type: z.literal("banner"),
@@ -155,6 +162,7 @@ export const infoCardBlockSchema = z.object({
   name: z.string().default("{{customer.name}}"),
   lines: z.string().default("{{customer.phone}}\n{{customer.email}}"),
   accent: colorField("#ea580c"),
+  look: blockLook,
 });
 export const lineItemColKeys = ["description", "qty", "unitPrice", "unitPriceExVat", "vat", "subtotal", "total"] as const;
 export const lineItemColumnSchema = z.object({
@@ -165,6 +173,7 @@ export const lineItemColumnSchema = z.object({
 });
 export const lineItemsBlockSchema = z.object({
   ...base, type: z.literal("lineItems"),
+  look: blockLook,
   headerBg: colorField("#020617"),
   headerColor: colorField("#ffffff"),
   vatRate: z.number().default(15),   // used by a "vat" column (prices are VAT-inclusive)
@@ -186,6 +195,7 @@ export const termsBlockSchema = z.object({
   ...base, type: z.literal("terms"),
   title: z.string().default("TERMS"),
   items: z.array(z.object({ text: z.string() })).default([]),
+  look: blockLook,
 });
 export const footerBlockSchema = z.object({
   ...base, type: z.literal("footer"),
@@ -199,6 +209,92 @@ export const footerBlockSchema = z.object({
 /** Delivery handover checklist runs + customer signature, filled from the record (see ./handoverChecklist.ts). */
 export const handoverChecklistBlockSchema = z.object({ ...base, type: z.literal("handoverChecklist") });
 
+// ── showcase quotation blocks (rendered by ./showcaseRender.ts) ──────
+/** Line icons the showcase blocks can draw — see SHOWCASE_ICONS in showcaseRender.ts. */
+export const showcaseIconNames = [
+  "calendar", "calendarCheck", "clock", "user", "seats", "range", "electric", "premium", "speed", "battery", "warranty", "charge",
+] as const;
+export type ShowcaseIcon = (typeof showcaseIconNames)[number];
+const showcaseIcon = z.enum(showcaseIconNames).catch("premium");
+export const showcaseHeaderBlockSchema = z.object({
+  ...base, type: z.literal("showcaseHeader"),
+  title: z.string().default("QUOTATION"),
+  docNumber: z.string().default("{{quote.number}}"),
+  tagline: z.string().default("PREMIUM ELECTRIC MOBILITY"),
+  bg: colorField("#020617"),
+  accent: colorField("#ea580c"),
+  /** Optional band photo. Only an inline `data:image/…` is ever rendered. */
+  bgImage: z.string().default(""),
+  showLogo: z.boolean().default(true),
+  /** A slimmer band (no tagline) — the header repeated on a continuation page. */
+  compact: z.boolean().optional(),
+});
+export const infoStripBlockSchema = z.object({
+  ...base, type: z.literal("infoStrip"),
+  accent: colorField("#ea580c"),
+  items: z.array(z.object({
+    icon: showcaseIcon, label: z.string().default(""), value: z.string().default(""), sub: z.string().default(""),
+  })).default([]),
+});
+/** A vehicle as the showcase shows it (lib/docbuilder/vehicleShowcase.ts VehicleShowcaseData). */
+export const frozenVehicleSchema = z.object({
+  name: z.string(),
+  tagline: z.string().default(""),
+  description: z.string().default(""),
+  image: z.string().nullable().default(null),
+  specs: z.array(z.object({ icon: showcaseIcon, label: z.string(), sub: z.string().default("") })).default([]),
+});
+/** The quote's primary vehicle — model, tagline, description, specs and photo come from its Product. */
+export const vehicleShowcaseBlockSchema = z.object({
+  ...base, type: z.literal("vehicleShowcase"),
+  part: z.enum(["full", "details", "image"]).default("full"),
+  brand: z.string().default("DENAGO EV"),
+  accent: colorField("#ea580c"),
+  imageHeight: z.number().default(280),
+  /** "contain" shows the whole photo (cut-outs); "cover" fills the area (scenic photos). */
+  imageFit: z.enum(["contain", "cover"]).default("contain"),
+  /**
+   * Give the page room for more line items: above `afterRows` rows (and up to
+   * `untilRows`, beyond which the layout overflows to a second page instead)
+   * the photo loses `perRow` px per extra row, down to `minHeight`, and the
+   * details switch to a compact setting so the text column shrinks with it.
+   */
+  shrink: z.object({ afterRows: z.number(), untilRows: z.number(), perRow: z.number(), minHeight: z.number() }).optional(),
+  /**
+   * Set ONLY on a signing snapshot, at send time (lib/signing/service.ts): the
+   * vehicle exactly as the signer was shown it — null meaning there was none.
+   * When present it renders INSTEAD of the live Product, so editing the product
+   * afterwards cannot change a document someone is signing or has signed.
+   * Absent on templates, which bind to the quote live.
+   */
+  frozen: frozenVehicleSchema.nullable().optional(),
+});
+export const totalsBoxBlockSchema = z.object({
+  ...base, type: z.literal("totalsBox"),
+  rows: z.array(z.object({ label: z.string(), value: z.string() })).default([]),
+  totalLabel: z.string().default("TOTAL INCL. VAT"),
+  totalAmount: z.string().default("{{quote.total}}"),
+  bg: colorField("#020617"),
+  accent: colorField("#ea580c"),
+});
+export const acceptanceBlockSchema = z.object({
+  ...base, type: z.literal("acceptance"),
+  title: z.string().default("ACCEPTANCE OF QUOTATION"),
+  text: z.string().default(""),
+  nameLabel: z.string().default("Customer Name"),
+  nameValue: z.string().default("{{customer.name}}"),
+  signatureLabel: z.string().default("Signature"),
+  dateLabel: z.string().default("Date"),
+});
+export const footerBandBlockSchema = z.object({
+  ...base, type: z.literal("footerBand"),
+  subtitle: z.string().default("Authorised Denago EV Dealer"),
+  bg: colorField("#020617"),
+  accent: colorField("#ea580c"),
+  /** Optional band photo (e.g. a skyline). Only an inline `data:image/…` is ever rendered. */
+  bgImage: z.string().default(""),
+});
+
 /** Conditional wrapper — nested blocks render only when `when` is truthy (safe expr engine). */
 export const conditionalBlockSchema = z.object({
   ...base, type: z.literal("conditional"),
@@ -211,6 +307,7 @@ export const blockSchema: z.ZodType<DocumentBlock> = z.lazy(() => z.discriminate
   pageBreakBlockSchema, pricingBlockSchema, tableBlockSchema,
   bannerBlockSchema, infoCardBlockSchema, lineItemsBlockSchema, totalBandBlockSchema, termsBlockSchema, footerBlockSchema,
   conditionalBlockSchema, handoverChecklistBlockSchema,
+  showcaseHeaderBlockSchema, infoStripBlockSchema, vehicleShowcaseBlockSchema, totalsBoxBlockSchema, acceptanceBlockSchema, footerBandBlockSchema,
 ])) as z.ZodType<DocumentBlock>;
 
 export type TextBlock = z.infer<typeof textBlockSchema>;
@@ -228,6 +325,14 @@ export type TotalBandBlock = z.infer<typeof totalBandBlockSchema>;
 export type TermsBlock = z.infer<typeof termsBlockSchema>;
 export type FooterBlock = z.infer<typeof footerBlockSchema>;
 export type HandoverChecklistBlock = z.infer<typeof handoverChecklistBlockSchema>;
+export type ShowcaseHeaderBlock = z.infer<typeof showcaseHeaderBlockSchema>;
+export type InfoStripBlock = z.infer<typeof infoStripBlockSchema>;
+export type VehicleShowcaseBlock = z.infer<typeof vehicleShowcaseBlockSchema>;
+export type TotalsBoxBlock = z.infer<typeof totalsBoxBlockSchema>;
+export type AcceptanceBlock = z.infer<typeof acceptanceBlockSchema>;
+export type FooterBandBlock = z.infer<typeof footerBandBlockSchema>;
+export type ShowcaseBlock =
+  | ShowcaseHeaderBlock | InfoStripBlock | VehicleShowcaseBlock | TotalsBoxBlock | AcceptanceBlock | FooterBandBlock;
 export type ConditionalBlock = {
   id: string; type: "conditional"; settings: LayoutSettings; locked: boolean; hidden: boolean;
   when: string; blocks: DocumentBlock[];
@@ -236,7 +341,7 @@ export type DocumentBlock =
   | TextBlock | HeadingBlock | ImageBlock | DividerBlock | SpacerBlock
   | PageBreakBlock | PricingBlock | TableBlock
   | BannerBlock | InfoCardBlock | LineItemsBlock | TotalBandBlock | TermsBlock | FooterBlock
-  | ConditionalBlock | HandoverChecklistBlock;
+  | ConditionalBlock | HandoverChecklistBlock | ShowcaseBlock;
 export type BlockType = DocumentBlock["type"];
 
 // ── columns / rows / pages ──────────────────────────────────────────
@@ -323,11 +428,33 @@ export const floatingBlockSchema = z.object({
 export type FloatingBlock = z.infer<typeof floatingBlockSchema>;
 
 // ── page / document ─────────────────────────────────────────────────
+/**
+ * Content pinned to the foot of a page that must MOVE to a following page when
+ * the flowed content above it would run into it — the showcase quote's terms /
+ * acceptance cards (with the customer's signature and date fields) and its
+ * footer band. `maxItems` is how many bound line-item rows still fit above it.
+ * Resolved by ./overflow.ts: at send time into the signing snapshot (so the
+ * signed layout is fixed), and at render time for live documents.
+ */
+export const overflowGroupSchema = z.object({
+  maxItems: z.number(),
+  floatIds: z.array(z.string()).default([]),
+  fieldIds: z.array(z.string()).default([]),
+  /** When moved, lift the group so its top sits here; unset keeps its position. */
+  topOnNextPage: z.number().optional(),
+  /** Remove the group instead of moving it (it is already repeated on the next page). */
+  drop: z.boolean().optional(),
+  /** Extra content the continuation page gets when THIS group moves (a compact header, a footer). */
+  nextPageFloats: z.array(floatingBlockSchema).optional(),
+});
+export type OverflowGroup = z.infer<typeof overflowGroupSchema>;
+
 export const pageSchema = z.object({
   id: z.string(),
   rows: z.array(rowSchema).default([]),
   overlayFields: z.array(overlayFieldSchema).default([]),
   floatingBlocks: z.array(floatingBlockSchema).default([]),
+  overflowGroups: z.array(overflowGroupSchema).optional(),
 });
 export type DocumentPage = z.infer<typeof pageSchema>;
 
@@ -348,6 +475,13 @@ export const documentSchema = z.object({
   pages: z.array(pageSchema).min(1),
   header: z.array(blockSchema).default([]),
   footer: z.array(blockSchema).default([]),
+  /**
+   * Set ONLY on a signing snapshot, at send time: the number of line-item rows
+   * the layout was resolved for (overflow pages, the showcase hero's height).
+   * Renders use it instead of the live row count, so a signed layout — and the
+   * signature fields placed on it — never re-flows.
+   */
+  layoutRows: z.number().optional(),
 });
 export type DocumentModel = z.infer<typeof documentSchema>;
 

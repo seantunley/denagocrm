@@ -4,9 +4,12 @@ import { useEffect, useState } from "react";
 import { useDraggable } from "@dnd-kit/core";
 import { useEditor } from "@/lib/doceditor/store";
 import { newBlock, newOverlayField } from "@/lib/doceditor/factory";
+import { showcaseQuoteTemplate } from "@/lib/doceditor/standardTemplates";
+import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import type { BlockType, DocumentBlock, OverlayField } from "@/lib/doceditor/model";
 import type { DragData } from "./DndController";
 import { listLibraryItems, deleteLibraryItem } from "@/app/actions/doclibrary";
+import { listClauseBlocks } from "@/app/actions/customDocuments";
 
 const CONTENT: { type: BlockType; label: string; icon: string }[] = [
   { type: "text", label: "Text", icon: "¶" },
@@ -30,6 +33,33 @@ const BRANDED: { type: BlockType; label: string; icon: string }[] = [
   { type: "footer", label: "Footer", icon: "‗" },
 ];
 
+const SHOWCASE: { type: BlockType; label: string; icon: string }[] = [
+  { type: "showcaseHeader", label: "Header band", icon: "▀" },
+  { type: "infoStrip", label: "Info strip", icon: "⋯" },
+  { type: "vehicleShowcase", label: "Vehicle showcase (bound)", icon: "🚙" },
+  { type: "totalsBox", label: "Totals box", icon: "∑" },
+  { type: "acceptance", label: "Acceptance card", icon: "✍" },
+  { type: "footerBand", label: "Footer band", icon: "▄" },
+];
+
+/** Swap the whole document for the showcase quotation layout. Undoable; nothing is saved until the owner saves/publishes. */
+function ShowcaseLayoutButton() {
+  const commit = useEditor((s) => s.commit);
+  return (
+    <ConfirmActionDialog
+      trigger={
+        <button type="button" className="w-full rounded-lg border border-orange-200 bg-orange-50 px-2.5 py-2 text-left text-sm text-orange-700 hover:border-orange-300">
+          ✨ Replace with showcase quotation layout
+        </button>
+      }
+      title="Use the showcase quotation layout?"
+      description="This replaces every page of this document with the showcase layout. Undo brings it back, and nothing changes for customers until you save and publish."
+      confirmLabel="Replace layout"
+      onConfirm={() => commit((doc) => ({ ...showcaseQuoteTemplate(), title: doc.title }))}
+    />
+  );
+}
+
 const FIELDS: { kind: OverlayField["kind"]; label: string; icon: string }[] = [
   { kind: "signature", label: "Signature", icon: "✍" },
   { kind: "initials", label: "Initials", icon: "AB" },
@@ -43,14 +73,20 @@ const TABS = ["Content", "Fields", "Library"] as const;
 
 type LibItem = { id: string; name: string; category: string | null; blocks: DocumentBlock[] };
 
+// The content library needs docbuilder.manage; a custom document is edited with
+// documents.manage. Someone without it gets an empty library, not a stuck spinner.
+const loadLibrary = () => listLibraryItems().then((r) => r as LibItem[], () => [] as LibItem[]);
+const loadClauses = () => listClauseBlocks().then((r) => r as LibItem[], () => [] as LibItem[]);
+
 function LibraryTab() {
   const insertLibrary = useEditor((s) => s.insertLibrary);
   const [items, setItems] = useState<LibItem[]>([]);
+  const [clauses, setClauses] = useState<LibItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const refresh = async () => { setLoading(true); setItems((await listLibraryItems()) as LibItem[]); setLoading(false); };
+  const refresh = async () => { setLoading(true); setItems(await loadLibrary()); setClauses(await loadClauses()); setLoading(false); };
   useEffect(() => {
     let alive = true;
-    listLibraryItems().then((r) => { if (alive) { setItems(r as LibItem[]); setLoading(false); } });
+    Promise.all([loadLibrary(), loadClauses()]).then(([lib, cl]) => { if (alive) { setItems(lib); setClauses(cl); setLoading(false); } });
     return () => { alive = false; };
   }, []);
 
@@ -75,6 +111,18 @@ function LibraryTab() {
             </div>
           ))}
         </div>
+      )}
+      {clauses.length > 0 && (
+        <>
+          <p className="px-1 pt-3 text-[11px] font-medium text-slate-400">Clauses — copied in; edit them in Document Studio.</p>
+          <div className="space-y-1.5">
+            {clauses.map((it) => (
+              <button key={it.id} type="button" className="block w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-left text-sm text-slate-700 hover:border-orange-300" onClick={() => insertLibrary(it.blocks)} title="Insert this clause into the document">
+                {it.name}{it.category ? <span className="ml-1 text-[10px] text-slate-400">{it.category}</span> : null}
+              </button>
+            ))}
+          </div>
+        </>
       )}
     </>
   );
@@ -131,6 +179,11 @@ export function Palette() {
             <p className="px-1 pt-2 text-[11px] font-medium text-slate-400">Branded (quote/proposal)</p>
             <div className="grid grid-cols-1 gap-1.5">
               {BRANDED.map((c) => <ContentItem key={c.type} {...c} />)}
+            </div>
+            <p className="px-1 pt-2 text-[11px] font-medium text-slate-400">Showcase quotation</p>
+            <ShowcaseLayoutButton />
+            <div className="grid grid-cols-1 gap-1.5">
+              {SHOWCASE.map((c) => <ContentItem key={c.type} {...c} />)}
             </div>
           </>
         ) : tab === "Fields" ? (
