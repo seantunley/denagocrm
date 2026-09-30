@@ -1,14 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import { publishBuilderVersion, restoreBuilderVersion, listBuilderVersionsAction } from "@/app/actions/docbuilder";
+import { publishBuilderVersion, restoreBuilderVersion, listBuilderVersionsAction, resetBuilderTemplateToStandard } from "@/app/actions/docbuilder";
+import { toast } from "sonner";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import ModalPortal from "@/components/ui/modal-portal";
 
 type Version = { id: string; version: number; label: string | null; publishedBy: string | null; publishedAt: string };
 
 /** Version history drawer: publish an immutable snapshot, list history, restore. */
-export function VersionHistory({ id, save, onPublished }: { id: string; save: () => Promise<void>; onPublished?: () => void }) {
+export function VersionHistory({ id, save, onPublished, hasStandardLayout = false }: { id: string; save: () => Promise<void>; onPublished?: () => void; hasStandardLayout?: boolean }) {
   const [open, setOpen] = useState(false);
   const [versions, setVersions] = useState<Version[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
@@ -27,6 +28,19 @@ export function VersionHistory({ id, save, onPublished }: { id: string; save: ()
         onPublished?.();
       }
       await refresh();
+    } finally {
+      setBusy(null);
+    }
+  };
+  const resetToStandard = async () => {
+    setBusy("reset");
+    try {
+      const result = await resetBuilderTemplateToStandard(id);
+      if (!result.ok) {
+        toast.error(result.error ?? "Could not reset the layout.");
+        return;
+      }
+      window.location.reload();
     } finally {
       setBusy(null);
     }
@@ -56,6 +70,15 @@ export function VersionHistory({ id, save, onPublished }: { id: string; save: ()
               <button type="button" disabled={busy === "publish"} onClick={publish} className="w-full rounded-md bg-orange-600 py-1.5 text-sm font-medium text-white hover:bg-orange-700 disabled:opacity-60">
                 {busy === "publish" ? "Saving…" : "Publish current as a version"}
               </button>
+              {hasStandardLayout && (
+                <ConfirmActionDialog
+                  trigger={<button type="button" disabled={busy === "reset"} className="mt-2 w-full rounded-md border border-slate-300 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-60">{busy === "reset" ? "Resetting…" : "Reset draft to standard layout"}</button>}
+                  title="Reset the draft to the standard layout?"
+                  description="Your draft is replaced with the latest standard layout for this document type. Real documents keep using the published version until you press Publish, and the current layout stays in history so you can restore it."
+                  confirmLabel="Reset draft"
+                  onConfirm={resetToStandard}
+                />
+              )}
             </div>
             <div className="flex-1 overflow-y-auto p-2">
               {versions.length === 0 ? (

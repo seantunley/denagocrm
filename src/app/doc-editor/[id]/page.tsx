@@ -7,6 +7,7 @@ import { requiredRecordKind } from "@/lib/docbuilder/recordBinding";
 import Link from "next/link";
 import { readTemplateDocument } from "@/lib/doceditor/legacy";
 import { DocEditor, type PublishState } from "@/components/doceditor/DocEditor";
+import { STANDARD_TEMPLATE_KEYS } from "@/lib/doceditor/standardTemplates";
 import { DocEditorEnvProvider } from "@/components/doceditor/EditorContext";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { documentLogo } from "@/lib/doceditor/renderGlobals";
@@ -143,6 +144,7 @@ export default async function DocEditorPage({
         initialDoc={initialDoc}
         records={records}
         initialPublishState={publishState}
+        hasStandardLayout={(STANDARD_TEMPLATE_KEYS as string[]).includes(template.key)}
       />
     </DocEditorEnvProvider>
   );

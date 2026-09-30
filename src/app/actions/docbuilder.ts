@@ -6,6 +6,7 @@ import { prisma } from "@/lib/db";
 import { requirePermission, requireAnyPermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { listBuilderVersions } from "@/lib/docbuilder/store";
+import { STANDARD_TEMPLATE_KEYS, standardTemplateFor, type StandardDocKey } from "@/lib/doceditor/standardTemplates";
 import { withActingStaffScope } from "@/lib/actingScope";
 
 const BASE = "/document-studio";
@@ -76,6 +77,62 @@ export async function publishBuilderVersion(id: string, label?: string): Promise
     revalidatePath(`/doc-editor/${id}`);
     revalidatePath(BASE);
     return { ok: true, version };
+  });
+}
+
+/**
+ * Replace the working draft with the current standard layout for its type.
+ *
+ * Seeding never overwrites an existing template, so a workspace keeps the layout
+ * it was first seeded with even after the standard layout improves. This is how
+ * the owner picks the new one up.
+ *
+ * It must not change what customers get, and must not switch anything over:
+ *  - The old draft is always kept in history as a version, so it can be restored.
+ *  - Other document types move to this editor only when their layout HAS a
+ *    published version (the switch in #672–#675), so for them that saved version
+ *    stays UNPUBLISHED. Publishing it would turn the new renderer on.
+ *  - Quotes are the exception: they already render from this editor with no
+ *    switch, and a never-published quote layout renders its DRAFT. Replacing that
+ *    draft would change live quotes, so its old draft is published as-is first.
+ * The reset layout then waits in the draft until someone presses Publish.
+ */
+/** Types whose real documents render from this editor with no publish switch. */
+const RENDERED_WITHOUT_PUBLISH_SWITCH = new Set(["quote"]);
+
+export async function resetBuilderTemplateToStandard(id: string): Promise<{ ok: boolean; error?: string }> {
+  return withActingStaffScope(async () => {
+    const user = await requirePermission("docbuilder.manage");
+    const tpl = await prisma.docBuilderTemplate.findUnique({ where: { id } });
+    if (!tpl || tpl.deletedAt) return { ok: false, error: "That template no longer exists." };
+    if (!(STANDARD_TEMPLATE_KEYS as string[]).includes(tpl.key)) {
+      return { ok: false, error: "There is no standard layout for this kind of document." };
+    }
+    const standard = standardTemplateFor(tpl.key as StandardDocKey);
+    await prisma.$transaction(async (tx) => {
+      const last = await tx.docBuilderVersion.findFirst({
+        where: { templateId: id }, orderBy: { version: "desc" }, select: { version: true },
+      });
+      const version = (last?.version ?? 0) + 1;
+      await tx.docBuilderVersion.create({
+        data: { templateId: id, version, data: tpl.data as object, label: "Before reset to standard", publishedBy: user.name },
+      });
+      const draftIsLive = RENDERED_WITHOUT_PUBLISH_SWITCH.has(tpl.key) && tpl.publishedVersion == null;
+      await tx.docBuilderTemplate.update({
+        where: { id },
+        data: {
+          data: standard as object,
+          ...(draftIsLive ? { status: "published", publishedVersion: version } : {}),
+        },
+      });
+    });
+    await logAudit({
+      action: "docbuilder.reset_standard",
+      summary: `Reset the draft of “${tpl.name}” to the standard ${tpl.key} layout (not live until published)`,
+      entityType: "DocBuilderTemplate", entityId: id, user,
+    });
+    revalidatePath(`/doc-editor/${id}`);
+    return { ok: true };
   });
 }
 
