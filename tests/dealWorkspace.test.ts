@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 
 const read = (path: string) => readFileSync(path, "utf8");
 
-// Redeploy marker: preview env updated for authenticated verification.\ntest("deal jacket is quote-scoped and fails closed through the existing quote gate", () => {
+// Redeploy marker: preview env updated for authenticated verification.\n\ntest("deal jacket is quote-scoped and fails closed through the existing quote gate", () => {
   const page = read("src/app/(app)/deals/[id]/page.tsx");
   const routes = read("src/lib/routeAccess.ts");
 
