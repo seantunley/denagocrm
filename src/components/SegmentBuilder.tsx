@@ -1,7 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { unstable_rethrow, useRouter } from "next/navigation";
+import { toast } from "sonner";
+import { ACTION_NOT_DELIVERED } from "@/components/actionError";
 import { Filter, Save, ScanSearch, UsersRound } from "lucide-react";
 import { previewAudience, saveSegment } from "@/app/actions/campaigns";
 import { SectionHeading, StatusPill, Surface } from "@/components/visual-system";
@@ -61,8 +63,14 @@ export default function SegmentBuilder({ tags }: { tags: Tag[] }) {
 
   async function preview() {
     setCounting(true);
-    setCount((await previewAudience(buildFormData())).count);
-    setCounting(false);
+    try {
+      setCount((await previewAudience(buildFormData())).count);
+    } catch (error) {
+      unstable_rethrow(error);
+      toast.error(ACTION_NOT_DELIVERED);
+    } finally {
+      setCounting(false);
+    }
   }
 
   async function save() {
@@ -70,8 +78,16 @@ export default function SegmentBuilder({ tags }: { tags: Tag[] }) {
     setSaving(true);
     const formData = buildFormData();
     formData.set("name", name.trim());
-    await saveSegment(formData);
-    setSaving(false);
+    try {
+      await saveSegment(formData);
+    } catch (error) {
+      // Keep what was typed: the save may not have happened.
+      unstable_rethrow(error);
+      toast.error(ACTION_NOT_DELIVERED);
+      return;
+    } finally {
+      setSaving(false);
+    }
     setName("");
     setCriteria(EMPTY);
     setCount(null);

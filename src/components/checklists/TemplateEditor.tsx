@@ -2,6 +2,8 @@
 
 import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
+import { unstable_rethrow } from "next/navigation";
+import { ACTION_NOT_DELIVERED } from "@/components/actionError";
 import {
   DndContext,
   DragOverlay,
@@ -397,13 +399,21 @@ export default function TemplateEditor({
 
     setProblems([]);
     setBusy(true);
-    const result = await save(template.id ?? null, input);
-    setBusy(false);
-    if (result.error) {
-      setProblems([result.error]);
-      return;
+    try {
+      const result = await save(template.id ?? null, input);
+      if (result.error) {
+        setProblems([result.error]);
+        return;
+      }
+      setSaved(result.success ?? "Saved.");
+    } catch (error) {
+      // A call that never arrived (stale tab after a deploy, network, expired
+      // login) used to leave the button on "Saving…" forever with no word.
+      unstable_rethrow(error);
+      setProblems([ACTION_NOT_DELIVERED]);
+    } finally {
+      setBusy(false);
     }
-    setSaved(result.success ?? "Saved.");
   }
 
   /**
@@ -417,9 +427,15 @@ export default function TemplateEditor({
   async function discard() {
     if (!template.id || !remove) return;
     setBusy(true);
-    const result = await remove(template.id);
-    setBusy(false);
-    if (result.error) setProblems([result.error]);
+    try {
+      const result = await remove(template.id);
+      if (result.error) setProblems([result.error]);
+    } catch (error) {
+      unstable_rethrow(error);
+      setProblems([ACTION_NOT_DELIVERED]);
+    } finally {
+      setBusy(false);
+    }
   }
 
   const dragged = activeKey ? items.find((item) => item.key === activeKey) : undefined;
