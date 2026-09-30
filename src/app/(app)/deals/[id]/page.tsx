@@ -4,23 +4,31 @@ import { notFound } from "next/navigation";
 import {
   Activity,
   BadgeCheck,
-  Boxes,
   CalendarClock,
+  CarFront,
+  Check,
   CircleDollarSign,
+  Clock3,
   FileSignature,
   FileText,
+  Mail,
   MessageSquareText,
   PackageCheck,
+  Phone,
   ReceiptText,
+  ShieldCheck,
   Truck,
   UserRound,
+  Wrench,
 } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { requireQuoteReadAccess } from "@/lib/permissions";
 import { contactName, formatDate, formatDateTime, formatZAR } from "@/lib/format";
 import { payableTotalCents } from "@/lib/pricing";
+import { primaryVehicleLine, showcaseImageRefFor } from "@/lib/docbuilder/vehicleShowcase";
+import { storedFileSrc } from "@/lib/storedFileSrc";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
-import { EmptyState, SectionHeading, StatusPill, Surface } from "@/components/visual-system";
+import { StatusPill, Surface } from "@/components/visual-system";
 
 function statusTone(status: string): "neutral" | "success" | "warning" | "danger" | "info" {
   if (status === "accepted" || status === "completed" || status === "delivered") return "success";
@@ -30,32 +38,22 @@ function statusTone(status: string): "neutral" | "success" | "warning" | "danger
   return "neutral";
 }
 
-function Row({ label, value, href }: { label: string; value: ReactNode; href?: string }) {
+function Fact({ label, value }: { label: string; value: ReactNode }) {
   return (
-    <div className="flex min-w-0 items-start justify-between gap-4 border-b border-border/60 py-2.5 last:border-0">
-      <dt className="shrink-0 text-xs text-muted-foreground">{label}</dt>
-      <dd className="min-w-0 text-right text-sm font-medium text-foreground">
-        {href ? <Link href={href} className="text-primary hover:underline">{value}</Link> : value}
-      </dd>
+    <div className="min-w-0">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">{label}</p>
+      <div className="mt-1 truncate text-sm font-semibold text-foreground">{value}</div>
     </div>
   );
 }
 
-function Stage({
-  label,
-  done,
-  detail,
-}: {
-  label: string;
-  done: boolean;
-  detail?: string;
-}) {
+function ReadinessRow({ done, label, detail }: { done: boolean; label: string; detail?: string }) {
   return (
-    <div className="flex gap-3">
-      <span className={`mt-0.5 grid size-7 shrink-0 place-items-center rounded-full border ${done ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300" : "border-border bg-muted/40 text-muted-foreground"}`}>
-        {done ? <BadgeCheck className="size-4" /> : <span className="size-1.5 rounded-full bg-current" />}
+    <div className="flex items-start gap-3 py-2">
+      <span className={`mt-0.5 grid size-5 shrink-0 place-items-center rounded-full border ${done ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300" : "border-amber-400/40 bg-amber-400/10 text-amber-300"}`}>
+        {done ? <Check className="size-3" /> : <span className="size-1.5 rounded-full bg-current" />}
       </span>
-      <div className="min-w-0 pb-4">
+      <div className="min-w-0">
         <p className="text-sm font-medium text-foreground">{label}</p>
         {detail && <p className="mt-0.5 text-xs text-muted-foreground">{detail}</p>}
       </div>
@@ -63,11 +61,42 @@ function Stage({
   );
 }
 
-export default async function DealWorkspacePage({
-  params,
+function JourneyStep({ label, done, current }: { label: string; done: boolean; current?: boolean }) {
+  return (
+    <div className="relative flex min-w-0 flex-1 items-center gap-2">
+      <span className={`relative z-10 grid size-7 shrink-0 place-items-center rounded-full border ${done ? "border-emerald-400/50 bg-emerald-400/15 text-emerald-300" : current ? "border-primary/60 bg-primary/15 text-primary" : "border-border bg-background text-muted-foreground"}`}>
+        {done ? <Check className="size-3.5" /> : <span className="size-1.5 rounded-full bg-current" />}
+      </span>
+      <span className={`truncate text-xs font-medium ${done ? "text-foreground" : current ? "text-primary" : "text-muted-foreground"}`}>{label}</span>
+      <span className="absolute left-7 right-0 top-3.5 h-px bg-border last:hidden" />
+    </div>
+  );
+}
+
+function TimelineItem({
+  icon,
+  title,
+  detail,
+  when,
 }: {
-  params: Promise<{ id: string }>;
+  icon: ReactNode;
+  title: string;
+  detail?: string;
+  when: Date;
 }) {
+  return (
+    <div className="grid grid-cols-[2rem_minmax(0,1fr)_auto] gap-3 border-b border-border/60 py-3 last:border-0">
+      <span className="grid size-8 place-items-center rounded-lg bg-muted/60 text-muted-foreground">{icon}</span>
+      <div className="min-w-0">
+        <p className="truncate text-sm font-medium text-foreground">{title}</p>
+        {detail && <p className="mt-0.5 line-clamp-2 text-xs leading-5 text-muted-foreground">{detail}</p>}
+      </div>
+      <span className="whitespace-nowrap text-[11px] text-muted-foreground">{formatDateTime(when)}</span>
+    </div>
+  );
+}
+
+export default async function DealWorkspacePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   await requireQuoteReadAccess(id);
 
@@ -79,12 +108,13 @@ export default async function DealWorkspacePage({
       contact: true,
       lead: {
         include: {
+          product: true,
           assignedTo: true,
           activities: { orderBy: { dueDate: "asc" }, take: 20 },
           communications: {
             include: { user: true },
             orderBy: { occurredAt: "desc" },
-            take: 12,
+            take: 16,
           },
         },
       },
@@ -92,10 +122,7 @@ export default async function DealWorkspacePage({
       soldStock: { include: { product: true } },
       stockReservations: {
         where: { status: "active" },
-        include: {
-          stockUnit: { include: { product: true } },
-          reservedBy: true,
-        },
+        include: { stockUnit: { include: { product: true } }, reservedBy: true },
         orderBy: { reservedAt: "desc" },
       },
     },
@@ -105,27 +132,13 @@ export default async function DealWorkspacePage({
   const [documents, signatures] = await Promise.all([
     prisma.document.findMany({
       where: { quoteId: quote.id, deletedAt: null },
-      select: {
-        id: true,
-        fileName: true,
-        tag: true,
-        sizeBytes: true,
-        createdAt: true,
-        uploadedBy: { select: { name: true } },
-      },
+      select: { id: true, fileName: true, tag: true, sizeBytes: true, createdAt: true, uploadedBy: { select: { name: true } } },
       orderBy: { createdAt: "desc" },
       take: 30,
     }),
     prisma.signatureRequest.findMany({
       where: { quoteId: quote.id, deletedAt: null },
-      select: {
-        id: true,
-        title: true,
-        status: true,
-        sentAt: true,
-        completedAt: true,
-        createdAt: true,
-      },
+      select: { id: true, title: true, status: true, sentAt: true, completedAt: true, createdAt: true },
       orderBy: { createdAt: "desc" },
       take: 20,
     }),
@@ -138,6 +151,7 @@ export default async function DealWorkspacePage({
       : quote.depositType === "percent"
         ? Math.round(total * ((quote.depositValue ?? 0) / 100))
         : 0;
+
   const customer = quote.contact ? contactName(quote.contact) : quote.lead?.name || "Unlinked customer";
   const stock = [
     ...quote.soldStock.map((unit) => ({ ...unit, allocation: "Sold" })),
@@ -145,208 +159,304 @@ export default async function DealWorkspacePage({
       .filter((reservation) => !quote.soldStock.some((unit) => unit.id === reservation.stockUnit.id))
       .map((reservation) => ({ ...reservation.stockUnit, allocation: "Reserved" })),
   ];
+  const unit = stock[0] ?? null;
+  const vehicleLine = primaryVehicleLine(quote.items);
+  const vehicleProduct = vehicleLine?.product ?? quote.lead?.product ?? unit?.product ?? null;
+  const vehicleColour = vehicleLine?.colorPreference ?? quote.lead?.color ?? unit?.color ?? null;
+  const vehicleImage = vehicleProduct
+    ? storedFileSrc(showcaseImageRefFor(vehicleProduct, vehicleColour))
+    : null;
+  const vehicleName = vehicleProduct?.name ?? vehicleLine?.description ?? quote.lead?.title ?? "Vehicle not selected";
   const nextActivity = quote.lead?.activities.find((item) => item.status === "planned") ?? null;
+  const accepted = quote.status === "accepted" || Boolean(quote.signedAt);
+  const stockReady = stock.length > 0;
+  const pdiReady = stockReady && stock.every((item) => item.pdiStatus === "ready_for_delivery" || item.pdiStatus === "passed");
+  const deliveryBooked = Boolean(quote.deliveryScheduledFor);
+  const delivered = Boolean(quote.deliveredAt);
+
+  const journey = [
+    { label: "Quote", done: true },
+    { label: "Signed", done: accepted },
+    { label: "Deposit", done: Boolean(quote.depositPaidAt) },
+    { label: "Stock", done: stockReady },
+    { label: "PDI", done: pdiReady },
+    { label: "Delivery", done: delivered },
+  ];
+  const currentIndex = Math.min(journey.findIndex((step) => !step.done), journey.length - 1);
+
+  const commercialLines = quote.items
+    .filter((item) => item.selected !== false)
+    .map((item) => ({
+      id: item.id,
+      label: item.description,
+      amount: Math.round(item.quantity * item.unitPriceCents * (1 - item.discountPct / 100)),
+      kind: item.kind,
+    }));
+  const timeline = [
+    ...quote.lead?.communications.map((message) => ({
+      key: `comm-${message.id}`,
+      when: message.occurredAt,
+      icon: message.type === "email" ? <Mail className="size-3.5" /> : <MessageSquareText className="size-3.5" />,
+      title: message.subject || `${message.type} ${message.direction || ""}`.trim(),
+      detail: message.body,
+    })) ?? [],
+    ...documents.map((doc) => ({
+      key: `doc-${doc.id}`,
+      when: doc.createdAt,
+      icon: <FileText className="size-3.5" />,
+      title: `Document added · ${doc.fileName}`,
+      detail: doc.uploadedBy.name,
+    })),
+    ...signatures.map((request) => ({
+      key: `sig-${request.id}`,
+      when: request.completedAt ?? request.sentAt ?? request.createdAt,
+      icon: <FileSignature className="size-3.5" />,
+      title: request.completedAt ? `Signed · ${request.title}` : request.sentAt ? `Signature request sent · ${request.title}` : `Signature request created · ${request.title}`,
+      detail: request.status.replaceAll("_", " "),
+    })),
+    ...(quote.signedAt ? [{ key: "signed", when: quote.signedAt, icon: <BadgeCheck className="size-3.5" />, title: "Quote accepted / signed", detail: quote.signedByName ?? undefined }] : []),
+    ...(quote.depositPaidAt ? [{ key: "deposit", when: quote.depositPaidAt, icon: <CircleDollarSign className="size-3.5" />, title: "Deposit marked received", detail: depositAmount ? formatZAR(depositAmount) : undefined }] : []),
+    ...(quote.deliveryScheduledFor ? [{ key: "delivery-booked", when: quote.deliveryScheduledFor, icon: <CalendarClock className="size-3.5" />, title: "Delivery scheduled", detail: formatDateTime(quote.deliveryScheduledFor) }] : []),
+  ].sort((a, b) => b.when.getTime() - a.when.getTime()).slice(0, 14);
 
   return (
     <EntityDetailShell
       backHref="/quotes"
       backLabel="Quotes"
-      eyebrow="Deal workspace"
+      eyebrow="Deal"
       title={`Q-${quote.number} · ${customer}`}
       status={<StatusPill tone={statusTone(quote.status)}>{quote.status}</StatusPill>}
-      description={quote.lead ? quote.lead.title : "Commercial deal"}
-      meta={`Created ${formatDate(quote.createdAt)}${quote.createdBy ? ` · by ${quote.createdBy.name}` : ""}`}
-      facts={[
-        { label: "Deal value", value: formatZAR(total) },
-        { label: "Customer", value: customer },
-        { label: "Stock", value: stock.length ? `${stock.length} unit${stock.length === 1 ? "" : "s"}` : "Not allocated" },
-        { label: "Next action", value: nextActivity ? formatDateTime(nextActivity.dueDate) : "None planned" },
-      ]}
+      description={vehicleName}
+      meta={`Created ${formatDate(quote.createdAt)}${quote.createdBy ? ` · ${quote.createdBy.name}` : ""}`}
       actions={
         <>
-          <Link href={`/quotes?edit=${quote.id}`} className="btn-primary">Open quote editor</Link>
-          {quote.leadId && <Link href={`/leads/${quote.leadId}`} className="btn-secondary">Open lead</Link>}
-          <a href={`/quotes/${quote.id}/print`} target="_blank" rel="noreferrer" className="btn-secondary">Print / PDF</a>
+          <Link href={`/quotes?edit=${quote.id}`} className="btn-primary">Edit quote</Link>
+          {quote.leadId && <Link href={`/leads/${quote.leadId}?tab=activities&schedule=1`} className="btn-secondary">Add activity</Link>}
+          <a href={`/quotes/${quote.id}/print`} target="_blank" rel="noreferrer" className="btn-secondary">Print</a>
         </>
       }
     >
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(20rem,.65fr)]">
-        <div className="space-y-4">
-          <Surface className="p-4">
-            <SectionHeading title="Deal progress" description="One operational path from proposal to handover." />
-            <div className="mt-4 grid gap-x-6 sm:grid-cols-2">
-              <Stage label="Quote prepared" done detail={`Q-${quote.number} · ${formatZAR(total)}`} />
-              <Stage label="Sent to customer" done={quote.status !== "draft"} detail={quote.viewedAt ? `Viewed ${formatDateTime(quote.viewedAt)}` : undefined} />
-              <Stage label="Accepted / signed" done={quote.status === "accepted" || Boolean(quote.signedAt)} detail={quote.signedAt ? formatDateTime(quote.signedAt) : undefined} />
-              <Stage label="Invoiced" done={Boolean(quote.invoicedAt)} detail={quote.invoicedAt ? formatDateTime(quote.invoicedAt) : undefined} />
-              <Stage label="Deposit received" done={Boolean(quote.depositPaidAt)} detail={quote.depositPaidAt ? formatDateTime(quote.depositPaidAt) : depositAmount ? `Expected ${formatZAR(depositAmount)}` : undefined} />
-              <Stage label="Stock allocated" done={stock.length > 0} detail={stock.length ? stock.map((unit) => unit.stockNumber ?? unit.serial ?? unit.product.name).join(", ") : undefined} />
-              <Stage label="Delivery scheduled" done={Boolean(quote.deliveryScheduledFor)} detail={quote.deliveryScheduledFor ? formatDateTime(quote.deliveryScheduledFor) : undefined} />
-              <Stage label="Delivered" done={Boolean(quote.deliveredAt)} detail={quote.deliveredAt ? formatDateTime(quote.deliveredAt) : undefined} />
+      <div className="space-y-4">
+        <Surface className="overflow-hidden">
+          <div className="grid min-h-[250px] lg:grid-cols-[minmax(0,1.25fr)_minmax(22rem,.75fr)]">
+            <div className="relative overflow-hidden border-b border-border bg-gradient-to-br from-muted/30 via-background to-background lg:border-b-0 lg:border-r">
+              {vehicleImage ? (
+                <>
+                  {/* eslint-disable-next-line @next/next/no-img-element -- authenticated stored-file route */}
+                  <img src={vehicleImage} alt={vehicleName} className="absolute inset-0 size-full object-cover opacity-75" />
+                  <div className="absolute inset-0 bg-gradient-to-r from-background via-background/45 to-transparent" />
+                  <div className="absolute inset-0 bg-gradient-to-t from-background via-transparent to-transparent" />
+                </>
+              ) : (
+                <div className="absolute inset-0 grid place-items-center text-muted-foreground/15">
+                  <CarFront className="size-40" strokeWidth={1} />
+                </div>
+              )}
+              <div className="relative flex h-full min-h-[250px] flex-col justify-end p-5 sm:p-6">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-primary">Vehicle</p>
+                <h2 className="mt-2 max-w-2xl text-2xl font-semibold tracking-tight text-foreground">{vehicleName}</h2>
+                <div className="mt-4 grid max-w-2xl grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
+                  <Fact label="Colour" value={vehicleColour ?? "—"} />
+                  <Fact label="Stock no." value={unit?.stockNumber ?? "Not allocated"} />
+                  <Fact label="VIN / Serial" value={unit?.serial ? `••••${unit.serial.slice(-6)}` : "—"} />
+                  <Fact label="PDI" value={unit ? unit.pdiStatus.replaceAll("_", " ") : "Pending allocation"} />
+                </div>
+              </div>
             </div>
-          </Surface>
 
-          <div className="grid gap-4 lg:grid-cols-2">
-            <Surface className="p-4">
-              <SectionHeading title="Customer & opportunity" description="The people and sales context behind this deal." action={<UserRound className="size-4 text-muted-foreground" />} />
-              <dl className="mt-3">
-                <Row label="Customer" value={customer} href={quote.contactId ? `/contacts/${quote.contactId}` : undefined} />
-                <Row label="Email" value={quote.contact?.email ?? quote.lead?.email ?? "—"} />
-                <Row label="Phone" value={quote.contact?.phone ?? quote.lead?.phone ?? "—"} />
-                <Row label="Lead" value={quote.lead?.title ?? "—"} href={quote.leadId ? `/leads/${quote.leadId}` : undefined} />
-                <Row label="Sales owner" value={quote.lead?.assignedTo?.name ?? quote.createdBy?.name ?? "Unassigned"} />
-                <Row label="Source" value={quote.lead?.source ?? "—"} />
-              </dl>
-            </Surface>
-
-            <Surface className="p-4">
-              <SectionHeading title="Commercials" description="Quote economics currently stored on the deal." action={<CircleDollarSign className="size-4 text-muted-foreground" />} />
-              <dl className="mt-3">
-                <Row label="Total" value={formatZAR(total)} />
-                <Row label="Deposit terms" value={quote.depositType ? (quote.depositType === "percent" ? `${quote.depositValue ?? 0}% · ${formatZAR(depositAmount)}` : formatZAR(depositAmount)) : "Not set"} />
-                <Row label="Deposit status" value={quote.depositPaidAt ? `Received ${formatDate(quote.depositPaidAt)}` : "Not marked received"} />
-                <Row label="Invoice status" value={quote.invoicedAt ? `Invoiced ${formatDate(quote.invoicedAt)}` : "Not invoiced"} />
-                <Row label="Payment ledger" value="Not yet implemented" />
-              </dl>
-              <p className="mt-3 rounded-lg border border-border bg-muted/25 p-2.5 text-xs leading-5 text-muted-foreground">
-                This workspace does not invent payment data. Actual receipts, balances, refunds and credit notes belong to the Deal Financials module.
-              </p>
-            </Surface>
+            <div className="flex flex-col justify-between p-5 sm:p-6">
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">Deal value</p>
+                <p className="mt-1 text-3xl font-semibold tracking-tight text-foreground">{formatZAR(total)}</p>
+                <div className="mt-5 grid grid-cols-2 gap-4 border-t border-border pt-4">
+                  <Fact label="Customer" value={customer} />
+                  <Fact label="Sales owner" value={quote.lead?.assignedTo?.name ?? quote.createdBy?.name ?? "Unassigned"} />
+                  <Fact label="Deposit" value={depositAmount ? formatZAR(depositAmount) : "Not set"} />
+                  <Fact label="Next action" value={nextActivity ? formatDateTime(nextActivity.dueDate) : "None planned"} />
+                </div>
+              </div>
+              <div className="mt-5 flex flex-wrap gap-2">
+                {quote.contactId && <Link href={`/contacts/${quote.contactId}`} className="btn-secondary btn-sm"><UserRound className="size-4" />Customer</Link>}
+                {quote.leadId && <Link href={`/leads/${quote.leadId}`} className="btn-secondary btn-sm"><Activity className="size-4" />Lead</Link>}
+                {quote.status === "accepted" && <Link href="/deliveries" className="btn-secondary btn-sm"><Truck className="size-4" />Delivery board</Link>}
+              </div>
+            </div>
           </div>
 
-          <Surface className="p-4">
-            <SectionHeading title="Vehicle & stock" description="Reserved or sold physical units tied to this quote." action={<Boxes className="size-4 text-muted-foreground" />} />
-            {stock.length === 0 ? (
-              <EmptyState icon={PackageCheck} title="No stock allocated" description="Reserve or allocate a stock unit from Stock when this deal is ready for fulfilment." className="mt-4" />
-            ) : (
-              <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                {stock.map((unit) => (
-                  <Link key={unit.id} href={`/stock/${unit.id}`} className="rounded-lg border border-border bg-muted/20 p-3 transition-colors hover:bg-muted/40">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="text-sm font-semibold">{unit.product.name}</p>
-                        <p className="mt-0.5 text-xs text-muted-foreground">{[unit.color, unit.stockNumber, unit.serial].filter(Boolean).join(" · ") || "Unit details pending"}</p>
-                      </div>
-                      <StatusPill tone={unit.status === "sold" ? "success" : "info"}>{unit.allocation}</StatusPill>
-                    </div>
-                    <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-muted-foreground">
-                      <span>PDI: <strong className="text-foreground">{unit.pdiStatus.replaceAll("_", " ")}</strong></span>
-                      <span>Location: <strong className="text-foreground">{unit.location ?? "—"}</strong></span>
-                    </div>
-                  </Link>
-                ))}
-              </div>
-            )}
-          </Surface>
+          <div className="border-t border-border bg-muted/15 px-5 py-4 sm:px-6">
+            <div className="flex gap-3 overflow-x-auto pb-1">
+              {journey.map((step, index) => (
+                <JourneyStep key={step.label} label={step.label} done={step.done} current={index === currentIndex && !step.done} />
+              ))}
+            </div>
+          </div>
+        </Surface>
 
-          <div className="grid gap-4 lg:grid-cols-2">
-            <Surface className="p-4">
-              <SectionHeading title="Documents" description="Files already filed against this quote." action={<FileText className="size-4 text-muted-foreground" />} />
-              {documents.length === 0 ? (
-                <p className="mt-4 text-sm text-muted-foreground">No filed documents yet.</p>
-              ) : (
-                <div className="mt-3 space-y-1">
-                  {documents.map((doc) => (
-                    <Link key={doc.id} href={`/documents?q=${encodeURIComponent(doc.fileName)}`} className="flex items-center justify-between gap-3 rounded-lg px-2 py-2 hover:bg-muted/40">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium">{doc.fileName}</p>
-                        <p className="text-xs text-muted-foreground">{doc.tag ?? "file"} · {Math.max(1, Math.round(doc.sizeBytes / 1024))} KB · {doc.uploadedBy.name}</p>
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(19rem,.55fr)]">
+          <div className="space-y-4">
+            <Surface className="p-5">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Commercials</p>
+                  <h2 className="mt-1 text-base font-semibold">Deal sheet</h2>
+                </div>
+                <CircleDollarSign className="size-5 text-muted-foreground" />
+              </div>
+              <div className="mt-4 divide-y divide-border/70">
+                {commercialLines.map((line) => (
+                  <div key={line.id} className="grid grid-cols-[minmax(0,1fr)_auto] gap-4 py-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium">{line.label}</p>
+                      <p className="mt-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">{line.kind.replaceAll("_", " ")}</p>
+                    </div>
+                    <p className="text-sm font-semibold tabular-nums">{formatZAR(line.amount)}</p>
+                  </div>
+                ))}
+                {quote.fees.map((fee) => (
+                  <div key={fee.id} className="grid grid-cols-[minmax(0,1fr)_auto] gap-4 py-3">
+                    <div>
+                      <p className="text-sm font-medium">{fee.label}</p>
+                      <p className="mt-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">Fee</p>
+                    </div>
+                    <p className="text-sm font-semibold tabular-nums">{formatZAR(fee.amountCents)}</p>
+                  </div>
+                ))}
+                <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-4 py-4">
+                  <div>
+                    <p className="font-semibold">Deal total</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">{quote.depositPaidAt ? "Deposit received" : depositAmount ? `Deposit expected · ${formatZAR(depositAmount)}` : "No deposit terms set"}</p>
+                  </div>
+                  <p className="text-lg font-semibold tabular-nums">{formatZAR(total)}</p>
+                </div>
+              </div>
+            </Surface>
+
+            <Surface className="p-5">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Activity</p>
+                  <h2 className="mt-1 text-base font-semibold">Deal timeline</h2>
+                </div>
+                {quote.leadId && <Link href={`/leads/${quote.leadId}?tab=comms`} className="text-xs font-medium text-primary hover:underline">Full timeline</Link>}
+              </div>
+              <div className="mt-3">
+                {timeline.length ? timeline.map((event) => (
+                  <TimelineItem key={event.key} icon={event.icon} title={event.title} detail={event.detail} when={event.when} />
+                )) : (
+                  <div className="py-8 text-center text-sm text-muted-foreground">No deal activity recorded yet.</div>
+                )}
+              </div>
+            </Surface>
+
+            {stock.length > 0 && (
+              <Surface className="p-5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Allocated stock</p>
+                    <h2 className="mt-1 text-base font-semibold">{stock.length} physical unit{stock.length === 1 ? "" : "s"}</h2>
+                  </div>
+                  <PackageCheck className="size-5 text-muted-foreground" />
+                </div>
+                <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                  {stock.map((item) => (
+                    <Link key={item.id} href={`/stock/${item.id}`} className="rounded-xl border border-border bg-muted/20 p-3.5 hover:bg-muted/35">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold">{item.product.name}</p>
+                          <p className="mt-1 text-xs text-muted-foreground">{[item.color, item.stockNumber, item.location].filter(Boolean).join(" · ")}</p>
+                        </div>
+                        <StatusPill tone={item.status === "sold" ? "success" : "info"}>{item.allocation}</StatusPill>
                       </div>
-                      <span className="text-xs text-muted-foreground">{formatDate(doc.createdAt)}</span>
+                      <div className="mt-3 flex items-center gap-2 text-xs">
+                        <Wrench className="size-3.5 text-muted-foreground" />
+                        <span className="text-muted-foreground">PDI</span>
+                        <span className="font-medium">{item.pdiStatus.replaceAll("_", " ")}</span>
+                      </div>
                     </Link>
                   ))}
                 </div>
-              )}
-            </Surface>
-
-            <Surface className="p-4">
-              <SectionHeading title="Signatures" description="Signing envelopes tied to this quote." action={<FileSignature className="size-4 text-muted-foreground" />} />
-              {signatures.length === 0 ? (
-                <p className="mt-4 text-sm text-muted-foreground">No signature requests yet.</p>
-              ) : (
-                <div className="mt-3 space-y-2">
-                  {signatures.map((request) => (
-                    <Link key={request.id} href={`/signatures/${request.id}`} className="flex items-center justify-between gap-3 rounded-lg border border-border/70 p-2.5 hover:bg-muted/40">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium">{request.title}</p>
-                        <p className="text-xs text-muted-foreground">{request.completedAt ? `Completed ${formatDateTime(request.completedAt)}` : request.sentAt ? `Sent ${formatDateTime(request.sentAt)}` : `Created ${formatDateTime(request.createdAt)}`}</p>
-                      </div>
-                      <StatusPill tone={statusTone(request.status)}>{request.status.replaceAll("_", " ")}</StatusPill>
-                    </Link>
-                  ))}
-                </div>
-              )}
-            </Surface>
+              </Surface>
+            )}
           </div>
-        </div>
 
-        <div className="space-y-4">
-          <Surface className="p-4">
-            <SectionHeading title="Next actions" description="Sales activity without leaving the deal." action={<CalendarClock className="size-4 text-muted-foreground" />} />
-            {!quote.lead ? (
-              <p className="mt-4 text-sm text-muted-foreground">This quote is not linked to a lead.</p>
-            ) : quote.lead.activities.filter((item) => item.status === "planned").length === 0 ? (
-              <EmptyState icon={Activity} title="Nothing scheduled" description="Open the lead to schedule the next call, meeting or follow-up." className="mt-4" action={<Link href={`/leads/${quote.lead.id}?tab=activities&schedule=1`} className="btn-secondary btn-sm">Schedule activity</Link>} />
-            ) : (
-              <div className="mt-3 space-y-2">
-                {quote.lead.activities.filter((item) => item.status === "planned").slice(0, 6).map((item) => (
-                  <div key={item.id} className="rounded-lg border border-border/70 p-2.5">
-                    <div className="flex items-start justify-between gap-3">
-                      <p className="text-sm font-medium">{item.summary}</p>
-                      <StatusPill tone={item.dueDate < new Date() ? "danger" : "neutral"}>{formatDate(item.dueDate)}</StatusPill>
-                    </div>
-                    <p className="mt-1 text-xs text-muted-foreground">{item.type}{item.location ? ` · ${item.location}` : ""}</p>
-                  </div>
-                ))}
+          <aside className="space-y-4">
+            <Surface className="p-5">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="size-5 text-primary" />
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Readiness</p>
+                  <h2 className="mt-0.5 text-base font-semibold">Ready to deliver?</h2>
+                </div>
+              </div>
+              <div className="mt-3 divide-y divide-border/60">
+                <ReadinessRow done={accepted} label="Agreement accepted" detail={quote.signedAt ? formatDateTime(quote.signedAt) : "Customer acceptance outstanding"} />
+                <ReadinessRow done={Boolean(quote.depositPaidAt)} label="Deposit received" detail={quote.depositPaidAt ? formatDateTime(quote.depositPaidAt) : depositAmount ? `Waiting for ${formatZAR(depositAmount)}` : "No deposit receipt recorded"} />
+                <ReadinessRow done={stockReady} label="Stock allocated" detail={stockReady ? stock.map((item) => item.stockNumber ?? item.product.name).join(", ") : "No physical unit assigned"} />
+                <ReadinessRow done={pdiReady} label="PDI complete" detail={stockReady ? (pdiReady ? "Allocated stock ready for delivery" : "Workshop preparation still outstanding") : "Requires stock allocation first"} />
+                <ReadinessRow done={deliveryBooked} label="Delivery booked" detail={deliveryBooked ? formatDateTime(quote.deliveryScheduledFor) : "No delivery date scheduled"} />
+              </div>
+              {quote.status === "accepted" && <Link href="/deliveries" className="btn-primary btn-sm mt-4 w-full"><Truck className="size-4" />Open fulfilment</Link>}
+            </Surface>
+
+            <Surface className="p-5">
+              <div className="flex items-center gap-2">
+                <UserRound className="size-5 text-muted-foreground" />
+                <h2 className="text-sm font-semibold">Customer</h2>
+              </div>
+              <div className="mt-4">
+                <p className="text-base font-semibold">{customer}</p>
+                <div className="mt-3 space-y-2 text-sm">
+                  <p className="flex items-center gap-2 text-muted-foreground"><Mail className="size-3.5" /><span className="truncate">{quote.contact?.email ?? quote.lead?.email ?? "No email"}</span></p>
+                  <p className="flex items-center gap-2 text-muted-foreground"><Phone className="size-3.5" /><span>{quote.contact?.phone ?? quote.lead?.phone ?? "No phone"}</span></p>
+                </div>
+              </div>
+              <div className="mt-4 grid grid-cols-2 gap-3 border-t border-border pt-4">
+                <Fact label="Source" value={quote.lead?.source ?? "—"} />
+                <Fact label="Owner" value={quote.lead?.assignedTo?.name ?? quote.createdBy?.name ?? "—"} />
+              </div>
+            </Surface>
+
+            <Surface className="p-5">
+              <div className="flex items-center gap-2">
+                <Clock3 className="size-5 text-muted-foreground" />
+                <h2 className="text-sm font-semibold">Next action</h2>
+              </div>
+              {nextActivity ? (
+                <div className="mt-4">
+                  <p className="text-sm font-semibold">{nextActivity.summary}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{nextActivity.type}{nextActivity.location ? ` · ${nextActivity.location}` : ""}</p>
+                  <p className="mt-3 text-xs font-medium text-primary">{formatDateTime(nextActivity.dueDate)}</p>
+                </div>
+              ) : (
+                <p className="mt-4 text-sm text-muted-foreground">Nothing scheduled.</p>
+              )}
+              {quote.leadId && <Link href={`/leads/${quote.leadId}?tab=activities&schedule=1`} className="btn-secondary btn-sm mt-4 w-full">Schedule activity</Link>}
+            </Surface>
+
+            <Surface className="p-5">
+              <div className="flex items-center gap-2">
+                <FileText className="size-5 text-muted-foreground" />
+                <h2 className="text-sm font-semibold">Deal file</h2>
+              </div>
+              <div className="mt-3 space-y-1.5">
+                <a href={`/quotes/${quote.id}/print`} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm hover:bg-muted/40"><FileText className="size-4 text-muted-foreground" />Quotation</a>
+                {quote.status === "accepted" && <>
+                  <a href={`/quotes/${quote.id}/invoice`} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm hover:bg-muted/40"><ReceiptText className="size-4 text-muted-foreground" />Invoice</a>
+                  <a href={`/quotes/${quote.id}/agreement`} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm hover:bg-muted/40"><FileSignature className="size-4 text-muted-foreground" />Sales agreement</a>
+                  <a href={`/quotes/${quote.id}/delivery-note`} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm hover:bg-muted/40"><Truck className="size-4 text-muted-foreground" />Delivery note</a>
+                </>}
+              </div>
+              <div className="mt-4 border-t border-border pt-3 text-xs text-muted-foreground">
+                {documents.length} filed document{documents.length === 1 ? "" : "s"} · {signatures.length} signature request{signatures.length === 1 ? "" : "s"}
+              </div>
+            </Surface>
+
+            {!quote.invoicedAt && (
+              <div className="rounded-xl border border-amber-400/20 bg-amber-400/5 p-4 text-xs leading-5 text-amber-100/80">
+                <strong className="text-amber-200">Financial ledger not yet available.</strong> This deal view shows quote value, deposit terms and fulfilment markers only; balances and payments remain part of the upcoming Deal Financials module.
               </div>
             )}
-          </Surface>
-
-          <Surface className="p-4">
-            <SectionHeading title="Delivery" description="Fulfilment status for the accepted deal." action={<Truck className="size-4 text-muted-foreground" />} />
-            <dl className="mt-3">
-              <Row label="Scheduled" value={formatDateTime(quote.deliveryScheduledFor)} />
-              <Row label="Delivered" value={formatDateTime(quote.deliveredAt)} />
-              <Row label="Handed over by" value={quote.deliveredByName ?? "—"} />
-              <Row label="Customer handover signature" value={quote.deliverySignatureRef ? "Captured" : "Not captured"} />
-              <Row label="Dealer countersignature" value={quote.dealerSignedAt ? `Signed ${formatDate(quote.dealerSignedAt)}` : "Not signed"} />
-            </dl>
-            {quote.status === "accepted" && <Link href="/deliveries" className="btn-secondary btn-sm mt-3 w-full">Open delivery board</Link>}
-          </Surface>
-
-          <Surface className="p-4">
-            <SectionHeading title="Recent communication" description="Latest messages recorded against the linked lead." action={<MessageSquareText className="size-4 text-muted-foreground" />} />
-            {!quote.lead || quote.lead.communications.length === 0 ? (
-              <p className="mt-4 text-sm text-muted-foreground">No communication recorded against this lead.</p>
-            ) : (
-              <div className="mt-3 space-y-3">
-                {quote.lead.communications.slice(0, 8).map((message) => (
-                  <div key={message.id} className="border-b border-border/60 pb-3 last:border-0 last:pb-0">
-                    <div className="flex items-center justify-between gap-3">
-                      <p className="text-xs font-medium capitalize">{message.type}{message.direction ? ` · ${message.direction}` : ""}</p>
-                      <span className="text-[11px] text-muted-foreground">{formatDateTime(message.occurredAt)}</span>
-                    </div>
-                    {message.subject && <p className="mt-1 text-xs font-medium">{message.subject}</p>}
-                    <p className="mt-1 line-clamp-3 whitespace-pre-wrap text-xs leading-5 text-muted-foreground">{message.body}</p>
-                    <p className="mt-1 text-[11px] text-muted-foreground/70">{message.user.name}</p>
-                  </div>
-                ))}
-              </div>
-            )}
-            {quote.leadId && <Link href={`/leads/${quote.leadId}?tab=comms`} className="btn-secondary btn-sm mt-3 w-full">Open full timeline</Link>}
-          </Surface>
-
-          <Surface className="p-4">
-            <SectionHeading title="Deal documents" description="Fast access to customer-facing output." action={<ReceiptText className="size-4 text-muted-foreground" />} />
-            <div className="mt-3 grid gap-2">
-              <a href={`/quotes/${quote.id}/print`} target="_blank" rel="noreferrer" className="btn-secondary btn-sm justify-start"><FileText className="size-4" />Quotation</a>
-              {quote.status === "accepted" && <>
-                <a href={`/quotes/${quote.id}/invoice`} target="_blank" rel="noreferrer" className="btn-secondary btn-sm justify-start"><ReceiptText className="size-4" />Invoice</a>
-                <a href={`/quotes/${quote.id}/agreement`} target="_blank" rel="noreferrer" className="btn-secondary btn-sm justify-start"><FileSignature className="size-4" />Sales agreement</a>
-                <a href={`/quotes/${quote.id}/delivery-note`} target="_blank" rel="noreferrer" className="btn-secondary btn-sm justify-start"><Truck className="size-4" />Delivery note</a>
-              </>}
-            </div>
-          </Surface>
+          </aside>
         </div>
       </div>
     </EntityDetailShell>
