@@ -51,6 +51,8 @@ type OutboxRow = {
   leaseUntil: Date | null;
   createdAt: Date;
   communicationLoggedAt: Date | null;
+  communicationId?: string | null;
+  providerMessageId?: string | null;
 };
 
 export type BotOutboxRun = { sent: number; retried: number; dead: number; cancelled: number; repairedLogs: number };
@@ -815,7 +817,7 @@ async function repairCommunicationLog(row: OutboxRow): Promise<boolean> {
     // `tenantForOutbox()` resolves an unowned write to DEFAULT_TENANT_ID because the
     // outbox only needs a stable partition key. A Communication is a customer record
     // and carries composite keys to Contact and Lead, so its owner is theirs.
-    create: { type: row.channel, direction: "outbound", subject: FLOW_MARKER, body: storedBody, contactId: row.contactId, leadId: row.leadId, userId: row.actorId, dedupeKey, tenantId: await customerRecordTenantId({ contactId: row.contactId, leadId: row.leadId }) },
+    create: { type: row.channel, direction: "outbound", subject: FLOW_MARKER, body: storedBody, contactId: row.contactId, leadId: row.leadId, userId: row.actorId, dedupeKey, messageId: row.providerMessageId ?? null, tenantId: await customerRecordTenantId({ contactId: row.contactId, leadId: row.leadId }) },
   });
   await prisma.botFlowOutbox.updateMany({ where: { id: row.id, status: "sent", communicationLoggedAt: null }, data: { communicationLoggedAt: new Date() } });
   return true;
@@ -1057,12 +1059,46 @@ async function deliverClaimed(row: OutboxRow): Promise<"sent" | "retry" | "dead"
     // that second statement, and reconciling first would look for the echo while
     // the webhook could still legitimately be recording one.
     await reconcileProviderEcho(result.providerMessageId);
-    await repairCommunicationLog({ ...row, status: "sent" }).catch(() => {});
+    await stampProviderMessageId(row, result.providerMessageId);
+    await repairCommunicationLog({ ...row, status: "sent", providerMessageId: result.providerMessageId }).catch(() => {});
     return "sent";
   }
   await reconcileProviderEcho(result.providerMessageId);
-  await repairCommunicationLog({ ...row, status: "sent" }).catch(async (error) => { await logError("bot-outbox-log", error, row.id).catch(() => {}); });
+  await stampProviderMessageId(row, result.providerMessageId);
+  await repairCommunicationLog({ ...row, status: "sent", providerMessageId: result.providerMessageId }).catch(async (error) => { await logError("bot-outbox-log", error, row.id).catch(() => {}); });
   return "sent";
+}
+
+/**
+ * Put the provider's id (WhatsApp wamid) on the timeline row a staff reply
+ * already has, so the message can be traced to a later async status.
+ * Best effort: the send happened; a missing id must not turn it into a failure.
+ */
+async function stampProviderMessageId(row: OutboxRow, providerMessageId: string | undefined): Promise<void> {
+  if (!providerMessageId || !row.communicationId) return;
+  await prisma.communication
+    .updateMany({ where: { id: row.communicationId, messageId: null }, data: { messageId: providerMessageId } })
+    .catch(() => {});
+}
+
+/**
+ * Apply a provider's ASYNC failure (WhatsApp `failed` status) to the message it
+ * names. The send was accepted — the row says `sent` — so without this the
+ * inbox showed "Sent ✓" for a message that never arrived. `dead` + the failure
+ * class is what deliveryLabel renders as "Not delivered — <reason>".
+ *
+ * Exact match on the provider id within this conversation's tenant; nothing
+ * later in the conversation is blocked, since those messages already went.
+ */
+export async function applyProviderFailure(
+  channel: string,
+  failure: { providerMessageId: string; failureCode: string; detail: string },
+): Promise<number> {
+  const marked = await prisma.botFlowOutbox.updateMany({
+    where: { tenantId: outboxTenantId(), channel, providerMessageId: failure.providerMessageId, status: "sent" },
+    data: { status: "dead", failureCode: failure.failureCode, lastError: failure.detail.slice(0, 1000) },
+  });
+  return marked.count;
 }
 
 /**

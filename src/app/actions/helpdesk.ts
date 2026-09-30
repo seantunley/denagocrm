@@ -11,6 +11,16 @@ import { actingOwnerTenantId, withActingTenantWrite, withActingStaffScope } from
 import { resolveAssignableUser } from "@/lib/tenantActor";
 import { logAudit } from "@/lib/audit";
 import { logError } from "@/lib/errorLog";
+import { sendEmail } from "@/lib/email";
+import { isReplyToAddress } from "@/lib/replyToAddresses";
+import { customerRecordTenantId } from "@/lib/customerRecordTenant";
+import {
+  newReplyMessageId,
+  replyEmailRecipient,
+  replyOutcomeText,
+  replyThreadHeaders,
+  type ReplyEmailOutcome,
+} from "@/lib/helpdeskReplyEmail";
 import {
   requirePermission,
   requireCaseAccess,
@@ -36,8 +46,93 @@ async function loadCase(caseId: string) {
     where: { id: caseId },
     // `tenantId` is selected because the reply path stamps its message with the
     // CASE's owner rather than the replying agent's workspace — see replyToTicket.
-    select: { id: true, tenantId: true, number: true, status: true, contactId: true, priority: true, type: true, mailboxId: true, assignedToId: true, firstResponseAt: true },
+    select: { id: true, tenantId: true, number: true, subject: true, source: true, status: true, contactId: true, priority: true, type: true, mailboxId: true, assignedToId: true, firstResponseAt: true },
   });
+}
+
+type LoadedCase = NonNullable<Awaited<ReturnType<typeof loadCase>>>;
+
+/**
+ * Email a staff reply to the customer, threaded onto their conversation, and
+ * record what happened on the reply (`meta.email`) and — when it went — on the
+ * customer's timeline as an outbound email.
+ *
+ * Runs AFTER the reply committed: the reply exists on the ticket and portal
+ * whatever the mail server says, so a failure is reported, never thrown (a
+ * throw would make the agent resend a reply that was already posted).
+ */
+async function emailTicketReply(item: LoadedCase, replyId: string, body: string, userId: string): Promise<ReplyEmailOutcome> {
+  const [contact, mailbox, chain] = await Promise.all([
+    prisma.contact.findUnique({ where: { id: item.contactId }, select: { email: true } }),
+    item.mailboxId
+      ? prisma.supportMailbox.findUnique({ where: { id: item.mailboxId }, select: { email: true, signature: true } })
+      : Promise.resolve(null),
+    prisma.customerCaseMessage.findMany({
+      where: { caseId: item.id, sourceMessageId: { startsWith: "msg:" } },
+      orderBy: { createdAt: "asc" },
+      select: { sourceMessageId: true },
+    }),
+  ]);
+
+  const target = replyEmailRecipient({ source: item.source, contactEmail: contact?.email, mailboxEmail: mailbox?.email });
+  let outcome: ReplyEmailOutcome;
+  if ("skip" in target) {
+    outcome = { status: "skipped", reason: target.skip };
+  } else {
+    const messageId = newReplyMessageId(randomUUID(), mailbox?.email);
+    const threading = replyThreadHeaders(chain.map((m) => m.sourceMessageId));
+    const subject = `Re: ${item.subject} [C-${item.number}]`;
+    const text = mailbox?.signature ? `${body}\n\n${mailbox.signature}` : body;
+    const sent = await withActingStaffScope(() =>
+      sendEmail({
+        to: target.to,
+        subject,
+        text,
+        messageId,
+        headers: threading,
+        // Replies go to the help desk mailbox, which the IMAP sync files back
+        // onto this ticket. The mailbox address is admin-set; parse it anyway.
+        replyTo: mailbox?.email && isReplyToAddress(mailbox.email) ? mailbox.email : undefined,
+      }),
+    );
+    outcome = sent.ok
+      ? { status: "sent", to: target.to, messageId }
+      : { status: "failed", to: target.to, error: sent.error ?? "Failed to send email" };
+
+    if (sent.ok) {
+      // ponytail: direct Communication write; switch to the shared
+      // recordOutboundMessage helper once that lands.
+      await bestEffort("helpdesk.reply_timeline", `emailed reply on case ${item.id}`, async () =>
+        prisma.communication.create({
+          data: {
+            type: "email",
+            direction: "outbound",
+            subject,
+            body: text,
+            messageId,
+            inReplyTo: threading?.["In-Reply-To"] ?? null,
+            references: threading?.References ?? null,
+            contactId: item.contactId,
+            userId,
+            tenantId: await customerRecordTenantId({ contactId: item.contactId }),
+          },
+        }),
+      );
+    }
+  }
+
+  // Our Message-ID goes on the reply as its sourceMessageId, so a customer
+  // answer that names only it in In-Reply-To still threads onto this ticket.
+  await bestEffort("helpdesk.reply_email_meta", `reply ${replyId} on case ${item.id}`, () =>
+    prisma.customerCaseMessage.update({
+      where: { id: replyId },
+      data: {
+        meta: { email: outcome } as Prisma.InputJsonObject,
+        ...(outcome.status === "sent" ? { sourceMessageId: `msg:${outcome.messageId}` } : {}),
+      },
+    }),
+  );
+  return outcome;
 }
 
 /**
@@ -215,10 +310,11 @@ export async function replyToTicket(caseId: string, formData: FormData): Promise
     // ticket cannot see it. `withTenantWrite` gave every reply the founding tenant
     // while enforcement is dormant, which is right only for the founding tenant's
     // own tickets. `?? actingTenantId` covers a case row that predates stamping.
-    await withActingTenantWrite(async (tx, actingTenantId) => {
+    const replyId: string = await withActingTenantWrite(async (tx, actingTenantId) => {
       const tenantId = item.tenantId ?? actingTenantId;
-      await tx.customerCaseMessage.create({
+      const reply = await tx.customerCaseMessage.create({
         data: { caseId, userId: user.id, direction: "staff", type: "staff", body, tenantId },
+        select: { id: true },
       });
       // Compare-and-set against the status the COMPOSER WAS RENDERED WITH, not
       // against a value re-read moments ago in this same request. Re-reading
@@ -242,8 +338,10 @@ export async function replyToTicket(caseId: string, formData: FormData): Promise
       if (advanced.count !== 1) {
         refuse("Someone else changed this ticket while you were writing. Refresh and send again.");
       }
+      return reply.id;
     });
 
+    const emailed = await emailTicketReply(item, replyId, body, user.id);
     await notifyCustomer(
       item.contactId,
       `Update on ticket C-${item.number}`,
@@ -252,7 +350,7 @@ export async function replyToTicket(caseId: string, formData: FormData): Promise
     );
     await logAudit({
       action: "case.staff_reply",
-      summary: `Replied to ticket C-${item.number}`,
+      summary: `Replied to ticket C-${item.number} (${emailed.status === "sent" ? "emailed" : emailed.status === "failed" ? "email failed" : "portal only"})`,
       contactId: item.contactId,
       user,
       entityType: "CustomerCase",
@@ -261,6 +359,7 @@ export async function replyToTicket(caseId: string, formData: FormData): Promise
     revalidatePath(`/cases/${caseId}`);
     revalidatePath("/cases");
     revalidatePath(`/portal/support/${caseId}`);
+    return { success: replyOutcomeText(emailed) };
   });
 }
 

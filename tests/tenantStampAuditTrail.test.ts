@@ -463,6 +463,8 @@ const CUSTOMER_RECORD_WRITERS = [
   "src/app/actions/communications.ts",
   "src/app/actions/emails.ts",
   "src/app/actions/fulfilment.ts",
+  // An emailed help desk reply, on the customer's timeline — the contact's tenant.
+  "src/app/actions/helpdesk.ts",
   "src/app/actions/leads.ts",
   "src/app/actions/messenger.ts",
   "src/app/actions/portal.ts",

@@ -88,6 +88,12 @@ export async function sendEmail(input: {
    * injection, and "the library probably handles it" is not a control.
    */
   replyTo?: string;
+  /**
+   * Our own `Message-ID` (`<id@domain>`), for mail that must be threaded back:
+   * a customer's answer names it in In-Reply-To, and the IMAP sync matches that
+   * to the ticket. Omitted → nodemailer generates one, as before.
+   */
+  messageId?: string;
 }): Promise<{ ok: boolean; error?: string }> {
   const config = await getSmtpConfig();
   if (!config) return { ok: false, error: "SMTP is not configured (see Settings → Email)." };
@@ -114,6 +120,7 @@ export async function sendEmail(input: {
       // Omitted entirely when absent, so mail that sets no Reply-To is
       // byte-for-byte what it was before this field existed.
       ...(input.replyTo ? { replyTo: input.replyTo } : {}),
+      ...(input.messageId ? { messageId: input.messageId } : {}),
     });
     await noteSmtpOutcome(config, null);
     return { ok: true };
