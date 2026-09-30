@@ -5,6 +5,7 @@ import { BasicBlocksPlugin, BasicMarksPlugin } from "@platejs/basic-nodes/react"
 import { plateToHtmlBody, prettyToken } from "@/lib/docbuilder/plateSerialize";
 import { useEditor } from "@/lib/doceditor/store";
 import type { TextBlock, HeadingBlock } from "@/lib/doceditor/model";
+import { VARIABLES } from "@/lib/doceditor/variables";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -29,11 +30,6 @@ const MergeFieldPlugin = createPlatePlugin({
   node: { isElement: true, isInline: true, isVoid: true, component: MergeFieldElement },
 });
 
-const VARIABLES: { group: string; fields: string[] }[] = [
-  { group: "Customer", fields: ["customer.name", "customer.phone", "customer.email", "customer.address"] },
-  { group: "Quotation", fields: ["quote.number", "quote.date", "quote.validUntil", "quote.subtotal", "quote.vat", "quote.total", "vehicle", "preparedBy"] },
-  { group: "Job card", fields: ["jobcard.number", "jobcard.status", "jobcard.total", "vehicle.reg", "technician"] },
-];
 const EMPTY = [{ type: "p", children: [{ text: "" }] }];
 
 /** Read-only render for inactive blocks — no Plate instance mounted. */
