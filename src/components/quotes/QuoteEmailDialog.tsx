@@ -88,7 +88,7 @@ export default function QuoteEmailDialog({
               <div className="space-y-1.5">
                 <Label htmlFor="quote-email-body">Message</Label>
                 <Textarea id="quote-email-body" rows={9} value={draft.body} onChange={(e) => setDraft({ ...draft, body: e.target.value })} />
-                <p className="text-xs text-muted-foreground">Your email signature is added below the message. Default wording: Settings → Email → Quote email.</p>
+                <p className="text-xs text-muted-foreground">Sent in your branded layout (logo and company details added). Default wording: Settings → Email templates → Quote email.</p>
               </div>
               <div className="flex items-center justify-between gap-3 rounded-xl border border-border bg-muted/30 px-3 py-2 text-sm">
                 <span className="flex min-w-0 items-center gap-2"><Paperclip className="size-4 shrink-0" /><span className="truncate">{draft.fileName}</span></span>

@@ -466,8 +466,6 @@ const CUSTOMER_RECORD_WRITERS = [
   "src/app/actions/leads.ts",
   "src/app/actions/messenger.ts",
   "src/app/actions/portal.ts",
-  // "Email quote" — the timeline entry for the send.
-  "src/app/actions/quoteEmail.ts",
   "src/app/actions/testDrives.ts",
   "src/app/actions/warranty.ts",
   "src/app/actions/whatsapp.ts",

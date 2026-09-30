@@ -23,7 +23,6 @@ import { resolveActingTenant } from "@/lib/tenantContext";
 import { parseReplyTo } from "@/lib/replyToAddresses";
 import { tenantOrigin } from "@/lib/tenantOrigin";
 import { withActingStaffScope } from "@/lib/actingScope";
-import { QUOTE_EMAIL_TEMPLATE_SETTING } from "@/lib/quoteEmail";
 
 export type SendEmailState = { ok?: string; error?: string };
 
@@ -197,15 +196,6 @@ export async function saveServiceReminderSettings(formData: FormData) {
     for (const [key, value] of Object.entries(entries)) {
       await putSetting(key, value);
     }
-    revalidatePath("/settings");
-  });
-}
-
-/** Which Email template "Email quote" starts from. Empty = the built-in wording. */
-export async function saveQuoteEmailSettings(formData: FormData) {
-  return asActionResult(async () => {
-    await requireOwner();
-    await putSetting(QUOTE_EMAIL_TEMPLATE_SETTING, String(formData.get("templateId") ?? "").trim());
     revalidatePath("/settings");
   });
 }

@@ -4,29 +4,19 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { getCurrentUser } from "@/lib/auth";
-import { canAccessQuote, hasPermission } from "@/lib/permissions";
-import { getSetting } from "@/lib/settings";
-import { getCompanyProfile } from "@/lib/companyProfile";
+import { canAccessQuote, hasPermission, type PermissionUser } from "@/lib/permissions";
 import { htmlToPdf } from "@/lib/customDocs";
 import { renderQuotePrintHtml } from "@/lib/quotePrintDocument";
 import { sendEmail } from "@/lib/email";
-import { buildEmailHtml, buildSignature, signatureCompanyFrom } from "@/lib/signature";
-import { escapeHtml } from "@/lib/escapeHtml";
-import { tenantOrigin } from "@/lib/tenantOrigin";
 import { composerReplyToDefault } from "@/lib/replyToDefault";
 import { parseReplyTo } from "@/lib/replyToAddresses";
-import { customerRecordTenantId } from "@/lib/customerRecordTenant";
 import { logAudit } from "@/lib/audit";
 import { formatZAR } from "@/lib/format";
 import { payableTotalCents } from "@/lib/pricing";
 import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
-import {
-  QUOTE_EMAIL_TEMPLATE_SETTING,
-  composeQuoteEmail,
-  deliverQuoteEmail,
-  quoteEmailVars,
-  quotePdfFileName,
-} from "@/lib/quoteEmail";
+import { validateSigningTemplate } from "@/lib/signing/emailTemplates";
+import { tenantEmailContent } from "@/lib/signing/signingEmail";
+import { deliverQuoteEmail, quotePdfFileName } from "@/lib/quoteEmail";
 
 export type QuoteEmailDraft =
   | { ok: true; to: string; subject: string; body: string; fileName: string }
@@ -57,35 +47,43 @@ async function loadQuote(quoteId: string) {
   return quote;
 }
 
-/** What the dialog shows before anything is sent. Sends nothing. */
+type LoadedQuote = NonNullable<Awaited<ReturnType<typeof loadQuote>>>;
+
+/** The quote's merge fields. Company fields are filled from the QUOTE's tenant by tenantEmailContent. */
+async function quoteVars(quote: LoadedQuote, user: PermissionUser) {
+  const billTo = quoteBillTo(quote, await loadBillToFleet(prisma, quote.fleetId));
+  // The person, not the fleet account: "Hi Acme Logistics" reads wrong.
+  const name = (billTo.attention || billTo.name).trim();
+  return {
+    to: billTo.email,
+    vars: {
+      recipient_name: name,
+      first_name: name.split(/\s+/)[0] ?? "",
+      document_title: `Quote Q-${quote.number}`,
+      quote_number: `Q-${quote.number}`,
+      total: formatZAR(Math.round(payableTotalCents(quote))),
+      sender_name: user.name,
+    },
+  };
+}
+
+/** What the dialog shows before anything is sent: the tenant's saved Quote email, merged. Sends nothing. */
 export async function quoteEmailDraft(quoteId: string): Promise<QuoteEmailDraft> {
   return withActingStaffScope(async () => {
     const user = await emailingUser(quoteId);
     if (!user) return { ok: false, error: "Your role can't send quotes to customers." };
     const quote = await loadQuote(quoteId);
     if (!quote) return { ok: false, error: "This quote no longer exists." };
-
-    const billTo = quoteBillTo(quote, await loadBillToFleet(prisma, quote.fleetId));
-    const [templateId, company] = await Promise.all([getSetting(QUOTE_EMAIL_TEMPLATE_SETTING), getCompanyProfile()]);
-    const template = templateId
-      ? await prisma.emailTemplate.findUnique({ where: { id: templateId }, select: { subject: true, body: true } })
-      : null;
-    const vars = quoteEmailVars({
-      // The person, not the fleet account: "Hi Acme Logistics" reads wrong.
-      customerName: billTo.attention || billTo.name,
-      quoteNumber: quote.number,
-      total: formatZAR(Math.round(payableTotalCents(quote))),
-      companyName: company.name,
-      senderName: user.name,
-    });
-    return { ok: true, to: billTo.email, ...composeQuoteEmail(template, vars), fileName: quotePdfFileName(quote.number) };
+    const { to, vars } = await quoteVars(quote, user);
+    const email = await tenantEmailContent("quote", quote.tenantId, vars);
+    return { ok: true, to, subject: email.subject, body: email.text, fileName: quotePdfFileName(quote.number) };
   });
 }
 
 /**
- * The explicit Send. Renders the PDF from the Print / PDF renderer, emails it,
- * and only after a successful send marks a draft quote sent and logs it on the
- * customer's timeline. See deliverQuoteEmail for why the order is the point.
+ * The explicit Send. Renders the PDF from the Print / PDF renderer, emails it in
+ * the tenant's branded layout, and only after a successful send marks a draft
+ * quote sent and audits it. See deliverQuoteEmail for why the order is the point.
  */
 export async function sendQuoteEmail(
   quoteId: string,
@@ -99,10 +97,11 @@ export async function sendQuoteEmail(
     const to = parseReplyTo(String(input.to ?? ""));
     if (!to.ok) return { ok: false, error: `Not a valid email address: ${to.invalid.join(", ")}` };
     if (!to.value) return { ok: false, error: "Enter the customer's email address." };
+    // The per-send edit goes through the SAME validation as the saved template.
     const subject = String(input.subject ?? "").trim();
-    const body = String(input.body ?? "").trim();
-    if (!subject || /[\r\n]/.test(subject)) return { ok: false, error: "Enter a one-line subject." };
-    if (!body) return { ok: false, error: "The message can't be empty." };
+    const body = String(input.body ?? "").replace(/\r\n?/g, "\n").trim();
+    const problem = validateSigningTemplate("quote", subject, body);
+    if (problem) return { ok: false, error: problem };
 
     const quote = await loadQuote(quoteId);
     if (!quote) return { ok: false, error: "This quote no longer exists." };
@@ -110,12 +109,13 @@ export async function sendQuoteEmail(
     if (quote.items.length === 0) return { ok: false, error: "Add at least one line before sending the quote." };
 
     const fileName = quotePdfFileName(quote.number);
-    const profile = await getCompanyProfile();
-    const signature = buildSignature(user, signatureCompanyFrom(profile, await tenantOrigin(quote.tenantId)));
+    const { vars } = await quoteVars(quote, user);
+    // Rendered escaped into the branded shell; CR/LF cannot reach the subject.
+    const email = await tenantEmailContent("quote", quote.tenantId, vars, { subject, body });
     const replyTo = await composerReplyToDefault(user.email);
 
     const result = await deliverQuoteEmail(
-      { to: to.value, subject, body, fileName },
+      { to: to.value, fileName },
       {
         // The same renderer the Print / PDF button serves, so the attachment is
         // exactly what Preview showed.
@@ -130,14 +130,16 @@ export async function sendQuoteEmail(
             return null;
           }
         },
+        // `record`: the shared timeline entry, written once SMTP accepts the mail.
         send: (mail) =>
           sendEmail({
             to: mail.to,
-            subject: mail.subject,
-            text: `${mail.body}\n\n--\n${[user.name, profile.name, profile.phone].filter((s) => s && s.trim()).join(" · ")}`,
-            html: buildEmailHtml(escapeHtml(mail.body).replace(/\n/g, "<br>"), signature),
+            subject: email.subject,
+            text: email.text,
+            html: email.html,
             attachments: mail.attachments,
             replyTo: replyTo || undefined,
+            record: { contactId: quote.contactId, leadId: quote.leadId, userId: user.id, label: "Quote email" },
           }),
         // Only a draft moves, and only the version that was rendered: an edit
         // saved while the PDF was being made bumps updatedAt, and the quote then
@@ -156,25 +158,11 @@ export async function sendQuoteEmail(
               data: { status: "sent" },
             })
           ).count === 1,
-        // The timeline entry, in the Communication shape sendEmailAction writes.
-        // TODO(#694): move to sendEmail's `record` option once that PR lands.
-        record: async (mail) => {
-          await prisma.communication.create({
-            data: {
-              type: "email",
-              direction: "outbound",
-              subject: mail.subject,
-              body: `${mail.body}\n\n[Attachments: ${mail.fileName}]`,
-              leadId: quote.leadId,
-              contactId: quote.contactId,
-              userId: user.id,
-              tenantId: await customerRecordTenantId({ contactId: quote.contactId, leadId: quote.leadId }),
-            },
-          });
+        audit: async (sent) => {
           await logAudit({
             action: "quote.emailed",
-            summary: `Emailed quote Q-${quote.number} (${formatZAR(Math.round(payableTotalCents(quote)))}) to ${mail.to} as ${mail.fileName}${
-              mail.markedSent ? " — marked sent" : ""
+            summary: `Emailed quote Q-${quote.number} (${vars.total}) to ${sent.to} as ${sent.fileName}${
+              sent.markedSent ? " — marked sent" : ""
             }`,
             leadId: quote.leadId,
             contactId: quote.contactId,
