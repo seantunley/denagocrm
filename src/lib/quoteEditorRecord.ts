@@ -18,26 +18,14 @@ export type QuoteForEditor = Prisma.QuoteGetPayload<{
   include: { items: true; fees: true; lead: true; contact: true; createdBy: true };
 }>;
 
-/** The slim version rows the family/successor lookups need. */
-export type QuoteVersionRow = {
-  id: string;
-  number: number;
-  status: string;
-  createdAt: Date;
-  supersededAt: Date | null;
-  revisionOfId: string | null;
-  deletedAt: Date | null;
-};
-
-export const QUOTE_VERSION_SELECT = {
-  id: true,
-  number: true,
-  status: true,
-  createdAt: true,
-  supersededAt: true,
-  revisionOfId: true,
-  deletedAt: true,
-} as const;
+import type { QuoteVersionIndex } from "./quoteVersions";
+export {
+  QUOTE_VERSION_SELECT,
+  loadQuoteVersions,
+  quoteVersionIndex,
+  type QuoteVersionIndex,
+  type QuoteVersionRow,
+} from "./quoteVersions";
 
 export const QUOTE_EDITOR_INCLUDE = {
   items: true,
@@ -47,39 +35,6 @@ export const QUOTE_EDITOR_INCLUDE = {
   createdBy: true,
 } as const;
 
-/**
- * Version lookups precomputed once for a batch of quotes. The list builds
- * hundreds of records from one index; doing it per quote would be quadratic.
- */
-export type QuoteVersionIndex = {
-  rootFor: (id: string) => string;
-  familyOf: (id: string) => QuoteVersionRow[];
-  successorOf: (id: string) => QuoteVersionRow | null;
-};
-
-export function quoteVersionIndex(allVersions: QuoteVersionRow[]): QuoteVersionIndex {
-  const versionById = new Map(allVersions.map((version) => [version.id, version]));
-  const rootFor = (id: string) => {
-    let current = versionById.get(id);
-    const seen = new Set<string>();
-    while (current?.revisionOfId && !seen.has(current.id)) {
-      seen.add(current.id);
-      current = versionById.get(current.revisionOfId) ?? current;
-      if (!current.revisionOfId) break;
-    }
-    return current?.id ?? id;
-  };
-  const versionsByRoot = new Map<string, QuoteVersionRow[]>();
-  for (const version of allVersions) {
-    const root = rootFor(version.id);
-    versionsByRoot.set(root, [...(versionsByRoot.get(root) ?? []), version]);
-  }
-  return {
-    rootFor,
-    familyOf: (id) => versionsByRoot.get(rootFor(id)) ?? [],
-    successorOf: (id) => allVersions.find((version) => version.revisionOfId === id && !version.deletedAt) ?? null,
-  };
-}
 
 /**
  * `fleetNames` maps fleet id → name for the quotes in this batch, already

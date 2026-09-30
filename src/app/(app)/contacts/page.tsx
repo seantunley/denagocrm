@@ -215,7 +215,7 @@ export default async function ContactsPage({
           canManageActivities={canManageActivities}
         />
       )}
-      <ListPager path="/contacts" params={params} page={page} total={total} className="px-0" />
+      <ListPager path="/contacts" page={page} total={total} className="px-0" />
     </div>
   );
 }

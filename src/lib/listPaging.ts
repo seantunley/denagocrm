@@ -34,9 +34,10 @@ export function pageWindow(requested: number, total: number, size = PAGE_SIZE) {
  * search box, `?view=`, and `?edit=` on quotes, which opens the editor — and
  * only replaces `page`. Page 1 drops the param so the canonical URL stays clean.
  */
-export function pageHref(path: string, params: ListSearchParams, page: number): string {
+export function pageHref(path: string, params: ListSearchParams | URLSearchParams, page: number): string {
   const query = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
+  const entries = params instanceof URLSearchParams ? params.entries() : Object.entries(params);
+  for (const [key, value] of entries) {
     if (key === "page" || value == null) continue;
     for (const item of Array.isArray(value) ? value : [value]) query.append(key, item);
   }

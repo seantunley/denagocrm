@@ -252,7 +252,7 @@ export default async function JobCardsPage({
                     </RecordContextMenu>
                   );
                 })}
-                <ListPager path="/jobcards" params={params} page={page} total={total} />
+                <ListPager path="/jobcards" page={page} total={total} />
               </MobileDataList>
             }
             desktop={
@@ -312,7 +312,7 @@ export default async function JobCardsPage({
                     })}
                   </tbody>
                 </table>
-                <ListPager path="/jobcards" params={params} page={page} total={total} className="border-t border-border" />
+                <ListPager path="/jobcards" page={page} total={total} className="border-t border-border" />
               </div>
             }
           />

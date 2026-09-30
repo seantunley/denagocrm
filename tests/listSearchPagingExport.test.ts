@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 
 import { pageHref, pageWindow, parsePage, searchTerms } from "../src/lib/listPaging";
 import { quoteCsv, quoteListWhere, type QuoteExportRow } from "../src/lib/quoteList";
+import { loadQuoteVersions, quoteVersionIndex } from "../src/lib/quoteVersions";
+import { withTenant } from "../src/lib/tenantScope";
 
 /**
  * Gap #17: quote search only covered the newest 200 quotes, and lists had no
@@ -110,7 +112,22 @@ test("the quotes page filters in the database and pages — no newest-200 cap, n
   assert.match(page, /quoteListFilter\(user, \{ q, status \}\)/);
   assert.match(page, /prisma\.quote\.count\(\{ where \}\)/);
   assert.match(page, /where,\s*[\s\S]{0,200}?skip,\s*take,/, "the list query pages with skip/take");
-  assert.match(page, /<ListPager path="\/quotes" params=\{params\}/, "the pager gets EVERY search param");
+  assert.match(page, /<ListPager path="\/quotes" page=\{page\}/);
+});
+
+test("the pager builds its links from the LIVE url, so it carries the current ?edit=, never a stale one", () => {
+  // #696 rewrites ?edit= with history.replaceState as quotes open and close.
+  // Next syncs that into useSearchParams but does not re-render the server page,
+  // so links built from the server's params would reopen a closed quote.
+  const pager = shipped("src/components/ListPager.tsx");
+  assert.match(pager, /^"use client";/);
+  assert.match(pager, /const params = useSearchParams\(\);/);
+  assert.match(pager, /pageHref\(path, params, page - 1\)/);
+  assert.match(pager, /pageHref\(path, params, page \+ 1\)/);
+  // …and pageHref keeps whatever that live URL holds, including edit.
+  const live = new URLSearchParams("edit=cq_now&q=smith&page=2");
+  assert.equal(pageHref("/quotes", live, 3), "/quotes?edit=cq_now&q=smith&page=3");
+  assert.equal(pageHref("/quotes", new URLSearchParams("q=smith&page=2"), 1), "/quotes?q=smith");
 });
 
 test("paging keeps every other param, including ?edit=", () => {
@@ -193,6 +210,60 @@ test("export permission gate is exactly the quotes page's gate", () => {
   assert.doesNotMatch(route, /metadata: \{[^}]*\bq:/);
 });
 
+test("a newest quote keeps its full version history with >2,000 quote rows in the workspace", async () => {
+  // 2,100 older standalone quotes, then the newest family: v1 → v2 → v3 (head).
+  const day = 86_400_000;
+  const row = (id: string, n: number, revisionOfId: string | null, superseded: boolean, tenantId = "t_mine") => ({
+    id, number: n, status: superseded ? "sent" : "draft", createdAt: new Date(Date.UTC(2020, 0, 1) + n * day),
+    supersededAt: superseded ? new Date() : null, revisionOfId, deletedAt: null, tenantId,
+  });
+  const rows = [
+    ...Array.from({ length: 2_100 }, (_, i) => row(`old${i}`, i, null, false)),
+    row("v1", 5_000, null, true),
+    row("v2", 5_001, "v1", true),
+    row("v3", 5_002, "v2", false),
+    // Another workspace's row pointing at ours must never join the family.
+    row("foreign", 5_003, "v3", false, "t_other"),
+  ];
+  const calls: unknown[] = [];
+  const client = {
+    quote: {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      async findMany(args: any) {
+        calls.push(args);
+        let out = rows.filter((r) => !args.where || matches(r, args.where));
+        if (args.orderBy?.createdAt === "asc") out = out.toSorted((a, b) => +a.createdAt - +b.createdAt);
+        return args.take ? out.slice(0, args.take) : out;
+      },
+    },
+  };
+
+  // What main did: the oldest 2,000 rows, workspace-wide. The newest family isn't in them.
+  const oldIndex = quoteVersionIndex(await client.quote.findMany({ orderBy: { createdAt: "asc" }, take: 2_000 }));
+  assert.deepEqual(oldIndex.familyOf("v3"), [], "fixture: the old cap loses the newest quote's history");
+
+  // Now: only the families of the quotes on the page.
+  calls.length = 0;
+  const versions = await withTenant("t_mine", () => loadQuoteVersions(client, ["v3"]));
+  const index = quoteVersionIndex(versions);
+  assert.deepEqual(index.familyOf("v3").map((v) => v.id), ["v1", "v2", "v3"]);
+  assert.equal(index.successorOf("v1")?.id, "v2");
+  assert.equal(index.successorOf("v2")?.id, "v3");
+  assert.equal(versions.length, 3, "loads that family and nothing else — not the other tenant's row");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  assert.ok(calls.every((c: any) => c.take === undefined && c.where.tenantId === "t_mine"), "tenant-named, uncapped");
+  // Starting mid-chain (a deep link to an old revision) finds the whole family too.
+  const fromMiddle = await withTenant("t_mine", () => loadQuoteVersions(client, ["v2"]));
+  assert.deepEqual(quoteVersionIndex(fromMiddle).familyOf("v2").map((v) => v.id), ["v1", "v2", "v3"]);
+
+  // And the page + editor action use it, through the scoped client, with no global cap.
+  const page = shipped("src/app/(app)/quotes/page.tsx");
+  const action = shipped("src/app/actions/quotes.ts");
+  assert.match(page, /loadQuoteVersions\(prisma, quotes\.map\(\(quote\) => quote\.id\)\)/);
+  assert.match(action, /loadQuoteVersions\(prisma, \[quote\.id\]\)/);
+  for (const src of [page, action]) assert.doesNotMatch(src, /take:\s*2_?000\b/);
+});
+
 test("the other lists page in the database instead of capping at 200", () => {
   for (const [file, pathName] of [
     ["src/app/(app)/contacts/page.tsx", "/contacts"],
@@ -203,7 +274,7 @@ test("the other lists page in the database instead of capping at 200", () => {
     const src = shipped(file);
     assert.doesNotMatch(src, /take:\s*200\b/, `${file}: no 200 cap`);
     assert.match(src, /pageWindow\(parsePage\(params\.page\), total\)/, `${file}: paged`);
-    assert.match(src, new RegExp(`<ListPager path="${pathName.replace(/\//g, "\\/")}" params=\\{params\\}`), `${file}: pager keeps params`);
+    assert.match(src, new RegExp(`<ListPager path="${pathName.replace(/\//g, "\\/")}" page=\\{page\\}`), `${file}: pager`);
   }
   // Job cards: search and status now run in the database too.
   const jobcards = shipped("src/app/(app)/jobcards/page.tsx");

@@ -14,8 +14,8 @@ import { leadOptionLabels } from "@/lib/leadOption";
 import { payableTotalCents } from "@/lib/pricing";
 import {
   QUOTE_EDITOR_INCLUDE,
-  QUOTE_VERSION_SELECT,
   buildQuoteEditorRecord,
+  loadQuoteVersions,
   quoteVersionIndex,
 } from "@/lib/quoteEditorRecord";
 import { loadBillToFleets, quoteBillTo } from "@/lib/quoteBillTo";
@@ -86,7 +86,7 @@ export default async function QuotesPage({
   // on the last page) clamps to the last real page instead of showing nothing.
   const total = await prisma.quote.count({ where });
   const { page, skip, take } = pageWindow(parsePage(params.page), total);
-  const [quotes, statusCounts, openQuotes, contacts, openLeads, products, allVersions, validDaysRaw, quoteTerms] = await Promise.all([
+  const [quotes, statusCounts, openQuotes, contacts, openLeads, products, validDaysRaw, quoteTerms] = await Promise.all([
     prisma.quote.findMany({
       where,
       // `id` breaks createdAt ties so a row can't appear on two pages.
@@ -119,18 +119,15 @@ export default async function QuotesPage({
       include: { colors: { orderBy: { name: "asc" } } },
       orderBy: { name: "asc" },
     }),
-    prisma.quote.findMany({
-      orderBy: { createdAt: "asc" },
-      select: QUOTE_VERSION_SELECT,
-      take: 2_000,
-    }),
     getSetting("QUOTE_VALID_DAYS"),
     getSetting("QUOTE_TERMS"),
   ]);
 
   // Shared with quoteEditorRecord(), the action that loads ONE quote for the
   // editor — a revision, or a deep link to a quote older than this list's cap.
-  const versionIndex = quoteVersionIndex(allVersions);
+  // Only the version families of the quotes on THIS page, through the same
+  // scoped client — no workspace-wide cap for a newer quote to fall off.
+  const versionIndex = quoteVersionIndex(await loadQuoteVersions(prisma, quotes.map((quote) => quote.id)));
   // One batched, tenant-scoped lookup for the whole page — a page of rows would
   // otherwise be a round trip per row to print at most a handful of account names.
   const fleetsById = await loadBillToFleets(prisma, quotes.map((quote) => quote.fleetId));
@@ -231,7 +228,7 @@ export default async function QuotesPage({
               ))}
             </MobileTaskList>
           )}
-          <ListPager path="/quotes" params={params} page={page} total={total} />
+          <ListPager path="/quotes" page={page} total={total} />
         </MobileSection>
       </MobileOnly>
       <DesktopOnly>
@@ -337,7 +334,7 @@ export default async function QuotesPage({
                     </RecordContextMenu>
                   );
                 })}
-                <ListPager path="/quotes" params={params} page={page} total={total} />
+                <ListPager path="/quotes" page={page} total={total} />
               </MobileDataList>
             }
             desktop={
@@ -399,7 +396,7 @@ export default async function QuotesPage({
                   </tbody>
                 </table>
                 </div>
-                <ListPager path="/quotes" params={params} page={page} total={total} className="border-t border-border" />
+                <ListPager path="/quotes" page={page} total={total} className="border-t border-border" />
               </Surface>
             }
           />

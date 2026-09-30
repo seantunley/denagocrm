@@ -88,7 +88,7 @@ export default async function ClosedLeadsPage({
           </tbody>
         </table>
       </ResponsiveEntityTable>
-      <ListPager path="/leads/closed" params={params} page={page} total={total} className="px-0" />
+      <ListPager path="/leads/closed" page={page} total={total} className="px-0" />
     </div>
   );
 }

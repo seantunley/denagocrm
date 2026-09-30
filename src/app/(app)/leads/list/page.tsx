@@ -182,7 +182,7 @@ export default async function LeadListPage({ searchParams }: { searchParams: Pro
               <div className="border-t border-border bg-muted/20 px-4 py-3 text-xs text-muted-foreground">
                 {total} lead{total !== 1 ? "s" : ""} · <span className="font-semibold text-foreground">{formatZAR(totalValue)}</span> total
               </div>
-              <ListPager path="/leads/list" params={params} page={page} total={total} />
+              <ListPager path="/leads/list" page={page} total={total} />
             </MobileDataList>
           }
           desktop={
@@ -215,7 +215,7 @@ export default async function LeadListPage({ searchParams }: { searchParams: Pro
                 </tbody>
               </table>
               <p className="border-t border-border px-4 py-2.5 text-xs text-muted-foreground">{total} lead{total !== 1 ? "s" : ""} · total value <span className="font-semibold text-foreground">{formatZAR(totalValue)}</span></p>
-              <ListPager path="/leads/list" params={params} page={page} total={total} className="border-t border-border" />
+              <ListPager path="/leads/list" page={page} total={total} className="border-t border-border" />
             </div>
           }
         />
