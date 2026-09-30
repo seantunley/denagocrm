@@ -272,17 +272,26 @@ export async function sendWhatsAppText(
     if (record) await recordOutboundFailure(logged, record, error);
     return { ok: false, error };
   }
-  const res = await fetch(`${GRAPH}/${creds.phoneNumberId}/messages`, {
-    signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${creds.token}` },
-    body: JSON.stringify({
-      messaging_product: "whatsapp",
-      to: toDigits,
-      type: "text",
-      text: { body: text.slice(0, WA_TEXT_MAX) },
-    }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${GRAPH}/${creds.phoneNumberId}/messages`, {
+      signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${creds.token}` },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        to: toDigits,
+        type: "text",
+        text: { body: text.slice(0, WA_TEXT_MAX) },
+      }),
+    });
+  } catch (e) {
+    // Timeout, DNS, TLS, reset: the customer's timeline still says it failed.
+    // Rethrown so callers (outbox retries, job workers) behave as before.
+    const name = e instanceof Error ? e.name : "Error";
+    if (record) await recordOutboundFailure(logged, record, `Could not reach WhatsApp (${name === "TimeoutError" ? "timed out" : name})`);
+    throw e;
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => null);
     await noteWhatsAppOutcome(creds, res, err);
