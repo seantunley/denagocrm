@@ -14,6 +14,7 @@ import { getBuilderTemplate } from "@/lib/docbuilder/store";
 import {
   parseBuilderRecord,
   recordMatchesTemplate,
+  requiredRecordKind,
   type BuilderRecordKind,
 } from "@/lib/docbuilder/recordBinding";
 import { saveFile } from "@/lib/storage";
@@ -56,10 +57,12 @@ async function validatedBinding(
   const template = await getBuilderTemplate(templateId);
   if (!template) throw new Error("Template not found.");
   if (record && !recordMatchesTemplate(template.key, record.kind)) {
+    const required = requiredRecordKind(template.key);
+    const label = { quote: "a quote", jobcard: "a job card", lead: "a lead", warranty: "a warranty claim" };
     throw new Error(
-      record.kind === "quote"
-        ? `The “${template.name}” template requires a job card record.`
-        : `The “${template.name}” template requires a quote record.`,
+      required && required !== "either"
+        ? `The “${template.name}” template requires ${label[required]} record.`
+        : `The “${template.name}” template can’t be bound to a record.`,
     );
   }
   // Same message either way — "you may not" and "it does not exist" must not be
@@ -74,6 +77,8 @@ async function validatedBinding(
     template,
     quoteId: record?.kind === "quote" ? record.id : undefined,
     jobCardId: record?.kind === "jobcard" ? record.id : undefined,
+    leadId: record?.kind === "lead" ? record.id : undefined,
+    warrantyClaimId: record?.kind === "warranty" ? record.id : undefined,
   };
 }
 
@@ -160,11 +165,13 @@ export async function generateDocEditorDocument(formData: FormData) {
       : legacyRecord(formData);
     if (submittedRecord && !record) throw new ActionRefusal("Choose a valid record.");
 
-    const { quoteId, jobCardId } = await validatedBinding(user, templateId, record);
+    const { quoteId, jobCardId, leadId, warrantyClaimId } = await validatedBinding(user, templateId, record);
     const result = await generateDocEditorPdf({
       templateId,
       quoteId,
       jobCardId,
+      leadId,
+      warrantyClaimId,
       live: true, // filed against a record, so the published layout
     });
     if (!result) refuse("Could not build that document — check the template.");

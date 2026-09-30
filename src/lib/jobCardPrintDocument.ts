@@ -1,9 +1,22 @@
 import "server-only";
 import { prisma } from "@/lib/db";
 import { publishedBuilderTemplateFor } from "@/lib/docbuilder/published";
+import { readTemplateDocument } from "@/lib/doceditor/legacy";
 import { renderDocumentHtml } from "@/lib/doceditor/serialize";
 import { bindCtx, logoDataUri } from "@/lib/signing/render";
 import { embedDocImages } from "@/lib/doceditor/renderGlobals";
+
+/**
+ * The published jobcard layout, parsed — or null, which keeps the original print
+ * page. The print page's switch and this renderer both use it, so an unreadable
+ * published layout sends nobody round a redirect loop.
+ */
+export async function publishedJobCardLayout() {
+  const live = await publishedBuilderTemplateFor("jobcard");
+  if (!live) return null;
+  const read = readTemplateDocument(live.data, live.name);
+  return read.status === "ok" ? { ...live, doc: read.doc } : null;
+}
 
 /**
  * The printed job card from the PUBLISHED single-editor layout — the same
@@ -16,7 +29,7 @@ export async function renderJobCardPrintHtml(opts: {
   photos?: boolean;
   toolbarHtml?: string;
 }): Promise<string | null> {
-  const live = await publishedBuilderTemplateFor("jobcard");
+  const live = await publishedJobCardLayout();
   if (!live) return null;
   const ctx = await bindCtx(null, opts.jobCardId);
 

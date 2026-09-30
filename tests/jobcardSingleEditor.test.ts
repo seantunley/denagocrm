@@ -27,7 +27,7 @@ const loaderKey = Module as unknown as { _load: Loader };
 const realLoad = loaderKey._load;
 loaderKey._load = function (this: unknown, request: string, parent, isMain) {
   if (request === "server-only") return {};
-  if (request === "@/lib/docbuilder/store" && parent?.filename?.endsWith("published.ts")) {
+  if ((request === "./store" || request === "@/lib/docbuilder/store") && parent?.filename?.endsWith("published.ts")) {
     return {
       defaultBuilderTemplateId: async () => fakeDefaultId,
       getLiveBuilderTemplate: async (id: string) => (fakeLive && fakeLive.id === id ? fakeLive : null),
@@ -47,24 +47,23 @@ test("gate: an unpublished jobcard layout keeps the old renderer (null)", async 
   assert.equal(await publishedBuilderTemplateFor("jobcard"), null, "no template at all");
 });
 
-test("gate: a published jobcard layout switches to the builder, parsed", async () => {
+test("gate: a published jobcard layout switches to the builder", async () => {
   fakeDefaultId = "t1";
   fakeLive = { id: "t1", name: "Job card", publishedVersion: 3, data: standardTemplateFor("jobcard") };
   const live = await publishedBuilderTemplateFor("jobcard");
   assert.ok(live);
   assert.equal(live.id, "t1");
-  assert.equal(live.doc.pages.length, 1);
 });
 
-test("gate: published but unreadable data falls back to the old renderer", async () => {
-  fakeDefaultId = "t1";
-  fakeLive = { id: "t1", name: "Job card", publishedVersion: 1, data: { nonsense: true } };
-  assert.equal(await publishedBuilderTemplateFor("jobcard"), null);
-});
-
-test("print page: builder only when published, and never for an old ?tpl= preview", () => {
+test("print page: builder only when published AND readable, never for an old ?tpl= preview", () => {
+  // publishedJobCardLayout = the shared switch + a readable document. The page
+  // and the renderer both use it, so an unreadable published layout keeps the
+  // old page instead of bouncing between the two routes.
+  const render = src("src/lib/jobCardPrintDocument.ts");
+  assert.match(render, /publishedBuilderTemplateFor\("jobcard"\);\s+if \(!live\) return null;\s+const read = readTemplateDocument\(live\.data, live\.name\);\s+return read\.status === "ok" \? \{ \.\.\.live, doc: read\.doc \} : null;/);
+  assert.match(render, /const live = await publishedJobCardLayout\(\);/);
   const page = src("src/app/(print)/jobcards/[id]/print/page.tsx");
-  const gate = page.indexOf('if (!tplId && (await publishedBuilderTemplateFor("jobcard")))');
+  const gate = page.indexOf("if (!tplId && (await publishedJobCardLayout()))");
   assert.ok(gate > 0, "the page decides through the shared helper");
   assert.ok(gate > page.indexOf("requireJobCardReadAccess(id)"), "access is checked before anything else");
   assert.ok(gate < page.indexOf('getDocTemplate("jobcard"'), "the switch runs before the old renderer");
@@ -72,8 +71,6 @@ test("print page: builder only when published, and never for an old ?tpl= previe
   const route = src("src/app/(print)/jobcards/[id]/print/document/route.ts");
   assert.ok(route.indexOf("requireJobCardReadAccess(id)") < route.indexOf("renderJobCardPrintHtml("));
   assert.match(route, /isModuleEnabled\("automotive"\)/, "no layout guards a route handler");
-  const render = src("src/lib/jobCardPrintDocument.ts");
-  assert.match(render, /publishedBuilderTemplateFor\("jobcard"\)/);
   // Uploaded images embedded against the job card's workspace; logo via bindCtx.
   assert.match(render, /embedDocImages\(live\.doc, owner\?\.tenantId \?\? undefined\)/);
   assert.match(render, /renderDocumentHtml\(doc, ctx,/);
