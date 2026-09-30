@@ -5,7 +5,8 @@ import { resolveCampaignRecipientTenant } from "@/lib/tokenTenant";
 import { brandForTenant } from "@/lib/tenantBrand";
 import { escapeHtml } from "@/lib/escapeHtml";
 import { PLATFORM_NAME } from "@/lib/platformIdentity";
-import { GOVERNANCE_TX } from "@/lib/audit";
+import { GOVERNANCE_TX, logAudit } from "@/lib/audit";
+import { logError } from "@/lib/errorLog";
 
 /**
  * MARKETING UNSUBSCRIBE — whose brand, and on which verb.
@@ -118,10 +119,16 @@ export async function GET(_req: Request, { params }: { params: Promise<{ token: 
 }
 
 /** Performs the opt-out. Reached by the form above and by RFC 8058 one-click. */
-export async function POST(_req: Request, { params }: { params: Promise<{ token: string }> }) {
+export async function POST(req: Request, { params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
   let name = PLATFORM_NAME;
   try {
+    // HOW, for the consent evidence: RFC 8058 one-click POSTs exactly this body
+    // from the mail provider; our own confirmation form posts nothing.
+    const body = await req.text().catch(() => "");
+    const method = /List-Unsubscribe=One-Click/i.test(body)
+      ? "one-click unsubscribe from the mail app"
+      : "unsubscribe link in a marketing email";
     const { owner, name: brandName } = await brandFor(token);
     name = brandName;
     // Phase C no-user edge: opt the contact out inside the recipient's tenant scope
@@ -157,7 +164,32 @@ export async function POST(_req: Request, { params }: { params: Promise<{ token:
             where: { id: r.id },
             data: { unsubscribedAt: new Date() },
           });
+          // POPIA evidence of WHEN and HOW. Same transaction: an opt-out with no
+          // record of itself is the gap this closes. Portal and admin opt-outs
+          // already write one; this was the only path that did not.
+          await tx.consentRecord.create({
+            data: {
+              contactId: r.contactId,
+              tenantId: r.tenantId,
+              type: "marketing",
+              granted: false,
+              source: "unsubscribe_link",
+              note: `Unsubscribed via ${method} (campaign ${r.campaignId})`,
+            },
+          });
         }, GOVERNANCE_TX);
+        // Best-effort and AFTER commit, deliberately: an audit write that fails
+        // must never roll back a customer's opt-out. The ConsentRecord above is
+        // the durable evidence; this puts it on the contact's timeline too.
+        await logAudit({
+          action: "consent.unsubscribed",
+          summary: `Unsubscribed from marketing emails via ${method}`,
+          contactId: r.contactId,
+          entityType: "CampaignRecipient",
+          entityId: r.id,
+          metadata: { campaignId: r.campaignId, method },
+          userName: "Unsubscribe link",
+        });
         return true;
       },
       () => false,
@@ -170,7 +202,11 @@ export async function POST(_req: Request, { params }: { params: Promise<{ token:
           : INVALID,
       ),
     );
-  } catch {
+  } catch (error) {
+    // A failed opt-out is a compliance failure somebody must see. Never the
+    // token (it is a credential) and nothing about the person — logError also
+    // runs everything through redactForLog.
+    await logError("unsubscribe", error, "marketing opt-out did not commit");
     return html(message(name, "Something went wrong — please reply to the email and we'll remove you."));
   }
 }
