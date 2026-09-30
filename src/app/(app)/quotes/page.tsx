@@ -406,6 +406,7 @@ export default async function QuotesPage({
 function quoteContextActions(quote: { id: string; status: string }): RecordContextAction[] {
   return [
     { label: "Open editor", href: `/quotes?edit=${quote.id}`, icon: "edit" },
+    { label: "Deal workspace", href: `/deals/${quote.id}`, icon: "view" },
     { label: "Print / PDF", href: `/quotes/${quote.id}/print`, icon: "print", newTab: true },
     ...quotePrintLinks(quote).map((link) => ({ ...link, icon: "print" as const, newTab: true })),
   ];
