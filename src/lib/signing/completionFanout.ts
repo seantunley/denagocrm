@@ -1,6 +1,7 @@
 import "server-only";
 import { prisma } from "@/lib/db";
 import { sendEmail } from "@/lib/email";
+import { signingEmailContent } from "./signingEmail";
 import type { SweepTenantWhere } from "./recoveryScope";
 
 /**
@@ -79,6 +80,8 @@ export function describeError(err: unknown): string {
  * dormant (which is every environment today).
  */
 export async function deliverCompletionEmails(opts: {
+  /** Whose template and brand the email uses — see signingEmail.ts. */
+  requestId: string;
   title: string;
   pdf: Buffer;
   recipients: FanoutRecipient[];
@@ -95,10 +98,14 @@ export async function deliverCompletionEmails(opts: {
       continue; // already has it; re-sending a signed contract is not a fix
     }
 
+    const email = await signingEmailContent("completed", {
+      requestId: opts.requestId, title: opts.title, recipientName: recipient.name,
+    });
     const result = await sendEmail({
       to: recipient.email,
-      subject: `Completed & signed: ${opts.title}`,
-      text: `Hi ${recipient.name},\n\nEveryone has signed "${opts.title}". The final sealed PDF is attached.\n\nDenago Cape Town`,
+      subject: email.subject,
+      text: email.text,
+      html: email.html,
       attachments: [{ filename: `${opts.title}.pdf`, content: opts.pdf, contentType: "application/pdf" }],
     });
 
