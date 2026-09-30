@@ -26,7 +26,11 @@ import {
   ResponsiveDataView,
 } from "@/components/responsive-patterns";
 import { cn } from "@/lib/utils";
-import { stageMeta, priorityMeta, isTerminalStage, jobCardTotals } from "@/lib/workshop-constants";
+import { STAGES, stageMeta, priorityMeta, jobCardTotals } from "@/lib/workshop-constants";
+import { containsText, pageWindow, parsePage, searchTerms } from "@/lib/listPaging";
+import ListPager from "@/components/ListPager";
+
+const TERMINAL_STAGES = STAGES.filter((stage) => stage.terminal).map((stage) => stage.value);
 import {
   getAccessibleJobCardIds,
   getAccessibleVehicleIds,
@@ -48,23 +52,58 @@ const FILTERS = [
 export default async function JobCardsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ status?: string; q?: string }>;
+  searchParams: Promise<{ status?: string; q?: string; page?: string }>;
 }) {
   const user = await requireAnyPermission("jobcards.view_all", "jobcards.view_owned");
-  const { status: requestedStatus = "all", q = "" } = await searchParams;
+  const params = await searchParams;
+  const { status: requestedStatus = "all", q = "" } = params;
   const activeStatus = FILTERS.some((filter) => filter.value === requestedStatus) ? requestedStatus : "all";
-  const query = q.trim().toLowerCase();
   const [jobCardIds, vehicleIds, canManage] = await Promise.all([
     getAccessibleJobCardIds(user),
     getAccessibleVehicleIds(user),
     hasPermission(user, "jobcards.manage"),
   ]);
-  const [jobCards, vehicles] = await Promise.all([
+  // Status and search run in the database over every accessible job card, not
+  // an in-memory filter of the newest 200.
+  const scope = jobCardIds === null ? {} : { id: { in: jobCardIds } };
+  const activeWhere = { AND: [scope, { status: { notIn: TERMINAL_STAGES } }] };
+  const where = {
+    AND: [
+      scope,
+      activeStatus === "active"
+        ? { status: { notIn: TERMINAL_STAGES } }
+        : activeStatus !== "all" ? { status: activeStatus } : {},
+      ...searchTerms(q).map((term) => {
+        const number = /^#?(\d{1,9})$/.exec(term)?.[1];
+        const text = containsText(term);
+        return {
+          OR: [
+            ...(number ? [{ number: Number(number) }] : []),
+            { description: text },
+            { vehicle: { is: { OR: [{ model: text }, { vin: text }, { regNumber: text }] } } },
+            { contact: { is: { OR: [{ firstName: text }, { lastName: text }, { company: text }] } } },
+            { technician: { is: { name: text } } },
+            { bay: { is: { name: text } } },
+          ],
+        };
+      }),
+    ],
+  };
+  const total = await prisma.jobCard.count({ where });
+  const { page, skip, take } = pageWindow(parsePage(params.page), total);
+  const [jobCards, active, vehicles] = await Promise.all([
     prisma.jobCard.findMany({
-      where: jobCardIds === null ? {} : { id: { in: jobCardIds } },
-      orderBy: [{ openedAt: "desc" }],
+      where,
+      orderBy: [{ openedAt: "desc" }, { id: "desc" }],
       include: { vehicle: true, contact: true, items: true, bay: true, technician: true },
-      take: 200,
+      skip,
+      take,
+    }),
+    // The headline figures and technician load cover EVERY active job, not
+    // just the ones on this page.
+    prisma.jobCard.findMany({
+      where: activeWhere,
+      select: { status: true, technicianId: true, technician: { select: { name: true } }, items: true },
     }),
     canManage
       ? prisma.vehicle.findMany({
@@ -76,31 +115,17 @@ export default async function JobCardsPage({
       : Promise.resolve([]),
   ]);
 
-  const active = jobCards.filter((job) => !isTerminalStage(job.status));
   const counts = {
     active: active.length,
-    repair: jobCards.filter((job) => job.status === "repair").length,
-    ready: jobCards.filter((job) => job.status === "ready").length,
+    repair: active.filter((job) => job.status === "repair").length,
+    ready: active.filter((job) => job.status === "ready").length,
     unassigned: active.filter((job) => !job.technicianId).length,
   };
   const wipCents = active.reduce((sum, job) => sum + jobCardTotals(job.items).totalCents, 0);
 
-  const filteredJobs = jobCards.filter((job) => {
-    if (activeStatus === "active" && isTerminalStage(job.status)) return false;
-    if (activeStatus !== "all" && activeStatus !== "active" && job.status !== activeStatus) return false;
-    if (!query) return true;
-    const searchable = [
-      String(job.number),
-      job.description,
-      job.vehicle.model,
-      job.vehicle.vin,
-      job.vehicle.regNumber,
-      contactName(job.contact),
-      job.technician?.name,
-      job.bay?.name,
-    ].filter(Boolean).join(" ").toLowerCase();
-    return searchable.includes(query);
-  });
+  const filteredJobs = jobCards;
+  // Nothing matched AND nothing was filtered: there are no job cards at all.
+  const noneYet = total === 0 && activeStatus === "all" && !q.trim();
 
   const load = new Map<string, number>();
   for (const job of active) {
@@ -187,9 +212,9 @@ export default async function JobCardsPage({
         {filteredJobs.length === 0 ? (
           <EmptyState
             icon={Wrench}
-            title={jobCards.length === 0 ? "No job cards yet" : "No jobs matched this view"}
-            description={jobCards.length === 0 ? "Open the first workshop job when a vehicle arrives." : "Try another status or a broader search."}
-            action={jobCards.length === 0 ? newJobTrigger : <Link href="/jobcards" className={buttonVariants({ variant: "outline", size: "sm" })}>Clear filters</Link>}
+            title={noneYet ? "No job cards yet" : "No jobs matched this view"}
+            description={noneYet ? "Open the first workshop job when a vehicle arrives." : "Try another status or a broader search."}
+            action={noneYet ? newJobTrigger : <Link href="/jobcards" className={buttonVariants({ variant: "outline", size: "sm" })}>Clear filters</Link>}
             className="m-4"
           />
         ) : (
@@ -227,6 +252,7 @@ export default async function JobCardsPage({
                     </RecordContextMenu>
                   );
                 })}
+                <ListPager path="/jobcards" params={params} page={page} total={total} />
               </MobileDataList>
             }
             desktop={
@@ -286,6 +312,7 @@ export default async function JobCardsPage({
                     })}
                   </tbody>
                 </table>
+                <ListPager path="/jobcards" params={params} page={page} total={total} className="border-t border-border" />
               </div>
             }
           />

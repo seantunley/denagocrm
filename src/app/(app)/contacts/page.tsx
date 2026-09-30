@@ -21,6 +21,8 @@ import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { prisma } from "@/lib/db";
+import { pageWindow, parsePage } from "@/lib/listPaging";
+import ListPager from "@/components/ListPager";
 import { listActingTenantStaff } from "@/lib/tenantActor";
 import { fleetPicker } from "@/lib/fleetDirectory";
 import { NO_FLEET_PICKER } from "@/lib/fleetTypes";
@@ -47,11 +49,12 @@ function initials(name: string) {
 export default async function ContactsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; view?: string }>;
+  searchParams: Promise<{ q?: string; view?: string; page?: string }>;
 }) {
   const user = await requireAnyPermission("contacts.view_all", "contacts.view_owned");
   const automotiveOn = await isModuleEnabled("automotive");
-  const { q, view } = await searchParams;
+  const params = await searchParams;
+  const { q, view } = params;
   const cards = view !== "list";
   const [accessibleIds, canCreate, canMerge, canEdit, canCreateLead, canManageActivities] = await Promise.all([
     getAccessibleContactIds(user),
@@ -78,11 +81,18 @@ export default async function ContactsPage({
       searchWhere,
     ],
   };
+  // Paged in the database: every matching contact is reachable, not just the
+  // newest 200. The headline figures count the whole match, not the page.
+  const total = await prisma.contact.count({ where });
+  const { page, skip, take } = pageWindow(parsePage(params.page), total);
+  const matched = { is: { ...where, deletedAt: null } };
 
-  const [contacts, users, picker] = await Promise.all([
+  const [contacts, users, picker, vehicleCount, leadCount] = await Promise.all([
     prisma.contact.findMany({
       where,
-      orderBy: { createdAt: "desc" },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      skip,
+      take,
       include: {
         tags: true,
         owner: true,
@@ -93,17 +103,16 @@ export default async function ContactsPage({
           },
         },
       },
-      take: 200,
     }),
     // The owner picker inside the create dialog: staff of THIS tenant. `User` is
     // a global model, so prisma.user.findMany is not tenant-scoped by anything —
     // the dropdown was offering every user on the platform as a contact owner.
     canCreate ? listActingTenantStaff() : Promise.resolve([]),
     canCreate ? fleetPicker() : Promise.resolve(NO_FLEET_PICKER),
+    prisma.vehicle.count({ where: { contact: matched } }),
+    prisma.lead.count({ where: { status: "open", contact: matched } }),
   ]);
 
-  const vehicleCount = contacts.reduce((total, contact) => total + contact._count.vehicles, 0);
-  const leadCount = contacts.reduce((total, contact) => total + contact._count.leads, 0);
   const queryString = (target: string) =>
     `/contacts?${new URLSearchParams({ ...(q ? { q } : {}), view: target })}`;
 
@@ -115,7 +124,7 @@ export default async function ContactsPage({
         title="Customer relationships"
         description={
           q
-            ? `${contacts.length} result${contacts.length === 1 ? "" : "s"} for “${q}”`
+            ? `${total} result${total === 1 ? "" : "s"} for “${q}”`
             : accessibleIds === null
               ? "Your complete view of every customer, company and conversation."
               : "Customers assigned to you or your teams."
@@ -149,7 +158,7 @@ export default async function ContactsPage({
           )}
         </>}
         stats={[
-          { label: q ? "Matching contacts" : "Contacts shown", value: contacts.length, detail: accessibleIds === null ? "Across the organisation" : "Within your access", icon: UsersRound },
+          { label: q ? "Matching contacts" : "Contacts", value: total, detail: accessibleIds === null ? "Across the organisation" : "Within your access", icon: UsersRound },
           ...(automotiveOn ? [{ label: "Linked vehicles", value: vehicleCount, detail: "Customer-owned fleet", icon: CarFront }] : []),
           { label: "Open opportunities", value: leadCount, detail: leadCount ? "Active customer demand" : "No live opportunities", icon: ArrowRight, tone: leadCount > 0 ? "primary" as const : "default" as const },
           { label: "View", value: cards ? "Cards" : "List", detail: q ? "Filtered results" : "Current workspace", icon: cards ? Grid2X2 : List },
@@ -206,6 +215,7 @@ export default async function ContactsPage({
           canManageActivities={canManageActivities}
         />
       )}
+      <ListPager path="/contacts" params={params} page={page} total={total} className="px-0" />
     </div>
   );
 }

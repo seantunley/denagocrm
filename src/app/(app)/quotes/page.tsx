@@ -1,12 +1,14 @@
 import Link from "next/link";
-import { CheckCircle2, CircleDollarSign, FileText, Plus, Search, Send } from "lucide-react";
+import { CheckCircle2, CircleDollarSign, Download, FileText, Plus, Search, Send } from "lucide-react";
 import { prisma } from "@/lib/db";
 import {
   requireAnyPermission,
-  getAccessibleQuoteIds,
   getAccessibleLeadIds,
   hasPermission,
 } from "@/lib/permissions";
+import { pageHref, pageWindow, parsePage } from "@/lib/listPaging";
+import { quoteListFilter } from "@/lib/quoteListQuery";
+import ListPager from "@/components/ListPager";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 import { leadOptionLabels } from "@/lib/leadOption";
 import { payableTotalCents } from "@/lib/pricing";
@@ -57,10 +59,14 @@ function inputDate(daysFromNow: number) {
 export default async function QuotesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ edit?: string; q?: string; status?: string }>;
+  searchParams: Promise<{ edit?: string; q?: string; status?: string; page?: string }>;
 }) {
   const user = await requireAnyPermission("quotes.view_all", "quotes.view_owned");
-  const accessibleQuoteIds = await getAccessibleQuoteIds(user);
+  const params = await searchParams;
+  const { edit, q, status } = params;
+  // RBAC scope + search + status, as one database filter. The export route
+  // builds the same one, so the CSV holds exactly what this list shows.
+  const { where, all } = await quoteListFilter(user, { q, status });
   /*
    * THE LEAD PICKER NEEDS LEAD RBAC, NOT QUOTE RBAC.
    *
@@ -76,15 +82,24 @@ export default async function QuotesPage({
    * query is the fix; a label is not the place to hide a record.
    */
   const accessibleLeadIds = await getAccessibleLeadIds(user);
-  const { edit, q, status } = await searchParams;
-  const [quotes, contacts, openLeads, products, allVersions, validDaysRaw, quoteTerms] = await Promise.all([
+  // Counted first so an out-of-range ?page= (e.g. after deleting the last row
+  // on the last page) clamps to the last real page instead of showing nothing.
+  const total = await prisma.quote.count({ where });
+  const { page, skip, take } = pageWindow(parsePage(params.page), total);
+  const [quotes, statusCounts, openQuotes, contacts, openLeads, products, allVersions, validDaysRaw, quoteTerms] = await Promise.all([
     prisma.quote.findMany({
-      // Only current heads appear in the list. Older revisions remain available
-      // from the editor's version history and the full record. RBAC-scoped.
-      where: { supersededAt: null, ...(accessibleQuoteIds ? { id: { in: accessibleQuoteIds } } : {}) },
-      orderBy: { createdAt: "desc" },
+      where,
+      // `id` breaks createdAt ties so a row can't appear on two pages.
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       include: QUOTE_EDITOR_INCLUDE,
-      take: 200,
+      skip,
+      take,
+    }),
+    // Headline figures cover every quote this user may see, not just this page.
+    prisma.quote.groupBy({ by: ["status"], where: all, _count: { _all: true } }),
+    prisma.quote.findMany({
+      where: { AND: [all, { status: { not: "declined" } }] },
+      select: { taxInclusive: true, depositType: true, depositValue: true, items: true, fees: true },
     }),
     prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
     // Open leads offered as an optional link when starting a fresh quote.
@@ -116,8 +131,8 @@ export default async function QuotesPage({
   // Shared with quoteEditorRecord(), the action that loads ONE quote for the
   // editor — a revision, or a deep link to a quote older than this list's cap.
   const versionIndex = quoteVersionIndex(allVersions);
-  // One batched, tenant-scoped lookup for the whole page — 200 rows would
-  // otherwise be 200 round trips to print at most a handful of account names.
+  // One batched, tenant-scoped lookup for the whole page — a page of rows would
+  // otherwise be a round trip per row to print at most a handful of account names.
   const fleetsById = await loadBillToFleets(prisma, quotes.map((quote) => quote.fleetId));
   const fleetNames = new Map([...fleetsById].map(([id, fleet]) => [id, fleet.name]));
   const records: QuoteEditorRecord[] = quotes.map((quote) =>
@@ -153,28 +168,18 @@ export default async function QuotesPage({
     basePriceCents: product.basePriceCents,
     colors: product.colors.map((colour) => colour.name),
   }));
-  const needle = q?.trim().toLowerCase() ?? "";
-  const visibleQuotes = quotes.filter((quote) => {
-    const matchesStatus = !status || quote.status === status;
-    // The SAME resolver the row renders with, not a second copy of the rule.
-    // Deciding the addressee here independently meant a fleet quote could not be
-    // found by the fleet's name — the row showed "Acme Logistics" and the search
-    // only ever matched the manager whose contact record is attached to it.
-    const customer = quoteBillTo(quote, fleetsById.get(quote.fleetId ?? "") ?? null).name;
-    const matchesSearch = !needle || [
-      `q-${quote.number}`,
-      customer,
-      quote.lead?.title ?? "",
-    ].some((value) => value.toLowerCase().includes(needle));
-    return matchesStatus && matchesSearch;
-  });
-  const draftCount = quotes.filter((quote) => quote.status === "draft").length;
-  const sentCount = quotes.filter((quote) => quote.status === "sent").length;
-  const acceptedCount = quotes.filter((quote) => quote.status === "accepted").length;
-  const pipelineValue = quotes
-    .filter((quote) => quote.status !== "declined")
-    .reduce((total, quote) => total + payableTotalCents(quote), 0);
-  const filtersActive = Boolean(needle || status);
+  // Search and status are applied by the database (quoteListWhere), across every
+  // quote — including a fleet quote found by the fleet's name, which the row
+  // shows via quoteBillTo.
+  const visibleQuotes = quotes;
+  const countOf = (value: string) => statusCounts.find((row) => row.status === value)?._count._all ?? 0;
+  const draftCount = countOf("draft");
+  const sentCount = countOf("sent");
+  const acceptedCount = countOf("accepted");
+  const quoteCount = statusCounts.reduce((sum, row) => sum + row._count._all, 0);
+  const pipelineValue = openQuotes.reduce((sum, quote) => sum + payableTotalCents(quote), 0);
+  const filtersActive = Boolean(q?.trim() || status);
+  const exportQuery = new URLSearchParams({ ...(q?.trim() ? { q: q.trim() } : {}), ...(status ? { status } : {}) }).toString();
 
   return (
     <QuoteEditorProvider
@@ -186,7 +191,7 @@ export default async function QuotesPage({
       // Passed straight through, NOT filtered against `records`. That check made
       // sense while a missing record was indistinguishable from "new quote", and
       // became the hole this whole redirect was meant to close: `records` holds
-      // the newest 200 current heads, so an older quote, a superseded revision,
+      // one page of current heads, so a quote on another page, a superseded revision,
       // and every bookmark or already-delivered notification pointing at one
       // landed silently on the list. The provider fetches whatever it is given
       // through quoteEditorRecord(), which enforces its own access and reports a
@@ -204,8 +209,8 @@ export default async function QuotesPage({
           }
         />
         <MobileStatPair items={[
-          { label: "Current", value: quotes.length },
-          { label: "Awaiting decision", value: quotes.filter((quote) => quote.status === "sent").length },
+          { label: "Current", value: quoteCount },
+          { label: "Awaiting decision", value: sentCount },
         ]} />
         <MobileSection title="Recent quotes" detail="Tap to review">
           {quotes.length === 0 ? (
@@ -220,11 +225,13 @@ export default async function QuotesPage({
                   detail={quoteBillTo(quote, fleetsById.get(quote.fleetId ?? "") ?? null).name || "Unlinked quote"}
                   meta={`${formatZAR(Math.round(payableTotalCents(quote)))} · valid ${formatDate(quote.validUntil)}`}
                   aside={<StatusPill tone={quote.status === "accepted" ? "success" : quote.status === "declined" ? "danger" : quote.status === "sent" ? "info" : "neutral"}>{quote.status}</StatusPill>}
-                  href={`/quotes?edit=${quote.id}`}
+                  // Keeps the page and filters, so closing the editor lands back where you were.
+                  href={pageHref("/quotes", { ...params, edit: quote.id }, page)}
                 />
               ))}
             </MobileTaskList>
           )}
+          <ListPager path="/quotes" params={params} page={page} total={total} />
         </MobileSection>
       </MobileOnly>
       <DesktopOnly>
@@ -238,7 +245,7 @@ export default async function QuotesPage({
             { label: "Draft", value: draftCount, detail: "Proposals being prepared", icon: FileText, tone: "primary" },
             { label: "Sent", value: sentCount, detail: "With customers for review", icon: Send, tone: sentCount > 0 ? "warning" : "default" },
             { label: "Accepted", value: acceptedCount, detail: "Current accepted quotes", icon: CheckCircle2, tone: "success" },
-            { label: "Open value", value: formatZAR(Math.round(pipelineValue)), detail: `${quotes.length} current quote${quotes.length === 1 ? "" : "s"}`, icon: CircleDollarSign },
+            { label: "Open value", value: formatZAR(Math.round(pipelineValue)), detail: `${quoteCount} current quote${quoteCount === 1 ? "" : "s"}`, icon: CircleDollarSign },
           ]}
           actions={
           <QuoteEditorTrigger className={buttonVariants({ size: "sm" })}>
@@ -263,6 +270,11 @@ export default async function QuotesPage({
             </select>
             <Button variant="secondary" type="submit">Filter</Button>
             {filtersActive && <Link href="/quotes" className={buttonVariants({ variant: "ghost" })}>Clear</Link>}
+            {/* Every matching quote, not just this page. A plain <a>: it is a file download, not a page. */}
+            <a href={`/api/export/quotes${exportQuery ? `?${exportQuery}` : ""}`} download className={buttonVariants({ variant: "outline" })}>
+              <Download className="size-4" />
+              Export CSV
+            </a>
           </form>
         </WorkspaceToolbar>
 
@@ -325,12 +337,13 @@ export default async function QuotesPage({
                     </RecordContextMenu>
                   );
                 })}
+                <ListPager path="/quotes" params={params} page={page} total={total} />
               </MobileDataList>
             }
             desktop={
               <Surface>
                 <div className="border-b border-border px-5 py-4">
-                  <SectionHeading title="Quote register" description={`${visibleQuotes.length} proposal${visibleQuotes.length === 1 ? "" : "s"} match this commercial view.`} />
+                  <SectionHeading title="Quote register" description={`${total} proposal${total === 1 ? "" : "s"} match this commercial view.`} />
                 </div>
                 <div className="overflow-x-auto">
                 <table className="table-base">
@@ -386,6 +399,7 @@ export default async function QuotesPage({
                   </tbody>
                 </table>
                 </div>
+                <ListPager path="/quotes" params={params} page={page} total={total} className="border-t border-border" />
               </Surface>
             }
           />

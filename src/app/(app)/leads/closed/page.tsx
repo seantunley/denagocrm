@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { prisma } from "@/lib/db";
+import { pageWindow, parsePage } from "@/lib/listPaging";
+import ListPager from "@/components/ListPager";
 import { reopenLead } from "@/app/actions/leads";
 import { formatDate, formatZAR } from "@/lib/format";
 import {
@@ -11,20 +13,30 @@ import {
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 import { PageHeader } from "@/components/page-header";
 
-export default async function ClosedLeadsPage() {
+export default async function ClosedLeadsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ page?: string }>;
+}) {
   const user = await requireAnyPermission("leads.view_all", "leads.view_owned");
+  const params = await searchParams;
   const [accessibleIds, canReopen] = await Promise.all([
     getAccessibleLeadIds(user),
     hasPermission(user, "leads.reopen"),
   ]);
+  const where = {
+    status: { in: ["won", "lost"] },
+    ...(accessibleIds ? { id: { in: accessibleIds } } : {}),
+  };
+  // Paged in the database: older closed deals are reachable, not cut at 200.
+  const total = await prisma.lead.count({ where });
+  const { page, skip, take } = pageWindow(parsePage(params.page), total);
   const leads = await prisma.lead.findMany({
-    where: {
-      status: { in: ["won", "lost"] },
-      ...(accessibleIds ? { id: { in: accessibleIds } } : {}),
-    },
-    orderBy: { updatedAt: "desc" },
+    where,
+    orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
     include: { product: true, contact: true },
-    take: 200,
+    skip,
+    take,
   });
 
   return (
@@ -76,6 +88,7 @@ export default async function ClosedLeadsPage() {
           </tbody>
         </table>
       </ResponsiveEntityTable>
+      <ListPager path="/leads/closed" params={params} page={page} total={total} className="px-0" />
     </div>
   );
 }
