@@ -303,7 +303,10 @@ test("Resend takes the resend path", () => {
   // dispatchRequest's claim excludes an already-"sent" request, so the button
   // that relabelled itself "Resend" reported a delivery failure every time.
   const card = shipped("src/components/SigningBlock.tsx");
-  assert.match(card, /preview\.sent \? resendRecordSigning\(kind, id\) : sendRecordSigning\(kind, id\)/);
+  assert.match(
+    card,
+    /preview\.sent \? resendRecordSigning\(kind, id, preview\.requestId\) : sendRecordSigning\(kind, id, preview\.requestId\)/,
+  );
   const preview = shipped("src/components/signing/SignedDocPreview.tsx");
   assert.match(preview, /view\.sent[\s\S]{0,80}Resend/, "the label is what makes taking the wrong path a lie");
 });
