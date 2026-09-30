@@ -18,6 +18,7 @@ import { brandFooterContent, SOCIAL_ICON_PATHS } from "@/lib/companyBrand";
 import { showcaseBlockHtml, showcaseLookHtml } from "./showcaseRender";
 import { layoutRowsFor, resolveOverflowGroups } from "./overflow";
 import { storedFileSrc } from "@/lib/storedFileSrc";
+import { DOCUMENT_FONT_FACE, DOCUMENT_FONT_FAMILY } from "./documentFont";
 
 export type RenderCtx = {
   tokens: Record<string, string>;
@@ -55,7 +56,9 @@ function tok(s: string, ctx: RenderCtx): string {
   return (s ?? "").replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, k: string) => ctx?.tokens?.[k] ?? `{{${k}}}`);
 }
 function fontStack(f: DocStyle["fontFamily"]): string {
-  return f === "serif" ? "Georgia, 'Times New Roman', serif" : f === "mono" ? "'Courier New', monospace" : "Helvetica, Arial, sans-serif";
+  // Sans leads with the embedded Geist (DOCUMENT_FONT_FACE): the PDF renderer has
+  // no Helvetica/Arial, and its fallback printed uneven, jagged letters.
+  return f === "serif" ? "Georgia, 'Times New Roman', serif" : f === "mono" ? "'Courier New', monospace" : `'${DOCUMENT_FONT_FAMILY}', Helvetica, Arial, sans-serif`;
 }
 function money(amount: number, currency: string): string {
   const sign = amount < 0 ? "-" : "";
@@ -414,7 +417,8 @@ export function renderSigningSheets(input: DocumentModel, ctxIn: RenderCtx, logo
     return `<div style="position:absolute;inset:0;padding:${m}px">${rows}</div>${floats}`;
   });
   const css = `
-    .sg-sheet { font-family:${font}; font-size:11pt; line-height:1.5; color:#1e293b; }
+    ${DOCUMENT_FONT_FACE}
+    .sg-sheet { font-family:${font}; font-size:11pt; line-height:1.5; color:#1e293b; -webkit-font-smoothing:antialiased; }
     .sg-sheet * { box-sizing:border-box; }
     .sg-sheet h1 { font-size:20pt; margin:0 0 8px; color:${cssColor(doc.style.ink, "#020617")}; }
     .sg-sheet h2 { font-size:15pt; margin:12px 0 6px; color:${cssColor(doc.style.ink, "#020617")}; }
@@ -457,9 +461,10 @@ export function renderDocumentHtml(
   const pageCss = doc.style.pageSize === "A4" ? "A4" : "letter";
   const size = PAGE_SIZES[doc.style.pageSize];
   return `<!doctype html><html><head><meta charset="utf-8"><style>
+    ${DOCUMENT_FONT_FACE}
     @page { size: ${pageCss}; margin: ${m}px; }
     * { box-sizing: border-box; }
-    body { font-family: ${font}; font-size: 11pt; line-height: 1.5; color: #1e293b; margin: 0; }
+    body { font-family: ${font}; font-size: 11pt; line-height: 1.5; color: #1e293b; margin: 0; -webkit-font-smoothing: antialiased; }
     h1 { font-size: 20pt; margin: 0 0 8px; color: ${cssColor(doc.style.ink, "#020617")}; }
     h2 { font-size: 15pt; margin: 12px 0 6px; color: ${cssColor(doc.style.ink, "#020617")}; }
     h3 { font-size: 12pt; margin: 10px 0 4px; color: ${cssColor(doc.style.ink, "#020617")}; }
