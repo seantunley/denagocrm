@@ -16,6 +16,7 @@ import { saveFile, deleteFile } from "@/lib/storage";
 import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "@/lib/signing/status";
 import { quoteExpired } from "@/lib/quoteExpiry";
 import { defaultBuilderTemplateId } from "@/lib/docbuilder/store";
+import { publishedBuilderTemplateFor } from "@/lib/docbuilder/published";
 import { resolveEnvelope } from "@/lib/signing/autoEnvelope";
 import { renderEnvelopePdf } from "@/lib/signing/render";
 import { createSignatureRequestFromDoc, type SigningIdentityMode } from "@/lib/signing/service";
@@ -221,10 +222,13 @@ export async function startRecordSigning(
       return { ok: true, requestId: existing.requestId, preview: true };
     }
 
-    // Quote signing uses the editable builder template. Job cards deliberately stay
-    // on their current synthesised signing layout until visual parity is verified.
+    // Quote signing uses the editable builder template. A job card uses its builder
+    // layout only once that layout is PUBLISHED (the same switch as its print page);
+    // until then null keeps resolveEnvelope on its synthesised standard layout.
     const templateId =
-      kind === "quote" ? await defaultBuilderTemplateId("quote") : null;
+      kind === "quote"
+        ? await defaultBuilderTemplateId("quote")
+        : (await publishedBuilderTemplateFor("jobcard"))?.id ?? null;
     const envelope = await resolveEnvelope({
       quoteId,
       jobCardId,

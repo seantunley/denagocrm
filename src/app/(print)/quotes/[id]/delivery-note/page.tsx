@@ -1,4 +1,4 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { requireQuoteReadAccess } from "@/lib/permissions";
 import PrintActions from "@/components/PrintActions";
@@ -9,36 +9,8 @@ import { formatDate } from "@/lib/format";
 import { documentTotals, feeRows, includedLines } from "@/lib/pricing";
 import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { isModuleEnabled } from "@/lib/modules/enabled";
-import { deliveryNoteRuns } from "@/lib/checklists/deliveryHandover";
-
-type GuidedEntry = {
-  id: string;
-  labelSnapshot: string;
-  captureSnapshot: string;
-  status: string;
-  note: string | null;
-  value: string | null;
-  skipReason: string | null;
-  photos: Array<{ id: string }>;
-};
-
-function guidedEntryDetail(entry: GuidedEntry): string | null {
-  if (entry.status === "skipped" || entry.status === "na") {
-    return entry.skipReason ? `Skipped — ${entry.skipReason}` : "Skipped";
-  }
-  if (entry.captureSnapshot === "boolean") {
-    if (entry.value === "true") return "Yes";
-    if (entry.value === "false") return "No";
-  }
-  if (entry.captureSnapshot === "text" || entry.captureSnapshot === "number") {
-    return entry.value?.trim() || null;
-  }
-  if (entry.captureSnapshot === "photo" || entry.captureSnapshot === "photo_note") {
-    const evidence = `${entry.photos.length} photo${entry.photos.length === 1 ? "" : "s"}`;
-    return entry.note?.trim() ? `${evidence} · ${entry.note.trim()}` : evidence;
-  }
-  return entry.note?.trim() || entry.value?.trim() || null;
-}
+import { guidedEntryDetail } from "@/lib/doceditor/handoverChecklist";
+import { builderLayoutFor, loadDeliveryEvidence } from "@/lib/deliveryServicePrint";
 
 export default async function DeliveryNotePrintPage({
   params,
@@ -54,6 +26,16 @@ export default async function DeliveryNotePrintPage({
   if (!(await isModuleEnabled("automotive"))) notFound();
   await requireQuoteReadAccess(id);
   const { tpl: tplId, embed, runs: requestedRuns } = await searchParams;
+  // SAFE SWITCH: once the delivery layout is published in the document editor
+  // (or Document Studio previews one with ?tpl=), that layout is the note.
+  // Until then everything below renders exactly as it always has.
+  if (await builderLayoutFor("delivery", tplId)) {
+    const qs = new URLSearchParams();
+    if (tplId) qs.set("tpl", tplId);
+    if (embed) qs.set("embed", embed);
+    if (requestedRuns) qs.set("runs", requestedRuns);
+    redirect(`/quotes/${encodeURIComponent(id)}/delivery-note/document${qs.size ? `?${qs}` : ""}`);
+  }
   const embedded = embed === "1";
   const quote = await prisma.quote.findUnique({
     where: { id },
@@ -61,79 +43,9 @@ export default async function DeliveryNotePrintPage({
   });
   if (!quote) notFound();
 
-  const guidedRuns = quote.tenantId
-    ? await prisma.checklistRun.findMany({
-        where: {
-          tenantId: quote.tenantId,
-          hostType: "quote.delivery",
-          hostId: quote.id,
-          completedAt: { not: null },
-        },
-        orderBy: { completedAt: "desc" },
-        select: {
-          id: true,
-          templateId: true,
-          completedAt: true,
-          template: { select: { name: true, sortOrder: true } },
-          entries: {
-            orderBy: { sortOrder: "asc" },
-            select: {
-              id: true,
-              labelSnapshot: true,
-              captureSnapshot: true,
-              status: true,
-              note: true,
-              value: true,
-              skipReason: true,
-              photos: { select: { id: true } },
-            },
-          },
-        },
-      })
-    : [];
-
-  // A delivery checklist is repeatable by design, but the delivery note should
-  // show the run the customer is actually signing, not every historical retry.
-  //
-  // ONCE SIGNED, THAT IS DECIDED AND THIS MUST NOT RE-DECIDE IT. Choosing the
-  // newest completed run per template on every render meant a checklist re-run
-  // AFTER handover silently replaced the evidence beside a signature the customer
-  // had already given — the document changed after it was signed. The per-entry
-  // snapshots froze the template's wording; nothing froze WHICH RUN.
-  //
-  // completeGuidedDelivery now records the ids at the moment of signing, in the
-  // same write that records the delivery. Where they exist they are the whole
-  // answer, and a later run cannot appear on this note however new it is.
-  /*
-   * BEFORE SIGNING, THE REVIEWER SAYS WHICH RUNS. After it, the record does.
-   *
-   * `deliveryHandoverRunIds` is written at the moment of signing and is the
-   * whole answer once it exists — a later run cannot appear on a signed note.
-   * But during REVIEW there is nothing written yet, and picking "the newest
-   * completed run per template" here while the completion action picked it again
-   * at submission is what let the customer read one note and sign beside
-   * another. The screen now chooses once and passes the ids to both.
-   *
-   * Only ids that are already among this quote's completed runs survive the
-   * intersection below, so the parameter cannot introduce anything; and a signed
-   * note ignores it entirely.
-   */
-  const previewRunIds = (requestedRuns ?? "")
-    .split(",")
-    .map((id) => id.trim())
-    .filter(Boolean);
-  const noteRunIds = quote.deliveryHandoverRunIds.length > 0
-    ? quote.deliveryHandoverRunIds
-    : previewRunIds.filter((id) => guidedRuns.some((run) => run.id === id));
-  const guidedRunsForNote = deliveryNoteRuns(guidedRuns, noteRunIds);
-
-  const signatureDoc = quote.deliverySignatureRef
-    ? await prisma.document.findFirst({
-        where: { quoteId: quote.id, tag: "delivery-signature", deletedAt: null },
-        orderBy: { createdAt: "desc" },
-        select: { id: true },
-      })
-    : null;
+  // Which checklist runs (the signed ones, once signed) and the signature — one
+  // loader shared with the document-editor layout, so the two cannot disagree.
+  const { guidedRunsForNote, signatureDoc } = await loadDeliveryEvidence(quote, requestedRuns);
 
   // The company this document is FROM. getCompanyProfile now inherits the
   // platform-set tenant brand when the tenant has not filled in its own profile.

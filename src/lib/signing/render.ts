@@ -8,6 +8,7 @@ import { parseDocument, type DocumentModel } from "@/lib/doceditor/model";
 import { renderDocumentHtml, renderSigningSheets, type RenderCtx, type StampField } from "@/lib/doceditor/serialize";
 import { htmlToPdf } from "@/lib/customDocs";
 import { readFile } from "@/lib/storage";
+import { embedStoredImage } from "@/lib/storedImage";
 import { getCompanyProfile, companyTokens } from "@/lib/companyProfile";
 import { parseFrozenBrand, type FrozenBrand } from "./frozenBrand";
 import type { SignatureRequest } from "@prisma/client";
@@ -73,9 +74,11 @@ export async function bindCtx(
   } else if (jobCardId) {
     const jc = await prisma.jobCard.findUnique({
       where: { id: jobCardId },
-      include: { items: true, vehicle: true, contact: true, technician: true },
+      include: { items: true, vehicle: true, contact: true, technician: true, serviceRecord: { include: { performedBy: true } } },
     });
-    if (jc) return withCompany(buildJobCardContext(jc));
+    // Embedded, not linked: a signature in the private store has no public link.
+    const signatureSrc = jc?.signedAt ? await embedStoredImage(jc.signatureRef, jc.tenantId) : null;
+    if (jc) return withCompany(buildJobCardContext(jc, signatureSrc));
   }
   // No linked record → still resolve the global brand tokens (unbound).
   return withCompany(null);

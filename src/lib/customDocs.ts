@@ -168,6 +168,11 @@ export async function htmlToPdf(html: string, opts?: HtmlPdfOptions): Promise<Bu
       } catch { return void r.abort(); }
     });
     await page.setContent(html, { waitUntil: "load", timeout: 30000 });
+    // Documents embed their font (doceditor/documentFont). A web font starts
+    // loading only once layout uses it, which is AFTER "load", so printing here
+    // captured the fallback — the jagged letters Sean still saw in the PDF after
+    // #683. Wait for every font the page uses before printing.
+    await page.evaluate(() => document.fonts.ready);
     const useFrame = Boolean(opts?.headerTemplate || opts?.footerTemplate);
     const pdf = await page.pdf({
       format: "A4",
