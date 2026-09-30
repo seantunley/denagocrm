@@ -16,7 +16,7 @@ import { plateToHtmlBody } from "@/lib/docbuilder/plateSerialize";
 import { evaluateCondition } from "@/lib/docbuilder/expr";
 import { brandFooterContent, SOCIAL_ICON_PATHS } from "@/lib/companyBrand";
 import { showcaseBlockHtml, showcaseLookHtml } from "./showcaseRender";
-import { boundRowCount, resolveOverflowGroups } from "./overflow";
+import { layoutRowsFor, resolveOverflowGroups } from "./overflow";
 
 export type RenderCtx = {
   tokens: Record<string, string>;
@@ -27,7 +27,15 @@ export type RenderCtx = {
   // preview — in which case conditionals and showIf columns must render as the
   // placeholder layout, NOT be evaluated against an empty scope.
   bound?: boolean;
+  /** Line-item rows the page layout is resolved for (see overflow.ts layoutRowsFor). Set by the renderers. */
+  layoutRows?: number;
 } | null;
+
+/** Lay a document out for its row count: overflow pages resolved, and the count handed to the blocks. */
+function laidOut(input: DocumentModel, ctx: RenderCtx): { doc: DocumentModel; ctx: RenderCtx } {
+  const rows = layoutRowsFor(input, ctx);
+  return { doc: resolveOverflowGroups(input, rows), ctx: ctx ? { ...ctx, layoutRows: rows } : ctx };
+}
 
 function esc(s: unknown): string {
   // Attribute-safe: also escape quotes so values interpolated into style/src/attr can't break out.
@@ -374,9 +382,9 @@ export function renderEmailHtml(doc: DocumentModel, ctx: RenderCtx, logoDataUri?
  * sheet-relative coordinates (matching the editor's origin — no margin subtract).
  * Overlay fields are intentionally omitted; the client renders live controls.
  */
-export function renderSigningSheets(input: DocumentModel, ctx: RenderCtx, logoDataUri?: string): { width: number; height: number; margin: number; css: string; pages: string[] } {
-  // A no-op for a signing snapshot, whose overflow was resolved at send time.
-  const doc = resolveOverflowGroups(input, boundRowCount(ctx));
+export function renderSigningSheets(input: DocumentModel, ctxIn: RenderCtx, logoDataUri?: string): { width: number; height: number; margin: number; css: string; pages: string[] } {
+  // A signing snapshot was laid out at send time (layoutRows), so this is fixed for it.
+  const { doc, ctx } = laidOut(input, ctxIn);
   const m = doc.style.margin;
   const size = PAGE_SIZES[doc.style.pageSize];
   const font = fontStack(doc.style.fontFamily);
@@ -404,7 +412,7 @@ export function renderSigningSheets(input: DocumentModel, ctx: RenderCtx, logoDa
 
 export function renderDocumentHtml(
   input: DocumentModel,
-  ctx: RenderCtx,
+  ctxIn: RenderCtx,
   logoDataUri?: string,
   opts?: {
     hideOverlays?: boolean;
@@ -420,8 +428,8 @@ export function renderDocumentHtml(
   },
 ): string {
   // Bottom-pinned content that the bound line items would run into moves to a
-  // following page (overflow.ts). A no-op for a signing snapshot, resolved at send.
-  const doc = resolveOverflowGroups(input, boundRowCount(ctx));
+  // following page (overflow.ts). A signing snapshot was laid out at send time.
+  const { doc, ctx } = laidOut(input, ctxIn);
   const font = fontStack(doc.style.fontFamily);
   const m = doc.style.margin;
   const header = doc.header.length ? doc.header.map((b) => blockHtml(b, ctx, doc.style, logoDataUri)).join("") : "";

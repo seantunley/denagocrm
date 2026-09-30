@@ -15,7 +15,7 @@ import {
   standardQuoteTemplate,
   uid,
 } from "./factory";
-import { ACCEPTANCE_GEOMETRY, FOOTER_BAND_HEIGHT, SHOWCASE_INSET, acceptanceHeight } from "./showcaseRender";
+import { ACCEPTANCE_GEOMETRY, FOOTER_BAND_HEIGHT, SHOWCASE_COMPACT_HEADER_HEIGHT, SHOWCASE_INSET, acceptanceHeight } from "./showcaseRender";
 import { SHOWCASE_FOOTER_IMAGE, SHOWCASE_HEADER_IMAGE } from "./showcaseAssets";
 
 export type StandardDocKey =
@@ -272,8 +272,12 @@ function warrantyClaimTemplate(): DocumentModel {
  * flowed content above is. The flow therefore has a height budget: three
  * line-item/fee rows fit above the bottom band on one A4 sheet.
  */
-/** Line-item/fee rows that fit above the terms/acceptance cards, and above the footer band. */
-export const SHOWCASE_ROWS_ABOVE_CARDS = 3;
+/**
+ * Line-item/fee rows: with the full-height hero; on one page at all (the hero
+ * shrinking); and above page 1's footer band once the cards have moved on.
+ */
+export const SHOWCASE_ROWS_FULL_HERO = 3;
+export const SHOWCASE_ROWS_ABOVE_CARDS = 6;
 export const SHOWCASE_ROWS_ABOVE_FOOTER = 9;
 
 export function showcaseQuoteTemplate(): DocumentModel {
@@ -300,6 +304,8 @@ export function showcaseQuoteTemplate(): DocumentModel {
       block.part = part;
       block.imageHeight = 356; // with the text column beside it, leaves room for three table rows
       block.imageFit = "cover"; // scenic product photos fill the hero and fade into the page
+      // One table row is ~33px: each extra row takes that from the hero instead.
+      block.shrink = { afterRows: SHOWCASE_ROWS_FULL_HERO, untilRows: SHOWCASE_ROWS_ABOVE_CARDS, perRow: 33, minHeight: 260 };
     }
     return block;
   };
@@ -363,13 +369,31 @@ export function showcaseQuoteTemplate(): DocumentModel {
       anchor: { mode: "page", blockId: null, x: lineX, y: sigTop + g.sigRowH + 1 }, width: Math.min(160, lineW), height: g.dateRowH - 2,
     }),
   ];
-  // Longer quotes: when the table + totals would reach the cards, the cards
-  // (with the signature and date fields) continue at the top of a second page;
-  // when they would also reach the footer band, it follows them there. The row
-  // counts are measured against this layout in headless Chrome (see the PR).
+  // Longer quotes, in two steps (row counts measured in headless Chrome — see
+  // the PR and tests):
+  //  1. Beyond SHOWCASE_ROWS_FULL_HERO rows the hero shrinks (block `shrink`),
+  //     so up to SHOWCASE_ROWS_ABOVE_CARDS rows still fit on ONE page.
+  //  2. Beyond that the hero returns to full size and the cards (with the
+  //     signature and date fields) continue on a proper second page: a compact
+  //     header band at the top, the cards under it, the footer band at the foot.
+  //     Page 1 keeps its own footer band while the table leaves room for it.
+  const continuationHeader = newBlock("showcaseHeader");
+  if (continuationHeader.type === "showcaseHeader") {
+    continuationHeader.bgImage = SHOWCASE_HEADER_IMAGE;
+    continuationHeader.compact = true;
+  }
   page.overflowGroups = [
-    { maxItems: SHOWCASE_ROWS_ABOVE_CARDS, floatIds: [termsFloat.id, acceptFloat.id], fieldIds: page.overlayFields.map((f) => f.id), topOnNextPage: inset },
-    { maxItems: SHOWCASE_ROWS_ABOVE_FOOTER, floatIds: [footerFloat.id], fieldIds: [] },
+    {
+      maxItems: SHOWCASE_ROWS_ABOVE_CARDS,
+      floatIds: [termsFloat.id, acceptFloat.id],
+      fieldIds: page.overlayFields.map((f) => f.id),
+      topOnNextPage: SHOWCASE_COMPACT_HEADER_HEIGHT + 24,
+      nextPageFloats: [
+        { id: uid(), x: 0, y: 0, width: PAGE.w, block: continuationHeader },
+        { id: uid(), x: 0, y: footerY, width: PAGE.w, block: { ...footerBand, id: uid() } },
+      ],
+    },
+    { maxItems: SHOWCASE_ROWS_ABOVE_FOOTER, floatIds: [footerFloat.id], fieldIds: [], drop: true },
   ];
 
   return {

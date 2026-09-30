@@ -5,9 +5,9 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { parseDocument } from "../src/lib/doceditor/model";
 import { renderDocumentHtml, renderSigningSheets, type RenderCtx } from "../src/lib/doceditor/serialize";
-import { SHOWCASE_ROWS_ABOVE_CARDS, SHOWCASE_ROWS_ABOVE_FOOTER, showcaseQuoteTemplate } from "../src/lib/doceditor/standardTemplates";
+import { SHOWCASE_ROWS_ABOVE_CARDS, SHOWCASE_ROWS_ABOVE_FOOTER, SHOWCASE_ROWS_FULL_HERO, showcaseQuoteTemplate } from "../src/lib/doceditor/standardTemplates";
 import { resolveOverflowGroups } from "../src/lib/doceditor/overflow";
-import { ACCEPTANCE_GEOMETRY, SHOWCASE_INSET, acceptanceHeight } from "../src/lib/doceditor/showcaseRender";
+import { ACCEPTANCE_GEOMETRY, SHOWCASE_COMPACT_HEADER_HEIGHT, SHOWCASE_INSET, acceptanceHeight } from "../src/lib/doceditor/showcaseRender";
 import { SHOWCASE_BAND_ASSETS } from "../src/lib/doceditor/showcaseAssets";
 import { existsSync } from "node:fs";
 import { freezeDocumentGlobals, freezeVehicleShowcase } from "../src/lib/signing/freezeDocument";
@@ -257,17 +257,31 @@ test("one content column: every inset section shares the same left and right edg
   assert.ok(footer.y + 100 <= 1122.52, "footer band ends on the sheet");
 });
 
-test("long quotes: the cards (with signature + date) and then the footer move to page 2 — never overlapped", () => {
-  const rowsCtx = (n: number): RenderCtx => ({ ...ctx({})!, items: Array.from({ length: n }, (_, i) => ({ cells: [{ value: `Line ${i}` }, { value: "1" }, { value: "R 1,00" }, { value: "R 1,00" }] })) });
+test("long quotes: the hero shrinks first; then the cards (with signature + date) get a proper page 2", () => {
+  const rowsCtx = (n: number): RenderCtx => ({ ...ctx({ showcase: showcaseFromProduct({ name: "Denago EV Rover XL", description: null, showcaseTagline: null, showcaseSpecs: null }, PNG) })!, items: Array.from({ length: n }, (_, i) => ({ cells: [{ value: `Line ${i}` }, { value: "1" }, { value: "R 1,00" }, { value: "R 1,00" }] })) });
   const template = showcaseQuoteTemplate();
   const acceptOf = (page: (typeof template.pages)[number]) => page.floatingBlocks.find((f) => f.block.type === "acceptance");
+  const types = (page: (typeof template.pages)[number]) => page.floatingBlocks.map((f) => f.block.type).sort();
+  const heroHeight = (html: string) => Number(/<div style="position:relative;z-index:0;height:(\d+)px/.exec(html)?.[1]);
   const g = ACCEPTANCE_GEOMETRY;
-  for (const n of [0, 1, 3, 4, 6, 9, 10]) {
+  assert.equal(SHOWCASE_ROWS_ABOVE_CARDS, 6, "six rows still fit on one page");
+  for (const n of [0, 1, 3, 4, 5, 6, 7, 8, 9, 10]) {
     const doc = resolveOverflowGroups(template, n);
     assert.ok(doc.pages.every((p) => !p.overflowGroups), "resolved documents carry no groups");
     const cardsMoved = n > SHOWCASE_ROWS_ABOVE_CARDS;
-    const footerMoved = n > SHOWCASE_ROWS_ABOVE_FOOTER;
+    const footerDropped = n > SHOWCASE_ROWS_ABOVE_FOOTER;
     assert.equal(doc.pages.length, cardsMoved ? 2 : 1, `${n} rows: page count`);
+    // The hero gives up ~one table row of height per row between 3 and 6, then is full again.
+    const html0 = renderDocumentHtml(template, rowsCtx(n));
+    const shrinking = n > SHOWCASE_ROWS_FULL_HERO && n <= SHOWCASE_ROWS_ABOVE_CARDS;
+    assert.equal(heroHeight(html0), shrinking ? Math.max(260, 356 - (n - SHOWCASE_ROWS_FULL_HERO) * 33) : 356, `${n} rows: hero height`);
+    if (cardsMoved) {
+      assert.deepEqual(types(doc.pages[1]), ["acceptance", "footerBand", "showcaseHeader", "terms"], `${n} rows: page 2 is a proper page`);
+      assert.ok(doc.pages[1].floatingBlocks.some((f) => f.block.type === "showcaseHeader" && f.block.compact), "with the compact header band");
+      assert.deepEqual(types(doc.pages[0]), footerDropped ? [] : ["footerBand"], `${n} rows: page 1 footer`);
+    } else {
+      assert.deepEqual(types(doc.pages[0]), ["acceptance", "footerBand", "terms"]);
+    }
     const cardsPage = doc.pages[cardsMoved ? 1 : 0];
     const card = acceptOf(cardsPage);
     assert.ok(card, `${n} rows: acceptance card on page ${cardsMoved ? 2 : 1}`);
@@ -277,10 +291,7 @@ test("long quotes: the cards (with signature + date) and then the footer move to
     const sigLineTop = card.y + g.pad + g.headerH + g.headerGap + g.textH + g.nameRowH;
     assert.ok(sig.anchor.y >= sigLineTop && sig.anchor.y + sig.height <= sigLineTop + g.sigRowH, `${n} rows: signature on its line`);
     assert.ok(date.anchor.y >= sigLineTop + g.sigRowH && date.anchor.y + date.height <= sigLineTop + g.sigRowH + g.dateRowH, `${n} rows: date on its line`);
-    if (cardsMoved) assert.equal(card.y, SHOWCASE_INSET, "lifted to the top of page 2");
-    const footerPage = doc.pages[footerMoved ? 1 : 0];
-    assert.ok(footerPage.floatingBlocks.some((f) => f.block.type === "footerBand"), `${n} rows: footer band placed`);
-    assert.equal(doc.pages.flatMap((p) => p.floatingBlocks).length, 3, "nothing lost or duplicated");
+    if (cardsMoved) assert.equal(card.y, SHOWCASE_COMPACT_HEADER_HEIGHT + 24, "just under page 2's header band");
 
     // Rendered: one sheet per page, in print and on the signing surface.
     const html = renderDocumentHtml(template, rowsCtx(n));
@@ -288,15 +299,21 @@ test("long quotes: the cards (with signature + date) and then the footer move to
     assert.equal(renderSigningSheets(template, rowsCtx(n)).pages.length, doc.pages.length);
   }
 
-  // Resolved once (the signing snapshot) it is static: more rows later cannot
-  // move the card away from the signature fields already created for it.
-  const snapshot = parseDocument(JSON.parse(JSON.stringify(resolveOverflowGroups(template, 2))))!;
-  assert.equal(renderSigningSheets(snapshot, rowsCtx(8)).pages.length, 1);
+  // Laid out once (the signing snapshot, as freezeQuoteShowcase does) it is
+  // static: a different live row count later cannot move the card away from
+  // the signature fields created for it, nor resize the hero above it.
+  const snapshot = parseDocument(JSON.parse(JSON.stringify({ ...resolveOverflowGroups(template, 5), layoutRows: 5 })))!;
+  for (const later of [1, 8]) {
+    assert.equal(renderSigningSheets(snapshot, rowsCtx(later)).pages.length, 1);
+    assert.equal(heroHeight(renderDocumentHtml(snapshot, rowsCtx(later))), 356 - 2 * 33, "hero stays as sent");
+  }
   assert.deepEqual(resolveOverflowGroups(snapshot, 8), snapshot);
 
-  // Send time counts the rows exactly as the table is built: charged lines + fees.
+  // Send time counts the rows exactly as the table is built (charged lines +
+  // fees) and pins the count into the snapshot.
   const loader = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../src/lib/docbuilder/vehicleShowcaseLoad.ts"), "utf8");
-  assert.match(loader, /resolveOverflowGroups\(doc, quote \? includedLines\(quote\.items\)\.length \+ feeRows\(quote\.fees\)\.length : 0\)/);
+  assert.match(loader, /const rows = doc\.layoutRows \?\? \(quote \? includedLines\(quote\.items\)\.length \+ feeRows\(quote\.fees\)\.length : 0\);/);
+  assert.match(loader, /resolveOverflowGroups\(\{ \.\.\.doc, layoutRows: rows \}, rows\)/);
 });
 
 test("the send and snapshot-render paths are wired to the frozen vehicle", () => {

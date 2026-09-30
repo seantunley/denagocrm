@@ -223,6 +223,8 @@ export const showcaseHeaderBlockSchema = z.object({
   /** Optional band photo. Only an inline `data:image/…` is ever rendered. */
   bgImage: z.string().default(""),
   showLogo: z.boolean().default(true),
+  /** A slimmer band (no tagline) — the header repeated on a continuation page. */
+  compact: z.boolean().optional(),
 });
 export const infoStripBlockSchema = z.object({
   ...base, type: z.literal("infoStrip"),
@@ -248,6 +250,13 @@ export const vehicleShowcaseBlockSchema = z.object({
   imageHeight: z.number().default(280),
   /** "contain" shows the whole photo (cut-outs); "cover" fills the area (scenic photos). */
   imageFit: z.enum(["contain", "cover"]).default("contain"),
+  /**
+   * Give the page room for more line items: above `afterRows` rows (and up to
+   * `untilRows`, beyond which the layout overflows to a second page instead)
+   * the photo loses `perRow` px per extra row, down to `minHeight`, and the
+   * details switch to a compact setting so the text column shrinks with it.
+   */
+  shrink: z.object({ afterRows: z.number(), untilRows: z.number(), perRow: z.number(), minHeight: z.number() }).optional(),
   /**
    * Set ONLY on a signing snapshot, at send time (lib/signing/service.ts): the
    * vehicle exactly as the signer was shown it — null meaning there was none.
@@ -429,6 +438,10 @@ export const overflowGroupSchema = z.object({
   fieldIds: z.array(z.string()).default([]),
   /** When moved, lift the group so its top sits here; unset keeps its position. */
   topOnNextPage: z.number().optional(),
+  /** Remove the group instead of moving it (it is already repeated on the next page). */
+  drop: z.boolean().optional(),
+  /** Extra content the continuation page gets when THIS group moves (a compact header, a footer). */
+  nextPageFloats: z.array(floatingBlockSchema).optional(),
 });
 export type OverflowGroup = z.infer<typeof overflowGroupSchema>;
 
@@ -458,6 +471,13 @@ export const documentSchema = z.object({
   pages: z.array(pageSchema).min(1),
   header: z.array(blockSchema).default([]),
   footer: z.array(blockSchema).default([]),
+  /**
+   * Set ONLY on a signing snapshot, at send time: the number of line-item rows
+   * the layout was resolved for (overflow pages, the showcase hero's height).
+   * Renders use it instead of the live row count, so a signed layout — and the
+   * signature fields placed on it — never re-flows.
+   */
+  layoutRows: z.number().optional(),
 });
 export type DocumentModel = z.infer<typeof documentSchema>;
 

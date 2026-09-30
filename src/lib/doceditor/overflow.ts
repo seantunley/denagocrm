@@ -6,11 +6,20 @@ export function boundRowCount(ctx: { items?: unknown[]; bound?: boolean } | null
 }
 
 /**
+ * The row count a render lays the document out for: the one frozen into a
+ * signing snapshot at send time when there is one, else the live record's.
+ */
+export function layoutRowsFor(doc: DocumentModel, ctx: { items?: unknown[]; bound?: boolean } | null | undefined): number {
+  return doc.layoutRows ?? boundRowCount(ctx);
+}
+
+/**
  * Resolve every page's overflow groups (see overflowGroupSchema) for a document
- * with `itemCount` line-item rows: a group whose `maxItems` is exceeded moves —
- * its floating blocks AND overlay fields together, so a signature field stays on
- * its line — onto a new page inserted straight after, lifted to `topOnNextPage`
- * when set. Groups that fit stay put.
+ * with `itemCount` line-item rows. A group whose `maxItems` is exceeded leaves
+ * the page — its floating blocks AND overlay fields together, so a signature
+ * field stays on its line — and, unless it is a `drop` group, lands on a new
+ * page inserted straight after (lifted to `topOnNextPage` when set), along with
+ * the group's `nextPageFloats`. Groups that fit stay put.
  *
  * The result carries no overflow groups, so it is idempotent and a document
  * resolved once (a signing snapshot, at send time) is static from then on: its
@@ -22,30 +31,32 @@ export function resolveOverflowGroups(doc: DocumentModel, itemCount: number): Do
   if (!doc.pages.some((page) => page.overflowGroups)) return doc;
   const pages: DocumentPage[] = [];
   for (const { overflowGroups, ...page } of doc.pages) {
-    const moving = (overflowGroups ?? []).filter((group) => itemCount > group.maxItems);
-    if (!moving.length) {
+    const leaving = (overflowGroups ?? []).filter((group) => itemCount > group.maxItems);
+    if (!leaving.length) {
       pages.push(page);
       continue;
     }
     const next: DocumentPage = { id: `${page.id}-continued`, rows: [], overlayFields: [], floatingBlocks: [] };
-    const movedFloats = new Set<string>();
-    const movedFields = new Set<string>();
-    for (const group of moving) {
-      const floats = page.floatingBlocks.filter((f) => group.floatIds.includes(f.id) && !movedFloats.has(f.id));
-      const fields = page.overlayFields.filter((f) => group.fieldIds.includes(f.id) && !movedFields.has(f.id));
+    const gone = { floats: new Set<string>(), fields: new Set<string>() };
+    for (const group of leaving) {
+      const floats = page.floatingBlocks.filter((f) => group.floatIds.includes(f.id) && !gone.floats.has(f.id));
+      const fields = page.overlayFields.filter((f) => group.fieldIds.includes(f.id) && !gone.fields.has(f.id));
+      floats.forEach((f) => gone.floats.add(f.id));
+      fields.forEach((f) => gone.fields.add(f.id));
+      next.floatingBlocks.push(...(group.nextPageFloats ?? []));
+      if (group.drop) continue;
       const top = Math.min(...floats.map((f) => f.y), ...fields.map((f) => f.anchor.y));
       const dy = group.topOnNextPage !== undefined && Number.isFinite(top) ? group.topOnNextPage - top : 0;
-      for (const f of floats) { movedFloats.add(f.id); next.floatingBlocks.push({ ...f, y: f.y + dy }); }
-      for (const f of fields) { movedFields.add(f.id); next.overlayFields.push({ ...f, anchor: { ...f.anchor, y: f.anchor.y + dy } }); }
+      next.floatingBlocks.push(...floats.map((f) => ({ ...f, y: f.y + dy })));
+      next.overlayFields.push(...fields.map((f) => ({ ...f, anchor: { ...f.anchor, y: f.anchor.y + dy } })));
     }
-    pages.push(
-      {
-        ...page,
-        floatingBlocks: page.floatingBlocks.filter((f) => !movedFloats.has(f.id)),
-        overlayFields: page.overlayFields.filter((f) => !movedFields.has(f.id)),
-      },
-      next,
-    );
+    pages.push({
+      ...page,
+      floatingBlocks: page.floatingBlocks.filter((f) => !gone.floats.has(f.id)),
+      overlayFields: page.overlayFields.filter((f) => !gone.fields.has(f.id)),
+    });
+    // A drop-only overflow (nothing to carry) adds no empty page.
+    if (next.floatingBlocks.length || next.overlayFields.length) pages.push(next);
   }
   return { ...doc, pages };
 }

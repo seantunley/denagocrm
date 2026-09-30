@@ -45,7 +45,7 @@ export async function withVehicleShowcase(ctx: MergeContext, quote: QuoteForPrin
  */
 export async function freezeQuoteShowcase(doc: DocumentModel, quoteId: string | null | undefined): Promise<DocumentModel> {
   const showcase = hasVehicleShowcase(doc);
-  const overflow = doc.pages.some((page) => page.overflowGroups);
+  const overflow = doc.pages.some((page) => page.overflowGroups) || doc.layoutRows !== undefined;
   if (!showcase && !overflow) return doc;
   const quote = quoteId
     ? await prisma.quote.findUnique({ where: { id: quoteId }, include: { items: true, fees: true, lead: { include: { product: true } } } })
@@ -54,7 +54,11 @@ export async function freezeQuoteShowcase(doc: DocumentModel, quoteId: string | 
   // has now: the signature fields are created from this snapshot, so they must
   // already be on the page (and at the spot) where they will be signed. Counted
   // exactly as buildQuoteContext builds the table: charged lines + fee rows.
-  let frozen = resolveOverflowGroups(doc, quote ? includedLines(quote.items).length + feeRows(quote.fees).length : 0);
+  // `layoutRows` pins the count into the snapshot, so every later render of it
+  // (signer view, sealed PDF) lays out — hero height included — exactly as sent.
+  // (A document already laid out keeps its count — its groups are resolved.)
+  const rows = doc.layoutRows ?? (quote ? includedLines(quote.items).length + feeRows(quote.fees).length : 0);
+  let frozen = resolveOverflowGroups({ ...doc, layoutRows: rows }, rows);
   if (!showcase) return frozen;
   let vehicle = quote ? await quoteVehicle(quote) : null;
   if (!vehicle && quote) {
