@@ -5,6 +5,7 @@ import { readFile } from "@/lib/storage";
 import { sendEmail } from "@/lib/email";
 import { logError } from "@/lib/errorLog";
 import { runInTenantScope } from "@/lib/tenantScope";
+import { getCompanyProfile } from "@/lib/companyProfile";
 import { configuredSigningCertificateInfo, sealedPdfSignature } from "@/lib/pdf/seal";
 import { logSignEvent } from "./events";
 import { runPostCompletion } from "./postComplete";
@@ -191,10 +192,11 @@ async function executeCompletionEmail(job: SigningJob): Promise<void> {
   const request = await completionRequest(job);
   if (!request.signedPdfRef) throw new Error("Completed request has no sealed PDF reference");
   const pdf = await readFile(request.signedPdfRef);
+  const company = await getCompanyProfile(job.tenantId);
   const result = await sendEmail({
     to: recipient.email,
     subject: `Completed & signed: ${request.title}`,
-    text: `Hi ${recipient.name},\n\nEveryone has signed "${request.title}". The final sealed PDF is attached.\n\nDenago Cape Town`,
+    text: `Hi ${recipient.name},\n\nEveryone has signed "${request.title}". The final sealed PDF is attached.\n\n${company.name}`,
     attachments: [{ filename: `${request.title}.pdf`, content: pdf, contentType: "application/pdf" }],
   });
   if (!result.ok) throw new Error(result.error || `SMTP did not accept ${recipient.email}`);

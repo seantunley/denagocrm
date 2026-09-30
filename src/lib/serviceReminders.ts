@@ -7,6 +7,7 @@ import { sendSms } from "./sms";
 import { logAudit } from "./audit";
 import { computeDue } from "./serviceDue";
 import { formatDate } from "./format";
+import { companyContactPhrase, companyTeamSignoff, getCompanyProfile } from "./companyProfile";
 
 /**
  * Emails customers whose vehicle is due (or overdue) for a service.
@@ -29,6 +30,7 @@ export async function runServiceReminders(): Promise<number> {
     },
   });
   const firstUser = await resolveTenantActor();
+  const company = await getCompanyProfile();
 
   let sent = 0;
   for (const vehicle of vehicles) {
@@ -50,7 +52,7 @@ export async function runServiceReminders(): Promise<number> {
       due_date: due.nextDueDate ? formatDate(due.nextDueDate) : "soon",
       due_km: due.nextDueKm != null ? `${due.nextDueKm.toLocaleString()} km` : "",
       current_km: due.currentKm != null ? `${due.currentKm.toLocaleString()} km` : "",
-      user_name: "The Denago Cape Town team",
+      user_name: companyTeamSignoff(company),
       email: vehicle.contact.email,
       phone: vehicle.contact.phone ?? "",
       value: "",
@@ -117,6 +119,7 @@ export async function remindVehicleService(
   const template = templateId
     ? await prisma.emailTemplate.findUnique({ where: { id: templateId } })
     : null;
+  const company = await getCompanyProfile();
 
   const vars = {
     name: `${contact.firstName} ${contact.lastName ?? ""}`.trim(),
@@ -126,7 +129,7 @@ export async function remindVehicleService(
     due_date: dueWhen,
     due_km: due.nextDueKm != null ? `${due.nextDueKm.toLocaleString()} km` : "",
     current_km: due.currentKm != null ? `${due.currentKm.toLocaleString()} km` : "",
-    user_name: "The Denago Cape Town team",
+    user_name: companyTeamSignoff(company),
     email: contact.email ?? "",
     phone: contact.phone ?? "",
     value: "",
@@ -141,12 +144,12 @@ export async function remindVehicleService(
     subject = template ? renderTemplate(template.subject, vars) : subject;
     body = template
       ? renderTemplate(template.body, vars)
-      : `Hi ${first},\n\nA quick reminder that your ${vehicle.model} is due for a service (${dueWhen}). Reply or call us on 073 789 3438 and we'll book you in.\n\nWarm regards,\nDenago Cape Town`;
+      : `Hi ${first},\n\nA quick reminder that your ${vehicle.model} is due for a service (${dueWhen}). Reply or call us${company.phone ? ` on ${company.phone}` : ""} and we'll book you in.\n\nWarm regards,\n${company.name}`;
     const r = await sendEmail({ to: contact.email, subject, text: body });
     if (!r.ok) return { ok: false, error: r.error ?? "Email failed" };
   } else {
     channel = "sms";
-    body = `Hi ${first}, your ${vehicle.model} is due for a service (${dueWhen}). Call Denago Cape Town on 073 789 3438 to book. Reply STOP to opt out.`;
+    body = `Hi ${first}, your ${vehicle.model} is due for a service (${dueWhen}). Call ${companyContactPhrase(company)} to book. Reply STOP to opt out.`;
     const r = await sendSms(contact.phone!, body);
     if (!r.ok) return { ok: false, error: r.error ?? "SMS failed" };
   }

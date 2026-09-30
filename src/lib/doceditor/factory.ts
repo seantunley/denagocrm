@@ -104,7 +104,7 @@ export function newBlock(type: BlockType): DocumentBlock {
         nameLabel: "Customer Name", nameValue: "{{customer.name}}", signatureLabel: "Signature", dateLabel: "Date",
       };
     case "footerBand":
-      return { id: uid(), type, ...emptyLayout, subtitle: "Authorised Denago EV Dealer", bg: "#020617", accent: "#ea580c", bgImage: "" };
+      return { id: uid(), type, ...emptyLayout, subtitle: "{{company.tagline}}", bg: "#020617", accent: "#ea580c", bgImage: "" };
   }
 }
 
@@ -145,7 +145,7 @@ export function standardQuoteTemplate(): DocumentModel {
       ]),
       newRow([
         newColumn(50, [infoCard("PREPARED FOR", "{{customer.name}}", "{{customer.phone}}\n{{customer.email}}", "#ea580c")]),
-        newColumn(50, [infoCard("VEHICLE OF INTEREST", "{{vehicle}}", "Demo drives available at your estate or our Maitland showroom.", "#020617")]),
+        newColumn(50, [infoCard("VEHICLE OF INTEREST", "{{vehicle}}", "Demo drives available at your estate or our showroom.", "#020617")]),
       ]),
       newRow([newColumn(100, [newBlock("lineItems")])]),
       newRow([newColumn(100, [total])]),

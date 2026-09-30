@@ -111,7 +111,7 @@ function StampView({ s }: { s: StampField }) {
 export function SignSurface({ token, title, recipientName, sheets, fields, stamps = [], senderName }: { token: string; title: string; recipientName: string; sheets: Sheets; fields: Field[]; stamps?: StampField[]; senderName?: string }) {
   // The company that sent this document, for the two places the copy names them.
   // Undefined keeps the original literal — see tests/customerBranding.test.ts.
-  const sender = senderName ?? "Denago";
+  const sender = senderName ?? "The sender";
   const [values, setValues] = useState<Record<string, string>>({});
   const [name, setName] = useState(recipientName);
   const [consent, setConsent] = useState(false);

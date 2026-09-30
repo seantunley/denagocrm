@@ -3,7 +3,8 @@ import { formatDate, formatZAR } from "@/lib/format";
 import { storedFileSrc } from "@/lib/storedFileSrc";
 import { documentTotals, feeRows, includedLines, lineNetCents } from "@/lib/pricing";
 import { quoteBillTo, type BillToFleet } from "@/lib/quoteBillTo";
-import { defaultTemplate, type DocTemplate } from "@/lib/docTemplates";
+import { defaultTemplate, withCompanyDetails, type DocTemplate } from "@/lib/docTemplates";
+import type { CompanyProfile } from "@/lib/companyBrand";
 
 export type QuoteForPrint = Prisma.QuoteGetPayload<{
   include: { items: true; fees: true; lead: { include: { product: true } }; contact: true; createdBy: true };
@@ -16,7 +17,10 @@ export default function QuotePrintDoc({
   quote,
   fleet,
   template,
+  company,
 }: {
+  /** The company the quote is FROM — getCompanyProfile(). */
+  company: CompanyProfile;
   quote: QuoteForPrint;
   /** The account the quote is billed to, already resolved and tenant-checked —
    *  required, not optional, so no caller can silently print the manager's name
@@ -24,7 +28,7 @@ export default function QuotePrintDoc({
   fleet: BillToFleet | null;
   template?: DocTemplate;
 }) {
-  const tpl = template ?? defaultTemplate("quote");
+  const tpl = template ?? withCompanyDetails(defaultTemplate("quote"), company);
   const lineNet = lineNetCents;
   // Fees and delivery are part of the price the customer is being quoted — so
   // they are itemised as rows as well as counted in the total. A total that
@@ -57,8 +61,8 @@ export default function QuotePrintDoc({
         <div className="flex items-center justify-between rounded-xl bg-[#020617] px-7 py-5">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src={tpl.logoUrl ?? "/branding/denago-logo-email.png"}
-            alt="Denago Cape Town EV"
+            src={tpl.logoUrl || company.logoUrl || "/branding/denago-logo-email.png"}
+            alt={company.name}
             className="h-11 w-auto object-contain"
           />
           <div className="text-right">
@@ -99,7 +103,7 @@ export default function QuotePrintDoc({
             </p>
             {quote.lead?.color && <p className="text-slate-600">Colour: {quote.lead.color}</p>}
             <p className="text-slate-600 text-xs mt-1">
-              Demo drives available at your estate or our Maitland showroom.
+              Demo drives available at your estate or our showroom.
             </p>
           </div>
         </div>
@@ -218,18 +222,18 @@ export default function QuotePrintDoc({
                       <>
                         {quote.dealerSignatureRef?.startsWith("http") && (
                           // eslint-disable-next-line @next/next/no-img-element
-                          <img src={storedFileSrc(quote.dealerSignatureRef) ?? undefined} alt="Denago signature" className="h-14 w-auto mb-1" />
+                          <img src={storedFileSrc(quote.dealerSignatureRef) ?? undefined} alt={`${company.name} signature`} className="h-14 w-auto mb-1" />
                         )}
                         <div className="border-t-2 border-slate-900 pt-2">
                           <p className="text-xs text-slate-600">
-                            For Denago Cape Town — <b>{quote.dealerSignedByName}</b>,{" "}
+                            For {company.name} — <b>{quote.dealerSignedByName}</b>,{" "}
                             {formatDate(quote.dealerSignedAt)}
                           </p>
                         </div>
                       </>
                     ) : (
                       <div className="border-t-2 border-slate-900 pt-2 mt-14">
-                        <p className="text-xs text-slate-500">Denago Cape Town &amp; date</p>
+                        <p className="text-xs text-slate-500">{company.name} &amp; date</p>
                       </div>
                     )}
                   </div>
@@ -261,19 +265,19 @@ export default function QuotePrintDoc({
             <div className="border-t-2 border-orange-600 pt-4 flex items-start justify-between gap-6 flex-wrap no-break">
               <div className="text-[10px] text-slate-500 leading-4">
                 <p className="font-bold text-slate-700 text-[11px]">
-                  Denago Cape Town — Authorized Denago EV Dealer
+                  {[company.name, company.tagline].filter(Boolean).join(" — ")}
                 </p>
                 {tpl.footerLines.map((line, i) => (
                   <p key={i}>{line}</p>
                 ))}
               </div>
-              <div className="flex items-center gap-1.5 shrink-0">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src="/branding/social-facebook.png" alt="Facebook" className="h-5 w-5" />
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src="/branding/social-instagram.png" alt="Instagram" className="h-5 w-5" />
-                <span className="text-[10px] text-slate-500">@denago_capetown</span>
-              </div>
+              {company.instagram && (
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src="/branding/social-instagram.png" alt="Instagram" className="h-5 w-5" />
+                  <span className="text-[10px] text-slate-500">{company.instagram}</span>
+                </div>
+              )}
             </div>
           )}
         </div>

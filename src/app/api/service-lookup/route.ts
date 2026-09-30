@@ -12,6 +12,7 @@ import { serviceOtpKey } from "@/lib/serviceOtp";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { sendSms, isSmsConfigured, maskPhone } from "@/lib/sms";
 import { sendEmail, isSmtpConfigured } from "@/lib/email";
+import { getCompanyProfile } from "@/lib/companyProfile";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -119,12 +120,13 @@ export async function POST(req: NextRequest) {
     // digest is trivially reversible from a DB dump.
     const codeHash = await bcrypt.hash(code, 10);
 
+    const company = await getCompanyProfile(auth.tenantId);
     let channel: "sms" | "email" | null = null;
     let target = "";
     if (phone && (await isSmsConfigured())) {
       const res = await sendSms(
         phone,
-        `Denago Cape Town: your verification code is ${code}. It expires in 10 minutes. If you didn't request this, ignore this message.`
+        `${company.name}: your verification code is ${code}. It expires in 10 minutes. If you didn't request this, ignore this message.`
       );
       if (res.ok) {
         channel = "sms";
@@ -134,8 +136,8 @@ export async function POST(req: NextRequest) {
     if (!channel && email && (await isSmtpConfigured())) {
       const res = await sendEmail({
         to: email,
-        subject: "Your Denago Cape Town verification code",
-        text: `Your verification code is ${code}.\n\nIt expires in 10 minutes. If you didn't request this, you can ignore this email.\n\nDenago Cape Town`,
+        subject: `Your ${company.name} verification code`,
+        text: `Your verification code is ${code}.\n\nIt expires in 10 minutes. If you didn't request this, you can ignore this email.\n\n${company.name}`,
       });
       if (res.ok) {
         channel = "email";

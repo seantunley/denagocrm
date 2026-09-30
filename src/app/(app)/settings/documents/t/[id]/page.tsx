@@ -164,12 +164,12 @@ export default async function TemplateEditorPage({
               </select>
               <label className="mt-2 flex items-center gap-2 text-[13px] text-foreground/90">
                 <input type="checkbox" name="dealerCounterSign" defaultChecked={template.signature.dealerCounterSign} className="h-4 w-4 accent-orange-600" />
-                Show the Denago counter-signature box
+                Show the dealer counter-signature box
               </label>
             </div>
             <div>
               <label className={label}>Footer lines — one per line, maximum four</label>
-              <textarea name="footerLines" rows={3} defaultValue={template.footerLines.join("\n")} className={input} />
+              <textarea name="footerLines" rows={3} defaultValue={template.footerLines.join("\n")} placeholder="Leave empty to use the address, phone, email and website from Settings → Company" className={input} />
             </div>
             <Button type="submit">Save operational template</Button>
           </form>

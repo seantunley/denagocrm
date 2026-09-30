@@ -5,6 +5,7 @@ import { resolveTenantCredential } from "./settings";
 import { currentTenantScope } from "./tenantScope";
 import { sendEmail } from "./email";
 import { logAudit } from "./audit";
+import { getCompanyProfile } from "./companyProfile";
 
 const REVIEW_MARKER = "Google review request";
 
@@ -35,16 +36,19 @@ export async function sendReviewRequest(
 
   const reviewLink = `https://search.google.com/local/writereview?placeid=${encodeURIComponent(placeId)}`;
   const firstName = contact.firstName;
+  // The workspace's own Company Profile, not Denago's name and landline.
+  const company = await getCompanyProfile(await customerRecordTenantId({ contactId }));
+  const callUs = company.phone ? ` on ${company.phone}` : "";
   const text =
     occasion === "delivery"
-      ? `Hi ${firstName},\n\nCongratulations on your new ${refText} — welcome to the Denago Cape Town family! 🎉\n\nIf you're enjoying it, it would mean the world to us if you shared your experience in a quick Google review (it takes under a minute):\n\n${reviewLink}\n\nAnything you need, we're a call away on 073 789 3438.\n\nWarm regards,\nDenago Cape Town`
-      : `Hi ${firstName},\n\nThanks for trusting us with ${refText} — we hope everything is running perfectly.\n\nIf you were happy with the service, a quick Google review would mean a lot to our small team (it takes under a minute):\n\n${reviewLink}\n\nAnything not 100%? Rather call us first on 073 789 3438 and we'll make it right.\n\nWarm regards,\nDenago Cape Town`;
+      ? `Hi ${firstName},\n\nCongratulations on your new ${refText} — welcome to the ${company.name} family! 🎉\n\nIf you're enjoying it, it would mean the world to us if you shared your experience in a quick Google review (it takes under a minute):\n\n${reviewLink}\n\nAnything you need, we're a call away${callUs}.\n\nWarm regards,\n${company.name}`
+      : `Hi ${firstName},\n\nThanks for trusting us with ${refText} — we hope everything is running perfectly.\n\nIf you were happy with the service, a quick Google review would mean a lot to our small team (it takes under a minute):\n\n${reviewLink}\n\nAnything not 100%? Rather call us first${callUs} and we'll make it right.\n\nWarm regards,\n${company.name}`;
 
   const res = await sendEmail({
     to: contact.email,
     subject:
       occasion === "delivery"
-        ? "Enjoying your new Denago? We'd love a quick review ⭐"
+        ? `Enjoying your new ${refText}? We'd love a quick review ⭐`
         : "How was your service? A quick review would mean a lot ⭐",
     text,
   });

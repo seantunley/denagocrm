@@ -3,7 +3,8 @@ import { prisma } from "./db";
 import { getSetting } from "./settings";
 import { embedStoredImage } from "./storedImage";
 import { isDocEditorLibraryItem } from "./studioClauses";
-import { DOC_DEFS, defaultTemplate, mergeTemplate, type DocKey, type DocTemplate } from "./docTemplates";
+import { DOC_DEFS, defaultTemplate, mergeTemplate, withCompanyDetails, type DocKey, type DocTemplate } from "./docTemplates";
+import { getCompanyProfile } from "./companyProfile";
 
 /** First run per type: seed a "Standard" template (from legacy settings if any). */
 export async function ensureSeeded(): Promise<void> {
@@ -47,6 +48,11 @@ export async function getTemplateRecord(id: string) {
  * via ?tpl=), else the type's default record, else built-in defaults.
  */
 export async function getDocTemplate(key: DocKey, templateId?: string): Promise<DocTemplate> {
+  const [tpl, company] = await Promise.all([loadDocTemplate(key, templateId), getCompanyProfile()]);
+  return withCompanyDetails(tpl, company);
+}
+
+async function loadDocTemplate(key: DocKey, templateId?: string): Promise<DocTemplate> {
   if (templateId) {
     const rec = await prisma.docTemplateRecord.findUnique({ where: { id: templateId } });
     if (rec && rec.docType === key) return withPrintableLogo(mergeTemplate(key, rec.config), rec.tenantId);

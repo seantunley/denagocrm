@@ -1749,14 +1749,14 @@ function TestDriveDialog({
   const [productId, setProductId] = useState("");
   const [date, setDate] = useState(tomorrow);
   const [time, setTime] = useState("10:00");
-  const [location, setLocation] = useState("Denago Cape Town showroom");
+  const [location, setLocation] = useState("Our showroom");
 
   useEffect(() => {
     if (pending) {
       setProductId(pending.lead.productId ?? "");
       setDate(tomorrow);
       setTime("10:00");
-      setLocation("Denago Cape Town showroom");
+      setLocation("Our showroom");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending?.lead.id]);

@@ -6,6 +6,7 @@ import { requireJobCardReadAccess } from "@/lib/permissions";
 import PrintActions from "@/components/PrintActions";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 import { getDocTemplate } from "@/lib/docTemplateStore";
+import { getCompanyProfile } from "@/lib/companyProfile";
 import { embedStoredImage } from "@/lib/storedImage";
 import { stageMeta, jobCardTotals, jobLineCents } from "@/lib/workshop-constants";
 
@@ -40,7 +41,7 @@ export default async function JobCardPrintPage({
     },
   });
   if (!jobCard) notFound();
-  const tpl = await getDocTemplate("jobcard", tplId);
+  const [tpl, company] = await Promise.all([getDocTemplate("jobcard", tplId), getCompanyProfile()]);
   // Embedded, not linked: a signature in the private store has no public link.
   const signatureSrc = jobCard.signedAt ? await embedStoredImage(jobCard.signatureRef, jobCard.tenantId) : null;
   const conditionPhotos = jobCard.documents;
@@ -92,8 +93,8 @@ export default async function JobCardPrintPage({
         <div className="flex items-center justify-between rounded-xl bg-[#020617] px-7 py-5">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src={tpl.logoUrl ?? "/branding/denago-logo-email.png"}
-            alt="Denago Cape Town EV"
+            src={tpl.logoUrl || company.logoUrl || "/branding/denago-logo-email.png"}
+            alt={company.name}
             className="h-11 w-auto object-contain"
           />
           <div className="text-right">
@@ -301,7 +302,7 @@ export default async function JobCardPrintPage({
         )}
 
         <p className="text-[10px] text-slate-400 mt-8 text-center">
-          Denago Cape Town · Authorized Denago EV Dealer · Job card #{jobCard.number} · Generated{" "}
+          {[company.name, company.tagline].filter(Boolean).join(" · ")} · Job card #{jobCard.number} · Generated{" "}
           {formatDate(new Date())}
         </p>
       </div>

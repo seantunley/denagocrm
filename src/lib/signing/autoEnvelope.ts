@@ -326,7 +326,7 @@ function makeCosignable(
   customer: { name: string; email: string | null },
 ): { doc: DocumentModel; denagoId: string; customerId: string } {
   const dealerRecipient = newRecipient({
-    name: denago.name || "Denago Cape Town",
+    name: denago.name || "Dealer",
     email: denago.email ?? "",
     role: "signer",
     color: "#020617",

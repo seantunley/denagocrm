@@ -11,6 +11,7 @@ import { portalTenantId } from "@/lib/portalTenant";
 import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { resolveTenantActor } from "@/lib/tenantActor";
 import { sendEmail, isSmtpConfigured } from "@/lib/email";
+import { getCompanyProfile } from "@/lib/companyProfile";
 import { getPortalContact, setPortalCookie, clearPortalCookie } from "@/lib/portal";
 import { portalCanAccessVehicle, requirePortalScope } from "@/lib/portalAccess";
 import { isModuleEnabled } from "@/lib/modules/enabled";
@@ -224,10 +225,12 @@ async function issuePortalOtp(email: string): Promise<PortalAuthState> {
       },
     });
   });
+  // Signed by the workspace the contact belongs to (the lookup above pins it).
+  const company = await getCompanyProfile(DEFAULT_TENANT_ID);
   await sendEmail({
     to: email,
-    subject: "Your Denago Cape Town portal code",
-    text: `Your login code is ${code}. It expires in 10 minutes.\n\nIf you didn't request this, ignore this email.\n\nDenago Cape Town`,
+    subject: `Your ${company.name} portal code`,
+    text: `Your login code is ${code}. It expires in 10 minutes.\n\nIf you didn't request this, ignore this email.\n\n${company.name}`,
   }).catch(() => {});
   return generic;
 }

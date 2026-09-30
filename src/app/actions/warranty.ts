@@ -7,6 +7,7 @@ import { resolveTenantActor } from "@/lib/tenantActor";
 import { logAudit } from "@/lib/audit";
 import { sendEmail } from "@/lib/email";
 import { sendSms } from "@/lib/sms";
+import { companyContactPhrase, getCompanyProfile } from "@/lib/companyProfile";
 import { claimStatuses } from "@/lib/warranty";
 import { requirePermission, requireVehicleAccess } from "@/lib/permissions";
 import { withActingStaffScope } from "@/lib/actingScope";
@@ -101,6 +102,8 @@ export async function notifyRecall(_prev: NotifyResult, formData: FormData): Pro
       include: { contact: true },
     });
     const firstUser = await resolveTenantActor();
+    const company = await getCompanyProfile();
+    const contactPhrase = companyContactPhrase(company);
 
     const seen = new Set<string>();
     let sent = 0;
@@ -111,10 +114,10 @@ export async function notifyRecall(_prev: NotifyResult, formData: FormData): Pro
       seen.add(c.id);
       const first = c.firstName;
       const subject = `Important: ${recall.title} — your ${recall.model}`;
-      const body = `Hi ${first},\n\n${recall.description}\n\nPlease contact Denago Cape Town on 073 789 3438 to arrange this at no charge.\n\nWarm regards,\nDenago Cape Town`;
+      const body = `Hi ${first},\n\n${recall.description}\n\nPlease contact ${contactPhrase} to arrange this at no charge.\n\nWarm regards,\n${company.name}`;
       let ok = false;
       if (c.email) ok = (await sendEmail({ to: c.email, subject, text: body })).ok;
-      else if (c.phone) ok = (await sendSms(c.phone, `${recall.title}: ${recall.description} Call Denago Cape Town on 073 789 3438.`)).ok;
+      else if (c.phone) ok = (await sendSms(c.phone, `${recall.title}: ${recall.description} Call ${contactPhrase}.`)).ok;
       if (!ok) {
         skipped += 1;
         continue;

@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { readFile } from "@/lib/storage";
 import { logError } from "@/lib/errorLog";
 import { runInTenantScope } from "@/lib/tenantScope";
+import { getCompanyProfile } from "@/lib/companyProfile";
 import { logSignEvent, buildSignEvent } from "./events";
 import { runPostCompletion } from "./postComplete";
 import {
@@ -121,6 +122,7 @@ type StrandedRequest = {
   signedPdfRef: string | null;
   signedDocId: string | null;
   signedPdfHash: string | null;
+  tenantId: string | null;
 };
 
 /**
@@ -171,6 +173,7 @@ async function sweep(where: SweepTenantWhere): Promise<RecoveryResult> {
       signedPdfRef: true,
       signedDocId: true,
       signedPdfHash: true,
+      tenantId: true,
     },
     orderBy: { completedAt: "asc" },
     take: MAX_PER_RUN,
@@ -434,6 +437,7 @@ async function redrive(
     pdf,
     recipients: recipients as FanoutRecipient[],
     tenantWhere: where,
+    senderName: (await getCompanyProfile(req.tenantId)).name,
   });
   failures.push(...delivery.failures);
 

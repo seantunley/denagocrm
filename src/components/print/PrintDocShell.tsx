@@ -145,7 +145,7 @@ export default function PrintDocShell({
   /** The company this document is FROM — resolved from the Company Profile,
    *  which now inherits the platform-set tenant brand. Optional so an
    *  un-updated caller renders exactly what it rendered before. */
-  company?: { name: string; tagline: string; logoUrl: string };
+  company?: { name: string; tagline: string; logoUrl: string; facebook?: string; instagram?: string };
   template: DocTemplate;
   title: string;
   number?: string;
@@ -273,13 +273,25 @@ export default function PrintDocShell({
                   <p key={i}>{l}</p>
                 ))}
               </div>
-              <div className="flex items-center gap-1.5 shrink-0">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src="/branding/social-facebook.png" alt="Facebook" className="h-5 w-5" />
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src="/branding/social-instagram.png" alt="Instagram" className="h-5 w-5" />
-                <span className="text-[10px] text-slate-500">@denago_capetown</span>
-              </div>
+              {/* The workspace's own socials (Settings → Company); none set, no row. */}
+              {(company?.facebook || company?.instagram) && (
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {company.facebook && (
+                    <>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src="/branding/social-facebook.png" alt="Facebook" className="h-5 w-5" />
+                      <span className="text-[10px] text-slate-500">{company.facebook}</span>
+                    </>
+                  )}
+                  {company.instagram && (
+                    <>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src="/branding/social-instagram.png" alt="Instagram" className="h-5 w-5" />
+                      <span className="text-[10px] text-slate-500">{company.instagram}</span>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>

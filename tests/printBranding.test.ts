@@ -42,7 +42,7 @@ test("the company profile resolves in one order: own, then platform, then defaul
   // upload the same asset twice — once by their admin into the profile, once by
   // a platform admin into the tenant brand — and the two could drift.
   const code = shipped("src/lib/companyProfile.ts");
-  assert.match(code, /brandForTenant\(await getActiveTenantId\(\)/, "step 2 is the platform-set brand");
+  assert.match(code, /brandForTenant\(explicit \? tenantId : await getActiveTenantId\(\)/, "step 2 is the platform-set brand");
   assert.match(
     code,
     /own \|\| fromBrand\[field\] \|\| COMPANY_DEFAULTS\[field\]/,
@@ -90,7 +90,7 @@ test("the print shell names no customer when no company is given", () => {
   // name in the platform defaults for as long as it was there. They are the
   // platform's name now.
   const code = shipped("src/components/print/PrintDocShell.tsx");
-  assert.match(code, /company\?: \{ name: string; tagline: string; logoUrl: string \}/, "still optional");
+  assert.match(code, /company\?: \{ name: string; tagline: string; logoUrl: string;/, "still optional");
   assert.match(code, /\|\| "\/branding\/denago-logo-email\.png"/, "logo fallback");
   assert.match(code, /company\?\.name \|\| PLATFORM_NAME/, "alt text and counter-signature");
   assert.match(code, /\[company\?\.name \|\| PLATFORM_NAME, company\?\.tagline\]/, "footer");

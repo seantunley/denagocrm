@@ -47,7 +47,7 @@ export default async function WarrantyClaimPrintPage({
         title="Warranty claim"
         number={`WC-${claim.id.slice(-6).toUpperCase()}`}
         meta={[`Claimed: ${formatDate(claim.claimedAt)}`, `Status: ${claim.status}`]}
-        parties={{ left: "Customer · Date", right: "For Denago Cape Town · Date" }}
+        parties={{ left: "Customer · Date", right: `For ${company.name} · Date` }}
       >
         {tpl.sections.vehicle !== false && (
           <div className="grid grid-cols-2 gap-4 mb-6">

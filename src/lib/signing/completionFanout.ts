@@ -83,6 +83,8 @@ export async function deliverCompletionEmails(opts: {
   pdf: Buffer;
   recipients: FanoutRecipient[];
   tenantWhere: SweepTenantWhere;
+  /** The workspace's Company Profile name — the mail's sign-off. */
+  senderName: string;
 }): Promise<DeliveryResult> {
   const failures: string[] = [];
   let sent = 0;
@@ -98,7 +100,7 @@ export async function deliverCompletionEmails(opts: {
     const result = await sendEmail({
       to: recipient.email,
       subject: `Completed & signed: ${opts.title}`,
-      text: `Hi ${recipient.name},\n\nEveryone has signed "${opts.title}". The final sealed PDF is attached.\n\nDenago Cape Town`,
+      text: `Hi ${recipient.name},\n\nEveryone has signed "${opts.title}". The final sealed PDF is attached.\n\n${opts.senderName}`,
       attachments: [{ filename: `${opts.title}.pdf`, content: opts.pdf, contentType: "application/pdf" }],
     });
 

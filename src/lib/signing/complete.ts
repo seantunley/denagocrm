@@ -5,6 +5,7 @@ import { parseDocument } from "@/lib/doceditor/model";
 import { renderDocumentHtml, type StampField } from "@/lib/doceditor/serialize";
 import { htmlToPdf } from "@/lib/customDocs";
 import { sealPdf } from "@/lib/pdf/seal";
+import { getCompanyProfile } from "@/lib/companyProfile";
 import { saveFile, readFile, deleteFile } from "@/lib/storage";
 import { formatDateTime } from "@/lib/format";
 import { logError } from "@/lib/errorLog";
@@ -244,7 +245,15 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
     appendHtml: certificateHtml(req.title, req.id, rows) + acknowledgementsHtml(ackFields, expectedSigners),
   });
   let pdf = await htmlToPdf(html);
-  pdf = await sealPdf(pdf, { reason: `Signed: ${req.title}`, name: "Denago Cape Town" });
+  // The seal names the workspace that sealed it — this was "Denago Cape Town"
+  // on every tenant's signed contracts.
+  const company = await getCompanyProfile(req.tenantId);
+  pdf = await sealPdf(pdf, {
+    reason: `Signed: ${req.title}`,
+    name: company.name,
+    contactInfo: company.email,
+    location: company.address,
+  });
   const hash = crypto.createHash("sha256").update(pdf).digest("hex");
 
   // Independent proof of WHEN, requested BEFORE the completion transaction so a
@@ -425,6 +434,7 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
       completedEmailSentAt: r.completedEmailSentAt,
     })),
     tenantWhere,
+    senderName: company.name,
   });
 
   // LAST, not first, and ONLY on success. This event used to be written
