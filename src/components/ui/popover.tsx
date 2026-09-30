@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { Layer } from "./layer"
 import { Popover as PopoverPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
@@ -25,6 +26,7 @@ function PopoverContent({
 }: React.ComponentProps<typeof PopoverPrimitive.Content>) {
   return (
     <PopoverPrimitive.Portal>
+      <Layer>
       <PopoverPrimitive.Content
         data-slot="popover-content"
         align={align}
@@ -35,6 +37,7 @@ function PopoverContent({
         )}
         {...props}
       />
+      </Layer>
     </PopoverPrimitive.Portal>
   )
 }

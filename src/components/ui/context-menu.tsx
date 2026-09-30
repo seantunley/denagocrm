@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { Layer } from "./layer"
 import { ChevronRightIcon } from "lucide-react"
 import { ContextMenu as ContextMenuPrimitive } from "radix-ui"
 
@@ -20,6 +21,7 @@ function ContextMenuContent({
 }: React.ComponentProps<typeof ContextMenuPrimitive.Content>) {
   return (
     <ContextMenuPrimitive.Portal>
+      <Layer>
       <ContextMenuPrimitive.Content
         data-slot="context-menu-content"
         className={cn(
@@ -28,6 +30,7 @@ function ContextMenuContent({
         )}
         {...props}
       />
+      </Layer>
     </ContextMenuPrimitive.Portal>
   )
 }
@@ -112,6 +115,7 @@ function ContextMenuSubContent({
 }: React.ComponentProps<typeof ContextMenuPrimitive.SubContent>) {
   return (
     <ContextMenuPrimitive.Portal>
+      <Layer>
       <ContextMenuPrimitive.SubContent
         data-slot="context-menu-sub-content"
         className={cn(
@@ -120,6 +124,7 @@ function ContextMenuSubContent({
         )}
         {...props}
       />
+      </Layer>
     </ContextMenuPrimitive.Portal>
   )
 }

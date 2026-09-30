@@ -3,14 +3,41 @@
 import * as React from "react"
 import { XIcon } from "lucide-react"
 import { Dialog as DialogPrimitive } from "radix-ui"
+import { usePathname } from "next/navigation"
+import { Layer } from "./layer"
 
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 
+/**
+ * A dialog belongs to the page it was opened on.
+ *
+ * When something inside it navigates (Countersign & review → the signing page,
+ * a product link in Settings → the product page), the app routes UNDERNEATH the
+ * dialog, which stayed open on top: the new page was there but hidden (Sean,
+ * 2026-09-30, "opened something in the background that I could not see").
+ * So an open dialog hides as soon as the PATHNAME changes from the one it
+ * opened on. Query-only changes (?edit=, ?tab=) don't close it.
+ *
+ * It hides rather than calling onOpenChange(false): for route modals that
+ * callback is router.back(), which would undo the very navigation that closed it.
+ */
 function Dialog({
+  open,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Root>) {
-  return <DialogPrimitive.Root data-slot="dialog" {...props} />
+  const pathname = usePathname()
+  // The pathname the dialog opened on; null while closed. Tracked by React's
+  // "adjust state during render" pattern, so a reopen always starts fresh.
+  const [openedOn, setOpenedOn] = React.useState<string | null>(open ? pathname : null)
+  const [wasOpen, setWasOpen] = React.useState(Boolean(open))
+  if (Boolean(open) !== wasOpen) {
+    setWasOpen(Boolean(open))
+    setOpenedOn(open ? pathname : null)
+  }
+  // Uncontrolled dialogs (no `open` prop) manage themselves; leave them alone.
+  const effectiveOpen = open === undefined ? undefined : Boolean(open) && (openedOn === null || openedOn === pathname)
+  return <DialogPrimitive.Root data-slot="dialog" {...(effectiveOpen === undefined ? {} : { open: effectiveOpen })} {...props} />
 }
 
 function DialogTrigger({
@@ -20,9 +47,15 @@ function DialogTrigger({
 }
 
 function DialogPortal({
+  children,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Portal>) {
-  return <DialogPrimitive.Portal data-slot="dialog-portal" {...props} />
+  // Overlay + content share one layer, taken when the dialog opens (./layer).
+  return (
+    <DialogPrimitive.Portal data-slot="dialog-portal" {...props}>
+      <Layer>{children}</Layer>
+    </DialogPrimitive.Portal>
+  )
 }
 
 function DialogClose({

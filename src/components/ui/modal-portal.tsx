@@ -2,6 +2,7 @@
 
 import { useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { Layer } from "./layer";
 
 /**
  * Renders an overlay into `document.body`, so its z-index means what it says.
@@ -58,5 +59,7 @@ const onServer = () => false;
 export default function ModalPortal({ children }: { children: ReactNode }) {
   const hydrated = useSyncExternalStore(NEVER_CHANGES, onClient, onServer);
   if (!hydrated) return null;
-  return createPortal(children, document.body);
+  // On the next layer up, so an overlay opened from inside a dialog (the signing
+  // preview from the quote editor) shows above it — see ./layer.
+  return createPortal(<Layer>{children}</Layer>, document.body);
 }
