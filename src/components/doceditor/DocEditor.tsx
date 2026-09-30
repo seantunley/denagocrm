@@ -56,12 +56,15 @@ export function DocEditor({
   initialDoc,
   records,
   initialPublishState = "never",
+  hasStandardLayout = false,
   mode = "template",
 }: {
   id: string;
   initialDoc: DocumentModel;
   records: RecordOption[];
   initialPublishState?: PublishState;
+  /** This document type has a standard layout the draft can be reset to. */
+  hasStandardLayout?: boolean;
   mode?: EditorMode;
 }) {
   const isDocument = mode === "document";
@@ -390,6 +393,7 @@ export function DocEditor({
         <VersionHistory
           id={id}
           onPublished={() => setPublishState("live")}
+          hasStandardLayout={hasStandardLayout}
           save={async () => {
             const current = useEditor.getState().doc;
             if (current) {

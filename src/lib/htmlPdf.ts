@@ -38,6 +38,9 @@ export async function renderUrlToPdf(url: string): Promise<Buffer | null> {
     try {
       const page = await browser.newPage();
       await page.goto(url, { waitUntil: "networkidle0", timeout: 25_000 });
+      // Embedded document fonts finish loading after layout; print only once
+      // they have, or the PDF captures the fallback font (see customDocs.ts).
+      await page.evaluate(() => document.fonts.ready);
       const pdf = await page.pdf({
         format: "a4",
         printBackground: true,
