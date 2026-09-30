@@ -5,6 +5,7 @@ import { XIcon } from "lucide-react"
 import { Dialog as DialogPrimitive } from "radix-ui"
 import { usePathname } from "next/navigation"
 import { Layer } from "./layer"
+import { dialogVisible, initialDialogNavState, nextDialogNavState } from "./dialogNavigation"
 
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -21,23 +22,43 @@ import { Button } from "@/components/ui/button"
  *
  * It hides rather than calling onOpenChange(false): for route modals that
  * callback is router.back(), which would undo the very navigation that closed it.
+ * The dismissal is sticky until the dialog is really reopened (dialogNavigation).
+ *
+ * Uncontrolled dialogs (DialogTrigger, no `open` prop) are covered too: their
+ * open state is held here, and closed outright when navigation dismisses them.
  */
 function Dialog({
-  open,
+  open: openProp,
+  defaultOpen,
+  onOpenChange,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Root>) {
   const pathname = usePathname()
-  // The pathname the dialog opened on; null while closed. Tracked by React's
-  // "adjust state during render" pattern, so a reopen always starts fresh.
-  const [openedOn, setOpenedOn] = React.useState<string | null>(open ? pathname : null)
-  const [wasOpen, setWasOpen] = React.useState(Boolean(open))
-  if (Boolean(open) !== wasOpen) {
-    setWasOpen(Boolean(open))
-    setOpenedOn(open ? pathname : null)
+  const controlled = openProp !== undefined
+  const [internalOpen, setInternalOpen] = React.useState(Boolean(defaultOpen))
+  const open = controlled ? Boolean(openProp) : internalOpen
+
+  // "Adjust state during render", so a reopen always starts fresh.
+  const [nav, setNav] = React.useState(() => initialDialogNavState(open, pathname))
+  const next = nextDialogNavState(nav, open, pathname)
+  if (next !== nav) {
+    setNav(next)
+    // An uncontrolled dialog has no owner to keep it "open": close it for real.
+    if (!controlled && next.dismissed) setInternalOpen(false)
   }
-  // Uncontrolled dialogs (no `open` prop) manage themselves; leave them alone.
-  const effectiveOpen = open === undefined ? undefined : Boolean(open) && (openedOn === null || openedOn === pathname)
-  return <DialogPrimitive.Root data-slot="dialog" {...(effectiveOpen === undefined ? {} : { open: effectiveOpen })} {...props} />
+
+  const handleOpenChange = (value: boolean) => {
+    if (!controlled) setInternalOpen(value)
+    onOpenChange?.(value)
+  }
+  return (
+    <DialogPrimitive.Root
+      data-slot="dialog"
+      open={dialogVisible(next, open)}
+      onOpenChange={handleOpenChange}
+      {...props}
+    />
+  )
 }
 
 function DialogTrigger({
