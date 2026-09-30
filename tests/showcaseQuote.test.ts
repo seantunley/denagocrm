@@ -407,7 +407,7 @@ test("the send and snapshot-render paths are wired to the frozen vehicle", () =>
   const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
   const read = (f: string) => readFileSync(path.join(root, f), "utf8");
   const service = read("src/lib/signing/service.ts");
-  assert.match(service, /const frozenDoc = await freezeQuoteShowcase\(/, "send time freezes the vehicle into the snapshot");
+  assert.match(service, /const frozenDoc = (snapFieldsToAcceptanceCards\()?await freezeQuoteShowcase\(/, "send time freezes the vehicle into the snapshot");
   assert.match(service, /snapshotJson: frozenDoc/);
   const render = read("src/lib/signing/render.ts");
   for (const fn of ["renderRequestDocHtml", "renderRequestSigningSheets"]) {
