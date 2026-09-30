@@ -76,7 +76,11 @@ export function priorById<T extends { id: string }>(rows: T[]): Map<string, T> {
   return new Map(rows.map((row) => [row.id, row]));
 }
 
-export function itemRowsFor(incoming: IncomingItem[], prior: Map<string, PriorItem>): ItemRow[] {
+/**
+ * `vatRatePct` is the workspace's CURRENT rate and only reaches a line that is
+ * genuinely new — an existing line keeps the rate it was issued at.
+ */
+export function itemRowsFor(incoming: IncomingItem[], prior: Map<string, PriorItem>, vatRatePct: number): ItemRow[] {
   return incoming.map(({ id, taxRatePct, ...rest }) => {
     const previous = id ? prior.get(id) : undefined;
     return {
@@ -84,7 +88,7 @@ export function itemRowsFor(incoming: IncomingItem[], prior: Map<string, PriorIt
       // still gets a generated primary key rather than a caller-chosen one.
       ...(previous ? { id: previous.id } : {}),
       ...rest,
-      taxRatePct: taxRatePct ?? previous?.taxRatePct ?? 15,
+      taxRatePct: taxRatePct ?? previous?.taxRatePct ?? vatRatePct,
       kind: previous?.kind ?? "product",
       costCents: previous?.costCents ?? 0,
       optional: previous?.optional ?? false,
@@ -93,13 +97,13 @@ export function itemRowsFor(incoming: IncomingItem[], prior: Map<string, PriorIt
   });
 }
 
-export function feeRowsFor(incoming: IncomingFee[], prior: Map<string, PriorFee>): FeeRow[] {
+export function feeRowsFor(incoming: IncomingFee[], prior: Map<string, PriorFee>, vatRatePct: number): FeeRow[] {
   return incoming.map(({ id, taxRatePct, ...rest }, index) => {
     const previous = id ? prior.get(id) : undefined;
     return {
       ...(previous ? { id: previous.id } : {}),
       ...rest,
-      taxRatePct: taxRatePct ?? previous?.taxRatePct ?? 15,
+      taxRatePct: taxRatePct ?? previous?.taxRatePct ?? vatRatePct,
       sortOrder: index,
     };
   });

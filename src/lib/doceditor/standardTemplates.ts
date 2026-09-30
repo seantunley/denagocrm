@@ -484,9 +484,10 @@ export function showcaseQuoteTemplate(): DocumentModel {
   totals.settings = { width: 46, horizontalAlignment: "right" };
   // The standard quote's terms, each its own bullet.
   const quoteTerms = terms("QUOTATION TERMS", [
-    "Quote valid for 14 days.",
+    // Tokens, not literals — see factory.ts standardQuoteTemplate.
+    "Quote valid until {{quote.validUntil}}.",
     "50% deposit to secure build slot; balance on delivery.",
-    "Prices are recommended retail, including 15% VAT, and subject to change without notice.",
+    "Prices are recommended retail, including {{quote.vatRate}} VAT, and subject to change without notice.",
     "Denago EVs are Low-Speed Vehicles for private-property use and are not road registered.",
     "E & O.E.",
   ]);

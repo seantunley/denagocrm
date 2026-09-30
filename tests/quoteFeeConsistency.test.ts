@@ -286,10 +286,10 @@ test("a declined add-on survives a save instead of being silently re-included", 
   const code = src("src/app/actions/quotes.ts");
   assert.match(
     code,
-    /itemRowsFor\(normalizedItems, priorById\(existing\.items\)\)/,
+    /itemRowsFor\(normalizedItems, priorById\(existing\.items\), /,
     "an update must inherit from the rows it is replacing",
   );
-  assert.match(code, /feeRowsFor\(normalizedFees, priorById\(existing\.fees\)\)/);
+  assert.match(code, /feeRowsFor\(normalizedFees, priorById\(existing\.fees\), /);
   const rows = src("src/lib/quoteRows.ts");
   assert.match(rows, /optional: previous\?\.optional \?\? false/);
   assert.match(rows, /selected: previous\?\.selected \?\? true/);

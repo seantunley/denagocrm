@@ -17,7 +17,7 @@ import {
   quoteVersionIndex,
 } from "@/lib/quoteEditorRecord";
 import { loadBillToFleets, quoteBillTo } from "@/lib/quoteBillTo";
-import { getSetting } from "@/lib/settings";
+import { editorDefaults, quoteFromLeadDefaults } from "@/lib/quoteFromLead";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { EmptyState, SectionHeading, StatusPill, Surface, WorkspaceToolbar } from "@/components/visual-system";
@@ -48,12 +48,6 @@ import {
   MobileWorkspaceHeader,
 } from "@/components/mobile-workspace";
 
-function inputDate(daysFromNow: number) {
-  const date = new Date();
-  date.setDate(date.getDate() + daysFromNow);
-  return date.toISOString().slice(0, 10);
-}
-
 export default async function QuotesPage({
   searchParams,
 }: {
@@ -77,7 +71,7 @@ export default async function QuotesPage({
    */
   const accessibleLeadIds = await getAccessibleLeadIds(user);
   const { edit, q, status } = await searchParams;
-  const [quotes, contacts, openLeads, products, allVersions, validDaysRaw, quoteTerms] = await Promise.all([
+  const [quotes, contacts, openLeads, products, allVersions, quoteDefaults] = await Promise.all([
     prisma.quote.findMany({
       // Only current heads appear in the list. Older revisions remain available
       // from the editor's version history and the full record. RBAC-scoped.
@@ -109,8 +103,7 @@ export default async function QuotesPage({
       select: QUOTE_VERSION_SELECT,
       take: 2_000,
     }),
-    getSetting("QUOTE_VALID_DAYS"),
-    getSetting("QUOTE_TERMS"),
+    quoteFromLeadDefaults(),
   ]);
 
   // Shared with quoteEditorRecord(), the action that loads ONE quote for the
@@ -129,11 +122,7 @@ export default async function QuotesPage({
   // the permission is left to ask — once, not per row.
   const canDelete = await hasPermission(user, "quotes.delete");
 
-  const validDays = Number.parseInt(validDaysRaw ?? "7", 10);
-  const defaults = {
-    validUntil: inputDate(Number.isFinite(validDays) ? validDays : 7),
-    terms: quoteTerms || "Prices include VAT. Delivery arranged on acceptance. E&OE.",
-  };
+  const defaults = editorDefaults(quoteDefaults);
   const contactOptions = contacts.map((contact) => ({ id: contact.id, label: contactName(contact) }));
   // `lead.title` is the MODEL someone wants, and a dealership sells the same few
   // models repeatedly — so preferring it made every option in the picker read

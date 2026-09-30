@@ -110,7 +110,7 @@ test("the frozen brand WINS over the live profile at render time", () => {
   const code = shipped("src/lib/signing/render.ts");
   assert.match(
     code,
-    /const company = frozen \? frozen\.tokens : live \? \{ \.\.\.\(await liveGlobalTokens\(\)\), \.\.\.companyTokens\(live\) \} : \{\};/,
+    /const company = frozen \? frozen\.tokens : live \? \{ \.\.\.\(await liveGlobalTokens\(regional\)\), \.\.\.companyTokens\(live\) \} : \{\};/,
     "frozen first, live only as the fallback",
   );
   assert.match(code, /const live = frozen \? null : await getCompanyProfile\(\);/, "the live profile is not even read for a frozen brand");

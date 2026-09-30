@@ -245,17 +245,17 @@ function lineItemsHtml(b: LineItemsBlock, ctx: RenderCtx): string {
   const cell = (c: (typeof cols)[number], i: number, row: number, value: string) =>
     `<td style="text-align:${c.align};padding:7px 12px;font-size:9pt;color:#1f2937;border-bottom:${border};${i ? `border-left:${border};` : `border-left:${border};`}${i === cols.length - 1 ? `border-right:${border};` : ""}${row % 2 ? `background:#f8fafc;${KEEP_BG}` : ""}">${esc(value)}</td>`;
   const body = rows.length
-    ? rows.map((r, ri) => `<tr>${cols.map((c, i) => cell(c, i, ri, lineItemCell(c.key, r, b.vatRate))).join("")}</tr>`).join("")
+    ? rows.map((r, ri) => `<tr>${cols.map((c, i) => cell(c, i, ri, lineItemCell(c.key, r, b.vatRate, ctx?.regional))).join("")}</tr>`).join("")
     : `<tr><td colspan="${cols.length}" style="padding:9px 12px;color:#94a3b8;font-size:9pt;border:${border};border-top:none">Line items appear here when linked to a record</td></tr>`;
   return `<table style="width:100%;table-layout:fixed;border-collapse:separate;border-spacing:0;margin:8px 0 0">${colgroup}<thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
-function termsHtml(b: TermsBlock): string {
+function termsHtml(b: TermsBlock, ctx: RenderCtx): string {
   const dot = `<span style="width:5px;height:5px;border-radius:50%;background:${ACCENT};flex:none;margin-top:5px;${KEEP_BG}"></span>`;
   // The same height as the acceptance card beside it (at least), so the pair reads as one row.
   return `<div style="${CARD}box-sizing:border-box;min-height:${acceptanceHeight()}px;padding:12px 14px">
     ${cardHeader("doc", b.title, ACCENT, 22)}
-    <div style="margin-top:6px">${b.items.map((it) => `<div style="display:flex;gap:7px;font-size:7.5pt;line-height:1.4;color:#4b5563;margin-bottom:3px">${dot}<span>${esc(it.text)}</span></div>`).join("")}</div>
+    <div style="margin-top:6px">${b.items.map((it) => `<div style="display:flex;gap:7px;font-size:7.5pt;line-height:1.4;color:#4b5563;margin-bottom:3px">${dot}<span>${esc(tok(it.text, ctx))}</span></div>`).join("")}</div>
   </div>`;
 }
 
@@ -263,7 +263,7 @@ function termsHtml(b: TermsBlock): string {
 export function showcaseLookHtml(block: InfoCardBlock | LineItemsBlock | TermsBlock, ctx: RenderCtx): string {
   if (block.type === "infoCard") return preparedForHtml(block, ctx);
   if (block.type === "lineItems") return lineItemsHtml(block, ctx);
-  return termsHtml(block);
+  return termsHtml(block, ctx);
 }
 
 function acceptanceHtml(b: AcceptanceBlock, ctx: RenderCtx): string {

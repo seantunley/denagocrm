@@ -4,13 +4,11 @@ import { withActingStaffScope } from "@/lib/actingScope";
 import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { addDays } from "date-fns";
 import type { Prisma } from "@prisma/client";
 import { prisma, basePrisma } from "@/lib/db";
 import { payableTotalCents } from "@/lib/pricing";
 import { logAudit } from "@/lib/audit";
 import { CLOSED_REQUEST_STATUSES } from "@/lib/signing/status";
-import { getSetting } from "@/lib/settings";
 import { markReferralEarned } from "@/lib/referrals";
 import { hasOpenSignatureRequest } from "@/lib/quoteLock";
 import { nextQuoteNumber } from "@/lib/numbering";
@@ -151,11 +149,7 @@ export async function createQuoteForContact(formData: FormData) {
     const product = productId
       ? await prisma.product.findUnique({ where: { id: productId } })
       : null;
-    const validDaysRaw = await getSetting("QUOTE_VALID_DAYS");
-    const validDays = validDaysRaw ? parseInt(validDaysRaw, 10) : 7;
-    const terms =
-      (await getSetting("QUOTE_TERMS")) ||
-      "Prices include VAT. Delivery arranged on acceptance. E&OE.";
+    const { validUntil, terms, regional } = await quoteFromLeadDefaults();
     // Advisory-locked allocation + insert in one transaction (#11). The bypass
     // client carries no tenant, so the row and its children are stamped here.
     const tenantId = await actingTenantId();
@@ -167,7 +161,7 @@ export async function createQuoteForContact(formData: FormData) {
           tenantId,
           contactId,
           createdById: user.id,
-          validUntil: addDays(new Date(), isNaN(validDays) ? 7 : validDays),
+          validUntil,
           terms,
           items: product
             ? {
@@ -178,6 +172,7 @@ export async function createQuoteForContact(formData: FormData) {
                     qty: 1,
                     unitPriceCents: product.basePriceCents,
                     productId: product.id,
+                    taxRatePct: regional.vatRatePct,
                   },
                 ],
               }
@@ -272,11 +267,7 @@ export async function createQuoteForFleet(formData: FormData) {
       );
     }
 
-    const validDaysRaw = await getSetting("QUOTE_VALID_DAYS");
-    const validDays = validDaysRaw ? parseInt(validDaysRaw, 10) : 7;
-    const terms =
-      (await getSetting("QUOTE_TERMS")) ||
-      "Prices include VAT. Delivery arranged on acceptance. E&OE.";
+    const { validUntil, terms } = await quoteFromLeadDefaults();
 
     // Advisory-locked allocation + insert in one transaction, same as every
     // other quote-creating path (#11).
@@ -290,7 +281,7 @@ export async function createQuoteForFleet(formData: FormData) {
           contactId: contact.id,
           fleetId: fleet.id,
           createdById: user.id,
-          validUntil: addDays(new Date(), isNaN(validDays) ? 7 : validDays),
+          validUntil,
           terms,
         },
         select: { id: true, number: true },
@@ -445,9 +436,9 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
     }
   }
 
-  const createDefaults = data.id
-    ? null
-    : await Promise.all([getSetting("QUOTE_VALID_DAYS"), getSetting("QUOTE_TERMS")]);
+  // Needed on edits too: a line ADDED to an existing draft takes the workspace's
+  // current VAT rate, while the lines already on it keep their own.
+  const createDefaults = await quoteFromLeadDefaults();
 
   // Resolved before the bypass transaction. This is the ACTOR, which is the
   // right owner for a quote being created here and only the FALLBACK for one
@@ -546,8 +537,8 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
       }
 
       // Inherit the hidden columns by row id, and KEEP that id — see quoteRows.
-      const itemRows = itemRowsFor(normalizedItems, priorById(existing.items));
-      const feeRows = feeRowsFor(normalizedFees, priorById(existing.fees));
+      const itemRows = itemRowsFor(normalizedItems, priorById(existing.items), createDefaults.regional.vatRatePct);
+      const feeRows = feeRowsFor(normalizedFees, priorById(existing.fees), createDefaults.regional.vatRatePct);
       // The QUOTE is the parent, so its children take ITS owner — the same
       // invariant createQuoteRevision applies to a copied quote. Stamping the
       // actor instead would split a quote across two workspaces whenever the
@@ -577,16 +568,11 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
     }
 
     const number = await nextQuoteNumber(tx); // advisory-locked allocation (#11)
-    const validDaysRaw = createDefaults?.[0];
-    const validDays = validDaysRaw ? parseInt(validDaysRaw, 10) : 7;
-    const defaultTerms =
-      createDefaults?.[1] ||
-      "Prices include VAT. Delivery arranged on acceptance. E&OE.";
 
     // Same builders, with NOTHING to inherit from — so a client-supplied id
     // finds no prior row and is dropped rather than choosing a primary key.
-    const itemRows = itemRowsFor(normalizedItems, new Map());
-    const feeRows = feeRowsFor(normalizedFees, new Map());
+    const itemRows = itemRowsFor(normalizedItems, new Map(), createDefaults.regional.vatRatePct);
+    const feeRows = feeRowsFor(normalizedFees, new Map(), createDefaults.regional.vatRatePct);
     return {
       // A brand-new quote has no prior owner, so the actor IS the parent's owner
       // here — and the children take the same value, which is the same
@@ -599,8 +585,8 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
           contactId: data.contactId,
           leadId: linkedLeadId,
           createdById: user.id,
-          validUntil: validUntil ?? addDays(new Date(), Number.isNaN(validDays) ? 7 : validDays),
-          terms: data.terms || defaultTerms,
+          validUntil: validUntil ?? createDefaults.validUntil,
+          terms: data.terms || createDefaults.terms,
           status: data.intent,
           ...cpqQuoteData,
           items: itemRows.length > 0 ? { create: itemRows.map((row) => ({ ...row, tenantId: actingTenant })) } : undefined,
@@ -667,9 +653,7 @@ export async function createQuoteRevision(quoteId: string) {
   return withActingStaffScope(async () => {
   return asActionResult(async () => {
     const user = await requireQuoteAccess(quoteId, "quotes.edit");
-    const validDaysRaw = await getSetting("QUOTE_VALID_DAYS");
-    const validDays = validDaysRaw ? parseInt(validDaysRaw, 10) : 7;
-    const validUntil = addDays(new Date(), isNaN(validDays) ? 7 : validDays);
+    const { validUntil } = await quoteFromLeadDefaults();
     // The ACTING workspace, and here it is a PREDICATE, not just a fallback owner.
     // `actingTenantId()` resolves the validated session workspace while enforcement
     // is dormant, which `writeTenantId()` does not — dormant is every environment

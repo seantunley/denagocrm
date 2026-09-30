@@ -45,7 +45,7 @@ test("product context is capped before reaching the model", () => {
 
 test("assistant receives maintained product facts and explicit no-inference fences", () => {
   const code = src("src/lib/botAi.ts");
-  assert.match(code, /renderBotProductFacts\(products\)/);
+  assert.match(code, /renderBotProductFacts\(products, undefined, regional\)/);
   assert.match(code, /LIVE PRODUCT FACTS FROM THE CRM/);
   assert.match(code, /STOCK AVAILABILITY is NOT supplied/);
   assert.match(code, /FINANCE TERMS, ROAD-LEGAL\/REGISTRATION STATUS, WARRANTY DETAILS, ACCESSORY COMPATIBILITY and SERVICE POLICY must come from Approved Knowledge/);

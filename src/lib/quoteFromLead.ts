@@ -1,7 +1,9 @@
 import "server-only";
 import type { Prisma } from "@prisma/client";
 import { addDays } from "date-fns";
-import { getSetting } from "./settings";
+import { getRegionalSettings, getSetting } from "./settings";
+import { DEFAULT_QUOTE_TERMS, quoteValidDays } from "./quoteExpiry";
+import type { Regional } from "./format";
 import { nextQuoteNumber } from "./numbering";
 
 /**
@@ -39,22 +41,37 @@ import { nextQuoteNumber } from "./numbering";
 
 type Tx = Prisma.TransactionClient;
 
-export type QuoteFromLeadDefaults = { validUntil: Date; terms: string };
+export type QuoteFromLeadDefaults = { validUntil: Date; terms: string; regional: Regional };
 
 /**
- * The validity window and terms a new quote starts with.
+ * The validity window, terms and VAT rate a new quote starts with — the ONE
+ * place every quote-creating path reads them from (lead, contact, fleet, the
+ * editor, revisions), so none of them can drift from Settings → Quotes.
  *
- * Resolved OUTSIDE the transaction on purpose: these are two `AppSetting` reads,
+ * Resolved OUTSIDE the transaction on purpose: these are `AppSetting` reads,
  * and holding the quote-number advisory lock across them would serialise every
  * concurrent quote creation behind a settings lookup.
  */
 export async function quoteFromLeadDefaults(): Promise<QuoteFromLeadDefaults> {
-  const validDaysRaw = await getSetting("QUOTE_VALID_DAYS");
-  const validDays = validDaysRaw ? parseInt(validDaysRaw, 10) : 7;
-  const terms =
-    (await getSetting("QUOTE_TERMS")) ||
-    "Prices include VAT. Delivery arranged on acceptance. E&OE.";
-  return { validUntil: addDays(new Date(), isNaN(validDays) ? 7 : validDays), terms };
+  const [validDaysRaw, terms, regional] = await Promise.all([
+    getSetting("QUOTE_VALID_DAYS"),
+    getSetting("QUOTE_TERMS"),
+    getRegionalSettings(),
+  ]);
+  return {
+    validUntil: addDays(new Date(), quoteValidDays(validDaysRaw)),
+    terms: terms || DEFAULT_QUOTE_TERMS,
+    regional,
+  };
+}
+
+/** The same defaults, shaped for the quote editor (a date input wants yyyy-mm-dd). */
+export function editorDefaults(defaults: QuoteFromLeadDefaults) {
+  return {
+    validUntil: defaults.validUntil.toISOString().slice(0, 10),
+    terms: defaults.terms,
+    regional: defaults.regional,
+  };
 }
 
 /** The lead fields a seeded quote is built from. */
@@ -107,6 +124,9 @@ export async function insertQuoteFromLead(
                 unitPriceCents: lead.valueCents || lead.product.basePriceCents,
                 productId: lead.product.id,
                 colorPreference: lead.color || null,
+                // Stamped, not left to the column default: the line keeps the
+                // rate it was issued at even if the workspace's VAT changes.
+                taxRatePct: defaults.regional.vatRatePct,
               },
             ],
           }

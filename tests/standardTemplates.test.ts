@@ -30,7 +30,11 @@ test("all operational templates use the current document model", () => {
   }
 });
 
-test("terms blocks do not contain unresolved merge tokens", () => {
+// Terms items are token-resolved at render time since the quote wording stopped
+// hard-coding its validity and VAT rate — but only tokens a quote always fills.
+const TERMS_TOKENS = new Set(["quote.validUntil", "quote.vatRate"]);
+
+test("terms blocks use only merge tokens a quote always fills", () => {
   for (const key of STANDARD_TEMPLATE_KEYS) {
     const template = standardTemplateFor(key);
     const terms = template.pages.flatMap((page) =>
@@ -44,7 +48,9 @@ test("terms blocks do not contain unresolved merge tokens", () => {
       if (block.type !== "terms") continue;
       assert.equal(block.title.includes("{{"), false, `${key} terms title`);
       for (const item of block.items) {
-        assert.equal(item.text.includes("{{"), false, `${key} terms item`);
+        for (const [, token] of item.text.matchAll(/\{\{\s*([\w.]+)\s*\}\}/g)) {
+          assert.ok(key === "quote" && TERMS_TOKENS.has(token), `${key} terms item uses {{${token}}}`);
+        }
       }
     }
   }

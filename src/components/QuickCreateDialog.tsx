@@ -14,7 +14,7 @@ import ContactForm from "@/components/ContactForm";
 import JobCardForm from "@/components/JobCardForm";
 import VehicleForm from "@/components/VehicleForm";
 import type { FleetPicker } from "@/lib/fleetTypes";
-import { QuoteEditorDialog } from "@/components/quotes/QuoteEditorDialog";
+import { QuoteEditorDialog, type QuoteEditorDefaults } from "@/components/quotes/QuoteEditorDialog";
 import {
   createQuickContact,
   createQuickLead,
@@ -56,7 +56,8 @@ type Options = {
   users: { id: string; name: string }[];
   vehicles: { id: string; label: string }[];
   fleetPicker: FleetPicker;
-  quoteDefaults: { validUntil: string; terms: string };
+  /** Sent only when the quote dialog is asked for (or the legacy full payload). */
+  quoteDefaults: QuoteEditorDefaults | null;
 };
 
 /** Global create dialog with contextual defaults and tenant-validated writes. */
@@ -151,7 +152,7 @@ export default function QuickCreateDialog() {
 
   const currentOptions = optionsKind === kind ? options : null;
 
-  if (kind === "quote" && currentOptions) {
+  if (kind === "quote" && currentOptions?.quoteDefaults) {
     return (
       <QuoteEditorDialog
         open

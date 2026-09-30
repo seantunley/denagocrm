@@ -141,11 +141,12 @@ export function buildQuoteEditorRecord(
       costCents: item.costCents,
       optional: item.optional,
       selected: item.selected,
+      taxRatePct: item.taxRatePct,
     })),
     taxInclusive: quote.taxInclusive,
     depositType: quote.depositType,
     depositValue: quote.depositValue,
-    fees: quote.fees.map((fee) => ({ id: fee.id, label: fee.label, kind: fee.kind, amountCents: fee.amountCents })),
+    fees: quote.fees.map((fee) => ({ id: fee.id, label: fee.label, kind: fee.kind, amountCents: fee.amountCents, taxRatePct: fee.taxRatePct })),
     versions: index
       .familyOf(quote.id)
       .toSorted((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
