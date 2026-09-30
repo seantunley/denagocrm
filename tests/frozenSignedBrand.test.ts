@@ -110,9 +110,12 @@ test("the frozen brand WINS over the live profile at render time", () => {
   const code = shipped("src/lib/signing/render.ts");
   assert.match(
     code,
-    /const company = frozen \? frozen\.tokens : companyTokens\(await getCompanyProfile\(\)\);/,
+    /const company = frozen \? frozen\.tokens : live \? \{ \.\.\.\(await liveGlobalTokens\(\)\), \.\.\.companyTokens\(live\) \} : \{\};/,
     "frozen first, live only as the fallback",
   );
+  assert.match(code, /const live = frozen \? null : await getCompanyProfile\(\);/, "the live profile is not even read for a frozen brand");
+  // The logo follows the same rule — the frozen one, never the live one, for a signed request.
+  assert.match(code, /documentLogo\(frozen \? frozen\.logoUrl : live\?\.logoUrl\)/);
   assert.match(code, /frozen\?: FrozenBrand \| null/, "and it is optional, so unfrozen rows are unchanged");
 });
 

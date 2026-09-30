@@ -7,6 +7,9 @@ import { requiredRecordKind } from "@/lib/docbuilder/recordBinding";
 import Link from "next/link";
 import { readTemplateDocument } from "@/lib/doceditor/legacy";
 import { DocEditor, type PublishState } from "@/components/doceditor/DocEditor";
+import { DocEditorEnvProvider } from "@/components/doceditor/EditorContext";
+import { getCompanyProfile } from "@/lib/companyProfile";
+import { documentLogo } from "@/lib/doceditor/renderGlobals";
 
 export const dynamic = "force-dynamic";
 
@@ -102,12 +105,18 @@ export default async function DocEditorPage({
       ? "live"
       : "ahead";
 
+  // The canvas shows the same embedded logo the printed document will carry.
+  const company = await getCompanyProfile();
+  const logoSrc = (await documentLogo(company.logoUrl)) ?? "";
+
   return (
-    <DocEditor
-      id={template.id}
-      initialDoc={initialDoc}
-      records={records}
-      initialPublishState={publishState}
-    />
+    <DocEditorEnvProvider value={{ templateId: template.id, logoSrc, companyName: company.name }}>
+      <DocEditor
+        id={template.id}
+        initialDoc={initialDoc}
+        records={records}
+        initialPublishState={publishState}
+      />
+    </DocEditorEnvProvider>
   );
 }

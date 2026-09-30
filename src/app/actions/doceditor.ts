@@ -17,6 +17,7 @@ import {
   type BuilderRecordKind,
 } from "@/lib/docbuilder/recordBinding";
 import { saveFile } from "@/lib/storage";
+import { checkDocImage } from "@/lib/doceditor/imageUpload";
 import { actingOwnerTenantId, withActingStaffScope } from "@/lib/actingScope";
 
 const BASE = "/document-studio";
@@ -234,6 +235,42 @@ export async function createStandardQuoteTemplate() {
     });
     revalidatePath(BASE);
     return { redirectTo: `/doc-editor/${created.id}` };
+  });
+}
+
+/**
+ * Upload an image for an image block. Returns the stored-file ref the block keeps
+ * as its `src`; the editor shows it through /api/stored and every render embeds
+ * it (renderGlobals.embedDocImages), so the private file never needs a public link.
+ *
+ * Filed under the open TEMPLATE's workspace, like a document template's logo
+ * (uploadTemplateLogo) — that is whose document the image is part of. The type
+ * comes from the file's own bytes, never the name or browser MIME type.
+ */
+export async function uploadDocEditorImage(formData: FormData): Promise<{ ok: true; ref: string } | { ok: false; error: string }> {
+  return withActingStaffScope(async () => {
+    const user = await requirePermission("docbuilder.manage");
+    const file = formData.get("file");
+    if (!(file instanceof File)) return { ok: false, error: "Choose an image to upload." };
+    // Checked on the size and first bytes BEFORE the whole file is read into memory.
+    const type = checkDocImage(file.size, new Uint8Array(await file.slice(0, 16).arrayBuffer()));
+    if (!type.ok) return type;
+    const bytes = Buffer.from(await file.arrayBuffer());
+
+    const templateId = String(formData.get("templateId") ?? "").trim();
+    const template = templateId ? await getBuilderTemplate(templateId) : null;
+    if (templateId && !template) return { ok: false, error: "Template not found." };
+    const tenantId = template ? template.tenantId : await actingOwnerTenantId();
+
+    const ref = await saveFile(bytes, `image.${type.ext}`, type.mime, tenantId);
+    await logAudit({
+      action: "doceditor.image_upload",
+      summary: template ? `Uploaded an image to “${template.name}”` : "Uploaded a document image",
+      entityType: "DocBuilderTemplate",
+      entityId: template?.id,
+      user,
+    });
+    return { ok: true, ref };
   });
 }
 
