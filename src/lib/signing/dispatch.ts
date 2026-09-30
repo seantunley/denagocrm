@@ -7,6 +7,7 @@ import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "./status";
 import { DEFAULT_BRAND, brandForTenant } from "@/lib/tenantBrand";
 import { tenantOrigin } from "@/lib/tenantOrigin";
 import { usableCapability } from "./tokenVault";
+import { signingRecord } from "@/lib/outboundMessageLog";
 
 /**
  * The platform origin, and the LAST resort.
@@ -133,12 +134,20 @@ export async function notifyRecipient(recipientId: string, opts?: { reminder?: b
   const verb = opts?.reminder ? "Reminder — please sign" : "Please sign your document";
   const evType = opts?.reminder ? "reminded" : "sent";
   let delivered = false;
+  // The customer's timeline gets a copy of each channel that went out, with the
+  // signing link reduced to its route shape — never a working capability.
+  const record = await signingRecord(r.requestId, {
+    email: r.email,
+    label: opts?.reminder ? "Signing reminder" : "Signing invitation",
+    secrets: [raw],
+  });
 
   if (hasEmail) {
     const res = await sendEmail({
       to: r.email!, subject: `${verb}: ${r.request.title}`,
       text: `Hi ${r.name},\n\n${verb}: "${r.request.title}" from ${brand.displayName}.\n\nOpen and sign here:\n${url}\n\nThank you,\n${brand.displayName}`,
       html: emailHtml(r.name, r.request.title, url, verb, brand),
+      record,
     });
     if (res.ok) delivered = true;
     await logSignEvent(r.requestId, { type: evType, recipientId: r.id, actor: "system", channel: "email", metadata: { ok: res.ok, error: res.error } });
@@ -146,7 +155,7 @@ export async function notifyRecipient(recipientId: string, opts?: { reminder?: b
   // WhatsApp works inside the 24h customer-service window (or requires an approved
   // template for cold outreach — see @/lib/whatsapp). Best-effort; failures are logged.
   if (hasWhatsApp) {
-    const res = await sendWhatsAppText(waDigits(r.phone!), `${verb}: "${r.request.title}"\nSign here: ${url}`);
+    const res = await sendWhatsAppText(waDigits(r.phone!), `${verb}: "${r.request.title}"\nSign here: ${url}`, record);
     if (res.ok) delivered = true;
     await logSignEvent(r.requestId, { type: evType, recipientId: r.id, actor: "system", channel: "whatsapp", metadata: { ok: res.ok, error: res.error } });
   }

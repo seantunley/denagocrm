@@ -121,10 +121,13 @@ export async function POST(req: NextRequest) {
 
     let channel: "sms" | "email" | null = null;
     let target = "";
+    // On the owner's timeline with the code masked.
+    const record = { contactId: vehicle.contactId, label: "Service lookup verification code", secrets: [code] };
     if (phone && (await isSmsConfigured())) {
       const res = await sendSms(
         phone,
-        `Denago Cape Town: your verification code is ${code}. It expires in 10 minutes. If you didn't request this, ignore this message.`
+        `Denago Cape Town: your verification code is ${code}. It expires in 10 minutes. If you didn't request this, ignore this message.`,
+        record,
       );
       if (res.ok) {
         channel = "sms";
@@ -136,6 +139,7 @@ export async function POST(req: NextRequest) {
         to: email,
         subject: "Your Denago Cape Town verification code",
         text: `Your verification code is ${code}.\n\nIt expires in 10 minutes. If you didn't request this, you can ignore this email.\n\nDenago Cape Town`,
+        record,
       });
       if (res.ok) {
         channel = "email";

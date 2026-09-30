@@ -1,6 +1,7 @@
 import "server-only";
 import { prisma } from "@/lib/db";
 import { sendEmail } from "@/lib/email";
+import { signingRecord } from "@/lib/outboundMessageLog";
 import type { SweepTenantWhere } from "./recoveryScope";
 
 /**
@@ -79,6 +80,8 @@ export function describeError(err: unknown): string {
  * dormant (which is every environment today).
  */
 export async function deliverCompletionEmails(opts: {
+  /** The request — resolves which customer's timeline each copy is recorded on. */
+  requestId: string;
   title: string;
   pdf: Buffer;
   recipients: FanoutRecipient[];
@@ -100,12 +103,14 @@ export async function deliverCompletionEmails(opts: {
       subject: `Completed & signed: ${opts.title}`,
       text: `Hi ${recipient.name},\n\nEveryone has signed "${opts.title}". The final sealed PDF is attached.\n\nDenago Cape Town`,
       attachments: [{ filename: `${opts.title}.pdf`, content: opts.pdf, contentType: "application/pdf" }],
+      record: await signingRecord(opts.requestId, { email: recipient.email, label: "Signed document copy" }),
     });
 
     // THE FIX. sendEmail reports failure in its return value and never throws,
     // so this is the only place the difference can be seen.
     if (!result.ok) {
-      failures.push(`${recipient.email}: ${result.error ?? "send failed"}`);
+      // Recipient id, not address: these strings end up in ErrorLog.
+      failures.push(`recipient ${recipient.id}: ${result.error ?? "send failed"}`);
       continue;
     }
 
@@ -120,7 +125,7 @@ export async function deliverCompletionEmails(opts: {
       // delivery one, and counting it as a failure would withhold the completion
       // marker and mail this person their contract a second time. Log and move on.
       console.error(
-        `[signing] delivered the sealed PDF to ${recipient.email} but could not record it`,
+        `[signing] delivered the sealed PDF to recipient ${recipient.id} but could not record it`,
         err,
       );
     }
