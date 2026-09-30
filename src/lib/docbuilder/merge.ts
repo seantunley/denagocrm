@@ -6,6 +6,7 @@ import { jobCardTotals, jobLineCents } from "@/lib/workshop-constants";
 import type { QuoteForPrint } from "@/components/print/QuotePrintDoc";
 import { quoteBillTo, type BillToFleet } from "@/lib/quoteBillTo";
 import type { TableRow } from "./blocks";
+import { quoteDocTokens } from "./quoteDocs";
 
 export type JobCardForDoc = Prisma.JobCardGetPayload<{
   include: { items: true; vehicle: true; contact: true; technician: true };
@@ -101,6 +102,8 @@ export function buildQuoteContext(quote: QuoteForPrint, fleet: BillToFleet | nul
     "quote.total": formatZAR(Math.round(total)),
     vehicle: quote.lead?.product?.name ?? lines[0]?.description ?? "—",
     preparedBy: quote.createdBy?.name ?? "—",
+    // Invoice / sales agreement numbering, dates and party blocks — see quoteDocs.ts.
+    ...quoteDocTokens(quote, billTo, pricing),
   };
   const items: TableRow[] = [
     ...lines.map((i) => ({
@@ -154,6 +157,9 @@ export function buildQuoteContext(quote: QuoteForPrint, fleet: BillToFleet | nul
       })),
     ],
     status: quote.status,
+    // Lets a layout show the Subtotal / VAT lines only when the rows are ex-VAT,
+    // as documentTotals() does for the fixed print pages.
+    taxInclusive: quote.taxInclusive !== false,
   };
   const vars = {
     quotation,
