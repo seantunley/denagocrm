@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -69,6 +70,23 @@ export default function QuickCreateDialog() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [calendarType, setCalendarType] = useState<string>("call");
   const activityTypes = useActivityTypes();
+
+  // Close FOR REAL when the route changes. The Dialog wrapper only hides a
+  // dialog on navigation (ui/dialog.tsx), and this one lives in the shell across
+  // routes: `kind` stayed set, so a quote editor holding a saved quote sat
+  // mounted and invisible, and asking for Quick create again (same `kind`)
+  // could never bring it back. Nothing survives here that the hide didn't
+  // already put out of reach.
+  const pathname = usePathname();
+  const [openedPathname, setOpenedPathname] = useState(pathname);
+  if (pathname !== openedPathname) {
+    setOpenedPathname(pathname);
+    if (kind) {
+      setKind(null);
+      setCreateDefaults({});
+      setLoadError(null);
+    }
+  }
 
   useEffect(() => {
     const onOpen = (event: Event) => {

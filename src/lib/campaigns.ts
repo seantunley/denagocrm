@@ -260,6 +260,9 @@ export async function sendCampaignBatch(
   for (const r of recipients) {
     const c = r.contact;
     const vars = { first_name: c.firstName, name: contactName(c) };
+    // On the customer's timeline. The text part is what is stored, so the
+    // recipient's tracking/unsubscribe token (HTML and headers only) never is.
+    const record = { contactId: c.id, userId: campaign.createdById, label: `Campaign: ${campaign.name}`, secrets: [r.token] };
     let res: { ok: boolean; error?: string };
     if (campaign.channel === "email") {
       const subject = renderTemplate(campaign.subject ?? "", vars);
@@ -272,9 +275,10 @@ export async function sendCampaignBatch(
         text,
         html,
         headers: unsubscribeHeaders(r.token, brand),
+        record,
       });
     } else {
-      res = await sendSms((c.whatsapp ?? c.phone)!, renderTemplate(campaign.body, vars));
+      res = await sendSms((c.whatsapp ?? c.phone)!, renderTemplate(campaign.body, vars), record);
     }
     if (res.ok) {
       sent++;

@@ -191,6 +191,9 @@ async function deliver(recipient: ClaimedRecipient) {
   // (emailBrand is cache()d) — but the single binding is what makes it obvious
   // that they are the same brand rather than two lookups that happen to match.
   const brand = recipient.channel === "email" ? await emailBrand(recipient.tenantId) : undefined;
+  // On the customer's timeline — the text part only, so the tracking token
+  // carried by the HTML and the unsubscribe header is never stored there.
+  const record = { contactId: recipient.contactId, label: `Campaign: ${recipient.campaignName}`, secrets: [recipient.token] };
   const result = recipient.channel === "email"
     ? await sendEmail({
         to: eligibility.destination,
@@ -198,8 +201,9 @@ async function deliver(recipient: ClaimedRecipient) {
         text: renderTemplate(recipient.body, vars),
         html: buildTrackedEmail(renderTemplate(recipient.htmlBody ?? recipient.body, vars), recipient.token, brand),
         headers: unsubscribeHeaders(recipient.token, brand),
+        record,
       })
-    : await sendSms(eligibility.destination, renderTemplate(recipient.body, vars));
+    : await sendSms(eligibility.destination, renderTemplate(recipient.body, vars), record);
 
   if (result.ok) {
     const changed = await basePrisma.$transaction(async (tx) => {
