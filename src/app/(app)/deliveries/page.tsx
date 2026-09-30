@@ -11,6 +11,7 @@ import {
 import ProofOfDelivery from "@/components/ProofOfDelivery";
 import { formatDate, formatZAR } from "@/lib/format";
 import { loadBillToFleets, quoteBillTo } from "@/lib/quoteBillTo";
+import { quotePrintLinks } from "@/lib/quotePrintLinks";
 import { quotePricing } from "@/lib/pricing";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import {
@@ -183,6 +184,14 @@ export default async function DeliveriesPage() {
                           <span className="shrink-0 rounded-full bg-muted px-2 py-1 text-[10px] font-medium text-muted-foreground">{stage?.title}</span>
                         </div>
                         <p className="mt-2 text-[11px] text-muted-foreground">{photos} handover photo{photos === 1 ? "" : "s"}{quote.deliveryScheduledFor ? ` · ${formatDate(quote.deliveryScheduledFor)}` : ""}</p>
+                        {/* Same tab on mobile, like the delivery note: keeps PWA back navigation. */}
+                        <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
+                          {quotePrintLinks(quote).map((link) => (
+                            <a key={link.href} href={link.href} className="text-xs text-primary hover:underline">
+                              {link.label}
+                            </a>
+                          ))}
+                        </div>
                       </div>
                     </div>
                     {canManage && (
@@ -382,6 +391,15 @@ export default async function DeliveriesPage() {
                           );
                         })()}
 
+                        {/* Every card is an accepted quote that passed getAccessibleQuoteIds
+                            — the gate the invoice/agreement print routes apply. */}
+                        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
+                          {quotePrintLinks(quote).map((link) => (
+                            <a key={link.href} href={link.href} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">
+                              🧾 {link.label}
+                            </a>
+                          ))}
+                        </div>
                         {canManage && column.key === "invoice" && (
                           <SaveForm success="Invoice recorded" resetOnSuccess={false} action={markInvoiced.bind(null, quote.id)} className="mt-2.5 space-y-1.5">
                             <input type="file" name="file" required accept=".pdf,image/*" className="block w-full text-xs text-muted-foreground file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
