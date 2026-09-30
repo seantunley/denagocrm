@@ -64,6 +64,52 @@ export async function reconcileProviderFailure(ledger: FailureLedger, providerMe
   return marked;
 }
 
+/**
+ * How long a parked failure waits for its row. A wamid our outbox sent is
+ * committed within seconds; one still unmatched after a week belongs to a send
+ * that never had an outbox row (the legacy bot, signing links) and never will.
+ */
+export const PARKED_FAILURE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Cron side — the retry for a reconcile that failed. Both immediate paths (the
+ * webhook's re-check, the worker's reconcile right after the commit) are best
+ * effort; if one errors, the failure stays parked and this sweep, run by the
+ * outbox cron beside the Communication-log repair, applies it on a later pass.
+ *
+ * Oldest first, one bounded batch, each one exactly the reconcile the worker
+ * runs — so it is idempotent and safe to run concurrently (every write is
+ * conditional: the row on `sent|dead`, the parked record on `pending`).
+ * Unmatched records stay pending until the TTL, then expire.
+ */
+export async function sweepParkedFailures<T extends { providerMessageId: string; parkedAt: Date }>(
+  parked: T[],
+  ops: {
+    reconcile(row: T): Promise<number>;
+    expire(row: T): Promise<void>;
+    onError(row: T, error: unknown): Promise<void>;
+    shouldStop?(): boolean;
+  },
+  now: Date = new Date(),
+): Promise<{ applied: number; expired: number }> {
+  let applied = 0;
+  let expired = 0;
+  for (const row of parked) {
+    if (ops.shouldStop?.()) break;
+    try {
+      if ((await ops.reconcile(row)) > 0) applied += 1;
+      else if (now.getTime() - row.parkedAt.getTime() >= PARKED_FAILURE_TTL_MS) {
+        await ops.expire(row);
+        expired += 1;
+      }
+    } catch (error) {
+      // Left pending: the next pass tries again.
+      await ops.onError(row, error);
+    }
+  }
+  return { applied, expired };
+}
+
 /** The parked payload, as stored in a text column. */
 export function encodeParkedFailure(failure: ProviderFailure): string {
   return JSON.stringify({ failureCode: failure.failureCode, detail: failure.detail });

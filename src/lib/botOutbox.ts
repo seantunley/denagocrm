@@ -16,6 +16,7 @@ import {
   encodeParkedFailure,
   reconcileProviderFailure,
   recordProviderFailure,
+  sweepParkedFailures,
   type FailureLedger,
   type ProviderFailure,
 } from "./providerFailure";
@@ -1158,8 +1159,8 @@ export async function applyProviderFailure(channel: string, failure: ProviderFai
  */
 async function reconcileParkedFailure(channel: string, providerMessageId: string | undefined): Promise<void> {
   if (!providerMessageId) return;
-  // ponytail: a reconcile that errors here leaves the failure parked (row shows
-  // "Sent ✓"); sweep pending `*:failed` rows from the outbox cron if that is seen.
+  // A reconcile that errors here leaves the failure parked; the outbox cron's
+  // retryParkedFailures applies it on a later pass.
   await reconcileProviderFailure(failureLedger(channel), providerMessageId).catch(async (error) => {
     await logError("bot-outbox-failure-reconcile", error, `${channel}:${providerMessageId}`).catch(() => {});
   });
@@ -1235,6 +1236,51 @@ async function repairPendingCommunicationLogs(
   return repaired;
 }
 
+const PARKED_FAILURE_SUFFIX = ":failed";
+
+/**
+ * Retry parked provider failures (see ./providerFailure.ts) whose immediate
+ * reconcile did not land. Same `scope` rule as repairPendingCommunicationLogs,
+ * and each record is reconciled inside ITS OWN tenant's scope — the tenant the
+ * ledger (outboxTenantId()) must match — exactly as the drain below binds each
+ * conversation's tenant.
+ */
+async function retryParkedFailures(
+  limit: number,
+  scope: { tenantId?: string },
+  budget?: OutboxBudget,
+): Promise<number> {
+  const rows = await prisma.botInboundEvent.findMany({
+    where: { ...scope, channel: { endsWith: PARKED_FAILURE_SUFFIX }, status: "pending" },
+    orderBy: { createdAt: "asc" },
+    take: limit,
+    select: { id: true, tenantId: true, channel: true, providerId: true, createdAt: true },
+  });
+  const parked = rows.map((row) => ({
+    ...row,
+    outboxChannel: row.channel.slice(0, -PARKED_FAILURE_SUFFIX.length),
+    providerMessageId: row.providerId,
+    parkedAt: row.createdAt,
+  }));
+  const run = await sweepParkedFailures(parked, {
+    reconcile: (row) =>
+      runInTenantScope({ tenantId: row.tenantId, system: false }, () =>
+        reconcileProviderFailure(failureLedger(row.outboxChannel), row.providerMessageId),
+      ),
+    expire: async (row) => {
+      await prisma.botInboundEvent.updateMany({
+        where: { id: row.id, tenantId: row.tenantId, status: "pending" },
+        data: { status: "expired", completedAt: new Date() },
+      });
+    },
+    onError: async (row, error) => {
+      await logError("bot-outbox-failure-reconcile", error, `${row.channel}:${row.providerMessageId}`).catch(() => {});
+    },
+    shouldStop: () => Boolean(budget?.shouldStop(4_000)),
+  });
+  return run.applied;
+}
+
 /**
  * Per-slice cron drain. Conversation ordering is preserved by claimOldest().
  *
@@ -1271,6 +1317,11 @@ export async function flushBotOutbox(
   const scope = sliceTenantId === null ? {} : { tenantId: outboxTenantId() };
 
   stats.repairedLogs = await repairPendingCommunicationLogs(Math.min(limit, 25), scope, budget);
+  if (budget?.shouldStop(4_000)) return stats;
+  // Best effort, like the log repair: a sweep error must not stop the drain.
+  await retryParkedFailures(Math.min(limit, 25), scope, budget).catch(async (error) => {
+    await logError("bot-outbox-failure-reconcile", error, "sweep").catch(() => {});
+  });
   if (budget?.shouldStop(4_000)) return stats;
 
   const due = await prisma.botFlowOutbox.findMany({

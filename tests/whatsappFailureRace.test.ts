@@ -7,8 +7,10 @@ import path from "node:path";
 import {
   decodeParkedFailure,
   encodeParkedFailure,
+  PARKED_FAILURE_TTL_MS,
   reconcileProviderFailure,
   recordProviderFailure,
+  sweepParkedFailures,
   type FailureLedger,
   type ProviderFailure,
 } from "../src/lib/providerFailure";
@@ -26,13 +28,18 @@ const FAILED: ProviderFailure = { providerMessageId: WAMID, failureCode: "outsid
  * deliverClaimed does it: `UPDATE … WHERE status = 'running'` to sent + id, then
  * reconcile.
  */
-function world(hooks: { beforePark?: () => Promise<void> } = {}) {
+function world(hooks: { beforePark?: () => Promise<void>; markFailedThrows?: number } = {}) {
   const row = { status: "running", providerMessageId: null as string | null, failureCode: null as string | null };
-  const parked = new Map<string, { failure: ProviderFailure; status: "pending" | "completed" }>();
+  const parked = new Map<string, { failure: ProviderFailure; status: "pending" | "completed" | "expired"; parkedAt: Date }>();
   let markWrites = 0;
+  let throwsLeft = hooks.markFailedThrows ?? 0;
   const ledger: FailureLedger = {
     async markFailed(f) {
       if (row.providerMessageId !== f.providerMessageId || !["sent", "dead"].includes(row.status)) return 0;
+      if (throwsLeft > 0) {
+        throwsLeft--;
+        throw new Error("connection reset");
+      }
       row.status = "dead";
       row.failureCode = f.failureCode;
       markWrites++;
@@ -40,7 +47,7 @@ function world(hooks: { beforePark?: () => Promise<void> } = {}) {
     },
     async park(f) {
       await hooks.beforePark?.();
-      if (!parked.has(f.providerMessageId)) parked.set(f.providerMessageId, { failure: f, status: "pending" });
+      if (!parked.has(f.providerMessageId)) parked.set(f.providerMessageId, { failure: f, status: "pending", parkedAt: new Date() });
     },
     async parked(id) {
       const p = parked.get(id);
@@ -56,10 +63,30 @@ function world(hooks: { beforePark?: () => Promise<void> } = {}) {
       row.status = "sent";
       row.providerMessageId = id;
     }
-    await reconcileProviderFailure(ledger, id);
+    // Best effort, as reconcileParkedFailure is: an error is logged, not thrown.
+    await reconcileProviderFailure(ledger, id).catch(() => {});
+  }
+  /** One cron pass, with the ops retryParkedFailures gives it. */
+  async function cronSweep(now = new Date()) {
+    const pending = [...parked.entries()]
+      .filter(([, p]) => p.status === "pending")
+      .sort(([, a], [, b]) => a.parkedAt.getTime() - b.parkedAt.getTime())
+      .map(([providerMessageId, p]) => ({ providerMessageId, parkedAt: p.parkedAt }));
+    return sweepParkedFailures(
+      pending,
+      {
+        reconcile: (r) => reconcileProviderFailure(ledger, r.providerMessageId),
+        expire: async (r) => {
+          const p = parked.get(r.providerMessageId);
+          if (p?.status === "pending") p.status = "expired";
+        },
+        onError: async () => {},
+      },
+      now,
+    );
   }
   const label = () => deliveryLabel({ direction: "outbound" }, true, { status: row.status, failureCode: row.failureCode });
-  return { row, parked, ledger, workerCommits, label, writes: () => markWrites };
+  return { row, parked, ledger, workerCommits, cronSweep, label, writes: () => markWrites };
 }
 
 test("REGRESSION: failed webhook arrives before the worker persists the wamid → ends Not delivered", async () => {
@@ -119,6 +146,67 @@ test("a failure for a wamid no outbox row will ever hold stays parked and touche
   await recordProviderFailure(w.ledger, { ...FAILED, providerMessageId: "wamid.someone-else" });
   assert.equal(w.row.status, "sent");
   assert.equal(w.writes(), 0);
+});
+
+test("REGRESSION: the worker's reconcile throws once after the wamid is persisted → the next cron sweep applies it", async () => {
+  const w = world({ markFailedThrows: 1 });
+  await recordProviderFailure(w.ledger, FAILED); // early: parked
+  await w.workerCommits(WAMID); // commits the id; its reconcile throws and is swallowed
+  assert.equal(w.row.status, "sent", "the gap: parked failure, row says sent");
+  assert.equal(w.parked.get(WAMID)?.status, "pending");
+  const run = await w.cronSweep();
+  assert.deepEqual(run, { applied: 1, expired: 0 });
+  assert.equal(w.row.status, "dead");
+  assert.equal(w.label()?.text, "Not delivered — outside the 24-hour reply window");
+  assert.equal(w.parked.get(WAMID)?.status, "completed");
+  // Idempotent: a second (or concurrent) pass finds nothing pending.
+  assert.deepEqual(await w.cronSweep(), { applied: 0, expired: 0 });
+  assert.equal(w.row.status, "dead");
+});
+
+test("a sweep error leaves the record pending for the next pass", async () => {
+  const w = world({ markFailedThrows: 2 });
+  await recordProviderFailure(w.ledger, FAILED);
+  await w.workerCommits(WAMID); // throw #1
+  assert.deepEqual(await w.cronSweep(), { applied: 0, expired: 0 }); // throw #2
+  assert.equal(w.parked.get(WAMID)?.status, "pending");
+  assert.deepEqual(await w.cronSweep(), { applied: 1, expired: 0 });
+  assert.equal(w.row.status, "dead");
+});
+
+test("an unmatched parked failure stays pending, then expires after the TTL", async () => {
+  const w = world();
+  await recordProviderFailure(w.ledger, { ...FAILED, providerMessageId: "wamid.legacy-bot" });
+  const parkedAt = w.parked.get("wamid.legacy-bot")!.parkedAt.getTime();
+  assert.deepEqual(await w.cronSweep(new Date(parkedAt + PARKED_FAILURE_TTL_MS - 1)), { applied: 0, expired: 0 });
+  assert.equal(w.parked.get("wamid.legacy-bot")?.status, "pending");
+  assert.deepEqual(await w.cronSweep(new Date(parkedAt + PARKED_FAILURE_TTL_MS)), { applied: 0, expired: 1 });
+  assert.equal(w.parked.get("wamid.legacy-bot")?.status, "expired");
+  assert.deepEqual(await w.cronSweep(new Date(parkedAt + 2 * PARKED_FAILURE_TTL_MS)), { applied: 0, expired: 0 }, "expired is final");
+  assert.equal(PARKED_FAILURE_TTL_MS, 7 * 24 * 60 * 60 * 1000);
+});
+
+test("the sweep stops when the cron budget runs out", async () => {
+  let calls = 0;
+  const rows = [1, 2, 3].map((i) => ({ providerMessageId: `wamid.${i}`, parkedAt: new Date() }));
+  await sweepParkedFailures(rows, {
+    reconcile: async () => (calls++, 0),
+    expire: async () => {},
+    onError: async () => {},
+    shouldStop: () => calls >= 2,
+  });
+  assert.equal(calls, 2);
+});
+
+test("wiring: the outbox cron runs the parked-failure retry, bounded, oldest first, per-tenant scoped", () => {
+  const outbox = src("src/lib/botOutbox.ts");
+  const flush = outbox.slice(outbox.indexOf("export async function flushBotOutbox("));
+  assert.match(flush, /await retryParkedFailures\(Math\.min\(limit, 25\), scope, budget\)/);
+  const sweep = outbox.slice(outbox.indexOf("async function retryParkedFailures"), outbox.indexOf("export async function flushBotOutbox("));
+  assert.match(sweep, /where: \{ \.\.\.scope, channel: \{ endsWith: PARKED_FAILURE_SUFFIX \}, status: "pending" \}/);
+  assert.match(sweep, /orderBy: \{ createdAt: "asc" \},\s*take: limit/);
+  assert.match(sweep, /runInTenantScope\(\{ tenantId: row\.tenantId, system: false \}/);
+  assert.match(sweep, /where: \{ id: row\.id, tenantId: row\.tenantId, status: "pending" \},\s*data: \{ status: "expired"/);
 });
 
 test("the parked payload round-trips through the text column", () => {
