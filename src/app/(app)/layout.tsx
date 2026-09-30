@@ -13,6 +13,7 @@ import { tenantEnforcing } from "@/lib/tenantEnforcement";
 import { currentTenantScope } from "@/lib/tenantScope";
 import AppShell from "@/components/AppShell";
 import AppContextMenu from "@/components/AppContextMenu";
+import SessionKeeper from "@/components/SessionKeeper";
 
 export default async function AppLayout({
   children,
@@ -84,6 +85,7 @@ export default async function AppLayout({
           listens on `document` and stands aside wherever RecordContextMenu, a
           flow canvas or a text input has already claimed the click. */}
       <AppContextMenu />
+      <SessionKeeper />
       {/* Resolved here, in the SERVER layout, for the same reason `brand` is:
           getSetting reads the tenant from the request scope, which a client
           component has no access to. */}

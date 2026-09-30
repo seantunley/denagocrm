@@ -19,6 +19,10 @@ import {
 
 const EMPTY_DOC = [{ type: "paragraph", content: [] }];
 
+// A DocInstance made in the document editor keeps an empty BlockNote column;
+// saving or finalising it here would file that emptiness as the document.
+const NEW_EDITOR_DOCUMENT = "This document is edited in the document editor.";
+
 async function assertLinkedScope(
   user: PermissionUser,
   links: { contactId?: string | null; leadId?: string | null; quoteId?: string | null }
@@ -190,6 +194,7 @@ export async function saveDocInstance(
 ): Promise<{ ok: boolean; error?: string }> {
   return withActingStaffScope(async () => {
     const { doc } = await requireDocInstanceAccess(id, "documents.manage");
+    if (doc.docModelJson != null) return { ok: false, error: NEW_EDITOR_DOCUMENT };
     if (doc.status === "final") return { ok: false, error: "This document is finalised — duplicate it to edit." };
     await prisma.docInstance.update({
       where: { id },
@@ -202,6 +207,8 @@ export async function saveDocInstance(
 export async function finalizeDocInstance(id: string): Promise<{ ok: boolean; error?: string; pdfDocId?: string }> {
   return withActingStaffScope(async () => {
     const { user, doc } = await requireDocInstanceAccess(id, "documents.manage");
+    if (doc.docModelJson != null) return { ok: false, error: NEW_EDITOR_DOCUMENT };
+    if (doc.status === "final") return { ok: false, error: "This document is already finalised." };
 
     try {
       const html = await renderInstanceHtml({ title: doc.title, contentJson: doc.contentJson });

@@ -1,4 +1,4 @@
-import { requireQuoteReadAccess } from "@/lib/permissions";
+import { hasAnyPermission, requireQuoteReadAccess } from "@/lib/permissions";
 import { renderQuotePrintHtml } from "@/lib/quotePrintDocument";
 import { printToolbarHtml } from "@/lib/printToolbar";
 import { withActingStaffScope } from "@/lib/actingScope";
@@ -41,11 +41,14 @@ export async function GET(
 ) {
   return withActingStaffScope(async () => {
   const { id } = await context.params;
-  await requireQuoteReadAccess(id);
+  const user = await requireQuoteReadAccess(id);
 
   // ?tpl= previews a specific builder template — used by the Document Studio
-  // preview links. It selects a LAYOUT, never a different quote's data.
-  const templateId = new URL(request.url).searchParams.get("tpl");
+  // preview links. It selects a LAYOUT, never a different quote's data. It also
+  // renders that template's UNPUBLISHED draft, which is Builder work, so it is
+  // honoured only for Builder users; anyone else gets the quote as customers do.
+  const requested = new URL(request.url).searchParams.get("tpl");
+  const templateId = requested && (await hasAnyPermission(user, "docbuilder.view", "docbuilder.manage")) ? requested : null;
 
   const html = await renderQuotePrintHtml({
     quoteId: id,

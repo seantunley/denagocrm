@@ -11,6 +11,7 @@ import { validateExpression } from "@/lib/docbuilder/expr";
 import { saveLibraryItem } from "@/app/actions/doclibrary";
 import { TextPromptDialog } from "@/components/TextPromptDialog";
 import { toast } from "sonner";
+import { ShowcaseProps } from "./ShowcaseProps";
 import { useState } from "react";
 import { uploadDocEditorImage } from "@/app/actions/doceditor";
 import { checkDocImage, DOC_IMAGE_ACCEPT } from "@/lib/doceditor/imageUpload";
@@ -182,6 +183,7 @@ function BlockProps({ block, floating }: { block: DocumentBlock; floating: boole
       {block.type === "terms" && <TermsProps block={block} />}
       {block.type === "footer" && <FooterProps block={block} />}
       {block.type === "lineItems" && <LineItemsProps block={block} />}
+      {(block.type === "showcaseHeader" || block.type === "infoStrip" || block.type === "vehicleShowcase" || block.type === "totalsBox" || block.type === "acceptance" || block.type === "footerBand") && <ShowcaseProps block={block} />}
       {(block.type === "text" || block.type === "heading") && <TextHint block={block} />}
       {block.type === "table" && <p className="p-3 text-xs text-slate-400">Edit table cells inline on the page.</p>}
       {block.type === "pageBreak" && <p className="p-3 text-xs text-slate-400">Forces the next content onto a new page.</p>}
