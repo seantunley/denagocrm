@@ -164,6 +164,7 @@ const calls: { settingsWhere: Where[]; brandFor: (string | null)[] } = { setting
 const REQUESTS: Record<string, { tenantId: string | null; quoteId: string | null; createdById: string | null; expiresAt: Date | null }> = {
   req_a: { tenantId: "t_a", quoteId: "q1", createdById: "u1", expiresAt: null },
   req_b: { tenantId: "t_b", quoteId: null, createdById: null, expiresAt: null },
+  req_legacy: { tenantId: null, quoteId: "q1", createdById: "u1", expiresAt: null },
 };
 const STORE = [
   { tenantId: "t_a", key: "SIGNING_EMAIL_INVITE", value: JSON.stringify({ subject: "A: {{quote_number}} from {{sender_name}}", body: "Tenant A copy\n\n{{signing_link}}" }) },
@@ -227,16 +228,18 @@ test("each request renders from ITS tenant's template and brand only", async () 
   assert.deepEqual(calls.brandFor, ["t_a", "t_b"]);
 });
 
-test("a missing request renders unbranded: no settings or brand read for ANY tenant", async () => {
-  const settingsBefore = calls.settingsWhere.length;
-  const brandBefore = calls.brandFor.length;
-  const e = await signingEmailContent("invite", { requestId: "req_gone", title: "Quote Q-9", recipientName: "Jane", signingUrl: URL_ });
-  assert.equal(e.subject, "Please sign your document: Quote Q-9");
-  assert.ok(e.html.includes(`href="${URL_}"`));
-  assert.doesNotMatch(e.html, /api\/brand\/logo/);
-  assert.equal(calls.settingsWhere.length, settingsBefore, "no AppSetting read");
-  assert.equal(calls.brandFor.length, brandBefore, "no tenant brand read");
-});
+for (const [label, requestId] of [["a missing request", "req_gone"], ["a request with no tenant", "req_legacy"]]) {
+  test(`${label} renders unbranded: no settings or brand read for ANY tenant`, async () => {
+    const settingsBefore = calls.settingsWhere.length;
+    const brandBefore = calls.brandFor.length;
+    const e = await signingEmailContent("invite", { requestId, title: "Quote Q-9", recipientName: "Jane", signingUrl: URL_ });
+    assert.equal(e.subject, "Please sign your document: Quote Q-9");
+    assert.ok(e.html.includes(`href="${URL_}"`));
+    assert.doesNotMatch(e.html, /api\/brand\/logo/);
+    assert.equal(calls.settingsWhere.length, settingsBefore, "no AppSetting read");
+    assert.equal(calls.brandFor.length, brandBefore, "no tenant brand read");
+  });
+}
 
 test("a failed lookup still sends the default email with the link", async () => {
   const e = await signingEmailContent("invite", { requestId: "req_boom", title: "Quote Q-9", recipientName: "Jane", signingUrl: URL_ });

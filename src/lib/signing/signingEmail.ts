@@ -2,7 +2,6 @@ import "server-only";
 import { basePrisma } from "@/lib/db";
 import { brandForTenant, DEFAULT_BRAND } from "@/lib/tenantBrand";
 import { emailBrand } from "@/lib/emailBrand";
-import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { formatDate } from "@/lib/format";
 import { decryptValue } from "@/lib/settings";
 import {
@@ -55,23 +54,22 @@ export async function signingEmailContent(
       where: { id: input.requestId },
       select: { tenantId: true, quoteId: true, createdById: true, expiresAt: true },
     });
-    // No request → no tenant to brand as. Never fall through to the default
-    // tenant's template, phone, email or logo.
-    if (!req) return unbranded();
-    const tenantId = req.tenantId ?? null;
-    const settingsTenant = tenantId ?? DEFAULT_TENANT_ID;
+    // No request, or one with no owning tenant → nothing to brand as. Never
+    // fall through to the default tenant's template, phone, email or logo.
+    if (!req?.tenantId) return unbranded();
+    const tenantId = req.tenantId;
     const def = SIGNING_EMAILS[kind];
     const [brand, mailBrand, settings, quote, sender] = await Promise.all([
       brandForTenant(tenantId).catch(() => DEFAULT_BRAND),
       emailBrand(tenantId),
       basePrisma.appSetting.findMany({
-        where: { tenantId: settingsTenant, key: { in: [def.settingKey, "COMPANY_PHONE", "COMPANY_EMAIL", "COMPANY_LOGO_URL"] } },
+        where: { tenantId, key: { in: [def.settingKey, "COMPANY_PHONE", "COMPANY_EMAIL", "COMPANY_LOGO_URL"] } },
         select: { key: true, value: true },
       }),
-      req?.quoteId
+      req.quoteId
         ? basePrisma.quote.findFirst({ where: { id: req.quoteId, tenantId }, select: { number: true } })
         : null,
-      req?.createdById ? basePrisma.user.findUnique({ where: { id: req.createdById }, select: { name: true } }) : null,
+      req.createdById ? basePrisma.user.findUnique({ where: { id: req.createdById }, select: { name: true } }) : null,
     ]);
     const setting = (key: string) => {
       const raw = settings.find((s) => s.key === key)?.value ?? "";
@@ -86,7 +84,7 @@ export async function signingEmailContent(
     vars.company_name = brand.displayName;
     vars.company_phone = setting("COMPANY_PHONE");
     vars.company_email = setting("COMPANY_EMAIL");
-    vars.expiry_date = req?.expiresAt ? formatDate(req.expiresAt) : "";
+    vars.expiry_date = req.expiresAt ? formatDate(req.expiresAt) : "";
 
     // The public brand-logo route (what campaign mail uses); a typed-in company
     // logo only if it is a public https URL — never a private-store link, which
