@@ -80,7 +80,7 @@ export async function publishStudioTemplate(id: string) {
       user,
     });
     revalidatePath(`/settings/documents/studio/t/${id}`);
-    revalidatePath("/settings/documents");
+    revalidatePath("/document-studio");
   });
 }
 
@@ -89,7 +89,7 @@ export async function deleteStudioTemplate(id: string) {
     const user = await requirePermission("document_templates.manage");
     const tpl = await prisma.customDocTemplate.update({ where: { id }, data: { deletedAt: new Date() } });
     await logAudit({ action: "studio.template.deleted", summary: `Deleted studio template “${tpl.name}”`, user });
-    redirect("/settings/documents?tab=studio");
+    redirect("/document-studio");
   });
 }
 
@@ -125,7 +125,7 @@ export async function deleteReusableBlock(id: string) {
   return withActingStaffScope(async () => {
     await requirePermission("document_templates.manage");
     await prisma.reusableBlock.update({ where: { id }, data: { deletedAt: new Date() } });
-    revalidatePath("/settings/documents");
+    revalidatePath("/document-studio");
   });
 }
 
@@ -250,6 +250,6 @@ export async function deleteDocInstance(id: string) {
     const { user, doc } = await requireDocInstanceAccess(id, "documents.manage");
     await prisma.docInstance.update({ where: { id }, data: { deletedAt: new Date() } });
     await logAudit({ action: "studio.doc.deleted", summary: `Deleted document “${doc.title}”`, user });
-    redirect("/settings/documents?tab=studio");
+    redirect("/document-studio");
   });
 }

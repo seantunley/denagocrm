@@ -8,7 +8,7 @@ import { logAudit } from "@/lib/audit";
 import { listBuilderVersions } from "@/lib/docbuilder/store";
 import { withActingStaffScope } from "@/lib/actingScope";
 
-const BASE = "/settings/documents/builder";
+const BASE = "/document-studio";
 
 /*
  * `createBuilderTemplate` and `saveBuilderData` used to live here and are gone.

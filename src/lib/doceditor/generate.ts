@@ -1,6 +1,4 @@
 import "server-only";
-import fs from "fs";
-import path from "path";
 import { prisma } from "@/lib/db";
 import { getBuilderTemplate, getLiveBuilderTemplate } from "@/lib/docbuilder/store";
 import { buildQuoteContext, buildJobCardContext } from "@/lib/docbuilder/merge";
@@ -11,6 +9,7 @@ import { htmlToPdf } from "@/lib/customDocs";
 import { type DocumentModel } from "./model";
 import { readTemplateDocument } from "./legacy";
 import { renderDocumentHtml, renderEmailHtml, type RenderCtx } from "./serialize";
+import { defaultLogoDataUri as logoDataUri, documentLogo, embedDocImages, liveGlobalTokens } from "./renderGlobals";
 
 /**
  * Fold the editable Company Profile in as {{company.*}} tokens, exactly as the
@@ -21,21 +20,13 @@ import { renderDocumentHtml, renderEmailHtml, type RenderCtx } from "./serialize
  * otherwise be null. Record-specific tokens still win on any overlap.
  */
 async function withCompany(ctx: RenderCtx): Promise<RenderCtx> {
-  const company = companyTokens(await getCompanyProfile());
+  const profile = await getCompanyProfile();
+  const company = { ...(await liveGlobalTokens()), ...companyTokens(profile) };
+  const logo = await documentLogo(profile.logoUrl);
   // Unbound: carry company tokens only, but mark bound:false so conditionals/showIf
   // columns render as the placeholder layout rather than evaluating an empty scope.
-  if (!ctx) return { tokens: company, items: [], vars: {}, bound: false };
-  return { ...ctx, tokens: { ...company, ...ctx.tokens }, bound: true };
-}
-
-let logoCache: string | null | undefined;
-function logoDataUri(): string | undefined {
-  if (logoCache !== undefined) return logoCache ?? undefined;
-  try {
-    const buf = fs.readFileSync(path.join(process.cwd(), "public", "branding", "denago-logo-email.png"));
-    logoCache = `data:image/png;base64,${buf.toString("base64")}`;
-  } catch { logoCache = null; }
-  return logoCache ?? undefined;
+  if (!ctx) return { tokens: company, items: [], vars: {}, bound: false, logo };
+  return { ...ctx, tokens: { ...company, ...ctx.tokens }, bound: true, logo };
 }
 
 export type Resolved = { doc: DocumentModel; ctx: RenderCtx; title: string; quoteId: string | null; jobCardId: string | null; contactId: string | null };
@@ -72,7 +63,7 @@ async function resolve(templateId: string, quoteId?: string | null, jobCardId?: 
   // document we could not fully understand.
   const read = readTemplateDocument(tpl.data, tpl.name);
   if (read.status !== "ok") return null;
-  const doc = read.doc;
+  const doc = await embedDocImages(read.doc, tpl.tenantId);
   let ctx: RenderCtx = null;
   let title = doc.title || tpl.name;
   let qId: string | null = null, jId: string | null = null, contactId: string | null = null;
