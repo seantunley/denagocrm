@@ -11,6 +11,9 @@ import {
   DELIVERED_STOCK_STATUSES,
   notReadyMessage,
   vehiclesAwaitingRegistration,
+  vinConflictMessage,
+  vinMatch,
+  type VinMatch,
 } from "@/lib/deliveryVehicles";
 import { addStockEvent } from "@/lib/stockPlatform";
 import type { PermissionUser } from "@/lib/permissions";
@@ -168,26 +171,34 @@ export async function deliverQuote(input: {
   }
 
   /*
-   * ONE VEHICLE PER CART. Resolved before anything is written, so a refusal here
-   * costs nothing. A unit whose serial is already a live vehicle in this
-   * workspace REUSES that vehicle — that is the record the customer registered,
-   * or the one an earlier delivery created. Matched case-insensitively, because
-   * stock serials are stored upper-case and a hand-typed VIN may not be.
+   * ONE VEHICLE PER CART — AND IT MUST BE THIS CUSTOMER'S. Resolved before
+   * anything is written, so a refusal here costs nothing. A live vehicle with
+   * the unit's serial (matched case-insensitively: stock serials are stored
+   * upper-case, a hand-typed VIN may not be) is:
+   *
+   *   this quote's customer's  → reused;
+   *   nobody's                 → attached to this customer, audited;
+   *   ANOTHER customer's       → the whole delivery is refused. Never reassigned:
+   *                              handing the cart over while its service and
+   *                              warranty record stays on someone else is the
+   *                              bug, and moving it silently is a worse one.
    */
   const contact = quote.contact ?? quote.lead?.contact ?? null;
   if (outstanding.length > 0 && !contact) {
     refuse("Link this quote to a contact before delivery — its stock becomes the customer's vehicle.");
   }
-  const existingVehicle = new Map<string, string>();
+  const existingVehicle = new Map<string, { id: string; match: VinMatch; contactId: string }>();
   for (const unit of outstanding) {
     if (!unit.serial) continue;
     const ids = await ciExactIds("vehicleVin", unit.serial);
     if (ids.length === 0) continue;
-    const live = await prisma.vehicle.findFirst({ where: { id: { in: ids } }, select: { id: true } });
+    const live = await prisma.vehicle.findFirst({ where: { id: { in: ids } }, select: { id: true, contactId: true } });
     // The VIN is unique across the whole table. A match we cannot see is in
     // Trash, and creating another would collide with it.
     if (!live) refuse("A vehicle with this unit's serial/VIN already exists but is not active in this workspace (check Trash). Restore it, then deliver again.");
-    existingVehicle.set(unit.id, live.id);
+    const match = vinMatch(live.contactId, contact!.id);
+    if (match === "conflict") refuse(vinConflictMessage(unit.serial));
+    existingVehicle.set(unit.id, { id: live.id, match, contactId: live.contactId });
   }
 
   const evidence = !catchUp && input.collectEvidence
@@ -231,9 +242,18 @@ export async function deliverQuote(input: {
         },
       });
       if (moved.count !== 1) refuse("A stock unit on this quote changed while it was being delivered. Refresh and try again.");
-      const reuse = existingVehicle.get(unit.id);
-      if (reuse) {
-        ids.push(reuse);
+      const existing = existingVehicle.get(unit.id);
+      if (existing) {
+        // Re-proved INSIDE the transaction, conditional on the owner read above:
+        // a vehicle transferred in between matches nothing and refuses the lot.
+        const owned = existing.match === "attach"
+          ? await tx.vehicle.updateMany({
+              where: { id: existing.id, contactId: existing.contactId },
+              data: { contactId: contact!.id },
+            })
+          : { count: await tx.vehicle.count({ where: { id: existing.id, contactId: contact!.id } }) };
+        if (owned.count !== 1) refuse(vinConflictMessage(unit.serial ?? ""));
+        ids.push(existing.id);
         continue;
       }
       const vehicle = await tx.vehicle.create({
@@ -256,6 +276,12 @@ export async function deliverQuote(input: {
 
   const actor = { id: user.id, name: user.name };
   for (const unit of outstanding) {
+    const match = existingVehicle.get(unit.id)?.match;
+    const outcome = match === "reuse"
+      ? "existing vehicle record reused"
+      : match === "attach"
+        ? "existing unowned vehicle record attached to this customer"
+        : "vehicle record created";
     await addStockEvent({
       stockUnitId: unit.id,
       eventType: "unit.delivered",
@@ -263,12 +289,21 @@ export async function deliverQuote(input: {
       toStatus: "delivered",
       leadId: quote.leadId,
       quoteId,
-      detail: existingVehicle.has(unit.id) ? "Existing customer vehicle reused" : "Customer vehicle created",
+      detail: outcome,
       actor,
     });
+    if (match === "attach") {
+      await logAudit({
+        action: "vehicle.owner_attached",
+        summary: `Vehicle …${(unit.serial ?? "").slice(-4)} had no owner; attached to this customer on delivery of Q-${quote.number}`,
+        contactId: contact?.id ?? quote.contactId,
+        leadId: quote.leadId,
+        user,
+      });
+    }
     await logAudit({
       action: "stock.delivered",
-      summary: `Delivered ${unit.stockNumber ?? unit.product.name} on Q-${quote.number} — ${existingVehicle.has(unit.id) ? "existing vehicle record reused" : "vehicle record created"}`,
+      summary: `Delivered ${unit.stockNumber ?? unit.product.name} on Q-${quote.number} — ${outcome}`,
       contactId: contact?.id ?? quote.contactId,
       leadId: quote.leadId,
       user,

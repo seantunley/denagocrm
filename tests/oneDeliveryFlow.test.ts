@@ -8,6 +8,8 @@ import {
   DELIVERABLE_STATUS,
   notReadyMessage,
   vehiclesAwaitingRegistration,
+  vinConflictMessage,
+  vinMatch,
   type DeliveryQuoteLine,
 } from "../src/lib/deliveryVehicles";
 
@@ -111,10 +113,49 @@ test("both entry points get that same refusal — the stock page has no readines
 test("an existing vehicle with the unit's VIN is reused, never duplicated", () => {
   const body = fn(delivery, "deliverQuote");
   assert.match(body, /ciExactIds\("vehicleVin", unit\.serial\)/, "case-insensitive VIN match");
-  const reuse = body.indexOf("existingVehicle.get(unit.id)");
+  const reuse = body.indexOf("const existing = existingVehicle.get(unit.id)");
   const create = body.indexOf("tx.vehicle.create(");
   assert.ok(reuse !== -1 && create !== -1 && reuse < create, "reuse is checked before any create");
-  assert.match(body.slice(reuse, create), /if \(reuse\) \{[\s\S]*continue;/);
+  assert.match(body.slice(reuse, create), /if \(existing\) \{[\s\S]*continue;/);
+});
+
+/* ── the reused vehicle must belong to THIS quote's customer ─────────────── */
+
+test("VIN reuse: same customer reuses, no owner attaches, ANOTHER customer conflicts", () => {
+  assert.equal(vinMatch("contact_a", "contact_a"), "reuse");
+  assert.equal(vinMatch(null, "contact_a"), "attach");
+  assert.equal(vinMatch("", "contact_a"), "attach");
+  assert.equal(vinMatch("contact_b", "contact_a"), "conflict", "another customer's vehicle is never reused");
+});
+
+test("the conflict refusal gives the last 4 of the VIN and nothing about the other customer", () => {
+  const message = vinConflictMessage("DNG9XX001234");
+  assert.match(message, /^Cart …1234 is already registered to another customer — check the stock unit or transfer the vehicle first\./);
+  assert.doesNotMatch(message, /DNG9XX00/, "never the full VIN");
+  assert.match(message, /Nothing was changed\./);
+});
+
+test("a VIN on another customer refuses the WHOLE delivery before any write", () => {
+  const body = fn(delivery, "deliverQuote");
+  assert.match(body, /select: \{ id: true, contactId: true \}/, "the owner is read with the match");
+  const gate = body.indexOf('if (match === "conflict") refuse(vinConflictMessage(unit.serial));');
+  assert.notEqual(gate, -1, "a conflicting owner must refuse");
+  for (const write of ["input.collectEvidence(", "prisma.$transaction(", "tx.quote.updateMany(", "tx.stockUnit.updateMany(", "tx.vehicle.create("]) {
+    assert.ok(body.indexOf(write) > gate, `${write} must come after the ownership check`);
+  }
+});
+
+test("ownership is re-proved inside the transaction; an unowned vehicle is attached conditionally and audited", () => {
+  const body = fn(delivery, "deliverQuote");
+  const tx = body.slice(body.indexOf("prisma.$transaction("));
+  // Reuse: still this customer's at commit time, or the lot rolls back.
+  assert.match(tx, /tx\.vehicle\.count\(\{ where: \{ id: existing\.id, contactId: contact!\.id \} \}\)/);
+  // Attach: only if the owner is still the one read — never overwrites a real owner.
+  assert.match(tx, /tx\.vehicle\.updateMany\(\{\s*where: \{ id: existing\.id, contactId: existing\.contactId \},\s*data: \{ contactId: contact!\.id \}/);
+  assert.match(tx, /if \(owned\.count !== 1\) refuse\(vinConflictMessage\(/);
+  assert.match(body, /action: "vehicle\.owner_attached"/);
+  // No other path writes a vehicle's owner.
+  assert.equal((strip(delivery).match(/data: \{ contactId:/g) ?? []).length, 1, "exactly one owner write");
 });
 
 test("a board delivery that left its stock behind can be finished from the stock page", () => {

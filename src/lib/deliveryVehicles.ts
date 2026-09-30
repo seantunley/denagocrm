@@ -52,6 +52,28 @@ export type VehicleToRegister = {
 /** Stock statuses that mean the unit has been handed over (and has its vehicle). */
 export const DELIVERED_STOCK_STATUSES = ["delivered", "sold"] as const;
 
+/**
+ * What to do with a live vehicle that already carries a delivered cart's VIN.
+ *
+ *   same customer as the quote → reuse it (the one-vehicle-per-cart rule)
+ *   no customer on it          → attach it to the quote's customer (audited)
+ *   a DIFFERENT customer       → refuse the whole delivery; never reassign
+ *
+ * Reusing without this check handed a cart to one customer while its vehicle
+ * record — service history, warranty identity — stayed on somebody else.
+ */
+export type VinMatch = "reuse" | "attach" | "conflict";
+
+export function vinMatch(vehicleContactId: string | null, quoteContactId: string): VinMatch {
+  if (!vehicleContactId) return "attach";
+  return vehicleContactId === quoteContactId ? "reuse" : "conflict";
+}
+
+/** Last 4 of the VIN only — never the other customer's name or details. */
+export function vinConflictMessage(serial: string): string {
+  return `Cart …${serial.slice(-4)} is already registered to another customer — check the stock unit or transfer the vehicle first. Nothing was changed.`;
+}
+
 /** The only stock status a cart can be handed over from: PDI passed. */
 export const DELIVERABLE_STATUS = "ready_for_delivery";
 
