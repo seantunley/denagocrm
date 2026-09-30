@@ -10,8 +10,14 @@ import { softDeleteRecord } from "@/lib/trash";
 import { parseRands } from "@/lib/format";
 import { Prisma } from "@prisma/client";
 import { deleteFile, saveFile } from "@/lib/storage";
-import { detectProfileImageMime } from "@/lib/profile";
-import { MAX_VEHICLE_SPECS, parseVehicleSpecs } from "@/lib/docbuilder/vehicleShowcase";
+import {
+  MAX_VEHICLE_SPECS,
+  checkShowcaseImage,
+  colourImageRef,
+  parseColourImages,
+  parseVehicleSpecs,
+  uniqueColours,
+} from "@/lib/docbuilder/vehicleShowcase";
 
 function productData(formData: FormData) {
   const str = (k: string) => {
@@ -84,24 +90,20 @@ export async function updateProduct(id: string, formData: FormData) {
 }
 
 /**
- * Product photos are embedded into every quote PDF that shows them AND frozen,
- * as bytes, into each signature request's snapshot (freezeVehicleShowcase) — so
- * this cap is also the ceiling on what one showcase adds to a snapshot. A
- * web-optimised cut-out is typically 100–400 KB.
- */
-const SHOWCASE_IMAGE_MAX_BYTES = 1.5 * 1024 * 1024;
-
-/**
- * The "Quote showcase" card: the tagline, spec icons and photo the showcase
- * quotation layout shows for this model. The photo goes to the private store,
- * filed under the PRODUCT's workspace, and is embedded as a data URL when a
- * quote is rendered (lib/docbuilder/vehicleShowcaseLoad.ts).
+ * The "Quote showcase" card: the tagline, spec icons and photos the showcase
+ * quotation layout shows for this model — a default photo plus one per colour
+ * (the quoted colour's photo wins; see showcaseImageRefFor). Photos go to the
+ * private store, filed under the PRODUCT's workspace, and are embedded as data
+ * URLs when a quote is rendered (lib/docbuilder/vehicleShowcaseLoad.ts).
  */
 export async function updateProductShowcase(id: string, formData: FormData) {
   return withActingStaffScope(async () => {
-    await requireOwner();
+    const user = await requireOwner();
     // Tenant-scoped read: another workspace's product id resolves to nothing.
-    const product = await prisma.product.findUnique({ where: { id }, select: { id: true, tenantId: true, showcaseImageRef: true } });
+    const product = await prisma.product.findUnique({
+      where: { id },
+      select: { id: true, tenantId: true, name: true, showcaseImageRef: true, showcaseColourImages: true, colors: { select: { id: true, name: true } } },
+    });
     if (!product) throw new Error("Product not found");
 
     const specs = parseVehicleSpecs(
@@ -113,31 +115,58 @@ export async function updateProductShowcase(id: string, formData: FormData) {
     );
     const tagline = String(formData.get("showcaseTagline") ?? "").trim().slice(0, 120) || null;
 
-    let imageRef = product.showcaseImageRef;
-    const upload = formData.get("showcaseImage");
-    if (upload instanceof File && upload.size > 0) {
-      if (upload.size > SHOWCASE_IMAGE_MAX_BYTES) throw new Error("Product photos must be 1.5 MB or smaller — export a web-optimised PNG, JPG or WebP.");
-      const buffer = Buffer.from(await upload.arrayBuffer());
-      const mime = detectProfileImageMime(buffer); // sniffed from the bytes, not the browser's say-so
-      if (!mime) throw new Error("That file is not a PNG, JPG or WebP image.");
-      const ext = mime === "image/jpeg" ? ".jpg" : mime === "image/png" ? ".png" : ".webp";
-      imageRef = await saveFile(buffer, `product-${product.id}${ext}`, mime, product.tenantId);
-    } else if (formData.get("removeShowcaseImage") === "on") {
-      imageRef = null;
-    }
+    const saved: string[] = []; // written by THIS save — removed again if it fails
+    // A new upload's ref, `null` when the owner ticked remove, else `current`.
+    const photo = async (field: string, removeField: string, current: string | null, slug: string) => {
+      const upload = formData.get(field);
+      if (upload instanceof File && upload.size > 0) {
+        const buffer = Buffer.from(await upload.arrayBuffer());
+        const { mime, ext } = checkShowcaseImage(buffer);
+        const ref = await saveFile(buffer, `product-${product.id}${slug}${ext}`, mime, product.tenantId);
+        saved.push(ref);
+        return ref;
+      }
+      return formData.get(removeField) === "on" ? null : current;
+    };
 
+    const previousColours = parseColourImages(product.showcaseColourImages);
+    const colourImages: Record<string, string> = {};
+    const changedColours: string[] = [];
+    let imageRef: string | null;
     try {
+      imageRef = await photo("showcaseImage", "removeShowcaseImage", product.showcaseImageRef, "");
+      // Only the product's own colours: a photo for a colour since removed from
+      // the product is dropped here (and its file deleted below).
+      for (const colour of uniqueColours(product.colors)) {
+        const current = colourImageRef(previousColours, colour.name);
+        const next = await photo(`colourImage_${colour.id}`, `removeColourImage_${colour.id}`, current, `-${colour.id}`);
+        if (next) colourImages[colour.name] = next;
+        if (next !== current) changedColours.push(colour.name);
+      }
       await prisma.product.update({
         where: { id },
-        data: { showcaseTagline: tagline, showcaseSpecs: specs.length ? specs : Prisma.DbNull, showcaseImageRef: imageRef },
+        data: {
+          showcaseTagline: tagline,
+          showcaseSpecs: specs.length ? specs : Prisma.DbNull,
+          showcaseImageRef: imageRef,
+          showcaseColourImages: Object.keys(colourImages).length ? colourImages : Prisma.DbNull,
+        },
       });
     } catch (error) {
-      if (imageRef && imageRef !== product.showcaseImageRef) await deleteFile(imageRef).catch(() => {});
+      await Promise.all(saved.map((ref) => deleteFile(ref).catch(() => {})));
       throw error;
     }
-    if (product.showcaseImageRef && product.showcaseImageRef !== imageRef) {
-      await deleteFile(product.showcaseImageRef).catch((error) => console.warn("Unable to remove previous product photo", error));
+    const kept = new Set([imageRef, ...Object.values(colourImages)]);
+    for (const old of [product.showcaseImageRef, ...Object.values(previousColours)]) {
+      if (old && !kept.has(old)) await deleteFile(old).catch((error) => console.warn("Unable to remove previous product photo", error));
     }
+    await logAudit({
+      action: "product.showcase_updated",
+      summary: `Updated the quote showcase for ${product.name}${changedColours.length ? ` (colour photos: ${changedColours.join(", ")})` : ""}`,
+      user,
+      entityType: "product",
+      entityId: product.id,
+    });
     revalidatePath(`/products/${id}`);
   });
 }
