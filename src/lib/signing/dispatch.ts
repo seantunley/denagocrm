@@ -4,8 +4,8 @@ import { sendEmail } from "@/lib/email";
 import { sendWhatsAppText, waDigits, isWhatsAppConfigured } from "@/lib/whatsapp";
 import { logSignEvent } from "./events";
 import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "./status";
-import { DEFAULT_BRAND, brandForTenant } from "@/lib/tenantBrand";
 import { tenantOrigin } from "@/lib/tenantOrigin";
+import { signingEmailContent } from "./signingEmail";
 import { usableCapability } from "./tokenVault";
 import { signingRecord } from "@/lib/outboundMessageLog";
 
@@ -23,48 +23,8 @@ export function signUrl(token: string, origin?: string | null): string {
   return `${process.env.SIGN_BASE_URL || origin || BASE}/signing/${token}`;
 }
 
-/**
- * The email a customer receives asking them to sign a contract.
- *
- * It had "DENAGO CAPE TOWN" as a wordmark at the top and "Denago Cape Town —
- * Authorised Denago EV Dealer" at the bottom, typed in. Every tenant's customers
- * received it, above a document from a company they had never dealt with, next
- * to a link to a hostname that was not their supplier's. Of everything the brand
- * work has touched this is the least excusable place for it: a request to sign a
- * legal document should say who is asking.
- */
-function emailHtml(name: string, title: string, url: string, verb: string, brand: SignBrand): string {
-  const wordmark = brand.tagline
-    ? `${escapeText(brand.displayName)} — ${escapeText(brand.tagline)}`
-    : escapeText(brand.displayName);
-  return `<div style="font-family:Helvetica,Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;color:#1e293b">
-    <div style="font-weight:800;letter-spacing:1px">${escapeText(brand.displayName.toUpperCase())}</div>
-    <h2 style="font-size:18px;margin:18px 0 6px">${verb}</h2>
-    <p>Hi ${escapeText(name)},</p>
-    <p>Please review and sign <strong>${escapeText(title)}</strong>.</p>
-    <p style="margin:22px 0"><a href="${url}" style="background:#ea580c;color:#fff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:700">Open &amp; sign</a></p>
-    <p style="font-size:12px;color:#64748b">Or paste this link into your browser:<br>${url}</p>
-    <p style="font-size:12px;color:#94a3b8;margin-top:20px">${wordmark}</p>
-  </div>`;
-}
-
-type SignBrand = { displayName: string; tagline: string | null };
-
-/**
- * Who this request is from, and where its links should point.
- *
- * Resolved together because they answer the same question and both fail the same
- * way — a lookup that throws must never stop a signing invitation going out, so
- * both fall back to the platform's own identity rather than propagating.
- */
-async function senderFor(tenantId: string | null): Promise<{ brand: SignBrand; origin: string }> {
-  const [brand, origin] = await Promise.all([
-    brandForTenant(tenantId).catch(() => DEFAULT_BRAND),
-    tenantOrigin(tenantId),
-  ]);
-  return { brand: { displayName: brand.displayName, tagline: brand.tagline }, origin };
-}
-function escapeText(s: string): string { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+// The email itself — wording, brand, logo, button — is the tenant's editable
+// template now: see ./emailTemplates.ts (Settings → Email templates).
 
 /** Outcome of a notify attempt: whether the recipient had a usable channel, and
  *  whether at least one channel actually accepted the message. */
@@ -106,7 +66,7 @@ export async function notifyRecipient(recipientId: string, opts?: { reminder?: b
     if (claimed.count !== 1) return { reachable: true, delivered: false };
   }
 
-  const { brand, origin } = await senderFor(r.request.tenantId);
+  const origin = await tenantOrigin(r.request.tenantId);
 
   // r.token is the stored DIGEST. Building the URL from it sends the customer a
   // link the public route hashes again and cannot resolve — accepted by SMTP,
@@ -143,10 +103,13 @@ export async function notifyRecipient(recipientId: string, opts?: { reminder?: b
   });
 
   if (hasEmail) {
+    const email = await signingEmailContent(opts?.reminder ? "reminder" : "invite", {
+      requestId: r.requestId, title: r.request.title, recipientName: r.name, signingUrl: url,
+    });
     const res = await sendEmail({
-      to: r.email!, subject: `${verb}: ${r.request.title}`,
-      text: `Hi ${r.name},\n\n${verb}: "${r.request.title}" from ${brand.displayName}.\n\nOpen and sign here:\n${url}\n\nThank you,\n${brand.displayName}`,
-      html: emailHtml(r.name, r.request.title, url, verb, brand),
+      to: r.email!, subject: email.subject,
+      text: email.text,
+      html: email.html,
       record,
     });
     if (res.ok) delivered = true;

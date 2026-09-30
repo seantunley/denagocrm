@@ -105,9 +105,9 @@ test("sendWhatsAppText records only after Meta accepted, failures on both failur
 
 const SILENT_PATHS: Array<[string, RegExp[]]> = [
   // Signing invitation + reminder (email and WhatsApp), link token as a secret.
-  ["src/lib/signing/dispatch.ts", [/signingRecord\(r\.requestId, \{[\s\S]*?secrets: \[raw\]/, /html: emailHtml\([^)]*\),\n\s+record,/, /sendWhatsAppText\([^;]*, record\);/]],
+  ["src/lib/signing/dispatch.ts", [/signingRecord\(r\.requestId, \{[\s\S]*?secrets: \[raw\]/, /html: email\.html,\n\s+record,/, /sendWhatsAppText\([^;]*, record\);/]],
   // Signer OTP by email or SMS, the code as a secret.
-  ["src/lib/signing/identity.ts", [/label: "Signing verification code",\n\s+secrets: \[code\]/, /and tell the sender\.`,\n\s+record,/, /expires in 10 minutes\.`,\n\s+record,/]],
+  ["src/lib/signing/identity.ts", [/label: "Signing verification code",\n\s+secrets: \[code\]/, /signingEmailContent\("otp", \{[\s\S]*?\}\)\),\n\s+record,/, /expires in 10 minutes\.`,\n\s+record,/]],
   // Sealed-PDF copies — live completion, recovery sweep and durable job.
   ["src/lib/signing/completionFanout.ts", [/record: await signingRecord\(opts\.requestId/]],
   ["src/lib/signing/jobWorker.ts", [/record: await signingRecord\(request\.id/]],
