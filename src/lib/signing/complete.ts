@@ -187,7 +187,9 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
     );
   }
 
-  const ctx = await bindCtx(req.quoteId, req.jobCardId);
+  // The sealed PDF renders the snapshot, whose showcase vehicle was frozen at
+  // send time — never the live Product.
+  const ctx = await bindCtx(req.quoteId, req.jobCardId, undefined, { liveVehicle: false });
 
   const rows: RecipientRow[] = [];
   for (const r of req.recipients.filter((x) => x.status === "signed")) {

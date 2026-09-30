@@ -8,6 +8,10 @@ import { requireOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
 import { parseRands } from "@/lib/format";
+import { Prisma } from "@prisma/client";
+import { deleteFile, saveFile } from "@/lib/storage";
+import { detectProfileImageMime } from "@/lib/profile";
+import { MAX_VEHICLE_SPECS, parseVehicleSpecs } from "@/lib/docbuilder/vehicleShowcase";
 
 function productData(formData: FormData) {
   const str = (k: string) => {
@@ -75,6 +79,65 @@ export async function updateProduct(id: string, formData: FormData) {
     if (!data.name) throw new Error("Product name is required");
     await prisma.product.update({ where: { id }, data });
     revalidatePath("/products");
+    revalidatePath(`/products/${id}`);
+  });
+}
+
+/**
+ * Product photos are embedded into every quote PDF that shows them AND frozen,
+ * as bytes, into each signature request's snapshot (freezeVehicleShowcase) — so
+ * this cap is also the ceiling on what one showcase adds to a snapshot. A
+ * web-optimised cut-out is typically 100–400 KB.
+ */
+const SHOWCASE_IMAGE_MAX_BYTES = 1.5 * 1024 * 1024;
+
+/**
+ * The "Quote showcase" card: the tagline, spec icons and photo the showcase
+ * quotation layout shows for this model. The photo goes to the private store,
+ * filed under the PRODUCT's workspace, and is embedded as a data URL when a
+ * quote is rendered (lib/docbuilder/vehicleShowcaseLoad.ts).
+ */
+export async function updateProductShowcase(id: string, formData: FormData) {
+  return withActingStaffScope(async () => {
+    await requireOwner();
+    // Tenant-scoped read: another workspace's product id resolves to nothing.
+    const product = await prisma.product.findUnique({ where: { id }, select: { id: true, tenantId: true, showcaseImageRef: true } });
+    if (!product) throw new Error("Product not found");
+
+    const specs = parseVehicleSpecs(
+      Array.from({ length: MAX_VEHICLE_SPECS }, (_, i) => ({
+        icon: String(formData.get(`specIcon${i}`) ?? ""),
+        label: String(formData.get(`specLabel${i}`) ?? "").slice(0, 40),
+        sub: String(formData.get(`specSub${i}`) ?? "").slice(0, 60),
+      })),
+    );
+    const tagline = String(formData.get("showcaseTagline") ?? "").trim().slice(0, 120) || null;
+
+    let imageRef = product.showcaseImageRef;
+    const upload = formData.get("showcaseImage");
+    if (upload instanceof File && upload.size > 0) {
+      if (upload.size > SHOWCASE_IMAGE_MAX_BYTES) throw new Error("Product photos must be 1.5 MB or smaller — export a web-optimised PNG, JPG or WebP.");
+      const buffer = Buffer.from(await upload.arrayBuffer());
+      const mime = detectProfileImageMime(buffer); // sniffed from the bytes, not the browser's say-so
+      if (!mime) throw new Error("That file is not a PNG, JPG or WebP image.");
+      const ext = mime === "image/jpeg" ? ".jpg" : mime === "image/png" ? ".png" : ".webp";
+      imageRef = await saveFile(buffer, `product-${product.id}${ext}`, mime, product.tenantId);
+    } else if (formData.get("removeShowcaseImage") === "on") {
+      imageRef = null;
+    }
+
+    try {
+      await prisma.product.update({
+        where: { id },
+        data: { showcaseTagline: tagline, showcaseSpecs: specs.length ? specs : Prisma.DbNull, showcaseImageRef: imageRef },
+      });
+    } catch (error) {
+      if (imageRef && imageRef !== product.showcaseImageRef) await deleteFile(imageRef).catch(() => {});
+      throw error;
+    }
+    if (product.showcaseImageRef && product.showcaseImageRef !== imageRef) {
+      await deleteFile(product.showcaseImageRef).catch((error) => console.warn("Unable to remove previous product photo", error));
+    }
     revalidatePath(`/products/${id}`);
   });
 }
