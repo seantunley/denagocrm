@@ -38,6 +38,7 @@ const FAILURE_REASON: Record<string, string> = {
   outside_window: "outside the 24-hour reply window",
   invalid_recipient: "this number or account is not reachable",
   rejected_by_recipient: "the customer's account rejected it",
+  app_not_approved: "Meta has not approved the app to message customers yet",
   not_configured: "the channel is not connected",
   rate_limited: "the channel is rate-limiting us",
   transient_network: "the channel could not be reached",
@@ -73,6 +74,9 @@ export function classifyDeliveryFailure(error: string): string {
   if (/invalid outbox payload|unsupported bot channel/.test(text)) return "invalid_payload";
   if (/24|outside the 24|window/.test(text)) return "outside_window";
   if (/not configured|no token|token is not|missing credential/.test(text)) return "not_configured";
+  // Before App Review, Meta refuses every customer who isn't a tester of the app.
+  // Our permission, not the customer's choice, and no retry fixes it.
+  if (/admins, developers or testers/.test(text)) return "app_not_approved";
   if (/invalid|not a valid|no such user|recipient.*(unavailable|not found)|unknown user/.test(text)) return "invalid_recipient";
   if (/blocked|unsubscribed|opt(ed)? out|policy violation|not authorized|permission/.test(text)) return "rejected_by_recipient";
   if (/rate limit|too many requests|429/.test(text)) return "rate_limited";
@@ -105,6 +109,7 @@ export const PERMANENT_FAILURES = new Set([
   "invalid_payload",
   "invalid_recipient",
   "rejected_by_recipient",
+  "app_not_approved",
   "outside_window",
 ]);
 
