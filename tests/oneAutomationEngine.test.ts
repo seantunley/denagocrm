@@ -104,7 +104,9 @@ const WRITE_PATHS: Array<[string, string[]]> = [
   ["src/app/actions/leads.ts", ["stage_entered", "lead_won", "lead_lost"]],
   ["src/app/actions/quotes.ts", ["lead_won", "quote_declined"]],
   ["src/lib/signing/postComplete.ts", ["lead_won", "quote_signed"]],
-  ["src/app/actions/fulfilment.ts", ["delivered"]],
+  // The one delivery, shared by the Deliveries board and the stock page — so a
+  // stock-page delivery now fires `delivered` too, which it never did before.
+  ["src/lib/quoteDelivery.ts", ["delivered"]],
   ["src/lib/referrals.ts", ["referral_earned"]],
 ];
 
