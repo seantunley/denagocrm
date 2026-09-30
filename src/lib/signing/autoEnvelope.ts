@@ -289,6 +289,9 @@ function ensureSignable(
   );
   if (signingRecipients.length === 0) {
     const customerRecipient = newRecipient({
+      // The party is stated, not only implied by the name: send-time field
+      // snapping (doceditor/fieldSnap.ts) moves only the customer's fields.
+      party: "customer",
       name: customer.name || "Customer",
       email: customer.email ?? "",
       role: "signer",
@@ -325,13 +328,16 @@ function makeCosignable(
   denago: { name: string; email: string | null },
   customer: { name: string; email: string | null },
 ): { doc: DocumentModel; denagoId: string; customerId: string } {
+  // Parties stated explicitly (see ensureSignable): fieldSnap moves only the customer's fields.
   const dealerRecipient = newRecipient({
+    party: "denago",
     name: denago.name || "Denago Cape Town",
     email: denago.email ?? "",
     role: "signer",
     color: "#020617",
   });
   const customerRecipient = newRecipient({
+    party: "customer",
     name: customer.name || "Customer",
     email: customer.email ?? "",
     role: "signer",
