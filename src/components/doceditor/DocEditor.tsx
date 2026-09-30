@@ -7,14 +7,17 @@ import { useEditor } from "@/lib/doceditor/store";
 import type { DocumentModel } from "@/lib/doceditor/model";
 import { saveDocEditor, importDocEditorTemplate } from "@/app/actions/doceditor";
 import { publishBuilderVersion } from "@/app/actions/docbuilder";
+import { finaliseCustomDocument, saveCustomDocument } from "@/app/actions/customDocuments";
 import { DndController } from "./DndController";
 import { Palette } from "./Palette";
 import { Canvas } from "./Canvas";
 import { PropertiesPanel } from "./PropertiesPanel";
 import { VersionHistory } from "./VersionHistory";
+import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { toast } from "sonner";
 import {
   Eye,
+  FileCheck2,
   FileDown,
   PanelLeft,
   PanelRight,
@@ -40,12 +43,21 @@ type RecordOption = { value: string; label: string };
  */
 export type PublishState = "never" | "live" | "ahead";
 
+/**
+ * "template": a DocBuilderTemplate — autosaves the draft, Publish makes it live.
+ * "document": a custom document (DocInstance) — its own copy of a template, so
+ * it saves to the document, never the template, and ends with Finalise instead
+ * of Publish. Versions, record preview, import and export are template tools.
+ */
+export type EditorMode = "template" | "document";
+
 export function DocEditor({
   id,
   initialDoc,
   records,
   initialPublishState = "never",
   hasStandardLayout = false,
+  mode = "template",
 }: {
   id: string;
   initialDoc: DocumentModel;
@@ -53,7 +65,10 @@ export function DocEditor({
   initialPublishState?: PublishState;
   /** This document type has a standard layout the draft can be reset to. */
   hasStandardLayout?: boolean;
+  mode?: EditorMode;
 }) {
+  const isDocument = mode === "document";
+  const save = isDocument ? saveCustomDocument : saveDocEditor;
   const load = useEditor((state) => state.load);
   const doc = useEditor((state) => state.doc);
   const dirty = useEditor((state) => state.dirty);
@@ -127,7 +142,8 @@ export function DocEditor({
       saveChain.current = saveChain.current.then(async () => {
         try {
           setSaveState("saving");
-          const result = await saveDocEditor(id, snapshot);
+          const result = await save(id, snapshot);
+          if (!result.ok && isDocument) toast.error(result.error ?? "Couldn't save this document.");
           if (result.ok) {
             // A saved edit after a publish: real documents no longer match the screen.
             setPublishState((state) => (state === "live" ? "ahead" : state));
@@ -146,7 +162,7 @@ export function DocEditor({
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
-  }, [doc, dirty, id, markSaved]);
+  }, [doc, dirty, id, markSaved, save, isDocument]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -192,12 +208,31 @@ export function DocEditor({
   const manualSave = async () => {
     if (!doc) return;
     setSaveState("saving");
-    const result = await saveDocEditor(id, doc);
+    const result = await save(id, doc);
     if (result.ok) {
       markSaved();
       setSaveState("saved");
       setPublishState((state) => (state === "live" ? "ahead" : state));
+    } else {
+      setSaveState("idle");
+      if (isDocument) toast.error(result.error ?? "Couldn't save this document.");
     }
+  };
+
+  /** Save what is on screen, render the PDF, file it and lock the document. */
+  const finalise = async (): Promise<{ error?: string } | void> => {
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    await saveChain.current;
+    const current = useEditor.getState().doc;
+    if (current) {
+      const saved = await saveCustomDocument(id, current);
+      if (!saved.ok) return { error: saved.error ?? "Couldn't save, so the document was not finalised." };
+      markSaved();
+    }
+    const result = await finaliseCustomDocument(id);
+    if (!result.ok) return { error: result.error ?? "Couldn't finalise this document." };
+    if (result.pdfDocId) window.open(`/api/files/${result.pdfDocId}`, "_blank");
+    router.refresh(); // the page re-renders as the locked, filed document
   };
 
   const publish = async () => {
@@ -236,7 +271,7 @@ export function DocEditor({
   const recordQuery = record
     ? `?record=${encodeURIComponent(record)}`
     : "";
-  const previewUrl = `/api/pdf/doc-editor/${id}${recordQuery}`;
+  const previewUrl = isDocument ? `/api/pdf/doc-instance/${id}` : `/api/pdf/doc-editor/${id}${recordQuery}`;
   const buttonClass =
     "inline-flex h-8 items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.035] px-2.5 text-xs text-slate-300 transition hover:bg-white/[0.08] hover:text-white";
 
@@ -260,7 +295,11 @@ export function DocEditor({
             }
           />
         }
-        description="Document Editor · drag content onto a print-ready canvas"
+        description={
+          isDocument
+            ? "Custom document · your own copy — editing it never changes the template"
+            : "Document Editor · drag content onto a print-ready canvas"
+        }
         status={
           <div className="flex items-center gap-3">
             <BuilderSaveStatus
@@ -272,6 +311,25 @@ export function DocEditor({
                     : "Saved"
               }
             />
+            {isDocument ? (
+              <ConfirmActionDialog
+                title="Finalise this document?"
+                description="The PDF is filed in the document repository against its customer and quote, and the document can no longer be edited."
+                confirmLabel="Finalise & file PDF"
+                success="Finalised. The PDF is filed in the document repository."
+                onConfirm={finalise}
+                trigger={
+                  <button
+                    type="button"
+                    className="inline-flex h-8 items-center gap-1.5 rounded-md bg-orange-600 px-3 text-xs font-medium text-white transition hover:bg-orange-700"
+                    title="Render the PDF, file it in the repository and lock this document"
+                  >
+                    <FileCheck2 className="size-4" />
+                    Finalise
+                  </button>
+                }
+              />
+            ) : (<>
             <span
               className={`whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium ${
                 publishState === "live"
@@ -297,6 +355,7 @@ export function DocEditor({
             >
               {publishing ? "Publishing…" : "Publish"}
             </button>
+            </>)}
           </div>
         }
       >
@@ -330,6 +389,7 @@ export function DocEditor({
           <Plus className="size-4" />
           <span className="hidden sm:inline">Page</span>
         </button>
+        {!isDocument && (<>
         <VersionHistory
           id={id}
           onPublished={() => setPublishState("live")}
@@ -356,6 +416,7 @@ export function DocEditor({
             </option>
           ))}
         </select>
+        </>)}
         <a
           className={buttonClass}
           href={previewUrl}
@@ -369,6 +430,7 @@ export function DocEditor({
             record was chosen in the PREVIEW dropdown beside it — a third way to
             create a signing envelope for a quote, from a design tool, next to a
             control that says preview. Sending is the quote's Send tab. */}
+        {!isDocument && (<>
         <button
           type="button"
           className={buttonClass}
@@ -416,6 +478,7 @@ export function DocEditor({
             ))}
           </div>
         </details>
+        </>)}
         <button type="button" className="btn-primary btn-sm" onClick={manualSave}>
           <Save className="size-4" />
           {saveState === "saving" ? "Saving…" : "Save"}

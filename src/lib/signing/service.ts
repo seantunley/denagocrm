@@ -2,10 +2,13 @@ import "server-only";
 import { Prisma } from "@prisma/client";
 import { basePrisma } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
-import { formatDate } from "@/lib/format";
+import { documentGlobalTokens } from "@/lib/docbuilder/merge";
+import { freezableLogoUrl } from "@/lib/doceditor/renderGlobals";
 import { getCompanyProfile, companyTokens } from "@/lib/companyProfile";
 import type { DocumentModel } from "@/lib/doceditor/model";
 import { freezeDocumentGlobals } from "@/lib/signing/freezeDocument";
+import { freezeQuoteShowcase } from "@/lib/docbuilder/vehicleShowcaseLoad";
+import { showcaseAssetTokens } from "@/lib/doceditor/showcaseAssetsServer";
 // newSignToken is superseded by newSignCapability: a capability is stored as a
 // digest plus ciphertext, never as the raw value. frozenBrand is kept — the
 // brand a document was signed under must not follow a later rebrand.
@@ -105,10 +108,27 @@ export async function createSignatureRequestFromDoc(opts: {
   // would claim about itself afterwards.
   const profile = await getCompanyProfile();
   const brand = frozenBrand(profile);
-  const frozenDoc = freezeDocumentGlobals(opts.doc, {
-    ...companyTokens(profile),
-    "date.today": formatDate(new Date()),
-  });
+  // The logo is frozen as something WE serve: an outside link could change or
+  // vanish after signing, and the signing page would hot-link a third party.
+  brand.logoUrl = await freezableLogoUrl(brand.logoUrl);
+  // {{user.name}} is the member of staff sending it. The customer's signing page
+  // has no staff session to resolve it from later, so it is frozen here too.
+  const sender = opts.createdById
+    ? await basePrisma.user.findUnique({ where: { id: opts.createdById }, select: { name: true } }).catch(() => null)
+    : null;
+  // The showcase vehicle and page layout are frozen the same way: the vehicle's
+  // photo, tagline and specs are otherwise read live from the Product, which may
+  // be edited mid-signature.
+  const frozenDoc = await freezeQuoteShowcase(
+    freezeDocumentGlobals(opts.doc, {
+      // Built-in band photos ({{asset.*}}) become data URLs IN the snapshot, so
+      // a signed quote keeps the photo it was signed with.
+      ...showcaseAssetTokens(),
+      ...companyTokens(profile),
+      ...documentGlobalTokens(sender?.name),
+    }),
+    source.quoteId,
+  );
   // Whether the signer must prove who they are.
   //
   // The workspace policy decides the default — MONEY out of the box, so a quote

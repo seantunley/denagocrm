@@ -110,9 +110,12 @@ test("the frozen brand WINS over the live profile at render time", () => {
   const code = shipped("src/lib/signing/render.ts");
   assert.match(
     code,
-    /const company = frozen \? frozen\.tokens : companyTokens\(await getCompanyProfile\(\)\);/,
+    /const company = frozen \? frozen\.tokens : live \? \{ \.\.\.\(await liveGlobalTokens\(\)\), \.\.\.companyTokens\(live\) \} : \{\};/,
     "frozen first, live only as the fallback",
   );
+  assert.match(code, /const live = frozen \? null : await getCompanyProfile\(\);/, "the live profile is not even read for a frozen brand");
+  // The logo follows the same rule — the frozen one, never the live one, for a signed request.
+  assert.match(code, /documentLogo\(frozen \? frozen\.logoUrl : live\?\.logoUrl\)/);
   assert.match(code, /frozen\?: FrozenBrand \| null/, "and it is optional, so unfrozen rows are unchanged");
 });
 
@@ -125,7 +128,9 @@ test("every renderer of a frozen document reads the frozen brand", () => {
     assert.notEqual(start, -1, `${fn} is gone — was it renamed?`);
     const body = code.slice(start, code.indexOf("\n}", start));
     assert.match(body, /parseFrozenBrand\(req\.brandJson\)/, `${fn} must read the frozen brand`);
-    assert.match(body, /bindCtx\(req\.quoteId, req\.jobCardId, frozen\)/, `${fn} must bind it`);
+    // (A trailing options argument is allowed — the snapshot renders also pass
+    // `{ liveVehicle: false }` so the frozen showcase vehicle is used.)
+    assert.match(body, /bindCtx\(req\.quoteId, req\.jobCardId, frozen[,)]/, `${fn} must bind it`);
     assert.match(body, /frozen\?\.logoUrl \?\? logoDataUri\(\)/, `${fn} must use the frozen logo`);
     assert.match(body, /"brandJson"/, `${fn} must select the column it reads`);
   }

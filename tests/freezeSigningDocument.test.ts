@@ -29,3 +29,16 @@ test("company and date globals are frozen throughout a signing snapshot", () => 
   assert.match(changedJson, /17 Jul 2026/);
   assert.doesNotMatch(changedJson, /Changed Company/);
 });
+
+test("variables inserted from the picker are frozen too, not only typed {{tokens}}", () => {
+  const source = standardTemplateFor("indemnity");
+  const pill = (token: string) => ({ type: "mergeField", token, children: [{ text: "" }] });
+  const text = { ...source.pages[0].rows[0].columns[0].blocks[0], type: "text", value: [{ type: "p", children: [pill("date.today"), pill("user.name"), pill("customer.name")] }] };
+  const doc = { ...source, pages: [{ ...source.pages[0], rows: [{ ...source.pages[0].rows[0], columns: [{ ...source.pages[0].rows[0].columns[0], blocks: [text] }] }] }] };
+  const json = JSON.stringify(freezeDocumentGlobals(doc as typeof source, { "date.today": "29 Sep 2026", "user.name": "Sean" }));
+  assert.match(json, /"text":"29 Sep 2026"/);
+  assert.match(json, /"text":"Sean"/);
+  assert.doesNotMatch(json, /"token":"date\.today"/);
+  // A record variable is not a global — it stays a variable, bound when rendered.
+  assert.match(json, /"token":"customer\.name"/);
+});

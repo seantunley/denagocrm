@@ -1,4 +1,5 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+import { printableRecordLayout } from "@/lib/docbuilder/leadWarrantyRecords";
 import { prisma } from "@/lib/db";
 import { requireLeadReadAccess } from "@/lib/permissions";
 import PrintActions from "@/components/PrintActions";
@@ -17,6 +18,12 @@ export default async function IndemnityPrintPage({
   const { id } = await params;
   await requireLeadReadAccess(id);
   const { tpl: tplId } = await searchParams;
+  // SAFE SWITCH: once the default indemnity layout is PUBLISHED in the single
+  // editor, that is what prints. ?tpl= is a Settings → Documents preview of a
+  // legacy template, so it stays here.
+  if (!tplId && (await printableRecordLayout("indemnity"))) {
+    redirect(`/leads/${id}/indemnity/document`);
+  }
   const lead = await prisma.lead.findUnique({
     where: { id },
     include: { product: true, contact: true },

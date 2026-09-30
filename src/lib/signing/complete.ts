@@ -10,6 +10,7 @@ import { formatDateTime } from "@/lib/format";
 import { logError } from "@/lib/errorLog";
 import { resolveTenantActor } from "@/lib/tenantActor";
 import { bindCtx, logoDataUri } from "./render";
+import { embedDocImages } from "@/lib/doceditor/renderGlobals";
 import { logSignEvent } from "./events";
 import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "./status";
 import { requestTrustedTimestamp } from "./timestamp";
@@ -186,7 +187,9 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
     );
   }
 
-  const ctx = await bindCtx(req.quoteId, req.jobCardId);
+  // The sealed PDF renders the snapshot, whose showcase vehicle was frozen at
+  // send time — never the live Product.
+  const ctx = await bindCtx(req.quoteId, req.jobCardId, undefined, { liveVehicle: false });
 
   const rows: RecipientRow[] = [];
   for (const r of req.recipients.filter((x) => x.status === "signed")) {
@@ -235,7 +238,7 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
     .filter((r) => r.role !== "viewer")
     .map((r) => ({ id: r.id, name: r.signedName || r.name }));
 
-  const html = renderDocumentHtml(doc, ctx, logoDataUri(), {
+  const html = renderDocumentHtml(await embedDocImages(doc, req.tenantId), ctx, logoDataUri(), {
     hideOverlays: true,
     stampedFields,
     appendHtml: certificateHtml(req.title, req.id, rows) + acknowledgementsHtml(ackFields, expectedSigners),

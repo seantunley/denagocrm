@@ -1,7 +1,9 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { unstable_rethrow } from "next/navigation";
 import { saveMySignature } from "@/app/actions/signing";
+import { ACTION_NOT_DELIVERED } from "@/components/actionError";
 import ModalPortal from "@/components/ui/modal-portal";
 
 /**
@@ -56,14 +58,20 @@ export default function SignatureCapture({
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, out.width, out.height);
     ctx.drawImage(canvas, 0, 0);
-    const result = await saveMySignature(out.toDataURL("image/png"));
-    if (result.error) setError(result.error);
-    else {
-      setPadOpen(false);
-      setPreviewFailed(false);
-      onSaved();
+    try {
+      const result = await saveMySignature(out.toDataURL("image/png"));
+      if (result.error) setError(result.error);
+      else {
+        setPadOpen(false);
+        setPreviewFailed(false);
+        onSaved();
+      }
+    } catch (error) {
+      unstable_rethrow(error);
+      setError(ACTION_NOT_DELIVERED);
+    } finally {
+      setBusy(false);
     }
-    setBusy(false);
   }
 
   return (

@@ -1,15 +1,17 @@
 import "server-only";
-import fs from "fs";
-import path from "path";
 import { prisma } from "@/lib/db";
 import { getBuilderTemplate, getLiveBuilderTemplate } from "@/lib/docbuilder/store";
 import { buildQuoteContext, buildJobCardContext } from "@/lib/docbuilder/merge";
+import { withVehicleShowcase } from "@/lib/docbuilder/vehicleShowcaseLoad";
+import { showcaseAssetTokens } from "./showcaseAssetsServer";
 import { loadBillToFleet } from "@/lib/quoteBillTo";
+import { loadLeadForDoc, loadWarrantyClaimForDoc } from "@/lib/docbuilder/leadWarrantyRecords";
 import { getCompanyProfile, companyTokens } from "@/lib/companyProfile";
 import { htmlToPdf } from "@/lib/customDocs";
 import { type DocumentModel } from "./model";
 import { readTemplateDocument } from "./legacy";
 import { renderDocumentHtml, renderEmailHtml, type RenderCtx } from "./serialize";
+import { defaultLogoDataUri as logoDataUri, documentLogo, embedDocImages, liveGlobalTokens } from "./renderGlobals";
 
 /**
  * Fold the editable Company Profile in as {{company.*}} tokens, exactly as the
@@ -19,22 +21,15 @@ import { renderDocumentHtml, renderEmailHtml, type RenderCtx } from "./serialize
  * NO quote/job card is bound (list preview / "No record" export), where ctx would
  * otherwise be null. Record-specific tokens still win on any overlap.
  */
-async function withCompany(ctx: RenderCtx): Promise<RenderCtx> {
-  const company = companyTokens(await getCompanyProfile());
+async function withCompany(ctx: RenderCtx, tenantId?: string | null): Promise<RenderCtx> {
+  const profile = await getCompanyProfile();
+  // + the showcase layout's built-in band photos ({{asset.*}}), embedded as data URLs.
+  const company = { ...showcaseAssetTokens(), ...(await liveGlobalTokens()), ...companyTokens(profile) };
+  const logo = await documentLogo(profile.logoUrl, tenantId);
   // Unbound: carry company tokens only, but mark bound:false so conditionals/showIf
   // columns render as the placeholder layout rather than evaluating an empty scope.
-  if (!ctx) return { tokens: company, items: [], vars: {}, bound: false };
-  return { ...ctx, tokens: { ...company, ...ctx.tokens }, bound: true };
-}
-
-let logoCache: string | null | undefined;
-function logoDataUri(): string | undefined {
-  if (logoCache !== undefined) return logoCache ?? undefined;
-  try {
-    const buf = fs.readFileSync(path.join(process.cwd(), "public", "branding", "denago-logo-email.png"));
-    logoCache = `data:image/png;base64,${buf.toString("base64")}`;
-  } catch { logoCache = null; }
-  return logoCache ?? undefined;
+  if (!ctx) return { tokens: company, items: [], vars: {}, bound: false, logo };
+  return { ...ctx, tokens: { ...company, ...ctx.tokens }, bound: true, logo };
 }
 
 export type Resolved = { doc: DocumentModel; ctx: RenderCtx; title: string; quoteId: string | null; jobCardId: string | null; contactId: string | null };
@@ -59,7 +54,9 @@ export async function renderResolvedToPdf(r: Resolved): Promise<{ buffer: Buffer
 }
 
 /** Load a template + bind it to a quote/job card (shared by PDF and export). */
-async function resolve(templateId: string, quoteId?: string | null, jobCardId?: string | null, live = false): Promise<Resolved | null> {
+type OtherRecord = { leadId?: string | null; warrantyClaimId?: string | null };
+
+async function resolve(templateId: string, quoteId?: string | null, jobCardId?: string | null, live = false, other?: OtherRecord): Promise<Resolved | null> {
   // `live`: a document being filed against a record renders the PUBLISHED
   // version; previews and the editor's own exports render the draft.
   const tpl = live ? await getLiveBuilderTemplate(templateId) : await getBuilderTemplate(templateId);
@@ -69,7 +66,7 @@ async function resolve(templateId: string, quoteId?: string | null, jobCardId?: 
   // document we could not fully understand.
   const read = readTemplateDocument(tpl.data, tpl.name);
   if (read.status !== "ok") return null;
-  const doc = read.doc;
+  const doc = await embedDocImages(read.doc, tpl.tenantId);
   let ctx: RenderCtx = null;
   let title = doc.title || tpl.name;
   let qId: string | null = null, jId: string | null = null, contactId: string | null = null;
@@ -79,13 +76,16 @@ async function resolve(templateId: string, quoteId?: string | null, jobCardId?: 
       include: { items: true, fees: { orderBy: { sortOrder: "asc" } }, lead: { include: { product: true } }, contact: true, createdBy: true },
     });
     // Tenant-scoped fleet lookup, not an include — Quote.fleetId has no FK.
-    if (q) { ctx = buildQuoteContext(q, await loadBillToFleet(prisma, q.fleetId)); title = `${doc.title} — Q-${q.number}`; qId = q.id; contactId = q.contactId; }
+    if (q) { ctx = await withVehicleShowcase(buildQuoteContext(q, await loadBillToFleet(prisma, q.fleetId)), q); title = `${doc.title} — Q-${q.number}`; qId = q.id; contactId = q.contactId; }
   } else if (jobCardId) {
     const jc = await prisma.jobCard.findUnique({
       where: { id: jobCardId },
       include: { items: true, vehicle: true, contact: true, technician: true },
     });
     if (jc) { ctx = buildJobCardContext(jc); title = `${doc.title} — Job #${jc.number}`; jId = jc.id; contactId = jc.contactId; }
+  } else if (other?.leadId || other?.warrantyClaimId) {
+    const bound = other.leadId ? await loadLeadForDoc(other.leadId) : await loadWarrantyClaimForDoc(other.warrantyClaimId!);
+    if (bound) { ctx = bound.ctx; title = `${doc.title} — ${bound.label}`; contactId = bound.contactId; }
   }
   // Fold in company tokens once — including the unbound case (ctx still null), so the
   // record-independent brand tokens resolve in list previews and "No record" exports.
@@ -100,18 +100,40 @@ async function resolve(templateId: string, quoteId?: string | null, jobCardId?: 
  */
 export async function generateDocEditorPdf(opts: {
   templateId: string; quoteId?: string | null; jobCardId?: string | null; live?: boolean;
-}): Promise<{ buffer: Buffer; title: string; quoteId: string | null; jobCardId: string | null; contactId: string | null } | null> {
-  const r = await resolve(opts.templateId, opts.quoteId, opts.jobCardId, opts.live);
+} & OtherRecord): Promise<{ buffer: Buffer; title: string; quoteId: string | null; jobCardId: string | null; contactId: string | null } | null> {
+  const r = await resolve(opts.templateId, opts.quoteId, opts.jobCardId, opts.live, opts);
   if (!r) return null;
   return renderResolvedToPdf(r);
+}
+
+/**
+ * A stand-alone document (a custom document, not a template) as print HTML,
+ * with the record snapshot it was frozen with — null when it is linked to
+ * nothing. Same company tokens, workspace logo and renderer as a generated
+ * template, and — like every other render path — uploaded images embedded
+ * BEFORE rendering: the stored files are private, and the PDF renderer has no
+ * session to fetch them with.
+ *
+ * `tenantId` is the document's OWN workspace. Images are embedded only if they
+ * belong to it, so a ref pasted in from another workspace is dropped, not
+ * printed. A document with no owner falls back to the acting workspace.
+ */
+export async function renderCustomDocumentHtml(doc: DocumentModel, snapshot: RenderCtx, tenantId: string | null): Promise<string> {
+  const embedded = await embedDocImages(doc, tenantId ?? undefined);
+  return renderDocumentHtml(embedded, await withCompany(snapshot, tenantId), logoDataUri());
+}
+
+/** {@link renderCustomDocumentHtml}, as a PDF — used by Finalise and the preview route. */
+export async function renderModelToPdf(doc: DocumentModel, snapshot: RenderCtx, tenantId: string | null): Promise<Buffer> {
+  return htmlToPdf(await renderCustomDocumentHtml(doc, snapshot, tenantId));
 }
 
 export type ExportFormat = "html" | "email" | "doc";
 
 /** Export a template as static HTML, email-safe HTML, or a Word-openable .doc. */
-export async function generateDocEditorExport(opts: { templateId: string; quoteId?: string | null; format: ExportFormat }):
+export async function generateDocEditorExport(opts: { templateId: string; quoteId?: string | null; format: ExportFormat } & OtherRecord):
   Promise<{ content: string; title: string; mime: string; ext: string } | null> {
-  const r = await resolve(opts.templateId, opts.quoteId);
+  const r = await resolve(opts.templateId, opts.quoteId, null, false, opts);
   if (!r) return null;
   if (opts.format === "email") {
     return { content: renderEmailHtml(r.doc, r.ctx, logoDataUri()), title: r.title, mime: "text/html; charset=utf-8", ext: "html" };

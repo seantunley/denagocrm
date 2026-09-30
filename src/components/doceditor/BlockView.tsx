@@ -3,7 +3,27 @@
 import type { DocumentBlock } from "@/lib/doceditor/model";
 import { computePricing } from "@/lib/doceditor/serialize";
 import { brandFooterContent, SOCIAL_ICON_PATHS, COMPANY_DEFAULTS } from "@/lib/companyBrand";
+import { storedFileSrc } from "@/lib/storedFileSrc";
 import { ActiveRichText, ReadOnlyRichText } from "./RichText";
+import { ShowcaseBlockView } from "./ShowcaseBlockView";
+import { useDocEditorEnv } from "./EditorContext";
+
+/** The workspace's own logo (resolved server-side, same as the printed banner). */
+function BannerView({ block }: { block: Extract<DocumentBlock, { type: "banner" }> }) {
+  const { logoSrc, companyName } = useDocEditorEnv();
+  return (
+    <div style={{ background: block.bg, borderRadius: 8, padding: "14px 18px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      {block.showLogo && logoSrc ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={logoSrc} alt={companyName} style={{ height: 32, width: "auto" }} />
+      ) : <span style={{ color: "#fff", fontWeight: 800, letterSpacing: 1 }}>{companyName.toUpperCase()}</span>}
+      <div style={{ textAlign: "right" }}>
+        <div style={{ color: "#fff", fontWeight: 800, fontSize: 20, letterSpacing: 1 }}>{block.title}</div>
+        <div style={{ color: block.accent, fontWeight: 800 }}>{block.docNumber}</div>
+      </div>
+    </div>
+  );
+}
 
 function money(amount: number, currency: string): string {
   const n = Math.abs(amount).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -12,21 +32,28 @@ function money(amount: number, currency: string): string {
 
 /** Renders one block's CONTENT for the editing canvas. Chrome (handles, outline) is added by the wrapper. */
 export function BlockView({ block, active }: { block: DocumentBlock; active: boolean }) {
+  // Shared blocks drawn in the showcase quotation's style render its HTML, as the PDF does.
+  if ((block.type === "infoCard" || block.type === "lineItems" || block.type === "terms") && block.look === "showcase") {
+    return <ShowcaseBlockView block={block} />;
+  }
   switch (block.type) {
     case "text":
     case "heading":
       return active ? <ActiveRichText block={block} /> : <ReadOnlyRichText value={block.value} muted />;
 
     case "image": {
-      const valid = typeof block.src === "string" && /^(https?:|data:image\/)/i.test(block.src.trim());
+      // An uploaded image is a private stored ref; the browser reaches it through /api/stored.
+      const raw = typeof block.src === "string" ? block.src.trim() : "";
+      const src = /^data:image\//i.test(raw) ? raw : storedFileSrc(raw);
+      const valid = !!src && /^(https?:|data:image\/|\/api\/stored\?)/i.test(src);
       return (
         <div style={{ textAlign: "center" }}>
           {valid ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={block.src} alt={block.alt} style={{ width: `${block.widthPct}%`, height: "auto", borderRadius: block.rounded ? 8 : 0 }} />
+            <img src={src} alt={block.alt} style={{ width: `${block.widthPct}%`, height: "auto", borderRadius: block.rounded ? 8 : 0 }} />
           ) : (
             <div className="flex items-center justify-center rounded border border-dashed border-slate-300 bg-slate-50 text-slate-400" style={{ height: 120, fontSize: 13 }}>
-              🖼 Add an image URL in the panel →
+              🖼 Upload an image or add a URL in the panel →
             </div>
           )}
         </div>
@@ -103,18 +130,7 @@ export function BlockView({ block, active }: { block: DocumentBlock; active: boo
     }
 
     case "banner":
-      return (
-        <div style={{ background: block.bg, borderRadius: 8, padding: "14px 18px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          {block.showLogo ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src="/branding/denago-logo-email.png" alt="Denago" style={{ height: 32, width: "auto" }} />
-          ) : <span style={{ color: "#fff", fontWeight: 800, letterSpacing: 1 }}>DENAGO</span>}
-          <div style={{ textAlign: "right" }}>
-            <div style={{ color: "#fff", fontWeight: 800, fontSize: 20, letterSpacing: 1 }}>{block.title}</div>
-            <div style={{ color: block.accent, fontWeight: 800 }}>{block.docNumber}</div>
-          </div>
-        </div>
-      );
+      return <BannerView block={block} />;
     case "infoCard":
       return (
         <div style={{ background: "#f8fafc", borderLeft: `3px solid ${block.accent}`, borderRadius: 6, padding: "10px 12px" }}>
@@ -191,6 +207,9 @@ export function BlockView({ block, active }: { block: DocumentBlock; active: boo
         </div>
       );
     }
+
+    case "showcaseHeader": case "infoStrip": case "vehicleShowcase": case "totalsBox": case "acceptance": case "footerBand":
+      return <ShowcaseBlockView block={block} />;
   }
   return null;
 }
