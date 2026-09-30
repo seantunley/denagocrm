@@ -52,6 +52,65 @@ const columns: {
   { key: "deliver", title: "Scheduled", hint: "Mark delivered on handover day", accent: "#10b981", icon: <PackageCheck className="size-3.5" /> },
 ];
 
+/**
+ * Corrections — a wrong invoice, proof of payment, deposit amount or delivery
+ * date is fixable where it was entered. ONE component for the desktop board and
+ * the mobile queue, so the two cannot offer different fixes. Rendered only for
+ * `deliveries.manage`; every action re-checks that server-side.
+ */
+function FulfilmentCorrections({ quote }: {
+  quote: {
+    id: string;
+    number: number;
+    invoicedAt: Date | null;
+    depositPaidAt: Date | null;
+    depositPaidCents: number | null;
+    deliveryScheduledFor: Date | null;
+  };
+}) {
+  if (!quote.invoicedAt && !quote.depositPaidAt && !quote.deliveryScheduledFor) return null;
+  const fileInput = "block w-full text-xs text-muted-foreground file:btn-secondary file:btn-sm file:mr-2 file:border-0";
+  return (
+    <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
+      {quote.invoicedAt && (
+        <ModalTrigger label="Replace invoice" title={`Replace the invoice — Q-${quote.number}`} buttonClass="text-primary hover:underline">
+          <SaveForm success="Invoice replaced" resetOnSuccess={false} action={replaceInvoice.bind(null, quote.id)} className="space-y-3">
+            <p className="text-xs text-muted-foreground">The current invoice is kept in the quote&apos;s document history, marked as replaced.</p>
+            <input type="file" name="file" required accept=".pdf,image/*" className={fileInput} />
+            <SaveButton className="btn-primary btn-sm">Upload replacement</SaveButton>
+          </SaveForm>
+        </ModalTrigger>
+      )}
+      {quote.depositPaidAt && (
+        <ModalTrigger label="Correct deposit" title={`Deposit — Q-${quote.number}`} buttonClass="text-primary hover:underline">
+          <div className="space-y-5">
+            <SaveForm success="Deposit amount updated" resetOnSuccess={false} action={correctDepositAmount.bind(null, quote.id)} className="space-y-2">
+              <label className="label">Amount received (R)</label>
+              <input name="amount" inputMode="decimal" required className="input" defaultValue={quote.depositPaidCents != null ? (quote.depositPaidCents / 100).toFixed(2) : ""} placeholder="0.00" />
+              <SaveButton className="btn-primary btn-sm">Save amount</SaveButton>
+            </SaveForm>
+            <SaveForm success="Proof of payment replaced" resetOnSuccess={false} action={replaceProofOfPayment.bind(null, quote.id)} className="space-y-2 border-t border-border pt-4">
+              <label className="label">Replace proof of payment</label>
+              <p className="text-xs text-muted-foreground">The current file is kept in the quote&apos;s document history, marked as replaced.</p>
+              <input type="file" name="file" required accept=".pdf,image/*" className={fileInput} />
+              <SaveButton className="btn-secondary btn-sm">Upload replacement</SaveButton>
+            </SaveForm>
+          </div>
+        </ModalTrigger>
+      )}
+      {quote.deliveryScheduledFor && (
+        <ModalTrigger label="Reschedule" title={`Reschedule delivery — Q-${quote.number}`} buttonClass="text-primary hover:underline">
+          <SaveForm success="Delivery rescheduled" resetOnSuccess={false} action={rescheduleDelivery.bind(null, quote.id)} className="space-y-3">
+            <p className="text-xs text-muted-foreground">Currently {formatDate(quote.deliveryScheduledFor)}. The workshop calendar entry moves with it.</p>
+            <input type="date" name="date" required className="input" />
+            <SaveButton className="btn-primary btn-sm">Move delivery</SaveButton>
+          </SaveForm>
+        </ModalTrigger>
+      )}
+    </div>
+  );
+}
+
 export default async function DeliveriesPage() {
   const user = await requireAnyPermission("deliveries.view", "deliveries.manage");
   const [quoteIds, canManage] = await Promise.all([
@@ -187,7 +246,8 @@ export default async function DeliveriesPage() {
                           <div className="min-w-0"><Link href={`/quotes/${quote.id}`} className="text-sm font-semibold text-primary">Q-{quote.number} · {who}</Link><p className="mt-0.5 truncate text-xs text-muted-foreground">{model}</p></div>
                           <span className="shrink-0 rounded-full bg-muted px-2 py-1 text-[10px] font-medium text-muted-foreground">{stage?.title}</span>
                         </div>
-                        <p className="mt-2 text-[11px] text-muted-foreground">{photos} handover photo{photos === 1 ? "" : "s"}{quote.deliveryScheduledFor ? ` · ${formatDate(quote.deliveryScheduledFor)}` : ""}</p>
+                        <p className="mt-2 text-[11px] text-muted-foreground">{photos} handover photo{photos === 1 ? "" : "s"}{quote.deliveryScheduledFor ? ` · ${formatDate(quote.deliveryScheduledFor)}` : ""}{quote.depositPaidCents != null ? ` · deposit ${formatZAR(quote.depositPaidCents)}` : ""}</p>
+                        {canManage && <FulfilmentCorrections quote={quote} />}
                       </div>
                     </div>
                     {canManage && (
@@ -373,46 +433,7 @@ export default async function DeliveriesPage() {
                           </div>
                         )}
 
-                        {/* Corrections: a wrong file, amount or date is fixable where it was entered. */}
-                        {canManage && (quote.invoicedAt || quote.depositPaidAt || quote.deliveryScheduledFor) && (
-                          <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
-                            {quote.invoicedAt && (
-                              <ModalTrigger label="Replace invoice" title={`Replace the invoice — Q-${quote.number}`} buttonClass="text-primary hover:underline">
-                                <SaveForm success="Invoice replaced" resetOnSuccess={false} action={replaceInvoice.bind(null, quote.id)} className="space-y-3">
-                                  <p className="text-xs text-muted-foreground">The current invoice is kept in the quote&apos;s document history, marked as replaced.</p>
-                                  <input type="file" name="file" required accept=".pdf,image/*" className="block w-full text-xs text-muted-foreground file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
-                                  <SaveButton className="btn-primary btn-sm">Upload replacement</SaveButton>
-                                </SaveForm>
-                              </ModalTrigger>
-                            )}
-                            {quote.depositPaidAt && (
-                              <ModalTrigger label="Correct deposit" title={`Deposit — Q-${quote.number}`} buttonClass="text-primary hover:underline">
-                                <div className="space-y-5">
-                                  <SaveForm success="Deposit amount updated" resetOnSuccess={false} action={correctDepositAmount.bind(null, quote.id)} className="space-y-2">
-                                    <label className="label">Amount received (R)</label>
-                                    <input name="amount" inputMode="decimal" required className="input" defaultValue={quote.depositPaidCents != null ? (quote.depositPaidCents / 100).toFixed(2) : ""} placeholder="0.00" />
-                                    <SaveButton className="btn-primary btn-sm">Save amount</SaveButton>
-                                  </SaveForm>
-                                  <SaveForm success="Proof of payment replaced" resetOnSuccess={false} action={replaceProofOfPayment.bind(null, quote.id)} className="space-y-2 border-t border-border pt-4">
-                                    <label className="label">Replace proof of payment</label>
-                                    <p className="text-xs text-muted-foreground">The current file is kept in the quote&apos;s document history, marked as replaced.</p>
-                                    <input type="file" name="file" required accept=".pdf,image/*" className="block w-full text-xs text-muted-foreground file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
-                                    <SaveButton className="btn-secondary btn-sm">Upload replacement</SaveButton>
-                                  </SaveForm>
-                                </div>
-                              </ModalTrigger>
-                            )}
-                            {quote.deliveryScheduledFor && (
-                              <ModalTrigger label="Reschedule" title={`Reschedule delivery — Q-${quote.number}`} buttonClass="text-primary hover:underline">
-                                <SaveForm success="Delivery rescheduled" resetOnSuccess={false} action={rescheduleDelivery.bind(null, quote.id)} className="space-y-3">
-                                  <p className="text-xs text-muted-foreground">Currently {formatDate(quote.deliveryScheduledFor)}. The workshop calendar entry moves with it.</p>
-                                  <input type="date" name="date" required className="input" />
-                                  <SaveButton className="btn-primary btn-sm">Move delivery</SaveButton>
-                                </SaveForm>
-                              </ModalTrigger>
-                            )}
-                          </div>
-                        )}
+                        {canManage && <FulfilmentCorrections quote={quote} />}
 
                         {stockByQuote.has(quote.id) && (() => {
                           const s = stockByQuote.get(quote.id)!;

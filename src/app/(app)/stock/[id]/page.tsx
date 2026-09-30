@@ -246,6 +246,13 @@ export default async function StockUnitPage({ params }: { params: Promise<{ id: 
                   </ModalTrigger>
                 )}
 
+                {unit.depositReceivedAt && (
+                  <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-sm font-medium text-emerald-300">
+                    <BadgeDollarSign className="size-4" />
+                    Deposit recorded: {unit.depositReceivedCents != null ? formatZAR(unit.depositReceivedCents) : "amount not recorded"} · {formatDateTime(unit.depositReceivedAt)}
+                  </span>
+                )}
+
                 {["reserved", "allocated"].includes(unit.status) && (
                   <ModalTrigger label="Release" title="Release this unit" buttonClass="btn-secondary">
                     <SaveForm success="Reservation released" resetOnSuccess={false} action={releaseUnit.bind(null, unit.id)} className="space-y-4"><div><label className="label">Reason *</label><textarea name="reason" className="input min-h-24" required /></div><SaveButton className="btn-primary">Return to available stock</SaveButton></SaveForm>
@@ -260,7 +267,7 @@ export default async function StockUnitPage({ params }: { params: Promise<{ id: 
                   </ModalTrigger>
                 )}
 
-                {(unit.status === "ready_for_delivery" || (unit.quoteDeliveredAt && ["allocated", "pdi", "hold"].includes(unit.status))) && (
+                {unit.status === "ready_for_delivery" && (
                   <ModalTrigger label="Complete delivery" title="Customer handover" buttonClass="btn bg-emerald-700 text-white hover:bg-emerald-600">
                     <SaveForm success="Unit delivered" resetOnSuccess={false} action={deliverStockUnit.bind(null, unit.id)} className="space-y-4"><p className="text-sm text-muted-foreground">{unit.quoteDeliveredAt ? `Q-${unit.quoteNumber} was already handed over from the Deliveries board. This marks the cart delivered, files the sale value and starts the warranty — reusing the customer's vehicle record if it has this VIN.` : `This is the same delivery as "Mark delivered" on the Deliveries board: it marks Q-${unit.quoteNumber ?? ""} delivered, hands over every cart allocated to it, creates (or reuses) the customer's vehicle record, files the sale value and starts the warranty.`}</p><div><label className="label">Warranty months</label><input name="warrantyMonths" type="number" min="0" defaultValue="12" className="input" /></div><SaveButton className="btn bg-emerald-700 text-white hover:bg-emerald-600">Confirm delivered</SaveButton></SaveForm>
                   </ModalTrigger>

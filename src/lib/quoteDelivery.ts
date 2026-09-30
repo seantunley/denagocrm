@@ -6,7 +6,12 @@ import { logAudit } from "@/lib/audit";
 import { ciExactIds } from "@/lib/ciExact";
 import { emitLeadJourneyEvent } from "@/lib/leadJourneyEvents";
 import { deliveryHandoverReadiness } from "@/lib/checklists/deliveryHandover";
-import { DELIVERED_STOCK_STATUSES, vehiclesAwaitingRegistration } from "@/lib/deliveryVehicles";
+import {
+  DELIVERABLE_STATUS,
+  DELIVERED_STOCK_STATUSES,
+  notReadyMessage,
+  vehiclesAwaitingRegistration,
+} from "@/lib/deliveryVehicles";
 import { addStockEvent } from "@/lib/stockPlatform";
 import type { PermissionUser } from "@/lib/permissions";
 
@@ -29,7 +34,6 @@ import type { PermissionUser } from "@/lib/permissions";
  */
 
 export const QUOTE_GONE = "This quote is no longer available in this workspace.";
-
 export type DeliveryEvidence = {
   deliveredByName?: string | null;
   deliveryChecklist?: object;
@@ -81,6 +85,18 @@ export async function deliverQuote(input: {
    */
   const catchUp = Boolean(quote.deliveredAt);
   if (catchUp && outstanding.length === 0) refuse("This delivery is already marked as delivered.");
+
+  /*
+   * EVERY CART MUST BE READY, OR NOTHING IS DELIVERED.
+   *
+   * A cart still in PDI or on hold is not handed over by pressing a button on
+   * the board. Refused here, before any write, naming each cart and why — so the
+   * whole delivery either happens or does not. The transaction below re-checks
+   * the status on every unit, so a unit that changes in between also refuses
+   * the lot rather than delivering part of it.
+   */
+  const notReady = outstanding.filter((unit) => unit.status !== DELIVERABLE_STATUS);
+  if (notReady.length > 0) refuse(notReadyMessage(quote.number, notReady));
 
   let deliveryHandoverRunIds: string[] = [];
   if (!catchUp) {
@@ -204,7 +220,7 @@ export async function deliverQuote(input: {
       // line (qty × price), which would over-state revenue for multi-quantity quotes.
       const saleLine = quote.items.find((item) => item.productId === unit.productId && item.selected);
       const moved = await tx.stockUnit.updateMany({
-        where: { id: unit.id, status: unit.status, deletedAt: null },
+        where: { id: unit.id, status: DELIVERABLE_STATUS, deletedAt: null },
         data: {
           status: "delivered",
           soldAt: unit.soldAt ?? deliveredAt,

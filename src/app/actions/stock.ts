@@ -581,15 +581,12 @@ export async function deliverStockUnit(id: string, formData: FormData) {
     const tenantId = await actingTenantId();
     const quote = await prisma.quote.findFirst({
       where: { id: current.soldQuoteId, tenantId },
-      select: { status: true, deliveredAt: true },
+      select: { status: true },
     });
     if (!quote || quote.status !== "accepted") throw new ActionRefusal("Stock can only be delivered against an accepted quote");
-    // PDI first, as before — unless the quote was already handed over from the
-    // Deliveries board, in which case the cart is with the customer and this
-    // only finishes the unit that board delivery left behind.
-    if (current.status !== "ready_for_delivery" && !(quote.deliveredAt && ["allocated", "pdi", "hold"].includes(current.status))) {
-      throw new ActionRefusal("Only a PDI-passed unit can be delivered");
-    }
+    // No readiness check of its own: deliverQuote refuses the whole delivery if
+    // ANY cart on the quote is not PDI-passed, naming each one — the same
+    // refusal, word for word, as the Deliveries board gets.
     return deliverQuote({
       quoteId: current.soldQuoteId,
       tenantId,

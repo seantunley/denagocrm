@@ -4,7 +4,12 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-import { vehiclesAwaitingRegistration, type DeliveryQuoteLine } from "../src/lib/deliveryVehicles";
+import {
+  DELIVERABLE_STATUS,
+  notReadyMessage,
+  vehiclesAwaitingRegistration,
+  type DeliveryQuoteLine,
+} from "../src/lib/deliveryVehicles";
 
 /**
  * GAP #12 — two delivery flows that each did half the job.
@@ -60,11 +65,47 @@ test("the delivery marks the quote delivered AND moves every allocated unit to d
   const tx = body.slice(body.indexOf("prisma.$transaction("));
   assert.ok(body.includes("prisma.$transaction("), "quote, stock and vehicles commit together");
   assert.match(tx, /tx\.quote\.updateMany\(\{\s*where: \{ id: quoteId, tenantId, deliveredAt: null \},\s*data: \{ deliveredAt,/);
-  assert.match(tx, /tx\.stockUnit\.updateMany\(\{\s*where: \{ id: unit\.id, status: unit\.status, deletedAt: null \},\s*data: \{\s*status: "delivered"/);
-  // Every unit allocated to the quote, whatever stage it reached — not only
-  // PDI-passed ones, which is how units were left "allocated" forever.
+  assert.match(tx, /tx\.stockUnit\.updateMany\(\{\s*where: \{ id: unit\.id, status: DELIVERABLE_STATUS, deletedAt: null \},\s*data: \{\s*status: "delivered"/);
+  // Every unit allocated to the quote is handed over — none is left "allocated".
   assert.match(body, /stockUnit\.findMany\(\{\s*where: \{ soldQuoteId: quoteId, tenantId, deletedAt: null \}/);
   assert.match(body, /const outstanding = units\.filter\(\(unit\) => !\(DELIVERED_STOCK_STATUSES/);
+});
+
+/* ── a cart that is not ready blocks the WHOLE delivery ──────────────────── */
+
+test("the refusal names every cart that is not ready, and why — never the customer", () => {
+  const message = notReadyMessage(1042, [
+    { stockNumber: "STK-0007", serial: "DNG9XX00123", status: "pdi" },
+    { stockNumber: null, serial: "dng9xx00456", status: "hold" },
+    { stockNumber: null, serial: null, status: "allocated" },
+  ]);
+  assert.match(message, /^Q-1042 can't be delivered yet/);
+  assert.match(message, /STK-0007 \(still in PDI\)/);
+  assert.match(message, /unit …0456 \(on hold\)/, "no stock number: last 4 of the serial only");
+  assert.doesNotMatch(message, /dng9xx00456/i, "never the full VIN");
+  assert.match(message, /an unnumbered unit \(PDI not started\)/);
+  assert.match(message, /Nothing was changed\./);
+});
+
+test("the readiness gate runs before ANY write, and the transaction re-checks it per unit", () => {
+  const body = fn(delivery, "deliverQuote");
+  const gate = body.indexOf("refuse(notReadyMessage(quote.number, notReady))");
+  assert.notEqual(gate, -1, "deliverQuote must refuse on a not-ready cart");
+  assert.match(body, /const notReady = outstanding\.filter\(\(unit\) => unit\.status !== DELIVERABLE_STATUS\);/);
+  for (const write of ["input.collectEvidence(", "prisma.$transaction(", "tx.quote.updateMany(", "tx.vehicle.create("]) {
+    const at = body.indexOf(write);
+    assert.ok(at > gate, `${write} must come after the readiness gate — a refusal must leave nothing behind`);
+  }
+  // A unit that leaves ready_for_delivery between the gate and the write matches
+  // nothing, refuses inside the transaction, and rolls the quote back with it.
+  assert.match(body, /if \(moved\.count !== 1\) refuse\(/);
+  assert.equal(DELIVERABLE_STATUS, "ready_for_delivery");
+});
+
+test("both entry points get that same refusal — the stock page has no readiness check of its own", () => {
+  const unit = strip(fn(stock, "deliverStockUnit"));
+  assert.doesNotMatch(unit, /current\.status/, "a private status check would give the stock page a different answer");
+  assert.doesNotMatch(fn(fulfilment, "markDelivered"), /ready_for_delivery|DELIVERABLE_STATUS/);
 });
 
 test("an existing vehicle with the unit's VIN is reused, never duplicated", () => {
@@ -80,7 +121,8 @@ test("a board delivery that left its stock behind can be finished from the stock
   const body = fn(delivery, "deliverQuote");
   assert.match(body, /const catchUp = Boolean\(quote\.deliveredAt\);/);
   assert.match(body, /if \(catchUp && outstanding\.length === 0\) refuse\("This delivery is already marked as delivered\."\);/);
-  assert.match(fn(stock, "deliverStockUnit"), /quote\.deliveredAt && \["allocated", "pdi", "hold"\]\.includes\(current\.status\)/);
+  // Still only once the cart has passed PDI: the readiness gate is not skipped.
+  assert.ok(body.indexOf("const notReady") > body.indexOf("const catchUp"), "catch-up is gated like any delivery");
 });
 
 const cart = (over: Partial<DeliveryQuoteLine> = {}): DeliveryQuoteLine => ({
@@ -144,6 +186,24 @@ test("every correction is permissioned exactly like the stage it corrects", () =
   assert.match(replace, /return asFulfilmentAction\(async \(\) => \{/);
   assert.match(replace, /requireQuoteAccess\(quoteId, "deliveries\.manage"\)/);
   for (const name of correctionActions) assert.ok(fulfilment.includes(`export async function ${name}(`), `${name} is exported`);
+});
+
+test("the corrections are where people work: desktop board AND mobile queue, one component", () => {
+  const page = src("src/app/(app)/deliveries/page.tsx");
+  const uses = page.match(/\{canManage && <FulfilmentCorrections quote=\{quote\} \/>\}/g) ?? [];
+  assert.equal(uses.length, 2, "rendered in both the mobile and desktop views, behind deliveries.manage");
+  const mobile = page.slice(page.indexOf("<MobileOnly"), page.indexOf("<DesktopOnly"));
+  assert.match(mobile, /<FulfilmentCorrections quote=\{quote\} \/>/, "the mobile queue has them");
+  const component = page.slice(page.indexOf("function FulfilmentCorrections"), page.indexOf("export default async function"));
+  for (const action of ["replaceInvoice", "correctDepositAmount", "replaceProofOfPayment", "rescheduleDelivery"]) {
+    assert.match(component, new RegExp(`action=\\{${action}\\.bind\\(null, quote\\.id\\)\\}`), `${action} is offered`);
+  }
+});
+
+test("the stock unit shows the recorded reservation deposit amount", () => {
+  const page = src("src/app/(app)/stock/[id]/page.tsx");
+  assert.match(page, /Deposit recorded: \{unit\.depositReceivedCents != null \? formatZAR\(unit\.depositReceivedCents\)/);
+  assert.match(page, /r\."depositReceivedCents"/);
 });
 
 test("rescheduling is audited old → new and moves the calendar entry", () => {

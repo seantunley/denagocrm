@@ -52,6 +52,33 @@ export type VehicleToRegister = {
 /** Stock statuses that mean the unit has been handed over (and has its vehicle). */
 export const DELIVERED_STOCK_STATUSES = ["delivered", "sold"] as const;
 
+/** The only stock status a cart can be handed over from: PDI passed. */
+export const DELIVERABLE_STATUS = "ready_for_delivery";
+
+const NOT_READY_REASON: Record<string, string> = {
+  allocated: "PDI not started",
+  pdi: "still in PDI",
+  hold: "on hold",
+  damaged: "marked damaged",
+};
+
+/**
+ * Why a delivery is refused: each cart that is not ready, and the reason. Named
+ * by stock number, else the last 4 of its serial — never the customer.
+ */
+export function notReadyMessage(
+  quoteNumber: number,
+  units: readonly { stockNumber: string | null; serial: string | null; status: string }[],
+): string {
+  const list = units
+    .map((unit) => {
+      const name = unit.stockNumber ?? (unit.serial ? `unit …${unit.serial.slice(-4)}` : "an unnumbered unit");
+      return `${name} (${NOT_READY_REASON[unit.status] ?? unit.status.replaceAll("_", " ")})`;
+    })
+    .join(", ");
+  return `Q-${quoteNumber} can't be delivered yet — ${units.length === 1 ? "this cart is" : "these carts are"} not ready: ${list}. Complete PDI (or resolve the hold) on the stock page first. Nothing was changed.`;
+}
+
 /**
  * Expand a delivered quote's lines into one entry per physical vehicle.
  *
