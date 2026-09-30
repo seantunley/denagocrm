@@ -161,7 +161,9 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
       // An uploaded image arrives here already embedded (renderGlobals.embedDocImages).
       // One that was not — a render path that skipped that step — goes through the
       // signed-in /api/stored proxy, never as the raw private-store link.
-      const raw = String(block.src || "").trim();
+      // {{tokens}} resolve too (e.g. {{jobcard.signature}}, a data URL); an
+      // unresolved one fails the scheme check below and renders nothing.
+      const raw = tok(String(block.src || ""), ctx).trim();
       const src = /^data:image\//i.test(raw) ? raw : storedFileSrc(raw);
       if (!src || !/^(https:|data:image\/|\/api\/stored\?)/i.test(src)) return "";
       return wrap(`<img src="${esc(src)}" alt="${esc(block.alt)}" style="width:${Math.max(5, Math.min(100, block.widthPct))}%;height:auto;${block.rounded ? "border-radius:8px;" : ""}"/>`);

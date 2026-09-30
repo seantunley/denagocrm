@@ -297,22 +297,69 @@ function deliveryTemplate(): DocumentModel {
   ]);
 }
 
+/**
+ * Mirrors the fixed job-card printout (app/(print)/jobcards/[id]/print): same
+ * sections, order and wording. Sections the printout shows only sometimes are
+ * conditionals on the vars jobCardPrintFields adds.
+ */
 function jobcardTemplate(): DocumentModel {
-  return documentModel("Job card", [
-    [banner("JOB CARD", "{{jobcard.number}}")],
-    [
-      infoCard("CUSTOMER", "{{customer.name}}", "{{customer.phone}}\n{{customer.email}}"),
-      infoCard("VEHICLE", "{{vehicle}}", "VIN {{vehicle.vin}} · Reg {{vehicle.reg}}\nColour {{vehicle.color}}", INK),
-    ],
-    [text("Opened: {{jobcard.opened}}"), text("Technician: {{technician}}", "right")],
-    [heading("Work requested")],
-    [text("{{jobcard.description}}")],
-    [heading("Parts & labour")],
-    [lineItems()],
-    [totalBand("TOTAL INCL. VAT", "{{jobcard.total}}")],
-    signatureStrip("Customer sign-off & date", "Technician & date"),
-    [footer()],
-  ]);
+  const label = (value: string): DocumentBlock => {
+    const block = newBlock("text");
+    if (block.type === "text") block.value = [{ type: "p", children: [{ text: value.toUpperCase(), bold: true }] }];
+    return block;
+  };
+  const when = (expr: string, blocks: DocumentBlock[]): DocumentBlock => {
+    const block = newBlock("conditional");
+    if (block.type === "conditional") {
+      block.when = expr;
+      block.blocks = blocks;
+    }
+    return block;
+  };
+  const right = (block: DocumentBlock): DocumentBlock => {
+    block.settings = { width: 45, horizontalAlignment: "right" };
+    return block;
+  };
+  const signature = newBlock("image");
+  if (signature.type === "image") {
+    signature.src = "{{jobcard.signature}}";
+    signature.alt = "Signature";
+    signature.widthPct = 30;
+  }
+  const one = (...blocks: DocumentBlock[]) => newRow([newColumn(100, blocks)]);
+  const doc = documentModel("Job card", []);
+  doc.pages = [
+    newPage([
+      one(banner("JOB CARD", "{{jobcard.number}}"), text("{{jobcard.stage}}", "right")),
+      newRow([
+        newColumn(50, [infoCard("CUSTOMER", "{{customer.name}}", "{{customer.phone}}\n{{customer.email}}\n{{customer.address}}")]),
+        newColumn(50, [infoCard("VEHICLE", "{{vehicle.title}}", "{{vehicle.lines}}", INK)]),
+      ]),
+      one(label("Work requested"), text("{{jobcard.description}}")),
+      one(lineItems()),
+      one(
+        right(text("Parts: {{jobcard.parts}}", "right")),
+        right(text("Labour: {{jobcard.labour}}", "right")),
+        right(when("jobcard.other != 0", [text("Other: {{jobcard.other}}", "right")])),
+        totalBand("TOTAL", "{{jobcard.total}}"),
+      ),
+      one(when("jobcard.hasService", [
+        label("Service record"),
+        text("{{service.line}}"),
+        when("jobcard.hasServiceDetails", [text("{{service.details}}")]),
+        text("Next service due: {{service.nextDue}}"),
+      ])),
+      one(when("jobcard.hasNotes", [label("Notes"), text("{{jobcard.notes}}")])),
+      one(when("jobcard.signed", [signature, text("{{jobcard.signedLine}}")])),
+      newRow(
+        ["Technician signature · Date", "Customer signature · Date"].map((line) =>
+          newColumn(50, [when("!jobcard.signed", [text("________________________________"), text(line)])]),
+        ),
+      ),
+      one(footer(), text("{{company.name}} · Job card {{jobcard.number}} · Generated {{date.today}}", "center")),
+    ]),
+  ];
+  return doc;
 }
 
 function serviceReportTemplate(): DocumentModel {

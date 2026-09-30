@@ -1,4 +1,5 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+import { publishedJobCardLayout } from "@/lib/jobCardPrintDocument";
 import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { requireJobCardReadAccess } from "@/lib/permissions";
@@ -19,6 +20,12 @@ export default async function JobCardPrintPage({
   await requireJobCardReadAccess(id);
   const { tpl: tplId, photos } = await searchParams;
   const showPhotos = photos === "1";
+  // THE SAFE SWITCH. Once the jobcard layout is PUBLISHED in the document editor,
+  // it is the printout. Until then — and for ?tpl=, which previews an old-system
+  // template — everything below renders exactly as it always has.
+  if (!tplId && (await publishedJobCardLayout())) {
+    redirect(`/jobcards/${id}/print/document${showPhotos ? "?photos=1" : ""}`);
+  }
   const jobCard = await prisma.jobCard.findUnique({
     where: { id },
     include: {
