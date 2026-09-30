@@ -1,4 +1,5 @@
 import Link from "next/link";
+import type { ReactNode } from "react";
 import { notFound } from "next/navigation";
 import {
   Activity,
@@ -29,7 +30,7 @@ function statusTone(status: string): "neutral" | "success" | "warning" | "danger
   return "neutral";
 }
 
-function Row({ label, value, href }: { label: string; value: React.ReactNode; href?: string }) {
+function Row({ label, value, href }: { label: string; value: ReactNode; href?: string }) {
   return (
     <div className="flex min-w-0 items-start justify-between gap-4 border-b border-border/60 py-2.5 last:border-0">
       <dt className="shrink-0 text-xs text-muted-foreground">{label}</dt>
