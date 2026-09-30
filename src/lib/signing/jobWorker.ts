@@ -3,6 +3,7 @@ import crypto from "crypto";
 import { basePrisma } from "@/lib/db";
 import { readFile } from "@/lib/storage";
 import { sendEmail } from "@/lib/email";
+import { signingRecord } from "@/lib/outboundMessageLog";
 import { signingEmailContent } from "./signingEmail";
 import { logError } from "@/lib/errorLog";
 import { runInTenantScope } from "@/lib/tenantScope";
@@ -201,8 +202,10 @@ async function executeCompletionEmail(job: SigningJob): Promise<void> {
     text: email.text,
     html: email.html,
     attachments: [{ filename: `${request.title}.pdf`, content: pdf, contentType: "application/pdf" }],
+    record: await signingRecord(request.id, { email: recipient.email, label: "Signed document copy" }),
   });
-  if (!result.ok) throw new Error(result.error || `SMTP did not accept ${recipient.email}`);
+  // Recipient id, not address: a job error is persisted and logged.
+  if (!result.ok) throw new Error(result.error || `SMTP did not accept recipient ${recipient.id}`);
 
   await basePrisma.$executeRaw`
     UPDATE "SignatureRecipient"

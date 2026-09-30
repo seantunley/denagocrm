@@ -10,6 +10,7 @@ import { offeredChannels, identityRequired, type IdentityChannel, type ChannelOf
 import { logSignEvent } from "./events";
 import { signingOtpHash, safeEqualHex } from "./securityPolicy";
 import { hashSignToken } from "./tokens";
+import { signingRecord } from "@/lib/outboundMessageLog";
 
 /**
  * Proving a signer is who the document was sent to.
@@ -156,6 +157,13 @@ export async function startIdentityChallenge(
     },
   });
 
+  // On the customer's timeline with the code masked: the row proves a code was
+  // sent and where, and must not be a second way to read it.
+  const record = await signingRecord(recipient.request.id, {
+    email: recipient.email,
+    label: "Signing verification code",
+    secrets: [code],
+  });
   const sent = channel === "email"
     ? await sendEmail({
         to: destination,
@@ -163,10 +171,12 @@ export async function startIdentityChallenge(
         ...(await signingEmailContent("otp", {
           requestId: recipient.request.id, title: recipient.request.title, recipientName: recipient.name, code,
         })),
+        record,
       })
     : await sendSms(
         normalizePhone(destination) ?? destination,
         `Your verification code for "${recipient.request.title}" is ${code}. It expires in 10 minutes.`,
+        record,
       );
 
   if (!sent.ok) {
