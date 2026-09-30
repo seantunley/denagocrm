@@ -163,6 +163,12 @@ model Product {
   active         Boolean  @default(true)
   createdAt      DateTime @default(now())
 
+  // The vehicle hero on the showcase quotation layout (vehicleShowcase block).
+  // All optional: a product without them shows only its name and description.
+  showcaseTagline  String? // subtitle under the model name
+  showcaseSpecs    Json? // up to 4 × { icon, label, sub } — parsed by lib/docbuilder/vehicleShowcase.ts
+  showcaseImageRef String? // stored-file ref (lib/storage.ts saveFile); embedded as a data URL when rendered
+
   deletedAt     DateTime?
   deletedByName String?
   deleteReason  String?
