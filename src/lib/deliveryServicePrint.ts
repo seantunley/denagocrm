@@ -15,6 +15,7 @@ import {
 } from "@/lib/doceditor/handoverChecklist";
 import { deliveryNoteRuns } from "@/lib/checklists/deliveryHandover";
 import { bindCtx, logoDataUri } from "@/lib/signing/render";
+import { embedDocImages } from "@/lib/doceditor/renderGlobals";
 import { embedStoredImage } from "@/lib/storedImage";
 import { formatDate } from "@/lib/format";
 import { includedLines } from "@/lib/pricing";
@@ -200,7 +201,10 @@ export async function renderDeliveryNoteHtml(opts: {
     lineCount: includedLines(quote.items).length,
     handover: { runs, signature, signedOn: signature && quote.deliveredAt ? formatDate(quote.deliveredAt) : null },
   });
-  return renderDocumentHtml(opts.doc, ctx, logoDataUri(), { hideOverlays: true, toolbarHtml: opts.toolbarHtml });
+  // Uploaded image blocks are private files: embedded, owner-checked against the
+  // record's workspace. The workspace logo arrives on ctx.logo from bindCtx.
+  const doc = await embedDocImages(opts.doc, quote.tenantId ?? undefined);
+  return renderDocumentHtml(doc, ctx, logoDataUri(), { hideOverlays: true, toolbarHtml: opts.toolbarHtml });
 }
 
 /** The pre-guided proof-of-delivery ticks, or the default list unticked — as the fixed layout prints. */
@@ -223,6 +227,7 @@ export async function renderServiceReportHtml(opts: {
     where: { id: opts.jobCardId },
     select: {
       id: true,
+      tenantId: true,
       number: true,
       completedAt: true,
       vehicle: { select: { vin: true } },
@@ -245,7 +250,8 @@ export async function renderServiceReportHtml(opts: {
     nextDueDate: sr?.nextDueDate ?? null,
     nextDueKm: sr?.nextDueKm ?? null,
   });
-  return renderDocumentHtml(opts.doc, ctx, logoDataUri(), { hideOverlays: true, toolbarHtml: opts.toolbarHtml });
+  const doc = await embedDocImages(opts.doc, jobCard.tenantId ?? undefined);
+  return renderDocumentHtml(doc, ctx, logoDataUri(), { hideOverlays: true, toolbarHtml: opts.toolbarHtml });
 }
 
 export function printHtmlResponse(html: string | null): Response {

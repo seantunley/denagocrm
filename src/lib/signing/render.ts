@@ -1,6 +1,4 @@
 import "server-only";
-import fs from "fs";
-import path from "path";
 import { prisma } from "@/lib/db";
 import { buildQuoteContext, buildJobCardContext } from "@/lib/docbuilder/merge";
 import { loadBillToFleet } from "@/lib/quoteBillTo";
@@ -11,16 +9,12 @@ import { readFile } from "@/lib/storage";
 import { getCompanyProfile, companyTokens } from "@/lib/companyProfile";
 import { parseFrozenBrand, type FrozenBrand } from "./frozenBrand";
 import type { SignatureRequest } from "@prisma/client";
+// The built-in logo is only the FALLBACK now: bindCtx puts the workspace's own
+// (or the frozen) logo on the context, and the renderer prefers that.
+import { defaultLogoDataUri as logoDataUri, documentLogo, embedDocImages, liveGlobalTokens } from "@/lib/doceditor/renderGlobals";
 
-let logoCache: string | null | undefined;
-function logoDataUri(): string | undefined {
-  if (logoCache !== undefined) return logoCache ?? undefined;
-  try {
-    const buf = fs.readFileSync(path.join(process.cwd(), "public", "branding", "denago-logo-email.png"));
-    logoCache = `data:image/png;base64,${buf.toString("base64")}`;
-  } catch { logoCache = null; }
-  return logoCache ?? undefined;
-}
+/** The request's workspace, when the caller has it — whose uploaded images the snapshot may embed. */
+type OwnedBy = { tenantId?: string | null };
 
 /** Build the merge context for a request's linked record (quote / job card), if any. */
 /**
@@ -36,10 +30,17 @@ export async function bindCtx(quoteId: string | null, jobCardId: string | null, 
   // record (the signer sheets and final signed PDF re-render from snapshotJson, so an
   // unbound null context would print literal placeholders). Record-specific tokens
   // still win on overlap; bound:false keeps conditionals as the placeholder layout.
+  //
+  // The logo follows the same rule: the frozen one for a signed request (null →
+  // the built-in mark, as FrozenBrand documents), the live workspace logo
+  // otherwise. {{user.name}} / {{date.today}} are only resolved live — a frozen
+  // snapshot already had them baked in at send time (freezeDocumentGlobals).
   const withCompany = async (ctx: RenderCtx): Promise<RenderCtx> => {
-    const company = frozen ? frozen.tokens : companyTokens(await getCompanyProfile());
-    if (!ctx) return { tokens: company, items: [], vars: {}, bound: false };
-    return { ...ctx, tokens: { ...company, ...ctx.tokens }, bound: true };
+    const live = frozen ? null : await getCompanyProfile();
+    const company = frozen ? frozen.tokens : live ? { ...(await liveGlobalTokens()), ...companyTokens(live) } : {};
+    const logo = await documentLogo(frozen ? frozen.logoUrl : live?.logoUrl);
+    if (!ctx) return { tokens: company, items: [], vars: {}, bound: false, logo };
+    return { ...ctx, tokens: { ...company, ...ctx.tokens }, bound: true, logo };
   };
   if (quoteId) {
     const q = await prisma.quote.findUnique({
@@ -62,9 +63,10 @@ export async function bindCtx(quoteId: string | null, jobCardId: string | null, 
 }
 
 /** Render the frozen document of a signature request to print-ready HTML, bound to its record. */
-export async function renderRequestDocHtml(req: Pick<SignatureRequest, "snapshotJson" | "brandJson" | "quoteId" | "jobCardId">): Promise<string> {
-  const doc = parseDocument(req.snapshotJson);
-  if (!doc) return "<p style='padding:24px;color:#64748b'>This document is unavailable.</p>";
+export async function renderRequestDocHtml(req: Pick<SignatureRequest, "snapshotJson" | "brandJson" | "quoteId" | "jobCardId"> & OwnedBy): Promise<string> {
+  const parsed = parseDocument(req.snapshotJson);
+  if (!parsed) return "<p style='padding:24px;color:#64748b'>This document is unavailable.</p>";
+  const doc = await embedDocImages(parsed, req.tenantId);
   const frozen = parseFrozenBrand(req.brandJson);
   const ctx = await bindCtx(req.quoteId, req.jobCardId, frozen);
   return renderDocumentHtml(doc, ctx, frozen?.logoUrl ?? logoDataUri());
@@ -73,7 +75,7 @@ export async function renderRequestDocHtml(req: Pick<SignatureRequest, "snapshot
 /** Render a bound document to an unsigned print-ready PDF (overlay fields hidden). */
 export async function renderEnvelopePdf(doc: DocumentModel, quoteId: string | null, jobCardId: string | null): Promise<Buffer> {
   const ctx = await bindCtx(quoteId, jobCardId);
-  const html = renderDocumentHtml(doc, ctx, logoDataUri(), { hideOverlays: true });
+  const html = renderDocumentHtml(await embedDocImages(doc), ctx, logoDataUri(), { hideOverlays: true });
   return htmlToPdf(html);
 }
 
@@ -107,8 +109,9 @@ export async function signedFieldStamps(requestId: string, excludeRecipientId: s
 }
 
 /** Interactive per-page sheets for the signing surface, bound to the record. */
-export async function renderRequestSigningSheets(req: Pick<SignatureRequest, "snapshotJson" | "brandJson" | "quoteId" | "jobCardId">): Promise<{ width: number; height: number; margin: number; css: string; pages: string[] }> {
-  const doc = parseDocument(req.snapshotJson);
+export async function renderRequestSigningSheets(req: Pick<SignatureRequest, "snapshotJson" | "brandJson" | "quoteId" | "jobCardId"> & OwnedBy): Promise<{ width: number; height: number; margin: number; css: string; pages: string[] }> {
+  const parsed = parseDocument(req.snapshotJson);
+  const doc = parsed && (await embedDocImages(parsed, req.tenantId));
   if (!doc) return { width: 794, height: 1123, margin: 40, css: "", pages: ["<div style='padding:24px;color:#64748b'>This document is unavailable.</div>"] };
   // The sheets the SIGNER is looking at. These must match the sealed PDF exactly
   // — it is rendered from the same snapshot — so they take the frozen brand too.

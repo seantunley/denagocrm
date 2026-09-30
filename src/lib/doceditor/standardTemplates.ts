@@ -75,15 +75,6 @@ function totalBand(label: string, amount: string): DocumentBlock {
   return block;
 }
 
-function terms(title: string, items: string[]): DocumentBlock {
-  const block = newBlock("terms");
-  if (block.type === "terms") {
-    block.title = title;
-    block.items = items.map((item) => ({ text: item }));
-  }
-  return block;
-}
-
 function footer(): DocumentBlock {
   return newBlock("footer");
 }
@@ -117,58 +108,150 @@ function documentModel(title: string, blocks: DocumentBlock[][]): DocumentModel 
   };
 }
 
+// ── invoice / sales agreement: laid out as the fixed print pages print them ──
+
+const SLATE = "#64748b";
+
+/** Renders only when `when` is truthy against the bound record. */
+function conditional(when: string, blocks: DocumentBlock[]): DocumentBlock {
+  const block = newBlock("conditional");
+  if (block.type === "conditional") {
+    block.when = when;
+    block.blocks = blocks;
+  }
+  return block;
+}
+
+/** A labelled grey box of multi-line text (infoCard keeps the token's line breaks). */
+function textBox(label: string, body: string): DocumentBlock {
+  return infoCard(label, "", body, SLATE);
+}
+
+function italic(value: string): DocumentBlock {
+  const block = newBlock("text");
+  if (block.type === "text") block.value = [{ type: "p", children: [{ text: value, italic: true }] }];
+  return block;
+}
+
+/** A signature line with its label underneath. */
+function signLine(label: string): DocumentBlock {
+  const block = newBlock("text");
+  if (block.type === "text") {
+    block.value = [
+      { type: "p", children: [{ text: "" }] },
+      { type: "p", children: [{ text: "________________________________" }] },
+      { type: "p", children: [{ text: label }] },
+    ];
+  }
+  return block;
+}
+
+/** Subtotal and VAT above the total, only when the rows are ex-VAT (documentTotals). */
+function exclusiveTaxLines(): DocumentBlock {
+  const lines = newBlock("text");
+  if (lines.type === "text") {
+    lines.value = [
+      { type: "p", align: "right", children: [{ text: "Subtotal: {{quote.subtotal}}" }] },
+      { type: "p", align: "right", children: [{ text: "VAT: {{quote.vat}}" }] },
+    ];
+  }
+  const block = conditional("!quote.taxInclusive", [lines]);
+  block.settings = { width: 55, horizontalAlignment: "right" };
+  return block;
+}
+
 function invoiceTemplate(): DocumentModel {
   return documentModel("Standard invoice", [
-    [banner("INVOICE", "{{quote.number}}")],
-    [text("Invoice date: {{quote.date}}"), text("Prepared by: {{preparedBy}}", "right")],
+    [banner("INVOICE", "{{invoice.number}}")],
     [
-      infoCard("BILLED TO", "{{customer.name}}", "{{customer.phone}}\n{{customer.email}}\n{{customer.address}}"),
-      infoCard("FROM", "{{company.name}}", "{{company.address}}\n{{company.phone}} · {{company.email}}", INK),
+      text("Date: {{invoice.date}}"),
+      text("Reference: {{quote.number}}", "center"),
+      text("Billed to: {{customer.name}}", "right"),
+    ],
+    [conditional("invoice.intro", [italic("{{invoice.intro}}")])],
+    [
+      infoCard("BILLED TO", "{{customer.name}}", "{{invoice.billedTo}}"),
+      infoCard("INVOICE DETAILS", "Invoice {{invoice.number}}", "Quote {{quote.number}}\nStatus: {{quote.status}}", INK),
     ],
     [lineItems()],
-    [totalBand("TOTAL DUE INCL. VAT", "{{quote.total}}")],
-    [terms("BANKING & PAYMENT", [
-      "Bank: (add your banking details in the template)",
-      "Reference: use the document number shown above.",
-      "Prices include 15% VAT.",
-      "Payment due on presentation unless otherwise agreed.",
-    ])],
+    [exclusiveTaxLines()],
+    [totalBand("TOTAL INCL. VAT", "{{quote.total}}")],
+    // Both texts come from Settings → Documents → Invoice, as on the old page.
+    [conditional("invoice.paymentTerms", [textBox("PAYMENT TERMS", "{{invoice.paymentTerms}}")])],
+    [conditional("invoice.bankingDetails", [textBox("PAYMENT DETAILS", "{{invoice.bankingDetails}}")])],
+    [signLine("Received by · Date")],
     [footer()],
   ]);
 }
 
 function agreementTemplate(): DocumentModel {
   return documentModel("Sales agreement", [
-    [banner("SALES AGREEMENT", "{{quote.number}}")],
+    [banner("SALES AGREEMENT", "{{agreement.number}}")],
+    [text("Date: {{agreement.date}}"), text("Reference: {{quote.number}}", "right")],
+    [conditional("agreement.intro", [italic("{{agreement.intro}}")])],
     [
-      infoCard("BUYER", "{{customer.name}}", "{{customer.phone}}\n{{customer.email}}\n{{customer.address}}"),
-      infoCard("SELLER", "{{company.name}}", "{{company.address}}\n{{company.phone}}", INK),
+      infoCard("PURCHASER", "{{customer.name}}", "{{agreement.purchaser}}"),
+      infoCard("SELLER", "{{company.name}}", "{{company.tagline}}\n{{company.address}}", INK),
     ],
-    [heading("Vehicle & items")],
     [lineItems()],
-    [totalBand("TOTAL INCL. VAT", "{{quote.total}}")],
-    [terms("AGREEMENT CLAUSES", [
-      "The buyer agrees to purchase the vehicle(s) and items listed above at the stated price.",
-      "A 50% deposit secures the order; the balance is payable on delivery.",
-      "Denago EVs are Low-Speed Vehicles for private-property use and are not road registered.",
-      "Warranty: 12 months limited; battery 24 months.",
-      "This agreement is governed by the laws of South Africa.",
-    ])],
-    signatureStrip("Buyer signature & date", "For {{company.name}} & date"),
+    [exclusiveTaxLines()],
+    [totalBand("PURCHASE PRICE", "{{quote.total}}")],
+    // The clauses come from Settings → Documents → Sales agreement, as on the old page.
+    [conditional("agreement.clauses", [textBox("TERMS OF SALE", "{{agreement.clauses}}")])],
+    [signLine("Purchaser signature · Date"), signLine("For {{company.name}} · Date")],
     [footer()],
   ]);
 }
 
+// ── Indemnity + warranty claim: laid out like their legacy print pages ──
+
+/** Small text, as the legacy meta strip under the banner. */
+function small(block: DocumentBlock): DocumentBlock {
+  block.settings = { ...block.settings, fontScale: 0.8 };
+  return block;
+}
+
+/** Small italic note, as the legacy "intro" line under the banner. */
+function note(value: string): DocumentBlock {
+  const block = newBlock("text");
+  if (block.type === "text") block.value = [{ type: "p", children: [{ text: value, italic: true }] }];
+  return small(block);
+}
+
+/** A signature line with its label beneath. Paragraphs, because "\n" in a text leaf does not break. */
+function smallSignLine(label: string): DocumentBlock {
+  const block = newBlock("text");
+  if (block.type === "text") {
+    block.value = ["", "", "________________________________________", label].map((line) => ({
+      type: "p",
+      children: [{ text: line }],
+    }));
+  }
+  return small(block);
+}
+
 function indemnityTemplate(): DocumentModel {
   return documentModel("Test-drive indemnity", [
-    [banner("TEST-DRIVE INDEMNITY", "{{date.today}}")],
-    [infoCard("DRIVER", "{{customer.name}}", "{{customer.phone}}\n{{customer.email}}")],
-    [text(
-      "I, the undersigned, acknowledge that I am about to operate an electric Low-Speed Vehicle supplied by {{company.name}} for the purpose of a demonstration drive.\n\n" +
-        "I confirm that I hold a valid driver's licence, will operate the vehicle responsibly and on private property only, and accept full responsibility for any damage, injury or loss arising from my use of the vehicle during the demonstration.\n\n" +
-        "I indemnify {{company.name}} against all claims arising from the demonstration drive.",
+    [banner("TEST-DRIVE INDEMNITY", "")],
+    [small(text("Date: {{date.today}}"))],
+    [note("Please read and sign before the test drive.")],
+    [
+      infoCard("DRIVER", "{{customer.name}}", "{{customer.lines}}"),
+      infoCard("VEHICLE", "{{vehicle}}", "{{vehicle.lines}}", INK),
+    ],
+    [infoCard(
+      "TO BE COMPLETED BY THE DRIVER",
+      "",
+      "Driver's licence number: ______________________________\n\nID / passport number: ______________________________",
+      SLATE,
     )],
-    signatureStrip("Driver signature & date", "Witness (for {{company.name}}) & date"),
+    [infoCard(
+      "INDEMNITY & WAIVER",
+      "",
+      "I, the undersigned, acknowledge that I am test-driving the vehicle entirely at my own risk. I confirm that I hold a valid driver's licence, will follow all instructions given by {{company.name}} staff, and accept liability for any damage caused by my negligence during the test drive. {{company.name}}, its owners and employees are indemnified against any claim for injury, loss or damage arising from the test drive, to the fullest extent permitted by law.",
+      SLATE,
+    )],
+    [smallSignLine("Driver signature · Date"), smallSignLine("For {{company.name}} · Date")],
     [footer()],
   ]);
 }
@@ -177,15 +260,6 @@ function indemnityTemplate(): DocumentModel {
 function packingList(): DocumentBlock {
   const block = newBlock("lineItems");
   if (block.type === "lineItems") block.columns = block.columns.filter((c) => c.key === "description" || c.key === "qty");
-  return block;
-}
-
-function onlyWhen(when: string, blocks: DocumentBlock[]): DocumentBlock {
-  const block = newBlock("conditional");
-  if (block.type === "conditional") {
-    block.when = when;
-    block.blocks = blocks;
-  }
   return block;
 }
 
@@ -234,26 +308,32 @@ function serviceReportTemplate(): DocumentModel {
       infoCard("CUSTOMER", "{{customer.name}}", "{{service.customerLines}}"),
       infoCard("VEHICLE", "{{vehicle}}", "{{service.vehicleLines}}", INK),
     ],
-    [onlyWhen("service.hasSummary", [infoCard("WORK CARRIED OUT", "", "{{service.work}}", INK)])],
-    [onlyWhen("jobcard.lines.length > 0", [packingList()])],
-    [onlyWhen("service.hasNextDue", [infoCard("NEXT SERVICE DUE", "{{service.nextDue}}", "")])],
+    [conditional("service.hasSummary", [infoCard("WORK CARRIED OUT", "", "{{service.work}}", INK)])],
+    [conditional("jobcard.lines.length > 0", [packingList()])],
+    [conditional("service.hasNextDue", [infoCard("NEXT SERVICE DUE", "{{service.nextDue}}", "")])],
     signatureStrip("Customer & date", "Technician & date"),
     [footer()],
   ]);
 }
 
 function warrantyClaimTemplate(): DocumentModel {
+  // The resolution box only prints once there is one, as on the legacy page.
+  const resolution = newBlock("conditional");
+  if (resolution.type === "conditional") {
+    resolution.when = "claim.hasResolution";
+    resolution.blocks = [infoCard("RESOLUTION", "", "{{claim.resolutionLine}}", SLATE)];
+  }
   return documentModel("Warranty claim", [
-    [banner("WARRANTY CLAIM", "{{date.today}}")],
+    [banner("WARRANTY CLAIM", "{{claim.number}}")],
+    [small(text("Claimed: {{claim.date}}")), small(text("Status: {{claim.status}}", "right"))],
+    [note("Warranty claim as recorded by {{company.name}}.")],
     [
-      infoCard("CUSTOMER", "{{customer.name}}", "{{customer.phone}}\n{{customer.email}}"),
-      infoCard("VEHICLE & WARRANTY", "{{vehicle}}", "VIN {{vehicle.vin}} · Reg {{vehicle.reg}}", INK),
+      infoCard("CUSTOMER", "{{customer.name}}", "{{customer.lines}}"),
+      infoCard("VEHICLE & WARRANTY", "{{vehicle}}", "{{vehicle.lines}}", INK),
     ],
-    [heading("Fault description")],
-    [text("Describe the fault, when it occurred and the conditions under which it happens.")],
-    [heading("Assessment")],
-    [text("Technician assessment, parts required and recommended remedy.")],
-    signatureStrip("Customer & date", "For {{company.name}} & date"),
+    [infoCard("REPORTED FAULT", "", "{{claim.description}}", SLATE)],
+    [resolution],
+    [smallSignLine("Customer · Date"), smallSignLine("For {{company.name}} · Date")],
     [footer()],
   ]);
 }

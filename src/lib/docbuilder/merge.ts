@@ -6,6 +6,7 @@ import { jobCardTotals, jobLineCents } from "@/lib/workshop-constants";
 import type { QuoteForPrint } from "@/components/print/QuotePrintDoc";
 import { quoteBillTo, type BillToFleet } from "@/lib/quoteBillTo";
 import type { TableRow } from "./blocks";
+import { quoteDocTokens } from "./quoteDocs";
 
 export type JobCardForDoc = Prisma.JobCardGetPayload<{
   include: { items: true; vehicle: true; contact: true; technician: true };
@@ -25,6 +26,20 @@ export type MergeContext = {
   items: TableRow[];
   vars: Record<string, unknown>;
 };
+
+function firstWord(name: string | null | undefined): string {
+  return name?.trim().split(/\s+/)[0] ?? "";
+}
+
+/**
+ * The record-independent tokens every document gets, bound or not:
+ * `{{user.name}}` (the staff member generating it — blank when there is no
+ * signed-in staff member, e.g. a customer's signing page) and `{{date.today}}`.
+ * `{{company.*}}` is the third such set, from companyTokens().
+ */
+export function documentGlobalTokens(userName: string | null | undefined, now: Date = new Date()): Record<string, string> {
+  return { "user.name": userName?.trim() ?? "", "date.today": formatDate(now) };
+}
 
 /**
  * `fleet` is REQUIRED, not optional, and resolved by the caller through
@@ -70,6 +85,14 @@ export function buildQuoteContext(quote: QuoteForPrint, fleet: BillToFleet | nul
     "customer.attention": billTo.attention ?? "",
     "customer.vatNumber": billTo.vatNumber,
     "customer.registrationNumber": billTo.registrationNumber,
+    // The PERSON's first name, for "Dear …" — not the bill-to name, which for a
+    // fleet quote is the business. A customerless lead falls back to its name.
+    "customer.firstName": quote.contact?.firstName ?? firstWord(quote.lead?.name),
+    "lead.name": quote.lead?.name ?? "",
+    "lead.title": quote.lead?.title ?? "",
+    "lead.source": quote.lead?.source ?? "",
+    "lead.product": quote.lead?.product?.name ?? "",
+    "lead.value": quote.lead ? formatZAR(quote.lead.valueCents) : "",
     "quote.number": `Q-${quote.number}`,
     "quote.date": formatDate(quote.createdAt),
     "quote.validUntil": quote.validUntil ? formatDate(quote.validUntil) : "—",
@@ -79,6 +102,8 @@ export function buildQuoteContext(quote: QuoteForPrint, fleet: BillToFleet | nul
     "quote.total": formatZAR(Math.round(total)),
     vehicle: quote.lead?.product?.name ?? lines[0]?.description ?? "—",
     preparedBy: quote.createdBy?.name ?? "—",
+    // Invoice / sales agreement numbering, dates and party blocks — see quoteDocs.ts.
+    ...quoteDocTokens(quote, billTo, pricing),
   };
   const items: TableRow[] = [
     ...lines.map((i) => ({
@@ -132,6 +157,9 @@ export function buildQuoteContext(quote: QuoteForPrint, fleet: BillToFleet | nul
       })),
     ],
     status: quote.status,
+    // Lets a layout show the Subtotal / VAT lines only when the rows are ex-VAT,
+    // as documentTotals() does for the fixed print pages.
+    taxInclusive: quote.taxInclusive !== false,
   };
   const vars = {
     quotation,
@@ -155,6 +183,7 @@ export function buildJobCardContext(jc: JobCardForDoc): MergeContext {
   const address = [jc.contact.address, jc.contact.suburb, jc.contact.city, jc.contact.province, jc.contact.postalCode].filter(Boolean).join(", ");
   const tokens: Record<string, string> = {
     "customer.name": contactName(jc.contact),
+    "customer.firstName": jc.contact.firstName ?? "",
     "customer.phone": jc.contact.phone ?? "",
     "customer.email": jc.contact.email ?? "",
     "customer.address": address,

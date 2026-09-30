@@ -277,6 +277,8 @@ test("a failure is classified, stored and acted on", () => {
   assert.equal(classifyDeliveryFailure("Meta page token is not configured (Settings → Integrations)."), "not_configured");
   assert.equal(classifyDeliveryFailure("Send API error 429: too many requests"), "rate_limited");
   assert.equal(classifyDeliveryFailure("socket hang up"), "transient_network");
+  // Meta's refusal before the app is live is ours to fix, not the customer's.
+  assert.equal(classifyDeliveryFailure("(#200) Cannot message users who are not admins, developers or testers of the app until pages_messaging permission is reviewed and the app is live."), "app_not_approved");
   // An unfamiliar message must retry. Guessing "permanent" would discard a
   // deliverable customer reply.
   assert.equal(classifyDeliveryFailure("Something nobody has seen before"), "provider_error");
