@@ -12,11 +12,18 @@ import { SHOWCASE_BAND_ASSETS } from "../src/lib/doceditor/showcaseAssets";
 import { existsSync } from "node:fs";
 import { freezeDocumentGlobals, freezeVehicleShowcase } from "../src/lib/signing/freezeDocument";
 import {
+  SHOWCASE_IMAGE_MAX_BYTES,
+  checkShowcaseImage,
   modelName,
+  parseColourImages,
   parseVehicleSpecs,
+  primaryVehicleLine,
   primaryVehicleProductId,
+  quoteVehiclePhoto,
   readShowcase,
   showcaseFromProduct,
+  showcaseImageRefFor,
+  uniqueColours,
 } from "../src/lib/docbuilder/vehicleShowcase";
 
 const PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -178,6 +185,86 @@ test("a sent quote keeps its vehicle: editing the product changes neither the si
   const later = renderDocumentHtml(none, live);
   assert.doesNotMatch(later, /EDITED|9 SEATS|>Rover XL</);
   assert.ok(!later.includes(PNG_B));
+});
+
+test("the photo follows the quoted colour: exact, case-insensitive, missing colour → default, no photos → none", () => {
+  const product = { showcaseImageRef: "default.png", showcaseColourImages: { White: "white.png", Lava: "lava.png", "Matte Black": "matte.png" } };
+  assert.equal(showcaseImageRefFor(product, "Lava"), "lava.png");
+  assert.equal(showcaseImageRefFor(product, "White"), "white.png");
+  assert.equal(showcaseImageRefFor(product, "  lava "), "lava.png", "trimmed, case-insensitive");
+  assert.equal(showcaseImageRefFor(product, "MATTE BLACK"), "matte.png");
+  assert.equal(showcaseImageRefFor(product, "Verdant"), "default.png", "a colour with no photo shows the default");
+  assert.equal(showcaseImageRefFor(product, null), "default.png", "no colour on the line → default");
+  assert.equal(showcaseImageRefFor(product, "  "), "default.png");
+  assert.equal(showcaseImageRefFor({ showcaseImageRef: null, showcaseColourImages: null }, "Lava"), null, "no photos at all → none");
+  assert.equal(showcaseImageRefFor({ showcaseImageRef: null, showcaseColourImages: { White: "white.png" } }, "Lava"), null);
+  assert.deepEqual(parseColourImages({ White: "w.png", " ": "x.png", Blue: 7, Gray: "" }), { White: "w.png" }, "malformed entries are ignored");
+  assert.deepEqual(parseColourImages(["w.png"]), {});
+  assert.deepEqual(uniqueColours([{ name: "White" }, { name: " white" }, { name: "Lava" }, { name: "" }]).map((c) => c.name), ["White", "Lava"]);
+
+  // The colour is the PRIMARY vehicle line's — not an accessory's.
+  const items = [
+    { ...line({ productId: "acc", kind: "accessory", sortOrder: 0 }), colorPreference: "White" },
+    { ...line({ productId: "rover", sortOrder: 1 }), colorPreference: "Lava" },
+  ];
+  const vehicleLine = primaryVehicleLine(items);
+  assert.equal(vehicleLine?.colorPreference, "Lava");
+  assert.equal(quoteVehiclePhoto(vehicleLine, product, null)?.imageRef, "lava.png");
+  // No line product (none on the quote, or another workspace's): the lead's product in the lead's colour.
+  assert.equal(quoteVehiclePhoto(null, null, { product, color: "white" })?.imageRef, "white.png");
+  assert.equal(quoteVehiclePhoto(null, null, { product: null, color: "White" }), null);
+});
+
+test("showcase photo uploads: PNG/JPG/WebP by their bytes, 1.5 MB cap", () => {
+  const png = Buffer.from(PNG.split(",")[1], "base64");
+  assert.deepEqual(checkShowcaseImage(png), { mime: "image/png", ext: ".png" });
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10]);
+  assert.deepEqual(checkShowcaseImage(jpeg), { mime: "image/jpeg", ext: ".jpg" });
+  assert.throws(() => checkShowcaseImage(Buffer.from("<svg onload=alert(1)>")), /not a PNG, JPG or WebP/);
+  assert.throws(() => checkShowcaseImage(Buffer.from("GIF89a")), /not a PNG, JPG or WebP/);
+  const huge = Buffer.alloc(SHOWCASE_IMAGE_MAX_BYTES + 1);
+  png.copy(huge);
+  assert.throws(() => checkShowcaseImage(huge), /1\.5 MB or smaller/);
+});
+
+test("a sent quote keeps the photo of the colour it was sent in", () => {
+  const LAVA = "data:image/png;base64,TEFWQUxBVkE=";
+  const LAVA_NEW = "data:image/png;base64,TkVXTEFWQQ==";
+  const WHITE = "data:image/png;base64,V0hJVEVXSElURQ==";
+  const DEFAULT = "data:image/png;base64,REVGQVVMVA==";
+  // Stand-in for the private store: embedStoredImage turns a ref into these bytes.
+  const store: Record<string, string> = { "lava.png": LAVA, "white.png": WHITE, "default.png": DEFAULT };
+  const product = {
+    name: "Denago EV Rover XL", description: "", showcaseTagline: null, showcaseSpecs: null,
+    showcaseImageRef: "default.png", showcaseColourImages: { Lava: "lava.png", White: "white.png" } as Record<string, string>,
+  };
+  // What freezeQuoteShowcase does: the primary line → its colour's photo → embedded → frozen.
+  const send = (colour: string) => {
+    const vehicleLine = primaryVehicleLine([{ ...line({ productId: "rover" }), colorPreference: colour }]);
+    const chosen = quoteVehiclePhoto(vehicleLine, product, null)!;
+    const vehicle = showcaseFromProduct(chosen.product, chosen.imageRef ? store[chosen.imageRef] : null);
+    return parseDocument(JSON.parse(JSON.stringify(freezeVehicleShowcase(showcaseQuoteTemplate(), vehicle))))!;
+  };
+  const lavaQuote = send("Lava");
+  const whiteQuote = send("White");
+
+  // The owner then replaces the Lava photo.
+  store["lava2.png"] = LAVA_NEW;
+  product.showcaseColourImages.Lava = "lava2.png";
+  const live = ctx({ showcase: showcaseFromProduct(product, LAVA_NEW) });
+
+  const lavaSigned = renderSigningSheets(lavaQuote, live).pages.join("\n");
+  assert.ok(lavaSigned.includes(`src="${LAVA}"`), "the signed Lava quote still shows the original Lava photo");
+  assert.ok(!lavaSigned.includes(LAVA_NEW) && !lavaSigned.includes(DEFAULT) && !lavaSigned.includes(WHITE));
+  const whiteSigned = renderDocumentHtml(whiteQuote, live);
+  assert.ok(whiteSigned.includes(`src="${WHITE}"`), "a White quote shows the White photo");
+  assert.ok(!whiteSigned.includes(LAVA) && !whiteSigned.includes(LAVA_NEW));
+
+  // …and the real loader resolves the photo this way on both the live and the send path.
+  const loader = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../src/lib/docbuilder/vehicleShowcaseLoad.ts"), "utf8");
+  assert.match(loader, /const chosen = quoteVehiclePhoto\(line, lineProduct, quote\.lead\);/);
+  assert.match(loader, /embedStoredImage\(chosen\.imageRef, chosen\.product\.tenantId\)/);
+  assert.doesNotMatch(loader, /showcaseImageRef/, "never the default photo directly");
 });
 
 test("band photos and the vehicle-photo fade: rendered under an overlay, and carried in the snapshot", () => {

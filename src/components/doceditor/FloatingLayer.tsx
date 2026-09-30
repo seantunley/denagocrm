@@ -32,7 +32,13 @@ export function FloatingLayer({ page, zoom }: { page: DocumentPage; zoom: number
             className={`pointer-events-auto absolute rounded bg-white/0 ${isSel ? "outline outline-2 outline-orange-400" : "hover:outline hover:outline-1 hover:outline-dashed hover:outline-slate-300"}`}
             style={{ left: fb.x * zoom, top: fb.y * zoom, width: fb.width * zoom }}
           >
-            <BlockView block={fb.block} active={active} />
+            {/* The block lays out at its real width and is zoomed as a whole, the
+                same factor as its position — so a fixed-geometry block (the
+                showcase acceptance card) keeps its lines under the overlay
+                fields, which are also placed at `px × zoom`. */}
+            <div style={{ zoom }}>
+              <BlockView block={fb.block} active={active} />
+            </div>
           </div>
         );
       })}
