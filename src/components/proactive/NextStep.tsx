@@ -22,7 +22,8 @@ import {
   rescheduleActivity,
   scheduleFollowUp,
 } from "@/app/actions/activities";
-import { markWon, markLost } from "@/app/actions/leads";
+import { markLost } from "@/app/actions/leads";
+import { MarkWonForm } from "@/components/MarkWonDialog";
 import { fireConfetti } from "@/lib/confetti";
 import { createQuoteFromLead } from "@/app/actions/quotes";
 import {
@@ -58,7 +59,7 @@ export function NextStepDialog({
   leadName: string;
   onClose: () => void;
 }) {
-  const [mode, setMode] = useState<"choose" | "followup" | "lost">("choose");
+  const [mode, setMode] = useState<"choose" | "followup" | "won" | "lost">("choose");
   const [fuType, setFuType] = useState("call");
   const activityTypes = useActivityTypes();
   const [fuWhen, setFuWhen] = useState(defaultFollowUp());
@@ -142,22 +143,12 @@ export function NextStepDialog({
               <ChevronRight className="size-4 text-muted-foreground" />
             </button>
 
-            <button
-              className={choice}
-              disabled={pending}
-              onClick={() =>
-                start(async () => {
-                  fireConfetti();
-                  toast.success(`${leadName} marked WON 🎉`);
-                  await markWon(leadId); // redirects to the contact
-                })
-              }
-            >
+            <button className={choice} disabled={pending} onClick={() => setMode("won")}>
               <Trophy className="size-4 shrink-0 text-emerald-400" />
               <span className="flex-1">
                 We won the deal
                 <span className="block text-xs text-muted-foreground">
-                  Marks the lead won and opens the customer
+                  Pick the accepted quote, then open the customer
                 </span>
               </span>
               <ChevronRight className="size-4 text-muted-foreground" />
@@ -237,6 +228,18 @@ export function NextStepDialog({
               </Button>
             </div>
           </div>
+        )}
+
+        {mode === "won" && (
+          <MarkWonForm
+            leadId={leadId}
+            onCancel={() => setMode("choose")}
+            onWon={() => {
+              fireConfetti();
+              reset();
+              onClose();
+            }}
+          />
         )}
 
         {mode === "lost" && (

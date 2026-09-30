@@ -5,12 +5,11 @@ import { revalidatePath } from "next/cache";
 import { prisma, basePrisma } from "@/lib/db";
 import { contactName, parseRands } from "@/lib/format";
 import { emitLeadJourneyEvent } from "@/lib/leadJourneyEvents";
-import { recordReferral, markReferralEarned } from "@/lib/referrals";
+import { recordReferral } from "@/lib/referrals";
 import { logAudit, logAuditStrict, GOVERNANCE_TX } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
 import { createLeadRecord } from "@/lib/leadCreate";
 import { cancelPlannedActivitiesForLostLead } from "@/lib/leadClose";
-import { triggerSurvey } from "@/lib/surveys";
 import { removeTimelinePin } from "@/lib/timelinePins";
 import { customerRecordTenantId } from "@/lib/customerRecordTenant";
 // `resolveAssignableUser` is the consolidated contract from #460/#467 — it
@@ -18,13 +17,22 @@ import { customerRecordTenantId } from "@/lib/customerRecordTenant";
 // against, and it is the one that enforces membership while dormant.
 import { resolveAssignableUser } from "@/lib/tenantActor";
 import { withActingStaffScope } from "@/lib/actingScope";
+import type { Lead } from "@prisma/client";
+import { getCurrentUser } from "@/lib/auth";
+import { actingTenantId } from "@/lib/actingTenant";
+import { payableTotalCents } from "@/lib/pricing";
+import { WINNABLE_QUOTE_STATUSES, acceptQuoteInTx, afterDealWon, winLeadInTx } from "@/lib/quoteOutcome";
+import { CLOSED_REQUEST_STATUSES } from "@/lib/signing/status";
 import {
+  canAccessLead,
   getAccessibleContactIds,
+  getAccessibleQuoteIds,
   hasPermission,
   requireAnyPermission,
   requireLeadAccess,
   requireLeadReadAccess,
   requirePermission,
+  requireQuoteAccess,
 } from "@/lib/permissions";
 import { type PipelineStageAction } from "@/lib/pipelineStageActions";
 import {
@@ -1384,65 +1392,147 @@ export async function markLeadViewed(leadId: string) {
   });
 }
 
+/**
+ * The lead's quotes that "Mark won" can accept: live, current, unsigned and not
+ * yet decided either way. Accepted ones are listed separately — they are already
+ * on Deliveries and need nothing from Mark won.
+ */
+async function wonQuoteOptions(leadId: string) {
+  const quotes = await prisma.quote.findMany({
+    where: { leadId, deletedAt: null, supersededAt: null },
+    include: { items: true, fees: true },
+    orderBy: { createdAt: "desc" },
+  });
+  return {
+    winnable: quotes.filter((quote) => !quote.signedAt && WINNABLE_QUOTE_STATUSES.includes(quote.status)),
+    accepted: quotes.filter((quote) => quote.status === "accepted"),
+  };
+}
+
+export type MarkWonChoices = {
+  quotes: Array<{ id: string; number: number; status: string; totalCents: number; outForSignature: boolean }>;
+  acceptedNumbers: number[];
+  /** Accepting a quote is a status change; without it only "no quote" is open. */
+  canAcceptQuotes: boolean;
+};
+
+/**
+ * What the Mark won dialog offers. Read-only, and null (not a redirect) on any
+ * refusal, because it feeds a dialog — markWon() re-checks everything.
+ */
+export async function markWonChoices(leadId: string): Promise<MarkWonChoices | null> {
+  return withActingStaffScope(async () => {
+    const user = await getCurrentUser();
+    if (!user || !(await hasPermission(user, "leads.mark_won")) || !(await canAccessLead(user, leadId))) return null;
+    const [{ winnable, accepted }, visible, canAcceptQuotes] = await Promise.all([
+      wonQuoteOptions(leadId),
+      getAccessibleQuoteIds(user),
+      hasPermission(user, "quotes.change_status"),
+    ]);
+    const shown = winnable.filter((quote) => visible === null || visible.includes(quote.id));
+    const signing = await prisma.signatureRequest.findMany({
+      where: { quoteId: { in: shown.map((quote) => quote.id) }, deletedAt: null, status: { notIn: [...CLOSED_REQUEST_STATUSES] } },
+      select: { quoteId: true },
+    });
+    const outForSignature = new Set(signing.map((request) => request.quoteId));
+    return {
+      quotes: shown.map((quote) => ({
+        id: quote.id,
+        number: quote.number,
+        status: quote.status,
+        totalCents: payableTotalCents(quote),
+        outForSignature: outForSignature.has(quote.id),
+      })),
+      acceptedNumbers: accepted.map((quote) => quote.number),
+      canAcceptQuotes,
+    };
+  });
+}
+
+/**
+ * Close the deal as won.
+ *
+ * WITH A QUOTE (`quoteId`): exactly what accepting that quote does — the shared
+ * acceptQuoteInTx — so the deal lands on Deliveries. When the lead has quotes
+ * that could be the one, the caller MUST say which (or `quoteId=none`): the
+ * choice is never guessed, not even when there is only one.
+ *
+ * WITHOUT ONE: the lead is won and nothing goes to Deliveries until a quote is
+ * accepted, and the message says so.
+ *
+ * Either way the customer is the lead's linked contact, else the chosen quote's,
+ * else an existing contact with the same email/phone — a new one only when none
+ * of those exist.
+ */
 export async function markWon(leadId: string, formData?: FormData) {
   return asActionResult(async () => {
     const user = await requireLeadAccess(leadId, "leads.mark_won");
     const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
-    let contactId = before.contactId;
-    if (!contactId) {
-      const [firstName, ...rest] = before.name.split(/\s+/);
-      const contact = await prisma.contact.create({
-        data: {
-          firstName: firstName || before.name,
-          lastName: rest.join(" ") || null,
-          email: before.email,
-          phone: before.phone,
-          source: before.source,
-          // Carried, for the same reason as createLead: winning a lead must not
-          // be the moment its notes disappear. notesFromLeadId records WHERE the
-          // copy came from, so the timeline can show one entry instead of two
-          // without comparing sentences — see lib/timelineNotes.ts.
-          notes: before.notes,
-          notesFromLeadId: before.notes?.trim() ? before.id : null,
-          tenantId: before.tenantId,
-          createdById: user.id,
-          ownerId: before.assignedToId ?? user.id,
-        },
-      });
-      contactId = contact.id;
-      await logAudit({
-        action: "contact.created",
-        summary: `Created contact ${before.name} from won lead`,
-        contactId,
-        leadId,
-        user,
-        after: contact,
-      });
+    if (before.status !== "open") refuse("This lead is already closed. Reopen it first to mark it won.");
+
+    const choice = String(formData?.get("quoteId") ?? "").trim();
+    const { winnable, accepted } = await wonQuoteOptions(leadId);
+    if (!choice && winnable.length > 0) {
+      refuse("Choose the quote the customer accepted, or mark it won without a quote.");
     }
-    const lead = await prisma.lead.update({
-      where: { id: leadId },
-      data: { status: "won", contactId },
-    });
-    await markReferralEarned(leadId).catch(() => {});
-    await emitLeadJourneyEvent("lead_won", leadId);
-    await logAuditStrict({
-      action: "lead.won",
-      summary: `Marked lead “${lead.title}” as WON 🎉`,
-      leadId,
-      contactId,
-      user,
-      before,
-      after: lead,
-    });
-    await triggerSurvey("won", { contactId, leadId });
+    const chosen = choice && choice !== "none" ? winnable.find((quote) => quote.id === choice) : null;
+    if (choice && choice !== "none" && !chosen) refuse("That quote can't be accepted any more — reload and choose again.");
+    if (chosen) await requireQuoteAccess(chosen.id, "quotes.change_status");
+    // Asked up front as well as under the lock, so a refusal comes before the
+    // customer is linked rather than after. The locked check is the real one.
+    const liveSigning = chosen
+      ? await prisma.signatureRequest.findFirst({
+          where: { quoteId: chosen.id, deletedAt: null, status: { notIn: [...CLOSED_REQUEST_STATUSES] } },
+          select: { id: true },
+        })
+      : null;
+    if (chosen && liveSigning) {
+      refuse(`Quote Q-${chosen.number} is out for signature — void the signing request first, or let the customer sign it.`);
+    }
+
+    const contactId = await linkOrCreateLeadContact(before, user, chosen?.contactId ?? null);
+    const tenantId = await actingTenantId();
+    const outcome = await basePrisma.$transaction(async (tx) => {
+      if (chosen) {
+        // A quote raised before the lead had a customer carries none; it gets
+        // the one the deal was just won with.
+        await tx.quote.updateMany({ where: { id: chosen.id, tenantId, contactId: null }, data: { contactId } });
+        return acceptQuoteInTx(tx, chosen.id, tenantId, user);
+      }
+      if (!(await winLeadInTx(tx, leadId, tenantId))) return { kind: "gone" as const };
+      await logAuditStrict({
+        action: "lead.won",
+        summary:
+          `Marked lead “${before.title}” as WON 🎉` +
+          (accepted.length > 0 ? "" : " — no quote accepted, so nothing goes to Deliveries yet"),
+        leadId,
+        contactId,
+        user,
+        before: { status: before.status },
+        after: { status: "won" },
+      }, tx);
+      return { kind: "won" as const };
+    }, GOVERNANCE_TX);
+
+    if (outcome.kind === "out_for_signature") {
+      refuse(`Quote Q-${chosen?.number} is out for signature — void the signing request first, or let the customer sign it.`);
+    }
+    if (outcome.kind === "gone") refuse("This deal changed while you were marking it won — reload the page.");
+    if (outcome.kind === "won" || outcome.wonLeadId) await afterDealWon(leadId, contactId);
+
     revalidatePath("/leads");
     revalidatePath("/forecast");
+    revalidatePath("/deliveries");
     revalidatePath(`/leads/${leadId}`);
+    const success = chosen
+      ? `Marked won — Q-${chosen.number} accepted and sent to Deliveries`
+      : accepted.length > 0
+      ? `Marked won — Q-${accepted.map((quote) => quote.number).join(", Q-")} is already on Deliveries`
+      : "Marked won — nothing goes to Deliveries until a quote is accepted";
     // A real success that simply stays put: the win IS recorded, this only skips
-    // the hop to the contact. Said explicitly so it cannot be mistaken for one of
-    // the silent "nothing happened" returns.
-    if (formData?.get("returnTo") === "/leads") return { success: "Marked won" };
-    return { redirectTo: `/contacts/${contactId}` };
+    // the hop to the contact.
+    if (formData?.get("returnTo") === "/leads") return { success };
+    return { success, redirectTo: `/contacts/${contactId}` };
   });
 }
 
@@ -1539,6 +1629,96 @@ export async function linkLeadToContact(leadId: string, formData: FormData) {
   });
 }
 
+/**
+ * The customer a lead belongs to — found before it is ever created.
+ *
+ * In order: the lead's linked contact; the contact the caller already has in
+ * hand (Mark won passes the chosen quote's customer); an existing contact with
+ * the lead's email or phone; and only then a new one. Mark won used to skip the
+ * middle two and create a fresh contact every time, which is where duplicate
+ * customers came from. Nothing is merged — a match is linked, never combined.
+ *
+ * Links the lead, and gives its customer-less draft quotes the same contact.
+ */
+async function linkOrCreateLeadContact(
+  lead: Lead,
+  user: { id: string; name: string },
+  knownContactId: string | null,
+): Promise<string> {
+  if (lead.contactId) return lead.contactId;
+  let contactId = knownContactId;
+  if (!contactId) {
+    const matchers = [
+      ...(lead.email ? [{ email: lead.email }] : []),
+      ...(lead.phone ? [{ phone: lead.phone }] : []),
+    ];
+    const existingMatch = matchers.length > 0
+      ? await prisma.contact.findFirst({ where: { OR: matchers } })
+      : null;
+    // Reuse if tenantId already matches, or if it's null (pre-backfill) — stamp
+    // the lead's tenantId onto it so the composite FK is satisfied without
+    // creating a duplicate.
+    const canReuse = existingMatch && (
+      existingMatch.tenantId === lead.tenantId || existingMatch.tenantId === null
+    );
+    if (canReuse && existingMatch) {
+      contactId = existingMatch.id;
+      if (existingMatch.tenantId === null && lead.tenantId !== null) {
+        await prisma.contact.update({
+          where: { id: existingMatch.id },
+          data: { tenantId: lead.tenantId },
+        });
+      }
+    } else {
+      const [firstName, ...rest] = lead.name.split(/\s+/);
+      const contact = await prisma.contact.create({
+        data: {
+          firstName: firstName || lead.name,
+          lastName: rest.join(" ") || null,
+          email: lead.email,
+          phone: lead.phone,
+          source: lead.source,
+          // Becoming a customer must not be the moment the lead's notes
+          // disappear. notesFromLeadId records WHERE the copy came from, so the
+          // timeline can show one entry instead of two — see lib/timelineNotes.ts.
+          notes: lead.notes,
+          notesFromLeadId: lead.notes?.trim() ? lead.id : null,
+          tenantId: lead.tenantId,
+          createdById: user.id,
+          ownerId: lead.assignedToId ?? user.id,
+        },
+      });
+      contactId = contact.id;
+      await logAudit({
+        action: "contact.created",
+        summary: `Created contact ${lead.name} from lead`,
+        contactId,
+        leadId: lead.id,
+        user,
+        after: contact,
+      });
+    }
+  }
+
+  await prisma.lead.update({ where: { id: lead.id }, data: { contactId } });
+  // Quotes already made from this lead while it had no customer get this one,
+  // as linkLeadToContact does — otherwise they stay stuck on "Customer not selected".
+  await prisma.quote.updateMany({
+    where: { leadId: lead.id, contactId: null, status: "draft", deletedAt: null },
+    data: { contactId },
+  });
+  await logAuditStrict({
+    action: "lead.contact_linked",
+    summary: `Linked lead "${lead.title}" to contact`,
+    leadId: lead.id,
+    contactId,
+    user,
+    before: { contactId: lead.contactId },
+    after: { contactId },
+  });
+  return contactId;
+}
+
 export async function convertLeadToContact(leadId: string): Promise<{ ok: boolean; error?: string; contactId?: string }> {
   return withActingStaffScope(async () => {
     try {
@@ -1547,74 +1727,7 @@ export async function convertLeadToContact(leadId: string): Promise<{ ok: boolea
 
       if (lead.contactId) return { ok: false, error: "Already linked to a contact" };
 
-      const matchers = [
-        ...(lead.email ? [{ email: lead.email }] : []),
-        ...(lead.phone ? [{ phone: lead.phone }] : []),
-      ];
-      const existingMatch = matchers.length > 0
-        ? await prisma.contact.findFirst({ where: { OR: matchers } })
-        : null;
-      // Reuse if tenantId already matches, or if it's null (pre-backfill) — stamp
-      // the lead's tenantId onto it so the composite FK is satisfied without
-      // creating a duplicate.
-      const canReuse = existingMatch && (
-        existingMatch.tenantId === lead.tenantId || existingMatch.tenantId === null
-      );
-
-      let contactId: string;
-      if (canReuse && existingMatch) {
-        contactId = existingMatch.id;
-        if (existingMatch.tenantId === null && lead.tenantId !== null) {
-          await prisma.contact.update({
-            where: { id: existingMatch.id },
-            data: { tenantId: lead.tenantId },
-          });
-        }
-      } else {
-        const [firstName, ...rest] = lead.name.split(/\s+/);
-        const contact = await prisma.contact.create({
-          data: {
-            firstName: firstName || lead.name,
-            lastName: rest.join(" ") || null,
-            email: lead.email,
-            phone: lead.phone,
-            source: lead.source,
-            // Converting is explicitly "this lead is now a customer". Losing the
-            // notes at that point loses the reason the customer exists.
-            notes: lead.notes,
-            notesFromLeadId: lead.notes?.trim() ? lead.id : null,
-            tenantId: lead.tenantId,
-            createdById: user.id,
-            ownerId: lead.assignedToId ?? user.id,
-          },
-        });
-        contactId = contact.id;
-        await logAudit({
-          action: "contact.created",
-          summary: `Created contact ${lead.name} from lead`,
-          contactId,
-          leadId,
-          user,
-          after: contact,
-        });
-      }
-
-      await prisma.lead.update({ where: { id: leadId }, data: { contactId } });
-      // Quotes already made from this lead while it had no customer get this one,
-      // as linkLeadToContact does — otherwise they stay stuck on "Customer not selected".
-      await prisma.quote.updateMany({
-        where: { leadId, contactId: null, status: "draft", deletedAt: null },
-        data: { contactId },
-      });
-      await logAuditStrict({
-        action: "lead.contact_linked",
-        summary: `Linked lead "${lead.title}" to contact`,
-        leadId,
-        contactId,
-        user,
-        before: { contactId: lead.contactId },
-        after: { contactId },
-      });
+      const contactId = await linkOrCreateLeadContact(lead, user, null);
 
       revalidatePath("/leads");
       revalidatePath("/contacts");

@@ -101,8 +101,11 @@ const WRITE_PATHS: Array<[string, string[]]> = [
   // duplicated back out to five places, which is the thing that was fixed:
   // three of those five never fired an automation at all.
   ["src/lib/leadCreate.ts", ["lead_created"]],
-  ["src/app/actions/leads.ts", ["stage_entered", "lead_won", "lead_lost"]],
-  ["src/app/actions/quotes.ts", ["lead_won", "quote_declined"]],
+  ["src/app/actions/leads.ts", ["stage_entered", "lead_lost"]],
+  ["src/app/actions/quotes.ts", ["quote_declined"]],
+  // Mark won and accepting a quote share one win path (#11); both must still
+  // reach it — see the afterDealWon assertion below.
+  ["src/lib/quoteOutcome.ts", ["lead_won"]],
   ["src/lib/signing/postComplete.ts", ["lead_won", "quote_signed"]],
   ["src/app/actions/fulfilment.ts", ["delivered"]],
   ["src/lib/referrals.ts", ["referral_earned"]],
@@ -149,6 +152,12 @@ for (const [rel, triggers] of WRITE_PATHS) {
     }
   });
 }
+
+test("Mark won and accepting a quote both reach the shared lead_won emitter", () => {
+  for (const rel of ["src/app/actions/leads.ts", "src/app/actions/quotes.ts"]) {
+    assert.match(shipped(rel), /await afterDealWon\(/, `${rel} must fan a win out through afterDealWon`);
+  }
+});
 
 test("every path that changes a stage emits stage_entered", () => {
   // FIVE distinct paths now change a lead's stage — the edit form, the board

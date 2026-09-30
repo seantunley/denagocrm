@@ -146,6 +146,11 @@ async function checkRecordActive(
       return { error: "This quote was superseded by a revision — sign the current version.", leadId: null, version: null };
     }
     if (quote.signedAt) return { error: "This quote has already been signed.", leadId: null, version: null };
+    // A cancel that lands after this check still bumps updatedAt, so the locked
+    // version check in startRecordSigning refuses it as stale.
+    if (quote.status === "cancelled") {
+      return { error: "This quote was cancelled — duplicate it to send a new one.", leadId: null, version: null };
+    }
     if (quoteExpired(quote.validUntil)) {
       return { error: "This quote has expired — issue an updated quote first.", leadId: null, version: null };
     }

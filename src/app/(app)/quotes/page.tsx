@@ -38,6 +38,7 @@ import {
   type QuoteEditorRecord,
 } from "@/components/quotes/QuoteEditorDialog";
 import RecordContextMenu, { type RecordContextAction } from "@/components/RecordContextMenu";
+import QuoteRowActions from "@/components/quotes/QuoteRowActions";
 import {
   DesktopOnly,
   MobileOnly,
@@ -127,7 +128,11 @@ export default async function QuotesPage({
   // Every quote here is already RBAC-scoped by getAccessibleQuoteIds, so the
   // per-quote half of deleteQuote()'s check is satisfied by the query and only
   // the permission is left to ask — once, not per row.
-  const canDelete = await hasPermission(user, "quotes.delete");
+  const [canDelete, canCancel, canDuplicate] = await Promise.all([
+    hasPermission(user, "quotes.delete"),
+    hasPermission(user, "quotes.change_status"),
+    hasPermission(user, "quotes.create"),
+  ]);
 
   const validDays = Number.parseInt(validDaysRaw ?? "7", 10);
   const defaults = {
@@ -172,7 +177,7 @@ export default async function QuotesPage({
   const sentCount = quotes.filter((quote) => quote.status === "sent").length;
   const acceptedCount = quotes.filter((quote) => quote.status === "accepted").length;
   const pipelineValue = quotes
-    .filter((quote) => quote.status !== "declined")
+    .filter((quote) => quote.status !== "declined" && quote.status !== "cancelled")
     .reduce((total, quote) => total + payableTotalCents(quote), 0);
   const filtersActive = Boolean(needle || status);
 
@@ -260,6 +265,7 @@ export default async function QuotesPage({
               <option value="sent">Sent</option>
               <option value="accepted">Accepted</option>
               <option value="declined">Declined</option>
+              <option value="cancelled">Cancelled</option>
             </select>
             <Button variant="secondary" type="submit">Filter</Button>
             {filtersActive && <Link href="/quotes" className={buttonVariants({ variant: "ghost" })}>Clear</Link>}
@@ -318,7 +324,8 @@ export default async function QuotesPage({
                         </MobileDataField>
                         <MobileDataField label="Created">{formatDate(quote.createdAt)}</MobileDataField>
                       </MobileDataFields>
-                      <div className="mt-2 flex justify-end">
+                      <div className="mt-2 flex justify-end gap-3">
+                        <QuoteRowActions quoteId={quote.id} number={quote.number} status={quote.status} signed={Boolean(quote.signedAt)} canCancel={canCancel} canDuplicate={canDuplicate} />
                         <ConfirmDelete action={deleteQuote.bind(null, quote.id)} title={`Delete quote Q-${quote.number}?`} description="Moves the quote to Trash (restorable for 60 days)." trigger="Delete quote" triggerClass="text-xs text-slate-500 hover:text-red-400" disabled={!canDelete} disabledReason="Your role can't delete quotes." />
                       </div>
                     </MobileDataCard>
@@ -376,7 +383,8 @@ export default async function QuotesPage({
                           </td>
                           <td className="text-slate-400">{formatDate(quote.validUntil)}</td>
                           <td className="text-slate-400">{formatDate(quote.createdAt)}{quote.createdBy ? ` · ${quote.createdBy.name}` : ""}</td>
-                          <td className="text-right">
+                          <td className="whitespace-nowrap text-right">
+                            <QuoteRowActions className="mr-3" quoteId={quote.id} number={quote.number} status={quote.status} signed={Boolean(quote.signedAt)} canCancel={canCancel} canDuplicate={canDuplicate} />
                             <ConfirmDelete action={deleteQuote.bind(null, quote.id)} title={`Delete quote Q-${quote.number}?`} description="Moves the quote to Trash (restorable for 60 days)." trigger="Delete" triggerClass="text-xs text-slate-500 hover:text-red-400" disabled={!canDelete} disabledReason="Your role can't delete quotes." />
                           </td>
                         </tr>

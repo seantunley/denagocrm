@@ -180,6 +180,7 @@ const QUOTE_STATUS = [
   { value: "sent", label: "Sent" },
   { value: "accepted", label: "Accepted" },
   { value: "declined", label: "Declined" },
+  { value: "cancelled", label: "Cancelled" },
 ] as const;
 
 const ACTIVITY_STATUS = [

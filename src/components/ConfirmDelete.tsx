@@ -7,7 +7,12 @@ import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { cn } from "@/lib/utils";
 import type { ActionResult } from "@/lib/actionResultTypes";
 
-export default function ConfirmDelete({ action, title, description, trigger = "Delete", triggerClass = "btn-danger", confirmLabel = "Delete", success = "Deleted", contentClassName, onDeleted, disabled = false, disabledReason = "You do not have permission to delete this." }: {
+export default function ConfirmDelete({ action, title, description, trigger = "Delete", triggerClass = "btn-danger", confirmLabel = "Delete", success = "Deleted", contentClassName, onDeleted, disabled = false, disabledReason = "You do not have permission to delete this.", reasonLabel = "Reason for deleting", reasonPlaceholder = "Duplicate entry or created by mistake", pendingLabel = "Deleting…", dismissLabel = "Cancel" }: {
+  /** The same required-reason confirmation serves other destructive moves (cancelling a quote). */
+  reasonLabel?: string;
+  reasonPlaceholder?: string;
+  pendingLabel?: string;
+  dismissLabel?: string;
   /**
    * Accepts BOTH shapes deliberately. Actions converted to return `{ error }`
    * surface a real refusal message; ones still returning void keep working
@@ -81,8 +86,8 @@ export default function ConfirmDelete({ action, title, description, trigger = "D
           }}
           className="space-y-4"
         >
-          <div><label className="label" htmlFor="delete-reason">Reason for deleting</label><textarea id="delete-reason" name="reason" className="input" rows={3} required placeholder="Duplicate entry or created by mistake" /></div>
-          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end"><DialogClose asChild><button type="button" className="btn-secondary">Cancel</button></DialogClose><SaveButton pendingLabel="Deleting…" className="btn-danger">{confirmLabel}</SaveButton></div>
+          <div><label className="label" htmlFor="delete-reason">{reasonLabel}</label><textarea id="delete-reason" name="reason" className="input" rows={3} required placeholder={reasonPlaceholder} /></div>
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end"><DialogClose asChild><button type="button" className="btn-secondary">{dismissLabel}</button></DialogClose><SaveButton pendingLabel={pendingLabel} className="btn-danger">{confirmLabel}</SaveButton></div>
         </SaveForm>
       </ResponsiveDialogContent>
     </Dialog>

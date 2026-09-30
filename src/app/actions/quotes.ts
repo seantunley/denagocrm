@@ -8,11 +8,12 @@ import { addDays } from "date-fns";
 import type { Prisma } from "@prisma/client";
 import { prisma, basePrisma } from "@/lib/db";
 import { payableTotalCents } from "@/lib/pricing";
-import { logAudit } from "@/lib/audit";
+import { logAudit, GOVERNANCE_TX } from "@/lib/audit";
 import { CLOSED_REQUEST_STATUSES } from "@/lib/signing/status";
 import { getSetting } from "@/lib/settings";
-import { markReferralEarned } from "@/lib/referrals";
 import { hasOpenSignatureRequest } from "@/lib/quoteLock";
+import { acceptQuoteInTx, afterDealWon, cancelQuoteInTx, duplicateQuoteInTx } from "@/lib/quoteOutcome";
+import { addStockEvent } from "@/lib/stockPlatform";
 import { nextQuoteNumber } from "@/lib/numbering";
 import { insertQuoteFromLead, quoteFromLeadDefaults } from "@/lib/quoteFromLead";
 import { actingTenantId } from "@/lib/actingTenant";
@@ -867,17 +868,37 @@ export async function setQuoteStatus(quoteId: string, status: string) {
     const user = await requireQuoteAccess(quoteId, "quotes.change_status");
     const allowed = new Set(["draft", "sent", "accepted", "declined"]);
     if (!allowed.has(status)) throw new ActionRefusal("Invalid quote status");
+    // ACCEPTING is the same act as "Mark won" with this quote chosen, so both go
+    // through the one shared definition — quote accepted (which is what puts it on
+    // Deliveries), lead won, both audited, in one locked transaction.
+    if (status === "accepted") {
+      const tenantId = await actingTenantId();
+      const accepted = await basePrisma.$transaction(
+        (tx) => acceptQuoteInTx(tx, quoteId, tenantId, user),
+        GOVERNANCE_TX,
+      );
+      if (accepted.kind === "gone") refuse("This quote can no longer be changed — reload the page.");
+      if (accepted.kind === "out_for_signature") {
+        refuse("This quote is out for signature — void the signing request before changing its status.");
+      }
+      if (accepted.wonLeadId) await afterDealWon(accepted.wonLeadId, accepted.quote.contactId);
+      revalidatePath("/quotes");
+      revalidatePath(`/quotes/${quoteId}`);
+      revalidatePath("/deliveries");
+      if (accepted.quote.leadId) revalidatePath(`/leads/${accepted.quote.leadId}`);
+      return { success: `Quote Q-${accepted.quote.number} accepted — it's on Deliveries` };
+    }
     // Lock the quote FOR UPDATE and re-check signed/superseded inside the
     // transaction so a concurrent createQuoteRevision can't supersede it between
-    // the check and the write — which would run lead-won/referral side-effects
-    // against an obsolete quote.
+    // the check and the write.
     const result = await basePrisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT id FROM "Quote" WHERE id = ${quoteId} FOR UPDATE`;
       const before = await tx.quote.findUnique({ where: { id: quoteId } });
-      if (!before || before.deletedAt || before.signedAt || before.supersededAt) return null;
-      // Don't let staff manually accept/decline a quote that's out for signature —
-      // void the request first. (draft/sent moves are still allowed.)
-      if ((status === "accepted" || status === "declined") && (await hasOpenSignatureRequest(tx, quoteId))) {
+      // A cancelled quote is finished: Duplicate it to start again.
+      if (!before || before.deletedAt || before.signedAt || before.supersededAt || before.status === "cancelled") return null;
+      // Don't let staff manually decline a quote that's out for signature — void
+      // the request first. (draft/sent moves are still allowed.)
+      if (status === "declined" && (await hasOpenSignatureRequest(tx, quoteId))) {
         return { blocked: true as const };
       }
       const updated = await tx.quote.update({
@@ -888,21 +909,13 @@ export async function setQuoteStatus(quoteId: string, status: string) {
         // the line-items subtotal as the value of the sale.
         include: { items: true, fees: true, lead: true },
       });
-      // Win the lead in the SAME transaction, locked, so a concurrent accept/decline
-      // can't leave quote and lead status diverged (e.g. quote declined, lead won).
-      let wonLeadId: string | null = null;
-      if (status === "accepted" && updated.leadId) {
-        await tx.$executeRaw`SELECT id FROM "Lead" WHERE id = ${updated.leadId} FOR UPDATE`;
-        const won = await tx.lead.updateMany({ where: { id: updated.leadId, deletedAt: null, status: "open" }, data: { status: "won" } });
-        if (won.count === 1) wonLeadId = updated.leadId;
-      }
       // Reopen the lead in the SAME transaction when this quote stops being accepted,
       // so the status change and the reopen are atomic.
       let reopenedLead: { title: string; contactId: string | null } | null = null;
-      if (before.status === "accepted" && status !== "accepted" && updated.leadId) {
+      if (before.status === "accepted" && updated.leadId) {
         reopenedLead = await reopenLeadInTx(tx, updated.leadId);
       }
-      return { beforeStatus: before.status, quote: updated, wonLeadId, reopenedLead };
+      return { beforeStatus: before.status, quote: updated, reopenedLead };
     });
     // The transaction returns null BEFORE touching anything when the quote is
     // missing, deleted, signed or superseded — so this is "nothing happened",
@@ -912,13 +925,11 @@ export async function setQuoteStatus(quoteId: string, status: string) {
     if ("blocked" in result) {
       throw new ActionRefusal("This quote is out for signature — void the signing request before changing its status.");
     }
-    const { quote, wonLeadId, reopenedLead } = result;
+    const { quote, reopenedLead } = result;
     const total = payableTotalCents(quote);
     const verb =
       status === "sent"
         ? "sent to the customer"
-        : status === "accepted"
-        ? "accepted 🎉"
         : status === "declined"
         ? "declined"
         : "moved back to draft";
@@ -929,19 +940,6 @@ export async function setQuoteStatus(quoteId: string, status: string) {
       contactId: quote.contactId,
       user,
     });
-    // External, best-effort lead-won fan-out — gated on the in-transaction win so it
-    // fires exactly once and never for a quote that didn't actually win the lead.
-    if (wonLeadId) {
-      await markReferralEarned(wonLeadId).catch(() => {});
-      await emitLeadJourneyEvent("lead_won", wonLeadId);
-      await logAudit({
-        action: "lead.won",
-        summary: `Lead “${quote.lead?.title ?? ""}” won via accepted quote Q-${quote.number} 🎉`,
-        leadId: wonLeadId,
-        contactId: quote.contactId,
-        user,
-      });
-    }
     // "Quote declined" is offered as an enrolment trigger in the journey
     // builder, and was offered by the retired automations builder before it,
     // and NEITHER engine ever fired it: nothing in the codebase called
@@ -1058,5 +1056,79 @@ export async function deleteQuote(id: string, formData: FormData) {
     }
     revalidatePath("/quotes");
     return { redirectTo: "/quotes" };
+  });
+}
+
+/**
+ * Cancel a quote — signed or not — keeping everything it produced. The same
+ * permission as the other lifecycle moves (accept / decline / back to draft);
+ * the work itself is {@link cancelQuoteInTx}.
+ */
+export async function cancelQuote(id: string, formData: FormData) {
+  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
+    const user = await requireQuoteAccess(id, "quotes.change_status");
+    const reason = String(formData.get("reason") ?? "").trim();
+    if (!reason) refuse("Say why the quote is being cancelled.");
+    const tenantId = await actingTenantId();
+    const result = await basePrisma.$transaction(async (tx) => {
+      const cancelled = await cancelQuoteInTx(tx, { quoteId: id, tenantId, reason, actor: user });
+      if (cancelled.kind !== "cancelled") return { cancelled, reopenedLead: null };
+      // An accepted quote was the sale; cancelling it un-wins the lead unless
+      // another accepted quote still stands — same rule as trashing one.
+      const reopenedLead =
+        cancelled.wasAccepted && cancelled.quote.leadId ? await reopenLeadInTx(tx, cancelled.quote.leadId) : null;
+      return { cancelled, reopenedLead };
+    }, GOVERNANCE_TX);
+    const { cancelled, reopenedLead } = result;
+    if (cancelled.kind !== "cancelled") refuse(cancelled.message);
+    for (const unit of cancelled.releasedUnits) {
+      await addStockEvent({
+        stockUnitId: unit.id,
+        eventType: unit.to === "available" ? "reservation.released" : "unit.status_changed",
+        fromStatus: unit.from,
+        toStatus: unit.to,
+        leadId: unit.leadId,
+        quoteId: id,
+        reason: `Quote Q-${cancelled.quote.number} cancelled`,
+        actor: { id: user.id, name: user.name },
+      });
+    }
+    if (reopenedLead && cancelled.quote.leadId) {
+      await auditLeadReopened(reopenedLead, cancelled.quote.leadId, cancelled.quote.number, user);
+    }
+    revalidatePath("/quotes");
+    revalidatePath(`/quotes/${id}`);
+    revalidatePath("/deliveries");
+    revalidatePath("/stock");
+    if (cancelled.quote.leadId) revalidatePath(`/leads/${cancelled.quote.leadId}`);
+    if (cancelled.quote.contactId) revalidatePath(`/contacts/${cancelled.quote.contactId}`);
+    return { success: `Quote Q-${cancelled.quote.number} cancelled` };
+  });
+  });
+}
+
+/**
+ * A new, unsigned draft copy of a quote, opened in the editor. Same permission
+ * as creating a quote, on a quote the caller can access — the shape
+ * createQuoteRevision uses for its copy.
+ */
+export async function duplicateQuote(id: string) {
+  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
+    const user = await requireQuoteAccess(id, "quotes.create");
+    const validDaysRaw = await getSetting("QUOTE_VALID_DAYS");
+    const validDays = validDaysRaw ? parseInt(validDaysRaw, 10) : 7;
+    const tenantId = await actingTenantId();
+    const copy = await basePrisma.$transaction(
+      (tx) => duplicateQuoteInTx(tx, { quoteId: id, tenantId, actor: user, validUntil: addDays(new Date(), isNaN(validDays) ? 7 : validDays) }),
+      GOVERNANCE_TX,
+    );
+    if (!copy) refuse("That quote is no longer available — reload the page.");
+    revalidatePath("/quotes");
+    if (copy.leadId) revalidatePath(`/leads/${copy.leadId}`);
+    if (copy.contactId) revalidatePath(`/contacts/${copy.contactId}`);
+    return { success: `Quote Q-${copy.number} created from Q-${copy.originalNumber}`, redirectTo: `/quotes?edit=${copy.id}` };
+  });
   });
 }

@@ -16,6 +16,7 @@ import {
   Ban,
   Check,
   Clock3,
+  Copy,
   ExternalLink,
   Eye,
   FileClock,
@@ -37,8 +38,10 @@ import {
 import { toast } from "sonner";
 import {
   canDeleteQuote,
+  cancelQuote,
   createQuoteRevision,
   deleteQuote,
+  duplicateQuote,
   quoteEditorRecord,
   saveQuoteDraft,
   setQuoteStatus,
@@ -52,7 +55,7 @@ import { quoteSigningView } from "@/app/actions/recordSigning";
 import type { QuoteSigningView } from "@/lib/signing/record";
 import { feeRows, quotePricing } from "@/lib/pricing";
 import SigningBlock from "@/components/SigningBlock";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Dialog,
   DialogDescription,
@@ -858,6 +861,39 @@ export function QuoteEditorDialog({
                   )}
                 </div>
               )}
+              {/*
+                Duplicate and Cancel work on ANY saved quote — signed ones
+                included, which is exactly when Revise cannot help. Duplicate
+                makes an unsigned draft and supersedes nothing; Cancel keeps the
+                quote, its signed PDF and its history, and voids a live signing
+                link. Both actions re-check permission and state on the server.
+              */}
+              {savedQuote && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button type="button" size="sm" variant="outline" disabled={isPending} title="Copies this quote into a new, unsigned draft. The editor switches to the copy." onClick={() => runLifecycle("Copy created", () => duplicateQuote(savedQuote.id))}><Copy />Duplicate</Button>
+                  {!record?.supersededAt && currentStatus !== "cancelled" && (
+                    <ConfirmDelete
+                      action={cancelQuote.bind(null, savedQuote.id)}
+                      title={`Cancel quote Q-${savedQuote.number}?`}
+                      description={cancelQuoteConsequences(currentStatus, Boolean(signing?.signedAt))}
+                      trigger="Cancel quote"
+                      triggerClass={buttonVariants({ variant: "outline", size: "sm" })}
+                      confirmLabel="Cancel quote"
+                      dismissLabel="Keep quote"
+                      pendingLabel="Cancelling…"
+                      reasonLabel="Reason for cancelling"
+                      reasonPlaceholder="e.g. Customer changed their order, deal fell through"
+                      success={`Quote Q-${savedQuote.number} cancelled`}
+                      contentClassName="z-[110]"
+                      onDeleted={() => {
+                        setSavedQuote((current) => (current ? { ...current, status: "cancelled" } : current));
+                        reloadSigning();
+                        router.refresh();
+                      }}
+                    />
+                  )}
+                </div>
+              )}
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 {isPending ? <Loader2 className="size-3.5 animate-spin text-primary" /> : dirty ? <Clock3 className="size-3.5 text-amber-300" /> : <Check className="size-3.5 text-emerald-400" />}
                 <span>{isPending ? "Saving…" : dirty ? "Unsaved changes" : "All changes saved"}</span>
@@ -1514,4 +1550,25 @@ export function QuoteEditorTrigger({
       {children}
     </button>
   );
+}
+
+/**
+ * The editor's opener when there is one on the page, else null. Pushing
+ * /quotes?edit=<id> from inside /quotes opens nothing (the provider reads it
+ * once, on mount), so a control that creates a quote asks here first.
+ */
+export function useOptionalQuoteEditor(): QuoteEditorContextValue | null {
+  return useContext(QuoteEditorContext);
+}
+
+/** What cancelling a quote does, said before the reason is typed. */
+export function cancelQuoteConsequences(status: string, signed: boolean): string {
+  const kept = signed ? "the quote, its signed PDF and its history" : "the quote and its history";
+  return [
+    `The quote is marked cancelled and leaves Deliveries. Nothing is deleted — ${kept} stay on record.`,
+    "Any signing request still out with the customer is voided, and stock allocated to it is released.",
+    status === "accepted" ? "Its lead reopens unless another accepted quote still stands." : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
