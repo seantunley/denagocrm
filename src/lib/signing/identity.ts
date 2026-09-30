@@ -2,6 +2,7 @@ import "server-only";
 import crypto from "crypto";
 import { basePrisma } from "@/lib/db";
 import { sendEmail } from "@/lib/email";
+import { signingEmailContent } from "./signingEmail";
 import { sendSms, normalizePhone } from "@/lib/sms";
 // The channel RULE is pure and lives on its own so it can be tested directly;
 // this module keeps the parts that need a database and a network.
@@ -158,11 +159,10 @@ export async function startIdentityChallenge(
   const sent = channel === "email"
     ? await sendEmail({
         to: destination,
-        subject: `Verification code: ${recipient.request.title}`,
-        text:
-          `Hi ${recipient.name},\n\nYour verification code for “${recipient.request.title}” is ${code}.\n\n` +
-          `It expires in 10 minutes. If you did not ask to sign this document, ignore this message ` +
-          `and tell the sender.`,
+        // The code is appended if an edited template drops it — see emailTemplates.ts.
+        ...(await signingEmailContent("otp", {
+          requestId: recipient.request.id, title: recipient.request.title, recipientName: recipient.name, code,
+        })),
       })
     : await sendSms(
         normalizePhone(destination) ?? destination,

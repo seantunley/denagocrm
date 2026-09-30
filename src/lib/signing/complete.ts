@@ -416,6 +416,7 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
   // — so a fan-out that reached nobody looked exactly like one that reached
   // everybody, and the completion marker below was written over it.
   const delivery = await deliverCompletionEmails({
+    requestId: req.id,
     title: req.title,
     pdf,
     recipients: req.recipients.map((r) => ({

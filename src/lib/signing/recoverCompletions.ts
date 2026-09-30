@@ -430,6 +430,7 @@ async function redrive(
   }
 
   const delivery = await deliverCompletionEmails({
+    requestId: req.id,
     title: req.title,
     pdf,
     recipients: recipients as FanoutRecipient[],

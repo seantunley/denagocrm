@@ -132,11 +132,15 @@ test("the signing invitation names the workspace, not Denago", () => {
   // hardcoded name: a request to sign a legal document should say who is asking.
   // It had "DENAGO CAPE TOWN" as a wordmark and "Denago Cape Town — Authorised
   // Denago EV Dealer" in the footer, sent to every tenant's customers.
-  const code = withoutPlatformOrigin("src/lib/signing/dispatch.ts");
-  assert.doesNotMatch(code, /Denago/i, "no company named by a literal");
-  assert.match(code, /brand\.displayName\.toUpperCase\(\)/, "the wordmark is the workspace's");
-  assert.match(code, /from \$\{brand\.displayName\}/, "…and so is the plain-text body");
-  assert.match(code, /const \{ brand, origin \} = await senderFor\(r\.request\.tenantId\)/);
+  // The email is rendered from the tenant's editable template now
+  // (signingEmail.ts → emailTemplates.ts), so the company comes from the brand.
+  for (const file of ["src/lib/signing/dispatch.ts", "src/lib/signing/signingEmail.ts", "src/lib/signing/emailTemplates.ts"]) {
+    assert.doesNotMatch(withoutPlatformOrigin(file), /Denago/i, `${file}: no company named by a literal`);
+  }
+  assert.match(shipped("src/lib/signing/emailTemplates.ts"), /brand\.companyName\.toUpperCase\(\)/, "the wordmark is the workspace's");
+  assert.match(shipped("src/lib/signing/signingEmail.ts"), /companyName: brand\.displayName/);
+  assert.match(shipped("src/lib/signing/signingEmail.ts"), /brandForTenant\(tenantId\)/, "the brand is the REQUEST's tenant's");
+  assert.match(shipped("src/lib/signing/dispatch.ts"), /const origin = await tenantOrigin\(r\.request\.tenantId\)/);
 });
 
 test("approval and survey mail stop signing off as someone else", () => {
@@ -149,7 +153,7 @@ test("a brand lookup can never stop a send", () => {
   // These run in cron jobs and queue workers with no error boundary and no retry
   // the recipient can trigger. A throw here loses a signature request to
   // decoration.
-  for (const file of ["src/lib/signing/dispatch.ts", "src/lib/signing/approvals.ts", "src/lib/surveys.ts", "src/lib/surveyDistributionQueue.ts"]) {
+  for (const file of ["src/lib/signing/signingEmail.ts", "src/lib/signing/approvals.ts", "src/lib/surveys.ts", "src/lib/surveyDistributionQueue.ts"]) {
     assert.match(shipped(file), /brandForTenant\([^)]*\)\.catch\(\(\) => DEFAULT_BRAND\)/, `${file}`);
   }
 });
