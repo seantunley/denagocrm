@@ -1,5 +1,6 @@
 import Link from "next/link";
 import {
+  Copy,
   FileText,
   Layers3,
   PenLine,
@@ -7,31 +8,112 @@ import {
   Rocket,
   ScrollText,
   Star,
+  Trash2,
   Workflow,
 } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { DOC_DEFS, DOC_GROUPS, type DocKey } from "@/lib/docTemplates";
-import { ensureSeeded, listTemplates } from "@/lib/docTemplateStore";
+import { ensureSeeded, listStudioClauses, listTemplates } from "@/lib/docTemplateStore";
 import { ensureBuilderSeeded } from "@/lib/docbuilder/store";
-import { formatDate } from "@/lib/format";
-import { createDocTemplate } from "@/app/actions/documents";
+import { contactName, formatDate } from "@/lib/format";
 import {
+  getAccessibleContactIds,
+  getAccessibleLeadIds,
+  getAccessibleQuoteIds,
+  hasAnyPermission,
+  hasPermission,
+  requireAnyPermission,
+  type PermissionUser,
+} from "@/lib/permissions";
+import {
+  createDocTemplate,
+  deleteDocTemplate,
+  duplicateDocTemplate,
+  setDefaultDocTemplate,
+} from "@/app/actions/documents";
+import {
+  createDocInstance,
   createReusableBlock,
   createStudioTemplate,
 } from "@/app/actions/studio";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import { Button, buttonVariants } from "@/components/ui/button";
+import BuilderSection from "./builder-section";
 
 export const dynamic = "force-dynamic";
 
-export default async function DocumentStudioPage() {
-  await Promise.all([ensureSeeded(), ensureBuilderSeeded()]);
-  const keys = Object.keys(DOC_DEFS) as DocKey[];
+const scoped = (ids: string[] | null) => (ids === null ? {} : { id: { in: ids } });
+
+/**
+ * Pickers for "New document". Settings → Documents read these straight from the
+ * table because it was owner-only; this page is open to document_templates.manage
+ * holders, so every list is RBAC-scoped (createDocInstance re-checks on submit).
+ */
+async function loadPickers(user: PermissionUser) {
+  const [contactIds, quoteIds, leadIds] = await Promise.all([
+    getAccessibleContactIds(user),
+    getAccessibleQuoteIds(user),
+    getAccessibleLeadIds(user),
+  ]);
+  const [contacts, quotes, leads] = await Promise.all([
+    prisma.contact.findMany({
+      where: scoped(contactIds),
+      orderBy: { firstName: "asc" },
+      take: 300,
+    }),
+    prisma.quote.findMany({
+      where: { supersededAt: null, ...scoped(quoteIds) },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+      include: { contact: true },
+    }),
+    prisma.lead.findMany({
+      where: { status: "open", ...scoped(leadIds) },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+      select: { id: true, name: true, title: true },
+    }),
+  ]);
+  return { contacts, quotes, leads };
+}
+
+/**
+ * The one list of document templates. Quote print, PDF and e-signing all render
+ * the default quote Document Builder layout, so the quote card offers only that —
+ * the legacy quote DocTemplateRecord rows are rendered by nothing.
+ */
+export default async function DocumentStudioPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ q?: string }>;
+}) {
+  const user = await requireAnyPermission("document_templates.manage", "docbuilder.view", "docbuilder.manage");
+  const { q } = await searchParams;
+  // A Builder-only user (the old Document Builder page's audience) gets the
+  // Builder section and nothing that needs document_templates.manage.
+  if (!(await hasPermission(user, "document_templates.manage"))) {
+    return (
+      <div className="space-y-7">
+        <WorkspaceHero icon={Layers3} eyebrow="Document operations" title="Document Studio" description="Document layouts you can open with your access." />
+        <BuilderSection user={user} q={q} />
+      </div>
+    );
+  }
+  const [canCreateDocument, canEditLayout, canSeeBuilder] = await Promise.all([
+    // createDocInstance requires documents.manage; don't offer a form that bounces.
+    hasPermission(user, "documents.manage"),
+    hasPermission(user, "docbuilder.manage"),
+    hasAnyPermission(user, "docbuilder.view", "docbuilder.manage"),
+    ensureSeeded(),
+    ensureBuilderSeeded(),
+  ]);
+  const keys = (Object.keys(DOC_DEFS) as DocKey[]).filter((key) => key !== "quote");
   const [
     studioTemplates,
     clauses,
     instances,
     quoteBuilder,
+    pickers,
     ...typedLists
   ] = await Promise.all([
     prisma.customDocTemplate.findMany({
@@ -46,10 +128,7 @@ export default async function DocumentStudioPage() {
         _count: { select: { instances: true } },
       },
     }),
-    prisma.reusableBlock.findMany({
-      where: { deletedAt: null },
-      orderBy: { name: "asc" },
-    }),
+    listStudioClauses(),
     prisma.docInstance.findMany({
       where: { deletedAt: null },
       orderBy: { updatedAt: "desc" },
@@ -60,6 +139,7 @@ export default async function DocumentStudioPage() {
       orderBy: [{ isDefault: "desc" }, { updatedAt: "desc" }],
       select: { id: true },
     }),
+    canCreateDocument ? loadPickers(user) : null,
     ...keys.map((key) => listTemplates(key)),
   ]);
   const typedByKey = Object.fromEntries(
@@ -100,11 +180,10 @@ export default async function DocumentStudioPage() {
           1. Operational templates
         </h2>
         <p className="mt-1 max-w-4xl text-sm leading-6 text-muted-foreground">
-          The named templates control the existing print layouts. Quote signing
-          additionally uses the editable Document Builder layout, exposed as
-          <strong> Edit signing layout</strong> below. Other document types remain
-          on their existing production renderers until each builder layout reaches
-          visual parity.
+          Quotes use a single Document Builder layout, opened with
+          <strong> Edit quote layout</strong> below. The named templates for every
+          other document type control their existing print layouts until each
+          builder layout reaches visual parity.
         </p>
       </section>
 
@@ -125,9 +204,40 @@ export default async function DocumentStudioPage() {
             <div className="grid gap-4 xl:grid-cols-2">
               {group.keys.map((key) => {
                 const definition = DOC_DEFS[key];
+                if (key === "quote") {
+                  return (
+                    <div
+                      key={key}
+                      className="rounded-xl border border-border/70 bg-background/30 p-4"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="font-medium text-foreground">
+                            {definition.label}
+                          </p>
+                          <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
+                            This one layout is used for quote print, PDF and e-signing.
+                          </p>
+                        </div>
+                        {quoteBuilder && canEditLayout ? (
+                          <Button asChild size="sm" className="shrink-0">
+                            <Link href={`/doc-editor/${quoteBuilder.id}`}>
+                              <PenLine className="size-3.5" />
+                              Edit quote layout
+                            </Link>
+                          </Button>
+                        ) : (
+                          <span className="shrink-0 text-[11px] text-muted-foreground">
+                            {quoteBuilder
+                              ? "Editing needs Document Builder access."
+                              : "No quote layout yet."}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                }
                 const templates = typedByKey[key];
-                const signingBuilderId =
-                  key === "quote" ? quoteBuilder?.id : undefined;
                 return (
                   <div
                     key={key}
@@ -142,19 +252,9 @@ export default async function DocumentStudioPage() {
                           {definition.description}
                         </p>
                       </div>
-                      <div className="flex shrink-0 flex-col items-end gap-2">
-                        <span className="rounded bg-muted px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                          Built-in
-                        </span>
-                        {signingBuilderId && (
-                          <Button asChild size="sm">
-                            <Link href={`/doc-editor/${signingBuilderId}`}>
-                              <PenLine className="size-3.5" />
-                              Edit signing layout
-                            </Link>
-                          </Button>
-                        )}
-                      </div>
+                      <span className="shrink-0 rounded bg-muted px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        Built-in
+                      </span>
                     </div>
                     <ul className="mt-3 divide-y divide-border/50">
                       {templates.map((template) => (
@@ -184,6 +284,31 @@ export default async function DocumentStudioPage() {
                               Edit
                             </Link>
                           </Button>
+                          {!template.isDefault && (
+                            <form action={setDefaultDocTemplate.bind(null, template.id)}>
+                              <Button variant="ghost" size="sm" title="Make default" aria-label={`Make ${template.name} the default`}>
+                                <Star className="size-3.5" />
+                              </Button>
+                            </form>
+                          )}
+                          <form action={duplicateDocTemplate.bind(null, template.id)}>
+                            <Button variant="ghost" size="sm" title="Duplicate" aria-label={`Duplicate ${template.name}`}>
+                              <Copy className="size-3.5" />
+                            </Button>
+                          </form>
+                          {!template.isDefault && (
+                            <form action={deleteDocTemplate.bind(null, template.id)}>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="text-red-400 hover:text-red-300"
+                                title="Delete"
+                                aria-label={`Delete ${template.name}`}
+                              >
+                                <Trash2 className="size-3.5" />
+                              </Button>
+                            </form>
+                          )}
                         </li>
                       ))}
                     </ul>
@@ -229,6 +354,57 @@ export default async function DocumentStudioPage() {
           documents without a dedicated CRM screen.
         </p>
       </section>
+
+      {pickers && (
+        <section className="rounded-xl border border-border bg-card p-4 shadow-sm">
+          <h3 className="mb-1 text-sm font-semibold">New document</h3>
+          <p className="mb-3 text-xs text-muted-foreground">
+            Pick a template (or start blank) and link the customer — merge fields
+            fill in automatically and are frozen into the document.
+          </p>
+          <form action={createDocInstance} className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+            <input name="title" required placeholder="Document title…" aria-label="Document title" className={`${input} xl:col-span-2`} />
+            <select name="templateId" aria-label="Template" className={input} defaultValue="">
+              <option value="">Blank document</option>
+              {studioTemplates.map((template) => (
+                <option key={template.id} value={template.id}>
+                  {template.name}
+                  {template.versions[0] ? ` (v${template.versions[0].version})` : " (draft)"}
+                </option>
+              ))}
+            </select>
+            <select name="contactId" aria-label="Customer" className={input} defaultValue="">
+              <option value="">Customer (optional)…</option>
+              {pickers.contacts.map((contact) => (
+                <option key={contact.id} value={contact.id}>
+                  {contactName(contact)}
+                </option>
+              ))}
+            </select>
+            <select name="quoteId" aria-label="Quote" className={input} defaultValue="">
+              <option value="">Quote (optional)…</option>
+              {pickers.quotes.map((quote) => (
+                <option key={quote.id} value={quote.id}>
+                  Q-{quote.number}
+                  {quote.contact ? ` — ${contactName(quote.contact)}` : ""}
+                </option>
+              ))}
+            </select>
+            <select name="leadId" aria-label="Deal" className={input} defaultValue="">
+              <option value="">Deal (optional)…</option>
+              {pickers.leads.map((lead) => (
+                <option key={lead.id} value={lead.id}>
+                  {lead.title || lead.name}
+                </option>
+              ))}
+            </select>
+            <Button type="submit">
+              <Plus className="size-4" />
+              Create document
+            </Button>
+          </form>
+        </section>
+      )}
 
       <div className="grid items-start gap-5 xl:grid-cols-2">
         <section className="rounded-xl border border-border bg-card p-4 shadow-sm">
@@ -376,6 +552,8 @@ export default async function DocumentStudioPage() {
           ))}
         </ul>
       </section>
+
+      {canSeeBuilder && <BuilderSection user={user} q={q} />}
     </div>
   );
 }

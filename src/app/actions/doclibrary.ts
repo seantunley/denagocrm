@@ -6,6 +6,7 @@ import { logAudit } from "@/lib/audit";
 import { z } from "zod";
 import { blockSchema } from "@/lib/doceditor/model";
 import { withActingStaffScope } from "@/lib/actingScope";
+import { isDocEditorLibraryItem } from "@/lib/studioClauses";
 
 const saveSchema = z.object({
   name: z.string().min(1),
@@ -42,7 +43,7 @@ export async function listLibraryItems() {
         take: 200,
       });
       return rows
-        .filter((r) => (r.contentJson as { kind?: string })?.kind === "doceditor")
+        .filter(isDocEditorLibraryItem)
         .map((r) => ({ id: r.id, name: r.name, category: r.category, blocks: (r.contentJson as { blocks: unknown[] }).blocks }));
     } catch {
       return [];

@@ -1,0 +1,394 @@
+import Link from "next/link";
+import { SaveForm } from "@/components/SaveForm";
+import { SaveSubmitButton } from "@/components/SaveSubmitButton";
+import {
+  Plus,
+  Star,
+  Trash2,
+  PenLine,
+  FileDown,
+  Sparkles,
+} from "lucide-react";
+import {
+  getAccessibleQuoteIds,
+  getAccessibleJobCardIds,
+  type PermissionUser,
+} from "@/lib/permissions";
+import { prisma } from "@/lib/db";
+import { contactName, formatDate } from "@/lib/format";
+import { listBuilderTemplates } from "@/lib/docbuilder/store";
+import {
+  deleteBuilderTemplate,
+  setDefaultBuilderTemplate,
+} from "@/app/actions/docbuilder";
+import {
+  createDocEditorTemplate,
+  createStandardQuoteTemplate,
+  generateDocEditorDocument,
+} from "@/app/actions/doceditor";
+import { Button } from "@/components/ui/button";
+
+const DOC_KEYS = [
+  "proposal",
+  "quote",
+  "invoice",
+  "agreement",
+  "delivery",
+  "indemnity",
+  "jobcard",
+  "service-report",
+  "warranty-claim",
+  "custom",
+];
+
+const TOKENS = [
+  "company.name",
+  "company.phone",
+  "company.email",
+  "company.address",
+  "customer.name",
+  "customer.phone",
+  "customer.email",
+  "customer.address",
+  "quote.number",
+  "quote.date",
+  "quote.validUntil",
+  "quote.subtotal",
+  "quote.vat",
+  "quote.total",
+  "jobcard.number",
+  "jobcard.opened",
+  "jobcard.completed",
+  "jobcard.description",
+  "jobcard.total",
+  "vehicle",
+  "vehicle.vin",
+  "vehicle.reg",
+  "preparedBy",
+  "technician",
+  "date.today",
+];
+
+const RECORD_LIMIT = 100;
+
+/**
+ * The Document Builder list (formerly /settings/documents/builder, which now
+ * redirects here). The caller renders it only for docbuilder.view/manage.
+ */
+export default async function BuilderSection({
+  user,
+  q,
+}: {
+  user: PermissionUser;
+  q?: string;
+}) {
+  /**
+   * `docbuilder.manage` is a CAPABILITY, not an access decision.
+   *
+   * This selector listed quote numbers with customer names, and job card
+   * numbers with customers and vehicles, straight from the table — so a holder
+   * whose record scope is restricted read the metadata of every deal and every
+   * job in the workspace out of a dropdown. generateDocEditorDocument() checks
+   * canAccessQuote/canAccessJobCard before it builds anything, but by then the
+   * disclosure has already happened. Scope the LIST too. (Same shape as the
+   * signing-hub finding: see tests/signingRecordAccess.test.ts.)
+   */
+  const [quoteIds, jobCardIds] = await Promise.all([
+    getAccessibleQuoteIds(user),
+    getAccessibleJobCardIds(user),
+  ]);
+  const scoped = (ids: string[] | null) => (ids === null ? {} : { id: { in: ids } });
+
+  /**
+   * …and a cap is not a corpus. The list stops at 100, which was survivable
+   * while every quote and job card could also generate from its own header.
+   * Those controls are gone, so an older record had no route left at all —
+   * hence the search, which reaches any record the caller may see.
+   */
+  const query = (q ?? "").trim();
+  const digits = query.replace(/\D/g, "");
+  const number = digits ? Number.parseInt(digits, 10) : null;
+  const nameLike = { contains: query, mode: "insensitive" as const };
+  const contactMatch = {
+    OR: [{ firstName: nameLike }, { lastName: nameLike }, { company: nameLike }],
+  };
+
+  const [templates, quotes, jobCards] = await Promise.all([
+    listBuilderTemplates(),
+    prisma.quote.findMany({
+      where: {
+        supersededAt: null,
+        ...scoped(quoteIds),
+        ...(query
+          ? { OR: [...(number ? [{ number }] : []), { contact: contactMatch }] }
+          : {}),
+      },
+      orderBy: { createdAt: "desc" },
+      take: RECORD_LIMIT,
+      include: { contact: true },
+    }),
+    prisma.jobCard.findMany({
+      where: {
+        ...scoped(jobCardIds),
+        ...(query
+          ? {
+              OR: [
+                ...(number ? [{ number }] : []),
+                { contact: contactMatch },
+                { vehicle: { model: nameLike } },
+              ],
+            }
+          : {}),
+      },
+      orderBy: { openedAt: "desc" },
+      take: RECORD_LIMIT,
+      include: { contact: true, vehicle: true },
+    }),
+  ]);
+  const capped = quotes.length === RECORD_LIMIT || jobCards.length === RECORD_LIMIT;
+
+  const input =
+    "h-9 rounded-md border border-input bg-card px-3 text-sm text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/20";
+
+  return (
+    <div id="builder" className="space-y-5">
+      <section className="rounded-2xl border border-violet-500/25 bg-violet-500/[0.05] p-5">
+        <h2 className="text-base font-semibold text-foreground">
+          3. Document Builder layouts
+        </h2>
+        <p className="mt-1 max-w-4xl text-sm leading-6 text-muted-foreground">
+          Drag blocks onto a document, bind it to a compatible CRM record and
+          export a professional PDF. The default quote layout here is the one
+          used for quote print, PDF and e-signing.
+        </p>
+      </section>
+
+      <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <p className="text-sm font-semibold text-foreground">New layout</p>
+          <SaveForm success="Template created" action={createStandardQuoteTemplate}>
+            <SaveSubmitButton variant="outline" size="sm">
+              <Sparkles className="size-3.5" />
+              Start from “Standard” quote
+            </SaveSubmitButton>
+          </SaveForm>
+        </div>
+        <SaveForm
+          success="Template created"
+          action={createDocEditorTemplate}
+          className="flex flex-wrap items-center gap-2"
+        >
+          <input
+            name="name"
+            required
+            placeholder="Document name…"
+            className={`${input} min-w-48 flex-1`}
+          />
+          <select name="key" defaultValue="proposal" className={input}>
+            {DOC_KEYS.map((key) => (
+              <option key={key} value={key}>
+                {key}
+              </option>
+            ))}
+          </select>
+          <SaveSubmitButton>
+            <Plus className="size-4" />
+            Create &amp; edit
+          </SaveSubmitButton>
+        </SaveForm>
+      </div>
+
+      <div className="rounded-xl border border-primary/25 bg-primary/[0.05] p-4 shadow-sm">
+        <p className="mb-1 flex items-center gap-1.5 text-sm font-semibold text-foreground">
+          <Sparkles className="size-4 text-primary" />
+          Generate a document
+        </p>
+        <p className="mb-3 text-xs text-muted-foreground">
+          Choose one template and one matching record. Quote-family templates
+          accept quotes; workshop templates accept job cards. The server rejects
+          mismatched combinations before generating or filing anything.
+        </p>
+        {/* A plain GET form: the page re-renders scoped and filtered, so no
+            client code is needed to reach a record beyond the newest hundred. */}
+        <form method="get" action="/document-studio#builder" className="mb-3 flex flex-wrap items-center gap-2">
+          <input
+            type="search"
+            name="q"
+            defaultValue={query}
+            placeholder="Find a record — quote or job number, customer, vehicle"
+            aria-label="Search records"
+            className={`${input} min-w-64 flex-1`}
+          />
+          <Button type="submit" variant="outline" size="sm">Search</Button>
+          {query && (
+            <Link href="/document-studio#builder" className="text-xs text-muted-foreground hover:text-foreground">
+              Clear
+            </Link>
+          )}
+        </form>
+        {capped && (
+          <p className="mb-3 text-xs text-muted-foreground">
+            Showing the first {RECORD_LIMIT} matches — search by number or customer to narrow it down.
+          </p>
+        )}
+        {query && quotes.length === 0 && jobCards.length === 0 && (
+          <p className="mb-3 text-xs text-muted-foreground">
+            No records match “{query}”. Generating without one fills the template with placeholders.
+          </p>
+        )}
+        <SaveForm
+          success="Document generated"
+          resetOnSuccess={false}
+          action={generateDocEditorDocument}
+          className="flex flex-wrap items-end gap-2"
+        >
+          <select
+            name="templateId"
+            required
+            className={input}
+            defaultValue=""
+          >
+            <option value="" disabled>
+              Template…
+            </option>
+            {templates.map((template) => (
+              <option key={template.id} value={template.id}>
+                {template.name} ({template.key})
+              </option>
+            ))}
+          </select>
+          <select name="record" className={input} defaultValue="">
+            <option value="">No record (placeholders)</option>
+            <optgroup label="Quotes">
+              {quotes.map((quote) => (
+                <option key={quote.id} value={`quote:${quote.id}`}>
+                  Q-{quote.number}
+                  {quote.contact ? ` — ${contactName(quote.contact)}` : ""}
+                </option>
+              ))}
+            </optgroup>
+            <optgroup label="Job cards">
+              {jobCards.map((jobCard) => (
+                <option key={jobCard.id} value={`jobcard:${jobCard.id}`}>
+                  Job #{jobCard.number} — {contactName(jobCard.contact)} — {jobCard.vehicle.model}
+                </option>
+              ))}
+            </optgroup>
+          </select>
+          <SaveSubmitButton>
+            <FileDown className="size-4" />
+            Generate &amp; file
+          </SaveSubmitButton>
+        </SaveForm>
+      </div>
+
+      <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
+        <p className="mb-2 text-sm font-semibold text-foreground">
+          Merge fields
+        </p>
+        <p className="mb-2 text-xs text-muted-foreground">
+          Type these into text-capable blocks. Values resolve from the selected
+          record and the Company Profile at generation time.
+        </p>
+        <div className="flex flex-wrap gap-1.5">
+          {TOKENS.map((token) => (
+            <code
+              key={token}
+              className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-foreground"
+            >
+              {`{{${token}}}`}
+            </code>
+          ))}
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
+        <p className="mb-2 text-sm font-semibold text-foreground">
+          Builder layouts
+        </p>
+        {templates.length === 0 ? (
+          <p className="py-2 text-xs text-muted-foreground/70">
+            None yet — create one above.
+          </p>
+        ) : (
+          <ul className="divide-y divide-border/50">
+            {templates.map((template) => (
+              <li
+                key={template.id}
+                className="flex items-center gap-2 py-2"
+              >
+                <p className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground">
+                  <Link
+                    href={`/doc-editor/${template.id}`}
+                    className="hover:text-primary"
+                  >
+                    {template.name}
+                  </Link>
+                  <span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                    {template.key}
+                  </span>
+                  {template.isDefault && (
+                    <span className="ml-2 inline-flex items-center gap-1 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+                      <Star className="size-2.5" />
+                      Default
+                    </span>
+                  )}
+                  <span className="ml-2 text-[11px] font-normal text-muted-foreground">
+                    edited {formatDate(template.updatedAt)}
+                  </span>
+                </p>
+                <Button
+                  asChild
+                  variant="outline"
+                  size="sm"
+                  title="Preview PDF"
+                >
+                  <a
+                    href={`/api/pdf/doc-editor/${template.id}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <FileDown className="size-3.5" />
+                    PDF
+                  </a>
+                </Button>
+                <Button
+                  asChild
+                  variant="outline"
+                  size="sm"
+                  title="Open the editor"
+                >
+                  <Link href={`/doc-editor/${template.id}`}>
+                    <PenLine className="size-3.5" />
+                    Edit
+                  </Link>
+                </Button>
+                {!template.isDefault && (
+                  <SaveForm
+                    success="Default template set"
+                    resetOnSuccess={false}
+                    action={setDefaultBuilderTemplate.bind(null, template.id)}
+                  >
+                    <SaveSubmitButton variant="ghost" size="sm" title="Make default">
+                      <Star className="size-3.5" />
+                    </SaveSubmitButton>
+                  </SaveForm>
+                )}
+                <SaveForm success="Template deleted" resetOnSuccess={false} action={deleteBuilderTemplate.bind(null, template.id)}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-red-400 hover:text-red-300"
+                    title="Delete"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </Button>
+                </SaveForm>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}

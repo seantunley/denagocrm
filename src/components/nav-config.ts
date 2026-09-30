@@ -149,7 +149,7 @@ export function buildNav(
   if (automationLinks.length) groups.push({ key: "automation", label: "Automation", links: automationLinks });
 
   const platformLinks: NavLink[] = [];
-  if (can("document_templates.manage")) platformLinks.push({ href: "/document-studio", label: "Document Studio", icon: FileText });
+  if (can("document_templates.manage", "docbuilder.view", "docbuilder.manage")) platformLinks.push({ href: "/document-studio", label: "Document Studio", icon: FileText });
   if (platformLinks.length) groups.push({ key: "platform", label: "Platform", links: platformLinks });
 
   const governanceLinks: NavLink[] = [];

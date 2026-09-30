@@ -305,6 +305,7 @@ export async function updateDocTemplate(id: string, formData: FormData) {
     });
     await logAudit({ action: "doctemplate.saved", summary: `Updated ${DOC_DEFS[key].label} template “${rec.name}”`, user });
     revalidatePath(`/settings/documents/t/${id}`);
+    revalidatePath("/document-studio");
   });
 }
 
@@ -317,7 +318,8 @@ export async function setDefaultDocTemplate(id: string) {
       prisma.docTemplateRecord.update({ where: { id }, data: { isDefault: true } }),
     ]);
     await logAudit({ action: "doctemplate.default", summary: `“${rec.name}” is now the default ${rec.docType} template`, user });
-    revalidatePath("/settings/documents");
+    revalidatePath("/document-studio");
+    revalidatePath(`/settings/documents/t/${id}`);
   });
 }
 
@@ -340,7 +342,7 @@ export async function deleteDocTemplate(id: string) {
     if (rec.isDefault) return;
     await prisma.docTemplateRecord.update({ where: { id }, data: { deletedAt: new Date() } });
     await logAudit({ action: "doctemplate.deleted", summary: `Deleted template “${rec.name}”`, user });
-    revalidatePath("/settings/documents");
+    revalidatePath("/document-studio");
   });
 }
 
@@ -361,6 +363,7 @@ export async function uploadTemplateLogo(id: string, formData: FormData) {
     await prisma.docTemplateRecord.update({ where: { id }, data: { config: config as object } });
     await logAudit({ action: "doctemplate.logo", summary: `Replaced the logo on template “${rec.name}”`, user });
     revalidatePath(`/settings/documents/t/${id}`);
+    revalidatePath("/document-studio");
   });
 }
 
@@ -374,7 +377,7 @@ export async function renameDocument(id: string, formData: FormData) {
     if (!fileName) return;
     await prisma.document.update({ where: { id }, data: { fileName, tag } });
     await logAudit({ action: "document.updated", summary: `Renamed/re-tagged “${fileName}”`, user });
-    revalidatePath("/settings/documents");
+    revalidatePath("/documents");
   });
 }
 
@@ -398,7 +401,7 @@ export async function moveDocument(id: string, formData: FormData) {
           : { quoteId: targetId, contactId: null, vehicleId: null, jobCardId: null };
     const doc = await prisma.document.update({ where: { id }, data });
     await logAudit({ action: "document.moved", summary: `Re-filed “${doc.fileName}”`, user });
-    revalidatePath("/settings/documents");
+    revalidatePath("/documents");
   });
 }
 
@@ -425,7 +428,7 @@ export async function uploadRepoDocument(formData: FormData) {
       },
     });
     await logAudit({ action: "document.uploaded", summary: `Uploaded “${file.name}” to the repository`, user });
-    revalidatePath("/settings/documents");
+    revalidatePath("/documents");
   });
 }
 
@@ -515,6 +518,6 @@ export async function replaceDocument(id: string, formData: FormData) {
       summary: `New version of “${old.fileName}” (previous kept in history)`,
       user,
     });
-    revalidatePath("/settings/documents");
+    revalidatePath("/documents");
   });
 }
