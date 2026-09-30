@@ -72,7 +72,8 @@ function sourceFiles(dir: string, out: string[] = []): string[] {
 }
 
 test("no customer-facing source hard-codes Denago's company details", () => {
-  const hits = sourceFiles("src").filter((rel) => COMPANY_LITERALS.test(shipped(rel)));
+  // Whitespace collapsed, so a literal wrapped across two JSX lines still counts.
+  const hits = sourceFiles("src").filter((rel) => COMPANY_LITERALS.test(shipped(rel).replace(/\s+/g, " ")));
   const unexplained = hits.filter((rel) => !(rel in ALLOWED));
   assert.deepEqual(
     unexplained,

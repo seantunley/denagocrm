@@ -231,6 +231,8 @@ async function issuePortalOtp(email: string): Promise<PortalAuthState> {
     to: email,
     subject: `Your ${company.name} portal code`,
     text: `Your login code is ${code}. It expires in 10 minutes.\n\nIf you didn't request this, ignore this email.\n\n${company.name}`,
+    // On the customer's timeline with the code masked.
+    record: { contactId: contact.id, label: "Portal login code", secrets: [code] },
   }).catch(() => {});
   return generic;
 }

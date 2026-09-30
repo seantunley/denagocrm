@@ -137,6 +137,16 @@ export default async function ContactDetailPage({
       include: { versions: { orderBy: { version: "desc" }, take: 1 } },
     }),
   ]);
+  // What the customer has told us about being contacted — the same inputs the
+  // send gate (communicationPolicy) reads, so staff see why a message was held.
+  const [portalPref, unsubscribes] = await Promise.all([
+    prisma.portalPreference.findUnique({ where: { contactId: contact.id } }),
+    prisma.campaignRecipient.findMany({
+      where: { contactId: contact.id, unsubscribedAt: { not: null } },
+      select: { id: true, unsubscribedAt: true, campaign: { select: { name: true } } },
+      orderBy: { unsubscribedAt: "desc" },
+    }),
+  ]);
   const referralCode = marketingOn ? await ensureReferralCode(contact.id) : "";
   // The share text names THIS workspace (Settings → Company), not Denago.
   const company = marketingOn ? await getCompanyProfile() : null;
@@ -540,6 +550,39 @@ export default async function ContactDetailPage({
                         >
                           ⬇ Export data
                         </a>
+                      </div>
+                      <div className="mb-4 text-sm">
+                        <h3 className="text-xs uppercase tracking-wide text-slate-400 mb-2">Communication preferences</h3>
+                        <ul className="grid sm:grid-cols-2 gap-x-4 gap-y-1">
+                          {[
+                            ["Marketing", !contact.marketingOptOut],
+                            ["Email service reminders (portal)", portalPref ? portalPref.serviceReminders && portalPref.emailServiceUpdates : true],
+                            ["SMS service updates (portal)", portalPref ? portalPref.smsServiceUpdates : true],
+                            ["Marketing emails (portal)", portalPref ? portalPref.marketingEmail && portalPref.emailMarketing : true],
+                            ["Portal notifications", portalPref ? portalPref.portalNotifications : true],
+                          ].map(([label, on]) => (
+                            <li key={String(label)} className="flex items-center justify-between gap-2">
+                              <span>{label}</span>
+                              <span className={`badge ${on ? "bg-emerald-500/15 text-emerald-300" : "bg-red-500/15 text-red-300"}`}>
+                                {on ? "On" : "Off"}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                        <p className="text-xs text-slate-500 mt-1">
+                          {portalPref
+                            ? `Portal preferences last changed ${formatDateTime(portalPref.updatedAt)}.`
+                            : "Never changed in the portal (defaults apply)."}
+                        </p>
+                        {unsubscribes.length > 0 && (
+                          <ul className="mt-2 text-xs text-slate-400 space-y-0.5">
+                            {unsubscribes.map((u) => (
+                              <li key={u.id}>
+                                Unsubscribed via email link — {u.campaign.name} · {formatDateTime(u.unsubscribedAt!)}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
                       </div>
                       <SaveForm
                         success="Consent recorded"

@@ -6,6 +6,7 @@ import { currentTenantScope } from "./tenantScope";
 import { sendEmail } from "./email";
 import { logAudit } from "./audit";
 import { getCompanyProfile } from "./companyProfile";
+import { canContactPerson, describeBlockedReason } from "./communicationPolicy";
 
 const REVIEW_MARKER = "Google review request";
 
@@ -23,6 +24,24 @@ export async function sendReviewRequest(
   if (!placeId) return false;
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });
   if (!contact?.email) return false;
+
+  // A review ask is solicitation: marketing opt-out, withdrawn marketing consent
+  // and the portal "Marketing emails" switch all refuse it, as does Trash.
+  const verdict = await canContactPerson({
+    contactId,
+    tenantId: contact.tenantId,
+    purpose: "review",
+    requestedChannel: "email",
+  });
+  if (!verdict.allowed) {
+    await logAudit({
+      action: "communication.suppressed",
+      summary: `Google review request (${occasion}) not sent — ${describeBlockedReason(verdict.reason)}`,
+      contactId,
+      userName: "System",
+    });
+    return false;
+  }
 
   // Don't nag: one review ask per customer per 90 days
   const recent = await prisma.communication.findFirst({

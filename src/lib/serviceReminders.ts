@@ -8,6 +8,33 @@ import { logAudit } from "./audit";
 import { computeDue } from "./serviceDue";
 import { formatDate } from "./format";
 import { companyContactPhrase, companyTeamSignoff, getCompanyProfile } from "./companyProfile";
+import { canContactPerson, describeBlockedReason, firstAllowedChannel } from "./communicationPolicy";
+
+async function recordSuppressedReminder(
+  vehicleId: string,
+  contactId: string,
+  model: string,
+  /** Null for the manual button: a click is not a due-cycle decision. */
+  dueKey: string | null,
+  reason: string | undefined,
+  userName: string,
+) {
+  if (dueKey) {
+    await prisma.serviceReminderLog
+      .upsert({
+        where: { vehicleId_dueKey: { vehicleId, dueKey } },
+        create: { vehicleId, dueKey, sentTo: `not sent: ${reason ?? "not contactable"}` },
+        update: {},
+      })
+      .catch(() => {});
+  }
+  await logAudit({
+    action: "communication.suppressed",
+    summary: `Service reminder for ${model} not sent — ${describeBlockedReason(reason)}`,
+    contactId,
+    userName,
+  });
+}
 
 /**
  * Emails customers whose vehicle is due (or overdue) for a service.
@@ -43,6 +70,21 @@ export async function runServiceReminders(): Promise<number> {
       where: { vehicleId_dueKey: { vehicleId: vehicle.id, dueKey } },
     });
     if (already) continue;
+
+    // Trashed contact, portal "Email service reminders" off, or service consent
+    // withdrawn. The refusal is recorded against the due-cycle so it is audited
+    // ONCE, not every night: a customer who switches reminders back on picks up
+    // from the next cycle (the manual Remind button still works for this one).
+    const verdict = await canContactPerson({
+      contactId: vehicle.contactId,
+      tenantId: vehicle.contact.tenantId,
+      purpose: "service",
+      requestedChannel: "email",
+    });
+    if (!verdict.allowed) {
+      await recordSuppressedReminder(vehicle.id, vehicle.contactId, vehicle.model, dueKey, verdict.reason, "Automation");
+      continue;
+    }
 
     const vars = {
       name: `${vehicle.contact.firstName} ${vehicle.contact.lastName ?? ""}`.trim(),
@@ -110,6 +152,19 @@ export async function remindVehicleService(
   const { contact } = vehicle;
   if (!contact.email && !contact.phone) return { ok: false, error: "No email or phone on file" };
 
+  // A deliberate click still may not override the customer: email first, SMS
+  // if email is refused (no address, or only email reminders switched off).
+  const verdict = await firstAllowedChannel({
+    contactId: contact.id,
+    tenantId: contact.tenantId,
+    purpose: "service",
+    channels: ["email", "sms"],
+  });
+  if (!verdict.allowed || !verdict.destination) {
+    await recordSuppressedReminder(vehicle.id, contact.id, vehicle.model, null, verdict.reason, "System");
+    return { ok: false, error: `Not sent — ${describeBlockedReason(verdict.reason)}` };
+  }
+
   const due = computeDue(vehicle);
   const firstUser = await resolveTenantActor();
   const first = contact.firstName;
@@ -139,18 +194,18 @@ export async function remindVehicleService(
   let subject = `Service reminder — your ${vehicle.model}`;
   let body: string;
 
-  if (contact.email) {
+  if (verdict.channel === "email") {
     channel = "email";
     subject = template ? renderTemplate(template.subject, vars) : subject;
     body = template
       ? renderTemplate(template.body, vars)
       : `Hi ${first},\n\nA quick reminder that your ${vehicle.model} is due for a service (${dueWhen}). Reply or call us${company.phone ? ` on ${company.phone}` : ""} and we'll book you in.\n\nWarm regards,\n${company.name}`;
-    const r = await sendEmail({ to: contact.email, subject, text: body });
+    const r = await sendEmail({ to: verdict.destination, subject, text: body });
     if (!r.ok) return { ok: false, error: r.error ?? "Email failed" };
   } else {
     channel = "sms";
     body = `Hi ${first}, your ${vehicle.model} is due for a service (${dueWhen}). Call ${companyContactPhrase(company)} to book. Reply STOP to opt out.`;
-    const r = await sendSms(contact.phone!, body);
+    const r = await sendSms(verdict.destination, body);
     if (!r.ok) return { ok: false, error: r.error ?? "SMS failed" };
   }
 
@@ -158,8 +213,8 @@ export async function remindVehicleService(
   await prisma.serviceReminderLog
     .upsert({
       where: { vehicleId_dueKey: { vehicleId: vehicle.id, dueKey } },
-      create: { vehicleId: vehicle.id, dueKey, sentTo: contact.email ?? contact.phone ?? "" },
-      update: { sentTo: contact.email ?? contact.phone ?? "" },
+      create: { vehicleId: vehicle.id, dueKey, sentTo: verdict.destination },
+      update: { sentTo: verdict.destination },
     })
     .catch(() => {});
   if (firstUser) {

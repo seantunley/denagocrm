@@ -123,10 +123,13 @@ export async function POST(req: NextRequest) {
     const company = await getCompanyProfile(auth.tenantId);
     let channel: "sms" | "email" | null = null;
     let target = "";
+    // On the owner's timeline with the code masked.
+    const record = { contactId: vehicle.contactId, label: "Service lookup verification code", secrets: [code] };
     if (phone && (await isSmsConfigured())) {
       const res = await sendSms(
         phone,
-        `${company.name}: your verification code is ${code}. It expires in 10 minutes. If you didn't request this, ignore this message.`
+        `${company.name}: your verification code is ${code}. It expires in 10 minutes. If you didn't request this, ignore this message.`,
+        record,
       );
       if (res.ok) {
         channel = "sms";
@@ -138,6 +141,7 @@ export async function POST(req: NextRequest) {
         to: email,
         subject: `Your ${company.name} verification code`,
         text: `Your verification code is ${code}.\n\nIt expires in 10 minutes. If you didn't request this, you can ignore this email.\n\n${company.name}`,
+        record,
       });
       if (res.ok) {
         channel = "email";

@@ -1,5 +1,6 @@
 import { resolveIntegrationBundle } from "@/lib/settings";
 import { currentTenantScope } from "@/lib/tenantScope";
+import { recordOutboundFailure, recordOutboundMessage, type OutboundRecord } from "@/lib/outboundMessageLog";
 
 /**
  * SMS via BulkSMS (bulksms.com) — Settings → Integrations holds the token.
@@ -30,7 +31,22 @@ export function maskPhone(raw: string): string {
   return `••• ••• •${digits.slice(-3)}`;
 }
 
-export async function sendSms(to: string, body: string): Promise<{ ok: boolean; error?: string }> {
+/**
+ * `record` — the customer this text is to. When given, the sent message is
+ * written to their timeline once the gateway accepts it (and a failure to their
+ * audit trail); see lib/outboundMessageLog.ts.
+ */
+export async function sendSms(to: string, body: string, record?: OutboundRecord): Promise<{ ok: boolean; error?: string }> {
+  const result = await sendSmsNow(to, body);
+  if (record) {
+    const logged = { channel: "sms" as const, to, text: body };
+    if (result.ok) await recordOutboundMessage({ ...logged, messageId: result.messageId }, record);
+    else await recordOutboundFailure(logged, record, result.error);
+  }
+  return { ok: result.ok, error: result.error };
+}
+
+async function sendSmsNow(to: string, body: string): Promise<{ ok: boolean; error?: string; messageId?: string | null }> {
   const [id, secret] = await bulkSmsCredentials();
   if (!id || !secret) return { ok: false, error: "SMS is not configured" };
   const intl = normalizePhone(to);
@@ -49,7 +65,9 @@ export async function sendSms(to: string, body: string): Promise<{ ok: boolean; 
       const text = await res.text().catch(() => "");
       return { ok: false, error: `SMS gateway ${res.status}: ${text.slice(0, 200)}` };
     }
-    return { ok: true };
+    // BulkSMS answers with one entry per message sent.
+    const sent = (await res.json().catch(() => null)) as Array<{ id?: string }> | null;
+    return { ok: true, messageId: Array.isArray(sent) ? (sent[0]?.id ?? null) : null };
   } catch (err) {
     const { logError } = await import("./errorLog");
     // Never the number: it is client information.

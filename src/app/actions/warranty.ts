@@ -8,6 +8,7 @@ import { logAudit } from "@/lib/audit";
 import { sendEmail } from "@/lib/email";
 import { sendSms } from "@/lib/sms";
 import { companyContactPhrase, getCompanyProfile } from "@/lib/companyProfile";
+import { describeBlockedReason, firstAllowedChannel } from "@/lib/communicationPolicy";
 import { claimStatuses } from "@/lib/warranty";
 import { requirePermission, requireVehicleAccess } from "@/lib/permissions";
 import { withActingStaffScope } from "@/lib/actingScope";
@@ -115,9 +116,26 @@ export async function notifyRecall(_prev: NotifyResult, formData: FormData): Pro
       const first = c.firstName;
       const subject = `Important: ${recall.title} — your ${recall.model}`;
       const body = `Hi ${first},\n\n${recall.description}\n\nPlease contact ${contactPhrase} to arrange this at no charge.\n\nWarm regards,\n${company.name}`;
+      // Trashed contacts, portal service switches and withdrawn service consent.
+      const verdict = await firstAllowedChannel({
+        contactId: c.id,
+        tenantId: c.tenantId,
+        purpose: "service",
+        channels: ["email", "sms"],
+      });
+      if (!verdict.allowed || !verdict.destination) {
+        skipped += 1;
+        await logAudit({
+          action: "communication.suppressed",
+          summary: `Recall notice "${recall.title}" not sent — ${describeBlockedReason(verdict.reason)}`,
+          contactId: c.id,
+          user,
+        });
+        continue;
+      }
       let ok = false;
-      if (c.email) ok = (await sendEmail({ to: c.email, subject, text: body })).ok;
-      else if (c.phone) ok = (await sendSms(c.phone, `${recall.title}: ${recall.description} Call ${contactPhrase}.`)).ok;
+      if (verdict.channel === "email") ok = (await sendEmail({ to: verdict.destination, subject, text: body })).ok;
+      else ok = (await sendSms(verdict.destination, `${recall.title}: ${recall.description} Call ${contactPhrase}.`)).ok;
       if (!ok) {
         skipped += 1;
         continue;
@@ -126,7 +144,7 @@ export async function notifyRecall(_prev: NotifyResult, formData: FormData): Pro
       if (firstUser) {
         await prisma.communication.create({
           data: {
-            type: c.email ? "email" : "sms",
+            type: verdict.channel === "email" ? "email" : "sms",
             direction: "outbound",
             subject: `[Recall] ${recall.title}`,
             body,

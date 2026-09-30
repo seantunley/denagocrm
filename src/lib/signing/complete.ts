@@ -425,6 +425,7 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
   // — so a fan-out that reached nobody looked exactly like one that reached
   // everybody, and the completion marker below was written over it.
   const delivery = await deliverCompletionEmails({
+    requestId: req.id,
     title: req.title,
     pdf,
     recipients: req.recipients.map((r) => ({
@@ -433,9 +434,7 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
       email: r.email,
       completedEmailSentAt: r.completedEmailSentAt,
     })),
-    tenantWhere,
-    senderName: company.name,
-  });
+    tenantWhere,  });
 
   // LAST, not first, and ONLY on success. This event used to be written
   // immediately after the transaction, which made it a record that the commit

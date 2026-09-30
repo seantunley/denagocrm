@@ -354,8 +354,8 @@ export default function QuoteDoc({
             <Text style={s.certSealLabel}>TAMPER-EVIDENT SEAL</Text>
             <Text style={s.certSealText}>
               This document was signed electronically in terms of the Electronic Communications and
-              Transactions Act 25 of 2002. It carries a PKCS#7 digital signature applied by Denago Cape
-              Town; any alteration made after sealing invalidates the signature and is detectable by any
+              Transactions Act 25 of 2002. It carries a PKCS#7 digital signature applied by {company.name};
+              any alteration made after sealing invalidates the signature and is detectable by any
               standard PDF reader.
             </Text>
           </View>
