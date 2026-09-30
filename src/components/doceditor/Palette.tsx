@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { useDraggable } from "@dnd-kit/core";
 import { useEditor } from "@/lib/doceditor/store";
 import { newBlock, newOverlayField } from "@/lib/doceditor/factory";
+import { showcaseQuoteTemplate } from "@/lib/doceditor/standardTemplates";
+import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import type { BlockType, DocumentBlock, OverlayField } from "@/lib/doceditor/model";
 import type { DragData } from "./DndController";
 import { listLibraryItems, deleteLibraryItem } from "@/app/actions/doclibrary";
@@ -29,6 +31,33 @@ const BRANDED: { type: BlockType; label: string; icon: string }[] = [
   { type: "terms", label: "Terms", icon: "§" },
   { type: "footer", label: "Footer", icon: "‗" },
 ];
+
+const SHOWCASE: { type: BlockType; label: string; icon: string }[] = [
+  { type: "showcaseHeader", label: "Header band", icon: "▀" },
+  { type: "infoStrip", label: "Info strip", icon: "⋯" },
+  { type: "vehicleShowcase", label: "Vehicle showcase (bound)", icon: "🚙" },
+  { type: "totalsBox", label: "Totals box", icon: "∑" },
+  { type: "acceptance", label: "Acceptance card", icon: "✍" },
+  { type: "footerBand", label: "Footer band", icon: "▄" },
+];
+
+/** Swap the whole document for the showcase quotation layout. Undoable; nothing is saved until the owner saves/publishes. */
+function ShowcaseLayoutButton() {
+  const commit = useEditor((s) => s.commit);
+  return (
+    <ConfirmActionDialog
+      trigger={
+        <button type="button" className="w-full rounded-lg border border-orange-200 bg-orange-50 px-2.5 py-2 text-left text-sm text-orange-700 hover:border-orange-300">
+          ✨ Replace with showcase quotation layout
+        </button>
+      }
+      title="Use the showcase quotation layout?"
+      description="This replaces every page of this document with the showcase layout. Undo brings it back, and nothing changes for customers until you save and publish."
+      confirmLabel="Replace layout"
+      onConfirm={() => commit((doc) => ({ ...showcaseQuoteTemplate(), title: doc.title }))}
+    />
+  );
+}
 
 const FIELDS: { kind: OverlayField["kind"]; label: string; icon: string }[] = [
   { kind: "signature", label: "Signature", icon: "✍" },
@@ -149,6 +178,11 @@ export function Palette() {
             <p className="px-1 pt-2 text-[11px] font-medium text-slate-400">Branded (quote/proposal)</p>
             <div className="grid grid-cols-1 gap-1.5">
               {BRANDED.map((c) => <ContentItem key={c.type} {...c} />)}
+            </div>
+            <p className="px-1 pt-2 text-[11px] font-medium text-slate-400">Showcase quotation</p>
+            <ShowcaseLayoutButton />
+            <div className="grid grid-cols-1 gap-1.5">
+              {SHOWCASE.map((c) => <ContentItem key={c.type} {...c} />)}
             </div>
           </>
         ) : tab === "Fields" ? (

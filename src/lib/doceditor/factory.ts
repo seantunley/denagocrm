@@ -80,6 +80,29 @@ export function newBlock(type: BlockType): DocumentBlock {
       ] };
     case "conditional":
       return { id: uid(), type, ...emptyLayout, when: "", blocks: [] };
+    case "showcaseHeader":
+      return { id: uid(), type, ...emptyLayout, title: "QUOTATION", docNumber: "{{quote.number}}", tagline: "PREMIUM ELECTRIC MOBILITY", bg: "#020617", accent: "#ea580c", bgImage: "", showLogo: true };
+    case "infoStrip":
+      return { id: uid(), type, ...emptyLayout, accent: "#ea580c", items: [
+        { icon: "calendar", label: "QUOTE DATE", value: "{{quote.date}}", sub: "" },
+        { icon: "calendarCheck", label: "VALID UNTIL", value: "{{quote.validUntil}}", sub: "" },
+        { icon: "user", label: "PREPARED BY", value: "{{preparedBy}}", sub: "Sales Consultant" },
+      ] };
+    case "vehicleShowcase":
+      return { id: uid(), type, ...emptyLayout, part: "full", brand: "DENAGO EV", accent: "#ea580c", imageHeight: 280, imageFit: "contain" };
+    case "totalsBox":
+      return { id: uid(), type, ...emptyLayout, bg: "#020617", accent: "#ea580c", totalLabel: "TOTAL INCL. VAT", totalAmount: "{{quote.total}}", rows: [
+        { label: "Subtotal (excl. VAT)", value: "{{quote.subtotal}}" },
+        { label: "VAT (15%)", value: "{{quote.vat}}" },
+      ] };
+    case "acceptance":
+      return {
+        id: uid(), type, ...emptyLayout, title: "ACCEPTANCE OF QUOTATION",
+        text: "I confirm acceptance of the above quotation and {{company.name}}’s terms and conditions.",
+        nameLabel: "Customer Name", nameValue: "{{customer.name}}", signatureLabel: "Signature", dateLabel: "Date",
+      };
+    case "footerBand":
+      return { id: uid(), type, ...emptyLayout, subtitle: "Authorised Denago EV Dealer", bg: "#020617", accent: "#ea580c", bgImage: "" };
   }
 }
 

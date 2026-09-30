@@ -1,5 +1,12 @@
 import "server-only";
-import { canAccessJobCard, canAccessQuote, type PermissionUser } from "@/lib/permissions";
+import { prisma } from "@/lib/db";
+import {
+  canAccessJobCard,
+  canAccessLead,
+  canAccessQuote,
+  canAccessVehicle,
+  type PermissionUser,
+} from "@/lib/permissions";
 import type { BuilderRecordKind } from "./recordBinding";
 
 /**
@@ -26,6 +33,15 @@ export async function canAccessBuilderRecord(
   user: PermissionUser,
   record: { kind: BuilderRecordKind; id: string },
 ): Promise<boolean> {
+  // The same decisions the lead and warranty print pages make.
+  if (record.kind === "lead") return canAccessLead(user, record.id);
+  if (record.kind === "warranty") {
+    const claim = await prisma.warrantyClaim.findUnique({
+      where: { id: record.id },
+      select: { vehicleId: true },
+    });
+    return claim ? canAccessVehicle(user, claim.vehicleId) : false;
+  }
   return record.kind === "quote"
     ? canAccessQuote(user, record.id)
     : canAccessJobCard(user, record.id);

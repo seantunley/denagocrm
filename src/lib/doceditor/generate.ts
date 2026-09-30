@@ -2,7 +2,10 @@ import "server-only";
 import { prisma } from "@/lib/db";
 import { getBuilderTemplate, getLiveBuilderTemplate } from "@/lib/docbuilder/store";
 import { buildQuoteContext, buildJobCardContext } from "@/lib/docbuilder/merge";
+import { withVehicleShowcase } from "@/lib/docbuilder/vehicleShowcaseLoad";
+import { showcaseAssetTokens } from "./showcaseAssetsServer";
 import { loadBillToFleet } from "@/lib/quoteBillTo";
+import { loadLeadForDoc, loadWarrantyClaimForDoc } from "@/lib/docbuilder/leadWarrantyRecords";
 import { getCompanyProfile, companyTokens } from "@/lib/companyProfile";
 import { htmlToPdf } from "@/lib/customDocs";
 import { type DocumentModel } from "./model";
@@ -20,7 +23,8 @@ import { defaultLogoDataUri as logoDataUri, documentLogo, embedDocImages, liveGl
  */
 async function withCompany(ctx: RenderCtx, tenantId?: string | null): Promise<RenderCtx> {
   const profile = await getCompanyProfile();
-  const company = { ...(await liveGlobalTokens()), ...companyTokens(profile) };
+  // + the showcase layout's built-in band photos ({{asset.*}}), embedded as data URLs.
+  const company = { ...showcaseAssetTokens(), ...(await liveGlobalTokens()), ...companyTokens(profile) };
   const logo = await documentLogo(profile.logoUrl, tenantId);
   // Unbound: carry company tokens only, but mark bound:false so conditionals/showIf
   // columns render as the placeholder layout rather than evaluating an empty scope.
@@ -50,7 +54,9 @@ export async function renderResolvedToPdf(r: Resolved): Promise<{ buffer: Buffer
 }
 
 /** Load a template + bind it to a quote/job card (shared by PDF and export). */
-async function resolve(templateId: string, quoteId?: string | null, jobCardId?: string | null, live = false): Promise<Resolved | null> {
+type OtherRecord = { leadId?: string | null; warrantyClaimId?: string | null };
+
+async function resolve(templateId: string, quoteId?: string | null, jobCardId?: string | null, live = false, other?: OtherRecord): Promise<Resolved | null> {
   // `live`: a document being filed against a record renders the PUBLISHED
   // version; previews and the editor's own exports render the draft.
   const tpl = live ? await getLiveBuilderTemplate(templateId) : await getBuilderTemplate(templateId);
@@ -70,13 +76,16 @@ async function resolve(templateId: string, quoteId?: string | null, jobCardId?: 
       include: { items: true, fees: { orderBy: { sortOrder: "asc" } }, lead: { include: { product: true } }, contact: true, createdBy: true },
     });
     // Tenant-scoped fleet lookup, not an include — Quote.fleetId has no FK.
-    if (q) { ctx = buildQuoteContext(q, await loadBillToFleet(prisma, q.fleetId)); title = `${doc.title} — Q-${q.number}`; qId = q.id; contactId = q.contactId; }
+    if (q) { ctx = await withVehicleShowcase(buildQuoteContext(q, await loadBillToFleet(prisma, q.fleetId)), q); title = `${doc.title} — Q-${q.number}`; qId = q.id; contactId = q.contactId; }
   } else if (jobCardId) {
     const jc = await prisma.jobCard.findUnique({
       where: { id: jobCardId },
       include: { items: true, vehicle: true, contact: true, technician: true },
     });
     if (jc) { ctx = buildJobCardContext(jc); title = `${doc.title} — Job #${jc.number}`; jId = jc.id; contactId = jc.contactId; }
+  } else if (other?.leadId || other?.warrantyClaimId) {
+    const bound = other.leadId ? await loadLeadForDoc(other.leadId) : await loadWarrantyClaimForDoc(other.warrantyClaimId!);
+    if (bound) { ctx = bound.ctx; title = `${doc.title} — ${bound.label}`; contactId = bound.contactId; }
   }
   // Fold in company tokens once — including the unbound case (ctx still null), so the
   // record-independent brand tokens resolve in list previews and "No record" exports.
@@ -91,8 +100,8 @@ async function resolve(templateId: string, quoteId?: string | null, jobCardId?: 
  */
 export async function generateDocEditorPdf(opts: {
   templateId: string; quoteId?: string | null; jobCardId?: string | null; live?: boolean;
-}): Promise<{ buffer: Buffer; title: string; quoteId: string | null; jobCardId: string | null; contactId: string | null } | null> {
-  const r = await resolve(opts.templateId, opts.quoteId, opts.jobCardId, opts.live);
+} & OtherRecord): Promise<{ buffer: Buffer; title: string; quoteId: string | null; jobCardId: string | null; contactId: string | null } | null> {
+  const r = await resolve(opts.templateId, opts.quoteId, opts.jobCardId, opts.live, opts);
   if (!r) return null;
   return renderResolvedToPdf(r);
 }
@@ -122,9 +131,9 @@ export async function renderModelToPdf(doc: DocumentModel, snapshot: RenderCtx, 
 export type ExportFormat = "html" | "email" | "doc";
 
 /** Export a template as static HTML, email-safe HTML, or a Word-openable .doc. */
-export async function generateDocEditorExport(opts: { templateId: string; quoteId?: string | null; format: ExportFormat }):
+export async function generateDocEditorExport(opts: { templateId: string; quoteId?: string | null; format: ExportFormat } & OtherRecord):
   Promise<{ content: string; title: string; mime: string; ext: string } | null> {
-  const r = await resolve(opts.templateId, opts.quoteId);
+  const r = await resolve(opts.templateId, opts.quoteId, null, false, opts);
   if (!r) return null;
   if (opts.format === "email") {
     return { content: renderEmailHtml(r.doc, r.ctx, logoDataUri()), title: r.title, mime: "text/html; charset=utf-8", ext: "html" };
