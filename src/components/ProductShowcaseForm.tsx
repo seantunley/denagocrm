@@ -31,7 +31,13 @@ export default function ProductShowcaseForm({
             <input name="showcaseTagline" className="input" maxLength={120} defaultValue={product.showcaseTagline ?? ""} placeholder="e.g. Lifted 4-seater · Forward-facing" />
           </div>
           <div>
-            <label className="label">Photo (PNG, JPG or WebP, up to 1.5 MB — a web-optimised cut-out on white or transparent looks best)</label>
+            <label className="label">Photo (PNG, JPG or WebP, up to 1.5 MB)</label>
+            <p className="mb-1 text-[11px] leading-4 text-muted-foreground">
+              <strong>Cut-out</strong> (cart on white or transparent): about 1200 × 1000 px, cart filling the frame. In the quote
+              layout, set the vehicle section&apos;s Photo fit to &ldquo;Show whole photo&rdquo;.{" "}
+              <strong>Scenic</strong> (cart in a landscape, fades into the page): 1400 × 1000 px landscape, cart in the right
+              two-thirds; the left third sits behind the text, so keep only scenery there. Photo fit &ldquo;Fill&rdquo;.
+            </p>
             {photo ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img src={photo} alt={product.name} className="mb-2 max-h-40 rounded border border-border bg-white object-contain" />

@@ -228,16 +228,26 @@ function lineItemsHtml(b: LineItemsBlock, ctx: RenderCtx): string {
   const rows = ctx?.items ?? [];
   const cols = ctx?.bound ? b.columns.filter((c) => evaluateCondition(c.showIf, ctx.vars)) : b.columns;
   const border = "1px solid #e5e7eb";
+  // Fixed column widths, shared by header and body. With auto layout and
+  // nowrap headers, a long header ("TOTAL (INCL. VAT)") set its column's width,
+  // pushed the table past the page edge, and the header no longer lined up with
+  // the rows beneath. Description takes what the numeric columns leave.
+  // Qty 9%; the money columns share 50%; the first (description) column gets the rest.
+  const moneyCols = cols.filter((c, i) => i > 0 && c.key !== "qty").length;
+  const widths = cols.map((c, i) => (i === 0 ? null : c.key === "qty" ? 9 : Math.floor(50 / Math.max(1, moneyCols))));
+  const colgroup = `<colgroup>${cols.map((_, i) => `<col${widths[i] != null ? ` style="width:${widths[i]}%"` : ""}>`).join("")}</colgroup>`;
   const head = cols.map((c, i) => {
     const radius = i === 0 ? "border-top-left-radius:6px;" : i === cols.length - 1 ? "border-top-right-radius:6px;" : "";
-    return `<th style="text-align:${c.align};background:${cssColor(b.headerBg, INK)};color:${cssColor(b.headerColor, "#ffffff")};padding:9px 12px;font-size:7.5pt;font-weight:800;letter-spacing:.4px;text-transform:uppercase;white-space:nowrap;${radius}${KEEP_BG}">${withQualifier(c.header, "font-size:6pt;font-weight:600")}</th>`;
+    // A faint divider in the header on the same edges as the body's cell borders.
+    const divider = i ? "border-left:1px solid rgba(255,255,255,.14);" : "";
+    return `<th style="text-align:${c.align};background:${cssColor(b.headerBg, INK)};color:${cssColor(b.headerColor, "#ffffff")};padding:9px 12px;font-size:7.5pt;font-weight:800;letter-spacing:.4px;text-transform:uppercase;line-height:1.25;${divider}${radius}${KEEP_BG}">${withQualifier(c.header, "font-size:6pt;font-weight:600")}</th>`;
   }).join("");
   const cell = (c: (typeof cols)[number], i: number, row: number, value: string) =>
     `<td style="text-align:${c.align};padding:7px 12px;font-size:9pt;color:#1f2937;border-bottom:${border};${i ? `border-left:${border};` : `border-left:${border};`}${i === cols.length - 1 ? `border-right:${border};` : ""}${row % 2 ? `background:#f8fafc;${KEEP_BG}` : ""}">${esc(value)}</td>`;
   const body = rows.length
     ? rows.map((r, ri) => `<tr>${cols.map((c, i) => cell(c, i, ri, lineItemCell(c.key, r, b.vatRate))).join("")}</tr>`).join("")
     : `<tr><td colspan="${cols.length}" style="padding:9px 12px;color:#94a3b8;font-size:9pt;border:${border};border-top:none">Line items appear here when linked to a record</td></tr>`;
-  return `<table style="width:100%;border-collapse:separate;border-spacing:0;margin:8px 0 0"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+  return `<table style="width:100%;table-layout:fixed;border-collapse:separate;border-spacing:0;margin:8px 0 0">${colgroup}<thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
 function termsHtml(b: TermsBlock): string {
