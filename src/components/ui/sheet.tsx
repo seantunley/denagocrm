@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { Layer } from "./layer"
 import { XIcon } from "lucide-react"
 import { Dialog as SheetPrimitive } from "radix-ui"
 
@@ -23,9 +24,15 @@ function SheetClose({
 }
 
 function SheetPortal({
+  children,
   ...props
 }: React.ComponentProps<typeof SheetPrimitive.Portal>) {
-  return <SheetPrimitive.Portal data-slot="sheet-portal" {...props} />
+  // Its own layer, taken when it opens, so it stacks above what opened it (./layer).
+  return (
+    <SheetPrimitive.Portal data-slot="sheet-portal" {...props}>
+      <Layer>{children}</Layer>
+    </SheetPrimitive.Portal>
+  )
 }
 
 function SheetOverlay({

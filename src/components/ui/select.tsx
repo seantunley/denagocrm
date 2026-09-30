@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { Layer } from "./layer"
 import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from "lucide-react"
 import { Select as SelectPrimitive } from "radix-ui"
 
@@ -59,6 +60,7 @@ function SelectContent({
 }: React.ComponentProps<typeof SelectPrimitive.Content>) {
   return (
     <SelectPrimitive.Portal>
+      <Layer>
       <SelectPrimitive.Content
         data-slot="select-content"
         className={cn(
@@ -83,6 +85,7 @@ function SelectContent({
         </SelectPrimitive.Viewport>
         <SelectScrollDownButton />
       </SelectPrimitive.Content>
+      </Layer>
     </SelectPrimitive.Portal>
   )
 }

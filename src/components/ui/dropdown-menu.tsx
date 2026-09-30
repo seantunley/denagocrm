@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { Layer } from "./layer"
 import { CheckIcon, ChevronRightIcon, CircleIcon } from "lucide-react"
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui"
 
@@ -13,10 +14,13 @@ function DropdownMenu({
 }
 
 function DropdownMenuPortal({
+  children,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Portal>) {
   return (
-    <DropdownMenuPrimitive.Portal data-slot="dropdown-menu-portal" {...props} />
+    <DropdownMenuPrimitive.Portal data-slot="dropdown-menu-portal" {...props}>
+      <Layer>{children}</Layer>
+    </DropdownMenuPrimitive.Portal>
   )
 }
 
@@ -38,6 +42,7 @@ function DropdownMenuContent({
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Content>) {
   return (
     <DropdownMenuPrimitive.Portal>
+      <Layer>
       <DropdownMenuPrimitive.Content
         data-slot="dropdown-menu-content"
         sideOffset={sideOffset}
@@ -47,6 +52,7 @@ function DropdownMenuContent({
         )}
         {...props}
       />
+      </Layer>
     </DropdownMenuPrimitive.Portal>
   )
 }

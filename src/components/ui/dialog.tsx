@@ -3,14 +3,62 @@
 import * as React from "react"
 import { XIcon } from "lucide-react"
 import { Dialog as DialogPrimitive } from "radix-ui"
+import { usePathname } from "next/navigation"
+import { Layer } from "./layer"
+import { dialogVisible, initialDialogNavState, nextDialogNavState } from "./dialogNavigation"
 
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 
+/**
+ * A dialog belongs to the page it was opened on.
+ *
+ * When something inside it navigates (Countersign & review → the signing page,
+ * a product link in Settings → the product page), the app routes UNDERNEATH the
+ * dialog, which stayed open on top: the new page was there but hidden (Sean,
+ * 2026-09-30, "opened something in the background that I could not see").
+ * So an open dialog hides as soon as the PATHNAME changes from the one it
+ * opened on. Query-only changes (?edit=, ?tab=) don't close it.
+ *
+ * It hides rather than calling onOpenChange(false): for route modals that
+ * callback is router.back(), which would undo the very navigation that closed it.
+ * The dismissal is sticky until the dialog is really reopened (dialogNavigation).
+ *
+ * Uncontrolled dialogs (DialogTrigger, no `open` prop) are covered too: their
+ * open state is held here, and closed outright when navigation dismisses them.
+ */
 function Dialog({
+  open: openProp,
+  defaultOpen,
+  onOpenChange,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Root>) {
-  return <DialogPrimitive.Root data-slot="dialog" {...props} />
+  const pathname = usePathname()
+  const controlled = openProp !== undefined
+  const [internalOpen, setInternalOpen] = React.useState(Boolean(defaultOpen))
+  const open = controlled ? Boolean(openProp) : internalOpen
+
+  // "Adjust state during render", so a reopen always starts fresh.
+  const [nav, setNav] = React.useState(() => initialDialogNavState(open, pathname))
+  const next = nextDialogNavState(nav, open, pathname)
+  if (next !== nav) {
+    setNav(next)
+    // An uncontrolled dialog has no owner to keep it "open": close it for real.
+    if (!controlled && next.dismissed) setInternalOpen(false)
+  }
+
+  const handleOpenChange = (value: boolean) => {
+    if (!controlled) setInternalOpen(value)
+    onOpenChange?.(value)
+  }
+  return (
+    <DialogPrimitive.Root
+      data-slot="dialog"
+      open={dialogVisible(next, open)}
+      onOpenChange={handleOpenChange}
+      {...props}
+    />
+  )
 }
 
 function DialogTrigger({
@@ -20,9 +68,15 @@ function DialogTrigger({
 }
 
 function DialogPortal({
+  children,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Portal>) {
-  return <DialogPrimitive.Portal data-slot="dialog-portal" {...props} />
+  // Overlay + content share one layer, taken when the dialog opens (./layer).
+  return (
+    <DialogPrimitive.Portal data-slot="dialog-portal" {...props}>
+      <Layer>{children}</Layer>
+    </DialogPrimitive.Portal>
+  )
 }
 
 function DialogClose({
