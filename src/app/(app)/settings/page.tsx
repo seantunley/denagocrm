@@ -21,11 +21,13 @@ import { AddUserForm, ChangePasswordForm } from "@/components/TeamForms";
 import {
   saveSmtpSettings,
   saveServiceReminderSettings,
+  saveQuoteEmailSettings,
   createTemplate,
   updateTemplate,
   deleteTemplate,
 } from "@/app/actions/emails";
 import TestEmailButton from "@/components/TestEmailButton";
+import { DEFAULT_QUOTE_EMAIL, QUOTE_EMAIL_FIELDS, QUOTE_EMAIL_TEMPLATE_SETTING } from "@/lib/quoteEmail";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import SecretReveal from "@/components/SecretReveal";
 import ClearSecret from "@/components/ClearSecret";
@@ -798,6 +800,46 @@ export default async function SettingsPage({
               </SaveForm>
             </Row>
             )}
+
+            <Row
+              title="Quote email"
+              status={
+                <span className="badge bg-muted text-muted-foreground">
+                  {templates.find((t) => t.id === setting(QUOTE_EMAIL_TEMPLATE_SETTING))?.name ?? "Built-in wording"}
+                </span>
+              }
+            >
+              <p className="text-xs text-muted-foreground mb-4">
+                The subject and message that &ldquo;Email quote&rdquo; starts with. Staff see it and can change it
+                before sending; the quote PDF is attached. To change the wording, create a template under
+                Email templates below and choose it here. Placeholders:{" "}
+                {QUOTE_EMAIL_FIELDS.map((field, i) => (
+                  <span key={field}>{i > 0 && ", "}<code>{`{{${field}}}`}</code></span>
+                ))}
+                .
+              </p>
+              <SaveForm success="Quote email saved" resetOnSuccess={false} action={saveQuoteEmailSettings} className="flex items-end gap-3 flex-wrap">
+                <div className="flex-1 min-w-56">
+                  <label className="label">Email template</label>
+                  <select name="templateId" className="input" defaultValue={setting(QUOTE_EMAIL_TEMPLATE_SETTING)}>
+                    <option value="">Built-in wording</option>
+                    {templates.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <SaveButton className="btn-primary">Save</SaveButton>
+              </SaveForm>
+              <details className="mt-3 rounded-lg border border-border bg-muted/40">
+                <summary className="px-4 py-2.5 cursor-pointer text-sm font-medium">Built-in wording</summary>
+                <div className="p-4 pt-1 text-xs text-muted-foreground whitespace-pre-wrap">
+                  <p className="font-medium text-foreground">{DEFAULT_QUOTE_EMAIL.subject}</p>
+                  <p className="mt-2">{DEFAULT_QUOTE_EMAIL.body}</p>
+                </div>
+              </details>
+            </Row>
 
             {/* The "Lifecycle journeys" toggles (LIFECYCLE_ANNIVERSARY_ENABLED /
                 LIFECYCLE_WINBACK_ENABLED) were removed here. They drove a
