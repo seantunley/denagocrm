@@ -80,7 +80,7 @@ export function classifyDeliveryFailure(error: string): string {
   if (/invalid|not a valid|no such user|recipient.*(unavailable|not found)|unknown user/.test(text)) return "invalid_recipient";
   if (/blocked|unsubscribed|opt(ed)? out|policy violation|not authorized|permission/.test(text)) return "rejected_by_recipient";
   if (/rate limit|too many requests|429/.test(text)) return "rate_limited";
-  if (/timeout|timed out|aborted|econn|network|socket/.test(text)) return "transient_network";
+  if (/timeout|timed out|aborted|econn|network|socket|could not reach/.test(text)) return "transient_network";
   return "provider_error";
 }
 

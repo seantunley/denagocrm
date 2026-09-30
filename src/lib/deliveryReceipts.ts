@@ -132,15 +132,13 @@ export function whatsappSendResult(res: { ok: boolean; status: number }, json: u
 }
 
 /**
- * A fetch that threw (timeout, DNS, reset) as a failed send. Worded so
- * classifyDeliveryFailure files it as transient_network and the outbox retries.
+ * A fetch that threw (timeout, DNS, TLS, reset) as a failed send, in the words
+ * the customer timeline already uses (#694). "could not reach" classifies as
+ * transient_network in classifyDeliveryFailure, so the outbox retries it.
  */
 export function whatsappTransportFailure(error: unknown): WhatsAppSendResult {
-  const name = error instanceof Error ? error.name : "";
-  return {
-    ok: false,
-    error: name === "TimeoutError" || name === "AbortError" ? "WhatsApp request timed out" : "WhatsApp network error — could not reach the API",
-  };
+  const name = error instanceof Error ? error.name : "Error";
+  return { ok: false, error: `Could not reach WhatsApp (${name === "TimeoutError" || name === "AbortError" ? "timed out" : name})` };
 }
 
 function watermarkToDate(raw: unknown): Date | null {

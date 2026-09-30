@@ -3,6 +3,7 @@ import { PLATFORM_TEAM_SIGNOFF } from "./platformIdentity";
 import { resolveIntegrationBundleForTenant } from "./settings";
 import { currentTenantScope } from "./tenantScope";
 import { formatZAR } from "./format";
+import { recordOutboundFailure, recordOutboundMessage, type OutboundRecord } from "./outboundMessageLog";
 
 export type SmtpConfig = {
   /**
@@ -94,9 +95,21 @@ export async function sendEmail(input: {
    * to the ticket. Omitted → nodemailer generates one, as before.
    */
   messageId?: string;
+  /**
+   * The customer this mail is to. When given, the sent message is written to
+   * their timeline once SMTP accepts it (and a failure to their audit trail) —
+   * see lib/outboundMessageLog.ts. Omit it where the caller already logs its own
+   * Communication, or the mail is not to a customer.
+   */
+  record?: OutboundRecord;
 }): Promise<{ ok: boolean; error?: string }> {
+  const logged = { channel: "email" as const, to: input.to, subject: input.subject, text: input.text, attachments: input.attachments?.map((a) => a.filename) };
   const config = await getSmtpConfig();
-  if (!config) return { ok: false, error: "SMTP is not configured (see Settings → Email)." };
+  if (!config) {
+    const error = "SMTP is not configured (see Settings → Email).";
+    if (input.record) await recordOutboundFailure(logged, input.record, error);
+    return { ok: false, error };
+  }
   try {
     const transporter = nodemailer.createTransport({
       host: config.host,
@@ -109,7 +122,7 @@ export async function sendEmail(input: {
       requireTLS: !config.secure,
       auth: config.user ? { user: config.user, pass: config.pass ?? "" } : undefined,
     });
-    await transporter.sendMail({
+    const info = await transporter.sendMail({
       from: fromHeader(config),
       to: input.to,
       subject: input.subject,
@@ -123,6 +136,7 @@ export async function sendEmail(input: {
       ...(input.messageId ? { messageId: input.messageId } : {}),
     });
     await noteSmtpOutcome(config, null);
+    if (input.record) await recordOutboundMessage({ ...logged, messageId: info?.messageId ?? null }, input.record);
     return { ok: true };
   } catch (err) {
     await noteSmtpOutcome(config, err);
@@ -130,7 +144,9 @@ export async function sendEmail(input: {
     // No recipient and no subject: both are client information (a subject
     // often names the customer), and the error class is what diagnoses a send.
     await logError("smtp", err, `send failed, ${input.to.split(",").length} recipient(s)`);
-    return { ok: false, error: err instanceof Error ? err.message : "Failed to send email" };
+    const error = err instanceof Error ? err.message : "Failed to send email";
+    if (input.record) await recordOutboundFailure(logged, input.record, error);
+    return { ok: false, error };
   }
 }
 

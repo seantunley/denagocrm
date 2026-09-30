@@ -25,6 +25,7 @@ import { writeTenantId } from "./tenantWrite";
 import { currentTenantScope } from "./tenantScope";
 import { distinctIdentities } from "./botBookingIdentity";
 import { whatsappSendResult, whatsappTransportFailure, type WhatsAppSendResult } from "./deliveryReceipts";
+import { recordOutboundFailure, recordOutboundMessage, type OutboundRecord } from "./outboundMessageLog";
 
 /**
  * Every outbound call is bounded. Node fetch has NO default timeout, so an
@@ -261,17 +262,32 @@ export async function matchByPhone(digits: string): Promise<PhoneMatch> {
  */
 export async function sendWhatsAppText(
   toDigits: string,
-  text: string
+  text: string,
+  /** The customer this is to: written to their timeline once Meta accepts it — see lib/outboundMessageLog.ts. */
+  record?: OutboundRecord,
 ): Promise<WhatsAppSendResult> {
+  const logged = { channel: "whatsapp" as const, to: toDigits, text };
   const creds = await waCredentials();
   if (!creds) {
-    return { ok: false, error: "WhatsApp is not configured (Settings → Integrations)." };
+    const error = "WhatsApp is not configured (Settings → Integrations).";
+    if (record) await recordOutboundFailure(logged, record, error);
+    return { ok: false, error };
   }
+  // A thrown transport error (timeout, DNS, TLS, reset) comes back from here as
+  // a failed send — "Could not reach WhatsApp (…)" — not a throw: callers that
+  // don't catch (signing dispatch, the legacy bot) no longer die mid-dispatch,
+  // and the outbox retries it exactly as it retried the throw.
   const sent = await postWhatsAppMessage(creds, { to: toDigits, type: "text", text: { body: text.slice(0, WA_TEXT_MAX) } });
-  if (!sent.ok && sent.error?.includes("24")) {
-    return { ok: false, error: "Outside the 24-hour reply window — the customer must message you first (or use an approved template from WhatsApp Manager)." };
+  if (sent.ok) {
+    if (record) await recordOutboundMessage({ ...logged, messageId: sent.providerMessageId ?? null }, record);
+    return sent;
   }
-  return sent;
+  const error = sent.error?.includes("24")
+    ? "Outside the 24-hour reply window — the customer must message you first (or use an approved template from WhatsApp Manager)."
+    : sent.error ?? "WhatsApp send failed";
+  // Transport and non-2xx failures both land here, so both reach the timeline.
+  if (record) await recordOutboundFailure(logged, record, error);
+  return { ok: false, error };
 }
 
 /**

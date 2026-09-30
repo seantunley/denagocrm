@@ -13,7 +13,6 @@ import { logAudit } from "@/lib/audit";
 import { logError } from "@/lib/errorLog";
 import { sendEmail } from "@/lib/email";
 import { isReplyToAddress } from "@/lib/replyToAddresses";
-import { customerRecordTenantId } from "@/lib/customerRecordTenant";
 import {
   newReplyMessageId,
   replyEmailRecipient,
@@ -93,32 +92,14 @@ async function emailTicketReply(item: LoadedCase, replyId: string, body: string,
         // Replies go to the help desk mailbox, which the IMAP sync files back
         // onto this ticket. The mailbox address is admin-set; parse it anyway.
         replyTo: mailbox?.email && isReplyToAddress(mailbox.email) ? mailbox.email : undefined,
+        // Customer timeline (outbound email, carrying our Message-ID) once SMTP
+        // accepts; a failure goes to their audit trail — lib/outboundMessageLog.ts.
+        record: { contactId: item.contactId, userId, label: `Help desk reply C-${item.number}` },
       }),
     );
     outcome = sent.ok
       ? { status: "sent", to: target.to, messageId }
       : { status: "failed", to: target.to, error: sent.error ?? "Failed to send email" };
-
-    if (sent.ok) {
-      // ponytail: direct Communication write; switch to the shared
-      // recordOutboundMessage helper once that lands.
-      await bestEffort("helpdesk.reply_timeline", `emailed reply on case ${item.id}`, async () =>
-        prisma.communication.create({
-          data: {
-            type: "email",
-            direction: "outbound",
-            subject,
-            body: text,
-            messageId,
-            inReplyTo: threading?.["In-Reply-To"] ?? null,
-            references: threading?.References ?? null,
-            contactId: item.contactId,
-            userId,
-            tenantId: await customerRecordTenantId({ contactId: item.contactId }),
-          },
-        }),
-      );
-    }
   }
 
   // Our Message-ID goes on the reply as its sourceMessageId, so a customer

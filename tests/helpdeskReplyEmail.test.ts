@@ -74,6 +74,8 @@ test("the reply action emails AFTER the commit and reports the outcome instead o
   assert.match(reply, /return \{ success: replyOutcomeText\(emailed\) \}/);
   assert.match(action, /messageId,\s*headers: threading/);
   assert.match(action, /sourceMessageId: `msg:\$\{outcome\.messageId\}`/, "our Message-ID threads the customer's answer back");
-  assert.match(action, /type: "email",\s*direction: "outbound"/, "recorded on the customer timeline");
+  // Customer timeline via the shared outbound log, not a hand-written row.
+  assert.match(action, /record: \{ contactId: item\.contactId, userId, label: `Help desk reply C-\$\{item\.number\}` \}/);
+  assert.doesNotMatch(action, /communication\.create\(/);
   assert.doesNotMatch(src("src/components/helpdesk/TicketComposer.tsx"), /success="Reply sent"/);
 });

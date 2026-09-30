@@ -298,9 +298,11 @@ async function deliver(invite: ClaimedInvite) {
   }
 
   const text = inviteText(invite.snapshot, invite.name, invite.token, await senderFor(invite.tenantId));
+  // On the customer's timeline, the survey link masked (it is a response capability).
+  const record = { contactId: invite.contactId, label: "Survey invitation", secrets: [invite.token] };
   const result = requested === "email"
-    ? await sendEmail({ to: eligibility.destination, subject: invite.snapshot.title, text })
-    : await sendSms(eligibility.destination, text);
+    ? await sendEmail({ to: eligibility.destination, subject: invite.snapshot.title, text, record })
+    : await sendSms(eligibility.destination, text, record);
 
   if (result.ok) {
     await basePrisma.$transaction(async (tx) => {
@@ -433,9 +435,10 @@ async function sendDueReminders(tid: string | null, limit = 50) {
       continue;
     }
     const text = inviteText(invite.snapshot, invite.name, invite.token, await senderFor(invite.tenantId), true);
+    const record = { contactId: invite.contactId, label: "Survey reminder", secrets: [invite.token] };
     const result = requested === "email"
-      ? await sendEmail({ to: eligibility.destination, subject: `Reminder: ${invite.snapshot.title}`, text })
-      : await sendSms(eligibility.destination, text);
+      ? await sendEmail({ to: eligibility.destination, subject: `Reminder: ${invite.snapshot.title}`, text, record })
+      : await sendSms(eligibility.destination, text, record);
     await basePrisma.$executeRaw`
       UPDATE "SurveyResponse"
       SET "providerStatus" = ${result.ok ? "reminder_sent" : "reminder_failed"},

@@ -463,8 +463,6 @@ const CUSTOMER_RECORD_WRITERS = [
   "src/app/actions/communications.ts",
   "src/app/actions/emails.ts",
   "src/app/actions/fulfilment.ts",
-  // An emailed help desk reply, on the customer's timeline — the contact's tenant.
-  "src/app/actions/helpdesk.ts",
   "src/app/actions/leads.ts",
   "src/app/actions/messenger.ts",
   "src/app/actions/portal.ts",
@@ -483,6 +481,9 @@ const CUSTOMER_RECORD_WRITERS = [
   "src/lib/imapSync.ts",
   "src/lib/journeyStepExecutor.ts",
   "src/lib/messenger.ts",
+  // The timeline copy of an automated customer send (signing, OTPs, campaigns,
+  // surveys). Stamped from the contact/lead it hangs off.
+  "src/lib/outboundMessageLog.ts",
   "src/lib/reviewRequests.ts",
   "src/lib/serviceReminders.ts",
   "src/lib/surveys.ts",
