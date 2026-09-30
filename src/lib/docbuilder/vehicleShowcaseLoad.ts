@@ -7,7 +7,7 @@ import type { QuoteForPrint } from "@/components/print/QuotePrintDoc";
 import type { DocumentModel } from "@/lib/doceditor/model";
 import { freezeVehicleShowcase, hasVehicleShowcase } from "@/lib/signing/freezeDocument";
 import type { MergeContext } from "./merge";
-import { primaryVehicleProductId, showcaseFromProduct, type VehicleShowcaseData } from "./vehicleShowcase";
+import { primaryVehicleLine, quoteVehiclePhoto, showcaseFromProduct, type VehicleShowcaseData } from "./vehicleShowcase";
 
 type QuoteVehicleSource = Pick<QuoteForPrint, "items" | "lead">;
 
@@ -17,13 +17,16 @@ type QuoteVehicleSource = Pick<QuoteForPrint, "items" | "lead">;
  *
  * The first charged catalogue line wins; a quote with no product line falls back
  * to the lead's product of interest. A normal tenant-scoped read: a product id
- * from another workspace resolves to nothing and the fallback is used.
+ * from another workspace resolves to nothing and the fallback is used. The photo
+ * is the one for the COLOUR being quoted (quoteVehiclePhoto) — this is the one
+ * path both a live render and the send-time freeze take.
  */
 async function quoteVehicle(quote: QuoteVehicleSource): Promise<VehicleShowcaseData | null> {
-  const productId = primaryVehicleProductId(quote.items);
-  const product = (productId ? await prisma.product.findUnique({ where: { id: productId } }) : null) ?? quote.lead?.product ?? null;
-  if (!product) return null;
-  return showcaseFromProduct(product, await embedStoredImage(product.showcaseImageRef, product.tenantId));
+  const line = primaryVehicleLine(quote.items);
+  const lineProduct = line?.productId ? await prisma.product.findUnique({ where: { id: line.productId } }) : null;
+  const chosen = quoteVehiclePhoto(line, lineProduct, quote.lead);
+  if (!chosen) return null;
+  return showcaseFromProduct(chosen.product, await embedStoredImage(chosen.imageRef, chosen.product.tenantId));
 }
 
 /**
