@@ -54,8 +54,8 @@ type Unit = {
   deliveredAt: Date | null; warrantyStartAt: Date | null; warrantyEndAt: Date | null;
   purchaseOrderId: string | null; purchaseOrderReference: string | null; supplier: string | null;
   reservedForLeadId: string | null; reservedLeadName: string | null; soldQuoteId: string | null;
-  quoteNumber: number | null; reservationExpiresAt: Date | null; depositRequiredCents: number | null;
-  depositReceivedAt: Date | null; ageDays: number;
+  quoteNumber: number | null; quoteDeliveredAt: Date | null; reservationExpiresAt: Date | null; depositRequiredCents: number | null;
+  depositReceivedAt: Date | null; depositReceivedCents: number | null; ageDays: number;
 };
 
 const statusMeta: Record<string, { label: string; tone: "neutral" | "success" | "warning" | "danger" | "info" }> = {
@@ -83,8 +83,8 @@ export default async function StockUnitPage({ params }: { params: Promise<{ id: 
       su."pdiStatus", su."pdiCompletedAt", su."arrivedAt", su."soldAt", su."deliveredAt",
       su."warrantyStartAt", su."warrantyEndAt", su."purchaseOrderId", po."reference" AS "purchaseOrderReference",
       po."supplier", su."reservedForLeadId", l."name" AS "reservedLeadName", su."soldQuoteId",
-      q."number" AS "quoteNumber", r."expiresAt" AS "reservationExpiresAt",
-      r."depositRequiredCents", r."depositReceivedAt",
+      q."number" AS "quoteNumber", q."deliveredAt" AS "quoteDeliveredAt", r."expiresAt" AS "reservationExpiresAt",
+      r."depositRequiredCents", r."depositReceivedAt", r."depositReceivedCents",
       GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (NOW() - COALESCE(su."arrivedAt", su."createdAt"))) / 86400))::int AS "ageDays"
     FROM "StockUnit" su
     JOIN "Product" p ON p."id" = su."productId"
@@ -242,7 +242,7 @@ export default async function StockUnitPage({ params }: { params: Promise<{ id: 
 
                 {unit.status === "reserved" && !unit.depositReceivedAt && (
                   <ModalTrigger label="Record deposit" title="Record reservation deposit" buttonClass="btn-secondary">
-                    <SaveForm success="Deposit recorded" resetOnSuccess={false} action={recordReservationDeposit.bind(null, unit.id)} className="space-y-4"><div><label className="label">Payment reference</label><input name="reference" className="input" /></div><SaveButton className="btn-primary">Confirm deposit received</SaveButton></SaveForm>
+                    <SaveForm success="Deposit recorded" resetOnSuccess={false} action={recordReservationDeposit.bind(null, unit.id)} className="space-y-4"><div className="grid grid-cols-2 gap-3"><div><label className="label">Amount received (R) *</label><input name="amount" inputMode="decimal" required className="input" defaultValue={unit.depositRequiredCents ? (unit.depositRequiredCents / 100).toFixed(2) : ""} placeholder="0.00" /></div><div><label className="label">Payment reference</label><input name="reference" className="input" /></div></div><SaveButton className="btn-primary">Confirm deposit received</SaveButton></SaveForm>
                   </ModalTrigger>
                 )}
 
@@ -260,9 +260,9 @@ export default async function StockUnitPage({ params }: { params: Promise<{ id: 
                   </ModalTrigger>
                 )}
 
-                {unit.status === "ready_for_delivery" && (
+                {(unit.status === "ready_for_delivery" || (unit.quoteDeliveredAt && ["allocated", "pdi", "hold"].includes(unit.status))) && (
                   <ModalTrigger label="Complete delivery" title="Customer handover" buttonClass="btn bg-emerald-700 text-white hover:bg-emerald-600">
-                    <SaveForm success="Unit delivered" resetOnSuccess={false} action={deliverStockUnit.bind(null, unit.id)} className="space-y-4"><p className="text-sm text-muted-foreground">This creates the customer&apos;s vehicle record, files the sale value and starts the warranty.</p><div><label className="label">Warranty months</label><input name="warrantyMonths" type="number" min="0" defaultValue="12" className="input" /></div><SaveButton className="btn bg-emerald-700 text-white hover:bg-emerald-600">Confirm delivered</SaveButton></SaveForm>
+                    <SaveForm success="Unit delivered" resetOnSuccess={false} action={deliverStockUnit.bind(null, unit.id)} className="space-y-4"><p className="text-sm text-muted-foreground">{unit.quoteDeliveredAt ? `Q-${unit.quoteNumber} was already handed over from the Deliveries board. This marks the cart delivered, files the sale value and starts the warranty — reusing the customer's vehicle record if it has this VIN.` : `This is the same delivery as "Mark delivered" on the Deliveries board: it marks Q-${unit.quoteNumber ?? ""} delivered, hands over every cart allocated to it, creates (or reuses) the customer's vehicle record, files the sale value and starts the warranty.`}</p><div><label className="label">Warranty months</label><input name="warrantyMonths" type="number" min="0" defaultValue="12" className="input" /></div><SaveButton className="btn bg-emerald-700 text-white hover:bg-emerald-600">Confirm delivered</SaveButton></SaveForm>
                   </ModalTrigger>
                 )}
 
@@ -299,7 +299,7 @@ export default async function StockUnitPage({ params }: { params: Promise<{ id: 
                 {unit.reservedForLeadId && <Link href={`/leads/${unit.reservedForLeadId}`} className="flex items-center gap-3 rounded-xl border border-border bg-background/30 p-3 hover:border-primary/30"><UserRoundCheck className="size-4 text-primary" /><div><p className="text-xs text-muted-foreground">Reserved lead</p><p className="font-medium">{unit.reservedLeadName}</p></div></Link>}
                 {unit.soldQuoteId && <Link href={`/quotes/${unit.soldQuoteId}`} className="flex items-center gap-3 rounded-xl border border-border bg-background/30 p-3 hover:border-primary/30"><FileCheck2 className="size-4 text-primary" /><div><p className="text-xs text-muted-foreground">Accepted quote</p><p className="font-medium">Q-{unit.quoteNumber}</p></div></Link>}
                 {unit.reservationExpiresAt && <div className="flex items-center gap-3 rounded-xl border border-border bg-background/30 p-3"><CalendarCheck className="size-4 text-amber-300" /><div><p className="text-xs text-muted-foreground">Reservation expires</p><p className="font-medium">{formatDateTime(unit.reservationExpiresAt)}</p></div></div>}
-                {unit.depositRequiredCents != null && unit.depositRequiredCents > 0 && <div className="flex items-center gap-3 rounded-xl border border-border bg-background/30 p-3"><BadgeDollarSign className="size-4 text-emerald-300" /><div><p className="text-xs text-muted-foreground">Deposit</p><p className="font-medium">{unit.depositReceivedAt ? `Received ${formatDateTime(unit.depositReceivedAt)}` : `${formatZAR(unit.depositRequiredCents)} required`}</p></div></div>}
+                {((unit.depositRequiredCents ?? 0) > 0 || unit.depositReceivedAt) && <div className="flex items-center gap-3 rounded-xl border border-border bg-background/30 p-3"><BadgeDollarSign className="size-4 text-emerald-300" /><div><p className="text-xs text-muted-foreground">Deposit</p><p className="font-medium">{unit.depositReceivedAt ? `${unit.depositReceivedCents != null ? formatZAR(unit.depositReceivedCents) : "Amount not recorded"} received ${formatDateTime(unit.depositReceivedAt)}` : `${formatZAR(unit.depositRequiredCents ?? 0)} required`}</p></div></div>}
               </div>
             </Surface>
           )}

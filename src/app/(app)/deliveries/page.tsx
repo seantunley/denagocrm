@@ -7,7 +7,12 @@ import {
   markInvoiced,
   markDepositPaid,
   scheduleDelivery,
+  rescheduleDelivery,
+  replaceInvoice,
+  replaceProofOfPayment,
+  correctDepositAmount,
 } from "@/app/actions/fulfilment";
+import ModalTrigger from "@/components/Modal";
 import ProofOfDelivery from "@/components/ProofOfDelivery";
 import { formatDate, formatZAR } from "@/lib/format";
 import { loadBillToFleets, quoteBillTo } from "@/lib/quoteBillTo";
@@ -360,10 +365,51 @@ export default async function DeliveriesPage() {
                         {(hasDoc(quote.id, "invoice") || hasDoc(quote.id, "pop") || photos > 0 || quote.deliveryScheduledFor) && (
                           <div className="mt-2 flex flex-wrap gap-1.5">
                             {hasDoc(quote.id, "invoice") && <span className={chip}><FileText className="size-2.5" /> Invoice</span>}
-                            {hasDoc(quote.id, "pop") && <span className={chip}><Wallet className="size-2.5" /> POP</span>}
+                            {hasDoc(quote.id, "pop") && <span className={chip}><Wallet className="size-2.5" /> POP{quote.depositPaidCents != null ? ` · ${formatZAR(quote.depositPaidCents)}` : ""}</span>}
                             {photos > 0 && <span className={chip}>📷 {photos}</span>}
                             {quote.deliveryScheduledFor && (
                               <span className={chip}><Truck className="size-2.5" /> {formatDate(quote.deliveryScheduledFor)}</span>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Corrections: a wrong file, amount or date is fixable where it was entered. */}
+                        {canManage && (quote.invoicedAt || quote.depositPaidAt || quote.deliveryScheduledFor) && (
+                          <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
+                            {quote.invoicedAt && (
+                              <ModalTrigger label="Replace invoice" title={`Replace the invoice — Q-${quote.number}`} buttonClass="text-primary hover:underline">
+                                <SaveForm success="Invoice replaced" resetOnSuccess={false} action={replaceInvoice.bind(null, quote.id)} className="space-y-3">
+                                  <p className="text-xs text-muted-foreground">The current invoice is kept in the quote&apos;s document history, marked as replaced.</p>
+                                  <input type="file" name="file" required accept=".pdf,image/*" className="block w-full text-xs text-muted-foreground file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
+                                  <SaveButton className="btn-primary btn-sm">Upload replacement</SaveButton>
+                                </SaveForm>
+                              </ModalTrigger>
+                            )}
+                            {quote.depositPaidAt && (
+                              <ModalTrigger label="Correct deposit" title={`Deposit — Q-${quote.number}`} buttonClass="text-primary hover:underline">
+                                <div className="space-y-5">
+                                  <SaveForm success="Deposit amount updated" resetOnSuccess={false} action={correctDepositAmount.bind(null, quote.id)} className="space-y-2">
+                                    <label className="label">Amount received (R)</label>
+                                    <input name="amount" inputMode="decimal" required className="input" defaultValue={quote.depositPaidCents != null ? (quote.depositPaidCents / 100).toFixed(2) : ""} placeholder="0.00" />
+                                    <SaveButton className="btn-primary btn-sm">Save amount</SaveButton>
+                                  </SaveForm>
+                                  <SaveForm success="Proof of payment replaced" resetOnSuccess={false} action={replaceProofOfPayment.bind(null, quote.id)} className="space-y-2 border-t border-border pt-4">
+                                    <label className="label">Replace proof of payment</label>
+                                    <p className="text-xs text-muted-foreground">The current file is kept in the quote&apos;s document history, marked as replaced.</p>
+                                    <input type="file" name="file" required accept=".pdf,image/*" className="block w-full text-xs text-muted-foreground file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
+                                    <SaveButton className="btn-secondary btn-sm">Upload replacement</SaveButton>
+                                  </SaveForm>
+                                </div>
+                              </ModalTrigger>
+                            )}
+                            {quote.deliveryScheduledFor && (
+                              <ModalTrigger label="Reschedule" title={`Reschedule delivery — Q-${quote.number}`} buttonClass="text-primary hover:underline">
+                                <SaveForm success="Delivery rescheduled" resetOnSuccess={false} action={rescheduleDelivery.bind(null, quote.id)} className="space-y-3">
+                                  <p className="text-xs text-muted-foreground">Currently {formatDate(quote.deliveryScheduledFor)}. The workshop calendar entry moves with it.</p>
+                                  <input type="date" name="date" required className="input" />
+                                  <SaveButton className="btn-primary btn-sm">Move delivery</SaveButton>
+                                </SaveForm>
+                              </ModalTrigger>
                             )}
                           </div>
                         )}
@@ -390,6 +436,7 @@ export default async function DeliveriesPage() {
                         )}
                         {canManage && column.key === "deposit" && (
                           <SaveForm success="Deposit recorded" resetOnSuccess={false} action={markDepositPaid.bind(null, quote.id)} className="mt-2.5 space-y-1.5">
+                            <input name="amount" inputMode="decimal" required placeholder="Amount received (R)" aria-label="Deposit amount received in rand" className="input text-xs py-1.5" />
                             <input type="file" name="file" required accept=".pdf,image/*" className="block w-full text-xs text-muted-foreground file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
                             <SaveButton className="btn-primary btn-sm w-full">Deposit paid</SaveButton>
                           </SaveForm>

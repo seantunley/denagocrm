@@ -49,14 +49,28 @@ export type VehicleToRegister = {
   color: string;
 };
 
+/** Stock statuses that mean the unit has been handed over (and has its vehicle). */
+export const DELIVERED_STOCK_STATUSES = ["delivered", "sold"] as const;
+
 /**
  * Expand a delivered quote's lines into one entry per physical vehicle.
  *
  * EXPANDED, not counted. The caller walks the customer through registrations one
  * at a time, and two units of different models must preselect different products
  * — a bare count could not express that.
+ *
+ * `fromStock` — the quote's stock units that are already delivered. Each one got
+ * its vehicle record automatically at delivery (lib/quoteDelivery.ts), so it is
+ * taken off the queue, one entry per unit of the same product. Without this the
+ * customer was asked to register a cart the stock flow had already created, and
+ * ended up with two vehicle records for one cart.
  */
-export function vehiclesAwaitingRegistration(lines: DeliveryQuoteLine[]): VehicleToRegister[] {
+export function vehiclesAwaitingRegistration(
+  lines: DeliveryQuoteLine[],
+  fromStock: readonly { productId: string }[] = [],
+): VehicleToRegister[] {
+  const covered = new Map<string, number>();
+  for (const unit of fromStock) covered.set(unit.productId, (covered.get(unit.productId) ?? 0) + 1);
   const queue: VehicleToRegister[] = [];
   for (const line of lines) {
     if (!line.productId) continue;
@@ -70,6 +84,11 @@ export function vehiclesAwaitingRegistration(lines: DeliveryQuoteLine[]): Vehicl
     // a line that exists was sold at least once.
     const units = Math.max(1, Math.floor(line.qty));
     for (let i = 0; i < units; i++) {
+      const left = covered.get(line.productId) ?? 0;
+      if (left > 0) {
+        covered.set(line.productId, left - 1);
+        continue;
+      }
       queue.push({
         productId: line.productId,
         model: line.product?.name ?? line.description,
