@@ -1279,7 +1279,7 @@ export function QuoteEditorDialog({
                             actually goes out — so getting as far as the
                             countersign pad and stopping doesn't cost a revision.
                           */}
-                          <Button type="button" variant="outline" onClick={() => save("draft", { thenSign: true })} disabled={isPending}><PenLine />Send for signature</Button>
+                          <Button type="button" variant="outline" onClick={() => save("draft", { thenSign: true })} disabled={isPending}><PenLine />Continue to signing</Button>
                         </>
                       ) : (
                         <div className="flex items-center gap-2 text-sm text-muted-foreground"><LockKeyhole className="size-4" />{signing?.locked ? "Out for signature — void the request below to edit." : "This version is already frozen."}</div>
