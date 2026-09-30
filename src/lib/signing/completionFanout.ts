@@ -1,6 +1,8 @@
 import "server-only";
 import { prisma } from "@/lib/db";
 import { sendEmail } from "@/lib/email";
+import { signingRecord } from "@/lib/outboundMessageLog";
+import { signingEmailContent } from "./signingEmail";
 import type { SweepTenantWhere } from "./recoveryScope";
 
 /**
@@ -79,6 +81,8 @@ export function describeError(err: unknown): string {
  * dormant (which is every environment today).
  */
 export async function deliverCompletionEmails(opts: {
+  /** The request: whose template and brand the email uses (signingEmail.ts), and which customer's timeline each copy is recorded on. */
+  requestId: string;
   title: string;
   pdf: Buffer;
   recipients: FanoutRecipient[];
@@ -95,17 +99,23 @@ export async function deliverCompletionEmails(opts: {
       continue; // already has it; re-sending a signed contract is not a fix
     }
 
+    const email = await signingEmailContent("completed", {
+      requestId: opts.requestId, title: opts.title, recipientName: recipient.name,
+    });
     const result = await sendEmail({
       to: recipient.email,
-      subject: `Completed & signed: ${opts.title}`,
-      text: `Hi ${recipient.name},\n\nEveryone has signed "${opts.title}". The final sealed PDF is attached.\n\nDenago Cape Town`,
+      subject: email.subject,
+      text: email.text,
+      html: email.html,
       attachments: [{ filename: `${opts.title}.pdf`, content: opts.pdf, contentType: "application/pdf" }],
+      record: await signingRecord(opts.requestId, { email: recipient.email, label: "Signed document copy" }),
     });
 
     // THE FIX. sendEmail reports failure in its return value and never throws,
     // so this is the only place the difference can be seen.
     if (!result.ok) {
-      failures.push(`${recipient.email}: ${result.error ?? "send failed"}`);
+      // Recipient id, not address: these strings end up in ErrorLog.
+      failures.push(`recipient ${recipient.id}: ${result.error ?? "send failed"}`);
       continue;
     }
 
@@ -120,7 +130,7 @@ export async function deliverCompletionEmails(opts: {
       // delivery one, and counting it as a failure would withhold the completion
       // marker and mail this person their contract a second time. Log and move on.
       console.error(
-        `[signing] delivered the sealed PDF to ${recipient.email} but could not record it`,
+        `[signing] delivered the sealed PDF to recipient ${recipient.id} but could not record it`,
         err,
       );
     }

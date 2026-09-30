@@ -3,6 +3,8 @@ import crypto from "crypto";
 import { basePrisma } from "@/lib/db";
 import { readFile } from "@/lib/storage";
 import { sendEmail } from "@/lib/email";
+import { signingRecord } from "@/lib/outboundMessageLog";
+import { signingEmailContent } from "./signingEmail";
 import { logError } from "@/lib/errorLog";
 import { runInTenantScope } from "@/lib/tenantScope";
 import { configuredSigningCertificateInfo, sealedPdfSignature } from "@/lib/pdf/seal";
@@ -191,13 +193,19 @@ async function executeCompletionEmail(job: SigningJob): Promise<void> {
   const request = await completionRequest(job);
   if (!request.signedPdfRef) throw new Error("Completed request has no sealed PDF reference");
   const pdf = await readFile(request.signedPdfRef);
+  const email = await signingEmailContent("completed", {
+    requestId: request.id, title: request.title, recipientName: recipient.name,
+  });
   const result = await sendEmail({
     to: recipient.email,
-    subject: `Completed & signed: ${request.title}`,
-    text: `Hi ${recipient.name},\n\nEveryone has signed "${request.title}". The final sealed PDF is attached.\n\nDenago Cape Town`,
+    subject: email.subject,
+    text: email.text,
+    html: email.html,
     attachments: [{ filename: `${request.title}.pdf`, content: pdf, contentType: "application/pdf" }],
+    record: await signingRecord(request.id, { email: recipient.email, label: "Signed document copy" }),
   });
-  if (!result.ok) throw new Error(result.error || `SMTP did not accept ${recipient.email}`);
+  // Recipient id, not address: a job error is persisted and logged.
+  if (!result.ok) throw new Error(result.error || `SMTP did not accept recipient ${recipient.id}`);
 
   await basePrisma.$executeRaw`
     UPDATE "SignatureRecipient"

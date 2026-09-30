@@ -144,7 +144,7 @@ async function fileSupportEmail(mailbox: Mailbox, parsed: ParsedMail, fromEmail:
   const when = parsed.date ?? new Date();
   const idemKey = emailIdemKey(messageId, transportKey);
 
-  let outcome: { isNew: boolean; caseId: string; caseNumber: bigint; contactLabel: string } | null;
+  let outcome: { isNew: boolean; caseId: string; caseNumber: bigint; contactLabel: string; contactId?: string } | null;
   try {
     outcome = await prisma.$transaction(async (tx) => {
       // Idempotency claim — already filed (retry / replay after a poison message).
@@ -206,7 +206,7 @@ async function fileSupportEmail(mailbox: Mailbox, parsed: ParsedMail, fromEmail:
         select: { id: true, number: true },
       });
       await tx.customerCaseMessage.create({ data: { ...messageBase, caseId: created.id } });
-      return { isNew: true, caseId: created.id, caseNumber: created.number, contactLabel: contactName(contact) };
+      return { isNew: true, caseId: created.id, caseNumber: created.number, contactLabel: contactName(contact), contactId: contact.id };
     });
   } catch (e) {
     // A concurrent run filed this same email first — its unique sourceMessageId
@@ -222,6 +222,7 @@ async function fileSupportEmail(mailbox: Mailbox, parsed: ParsedMail, fromEmail:
       to: fromEmail,
       subject: `Re: ${rawSubject} [C-${outcome.caseNumber}]`,
       text: `${mailbox.autoReplyBody}${sig}`,
+      record: { contactId: outcome.contactId, label: `Support auto-reply (C-${outcome.caseNumber})` },
     }).catch(() => {});
   }
 
