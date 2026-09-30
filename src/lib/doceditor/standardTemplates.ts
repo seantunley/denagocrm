@@ -213,7 +213,7 @@ function agreementTemplate(): DocumentModel {
 }
 
 // ── Indemnity + warranty claim: laid out like their legacy print pages ──
-const SLATE = "#64748b";
+// (SLATE is declared once, above, with the invoice/agreement helpers.)
 
 /** Small text, as the legacy meta strip under the banner. */
 function small(block: DocumentBlock): DocumentBlock {
@@ -228,8 +228,13 @@ function note(value: string): DocumentBlock {
   return small(block);
 }
 
-/** A signature line with its label beneath. Paragraphs, because "\n" in a text leaf does not break. */
-function signLine(label: string): DocumentBlock {
+/**
+ * A SMALL signature line with its label beneath, as the indemnity and warranty
+ * legacy pages print it. Paragraphs, because "\n" in a text leaf does not break.
+ * Distinct from signLine (invoice/agreement): #673 and #674 each added a helper
+ * by that name, and the merge kept both.
+ */
+function smallSignLine(label: string): DocumentBlock {
   const block = newBlock("text");
   if (block.type === "text") {
     block.value = ["", "", "________________________________________", label].map((line) => ({
@@ -261,7 +266,7 @@ function indemnityTemplate(): DocumentModel {
       "I, the undersigned, acknowledge that I am test-driving the vehicle entirely at my own risk. I confirm that I hold a valid driver's licence, will follow all instructions given by {{company.name}} staff, and accept liability for any damage caused by my negligence during the test drive. {{company.name}}, its owners and employees are indemnified against any claim for injury, loss or damage arising from the test drive, to the fullest extent permitted by law.",
       SLATE,
     )],
-    [signLine("Driver signature · Date"), signLine("For {{company.name}} · Date")],
+    [smallSignLine("Driver signature · Date"), smallSignLine("For {{company.name}} · Date")],
     [footer()],
   ]);
 }
@@ -340,7 +345,7 @@ function warrantyClaimTemplate(): DocumentModel {
     ],
     [infoCard("REPORTED FAULT", "", "{{claim.description}}", SLATE)],
     [resolution],
-    [signLine("Customer · Date"), signLine("For {{company.name}} · Date")],
+    [smallSignLine("Customer · Date"), smallSignLine("For {{company.name}} · Date")],
     [footer()],
   ]);
 }
