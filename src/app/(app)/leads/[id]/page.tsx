@@ -19,6 +19,7 @@ import { composerReplyToDefault } from "@/lib/replyToDefault";
 import LeadTimeline from "@/components/LeadTimeline";
 import { auditDetailFor } from "@/lib/auditDetailQuery";
 import ConfirmDelete from "@/components/ConfirmDelete";
+import AddToContactsButton from "@/components/AddToContactsButton";
 import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import MarkLeadViewed from "@/components/MarkLeadViewed";
 import WhatsAppPanel from "@/components/WhatsAppPanel";
@@ -336,6 +337,18 @@ export default async function LeadDetailPage({
                 content: (
                   <div className="card max-w-xl">
                     <h2 className="font-semibold mb-3">Customer</h2>
+                    {!lead.contact && (
+                      // The one-click path for a new customer. Before this, creating a
+                      // customer from a lead was only on the leads LIST, so from the lead
+                      // itself the only option was linking someone who already existed.
+                      <div className="mb-4 rounded-lg border border-orange-500/30 bg-orange-500/[0.06] p-3">
+                        <p className="mb-2 text-sm">
+                          Not a customer yet. Create one from this lead&apos;s name, email and phone
+                          (an existing customer with the same email or phone is linked instead).
+                        </p>
+                        <AddToContactsButton leadId={lead.id} label="Create customer from this lead" />
+                      </div>
+                    )}
                     {lead.contact && (
                       <Link
                         href={`/contacts/${lead.contact.id}`}

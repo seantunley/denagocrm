@@ -119,9 +119,12 @@ function bandBackground(bgCss: string, raw: string, ctx: RenderCtx, overlay: str
   const layers = usable ? `${overlay},url('${img}')` : `linear-gradient(115deg,${bgCss} 0%,${bgCss} 45%,#16233d 100%)`;
   return `background-color:${bgCss};background-image:${layers};background-size:cover;background-position:center;background-repeat:no-repeat;${KEEP_BG}`;
 }
-const HEADER_OVERLAY = "linear-gradient(90deg,rgba(11,18,32,.86) 0%,rgba(11,18,32,.55) 34%,rgba(11,18,32,.18) 68%,rgba(11,18,32,.32) 100%),linear-gradient(rgba(11,18,32,.08),rgba(11,18,32,.08))";
-const FOOTER_OVERLAY = "linear-gradient(90deg,rgba(11,18,32,.82) 0%,rgba(11,18,32,.5) 40%,rgba(11,18,32,.42) 100%),linear-gradient(rgba(11,18,32,.12),rgba(11,18,32,.12))";
-const TEXT_SHADOW = "text-shadow:0 1px 3px rgba(0,0,0,.65),0 0 10px rgba(0,0,0,.35);";
+// Legibility comes from the overlay alone. A blurred text-shadow was tried and
+// Chrome's PDF output (and some viewers) rasterise each shadowed run into a
+// visible grey rectangle behind the logo, tagline, title and footer lines.
+const HEADER_OVERLAY = "linear-gradient(90deg,rgba(11,18,32,.9) 0%,rgba(11,18,32,.66) 34%,rgba(11,18,32,.3) 68%,rgba(11,18,32,.5) 100%),linear-gradient(rgba(11,18,32,.1),rgba(11,18,32,.1))";
+const FOOTER_OVERLAY = "linear-gradient(90deg,rgba(11,18,32,.88) 0%,rgba(11,18,32,.66) 40%,rgba(11,18,32,.6) 100%),linear-gradient(rgba(11,18,32,.14),rgba(11,18,32,.14))";
+const TEXT_SHADOW = "";
 
 // ── vehicle ─────────────────────────────────────────────────────────
 /** Placeholder the template preview and the editor canvas show in place of a real vehicle. */
@@ -225,16 +228,26 @@ function lineItemsHtml(b: LineItemsBlock, ctx: RenderCtx): string {
   const rows = ctx?.items ?? [];
   const cols = ctx?.bound ? b.columns.filter((c) => evaluateCondition(c.showIf, ctx.vars)) : b.columns;
   const border = "1px solid #e5e7eb";
+  // Fixed column widths, shared by header and body. With auto layout and
+  // nowrap headers, a long header ("TOTAL (INCL. VAT)") set its column's width,
+  // pushed the table past the page edge, and the header no longer lined up with
+  // the rows beneath. Description takes what the numeric columns leave.
+  // Qty 9%; the money columns share 50%; the first (description) column gets the rest.
+  const moneyCols = cols.filter((c, i) => i > 0 && c.key !== "qty").length;
+  const widths = cols.map((c, i) => (i === 0 ? null : c.key === "qty" ? 9 : Math.floor(50 / Math.max(1, moneyCols))));
+  const colgroup = `<colgroup>${cols.map((_, i) => `<col${widths[i] != null ? ` style="width:${widths[i]}%"` : ""}>`).join("")}</colgroup>`;
   const head = cols.map((c, i) => {
     const radius = i === 0 ? "border-top-left-radius:6px;" : i === cols.length - 1 ? "border-top-right-radius:6px;" : "";
-    return `<th style="text-align:${c.align};background:${cssColor(b.headerBg, INK)};color:${cssColor(b.headerColor, "#ffffff")};padding:9px 12px;font-size:7.5pt;font-weight:800;letter-spacing:.4px;text-transform:uppercase;white-space:nowrap;${radius}${KEEP_BG}">${withQualifier(c.header, "font-size:6pt;font-weight:600")}</th>`;
+    // A faint divider in the header on the same edges as the body's cell borders.
+    const divider = i ? "border-left:1px solid rgba(255,255,255,.14);" : "";
+    return `<th style="text-align:${c.align};background:${cssColor(b.headerBg, INK)};color:${cssColor(b.headerColor, "#ffffff")};padding:9px 12px;font-size:7.5pt;font-weight:800;letter-spacing:.4px;text-transform:uppercase;line-height:1.25;${divider}${radius}${KEEP_BG}">${withQualifier(c.header, "font-size:6pt;font-weight:600")}</th>`;
   }).join("");
   const cell = (c: (typeof cols)[number], i: number, row: number, value: string) =>
     `<td style="text-align:${c.align};padding:7px 12px;font-size:9pt;color:#1f2937;border-bottom:${border};${i ? `border-left:${border};` : `border-left:${border};`}${i === cols.length - 1 ? `border-right:${border};` : ""}${row % 2 ? `background:#f8fafc;${KEEP_BG}` : ""}">${esc(value)}</td>`;
   const body = rows.length
     ? rows.map((r, ri) => `<tr>${cols.map((c, i) => cell(c, i, ri, lineItemCell(c.key, r, b.vatRate))).join("")}</tr>`).join("")
     : `<tr><td colspan="${cols.length}" style="padding:9px 12px;color:#94a3b8;font-size:9pt;border:${border};border-top:none">Line items appear here when linked to a record</td></tr>`;
-  return `<table style="width:100%;border-collapse:separate;border-spacing:0;margin:8px 0 0"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+  return `<table style="width:100%;table-layout:fixed;border-collapse:separate;border-spacing:0;margin:8px 0 0">${colgroup}<thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
 function termsHtml(b: TermsBlock): string {
