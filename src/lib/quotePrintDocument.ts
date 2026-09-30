@@ -7,6 +7,7 @@ import { renderDocumentHtml } from "@/lib/doceditor/serialize";
 import { attachQuoteFooterToFinalScreenSheet } from "@/lib/quoteFooterSheet";
 import { bindCtx, logoDataUri, signedFieldStamps } from "@/lib/signing/render";
 import { parseFrozenBrand } from "@/lib/signing/frozenBrand";
+import { embedDocImages } from "@/lib/doceditor/renderGlobals";
 
 /**
  * The printed quote, rendered from the SAME document the customer signs.
@@ -42,7 +43,7 @@ export async function renderQuotePrintHtml(opts: {
   const request = await prisma.signatureRequest.findFirst({
     where: { quoteId: opts.quoteId, deletedAt: null, status: "completed" },
     orderBy: { createdAt: "desc" },
-    select: { id: true, snapshotJson: true, brandJson: true },
+    select: { id: true, snapshotJson: true, brandJson: true, tenantId: true },
   });
   const frozen = request ? parseFrozenBrand(request.brandJson) : null;
   const ctx = await bindCtx(opts.quoteId, null, frozen);
@@ -59,7 +60,11 @@ export async function renderQuotePrintHtml(opts: {
   // ?tpl= still wins: that is Document Studio previewing a LAYOUT against real
   // data, and it must show the layout that was asked for.
   if (!opts.templateId && request) {
-    const signedDoc = parseDocument(request.snapshotJson);
+    const parsed = parseDocument(request.snapshotJson);
+    // Uploaded images are private files, and this page is also rendered HEADLESS
+    // for the customer's PDF, where nothing has a session to fetch them with — so
+    // they are embedded, owner-checked against the signed request's workspace.
+    const signedDoc = parsed && (await embedDocImages(parsed, request.tenantId ?? undefined));
     if (signedDoc) {
       const stamps = await signedFieldStamps(request.id, "");
       const html = renderDocumentHtml(signedDoc, ctx, frozen?.logoUrl ?? logoDataUri(), {
@@ -86,7 +91,12 @@ export async function renderQuotePrintHtml(opts: {
 
   const stampedFields = request ? await signedFieldStamps(request.id, "") : undefined;
 
-  const html = renderDocumentHtml(read.doc, ctx, logoDataUri(), {
+  // Embedded for the same reason, owner-checked against the TEMPLATE's workspace:
+  // that is where its uploads were filed (uploadDocEditorImage), and RLS already
+  // confines the template and the quote to one workspace. The quote is not
+  // re-loaded here for its tenant — bindCtx is this page's one quote read.
+  const doc = await embedDocImages(read.doc, template.tenantId ?? undefined);
+  const html = renderDocumentHtml(doc, ctx, logoDataUri(), {
     hideOverlays: !stampedFields?.length,
     stampedFields: stampedFields?.length ? stampedFields : undefined,
     toolbarHtml: opts.toolbarHtml,
