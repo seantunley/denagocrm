@@ -272,6 +272,10 @@ function warrantyClaimTemplate(): DocumentModel {
  * flowed content above is. The flow therefore has a height budget: three
  * line-item/fee rows fit above the bottom band on one A4 sheet.
  */
+/** Line-item/fee rows that fit above the terms/acceptance cards, and above the footer band. */
+export const SHOWCASE_ROWS_ABOVE_CARDS = 3;
+export const SHOWCASE_ROWS_ABOVE_FOOTER = 9;
+
 export function showcaseQuoteTemplate(): DocumentModel {
   const PAGE = PAGE_SIZES.A4;
   const inset = SHOWCASE_INSET;
@@ -345,11 +349,10 @@ export function showcaseQuoteTemplate(): DocumentModel {
     padded([items]),
     padded([totals]),
   ]);
-  page.floatingBlocks = [
-    { id: uid(), x: inset, y: cardsY, width: cardW, block: quoteTerms },
-    { id: uid(), x: acceptX, y: cardsY, width: cardW, block: newBlock("acceptance") },
-    { id: uid(), x: 0, y: footerY, width: PAGE.w, block: footerBand },
-  ];
+  const termsFloat = { id: uid(), x: inset, y: cardsY, width: cardW, block: quoteTerms };
+  const acceptFloat = { id: uid(), x: acceptX, y: cardsY, width: cardW, block: newBlock("acceptance") };
+  const footerFloat = { id: uid(), x: 0, y: footerY, width: PAGE.w, block: footerBand };
+  page.floatingBlocks = [termsFloat, acceptFloat, footerFloat];
   page.overlayFields = [
     newOverlayField("signature", {
       recipientId: customer.id, label: "Customer signature",
@@ -359,6 +362,14 @@ export function showcaseQuoteTemplate(): DocumentModel {
       recipientId: customer.id, label: "Date",
       anchor: { mode: "page", blockId: null, x: lineX, y: sigTop + g.sigRowH + 1 }, width: Math.min(160, lineW), height: g.dateRowH - 2,
     }),
+  ];
+  // Longer quotes: when the table + totals would reach the cards, the cards
+  // (with the signature and date fields) continue at the top of a second page;
+  // when they would also reach the footer band, it follows them there. The row
+  // counts are measured against this layout in headless Chrome (see the PR).
+  page.overflowGroups = [
+    { maxItems: SHOWCASE_ROWS_ABOVE_CARDS, floatIds: [termsFloat.id, acceptFloat.id], fieldIds: page.overlayFields.map((f) => f.id), topOnNextPage: inset },
+    { maxItems: SHOWCASE_ROWS_ABOVE_FOOTER, floatIds: [footerFloat.id], fieldIds: [] },
   ];
 
   return {

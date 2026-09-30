@@ -16,6 +16,7 @@ import { plateToHtmlBody } from "@/lib/docbuilder/plateSerialize";
 import { evaluateCondition } from "@/lib/docbuilder/expr";
 import { brandFooterContent, SOCIAL_ICON_PATHS } from "@/lib/companyBrand";
 import { showcaseBlockHtml, showcaseLookHtml } from "./showcaseRender";
+import { boundRowCount, resolveOverflowGroups } from "./overflow";
 
 export type RenderCtx = {
   tokens: Record<string, string>;
@@ -373,7 +374,9 @@ export function renderEmailHtml(doc: DocumentModel, ctx: RenderCtx, logoDataUri?
  * sheet-relative coordinates (matching the editor's origin — no margin subtract).
  * Overlay fields are intentionally omitted; the client renders live controls.
  */
-export function renderSigningSheets(doc: DocumentModel, ctx: RenderCtx, logoDataUri?: string): { width: number; height: number; margin: number; css: string; pages: string[] } {
+export function renderSigningSheets(input: DocumentModel, ctx: RenderCtx, logoDataUri?: string): { width: number; height: number; margin: number; css: string; pages: string[] } {
+  // A no-op for a signing snapshot, whose overflow was resolved at send time.
+  const doc = resolveOverflowGroups(input, boundRowCount(ctx));
   const m = doc.style.margin;
   const size = PAGE_SIZES[doc.style.pageSize];
   const font = fontStack(doc.style.fontFamily);
@@ -400,7 +403,7 @@ export function renderSigningSheets(doc: DocumentModel, ctx: RenderCtx, logoData
 }
 
 export function renderDocumentHtml(
-  doc: DocumentModel,
+  input: DocumentModel,
   ctx: RenderCtx,
   logoDataUri?: string,
   opts?: {
@@ -416,6 +419,9 @@ export function renderDocumentHtml(
     toolbarHtml?: string;
   },
 ): string {
+  // Bottom-pinned content that the bound line items would run into moves to a
+  // following page (overflow.ts). A no-op for a signing snapshot, resolved at send.
+  const doc = resolveOverflowGroups(input, boundRowCount(ctx));
   const font = fontStack(doc.style.fontFamily);
   const m = doc.style.margin;
   const header = doc.header.length ? doc.header.map((b) => blockHtml(b, ctx, doc.style, logoDataUri)).join("") : "";

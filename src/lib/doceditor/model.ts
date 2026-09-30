@@ -415,11 +415,29 @@ export const floatingBlockSchema = z.object({
 export type FloatingBlock = z.infer<typeof floatingBlockSchema>;
 
 // ── page / document ─────────────────────────────────────────────────
+/**
+ * Content pinned to the foot of a page that must MOVE to a following page when
+ * the flowed content above it would run into it — the showcase quote's terms /
+ * acceptance cards (with the customer's signature and date fields) and its
+ * footer band. `maxItems` is how many bound line-item rows still fit above it.
+ * Resolved by ./overflow.ts: at send time into the signing snapshot (so the
+ * signed layout is fixed), and at render time for live documents.
+ */
+export const overflowGroupSchema = z.object({
+  maxItems: z.number(),
+  floatIds: z.array(z.string()).default([]),
+  fieldIds: z.array(z.string()).default([]),
+  /** When moved, lift the group so its top sits here; unset keeps its position. */
+  topOnNextPage: z.number().optional(),
+});
+export type OverflowGroup = z.infer<typeof overflowGroupSchema>;
+
 export const pageSchema = z.object({
   id: z.string(),
   rows: z.array(rowSchema).default([]),
   overlayFields: z.array(overlayFieldSchema).default([]),
   floatingBlocks: z.array(floatingBlockSchema).default([]),
+  overflowGroups: z.array(overflowGroupSchema).optional(),
 });
 export type DocumentPage = z.infer<typeof pageSchema>;
 

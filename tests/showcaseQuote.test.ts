@@ -5,7 +5,8 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { parseDocument } from "../src/lib/doceditor/model";
 import { renderDocumentHtml, renderSigningSheets, type RenderCtx } from "../src/lib/doceditor/serialize";
-import { showcaseQuoteTemplate } from "../src/lib/doceditor/standardTemplates";
+import { SHOWCASE_ROWS_ABOVE_CARDS, SHOWCASE_ROWS_ABOVE_FOOTER, showcaseQuoteTemplate } from "../src/lib/doceditor/standardTemplates";
+import { resolveOverflowGroups } from "../src/lib/doceditor/overflow";
 import { ACCEPTANCE_GEOMETRY, SHOWCASE_INSET, acceptanceHeight } from "../src/lib/doceditor/showcaseRender";
 import { SHOWCASE_BAND_ASSETS } from "../src/lib/doceditor/showcaseAssets";
 import { existsSync } from "node:fs";
@@ -254,6 +255,48 @@ test("one content column: every inset section shares the same left and right edg
   assert.equal(terms.y, acceptance.y, "the two cards line up");
   assert.deepEqual([footer.x, footer.width], [0, W], "footer band is full-bleed");
   assert.ok(footer.y + 100 <= 1122.52, "footer band ends on the sheet");
+});
+
+test("long quotes: the cards (with signature + date) and then the footer move to page 2 — never overlapped", () => {
+  const rowsCtx = (n: number): RenderCtx => ({ ...ctx({})!, items: Array.from({ length: n }, (_, i) => ({ cells: [{ value: `Line ${i}` }, { value: "1" }, { value: "R 1,00" }, { value: "R 1,00" }] })) });
+  const template = showcaseQuoteTemplate();
+  const acceptOf = (page: (typeof template.pages)[number]) => page.floatingBlocks.find((f) => f.block.type === "acceptance");
+  const g = ACCEPTANCE_GEOMETRY;
+  for (const n of [0, 1, 3, 4, 6, 9, 10]) {
+    const doc = resolveOverflowGroups(template, n);
+    assert.ok(doc.pages.every((p) => !p.overflowGroups), "resolved documents carry no groups");
+    const cardsMoved = n > SHOWCASE_ROWS_ABOVE_CARDS;
+    const footerMoved = n > SHOWCASE_ROWS_ABOVE_FOOTER;
+    assert.equal(doc.pages.length, cardsMoved ? 2 : 1, `${n} rows: page count`);
+    const cardsPage = doc.pages[cardsMoved ? 1 : 0];
+    const card = acceptOf(cardsPage);
+    assert.ok(card, `${n} rows: acceptance card on page ${cardsMoved ? 2 : 1}`);
+    // The customer's fields travel WITH the card and stay on its lines.
+    const sig = cardsPage.overlayFields.find((f) => f.kind === "signature")!;
+    const date = cardsPage.overlayFields.find((f) => f.kind === "date")!;
+    const sigLineTop = card.y + g.pad + g.headerH + g.headerGap + g.textH + g.nameRowH;
+    assert.ok(sig.anchor.y >= sigLineTop && sig.anchor.y + sig.height <= sigLineTop + g.sigRowH, `${n} rows: signature on its line`);
+    assert.ok(date.anchor.y >= sigLineTop + g.sigRowH && date.anchor.y + date.height <= sigLineTop + g.sigRowH + g.dateRowH, `${n} rows: date on its line`);
+    if (cardsMoved) assert.equal(card.y, SHOWCASE_INSET, "lifted to the top of page 2");
+    const footerPage = doc.pages[footerMoved ? 1 : 0];
+    assert.ok(footerPage.floatingBlocks.some((f) => f.block.type === "footerBand"), `${n} rows: footer band placed`);
+    assert.equal(doc.pages.flatMap((p) => p.floatingBlocks).length, 3, "nothing lost or duplicated");
+
+    // Rendered: one sheet per page, in print and on the signing surface.
+    const html = renderDocumentHtml(template, rowsCtx(n));
+    assert.equal(html.split('class="doc-page"').length - 1, doc.pages.length);
+    assert.equal(renderSigningSheets(template, rowsCtx(n)).pages.length, doc.pages.length);
+  }
+
+  // Resolved once (the signing snapshot) it is static: more rows later cannot
+  // move the card away from the signature fields already created for it.
+  const snapshot = parseDocument(JSON.parse(JSON.stringify(resolveOverflowGroups(template, 2))))!;
+  assert.equal(renderSigningSheets(snapshot, rowsCtx(8)).pages.length, 1);
+  assert.deepEqual(resolveOverflowGroups(snapshot, 8), snapshot);
+
+  // Send time counts the rows exactly as the table is built: charged lines + fees.
+  const loader = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../src/lib/docbuilder/vehicleShowcaseLoad.ts"), "utf8");
+  assert.match(loader, /resolveOverflowGroups\(doc, quote \? includedLines\(quote\.items\)\.length \+ feeRows\(quote\.fees\)\.length : 0\)/);
 });
 
 test("the send and snapshot-render paths are wired to the frozen vehicle", () => {

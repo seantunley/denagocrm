@@ -213,7 +213,7 @@ function lineItemsHtml(b: LineItemsBlock, ctx: RenderCtx): string {
     return `<th style="text-align:${c.align};background:${cssColor(b.headerBg, INK)};color:${cssColor(b.headerColor, "#ffffff")};padding:9px 12px;font-size:7.5pt;font-weight:800;letter-spacing:.4px;text-transform:uppercase;white-space:nowrap;${radius}${KEEP_BG}">${withQualifier(c.header, "font-size:6pt;font-weight:600")}</th>`;
   }).join("");
   const cell = (c: (typeof cols)[number], i: number, row: number, value: string) =>
-    `<td style="text-align:${c.align};padding:9px 12px;font-size:9pt;color:#1f2937;border-bottom:${border};${i ? `border-left:${border};` : `border-left:${border};`}${i === cols.length - 1 ? `border-right:${border};` : ""}${row % 2 ? `background:#f8fafc;${KEEP_BG}` : ""}">${esc(value)}</td>`;
+    `<td style="text-align:${c.align};padding:7px 12px;font-size:9pt;color:#1f2937;border-bottom:${border};${i ? `border-left:${border};` : `border-left:${border};`}${i === cols.length - 1 ? `border-right:${border};` : ""}${row % 2 ? `background:#f8fafc;${KEEP_BG}` : ""}">${esc(value)}</td>`;
   const body = rows.length
     ? rows.map((r, ri) => `<tr>${cols.map((c, i) => cell(c, i, ri, lineItemCell(c.key, r, b.vatRate))).join("")}</tr>`).join("")
     : `<tr><td colspan="${cols.length}" style="padding:9px 12px;color:#94a3b8;font-size:9pt;border:${border};border-top:none">Line items appear here when linked to a record</td></tr>`;

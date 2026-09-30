@@ -1,7 +1,8 @@
 import "server-only";
 import { prisma } from "@/lib/db";
 import { embedStoredImage } from "@/lib/storedImage";
-import { includedLines } from "@/lib/pricing";
+import { feeRows, includedLines } from "@/lib/pricing";
+import { resolveOverflowGroups } from "@/lib/doceditor/overflow";
 import type { QuoteForPrint } from "@/components/print/QuotePrintDoc";
 import type { DocumentModel } from "@/lib/doceditor/model";
 import { freezeVehicleShowcase, hasVehicleShowcase } from "@/lib/signing/freezeDocument";
@@ -43,10 +44,18 @@ export async function withVehicleShowcase(ctx: MergeContext, quote: QuoteForPrin
  * returned untouched, without a query.
  */
 export async function freezeQuoteShowcase(doc: DocumentModel, quoteId: string | null | undefined): Promise<DocumentModel> {
-  if (!hasVehicleShowcase(doc)) return doc;
+  const showcase = hasVehicleShowcase(doc);
+  const overflow = doc.pages.some((page) => page.overflowGroups);
+  if (!showcase && !overflow) return doc;
   const quote = quoteId
-    ? await prisma.quote.findUnique({ where: { id: quoteId }, include: { items: true, lead: { include: { product: true } } } })
+    ? await prisma.quote.findUnique({ where: { id: quoteId }, include: { items: true, fees: true, lead: { include: { product: true } } } })
     : null;
+  // The page layout is resolved HERE, once, for the number of rows the quote
+  // has now: the signature fields are created from this snapshot, so they must
+  // already be on the page (and at the spot) where they will be signed. Counted
+  // exactly as buildQuoteContext builds the table: charged lines + fee rows.
+  let frozen = resolveOverflowGroups(doc, quote ? includedLines(quote.items).length + feeRows(quote.fees).length : 0);
+  if (!showcase) return frozen;
   let vehicle = quote ? await quoteVehicle(quote) : null;
   if (!vehicle && quote) {
     // The live renderer's fallback is the {{vehicle}} token: the lead's product
@@ -54,5 +63,6 @@ export async function freezeQuoteShowcase(doc: DocumentModel, quoteId: string | 
     const name = includedLines(quote.items)[0]?.description?.trim();
     if (name) vehicle = { name, tagline: "", description: "", image: null, specs: [] };
   }
-  return freezeVehicleShowcase(doc, vehicle);
+  frozen = freezeVehicleShowcase(frozen, vehicle);
+  return frozen;
 }
