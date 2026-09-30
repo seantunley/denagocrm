@@ -1600,6 +1600,12 @@ export async function convertLeadToContact(leadId: string): Promise<{ ok: boolea
       }
 
       await prisma.lead.update({ where: { id: leadId }, data: { contactId } });
+      // Quotes already made from this lead while it had no customer get this one,
+      // as linkLeadToContact does — otherwise they stay stuck on "Customer not selected".
+      await prisma.quote.updateMany({
+        where: { leadId, contactId: null, status: "draft", deletedAt: null },
+        data: { contactId },
+      });
       await logAuditStrict({
         action: "lead.contact_linked",
         summary: `Linked lead "${lead.title}" to contact`,
