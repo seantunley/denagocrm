@@ -64,10 +64,11 @@ test("the webhook applies `failed` to the outbox row with that wamid", () => {
   const route = src("src/app/api/webhooks/whatsapp/route.ts");
   assert.match(route, /const failure = whatsappFailure\(status\);\s*if \(failure\) await applyProviderFailure\("whatsapp", failure\);/);
   const outbox = src("src/lib/botOutbox.ts");
-  const apply = outbox.slice(outbox.indexOf("export async function applyProviderFailure"));
-  assert.match(apply, /providerMessageId: failure\.providerMessageId, status: "sent"/);
-  assert.match(apply, /tenantId: outboxTenantId\(\)/);
-  assert.match(apply, /status: "dead", failureCode: failure\.failureCode/);
+  const ledger = outbox.slice(outbox.indexOf("function failureLedger"), outbox.indexOf("export async function applyProviderFailure"));
+  assert.match(ledger, /const tenantId = outboxTenantId\(\)/);
+  assert.match(ledger, /where: \{ tenantId, channel, providerMessageId: failure\.providerMessageId/);
+  assert.match(ledger, /status: "dead", failureCode: failure\.failureCode/);
+  // The early-arrival race is covered in whatsappFailureRace.test.ts.
   // …and the wamid reaches the Communication.
   assert.match(outbox, /data: \{ messageId: providerMessageId \}/);
 });

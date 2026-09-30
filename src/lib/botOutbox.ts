@@ -11,6 +11,14 @@ import { logAuditStrict } from "./audit";
 import { redactForLog } from "./redactLog";
 import { classifyDeliveryFailure, PERMANENT_FAILURES, staffReplyMatchesRow } from "./messageDelivery";
 import { metaEchoDedupeKey } from "./metaEcho";
+import {
+  decodeParkedFailure,
+  encodeParkedFailure,
+  reconcileProviderFailure,
+  recordProviderFailure,
+  type FailureLedger,
+  type ProviderFailure,
+} from "./providerFailure";
 import { deleteCommunicationsAndReconcile } from "./conversations";
 import { attachmentUrlForDelivery } from "./outboundMedia";
 import type { OutMsg } from "./flow";
@@ -1059,11 +1067,15 @@ async function deliverClaimed(row: OutboxRow): Promise<"sent" | "retry" | "dead"
     // that second statement, and reconciling first would look for the echo while
     // the webhook could still legitimately be recording one.
     await reconcileProviderEcho(result.providerMessageId);
+    await reconcileParkedFailure(row.channel, result.providerMessageId);
     await stampProviderMessageId(row, result.providerMessageId);
     await repairCommunicationLog({ ...row, status: "sent", providerMessageId: result.providerMessageId }).catch(() => {});
     return "sent";
   }
   await reconcileProviderEcho(result.providerMessageId);
+  // AFTER the id is committed, exactly like the echo: a `failed` status that
+  // arrived before this point was parked, and this is where it lands.
+  await reconcileParkedFailure(row.channel, result.providerMessageId);
   await stampProviderMessageId(row, result.providerMessageId);
   await repairCommunicationLog({ ...row, status: "sent", providerMessageId: result.providerMessageId }).catch(async (error) => { await logError("bot-outbox-log", error, row.id).catch(() => {}); });
   return "sent";
@@ -1082,23 +1094,75 @@ async function stampProviderMessageId(row: OutboxRow, providerMessageId: string 
 }
 
 /**
- * Apply a provider's ASYNC failure (WhatsApp `failed` status) to the message it
- * names. The send was accepted — the row says `sent` — so without this the
- * inbox showed "Sent ✓" for a message that never arrived. `dead` + the failure
- * class is what deliveryLabel renders as "Not delivered — <reason>".
+ * The Prisma side of ./providerFailure.ts, for one channel in this
+ * conversation's tenant (outboxTenantId(): the endpoint's workspace at the
+ * webhook, the conversation's in the worker — the same value, as for the echo).
  *
- * Exact match on the provider id within this conversation's tenant; nothing
- * later in the conversation is blocked, since those messages already went.
+ * `markFailed` sets `dead` + the failure class, which deliveryLabel renders as
+ * "Not delivered — <reason>". Exact match on the provider id; nothing later in
+ * the conversation is blocked, since those messages already went.
+ *
+ * Parked failures reuse BotInboundEvent — the existing tenant-scoped ledger of
+ * provider events, unique on (tenantId, channel, providerId), with its RLS and
+ * grants already in place — under a channel of their own (`whatsapp:failed`) so
+ * they can never collide with an inbound-message claim.
  */
-export async function applyProviderFailure(
-  channel: string,
-  failure: { providerMessageId: string; failureCode: string; detail: string },
-): Promise<number> {
-  const marked = await prisma.botFlowOutbox.updateMany({
-    where: { tenantId: outboxTenantId(), channel, providerMessageId: failure.providerMessageId, status: "sent" },
-    data: { status: "dead", failureCode: failure.failureCode, lastError: failure.detail.slice(0, 1000) },
+function failureLedger(channel: string): FailureLedger {
+  const tenantId = outboxTenantId();
+  const parkChannel = `${channel}:failed`;
+  return {
+    async markFailed(failure) {
+      const marked = await prisma.botFlowOutbox.updateMany({
+        // `dead` too: a redelivered webhook re-marks its own row instead of
+        // parking a record nothing will consume.
+        where: { tenantId, channel, providerMessageId: failure.providerMessageId, status: { in: ["sent", "dead"] } },
+        data: { status: "dead", failureCode: failure.failureCode, lastError: failure.detail.slice(0, 1000) },
+      });
+      return marked.count;
+    },
+    async park(failure) {
+      await prisma.botInboundEvent.upsert({
+        where: { tenantId_channel_providerId: { tenantId, channel: parkChannel, providerId: failure.providerMessageId } },
+        create: { tenantId, channel: parkChannel, providerId: failure.providerMessageId, status: "pending", attempts: 0, lastError: encodeParkedFailure(failure) },
+        update: {},
+      });
+    },
+    async parked(providerMessageId) {
+      const row = await prisma.botInboundEvent.findFirst({
+        where: { tenantId, channel: parkChannel, providerId: providerMessageId, status: "pending" },
+        select: { lastError: true },
+      });
+      return row ? decodeParkedFailure(providerMessageId, row.lastError) : null;
+    },
+    async consume(providerMessageId) {
+      await prisma.botInboundEvent.updateMany({
+        where: { tenantId, channel: parkChannel, providerId: providerMessageId, status: "pending" },
+        data: { status: "completed", completedAt: new Date() },
+      });
+    },
+  };
+}
+
+/**
+ * Apply a provider's ASYNC failure (WhatsApp `failed` status) to the message it
+ * names — or park it until the worker commits that id. See ./providerFailure.ts.
+ */
+export async function applyProviderFailure(channel: string, failure: ProviderFailure): Promise<number> {
+  return recordProviderFailure(failureLedger(channel), failure);
+}
+
+/**
+ * Worker side: apply a failure that arrived before the id was committed. Best
+ * effort like the echo reconcile — the send happened, and a bookkeeping error
+ * must not turn it into a thrown delivery.
+ */
+async function reconcileParkedFailure(channel: string, providerMessageId: string | undefined): Promise<void> {
+  if (!providerMessageId) return;
+  // ponytail: a reconcile that errors here leaves the failure parked (row shows
+  // "Sent ✓"); sweep pending `*:failed` rows from the outbox cron if that is seen.
+  await reconcileProviderFailure(failureLedger(channel), providerMessageId).catch(async (error) => {
+    await logError("bot-outbox-failure-reconcile", error, `${channel}:${providerMessageId}`).catch(() => {});
   });
-  return marked.count;
 }
 
 /**
