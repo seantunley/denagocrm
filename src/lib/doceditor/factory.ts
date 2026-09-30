@@ -80,6 +80,8 @@ export function newBlock(type: BlockType): DocumentBlock {
       ] };
     case "conditional":
       return { id: uid(), type, ...emptyLayout, when: "", blocks: [] };
+    case "handoverChecklist":
+      return { id: uid(), type, ...emptyLayout };
     case "showcaseHeader":
       return { id: uid(), type, ...emptyLayout, title: "QUOTATION", docNumber: "{{quote.number}}", tagline: "PREMIUM ELECTRIC MOBILITY", bg: "#020617", accent: "#ea580c", bgImage: "", showLogo: true };
     case "infoStrip":

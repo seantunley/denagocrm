@@ -15,6 +15,7 @@ import { PAGE_SIZES } from "./model";
 import { plateToHtmlBody } from "@/lib/docbuilder/plateSerialize";
 import { evaluateCondition } from "@/lib/docbuilder/expr";
 import { brandFooterContent, SOCIAL_ICON_PATHS } from "@/lib/companyBrand";
+import { handoverChecklistHtml } from "./handoverChecklist";
 import { showcaseBlockHtml, showcaseLookHtml } from "./showcaseRender";
 import { layoutRowsFor, resolveOverflowGroups } from "./overflow";
 import { storedFileSrc } from "@/lib/storedFileSrc";
@@ -161,7 +162,9 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
       // An uploaded image arrives here already embedded (renderGlobals.embedDocImages).
       // One that was not — a render path that skipped that step — goes through the
       // signed-in /api/stored proxy, never as the raw private-store link.
-      const raw = String(block.src || "").trim();
+      // {{tokens}} resolve too (e.g. {{jobcard.signature}}, a data URL); an
+      // unresolved one fails the scheme check below and renders nothing.
+      const raw = tok(String(block.src || ""), ctx).trim();
       const src = /^data:image\//i.test(raw) ? raw : storedFileSrc(raw);
       if (!src || !/^(https:|data:image\/|\/api\/stored\?)/i.test(src)) return "";
       return wrap(`<img src="${esc(src)}" alt="${esc(block.alt)}" style="width:${Math.max(5, Math.min(100, block.widthPct))}%;height:auto;${block.rounded ? "border-radius:8px;" : ""}"/>`);
@@ -243,6 +246,9 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
         ${socials}
       </div>`;
     }
+
+    case "handoverChecklist":
+      return wrap(handoverChecklistHtml(ctx));
 
     case "conditional": {
       // Only prune when bound to a record; an unbound preview renders all branches.

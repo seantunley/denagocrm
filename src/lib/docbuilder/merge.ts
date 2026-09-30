@@ -6,6 +6,7 @@ import { jobCardTotals, jobLineCents } from "@/lib/workshop-constants";
 import type { QuoteForPrint } from "@/components/print/QuotePrintDoc";
 import { quoteBillTo, type BillToFleet } from "@/lib/quoteBillTo";
 import type { TableRow } from "./blocks";
+import { jobCardPrintFields, type JobCardPrintSource } from "./jobCardFields";
 import { quoteDocTokens } from "./quoteDocs";
 
 export type JobCardForDoc = Prisma.JobCardGetPayload<{
@@ -175,7 +176,11 @@ export function buildQuoteContext(quote: QuoteForPrint, fleet: BillToFleet | nul
   return { tokens, items, vars };
 }
 
-export function buildJobCardContext(jc: JobCardForDoc): MergeContext {
+export function buildJobCardContext(
+  jc: JobCardForDoc & { serviceRecord?: JobCardPrintSource["serviceRecord"] },
+  signatureSrc?: string | null,
+): MergeContext {
+  const print = jobCardPrintFields(jc, signatureSrc);
   // Same helper as the job card record and its printed documents. Totalling
   // only "part" + "labour" dropped any other line from {{jobcard.total}} while
   // the items table below still printed it.
@@ -203,6 +208,7 @@ export function buildJobCardContext(jc: JobCardForDoc): MergeContext {
     "vehicle.reg": jc.vehicle.regNumber ?? "—",
     "vehicle.color": jc.vehicle.color ?? "—",
     technician: jc.technician?.name ?? "—",
+    ...print.tokens,
   };
   const items: TableRow[] = jc.items.map((i) => ({
     cells: [
@@ -222,6 +228,7 @@ export function buildJobCardContext(jc: JobCardForDoc): MergeContext {
       other: other / 100,
       lines: jc.items.map((i) => ({ description: i.description, kind: i.kind, qty: i.qty })),
       km: jc.kmIn ?? null,
+      ...print.vars,
     },
     customer: { name: tokens["customer.name"], email: tokens["customer.email"], phone: tokens["customer.phone"] },
     vehicle: { model: jc.vehicle.model, vin: jc.vehicle.vin ?? "", reg: jc.vehicle.regNumber ?? "" },
