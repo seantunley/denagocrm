@@ -1519,6 +1519,12 @@ export async function linkLeadToContact(leadId: string, formData: FormData) {
       data: { contactId },
       include: { contact: true },
     });
+    // Quotes already made from this lead while it had no customer are editable
+    // drafts with none; give them this one rather than leaving them orphaned.
+    await prisma.quote.updateMany({
+      where: { leadId, contactId: null, status: "draft", deletedAt: null },
+      data: { contactId },
+    });
     await logAuditStrict({
       action: "lead.contact_linked",
       summary: `Linked lead “${lead.title}” to contact ${lead.contact ? `${lead.contact.firstName} ${lead.contact.lastName ?? ""}`.trim() : ""}`,

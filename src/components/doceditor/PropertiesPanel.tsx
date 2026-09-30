@@ -11,6 +11,11 @@ import { validateExpression } from "@/lib/docbuilder/expr";
 import { saveLibraryItem } from "@/app/actions/doclibrary";
 import { TextPromptDialog } from "@/components/TextPromptDialog";
 import { toast } from "sonner";
+import { useState } from "react";
+import { uploadDocEditorImage } from "@/app/actions/doceditor";
+import { checkDocImage, DOC_IMAGE_ACCEPT } from "@/lib/doceditor/imageUpload";
+import { storedFileSrc } from "@/lib/storedFileSrc";
+import { useDocEditorEnv } from "./EditorContext";
 
 const lbl = "block text-[11px] font-medium text-slate-500 mb-1";
 const inp = "w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm text-slate-800 focus:border-orange-400 focus:outline-none";
@@ -206,9 +211,45 @@ function TextHint({ block }: { block: TextBlock | { type: string } }) {
 
 function ImageProps({ block }: { block: ImageBlock }) {
   const updateBlock = useEditor((s) => s.updateBlock);
+  const { templateId } = useDocEditorEnv();
+  const [busy, setBusy] = useState(false);
+  // An uploaded image's src is a private stored ref — not something to show or edit as a URL.
+  const uploaded = !!block.src && storedFileSrc(block.src) !== block.src;
+
+  const upload = async (file: File) => {
+    const check = checkDocImage(file.size, new Uint8Array(await file.slice(0, 16).arrayBuffer()));
+    if (!check.ok) { toast.error(check.error); return; }
+    setBusy(true);
+    try {
+      const form = new FormData();
+      form.set("file", file);
+      if (templateId) form.set("templateId", templateId);
+      const result = await uploadDocEditorImage(form);
+      if (result.ok) updateBlock(block.id, { src: result.ref });
+      else toast.error(result.error);
+    } catch {
+      toast.error("The upload failed. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <Section title="Image">
-      <div className={row}><label className={lbl}>Image URL</label><input className={inp} value={block.src} placeholder="https://… or data:image/…" onChange={(e) => updateBlock(block.id, { src: e.target.value })} /></div>
+      <div className={row}>
+        <label className={`flex w-full cursor-pointer items-center justify-center rounded-md border border-slate-300 py-1.5 text-sm text-slate-700 hover:bg-slate-50 ${busy ? "pointer-events-none opacity-60" : ""}`}>
+          {busy ? "Uploading…" : uploaded ? "Replace image" : "Upload image"}
+          <input
+            type="file"
+            accept={DOC_IMAGE_ACCEPT}
+            className="sr-only"
+            disabled={busy}
+            onChange={(e) => { const file = e.target.files?.[0]; e.target.value = ""; if (file) void upload(file); }}
+          />
+        </label>
+        <p className="mt-1 text-[11px] text-slate-400">PNG, JPEG or WebP, up to 5 MB.</p>
+      </div>
+      <div className={row}><label className={lbl}>…or image URL</label><input className={inp} value={uploaded ? "" : block.src} placeholder={uploaded ? "Uploaded image — paste a URL to replace it" : "https://…"} onChange={(e) => updateBlock(block.id, { src: e.target.value })} /></div>
       <div className={row}><label className={lbl}>Alt text</label><input className={inp} value={block.alt} onChange={(e) => updateBlock(block.id, { alt: e.target.value })} /></div>
       <div className={row}><label className={lbl}>Width ({block.widthPct}%)</label><input type="range" min={10} max={100} className="w-full" value={block.widthPct} onChange={(e) => updateBlock(block.id, { widthPct: Number(e.target.value) }, false)} /></div>
       <label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={block.rounded} onChange={(e) => updateBlock(block.id, { rounded: e.target.checked })} /> Rounded corners</label>

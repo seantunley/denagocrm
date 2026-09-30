@@ -129,7 +129,7 @@ const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
  * screens — a template dropdown and a Generate button in the header of a quote,
  * and the same again on a job card. Choosing a document template is not part of
  * working the record, and it put a settings-shaped control where the work is.
- * Both are gone; Settings → Documents → Builder is the surface built for it.
+ * Both are gone; Document Studio's builder section is the surface built for it.
  */
 test("record screens do not offer a document-template picker", () => {
   for (const rel of ["src/app/(app)/jobcards/[id]/page.tsx", "src/app/(app)/quotes/[id]/page.tsx"]) {
@@ -139,9 +139,12 @@ test("record screens do not offer a document-template picker", () => {
   }
 });
 
-test("…and the settings surface that owns it still does", () => {
+// The Builder list moved from /settings/documents/builder (now a redirect) into Document Studio.
+const BUILDER_SECTION = "src/app/(app)/document-studio/builder-section.tsx";
+
+test("…and the Document Studio builder section that owns it still does", () => {
   // The action itself is not being removed — only the record-level shortcuts.
-  const settings = src("src/app/(app)/settings/documents/builder/page.tsx");
+  const settings = src(BUILDER_SECTION);
   assert.match(settings, /action=\{generateDocEditorDocument\}/, "the builder page must keep generating");
   assert.match(src("src/app/actions/doceditor.ts"), /export async function generateDocEditorDocument/);
 });
@@ -163,7 +166,7 @@ test("signing still resolves its own template, independently", () => {
  * anything, but by then the metadata has already been read out of a dropdown.
  */
 test("the Builder's record selector is scoped to what the caller may see", () => {
-  const page = src("src/app/(app)/settings/documents/builder/page.tsx");
+  const page = src(BUILDER_SECTION);
   assert.match(page, /getAccessibleQuoteIds\(user\)/, "quotes must be RBAC-scoped");
   assert.match(page, /getAccessibleJobCardIds\(user\)/, "job cards must be too");
   assert.match(page, /ids === null \? \{\} : \{ id: \{ in: ids \} \}/, "null means unrestricted, not 'no filter needed'");
@@ -181,9 +184,10 @@ test("the Builder's record selector is scoped to what the caller may see", () =>
  * so anything older had no route at all.
  */
 test("any accessible record can be reached, not just the newest hundred", () => {
-  const page = src("src/app/(app)/settings/documents/builder/page.tsx");
+  const page = src(BUILDER_SECTION);
   assert.match(page, /name="q"/, "the selector must be searchable");
-  assert.match(page, /searchParams/, "…server-side, so the scoped query does the filtering");
+  // …server-side, so the scoped query does the filtering: the page reads `q` and hands it down.
+  assert.match(src("src/app/(app)/document-studio/page.tsx"), /searchParams[\s\S]*<BuilderSection user=\{user\} q=\{q\} \/>/);
   // Searchable by the two things someone actually knows: the number, and who it is for.
   assert.match(page, /number \? \[\{ number \}\] : \[\]/, "search by quote or job number");
   assert.match(page, /contact: contactMatch/, "…and by customer");
