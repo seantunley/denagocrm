@@ -168,6 +168,9 @@ model Product {
   showcaseTagline  String? // subtitle under the model name
   showcaseSpecs    Json? // up to 4 × { icon, label, sub } — parsed by lib/docbuilder/vehicleShowcase.ts
   showcaseImageRef String? // stored-file ref (lib/storage.ts saveFile); embedded as a data URL when rendered
+  // One photo per colour: { [colour name]: stored-file ref }. The quote line's
+  // colour picks its photo (case-insensitive); showcaseImageRef is the fallback.
+  showcaseColourImages Json?
 
   deletedAt     DateTime?
   deletedByName String?
