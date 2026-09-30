@@ -7,6 +7,8 @@ import { freezableLogoUrl } from "@/lib/doceditor/renderGlobals";
 import { getCompanyProfile, companyTokens } from "@/lib/companyProfile";
 import type { DocumentModel } from "@/lib/doceditor/model";
 import { freezeDocumentGlobals } from "@/lib/signing/freezeDocument";
+import { freezeQuoteShowcase } from "@/lib/docbuilder/vehicleShowcaseLoad";
+import { showcaseAssetTokens } from "@/lib/doceditor/showcaseAssetsServer";
 // newSignToken is superseded by newSignCapability: a capability is stored as a
 // digest plus ciphertext, never as the raw value. frozenBrand is kept — the
 // brand a document was signed under must not follow a later rebrand.
@@ -114,10 +116,19 @@ export async function createSignatureRequestFromDoc(opts: {
   const sender = opts.createdById
     ? await basePrisma.user.findUnique({ where: { id: opts.createdById }, select: { name: true } }).catch(() => null)
     : null;
-  const frozenDoc = freezeDocumentGlobals(opts.doc, {
-    ...companyTokens(profile),
-    ...documentGlobalTokens(sender?.name),
-  });
+  // The showcase vehicle and page layout are frozen the same way: the vehicle's
+  // photo, tagline and specs are otherwise read live from the Product, which may
+  // be edited mid-signature.
+  const frozenDoc = await freezeQuoteShowcase(
+    freezeDocumentGlobals(opts.doc, {
+      // Built-in band photos ({{asset.*}}) become data URLs IN the snapshot, so
+      // a signed quote keeps the photo it was signed with.
+      ...showcaseAssetTokens(),
+      ...companyTokens(profile),
+      ...documentGlobalTokens(sender?.name),
+    }),
+    source.quoteId,
+  );
   // Whether the signer must prove who they are.
   //
   // The workspace policy decides the default — MONEY out of the box, so a quote

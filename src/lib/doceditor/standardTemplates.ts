@@ -4,13 +4,19 @@
  * builder starts from a useful layout rather than a blank page.
  */
 import type { DocumentBlock, DocumentModel } from "./model";
+import { PAGE_SIZES } from "./model";
 import {
   newBlock,
   newColumn,
+  newOverlayField,
   newPage,
+  newRecipient,
   newRow,
   standardQuoteTemplate,
+  uid,
 } from "./factory";
+import { ACCEPTANCE_GEOMETRY, FOOTER_BAND_HEIGHT, SHOWCASE_COMPACT_HEADER_HEIGHT, SHOWCASE_INSET, acceptanceHeight } from "./showcaseRender";
+import { SHOWCASE_FOOTER_IMAGE, SHOWCASE_HEADER_IMAGE } from "./showcaseAssets";
 
 export type StandardDocKey =
   | "quote"
@@ -348,6 +354,161 @@ function warrantyClaimTemplate(): DocumentModel {
     [smallSignLine("Customer · Date"), smallSignLine("For {{company.name}} · Date")],
     [footer()],
   ]);
+}
+
+/**
+ * The premium "showcase" quotation: dark header band, info strip, a vehicle hero
+ * bound to the quote's primary vehicle (its Product's photo, tagline and specs),
+ * line items, a totals box, terms + acceptance cards and a dark footer band.
+ *
+ * NOT one of BUILDERS — it is an alternative quote layout the owner applies in
+ * the editor (Palette → Layouts), so the live default quote template is never
+ * touched by this code.
+ *
+ * GEOMETRY. The page has NO margin: the header and footer bands run edge to
+ * edge and the hero photo bleeds off the right edge, as in the design. Every
+ * other section shares one content column, inset SHOWCASE_INSET px each side —
+ * the content rows by their own padding, the floating cards by their x/width.
+ *
+ * The bottom band (terms, acceptance, footer) is FLOATING at fixed page
+ * coordinates, because the customer's signature and date are overlay fields at
+ * page coordinates and must sit on the acceptance card's lines however long the
+ * flowed content above is. The flow therefore has a height budget: three
+ * line-item/fee rows fit above the bottom band on one A4 sheet.
+ */
+/**
+ * Line-item/fee rows: with the full-height hero; on one page at all (the hero
+ * shrinking); and above page 1's footer band once the cards have moved on.
+ */
+export const SHOWCASE_ROWS_FULL_HERO = 3;
+export const SHOWCASE_ROWS_ABOVE_CARDS = 6;
+export const SHOWCASE_ROWS_ABOVE_FOOTER = 9;
+
+export function showcaseQuoteTemplate(): DocumentModel {
+  const PAGE = PAGE_SIZES.A4;
+  const inset = SHOWCASE_INSET;
+  const contentW = PAGE.w - inset * 2;
+  const gap = 14;
+  const cardW = Math.floor((contentW - gap) / 2);
+  // PAGE.h is the rounded A4 height (1123 vs the exact 1122.52), so stop a
+  // pixel short of the sheet edge or the band spills onto a second sheet.
+  const footerY = PAGE.h - 1 - FOOTER_BAND_HEIGHT;
+  const cardsY = footerY - 14 - acceptanceHeight();
+  const acceptX = inset + cardW + gap;
+  const content = { top: 0, right: inset, bottom: 0, left: inset };
+  const padded = (blocks: DocumentBlock[], padding = content) => {
+    const row = newRow([newColumn(100, blocks)]);
+    row.settings = { ...row.settings, padding };
+    return row;
+  };
+
+  const vehicle = (part: "details" | "image") => {
+    const block = newBlock("vehicleShowcase");
+    if (block.type === "vehicleShowcase") {
+      block.part = part;
+      block.imageHeight = 356; // with the text column beside it, leaves room for three table rows
+      block.imageFit = "cover"; // scenic product photos fill the hero and fade into the page
+      // One table row is ~33px: each extra row takes that from the hero instead.
+      block.shrink = { afterRows: SHOWCASE_ROWS_FULL_HERO, untilRows: SHOWCASE_ROWS_ABOVE_CARDS, perRow: 33, minHeight: 260 };
+    }
+    return block;
+  };
+  const header = newBlock("showcaseHeader");
+  if (header.type === "showcaseHeader") header.bgImage = SHOWCASE_HEADER_IMAGE;
+  const footerBand = newBlock("footerBand");
+  if (footerBand.type === "footerBand") footerBand.bgImage = SHOWCASE_FOOTER_IMAGE;
+  const preparedFor = infoCard("PREPARED FOR", "{{customer.name}}", "{{customer.phone}}\n{{customer.email}}");
+  if (preparedFor.type === "infoCard") preparedFor.look = "showcase";
+  const items = newBlock("lineItems");
+  if (items.type === "lineItems") {
+    items.look = "showcase";
+    items.headerBg = "#0b1220";
+    items.columns = [
+      { key: "description", header: "Description", align: "left", showIf: "" },
+      { key: "qty", header: "Qty", align: "right", showIf: "" },
+      { key: "unitPrice", header: "Unit price (incl. VAT)", align: "right", showIf: "" },
+      { key: "total", header: "Total (incl. VAT)", align: "right", showIf: "" },
+    ];
+  }
+  const totals = newBlock("totalsBox");
+  totals.settings = { width: 46, horizontalAlignment: "right" };
+  // The standard quote's terms, each its own bullet.
+  const quoteTerms = terms("QUOTATION TERMS", [
+    "Quote valid for 14 days.",
+    "50% deposit to secure build slot; balance on delivery.",
+    "Prices are recommended retail, including 15% VAT, and subject to change without notice.",
+    "Denago EVs are Low-Speed Vehicles for private-property use and are not road registered.",
+    "E & O.E.",
+  ]);
+  if (quoteTerms.type === "terms") quoteTerms.look = "showcase";
+
+  const customer = newRecipient({ name: "Customer", role: "signer", party: "customer", color: "#2563eb" });
+  const g = ACCEPTANCE_GEOMETRY;
+  const lineX = acceptX + g.padX + g.labelW + g.gap;
+  const lineW = cardW - g.padX * 2 - g.labelW - g.gap;
+  const sigTop = cardsY + g.pad + g.headerH + g.headerGap + g.textH + g.nameRowH;
+
+  const hero = newRow([newColumn(44, [preparedFor, vehicle("details")]), newColumn(56, [vehicle("image")])]);
+  // Inset on the left only: the photo bleeds to the right page edge.
+  hero.settings = { ...hero.settings, gap: 0, padding: { top: 0, right: 0, bottom: 0, left: inset } };
+
+  const page = newPage([
+    padded([header], { top: 0, right: 0, bottom: 0, left: 0 }),
+    padded([newBlock("infoStrip")]),
+    hero,
+    padded([items]),
+    padded([totals]),
+  ]);
+  const termsFloat = { id: uid(), x: inset, y: cardsY, width: cardW, block: quoteTerms };
+  const acceptFloat = { id: uid(), x: acceptX, y: cardsY, width: cardW, block: newBlock("acceptance") };
+  const footerFloat = { id: uid(), x: 0, y: footerY, width: PAGE.w, block: footerBand };
+  page.floatingBlocks = [termsFloat, acceptFloat, footerFloat];
+  page.overlayFields = [
+    newOverlayField("signature", {
+      recipientId: customer.id, label: "Customer signature",
+      anchor: { mode: "page", blockId: null, x: lineX, y: sigTop + 2 }, width: lineW, height: g.sigRowH - 4,
+    }),
+    newOverlayField("date", {
+      recipientId: customer.id, label: "Date",
+      anchor: { mode: "page", blockId: null, x: lineX, y: sigTop + g.sigRowH + 1 }, width: Math.min(160, lineW), height: g.dateRowH - 2,
+    }),
+  ];
+  // Longer quotes, in two steps (row counts measured in headless Chrome — see
+  // the PR and tests):
+  //  1. Beyond SHOWCASE_ROWS_FULL_HERO rows the hero shrinks (block `shrink`),
+  //     so up to SHOWCASE_ROWS_ABOVE_CARDS rows still fit on ONE page.
+  //  2. Beyond that the hero returns to full size and the cards (with the
+  //     signature and date fields) continue on a proper second page: a compact
+  //     header band at the top, the cards under it, the footer band at the foot.
+  //     Page 1 keeps its own footer band while the table leaves room for it.
+  const continuationHeader = newBlock("showcaseHeader");
+  if (continuationHeader.type === "showcaseHeader") {
+    continuationHeader.bgImage = SHOWCASE_HEADER_IMAGE;
+    continuationHeader.compact = true;
+  }
+  page.overflowGroups = [
+    {
+      maxItems: SHOWCASE_ROWS_ABOVE_CARDS,
+      floatIds: [termsFloat.id, acceptFloat.id],
+      fieldIds: page.overlayFields.map((f) => f.id),
+      topOnNextPage: SHOWCASE_COMPACT_HEADER_HEIGHT + 24,
+      nextPageFloats: [
+        { id: uid(), x: 0, y: 0, width: PAGE.w, block: continuationHeader },
+        { id: uid(), x: 0, y: footerY, width: PAGE.w, block: { ...footerBand, id: uid() } },
+      ],
+    },
+    { maxItems: SHOWCASE_ROWS_ABOVE_FOOTER, floatIds: [footerFloat.id], fieldIds: [], drop: true },
+  ];
+
+  return {
+    schemaVersion: 1,
+    title: "Showcase quotation",
+    style: { fontFamily: "sans", pageSize: "A4", margin: 0, accent: ACCENT, ink: INK },
+    recipients: [customer],
+    pages: [page],
+    header: [],
+    footer: [],
+  };
 }
 
 const BUILDERS: Record<StandardDocKey, () => DocumentModel> = {

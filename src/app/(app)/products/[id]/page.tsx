@@ -8,6 +8,7 @@ import {
   deleteProduct,
 } from "@/app/actions/products";
 import ConfirmDelete from "@/components/ConfirmDelete";
+import ProductShowcaseForm from "@/components/ProductShowcaseForm";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
 import { formatZAR } from "@/lib/format";
@@ -126,6 +127,8 @@ export default async function ProductDetailPage({
             Used by {product._count.leads} lead(s) and {product._count.vehicles} vehicle(s).
           </p>
         </div>
+
+        <ProductShowcaseForm product={product} />
       </div>
     </EntityDetailShell>
   );

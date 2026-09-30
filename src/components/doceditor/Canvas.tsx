@@ -133,7 +133,18 @@ function RowView({ row, hint }: { row: DocumentRow; hint: Hint }) {
   };
 
   return (
-    <div ref={rowRef} className="relative grid" style={{ gridTemplateColumns: template, gap: row.settings?.gap ?? 16, margin: "3px 0" }}>
+    <div
+      ref={rowRef}
+      className="relative grid"
+      style={{
+        gridTemplateColumns: template,
+        gap: row.settings?.gap ?? 16,
+        // A row with its own padding owns its spacing — as serialize.ts rowSpacing().
+        ...(row.settings?.padding
+          ? { margin: 0, padding: `${row.settings.padding.top ?? 0}px ${row.settings.padding.right ?? 0}px ${row.settings.padding.bottom ?? 0}px ${row.settings.padding.left ?? 0}px` }
+          : { margin: "3px 0" }),
+      }}
+    >
       {row.columns.map((col, ci) => (
         <div key={col.id} className="relative min-w-0">
           <ColumnView col={col} hint={hint} />
