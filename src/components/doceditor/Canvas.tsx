@@ -68,7 +68,14 @@ function PageView({
       style={{ width: size.w * zoom, minHeight: sheet }}
     >
       <div className="relative" style={{ padding: margin * zoom }}>
-        <div style={{ fontFamily: fontFamily === "serif" ? "Georgia,serif" : fontFamily === "mono" ? "monospace" : "Helvetica,Arial,sans-serif" }}>
+        {/* CSS `zoom`, not just zoomed box sizes: the page, its margins and every
+            floating block / overlay field are placed at `px × zoom`, so the
+            CONTENT has to scale by the same factor or it lays out at 100% inside
+            a 90% box — wrapping differently from print, and leaving fixed-height
+            content (a signature line) where no overlay field expects it. */}
+        {/* Sans is Geist — the app's own copy of the font the renderer embeds as
+            the document face — so text wraps on the canvas as it prints. */}
+        <div style={{ zoom, fontFamily: fontFamily === "serif" ? "Georgia,serif" : fontFamily === "mono" ? "monospace" : "var(--font-geist-sans),Helvetica,Arial,sans-serif" }}>
           {page.rows.map((row) => <RowView key={row.id} row={row} hint={hint} />)}
         </div>
         <AddRowButton pageIdx={pIdx} active={!!hint && "pageIdx" in hint && hint.pageIdx === pIdx} />
