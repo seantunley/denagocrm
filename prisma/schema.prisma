@@ -2475,6 +2475,14 @@ model DocInstance {
   templateId        String?
   template          CustomDocTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
 
+  // A document made in the one document editor (/doc-editor/document/[id]).
+  // Set = this row is a DocumentModel, edited and finalised by the new editor;
+  // `contentJson` is then an empty placeholder. NULL = a legacy Studio
+  // (BlockNote) document. `builderTemplateId` is the DocBuilderTemplate (key
+  // "custom") it was created from — provenance only, never re-read.
+  docModelJson      Json?
+  builderTemplateId String?
+
   @@index([status, updatedAt])
   @@index([tenantId])
 }

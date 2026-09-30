@@ -21,11 +21,11 @@ import { defaultLogoDataUri as logoDataUri, documentLogo, embedDocImages, liveGl
  * NO quote/job card is bound (list preview / "No record" export), where ctx would
  * otherwise be null. Record-specific tokens still win on any overlap.
  */
-async function withCompany(ctx: RenderCtx): Promise<RenderCtx> {
+async function withCompany(ctx: RenderCtx, tenantId?: string | null): Promise<RenderCtx> {
   const profile = await getCompanyProfile();
   // + the showcase layout's built-in band photos ({{asset.*}}), embedded as data URLs.
   const company = { ...showcaseAssetTokens(), ...(await liveGlobalTokens()), ...companyTokens(profile) };
-  const logo = await documentLogo(profile.logoUrl);
+  const logo = await documentLogo(profile.logoUrl, tenantId);
   // Unbound: carry company tokens only, but mark bound:false so conditionals/showIf
   // columns render as the placeholder layout rather than evaluating an empty scope.
   if (!ctx) return { tokens: company, items: [], vars: {}, bound: false, logo };
@@ -104,6 +104,28 @@ export async function generateDocEditorPdf(opts: {
   const r = await resolve(opts.templateId, opts.quoteId, opts.jobCardId, opts.live, opts);
   if (!r) return null;
   return renderResolvedToPdf(r);
+}
+
+/**
+ * A stand-alone document (a custom document, not a template) as print HTML,
+ * with the record snapshot it was frozen with — null when it is linked to
+ * nothing. Same company tokens, workspace logo and renderer as a generated
+ * template, and — like every other render path — uploaded images embedded
+ * BEFORE rendering: the stored files are private, and the PDF renderer has no
+ * session to fetch them with.
+ *
+ * `tenantId` is the document's OWN workspace. Images are embedded only if they
+ * belong to it, so a ref pasted in from another workspace is dropped, not
+ * printed. A document with no owner falls back to the acting workspace.
+ */
+export async function renderCustomDocumentHtml(doc: DocumentModel, snapshot: RenderCtx, tenantId: string | null): Promise<string> {
+  const embedded = await embedDocImages(doc, tenantId ?? undefined);
+  return renderDocumentHtml(embedded, await withCompany(snapshot, tenantId), logoDataUri());
+}
+
+/** {@link renderCustomDocumentHtml}, as a PDF — used by Finalise and the preview route. */
+export async function renderModelToPdf(doc: DocumentModel, snapshot: RenderCtx, tenantId: string | null): Promise<Buffer> {
+  return htmlToPdf(await renderCustomDocumentHtml(doc, snapshot, tenantId));
 }
 
 export type ExportFormat = "html" | "email" | "doc";

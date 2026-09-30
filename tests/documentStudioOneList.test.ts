@@ -37,7 +37,7 @@ test("the quote card offers only the builder layout, never a DocTemplateRecord f
 
 test("other operational cards carry the Settings → Documents template actions", () => {
   const page = src(STUDIO);
-  for (const action of ["setDefaultDocTemplate", "duplicateDocTemplate", "deleteDocTemplate", "createDocInstance"]) {
+  for (const action of ["setDefaultDocTemplate", "duplicateDocTemplate", "deleteDocTemplate", "createCustomDocument"]) {
     assert.match(page, new RegExp(`action=\\{${action}`), `${action} must be wired`);
   }
 });
