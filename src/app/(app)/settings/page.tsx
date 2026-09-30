@@ -25,7 +25,16 @@ import {
   createTemplate,
   updateTemplate,
   deleteTemplate,
+  saveSigningEmailTemplate,
+  resetSigningEmailTemplate,
 } from "@/app/actions/emails";
+import {
+  SIGNING_EMAILS,
+  SIGNING_EMAIL_KINDS,
+  SIGNING_FIELD_HELP,
+  parseStoredSigningTemplate,
+  type SigningEmailKind,
+} from "@/lib/signing/emailTemplates";
 import TestEmailButton from "@/components/TestEmailButton";
 import { DEFAULT_QUOTE_EMAIL, QUOTE_EMAIL_FIELDS, QUOTE_EMAIL_TEMPLATE_SETTING } from "@/lib/quoteEmail";
 import ConfirmDelete from "@/components/ConfirmDelete";
@@ -136,6 +145,17 @@ export default async function SettingsPage({
       return ""; // encrypted value, key unavailable in this environment
     }
   };
+  // The signing emails' edited copies, read by EXPLICIT tenant — the same key the
+  // send path reads by the signature request's tenantId (lib/signing/signingEmail.ts).
+  const signingTenantId = isAdmin && tab === "email" ? await getActiveTenantId() : null;
+  const signingOverrides = signingTenantId
+    ? await basePrisma.appSetting.findMany({
+        where: { tenantId: signingTenantId, key: { in: SIGNING_EMAIL_KINDS.map((k) => SIGNING_EMAILS[k].settingKey) } },
+        select: { key: true, value: true },
+      })
+    : [];
+  const signingTemplate = (kind: SigningEmailKind) =>
+    parseStoredSigningTemplate(signingOverrides.find((s) => s.key === SIGNING_EMAILS[kind].settingKey)?.value);
   const settingsTenantId = tab === "integrations" ? await getActiveTenantId() : null;
   const xEntries = tab === "integrations"
     ? await Promise.all(["X_ACCOUNT_ID", "X_USERNAME"].map(async (key) => [key, await resolveTenantCredential(settingsTenantId, key)] as const))
@@ -863,6 +883,61 @@ export default async function SettingsPage({
                 <code>{"{{model}}"}</code>, <code>{"{{color}}"}</code>, <code>{"{{value}}"}</code>,{" "}
                 <code>{"{{user_name}}"}</code> — filled from the lead/contact when sending.
               </p>
+              <div className="mb-5">
+                <div className="text-sm font-semibold mb-1">Signing emails</div>
+                <p className="text-xs text-muted-foreground mb-3">
+                  Sent automatically by e-signing. Your logo, brand colour and an &ldquo;Open &amp; sign&rdquo;
+                  button are added for you. A line holding just <code>{"{{signing_link}}"}</code> becomes the
+                  button. Leave a blank line between paragraphs.
+                </p>
+                <div className="space-y-3">
+                  {SIGNING_EMAIL_KINDS.map((kind) => {
+                    const def = SIGNING_EMAILS[kind];
+                    const saved = signingTemplate(kind);
+                    return (
+                      <details key={kind} className="rounded-lg border border-border bg-muted/40">
+                        <summary className="px-4 py-2.5 cursor-pointer text-sm font-medium flex items-center gap-2">
+                          {def.label}
+                          <span className="badge bg-muted text-muted-foreground">{saved ? "Customised" : "Default"}</span>
+                        </summary>
+                        <div className="p-4 pt-1 space-y-2">
+                          <p className="text-xs text-muted-foreground">{def.description}</p>
+                          <SaveForm
+                            // Remount after a reset so the fields show the default again.
+                            key={saved ? "custom" : "default"}
+                            success="Signing email saved"
+                            resetOnSuccess={false}
+                            action={saveSigningEmailTemplate.bind(null, kind)}
+                            className="space-y-2"
+                          >
+                            <label className="label">Subject</label>
+                            <input name="subject" className="input" defaultValue={saved?.subject ?? def.subject} required maxLength={200} />
+                            <label className="label">Body</label>
+                            <textarea name="body" className="input font-mono text-xs" rows={9} defaultValue={saved?.body ?? def.body} required maxLength={5000} />
+                            <div className="text-xs text-muted-foreground">
+                              Fields:{" "}
+                              {def.fields.map((f, i) => (
+                                <span key={f}>
+                                  {i > 0 && ", "}
+                                  <code title={SIGNING_FIELD_HELP[f]}>{`{{${f}}}`}</code>
+                                  {f === def.action && " (required)"}
+                                </span>
+                              ))}
+                            </div>
+                            <SaveButton className="btn-primary btn-sm">Save</SaveButton>
+                          </SaveForm>
+                          {saved && (
+                            <SaveForm success="Reset to default" action={resetSigningEmailTemplate.bind(null, kind)}>
+                              <SaveButton className="btn-secondary btn-sm">Reset to default</SaveButton>
+                            </SaveForm>
+                          )}
+                        </div>
+                      </details>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="text-sm font-semibold mb-2">Your templates</div>
               <div className="space-y-3 mb-4">
                 {templates.map((t) => (
                   <details key={t.id} className="rounded-lg border border-border bg-muted/40">

@@ -2,10 +2,11 @@
 
 import { asActionResult, refuse } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
-import { prisma } from "@/lib/db";
+import { basePrisma, prisma } from "@/lib/db";
 import { customerRecordTenantId } from "@/lib/customerRecordTenant";
 import { putSetting } from "@/lib/settings";
-import { requireOwner } from "@/lib/auth";
+import { getActiveTenantId, requireOwner } from "@/lib/auth";
+import { SIGNING_EMAILS, validateSigningTemplate, type SigningEmailKind } from "@/lib/signing/emailTemplates";
 import {
   CUSTOMER_RECORD_WRITE_PERMISSIONS,
   canAccessContact,
@@ -259,6 +260,55 @@ export async function deleteTemplate(id: string, formData: FormData) {
     await prisma.emailTemplate.deleteMany({ where: { id, tenantId } });
     revalidatePath("/settings");
     revalidatePath("/campaigns");
+  });
+}
+
+// ---- Signing email templates (invitation / reminder / signed copy / code) ----
+
+/**
+ * The signing emails' overrides live in AppSetting under the tenant's own id,
+ * written EXPLICITLY (not via ambient scope) because the send path reads them by
+ * the signature request's tenantId from cron and public routes. Kept out of the
+ * EmailTemplate table on purpose: that table feeds every campaign, journey and
+ * service-reminder picker, and a signing template must never be picked as one.
+ */
+function signingKind(kind: string): SigningEmailKind {
+  // Bound arguments of a server action arrive from the client — never trusted.
+  if (!Object.hasOwn(SIGNING_EMAILS, kind)) refuse("Unknown signing email.");
+  return kind as SigningEmailKind;
+}
+
+export async function saveSigningEmailTemplate(kind: string, formData: FormData) {
+  return asActionResult(async () => {
+    const user = await requireOwner();
+    const def = SIGNING_EMAILS[signingKind(kind)];
+    const tenantId = await getActiveTenantId();
+    if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
+    const subject = String(formData.get("subject") ?? "").trim();
+    const body = String(formData.get("body") ?? "").replace(/\r\n?/g, "\n").trim();
+    const problem = validateSigningTemplate(def.kind, subject, body);
+    if (problem) refuse(problem);
+    const value = JSON.stringify({ subject, body });
+    await basePrisma.appSetting.upsert({
+      where: { tenantId_key: { tenantId, key: def.settingKey } },
+      update: { value },
+      create: { tenantId, key: def.settingKey, value },
+    });
+    await logAudit({ action: "settings.signing_email.saved", summary: `Edited the “${def.label}” email template`, user });
+    revalidatePath("/settings");
+  });
+}
+
+export async function resetSigningEmailTemplate(kind: string, formData: FormData) {
+  return asActionResult(async () => {
+    void formData;
+    const user = await requireOwner();
+    const def = SIGNING_EMAILS[signingKind(kind)];
+    const tenantId = await getActiveTenantId();
+    if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
+    await basePrisma.appSetting.deleteMany({ where: { tenantId, key: def.settingKey } });
+    await logAudit({ action: "settings.signing_email.reset", summary: `Reset the “${def.label}” email template to default`, user });
+    revalidatePath("/settings");
   });
 }
 

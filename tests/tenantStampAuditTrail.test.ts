@@ -483,6 +483,9 @@ const CUSTOMER_RECORD_WRITERS = [
   "src/lib/imapSync.ts",
   "src/lib/journeyStepExecutor.ts",
   "src/lib/messenger.ts",
+  // The timeline copy of an automated customer send (signing, OTPs, campaigns,
+  // surveys). Stamped from the contact/lead it hangs off.
+  "src/lib/outboundMessageLog.ts",
   "src/lib/reviewRequests.ts",
   "src/lib/serviceReminders.ts",
   "src/lib/surveys.ts",

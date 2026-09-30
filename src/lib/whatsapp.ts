@@ -24,6 +24,7 @@ import { DEFAULT_TENANT_ID } from "./tenant";
 import { writeTenantId } from "./tenantWrite";
 import { currentTenantScope } from "./tenantScope";
 import { distinctIdentities } from "./botBookingIdentity";
+import { recordOutboundFailure, recordOutboundMessage, type OutboundRecord } from "./outboundMessageLog";
 
 /**
  * Every outbound call is bounded. Node fetch has NO default timeout, so an
@@ -260,23 +261,37 @@ export async function matchByPhone(digits: string): Promise<PhoneMatch> {
  */
 export async function sendWhatsAppText(
   toDigits: string,
-  text: string
+  text: string,
+  /** The customer this is to: written to their timeline once Meta accepts it — see lib/outboundMessageLog.ts. */
+  record?: OutboundRecord,
 ): Promise<{ ok: boolean; error?: string }> {
+  const logged = { channel: "whatsapp" as const, to: toDigits, text };
   const creds = await waCredentials();
   if (!creds) {
-    return { ok: false, error: "WhatsApp is not configured (Settings → Integrations)." };
+    const error = "WhatsApp is not configured (Settings → Integrations).";
+    if (record) await recordOutboundFailure(logged, record, error);
+    return { ok: false, error };
   }
-  const res = await fetch(`${GRAPH}/${creds.phoneNumberId}/messages`, {
-    signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${creds.token}` },
-    body: JSON.stringify({
-      messaging_product: "whatsapp",
-      to: toDigits,
-      type: "text",
-      text: { body: text.slice(0, WA_TEXT_MAX) },
-    }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${GRAPH}/${creds.phoneNumberId}/messages`, {
+      signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${creds.token}` },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        to: toDigits,
+        type: "text",
+        text: { body: text.slice(0, WA_TEXT_MAX) },
+      }),
+    });
+  } catch (e) {
+    // Timeout, DNS, TLS, reset: the customer's timeline still says it failed.
+    // Rethrown so callers (outbox retries, job workers) behave as before.
+    const name = e instanceof Error ? e.name : "Error";
+    if (record) await recordOutboundFailure(logged, record, `Could not reach WhatsApp (${name === "TimeoutError" ? "timed out" : name})`);
+    throw e;
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => null);
     await noteWhatsAppOutcome(creds, res, err);
@@ -284,9 +299,14 @@ export async function sendWhatsAppText(
     const friendly = msg.includes("24")
       ? "Outside the 24-hour reply window — the customer must message you first (or use an approved template from WhatsApp Manager)."
       : msg;
+    if (record) await recordOutboundFailure(logged, record, friendly);
     return { ok: false, error: friendly };
   }
   await noteWhatsAppOutcome(creds, res, null);
+  if (record) {
+    const sent = (await res.json().catch(() => null)) as { messages?: Array<{ id?: string }> } | null;
+    await recordOutboundMessage({ ...logged, messageId: sent?.messages?.[0]?.id ?? null }, record);
+  }
   return { ok: true };
 }
 

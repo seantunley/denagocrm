@@ -2,6 +2,7 @@ import "server-only";
 import crypto from "crypto";
 import { basePrisma } from "@/lib/db";
 import { sendEmail } from "@/lib/email";
+import { signingEmailContent } from "./signingEmail";
 import { sendSms, normalizePhone } from "@/lib/sms";
 // The channel RULE is pure and lives on its own so it can be tested directly;
 // this module keeps the parts that need a database and a network.
@@ -9,6 +10,7 @@ import { offeredChannels, identityRequired, type IdentityChannel, type ChannelOf
 import { logSignEvent } from "./events";
 import { signingOtpHash, safeEqualHex } from "./securityPolicy";
 import { hashSignToken } from "./tokens";
+import { signingRecord } from "@/lib/outboundMessageLog";
 
 /**
  * Proving a signer is who the document was sent to.
@@ -155,18 +157,26 @@ export async function startIdentityChallenge(
     },
   });
 
+  // On the customer's timeline with the code masked: the row proves a code was
+  // sent and where, and must not be a second way to read it.
+  const record = await signingRecord(recipient.request.id, {
+    email: recipient.email,
+    label: "Signing verification code",
+    secrets: [code],
+  });
   const sent = channel === "email"
     ? await sendEmail({
         to: destination,
-        subject: `Verification code: ${recipient.request.title}`,
-        text:
-          `Hi ${recipient.name},\n\nYour verification code for “${recipient.request.title}” is ${code}.\n\n` +
-          `It expires in 10 minutes. If you did not ask to sign this document, ignore this message ` +
-          `and tell the sender.`,
+        // The code is appended if an edited template drops it — see emailTemplates.ts.
+        ...(await signingEmailContent("otp", {
+          requestId: recipient.request.id, title: recipient.request.title, recipientName: recipient.name, code,
+        })),
+        record,
       })
     : await sendSms(
         normalizePhone(destination) ?? destination,
         `Your verification code for "${recipient.request.title}" is ${code}. It expires in 10 minutes.`,
+        record,
       );
 
   if (!sent.ok) {
