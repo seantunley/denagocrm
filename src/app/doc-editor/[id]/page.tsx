@@ -1,12 +1,15 @@
 import { notFound } from "next/navigation";
-import { requirePermission } from "@/lib/permissions";
+import { getAccessibleLeadIds, getAccessibleVehicleIds, requirePermission } from "@/lib/permissions";
 import { prisma } from "@/lib/db";
 import { contactName } from "@/lib/format";
 import { getBuilderTemplate } from "@/lib/docbuilder/store";
 import { requiredRecordKind } from "@/lib/docbuilder/recordBinding";
 import Link from "next/link";
 import { readTemplateDocument } from "@/lib/doceditor/legacy";
-import { DocEditor } from "@/components/doceditor/DocEditor";
+import { DocEditor, type PublishState } from "@/components/doceditor/DocEditor";
+import { DocEditorEnvProvider } from "@/components/doceditor/EditorContext";
+import { getCompanyProfile } from "@/lib/companyProfile";
+import { documentLogo } from "@/lib/doceditor/renderGlobals";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +18,7 @@ export default async function DocEditorPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  await requirePermission("docbuilder.manage");
+  const user = await requirePermission("docbuilder.manage");
   const { id } = await params;
   const template = await getBuilderTemplate(id);
   if (!template) notFound();
@@ -61,8 +64,8 @@ export default async function DocEditorPage({
 
   const initialDoc = read.doc;
   const required = requiredRecordKind(template.key);
-  const [quotes, jobCards] = await Promise.all([
-    required === "jobcard" || required === null
+  const [quotes, jobCards, leads, claims] = await Promise.all([
+    required !== "quote" && required !== "either"
       ? []
       : prisma.quote.findMany({
           where: { supersededAt: null },
@@ -70,13 +73,32 @@ export default async function DocEditorPage({
           take: 100,
           include: { contact: true },
         }),
-    required === "quote" || required === null
+    required !== "jobcard" && required !== "either"
       ? []
       : prisma.jobCard.findMany({
           orderBy: { openedAt: "desc" },
           take: 100,
           include: { contact: true, vehicle: true },
         }),
+    // Scoped to the leads / vehicles the caller may see, as the print pages are.
+    required !== "lead"
+      ? []
+      : getAccessibleLeadIds(user).then((ids) =>
+          prisma.lead.findMany({
+            where: ids === null ? {} : { id: { in: ids } },
+            orderBy: { createdAt: "desc" },
+            take: 100,
+            select: { id: true, name: true, title: true },
+          })),
+    required !== "warranty"
+      ? []
+      : getAccessibleVehicleIds(user).then((ids) =>
+          prisma.warrantyClaim.findMany({
+            where: ids === null ? {} : { vehicleId: { in: ids } },
+            orderBy: { claimedAt: "desc" },
+            take: 100,
+            select: { id: true, vehicle: { select: { model: true } } },
+          })),
   ]);
   const records = [
     ...quotes.map((quote) => ({
@@ -87,13 +109,41 @@ export default async function DocEditorPage({
       value: `jobcard:${jobCard.id}`,
       label: `Job #${jobCard.number} — ${contactName(jobCard.contact)} — ${jobCard.vehicle.model}`,
     })),
+    ...leads.map((lead) => ({
+      value: `lead:${lead.id}`,
+      label: `Lead — ${lead.name} — ${lead.title}`,
+    })),
+    ...claims.map((claim) => ({
+      value: `warranty:${claim.id}`,
+      label: `Warranty claim WC-${claim.id.slice(-6).toUpperCase()} — ${claim.vehicle.model}`,
+    })),
   ];
 
+  // Does the saved draft match what real documents render (the published version)?
+  const published = template.publishedVersion == null
+    ? null
+    : await prisma.docBuilderVersion.findUnique({
+        where: { templateId_version: { templateId: template.id, version: template.publishedVersion } },
+        select: { data: true },
+      });
+  const publishState: PublishState = !published
+    ? "never"
+    : JSON.stringify(published.data) === JSON.stringify(template.data)
+      ? "live"
+      : "ahead";
+
+  // The canvas shows the same embedded logo the printed document will carry.
+  const company = await getCompanyProfile();
+  const logoSrc = (await documentLogo(company.logoUrl)) ?? "";
+
   return (
-    <DocEditor
-      id={template.id}
-      initialDoc={initialDoc}
-      records={records}
-    />
+    <DocEditorEnvProvider value={{ templateId: template.id, logoSrc, companyName: company.name }}>
+      <DocEditor
+        id={template.id}
+        initialDoc={initialDoc}
+        records={records}
+        initialPublishState={publishState}
+      />
+    </DocEditorEnvProvider>
   );
 }

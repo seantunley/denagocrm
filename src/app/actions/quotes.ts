@@ -496,7 +496,10 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
       ) {
         return null;
       }
-      if (existing.leadId && existing.contactId !== data.contactId) {
+      // CHANGING the customer is refused; FILLING IN a missing one is not. A
+      // quote made from a lead with no customer yet used to be stuck: the editor
+      // locked the box and this refused any value, so it could never get one.
+      if (existing.leadId && existing.contactId && existing.contactId !== data.contactId) {
         throw new Error("The customer on a lead-linked quote cannot be changed.");
       }
       // Same rule for a fleet account, for a stronger reason. createQuoteForFleet
@@ -533,6 +536,14 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
       // the point they all existed to protect, and a concurrent delete/purge
       // between the read and here is the only way it legitimately trips.
       if (updated.count !== 1) return null;
+      // The lead was missing the same customer; give it this one too, so the
+      // next quote made from it starts linked.
+      if (existing.leadId && !existing.contactId && data.contactId) {
+        await tx.lead.updateMany({
+          where: { id: existing.leadId, contactId: null, tenantId: existing.tenantId ?? actingTenant },
+          data: { contactId: data.contactId },
+        });
+      }
 
       // Inherit the hidden columns by row id, and KEEP that id — see quoteRows.
       const itemRows = itemRowsFor(normalizedItems, priorById(existing.items));

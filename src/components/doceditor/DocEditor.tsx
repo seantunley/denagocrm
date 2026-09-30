@@ -2,10 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { unstable_rethrow, useRouter } from "next/navigation";
 import { useEditor } from "@/lib/doceditor/store";
 import type { DocumentModel } from "@/lib/doceditor/model";
 import { saveDocEditor, importDocEditorTemplate } from "@/app/actions/doceditor";
+import { publishBuilderVersion } from "@/app/actions/docbuilder";
 import { DndController } from "./DndController";
 import { Palette } from "./Palette";
 import { Canvas } from "./Canvas";
@@ -32,14 +33,23 @@ import {
 
 type RecordOption = { value: string; label: string };
 
+/**
+ * Whether customers get what is on screen. "never": no version published yet,
+ * so real documents still use this draft. "live": the draft IS the published
+ * version. "ahead": edits since the last Publish, not on real documents yet.
+ */
+export type PublishState = "never" | "live" | "ahead";
+
 export function DocEditor({
   id,
   initialDoc,
   records,
+  initialPublishState = "never",
 }: {
   id: string;
   initialDoc: DocumentModel;
   records: RecordOption[];
+  initialPublishState?: PublishState;
 }) {
   const load = useEditor((state) => state.load);
   const doc = useEditor((state) => state.doc);
@@ -56,6 +66,8 @@ export function DocEditor({
     "idle" | "saving" | "saved"
   >("idle");
   const [record, setRecord] = useState("");
+  const [publishState, setPublishState] = useState<PublishState>(initialPublishState);
+  const [publishing, setPublishing] = useState(false);
   // Two states, because the panels are two different things at two sizes: a
   // bottom drawer on mobile (closed by default) and a docked column on desktop
   // (open by default). One boolean drove only the drawer, while the column was
@@ -113,6 +125,10 @@ export function DocEditor({
         try {
           setSaveState("saving");
           const result = await saveDocEditor(id, snapshot);
+          if (result.ok) {
+            // A saved edit after a publish: real documents no longer match the screen.
+            setPublishState((state) => (state === "live" ? "ahead" : state));
+          }
           if (result.ok && useEditor.getState().doc === snapshot) {
             markSaved();
             setSaveState("saved");
@@ -177,6 +193,32 @@ export function DocEditor({
     if (result.ok) {
       markSaved();
       setSaveState("saved");
+      setPublishState((state) => (state === "live" ? "ahead" : state));
+    }
+  };
+
+  const publish = async () => {
+    setPublishing(true);
+    try {
+      // Let a pending autosave land, then save what is on screen, so the
+      // snapshot is exactly what the person is looking at.
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      await saveChain.current;
+      const current = useEditor.getState().doc;
+      if (current) {
+        const saved = await saveDocEditor(id, current);
+        if (!saved.ok) throw new Error("save failed");
+        markSaved();
+      }
+      const result = await publishBuilderVersion(id);
+      if (!result.ok) throw new Error("publish failed");
+      setPublishState("live");
+      toast.success(`Published version ${result.version}. Quotes now use this layout.`);
+    } catch (error) {
+      unstable_rethrow(error);
+      toast.error("Not published. Nothing changed on real documents; try again.");
+    } finally {
+      setPublishing(false);
     }
   };
 
@@ -200,10 +242,10 @@ export function DocEditor({
       <BuilderWorkspaceBar
         identity={
           <Link
-            href="/settings/documents/builder"
+            href="/document-studio"
             className="text-xs text-slate-400 hover:text-white"
           >
-            ← Documents
+            ← Document Studio
           </Link>
         }
         title={
@@ -217,15 +259,42 @@ export function DocEditor({
         }
         description="Document Editor · drag content onto a print-ready canvas"
         status={
-          <BuilderSaveStatus
-            status={
-              saveState === "saving"
-                ? "Saving…"
-                : dirty
-                  ? "Unsaved changes"
-                  : "Saved"
-            }
-          />
+          <div className="flex items-center gap-3">
+            <BuilderSaveStatus
+              status={
+                saveState === "saving"
+                  ? "Saving…"
+                  : dirty
+                    ? "Unsaved changes"
+                    : "Saved"
+              }
+            />
+            <span
+              className={`whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                publishState === "live"
+                  ? "bg-emerald-500/15 text-emerald-300"
+                  : "bg-amber-500/15 text-amber-300"
+              }`}
+              title={
+                publishState === "live"
+                  ? "Real documents use exactly what you see."
+                  : publishState === "ahead"
+                    ? "Your changes are saved as a draft. Real documents keep the last published version until you press Publish."
+                    : "Never published: real documents use this draft until the first Publish."
+              }
+            >
+              {publishState === "live" ? "Live" : publishState === "ahead" ? "Draft, not live yet" : "Not published yet"}
+            </span>
+            <button
+              type="button"
+              onClick={publish}
+              disabled={publishing || publishState === "live"}
+              className="inline-flex h-8 items-center gap-1.5 rounded-md bg-orange-600 px-3 text-xs font-medium text-white transition hover:bg-orange-700 disabled:opacity-50"
+              title="Make this layout the one real documents use"
+            >
+              {publishing ? "Publishing…" : "Publish"}
+            </button>
+          </div>
         }
       >
         <button
@@ -260,6 +329,7 @@ export function DocEditor({
         </button>
         <VersionHistory
           id={id}
+          onPublished={() => setPublishState("live")}
           save={async () => {
             const current = useEditor.getState().doc;
             if (current) {
