@@ -15,6 +15,7 @@ import { PAGE_SIZES } from "./model";
 import { plateToHtmlBody } from "@/lib/docbuilder/plateSerialize";
 import { evaluateCondition } from "@/lib/docbuilder/expr";
 import { brandFooterContent, SOCIAL_ICON_PATHS } from "@/lib/companyBrand";
+import { storedFileSrc } from "@/lib/storedFileSrc";
 
 export type RenderCtx = {
   tokens: Record<string, string>;
@@ -25,6 +26,13 @@ export type RenderCtx = {
   // preview — in which case conditionals and showIf columns must render as the
   // placeholder layout, NOT be evaluated against an empty scope.
   bound?: boolean;
+  /**
+   * The workspace's logo, already embedded (see doceditor/renderGlobals). WINS
+   * over the renderer's `logoDataUri` argument, which every caller passes as the
+   * built-in Denago mark — resolving it into the context is what lets each of
+   * them print the acting tenant's logo instead without changing a call site.
+   */
+  logo?: string;
 } | null;
 
 function esc(s: unknown): string {
@@ -137,10 +145,14 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
     case "text":
       return wrap(plateToHtmlBody(block.value as never[], ctx as never));
     case "image": {
-      // {{tokens}} resolve here too (e.g. {{jobcard.signature}}, a data URL); an
+      // An uploaded image arrives here already embedded (renderGlobals.embedDocImages).
+      // One that was not — a render path that skipped that step — goes through the
+      // signed-in /api/stored proxy, never as the raw private-store link.
+      // {{tokens}} resolve too (e.g. {{jobcard.signature}}, a data URL); an
       // unresolved one fails the scheme check below and renders nothing.
-      const src = tok(String(block.src || ""), ctx).trim();
-      if (!src || !/^(https:|data:image\/)/i.test(src)) return "";
+      const raw = tok(String(block.src || ""), ctx).trim();
+      const src = /^data:image\//i.test(raw) ? raw : storedFileSrc(raw);
+      if (!src || !/^(https:|data:image\/|\/api\/stored\?)/i.test(src)) return "";
       return wrap(`<img src="${esc(src)}" alt="${esc(block.alt)}" style="width:${Math.max(5, Math.min(100, block.widthPct))}%;height:auto;${block.rounded ? "border-radius:8px;" : ""}"/>`);
     }
     case "divider":
@@ -154,9 +166,13 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
     case "table":
       return wrap(tableHtml(block));
     case "banner": {
-      const logo = block.showLogo && logoDataUri
-        ? `<img src="${logoDataUri}" alt="Denago" style="height:34px;width:auto"/>`
-        : `<span style="color:#fff;font-weight:800;font-size:15pt;letter-spacing:1px">DENAGO</span>`;
+      // Embedded images only: a logo LINK would have the customer's signing page
+      // (and a frozen document) load it from whatever host it names.
+      const logoSrc = [ctx?.logo, logoDataUri].find((src) => src && /^data:image\//i.test(src));
+      const company = ctx?.tokens?.["company.name"] || "DENAGO";
+      const logo = block.showLogo && logoSrc
+        ? `<img src="${esc(logoSrc)}" alt="${esc(company)}" style="height:34px;width:auto"/>`
+        : `<span style="color:#fff;font-weight:800;font-size:15pt;letter-spacing:1px">${esc(company.toUpperCase())}</span>`;
       return `<div style="background:${cssColor(block.bg, "#020617")};border-radius:8px;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;margin:2px 0">
         <div>${logo}</div>
         <div style="text-align:right"><div style="color:#fff;font-weight:800;font-size:17pt;letter-spacing:1px">${esc(tok(block.title, ctx))}</div><div style="color:${cssColor(block.accent, "#ea580c")};font-weight:800;font-size:12pt">${esc(tok(block.docNumber, ctx))}</div></div>

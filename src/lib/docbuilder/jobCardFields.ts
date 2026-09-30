@@ -53,8 +53,6 @@ export function jobCardPrintFields(jc: JobCardPrintSource, signatureSrc?: string
       ? `Signed electronically by ${jc.signedByName ?? ""} on ${formatDate(jc.signedAt)}${jc.signerIp ? ` · IP ${jc.signerIp}` : ""} · ECT Act, 2002`
       : "",
     "jobcard.signature": jc.signedAt ? signatureSrc ?? "" : "",
-    // The printout's "Generated …" date. A signing snapshot freezes its own.
-    "date.today": formatDate(new Date()),
   };
   const vars = {
     signed: Boolean(jc.signedAt),

@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { publishedBuilderTemplateFor } from "@/lib/docbuilder/published";
 import { renderDocumentHtml } from "@/lib/doceditor/serialize";
 import { bindCtx, logoDataUri } from "@/lib/signing/render";
+import { embedDocImages } from "@/lib/doceditor/renderGlobals";
 
 /**
  * The printed job card from the PUBLISHED single-editor layout — the same
@@ -38,7 +39,12 @@ export async function renderJobCardPrintHtml(opts: {
     }
   }
 
-  return renderDocumentHtml(live.doc, ctx, logoDataUri(), {
+  // Uploaded images are private files, embedded (owner-checked against the JOB
+  // CARD's workspace) so the page also prints headless; the workspace logo comes
+  // on ctx from bindCtx, with the built-in mark as the fallback.
+  const owner = await prisma.jobCard.findUnique({ where: { id: opts.jobCardId }, select: { tenantId: true } });
+  const doc = await embedDocImages(live.doc, owner?.tenantId ?? undefined);
+  return renderDocumentHtml(doc, ctx, logoDataUri(), {
     // A printed job card carries the customer's stored signature (a conditional
     // in the layout), not the e-signing placeholder boxes.
     hideOverlays: true,

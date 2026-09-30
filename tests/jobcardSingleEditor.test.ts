@@ -72,7 +72,11 @@ test("print page: builder only when published, and never for an old ?tpl= previe
   const route = src("src/app/(print)/jobcards/[id]/print/document/route.ts");
   assert.ok(route.indexOf("requireJobCardReadAccess(id)") < route.indexOf("renderJobCardPrintHtml("));
   assert.match(route, /isModuleEnabled\("automotive"\)/, "no layout guards a route handler");
-  assert.match(src("src/lib/jobCardPrintDocument.ts"), /publishedBuilderTemplateFor\("jobcard"\)/);
+  const render = src("src/lib/jobCardPrintDocument.ts");
+  assert.match(render, /publishedBuilderTemplateFor\("jobcard"\)/);
+  // Uploaded images embedded against the job card's workspace; logo via bindCtx.
+  assert.match(render, /embedDocImages\(live\.doc, owner\?\.tenantId \?\? undefined\)/);
+  assert.match(render, /renderDocumentHtml\(doc, ctx,/);
 });
 
 /**
