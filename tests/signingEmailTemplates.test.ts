@@ -227,6 +227,17 @@ test("each request renders from ITS tenant's template and brand only", async () 
   assert.deepEqual(calls.brandFor, ["t_a", "t_b"]);
 });
 
+test("a missing request renders unbranded: no settings or brand read for ANY tenant", async () => {
+  const settingsBefore = calls.settingsWhere.length;
+  const brandBefore = calls.brandFor.length;
+  const e = await signingEmailContent("invite", { requestId: "req_gone", title: "Quote Q-9", recipientName: "Jane", signingUrl: URL_ });
+  assert.equal(e.subject, "Please sign your document: Quote Q-9");
+  assert.ok(e.html.includes(`href="${URL_}"`));
+  assert.doesNotMatch(e.html, /api\/brand\/logo/);
+  assert.equal(calls.settingsWhere.length, settingsBefore, "no AppSetting read");
+  assert.equal(calls.brandFor.length, brandBefore, "no tenant brand read");
+});
+
 test("a failed lookup still sends the default email with the link", async () => {
   const e = await signingEmailContent("invite", { requestId: "req_boom", title: "Quote Q-9", recipientName: "Jane", signingUrl: URL_ });
   assert.equal(e.subject, "Please sign your document: Quote Q-9");

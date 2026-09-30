@@ -46,12 +46,19 @@ export async function signingEmailContent(
     phone: "",
     email: "",
   };
+  const unbranded = () => {
+    vars.company_name = fallbackBrand.companyName;
+    return renderSigningEmail(kind, null, vars, fallbackBrand);
+  };
   try {
     const req = await basePrisma.signatureRequest.findUnique({
       where: { id: input.requestId },
       select: { tenantId: true, quoteId: true, createdById: true, expiresAt: true },
     });
-    const tenantId = req?.tenantId ?? null;
+    // No request → no tenant to brand as. Never fall through to the default
+    // tenant's template, phone, email or logo.
+    if (!req) return unbranded();
+    const tenantId = req.tenantId ?? null;
     const settingsTenant = tenantId ?? DEFAULT_TENANT_ID;
     const def = SIGNING_EMAILS[kind];
     const [brand, mailBrand, settings, quote, sender] = await Promise.all([
@@ -99,7 +106,6 @@ export async function signingEmailContent(
       email: vars.company_email,
     });
   } catch {
-    vars.company_name = fallbackBrand.companyName;
-    return renderSigningEmail(kind, null, vars, fallbackBrand);
+    return unbranded();
   }
 }
