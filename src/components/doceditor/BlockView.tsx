@@ -5,6 +5,7 @@ import { computePricing } from "@/lib/doceditor/serialize";
 import { brandFooterContent, SOCIAL_ICON_PATHS, COMPANY_DEFAULTS } from "@/lib/companyBrand";
 import { storedFileSrc } from "@/lib/storedFileSrc";
 import { ActiveRichText, ReadOnlyRichText } from "./RichText";
+import { handoverChecklistHtml } from "@/lib/doceditor/handoverChecklist";
 import { ShowcaseBlockView } from "./ShowcaseBlockView";
 import { useDocEditorEnv } from "./EditorContext";
 
@@ -193,6 +194,10 @@ export function BlockView({ block, active }: { block: DocumentBlock; active: boo
         </div>
       );
     }
+
+    case "handoverChecklist":
+      // Our own escaped markup, sample data only — the same renderer the print uses.
+      return <div dangerouslySetInnerHTML={{ __html: handoverChecklistHtml(null) }} />;
 
     case "conditional": {
       const badge = block.when?.trim() ? block.when : "always";

@@ -206,6 +206,9 @@ export const footerBlockSchema = z.object({
   lines: z.array(z.object({ text: z.string() })).default([]),
 });
 
+/** Delivery handover checklist runs + customer signature, filled from the record (see ./handoverChecklist.ts). */
+export const handoverChecklistBlockSchema = z.object({ ...base, type: z.literal("handoverChecklist") });
+
 // ── showcase quotation blocks (rendered by ./showcaseRender.ts) ──────
 /** Line icons the showcase blocks can draw — see SHOWCASE_ICONS in showcaseRender.ts. */
 export const showcaseIconNames = [
@@ -303,7 +306,7 @@ export const blockSchema: z.ZodType<DocumentBlock> = z.lazy(() => z.discriminate
   textBlockSchema, headingBlockSchema, imageBlockSchema, dividerBlockSchema, spacerBlockSchema,
   pageBreakBlockSchema, pricingBlockSchema, tableBlockSchema,
   bannerBlockSchema, infoCardBlockSchema, lineItemsBlockSchema, totalBandBlockSchema, termsBlockSchema, footerBlockSchema,
-  conditionalBlockSchema,
+  conditionalBlockSchema, handoverChecklistBlockSchema,
   showcaseHeaderBlockSchema, infoStripBlockSchema, vehicleShowcaseBlockSchema, totalsBoxBlockSchema, acceptanceBlockSchema, footerBandBlockSchema,
 ])) as z.ZodType<DocumentBlock>;
 
@@ -321,6 +324,7 @@ export type LineItemsBlock = z.infer<typeof lineItemsBlockSchema>;
 export type TotalBandBlock = z.infer<typeof totalBandBlockSchema>;
 export type TermsBlock = z.infer<typeof termsBlockSchema>;
 export type FooterBlock = z.infer<typeof footerBlockSchema>;
+export type HandoverChecklistBlock = z.infer<typeof handoverChecklistBlockSchema>;
 export type ShowcaseHeaderBlock = z.infer<typeof showcaseHeaderBlockSchema>;
 export type InfoStripBlock = z.infer<typeof infoStripBlockSchema>;
 export type VehicleShowcaseBlock = z.infer<typeof vehicleShowcaseBlockSchema>;
@@ -337,7 +341,7 @@ export type DocumentBlock =
   | TextBlock | HeadingBlock | ImageBlock | DividerBlock | SpacerBlock
   | PageBreakBlock | PricingBlock | TableBlock
   | BannerBlock | InfoCardBlock | LineItemsBlock | TotalBandBlock | TermsBlock | FooterBlock
-  | ConditionalBlock | ShowcaseBlock;
+  | ConditionalBlock | HandoverChecklistBlock | ShowcaseBlock;
 export type BlockType = DocumentBlock["type"];
 
 // ── columns / rows / pages ──────────────────────────────────────────

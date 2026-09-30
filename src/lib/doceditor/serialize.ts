@@ -15,6 +15,7 @@ import { PAGE_SIZES } from "./model";
 import { plateToHtmlBody } from "@/lib/docbuilder/plateSerialize";
 import { evaluateCondition } from "@/lib/docbuilder/expr";
 import { brandFooterContent, SOCIAL_ICON_PATHS } from "@/lib/companyBrand";
+import { handoverChecklistHtml } from "./handoverChecklist";
 import { showcaseBlockHtml, showcaseLookHtml } from "./showcaseRender";
 import { layoutRowsFor, resolveOverflowGroups } from "./overflow";
 import { storedFileSrc } from "@/lib/storedFileSrc";
@@ -245,6 +246,9 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
         ${socials}
       </div>`;
     }
+
+    case "handoverChecklist":
+      return wrap(handoverChecklistHtml(ctx));
 
     case "conditional": {
       // Only prune when bound to a record; an unbound preview renders all branches.
