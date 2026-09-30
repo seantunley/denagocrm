@@ -189,7 +189,7 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
     .map((item) => ({
       id: item.id,
       label: item.description,
-      amount: Math.round(item.quantity * item.unitPriceCents * (1 - item.discountPct / 100)),
+      amount: Math.round(item.qty * item.unitPriceCents * (1 - item.discountPct / 100)),
       kind: item.kind,
     }));
   const timeline = [
