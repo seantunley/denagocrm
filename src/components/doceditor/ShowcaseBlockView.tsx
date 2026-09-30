@@ -3,6 +3,7 @@
 import type { InfoCardBlock, LineItemsBlock, ShowcaseBlock, TermsBlock } from "@/lib/doceditor/model";
 import { showcaseBlockHtml, showcaseLookHtml } from "@/lib/doceditor/showcaseRender";
 import { SHOWCASE_BAND_ASSETS } from "@/lib/doceditor/showcaseAssets";
+import { useDocEditorEnv } from "./EditorContext";
 
 /**
  * The canvas renders UNBOUND — merge fields and the sample vehicle show where
@@ -13,12 +14,13 @@ const CANVAS_CTX = { tokens: { ...SHOWCASE_BAND_ASSETS }, items: [], vars: {}, b
 
 /**
  * Canvas preview of a showcase block (or a shared block in the showcase look):
- * the SAME escaped, colour-sanitised HTML the PDF prints. `logo` is whatever the
- * canvas shows for the brand banner, so both blocks follow the same logo.
+ * the SAME escaped, colour-sanitised HTML the PDF prints, with the workspace's
+ * logo exactly as the brand banner on the canvas shows it.
  */
-export function ShowcaseBlockView({ block, logo }: { block: ShowcaseBlock | InfoCardBlock | LineItemsBlock | TermsBlock; logo?: string }) {
+export function ShowcaseBlockView({ block }: { block: ShowcaseBlock | InfoCardBlock | LineItemsBlock | TermsBlock }) {
+  const { logoSrc } = useDocEditorEnv();
   const html = block.type === "infoCard" || block.type === "lineItems" || block.type === "terms"
     ? showcaseLookHtml(block, CANVAS_CTX)
-    : showcaseBlockHtml(block, CANVAS_CTX, logo);
+    : showcaseBlockHtml(block, CANVAS_CTX, logoSrc || undefined);
   return <div dangerouslySetInnerHTML={{ __html: html }} />;
 }

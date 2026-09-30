@@ -93,7 +93,8 @@ const STILL_HARDCODED: Record<string, string> = {
   // Phase 5 (print / documents): the doc-editor canvas, the print shells and the
   // PDF/email renderers. They render a DOCUMENT, whose brand comes from the
   // record being printed rather than from the viewer's session.
-  "src/components/doceditor/BlockView.tsx": "phase 5 — document canvas",
+  // BlockView (the doc-editor canvas) is OFF this list: its banner shows the
+  // workspace logo resolved by the page, the same one the printed banner embeds.
   "src/components/print/PrintDocShell.tsx": "phase 5 — print",
   "src/components/print/QuotePrintDoc.tsx": "phase 5 — print",
   "src/lib/customDocs.ts": "phase 5 — print",
