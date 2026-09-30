@@ -142,8 +142,11 @@ function humaniseSendError(message: string): string {
   if (/24|window|outside/i.test(message)) {
     return "Outside the 24-hour reply window — the customer must message you first.";
   }
+  if (/admins, developers or testers/i.test(message)) {
+    return `Meta only lets this app message its own testers. Check the app is Live and pages_messaging has Advanced Access: ${message}`;
+  }
   if (/permission|OAuth/i.test(message)) {
-    return `Meta hasn't approved messaging permissions yet (app review pending): ${message}`;
+    return `Meta refused the Page token or its permissions: ${message}`;
   }
   return message;
 }
