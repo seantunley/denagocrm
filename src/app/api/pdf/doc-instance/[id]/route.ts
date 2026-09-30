@@ -27,7 +27,7 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
   if (!row || !doc || !(await canAccessDocumentLinks(user, row))) {
     return new Response("Not found", { status: 404 });
   }
-  const pdf = await renderModelToPdf(doc, renderSnapshot(row));
+  const pdf = await renderModelToPdf(doc, renderSnapshot(row), row.tenantId);
   return new Response(new Uint8Array(pdf), {
     headers: {
       "Content-Type": "application/pdf",

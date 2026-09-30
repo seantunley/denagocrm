@@ -7,6 +7,9 @@ import { parseDocument } from "@/lib/doceditor/model";
 import { canAccessDocumentLinks } from "@/lib/doceditor/instanceAccess";
 import { customDocumentEditable } from "@/lib/doceditor/customDocument";
 import { DocEditor } from "@/components/doceditor/DocEditor";
+import { DocEditorEnvProvider } from "@/components/doceditor/EditorContext";
+import { getCompanyProfile } from "@/lib/companyProfile";
+import { documentLogo } from "@/lib/doceditor/renderGlobals";
 
 export const dynamic = "force-dynamic";
 
@@ -29,7 +32,14 @@ export default async function CustomDocumentPage({ params }: { params: Promise<{
   // The editor autosaves, so it is only mounted on a draft the caller may edit
   // and whose content parsed — never on a fallback it would save over.
   if (editable && doc) {
-    return <DocEditor id={row.id} initialDoc={doc} records={[]} mode="document" />;
+    // The canvas shows the same embedded logo the finalised PDF will carry.
+    const company = await getCompanyProfile();
+    const logoSrc = (await documentLogo(company.logoUrl, row.tenantId)) ?? "";
+    return (
+      <DocEditorEnvProvider value={{ templateId: null, logoSrc, companyName: company.name }}>
+        <DocEditor id={row.id} initialDoc={doc} records={[]} mode="document" />
+      </DocEditorEnvProvider>
+    );
   }
 
   return (

@@ -225,6 +225,13 @@ test("the page, the preview route and the legacy Studio actions agree on who may
   const route = shipped("src/app/api/pdf/doc-instance/[id]/route.ts");
   assert.match(route, /canAccessDocumentLinks\(user, row\)/);
 
+  // Every custom-document render embeds images for the document's OWN workspace
+  // (behaviour: tests/customDocumentImages.test.ts).
+  assert.match(route, /renderModelToPdf\(doc, renderSnapshot\(row\), row\.tenantId\)/);
+  assert.match(body(shipped(ACTIONS), "finaliseCustomDocument"), /renderModelToPdf\(doc, renderSnapshot\(row\), row\.tenantId\)/);
+  assert.match(shipped("src/lib/doceditor/generate.ts"), /embedDocImages\(doc, tenantId \?\? undefined\)/);
+  assert.match(page, /documentLogo\(company\.logoUrl, row\.tenantId\)/, "the canvas shows the workspace logo");
+
   // A document-editor row has an empty BlockNote column; the Studio actions must not file it.
   const studio = shipped("src/app/actions/studio.ts");
   for (const name of ["saveDocInstance", "finalizeDocInstance"]) {

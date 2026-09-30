@@ -140,7 +140,7 @@ export async function finaliseCustomDocument(id: string): Promise<{ ok: boolean;
     if (!customDocumentEditable(row)) refuse("This document is already finalised.");
     const doc = parseDocument(row.docModelJson);
     if (!doc) refuse("This document can't be read, so it was not finalised.");
-    const pdf = await renderModelToPdf(doc, renderSnapshot(row));
+    const pdf = await renderModelToPdf(doc, renderSnapshot(row), row.tenantId);
 
     const fileName = `${row.title}.pdf`;
     // ponytail: a Finalise that loses the race below leaves this blob unreferenced.
