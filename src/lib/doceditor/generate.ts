@@ -1,15 +1,15 @@
 import "server-only";
-import fs from "fs";
-import path from "path";
 import { prisma } from "@/lib/db";
 import { getBuilderTemplate, getLiveBuilderTemplate } from "@/lib/docbuilder/store";
 import { buildQuoteContext, buildJobCardContext } from "@/lib/docbuilder/merge";
 import { loadBillToFleet } from "@/lib/quoteBillTo";
+import { loadLeadForDoc, loadWarrantyClaimForDoc } from "@/lib/docbuilder/leadWarrantyRecords";
 import { getCompanyProfile, companyTokens } from "@/lib/companyProfile";
 import { htmlToPdf } from "@/lib/customDocs";
 import { type DocumentModel } from "./model";
 import { readTemplateDocument } from "./legacy";
 import { renderDocumentHtml, renderEmailHtml, type RenderCtx } from "./serialize";
+import { defaultLogoDataUri as logoDataUri, documentLogo, embedDocImages, liveGlobalTokens } from "./renderGlobals";
 
 /**
  * Fold the editable Company Profile in as {{company.*}} tokens, exactly as the
@@ -20,21 +20,13 @@ import { renderDocumentHtml, renderEmailHtml, type RenderCtx } from "./serialize
  * otherwise be null. Record-specific tokens still win on any overlap.
  */
 async function withCompany(ctx: RenderCtx): Promise<RenderCtx> {
-  const company = companyTokens(await getCompanyProfile());
+  const profile = await getCompanyProfile();
+  const company = { ...(await liveGlobalTokens()), ...companyTokens(profile) };
+  const logo = await documentLogo(profile.logoUrl);
   // Unbound: carry company tokens only, but mark bound:false so conditionals/showIf
   // columns render as the placeholder layout rather than evaluating an empty scope.
-  if (!ctx) return { tokens: company, items: [], vars: {}, bound: false };
-  return { ...ctx, tokens: { ...company, ...ctx.tokens }, bound: true };
-}
-
-let logoCache: string | null | undefined;
-function logoDataUri(): string | undefined {
-  if (logoCache !== undefined) return logoCache ?? undefined;
-  try {
-    const buf = fs.readFileSync(path.join(process.cwd(), "public", "branding", "denago-logo-email.png"));
-    logoCache = `data:image/png;base64,${buf.toString("base64")}`;
-  } catch { logoCache = null; }
-  return logoCache ?? undefined;
+  if (!ctx) return { tokens: company, items: [], vars: {}, bound: false, logo };
+  return { ...ctx, tokens: { ...company, ...ctx.tokens }, bound: true, logo };
 }
 
 export type Resolved = { doc: DocumentModel; ctx: RenderCtx; title: string; quoteId: string | null; jobCardId: string | null; contactId: string | null };
@@ -59,7 +51,9 @@ export async function renderResolvedToPdf(r: Resolved): Promise<{ buffer: Buffer
 }
 
 /** Load a template + bind it to a quote/job card (shared by PDF and export). */
-async function resolve(templateId: string, quoteId?: string | null, jobCardId?: string | null, live = false): Promise<Resolved | null> {
+type OtherRecord = { leadId?: string | null; warrantyClaimId?: string | null };
+
+async function resolve(templateId: string, quoteId?: string | null, jobCardId?: string | null, live = false, other?: OtherRecord): Promise<Resolved | null> {
   // `live`: a document being filed against a record renders the PUBLISHED
   // version; previews and the editor's own exports render the draft.
   const tpl = live ? await getLiveBuilderTemplate(templateId) : await getBuilderTemplate(templateId);
@@ -69,7 +63,7 @@ async function resolve(templateId: string, quoteId?: string | null, jobCardId?: 
   // document we could not fully understand.
   const read = readTemplateDocument(tpl.data, tpl.name);
   if (read.status !== "ok") return null;
-  const doc = read.doc;
+  const doc = await embedDocImages(read.doc, tpl.tenantId);
   let ctx: RenderCtx = null;
   let title = doc.title || tpl.name;
   let qId: string | null = null, jId: string | null = null, contactId: string | null = null;
@@ -86,6 +80,9 @@ async function resolve(templateId: string, quoteId?: string | null, jobCardId?: 
       include: { items: true, vehicle: true, contact: true, technician: true },
     });
     if (jc) { ctx = buildJobCardContext(jc); title = `${doc.title} — Job #${jc.number}`; jId = jc.id; contactId = jc.contactId; }
+  } else if (other?.leadId || other?.warrantyClaimId) {
+    const bound = other.leadId ? await loadLeadForDoc(other.leadId) : await loadWarrantyClaimForDoc(other.warrantyClaimId!);
+    if (bound) { ctx = bound.ctx; title = `${doc.title} — ${bound.label}`; contactId = bound.contactId; }
   }
   // Fold in company tokens once — including the unbound case (ctx still null), so the
   // record-independent brand tokens resolve in list previews and "No record" exports.
@@ -100,8 +97,8 @@ async function resolve(templateId: string, quoteId?: string | null, jobCardId?: 
  */
 export async function generateDocEditorPdf(opts: {
   templateId: string; quoteId?: string | null; jobCardId?: string | null; live?: boolean;
-}): Promise<{ buffer: Buffer; title: string; quoteId: string | null; jobCardId: string | null; contactId: string | null } | null> {
-  const r = await resolve(opts.templateId, opts.quoteId, opts.jobCardId, opts.live);
+} & OtherRecord): Promise<{ buffer: Buffer; title: string; quoteId: string | null; jobCardId: string | null; contactId: string | null } | null> {
+  const r = await resolve(opts.templateId, opts.quoteId, opts.jobCardId, opts.live, opts);
   if (!r) return null;
   return renderResolvedToPdf(r);
 }
@@ -109,9 +106,9 @@ export async function generateDocEditorPdf(opts: {
 export type ExportFormat = "html" | "email" | "doc";
 
 /** Export a template as static HTML, email-safe HTML, or a Word-openable .doc. */
-export async function generateDocEditorExport(opts: { templateId: string; quoteId?: string | null; format: ExportFormat }):
+export async function generateDocEditorExport(opts: { templateId: string; quoteId?: string | null; format: ExportFormat } & OtherRecord):
   Promise<{ content: string; title: string; mime: string; ext: string } | null> {
-  const r = await resolve(opts.templateId, opts.quoteId);
+  const r = await resolve(opts.templateId, opts.quoteId, null, false, opts);
   if (!r) return null;
   if (opts.format === "email") {
     return { content: renderEmailHtml(r.doc, r.ctx, logoDataUri()), title: r.title, mime: "text/html; charset=utf-8", ext: "html" };

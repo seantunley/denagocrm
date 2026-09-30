@@ -159,16 +159,56 @@ function agreementTemplate(): DocumentModel {
   ]);
 }
 
+// ── Indemnity + warranty claim: laid out like their legacy print pages ──
+const SLATE = "#64748b";
+
+/** Small text, as the legacy meta strip under the banner. */
+function small(block: DocumentBlock): DocumentBlock {
+  block.settings = { ...block.settings, fontScale: 0.8 };
+  return block;
+}
+
+/** Small italic note, as the legacy "intro" line under the banner. */
+function note(value: string): DocumentBlock {
+  const block = newBlock("text");
+  if (block.type === "text") block.value = [{ type: "p", children: [{ text: value, italic: true }] }];
+  return small(block);
+}
+
+/** A signature line with its label beneath. Paragraphs, because "\n" in a text leaf does not break. */
+function signLine(label: string): DocumentBlock {
+  const block = newBlock("text");
+  if (block.type === "text") {
+    block.value = ["", "", "________________________________________", label].map((line) => ({
+      type: "p",
+      children: [{ text: line }],
+    }));
+  }
+  return small(block);
+}
+
 function indemnityTemplate(): DocumentModel {
   return documentModel("Test-drive indemnity", [
-    [banner("TEST-DRIVE INDEMNITY", "{{date.today}}")],
-    [infoCard("DRIVER", "{{customer.name}}", "{{customer.phone}}\n{{customer.email}}")],
-    [text(
-      "I, the undersigned, acknowledge that I am about to operate an electric Low-Speed Vehicle supplied by {{company.name}} for the purpose of a demonstration drive.\n\n" +
-        "I confirm that I hold a valid driver's licence, will operate the vehicle responsibly and on private property only, and accept full responsibility for any damage, injury or loss arising from my use of the vehicle during the demonstration.\n\n" +
-        "I indemnify {{company.name}} against all claims arising from the demonstration drive.",
+    [banner("TEST-DRIVE INDEMNITY", "")],
+    [small(text("Date: {{date.today}}"))],
+    [note("Please read and sign before the test drive.")],
+    [
+      infoCard("DRIVER", "{{customer.name}}", "{{customer.lines}}"),
+      infoCard("VEHICLE", "{{vehicle}}", "{{vehicle.lines}}", INK),
+    ],
+    [infoCard(
+      "TO BE COMPLETED BY THE DRIVER",
+      "",
+      "Driver's licence number: ______________________________\n\nID / passport number: ______________________________",
+      SLATE,
     )],
-    signatureStrip("Driver signature & date", "Witness (for {{company.name}}) & date"),
+    [infoCard(
+      "INDEMNITY & WAIVER",
+      "",
+      "I, the undersigned, acknowledge that I am test-driving the vehicle entirely at my own risk. I confirm that I hold a valid driver's licence, will follow all instructions given by {{company.name}} staff, and accept liability for any damage caused by my negligence during the test drive. {{company.name}}, its owners and employees are indemnified against any claim for injury, loss or damage arising from the test drive, to the fullest extent permitted by law.",
+      SLATE,
+    )],
+    [signLine("Driver signature · Date"), signLine("For {{company.name}} · Date")],
     [footer()],
   ]);
 }
@@ -231,17 +271,23 @@ function serviceReportTemplate(): DocumentModel {
 }
 
 function warrantyClaimTemplate(): DocumentModel {
+  // The resolution box only prints once there is one, as on the legacy page.
+  const resolution = newBlock("conditional");
+  if (resolution.type === "conditional") {
+    resolution.when = "claim.hasResolution";
+    resolution.blocks = [infoCard("RESOLUTION", "", "{{claim.resolutionLine}}", SLATE)];
+  }
   return documentModel("Warranty claim", [
-    [banner("WARRANTY CLAIM", "{{date.today}}")],
+    [banner("WARRANTY CLAIM", "{{claim.number}}")],
+    [small(text("Claimed: {{claim.date}}")), small(text("Status: {{claim.status}}", "right"))],
+    [note("Warranty claim as recorded by {{company.name}}.")],
     [
-      infoCard("CUSTOMER", "{{customer.name}}", "{{customer.phone}}\n{{customer.email}}"),
-      infoCard("VEHICLE & WARRANTY", "{{vehicle}}", "VIN {{vehicle.vin}} · Reg {{vehicle.reg}}", INK),
+      infoCard("CUSTOMER", "{{customer.name}}", "{{customer.lines}}"),
+      infoCard("VEHICLE & WARRANTY", "{{vehicle}}", "{{vehicle.lines}}", INK),
     ],
-    [heading("Fault description")],
-    [text("Describe the fault, when it occurred and the conditions under which it happens.")],
-    [heading("Assessment")],
-    [text("Technician assessment, parts required and recommended remedy.")],
-    signatureStrip("Customer & date", "For {{company.name}} & date"),
+    [infoCard("REPORTED FAULT", "", "{{claim.description}}", SLATE)],
+    [resolution],
+    [signLine("Customer · Date"), signLine("For {{company.name}} · Date")],
     [footer()],
   ]);
 }

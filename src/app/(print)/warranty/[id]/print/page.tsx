@@ -1,4 +1,5 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+import { printableRecordLayout } from "@/lib/docbuilder/leadWarrantyRecords";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { requireVehicleReadAccess } from "@/lib/permissions";
@@ -25,6 +26,12 @@ export default async function WarrantyClaimPrintPage({
   });
   if (!claim) notFound();
   await requireVehicleReadAccess(claim.vehicleId);
+  // SAFE SWITCH: once the default warranty-claim layout is PUBLISHED in the
+  // single editor, that is what prints. ?tpl= is a Settings → Documents preview
+  // of a legacy template, so it stays here.
+  if (!tplId && (await printableRecordLayout("warranty-claim"))) {
+    redirect(`/warranty/${id}/print/document`);
+  }
   // The company this document is FROM. getCompanyProfile now inherits the
   // platform-set tenant brand when the tenant has not filled in its own profile.
   const company = await getCompanyProfile();

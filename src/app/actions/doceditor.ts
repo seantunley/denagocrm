@@ -14,9 +14,11 @@ import { getBuilderTemplate } from "@/lib/docbuilder/store";
 import {
   parseBuilderRecord,
   recordMatchesTemplate,
+  requiredRecordKind,
   type BuilderRecordKind,
 } from "@/lib/docbuilder/recordBinding";
 import { saveFile } from "@/lib/storage";
+import { checkDocImage } from "@/lib/doceditor/imageUpload";
 import { actingOwnerTenantId, withActingStaffScope } from "@/lib/actingScope";
 
 const BASE = "/document-studio";
@@ -55,10 +57,12 @@ async function validatedBinding(
   const template = await getBuilderTemplate(templateId);
   if (!template) throw new Error("Template not found.");
   if (record && !recordMatchesTemplate(template.key, record.kind)) {
+    const required = requiredRecordKind(template.key);
+    const label = { quote: "a quote", jobcard: "a job card", lead: "a lead", warranty: "a warranty claim" };
     throw new Error(
-      record.kind === "quote"
-        ? `The “${template.name}” template requires a job card record.`
-        : `The “${template.name}” template requires a quote record.`,
+      required && required !== "either"
+        ? `The “${template.name}” template requires ${label[required]} record.`
+        : `The “${template.name}” template can’t be bound to a record.`,
     );
   }
   // Same message either way — "you may not" and "it does not exist" must not be
@@ -73,6 +77,8 @@ async function validatedBinding(
     template,
     quoteId: record?.kind === "quote" ? record.id : undefined,
     jobCardId: record?.kind === "jobcard" ? record.id : undefined,
+    leadId: record?.kind === "lead" ? record.id : undefined,
+    warrantyClaimId: record?.kind === "warranty" ? record.id : undefined,
   };
 }
 
@@ -159,11 +165,13 @@ export async function generateDocEditorDocument(formData: FormData) {
       : legacyRecord(formData);
     if (submittedRecord && !record) throw new ActionRefusal("Choose a valid record.");
 
-    const { quoteId, jobCardId } = await validatedBinding(user, templateId, record);
+    const { quoteId, jobCardId, leadId, warrantyClaimId } = await validatedBinding(user, templateId, record);
     const result = await generateDocEditorPdf({
       templateId,
       quoteId,
       jobCardId,
+      leadId,
+      warrantyClaimId,
       live: true, // filed against a record, so the published layout
     });
     if (!result) refuse("Could not build that document — check the template.");
@@ -234,6 +242,42 @@ export async function createStandardQuoteTemplate() {
     });
     revalidatePath(BASE);
     return { redirectTo: `/doc-editor/${created.id}` };
+  });
+}
+
+/**
+ * Upload an image for an image block. Returns the stored-file ref the block keeps
+ * as its `src`; the editor shows it through /api/stored and every render embeds
+ * it (renderGlobals.embedDocImages), so the private file never needs a public link.
+ *
+ * Filed under the open TEMPLATE's workspace, like a document template's logo
+ * (uploadTemplateLogo) — that is whose document the image is part of. The type
+ * comes from the file's own bytes, never the name or browser MIME type.
+ */
+export async function uploadDocEditorImage(formData: FormData): Promise<{ ok: true; ref: string } | { ok: false; error: string }> {
+  return withActingStaffScope(async () => {
+    const user = await requirePermission("docbuilder.manage");
+    const file = formData.get("file");
+    if (!(file instanceof File)) return { ok: false, error: "Choose an image to upload." };
+    // Checked on the size and first bytes BEFORE the whole file is read into memory.
+    const type = checkDocImage(file.size, new Uint8Array(await file.slice(0, 16).arrayBuffer()));
+    if (!type.ok) return type;
+    const bytes = Buffer.from(await file.arrayBuffer());
+
+    const templateId = String(formData.get("templateId") ?? "").trim();
+    const template = templateId ? await getBuilderTemplate(templateId) : null;
+    if (templateId && !template) return { ok: false, error: "Template not found." };
+    const tenantId = template ? template.tenantId : await actingOwnerTenantId();
+
+    const ref = await saveFile(bytes, `image.${type.ext}`, type.mime, tenantId);
+    await logAudit({
+      action: "doceditor.image_upload",
+      summary: template ? `Uploaded an image to “${template.name}”` : "Uploaded a document image",
+      entityType: "DocBuilderTemplate",
+      entityId: template?.id,
+      user,
+    });
+    return { ok: true, ref };
   });
 }
 
