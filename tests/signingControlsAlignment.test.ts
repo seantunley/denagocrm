@@ -6,6 +6,7 @@ import path from "node:path";
 import { showcaseQuoteTemplate } from "../src/lib/doceditor/standardTemplates";
 import { ACCEPTANCE_GEOMETRY, acceptanceFieldRects, showcaseBlockHtml } from "../src/lib/doceditor/showcaseRender";
 import { snapFieldsToAcceptanceCards } from "../src/lib/doceditor/fieldSnap";
+import { newRecipient } from "../src/lib/doceditor/factory";
 import type { AcceptanceBlock, DocumentModel, FloatingBlock, OverlayField } from "../src/lib/doceditor/model";
 
 /**
@@ -86,6 +87,54 @@ test("send-time snapping puts drifted fields back on the lines (and moves with a
   const e = parts(elsewhere);
   e.sig.anchor = { ...e.sig.anchor, x: 40, y: 200 };
   assert.deepEqual(rectOf(parts(snapFieldsToAcceptanceCards(elsewhere)).sig), { x: 40, y: 200, width: e.sig.width, height: e.sig.height });
+});
+
+test("snapping is narrow: only the customer's nearest field within 40px of its slot moves", () => {
+  // A customer signature placed deliberately ELSEWHERE inside the card (its top-left, >40px from the line).
+  const inside = showcaseQuoteTemplate();
+  const i = parts(inside);
+  i.sig.anchor = { ...i.sig.anchor, x: i.card.x + 14, y: i.card.y + 12 };
+  const iSnapped = parts(snapFieldsToAcceptanceCards(inside));
+  assert.deepEqual(rectOf(iSnapped.sig), rectOf(i.sig), "a field >40px from its slot is not moved");
+  assert.equal(snapFieldsToAcceptanceCards(inside), inside, "document untouched");
+
+  // Two candidates for the signature slot: only the nearest snaps; the other stays put.
+  const two = showcaseQuoteTemplate();
+  const t = parts(two);
+  const slot = acceptanceFieldRects(t.card).signature;
+  t.sig.anchor = { ...t.sig.anchor, x: slot.x + 12, y: slot.y + 15 };
+  const second: OverlayField = { ...t.sig, id: "second-signature", anchor: { ...t.sig.anchor, x: slot.x + 30, y: slot.y + 30 } };
+  t.page.overlayFields.push(second);
+  const twoSnapped = snapFieldsToAcceptanceCards(two).pages[0].overlayFields;
+  assert.deepEqual(rectOf(twoSnapped.find((f) => f.id === t.sig.id)!), slot, "the nearest candidate lands on the line");
+  assert.deepEqual(rectOf(twoSnapped.find((f) => f.id === "second-signature")!), rectOf(second), "the other candidate is not moved");
+
+  // Another recipient's field on the card (e.g. Denago's) is never moved — even right beside the line.
+  const cosign = showcaseQuoteTemplate();
+  const c = parts(cosign);
+  const denago = newRecipient({ party: "denago", name: "Denago Cape Town", role: "signer" });
+  cosign.recipients.push(denago);
+  const cSlot = acceptanceFieldRects(c.card).signature;
+  const dealerField: OverlayField = { ...c.sig, id: "dealer-signature", recipientId: denago.id, anchor: { ...c.sig.anchor, x: cSlot.x + 5, y: cSlot.y + 5 } };
+  c.page.overlayFields.unshift(dealerField);
+  c.sig.anchor = { ...c.sig.anchor, x: cSlot.x + 12, y: cSlot.y + 15 };
+  const cSnapped = snapFieldsToAcceptanceCards(cosign).pages[0].overlayFields;
+  assert.deepEqual(rectOf(cSnapped.find((f) => f.id === "dealer-signature")!), rectOf(dealerField), "Denago's field stays exactly where it was");
+  assert.deepEqual(rectOf(cSnapped.find((f) => f.id === c.sig.id)!), cSlot, "the customer's field still snaps");
+
+  // No customer party on the document at all: nothing is moved.
+  const custom = showcaseQuoteTemplate();
+  const u = parts(custom);
+  custom.recipients = custom.recipients.map((r) => ({ ...r, party: "custom" as const }));
+  u.sig.anchor = { ...u.sig.anchor, x: u.sig.anchor.x + 12, y: u.sig.anchor.y + 15 };
+  assert.equal(snapFieldsToAcceptanceCards(custom), custom);
+});
+
+test("the send paths name the customer party, so their fields are the ones snapped", () => {
+  const envelope = readFileSync(path.join(root, "src/lib/signing/autoEnvelope.ts"), "utf8");
+  // Both places that invent the customer recipient (ensureSignable, makeCosignable) state the party.
+  assert.equal((envelope.match(/const customerRecipient = newRecipient\(\{\s*(\/\/[^\n]*\n\s*)*party: "customer",/g) ?? []).length, 2);
+  assert.match(envelope, /const dealerRecipient = newRecipient\(\{\s*party: "denago",/);
 });
 
 test("the signing page: controls and lines share one scaled sheet, so they coincide at every width", () => {
