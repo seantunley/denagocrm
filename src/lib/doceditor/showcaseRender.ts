@@ -119,9 +119,12 @@ function bandBackground(bgCss: string, raw: string, ctx: RenderCtx, overlay: str
   const layers = usable ? `${overlay},url('${img}')` : `linear-gradient(115deg,${bgCss} 0%,${bgCss} 45%,#16233d 100%)`;
   return `background-color:${bgCss};background-image:${layers};background-size:cover;background-position:center;background-repeat:no-repeat;${KEEP_BG}`;
 }
-const HEADER_OVERLAY = "linear-gradient(90deg,rgba(11,18,32,.86) 0%,rgba(11,18,32,.55) 34%,rgba(11,18,32,.18) 68%,rgba(11,18,32,.32) 100%),linear-gradient(rgba(11,18,32,.08),rgba(11,18,32,.08))";
-const FOOTER_OVERLAY = "linear-gradient(90deg,rgba(11,18,32,.82) 0%,rgba(11,18,32,.5) 40%,rgba(11,18,32,.42) 100%),linear-gradient(rgba(11,18,32,.12),rgba(11,18,32,.12))";
-const TEXT_SHADOW = "text-shadow:0 1px 3px rgba(0,0,0,.65),0 0 10px rgba(0,0,0,.35);";
+// Legibility comes from the overlay alone. A blurred text-shadow was tried and
+// Chrome's PDF output (and some viewers) rasterise each shadowed run into a
+// visible grey rectangle behind the logo, tagline, title and footer lines.
+const HEADER_OVERLAY = "linear-gradient(90deg,rgba(11,18,32,.9) 0%,rgba(11,18,32,.66) 34%,rgba(11,18,32,.3) 68%,rgba(11,18,32,.5) 100%),linear-gradient(rgba(11,18,32,.1),rgba(11,18,32,.1))";
+const FOOTER_OVERLAY = "linear-gradient(90deg,rgba(11,18,32,.88) 0%,rgba(11,18,32,.66) 40%,rgba(11,18,32,.6) 100%),linear-gradient(rgba(11,18,32,.14),rgba(11,18,32,.14))";
+const TEXT_SHADOW = "";
 
 // ── vehicle ─────────────────────────────────────────────────────────
 /** Placeholder the template preview and the editor canvas show in place of a real vehicle. */
