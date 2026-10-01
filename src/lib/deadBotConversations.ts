@@ -2,6 +2,7 @@ import "server-only";
 import { prisma } from "./db";
 import { deliveryFailureReason, PERMANENT_FAILURES } from "./messageDelivery";
 import { contactName } from "./format";
+import { parkedFailureHead } from "./botOutbox";
 
 export type DeadBotConversation = {
   channel: string;
@@ -30,15 +31,17 @@ export async function listDeadBotConversations(limit = 25): Promise<DeadBotConve
     where: { ownership: "delivery_failed" },
     orderBy: { updatedAt: "desc" },
     take: limit,
-    select: { channel: true, key: true, updatedAt: true },
+    select: { id: true, tenantId: true, channel: true, key: true, updatedAt: true },
   });
   const out: DeadBotConversation[] = [];
   for (const session of sessions) {
-    // The message that actually failed — not the backlog it took down with it.
-    const head = await prisma.botFlowOutbox.findFirst({
-      where: { channel: session.channel, key: session.key, status: "dead", NOT: { failureCode: "blocked_by_earlier_failure" } },
-      orderBy: { updatedAt: "desc" },
-      select: { failureCode: true, updatedAt: true, contactId: true },
+    // The message that actually failed — not the backlog it took down with it,
+    // and the same one "Send again" retries, so the reason and the button agree.
+    const head = await parkedFailureHead(prisma, {
+      tenantId: session.tenantId ?? undefined,
+      channel: session.channel,
+      key: session.key,
+      sessionId: session.id,
     });
     const contact = head?.contactId
       ? await prisma.contact.findFirst({

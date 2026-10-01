@@ -937,15 +937,76 @@ async function killMessageAndBacklog(row: OutboxRow, lastError: string, failureC
     // repair never happen — with no retry left to trigger it, because the message
     // is already terminal. The customer would then be back to waiting at a prompt
     // they never received, which is the exact state this repair exists to prevent.
-    await tx.$executeRawUnsafe(
+    const parked: Array<{ id: string }> = await tx.$queryRawUnsafe(
       `UPDATE "BotSession"
           SET "ownership" = 'delivery_failed', "updatedAt" = CURRENT_TIMESTAMP
-        WHERE "tenantId" = $1 AND "channel" = $2 AND "key" = $3 AND "ownership" <> 'human'`,
+        WHERE "tenantId" = $1 AND "channel" = $2 AND "key" = $3 AND "ownership" <> 'human'
+        RETURNING "id"`,
       tenantId,
       row.channel,
       row.key,
     );
+    // Record WHICH failure parked it, in the same transaction, so "Send again"
+    // retries exactly this one. Keyed by the session id, never the customer's
+    // handle. Inferring the head from recency instead was wrong twice over: two
+    // failures close together, and a late provider receipt marking an older,
+    // already-sent message dead after this one.
+    for (const session of parked) {
+      await tx.botInboundEvent.upsert({
+        where: { tenantId_channel_providerId: { tenantId, channel: `${row.channel}${PARKED_HEAD_SUFFIX}`, providerId: session.id } },
+        create: {
+          tenantId,
+          channel: `${row.channel}${PARKED_HEAD_SUFFIX}`,
+          providerId: session.id,
+          status: "completed",
+          attempts: 0,
+          lastError: row.id,
+          completedAt: new Date(),
+        },
+        update: { lastError: row.id },
+      });
+    }
     return true;
+  });
+}
+
+/**
+ * Ledger channel suffix for "which outbox row parked this conversation".
+ * BotInboundEvent is already this file's tenant-scoped ledger (see
+ * failureLedger); rows here are written `completed`, so no inbound claim and no
+ * parked-failure sweep (which matches PARKED_FAILURE_SUFFIX) ever picks one up.
+ */
+const PARKED_HEAD_SUFFIX = ":parked-head";
+
+type ParkedHeadDb = Pick<typeof prisma, "botInboundEvent" | "botFlowOutbox">;
+
+/**
+ * The failure that parked a conversation — by identity, not by recency.
+ *
+ * Read from the record killMessageAndBacklog writes. A conversation parked
+ * before that record existed falls back to the newest message the WORKER killed:
+ * a late provider receipt can mark an older message dead afterwards, but such a
+ * message was accepted and so always carries the provider's id; a worker-killed
+ * head never does.
+ */
+export async function parkedFailureHead(
+  db: ParkedHeadDb,
+  conversation: { tenantId: string | undefined; channel: string; key: string; sessionId: string },
+): Promise<{ id: string; failureCode: string | null; updatedAt: Date; contactId: string | null } | null> {
+  const { tenantId, channel, key, sessionId } = conversation;
+  const select = { id: true, failureCode: true, updatedAt: true, contactId: true } as const;
+  const record = await db.botInboundEvent.findFirst({
+    where: { tenantId, channel: `${channel}${PARKED_HEAD_SUFFIX}`, providerId: sessionId },
+    select: { lastError: true },
+  });
+  if (record) {
+    if (!record.lastError) return null;
+    return db.botFlowOutbox.findFirst({ where: { id: record.lastError, tenantId, channel, key, status: "dead" }, select });
+  }
+  return db.botFlowOutbox.findFirst({
+    where: { tenantId, channel, key, status: "dead", providerMessageId: null, NOT: { failureCode: "blocked_by_earlier_failure" } },
+    orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+    select,
   });
 }
 
@@ -1218,12 +1279,15 @@ export async function requeueDeadConversation(channel: string, key: string): Pro
   return withStaffConversationScope(async () => {
     const tenantId = outboxTenantId();
     return prisma.$transaction(async (tx) => {
-      const head = await tx.botFlowOutbox.findFirst({
-        where: { tenantId, channel, key, status: "dead", NOT: { failureCode: "blocked_by_earlier_failure" } },
-        orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
-        select: { id: true, failureCode: true },
+      const session = await tx.botSession.findFirst({
+        where: { tenantId, channel, key, ownership: "delivery_failed" },
+        select: { id: true },
       });
-      if (head?.failureCode && PERMANENT_FAILURES.has(head.failureCode)) return "permanent";
+      if (!session) return "not_parked";
+      // The failure that parked THIS session, by its recorded identity.
+      const head = await parkedFailureHead(tx, { tenantId, channel, key, sessionId: session.id });
+      if (!head) return "not_parked";
+      if (head.failureCode && PERMANENT_FAILURES.has(head.failureCode)) return "permanent";
       const claimed = await tx.$executeRawUnsafe(
         `UPDATE "BotSession"
             SET "ownership" = 'bot', "updatedAt" = CURRENT_TIMESTAMP
@@ -1232,7 +1296,7 @@ export async function requeueDeadConversation(channel: string, key: string): Pro
         channel,
         key,
       );
-      if (claimed !== 1 || !head) return "not_parked";
+      if (claimed !== 1) return "not_parked";
       // Exactly the failure that parked the conversation and the backlog it
       // killed, by the head's id. A time window here (it was 5 s) also swept in
       // an earlier failure's dead output when two landed close together, and
