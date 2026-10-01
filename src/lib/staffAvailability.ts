@@ -1,5 +1,6 @@
 import "server-only";
 
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 
 export const DEFAULT_ACTIVITY_DURATION_MS = 60 * 60 * 1000;
@@ -12,6 +13,8 @@ export type StaffAvailabilityConflict = {
   summary: string;
   note: string | null;
 };
+
+type ScheduleDb = Pick<Prisma.TransactionClient, "activity" | "testDriveBooking" | "user">;
 
 export type StaffCommitmentConflict = {
   userId: string;
@@ -57,15 +60,27 @@ export function commitmentConflictMessage(conflict: StaffCommitmentConflict): st
   return `${conflict.userName} already has ${conflict.summary} from ${formatMoment(conflict.start)} to ${formatMoment(conflict.end)}. Move or cancel that booking before blocking this time.`;
 }
 
+export async function lockStaffSchedules(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  userIds: readonly string[],
+): Promise<void> {
+  for (const userId of Array.from(new Set(userIds.filter(Boolean))).sort()) {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`staff-schedule:${tenantId}:${userId}`})::bigint)`;
+  }
+}
+
 export async function findStaffAvailabilityConflict(args: {
   userId: string;
   start: Date;
   end: Date;
   excludeActivityId?: string | null;
+  db?: ScheduleDb;
 }): Promise<StaffAvailabilityConflict | null> {
   if (!(args.end > args.start)) throw new Error("Availability check requires an end after the start.");
 
-  const candidates = await prisma.activity.findMany({
+  const db = args.db ?? (prisma as unknown as ScheduleDb);
+  const candidates = await db.activity.findMany({
     where: {
       assignedToId: args.userId,
       availabilityBlock: true,
@@ -113,10 +128,12 @@ export async function findStaffCommitmentConflict(args: {
   start: Date;
   end: Date;
   excludeActivityId?: string | null;
+  db?: ScheduleDb;
 }): Promise<StaffCommitmentConflict | null> {
   if (!(args.end > args.start)) throw new Error("Commitment check requires an end after the start.");
 
-  const activities = await prisma.activity.findMany({
+  const db = args.db ?? (prisma as unknown as ScheduleDb);
+  const activities = await db.activity.findMany({
     where: {
       assignedToId: args.userId,
       availabilityBlock: false,
@@ -147,7 +164,7 @@ export async function findStaffCommitmentConflict(args: {
     };
   }
 
-  const drive = await prisma.testDriveBooking.findFirst({
+  const drive = await db.testDriveBooking.findFirst({
     where: {
       accompanyingSalespersonId: args.userId,
       deletedAt: null,
@@ -164,7 +181,7 @@ export async function findStaffCommitmentConflict(args: {
   });
   if (!drive) return null;
 
-  const user = await prisma.user.findUnique({
+  const user = await db.user.findUnique({
     where: { id: args.userId },
     select: { id: true, name: true },
   });
