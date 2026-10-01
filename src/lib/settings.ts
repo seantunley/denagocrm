@@ -401,39 +401,68 @@ async function getTenantCredentialOverrides(tenantId: string, keys: readonly str
  *   optional un-overridden fields fall back to global AppSetting.
  * - Founding tenant or no tenant, incomplete/no overrides → use ALL global
  *   settings (never mix one override with platform values for another key).
+ * - EXCEPT `independent` fields (X's sign-in tokens, Grok): this workspace's
+ *   own saved value is used whenever it has one, in every case where the
+ *   integration is available at all — they do not have to match the set.
  */
 export async function resolveIntegrationBundle(
   tenantId: string | null,
   integrationId: string,
+  // Injectable for tests, as resolveTenantCredential's are: the decision logic
+  // below is exercised without a database (tests/xCredentialSet.test.ts).
+  deps: {
+    lookupOverrides?: (tenantId: string, keys: readonly string[]) => Promise<Map<string, string>>;
+    getGlobal?: (key: string) => Promise<string | null>;
+  } = {},
 ): Promise<Record<string, string | null> | null> {
+  const lookupOverrides = deps.lookupOverrides ?? getTenantCredentialOverrides;
+  const getGlobal = deps.getGlobal ?? getSetting;
   const integration = TENANT_CREDENTIAL_INTEGRATIONS.find((i) => i.id === integrationId);
   if (!integration) return null;
 
   const keys = integration.fields.map((f) => f.key);
-  const requiredKeys = integration.fields.filter((f) => f.required !== false).map((f) => f.key);
+  const requiredKeys = integration.fields.filter((f) => f.required !== false && !f.independent).map((f) => f.key);
+  const independentKeys = integration.fields.filter((f) => f.independent).map((f) => f.key);
   const isFoundingOrNoTenant = !tenantId || tenantId === DEFAULT_TENANT_ID;
 
   const overrides = tenantId
-    ? await getTenantCredentialOverrides(tenantId, keys)
+    ? await lookupOverrides(tenantId, keys)
     : new Map<string, string>();
 
   const allRequiredOverridden = requiredKeys.every((k) => overrides.has(k));
 
+  let result: Record<string, string | null>;
   if (!allRequiredOverridden) {
     if (!isFoundingOrNoTenant) return null;
-    const globalValues = await Promise.all(keys.map((k) => getSetting(k)));
-    return Object.fromEntries(keys.map((k, i) => [k, globalValues[i]]));
-  }
-
-  if (isFoundingOrNoTenant) {
+    const globalValues = await Promise.all(keys.map((k) => getGlobal(k)));
+    result = Object.fromEntries(keys.map((k, i) => [k, globalValues[i]]));
+  } else if (isFoundingOrNoTenant) {
     const unset = keys.filter((k) => !overrides.has(k));
-    const fallbacks = await Promise.all(unset.map((k) => getSetting(k)));
-    const result: Record<string, string | null> = Object.fromEntries(keys.map((k) => [k, overrides.get(k) ?? null]));
+    const fallbacks = await Promise.all(unset.map((k) => getGlobal(k)));
+    result = Object.fromEntries(keys.map((k) => [k, overrides.get(k) ?? null]));
     unset.forEach((k, i) => { result[k] = fallbacks[i]; });
-    return result;
+  } else {
+    result = Object.fromEntries(keys.map((k) => [k, overrides.get(k) ?? null]));
   }
+  for (const k of independentKeys) {
+    const own = overrides.get(k);
+    if (own !== undefined) result[k] = own;
+  }
+  return result;
+}
 
-  return Object.fromEntries(keys.map((k) => [k, overrides.get(k) ?? null]));
+/**
+ * One credential, resolved by its integration's set rule (resolveIntegrationBundle)
+ * — the rule Settings → Integrations shows. Use this, not resolveTenantCredential,
+ * for any key that belongs to TENANT_CREDENTIAL_INTEGRATIONS: field by field, a
+ * half-entered override pairs one account's value with another's.
+ */
+export async function resolveIntegrationField(
+  tenantId: string | null,
+  integrationId: string,
+  key: string,
+): Promise<string | null> {
+  return (await resolveIntegrationBundle(tenantId, integrationId))?.[key] ?? null;
 }
 
 /**

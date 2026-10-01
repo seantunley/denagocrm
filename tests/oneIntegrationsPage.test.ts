@@ -62,8 +62,9 @@ test("the platform owner's rows are owner-only and never edit a per-workspace cr
 test("each field's source follows the senders' all-or-nothing bundle rule", () => {
   // Own values count only once every required field is set (status "active").
   assert.match(page, /const ownInUse = status === "active";/);
-  assert.match(page, /const source = ownInUse && isSet \? "own" : effectiveSet\[field\.key\] \? "default" : "unset";/);
-  assert.match(page, /const savedNotInUse = isSet && !ownInUse;/);
+  assert.match(page, /const ownCounts = field\.independent \? isSet && effectiveSet\[field\.key\] : ownInUse && isSet;/);
+  assert.match(page, /const source = ownCounts \? "own" : effectiveSet\[field\.key\] \? "default" : "unset";/);
+  assert.match(page, /const savedNotInUse = isSet && !ownCounts;/);
   // "Platform default" only when the default is really there.
   assert.match(page, /\) : defaultInUse \? \(\s*<span className="badge bg-muted text-muted-foreground">Platform default<\/span>/);
 });

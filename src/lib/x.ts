@@ -1,6 +1,6 @@
 import "server-only";
 import { currentTenantScope } from "./tenantScope";
-import { resolveTenantCredential, putTenantCredentialBundle } from "./settings";
+import { resolveIntegrationBundle, resolveIntegrationField, putTenantCredentialBundle } from "./settings";
 import { basePrisma } from "./db";
 
 const API = "https://api.x.com/2";
@@ -11,15 +11,15 @@ function tenantId(): string | null {
 }
 
 async function tokenForCurrentTenant(): Promise<string | null> {
-  return resolveTenantCredential(tenantId(), "X_ACCESS_TOKEN");
+  return resolveIntegrationField(tenantId(), "x", "X_ACCESS_TOKEN");
 }
 
 async function refreshXToken(owner: string): Promise<string | null> {
-  const [refreshToken, clientId, clientSecret] = await Promise.all([
-    resolveTenantCredential(owner, "X_REFRESH_TOKEN"),
-    resolveTenantCredential(owner, "X_CLIENT_ID"),
-    resolveTenantCredential(owner, "X_CLIENT_SECRET"),
-  ]);
+  // One resolution: the app's client id and secret always come as a pair.
+  const x = await resolveIntegrationBundle(owner, "x");
+  const refreshToken = x?.X_REFRESH_TOKEN;
+  const clientId = x?.X_CLIENT_ID;
+  const clientSecret = x?.X_CLIENT_SECRET;
   if (!refreshToken || !clientId || !clientSecret) return null;
   const auth = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
   const response = await fetch("https://api.x.com/2/oauth2/token", {
@@ -62,8 +62,10 @@ export async function sendXDirectMessage(recipientId: string, text: string): Pro
 }
 
 export async function exchangeXCode(input: { tenantId: string; code: string; verifier: string; redirectUri: string }) {
-  const clientId = await resolveTenantCredential(input.tenantId, "X_CLIENT_ID");
-  const clientSecret = await resolveTenantCredential(input.tenantId, "X_CLIENT_SECRET");
+  // One resolution, so the pair matches the client id the connect step used.
+  const app = await resolveIntegrationBundle(input.tenantId, "x");
+  const clientId = app?.X_CLIENT_ID;
+  const clientSecret = app?.X_CLIENT_SECRET;
   if (!clientId || !clientSecret) throw new Error("Configure the X client ID and secret first.");
   const auth = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
   const response = await fetch("https://api.x.com/2/oauth2/token", {

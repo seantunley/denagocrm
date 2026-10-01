@@ -138,7 +138,8 @@ export default async function IntegrationsPage() {
             // applies for the senders.
             const ownInUse = status === "active";
             const defaultInUse =
-              !ownInUse && integration.fields.filter((field) => field.required !== false).every((field) => effectiveSet[field.key]);
+              !ownInUse &&
+              integration.fields.filter((field) => field.required !== false && !field.independent).every((field) => effectiveSet[field.key]);
             const connection = connections.get(integration.id) ?? null;
             const needsReauth = connection?.status === "reauth_required";
             const guided = hasIntegrationFlow(integration.id);
@@ -242,9 +243,12 @@ export default async function IntegrationsPage() {
                     const secret = isSecretSettingKey(field.key);
                     const boolField = isBooleanTenantCredentialField(field.key);
                     // Where the value IN USE comes from — by the bundle rule, not by
-                    // whether this one key has a saved value of its own.
-                    const source = ownInUse && isSet ? "own" : effectiveSet[field.key] ? "default" : "unset";
-                    const savedNotInUse = isSet && !ownInUse;
+                    // whether this one key has a saved value of its own. An
+                    // `independent` field (X's sign-in tokens, Grok) counts on its
+                    // own whenever the integration is available at all.
+                    const ownCounts = field.independent ? isSet && effectiveSet[field.key] : ownInUse && isSet;
+                    const source = ownCounts ? "own" : effectiveSet[field.key] ? "default" : "unset";
+                    const savedNotInUse = isSet && !ownCounts;
                     const shown = secret ? undefined : effectiveShown[field.key];
                     return (
                       <div key={field.key} className="flex gap-2 items-end">
