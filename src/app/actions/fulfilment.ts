@@ -8,18 +8,15 @@ import { actingTenantId } from "@/lib/actingTenant";
 import { customerRecordTenantId } from "@/lib/customerRecordTenant";
 import { requireQuoteAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
-import { emitLeadJourneyEvent } from "@/lib/leadJourneyEvents";
 import { assertOwnedBlob, deleteFile, deleteOwnedBlob, saveFile } from "@/lib/storage";
 import { logError } from "@/lib/errorLog";
 import { checkUploadPayload, MAX_PHOTOS } from "@/lib/photoBudget";
-import { contactName } from "@/lib/format";
+import { contactName, formatZAR, parseRands } from "@/lib/format";
 import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { isModuleEnabled, requireModuleEnabled } from "@/lib/modules/enabled";
-import { deliveryHandoverReadiness } from "@/lib/checklists/deliveryHandover";
-import { vehiclesAwaitingRegistration } from "@/lib/deliveryVehicles";
+import { deliverQuote, QUOTE_GONE, type DeliveryEvidence } from "@/lib/quoteDelivery";
 
 const MAX_FILE = 4 * 1024 * 1024;
-const QUOTE_GONE = "This quote is no longer available in this workspace.";
 
 /**
  * A Server Action needs the tenant scope bound around its whole body. Resolving
@@ -44,11 +41,11 @@ async function attachStageDocument(
   userId: string,
   /** The QUOTE's owner, verbatim — this paperwork is the quote's, not the clerk's. */
   tenantId: string | null,
-) {
+): Promise<string> {
   const buffer = Buffer.from(await file.arrayBuffer());
   const storedName = await saveFile(buffer, file.name || fileName, file.type || "application/pdf", tenantId);
   try {
-    await prisma.document.create({
+    const document = await prisma.document.create({
       data: {
         tenantId,
         fileName,
@@ -60,7 +57,9 @@ async function attachStageDocument(
         tag,
         uploadedById: userId,
       },
+      select: { id: true },
     });
+    return document.id;
   } catch (error) {
     await deleteFile(storedName).catch(async (cleanupError) => {
       await logError(
@@ -77,6 +76,15 @@ async function attachStageDocument(
 function pickFile(formData: FormData): File | null {
   const file = formData.get("file");
   return file && typeof file === "object" && (file as File).size > 0 ? (file as File) : null;
+}
+
+/** A required rand amount, stored as integer cents like every other amount. */
+function depositCents(formData: FormData): number {
+  const raw = String(formData.get("amount") ?? "").trim();
+  if (!raw) refuse("Enter the deposit amount received.");
+  const cents = parseRands(raw);
+  if (cents < 0) refuse("The deposit amount cannot be negative.");
+  return cents;
 }
 
 export async function markInvoiced(quoteId: string, formData: FormData) {
@@ -121,18 +129,19 @@ export async function markDepositPaid(quoteId: string, formData: FormData) {
     if (!quote) refuse(QUOTE_GONE);
     if (!quote.invoicedAt) refuse("Invoice this quote before recording a deposit.");
     if (quote.depositPaidAt) refuse("The deposit is already recorded.");
+    const amountCents = depositCents(formData);
     const file = pickFile(formData);
     if (!file) refuse("Choose a file to upload.");
     if (file.size > MAX_FILE) refuse("That file is larger than 4 MB.");
     await attachStageDocument(quoteId, quote.contactId, "pop", `Proof of payment — Q-${quote.number}${file.name ? ` — ${file.name}` : ".pdf"}`, file, user.id, quote.tenantId);
     const updated = await prisma.quote.updateMany({
       where: { id: quoteId, tenantId },
-      data: { depositPaidAt: new Date() },
+      data: { depositPaidAt: new Date(), depositPaidCents: amountCents },
     });
     if (updated.count !== 1) refuse(QUOTE_GONE);
     await logAudit({
       action: "fulfilment.deposit_paid",
-      summary: `Q-${quote.number} deposit received — proof of payment filed`,
+      summary: `Q-${quote.number} deposit of ${formatZAR(amountCents)} received — proof of payment filed`,
       contactId: quote.contactId,
       leadId: quote.leadId,
       user,
@@ -140,6 +149,85 @@ export async function markDepositPaid(quoteId: string, formData: FormData) {
     revalidatePath("/deliveries");
     revalidatePath(`/quotes/${quoteId}`);
   });
+}
+
+/** Correct the recorded deposit amount — a typo must not be permanent. Audited old → new. */
+export async function correctDepositAmount(quoteId: string, formData: FormData) {
+  return asFulfilmentAction(async () => {
+    await requireModuleEnabled("automotive");
+    const user = await requireQuoteAccess(quoteId, "deliveries.manage");
+    const tenantId = await actingTenantId();
+    const quote = await prisma.quote.findFirst({ where: { id: quoteId, tenantId } });
+    if (!quote) refuse(QUOTE_GONE);
+    if (!quote.depositPaidAt) refuse("Record the deposit before correcting its amount.");
+    const amountCents = depositCents(formData);
+    if (amountCents === quote.depositPaidCents) return { success: "That is already the recorded amount" };
+    const updated = await prisma.quote.updateMany({
+      where: { id: quoteId, tenantId },
+      data: { depositPaidCents: amountCents },
+    });
+    if (updated.count !== 1) refuse(QUOTE_GONE);
+    await logAudit({
+      action: "fulfilment.deposit_amount_corrected",
+      summary: `Q-${quote.number} deposit amount changed from ${quote.depositPaidCents == null ? "not recorded" : formatZAR(quote.depositPaidCents)} to ${formatZAR(amountCents)}`,
+      contactId: quote.contactId,
+      leadId: quote.leadId,
+      user,
+    });
+    revalidatePath("/deliveries");
+    revalidatePath(`/quotes/${quoteId}`);
+  });
+}
+
+/**
+ * Replace a wrong invoice or proof of payment. The new file is filed exactly as
+ * the original was (same private storage helper, same quote ownership); the old
+ * one is NOT deleted — it is marked as replaced by the new one, the repository's
+ * versioning link, so it stays in the quote's document history.
+ */
+async function replaceStageDocument(quoteId: string, formData: FormData, kind: "invoice" | "pop") {
+  return asFulfilmentAction(async () => {
+    await requireModuleEnabled("automotive");
+    const user = await requireQuoteAccess(quoteId, "deliveries.manage");
+    const tenantId = await actingTenantId();
+    const quote = await prisma.quote.findFirst({ where: { id: quoteId, tenantId } });
+    if (!quote) refuse(QUOTE_GONE);
+    const label = kind === "invoice" ? "invoice" : "proof of payment";
+    if (kind === "invoice" ? !quote.invoicedAt : !quote.depositPaidAt) refuse(`There is no ${label} on this quote to replace yet.`);
+    const file = pickFile(formData);
+    if (!file) refuse("Choose a file to upload.");
+    if (file.size > MAX_FILE) refuse("That file is larger than 4 MB.");
+    const previous = await prisma.document.findMany({
+      where: { quoteId, tenantId: quote.tenantId, tag: kind, replacedById: null },
+      select: { id: true },
+    });
+    const title = kind === "invoice" ? `Invoice — Q-${quote.number}` : `Proof of payment — Q-${quote.number}`;
+    const nextId = await attachStageDocument(quoteId, quote.contactId, kind, `${title}${file.name ? ` — ${file.name}` : ".pdf"}`, file, user.id, quote.tenantId);
+    if (previous.length) {
+      await prisma.document.updateMany({
+        where: { id: { in: previous.map((doc) => doc.id) }, quoteId },
+        data: { replacedById: nextId },
+      });
+    }
+    await logAudit({
+      action: kind === "invoice" ? "fulfilment.invoice_replaced" : "fulfilment.pop_replaced",
+      summary: `Q-${quote.number} ${label} replaced — the previous file is kept in the quote's document history`,
+      contactId: quote.contactId,
+      leadId: quote.leadId,
+      user,
+    });
+    revalidatePath("/deliveries");
+    revalidatePath(`/quotes/${quoteId}`);
+    revalidatePath("/documents");
+  });
+}
+
+export async function replaceInvoice(quoteId: string, formData: FormData) {
+  return replaceStageDocument(quoteId, formData, "invoice");
+}
+
+export async function replaceProofOfPayment(quoteId: string, formData: FormData) {
+  return replaceStageDocument(quoteId, formData, "pop");
 }
 
 export async function scheduleDelivery(quoteId: string, formData: FormData) {
@@ -187,6 +275,56 @@ export async function scheduleDelivery(quoteId: string, formData: FormData) {
     await logAudit({
       action: "fulfilment.delivery_scheduled",
       summary: `Q-${quote.number} delivery scheduled for ${when.toLocaleDateString("en-ZA")} — on the workshop calendar`,
+      contactId: quote.contactId,
+      leadId: quote.leadId,
+      user,
+    });
+    revalidatePath("/deliveries");
+    revalidatePath(`/quotes/${quoteId}`);
+    revalidatePath("/workshop-calendar");
+  });
+}
+
+/**
+ * Move a scheduled delivery to another day. The workshop-calendar entry that
+ * scheduleDelivery created moves with it (matched by the note it wrote, which is
+ * the only link it has), and the change is audited old → new.
+ */
+export async function rescheduleDelivery(quoteId: string, formData: FormData) {
+  return asFulfilmentAction(async () => {
+    await requireModuleEnabled("automotive");
+    const user = await requireQuoteAccess(quoteId, "deliveries.manage");
+    const tenantId = await actingTenantId();
+    const quote = await prisma.quote.findFirst({ where: { id: quoteId, tenantId } });
+    if (!quote) refuse(QUOTE_GONE);
+    const previous = quote.deliveryScheduledFor;
+    if (!previous) refuse("Schedule the delivery before rescheduling it.");
+    if (quote.deliveredAt) refuse("This delivery has already been completed.");
+    const dateRaw = String(formData.get("date") ?? "").trim();
+    if (!dateRaw) refuse("Choose the new delivery date.");
+    const when = new Date(dateRaw);
+    if (isNaN(when.getTime())) refuse("That delivery date is not valid.");
+    if (when.getTime() === previous.getTime()) return { success: "That is already the delivery date" };
+    // Conditional on the date we read, so two people rescheduling at once cannot
+    // silently overwrite each other — the second is told to refresh.
+    const updated = await prisma.quote.updateMany({
+      where: { id: quoteId, tenantId, deliveredAt: null, deliveryScheduledFor: previous },
+      data: { deliveryScheduledFor: when },
+    });
+    if (updated.count !== 1) refuse("The delivery changed while you were rescheduling it. Refresh and try again.");
+    await prisma.activity.updateMany({
+      where: {
+        note: `Fulfilment of quote Q-${quote.number}.`,
+        dueDate: previous,
+        status: "planned",
+        contactId: quote.contactId,
+        leadId: quote.leadId,
+      },
+      data: { dueDate: when },
+    });
+    await logAudit({
+      action: "fulfilment.delivery_rescheduled",
+      summary: `Q-${quote.number} delivery moved from ${previous.toLocaleDateString("en-ZA")} to ${when.toLocaleDateString("en-ZA")}`,
       contactId: quote.contactId,
       leadId: quote.leadId,
       user,
@@ -361,35 +499,32 @@ export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) 
 }
 
 /**
+ * The Deliveries board's "Mark delivered". Authorises, then hands over to the
+ * ONE delivery (lib/quoteDelivery.ts → deliverQuote), which the stock page's
+ * "Complete delivery" also uses — so the quote, its stock units and the
+ * customer's vehicles end up the same whichever button was pressed.
+ *
  * `handoverRunIds` — the guided checklist runs the customer is signing BESIDE.
  *
  * THIS IS AN EXPORTED SERVER ACTION, WHICH IS A PUBLIC POST ENDPOINT, AND ITS
- * ARGUMENTS COME FROM THE CLIENT. An earlier version of this comment claimed the
- * ids were "passed server-to-server, never off the form" — that is wrong twice
- * over. A stale legacy form, or a hand-made request, can call this directly
- * without going anywhere near completeGuidedDelivery; and a Server Action's
- * arguments are deserialised from the request, so a caller can supply this third
- * parameter as freely as any form field.
+ * ARGUMENTS COME FROM THE CLIENT. A stale legacy form, or a hand-made request,
+ * can call this directly without going anywhere near completeGuidedDelivery; and
+ * a Server Action's arguments are deserialised from the request, so a caller can
+ * supply this third parameter as freely as any form field.
  *
- * So the guided-handover gate cannot live only in completeGuidedDelivery. It is
- * enforced HERE, against the database, for every caller:
+ * So the guided-handover gate is enforced in deliverQuote, against the database,
+ * for every caller — every id must be a COMPLETED run of THIS quote's handover
+ * in the acting tenant, and a tenant with an ACTIVE quote.delivery template must
+ * have one per template. A tenant with no active template is the legacy flow,
+ * unchanged.
  *
- *  - every id must be a COMPLETED run of THIS quote's delivery handover, in the
- *    acting tenant — a caller cannot name another workspace's run, or an
- *    unfinished one; and
- *  - when the tenant has any ACTIVE quote.delivery template, the verified runs
- *    must satisfy deliveryHandoverReadiness — every configured checklist has one.
- *
- * Re-verification alone was not enough: a crafted call could pass one genuine
- * run id while a second configured checklist was still unfinished, and be
- * recorded as a signed handover carrying partial evidence.
- *
- * A tenant with no active template is the legacy flow, unchanged: no ids, empty
- * column, and the delivery note falls back exactly as it does for deliveries
- * completed before this existed.
- *
- * Written in the SAME updateMany that records the delivery, so a signed handover
- * can never exist without the runs it was signed against.
+ * The paperwork below (delivery note, customer signature) is STAGED by the
+ * `collectEvidence` callback, which deliverQuote runs only AFTER every gate.
+ * Staging uploads the blob only; the Document rows and the signature reference
+ * are written inside the delivery transaction. If the delivery fails after
+ * staging, each uploaded blob is deleted only when a fresh query proves no
+ * Document row names it; otherwise — including a commit whose acknowledgement
+ * was lost — it is kept, and the count is logged.
  */
 export async function markDelivered(
   quoteId: string,
@@ -400,168 +535,55 @@ export async function markDelivered(
     await requireModuleEnabled("automotive");
     const user = await requireQuoteAccess(quoteId, "deliveries.manage");
     const tenantId = await actingTenantId();
-    const quote = await prisma.quote.findFirst({
-      where: { id: quoteId, tenantId },
-      // `items` so the delivery knows how many vehicles it actually sold. It used
-      // to send the customer to register exactly one, whatever the quantity —
-      // Q-1014 sold two Rover XXLs and the second was never recorded.
-      include: { lead: true, items: { include: { product: true }, orderBy: { sortOrder: "asc" } } },
-    });
-    if (!quote) refuse(QUOTE_GONE);
-    if (!quote.deliveryScheduledFor) refuse("Schedule the delivery before marking it delivered.");
-    if (quote.deliveredAt) refuse("This delivery is already marked as delivered.");
-    /*
-     * BEFORE ANY SIDE EFFECT, and that ordering is the point.
-     *
-     * Everything below this writes: the delivery-note file, the signature
-     * blob, and a Document row for each. Running the gate afterwards refused
-     * the request correctly and still left an uploaded blob and a Document row
-     * behind for a delivery that never completed — storage dirtied by a call
-     * that was rejected, with nothing to clean it up.
-     *
-     * The gate only reads, so it can run first at no cost, and a refusal then
-     * costs the caller nothing but the round trip.
-     */
-    /*
-     * Re-verified, not trusted. Each id must be a COMPLETED run of this quote's
-     * own delivery handover, in this tenant. Anything that does not resolve is a
-     * caller passing ids it should not have, so the whole delivery is refused
-     * rather than signed against a partial set — a delivery note showing three of
-     * four checklists is worse than one that refuses to be produced.
-     */
-    const requestedRunIds = [...new Set(handoverRunIds ?? [])];
-    let verifiedRuns: { id: string; templateId: string; completedAt: Date | null }[] = [];
-    if (requestedRunIds.length) {
-      verifiedRuns = await prisma.checklistRun.findMany({
-        where: {
-          id: { in: requestedRunIds },
-          tenantId,
-          hostType: "quote.delivery",
-          hostId: quoteId,
-          completedAt: { not: null },
-        },
-        select: { id: true, templateId: true, completedAt: true },
-      });
-      if (verifiedRuns.length !== requestedRunIds.length) {
-        refuse("The handover checklists could not be confirmed. Reload the delivery and try again.");
-      }
-    }
 
-    /*
-     * THE GUIDED GATE, ENFORCED HERE RATHER THAN ONLY IN THE WRAPPER.
-     *
-     * completeGuidedDelivery checks readiness before delegating, but this action
-     * is exported and therefore reachable without it — by a stale legacy form or
-     * a hand-made request. Checking only in the wrapper leaves the invariant
-     * optional, which is the same as not having it.
-     *
-     * Scoped to what the tenant has actually configured: no active template means
-     * no guided handover, and the legacy proof-of-delivery flow is untouched.
-     */
-    const handoverTemplates = await prisma.checklistTemplate.findMany({
-      where: { tenantId, host: "quote.delivery", active: true },
-      select: { id: true, name: true },
-      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-    });
-    if (handoverTemplates.length > 0) {
-      const readiness = deliveryHandoverReadiness(handoverTemplates, verifiedRuns);
-      if (!readiness.ready) {
-        const missing = handoverTemplates
-          .filter((template) => readiness.missingTemplateIds.includes(template.id))
-          .map((template) => template.name);
-        refuse(
-          `This delivery uses a guided handover. Complete ${missing.length === 1 ? `“${missing[0]}”` : missing.join(", ")} and sign from the delivery screen.`,
-        );
-      }
-      if (verifiedRuns.length !== handoverTemplates.length) {
-        refuse("The signed handover must include exactly one completed run for each active checklist. Reload the delivery and review it again.");
-      }
-    } else if (requestedRunIds.length > 0) {
-      refuse("This delivery does not have an active guided handover. Reload the delivery and try again.");
-    }
-
-    const runByTemplate = new Map(verifiedRuns.map((run) => [run.templateId, run.id]));
-    const deliveryHandoverRunIds = handoverTemplates
-      .map((template) => runByTemplate.get(template.id))
-      .filter((id): id is string => Boolean(id));
-
+    // Read-only checks before handing over, so an oversized file is refused
+    // before any gate or write.
     const file = pickFile(formData);
     if (file && file.size > MAX_FILE) refuse("That delivery note is larger than 4 MB.");
-    if (file) {
-      await attachStageDocument(quoteId, quote.contactId, "delivery-note", `Delivery note — Q-${quote.number} — ${file.name}`, file, user.id, quote.tenantId);
-    }
 
-    const deliveredByName = String(formData.get("deliveredByName") ?? "").trim() || null;
-    let deliveryChecklist: object | undefined;
-    try {
-      const parsed = JSON.parse(String(formData.get("checklist") ?? ""));
-      if (parsed && typeof parsed === "object") deliveryChecklist = parsed;
-    } catch {}
-    let deliverySignatureRef: string | null = null;
-    const signature = String(formData.get("signature") ?? "");
-    if (signature.startsWith("data:image/png;base64,")) {
-      const buffer = Buffer.from(signature.split(",")[1], "base64");
-      if (buffer.length > 0 && buffer.length <= MAX_FILE) {
-        // The customer's signature on THIS quote's delivery — the quote owns it,
-        // for the same reason its invoice and delivery note do.
-        deliverySignatureRef = await saveFile(buffer, `delivery-signature-Q${quote.number}.png`, "image/png", quote.tenantId);
-        await prisma.document.create({
-          data: {
-            tenantId: quote.tenantId,
-            fileName: `Delivery signature — Q-${quote.number}`,
-            storedName: deliverySignatureRef,
-            mimeType: "image/png",
-            sizeBytes: buffer.length,
-            contactId: quote.contactId,
-            quoteId,
-            tag: "delivery-signature",
-            uploadedById: user.id,
-          },
-        });
-      }
-    }
-
-
-
-    const updated = await prisma.quote.updateMany({
-      where: { id: quoteId, tenantId },
-      data: { deliveredAt: new Date(), deliveredByName, deliveryChecklist, deliverySignatureRef, deliveryHandoverRunIds },
-    });
-    if (updated.count !== 1) refuse(QUOTE_GONE);
-    if (quote.leadId) {
-      await emitLeadJourneyEvent("delivered", quote.leadId, {
-        occurrence: `quote:${quoteId}:delivered`,
-        payload: { quoteId, quoteNumber: quote.number },
-      });
-    }
-    await logAudit({
-      action: "fulfilment.delivered",
-      summary: `Q-${quote.number} delivered 🎉 — register the vehicle to start its service life`,
-      contactId: quote.contactId,
-      leadId: quote.leadId,
+    return deliverQuote({
+      quoteId,
+      tenantId,
       user,
+      handoverRunIds,
+      // Files are STAGED, not filed: `stage` uploads the blob only. deliverQuote
+      // creates the Document rows inside the delivery transaction and deletes
+      // these blobs if the delivery fails, so a refused delivery keeps nothing.
+      collectEvidence: async (quote, stage): Promise<DeliveryEvidence> => {
+        if (file) {
+          await stage({
+            buffer: Buffer.from(await file.arrayBuffer()),
+            originalName: file.name || "delivery-note.pdf",
+            mimeType: file.type || "application/pdf",
+            fileName: `Delivery note — Q-${quote.number} — ${file.name}`,
+            tag: "delivery-note",
+          });
+        }
+
+        const deliveredByName = String(formData.get("deliveredByName") ?? "").trim() || null;
+        let deliveryChecklist: object | undefined;
+        try {
+          const parsed = JSON.parse(String(formData.get("checklist") ?? ""));
+          if (parsed && typeof parsed === "object") deliveryChecklist = parsed;
+        } catch {}
+        let deliverySignatureRef: string | null = null;
+        const signature = String(formData.get("signature") ?? "");
+        if (signature.startsWith("data:image/png;base64,")) {
+          const buffer = Buffer.from(signature.split(",")[1], "base64");
+          if (buffer.length > 0 && buffer.length <= MAX_FILE) {
+            // The customer's signature on THIS quote's delivery — the quote owns it,
+            // for the same reason its invoice and delivery note do.
+            deliverySignatureRef = await stage({
+              buffer,
+              originalName: `delivery-signature-Q${quote.number}.png`,
+              mimeType: "image/png",
+              fileName: `Delivery signature — Q-${quote.number}`,
+              tag: "delivery-signature",
+            });
+          }
+        }
+        return { deliveredByName, deliveryChecklist, deliverySignatureRef };
+      },
     });
-    revalidatePath("/deliveries");
-    revalidatePath(`/quotes/${quoteId}`);
-    /*
-     * Hand over the WHOLE queue, by pointing at the quote rather than at one
-     * vehicle's details.
-     *
-     * `?quoteId=…&seq=0` keeps the quote as the single source of truth: the
-     * registration page re-derives the queue from the same lines, so the URL
-     * cannot carry a stale or hand-edited list, and the position survives a
-     * refresh. The old link passed the LEAD's product, which was not even
-     * necessarily what the quote sold.
-     *
-     * A quote with no catalogue lines queues nothing, and keeps the previous
-     * behaviour — a blank registration form seeded with the contact.
-     */
-    const queue = vehiclesAwaitingRegistration(quote.items);
-    const contactParam = `contactId=${quote.contactId ?? ""}`;
-    return {
-      redirectTo: queue.length > 0
-        ? `/vehicles/new?${contactParam}&quoteId=${quoteId}&seq=0`
-        : `/vehicles/new?${contactParam}&productId=${quote.lead?.productId ?? ""}&color=${encodeURIComponent(quote.lead?.color ?? "")}`,
-    };
   });
 }

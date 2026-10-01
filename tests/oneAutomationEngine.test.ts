@@ -107,7 +107,9 @@ const WRITE_PATHS: Array<[string, string[]]> = [
   // reach it — see the afterDealWon assertion below.
   ["src/lib/quoteOutcome.ts", ["lead_won"]],
   ["src/lib/signing/postComplete.ts", ["lead_won", "quote_signed"]],
-  ["src/app/actions/fulfilment.ts", ["delivered"]],
+  // The one delivery, shared by the Deliveries board and the stock page — so a
+  // stock-page delivery now fires `delivered` too, which it never did before.
+  ["src/lib/quoteDelivery.ts", ["delivered"]],
   ["src/lib/referrals.ts", ["referral_earned"]],
 ];
 
