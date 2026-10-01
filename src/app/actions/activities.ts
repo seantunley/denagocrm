@@ -206,7 +206,7 @@ export async function scheduleActivity(formData: FormData): Promise<{ error?: st
       });
       return { created } as const;
     });
-    if ("conflict" in activity) {
+    if ("conflict" in activity && activity.conflict) {
       return { error: availabilityConflictMessage(activity.conflict) };
     }
     activity = activity.created;
@@ -511,7 +511,7 @@ export async function scheduleFollowUp(data: {
     });
     return { activity } as const;
   });
-  if ("conflict" in result) return { ok: false, error: availabilityConflictMessage(result.conflict) };
+  if ("conflict" in result && result.conflict) return { ok: false, error: availabilityConflictMessage(result.conflict) };
   const activity = result.activity;
   await logAudit({
     action: "activity.scheduled",
