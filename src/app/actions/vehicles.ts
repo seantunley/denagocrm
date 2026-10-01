@@ -10,7 +10,7 @@ import { remindVehicleService } from "@/lib/serviceReminders";
 import { softDeleteRecord } from "@/lib/trash";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { withActingStaffScope } from "@/lib/actingScope";
-import { vehiclesAwaitingRegistration } from "@/lib/deliveryVehicles";
+import { registrationQueueForQuote } from "@/lib/quoteDelivery";
 import {
   requireContactAccess,
   requireVehicleAccess,
@@ -93,11 +93,7 @@ export async function createVehicle(formData: FormData) {
      */
     const deliveryQuoteId = String(formData.get("deliveryQuoteId") ?? "").trim();
     if (deliveryQuoteId) {
-      const quote = await prisma.quote.findFirst({
-        where: { id: deliveryQuoteId },
-        include: { items: { include: { product: true }, orderBy: { sortOrder: "asc" } } },
-      });
-      const queue = quote ? vehiclesAwaitingRegistration(quote.items) : [];
+      const queue = await registrationQueueForQuote(deliveryQuoteId);
       const next = (Number.parseInt(String(formData.get("deliverySeq") ?? "0"), 10) || 0) + 1;
       if (next < queue.length) {
         redirect(`/vehicles/new?contactId=${vehicle.contactId}&quoteId=${deliveryQuoteId}&seq=${next}`);

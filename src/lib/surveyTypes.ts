@@ -125,7 +125,7 @@ export function defaultQuestions(type: SurveyType): SurveyQuestion[] {
         {
           id: newQuestionId(),
           type: "rating",
-          label: "How was your buying experience with Denago?",
+          label: "How was your buying experience with us?",
           required: true,
           scale: 5,
         },
@@ -136,7 +136,7 @@ export function defaultQuestions(type: SurveyType): SurveyQuestion[] {
         {
           id: newQuestionId(),
           type: "nps",
-          label: "How likely are you to recommend Denago to a friend or colleague?",
+          label: "How likely are you to recommend us to a friend or colleague?",
           required: true,
           lowLabel: "Not likely",
           highLabel: "Very likely",
@@ -153,9 +153,11 @@ export function defaultQuestions(type: SurveyType): SurveyQuestion[] {
 export function defaultIntro(type: SurveyType): string {
   switch (type) {
     case "csat":
-      return "Thanks for choosing Denago Cape Town. We'd love to know how we did on your recent service.";
+      // Unnamed on purpose: the invite is already signed with the workspace's
+      // own name, and these defaults used to name Denago to every tenant's customers.
+      return "Thanks for choosing us. We'd love to know how we did on your recent service.";
     case "sales":
-      return "Congratulations on your new Denago! We'd love to hear about your buying experience.";
+      return "Congratulations on your purchase! We'd love to hear about your buying experience.";
     case "nps":
       return "We're always trying to improve. Could you spare a moment to answer one quick question?";
     default:

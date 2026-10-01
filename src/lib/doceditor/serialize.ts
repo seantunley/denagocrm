@@ -205,10 +205,12 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
       // Embedded images only: a logo LINK would have the customer's signing page
       // (and a frozen document) load it from whatever host it names.
       const logoSrc = [ctx?.logo, logoDataUri].find((src) => src && /^data:image\//i.test(src));
-      const company = ctx?.tokens?.["company.name"] || "DENAGO";
+      const company = ctx?.tokens?.["company.name"] || "";
       const logo = block.showLogo && logoSrc
         ? `<img src="${esc(logoSrc)}" alt="${esc(company)}" style="height:34px;width:auto"/>`
-        : `<span style="color:#fff;font-weight:800;font-size:15pt;letter-spacing:1px">${esc(company.toUpperCase())}</span>`;
+        : company
+          ? `<span style="color:#fff;font-weight:800;font-size:15pt;letter-spacing:1px">${esc(company.toUpperCase())}</span>`
+          : "";
       return `<div style="background:${cssColor(block.bg, "#020617")};border-radius:8px;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;margin:2px 0">
         <div>${logo}</div>
         <div style="text-align:right"><div style="color:#fff;font-weight:800;font-size:17pt;letter-spacing:1px">${esc(tok(block.title, ctx))}</div><div style="color:${cssColor(block.accent, "#ea580c")};font-weight:800;font-size:12pt">${esc(tok(block.docNumber, ctx))}</div></div>

@@ -148,7 +148,7 @@ export default function PrintDocShell({
   /** The company this document is FROM — resolved from the Company Profile,
    *  which now inherits the platform-set tenant brand. Optional so an
    *  un-updated caller renders exactly what it rendered before. */
-  company?: { name: string; tagline: string; logoUrl: string };
+  company?: { name: string; tagline: string; logoUrl: string; facebook?: string; instagram?: string };
   template: DocTemplate;
   title: string;
   number?: string;
@@ -191,20 +191,18 @@ export default function PrintDocShell({
       <div className="print-page max-w-3xl mx-auto px-6 py-8 print:p-0 text-sm text-slate-800 bg-white">
         {/* Brand banner */}
         <div className="flex items-center justify-between rounded-xl bg-[#020617] px-7 py-5">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            // `||`, not `??`. An unset logo is the EMPTY STRING here, not null:
-            // COMPANY_LOGO_URL is a text setting and getCompanyProfile() maps a
-            // missing one to "". `??` only skips null/undefined, so it passed the
-            // empty string straight through and rendered `<img src="">`, which
-            // browsers resolve to the current page and draw as a broken image on
-            // a printed document. Now that unconfigured workspaces are the normal
-            // case rather than the impossible one, this has to fall through.
-            src={tpl.logoUrl || company?.logoUrl || "/branding/denago-logo-email.png"}
-            alt={company?.name || PLATFORM_NAME}
-            className="h-11 w-auto object-contain"
-          />
-          <div className="text-right">
+          {/* `||`, not `??`: an unset COMPANY_LOGO_URL is "" and `<img src="">`
+              draws a broken image. With no logo at all, NO image — never another
+              company's — and `ml-auto` keeps the title on the right. */}
+          {(tpl.logoUrl || company?.logoUrl) && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={(tpl.logoUrl || company?.logoUrl) as string}
+              alt={company?.name || PLATFORM_NAME}
+              className="h-11 w-auto object-contain"
+            />
+          )}
+          <div className="ml-auto text-right">
             <p className="text-2xl font-bold tracking-widest text-white uppercase">{title}</p>
             {number && <p className="text-lg font-bold text-orange-500">{number}</p>}
           </div>
@@ -276,13 +274,25 @@ export default function PrintDocShell({
                   <p key={i}>{l}</p>
                 ))}
               </div>
-              <div className="flex items-center gap-1.5 shrink-0">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src="/branding/social-facebook.png" alt="Facebook" className="h-5 w-5" />
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src="/branding/social-instagram.png" alt="Instagram" className="h-5 w-5" />
-                <span className="text-[10px] text-slate-500">@denago_capetown</span>
-              </div>
+              {/* The workspace's own socials (Settings → Company); none set, no row. */}
+              {(company?.facebook || company?.instagram) && (
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {company.facebook && (
+                    <>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src="/branding/social-facebook.png" alt="Facebook" className="h-5 w-5" />
+                      <span className="text-[10px] text-slate-500">{company.facebook}</span>
+                    </>
+                  )}
+                  {company.instagram && (
+                    <>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src="/branding/social-instagram.png" alt="Instagram" className="h-5 w-5" />
+                      <span className="text-[10px] text-slate-500">{company.instagram}</span>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>

@@ -331,7 +331,7 @@ function makeCosignable(
   // Parties stated explicitly (see ensureSignable): fieldSnap moves only the customer's fields.
   const dealerRecipient = newRecipient({
     party: "denago",
-    name: denago.name || "Denago Cape Town",
+    name: denago.name || "Dealer",
     email: denago.email ?? "",
     role: "signer",
     color: "#020617",

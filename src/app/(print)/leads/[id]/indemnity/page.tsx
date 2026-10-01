@@ -43,7 +43,7 @@ export default async function IndemnityPrintPage({
         template={tpl}
         title="Test-drive indemnity"
         meta={[`Date: ${formatDate(new Date(), await getRegionalSettings())}`]}
-        parties={{ left: "Driver signature · Date", right: "For Denago Cape Town · Date" }}
+        parties={{ left: "Driver signature · Date", right: `For ${company.name} · Date` }}
         bodySection="waiver"
         bodyTitle="Indemnity & waiver"
       >
@@ -56,7 +56,7 @@ export default async function IndemnityPrintPage({
           <InfoBlock
             title="Vehicle"
             lines={[
-              lead.product?.name ?? "Denago EV",
+              lead.product?.name ?? "Demo vehicle",
               lead.color ? `Colour: ${lead.color}` : null,
             ]}
           />

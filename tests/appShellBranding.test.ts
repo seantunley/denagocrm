@@ -90,19 +90,15 @@ test("brand is optional on AppShell, so an unbranded render is the old render", 
  * it.
  */
 const STILL_HARDCODED: Record<string, string> = {
-  // Phase 5 (print / documents): the doc-editor canvas, the print shells and the
-  // PDF/email renderers. They render a DOCUMENT, whose brand comes from the
-  // record being printed rather than from the viewer's session.
-  // BlockView (the doc-editor canvas) is OFF this list: its banner shows the
-  // workspace logo resolved by the page, the same one the printed banner embeds.
-  "src/components/print/PrintDocShell.tsx": "phase 5 — print",
-  "src/lib/customDocs.ts": "phase 5 — print",
+  // The print shells, job card, Studio documents, campaign emails, the doc-editor
+  // built-in logo and the Settings → Documents preview are OFF this list: with no
+  // logo configured they now render NO logo, never Denago's. Denago's own logo
+  // comes from its Company Profile (COMPANY_LOGO_URL). Pinned behaviourally in
+  // printBranding.test.ts and by noHardcodedCompanyDetails.test.ts.
   // signature.ts is OFF this list now: its Denago name, tagline, address,
   // website, logo and hardcoded landline all moved to the tenant's own Company
   // Profile. Only the third-party social GLYPHS remain platform-hosted, and they
   // are not a brand asset of anyone's.
-  "src/lib/campaigns.ts": "phase 4 — email",
-  "src/app/(print)/jobcards/[id]/print/page.tsx": "phase 5 — print",
   // The two login pages and BrandLogo are OFF this list: their fallback is the
   // workspace NAME set as a wordmark, so there is no customer artwork left in
   // any of them. Removing the built-in image was not tidying — it was the one
@@ -114,9 +110,6 @@ const STILL_HARDCODED: Record<string, string> = {
   // and the honest fix is a generic glyph rather than a logo — which would be a
   // visible change for the current workspace. Revisit with a source-icon set.
   "src/components/KanbanBoard.tsx": "deferred — lead-source glyph, see comment",
-  // Per-TEMPLATE logo with its own upload; its fallback should become the
-  // tenant's in phase 5 when document branding lands.
-  "src/app/(app)/settings/documents/t/[id]/page.tsx": "phase 5 — per-template logo",
 };
 
 test("every remaining hardcoded brand asset is accounted for", () => {

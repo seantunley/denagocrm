@@ -18,10 +18,12 @@ import CopyButton from "@/components/CopyButton";
 import ResearchTabPanel from "@/components/ResearchTabPanel";
 import { isAiConfigured, isResearchConfigured } from "@/lib/ai";
 import { ensureReferralCode } from "@/lib/referrals";
+import { getCompanyProfile } from "@/lib/companyProfile";
 import { redeemReferral } from "@/app/actions/referrals";
 import { isWhatsAppConfigured } from "@/lib/whatsapp";
 import { formatDateTime } from "@/lib/format";
 import { requireUser } from "@/lib/auth";
+import { hasPermission } from "@/lib/permissions";
 import { contactHealth } from "@/lib/healthData";
 import { healthLabels } from "@/lib/health";
 import { recordConsent, anonymizeContact } from "@/app/actions/privacy";
@@ -52,9 +54,11 @@ export default async function ContactDetailPage({
   // Same default as the lead page — this person plus the mailbox IMAP reads, so a
   // reply lands in their inbox AND on this record. Never throws.
   const replyToDefault = await composerReplyToDefault(user.email);
-  const [automotiveOn, marketingOn] = await Promise.all([
+  const [automotiveOn, marketingOn, canCancelQuotes, canDuplicateQuotes] = await Promise.all([
     isModuleEnabled("automotive"),
     isModuleEnabled("marketing"),
+    hasPermission(user, "quotes.change_status"),
+    hasPermission(user, "quotes.create"),
   ]);
   const contact = await prisma.contact.findUnique({
     where: { id },
@@ -147,6 +151,9 @@ export default async function ContactDetailPage({
     }),
   ]);
   const referralCode = marketingOn ? await ensureReferralCode(contact.id) : "";
+  // The share text names THIS workspace (Settings → Company), not Denago.
+  const company = marketingOn ? await getCompanyProfile() : null;
+  const referralWhere = company ? `${company.name}${company.website ? ` (${company.website})` : ""}` : "";
   const [referralsMade, referredIn] = marketingOn
     ? await Promise.all([
         prisma.referral.findMany({
@@ -415,7 +422,7 @@ export default async function ContactDetailPage({
                         <CopyButton text={referralCode} />
                         <a
                           href={`https://wa.me/?text=${encodeURIComponent(
-                            `Use my referral code ${referralCode} when you enquire at Denago Cape Town (denagocpt.co.za) and mention my name — ${contactName(contact)}`
+                            `Use my referral code ${referralCode} when you enquire at ${referralWhere} and mention my name — ${contactName(contact)}`
                           )}`}
                           target="_blank"
                           className="btn-secondary btn-sm"
@@ -526,6 +533,7 @@ export default async function ContactDetailPage({
                   <DocumentsPanel
                     documents={looseDocuments}
                     quoteGroups={quoteGroups}
+                    quoteActions={{ canCancel: canCancelQuotes, canDuplicate: canDuplicateQuotes }}
                     contactId={contact.id}
                     revalidate={path}
                   />

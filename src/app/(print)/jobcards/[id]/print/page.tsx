@@ -6,6 +6,7 @@ import { requireJobCardReadAccess } from "@/lib/permissions";
 import PrintActions from "@/components/PrintActions";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 import { getDocTemplate } from "@/lib/docTemplateStore";
+import { getCompanyProfile } from "@/lib/companyProfile";
 import { getRegionalSettings } from "@/lib/settings";
 import { embedStoredImage } from "@/lib/storedImage";
 import { stageMeta, jobCardTotals, jobLineCents } from "@/lib/workshop-constants";
@@ -41,7 +42,7 @@ export default async function JobCardPrintPage({
     },
   });
   if (!jobCard) notFound();
-  const tpl = await getDocTemplate("jobcard", tplId);
+  const [tpl, company] = await Promise.all([getDocTemplate("jobcard", tplId), getCompanyProfile()]);
   const regional = await getRegionalSettings();
   // Embedded, not linked: a signature in the private store has no public link.
   const signatureSrc = jobCard.signedAt ? await embedStoredImage(jobCard.signatureRef, jobCard.tenantId) : null;
@@ -92,13 +93,12 @@ export default async function JobCardPrintPage({
       <div className="max-w-3xl mx-auto px-6 py-8 print:p-0 text-sm">
         {/* Brand banner */}
         <div className="flex items-center justify-between rounded-xl bg-[#020617] px-7 py-5">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={tpl.logoUrl ?? "/branding/denago-logo-email.png"}
-            alt="Denago Cape Town EV"
-            className="h-11 w-auto object-contain"
-          />
-          <div className="text-right">
+          {/* No logo configured → no image (never another company's). */}
+          {(tpl.logoUrl || company.logoUrl) && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={(tpl.logoUrl || company.logoUrl) as string} alt={company.name} className="h-11 w-auto object-contain" />
+          )}
+          <div className="ml-auto text-right">
             <p className="text-2xl font-semibold tracking-[-0.035em] tracking-widest text-white">JOB CARD</p>
             <p className="text-lg font-bold text-orange-500">#{jobCard.number}</p>
             <p className="text-xs text-slate-400">{stageMeta(jobCard.status).label}</p>
@@ -303,7 +303,7 @@ export default async function JobCardPrintPage({
         )}
 
         <p className="text-[10px] text-slate-400 mt-8 text-center">
-          Denago Cape Town · Authorized Denago EV Dealer · Job card #{jobCard.number} · Generated{" "}
+          {[company.name, company.tagline].filter(Boolean).join(" · ")} · Job card #{jobCard.number} · Generated{" "}
           {formatDate(new Date(), regional)}
         </p>
       </div>

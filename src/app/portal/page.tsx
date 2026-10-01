@@ -151,7 +151,7 @@ export default async function PortalHome() {
         <div className="pointer-events-none absolute -right-16 -top-20 size-64 rounded-full bg-orange-500/[0.09] blur-3xl" />
         <div className="relative flex flex-wrap items-start justify-between gap-5">
         <div>
-          <Eyebrow>{brand.branded ? `Your ${brand.displayName} garage` : "Your Denago garage"}</Eyebrow>
+          <Eyebrow>{brand.branded ? `Your ${brand.displayName} garage` : "Your garage"}</Eyebrow>
           <h1 className="mt-2 text-3xl font-semibold tracking-[-0.045em] sm:text-4xl">Hello, {contact.firstName}</h1>
           <p className="mt-2 max-w-xl text-sm leading-6 text-slate-400">{automotiveOn ? "Everything about your vehicles, service, warranty, quotes and deliveries—kept together and easy to follow." : "Your quotes, documents and support—kept together and easy to follow."}</p>
         </div>

@@ -24,10 +24,11 @@ export type SessionState = {
 // The restart/resume patterns moved to botOwnership.ts, because which one applies
 // depends on who owns the conversation.
 
-export function greetingVars(firstName: string | null): Record<string, string> {
+/** `businessName` is the workspace's Company Profile name — getCompanyProfile(). */
+export function greetingVars(firstName: string | null, businessName: string): Record<string, string> {
   return firstName
-    ? { first_name: firstName, name: firstName, known: "1", greeting: `Hey ${firstName} 👋 Welcome back to Denago Cape Town!` }
-    : { greeting: "Hi there 👋 Welcome to Denago Cape Town!" };
+    ? { first_name: firstName, name: firstName, known: "1", greeting: `Hey ${firstName} 👋 Welcome back to ${businessName}!` }
+    : { greeting: `Hi there 👋 Welcome to ${businessName}!` };
 }
 
 export function flowRuntimeVars(channel: string, now = new Date()): Record<string, string> {

@@ -1,6 +1,8 @@
 // Document template config — pure types + defaults (client-safe).
 // Templates are DocTemplateRecord rows: many per type, one default per type.
 
+import { brandFooterContent, type CompanyProfile } from "./companyBrand";
+
 export type DocKey =
   | "quote"
   | "invoice"
@@ -67,7 +69,7 @@ export const DOC_DEFS: Record<DocKey, DocDef> = {
       { id: "footer", label: "Branded footer" },
     ],
     defaultBody:
-      "1. The purchaser agrees to buy the vehicle(s) described above at the stated price.\n2. Ownership passes on receipt of full payment.\n3. The vehicle carries the manufacturer's warranty as per the warranty schedule.\n4. Delivery takes place at the agreed address or at Denago Cape Town, Maitland.\n5. This agreement is governed by the laws of the Republic of South Africa.",
+      "1. The purchaser agrees to buy the vehicle(s) described above at the stated price.\n2. Ownership passes on receipt of full payment.\n3. The vehicle carries the manufacturer's warranty as per the warranty schedule.\n4. Delivery takes place at the agreed address or at {{company.name}}.\n5. This agreement is governed by the laws of the Republic of South Africa.",
   },
   indemnity: {
     label: "Test-drive indemnity",
@@ -79,7 +81,7 @@ export const DOC_DEFS: Record<DocKey, DocDef> = {
       { id: "footer", label: "Branded footer" },
     ],
     defaultBody:
-      "I, the undersigned, acknowledge that I am test-driving the vehicle entirely at my own risk. I confirm that I hold a valid driver's licence, will follow all instructions given by Denago Cape Town staff, and accept liability for any damage caused by my negligence during the test drive. Denago Cape Town, its owners and employees are indemnified against any claim for injury, loss or damage arising from the test drive, to the fullest extent permitted by law.",
+      "I, the undersigned, acknowledge that I am test-driving the vehicle entirely at my own risk. I confirm that I hold a valid driver's licence, will follow all instructions given by {{company.name}} staff, and accept liability for any damage caused by my negligence during the test drive. {{company.name}}, its owners and employees are indemnified against any claim for injury, loss or damage arising from the test drive, to the fullest extent permitted by law.",
     defaultIntro: "Please read and sign before the test drive.",
   },
   delivery: {
@@ -126,7 +128,7 @@ export const DOC_DEFS: Record<DocKey, DocDef> = {
       { id: "signatures", label: "Signature block" },
       { id: "footer", label: "Branded footer" },
     ],
-    defaultIntro: "Warranty claim as recorded by Denago Cape Town.",
+    defaultIntro: "Warranty claim as recorded by {{company.name}}.",
   },
 };
 
@@ -137,8 +139,8 @@ export const DOC_GROUPS: { name: DocDef["group"]; keys: DocKey[] }[] = [
 ];
 
 export const SIGNATURE_POSITIONS: { id: SignaturePosition; label: string }[] = [
-  { id: "left-right", label: "Customer left · Denago right" },
-  { id: "right-left", label: "Denago left · Customer right" },
+  { id: "left-right", label: "Customer left · Dealer right" },
+  { id: "right-left", label: "Dealer left · Customer right" },
   { id: "strip", label: "Full-width strip" },
 ];
 
@@ -149,12 +151,31 @@ export function defaultTemplate(key: DocKey): DocTemplate {
     intro: def.defaultIntro ?? null,
     bodyText: def.defaultBody ?? null,
     terms: null,
-    footerLines: [
-      "Unit 55, M5 Freeway Business Park, Maitland, Cape Town · 073 789 3438",
-      "sales@denagocpt.co.za · denagocpt.co.za",
-    ],
+    // Empty = the Company Profile's address/phone and email/website lines,
+    // filled in at print time by withCompanyDetails().
+    footerLines: [],
     sections: Object.fromEntries(def.sections.map((s) => [s.id, s.id !== "prices"])),
     signature: { position: "left-right", dealerCounterSign: true },
+  };
+}
+
+/**
+ * Bind a template to the company printing it: `{{company.name}}` in the owner-
+ * editable text becomes the workspace's name, and an empty footer becomes the
+ * Company Profile's contact lines. These defaults used to be Denago's details
+ * typed in, so every workspace printed Denago's address on its documents.
+ */
+export function withCompanyDetails(tpl: DocTemplate, company: CompanyProfile): DocTemplate {
+  const fill = (s: string | null) => s?.replaceAll("{{company.name}}", company.name) ?? null;
+  const footer = brandFooterContent((k) => company[k]);
+  return {
+    ...tpl,
+    intro: fill(tpl.intro),
+    bodyText: fill(tpl.bodyText),
+    terms: fill(tpl.terms),
+    footerLines: tpl.footerLines.length
+      ? tpl.footerLines.map((l) => fill(l) ?? l)
+      : [footer.contact, footer.web].filter(Boolean),
   };
 }
 

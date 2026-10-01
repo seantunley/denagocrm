@@ -49,15 +49,20 @@ test("an email logo URL is absolute, and on the tenant's own origin", () => {
   // and in their client's "load remote images" prompt. Same route, same bytes,
   // same deployment; only the name changes.
   assert.match(code, /const origin = await tenantOrigin\(tenantId\);/, "resolved once for this email");
-  assert.match(code, /logoUrl: relative \? `\$\{origin\}\$\{relative\}` : null,/, "the tenant origin is prefixed");
+  assert.match(
+    code,
+    /logoUrl: relative \? `\$\{origin\}\$\{relative\}` : await profileEmailLogo\(tenantId\),/,
+    "the tenant origin is prefixed; no brand logo → the Company Profile's",
+  );
+  assert.match(code, /\/\^https:\\\/\\\/\/i\.test\(url\)/, "…only a public https URL a mail client can fetch");
   assert.match(code, /^\s+origin,$/m, "…and the same one is carried for the tracked links");
   assert.doesNotMatch(code, /appBaseUrl\(\)/, "not the platform's hostname");
+  // No logo at all → no image, never another company's. This pinned Denago's
+  // logo as the fallback for every tenant's campaign mail.
   const shell = shipped("src/lib/campaigns.ts");
-  assert.match(
-    shell,
-    /const logo = brand\?\.logoUrl \?\? `\$\{base\}\/branding\/denago-cape-town-logo\.png`;/,
-    "…and the built-in fallback is absolute too",
-  );
+  assert.match(shell, /const logo = brand\?\.logoUrl \?\? null;/);
+  assert.match(shell, /\$\{logo \? `<img src=/, "the <img> is only emitted when there is a logo");
+  assert.doesNotMatch(shell, /branding\/denago/);
 });
 
 test("an unbranded send names the platform, not a customer", () => {
