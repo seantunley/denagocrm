@@ -53,7 +53,10 @@ test("a merge is confirmed, with who goes where, and audited with what moved and
   assert.doesNotMatch(page, /<form action=\{mergeContacts/, "one-click merge is back");
   assert.match(page, /<ConfirmDelete\s+action=\{mergeContacts\.bind\(/);
   assert.match(page, /A merge can't be undone\./);
-  assert.match(merge, /summary: `Merged \$\{others\.map\(\(o\) => contactName\(o\)\)\.join\(", "\)\} into \$\{contactName\(keep\)\} — moved \$\{movedSummary\} — \$\{reason\}`/);
+  // Names only what THIS merge did — a duplicate another merge absorbed first is skipped.
+  assert.match(merge, /summary: `Merged \$\{mergedOthers\.map\(\(o\) => contactName\(o\)\)\.join\(", "\)\} into \$\{contactName\(keep\)\} — moved \$\{movedSummary\} — \$\{reason\}`/);
+  assert.match(merge, /if \(!loser\) return "skipped" as const;/);
+  assert.match(merge, /if \(mergedOthers\.length === 0\) refuse\(/);
 });
 
 test("duplicates are found by the shared identity rules, not by stripping spaces", () => {

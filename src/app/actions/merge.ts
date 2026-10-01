@@ -36,6 +36,7 @@ export async function mergeContacts(keepId: string, otherIdsCsv: string, formDat
       include: { tags: true },
     });
 
+    const mergedOthers: typeof others = [];
     for (const other of others) {
       // The ENTIRE merge for this duplicate — every related record, tags, the
       // backfill, identity moves and the soft-delete — runs in ONE transaction so
@@ -43,7 +44,7 @@ export async function mergeContacts(keepId: string, otherIdsCsv: string, formDat
       // UPDATE and RELOADED inside the transaction: when merging several
       // duplicates, each backfill is computed against the winner's CURRENT state,
       // so a later duplicate can't overwrite data an earlier one just recovered.
-      await basePrisma.$transaction(async (tx) => {
+      const outcome = await basePrisma.$transaction(async (tx) => {
         // Lock BOTH the winner and this loser FOR UPDATE, in stable sorted-ID order
         // (deadlock-safe), and RELOAD both live inside the transaction. Previously
         // only the winner was locked, so two concurrent merges of the SAME loser
@@ -55,7 +56,7 @@ export async function mergeContacts(keepId: string, otherIdsCsv: string, formDat
         // Reload the loser live (with tags). If it's already been merged/deleted by
         // a concurrent merge, skip it rather than acting on the stale pre-loop copy.
         const loser = await tx.contact.findFirst({ where: { id: other.id, deletedAt: null }, include: { tags: true } });
-        if (!loser) return;
+        if (!loser) return "skipped" as const;
 
         // Counts what moved, per table, for the audit line.
         const move = async (
@@ -194,16 +195,21 @@ export async function mergeContacts(keepId: string, otherIdsCsv: string, formDat
             deleteReason: `Merged into ${contactName(keep)}`,
           },
         });
+        return "merged" as const;
       });
+      // A duplicate another merge absorbed first is skipped, and left out of the
+      // audit line — which must name only what THIS merge did.
+      if (outcome === "merged") mergedOthers.push(other);
     }
+    if (mergedOthers.length === 0) refuse("Those duplicates were already merged — refresh the page.");
 
     const movedSummary = Object.entries(moved).map(([label, n]) => `${n} ${label}`).join(", ") || "no linked records";
     await logAudit({
       action: "contact.merged",
-      summary: `Merged ${others.map((o) => contactName(o)).join(", ")} into ${contactName(keep)} — moved ${movedSummary} — ${reason}`,
+      summary: `Merged ${mergedOthers.map((o) => contactName(o)).join(", ")} into ${contactName(keep)} — moved ${movedSummary} — ${reason}`,
       contactId: keepId,
       user,
-      metadata: { mergedIds: others.map((o) => o.id), moved },
+      metadata: { mergedIds: mergedOthers.map((o) => o.id), moved },
     });
     revalidatePath("/contacts");
     revalidatePath("/duplicates");
