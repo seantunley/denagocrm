@@ -13,8 +13,8 @@ const PROFILE_FIELDS = ["email", "phone", "whatsapp", "company", "address", "sub
 // Unique channel identities — must live on exactly one contact (or nowhere).
 // xUserId is unique per tenant rather than globally, but a merge never crosses
 // tenants, so the same move-or-drop rule holds; left behind, the deleted
-// duplicate kept answering X DMs.
-const IDENTITY_FIELDS = ["messengerPsid", "instagramId", "xUserId", "referralCode"] as const;
+// duplicate kept answering X DMs. telegramChatId is the same, for Telegram.
+const IDENTITY_FIELDS = ["messengerPsid", "instagramId", "xUserId", "telegramChatId", "referralCode"] as const;
 // Portal-preference booleans — merged conservatively (a disabled flag / opt-out
 // on EITHER side must stay off, so AND them; POPIA: never re-enable marketing).
 const PREF_FLAGS = ["serviceReminders", "portalNotifications", "marketingEmail", "emailServiceUpdates", "smsServiceUpdates", "emailMarketing"] as const;

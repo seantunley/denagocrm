@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runTelegramFlow, tgAnswerCallback } from "@/lib/telegram";
 import { tgPersistInboundFile } from "@/lib/telegramTransport";
+import { recordInboundTelegram } from "@/lib/telegramInbound";
 import { logError } from "@/lib/errorLog";
 import { inboundRetryResponse, noteInboundRetry } from "@/lib/webhookRetry";
 import {
@@ -18,9 +19,11 @@ export async function POST(req: NextRequest) {
   let update: {
     update_id?: number;
     message?: {
+      message_id?: number;
       text?: string;
       caption?: string;
       chat?: { id?: number };
+      from?: { first_name?: string; last_name?: string; username?: string };
       document?: TgFile;
       video?: TgFile;
       audio?: TgFile;
@@ -81,7 +84,17 @@ export async function POST(req: NextRequest) {
               : "telegram-photo.jpg";
             fileUrl = await tgPersistInboundFile(media.file_id, media.file_name || fallbackName, media.mime_type) ?? undefined;
           }
-          if (text || fileUrl) await runTelegramFlow(chatId, text, undefined, fileUrl);
+          if (!text && !fileUrl) return;
+          // On the customer's record and in the inbox FIRST (gap audit #29) — the
+          // bot used to be the only thing that ever saw a Telegram message.
+          await recordInboundTelegram({
+            chatId: String(chatId),
+            text,
+            fileUrl,
+            from: { firstName: message.from?.first_name, lastName: message.from?.last_name, username: message.from?.username },
+            providerMessageId: message.message_id != null ? String(message.message_id) : undefined,
+          });
+          await runTelegramFlow(chatId, text, undefined, fileUrl);
         });
         await completeInboundBotEvent(claim);
         return NextResponse.json({ ok: true });
