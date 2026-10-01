@@ -15,7 +15,7 @@ import {
 } from "./whatsappRendering";
 import { customerRecordTenantId } from "./customerRecordTenant";
 import { shareableFileUrl } from "./storage";
-import { credentialOwnerTenantId, resolveIntegrationBundleForTenant, resolveTenantCredential } from "./settings";
+import { resolveIntegrationBundleForTenant } from "./settings";
 import { sendPushToAll } from "./push";
 import { resolveTenantActor } from "./tenantActor";
 import { inboundCommunicationKey, isDedupeKeyConflict } from "./inboundMessageKey";
@@ -428,13 +428,16 @@ export async function sendWhatsAppList(
 export async function fetchWhatsAppMedia(
   mediaId: string
 ): Promise<{ buffer: Buffer; contentType: string } | null> {
-  const tenantId = ambientTenantId();
-  const token = await resolveTenantCredential(tenantId, "WA_ACCESS_TOKEN");
-  if (!token) return null;
+  // The token of the account that RECEIVED the voice note — the same set the
+  // sender resolves (waCredentials), never a field-by-field mix that could pair a
+  // half-entered workspace override with the settings account's media.
+  const bundle = await resolveIntegrationBundleForTenant(ambientTenantId(), "whatsapp");
+  const token = bundle?.values.WA_ACCESS_TOKEN;
+  if (!bundle || !token) return null;
   // phoneNumberId is empty on purpose: this endpoint is not scoped to it, and the
   // only failures reported below are ones classifyGraphError never quotes it in.
   const creds: WhatsAppCredentials = {
-    tenantId: credentialOwnerTenantId(tenantId),
+    tenantId: bundle.tenantId,
     phoneNumberId: "",
     token,
   };

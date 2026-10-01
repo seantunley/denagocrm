@@ -1,7 +1,7 @@
 import "server-only";
 import { basePrisma } from "./db";
 import { logError } from "./errorLog";
-import { resolveTenantCredential } from "./settings";
+import { resolveIntegrationBundle, resolveTenantCredential } from "./settings";
 import type { ChannelKind } from "./channelTenant";
 import {
   metaEndpointsFrom,
@@ -116,8 +116,14 @@ export async function reconcileTenantChannels(
     // is never the thing worth rationing — and it is the half the backstop
     // exists for. Gating it behind a Meta discovery allowance is how a tenant
     // whose WhatsApp row is missing could go unrepaired indefinitely.
-    const phoneNumberId = await resolveTenantCredential(tenantId, "WA_PHONE_NUMBER_ID");
-    const accessToken = await resolveTenantCredential(tenantId, "WA_ACCESS_TOKEN");
+    // Resolved as ONE set, by the rule the sender uses (resolveIntegrationBundle):
+    // a workspace's own values count only once every required one is set. Read
+    // field by field, a partial override registered the workspace's own phone
+    // number id while sends still went out from the settings number — so replies
+    // to the number customers actually saw could be routed nowhere.
+    const whatsappBundle = await resolveIntegrationBundle(tenantId, "whatsapp");
+    const phoneNumberId = whatsappBundle?.WA_PHONE_NUMBER_ID ?? null;
+    const accessToken = whatsappBundle?.WA_ACCESS_TOKEN ?? null;
     // Both halves are required for the channel to work at all, so clearing
     // either one disconnects it — and a disconnected channel must not keep
     // holding the endpoint against a workspace that may want to claim it.
