@@ -37,7 +37,8 @@ test("availability blocks refuse to cover existing customer commitments", () => 
   const code = src("src/app/actions/staffAvailability.ts");
   assert.match(code, /findStaffCommitmentConflict/);
   assert.match(code, /availabilityBlock: true/);
-  assert.match(code, /leadId/); // action deliberately creates no lead/contact fields
+  assert.doesNotMatch(code, /leadId\s*:/);
+  assert.doesNotMatch(code, /contactId\s*:/);
   assert.match(code, /assignedToId: assignedTo\.id/);
   assert.match(code, /note/);
 });
