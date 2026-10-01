@@ -19,6 +19,7 @@ import { addStockEvent } from "@/lib/stockPlatform";
 import { deleteFile, saveFile } from "@/lib/storage";
 import { logError } from "@/lib/errorLog";
 import { withStagedEvidence, type StageFile } from "@/lib/stagedEvidence";
+import { signedPdfIsSafeToDelete } from "@/lib/signing/blobReferences";
 import type { PermissionUser } from "@/lib/permissions";
 
 /**
@@ -217,8 +218,10 @@ export async function deliverQuote(input: {
    * or leaves no record behind:
    *
    *   - evidence BLOBS are uploaded first under fresh random keys nothing
-   *     references yet; if anything after that throws, exactly those blobs are
-   *     deleted (withStagedEvidence);
+   *     references yet; if anything after that throws, each of those blobs is
+   *     deleted ONLY when a fresh query proves no Document row names it — a
+   *     commit whose acknowledgement was lost keeps its files
+   *     (withStagedEvidence);
    *   - their Document ROWS, the quote, its stock and its vehicles are written in
    *     ONE TRANSACTION. The quote update is conditional on it not being delivered
    *     yet, so two people pressing the two buttons at once cannot both deliver
@@ -229,13 +232,20 @@ export async function deliverQuote(input: {
   const vehicleIds = await withStagedEvidence(
     {
       save: (buffer, originalName, mimeType) => saveFile(buffer, originalName, mimeType, quote.tenantId),
+      // The signing code's proof-based compensation, reused as is: a FRESH
+      // basePrisma count (outside the failed transaction, soft-delete inclusive,
+      // scoped to the quote's owner) of the Document rows naming this key. The
+      // signature's other reference, Quote.deliverySignatureRef, is written in
+      // the same transaction as its Document row, so that row is the proof. True
+      // only on a positive zero; any error or odd answer keeps the file.
+      isUnreferenced: (storedName) => signedPdfIsSafeToDelete(storedName, quote.tenantId),
       remove: deleteFile,
-      // A count and an id only: the error itself may carry the blob's key.
-      onCleanupFailure: (error, failed) =>
+      // Counts and the quote number only — never a key, file name or customer.
+      onRetained: ({ retained, deleteFailed }) =>
         logError(
           "delivery-evidence-cleanup",
-          new Error(`${error instanceof Error ? error.name : "Error"}: ${failed} unreferenced delivery evidence file(s) could not be deleted`),
-          `quote=${quoteId}`,
+          new Error(`Delivery refused or unconfirmed: ${retained} evidence file(s) kept (referenced, or not provably unreferenced), ${deleteFailed} unreferenced file(s) could not be deleted`),
+          `quote=Q-${quote.number}`,
           { tenantId: quote.tenantId, alert: false },
         ),
     },

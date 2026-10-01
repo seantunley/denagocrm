@@ -12,7 +12,8 @@ import {
   vinMatch,
   type DeliveryQuoteLine,
 } from "../src/lib/deliveryVehicles";
-import { withStagedEvidence } from "../src/lib/stagedEvidence";
+import { withStagedEvidence, type CleanupSummary, type StageFile } from "../src/lib/stagedEvidence";
+import { signedPdfIsUnreferenced } from "../src/lib/signing/compensate";
 
 /**
  * GAP #12 — two delivery flows that each did half the job.
@@ -213,77 +214,130 @@ test("the delivery is audited — the quote and every unit handed over", () => {
   assert.match(body, /eventType: "unit\.delivered"/);
 });
 
-/* ── a refused delivery keeps NO evidence ────────────────────────────────── */
+
+/* ── evidence: kept only if referenced, deleted only if PROVABLY not ─────── */
 
 /**
  * A fake store with real transaction semantics: writes inside `transaction`
  * land only if the callback resolves. Blobs live in `storage`, which no
  * transaction can roll back — exactly the production split.
+ *
+ * `ackLost` models the Q-1010 failure: Postgres COMMITS, then the client loses
+ * the acknowledgement and sees an error anyway.
+ *
+ * `isUnreferenced` is the REAL rule deliverQuote uses (signing's
+ * signedPdfIsUnreferenced), fed by a fresh count of committed rows — what
+ * signedPdfIsSafeToDelete asks basePrisma outside the failed transaction.
  */
-function fakeWorld() {
+function fakeWorld(options: { probeThrows?: boolean } = {}) {
   const storage = new Map<string, Buffer>();
   const documents: Array<Record<string, unknown>> = [];
   const sideEffects: string[] = [];
-  const cleanupFailures: Array<{ failed: number; message: string }> = [];
+  const logged: CleanupSummary[] = [];
   let key = 0;
   return {
     storage,
     documents,
     sideEffects,
-    cleanupFailures,
+    logged,
     deps: {
       save: async (buffer: Buffer) => {
         const ref = `uploads/tenant/${++key}-uuid.png`;
         storage.set(ref, buffer);
         return ref;
       },
+      isUnreferenced: (storedName: string) =>
+        signedPdfIsUnreferenced(storedName, {
+          "SignatureRequest.signedPdfRef": async () => 0,
+          "Document.storedName": async () => {
+            if (options.probeThrows) throw new Error("Connection terminated unexpectedly");
+            return documents.filter((row) => row.storedName === storedName).length;
+          },
+        }),
       remove: async (ref: string) => {
         storage.delete(ref);
       },
-      onCleanupFailure: async (error: unknown, failed: number) => {
-        cleanupFailures.push({ failed, message: error instanceof Error ? error.message : String(error) });
+      onRetained: async (summary: CleanupSummary) => {
+        logged.push(summary);
       },
     },
-    async transaction<T>(fn: (tx: { document: { create: (row: Record<string, unknown>) => void } }) => Promise<T>) {
+    async transaction<T>(
+      fn: (tx: { document: { create: (row: Record<string, unknown>) => void } }) => Promise<T>,
+      opts: { ackLost?: boolean } = {},
+    ) {
       const pending: Array<Record<string, unknown>> = [];
       const result = await fn({ document: { create: (row) => void pending.push(row) } });
       documents.push(...pending); // committed only when the body resolved
+      if (opts.ackLost) throw new AckLost("Connection reset before COMMIT was acknowledged");
       return result;
     },
   };
 }
 
 class LostRace extends Error {}
+class AckLost extends Error {}
 
-test("RACE: evidence uploaded, then the compare-and-set loses — no Document row, blob deleted, refused, nothing else written", async () => {
+const twoFiles = async (stage: StageFile) => {
+  const signature = await stage({ buffer: Buffer.from("png"), originalName: "sig.png", mimeType: "image/png", fileName: "Delivery signature — Q-1", tag: "delivery-signature" });
+  await stage({ buffer: Buffer.from("pdf"), originalName: "note.pdf", mimeType: "application/pdf", fileName: "Delivery note — Q-1", tag: "delivery-note" });
+  return { deliverySignatureRef: signature };
+};
+
+test("(a) COMMIT LANDED, ACK LOST: the transaction throws but its rows exist — the files are KEPT", async () => {
   const world = fakeWorld();
-  const attempt = withStagedEvidence(
+  const outcome = await withStagedEvidence(
     world.deps,
-    async (stage) => {
-      const signature = await stage({ buffer: Buffer.from("png"), originalName: "sig.png", mimeType: "image/png", fileName: "Delivery signature — Q-1", tag: "delivery-signature" });
-      await stage({ buffer: Buffer.from("pdf"), originalName: "note.pdf", mimeType: "application/pdf", fileName: "Delivery note — Q-1", tag: "delivery-note" });
-      return { deliverySignatureRef: signature };
-    },
+    twoFiles,
+    (_evidence, documents) => world.transaction(async (tx) => {
+      for (const document of documents) tx.document.create({ ...document });
+      return ["vehicle_1"];
+    }, { ackLost: true }),
+  ).catch((error) => error);
+  assert.ok(outcome instanceof AckLost, "the caller still sees the error");
+  assert.equal(world.documents.length, 2, "Postgres committed both Document rows");
+  assert.equal(world.storage.size, 2, "so neither file may be deleted from under them");
+  for (const row of world.documents) assert.ok(world.storage.has(String(row.storedName)), "every committed row still has its file");
+  assert.deepEqual(world.logged, [{ retained: 2, deleteFailed: 0 }], "the retention is logged as counts");
+});
+
+test("(b) GENUINE ROLLBACK: the compare-and-set loses, no row exists — the files are deleted, nothing else written", async () => {
+  const world = fakeWorld();
+  const outcome = await withStagedEvidence(
+    world.deps,
+    twoFiles,
     (_evidence, documents) => world.transaction(async (tx) => {
       // As deliverQuote does: the rows are created inside the transaction…
       for (const document of documents) tx.document.create({ ...document });
-      // …and then a concurrent change makes the stock unit's CAS match nothing.
+      // …then a concurrent change makes the stock unit's CAS match nothing.
       const moved = { count: 0 };
       if (moved.count !== 1) throw new LostRace("A stock unit on this quote changed while it was being delivered.");
       world.sideEffects.push("vehicle.create");
       return ["vehicle_1"];
     }),
   ).then(() => world.sideEffects.push("audit"), (error) => error);
-
-  const outcome = await attempt;
   assert.ok(outcome instanceof LostRace, "the delivery is refused with the transaction's own error");
   assert.equal(world.documents.length, 0, "no Document row survives the rolled-back transaction");
-  assert.equal(world.storage.size, 0, "every blob this attempt uploaded is deleted");
+  assert.equal(world.storage.size, 0, "both files are provably unreferenced, so both are deleted");
   assert.deepEqual(world.sideEffects, [], "nothing else is written — no vehicle, no audit");
-  assert.deepEqual(world.cleanupFailures, []);
+  assert.deepEqual(world.logged, []);
 });
 
-test("a failure WHILE staging deletes what was already uploaded", async () => {
+test("(c) THE REFERENCE CHECK ITSELF FAILS: no answer is not a 'no' — the files are KEPT", async () => {
+  const world = fakeWorld({ probeThrows: true });
+  const outcome = await withStagedEvidence(
+    world.deps,
+    twoFiles,
+    (_evidence, documents) => world.transaction(async (tx) => {
+      for (const document of documents) tx.document.create({ ...document });
+      throw new LostRace("refused");
+    }),
+  ).catch((error) => error);
+  assert.ok(outcome instanceof LostRace);
+  assert.equal(world.storage.size, 2, "an unanswered probe never authorises a delete");
+  assert.deepEqual(world.logged, [{ retained: 2, deleteFailed: 0 }]);
+});
+
+test("a failure WHILE staging deletes what was already uploaded (nothing can reference it)", async () => {
   const world = fakeWorld();
   const outcome = await withStagedEvidence(
     world.deps,
@@ -298,7 +352,7 @@ test("a failure WHILE staging deletes what was already uploaded", async () => {
   assert.deepEqual(world.sideEffects, [], "commit never ran");
 });
 
-test("a blob that cannot be deleted is reported by count only, and the refusal still stands", async () => {
+test("a proven-unreferenced file whose delete fails is counted, and the refusal still stands", async () => {
   const world = fakeWorld();
   const outcome = await withStagedEvidence(
     { ...world.deps, remove: async () => { throw new Error("del failed for uploads/tenant/1-uuid.png"); } },
@@ -306,10 +360,7 @@ test("a blob that cannot be deleted is reported by count only, and the refusal s
     async () => { throw new LostRace("refused"); },
   ).catch((error) => error);
   assert.ok(outcome instanceof LostRace, "the original refusal is what the caller sees");
-  assert.equal(world.cleanupFailures.length, 1);
-  assert.equal(world.cleanupFailures[0].failed, 1);
-  // deliverQuote's handler logs a NEW error naming a count — never this message.
-  assert.match(delivery, /onCleanupFailure: \(error, failed\) =>\s*logError\(\s*"delivery-evidence-cleanup",\s*new Error\(`\$\{error instanceof Error \? error\.name : "Error"\}: \$\{failed\} unreferenced/);
+  assert.deepEqual(world.logged, [{ retained: 0, deleteFailed: 1 }], "counts only — the delete error's key is never passed on");
 });
 
 test("a successful delivery keeps its blobs and commits its rows", async () => {
@@ -322,7 +373,21 @@ test("a successful delivery keeps its blobs and commits its rows", async () => {
   assert.equal(world.storage.size, 1);
   assert.equal(world.documents.length, 1);
   assert.equal(world.documents[0].sizeBytes, 1);
+  assert.deepEqual(world.logged, []);
 });
+
+test("deliverQuote reuses the signing code's proof-based check, and logs counts + quote number only", () => {
+  const body = fn(delivery, "deliverQuote");
+  assert.match(delivery, /import \{ signedPdfIsSafeToDelete \} from "@\/lib\/signing\/blobReferences";/, "the existing helper, not a parallel one");
+  assert.match(body, /isUnreferenced: \(storedName\) => signedPdfIsSafeToDelete\(storedName, quote\.tenantId\),/, "fresh, tenant-scoped, outside the failed transaction");
+  assert.match(body, /onRetained: \(\{ retained, deleteFailed \}\) =>\s*logError\(\s*"delivery-evidence-cleanup",/);
+  assert.match(body, /`quote=Q-\$\{quote\.number\}`/);
+  const handler = body.slice(body.indexOf("onRetained:"), body.indexOf("async (stage) =>"));
+  assert.doesNotMatch(handler, /storedName|fileName|contact|error\.message/, "never a key, file name or customer");
+  // The shared check counts Document rows by key, soft-delete inclusive.
+  assert.match(src("src/lib/signing/blobReferences.ts"), /"Document\.storedName": \(\) =>\s*basePrisma\.document\.count\(\{ where: \{ \.\.\.tenantWhere, storedName \} \}\)/);
+});
+
 
 test("the delivery files its evidence through staging: rows in the transaction, nothing written before it", () => {
   const body = fn(delivery, "deliverQuote");

@@ -521,10 +521,10 @@ export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) 
  * The paperwork below (delivery note, customer signature) is STAGED by the
  * `collectEvidence` callback, which deliverQuote runs only AFTER every gate.
  * Staging uploads the blob only; the Document rows and the signature reference
- * are written inside the delivery transaction, and if the delivery fails for any
- * reason after staging — including losing a race at commit — the blobs this
- * attempt uploaded are deleted. A refused delivery keeps no Document row; a blob
- * whose delete itself fails is left unreferenced and logged (count only).
+ * are written inside the delivery transaction. If the delivery fails after
+ * staging, each uploaded blob is deleted only when a fresh query proves no
+ * Document row names it; otherwise — including a commit whose acknowledgement
+ * was lost — it is kept, and the count is logged.
  */
 export async function markDelivered(
   quoteId: string,
