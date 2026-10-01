@@ -40,7 +40,7 @@ import {
   type SigningEmailKind,
 } from "@/lib/signing/emailTemplates";
 import { sanitizeEmailDoc, textToEmailDoc } from "@/lib/signing/emailDoc";
-import { EmailTemplateEditor } from "@/components/settings/EmailTemplateEditor";
+import { EmailTemplateEditor, SmsTemplateEditor } from "@/components/settings/EmailTemplateEditor";
 import TestEmailButton from "@/components/TestEmailButton";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import SecretReveal from "@/components/SecretReveal";
@@ -167,7 +167,7 @@ export default async function SettingsPage({
       })
     : [];
   const signingTemplate = (kind: SigningEmailKind) =>
-    parseStoredSigningTemplate(signingOverrides.find((s) => s.key === SIGNING_EMAILS[kind].settingKey)?.value);
+    parseStoredSigningTemplate(signingOverrides.find((s) => s.key === SIGNING_EMAILS[kind].settingKey)?.value, kind);
   const emailHeaderStyle = parseEmailHeaderStyle(signingOverrides.find((s) => s.key === "EMAIL_HEADER_STYLE")?.value);
   const settingsTenantId = tab === "integrations" ? await getActiveTenantId() : null;
   const xEntries = tab === "integrations"
@@ -852,10 +852,11 @@ export default async function SettingsPage({
               action="Manage"
             >
               <div className="mb-5">
-                <div className="text-sm font-semibold mb-1">Signing &amp; quote emails</div>
+                <div className="text-sm font-semibold mb-1">Messages your customers receive</div>
                 <p className="text-xs text-muted-foreground mb-3">
-                  Sent by e-signing, and the starting wording for &ldquo;Email quote&rdquo;. Your logo, brand colour
-                  and company details are added for you — the preview shows exactly what the customer receives.
+                  Every email and text the system sends a customer on its own — signing, quotes, codes, reminders,
+                  recalls, review requests and surveys. Your logo, brand colour and company details are added for you;
+                  each preview shows exactly what the customer receives.
                 </p>
                 <SaveForm success="Email header saved" resetOnSuccess={false} action={saveEmailHeaderStyle} className="mb-3 flex flex-wrap items-end gap-2">
                   <div>
@@ -871,14 +872,18 @@ export default async function SettingsPage({
                     Pick Dark or Brand colour if your logo is drawn in white.
                   </span>
                 </SaveForm>
+                {[...new Set(SIGNING_EMAIL_KINDS.map((k) => SIGNING_EMAILS[k].group))].map((group) => (
+                <div key={group} className="mb-4">
+                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">{group}</div>
                 <div className="space-y-3">
-                  {SIGNING_EMAIL_KINDS.map((kind) => {
+                  {SIGNING_EMAIL_KINDS.filter((k) => SIGNING_EMAILS[k].group === group).map((kind) => {
                     const def = SIGNING_EMAILS[kind];
                     const saved = signingTemplate(kind);
                     return (
                       <details key={kind} className="rounded-lg border border-border bg-muted/40">
                         <summary className="px-4 py-2.5 cursor-pointer text-sm font-medium flex items-center gap-2">
                           {def.label}
+                          <span className="badge bg-muted text-muted-foreground">{def.channel === "sms" ? "SMS" : "Email"}</span>
                           <span className="badge bg-muted text-muted-foreground">{saved ? "Customised" : "Default"}</span>
                         </summary>
                         <div className="p-4 pt-1 space-y-2">
@@ -891,18 +896,28 @@ export default async function SettingsPage({
                             action={saveSigningEmailTemplate.bind(null, kind)}
                             className="space-y-2"
                           >
-                            <EmailTemplateEditor
-                              initialSubject={saved?.subject ?? def.subject}
-                              initialDoc={
-                                (saved?.doc ? sanitizeEmailDoc(saved.doc, def.fields) : null) ??
-                                textToEmailDoc(saved?.body ?? def.body, def.fields)
-                              }
-                              fields={def.fields}
-                              fieldHelp={SIGNING_FIELD_HELP}
-                              requiredField={def.action}
-                              preview={previewSigningEmailTemplate.bind(null, kind)}
-                              refreshKey={emailHeaderStyle}
-                            />
+                            {def.channel === "sms" ? (
+                              <SmsTemplateEditor
+                                initialBody={saved?.body ?? def.body}
+                                fields={def.fields}
+                                fieldHelp={SIGNING_FIELD_HELP}
+                                requiredField={def.action}
+                                preview={previewSigningEmailTemplate.bind(null, kind)}
+                              />
+                            ) : (
+                              <EmailTemplateEditor
+                                initialSubject={saved?.subject ?? def.subject}
+                                initialDoc={
+                                  (saved?.doc ? sanitizeEmailDoc(saved.doc, def.fields) : null) ??
+                                  textToEmailDoc(saved?.body ?? def.body, def.fields)
+                                }
+                                fields={def.fields}
+                                fieldHelp={SIGNING_FIELD_HELP}
+                                requiredField={def.action}
+                                preview={previewSigningEmailTemplate.bind(null, kind)}
+                                refreshKey={emailHeaderStyle}
+                              />
+                            )}
                             <SaveButton className="btn-primary btn-sm">Save</SaveButton>
                           </SaveForm>
                           {saved && (
@@ -915,6 +930,8 @@ export default async function SettingsPage({
                     );
                   })}
                 </div>
+                </div>
+                ))}
               </div>
               <div className="text-sm font-semibold mb-1">Your templates</div>
               <p className="text-xs text-muted-foreground mb-2">
