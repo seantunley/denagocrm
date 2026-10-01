@@ -59,13 +59,12 @@ export default function QuotePrintDoc({
       <div className="print-page max-w-3xl mx-auto px-6 py-8 print:p-0 text-sm text-slate-800">
         {/* Brand banner */}
         <div className="flex items-center justify-between rounded-xl bg-[#020617] px-7 py-5">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={tpl.logoUrl || company.logoUrl || "/branding/denago-logo-email.png"}
-            alt={company.name}
-            className="h-11 w-auto object-contain"
-          />
-          <div className="text-right">
+          {/* No logo configured → no image (never another company's). */}
+          {(tpl.logoUrl || company.logoUrl) && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={(tpl.logoUrl || company.logoUrl) as string} alt={company.name} className="h-11 w-auto object-contain" />
+          )}
+          <div className="ml-auto text-right">
             <p className="text-2xl font-bold tracking-widest text-white">QUOTATION</p>
             <p className="text-lg font-bold text-orange-500">Q-{quote.number}</p>
           </div>

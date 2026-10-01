@@ -70,8 +70,9 @@ export async function renderInstanceHtml(instance: {
   // source of truth) — not hard-coded — so changing Settings > Company updates
   // finalized Studio documents too.
   const company = await getCompanyProfile();
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://crm.denagocpt.co.za";
-  const logoSrc = company.logoUrl?.trim() || `${appUrl}/branding/denago-cape-town-logo.png`;
+  // No logo configured → none (never another company's); the empty <span> keeps
+  // the title right-aligned in the flex header.
+  const logoSrc = company.logoUrl?.trim() ?? "";
   const footer = escapeHtml(
     [
       [company.name, company.tagline].filter((s) => s && s.trim()).join(" — "),
@@ -104,7 +105,7 @@ export async function renderInstanceHtml(instance: {
 </style></head>
 <body>
   <div class="doc-header">
-    <img src="${escapeHtml(logoSrc)}" alt="${escapeHtml(company.name)}" />
+    ${logoSrc ? `<img src="${escapeHtml(logoSrc)}" alt="${escapeHtml(company.name)}" />` : `<span></span>`}
     <div class="title">${escapeHtml(instance.title)}</div>
   </div>
   ${body}

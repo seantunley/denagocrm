@@ -108,8 +108,12 @@ export default async function TemplateEditorPage({
           <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
             <p className="mb-2 text-sm font-semibold">Logo</p>
             <div className="mb-3 flex h-16 items-center rounded-lg bg-[#020617] px-4">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={storedFileSrc(template.logoUrl) ?? "/branding/denago-logo-email.png"} alt="Current logo" className="h-10 w-auto object-contain" />
+              {storedFileSrc(template.logoUrl) ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={storedFileSrc(template.logoUrl) as string} alt="Current logo" className="h-10 w-auto object-contain" />
+              ) : (
+                <span className="text-xs text-slate-300">No template logo — prints the Settings → Company logo, or none</span>
+              )}
             </div>
             <form action={uploadTemplateLogo.bind(null, record.id)} className="flex items-center gap-2">
               <input type="file" name="file" accept="image/*" required className="block flex-1 text-xs text-muted-foreground" />

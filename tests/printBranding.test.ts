@@ -91,26 +91,43 @@ test("the print shell names no customer when no company is given", () => {
   // platform's name now.
   const code = shipped("src/components/print/PrintDocShell.tsx");
   assert.match(code, /company\?: \{ name: string; tagline: string; logoUrl: string;/, "still optional");
-  assert.match(code, /\|\| "\/branding\/denago-logo-email\.png"/, "logo fallback");
   assert.match(code, /company\?\.name \|\| PLATFORM_NAME/, "alt text and counter-signature");
   assert.match(code, /\[company\?\.name \|\| PLATFORM_NAME, company\?\.tagline\]/, "footer");
-  // The built-in logo FILE stays: swapping it needs a neutral replacement image,
-  // not a code change. Tracked in appShellBranding.test.ts's STILL_HARDCODED.
-  const withoutAsset = code.replace(/"\/branding\/[^"]*"/g, "");
-  assert.doesNotMatch(withoutAsset, /Denago/, "no customer named in any fallback");
+  assert.doesNotMatch(code, /Denago|branding\/denago/i, "no customer named — or pictured — in any fallback");
 });
 
-test("the template's own logo still wins over the company's", () => {
-  // Document Studio templates carry their own uploaded logo. That is a
-  // per-DOCUMENT choice and must outrank the workspace default, or setting it
-  // would silently stop working.
-  const code = shipped("src/components/print/PrintDocShell.tsx");
-  assert.match(code, /src=\{tpl\.logoUrl \|\| company\?\.logoUrl \|\| "\/branding\/denago-logo-email\.png"\}/);
-  // `||`, not `??`. An unset COMPANY_LOGO_URL resolves to the EMPTY STRING, not
-  // null — `??` passed it through and rendered `<img src="">`, which browsers
-  // resolve to the current page and draw as a broken image on a printed
-  // document. Harmless while every workspace was configured; the normal case now.
-  assert.doesNotMatch(code, /company\?\.logoUrl \?\?/, "?? does not skip an empty string");
+/**
+ * The logo, rendered. This pinned the Denago logo as the fallback: a workspace
+ * with a Company Profile but no uploaded logo printed every invoice, agreement
+ * and job card under Denago's mark. No logo now means no logo — no <img> at all
+ * (an empty src draws a broken image), and the title keeps its place.
+ */
+const printShell = async (company: { name: string; tagline: string; logoUrl: string }, templateLogo: string | null = null) => {
+  const React = await import("react");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const { default: PrintDocShell } = await import("../src/components/print/PrintDocShell");
+  const { defaultTemplate } = await import("../src/lib/docTemplates");
+  return renderToStaticMarkup(
+    React.createElement(PrintDocShell, { company, template: { ...defaultTemplate("invoice"), logoUrl: templateLogo }, title: "Invoice" }),
+  );
+};
+
+test("an unconfigured non-Denago workspace prints no Denago logo — and no broken image", async () => {
+  const html = await printShell({ name: "Acme Golf Carts", tagline: "", logoUrl: "" });
+  assert.doesNotMatch(html, /denago/i, "nothing of Denago's, logo included");
+  assert.doesNotMatch(html, /<img[^>]+src=""/, "no empty image");
+  assert.doesNotMatch(html, /<img[^>]+alt="Acme Golf Carts"/, "no logo element at all");
+  assert.match(html, />Invoice</, "the title still renders");
+});
+
+test("a configured workspace prints its own logo, and a template logo outranks it", async () => {
+  const own = await printShell({ name: "Acme Golf Carts", tagline: "", logoUrl: "https://acme.test/logo.png" });
+  assert.match(own, /<img[^>]+src="https:\/\/acme\.test\/logo\.png"/);
+  // Document Studio templates carry their own uploaded logo — a per-DOCUMENT
+  // choice that must outrank the workspace default.
+  const tpl = await printShell({ name: "Acme Golf Carts", tagline: "", logoUrl: "https://acme.test/logo.png" }, "data:image/png;base64,VFBM");
+  assert.match(tpl, /src="data:image\/png;base64,VFBM"/);
+  assert.doesNotMatch(tpl, /acme\.test\/logo\.png/);
 });
 
 test("the counter-signature label names the seller, resolved not defaulted", () => {

@@ -22,7 +22,7 @@ const shipped = (rel: string) =>
  * a literal here is another tenant's customer being told to phone Denago.
  */
 const COMPANY_LITERALS =
-  /Denago Cape Town|073\s?789\s?3438|M5 Freeway|Maitland|denago_capetown|Denago EV Dealer|denagocpt\.co\.za/i;
+  /Denago Cape Town|073\s?789\s?3438|M5 Freeway|Maitland|denago_capetown|Denago EV Dealer|denagocpt\.co\.za|branding\/denago|denago-(?:logo|cape-town-logo|ev-logo|mark)/i;
 
 /**
  * Files allowed to contain one, and why. Every entry must still match — fix
@@ -38,6 +38,7 @@ const ALLOWED: Record<string, string> = {
   "src/app/manifest.ts": "staff — PWA install description",
   "src/app/messages/manifest.webmanifest/route.ts": "staff — PWA install description",
   "src/components/AppShell.tsx": "staff — logo alt fallback, pinned by appShellBranding.test.ts",
+  "src/components/KanbanBoard.tsx": "staff — 16px lead-SOURCE glyph on the pipeline board (see appShellBranding.test.ts)",
   "src/components/quotes/QuoteEditorDialog.tsx": "staff — in-editor preview header (the printed quote reads the profile)",
   "src/lib/help/data/admin.json": "staff — help centre",
   "src/lib/help/data/channels.json": "staff — help centre (platform webhook URLs)",
@@ -50,7 +51,6 @@ const ALLOWED: Record<string, string> = {
   // when NEXT_PUBLIC_APP_URL is unset. Tenant links go through tenantOrigin().
   "src/lib/campaigns.ts": "platform origin fallback",
   "src/lib/competitors.ts": "platform origin in a crawler User-Agent",
-  "src/lib/customDocs.ts": "platform origin fallback",
   "src/lib/integrationProbe.ts": "platform origin fallback",
   "src/lib/pdfImageHosts.ts": "platform origin fallback",
   "src/lib/push.ts": "platform VAPID contact",

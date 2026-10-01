@@ -91,13 +91,12 @@ export default async function JobCardPrintPage({
       <div className="max-w-3xl mx-auto px-6 py-8 print:p-0 text-sm">
         {/* Brand banner */}
         <div className="flex items-center justify-between rounded-xl bg-[#020617] px-7 py-5">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={tpl.logoUrl || company.logoUrl || "/branding/denago-logo-email.png"}
-            alt={company.name}
-            className="h-11 w-auto object-contain"
-          />
-          <div className="text-right">
+          {/* No logo configured → no image (never another company's). */}
+          {(tpl.logoUrl || company.logoUrl) && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={(tpl.logoUrl || company.logoUrl) as string} alt={company.name} className="h-11 w-auto object-contain" />
+          )}
+          <div className="ml-auto text-right">
             <p className="text-2xl font-semibold tracking-[-0.035em] tracking-widest text-white">JOB CARD</p>
             <p className="text-lg font-bold text-orange-500">#{jobCard.number}</p>
             <p className="text-xs text-slate-400">{stageMeta(jobCard.status).label}</p>

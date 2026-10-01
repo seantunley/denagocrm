@@ -188,20 +188,18 @@ export default function PrintDocShell({
       <div className="print-page max-w-3xl mx-auto px-6 py-8 print:p-0 text-sm text-slate-800 bg-white">
         {/* Brand banner */}
         <div className="flex items-center justify-between rounded-xl bg-[#020617] px-7 py-5">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            // `||`, not `??`. An unset logo is the EMPTY STRING here, not null:
-            // COMPANY_LOGO_URL is a text setting and getCompanyProfile() maps a
-            // missing one to "". `??` only skips null/undefined, so it passed the
-            // empty string straight through and rendered `<img src="">`, which
-            // browsers resolve to the current page and draw as a broken image on
-            // a printed document. Now that unconfigured workspaces are the normal
-            // case rather than the impossible one, this has to fall through.
-            src={tpl.logoUrl || company?.logoUrl || "/branding/denago-logo-email.png"}
-            alt={company?.name || PLATFORM_NAME}
-            className="h-11 w-auto object-contain"
-          />
-          <div className="text-right">
+          {/* `||`, not `??`: an unset COMPANY_LOGO_URL is "" and `<img src="">`
+              draws a broken image. With no logo at all, NO image — never another
+              company's — and `ml-auto` keeps the title on the right. */}
+          {(tpl.logoUrl || company?.logoUrl) && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={(tpl.logoUrl || company?.logoUrl) as string}
+              alt={company?.name || PLATFORM_NAME}
+              className="h-11 w-auto object-contain"
+            />
+          )}
+          <div className="ml-auto text-right">
             <p className="text-2xl font-bold tracking-widest text-white uppercase">{title}</p>
             {number && <p className="text-lg font-bold text-orange-500">{number}</p>}
           </div>

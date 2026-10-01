@@ -138,7 +138,8 @@ test("the signing invitation names the workspace, not Denago", () => {
     assert.doesNotMatch(withoutPlatformOrigin(file), /Denago/i, `${file}: no company named by a literal`);
   }
   assert.match(shipped("src/lib/signing/emailTemplates.ts"), /brand\.companyName\.toUpperCase\(\)/, "the wordmark is the workspace's");
-  assert.match(shipped("src/lib/signing/signingEmail.ts"), /companyName: brand\.displayName/);
+  // Company Profile name first, then the platform brand.
+  assert.match(shipped("src/lib/signing/signingEmail.ts"), /const companyName = setting\("COMPANY_NAME"\) \|\| brand\.displayName;/);
   assert.match(shipped("src/lib/signing/signingEmail.ts"), /brandForTenant\(tenantId\)/, "the brand is the REQUEST's tenant's");
   assert.match(shipped("src/lib/signing/dispatch.ts"), /const origin = await tenantOrigin\(r\.request\.tenantId\)/);
 });
@@ -323,13 +324,10 @@ test("campaign links, the open pixel and unsubscribe use the tenant origin", () 
     /unsubscribeUrlFor\(emailBase\(brand\), token\)/,
   );
 
-  // The shell's built-in logo fallback resolves the same way, so the picture and
-  // the links in one email cannot arrive from two different hosts.
+  // The shell has no built-in logo any more: no tenant logo → no image, so there
+  // is no second host for a picture to arrive from.
   const shellStart = code.indexOf("function emailShell(");
-  assert.match(
-    code.slice(shellStart, code.indexOf("return `<!doctype", shellStart)),
-    /const base = emailBase\(brand\);/,
-  );
+  assert.match(code.slice(shellStart, code.indexOf("return `<!doctype", shellStart)), /const logo = brand\?\.logoUrl \?\? null;/);
 });
 
 test("the origin rides on the brand, because the builders are synchronous", () => {
@@ -339,7 +337,7 @@ test("the origin rides on the brand, because the builders are synchronous", () =
   const code = shipped("src/lib/emailBrand.ts");
   assert.match(code, /origin: string;/, "EmailBrand carries it");
   assert.match(code, /const origin = await tenantOrigin\(tenantId\);/, "resolved once");
-  assert.match(code, /logoUrl: relative \? `\$\{origin\}\$\{relative\}` : null,/, "…and reused for the logo");
+  assert.match(code, /logoUrl: relative \? `\$\{origin\}\$\{relative\}` : await profileEmailLogo\(tenantId\),/, "…and reused for the logo");
   assert.equal(UNBRANDED_EMAIL_ORIGIN_IS_EMPTY(code), true, "empty, never null, so a caller cannot emit `undefined/api/...`");
   assert.doesNotMatch(shipped("src/lib/campaigns.ts"), /await tenantOrigin\(/, "no per-recipient lookup");
 });
