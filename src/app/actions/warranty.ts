@@ -12,6 +12,8 @@ import { describeBlockedReason, firstAllowedChannel } from "@/lib/communicationP
 import { claimStatuses } from "@/lib/warranty";
 import { requirePermission, requireVehicleAccess } from "@/lib/permissions";
 import { withActingStaffScope } from "@/lib/actingScope";
+import { asActionResult, refuse } from "@/lib/actionResult";
+import { requiredReason } from "@/lib/deleteReason";
 
 export async function addWarrantyClaim(vehicleId: string, formData: FormData) {
   return withActingStaffScope(async () => {
@@ -59,12 +61,22 @@ export async function setWarrantyClaimStatus(id: string, formData: FormData) {
   });
 }
 
-export async function deleteWarrantyClaim(id: string) {
-  return withActingStaffScope(async () => {
+export async function deleteWarrantyClaim(id: string, formData?: FormData) {
+  return asActionResult(async () => {
+    // Authorise before answering anything about the record.
+    await requirePermission("warranty.manage");
     const claim = await prisma.warrantyClaim.findUnique({ where: { id } });
-    if (!claim) return;
-    await requireVehicleAccess(claim.vehicleId, "warranty.manage");
+    if (!claim) refuse("That warranty claim is already gone — refresh the page.");
+    const user = await requireVehicleAccess(claim.vehicleId, "warranty.manage");
+    const reason = requiredReason(formData, "deleting this claim");
     await prisma.warrantyClaim.delete({ where: { id } });
+    // Permanent (no Trash for claims), so the audit line is the only record left.
+    await logAudit({
+      action: "warranty.claim_deleted",
+      summary: `Deleted a ${claim.status} warranty claim (“${claim.description.slice(0, 80)}”) — ${reason}`,
+      contactId: claim.contactId,
+      user,
+    });
     revalidatePath(`/vehicles/${claim.vehicleId}`);
     revalidatePath("/warranty");
   });
@@ -83,10 +95,18 @@ export async function createRecall(formData: FormData) {
   });
 }
 
-export async function deleteRecall(id: string) {
-  return withActingStaffScope(async () => {
-    await requirePermission("warranty.manage");
-    await prisma.recall.delete({ where: { id } }).catch(() => {});
+export async function deleteRecall(id: string, formData?: FormData) {
+  return asActionResult(async () => {
+    const user = await requirePermission("warranty.manage");
+    const recall = await prisma.recall.findUnique({ where: { id }, select: { title: true, model: true } });
+    if (!recall) refuse("That recall is already gone — refresh the page.");
+    const reason = requiredReason(formData, "deleting this recall");
+    await prisma.recall.delete({ where: { id } });
+    await logAudit({
+      action: "recall.deleted",
+      summary: `Deleted the recall “${recall.title}” (${recall.model}) — ${reason}`,
+      user,
+    });
     revalidatePath("/warranty");
   });
 }

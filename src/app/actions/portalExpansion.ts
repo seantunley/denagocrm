@@ -17,6 +17,8 @@ import { isModuleEnabled } from "@/lib/modules/enabled";
 import { logAudit } from "@/lib/audit";
 import { sendPushToAll } from "@/lib/push";
 import { contactName } from "@/lib/format";
+import { ActionRefusal, classifyFailure, failureReference } from "@/lib/actionFailure";
+import { logError } from "@/lib/errorLog";
 
 export type PortalActionState = { ok?: string; error?: string };
 const text = (value: FormDataEntryValue | null) => String(value ?? "").trim();
@@ -30,8 +32,24 @@ const ALLOWED_UPLOAD_TYPES = new Set([
 
 async function portalUser() {
   const contact = await getPortalContact();
-  if (!contact) throw new Error("Please sign in again.");
+  if (!contact) throw new ActionRefusal("Please sign in again.");
   return contact;
+}
+
+/**
+ * What a customer sees when a portal action fails. Every expected problem
+ * already returns its own message; a deliberate refusal shows its text; anything
+ * ELSE is unexpected — a Postgres error names tables and columns — so it is
+ * logged with a reference and the customer gets the action's plain fallback.
+ * These catch blocks used to return `error.message` for any Error, straight to
+ * the customer.
+ */
+async function portalFailure(error: unknown, fallback: string): Promise<PortalActionState> {
+  const failure = classifyFailure(error, failureReference());
+  if (failure.kind !== "unexpected") return { error: failure.message };
+  console.error(failure.logLine, error);
+  await logError("portal-action", error, failure.logLine, { alert: false }).catch(() => {});
+  return { error: `${fallback} Please try again, or contact us if it keeps happening.` };
 }
 
 export async function submitProfileChange(
@@ -75,7 +93,7 @@ export async function submitProfileChange(
     revalidatePath("/portal/profile");
     return { ok: "Your requested changes were submitted for review." };
   } catch (error) {
-    return { error: error instanceof Error ? error.message : "Could not submit the request." };
+    return portalFailure(error, "Could not submit the request.");
   }
 }
 
@@ -134,7 +152,7 @@ export async function updatePortalPreferences(
     revalidatePath("/portal/profile");
     return { ok: "Preferences saved." };
   } catch (error) {
-    return { error: error instanceof Error ? error.message : "Could not save preferences." };
+    return portalFailure(error, "Could not save preferences.");
   }
 }
 
@@ -226,7 +244,7 @@ export async function createPortalCase(
     revalidatePath("/portal/support");
     return { ok: `Case C-${number} was submitted.` };
   } catch (error) {
-    return { error: error instanceof Error ? error.message : "Could not create the case." };
+    return portalFailure(error, "Could not create the case.");
   }
 }
 
@@ -281,7 +299,7 @@ export async function addPortalCaseMessage(
     revalidatePath("/cases");
     return { ok: "Message sent." };
   } catch (error) {
-    return { error: error instanceof Error ? error.message : "Could not send the message." };
+    return portalFailure(error, "Could not send the message.");
   }
 }
 
@@ -327,7 +345,7 @@ export async function uploadPortalFile(
     if (caseId) revalidatePath(`/portal/support/${caseId}`);
     return { ok: "File uploaded securely." };
   } catch (error) {
-    return { error: error instanceof Error ? error.message : "Could not upload the file." };
+    return portalFailure(error, "Could not upload the file.");
   }
 }
 
