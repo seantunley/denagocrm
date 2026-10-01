@@ -151,6 +151,7 @@ export async function reserveSlot(input: {
     await lockStaffSchedules(tx, stampTenantId ?? "global", [assignedToId]);
     const conflict = await findStaffAvailabilityConflict({
       userId: assignedToId,
+      tenantId: stampTenantId,
       start: dt,
       end: endDate,
       db: tx,
