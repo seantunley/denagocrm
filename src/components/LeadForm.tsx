@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { SaveForm } from "@/components/SaveForm";
+import ContactPicker, { type ContactOption } from "@/components/ContactPicker";
 import type { ActionResult } from "@/lib/actionResultTypes";
 import {
   BadgeDollarSign,
@@ -97,9 +98,8 @@ export default function LeadForm({
     [name, product, value],
   );
 
-  function onContactChange(id: string) {
+  function onContactChange(id: string, contact: ContactOption | null) {
     setContactId(id);
-    const contact = contacts.find((item) => item.id === id);
     if (contact && !name.trim()) setName(contact.label);
   }
 
@@ -157,12 +157,13 @@ export default function LeadForm({
           hint="Selecting a contact links the lead to their customer timeline."
           wide
         >
-          <select name="contactId" className="input" value={contactId} onChange={(event) => onContactChange(event.target.value)}>
-            <option value="">New prospect — create a contact automatically</option>
-            {contacts.map((contact) => (
-              <option key={contact.id} value={contact.id}>{contact.label}</option>
-            ))}
-          </select>
+          <ContactPicker
+            name="contactId"
+            options={contacts}
+            value={contactId}
+            onChange={onContactChange}
+            emptyLabel="New prospect — create a contact automatically"
+          />
         </Field>
         <Field label="Customer name *" wide>
           <input

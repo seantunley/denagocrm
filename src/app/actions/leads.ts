@@ -944,21 +944,43 @@ export async function searchLinkableContacts(
     if (query.length < 2) return [];
     const ids = await getAccessibleContactIds(user);
     if (ids !== null && ids.length === 0) return [];
-    const contains = { contains: query, mode: "insensitive" as const };
+    // Every word must match some field, so "jo smith" finds Jo Smith.
+    const words = query.split(/\s+/).slice(0, 4);
     const rows = await prisma.contact.findMany({
       where: {
         ...(ids === null ? {} : { id: { in: ids } }),
-        OR: [{ firstName: contains }, { lastName: contains }, { company: contains }, { email: contains }, { phone: contains }],
+        AND: words.map((word) => {
+          const contains = { contains: word, mode: "insensitive" as const };
+          return { OR: [{ firstName: contains }, { lastName: contains }, { company: contains }, { email: contains }, { phone: contains }] };
+        }),
       },
-      select: { id: true, firstName: true, lastName: true, company: true, isCompany: true, email: true, phone: true },
+      select: CONTACT_OPTION_SELECT,
       orderBy: { updatedAt: "desc" },
-      take: 8,
+      take: 12,
     });
-    return rows.map((row) => ({
-      id: row.id,
-      label: contactName(row),
-      sublabel: row.email ?? row.phone ?? "",
-    }));
+    return rows.map(contactOption);
+  });
+}
+
+const CONTACT_OPTION_SELECT = { id: true, firstName: true, lastName: true, company: true, isCompany: true, email: true, phone: true } as const;
+
+function contactOption(row: { id: string; firstName: string; lastName: string | null; company: string | null; isCompany: boolean; email: string | null; phone: string | null }) {
+  return { id: row.id, label: contactName(row), sublabel: row.email ?? row.phone ?? "" };
+}
+
+/**
+ * The label for a customer a form already has selected but the page didn't
+ * preload — a lead edited after its customer fell outside the preloaded list
+ * otherwise showed a blank picker, and saving it cleared the link. Same access
+ * rule as the search: null for a customer this caller may not see.
+ */
+export async function contactOptionById(id: string): Promise<{ id: string; label: string; sublabel: string } | null> {
+  return withActingStaffScope(async () => {
+    const user = await requireAnyPermission("contacts.view_all", "contacts.view_owned");
+    const ids = await getAccessibleContactIds(user);
+    if (ids !== null && !ids.includes(id)) return null;
+    const row = await prisma.contact.findFirst({ where: { id }, select: CONTACT_OPTION_SELECT });
+    return row ? contactOption(row) : null;
   });
 }
 
