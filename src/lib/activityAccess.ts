@@ -6,6 +6,7 @@ import {
   type PermissionUser,
 } from "./permissions";
 import { actingTenantId } from "./actingTenant";
+import { TenantScopeError } from "./tenantGuard";
 
 /**
  * Activities inherit access from their linked lead/contact. General activities
@@ -15,11 +16,16 @@ export async function getAccessibleActivityIds(user: PermissionUser): Promise<st
   if (!(await hasAnyPermission(user, "activities.view", "activities.manage"))) return [];
   if (user.role === "owner") return null;
 
-  const [leadIds, contactIds, tenantId] = await Promise.all([
+  const [leadIds, contactIds] = await Promise.all([
     getAccessibleLeadIds(user),
     getAccessibleContactIds(user),
-    actingTenantId(),
   ]);
+  let tenantId: string | null = null;
+  try {
+    tenantId = await actingTenantId();
+  } catch (error) {
+    if (!(error instanceof TenantScopeError)) throw error;
+  }
 
   const rows = await basePrisma.activity.findMany({
     where: {
@@ -28,7 +34,7 @@ export async function getAccessibleActivityIds(user: PermissionUser): Promise<st
         { createdById: user.id },
         // Staff availability is operationally useful only when the whole
         // workspace can see it. Keep the basePrisma read tenant-qualified.
-        { availabilityBlock: true, tenantId },
+        ...(tenantId ? [{ availabilityBlock: true, tenantId }] : []),
         ...(leadIds === null
           ? [{ leadId: { not: null } }]
           : leadIds.length
