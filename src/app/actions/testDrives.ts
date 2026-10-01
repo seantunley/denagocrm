@@ -1,7 +1,7 @@
 "use server";
 
-import crypto from "crypto";
 import { redirect } from "next/navigation";
+import { createBookedTestDrive } from "@/lib/testDriveBooking";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { agreedTenantId } from "@/lib/compositeTenantRules";
@@ -61,10 +61,6 @@ function optionalDate(value: string | null, label: string): Date | null {
   const parsed = new Date(`${value}T00:00:00+02:00`);
   if (Number.isNaN(parsed.getTime())) throw new Error(`${label} is invalid`);
   return parsed;
-}
-
-function newReference() {
-  return `TD-${crypto.randomBytes(6).toString("hex").toUpperCase()}`;
 }
 
 async function requireBooking(id: string) {
@@ -180,7 +176,6 @@ export async function createTestDriveBooking(formData: FormData) {
 
     const resolvedProductId = productId ?? demoVehicle?.productId ?? lead?.productId ?? null;
     const modelName = product?.name ?? demoVehicle?.name ?? lead?.title ?? "Vehicle";
-    const activityId = crypto.randomUUID();
     // Both parents are already in hand, so the owner is decided without another read.
     // Activity's composite keys are (tenantId, contactId) and (tenantId, leadId). If
     // the contact and the lead disagree this THROWS rather than writing NULL: a NULL
@@ -197,53 +192,27 @@ export async function createTestDriveBooking(formData: FormData) {
     // connection for the duration of an unrelated await.
     const bookingTenantId = await actingTenantId();
 
-    const booking = await prisma.$transaction(async (tx) => {
-      const created = await tx.testDriveBooking.create({
-        data: {
-          // Stamped from the SESSION, not left to the db.ts guard. The guard's
-          // `scopeArgs` returns its args untouched unless `tenantEnforcing()`, and
-          // enforcement is dormant in every environment — so this row was being
-          // written with a NULL tenant (2 of 2 on production at the 2026-08-10
-          // audit) and would have vanished from the workspace that booked it the
-          // moment enforcement flipped.
-          //
-          // NOTE for whoever owns Activity: the sibling `tx.activity.create` below
-          // is the same defect and is deliberately NOT touched here — Activity is
-          // on the other half of the audit list (14 of 61 unowned) and belongs in
-          // that change, not this one.
-          tenantId: bookingTenantId,
-          reference: newReference(),
-          status: "booked",
-          leadId,
-          contactId,
-          branch,
-          demoVehicleId,
-          productId: resolvedProductId,
-          salespersonId,
-          accompanyingSalespersonId,
-          activityId,
-          scheduledStart,
-          expectedReturnAt,
-        },
-      });
-      await tx.activity.create({
-        data: {
-          id: activityId,
-          type: "test_drive",
-          summary: `Test drive — ${modelName}`,
-          note: "Managed from the dedicated Test drives module.",
-          location: branch,
-          dueDate: scheduledStart,
-          status: "planned",
-          leadId,
-          contactId,
-          assignedToId: salespersonId,
-          createdById: user.id,
-          tenantId: activityTenantId,
-        },
-      });
-      return created;
-    });
+    // The booking's tenant is stamped from the SESSION, not left to the db.ts
+    // guard (whose `scopeArgs` returned args untouched while enforcement was
+    // dormant — 2 of 2 production rows had a NULL tenant at the 2026-08-10 audit).
+    const booking = await prisma.$transaction((tx) =>
+      createBookedTestDrive(tx, {
+        bookingTenantId,
+        activityTenantId,
+        leadId,
+        contactId,
+        branch,
+        demoVehicleId,
+        productId: resolvedProductId,
+        salespersonId,
+        accompanyingSalespersonId,
+        scheduledStart,
+        expectedReturnAt,
+        summary: `Test drive — ${modelName}`,
+        note: "Managed from the dedicated Test drives module.",
+        createdById: user.id,
+      }),
+    );
 
     await auditBooking({
       action: "test_drive.created",
