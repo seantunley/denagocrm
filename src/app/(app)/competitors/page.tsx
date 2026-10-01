@@ -3,6 +3,7 @@ import { AlertTriangle, ArrowUpRight, Eye, Globe2, Plus, Radar, ShieldCheck } fr
 import { requirePermission } from "@/lib/permissions";
 import { prisma } from "@/lib/db";
 import ModalTrigger from "@/components/Modal";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { buttonVariants } from "@/components/ui/button";
 import { EmptyState, StatusPill, Surface } from "@/components/visual-system";
 import { WorkspaceHero } from "@/components/workspace-hero";
@@ -108,7 +109,7 @@ export default async function CompetitorsPage() {
 
 function NewCompetitorForm() {
   return (
-    <form action={createCompetitor} className="space-y-3">
+    <SaveForm action={createCompetitor} success="Competitor added" className="space-y-3">
       <div>
         <label className="label">Name *</label>
         <input name="name" className="input" required placeholder="e.g. Acme EV" autoFocus />
@@ -129,7 +130,7 @@ function NewCompetitorForm() {
         <label className="label">Notes</label>
         <textarea name="description" className="input" rows={2} placeholder="Positioning, why they matter…" />
       </div>
-      <button className="btn-primary w-full">Add competitor</button>
-    </form>
+      <SaveButton className="btn-primary w-full" pendingLabel="Adding…">Add competitor</SaveButton>
+    </SaveForm>
   );
 }
