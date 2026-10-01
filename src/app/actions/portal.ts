@@ -11,7 +11,7 @@ import { portalTenantId } from "@/lib/portalTenant";
 import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { resolveTenantActor } from "@/lib/tenantActor";
 import { sendEmail, isSmtpConfigured } from "@/lib/email";
-import { getCompanyProfile } from "@/lib/companyProfile";
+import { tenantEmailContent } from "@/lib/signing/signingEmail";
 import { getPortalContact, setPortalCookie, clearPortalCookie } from "@/lib/portal";
 import { portalCanAccessVehicle, requirePortalScope } from "@/lib/portalAccess";
 import { isModuleEnabled } from "@/lib/modules/enabled";
@@ -65,9 +65,10 @@ const normEmail = (email: string) => email.trim().toLowerCase();
  * app.bypass_rls explicitly, which is the correct posture for a PRE-auth lookup
  * that cannot have a tenant scope yet and pins the tenant in its own WHERE.
  */
-async function findPortalContactByEmail(email: string): Promise<{ id: string } | null> {
-  const rows = await basePrisma.$queryRaw<{ id: string }[]>`
-    SELECT "id" FROM "Contact"
+type PortalContactRow = { id: string; firstName: string; lastName: string | null };
+async function findPortalContactByEmail(email: string): Promise<PortalContactRow | null> {
+  const rows = await basePrisma.$queryRaw<PortalContactRow[]>`
+    SELECT "id", "firstName", "lastName" FROM "Contact"
     WHERE LOWER("email") = ${email}
       AND "deletedAt" IS NULL
       AND "tenantId" = ${DEFAULT_TENANT_ID}
@@ -225,12 +226,18 @@ async function issuePortalOtp(email: string): Promise<PortalAuthState> {
       },
     });
   });
-  // Signed by the workspace the contact belongs to (the lookup above pins it).
-  const company = await getCompanyProfile(DEFAULT_TENANT_ID);
+  // The workspace's own editable "portal login code" email (Settings → Email
+  // templates), signed by the workspace the contact belongs to (the lookup above pins it).
+  const message = await tenantEmailContent("portal_code", DEFAULT_TENANT_ID, {
+    first_name: contact.firstName,
+    recipient_name: [contact.firstName, contact.lastName].filter(Boolean).join(" "),
+    code,
+  });
   await sendEmail({
     to: email,
-    subject: `Your ${company.name} portal code`,
-    text: `Your login code is ${code}. It expires in 10 minutes.\n\nIf you didn't request this, ignore this email.\n\n${company.name}`,
+    subject: message.subject,
+    text: message.text,
+    html: message.html,
     // On the customer's timeline with the code masked.
     record: { contactId: contact.id, label: "Portal login code", secrets: [code] },
   }).catch(() => {});
