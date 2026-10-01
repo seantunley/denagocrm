@@ -162,7 +162,8 @@ const VARS = {
 test("Quote email is edited in Settings → Email templates beside the signing emails", () => {
   assert.ok(SIGNING_EMAIL_KINDS.includes("quote"), "the settings loop renders every kind");
   const settings = shipped("src/app/(app)/settings/page.tsx");
-  assert.match(settings, /SIGNING_EMAIL_KINDS\.map\(\(kind\) =>/);
+  // Rendered section by section (each kind's group), so every kind still appears.
+  assert.match(settings, /SIGNING_EMAIL_KINDS\.filter\(\(k\) => SIGNING_EMAILS\[k\]\.group === group\)\.map\(\(kind\) =>/);
   assert.match(settings, /saveSigningEmailTemplate\.bind\(null, kind\)/);
   assert.match(settings, /resetSigningEmailTemplate\.bind\(null, kind\)/);
   // The two-step picker is gone.

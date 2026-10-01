@@ -37,6 +37,117 @@ function BlockList(props: any) {
 const TARGETS = ["p", "h2", "h3", "blockquote"];
 
 /**
+ * Whether the <details> this editor sits in is open. Settings lists every
+ * template folded shut; rendering a server preview for each one on page load
+ * fired a dozen-plus server renders nobody was looking at.
+ */
+function useOpenInDetails(ref: React.RefObject<HTMLElement | null>) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const details = ref.current?.closest("details");
+    if (!details) {
+      setOpen(true);
+      return;
+    }
+    const sync = () => setOpen(details.open);
+    sync();
+    details.addEventListener("toggle", sync);
+    return () => details.removeEventListener("toggle", sync);
+  }, [ref]);
+  return open;
+}
+
+/** Debounced server preview — only the newest answer is shown, and only while the template is open. */
+function useLivePreview(
+  preview: (fd: FormData) => Promise<EmailPreview>,
+  fields: Record<string, string>,
+  enabled: boolean,
+  refreshKey?: string,
+) {
+  const [shown, setShown] = useState<EmailPreview>({});
+  const seq = useRef(0);
+  const key = JSON.stringify(fields);
+  useEffect(() => {
+    if (!enabled) return;
+    const mine = ++seq.current;
+    const t = setTimeout(async () => {
+      const fd = new FormData();
+      for (const [k, v] of Object.entries(JSON.parse(key) as Record<string, string>)) fd.set(k, v);
+      const res = await preview(fd).catch(() => ({ error: "Preview unavailable — check your connection." }));
+      if (mine === seq.current) setShown(res);
+    }, 450);
+    return () => clearTimeout(t);
+  }, [key, preview, refreshKey, enabled]);
+  return shown;
+}
+
+/**
+ * A text message template: plain text (an SMS can't carry formatting), a
+ * running length with the number of SMS parts, and the real message with
+ * sample details underneath.
+ */
+export function SmsTemplateEditor({
+  initialBody,
+  fields,
+  fieldHelp,
+  requiredField,
+  preview,
+}: {
+  initialBody: string;
+  fields: readonly string[];
+  fieldHelp: Record<string, string>;
+  requiredField: string | null;
+  preview: (formData: FormData) => Promise<EmailPreview>;
+}) {
+  const [body, setBody] = useState(initialBody);
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const shown = useLivePreview(preview, { body }, useOpenInDetails(ref));
+  const insert = (token: string) => {
+    if (!token) return;
+    const el = ref.current;
+    const at = el?.selectionStart ?? body.length;
+    const next = `${body.slice(0, at)}{{${token}}}${body.slice(el?.selectionEnd ?? at)}`;
+    setBody(next);
+  };
+  const sample = shown.text ?? "";
+  const parts = Math.max(1, Math.ceil(sample.length / 153));
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <label className="label">Text message</label>
+        <select
+          onChange={(e) => {
+            insert(e.target.value);
+            e.currentTarget.value = "";
+          }}
+          defaultValue=""
+          className="h-7 rounded border border-border bg-background px-1 text-xs"
+          title="Insert a field — filled in for each customer when the text is sent"
+        >
+          <option value="">＋ Insert field</option>
+          {fields.map((f) => (
+            <option key={f} value={f}>
+              {fieldHelp[f] ?? f}
+              {f === requiredField ? " (required)" : ""}
+            </option>
+          ))}
+        </select>
+      </div>
+      <textarea ref={ref} name="body" className="input text-sm" rows={4} value={body} onChange={(e) => setBody(e.target.value)} required maxLength={640} />
+      <div className="label">Preview — what the customer receives (sample details)</div>
+      {shown.error ? (
+        <div className="text-sm text-red-600">{shown.error}</div>
+      ) : (
+        <div className="max-w-sm rounded-2xl rounded-bl-sm bg-muted px-3 py-2 text-sm whitespace-pre-wrap">{sample || "…"}</div>
+      )}
+      <p className="text-xs text-muted-foreground">
+        {sample.length} characters · {parts} SMS part{parts === 1 ? "" : "s"}. Words in {"{{double braces}}"} are filled in for each customer.
+      </p>
+    </div>
+  );
+}
+
+/**
  * The email template editor: formatted text on the left, the real email on the
  * right. The formatted body travels to the server as JSON in a hidden `doc`
  * field, where it is sanitised and turned into email HTML (lib/signing/emailDoc.ts).
@@ -61,8 +172,9 @@ export function EmailTemplateEditor({
 }) {
   const [subject, setSubject] = useState(initialSubject);
   const [doc, setDoc] = useState<unknown[]>(initialDoc);
-  const [shown, setShown] = useState<EmailPreview>({});
-  const seq = useRef(0);
+  const root = useRef<HTMLDivElement>(null);
+  // Re-rendered on the server (the real brand, logo and button) a moment after typing stops.
+  const shown = useLivePreview(preview, { subject, doc: JSON.stringify(doc) }, useOpenInDetails(root), refreshKey);
 
   const editor = usePlateEditor({
     plugins: [
@@ -75,20 +187,6 @@ export function EmailTemplateEditor({
     ],
     value: initialDoc as any,
   });
-
-  // Live preview: re-render on the server (the real brand, logo and button) a
-  // moment after typing stops. Only the newest answer is shown.
-  useEffect(() => {
-    const mine = ++seq.current;
-    const t = setTimeout(async () => {
-      const fd = new FormData();
-      fd.set("subject", subject);
-      fd.set("doc", JSON.stringify(doc));
-      const res = await preview(fd).catch(() => ({ error: "Preview unavailable — check your connection." }));
-      if (mine === seq.current) setShown(res);
-    }, 450);
-    return () => clearTimeout(t);
-  }, [subject, doc, preview, refreshKey]);
 
   const run = (fn: () => void) => (e: React.MouseEvent) => {
     e.preventDefault();
@@ -135,7 +233,7 @@ export function EmailTemplateEditor({
   const tb = "h-7 min-w-7 rounded px-1.5 text-xs hover:bg-muted";
   return (
     // Stacked, not side by side: the Settings column is too narrow for two panes.
-    <div className="space-y-4">
+    <div ref={root} className="space-y-4">
       <div className="space-y-2 min-w-0">
         <label className="label">Subject</label>
         <input name="subject" className="input" value={subject} onChange={(e) => setSubject(e.target.value)} required maxLength={200} />

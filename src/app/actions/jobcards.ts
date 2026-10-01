@@ -545,24 +545,33 @@ export async function completeJobCard(jobCardId: string, formData: FormData) {
       nextDueDate = addMonths(new Date(), jobCard.vehicle.serviceIntervalMonths);
     }
 
-    await prisma.$transaction([
-      prisma.jobCard.update({
-        where: { id: jobCardId },
-        data: { status: "collected", completedAt: new Date() },
-      }),
-      prisma.serviceRecord.create({
-        data: {
-          vehicleId: jobCard.vehicleId,
-          jobCardId,
-          summary,
-          details: str("details"),
-          km: km != null && !isNaN(km) ? km : null,
-          nextDueKm: nextDueKm != null && !isNaN(nextDueKm) ? nextDueKm : null,
-          nextDueDate,
-          performedById: user.id,
-        },
-      }),
-    ]);
+    const completedAt = new Date();
+    const record = {
+      summary,
+      details: str("details"),
+      km: km != null && !isNaN(km) ? km : null,
+      nextDueKm: nextDueKm != null && !isNaN(nextDueKm) ? nextDueKm : null,
+      nextDueDate,
+      performedById: user.id,
+    };
+    await prisma.$transaction(async (tx) => {
+      // The status move IS the claim: only a card that isn't already collected
+      // moves, so a double click (or a stale tab) can't complete it twice.
+      const moved = await tx.jobCard.updateMany({
+        where: { id: jobCardId, status: { not: "collected" } },
+        data: { status: "collected", completedAt },
+      });
+      if (moved.count === 0) refuse("This job card is already completed — reopen it first to complete it again.");
+      // One service record per job card (jobCardId is unique). A card that was
+      // collected, reopened and completed again UPDATES its record: creating a
+      // second one hit the unique constraint, so a reopened card could never be
+      // completed again.
+      await tx.serviceRecord.upsert({
+        where: { jobCardId },
+        create: { vehicleId: jobCard.vehicleId, jobCardId, ...record },
+        update: { ...record, serviceDate: completedAt },
+      });
+    });
     if (km != null && !isNaN(km)) {
       await prisma.mileageLog.create({
         data: { vehicleId: jobCard.vehicleId, km, note: `Job card #${jobCard.number} completed` },
