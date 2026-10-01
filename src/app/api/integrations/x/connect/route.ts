@@ -1,11 +1,15 @@
 import crypto from "crypto";
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { getActiveTenantId, requireOwner } from "@/lib/auth";
+import { getActiveTenantId, requireTenantOwner } from "@/lib/auth";
 import { resolveTenantCredential } from "@/lib/settings";
 
 export async function GET(request: Request) {
-  await requireOwner();
+  // The workspace's own owner, as on the Integrations page that offers this
+  // button — the platform-owner-only guard here let no one else finish (review of #742).
+  // Everything below is bound to the ACTIVE workspace: its client id, and a state
+  // cookie naming it that the callback checks before writing anything.
+  await requireTenantOwner();
   const tenantId = await getActiveTenantId();
   if (!tenantId) return NextResponse.json({ error: "No active workspace." }, { status: 403 });
   const clientId = await resolveTenantCredential(tenantId, "X_CLIENT_ID");

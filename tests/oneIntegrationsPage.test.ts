@@ -25,6 +25,22 @@ test("both old addresses land on the one page", () => {
   }
 });
 
+test("a tenant owner can complete X sign-in from the page that offers it", () => {
+  // Review of #742: the page is open to tenant owners and shows "Connect X
+  // account", but both OAuth routes demanded the platform owner.
+  for (const route of ["src/app/api/integrations/x/connect/route.ts", "src/app/api/integrations/x/callback/route.ts"]) {
+    const code = src(route);
+    assert.match(code, /await requireTenantOwner\(\);/);
+    assert.doesNotMatch(code, /await requireOwner\(\)/);
+  }
+  // Still bound to the workspace that started it.
+  const callback = src("src/app/api/integrations/x/callback/route.ts");
+  assert.match(callback, /activeTenantId !== pending\.tenantId \|\| url\.searchParams\.get\("state"\) !== pending\.state/);
+  assert.match(callback, /exchangeXCode\(\{ tenantId: activeTenantId,/);
+  const x = src("src/lib/x.ts");
+  assert.match(x, /if \(claimed && claimed\.tenantId !== input\.tenantId\)/);
+});
+
 test("one nav entry, open to tenant owners", () => {
   const entries = SETTINGS_TABS.filter((item) => /integration/.test(item.key));
   assert.deepEqual(entries.map((item) => item.key), ["integrations"]);

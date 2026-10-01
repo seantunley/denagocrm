@@ -1,10 +1,14 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { getActiveTenantId, requireOwner } from "@/lib/auth";
+import { getActiveTenantId, requireTenantOwner } from "@/lib/auth";
 import { exchangeXCode } from "@/lib/x";
 
 export async function GET(request: Request) {
-  await requireOwner();
+  // The workspace's own owner (see connect/route.ts). The state check below
+  // still refuses a callback for any workspace but the one that started it, and
+  // exchangeXCode writes only that workspace's rows and refuses an X account
+  // another workspace already holds.
+  await requireTenantOwner();
   const url = new URL(request.url);
   const jar = await cookies();
   const raw = jar.get("x_oauth")?.value;
