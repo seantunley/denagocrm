@@ -37,16 +37,22 @@ const { sendWhatsAppText } = createRequire(import.meta.url)("../src/lib/whatsapp
 
 const realFetch = globalThis.fetch;
 
-test("a timed-out send is recorded as not delivered and still throws", async () => {
+// The caller gets a FAILED SEND back rather than a throw (#697): callers that
+// never caught — signing dispatch, the legacy bot — died mid-dispatch, and the
+// outbox retries `{ ok: false }` (classified transient_network) as it did a throw.
+
+test("a timed-out send is recorded as not delivered and returned as a failed send", async () => {
   failures.length = 0;
   globalThis.fetch = async () => {
     throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
   };
+  let result;
   try {
-    await assert.rejects(sendWhatsAppText("27820000000", "hi", { contactId: "c1" }), { name: "TimeoutError" });
+    result = await sendWhatsAppText("27820000000", "hi", { contactId: "c1" });
   } finally {
     globalThis.fetch = realFetch;
   }
+  assert.deepEqual(result, { ok: false, error: "Could not reach WhatsApp (timed out)" });
   assert.deepEqual(failures, [{ to: "27820000000", error: "Could not reach WhatsApp (timed out)" }]);
   assert.equal(successes.length, 0);
 });
@@ -56,23 +62,41 @@ test("a connection error is recorded too", async () => {
   globalThis.fetch = async () => {
     throw new TypeError("fetch failed");
   };
+  let result;
   try {
-    await assert.rejects(sendWhatsAppText("27820000000", "hi", { contactId: "c1" }), TypeError);
+    result = await sendWhatsAppText("27820000000", "hi", { contactId: "c1" });
   } finally {
     globalThis.fetch = realFetch;
   }
+  assert.deepEqual(result, { ok: false, error: "Could not reach WhatsApp (TypeError)" });
   assert.deepEqual(failures, [{ to: "27820000000", error: "Could not reach WhatsApp (TypeError)" }]);
 });
 
-test("without a record nothing is logged, and the error still propagates", async () => {
+test("without a record nothing is logged, and the failure still reaches the caller", async () => {
   failures.length = 0;
   globalThis.fetch = async () => {
     throw new TypeError("fetch failed");
   };
+  let result;
   try {
-    await assert.rejects(sendWhatsAppText("27820000000", "hi"), TypeError);
+    result = await sendWhatsAppText("27820000000", "hi");
   } finally {
     globalThis.fetch = realFetch;
   }
+  assert.equal(result?.ok, false);
   assert.equal(failures.length, 0);
+});
+
+test("an accepted send is recorded with its wamid", async () => {
+  successes.length = 0;
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ messages: [{ id: "wamid.OK" }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+  let result;
+  try {
+    result = await sendWhatsAppText("27820000000", "hi", { contactId: "c1" });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.deepEqual(result, { ok: true, providerMessageId: "wamid.OK" });
+  assert.equal((successes[0] as { messageId?: string }).messageId, "wamid.OK");
 });
