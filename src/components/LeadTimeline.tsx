@@ -11,6 +11,7 @@ import {
   toggleLeadNotePin,
 } from "@/app/actions/timelinePins";
 import { formatDateTime } from "@/lib/format";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { isFutureDay } from "@/lib/activityDay";
 import {
   getTimelinePins,
@@ -289,9 +290,9 @@ export default async function LeadTimeline({
 
     const pinButton =
       item.pinTarget && pinAction ? (
-        <form action={pinAction} className="shrink-0">
-          <button
-            type="submit"
+        <SaveForm action={pinAction} className="shrink-0">
+          <SaveButton
+            pendingLabel={isPinned ? "Unpinning…" : "Pinning…"}
             title={isPinned ? "Unpin from the top" : "Pin to the top"}
             aria-label={
               isPinned ? "Unpin timeline entry" : "Pin timeline entry"
@@ -308,8 +309,8 @@ export default async function LeadTimeline({
               <Pin className="size-4" />
             )}
             {isPinned ? "Unpin" : "Pin"}
-          </button>
-        </form>
+          </SaveButton>
+        </SaveForm>
       ) : null;
 
     return (
