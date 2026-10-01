@@ -63,6 +63,8 @@ type OutboxRow = {
   communicationLoggedAt: Date | null;
   communicationId?: string | null;
   providerMessageId?: string | null;
+  /** As read BEFORE the claim — carries RETRY_IN_FLIGHT for a retried failure. */
+  lastError?: string | null;
 };
 
 export type BotOutboxRun = { sent: number; retried: number; dead: number; cancelled: number; repairedLogs: number };
@@ -884,7 +886,9 @@ async function claimOldest(channel: string, key: string): Promise<OutboxRow | nu
       availableAt: { lte: now },
       OR: [{ status: { in: ["pending", "retry"] } }, { status: "running", OR: [{ leaseUntil: null }, { leaseUntil: { lt: now } }] }],
     },
-    data: { status: "running", attempts: { increment: 1 }, leaseUntil, lastError: null },
+    // A retried failure keeps its marker through the claim, so a crash mid-send
+    // and a reclaim still let the fence recognise it (see RETRY_IN_FLIGHT).
+    data: { status: "running", attempts: { increment: 1 }, leaseUntil, lastError: isRetryInFlight(row.lastError) ? row.lastError : null },
   });
   return claimed.count === 1 ? { ...row, status: "running", attempts: row.attempts + 1, leaseUntil } : null;
 }
@@ -1045,7 +1049,8 @@ async function failDelivery(row: OutboxRow, error: string): Promise<"retry" | "d
   }
   await prisma.botFlowOutbox.updateMany({
     where: { id: row.id, status: "running", attempts: row.attempts },
-    data: { status: "retry", leaseUntil: null, lastError, failureCode, availableAt: retryAt(row.attempts) },
+    // A retried failure that fails transiently is still a retried failure.
+    data: { status: "retry", failureCode, leaseUntil: null, lastError: isRetryInFlight(row.lastError) ? `${RETRY_IN_FLIGHT}: ${lastError}`.slice(0, 1000) : lastError, availableAt: retryAt(row.attempts) },
   });
   return "retry";
 }
@@ -1105,14 +1110,22 @@ async function botMayStillSpeak(row: OutboxRow): Promise<boolean> {
     // Withdraw this row AND anything queued behind it, inside the same
     // transaction that observed the takeover — so the next claim cannot pick up
     // a sibling that this one just proved is superseded.
+    //
+    // A retried FAILURE is withdrawn back to `dead`, keeping its failure code, not
+    // cancelled: it never reached the customer, and "Send again" must not make
+    // that incident disappear just because a person took over before it went
+    // (re-review of #733). It stays listed; no longer retryable, since the bot no
+    // longer owns the thread.
     await tx.botFlowOutbox.updateMany({
       where: { id: row.id },
-      data: {
-        status: "cancelled",
-        leaseUntil: null,
-        failureCode: "superseded_by_human",
-        lastError: "Cancelled: a person took over this conversation before this message was sent",
-      },
+      data: isRetryInFlight(row.lastError)
+        ? { status: "dead", leaseUntil: null, lastError: RETRY_SUPERSEDED }
+        : {
+            status: "cancelled",
+            leaseUntil: null,
+            failureCode: "superseded_by_human",
+            lastError: "Cancelled: a person took over this conversation before this message was sent",
+          },
     });
     await cancelPendingBotOutputTx(tx, tenantId, row.channel, row.key);
     return false;
@@ -1296,7 +1309,7 @@ export type RequeueOutcome = "requeued" | "not_parked" | "permanent" | "human_ow
  * permanent failure — the customer blocked us, the 24-hour window closed — is
  * refused: resending cannot fix it, and would only fail again.
  */
-export async function requeueDeadConversation(channel: string, key: string): Promise<RequeueOutcome> {
+export async function requeueDeadConversation(channel: string, key: string): Promise<{ outcome: RequeueOutcome; headId?: string }> {
   return withStaffConversationScope(async () => {
     const tenantId = outboxTenantId();
     return prisma.$transaction(async (tx) => {
@@ -1304,11 +1317,11 @@ export async function requeueDeadConversation(channel: string, key: string): Pro
         where: { tenantId, channel, key, ownership: "delivery_failed" },
         select: { id: true },
       });
-      if (!session) return "not_parked";
+      if (!session) return { outcome: "not_parked" as const };
       // The failure that parked THIS session, by its recorded identity.
       const head = await parkedFailureHead(tx, { tenantId, channel, key, sessionId: session.id });
-      if (!head) return "not_parked";
-      if (head.failureCode && PERMANENT_FAILURES.has(head.failureCode)) return "permanent";
+      if (!head) return { outcome: "not_parked" as const };
+      if (head.failureCode && PERMANENT_FAILURES.has(head.failureCode)) return { outcome: "permanent" as const };
       const claimed = await tx.$executeRawUnsafe(
         `UPDATE "BotSession"
             SET "ownership" = 'bot', "updatedAt" = CURRENT_TIMESTAMP
@@ -1317,23 +1330,61 @@ export async function requeueDeadConversation(channel: string, key: string): Pro
         channel,
         key,
       );
-      if (claimed !== 1) return "not_parked";
+      if (claimed !== 1) return { outcome: "not_parked" as const };
       // Exactly the failure that parked the conversation and the backlog it
       // killed, by the head's id. A time window here (it was 5 s) also swept in
       // an earlier failure's dead output when two landed close together, and
       // re-sent messages nobody chose to retry.
+      await tx.botFlowOutbox.updateMany({ where: { id: head.id, tenantId, status: "dead" }, data: retryInFlight() });
       await tx.botFlowOutbox.updateMany({
         where: {
           tenantId,
           channel,
           key,
           status: "dead",
-          OR: [{ id: head.id }, { failureCode: "blocked_by_earlier_failure", lastError: { startsWith: blockedByPrefix(head.id) } }],
+          failureCode: "blocked_by_earlier_failure",
+          lastError: { startsWith: blockedByPrefix(head.id) },
         },
-        data: { status: "pending", attempts: 0, leaseUntil: null, lastError: null, failureCode: null, availableAt: new Date() },
+        data: BACKLOG_RESET(),
       });
-      return "requeued";
+      return { outcome: "requeued" as const, headId: head.id };
     });
+  });
+}
+
+/**
+ * A retried failure's marker while it is back in the queue. The worker's fence
+ * (botMayStillSpeak) reads it: if a person takes the conversation over between
+ * the retry and the send — the retry's own lock is long gone by then — the
+ * message goes back to `dead` as RETRY_SUPERSEDED instead of vanishing as
+ * `cancelled`, so the incident stays on the list (re-review of #733).
+ *
+ * The failure code and provider id are KEPT while it is in flight: a successful
+ * send overwrites both, and a withdrawn one is still recognisably the message
+ * that failed. Claiming and a transient retry both carry the marker forward.
+ */
+const RETRY_IN_FLIGHT = "Retrying a failed message";
+/** A retried failure the fence withdrew because a person took the conversation over first. */
+export const RETRY_SUPERSEDED = "Not sent again: a person took this conversation over first";
+const retryInFlight = () => ({ status: "pending", attempts: 0, leaseUntil: null, lastError: RETRY_IN_FLIGHT, availableAt: new Date() });
+const BACKLOG_RESET = () => ({ status: "pending", attempts: 0, leaseUntil: null, lastError: null, failureCode: null, availableAt: new Date() });
+const isRetryInFlight = (lastError: string | null | undefined) => Boolean(lastError?.startsWith(RETRY_IN_FLIGHT));
+
+/**
+ * What actually became of a retried message, read AFTER the flush — so "Send
+ * again" reports the send, not the requeue (re-review of #733).
+ */
+export async function retriedMessageOutcome(outboxId: string): Promise<"sent" | "queued" | "superseded" | "failed"> {
+  return withStaffConversationScope(async () => {
+    const row = await prisma.botFlowOutbox.findFirst({
+      where: { id: outboxId, tenantId: outboxTenantId() },
+      select: { status: true, lastError: true },
+    });
+    if (!row) return "failed";
+    if (row.status === "sent") return "sent";
+    if (row.status === "dead") return row.lastError === RETRY_SUPERSEDED ? "superseded" : "failed";
+    if (row.status === "cancelled") return "superseded";
+    return "queued";
   });
 }
 
@@ -1350,7 +1401,10 @@ export async function requeueDeadConversation(channel: string, key: string): Pro
 export const UNPARKED_FAILURE = {
   status: "dead",
   NOT: { failureCode: "blocked_by_earlier_failure" },
-  OR: [{ origin: "staff" }, { providerMessageId: { not: null } }],
+  // …plus a retried failure the fence withdrew because a person took over first
+  // (RETRY_SUPERSEDED): its conversation is no longer parked, but it still never
+  // reached the customer.
+  OR: [{ origin: "staff" }, { providerMessageId: { not: null } }, { lastError: RETRY_SUPERSEDED }],
 } satisfies Prisma.BotFlowOutboxWhereInput;
 
 /**
@@ -1361,7 +1415,7 @@ export const UNPARKED_FAILURE = {
  */
 export async function requeueFailedMessage(
   outboxId: string,
-): Promise<{ outcome: RequeueOutcome; channel?: string; key?: string }> {
+): Promise<{ outcome: RequeueOutcome; channel?: string; key?: string; headId?: string }> {
   return withStaffConversationScope(async () => {
     const tenantId = outboxTenantId();
     return prisma.$transaction(async (tx) => {
@@ -1380,9 +1434,9 @@ export async function requeueFailedMessage(
       if (head.origin === "bot" && !(await botStillOwnsTx(tx as unknown as TenantWriteTx, tenantId, head.channel, head.key))) {
         return { outcome: "human_owned" as const, channel: head.channel, key: head.key };
       }
-      // A fresh send: the old provider id belonged to the attempt that failed.
-      const reset = { status: "pending", attempts: 0, leaseUntil: null, lastError: null, failureCode: null, providerMessageId: null, sentAt: null, availableAt: new Date() };
-      const claimed = await tx.botFlowOutbox.updateMany({ where: { id: head.id, tenantId, status: "dead" }, data: reset });
+      // The lock above ends with this transaction; a takeover after it is the
+      // fence's to catch, and retryInFlight() is what lets it keep the incident.
+      const claimed = await tx.botFlowOutbox.updateMany({ where: { id: head.id, tenantId, status: "dead" }, data: retryInFlight() });
       if (claimed.count !== 1) return { outcome: "not_parked" as const };
       await tx.botFlowOutbox.updateMany({
         where: {
@@ -1393,9 +1447,9 @@ export async function requeueFailedMessage(
           failureCode: "blocked_by_earlier_failure",
           lastError: { startsWith: blockedByPrefix(head.id) },
         },
-        data: reset,
+        data: BACKLOG_RESET(),
       });
-      return { outcome: "requeued" as const, channel: head.channel, key: head.key };
+      return { outcome: "requeued" as const, channel: head.channel, key: head.key, headId: head.id };
     });
   });
 }

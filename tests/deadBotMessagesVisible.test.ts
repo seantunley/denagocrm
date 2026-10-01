@@ -39,7 +39,7 @@ test("failures that did not park the conversation are listed and retried by mess
   const shared = outbox.slice(outbox.indexOf("export const UNPARKED_FAILURE = {"), outbox.indexOf("} satisfies Prisma.BotFlowOutboxWhereInput;"));
   assert.match(shared, /status: "dead",/);
   assert.match(shared, /NOT: \{ failureCode: "blocked_by_earlier_failure" \},/);
-  assert.match(shared, /OR: \[\{ origin: "staff" \}, \{ providerMessageId: \{ not: null \} \}\],/);
+  assert.match(shared, /OR: \[\{ origin: "staff" \}, \{ providerMessageId: \{ not: null \} \}, \{ lastError: RETRY_SUPERSEDED \}\],/);
 
   const lib = src("src/lib/deadBotConversations.ts");
   const listed = lib.slice(lib.indexOf("const unparked = await"));
@@ -54,7 +54,6 @@ test("failures that did not park the conversation are listed and retried by mess
   assert.match(retry, /return withStaffConversationScope\(async \(\) => \{/);
   // The same predicate as the list, so what is shown is what can be retried.
   assert.match(retry, /where: \{ id: outboxId, tenantId, \.\.\.UNPARKED_FAILURE \}/);
-  assert.match(retry, /providerMessageId: null, sentAt: null/, "a fresh send, not the failed attempt's provider id");
   // Human takeover (re-review of #733): a BOT message is not requeued once a
   // person owns the thread — the worker's fence would cancel it and the action
   // would claim "Sending again" over nothing. Checked under the fence's own lock,
@@ -66,7 +65,7 @@ test("failures that did not park the conversation are listed and retried by mess
   assert.match(listed, /retryable: !PERMANENT_FAILURES\.has\(failure\.failureCode \?\? ""\) && !\(failure\.origin === "bot" && \(await humanOwns\(failure\.channel, failure\.key\)\)\),/);
   assert.match(lib, /return session\?\.ownership === "human";/);
   // Claimed on the row itself; a second click finds it no longer dead.
-  assert.match(retry, /updateMany\(\{ where: \{ id: head\.id, tenantId, status: "dead" \}, data: reset \}\);\s*if \(claimed\.count !== 1\) return \{ outcome: "not_parked" as const \};/);
+  assert.match(retry, /updateMany\(\{ where: \{ id: head\.id, tenantId, status: "dead" \}, data: retryInFlight\(\) \}\);\s*if \(claimed\.count !== 1\) return \{ outcome: "not_parked" as const \};/);
   assert.match(retry, /lastError: \{ startsWith: blockedByPrefix\(head\.id\) \}/);
   // The conversation stays with the person who has it — never handed to the bot.
   assert.doesNotMatch(retry, /BotSession|ownership/);
@@ -94,17 +93,20 @@ test("retry claims the parked conversation atomically and resends only this fail
   const requeue = outbox.slice(outbox.indexOf("export async function requeueDeadConversation("));
   assert.match(requeue, /return withStaffConversationScope\(async \(\) => \{/);
   assert.match(requeue, /const head = await parkedFailureHead\(tx, \{ tenantId, channel, key, sessionId: session\.id \}\);/);
-  assert.match(requeue, /if \(!head\) return "not_parked";/);
-  assert.match(requeue, /if \(head\.failureCode && PERMANENT_FAILURES\.has\(head\.failureCode\)\) return "permanent";/);
+  assert.match(requeue, /if \(!head\) return \{ outcome: "not_parked" as const \};/);
+  assert.match(requeue, /if \(head\.failureCode && PERMANENT_FAILURES\.has\(head\.failureCode\)\) return \{ outcome: "permanent" as const \};/);
   assert.match(requeue, /WHERE "tenantId" = \$1 AND "channel" = \$2 AND "key" = \$3 AND "ownership" = 'delivery_failed'/);
-  assert.match(requeue, /if \(claimed !== 1\) return "not_parked";/);
+  assert.match(requeue, /if \(claimed !== 1\) return \{ outcome: "not_parked" as const \};/);
   // Permanent is refused BEFORE the claim, so a refused retry leaves it parked.
-  assert.ok(requeue.indexOf('return "permanent"') < requeue.indexOf("const claimed = await"));
+  assert.ok(requeue.indexOf('outcome: "permanent"') < requeue.indexOf("const claimed = await"));
   // The incident by identity, not by a time window (review of #733): the head
-  // row itself, plus the rows whose blocked-by message names that head's id —
-  // the same prefix the kill writes.
-  assert.doesNotMatch(requeue, /getTime\(\)|updatedAt: \{ gte/);
-  assert.match(requeue, /OR: \[\{ id: head\.id \}, \{ failureCode: "blocked_by_earlier_failure", lastError: \{ startsWith: blockedByPrefix\(head\.id\) \} \}\]/);
+  // row itself (marked in flight), plus the rows whose blocked-by message names
+  // that head's id — the same prefix the kill writes.
+  const body = requeue.slice(0, requeue.indexOf("const RETRY_IN_FLIGHT"));
+  assert.doesNotMatch(body, /getTime\(\)|updatedAt: \{ gte/);
+  assert.match(body, /updateMany\(\{ where: \{ id: head\.id, tenantId, status: "dead" \}, data: retryInFlight\(\) \}\)/);
+  assert.match(body, /failureCode: "blocked_by_earlier_failure",\s*lastError: \{ startsWith: blockedByPrefix\(head\.id\) \},\s*\},\s*data: BACKLOG_RESET\(\),/);
+  assert.match(body, /return \{ outcome: "requeued" as const, headId: head\.id \};/);
   const kill = outbox.slice(outbox.indexOf("async function killMessageAndBacklog("), outbox.indexOf("async function failDelivery("));
   assert.match(kill, /const blocked = `\$\{blockedByPrefix\(row\.id\)\}\$\{lastError\}`\.slice\(0, 1000\);/);
   assert.match(outbox, /const blockedByPrefix = \(headId: string\) => `Blocked by earlier failed message \$\{headId\}: `;/);
@@ -129,8 +131,41 @@ test("retry claims the parked conversation atomically and resends only this fail
   const staffAction = action.slice(action.indexOf("export async function retryFailedMessage("));
   assert.match(staffAction, /const user = await requirePermission\("inbox\.reply"\);/);
   assert.match(staffAction, /if \(outcome === "permanent"\) refuse\(/);
-  assert.match(staffAction, /if \(outcome === "not_parked" \|\| !channel \|\| !key\) refuse\(/);
+  assert.match(staffAction, /if \(outcome === "not_parked" \|\| !channel \|\| !key \|\| !headId\) refuse\(/);
   assert.match(action, /const user = await requirePermission\("inbox\.reply"\);/);
   assert.match(action, /if \(outcome === "permanent"\) refuse\(/);
-  assert.match(action, /if \(outcome === "not_parked"\) refuse\(/);
+  assert.match(action, /if \(outcome === "not_parked" \|\| !headId\) refuse\(/);
+});
+
+test("a takeover between the retry and the send keeps the incident, and the action says so", () => {
+  // Re-review of #733: the retry's lock ends with its transaction; a person can
+  // take over before the flush, the fence cancels the bot message, and the action
+  // still said "Sending again" while the failure vanished from the list.
+  assert.match(outbox, /const RETRY_IN_FLIGHT = "Retrying a failed message";/);
+  assert.match(outbox, /export const RETRY_SUPERSEDED = "Not sent again: a person took this conversation over first";/);
+  // In flight: marked, failure code and provider id kept (not in the reset).
+  const inFlight = outbox.slice(outbox.indexOf("const retryInFlight = () =>"), outbox.indexOf("const BACKLOG_RESET"));
+  assert.match(inFlight, /lastError: RETRY_IN_FLIGHT/);
+  assert.doesNotMatch(inFlight, /failureCode|providerMessageId/);
+  // The marker survives the claim and a transient retry, so the cron path is covered too.
+  const claim = outbox.slice(outbox.indexOf("async function claimOldest("), outbox.indexOf("function retryAt("));
+  assert.match(claim, /lastError: isRetryInFlight\(row\.lastError\) \? row\.lastError : null/);
+  const fail = outbox.slice(outbox.indexOf("async function failDelivery("), outbox.indexOf("async function botMayStillSpeak("));
+  assert.match(fail, /lastError: isRetryInFlight\(row\.lastError\) \? `\$\{RETRY_IN_FLIGHT\}: \$\{lastError\}`/);
+  // The fence withdraws a retried failure back to dead — never to cancelled.
+  const fence = outbox.slice(outbox.indexOf("async function botMayStillSpeak("), outbox.indexOf("async function deliverClaimed("));
+  assert.match(fence, /data: isRetryInFlight\(row\.lastError\)\s*\? \{ status: "dead", leaseUntil: null, lastError: RETRY_SUPERSEDED \}/);
+  // The action reports what happened after the flush, not the requeue.
+  const action = src("src/app/actions/botDeliveries.ts");
+  const report = action.slice(action.indexOf("async function sendAndReport("), action.indexOf("export async function retryDeadBotConversation("));
+  assert.ok(report.indexOf("await flushBotOutboxConversation(") < report.indexOf("await retriedMessageOutcome(headId)"));
+  assert.match(report, /if \(result === "superseded"\) refuse\(/);
+  assert.match(report, /if \(result === "failed"\) refuse\(/);
+  assert.doesNotMatch(action, /success: "Sending again"/);
+  for (const fn of ["retryDeadBotConversation", "retryFailedMessage"]) {
+    const body = action.slice(action.indexOf(`export async function ${fn}(`));
+    assert.match(body.slice(0, 1400), /return sendAndReport\(channel, key, headId\);/, `${fn} reports the real outcome`);
+  }
+  const outcome = outbox.slice(outbox.indexOf("export async function retriedMessageOutcome("));
+  assert.match(outcome, /if \(row\.status === "dead"\) return row\.lastError === RETRY_SUPERSEDED \? "superseded" : "failed";/);
 });
