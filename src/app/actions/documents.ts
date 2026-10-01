@@ -1,7 +1,6 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
@@ -16,7 +15,8 @@ import {
   parseDocumentTarget,
 } from "@/lib/documentUpload";
 import { authorizeDocumentTarget } from "@/lib/documentUploadAuth";
-import { actingOwnerTenantId, withActingStaffScope } from "@/lib/actingScope";
+import { actingOwnerTenantId } from "@/lib/actingScope";
+import { requiredReason } from "@/lib/deleteReason";
 import { DOC_DEFS, defaultTemplate, mergeTemplate, isDocKey } from "@/lib/docTemplates";
 import {
   requirePermission,
@@ -88,12 +88,21 @@ async function uploadTargetTenantId(target: UploadTarget): Promise<string | null
   }
 }
 
+/*
+ * asActionResult on every action below (gap audit #22): an empty file, a file
+ * over the limit, an unknown template type, deleting the default — each used to
+ * either throw ("This page hit an error") or `return` silently (which the form
+ * read as success). Now each says what happened.
+ */
+const TOO_BIG = "That file is over the 25 MB limit.";
+const NO_FILE = "Choose a file to upload.";
+
 export async function uploadDocument(formData: FormData) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     const { user, target } = await authorizeUploadTarget(formData);
     const file = formData.get("file");
-    if (!(file instanceof File) || file.size === 0) return;
-    if (file.size > MAX_SIZE) throw new Error("File exceeds 25 MB limit");
+    if (!(file instanceof File) || file.size === 0) refuse(NO_FILE);
+    if (file.size > MAX_SIZE) refuse(TOO_BIG);
 
     const buffer = Buffer.from(await file.arrayBuffer());
     const mimeType = file.type || "application/octet-stream";
@@ -128,6 +137,7 @@ export async function uploadDocument(formData: FormData) {
       user,
     });
     revalidatePath(String(formData.get("revalidate") ?? "/"));
+    return { success: "Uploaded" };
   });
 }
 
@@ -227,18 +237,16 @@ export async function registerUploadedDocument(input: {
 }
 
 export async function deleteDocument(id: string, revalidate: string, formData: FormData) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     const user = await requireDocumentAccess(id, "documents.manage");
     const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
     // Tenant-scoped at the WRITE as well as at the gate — softDeleteRecord runs
     // on basePrisma (RLS bypassed) and now applies the active tenant itself, so
     // another tenant's document id is a no-op rather than a deletion.
     const doc = await softDeleteRecord("document", id, reason, user.name);
-    // Nothing matched: the id belongs to another tenant, or it is already gone.
-    // Same destination requireDocumentAccess uses when its own gate refuses, so
-    // the two failure modes look identical from outside — and, critically, no
-    // audit entry is written for a deletion that did not happen.
-    if (!doc) redirect("/documents");
+    // Nothing matched: the id belongs to another tenant, or it is already gone —
+    // and, critically, no audit entry is written for a deletion that did not happen.
+    if (!doc) refuse("That document is already gone — refresh the page.");
     await logAudit({
       action: "trash.deleted",
       summary: `Moved document “${doc.fileName}” to trash — ${reason}`,
@@ -246,16 +254,20 @@ export async function deleteDocument(id: string, revalidate: string, formData: F
       user,
     });
     revalidatePath(revalidate);
+    return { success: "Moved to trash" };
   });
 }
+
+const UNKNOWN_TEMPLATE = "That template type isn't supported any more.";
+const TEMPLATE_GONE = "That template is no longer there — refresh the page.";
 
 /* ── Typed generated-document templates ─────────────────────────── */
 
 export async function createDocTemplate(formData: FormData) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     const user = await requirePermission("document_templates.manage");
     const docType = String(formData.get("docType") ?? "");
-    if (!isDocKey(docType)) return;
+    if (!isDocKey(docType)) refuse("Choose what kind of document this template is for.");
     const name = String(formData.get("name") ?? "").trim() || "Untitled";
     const baseId = String(formData.get("baseId") ?? "").trim();
     let config: object = defaultTemplate(docType) as object;
@@ -270,15 +282,17 @@ export async function createDocTemplate(formData: FormData) {
       data: { docType, name, config, isDefault: hasDefault === 0 },
     });
     await logAudit({ action: "doctemplate.created", summary: `Created ${DOC_DEFS[docType].label} template “${name}”`, user });
-    redirect(`/settings/documents/t/${rec.id}`);
+    // Returned, not thrown: SaveForm navigates only when the action says it saved.
+    return { redirectTo: `/settings/documents/t/${rec.id}`, success: "Template created" };
   });
 }
 
 export async function updateDocTemplate(id: string, formData: FormData) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     const user = await requirePermission("document_templates.manage");
-    const rec = await prisma.docTemplateRecord.findUniqueOrThrow({ where: { id } });
-    if (!isDocKey(rec.docType)) return;
+    const rec = await prisma.docTemplateRecord.findUnique({ where: { id } });
+    if (!rec) refuse(TEMPLATE_GONE);
+    if (!isDocKey(rec.docType)) refuse(UNKNOWN_TEMPLATE);
     const key = rec.docType;
     const base = defaultTemplate(key);
     const config = {
@@ -306,13 +320,15 @@ export async function updateDocTemplate(id: string, formData: FormData) {
     await logAudit({ action: "doctemplate.saved", summary: `Updated ${DOC_DEFS[key].label} template “${rec.name}”`, user });
     revalidatePath(`/settings/documents/t/${id}`);
     revalidatePath("/document-studio");
+    return { success: "Template saved" };
   });
 }
 
 export async function setDefaultDocTemplate(id: string) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     const user = await requirePermission("document_templates.manage");
-    const rec = await prisma.docTemplateRecord.findUniqueOrThrow({ where: { id } });
+    const rec = await prisma.docTemplateRecord.findUnique({ where: { id } });
+    if (!rec) refuse(TEMPLATE_GONE);
     await prisma.$transaction([
       prisma.docTemplateRecord.updateMany({ where: { docType: rec.docType }, data: { isDefault: false } }),
       prisma.docTemplateRecord.update({ where: { id }, data: { isDefault: true } }),
@@ -320,40 +336,48 @@ export async function setDefaultDocTemplate(id: string) {
     await logAudit({ action: "doctemplate.default", summary: `“${rec.name}” is now the default ${rec.docType} template`, user });
     revalidatePath("/document-studio");
     revalidatePath(`/settings/documents/t/${id}`);
+    return { success: "Now the default" };
   });
 }
 
 export async function duplicateDocTemplate(id: string) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     const user = await requirePermission("document_templates.manage");
-    const rec = await prisma.docTemplateRecord.findUniqueOrThrow({ where: { id } });
+    const rec = await prisma.docTemplateRecord.findUnique({ where: { id } });
+    if (!rec) refuse(TEMPLATE_GONE);
     const copy = await prisma.docTemplateRecord.create({
       data: { docType: rec.docType, name: `Copy of ${rec.name}`, config: rec.config as object },
     });
     await logAudit({ action: "doctemplate.created", summary: `Duplicated template “${rec.name}”`, user });
-    redirect(`/settings/documents/t/${copy.id}`);
+    return { redirectTo: `/settings/documents/t/${copy.id}`, success: "Template duplicated" };
   });
 }
 
-export async function deleteDocTemplate(id: string) {
-  return withActingStaffScope(async () => {
+export async function deleteDocTemplate(id: string, formData?: FormData) {
+  return asActionResult(async () => {
     const user = await requirePermission("document_templates.manage");
-    const rec = await prisma.docTemplateRecord.findUniqueOrThrow({ where: { id } });
-    if (rec.isDefault) return;
+    const rec = await prisma.docTemplateRecord.findUnique({ where: { id } });
+    if (!rec) refuse(TEMPLATE_GONE);
+    if (rec.isDefault) refuse("This is the default template — make another one the default first.");
+    // Required here, not just in the dialog: the action is a public endpoint.
+    const reason = requiredReason(formData, "deleting this template");
     await prisma.docTemplateRecord.update({ where: { id }, data: { deletedAt: new Date() } });
-    await logAudit({ action: "doctemplate.deleted", summary: `Deleted template “${rec.name}”`, user });
+    await logAudit({ action: "doctemplate.deleted", summary: `Deleted template “${rec.name}” — ${reason}`, user });
     revalidatePath("/document-studio");
+    return { success: "Template deleted" };
   });
 }
 
 export async function uploadTemplateLogo(id: string, formData: FormData) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     const user = await requirePermission("document_templates.manage");
-    const rec = await prisma.docTemplateRecord.findUniqueOrThrow({ where: { id } });
-    if (!isDocKey(rec.docType)) return;
+    const rec = await prisma.docTemplateRecord.findUnique({ where: { id } });
+    if (!rec) refuse(TEMPLATE_GONE);
+    if (!isDocKey(rec.docType)) refuse(UNKNOWN_TEMPLATE);
     const file = formData.get("file");
-    if (!(file instanceof File) || file.size === 0) return;
-    if (file.size > 2 * 1024 * 1024 || !file.type.startsWith("image/")) return;
+    if (!(file instanceof File) || file.size === 0) refuse("Choose an image for the logo.");
+    if (!file.type.startsWith("image/")) refuse("The logo has to be an image (PNG, JPG, SVG…).");
+    if (file.size > 2 * 1024 * 1024) refuse("The logo is over the 2 MB limit.");
     // The logo belongs to the TEMPLATE it is being put on, and the template row was
     // already fetched and authorized above. Not the acting workspace: an owner
     // editing another workspace's template would otherwise write that workspace's
@@ -364,32 +388,34 @@ export async function uploadTemplateLogo(id: string, formData: FormData) {
     await logAudit({ action: "doctemplate.logo", summary: `Replaced the logo on template “${rec.name}”`, user });
     revalidatePath(`/settings/documents/t/${id}`);
     revalidatePath("/document-studio");
+    return { success: "Logo replaced" };
   });
 }
 
 /* ── Document repository ─────────────────────────────────────────── */
 
 export async function renameDocument(id: string, formData: FormData) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     const user = await requireDocumentAccess(id, "documents.manage");
     const fileName = String(formData.get("fileName") ?? "").trim();
     const tag = String(formData.get("tag") ?? "").trim() || null;
-    if (!fileName) return;
+    if (!fileName) refuse("Give the document a name.");
     await prisma.document.update({ where: { id }, data: { fileName, tag } });
     await logAudit({ action: "document.updated", summary: `Renamed/re-tagged “${fileName}”`, user });
     revalidatePath("/documents");
+    return { success: "Saved" };
   });
 }
 
 export async function moveDocument(id: string, formData: FormData) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     const user = await requireDocumentAccess(id, "documents.manage");
     const [kind, targetId] = String(formData.get("target") ?? "").split(":");
-    if (!targetId) return;
+    if (!targetId) refuse("Choose where to move it.");
     if (kind === "contact") await requireContactAccess(targetId, "documents.manage");
     else if (kind === "vehicle") await requireVehicleAccess(targetId, "documents.manage");
     else if (kind === "quote") await requireQuoteAccess(targetId, "documents.manage");
-    else return;
+    else refuse("Choose a customer, vehicle or quote to move it to.");
     // Clear every OTHER link on every move — otherwise moving a contact-filed doc
     // onto a vehicle/quote would keep the old contactId, leaving it linked to both
     // (and document access is the union of linked records).
@@ -402,15 +428,16 @@ export async function moveDocument(id: string, formData: FormData) {
     const doc = await prisma.document.update({ where: { id }, data });
     await logAudit({ action: "document.moved", summary: `Re-filed “${doc.fileName}”`, user });
     revalidatePath("/documents");
+    return { success: "Moved" };
   });
 }
 
 export async function uploadRepoDocument(formData: FormData) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     const user = await requirePermission("documents.manage");
     const file = formData.get("file");
-    if (!(file instanceof File) || file.size === 0) return;
-    if (file.size > MAX_SIZE) throw new Error("File exceeds 25 MB limit");
+    if (!(file instanceof File) || file.size === 0) refuse(NO_FILE);
+    if (file.size > MAX_SIZE) refuse(TOO_BIG);
     const mimeType = file.type || "application/octet-stream";
     // A repository upload is filed against no contact, vehicle, job card or quote —
     // there is genuinely no parent to inherit from, so the acting workspace owns it.
@@ -429,6 +456,7 @@ export async function uploadRepoDocument(formData: FormData) {
     });
     await logAudit({ action: "document.uploaded", summary: `Uploaded “${file.name}” to the repository`, user });
     revalidatePath("/documents");
+    return { success: "Uploaded" };
   });
 }
 
@@ -481,12 +509,13 @@ async function replacementOwnerTenantId(old: {
 }
 
 export async function replaceDocument(id: string, formData: FormData) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     const user = await requireDocumentAccess(id, "documents.manage");
     const file = formData.get("file");
-    if (!(file instanceof File) || file.size === 0) return;
-    if (file.size > MAX_SIZE) throw new Error("File exceeds 25 MB limit");
-    const old = await prisma.document.findUniqueOrThrow({ where: { id } });
+    if (!(file instanceof File) || file.size === 0) refuse(NO_FILE);
+    if (file.size > MAX_SIZE) refuse(TOO_BIG);
+    const old = await prisma.document.findUnique({ where: { id } });
+    if (!old) refuse("That document is no longer there — refresh the page.");
     const mimeType = file.type || old.mimeType;
     // A new VERSION of an existing document belongs where the document already does.
     // Taking the acting workspace here would split a version chain across two
@@ -519,5 +548,6 @@ export async function replaceDocument(id: string, formData: FormData) {
       user,
     });
     revalidatePath("/documents");
+    return { success: "New version uploaded" };
   });
 }

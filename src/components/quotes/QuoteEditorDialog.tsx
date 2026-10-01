@@ -70,6 +70,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { FeedbackBanner, StatusPill } from "@/components/visual-system";
 import { cn } from "@/lib/utils";
+import ContactPicker, { type ContactOption } from "@/components/ContactPicker";
 
 export type QuoteEditorContact = {
   id: string;
@@ -355,6 +356,8 @@ export function QuoteEditorDialog({
   const regional = defaults.regional;
   const rands = (cents: number) => formatZAR(cents, regional);
   const [draft, setDraft] = useState<DraftState>(() => createDraft(record, defaults, initialContactId, products));
+  // A customer found by search (beyond the preloaded list) — for its label.
+  const [pickedCustomer, setPickedCustomer] = useState<ContactOption | null>(null);
   const [initialSnapshot, setInitialSnapshot] = useState(() => draftSnapshot(draft));
   const [savedQuote, setSavedQuote] = useState<SavedQuote>(
     record ? { id: record.id, number: record.number, status: record.status } : null,
@@ -452,7 +455,10 @@ export function QuoteEditorDialog({
   ]
     .filter(Boolean)
     .join(" ");
-  const customerLabel = contacts.find((contact) => contact.id === draft.contactId)?.label ?? "Customer not selected";
+  const customerLabel =
+    contacts.find((contact) => contact.id === draft.contactId)?.label ??
+    (pickedCustomer?.id === draft.contactId ? pickedCustomer.label : null) ??
+    (draft.contactId ? "Customer" : "Customer not selected");
 
   const calculated = useMemo(() => {
     const lines = draft.lines.map((line) => ({
@@ -970,18 +976,20 @@ export function QuoteEditorDialog({
                         {record?.leadLabel && <StatusPill tone="info">Lead linked</StatusPill>}
                       </div>
                       <label className="mt-4 block text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground" htmlFor="quote-customer">Customer</label>
-                      <select
+                      <ContactPicker
                         id="quote-customer"
-                        className="input mt-1.5"
+                        name="contactId"
+                        className="mt-1.5"
+                        options={contacts}
                         value={draft.contactId}
                         // Locked for a lead's quote only once it HAS a customer;
                         // a lead with none yet must still be able to get one here.
                         disabled={!editable || Boolean(record?.leadLabel && record?.contactId)}
-                        onChange={(event) => setDraft((current) => ({ ...current, contactId: event.target.value }))}
-                      >
-                        <option value="">Select a customer…</option>
-                        {contacts.map((contact) => <option key={contact.id} value={contact.id}>{contact.label}</option>)}
-                      </select>
+                        onChange={(contactId, option) => {
+                          if (option) setPickedCustomer(option);
+                          setDraft((current) => ({ ...current, contactId }));
+                        }}
+                      />
                       {/* Optional lead link — only when starting a fresh quote. Picking a
                           lead ties the quote to it (so it shows on the lead) and fills in
                           the customer from that lead. Existing quotes keep their own link. */}

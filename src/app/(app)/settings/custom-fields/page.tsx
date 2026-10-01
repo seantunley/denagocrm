@@ -1,7 +1,7 @@
 import { requireOwner } from "@/lib/auth";
 import { SettingsWorkspace, SettingsSection } from "@/components/settings-workspace";
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
-import { Button } from "@/components/ui/button";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import {
   CUSTOM_ENTITIES,
@@ -22,7 +22,7 @@ export const dynamic = "force-dynamic";
 function DefForm({ entity, def }: { entity: CustomEntity; def?: FieldDef }) {
   const isNew = !def;
   return (
-    <form action={saveCustomFieldDef} className="grid gap-3 sm:grid-cols-2">
+    <SaveForm action={saveCustomFieldDef} resetOnSuccess={isNew} className="grid gap-3 sm:grid-cols-2">
       {def && <input type="hidden" name="id" value={def.id} />}
       <input type="hidden" name="entity" value={entity} />
 
@@ -91,9 +91,9 @@ function DefForm({ entity, def }: { entity: CustomEntity; def?: FieldDef }) {
         ) : (
           <span />
         )}
-        <Button type="submit" size="sm">{isNew ? "Add field" : "Save changes"}</Button>
+        <SaveButton className="btn-primary btn-sm" pendingLabel="Saving…">{isNew ? "Add field" : "Save changes"}</SaveButton>
       </div>
-    </form>
+    </SaveForm>
   );
 }
 
