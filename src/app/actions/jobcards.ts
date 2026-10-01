@@ -1,6 +1,7 @@
 "use server";
 
 import { asActionResult, ActionRefusal, refuse, type ActionResult } from "@/lib/actionResult";
+import { requiredReason } from "@/lib/deleteReason";
 import { randomUUID } from "crypto";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
@@ -432,12 +433,13 @@ export async function setJobCardStatus(jobCardId: string, status: string, formDa
     const allowed = new Set(STAGE_VALUES.filter((s) => s !== "collected"));
     if (!allowed.has(status)) throw new ActionRefusal("Invalid job card status");
     const jobCard = await prisma.jobCard.findUniqueOrThrow({ where: { id: jobCardId }, select: { number: true, contactId: true, status: true } });
+    // Cancelling must carry a reason (the dialog asks; the server insists).
+    // Other stage moves have none.
+    const reason = status === "cancelled" ? requiredReason(formData, "cancelling this job") : "";
     await prisma.jobCard.update({
       where: { id: jobCardId },
       data: { status, completedAt: null },
     });
-    // Cancelling is confirmed with a reason; other moves have none.
-    const reason = String(formData?.get("reason") ?? "").trim();
     await logAudit({
       action: "jobcard.stage",
       summary: `Job card #${jobCard.number}: ${stageMeta(jobCard.status).label} → ${stageMeta(status).label}${reason ? ` — ${reason}` : ""}`,

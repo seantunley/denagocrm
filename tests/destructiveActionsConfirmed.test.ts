@@ -29,6 +29,23 @@ test("Cancel job is confirmed with a reason, and the reason reaches the audit li
   assert.match(src("src/app/actions/jobcards.ts"), /setJobCardStatus\(jobCardId: string, status: string, formData\?: FormData\)[\s\S]*?\$\{reason \? ` — \$\{reason\}` : ""\}/);
 });
 
+test("the reason is REQUIRED on the server, not just in the dialog (reviewer, #709)", () => {
+  const warranty = src("src/app/actions/warranty.ts");
+  assert.match(warranty, /const reason = requiredReason\(formData, "deleting this claim"\);/);
+  assert.match(warranty, /const reason = requiredReason\(formData, "deleting this recall"\);/);
+  assert.match(src("src/app/actions/vehicles.ts"), /const reason = requiredReason\(formData, "deleting this battery check"\);/);
+  assert.match(src("src/app/actions/signflow.ts"), /const reason = requiredReason\(formData, "deleting this workflow"\);/);
+  assert.match(src("src/app/actions/jobcards.ts"), /status === "cancelled" \? requiredReason\(formData, "cancelling this job"\)/);
+  for (const f of ["src/app/actions/warranty.ts", "src/app/actions/vehicles.ts", "src/app/actions/signflow.ts", "src/app/actions/jobcards.ts"]) {
+    assert.doesNotMatch(src(f), /\|\| "No reason given"[^\n]*\n[^\n]*(warranty claim|recall “|battery check|signing workflow)/, f);
+  }
+  // Checked BEFORE anything is deleted.
+  const claim = warranty.slice(warranty.indexOf("export async function deleteWarrantyClaim("));
+  assert.ok(claim.indexOf("requiredReason(") < claim.indexOf("warrantyClaim.delete("));
+  const lib = src("src/lib/deleteReason.ts");
+  assert.match(lib, /if \(!reason\) refuse\(/);
+});
+
 test("the permanent deletes are audited with what was deleted and why", () => {
   const warranty = src("src/app/actions/warranty.ts");
   assert.match(warranty, /action: "warranty\.claim_deleted"/);

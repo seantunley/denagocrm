@@ -7,6 +7,8 @@ import { requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { blankWorkflow, parseGraph } from "@/lib/signflow/model";
 import { withActingStaffScope } from "@/lib/actingScope";
+import { asActionResult } from "@/lib/actionResult";
+import { requiredReason } from "@/lib/deleteReason";
 
 const BASE = "/settings/signing-workflows";
 
@@ -44,13 +46,14 @@ export async function saveSignWorkflow(id: string, name: string, graphJson: stri
 }
 
 export async function deleteSignWorkflow(id: string, formData?: FormData) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     const user = await requirePermission("signing.manage");
-    const reason = String(formData?.get("reason") ?? "").trim() || "No reason given";
+    const reason = requiredReason(formData, "deleting this workflow");
     const wf = await prisma.signWorkflow.update({ where: { id }, data: { deletedAt: new Date() }, select: { name: true } });
     await logAudit({ action: "signflow.delete", summary: `Deleted the signing workflow “${wf.name}” — ${reason}`, entityType: "SignWorkflow", entityId: id, user });
     revalidatePath(BASE);
-    redirect(BASE);
+    // Returned, not thrown: the confirmation dialog navigates only on success.
+    return { redirectTo: BASE };
   });
 }
 
