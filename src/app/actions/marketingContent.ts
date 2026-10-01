@@ -15,6 +15,7 @@ import {
 } from "@/lib/marketingAudiences";
 import { logAuditStrict } from "@/lib/audit";
 import { withActingStaffScope } from "@/lib/actingScope";
+import { asActionResult, refuse, ActionRefusal } from "@/lib/actionResult";
 
 // Keep historical categories readable/editable while making the governed
 // Marketing workspace's purpose-specific categories authoritative for new work.
@@ -41,8 +42,16 @@ const EMAIL_TEMPLATE_CATEGORIES = new Set([
 ]);
 
 function json<T>(value: FormDataEntryValue | null): T {
-  try { return JSON.parse(String(value ?? "")) as T; } catch { throw new Error("Invalid JSON definition"); }
+  try { return JSON.parse(String(value ?? "")) as T; } catch { refuse("Those audience rules couldn't be read — refresh and try again."); }
 }
+
+/*
+ * asActionResult on every mutation (gap audit #22). The workspaces call these
+ * directly and showed `caught.message` — but a message thrown from a Server
+ * Action is redacted in production, so staff got a generic failure for "every
+ * group needs a rule" or "published templates can't be edited". Several of these
+ * also bound no workspace at all; asActionResult binds it.
+ */
 
 async function contentContext(permission: Parameters<typeof requirePermission>[0]) {
   await requireModuleEnabled("marketing");
@@ -51,10 +60,11 @@ async function contentContext(permission: Parameters<typeof requirePermission>[0
 }
 
 export async function createMarketingAudience(formData: FormData) {
+  return asActionResult(async () => {
   const { user, tenantId } = await contentContext("campaigns.manage_audiences");
   const name = String(formData.get("name") ?? "").trim();
   const tree = validateAudienceTree(json<AudienceGroup>(formData.get("ruleTree")));
-  if (!name) throw new Error("Audience name is required");
+  if (!name) refuse("Give the audience a name.");
   await validateAudienceReferences(tree, tenantId);
 
   const id = `seg_${crypto.randomUUID()}`;
@@ -70,29 +80,52 @@ export async function createMarketingAudience(formData: FormData) {
     throw error;
   }
   revalidatePath("/marketing/audiences");
+  return { success: "Audience created" };
+  });
 }
 
 export async function updateMarketingAudience(id: string, formData: FormData) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     const { user, tenantId } = await contentContext("campaigns.manage_audiences");
     const tree = validateAudienceTree(json<AudienceGroup>(formData.get("ruleTree")));
     const submittedName = formData.get("name");
     const name = submittedName === null ? undefined : String(submittedName).trim();
-    if (submittedName !== null && !name) throw new Error("Audience name is required");
+    if (submittedName !== null && !name) refuse("Give the audience a name.");
     await validateAudienceReferences(tree, tenantId);
 
     const result = await saveAudienceVersion({ segmentId: id, tenantId, tree, userId: user.id, userName: user.name, name });
     await logAuditStrict({ action: "audience.updated", summary: `Updated audience version ${result.version}`, entityType: "Segment", entityId: id, user, after: { ...result, name } });
     revalidatePath("/marketing/audiences");
+    return { success: "Audience version saved" };
   });
 }
 
-export async function previewMarketingAudience(formData: FormData) {
+export type AudiencePreview = {
+  total: number;
+  channelCount: number;
+  emailCount: number;
+  smsCount: number;
+  contacts: Array<{ id: string; name: string; email: string | null; phone: string | null }>;
+};
+
+/** A preview, or the reason the rules can't be previewed (returned, so it isn't redacted). */
+export async function previewMarketingAudience(formData: FormData): Promise<AudiencePreview | { error: string }> {
   return withActingStaffScope(async () => {
+    try {
+      return await previewMarketingAudienceBody(formData);
+    } catch (error) {
+      if (error instanceof ActionRefusal) return { error: error.message };
+      throw error;
+    }
+  });
+}
+
+async function previewMarketingAudienceBody(formData: FormData): Promise<AudiencePreview> {
+  {
     const { tenantId } = await contentContext("campaigns.manage_audiences");
     const tree = validateAudienceTree(json<AudienceGroup>(formData.get("ruleTree")));
     const channel = String(formData.get("channel") ?? "any");
-    if (!new Set(["any", "email", "sms"]).has(channel)) throw new Error("Unsupported preview channel");
+    if (!new Set(["any", "email", "sms"]).has(channel)) refuse("Choose any, email or SMS for the preview.");
     await validateAudienceReferences(tree, tenantId);
 
     // Resolve once so the preview can explain reachability without three full
@@ -119,10 +152,11 @@ export async function previewMarketingAudience(formData: FormData) {
         phone: contact.whatsapp ?? contact.phone,
       })),
     };
-  });
+  }
 }
 
 export async function archiveMarketingAudience(id: string) {
+  return asActionResult(async () => {
   const { user, tenantId } = await contentContext("campaigns.manage_audiences");
   const updated = await basePrisma.$executeRaw`
     UPDATE "Segment"
@@ -131,9 +165,11 @@ export async function archiveMarketingAudience(id: string) {
       AND "tenantId" IS NOT DISTINCT FROM ${tenantId}
       AND COALESCE("status", 'active') <> 'archived'
   `;
-  if (updated !== 1) throw new Error("Audience not found or already archived");
+  if (updated !== 1) refuse("That audience is already archived or gone — refresh the page.");
   await logAuditStrict({ action: "audience.archived", summary: "Archived marketing audience", entityType: "Segment", entityId: id, user });
   revalidatePath("/marketing/audiences");
+  return { success: "Audience archived" };
+  });
 }
 
 type TemplateRow = {
@@ -155,13 +191,14 @@ function templateInput(formData: FormData) {
   const subject = String(formData.get("subject") ?? "").trim();
   const body = String(formData.get("body") ?? "");
   const plainTextBody = String(formData.get("plainTextBody") ?? "").trim() || null;
-  if (!name || !body.trim()) throw new Error("Template name and body are required");
-  if (!TEMPLATE_CATEGORIES.has(category)) throw new Error("Unsupported template category");
-  if (EMAIL_TEMPLATE_CATEGORIES.has(category) && !subject) throw new Error("Email templates require a subject");
+  if (!name || !body.trim()) refuse("Give the template a name and a body.");
+  if (!TEMPLATE_CATEGORIES.has(category)) refuse("Choose a template category.");
+  if (EMAIL_TEMPLATE_CATEGORIES.has(category) && !subject) refuse("Email templates need a subject line.");
   return { id, name, category, subject, body, plainTextBody };
 }
 
 export async function saveMarketingTemplate(formData: FormData) {
+  return asActionResult(async () => {
   const { user, tenantId } = await contentContext("campaigns.manage_templates");
   const input = templateInput(formData);
   const version = await basePrisma.$transaction(async (tx) => {
@@ -171,7 +208,7 @@ export async function saveMarketingTemplate(formData: FormData) {
     const allRows = await tx.$queryRaw<Array<{ tenantId: string | null }>>`
       SELECT "tenantId" FROM "EmailTemplate" WHERE "id" = ${input.id} FOR UPDATE
     `;
-    if (allRows[0] && allRows[0].tenantId !== tenantId) throw new Error("Template belongs to another tenant");
+    if (allRows[0] && allRows[0].tenantId !== tenantId) refuse("Template belongs to another tenant");
     const existing = await tx.$queryRaw<TemplateRow[]>`
       SELECT "id", "tenantId", "name", "subject", "body", "category", "status", "plainTextBody", "version"
       FROM "EmailTemplate"
@@ -179,7 +216,7 @@ export async function saveMarketingTemplate(formData: FormData) {
       LIMIT 1
     `;
     if (existing[0] && existing[0].status !== "draft") {
-      throw new Error("Published or archived templates cannot be edited in place");
+      refuse("Published and archived templates can't be edited — use it as a new draft instead.");
     }
     if (existing[0]) {
       const updated = await tx.$executeRaw`
@@ -190,7 +227,7 @@ export async function saveMarketingTemplate(formData: FormData) {
           AND "tenantId" IS NOT DISTINCT FROM ${tenantId}
           AND "status" = 'draft'
       `;
-      if (updated !== 1) throw new Error("Template changed while saving");
+      if (updated !== 1) refuse("Someone else changed this template while you were saving — refresh and try again.");
     } else {
       await tx.$executeRaw`
         INSERT INTO "EmailTemplate" (
@@ -221,14 +258,17 @@ export async function saveMarketingTemplate(formData: FormData) {
       UPDATE "EmailTemplate" SET "version" = ${next}
       WHERE "id" = ${input.id} AND "tenantId" IS NOT DISTINCT FROM ${tenantId}
     `;
-    if (updated !== 1) throw new Error("Template disappeared while versioning");
+    if (updated !== 1) refuse("That template was removed while saving — refresh the page.");
     return next;
   });
   await logAuditStrict({ action: "template.updated", summary: `Saved marketing template “${input.name}” version ${version}`, entityType: "EmailTemplate", entityId: input.id, user, after: { ...input, version, status: "draft" } });
   revalidatePath("/marketing/templates");
+  return { success: "Draft saved" };
+  });
 }
 
 export async function publishMarketingTemplate(id: string) {
+  return asActionResult(async () => {
   const { user, tenantId } = await contentContext("campaigns.manage_templates");
   const version = await basePrisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`marketing-template:${id}`}))`;
@@ -239,8 +279,8 @@ export async function publishMarketingTemplate(id: string) {
       FOR UPDATE
     `;
     const template = rows[0];
-    if (!template) throw new Error("Template not found");
-    if (template.status !== "draft") throw new Error("Only a draft template can be published");
+    if (!template) refuse("That template is no longer there — refresh the page.");
+    if (template.status !== "draft") refuse("Only a draft template can be published.");
     const versions = await tx.$queryRaw<Array<{ version: number }>>`
       SELECT COALESCE(MAX("version"), 0) + 1 AS "version"
       FROM "MarketingTemplateVersion"
@@ -263,14 +303,17 @@ export async function publishMarketingTemplate(id: string) {
         AND "tenantId" IS NOT DISTINCT FROM ${tenantId}
         AND "status" = 'draft'
     `;
-    if (updated !== 1) throw new Error("Template changed before publication");
+    if (updated !== 1) refuse("Someone else changed this template first — refresh and try again.");
     return next;
   });
   await logAuditStrict({ action: "template.published", summary: `Published marketing template version ${version}`, entityType: "EmailTemplate", entityId: id, user, after: { status: "published", version } });
   revalidatePath("/marketing/templates");
+  return { success: `Published v${version}` };
+  });
 }
 
 export async function archiveMarketingTemplate(id: string) {
+  return asActionResult(async () => {
   const { user, tenantId } = await contentContext("campaigns.manage_templates");
   const updated = await basePrisma.$executeRaw`
     UPDATE "EmailTemplate"
@@ -279,9 +322,11 @@ export async function archiveMarketingTemplate(id: string) {
       AND "tenantId" IS NOT DISTINCT FROM ${tenantId}
       AND "status" <> 'archived'
   `;
-  if (updated !== 1) throw new Error("Template not found or already archived");
+  if (updated !== 1) refuse("That template is already archived or gone — refresh the page.");
   await logAuditStrict({ action: "template.archived", summary: "Archived marketing template", entityType: "EmailTemplate", entityId: id, user });
   revalidatePath("/marketing/templates");
+  return { success: "Template archived" };
+  });
 }
 
 /**

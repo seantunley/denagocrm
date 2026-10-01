@@ -1,5 +1,6 @@
 import { addCommunication, deleteCommunication } from "@/app/actions/communications";
 import ConfirmDelete from "@/components/ConfirmDelete";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { formatDateTime } from "@/lib/format";
 import { storedFileSrc } from "@/lib/storedFileSrc";
 import PasteImageInput from "@/components/PasteImageInput";
@@ -71,7 +72,7 @@ export default function CommsTimeline({
         <summary className="btn-secondary btn-sm inline-flex cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
           + Log a call / email / note
         </summary>
-        <form action={addCommunication} className="mt-3 mb-2 space-y-3 rounded-lg bg-slate-800/40 p-4 border border-slate-800">
+        <SaveForm action={addCommunication} className="mt-3 mb-2 space-y-3 rounded-lg bg-slate-800/40 p-4 border border-slate-800">
         {contactId && <input type="hidden" name="contactId" value={contactId} />}
         {leadId && <input type="hidden" name="leadId" value={leadId} />}
         <input type="hidden" name="revalidate" value={revalidate} />
@@ -117,9 +118,9 @@ export default function CommsTimeline({
             <label className="label">When</label>
             <input type="datetime-local" name="occurredAt" className="input" />
           </div>
-          <button className="btn-primary">Log communication</button>
+          <SaveButton className="btn-primary" pendingLabel="Logging…">Log communication</SaveButton>
         </div>
-        </form>
+        </SaveForm>
       </details>
       )}
 

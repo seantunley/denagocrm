@@ -3,7 +3,7 @@ import { prisma } from "./db";
 import { accessibleInboxWhere, type PermissionUser } from "./permissions";
 import type { Prisma } from "@prisma/client";
 
-const DM_CHANNELS = ["whatsapp", "messenger", "instagram"];
+const DM_CHANNELS = ["whatsapp", "messenger", "instagram", "telegram"];
 
 /**
  * The newest `occurredAt` of every thread matching `where`, keyed the way the

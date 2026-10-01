@@ -24,7 +24,7 @@ import { threadCollaborationKey, type ThreadIdentity } from "./inboxThreads";
  * Conversation, and creating rows on sight for threads that never needed one
  * would be a write with no reader.
  */
-const CHANNELS_REQUIRING_CONVERSATION = new Set(["messenger", "instagram", "x"]);
+const CHANNELS_REQUIRING_CONVERSATION = new Set(["messenger", "instagram", "x", "telegram"]);
 
 /**
  * Map inbox threads to their Conversation ids, creating the missing DM ones.

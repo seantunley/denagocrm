@@ -40,6 +40,7 @@ import { SaveForm, SaveButton } from "@/components/SaveForm";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import { SaveSubmitButton } from "@/components/SaveSubmitButton";
 import BuilderSection from "./builder-section";
+import ContactPicker from "@/components/ContactPicker";
 
 export const dynamic = "force-dynamic";
 
@@ -385,14 +386,11 @@ export default async function DocumentStudioPage({
                 </option>
               ))}
             </select>
-            <select name="contactId" aria-label="Customer" className={input} defaultValue="">
-              <option value="">Customer (optional)…</option>
-              {pickers.contacts.map((contact) => (
-                <option key={contact.id} value={contact.id}>
-                  {contactName(contact)}
-                </option>
-              ))}
-            </select>
+            <ContactPicker
+              name="contactId"
+              options={pickers.contacts.map((contact) => ({ id: contact.id, label: contactName(contact) }))}
+              emptyLabel="Customer (optional)…"
+            />
             <select name="quoteId" aria-label="Quote" className={input} defaultValue="">
               <option value="">Quote (optional)…</option>
               {pickers.quotes.map((quote) => (

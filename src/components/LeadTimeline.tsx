@@ -458,7 +458,7 @@ export default async function LeadTimeline({
         </div>
       </div>
 
-      <form action={addCommunication} className="mb-5 space-y-2">
+      <SaveForm action={addCommunication} className="mb-5 space-y-2">
         {leadId && <input type="hidden" name="leadId" value={leadId} />}
         {contactId && (
           <input type="hidden" name="contactId" value={contactId} />
@@ -482,8 +482,8 @@ export default async function LeadTimeline({
           <Pin className="size-3.5 text-orange-300" />
           Pin this note immediately
         </label>
-        <button className="btn-secondary btn-sm w-full">+ Add note</button>
-      </form>
+        <SaveButton className="btn-secondary btn-sm w-full" pendingLabel="Adding…">+ Add note</SaveButton>
+      </SaveForm>
 
       {pinnedItems.length > 0 && (
         <section className="mb-5 overflow-hidden rounded-2xl border border-orange-400/30 bg-gradient-to-b from-orange-500/[0.10] to-orange-500/[0.03]">
