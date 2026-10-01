@@ -28,15 +28,27 @@ const basePrisma = {
     },
   },
   otpChallenge: {
-    updateMany: async ({ where, data }: { where: Partial<Challenge> & { id?: string }; data: Partial<Challenge> }) => {
+    // Synchronous body = one atomic statement, like a single UPDATE on the row.
+    updateMany: async ({
+      where,
+      data,
+    }: {
+      where: Partial<Omit<Challenge, "attempts">> & { attempts?: { lt: number } };
+      data: Partial<Omit<Challenge, "attempts">> & { attempts?: { increment: number } };
+    }) => {
       const rows = db.challenges.filter(
         (c) =>
           (where.id === undefined || c.id === where.id) &&
           (where.purpose === undefined || c.purpose === where.purpose) &&
           (where.key === undefined || c.key === where.key) &&
-          (where.verifiedAt === undefined || c.verifiedAt === where.verifiedAt),
+          (where.verifiedAt === undefined || c.verifiedAt === where.verifiedAt) &&
+          (where.attempts === undefined || c.attempts < where.attempts.lt),
       );
-      for (const r of rows) Object.assign(r, data);
+      const { attempts, ...rest } = data;
+      for (const r of rows) {
+        Object.assign(r, rest);
+        if (attempts) r.attempts += attempts.increment;
+      }
       return { count: rows.length };
     },
     create: async ({ data }: { data: Omit<Challenge, "id" | "attempts" | "verifiedAt" | "createdAt"> }) => {
@@ -178,6 +190,22 @@ test("wrong guesses are capped at five, even for the right code afterwards", asy
   const late = await resetPasswordWithCode(undefined, fd({ email: "jo@acme.test", code, password: "brandnewpass42" }));
   assert.ok(late.error, "the code is dead after five wrong tries");
   assert.equal(db.sessionBumps.length, 0);
+});
+
+test("a burst of concurrent guesses still gets only five — the sixth is refused even when it's right", async () => {
+  await requestPasswordReset(undefined, fd({ email: "jo@acme.test" }));
+  await runAfter();
+  const code = codeFromEmail();
+  const wrong = code === "111111" ? "222222" : "111111";
+  // All in flight at once: each reads the challenge before any result is known.
+  const guesses = [...Array(9).fill(wrong), code];
+  const results = await Promise.all(
+    guesses.map((g) => resetPasswordWithCode(undefined, fd({ email: "jo@acme.test", code: g, password: "brandnewpass42" }))),
+  );
+  assert.ok(results.every((r) => r.error), "the right code arrived after five tries were spent");
+  assert.equal(db.challenges[0].attempts, 5, "never more than five reserved");
+  assert.equal(db.sessionBumps.length, 0);
+  assert.ok(await bcrypt.compare("oldpassword123", db.users[0].passwordHash), "password unchanged");
 });
 
 test("an unknown email gets the same answer as a wrong code", async () => {

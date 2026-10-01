@@ -118,13 +118,24 @@ export async function resetPasswordWithCode(_prev: ResetState | undefined, formD
         orderBy: { createdAt: "desc" },
       })
     : null;
+  // Every try spends one of the MAX_TRIES BEFORE its result counts, in one
+  // conditional write: concurrent guesses serialize on the row, so however many
+  // arrive at once, at most MAX_TRIES are ever compared. (Reading `attempts` and
+  // incrementing afterwards let a burst of guesses all see 0 and all be judged.)
+  const reserved = challenge
+    ? (
+        await basePrisma.otpChallenge.updateMany({
+          where: { id: challenge.id, verifiedAt: null, attempts: { lt: MAX_TRIES } },
+          data: { attempts: { increment: 1 } },
+        })
+      ).count === 1
+    : false;
   // Always compare, so "no account / no code" costs what a wrong code costs.
   const matches = await bcrypt.compare(code, challenge?.codeHash ?? DECOY_CODE_HASH);
-  const usable = Boolean(user && security && !security.disabledAt && challenge && challenge.attempts < MAX_TRIES);
+  const usable = Boolean(user && security && !security.disabledAt && reserved);
 
   if (!usable || !matches) {
     await registerRateLimitAttempt(attemptKey, OTP_VERIFY_POLICY);
-    if (challenge) await basePrisma.otpChallenge.update({ where: { id: challenge.id }, data: { attempts: { increment: 1 } } });
     return { sent: true, email, error: "That code isn't right or has expired. Check the email, or request a new code." };
   }
 
