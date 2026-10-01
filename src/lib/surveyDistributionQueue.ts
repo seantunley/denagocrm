@@ -4,6 +4,7 @@ import { sendEmail } from "./email";
 import { sendSms } from "./sms";
 import { canContactPerson, classifyRetry, nextCommunicationWindow, type CommunicationChannel, type CommunicationPurpose } from "./communicationPolicy";
 import { currentTenantScope } from "./tenantScope";
+import { ActionRefusal } from "./actionFailure";
 
 import { DEFAULT_BRAND, brandForTenant } from "./tenantBrand";
 import { tenantOrigin } from "./tenantOrigin";
@@ -96,7 +97,8 @@ export async function createSurveyDistribution(args: {
   maxReminders?: number;
 }) {
   const contacts = [...new Set(args.contactIds)].slice(0, 5000);
-  if (contacts.length === 0) throw new Error("The selected audience contains no contacts");
+  // Refusals, not crashes: the person picking the audience can act on these.
+  if (contacts.length === 0) throw new ActionRefusal("The selected audience contains no contacts.");
 
   return basePrisma.$transaction(async (tx) => {
     const surveys = await tx.$queryRaw<Array<{ id: string; title: string; status: string; active: boolean; publishedVersion: number | null }>>`
@@ -109,7 +111,7 @@ export async function createSurveyDistribution(args: {
     `;
     const survey = surveys[0];
     if (!survey || survey.status !== "published" || !survey.active || !survey.publishedVersion) {
-      throw new Error("Only an active published survey version can be distributed");
+      throw new ActionRefusal("Only an active, published survey can be sent — publish it first.");
     }
 
     const eligible = await tx.$queryRaw<Array<{ id: string; firstName: string; lastName: string | null }>>`
@@ -119,7 +121,7 @@ export async function createSurveyDistribution(args: {
         AND "deletedAt" IS NULL
         AND "id" = ANY(${contacts}::text[])
     `;
-    if (eligible.length === 0) throw new Error("No accessible contacts remain in the selected audience");
+    if (eligible.length === 0) throw new ActionRefusal("No contacts you can reach remain in the selected audience.");
 
     const id = `sd_${crypto.randomUUID()}`;
     const scheduled = Boolean(args.scheduledFor && args.scheduledFor.getTime() > Date.now());

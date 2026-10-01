@@ -12,6 +12,7 @@ import {
 } from "@/app/actions/marketingCampaignWorkflow";
 import { StatusPill } from "@/components/visual-system";
 import MarketingPageHeader from "@/components/marketing/MarketingPageHeader";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 
 export default async function ReviewCampaignPage({ params }: { params: Promise<{ id: string }> }) {
   await requirePermission("campaigns.view");
@@ -40,14 +41,14 @@ export default async function ReviewCampaignPage({ params }: { params: Promise<{
 
       <section className="card space-y-4">
         <h2 className="font-semibold">Workflow actions</h2>
-        {campaign.status === "draft" || campaign.status === "changes_requested" ? <form action={submitCampaignForReview.bind(null, id)}><button className="btn-primary" disabled={errors.length > 0}>Submit for review</button></form> : null}
+        {campaign.status === "draft" || campaign.status === "changes_requested" ? <SaveForm action={submitCampaignForReview.bind(null, id)}><SaveButton className="btn-primary" disabled={errors.length > 0} pendingLabel="Submitting…">Submit for review</SaveButton></SaveForm> : null}
         {campaign.status === "in_review" ? <div className="grid gap-4 md:grid-cols-2">
-          <form action={requestCampaignChanges.bind(null, id)} className="space-y-2"><label className="space-y-1 block"><span className="label">Required changes</span><textarea name="note" className="input min-h-24" required /></label><button className="btn-secondary">Request changes</button></form>
-          <form action={approveCampaign.bind(null, id)} className="space-y-2"><label className="space-y-1 block"><span className="label">Approval note</span><textarea name="note" className="input min-h-24" /></label><button className="btn-primary" disabled={errors.length > 0}>Approve campaign</button></form>
+          <SaveForm action={requestCampaignChanges.bind(null, id)} className="space-y-2"><label className="space-y-1 block"><span className="label">Required changes</span><textarea name="note" className="input min-h-24" required /></label><SaveButton className="btn-secondary" pendingLabel="Sending back…">Request changes</SaveButton></SaveForm>
+          <SaveForm action={approveCampaign.bind(null, id)} className="space-y-2"><label className="space-y-1 block"><span className="label">Approval note</span><textarea name="note" className="input min-h-24" /></label><SaveButton className="btn-primary" disabled={errors.length > 0} pendingLabel="Approving…">Approve campaign</SaveButton></SaveForm>
         </div> : null}
         {campaign.status === "approved" ? <div className="grid gap-4 md:grid-cols-2">
-          <form action={sendApprovedCampaignNow.bind(null, id)} className="card border-primary/30 space-y-2"><p className="font-medium">Send now</p><p className="text-xs text-muted-foreground">Freezes the audience and queues recipients. Delivery remains asynchronous.</p><button className="btn-primary">Queue campaign</button></form>
-          <form action={scheduleCampaign.bind(null, id)} className="card border-primary/30 space-y-2"><label className="space-y-1 block"><span className="label">Schedule date and time</span><input name="scheduledFor" type="datetime-local" className="input" required /></label><button className="btn-primary">Schedule campaign</button></form>
+          <SaveForm action={sendApprovedCampaignNow.bind(null, id)} className="card border-primary/30 space-y-2"><p className="font-medium">Send now</p><p className="text-xs text-muted-foreground">Freezes the audience and queues recipients. Delivery remains asynchronous.</p><SaveButton className="btn-primary" pendingLabel="Queuing…">Queue campaign</SaveButton></SaveForm>
+          <SaveForm action={scheduleCampaign.bind(null, id)} className="card border-primary/30 space-y-2"><label className="space-y-1 block"><span className="label">Schedule date and time</span><input name="scheduledFor" type="datetime-local" className="input" required /></label><SaveButton className="btn-primary" pendingLabel="Scheduling…">Schedule campaign</SaveButton></SaveForm>
         </div> : null}
       </section>
     </div>
