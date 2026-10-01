@@ -1009,7 +1009,7 @@ model RetiredAutomationLog {
 model Quote {
   id         String    @id @default(cuid())
   number     Int       @unique
-  status     String    @default("draft") // draft | sent | accepted | declined
+  status     String    @default("draft") // draft | sent | accepted | declined | cancelled
   validUntil DateTime?
   terms      String?
   createdAt  DateTime  @default(now())

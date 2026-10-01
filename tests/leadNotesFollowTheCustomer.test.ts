@@ -63,7 +63,9 @@ test("the extractor finds each create separately, and does not run them together
 test("every path that turns a lead into a contact carries the lead's notes", () => {
   const code = src("src/app/actions/leads.ts");
   const bodies = contactCreateBodies(code);
-  assert.ok(bodies.length >= 3, `expected at least 3 contact.create sites, found ${bodies.length}`);
+  // createLead, and linkOrCreateLeadContact — which Mark won and "Create
+  // customer" now share, so it is one site where there used to be two.
+  assert.ok(bodies.length >= 2, `expected at least 2 contact.create sites, found ${bodies.length}`);
   for (const [index, body] of bodies.entries()) {
     assert.match(
       body,
@@ -153,9 +155,10 @@ test("all three conversion paths record where the note came from", () => {
   const code = src("src/app/actions/leads.ts");
   assert.equal(
     (code.match(/notesFromLeadId:/g) ?? []).length,
-    3,
-    "createLead, markWon and convertLeadToContact must each record provenance",
+    2,
+    "createLead and linkOrCreateLeadContact (markWon + convertLeadToContact) must each record provenance",
   );
+  assert.match(code, /await linkOrCreateLeadContact\(before, user,/, "markWon must create through the shared helper");
   // And only when a note was actually copied — otherwise every contact would
   // claim a note it does not have.
   assert.match(code, /notes\?\.trim\(\) \? \w+\.id : null/);

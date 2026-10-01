@@ -3,7 +3,6 @@ import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import {
-  markWon,
   markLost,
   reopenLead,
   deleteLead,
@@ -20,6 +19,9 @@ import LeadTimeline from "@/components/LeadTimeline";
 import { auditDetailFor } from "@/lib/auditDetailQuery";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import AddToContactsButton from "@/components/AddToContactsButton";
+import MarkWonButton from "@/components/MarkWonDialog";
+import QuoteRowActions from "@/components/quotes/QuoteRowActions";
+import { hasPermission } from "@/lib/permissions";
 import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import MarkLeadViewed from "@/components/MarkLeadViewed";
 import WhatsAppPanel from "@/components/WhatsAppPanel";
@@ -42,7 +44,7 @@ import { isModuleEnabled } from "@/lib/modules/enabled";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
 import { leadAttribution, isAdClick } from "@/lib/attribution";
-import { Car, Check, FileText } from "lucide-react";
+import { Car, FileText } from "lucide-react";
 
 const RESEARCH_SUBJECT = "🔎 AI research";
 
@@ -83,6 +85,10 @@ export default async function LeadDetailPage({
   });
   if (!lead) notFound();
   const automotiveOn = await isModuleEnabled("automotive");
+  const [canCancelQuotes, canDuplicateQuotes] = await Promise.all([
+    hasPermission(user, "quotes.change_status"),
+    hasPermission(user, "quotes.create"),
+  ]);
   const alreadyViewed = !!lead.viewedAt;
   const [contacts, users, templates, smtpConfigured, audit, waConfigured, libraryDocuments, products, stages] = await Promise.all([
     prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
@@ -161,11 +167,7 @@ export default async function LeadDetailPage({
               <SaveForm success="Quote created" resetOnSuccess={false} action={createQuoteFromLead.bind(null, lead.id)}>
                 <SaveButton className="btn-primary"><FileText className="size-4" />Create quote</SaveButton>
               </SaveForm>
-              <SaveForm success="Marked won" resetOnSuccess={false} action={markWon.bind(null, lead.id)}>
-                <SaveButton className="btn bg-emerald-700 text-white hover:bg-emerald-600">
-                  <Check className="size-4" />Mark won
-                </SaveButton>
-              </SaveForm>
+              <MarkWonButton leadId={lead.id} leadName={lead.name} />
               <ModalTrigger
                 label="Mark lost"
                 title={`Why was “${lead.title}” lost?`}
@@ -446,6 +448,9 @@ export default async function LeadDetailPage({
                                   {link.label}
                                 </a>
                               ))}
+                              {!q.supersededAt && (
+                                <QuoteRowActions quoteId={q.id} number={q.number} status={q.status} signed={Boolean(q.signedAt)} canCancel={canCancelQuotes} canDuplicate={canDuplicateQuotes} />
+                              )}
                             </li>
                           );
                         })}

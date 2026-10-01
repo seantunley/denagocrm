@@ -108,7 +108,8 @@ test("deleting from the editor dismisses the editor, without asking about unsave
   // exists, or route the close through the discard prompt — which would ask
   // whether to save changes to something already in the Trash.
   const code = shipped("src/components/quotes/QuoteEditorDialog.tsx");
-  const at = code.indexOf("<ConfirmDelete");
+  // The DELETE one: the header's Cancel quote is also a ConfirmDelete.
+  const at = code.lastIndexOf("<ConfirmDelete", code.indexOf("action={deleteQuote.bind"));
   assert.ok(at > 0, "the editor must offer delete");
   const block = code.slice(at, code.indexOf("/>", at));
   assert.match(block, /onDeleted=\{\(\) => onOpenChange\(false\)\}/, "it must close, and not via requestOpenChange");
@@ -159,7 +160,7 @@ test("the delete control defaults to unavailable until the answer arrives", () =
 
 test("the editor only offers delete once there is something to delete", () => {
   const code = shipped("src/components/quotes/QuoteEditorDialog.tsx");
-  const at = code.indexOf("<ConfirmDelete");
+  const at = code.lastIndexOf("<ConfirmDelete", code.indexOf("action={deleteQuote.bind"));
   const before = code.slice(Math.max(0, at - 200), at);
   assert.match(before, /savedQuote && \(/, "an unsaved draft has no record to trash");
 });
