@@ -10,6 +10,7 @@ import { contactName, formatDateTime } from "@/lib/format";
 import { SettingsWorkspace } from "@/components/settings-workspace";
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
+import ContactPicker from "@/components/ContactPicker";
 
 export const dynamic = "force-dynamic";
 
@@ -117,7 +118,12 @@ export default async function PortalAccessPage() {
           <input type="hidden" name="targetType" value="contact" />
           <h3 className="font-semibold">Grant contact/account access</h3>
           <select name="viewerContactId" className="input" required><option value="">Portal user</option>{portalUsers.map((contact) => <option key={contact.id} value={contact.id}>{contactName(contact)} · {contact.email}</option>)}</select>
-          <select name="targetId" className="input" required><option value="">Contact or account to expose</option>{contacts.map((contact) => <option key={contact.id} value={contact.id}>{contactName(contact)}</option>)}</select>
+          <ContactPicker
+            name="targetId"
+            required
+            placeholder="Contact or account to expose"
+            options={contacts.map((contact) => ({ id: contact.id, label: contactName(contact) }))}
+          />
           <div className="flex gap-2"><RoleSelect /><SaveButton className="btn-primary">Grant access</SaveButton></div>
         </SaveForm>
 
