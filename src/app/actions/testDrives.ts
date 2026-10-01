@@ -99,7 +99,7 @@ async function assertDemoVehicleAvailable(args: {
   end: Date;
   excludeBookingId?: string;
 }) {
-  const problem = await demoVehicleUnavailable(prisma, args);
+  const problem = await demoVehicleUnavailable(prisma, { ...args, tenantId: await actingTenantId() });
   if (problem) throw new Error(problem);
 }
 

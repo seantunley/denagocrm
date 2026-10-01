@@ -889,6 +889,7 @@ export async function moveLeadToTestDrive(
     if (upcoming) {
       // The new slot must be free for the car this booking already holds.
       const clash = await demoVehicleUnavailable(tx, {
+        tenantId: upcoming.tenantId ?? bookingTenantId,
         demoVehicleId: upcoming.demoVehicleId,
         start: when,
         end: expectedReturnAt,

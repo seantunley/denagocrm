@@ -98,13 +98,23 @@ export const UPCOMING_TEST_DRIVE_STATUSES = ["booked", "confirmed"];
  */
 export async function demoVehicleUnavailable(
   db: Pick<typeof prisma, "demoVehicle" | "testDriveBooking">,
-  args: { demoVehicleId: string | null; start: Date; end: Date; excludeBookingId?: string },
+  args: {
+    /** The booking's workspace — named in both reads, whatever client `db` is. */
+    tenantId: string | null;
+    demoVehicleId: string | null;
+    start: Date;
+    end: Date;
+    excludeBookingId?: string;
+  },
 ): Promise<string | null> {
   if (!args.demoVehicleId) return null;
-  const vehicle = await db.demoVehicle.findFirst({ where: { id: args.demoVehicleId, deletedAt: null } });
+  const vehicle = await db.demoVehicle.findFirst({
+    where: { id: args.demoVehicleId, tenantId: args.tenantId, deletedAt: null },
+  });
   if (!vehicle || vehicle.status !== "active") return "That demo vehicle is not available";
   const overlap = await db.testDriveBooking.findFirst({
     where: {
+      tenantId: args.tenantId,
       id: args.excludeBookingId ? { not: args.excludeBookingId } : undefined,
       demoVehicleId: args.demoVehicleId,
       deletedAt: null,
