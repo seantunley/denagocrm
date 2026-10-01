@@ -21,7 +21,8 @@ import {
 import SettingsNav from "@/components/SettingsNav";
 import { PageHeader } from "@/components/page-header";
 import { Surface } from "@/components/visual-system";
-import { settingsDestination, type SettingsGroup } from "@/lib/settings-navigation";
+import { settingsDestination, visibleSettingsGroups, type SettingsGroup } from "@/lib/settings-navigation";
+import { useSettingsViewer } from "@/components/SettingsViewer";
 import { cn } from "@/lib/utils";
 
 const groupIcons: Record<string, LucideIcon> = {
@@ -64,6 +65,10 @@ export function SettingsWorkspace({
   children: ReactNode;
 }) {
   const chromeless = useContext(SettingsChromeless);
+  const seen = useSettingsViewer();
+  // Only what this person may open — a page reached by permission must not list
+  // owner-only pages beside it that would redirect them away.
+  const shown = seen ? visibleSettingsGroups(seen.viewer, seen.enabled, groups) : groups;
 
   if (chromeless) {
     return (
@@ -77,9 +82,9 @@ export function SettingsWorkspace({
   return (
     <div className="space-y-4">
       <PageHeader title={title} description={description}>{actions}</PageHeader>
-      <SettingsFinder groups={groups} />
+      <SettingsFinder groups={shown} />
       <div className="grid items-start gap-4 lg:grid-cols-[13rem_minmax(0,1fr)]">
-        <SettingsNav groups={groups} current={current} />
+        <SettingsNav groups={shown} current={current} />
         <main className="min-w-0 space-y-4">{children}</main>
       </div>
     </div>
