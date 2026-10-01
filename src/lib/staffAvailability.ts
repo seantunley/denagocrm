@@ -77,11 +77,11 @@ export async function findStaffAvailabilityConflict(args: {
   start: Date;
   end: Date;
   excludeActivityId?: string | null;
-  db?: ScheduleDb;
+  db?: unknown;
 }): Promise<StaffAvailabilityConflict | null> {
   if (!(args.end > args.start)) throw new Error("Availability check requires an end after the start.");
 
-  const db = args.db ?? (prisma as unknown as ScheduleDb);
+  const db = (args.db ?? prisma) as unknown as ScheduleDb;
   const candidates = await db.activity.findMany({
     where: {
       assignedToId: args.userId,
@@ -130,11 +130,11 @@ export async function findStaffCommitmentConflict(args: {
   start: Date;
   end: Date;
   excludeActivityId?: string | null;
-  db?: ScheduleDb;
+  db?: unknown;
 }): Promise<StaffCommitmentConflict | null> {
   if (!(args.end > args.start)) throw new Error("Commitment check requires an end after the start.");
 
-  const db = args.db ?? (prisma as unknown as ScheduleDb);
+  const db = (args.db ?? prisma) as unknown as ScheduleDb;
   const activities = await db.activity.findMany({
     where: {
       assignedToId: args.userId,
