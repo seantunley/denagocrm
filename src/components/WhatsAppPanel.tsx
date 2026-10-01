@@ -112,7 +112,7 @@ export default function WhatsAppPanel({
       ) : (
         <p className="text-sm text-slate-400 mt-3">
           Business WhatsApp isn&apos;t connected yet (
-          <Link href="/settings?tab=integrations" className="text-orange-400 hover:underline">
+          <Link href="/settings/integrations" className="text-orange-400 hover:underline">
             Settings → Integrations
           </Link>
           ). Meanwhile:{" "}

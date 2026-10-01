@@ -39,7 +39,7 @@ export async function pollChatGptLogin(shownUserCode: unknown) {
       summary: "Connected a ChatGPT subscription for lead research",
       user,
     });
-    revalidatePath("/settings");
+    revalidatePath("/settings", "layout");
   }
   return result;
 }
@@ -54,7 +54,7 @@ export async function disconnectChatGpt() {
       : "Disconnected the ChatGPT subscription; OpenAI could not be reached to revoke the sign-in, so it was only cleared here",
     user,
   });
-  revalidatePath("/settings");
+  revalidatePath("/settings", "layout");
   return { revoked };
 }
 

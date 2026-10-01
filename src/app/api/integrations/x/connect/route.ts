@@ -9,7 +9,7 @@ export async function GET(request: Request) {
   const tenantId = await getActiveTenantId();
   if (!tenantId) return NextResponse.json({ error: "No active workspace." }, { status: 403 });
   const clientId = await resolveTenantCredential(tenantId, "X_CLIENT_ID");
-  if (!clientId) return NextResponse.redirect(new URL("/settings?tab=integrations&x=missing-client", request.url));
+  if (!clientId) return NextResponse.redirect(new URL("/settings/integrations?x=missing-client", request.url));
   const state = crypto.randomBytes(24).toString("base64url");
   const verifier = crypto.randomBytes(48).toString("base64url");
   const challenge = crypto.createHash("sha256").update(verifier).digest("base64url");

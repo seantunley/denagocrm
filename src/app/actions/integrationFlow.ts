@@ -11,7 +11,7 @@ import { commitVerifiedCredentials } from "@/lib/integrationCommit";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { reconcileTenantChannels } from "@/lib/channelRegistration";
 
-const OVERRIDES_PATH = "/settings/integration-overrides";
+const OVERRIDES_PATH = "/settings/integrations";
 
 /**
  * What the wizard renders. Structured rather than `ActionResult` because the

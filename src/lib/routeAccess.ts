@@ -89,7 +89,7 @@ export const ROUTE_RULES = [
   { prefix: "/trash", owner: true },
   // Repairs — the workspace issue inbox. Restricted to the owner, and not for
   // want of a narrower key: every fix route it links to is owner-gated already
-  // (/journeys calls requireOwner(), /settings/integration-overrides reads
+  // (/journeys calls requireOwner(), /settings/integrations reads
   // credential configuration), so a rule that let anyone else in would show them
   // problems they cannot act on and Fix buttons that bounce them back to "/".
   // The page also reports across domains — journeys, integrations — which no

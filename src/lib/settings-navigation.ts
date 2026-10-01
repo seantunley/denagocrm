@@ -73,16 +73,17 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
       { key: "email", label: "Email", keywords: ["smtp", "imap", "templates"] },
       { key: "automations", label: "Automations", module: "marketing", keywords: ["rules", "workflows", "triggers", "journeys", "follow-up", "next step"] },
       { key: "helpdesk", label: "Help desk", href: "/settings/helpdesk", permission: "cases.manage", module: "support", keywords: ["mailboxes", "saved replies", "tags", "support", "tickets", "cases"] },
-      { key: "integrations", label: "Integrations", keywords: ["api", "webhooks", "whatsapp", "meta"] },
       {
-        key: "integration-overrides",
-        label: "Integration overrides",
-        href: "/settings/integration-overrides",
+        // ONE Integrations page (batch 6) — it replaced the owner-only Settings tab
+        // and "Integration overrides", whose old addresses both redirect here.
+        key: "integrations",
+        label: "Integrations",
+        href: "/settings/integrations",
         // Visible to all signed-in users so tenant owners (who are not global
         // owners) can discover and navigate to this page. The page enforces
         // requireTenantOwner() — regular members who navigate here are redirected.
         everyone: true,
-        keywords: ["whatsapp", "email", "smtp", "imap", "telegram", "sms", "bulksms", "google reviews", "per-tenant", "credentials", "override"],
+        keywords: ["api", "webhooks", "whatsapp", "meta", "email", "smtp", "imap", "telegram", "sms", "bulksms", "google reviews", "per-tenant", "credentials", "override", "ai", "elevenlabs", "chatgpt", "intake"],
       },
     ],
   },
