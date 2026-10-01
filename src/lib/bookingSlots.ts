@@ -109,6 +109,7 @@ export async function reserveSlot(input: {
   assignedToId?: string | null;
   type?: string | null;
   location?: string | null;
+  endDate?: Date | null;
   dedupeMarker?: string | null;
 }) {
   const config = await getSlotConfig();
@@ -142,7 +143,7 @@ export async function reserveSlot(input: {
     return tx.activity.create({
       data: {
         type: input.type ?? "meeting", category: "workshop", summary: input.summary,
-        note, dueDate: dt, location: input.location ?? null,
+        note, dueDate: dt, endDate: input.endDate ?? null, location: input.location ?? null,
         contactId: input.contactId, leadId: input.leadId,
         assignedToId: input.assignedToId ?? input.userId, createdById: input.userId,
         ...(stampTenantId ? { tenantId: stampTenantId } : {}),
