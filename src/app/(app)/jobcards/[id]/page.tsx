@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
+import ModalTrigger from "@/components/Modal";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { storedFileSrc } from "@/lib/storedFileSrc";
@@ -7,6 +8,7 @@ import {
   addJobCardItem,
   deleteJobCardItem,
   setJobCardStatus,
+  updateJobCardDetails,
   setJobCardTechnician,
   setJobCardBay,
   setJobCardPriority,
@@ -293,7 +295,24 @@ export default async function JobCardDetailPage({
           <Surface className="p-5">
             <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_18rem] lg:items-start">
               <div>
-                <p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-primary">Work requested</p>
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-primary">Work requested</p>
+                  {jobCard.status !== "collected" && (
+                    <ModalTrigger label="Edit details" title={`Edit job card #${jobCard.number}`} buttonClass={buttonVariants({ variant: "outline", size: "sm" })}>
+                      <SaveForm success="Job card updated" action={updateJobCardDetails.bind(null, jobCard.id)} className="space-y-3">
+                        <div>
+                          <label className="label" htmlFor="edit-job-description">Work requested</label>
+                          <textarea id="edit-job-description" name="description" className="input" rows={5} defaultValue={jobCard.description} required />
+                        </div>
+                        <div>
+                          <label className="label" htmlFor="edit-job-km">Arrival mileage (km)</label>
+                          <input id="edit-job-km" type="number" min={0} name="kmIn" className="input" defaultValue={jobCard.kmIn ?? ""} />
+                        </div>
+                        <SaveButton className="btn-primary">Save changes</SaveButton>
+                      </SaveForm>
+                    </ModalTrigger>
+                  )}
+                </div>
                 <p className="mt-3 whitespace-pre-wrap text-base leading-7 text-foreground">{jobCard.description}</p>
               </div>
               <SaveForm success="Technician assigned" resetOnSuccess={false} action={setJobCardTechnician.bind(null, jobCard.id)} className="rounded-xl border border-border bg-muted/20 p-3">
