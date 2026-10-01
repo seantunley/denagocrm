@@ -301,7 +301,12 @@ test("print buttons use the same gate as the print routes", () => {
   // set canAccessQuote checks, empty without quote view permission.
   const quotes = shipped("src/app/(app)/quotes/page.tsx");
   assert.match(quotes, /requireAnyPermission\("quotes\.view_all", "quotes\.view_owned"\)/);
-  assert.match(quotes, /id: \{ in: accessibleQuoteIds \}/);
+  // The list's rows come from quoteListFilter (shared with the CSV export),
+  // which scopes them by getAccessibleQuoteIds.
+  assert.match(quotes, /const \{ where, all \} = await quoteListFilter\(user, \{ q, status \}\)/);
+  assert.match(quotes, /prisma\.quote\.findMany\(\{\s*where,/);
+  assert.match(shipped("src/lib/quoteListQuery.ts"), /getAccessibleQuoteIds\(user\)/);
+  assert.match(shipped("src/lib/quoteList.ts"), /input\.accessibleIds \? \[\{ id: \{ in: input\.accessibleIds \} \}\]/);
   assert.match(quotes, /quotePrintLinks\(quote\)/);
 
   const deliveries = shipped("src/app/(app)/deliveries/page.tsx");

@@ -3,6 +3,8 @@ import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { ListFilter } from "lucide-react";
 import { subDays } from "date-fns";
 import { prisma } from "@/lib/db";
+import { pageWindow, parsePage } from "@/lib/listPaging";
+import ListPager from "@/components/ListPager";
 import { saveView, deleteView } from "@/app/actions/views";
 import { formatDate, formatZAR } from "@/lib/format";
 import { getAccessibleLeadIds, hasPermission, requireAnyPermission } from "@/lib/permissions";
@@ -31,6 +33,7 @@ type Params = {
   stageId?: string;
   minValue?: string;
   days?: string;
+  page?: string;
 };
 
 type FilterOption = { id: string; name: string };
@@ -58,29 +61,39 @@ export default async function LeadListPage({ searchParams }: { searchParams: Pro
     : (await Promise.all(pipelines.map((pipeline) => listPipelineStages(pipeline.id)))).flat();
   const selectedPipelineStageIds = selectedPipeline ? stages.map((stage) => stage.id) : [];
 
+  const where = {
+    ...(accessibleIds ? { id: { in: accessibleIds } } : {}),
+    ...(status ? { status } : {}),
+    ...(source ? { source } : {}),
+    ...(stageId
+      ? { stageId }
+      : selectedPipeline
+        ? { stageId: { in: selectedPipelineStageIds } }
+        : {}),
+    ...(!isNaN(minValue) && minValue > 0 ? { valueCents: { gte: minValue * 100 } } : {}),
+    ...(!isNaN(days) && days > 0 ? { createdAt: { gte: subDays(new Date(), days) } } : {}),
+  };
+  // Paged in the database, so every matching lead is reachable, and the count
+  // and value in the footer cover the whole match rather than the newest 200.
+  const [total, sum] = await Promise.all([
+    prisma.lead.count({ where }),
+    prisma.lead.aggregate({ where, _sum: { valueCents: true } }),
+  ]);
+  const { page, skip, take } = pageWindow(parsePage(params.page), total);
   const leads = await prisma.lead.findMany({
-    where: {
-      ...(accessibleIds ? { id: { in: accessibleIds } } : {}),
-      ...(status ? { status } : {}),
-      ...(source ? { source } : {}),
-      ...(stageId
-        ? { stageId }
-        : selectedPipeline
-          ? { stageId: { in: selectedPipelineStageIds } }
-          : {}),
-      ...(!isNaN(minValue) && minValue > 0 ? { valueCents: { gte: minValue * 100 } } : {}),
-      ...(!isNaN(days) && days > 0 ? { createdAt: { gte: subDays(new Date(), days) } } : {}),
-    },
+    where,
     include: { stage: true, product: true, contact: true, assignedTo: true },
-    orderBy: { createdAt: "desc" },
-    take: 200,
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    skip,
+    take,
   });
 
-  const currentQuery = new URLSearchParams(
-    Object.fromEntries(Object.entries(params).filter(([, value]) => value)) as Record<string, string>,
-  ).toString();
-  const totalValue = leads.reduce((sum, lead) => sum + lead.valueCents, 0);
-  const activeFilterCount = Object.values(params).filter(Boolean).length;
+  // `page` is navigation, not a filter: it must not end up in a saved view or
+  // the active-filter badge.
+  const filters = Object.entries(params).filter(([key, value]) => key !== "page" && value);
+  const currentQuery = new URLSearchParams(Object.fromEntries(filters) as Record<string, string>).toString();
+  const totalValue = sum._sum.valueCents ?? 0;
+  const activeFilterCount = filters.length;
 
   const filterProps = { params, status, source, pipelineId, stageId, pipelines, stages };
 
@@ -167,8 +180,9 @@ export default async function LeadListPage({ searchParams }: { searchParams: Pro
                 </RecordContextMenu>
               ))}
               <div className="border-t border-border bg-muted/20 px-4 py-3 text-xs text-muted-foreground">
-                {leads.length} lead{leads.length !== 1 ? "s" : ""} · <span className="font-semibold text-foreground">{formatZAR(totalValue)}</span> total
+                {total} lead{total !== 1 ? "s" : ""} · <span className="font-semibold text-foreground">{formatZAR(totalValue)}</span> total
               </div>
+              <ListPager path="/leads/list" page={page} total={total} />
             </MobileDataList>
           }
           desktop={
@@ -200,7 +214,8 @@ export default async function LeadListPage({ searchParams }: { searchParams: Pro
                   ))}
                 </tbody>
               </table>
-              <p className="border-t border-border px-4 py-2.5 text-xs text-muted-foreground">{leads.length} lead{leads.length !== 1 ? "s" : ""} · total value <span className="font-semibold text-foreground">{formatZAR(totalValue)}</span></p>
+              <p className="border-t border-border px-4 py-2.5 text-xs text-muted-foreground">{total} lead{total !== 1 ? "s" : ""} · total value <span className="font-semibold text-foreground">{formatZAR(totalValue)}</span></p>
+              <ListPager path="/leads/list" page={page} total={total} className="border-t border-border" />
             </div>
           }
         />

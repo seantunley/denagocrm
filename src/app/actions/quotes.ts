@@ -37,8 +37,8 @@ import {
 } from "@/lib/permissions";
 import {
   QUOTE_EDITOR_INCLUDE,
-  QUOTE_VERSION_SELECT,
   buildQuoteEditorRecord,
+  loadQuoteVersions,
   quoteVersionIndex,
 } from "@/lib/quoteEditorRecord";
 import type { QuoteEditorRecord } from "@/components/quotes/QuoteEditorDialog";
@@ -974,11 +974,8 @@ export async function quoteEditorRecord(id: string): Promise<QuoteEditorRecord |
 
     // The version family: every revision reachable from this one, so the Versions
     // tab and the superseded-successor link work the same as from the list.
-    const versions = await prisma.quote.findMany({
-      orderBy: { createdAt: "asc" },
-      select: QUOTE_VERSION_SELECT,
-      take: 2_000,
-    });
+    // Loaded by family, not "the oldest 2,000 rows", which lost newer quotes' history.
+    const versions = await loadQuoteVersions(prisma, [quote.id]);
     // Tenant-scoped, so a fleet id from another workspace resolves to nothing and
     // the quote reads as an ordinary customer quote rather than naming an account
     // this caller has no business seeing.
