@@ -5,6 +5,7 @@ import {
   hasAnyPermission,
   type PermissionUser,
 } from "./permissions";
+import { actingTenantId } from "./actingTenant";
 
 /**
  * Activities inherit access from their linked lead/contact. General activities
@@ -14,9 +15,10 @@ export async function getAccessibleActivityIds(user: PermissionUser): Promise<st
   if (!(await hasAnyPermission(user, "activities.view", "activities.manage"))) return [];
   if (user.role === "owner") return null;
 
-  const [leadIds, contactIds] = await Promise.all([
+  const [leadIds, contactIds, tenantId] = await Promise.all([
     getAccessibleLeadIds(user),
     getAccessibleContactIds(user),
+    actingTenantId(),
   ]);
 
   const rows = await basePrisma.activity.findMany({
@@ -24,6 +26,9 @@ export async function getAccessibleActivityIds(user: PermissionUser): Promise<st
       OR: [
         { assignedToId: user.id },
         { createdById: user.id },
+        // Staff availability is operationally useful only when the whole
+        // workspace can see it. Keep the basePrisma read tenant-qualified.
+        { availabilityBlock: true, tenantId },
         ...(leadIds === null
           ? [{ leadId: { not: null } }]
           : leadIds.length
