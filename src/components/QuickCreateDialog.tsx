@@ -162,7 +162,12 @@ export default function QuickCreateDialog() {
 
   async function scheduleCalendar(formData: FormData) {
     try {
-      await scheduleQuickActivity(formData);
+      // A refusal (a full workshop slot, a follow-up with no note) comes back as a value.
+      const result = await scheduleQuickActivity(formData);
+      if (result?.error) {
+        toast.error(result.error);
+        return;
+      }
       close();
       toast.success("Activity scheduled");
     } catch (error) {

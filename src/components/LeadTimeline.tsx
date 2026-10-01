@@ -414,7 +414,7 @@ export default async function LeadTimeline({
         {item.pending && item.activityId && !isFutureDay(item.when) && (
           <div className="mt-2 flex flex-wrap items-center gap-2">
             {pinButton}
-            <form
+            <SaveForm
               action={completeActivity.bind(null, item.activityId)}
               className="flex min-w-0 flex-1 basis-full flex-wrap items-center gap-2 sm:basis-auto sm:flex-nowrap"
             >
@@ -425,14 +425,14 @@ export default async function LeadTimeline({
                 placeholder="Add a note (optional)"
                 className="input h-9 min-w-0 flex-1 basis-full text-xs sm:w-52 sm:basis-auto"
               />
-              <button
-                type="submit"
+              <SaveButton
+                pendingLabel="Saving…"
                 className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-emerald-500/50 bg-emerald-500/15 px-3 text-xs font-semibold text-emerald-100 transition-all hover:border-emerald-400/70 hover:bg-emerald-500/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/70"
               >
                 <Check className="size-4" />
                 Mark done
-              </button>
-            </form>
+              </SaveButton>
+            </SaveForm>
           </div>
         )}
       </li>
