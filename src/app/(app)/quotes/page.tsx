@@ -38,6 +38,7 @@ import {
   type QuoteEditorRecord,
 } from "@/components/quotes/QuoteEditorDialog";
 import RecordContextMenu, { type RecordContextAction } from "@/components/RecordContextMenu";
+import { quotePrintLinks } from "@/lib/quotePrintLinks";
 import {
   DesktopOnly,
   MobileOnly,
@@ -47,6 +48,10 @@ import {
   MobileTaskList,
   MobileWorkspaceHeader,
 } from "@/components/mobile-workspace";
+
+// "Email quote" (in the editor on this page) renders the PDF in headless Chrome
+// and sends it — the same budget the PDF routes get.
+export const maxDuration = 60;
 
 function inputDate(daysFromNow: number) {
   const date = new Date();
@@ -288,7 +293,7 @@ export default async function QuotesPage({
                       key={quote.id}
                       label={`Quote Q-${quote.number}`}
                       href={`/quotes/${quote.id}`}
-                      actions={quoteContextActions(quote.id)}
+                      actions={quoteContextActions(quote)}
                     >
                     <MobileDataCard>
                       <MobileDataHeader
@@ -354,7 +359,7 @@ export default async function QuotesPage({
                           key={quote.id}
                           label={`Quote Q-${quote.number}`}
                           href={`/quotes/${quote.id}`}
-                          actions={quoteContextActions(quote.id)}
+                          actions={quoteContextActions(quote)}
                         >
                         <tr tabIndex={0} className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary">
                           <td>
@@ -396,9 +401,12 @@ export default async function QuotesPage({
   );
 }
 
-function quoteContextActions(quoteId: string): RecordContextAction[] {
+// Every row here came through getAccessibleQuoteIds — the same gate the print
+// routes apply with requireQuoteReadAccess.
+function quoteContextActions(quote: { id: string; status: string }): RecordContextAction[] {
   return [
-    { label: "Open editor", href: `/quotes?edit=${quoteId}`, icon: "edit" },
-    { label: "Print / PDF", href: `/quotes/${quoteId}/print`, icon: "print", newTab: true },
+    { label: "Open editor", href: `/quotes?edit=${quote.id}`, icon: "edit" },
+    { label: "Print / PDF", href: `/quotes/${quote.id}/print`, icon: "print", newTab: true },
+    ...quotePrintLinks(quote).map((link) => ({ ...link, icon: "print" as const, newTab: true })),
   ];
 }

@@ -27,7 +27,10 @@ import { renderTemplate } from "@/lib/template";
  * link renders as the bulletproof button + the paste-this-link line.
  */
 
-export type SigningEmailKind = "invite" | "reminder" | "completed" | "otp";
+// "quote" is not a signing email: it is the "Email quote" message (the quote PDF
+// is attached). It shares the editor, the validation and the branded shell, so it
+// is one more kind here rather than a second copy of all three.
+export type SigningEmailKind = "invite" | "reminder" | "completed" | "otp" | "quote";
 
 export type SigningEmailDef = {
   kind: SigningEmailKind;
@@ -67,6 +70,7 @@ export const SIGNING_FIELD_HELP: Record<string, string> = {
   signing_link: "The personal signing link (required — shown as the button)",
   expiry_date: "Date the signing link expires (blank if none)",
   code: "The 6-digit verification code (required)",
+  total: "Quote total incl. VAT, e.g. R 125 000,00",
 };
 
 // The defaults are today's wording, so nothing a customer receives changes
@@ -111,6 +115,16 @@ export const SIGNING_EMAILS: Record<SigningEmailKind, SigningEmailDef> = {
     body: "Hi {{recipient_name}},\n\nYour verification code for “{{document_title}}” is:\n\n{{code}}\n\nIt expires in 10 minutes. If you did not ask to sign this document, ignore this message and tell the sender.",
     fields: [...COMMON, "code"],
     action: "code",
+  },
+  quote: {
+    kind: "quote",
+    label: "Quote email",
+    description: "The starting wording for “Email quote” in the quote editor. Staff see it and can change it before each send; the quote PDF is attached automatically.",
+    settingKey: "QUOTE_EMAIL",
+    subject: "Your quote {{quote_number}} from {{company_name}}",
+    body: "Hi {{first_name}},\n\nThank you for your interest. Your quote {{quote_number}} is attached as a PDF.\n\nIf you have any questions, or would like to go ahead, just reply to this email.\n\nKind regards,\n{{sender_name}}\n{{company_name}}",
+    fields: [...COMMON, "total"],
+    action: null,
   },
 };
 
