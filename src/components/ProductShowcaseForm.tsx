@@ -1,4 +1,5 @@
 import { updateProductShowcase } from "@/app/actions/products";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { showcaseIconNames } from "@/lib/doceditor/model";
 import { MAX_VEHICLE_SPECS, colourImageRef, parseVehicleSpecs, uniqueColours } from "@/lib/docbuilder/vehicleShowcase";
 import { storedFileSrc } from "@/lib/storedFileSrc";
@@ -25,7 +26,7 @@ export default function ProductShowcaseForm({
   const photo = storedFileSrc(product.showcaseImageRef);
   const colours = uniqueColours(product.colors);
   return (
-    <form action={updateProductShowcase.bind(null, product.id)} className="card space-y-4 lg:col-span-2">
+    <SaveForm action={updateProductShowcase.bind(null, product.id)} success="Showcase saved" resetOnSuccess={false} className="card space-y-4 lg:col-span-2">
       <div>
         <h2 className="font-semibold">Quote showcase</h2>
         <p className="text-xs text-muted-foreground">
@@ -116,7 +117,7 @@ export default function ProductShowcaseForm({
           </ul>
         )}
       </div>
-      <button className="btn-primary">Save showcase</button>
-    </form>
+      <SaveButton className="btn-primary" pendingLabel="Saving photos…">Save showcase</SaveButton>
+    </SaveForm>
   );
 }
