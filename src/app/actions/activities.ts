@@ -17,8 +17,11 @@ import { reserveSlot } from "@/lib/bookingSlots";
 import { ensureTimelinePin } from "@/lib/timelinePins";
 import {
   availabilityConflictMessage,
+  commitmentConflictMessage,
   DEFAULT_ACTIVITY_DURATION_MS,
+  effectiveActivityEnd,
   findStaffAvailabilityConflict,
+  findStaffCommitmentConflict,
   lockStaffSchedules,
 } from "@/lib/staffAvailability";
 import {
@@ -385,9 +388,6 @@ export async function rescheduleActivity(
   when: string,
 ): Promise<{ ok: boolean; error?: string }> {
   const { user, activity: existing } = await requireActivityAccess(id);
-  // Preserve the follow-up "real future time" invariant that updateActivity
-  // enforces: the hour-before reminder push skips midnight, so a follow-up
-  // rescheduled to a past/midnight time would silently miss its nudge.
   let dueDate: Date;
   if (existing.type === FOLLOW_UP_TYPE) {
     const normalised = ensureFollowUpTime(when);
@@ -396,15 +396,48 @@ export async function rescheduleActivity(
     if (problem) return { ok: false, error: problem };
   } else {
     dueDate = new Date(when.includes("T") ? `${when}:00+02:00` : when);
-    if (isNaN(dueDate.getTime())) {
-      return { ok: false, error: "Pick a valid date" };
-    }
+    if (isNaN(dueDate.getTime())) return { ok: false, error: "Pick a valid date" };
   }
-  const activity = await prisma.activity.update({
-    where: { id },
-    data: { dueDate, reminderSentAt: null },
-    include: { lead: true },
+
+  const oldEnd = effectiveActivityEnd(existing.dueDate, existing.endDate);
+  const duration = oldEnd.getTime() - existing.dueDate.getTime();
+  const endDate = new Date(dueDate.getTime() + duration);
+  const tenantId = existing.tenantId ?? await customerRecordTenantId({
+    contactId: existing.contactId,
+    leadId: existing.leadId,
   });
+
+  const result = await prisma.$transaction(async (tx) => {
+    await lockStaffSchedules(tx, tenantId ?? "global", [existing.assignedToId]);
+    if (existing.availabilityBlock) {
+      const conflict = await findStaffCommitmentConflict({
+        userId: existing.assignedToId,
+        start: dueDate,
+        end: endDate,
+        excludeActivityId: existing.id,
+        db: tx,
+      });
+      if (conflict) return { error: commitmentConflictMessage(conflict) } as const;
+    } else {
+      const conflict = await findStaffAvailabilityConflict({
+        userId: existing.assignedToId,
+        start: dueDate,
+        end: endDate,
+        excludeActivityId: existing.id,
+        db: tx,
+      });
+      if (conflict) return { error: availabilityConflictMessage(conflict) } as const;
+    }
+    const activity = await tx.activity.update({
+      where: { id },
+      data: { dueDate, endDate, reminderSentAt: null },
+      include: { lead: true },
+    });
+    return { activity } as const;
+  });
+  if ("error" in result) return { ok: false, error: result.error };
+  const activity = result.activity;
+
   await logAudit({
     action: "activity.rescheduled",
     summary: `Rescheduled ${activity.type} “${activity.summary}” to ${dueDate.toLocaleString(
@@ -440,9 +473,8 @@ export async function scheduleFollowUp(data: {
   const dueDate = new Date(
     data.when.includes("T") ? `${data.when}:00+02:00` : data.when,
   );
-  if (isNaN(dueDate.getTime())) {
-    return { ok: false, error: "Pick a valid date" };
-  }
+  if (isNaN(dueDate.getTime())) return { ok: false, error: "Pick a valid date" };
+  const endDate = new Date(dueDate.getTime() + DEFAULT_ACTIVITY_DURATION_MS);
   const label =
     data.summary?.trim() ||
     ({
@@ -454,18 +486,33 @@ export async function scheduleFollowUp(data: {
       todo: "Follow up",
     }[data.type]) ||
     "Follow up";
-  const activity = await prisma.activity.create({
-    data: {
-      type: data.type,
-      summary: label,
-      dueDate,
-      leadId: data.leadId,
-      contactId: data.contactId ?? null,
-      assignedToId: user.id,
-      createdById: user.id,
-      tenantId: await customerRecordTenantId({ contactId: data.contactId, leadId: data.leadId }),
-    },
+  const tenantId = await customerRecordTenantId({ contactId: data.contactId, leadId: data.leadId });
+  const result = await prisma.$transaction(async (tx) => {
+    await lockStaffSchedules(tx, tenantId ?? "global", [user.id]);
+    const conflict = await findStaffAvailabilityConflict({
+      userId: user.id,
+      start: dueDate,
+      end: endDate,
+      db: tx,
+    });
+    if (conflict) return { conflict } as const;
+    const activity = await tx.activity.create({
+      data: {
+        type: data.type,
+        summary: label,
+        dueDate,
+        endDate,
+        leadId: data.leadId,
+        contactId: data.contactId ?? null,
+        assignedToId: user.id,
+        createdById: user.id,
+        tenantId,
+      },
+    });
+    return { activity } as const;
   });
+  if ("conflict" in result) return { ok: false, error: availabilityConflictMessage(result.conflict) };
+  const activity = result.activity;
   await logAudit({
     action: "activity.scheduled",
     summary: `Scheduled ${activity.type}: “${activity.summary}” (next step)`,
@@ -489,28 +536,27 @@ export async function cancelActivity(id: string, revalidate: string) {
   revalidatePath(revalidate);
   revalidatePath("/activities");
   revalidatePath("/");
+  revalidatePath("/calendar");
   revalidateRecordPages(activity);
 }
 
-export async function updateActivity(id: string, formData: FormData) {
-  const { user } = await requireActivityAccess(id);
+export async function updateActivity(
+  id: string,
+  formData: FormData,
+): Promise<{ error?: string; success?: string }> {
+  const { user, activity: existing } = await requireActivityAccess(id);
   const summary = String(formData.get("summary") ?? "").trim();
-  if (!summary) return;
+  if (!summary) return { error: "What needs to happen is required." };
   const type = str(formData, "type") ?? "todo";
   const rawDue = str(formData, "dueDate");
+  const rawEnd = str(formData, "endDate");
 
-  // Editing an existing follow-up must preserve its "real future time"
-  // invariant: the hour-before reminder push skips midnight, so a follow-up
-  // edited to 00:00 or a past time would silently miss its nudge. The edit form
-  // neither submits nor persists a note, so we enforce ONLY the due-date rule
-  // here — we never newly require a note nor touch the existing one.
-  let duePatch = {};
+  let dueDate = existing.dueDate;
   if (rawDue) {
-    let dueDate: Date;
     if (type === FOLLOW_UP_TYPE) {
       dueDate = new Date(`${ensureFollowUpTime(rawDue)}:00+02:00`);
       const problem = followUpDueDateError(dueDate, new Date());
-      if (problem) throw new Error(problem);
+      if (problem) return { error: problem };
     } else {
       dueDate = rawDue.endsWith("T00:00")
         ? new Date(rawDue.slice(0, 10))
@@ -518,26 +564,63 @@ export async function updateActivity(id: string, formData: FormData) {
           ? new Date(`${rawDue}:00+02:00`)
           : new Date(rawDue);
     }
-    duePatch = { dueDate, reminderSentAt: null };
+  }
+  if (Number.isNaN(dueDate.getTime())) return { error: "Pick a valid start date and time." };
+
+  const previousEnd = effectiveActivityEnd(existing.dueDate, existing.endDate);
+  const previousDuration = previousEnd.getTime() - existing.dueDate.getTime();
+  const endDate = rawEnd
+    ? new Date(rawEnd.includes("T") ? `${rawEnd}:00+02:00` : rawEnd)
+    : new Date(dueDate.getTime() + previousDuration);
+  if (Number.isNaN(endDate.getTime()) || endDate <= dueDate) {
+    return { error: "End time must be after the start time." };
   }
 
-  // Resolved BEFORE the update rather than inline in the data object, so the
-  // refusal happens while nothing has been written yet. Reassignment is the
-  // easier of the two attacks: the activity already exists, so one forged field
-  // on an ordinary edit was enough to hand it to somebody in another workspace.
   const assignedToId = (await resolveActivityAssignee(formData))?.id ?? user.id;
-
-  const activity = await prisma.activity.update({
-    where: { id },
-    data: {
-      type,
-      category: formData.get("workshop") === "on" ? "workshop" : null,
-      summary,
-      location: str(formData, "location"),
-      assignedToId,
-      ...duePatch,
-    },
+  const tenantId = existing.tenantId ?? await customerRecordTenantId({
+    contactId: existing.contactId,
+    leadId: existing.leadId,
   });
+
+  const result = await prisma.$transaction(async (tx) => {
+    await lockStaffSchedules(tx, tenantId ?? "global", [existing.assignedToId, assignedToId]);
+    if (existing.availabilityBlock) {
+      const conflict = await findStaffCommitmentConflict({
+        userId: assignedToId,
+        start: dueDate,
+        end: endDate,
+        excludeActivityId: existing.id,
+        db: tx,
+      });
+      if (conflict) return { error: commitmentConflictMessage(conflict) } as const;
+    } else {
+      const conflict = await findStaffAvailabilityConflict({
+        userId: assignedToId,
+        start: dueDate,
+        end: endDate,
+        excludeActivityId: existing.id,
+        db: tx,
+      });
+      if (conflict) return { error: availabilityConflictMessage(conflict) } as const;
+    }
+    const activity = await tx.activity.update({
+      where: { id },
+      data: {
+        type,
+        category: formData.get("workshop") === "on" ? "workshop" : null,
+        summary,
+        location: str(formData, "location"),
+        assignedToId,
+        dueDate,
+        endDate,
+        reminderSentAt: null,
+      },
+    });
+    return { activity } as const;
+  });
+  if ("error" in result) return { error: result.error };
+  const activity = result.activity;
+
   await logAudit({
     action: "activity.updated",
     summary: `Updated activity “${summary}”`,
@@ -547,5 +630,8 @@ export async function updateActivity(id: string, formData: FormData) {
   });
   revalidatePath(String(formData.get("revalidate") ?? "/activities"));
   revalidatePath("/activities");
+  revalidatePath("/calendar");
   revalidatePath("/");
+  return { success: "Activity updated" };
 }
+
