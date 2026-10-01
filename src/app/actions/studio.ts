@@ -8,6 +8,7 @@ import { saveFile } from "@/lib/storage";
 import { buildMergeContext, renderInstanceHtml, htmlToPdf } from "@/lib/customDocs";
 import { resolveBlocks } from "@/lib/mergeFields";
 import { withActingStaffScope } from "@/lib/actingScope";
+import { asActionResult, refuse } from "@/lib/actionResult";
 import {
   canAccessContact,
   canAccessLead,
@@ -27,14 +28,15 @@ async function assertLinkedScope(
   user: PermissionUser,
   links: { contactId?: string | null; leadId?: string | null; quoteId?: string | null }
 ) {
-  if (links.contactId && !(await canAccessContact(user, links.contactId))) throw new Error("Contact access denied");
-  if (links.leadId && !(await canAccessLead(user, links.leadId))) throw new Error("Lead access denied");
-  if (links.quoteId && !(await canAccessQuote(user, links.quoteId))) throw new Error("Quote access denied");
+  if (links.contactId && !(await canAccessContact(user, links.contactId))) refuse("You don't have access to that customer.");
+  if (links.leadId && !(await canAccessLead(user, links.leadId))) refuse("You don't have access to that lead.");
+  if (links.quoteId && !(await canAccessQuote(user, links.quoteId))) refuse("You don't have access to that quote.");
 }
 
 async function requireDocInstanceAccess(id: string, permission: PermissionKey) {
   const user = await requirePermission(permission);
-  const doc = await prisma.docInstance.findUniqueOrThrow({ where: { id } });
+  const doc = await prisma.docInstance.findUnique({ where: { id } });
+  if (!doc) refuse("That document is no longer there — refresh the page.");
   await assertLinkedScope(user, doc);
   return { user, doc };
 }
@@ -68,12 +70,14 @@ export async function saveStudioTemplate(
 }
 
 export async function publishStudioTemplate(id: string) {
-  return withActingStaffScope(async () => {
+  // asActionResult: a refusal shows on the page instead of "This page hit an error" (#22).
+  return asActionResult(async () => {
     const user = await requirePermission("document_templates.manage");
-    const tpl = await prisma.customDocTemplate.findUniqueOrThrow({
+    const tpl = await prisma.customDocTemplate.findUnique({
       where: { id },
       include: { versions: { orderBy: { version: "desc" }, take: 1 } },
     });
+    if (!tpl) refuse("That template is no longer there — refresh the page.");
     const next = (tpl.versions[0]?.version ?? 0) + 1;
     await prisma.customDocVersion.create({
       data: { templateId: id, version: next, contentJson: tpl.draftJson as object, publishedBy: user.name },
@@ -85,6 +89,7 @@ export async function publishStudioTemplate(id: string) {
     });
     revalidatePath(`/settings/documents/studio/t/${id}`);
     revalidatePath("/document-studio");
+    return { success: `Published v${next}` };
   });
 }
 
@@ -100,14 +105,15 @@ export async function deleteStudioTemplate(id: string) {
 /* ── reusable blocks (inserted by value) ─────────────────────────── */
 
 export async function createReusableBlock(formData: FormData) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     const user = await requirePermission("document_templates.manage");
     const name = String(formData.get("name") ?? "").trim() || "Untitled clause";
     const row = await prisma.reusableBlock.create({
       data: { name, contentJson: EMPTY_DOC },
     });
     await logAudit({ action: "studio.block.created", summary: `Created reusable clause “${name}”`, user });
-    redirect(`/settings/documents/studio/c/${row.id}`);
+    // Returned, not thrown: SaveForm navigates only when the action says it saved.
+    return { redirectTo: `/settings/documents/studio/c/${row.id}`, success: "Clause created" };
   });
 }
 

@@ -10,6 +10,7 @@ import { MobileDataCard, MobileDataField, MobileDataFields, MobileDataHeader, Mo
 import { EmptyState, SectionHeading, StatusPill, Surface } from "@/components/visual-system";
 import { Building2, CarFront, Plus, UsersRound, Warehouse } from "lucide-react";
 import RecordContextMenu from "@/components/RecordContextMenu";
+import ContactPicker from "@/components/ContactPicker";
 
 export const dynamic = "force-dynamic";
 
@@ -56,14 +57,11 @@ export default async function FleetsPage() {
               </option>
             ))}
           </select>
-          <select name="contactId" className="input" defaultValue="">
-            <option value="">Primary contact (optional)…</option>
-            {contacts.map((c) => (
-              <option key={c.id} value={c.id}>
-                {contactName(c)}
-              </option>
-            ))}
-          </select>
+          <ContactPicker
+            name="contactId"
+            options={contacts.map((c) => ({ id: c.id, label: contactName(c) }))}
+            emptyLabel="Primary contact (optional)…"
+          />
           <div className="sm:col-span-3">
             <button className="btn-primary"><Plus className="size-4" /> Create fleet</button>
           </div>

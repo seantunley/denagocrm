@@ -4,6 +4,7 @@ import { contactName } from "@/lib/format";
 import ModalTrigger from "@/components/Modal";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { buttonVariants } from "@/components/ui/button";
+import ContactPicker from "@/components/ContactPicker";
 
 type ContactOption = {
   id: string;
@@ -56,10 +57,12 @@ export function TestDriveBookingTrigger({
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="sm:col-span-2">
             <label className="label">Customer</label>
-            <select name="contactId" className="input" required defaultValue={defaultContactId ?? ""}>
-              <option value="" disabled>Select customer…</option>
-              {contacts.map((contact) => <option key={contact.id} value={contact.id}>{contactName(contact)}</option>)}
-            </select>
+            <ContactPicker
+              name="contactId"
+              required
+              defaultValue={defaultContactId ?? ""}
+              options={contacts.map((contact) => ({ id: contact.id, label: contactName(contact) }))}
+            />
           </div>
           <div className="sm:col-span-2">
             <label className="label">Lead</label>
