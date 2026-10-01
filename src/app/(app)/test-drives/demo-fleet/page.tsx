@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { hasPermission, requireAnyPermission } from "@/lib/permissions";
 import { createDemoVehicle, updateDemoVehicle } from "@/app/actions/testDrives";
 import ModalTrigger from "@/components/Modal";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
 import { EmptyState, MetricCard, Surface } from "@/components/visual-system";
@@ -55,7 +56,7 @@ export default async function DemoFleetPage() {
         <Link href="/test-drives" className={buttonVariants({ variant: "secondary", size: "sm" })}>Test drives</Link>
         {canManage && (
           <ModalTrigger label={<><Plus className="size-4" />Add demo vehicle</>} title="Add demo vehicle" buttonClass={buttonVariants({ size: "sm" })}>
-            <form action={createDemoVehicle} className="grid gap-3 sm:grid-cols-2">
+            <SaveForm action={createDemoVehicle} success="Added to the demo fleet" className="grid gap-3 sm:grid-cols-2">
               <div className="sm:col-span-2"><label className="label">Display name</label><input name="name" className="input" required placeholder="Rover XL Demo 1" /></div>
               <div><label className="label">Product / model</label><select name="productId" className="input" defaultValue=""><option value="">No catalogue link</option>{products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select></div>
               <div><label className="label">Stock unit</label><select name="stockUnitId" className="input" defaultValue=""><option value="">No stock-unit link</option>{stockUnits.map((unit) => <option key={unit.id} value={unit.id}>{unit.stockNumber ?? unit.serial ?? "Unit"} · {unit.product.name}</option>)}</select></div>
@@ -66,8 +67,8 @@ export default async function DemoFleetPage() {
               <div><label className="label">Odometer (km)</label><input type="number" min="0" name="odometerKm" className="input" defaultValue="0" /></div>
               <div><label className="label">Battery (%)</label><input type="number" min="0" max="100" name="batteryLevelPct" className="input" /></div>
               <div className="sm:col-span-2"><label className="label">Notes</label><textarea name="notes" className="input" rows={3} /></div>
-              <div className="sm:col-span-2"><button className="btn-primary w-full">Add to demo fleet</button></div>
-            </form>
+              <div className="sm:col-span-2"><SaveButton className="btn-primary w-full" pendingLabel="Adding…">Add to demo fleet</SaveButton></div>
+            </SaveForm>
           </ModalTrigger>
         )}
       </PageHeader>
@@ -111,7 +112,7 @@ export default async function DemoFleetPage() {
                 {canManage && (
                   <details className="mt-4">
                     <summary className="cursor-pointer text-sm text-primary">Edit vehicle</summary>
-                    <form action={updateDemoVehicle.bind(null, demo.id)} className="mt-3 grid gap-2 sm:grid-cols-2">
+                    <SaveForm action={updateDemoVehicle.bind(null, demo.id)} success="Vehicle saved" resetOnSuccess={false} className="mt-3 grid gap-2 sm:grid-cols-2">
                       <input name="name" className="input" required defaultValue={demo.name} />
                       <select name="status" className="input" defaultValue={demo.status}><option value="active">Active</option><option value="maintenance">Maintenance</option><option value="unavailable">Unavailable</option><option value="retired">Retired</option></select>
                       <input name="branch" className="input" defaultValue={demo.branch ?? ""} placeholder="Branch" />
@@ -120,8 +121,8 @@ export default async function DemoFleetPage() {
                       <input type="number" min="0" name="odometerKm" className="input" defaultValue={demo.odometerKm} />
                       <input type="number" min="0" max="100" name="batteryLevelPct" className="input" defaultValue={demo.batteryLevelPct ?? ""} placeholder="Battery %" />
                       <textarea name="notes" className="input sm:col-span-2" rows={2} defaultValue={demo.notes ?? ""} placeholder="Notes" />
-                      <div className="sm:col-span-2 text-right"><button className="btn-secondary btn-sm">Save vehicle</button></div>
-                    </form>
+                      <div className="sm:col-span-2 text-right"><SaveButton className="btn-secondary btn-sm">Save vehicle</SaveButton></div>
+                    </SaveForm>
                   </details>
                 )}
               </Surface>
