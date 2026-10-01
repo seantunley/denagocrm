@@ -353,10 +353,33 @@ async function writeAudit(entry: AuditEntry, tx?: AuditTx) {
   else await basePrisma.$transaction(write);
 }
 
+/**
+ * Report an audit write that failed — to the System Log, which owners see and
+ * which raises the throttled system-error alert. Both failures used to vanish
+ * into an empty `catch` (gap audit #35), so a broken audit trail looked exactly
+ * like a quiet one. The action and record ids only: a summary names customers,
+ * and the System Log must hold no client information.
+ */
+async function reportAuditFailure(entry: AuditEntry, err: unknown, what: string): Promise<void> {
+  try {
+    const { logError } = await import("./errorLog"); // lazy: errorLog sits below audit in the import graph
+    await logError(
+      "audit-write",
+      err,
+      `${what} — action ${entry.action}${entry.contactId ? `, contact ${entry.contactId}` : ""}${entry.leadId ? `, lead ${entry.leadId}` : ""}`,
+    );
+  } catch {
+    console.error(`[audit] ${what} — action ${entry.action}; the System Log was unreachable too`);
+  }
+}
+
 export async function logAudit(entry: AuditEntry): Promise<void> {
   try {
     await writeAudit(entry);
-  } catch {
+  } catch (err) {
+    // The tamper-evident event was NOT written. Say so even if the fallback below
+    // saves the timeline entry — the hash chain has a gap either way.
+    await reportAuditFailure(entry, err, "audit event not written; falling back to the legacy timeline row");
     // Existing non-governance callers remain best-effort and keep their legacy timeline.
     try {
       await prisma.auditLog.create({
@@ -377,7 +400,9 @@ export async function logAudit(entry: AuditEntry): Promise<void> {
           tenantId: (await auditTenantIds(entry)).log,
         },
       });
-    } catch {}
+    } catch (fallbackErr) {
+      await reportAuditFailure(entry, fallbackErr, "audit entry LOST — the legacy timeline row failed too");
+    }
   }
 }
 
