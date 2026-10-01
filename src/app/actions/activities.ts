@@ -16,6 +16,12 @@ import { logAudit } from "@/lib/audit";
 import { reserveSlot } from "@/lib/bookingSlots";
 import { ensureTimelinePin } from "@/lib/timelinePins";
 import {
+  availabilityConflictMessage,
+  DEFAULT_ACTIVITY_DURATION_MS,
+  findStaffAvailabilityConflict,
+  lockStaffSchedules,
+} from "@/lib/staffAvailability";
+import {
   FOLLOW_UP_TYPE,
   ensureFollowUpTime,
   followUpDueDateError,
@@ -96,15 +102,16 @@ async function requireActivityAccess(id: string) {
   return { user, activity };
 }
 
-export async function scheduleActivity(formData: FormData) {
+export async function scheduleActivity(formData: FormData): Promise<{ error?: string; success?: string }> {
   const user = await requirePermission("activities.manage");
   const summary = String(formData.get("summary") ?? "").trim();
-  if (!summary) return;
+  if (!summary) return { error: "What needs to happen is required." };
   const leadId = str(formData, "leadId");
   const contactId = str(formData, "contactId");
   await assertLinks(user, { leadId, contactId });
 
   const rawDue = str(formData, "dueDate");
+  const rawEnd = str(formData, "endDate");
   const type = str(formData, "type") ?? "todo";
   const note = str(formData, "note");
   const location = str(formData, "location");
@@ -112,10 +119,33 @@ export async function scheduleActivity(formData: FormData) {
   const assignedToId = assignee?.id ?? user.id;
   const workshop = formData.get("workshop") === "on";
 
+  let dueDate: Date;
+  if (type === FOLLOW_UP_TYPE) {
+    dueDate = rawDue
+      ? new Date(`${ensureFollowUpTime(rawDue)}:00+02:00`)
+      : new Date(NaN);
+    const problem = followUpValidationError({ note, dueDate }, new Date());
+    if (problem) return { error: problem };
+  } else {
+    dueDate = rawDue
+      ? rawDue.includes("T")
+        ? new Date(`${rawDue}:00+02:00`)
+        : new Date(rawDue)
+      : new Date();
+  }
+  if (Number.isNaN(dueDate.getTime())) return { error: "Pick a valid start date and time." };
+
+  const endDate = rawEnd
+    ? new Date(rawEnd.includes("T") ? `${rawEnd}:00+02:00` : rawEnd)
+    : new Date(dueDate.getTime() + DEFAULT_ACTIVITY_DURATION_MS);
+  if (Number.isNaN(endDate.getTime()) || endDate <= dueDate) {
+    return { error: "End time must be after the start time." };
+  }
+
   let activity;
   if (workshop) {
     if (!rawDue || !rawDue.includes("T")) {
-      throw new Error("Pick a configured workshop date and time");
+      return { error: "Pick a configured workshop date and time." };
     }
     try {
       activity = await reserveSlot({
@@ -128,68 +158,61 @@ export async function scheduleActivity(formData: FormData) {
         contactId,
         leadId,
         assignedToId,
+        endDate,
         userId: user.id,
       });
     } catch (error) {
       const code = error instanceof Error ? error.message : "";
       if (code === "SLOT_TAKEN") {
-        throw new Error(
-          "That workshop time has just filled up. Pick another available slot.",
-        );
+        return { error: "That workshop time has just filled up. Pick another available slot." };
       }
       if (code === "SLOT_INVALID") {
-        throw new Error(
-          "That workshop slot is no longer available. Pick a future configured date and time.",
-        );
+        return { error: "That workshop slot is no longer available. Pick a future configured date and time." };
+      }
+      if (code.startsWith("STAFF_UNAVAILABLE:")) {
+        return { error: code.slice("STAFF_UNAVAILABLE:".length) };
       }
       throw error;
     }
   } else {
-    let dueDate: Date;
-    if (type === FOLLOW_UP_TYPE) {
-      // A follow-up MUST have a note and a real, future time — the latter so the
-      // existing hour-before reminder push (which skips midnight) fires.
-      dueDate = rawDue
-        ? new Date(`${ensureFollowUpTime(rawDue)}:00+02:00`)
-        : new Date(NaN);
-      const problem = followUpValidationError({ note, dueDate }, new Date());
-      if (problem) throw new Error(problem);
-    } else {
-      dueDate = rawDue
-        ? rawDue.includes("T")
-          ? new Date(`${rawDue}:00+02:00`)
-          : new Date(rawDue)
-        : new Date();
-    }
-    activity = await prisma.activity.create({
-      data: {
-        type,
-        category: null,
-        summary,
-        note,
-        dueDate,
-        location,
-        leadId,
-        contactId,
-        assignedToId,
-        createdById: user.id,
-        // Activity carries composite tenant foreign keys to Lead and Contact — the
-        // customer record owns the row, and stamping anything else refuses the write.
-        tenantId: await customerRecordTenantId({ contactId, leadId }),
-      },
+    const tenantId = await customerRecordTenantId({ contactId, leadId });
+    activity = await prisma.$transaction(async (tx) => {
+      await lockStaffSchedules(tx, tenantId ?? "global", [assignedToId]);
+      const conflict = await findStaffAvailabilityConflict({
+        userId: assignedToId,
+        start: dueDate,
+        end: endDate,
+        db: tx,
+      });
+      if (conflict) return { conflict } as const;
+      const created = await tx.activity.create({
+        data: {
+          type,
+          category: null,
+          summary,
+          note,
+          dueDate,
+          endDate,
+          location,
+          leadId,
+          contactId,
+          assignedToId,
+          createdById: user.id,
+          tenantId,
+        },
+      });
+      return { created } as const;
     });
+    if ("conflict" in activity) {
+      return { error: availabilityConflictMessage(activity.conflict) };
+    }
+    activity = activity.created;
   }
 
-  // Auto-pin a new follow-up to the top of the timeline. It stays pinned until
-  // manually unpinned (we never auto-unpin, even on completion).
   if (activity.type === FOLLOW_UP_TYPE) {
     await ensureTimelinePin("activity", activity.id, user.id);
   }
 
-  // The name for the audit line comes from the member we ALREADY resolved. It
-  // used to come from a fresh `prisma.user.findUnique` — a global lookup, which
-  // is the very thing that could not answer the membership question and so had
-  // no business being the source of the name we then wrote down.
   const assigneeName = assignee?.name ?? user.name;
   await logAudit({
     action: "activity.scheduled",
@@ -200,7 +223,9 @@ export async function scheduleActivity(formData: FormData) {
   });
   revalidatePath(String(formData.get("revalidate") ?? "/activities"));
   revalidatePath("/activities");
+  revalidatePath("/calendar");
   revalidatePath("/");
+  return { success: "Activity scheduled" };
 }
 
 async function finishActivity(id: string, note: string) {
