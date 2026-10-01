@@ -11,6 +11,7 @@ import {
   type CaptureFormVariant,
 } from "@/components/capture-form";
 import { cn } from "@/lib/utils";
+import { SaveForm } from "@/components/SaveForm";
 
 function priceSummary(value: string) {
   const parsed = Number(value.replace(/\s/g, "").replace(",", "."));
@@ -34,8 +35,9 @@ export default function ProductForm({ variant = "compact" }: { variant?: Capture
   );
 
   return (
-    <form
+    <SaveForm
       action={createProduct}
+      success="Product created"
       className={cn(
         "space-y-4",
         variant === "compact" && "card max-w-3xl",
@@ -167,6 +169,6 @@ export default function ProductForm({ variant = "compact" }: { variant?: Capture
         kind="product"
         variant={variant}
       />
-    </form>
+    </SaveForm>
   );
 }
