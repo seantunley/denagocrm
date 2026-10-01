@@ -55,6 +55,10 @@ export async function addCommunication(formData: FormData) {
     const chosen = file && typeof file === "object" && (file as File).size > 0;
     // Too big used to be dropped silently, saving a note without the photo.
     if (chosen && (file as File).size > 4 * 1024 * 1024) refuse("Images must be 4 MB or smaller.");
+    // The file picker only offers images, but a direct call can send anything — and
+    // a non-image used to pass as "an attachment", then be skipped at upload, saving
+    // a "🖼 Image" note with no image. Refuse it here, where it is still the caller's.
+    if (chosen && !(file as File).type.startsWith("image/")) refuse("Only images can be attached to a note.");
     const hasFile = Boolean(chosen);
     if (!body && !hasFile) refuse("Write a note or attach an image.");
 
@@ -81,7 +85,7 @@ export async function addCommunication(formData: FormData) {
     const tenantId = await customerRecordTenantId({ contactId, leadId });
 
     let attachmentUrl: string | null = null;
-    if (hasFile && (file as File).type.startsWith("image/")) {
+    if (hasFile) {
       const { saveFile } = await import("@/lib/storage");
       const f = file as File;
       attachmentUrl = await saveFile(

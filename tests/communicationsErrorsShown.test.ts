@@ -27,6 +27,16 @@ test("an empty note and an over-size image are refused, not silently dropped", (
   assert.match(add, /size > 4 \* 1024 \* 1024\) refuse\("Images must be 4 MB or smaller\."\)/);
 });
 
+test("a non-image file is refused, not counted as an attachment and then dropped", () => {
+  const add = fn("addCommunication");
+  const reject = add.indexOf('refuse("Only images can be attached to a note.")');
+  assert.ok(reject > 0, "a non-image upload must be refused on the server");
+  assert.match(add.slice(add.lastIndexOf("\n", reject), reject), /chosen && !\(file as File\)\.type\.startsWith\("image\/"\)/);
+  // Checked before anything is written, so a refused call leaves no row or blob.
+  assert.ok(reject < add.indexOf("saveFile("), "the type check must come before the upload");
+  assert.ok(reject < add.indexOf("prisma.communication.create"), "the type check must come before the row");
+});
+
 test("deleting a timeline entry requires its reason on the server, after authorising", () => {
   const del = fn("deleteCommunication");
   assert.match(del, /const reason = requiredReason\(formData, "deleting this entry"\);/);
