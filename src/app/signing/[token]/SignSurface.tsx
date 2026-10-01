@@ -65,7 +65,10 @@ function SignaturePad({ onDone, onCancel }: { onDone: (dataUrl: string) => void;
 
 /** One interactive field overlaid on the sheet at its placed coordinates. */
 function FieldWidget({ f, value, onSign, onSet, filled }: { f: Field; value: string; onSign: () => void; onSet: (v: string) => void; filled: boolean }) {
-  const box: React.CSSProperties = { position: "absolute", left: f.x, top: f.y, width: f.width, height: f.height };
+  // border-box explicitly, not by the global reset: the 2px border and padding of
+  // a live control must stay INSIDE the field's rect, or the control grows past
+  // the line it is placed on.
+  const box: React.CSSProperties = { position: "absolute", left: f.x, top: f.y, width: f.width, height: f.height, boxSizing: "border-box", margin: 0 };
   const ring = filled ? "#16a34a" : ACCENT;
 
   if (isSignatureKind(f.kind)) {
