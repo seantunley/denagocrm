@@ -1,9 +1,12 @@
 import { ExternalLink, Inbox, Star } from "lucide-react";
 import { basePrisma } from "@/lib/db";
 import { activeTenantPredicate } from "@/lib/tenantPredicate";
-import { getActiveTenantId, requireUser } from "@/lib/auth";
+import { getActiveTenantId } from "@/lib/auth";
 import { DEFAULT_TENANT_ID } from "@/lib/tenant";
-import { accessibleInboxWhere, hasPermission } from "@/lib/permissions";
+import { accessibleInboxWhere, hasPermission, requireAnyPermission } from "@/lib/permissions";
+import { loadCommentThreads } from "@/lib/commentInbox";
+import CommentThreadList from "@/components/CommentThreadList";
+import { pageCapabilities } from "@/lib/metaCapabilities";
 import AutoRefresh from "@/components/AutoRefresh";
 import Tabs from "@/components/Tabs";
 import SocialThreadList from "@/components/SocialThreadList";
@@ -20,12 +23,15 @@ import { WorkspaceHero } from "@/components/workspace-hero";
 
 export const metadata = { title: "Social inbox — DenagoCRM" };
 
-export default async function InboxPage() {
-  const user = await requireUser();
+export default async function InboxPage({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
+  const { tab } = await searchParams;
+  // The page's own guard, not only the layout's: a layout does not re-run on
+  // client navigation, and this page now also loads the public comments.
+  const user = await requireAnyPermission("inbox.view", "inbox.reply");
   const workspaceTenantId = (await getActiveTenantId()) ?? DEFAULT_TENANT_ID;
   const scopeWhere = await accessibleInboxWhere(user);
   const channelWhere = { type: { in: ["whatsapp", "messenger", "instagram", "x", "telegram"] } };
-  const [activeComms, archivedComms, reviews, placeId] = await Promise.all([
+  const [activeComms, archivedComms, reviews, placeId, activeComments, archivedComments, capabilities] = await Promise.all([
     loadInboxComms({ ...channelWhere, ...scopeWhere }, { archived: false }),
     loadInboxComms({ ...channelWhere, ...scopeWhere }, { archived: true }),
     basePrisma.googleReview.findMany({
@@ -34,6 +40,11 @@ export default async function InboxPage() {
       take: 10,
     }),
     getSetting("GOOGLE_PLACE_ID"),
+    loadCommentThreads({ archived: false }),
+    loadCommentThreads({ archived: true }),
+    // Asked, not assumed. Public replies need pages_manage_engagement; if Meta
+    // has not granted it, the button is not rendered and the notice says how.
+    pageCapabilities(),
   ]);
 
   const threadList = buildInboxThreads(activeComms);
@@ -92,6 +103,54 @@ export default async function InboxPage() {
     </div>
   );
 
+  // Public comments on posts and ads: their own tab, never mixed into "All".
+  // The conversation tabs group by PERSON and answer "who is waiting on us";
+  // a post with a crowd on it is moderation, and a commenter has no identity we
+  // can resolve (their Facebook id is not their Messenger id), so
+  // buildInboxThreads skips those rows by construction and this list reads them
+  // itself. This used to be a separate /comments screen, which now opens here.
+  const unreadComments = activeComments.filter((thread) => thread.unread).length;
+  const commentsPanel = (
+    <div className="space-y-4">
+      {!capabilities.canManageEngagement && (
+        <Surface className="border-amber-500/30 bg-amber-500/[0.06] p-4">
+          <p className="text-sm font-medium text-amber-200">Public replies are not enabled yet</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Replying <b>privately</b> works now. To also reply <b>under the post</b>, the Denago CRM app needs
+            Meta&apos;s <code className="rounded bg-muted px-1">pages_manage_engagement</code> permission:
+            request it in the Meta app dashboard under <b>App Review → Permissions and Features</b>, then
+            reconnect the Page in Settings → Integrations.
+            {capabilities.checkedAt
+              ? ` Last checked ${capabilities.checkedAt.toLocaleString("en-ZA")}.`
+              : " Meta has not been asked yet — this updates once the Page token is readable."}
+          </p>
+        </Surface>
+      )}
+      <Tabs
+        tabs={[
+          {
+            key: "active",
+            label: "Active",
+            count: unreadComments,
+            content: <CommentThreadList threads={activeComments} canReplyPublicly={capabilities.canManageEngagement} />,
+          },
+          {
+            key: "archived",
+            label: "Archived",
+            count: archivedComments.length,
+            content: (
+              <CommentThreadList
+                threads={archivedComments}
+                canReplyPublicly={capabilities.canManageEngagement}
+                emptyMessage="Nothing archived yet. Archive a post once you have dealt with its comments — it leaves this list but keeps listening, so a new comment brings it back."
+              />
+            ),
+          },
+        ]}
+      />
+    </div>
+  );
+
   const reviewsPanel = (
     <Surface className="max-w-4xl p-5">
       <SectionHeading title="Latest Google reviews" description="Recent public feedback from your connected Google Business profile." />
@@ -147,7 +206,7 @@ export default async function InboxPage() {
       </div>
 
       <Tabs
-        initialKey="all"
+        initialKey={tab === "comments" ? "comments" : "all"}
         tabs={[
           { key: "handoffs", label: "Bot handoffs", count: handoffThreads.length, content: handoffsPanel },
           { key: "all", label: "All", count: unread, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList} empty="No conversations yet. Messages appear here as soon as a connected customer channel receives one." /> },
@@ -156,6 +215,7 @@ export default async function InboxPage() {
           { key: "instagram", label: "Instagram", count: threadList.filter((thread) => thread.channel === "instagram" && thread.unread).length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "instagram")} empty="No Instagram DMs yet. They appear once the Instagram account and Meta messaging permissions are connected." /> },
           { key: "x", label: "X", count: threadList.filter((thread) => thread.channel === "x" && thread.unread).length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "x")} empty="No X conversations yet. Connect the tenant's X account in Settings → Integrations." /> },
           { key: "telegram", label: "Telegram", count: threadList.filter((thread) => thread.channel === "telegram" && thread.unread).length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "telegram")} empty="No Telegram conversations yet. They appear once the Telegram bot is connected in Settings → Integrations." /> },
+          { key: "comments", label: "Comments", count: unreadComments, content: commentsPanel },
           { key: "reviews", label: "Google Reviews", count: reviews.length, content: reviewsPanel },
           { key: "archived", label: "Archived", count: archivedList.length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={archivedList} empty="Nothing archived. Archive finished or test conversations to keep the active queue focused." /> },
         ]}
