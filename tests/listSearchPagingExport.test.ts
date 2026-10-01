@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { pageHref, pageWindow, parsePage, searchTerms } from "../src/lib/listPaging";
-import { quoteCsv, quoteListWhere, type QuoteExportRow } from "../src/lib/quoteList";
+import { matchingFleetIds, quoteCsv, quoteListWhere, type QuoteExportRow } from "../src/lib/quoteList";
 import type { BillToFleet } from "../src/lib/quoteBillTo";
 import { loadQuoteVersions, quoteVersionIndex } from "../src/lib/quoteVersions";
 import { withTenant } from "../src/lib/tenantScope";
@@ -45,11 +45,9 @@ function matches(row: any, where: any): boolean {
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
-type FakeFleet = { name: string; billingEmail: string | null; billingPhone: string | null; deletedAt: Date | null };
 type FakeQuote = QuoteExportRow & {
   id: string;
   supersededAt: Date | null;
-  fleet: FakeFleet | null;
   items: Array<{ description: string; qty: number; unitPriceCents: number }>;
 };
 
@@ -66,8 +64,6 @@ function quotes(): FakeQuote[] {
       createdAt: new Date(Date.UTC(2026, 0, 1) + n * 86_400_000),
       supersededAt: null,
       fleetId: oldest ? "flt_kloof" : null,
-      // The search-only relation, as the database join would resolve it.
-      fleet: oldest ? { name: "Kloof Lodge", billingEmail: null, billingPhone: null, deletedAt: null } : null,
       contact: oldest
         ? { firstName: "Thandi", lastName: "Mokoena", company: null, email: "thandi@example.co.za", phone: "082 555 0101" }
         : { firstName: `Customer${n}`, lastName: "Generic", company: null, email: `c${n}@example.com`, phone: `011 000 ${n}` },
@@ -92,9 +88,8 @@ test("search reaches a quote older than the newest 200 — by number, name, emai
   for (const q of ["1001", "Q-1001", "q1001", "Thandi Mokoena", "thandi@example", "082 555", "Rover XL", "rover 4-seater"]) {
     assert.deepEqual(found(quoteListWhere({ accessibleIds: null, q })), [1001], `search "${q}"`);
   }
-  // A fleet quote is found by the fleet's name, inside the same query.
-  assert.deepEqual(found(quoteListWhere({ accessibleIds: null, q: "Kloof Lodge" })), [1001]);
-  assert.deepEqual(found(quoteListWhere({ accessibleIds: null, q: "kloof thandi" })), [1001], "terms may match fleet and contact");
+  // A fleet quote is found by the fleet's name (fleet ids resolved by the caller).
+  assert.deepEqual(found(quoteListWhere({ accessibleIds: null, q: "Kloof Lodge", fleetIds: ["flt_kloof"] })), [1001]);
   // Status filter still applies, and search AND status combine.
   assert.deepEqual(found(quoteListWhere({ accessibleIds: null, status: "sent" })), [1001]);
   assert.deepEqual(found(quoteListWhere({ accessibleIds: null, status: "draft", q: "Thandi" })), []);
@@ -102,51 +97,68 @@ test("search reaches a quote older than the newest 200 — by number, name, emai
   assert.equal(found(quoteListWhere({ accessibleIds: null })).length, 250);
 });
 
-test("fleet search has no cap: with 600 matching fleets, the quote on the 600th is found and exported", () => {
-  // The old filter pre-fetched "fleets matching q, take 500" and fed their ids
-  // in, so this quote vanished from both the list and the CSV.
+test("fleet search has no cap: with 600 matching fleets, the quote on the 600th is found and exported", async () => {
+  // The old lookup was "fleets matching q, take 500", so this quote vanished
+  // from both the list and the CSV.
   const fleetOf = (n: number): BillToFleet => ({
     id: `flt_${n}`, name: `Kloof Lodge ${String(n).padStart(3, "0")}`, registrationNumber: null, vatNumber: null,
     billingEmail: null, billingPhone: null, address: null, suburb: null, city: null, province: null, postalCode: null,
   });
   const fleets = Array.from({ length: 600 }, (_, i) => fleetOf(i + 1));
-  const rows: FakeQuote[] = fleets.map((fleet, i) => ({
+  const fleetRows = [
+    ...fleets.map((fleet) => ({ ...fleet, deletedAt: null as Date | null, tenantId: "t_mine" })),
+    { ...fleetOf(601), name: "Kloof Lodge 601 (closed)", deletedAt: new Date(), tenantId: "t_mine" },
+    { ...fleetOf(602), name: "Kloof Lodge (another workspace)", deletedAt: null, tenantId: "t_other" },
+  ];
+  const lookups: Array<Record<string, unknown>> = [];
+  const client = {
+    fleet: {
+      // A fake that honours `where` and `take` the way Postgres would.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      async findMany(args: any) {
+        lookups.push(args);
+        const out = fleetRows.filter((row) => matches(row, args.where)).map((row) => ({ id: row.id }));
+        return typeof args.take === "number" ? out.slice(0, args.take) : out;
+      },
+    },
+  };
+  const rows: FakeQuote[] = [...fleets, fleetOf(601)].map((fleet, i) => ({
     ...quotes()[1],
     id: `fq${i + 1}`,
     number: 7000 + i + 1,
     fleetId: fleet.id,
-    fleet: { name: fleet.name, billingEmail: null, billingPhone: null, deletedAt: null },
   }));
   const target = rows[599];
 
-  const where = quoteListWhere({ accessibleIds: null, q: "Kloof" });
-  const hits = rows.filter((row) => matches(row, where));
-  assert.equal(hits.length, 600, "every matching fleet's quote, not the first 500 fleets'");
+  const fleetIds = await withTenant("t_mine", () => matchingFleetIds(client, "Kloof"));
+  assert.equal(fleetIds.length, 600, "every live matching fleet, not the first 500 — not the deleted one, not another tenant's");
+  assert.ok(lookups.every((args) => !("take" in args)), "no take on the fleet lookup");
+  assert.equal((lookups[0].where as { tenantId?: string }).tenantId, "t_mine", "tenant named in the lookup");
+  assert.deepEqual(lookups[0].select, { id: true }, "ids only");
+
+  const hits = rows.filter((row) => matches(row, quoteListWhere({ accessibleIds: null, q: "Kloof", fleetIds })));
+  assert.equal(hits.length, 600);
   assert.ok(hits.includes(target), "the quote on the 600th fleet is found");
-  assert.deepEqual(rows.filter((row) => matches(row, quoteListWhere({ accessibleIds: null, q: "Kloof Lodge 600" }))), [target]);
-  // A soft-deleted fleet does not match by its name (it prints as the contact).
-  const deleted = { ...target, fleet: { ...target.fleet!, deletedAt: new Date() } };
-  assert.equal(matches(deleted, quoteListWhere({ accessibleIds: null, q: "Kloof Lodge 600" })), false);
+  assert.ok(!hits.includes(rows[600]), "a soft-deleted fleet does not match by its name");
 
   // The export writes every hit, the 600th fleet's quote included, under the fleet's name.
   const csv = quoteCsv(hits, new Map(fleets.map((fleet) => [fleet.id, fleet])));
   assert.equal(csv.split("\r\n").length, 601);
   assert.ok(csv.includes(`"Q-${target.number}","draft","Kloof Lodge 600"`), "the 600th fleet's quote is in the export");
 
-  // No pre-fetched id list feeds the quote query any more, capped or not.
-  const query = shipped("src/lib/quoteListQuery.ts");
-  assert.doesNotMatch(query, /fleet\.findMany|fleetIds|\btake:/);
-  // The relation the filter uses joins on the TENANT as well as the id, and is
-  // Prisma-only: no migration adds a foreign key for it.
-  const schema = readFileSync(path.join(root, "prisma/schema.prisma"), "utf8");
-  assert.match(schema, /fleet\s+Fleet\?\s+@relation\("QuoteFleetSearch", fields: \[tenantId, fleetId\], references: \[tenantId, id\], onDelete: NoAction, onUpdate: NoAction\)/);
+  // The page/export path uses this uncapped lookup through the scoped client,
+  // and the schema keeps Quote.fleetId a bare scalar (no schema-only relation).
+  assert.match(shipped("src/lib/quoteListQuery.ts"), /matchingFleetIds\(prisma, q\)/);
+  assert.doesNotMatch(shipped("src/lib/quoteListQuery.ts"), /\btake:|basePrisma/);
+  assert.match(readFileSync(path.join(root, "src/lib/quoteList.ts"), "utf8"), /ponytail: every id becomes one bind param/);
+  assert.doesNotMatch(readFileSync(path.join(root, "prisma/schema.prisma"), "utf8"), /QuoteFleetSearch/);
 });
 
 test("search never widens RBAC: an owned-only user cannot find a quote outside their ids", () => {
   assert.deepEqual(found(quoteListWhere({ accessibleIds: ["q2"], q: "Thandi" })), []);
   assert.deepEqual(found(quoteListWhere({ accessibleIds: [], q: "" })), []);
   // Even a fleet match is bounded by the RBAC ids.
-  assert.deepEqual(found(quoteListWhere({ accessibleIds: ["q2"], q: "Kloof" })), []);
+  assert.deepEqual(found(quoteListWhere({ accessibleIds: ["q2"], q: "Kloof", fleetIds: ["flt_kloof"] })), []);
 });
 
 test("superseded revisions stay out of the list", () => {

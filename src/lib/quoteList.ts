@@ -3,6 +3,7 @@ import { csvRow } from "./csv";
 import { containsText, searchTerms } from "./listPaging";
 import { payableTotalCents } from "./pricing";
 import { quoteBillTo, type BillToFleet, type BillToQuote } from "./quoteBillTo";
+import { recoverableActiveTenantPredicate } from "./tenantPredicate";
 
 /**
  * The quotes list filter, as ONE database `where` — shared by the list page and
@@ -11,28 +12,71 @@ import { quoteBillTo, type BillToFleet, type BillToQuote } from "./quoteBillTo";
  * It replaced "load the newest 200 quotes, then filter them in memory", which
  * meant searching for an older quote by number or customer returned nothing.
  *
- * Pure: the caller resolves access (`accessibleIds`) and this only assembles the
- * predicate. Every match, the fleet's name included, is inside this one `where`:
- * there is no pre-fetched list of matching ids to cap or truncate. Soft-deleted
- * quotes are excluded by the scoped client, which injects `deletedAt: null`
- * into every read.
+ * Pure: the caller resolves access (`accessibleIds`) and fleet-name matches
+ * (`fleetIds` — ALL of them, uncapped — because `Quote.fleetId` deliberately has
+ * no relation to filter through), and this only assembles the predicate.
+ * Soft-deleted quotes are excluded by the scoped client, which injects
+ * `deletedAt: null` into every read.
  */
 export function quoteListWhere(input: {
   /** null = may see every quote in the workspace; [] = none. */
   accessibleIds: string[] | null;
   status?: string | null;
   q?: string | null;
+  /** Every fleet whose name / billing email / billing phone contains the whole query. */
+  fleetIds?: string[];
 }): Prisma.QuoteWhereInput {
   const terms = searchTerms(input.q);
+  const fleetIds = input.fleetIds ?? [];
   return {
     AND: [
       // Only current heads are listed; older revisions live in the version history.
       { supersededAt: null },
       ...(input.accessibleIds ? [{ id: { in: input.accessibleIds } }] : []),
       ...(input.status ? [{ status: input.status }] : []),
-      ...terms.map(quoteTermWhere),
+      ...(terms.length
+        ? [{
+            OR: [
+              ...(fleetIds.length ? [{ fleetId: { in: fleetIds } }] : []),
+              { AND: terms.map(quoteTermWhere) },
+            ],
+          }]
+        : []),
     ],
   };
+}
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/** Structural, as in quoteBillTo.ts, so the lookup is unit-testable with a fake client. */
+type FleetFinder = { findMany(args: any): Promise<any[]> };
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+/**
+ * EVERY live fleet whose name, billing email or billing phone contains `q`.
+ *
+ * NO `take`: a cap here silently dropped every quote billed to the 501st+
+ * matching fleet from the list AND the export. Pass the scoped `prisma`; the
+ * tenant and deletedAt are also named in the where itself.
+ *
+ * ponytail: every id becomes one bind param in the quote query's
+ * `fleetId IN (...)`, and Postgres caps a statement at ~32k params, so one
+ * search term matching ~32k fleets would fail. Upgrade path: a raw SQL EXISTS
+ * subquery on "Fleet" inside the quote query.
+ */
+export async function matchingFleetIds(client: { fleet: FleetFinder }, q: string): Promise<string[]> {
+  if (!q) return [];
+  // Named explicitly as well, as loadBillToFleets does: the guard rewrites
+  // nothing while enforcement is off.
+  const tenantScope = await recoverableActiveTenantPredicate("quote search fleets");
+  const rows = (await client.fleet.findMany({
+    where: {
+      ...tenantScope,
+      deletedAt: null,
+      OR: [{ name: containsText(q) }, { billingEmail: containsText(q) }, { billingPhone: containsText(q) }],
+    },
+    select: { id: true },
+  })) as Array<{ id: string }>;
+  return rows.map((row) => row.id);
 }
 
 /** "1022", "Q-1022" and "q1022" all mean quote number 1022. */
@@ -50,9 +94,6 @@ function quoteTermWhere(term: string): Prisma.QuoteWhereInput {
       { lead: { is: { OR: [{ name: text }, { title: text }, { email: text }, { phone: text }] } } },
       // …and the line items name the model actually quoted.
       { items: { some: { description: text } } },
-      // The fleet the quote is billed to, as the row shows it (quoteBillTo).
-      // Joined on (tenantId, fleetId), so only this workspace's live fleets.
-      { fleet: { is: { deletedAt: null, OR: [{ name: text }, { billingEmail: text }, { billingPhone: text }] } } },
     ],
   };
 }
