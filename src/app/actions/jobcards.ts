@@ -1,6 +1,7 @@
 "use server";
 
 import { asActionResult, ActionRefusal, refuse, type ActionResult } from "@/lib/actionResult";
+import { requiredReason } from "@/lib/deleteReason";
 import { randomUUID } from "crypto";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
@@ -426,19 +427,22 @@ export async function setJobCardTechnician(jobCardId: string, formData: FormData
 
 // Moving to any workflow stage (or cancelling / reopening). "collected" is
 // reserved for completeJobCard, which also creates the service record.
-export async function setJobCardStatus(jobCardId: string, status: string) {
+export async function setJobCardStatus(jobCardId: string, status: string, formData?: FormData) {
   return asActionResult(async () => {
     const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
     const allowed = new Set(STAGE_VALUES.filter((s) => s !== "collected"));
     if (!allowed.has(status)) throw new ActionRefusal("Invalid job card status");
     const jobCard = await prisma.jobCard.findUniqueOrThrow({ where: { id: jobCardId }, select: { number: true, contactId: true, status: true } });
+    // Cancelling must carry a reason (the dialog asks; the server insists).
+    // Other stage moves have none.
+    const reason = status === "cancelled" ? requiredReason(formData, "cancelling this job") : "";
     await prisma.jobCard.update({
       where: { id: jobCardId },
       data: { status, completedAt: null },
     });
     await logAudit({
       action: "jobcard.stage",
-      summary: `Job card #${jobCard.number}: ${stageMeta(jobCard.status).label} → ${stageMeta(status).label}`,
+      summary: `Job card #${jobCard.number}: ${stageMeta(jobCard.status).label} → ${stageMeta(status).label}${reason ? ` — ${reason}` : ""}`,
       contactId: jobCard.contactId,
       user,
     });

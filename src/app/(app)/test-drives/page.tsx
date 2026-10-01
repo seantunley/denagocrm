@@ -30,7 +30,8 @@ import { WorkspaceHero } from "@/components/workspace-hero";
 
 export const dynamic = "force-dynamic";
 
-type SearchParams = { status?: string };
+/** `book=1` (+ `contactId`, `leadId`) opens the booking form pre-filled — "Book test drive" on a customer or lead page. */
+type SearchParams = { status?: string; book?: string; contactId?: string; leadId?: string };
 
 const statusTone: Record<string, "neutral" | "success" | "warning" | "danger" | "info"> = {
   booked: "info",
@@ -50,7 +51,7 @@ const TEST_DRIVE_FILTERS = ["", "booked", "confirmed", "checked_out", "completed
 export default async function TestDrivesPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
   const user = await requireAnyPermission("activities.view", "activities.manage");
   const canManage = await hasPermission(user, "activities.manage");
-  const { status } = await searchParams;
+  const { status, book, contactId: bookContactId, leadId: bookLeadId } = await searchParams;
   const now = new Date();
   const metricFrom = subDays(startOfDay(now), 29);
   const [bookingScope, accessibleContactIds, accessibleLeadIds] = await Promise.all([
@@ -95,6 +96,29 @@ export default async function TestDrivesPage({ searchParams }: { searchParams: P
     prisma.product.findMany({ where: { deletedAt: null, active: true }, orderBy: { name: "asc" }, select: { id: true, name: true } }),
     listActingTenantStaff(),
   ]);
+
+  // Arriving from a customer or lead page: make sure THAT customer / lead is in the
+  // pickers even if it falls outside the first 500, so it can be pre-selected —
+  // fetched through the same access scope as the lists themselves.
+  const opening = book === "1" && canCreate;
+  if (opening && bookContactId && !contacts.some((c) => c.id === bookContactId)) {
+    const extra = await prisma.contact.findFirst({ where: { id: bookContactId, deletedAt: null, ...contactScope } });
+    if (extra) contacts.unshift(extra);
+  }
+  if (opening && bookLeadId && !leads.some((l) => l.id === bookLeadId)) {
+    const extra = await prisma.lead.findFirst({
+      where: { id: bookLeadId, deletedAt: null, ...leadScope },
+      select: { id: true, title: true, name: true, contactId: true, productId: true },
+    });
+    if (extra) leads.unshift(extra);
+  }
+  const bookDefaults = opening
+    ? {
+        defaultOpen: true,
+        defaultContactId: contacts.some((c) => c.id === bookContactId) ? bookContactId : undefined,
+        defaultLeadId: leads.some((l) => l.id === bookLeadId) ? bookLeadId : undefined,
+      }
+    : {};
 
   const metrics = calculateTestDriveMetrics({
     bookings: metricBookings,
@@ -199,6 +223,9 @@ export default async function TestDrivesPage({ searchParams }: { searchParams: P
             salespersonId={user.id}
             defaultStart={inputDate(defaultStart)}
             defaultEnd={inputDate(defaultEnd)}
+            // Only ONE trigger opens on arrival: the dialog portals to <body>, so it
+            // shows on mobile too, and opening both would stack two.
+            {...bookDefaults}
           />
         )}
         </>}

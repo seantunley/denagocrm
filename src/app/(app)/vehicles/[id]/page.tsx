@@ -383,11 +383,13 @@ export default async function VehicleDetailPage({
                               .join(" · ")}
                           </span>
                           <span className="text-xs text-slate-400">{formatDate(b.checkedAt)}</span>
-                          <form action={deleteBatteryCheck.bind(null, b.id)}>
-                            <button className="text-xs text-red-400 hover:text-red-300" title="Delete">
-                              ✕
-                            </button>
-                          </form>
+                          <ConfirmDelete
+                            action={deleteBatteryCheck.bind(null, b.id)}
+                            title={`Delete the battery check from ${formatDate(b.checkedAt)}?`}
+                            description="This reading is permanently removed — it does not go to Trash."
+                            trigger="✕"
+                            triggerClass="text-xs text-red-400 hover:text-red-300"
+                          />
                         </li>
                       );
                     })}
@@ -456,11 +458,13 @@ export default async function VehicleDetailPage({
                             />
                             <button className="btn-secondary btn-sm">Update</button>
                           </form>
-                          <form action={deleteWarrantyClaim.bind(null, c.id)}>
-                            <button className="text-xs text-red-400 hover:text-red-300" title="Delete">
-                              ✕
-                            </button>
-                          </form>
+                          <ConfirmDelete
+                            action={deleteWarrantyClaim.bind(null, c.id)}
+                            title="Delete this warranty claim?"
+                            description="The claim is permanently removed — it does not go to Trash. Consider setting it to resolved or rejected instead."
+                            trigger="✕"
+                            triggerClass="text-xs text-red-400 hover:text-red-300"
+                          />
                         </div>
                       </li>
                     ))}
