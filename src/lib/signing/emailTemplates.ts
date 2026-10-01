@@ -28,23 +28,56 @@ import { emailDocToHtml, sanitizeEmailDoc, type EmailDoc } from "./emailDoc";
  * link renders as the bulletproof button + the paste-this-link line.
  */
 
-// "quote" is not a signing email: it is the "Email quote" message (the quote PDF
-// is attached). It shares the editor, the validation and the branded shell, so it
-// is one more kind here rather than a second copy of all three.
-export type SigningEmailKind = "invite" | "reminder" | "completed" | "otp" | "quote";
+// Despite the name, this is the registry of EVERY system message a customer gets
+// from the CRM: the signing emails, "Email quote", and the codes, reminders,
+// recalls, review asks and survey invitations. One editor, one validation, one
+// branded shell — a kind each, rather than a copy of all three per message.
+// SMS kinds (`channel: "sms"`) share the fields and validation, with no subject
+// and no shell.
+export type SigningEmailKind =
+  | "invite"
+  | "reminder"
+  | "completed"
+  | "otp"
+  | "quote"
+  | "portal_code"
+  | "lookup_code"
+  | "lookup_code_sms"
+  | "service_reminder"
+  | "service_reminder_sms"
+  | "recall"
+  | "recall_sms"
+  | "review_delivery"
+  | "review_service"
+  | "survey_invite"
+  | "survey_invite_sms";
+
+/** Placeholders a message can't be sent without. Link ones render as a button when on a line of their own. */
+export type ActionField = "signing_link" | "code" | "review_link" | "survey_link";
 
 export type SigningEmailDef = {
   kind: SigningEmailKind;
   label: string;
   description: string;
-  /** AppSetting key the tenant's edited copy is stored under (JSON {subject, body}). */
+  /** Section in Settings → Email templates. */
+  group: string;
+  channel?: "email" | "sms";
+  /** AppSetting key the tenant's edited copy is stored under (JSON {subject, body, doc?}). */
   settingKey: string;
+  /** Unused for SMS. */
   subject: string;
   body: string;
   /** Placeholders this kind may use. Anything else is refused on save and blank at send. */
   fields: readonly string[];
   /** The placeholder that can never be removed, or null. */
-  action: "signing_link" | "code" | null;
+  action: ActionField | null;
+};
+
+/** Button text, and the text-part lead-in, for each link action. */
+const LINK_ACTIONS: Partial<Record<ActionField, { button: string; lead: string }>> = {
+  signing_link: { button: "Open &amp; sign", lead: "Open and sign here:" },
+  review_link: { button: "Leave a review", lead: "Leave a review here:" },
+  survey_link: { button: "Answer the survey", lead: "Answer here:" },
 };
 
 const COMMON = [
@@ -72,13 +105,28 @@ export const SIGNING_FIELD_HELP: Record<string, string> = {
   expiry_date: "Date the signing link expires (blank if none)",
   code: "The 6-digit verification code (required)",
   total: "Quote total incl. VAT, e.g. R 125 000,00",
+  company_contact: "Company name and phone, e.g. Acme on 021 000 0000",
+  model: "Vehicle model, e.g. Rover XL",
+  due_date: "Date the service is due",
+  recall_title: "Recall title",
+  recall_description: "What the recall is about",
+  item: "What was delivered or serviced",
+  review_link: "Your Google review link (required — shown as a button)",
+  survey_link: "The customer's personal survey link (required — shown as a button)",
+  survey_intro: "The survey's introduction (set on the survey)",
+  survey_title: "Survey title",
+  survey_subject: "Suggested subject for this kind of survey",
 };
+
+const PERSON = ["first_name", "recipient_name"] as const;
+const COMPANY = ["company_name", "company_phone", "company_email", "company_contact"] as const;
 
 // The defaults are today's wording, so nothing a customer receives changes
 // until an owner edits a template.
 export const SIGNING_EMAILS: Record<SigningEmailKind, SigningEmailDef> = {
   invite: {
     kind: "invite",
+    group: "Signing & quotes",
     label: "Signing — invitation",
     description: "Sent when a document is sent for signature.",
     settingKey: "SIGNING_EMAIL_INVITE",
@@ -89,6 +137,7 @@ export const SIGNING_EMAILS: Record<SigningEmailKind, SigningEmailDef> = {
   },
   reminder: {
     kind: "reminder",
+    group: "Signing & quotes",
     label: "Signing — reminder",
     description: "Sent when a signer is reminded (manually, by the reminder schedule, or the next signer in sequence).",
     settingKey: "SIGNING_EMAIL_REMINDER",
@@ -99,6 +148,7 @@ export const SIGNING_EMAILS: Record<SigningEmailKind, SigningEmailDef> = {
   },
   completed: {
     kind: "completed",
+    group: "Signing & quotes",
     label: "Signing — signed copy",
     description: "Sent to every recipient once everyone has signed. The sealed PDF is attached automatically.",
     settingKey: "SIGNING_EMAIL_COMPLETED",
@@ -109,6 +159,7 @@ export const SIGNING_EMAILS: Record<SigningEmailKind, SigningEmailDef> = {
   },
   otp: {
     kind: "otp",
+    group: "Signing & quotes",
     label: "Signing — verification code",
     description: "Sent when a document requires the signer to confirm their identity by email.",
     settingKey: "SIGNING_EMAIL_OTP",
@@ -119,6 +170,7 @@ export const SIGNING_EMAILS: Record<SigningEmailKind, SigningEmailDef> = {
   },
   quote: {
     kind: "quote",
+    group: "Signing & quotes",
     label: "Quote email",
     description: "The starting wording for “Email quote” in the quote editor. Staff see it and can change it before each send; the quote PDF is attached automatically.",
     settingKey: "QUOTE_EMAIL",
@@ -127,16 +179,146 @@ export const SIGNING_EMAILS: Record<SigningEmailKind, SigningEmailDef> = {
     fields: [...COMMON, "total"],
     action: null,
   },
+
+  portal_code: {
+    kind: "portal_code",
+    group: "Login & verification codes",
+    label: "Customer portal — login code",
+    description: "Emailed when a customer signs in to the customer portal.",
+    settingKey: "SYSTEM_EMAIL_PORTAL_CODE",
+    subject: "Your {{company_name}} portal code",
+    body: "Your login code is {{code}}. It expires in 10 minutes.\n\nIf you didn't request this, ignore this email.\n\n{{company_name}}",
+    fields: [...PERSON, ...COMPANY, "code"],
+    action: "code",
+  },
+  lookup_code: {
+    kind: "lookup_code",
+    group: "Login & verification codes",
+    label: "Service lookup — code (email)",
+    description: "Sent when someone looks up a vehicle by VIN on your website (used when SMS isn't available).",
+    settingKey: "SYSTEM_EMAIL_LOOKUP_CODE",
+    subject: "Your {{company_name}} verification code",
+    body: "Your verification code is {{code}}.\n\nIt expires in 10 minutes. If you didn't request this, you can ignore this email.\n\n{{company_name}}",
+    fields: [...PERSON, ...COMPANY, "code"],
+    action: "code",
+  },
+  lookup_code_sms: {
+    kind: "lookup_code_sms",
+    group: "Login & verification codes",
+    channel: "sms",
+    label: "Service lookup — code (SMS)",
+    description: "Texted when someone looks up a vehicle by VIN on your website.",
+    settingKey: "SYSTEM_SMS_LOOKUP_CODE",
+    subject: "",
+    body: "{{company_name}}: your verification code is {{code}}. It expires in 10 minutes. If you didn't request this, ignore this message.",
+    fields: [...PERSON, ...COMPANY, "code"],
+    action: "code",
+  },
+
+  service_reminder: {
+    kind: "service_reminder",
+    group: "Service & aftersales",
+    label: "Service reminder (email)",
+    description: "Sent by the Remind button on Service due. (The nightly automatic reminder uses the template picked under Service reminders.)",
+    settingKey: "SYSTEM_EMAIL_SERVICE_REMINDER",
+    subject: "Service reminder — your {{model}}",
+    body: "Hi {{first_name}},\n\nA quick reminder that your {{model}} is due for a service ({{due_date}}). Reply or call {{company_contact}} and we'll book you in.\n\nWarm regards,\n{{company_name}}",
+    fields: [...PERSON, ...COMPANY, "model", "due_date"],
+    action: null,
+  },
+  service_reminder_sms: {
+    kind: "service_reminder_sms",
+    group: "Service & aftersales",
+    channel: "sms",
+    label: "Service reminder (SMS)",
+    description: "Texted by the Remind button when the customer can't be emailed.",
+    settingKey: "SYSTEM_SMS_SERVICE_REMINDER",
+    subject: "",
+    body: "Hi {{first_name}}, your {{model}} is due for a service ({{due_date}}). Call {{company_contact}} to book. Reply STOP to opt out.",
+    fields: [...PERSON, ...COMPANY, "model", "due_date"],
+    action: null,
+  },
+  recall: {
+    kind: "recall",
+    group: "Service & aftersales",
+    label: "Recall notice (email)",
+    description: "Sent to every owner of the affected model when you notify a recall.",
+    settingKey: "SYSTEM_EMAIL_RECALL",
+    subject: "Important: {{recall_title}} — your {{model}}",
+    body: "Hi {{first_name}},\n\n{{recall_description}}\n\nPlease contact {{company_contact}} to arrange this at no charge.\n\nWarm regards,\n{{company_name}}",
+    fields: [...PERSON, ...COMPANY, "model", "recall_title", "recall_description"],
+    action: null,
+  },
+  recall_sms: {
+    kind: "recall_sms",
+    group: "Service & aftersales",
+    channel: "sms",
+    label: "Recall notice (SMS)",
+    description: "Texted to owners who can't be emailed.",
+    settingKey: "SYSTEM_SMS_RECALL",
+    subject: "",
+    body: "{{recall_title}}: {{recall_description}} Call {{company_contact}}.",
+    fields: [...PERSON, ...COMPANY, "model", "recall_title", "recall_description"],
+    action: null,
+  },
+
+  review_delivery: {
+    kind: "review_delivery",
+    group: "Reviews & surveys",
+    label: "Google review request — after delivery",
+    description: "Sent after a new vehicle is delivered (at most once every 90 days per customer, when a Google Place ID is set).",
+    settingKey: "SYSTEM_EMAIL_REVIEW_DELIVERY",
+    subject: "Enjoying your new {{item}}? We'd love a quick review ⭐",
+    body: "Hi {{first_name}},\n\nCongratulations on your new {{item}} — welcome to the {{company_name}} family! 🎉\n\nIf you're enjoying it, it would mean the world to us if you shared your experience in a quick Google review (it takes under a minute):\n\n{{review_link}}\n\nAnything you need, just call {{company_contact}}.\n\nWarm regards,\n{{company_name}}",
+    fields: [...PERSON, ...COMPANY, "item", "review_link"],
+    action: "review_link",
+  },
+  review_service: {
+    kind: "review_service",
+    group: "Reviews & surveys",
+    label: "Google review request — after a service",
+    description: "Sent when a job card is completed (at most once every 90 days per customer, when a Google Place ID is set).",
+    settingKey: "SYSTEM_EMAIL_REVIEW_SERVICE",
+    subject: "How was your service? A quick review would mean a lot ⭐",
+    body: "Hi {{first_name}},\n\nThanks for trusting us with {{item}} — we hope everything is running perfectly.\n\nIf you were happy with the service, a quick Google review would mean a lot to our small team (it takes under a minute):\n\n{{review_link}}\n\nAnything not 100%? Rather call {{company_contact}} first and we'll make it right.\n\nWarm regards,\n{{company_name}}",
+    fields: [...PERSON, ...COMPANY, "item", "review_link"],
+    action: "review_link",
+  },
+  survey_invite: {
+    kind: "survey_invite",
+    group: "Reviews & surveys",
+    label: "Survey invitation (email)",
+    description: "Sent when a survey is triggered for a customer. The introduction is set on each survey.",
+    settingKey: "SYSTEM_EMAIL_SURVEY_INVITE",
+    subject: "{{survey_subject}}",
+    body: "Hi {{first_name}},\n\n{{survey_intro}}\n\nTap below to answer (it takes under a minute):\n\n{{survey_link}}\n\nThank you,\n{{company_name}}",
+    fields: [...PERSON, ...COMPANY, "survey_title", "survey_intro", "survey_subject", "survey_link"],
+    action: "survey_link",
+  },
+  survey_invite_sms: {
+    kind: "survey_invite_sms",
+    group: "Reviews & surveys",
+    channel: "sms",
+    label: "Survey invitation (SMS)",
+    description: "Texted when the customer has no email address.",
+    settingKey: "SYSTEM_SMS_SURVEY_INVITE",
+    subject: "",
+    body: "Hi {{first_name}}, {{survey_intro}} {{survey_link}}",
+    fields: [...PERSON, ...COMPANY, "survey_title", "survey_intro", "survey_link"],
+    action: "survey_link",
+  },
 };
 
 export const SIGNING_EMAIL_KINDS = Object.keys(SIGNING_EMAILS) as SigningEmailKind[];
 
 /** Placeholders that carry a secret. They may appear in the body only — never the subject, which lands in previews, logs and timelines. */
-const SECRET_FIELDS = new Set(["signing_link", "code"]);
+const SECRET_FIELDS = new Set(["signing_link", "code", "survey_link"]);
 
 const PLACEHOLDER = /\{\{\s*(\w+)\s*\}\}/g;
 const MAX_SUBJECT = 200;
 const MAX_BODY = 5000;
+/** About four SMS segments — long enough for a real message, short enough not to cost a fortune per customer. */
+const MAX_SMS = 640;
 
 /**
  * `body` is always the plain text (it drives validation and the text/plain
@@ -147,12 +329,14 @@ const MAX_BODY = 5000;
 export type StoredSigningTemplate = { subject: string; body: string; doc?: unknown };
 
 /** Read a stored override back, defensively. Anything that is not one → null → default. */
-export function parseStoredSigningTemplate(raw: string | null | undefined): StoredSigningTemplate | null {
+export function parseStoredSigningTemplate(raw: string | null | undefined, kind?: SigningEmailKind): StoredSigningTemplate | null {
   if (!raw) return null;
   try {
     const v = JSON.parse(raw) as { subject?: unknown; body?: unknown; doc?: unknown };
     if (typeof v.subject !== "string" || typeof v.body !== "string") return null;
-    if (!v.subject.trim() || !v.body.trim()) return null;
+    // Only an SMS has no subject.
+    const sms = kind ? SIGNING_EMAILS[kind].channel === "sms" : false;
+    if ((!sms && !v.subject.trim()) || !v.body.trim()) return null;
     return Array.isArray(v.doc) ? { subject: v.subject, body: v.body, doc: v.doc } : { subject: v.subject, body: v.body };
   } catch {
     return null;
@@ -162,9 +346,15 @@ export function parseStoredSigningTemplate(raw: string | null | undefined): Stor
 /** Why this template cannot be saved, or null when it can. */
 export function validateSigningTemplate(kind: SigningEmailKind, subject: string, body: string): string | null {
   const def = SIGNING_EMAILS[kind];
-  if (!subject.trim() || !body.trim()) return "Subject and body are both required.";
-  if (subject.length > MAX_SUBJECT) return `Subject is too long (max ${MAX_SUBJECT} characters).`;
-  if (body.length > MAX_BODY) return `Body is too long (max ${MAX_BODY} characters).`;
+  if (def.channel === "sms") {
+    if (!body.trim()) return "The message is required.";
+    if (body.length > MAX_SMS) return `The text message is too long (max ${MAX_SMS} characters).`;
+    subject = "";
+  } else {
+    if (!subject.trim() || !body.trim()) return "Subject and body are both required.";
+    if (subject.length > MAX_SUBJECT) return `Subject is too long (max ${MAX_SUBJECT} characters).`;
+    if (body.length > MAX_BODY) return `Body is too long (max ${MAX_BODY} characters).`;
+  }
   const used = (s: string) => [...s.matchAll(PLACEHOLDER)].map((m) => m[1]);
   const unknown = [...new Set([...used(subject), ...used(body)].filter((f) => !def.fields.includes(f)))];
   if (unknown.length) {
@@ -247,11 +437,10 @@ export function renderSigningEmail(
   const actionLine = action ? new RegExp(`^\\{\\{\\s*${action}\\s*\\}\\}$`) : null;
   const paragraphs = body.split(/\n\s*\n/);
 
+  const link = action ? LINK_ACTIONS[action] : undefined;
   const text = paragraphs
     .map((p) => {
-      if (actionLine?.test(p.trim())) {
-        return action === "signing_link" ? `Open and sign here:\n${allowed.signing_link}` : allowed.code;
-      }
+      if (action && actionLine?.test(p.trim())) return link ? `${link.lead}\n${allowed[action]}` : allowed[action];
       return renderTemplate(p, allowed);
     })
     .join("\n\n");
@@ -259,15 +448,15 @@ export function renderSigningEmail(
   const escaped: Record<string, string> = Object.create(null);
   for (const [k, v] of Object.entries(allowed)) escaped[k] = escapeHtml(v);
   // Inline (mid-sentence) link/code: still clickable/prominent, still escaped.
-  if (allowed.signing_link) {
-    escaped.signing_link = `<a href="${escapeHtml(allowed.signing_link)}" style="color:${brand.accent};">${escapeHtml(allowed.signing_link)}</a>`;
+  for (const f of Object.keys(LINK_ACTIONS)) {
+    if (allowed[f]) escaped[f] = `<a href="${escapeHtml(allowed[f])}" style="color:${brand.accent};">${escapeHtml(allowed[f])}</a>`;
   }
   if (allowed.code) escaped.code = `<strong>${escapeHtml(allowed.code)}</strong>`;
 
   const P = `margin:0 0 16px;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:1.55;color:#1e293b;`;
   const actionHtml = () =>
-    action === "signing_link"
-      ? signButton(allowed.signing_link, brand)
+    action && link
+      ? signButton(allowed[action], brand, link.button)
       : `<p style="${P}"><span style="display:inline-block;padding:10px 18px;border:1px solid #e2e8f0;border-radius:8px;font-family:Consolas,Menlo,monospace;font-size:26px;font-weight:bold;letter-spacing:6px;color:#0f172a;">${escapeHtml(allowed.code)}</span></p>`;
 
   // The formatted body, when the owner saved one; otherwise the plain paragraphs.
@@ -296,6 +485,20 @@ export function renderSigningEmail(
 }
 
 /**
+ * Render one SMS kind: the template's text with the kind's own fields filled in,
+ * the action (code / link) appended if an edited template dropped it, and blank
+ * runs collapsed so an empty field doesn't leave a hole.
+ */
+export function renderSms(kind: SigningEmailKind, template: StoredSigningTemplate | null, vars: Record<string, string>): string {
+  const def = SIGNING_EMAILS[kind];
+  const allowed: Record<string, string> = Object.create(null);
+  for (const f of def.fields) allowed[f] = typeof vars[f] === "string" ? vars[f] : "";
+  let body = (template?.body ?? def.body).replace(/\r\n?/g, "\n").trim();
+  if (def.action && !new RegExp(`\\{\\{\\s*${def.action}\\s*\\}\\}`).test(body)) body += ` {{${def.action}}}`;
+  return renderTemplate(body, allowed).replace(/[ \t]{2,}/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/**
  * The bulletproof button.
  *
  * Outlook's Word engine ignores padding on an <a>, which is why the old button
@@ -304,17 +507,22 @@ export function renderSigningEmail(
  * roundrect instead, which is the only way to give it a full-size, rounded,
  * clickable button. Followed by the plain link for clients that block both.
  */
-export function signButton(url: string, brand: Pick<SigningEmailBrand, "accent" | "accentText">): string {
+export function signButton(
+  url: string,
+  brand: Pick<SigningEmailBrand, "accent" | "accentText">,
+  /** Already-HTML label — only ever one of the LINK_ACTIONS constants. */
+  label = "Open &amp; sign",
+): string {
   const href = escapeHtml(url);
   const font = "font-family:Helvetica,Arial,sans-serif;font-size:15px;font-weight:bold;";
   return `<!--[if mso]>
-<v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="${href}" style="height:46px;v-text-anchor:middle;width:200px;" arcsize="17%" stroke="f" fillcolor="${brand.accent}">
-<w:anchorlock/><center style="color:${brand.accentText};${font}">Open &amp; sign</center>
+<v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="${href}" style="height:46px;v-text-anchor:middle;width:220px;" arcsize="17%" stroke="f" fillcolor="${brand.accent}">
+<w:anchorlock/><center style="color:${brand.accentText};${font}">${label}</center>
 </v:roundrect>
 <![endif]--><!--[if !mso]><!-->
 <table role="presentation" border="0" cellspacing="0" cellpadding="0" style="margin:6px 0 16px;"><tr>
 <td align="center" bgcolor="${brand.accent}" style="background-color:${brand.accent};border-radius:8px;padding:13px 26px;">
-<a href="${href}" target="_blank" style="${font}color:${brand.accentText};text-decoration:none;display:inline-block;">Open &amp; sign</a>
+<a href="${href}" target="_blank" style="${font}color:${brand.accentText};text-decoration:none;display:inline-block;">${label}</a>
 </td></tr></table>
 <!--<![endif]-->
 <p style="margin:0 0 16px;font-family:Helvetica,Arial,sans-serif;font-size:12px;line-height:1.5;color:#64748b;">Or paste this link into your browser:<br><a href="${href}" style="color:#64748b;word-break:break-all;">${href}</a></p>`;
