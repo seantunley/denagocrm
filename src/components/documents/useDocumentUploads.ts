@@ -90,8 +90,10 @@ export function useDocumentUploads(target: UploadTarget | null, tenantId: string
           form.set("file", file);
           form.set("revalidate", "/documents");
           if (target.kind === "record") form.set(target.field, target.id);
-          await uploadDocument(form);
-          set({ status: "done" });
+          // A refusal (empty, too big, no access) comes back as a value.
+          const result = await uploadDocument(form);
+          if (result?.error) set({ status: "failed", message: result.error });
+          else set({ status: "done" });
         }
       } catch {
         // The token route refuses with a generic message and Server Action
