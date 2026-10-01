@@ -29,14 +29,17 @@ export default function ModalTrigger({
   label,
   title,
   buttonClass = "btn-primary",
+  defaultOpen = false,
   children,
 }: {
   label: ReactNode;
   title: string;
   buttonClass?: string;
+  /** Open on arrival — a link from another page that means "do this now". */
+  defaultOpen?: boolean;
   children: ReactNode;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
