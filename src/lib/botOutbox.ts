@@ -9,7 +9,8 @@ import { type TenantWriteTx } from "./tenantWrite";
 import { botStillOwnsTx, pauseBotSessionTx } from "./botSessionStore";
 import { logAuditStrict } from "./audit";
 import { redactForLog } from "./redactLog";
-import { classifyDeliveryFailure, PERMANENT_FAILURES, staffReplyMatchesRow } from "./messageDelivery";
+import { classifyDeliveryFailure, deliveryFailureReason, PERMANENT_FAILURES, staffReplyMatchesRow } from "./messageDelivery";
+import { sendPushToAll } from "./push";
 import { metaEchoDedupeKey } from "./metaEcho";
 import {
   decodeParkedFailure,
@@ -956,6 +957,14 @@ async function failDelivery(row: OutboxRow, error: string): Promise<"retry" | "d
     // The outbox id, not row.key: the conversation key IS the customer's phone
     // number on WhatsApp (and a handle elsewhere). The id leads to the row.
     await logError("bot-outbox", new Error(lastError), `${row.channel}:${row.id}:${failureCode}`).catch(() => {});
+    // A person has to step in — the customer is waiting at a prompt they never
+    // got, and the error log was the only place this showed (gap audit #31). No
+    // number or handle in the push; the inbox's Bot handoffs tab lists it.
+    await sendPushToAll({
+      title: "A message didn't reach a customer",
+      body: `${row.origin === "staff" ? "A reply" : "The assistant's reply"} on ${row.channel} failed — ${deliveryFailureReason(failureCode) ?? "the channel rejected it"}. They're waiting.`.slice(0, 200),
+      url: "/inbox",
+    }, "bot_handoff").catch(() => {});
     return "dead";
   }
   await prisma.botFlowOutbox.updateMany({
@@ -1183,6 +1192,49 @@ export async function flushBotOutboxConversation(
   budget?: OutboxBudget,
 ): Promise<BotOutboxRun> {
   return withStaffConversationScope(() => drainConversation(channel, key, limit, budget));
+}
+
+export type RequeueOutcome = "requeued" | "not_parked" | "permanent";
+
+/**
+ * Send a dead-lettered conversation's failed messages again (gap audit #31).
+ *
+ * Only while the conversation is still parked at `delivery_failed` — claimed
+ * atomically, so two people pressing Retry, or Retry racing a staff reply that
+ * took the conversation, resend nothing twice. Only the messages killed in THIS
+ * failure come back (the head and the backlog `killMessageAndBacklog` marked in
+ * the same transaction), never older dead rows from an earlier incident. And a
+ * permanent failure — the customer blocked us, the 24-hour window closed — is
+ * refused: resending cannot fix it, and would only fail again.
+ */
+export async function requeueDeadConversation(channel: string, key: string): Promise<RequeueOutcome> {
+  return withStaffConversationScope(async () => {
+    const tenantId = outboxTenantId();
+    return prisma.$transaction(async (tx) => {
+      const head = await tx.botFlowOutbox.findFirst({
+        where: { tenantId, channel, key, status: "dead", NOT: { failureCode: "blocked_by_earlier_failure" } },
+        orderBy: { updatedAt: "desc" },
+        select: { failureCode: true, updatedAt: true },
+      });
+      if (head?.failureCode && PERMANENT_FAILURES.has(head.failureCode)) return "permanent";
+      const claimed = await tx.$executeRawUnsafe(
+        `UPDATE "BotSession"
+            SET "ownership" = 'bot', "updatedAt" = CURRENT_TIMESTAMP
+          WHERE "tenantId" = $1 AND "channel" = $2 AND "key" = $3 AND "ownership" = 'delivery_failed'`,
+        tenantId,
+        channel,
+        key,
+      );
+      if (claimed !== 1 || !head) return "not_parked";
+      // Rows killed together share a transaction, so their updatedAt is the same
+      // instant; a small margin covers clock rounding and nothing older.
+      await tx.botFlowOutbox.updateMany({
+        where: { tenantId, channel, key, status: "dead", updatedAt: { gte: new Date(head.updatedAt.getTime() - 5_000) } },
+        data: { status: "pending", attempts: 0, leaseUntil: null, lastError: null, failureCode: null, availableAt: new Date() },
+      });
+      return "requeued";
+    });
+  });
 }
 
 async function drainConversation(
