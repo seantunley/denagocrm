@@ -1,4 +1,6 @@
+import { Prisma } from "@prisma/client";
 import { basePrisma } from "../src/lib/db";
+import { EMAIL_KEY_SQL, PHONE_KEY_SQL, contactIdentitySql } from "../src/lib/contactMatch";
 
 /**
  * DRY RUN — READ ONLY. Lists the data the old "Mark won" left behind (gap audit
@@ -20,7 +22,7 @@ import { basePrisma } from "../src/lib/db";
  */
 
 type WonLeadRow = { tenantId: string | null; leadId: string; wonAt: Date | null; quotes: string };
-type DuplicateRow = { tenantId: string | null; createdByMarkWon: string; existingContact: string; matchedOn: string; createdAt: Date };
+type DuplicateRow = { tenantId: string | null; createdByMarkWon: string; existingContact: string; createdAt: Date };
 
 async function main() {
   const { wonLeads, duplicates } = await basePrisma.$transaction(async (tx) => {
@@ -40,17 +42,20 @@ async function main() {
          )
        GROUP BY l."tenantId", l.id, l."wonAt"
        ORDER BY l."wonAt" DESC NULLS LAST`;
+    // The SAME identity rule the app now applies before creating a contact
+    // (lib/contactMatch.ts), with the new contact's own keys as the identity.
+    const sameCustomer = contactIdentitySql(
+      "o",
+      Prisma.raw(EMAIL_KEY_SQL('c."email"')),
+      Prisma.raw(PHONE_KEY_SQL('c."phone"')),
+    );
     const duplicates = await tx.$queryRaw<DuplicateRow[]>`
-      SELECT c."tenantId", c.id AS "createdByMarkWon", o.id AS "existingContact",
-             CASE WHEN c.email IS NOT NULL AND lower(trim(c.email)) = lower(trim(o.email)) THEN 'email' ELSE 'phone' END AS "matchedOn",
-             c."createdAt"
+      SELECT c."tenantId", c.id AS "createdByMarkWon", o.id AS "existingContact", c."createdAt"
         FROM "AuditLog" a
         JOIN "Contact" c ON c.id = a."contactId" AND c."tenantId" = a."tenantId"
-        JOIN "Contact" o ON o."tenantId" = c."tenantId" AND o.id <> c.id AND o."deletedAt" IS NULL
-                        AND o."createdAt" < c."createdAt"
-                        AND ((c.email IS NOT NULL AND lower(trim(c.email)) = lower(trim(o.email)))
-                          OR (c.phone IS NOT NULL AND regexp_replace(c.phone, '[^0-9]', '', 'g') <> ''
-                              AND regexp_replace(c.phone, '[^0-9]', '', 'g') = regexp_replace(o.phone, '[^0-9]', '', 'g')))
+        JOIN "Contact" o ON o."tenantId" IS NOT DISTINCT FROM c."tenantId" AND o.id <> c.id
+                        AND o."deletedAt" IS NULL AND o."createdAt" < c."createdAt"
+                        AND ${sameCustomer}
        WHERE a.action = 'contact.created' AND a.summary LIKE '%from won lead'
          AND c."deletedAt" IS NULL
        ORDER BY c."createdAt" DESC`;
@@ -63,7 +68,7 @@ async function main() {
   }
   console.log(`\n2) Contacts created by Mark won that match an older contact: ${duplicates.length}`);
   for (const row of duplicates) {
-    console.log(`   tenant ${row.tenantId} · new ${row.createdByMarkWon} · existing ${row.existingContact} · same ${row.matchedOn} · ${row.createdAt.toISOString().slice(0, 10)}`);
+    console.log(`   tenant ${row.tenantId} · new ${row.createdByMarkWon} · existing ${row.existingContact} · ${row.createdAt.toISOString().slice(0, 10)}`);
   }
   console.log("\nNothing was changed. Repair by hand: accept the right quote on each lead; review duplicates before merging.");
 }

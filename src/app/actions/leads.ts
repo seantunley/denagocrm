@@ -23,6 +23,7 @@ import { actingTenantId } from "@/lib/actingTenant";
 import { payableTotalCents } from "@/lib/pricing";
 import { WINNABLE_QUOTE_STATUSES, acceptQuoteInTx, afterDealWon, winLeadInTx } from "@/lib/quoteOutcome";
 import { CLOSED_REQUEST_STATUSES } from "@/lib/signing/status";
+import { ambiguousContactMessage, findExistingContact } from "@/lib/contactMatch";
 import {
   canAccessLead,
   getAccessibleContactIds,
@@ -206,13 +207,12 @@ export async function createLead(formData: FormData) {
     const title = String(formData.get("title") ?? "").trim() || generatedTitle;
 
     if (!data.contactId) {
-      const matchers = [
-        ...(data.email ? [{ email: data.email }] : []),
-        ...(data.phone ? [{ phone: data.phone }] : []),
-      ];
-      const existing = matchers.length > 0
-        ? await prisma.contact.findFirst({ where: { OR: matchers } })
-        : null;
+      // Same canonical identity rules as Mark won (lib/contactMatch.ts), in the
+      // workspace the lead is being created in. An ambiguous match refuses: the
+      // form has a customer picker, and guessing links the wrong person.
+      const match = await findExistingContact({ tenantId: await actingTenantId(), email: data.email, phone: data.phone });
+      if (match.kind === "ambiguous") refuse(ambiguousContactMessage(match.count));
+      const existing = match.kind === "one" ? { id: match.contactId } : null;
       // Reuse whatever the lookup found.
       //
       // This used to reuse ONLY a contact whose tenantId was null — a workaround
@@ -225,8 +225,7 @@ export async function createLead(formData: FormData) {
       //
       // The audit now takes its tenant from the record it describes, so the
       // mismatch cannot arise and the workaround is not needed. Cross-tenant
-      // reuse is not a risk here either: the lookup runs on the scoped client,
-      // which under enforcement cannot see another tenant's contacts.
+      // reuse is not a risk here either: the lookup names the acting tenant.
       if (existing) {
         data.contactId = existing.id;
       } else {
@@ -1648,27 +1647,14 @@ async function linkOrCreateLeadContact(
   if (lead.contactId) return lead.contactId;
   let contactId = knownContactId;
   if (!contactId) {
-    const matchers = [
-      ...(lead.email ? [{ email: lead.email }] : []),
-      ...(lead.phone ? [{ phone: lead.phone }] : []),
-    ];
-    const existingMatch = matchers.length > 0
-      ? await prisma.contact.findFirst({ where: { OR: matchers } })
-      : null;
-    // Reuse if tenantId already matches, or if it's null (pre-backfill) — stamp
-    // the lead's tenantId onto it so the composite FK is satisfied without
-    // creating a duplicate.
-    const canReuse = existingMatch && (
-      existingMatch.tenantId === lead.tenantId || existingMatch.tenantId === null
-    );
-    if (canReuse && existingMatch) {
-      contactId = existingMatch.id;
-      if (existingMatch.tenantId === null && lead.tenantId !== null) {
-        await prisma.contact.update({
-          where: { id: existingMatch.id },
-          data: { tenantId: lead.tenantId },
-        });
-      }
+    // The canonical identity rules (lib/contactMatch.ts), in the LEAD's
+    // workspace: trimmed case-insensitive email, digit-tail phone against the
+    // contact's phone and WhatsApp. Several matches is not an identity — refuse
+    // rather than pick one or add yet another duplicate.
+    const match = await findExistingContact({ tenantId: lead.tenantId, email: lead.email, phone: lead.phone });
+    if (match.kind === "ambiguous") refuse(ambiguousContactMessage(match.count));
+    if (match.kind === "one") {
+      contactId = match.contactId;
     } else {
       const [firstName, ...rest] = lead.name.split(/\s+/);
       const contact = await prisma.contact.create({

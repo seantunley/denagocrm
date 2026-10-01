@@ -212,10 +212,10 @@ test("Mark won reuses the customer instead of creating a duplicate", () => {
   const order = [
     "if (lead.contactId) return lead.contactId;",
     "let contactId = knownContactId;",
-    "prisma.contact.findFirst({ where: { OR: matchers } })",
+    "findExistingContact({ tenantId: lead.tenantId",
     "prisma.contact.create(",
   ].map((marker) => helper.indexOf(marker));
-  assert.ok(order.every((at) => at >= 0), "linked → known → email/phone match → create");
+  assert.ok(order.every((at) => at >= 0), "linked → known → canonical email/phone match → create");
   assert.deepEqual([...order].sort((a, b) => a - b), order, "…in that order, so create is the last resort");
   assert.doesNotMatch(helper.slice(0, helper.indexOf("\nexport ")), /merge/i, "a match is linked, never merged");
 });
