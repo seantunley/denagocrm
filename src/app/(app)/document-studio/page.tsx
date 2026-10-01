@@ -9,7 +9,6 @@ import {
   ScrollText,
   Sparkles,
   Star,
-  Trash2,
   Workflow,
 } from "lucide-react";
 import { prisma } from "@/lib/db";
@@ -37,7 +36,8 @@ import { convertStudioTemplate, createCustomDocument } from "@/app/actions/custo
 import { createDocEditorTemplate } from "@/app/actions/doceditor";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { SaveForm } from "@/components/SaveForm";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
+import ConfirmDelete from "@/components/ConfirmDelete";
 import { SaveSubmitButton } from "@/components/SaveSubmitButton";
 import BuilderSection from "./builder-section";
 
@@ -297,34 +297,31 @@ export default async function DocumentStudioPage({
                             </Link>
                           </Button>
                           {!template.isDefault && (
-                            <form action={setDefaultDocTemplate.bind(null, template.id)}>
-                              <Button variant="ghost" size="sm" title="Make default" aria-label={`Make ${template.name} the default`}>
+                            <SaveForm action={setDefaultDocTemplate.bind(null, template.id)}>
+                              <SaveButton pendingLabel="…" className={buttonVariants({ variant: "ghost", size: "sm" })} title="Make default" aria-label={`Make ${template.name} the default`}>
                                 <Star className="size-3.5" />
-                              </Button>
-                            </form>
+                              </SaveButton>
+                            </SaveForm>
                           )}
-                          <form action={duplicateDocTemplate.bind(null, template.id)}>
-                            <Button variant="ghost" size="sm" title="Duplicate" aria-label={`Duplicate ${template.name}`}>
+                          <SaveForm action={duplicateDocTemplate.bind(null, template.id)}>
+                            <SaveButton pendingLabel="…" className={buttonVariants({ variant: "ghost", size: "sm" })} title="Duplicate" aria-label={`Duplicate ${template.name}`}>
                               <Copy className="size-3.5" />
-                            </Button>
-                          </form>
+                            </SaveButton>
+                          </SaveForm>
                           {!template.isDefault && (
-                            <form action={deleteDocTemplate.bind(null, template.id)}>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="text-red-400 hover:text-red-300"
-                                title="Delete"
-                                aria-label={`Delete ${template.name}`}
-                              >
-                                <Trash2 className="size-3.5" />
-                              </Button>
-                            </form>
+                            <ConfirmDelete
+                              action={deleteDocTemplate.bind(null, template.id)}
+                              title={`Delete template “${template.name}”?`}
+                              description="Documents already made from it keep their content. You can restore it from Trash."
+                              trigger="Delete"
+                              triggerClass={buttonVariants({ variant: "ghost", size: "sm", className: "text-red-400 hover:text-red-300" })}
+                              confirmLabel="Delete template"
+                            />
                           )}
                         </li>
                       ))}
                     </ul>
-                    <form
+                    <SaveForm
                       action={createDocTemplate}
                       className="mt-3 flex flex-wrap gap-2"
                     >
@@ -343,11 +340,11 @@ export default async function DocumentStudioPage({
                           </option>
                         ))}
                       </select>
-                      <Button size="sm" type="submit">
+                      <SaveButton className={buttonVariants({ size: "sm" })} pendingLabel="Creating…">
                         <Plus className="size-3.5" />
                         Create
-                      </Button>
-                    </form>
+                      </SaveButton>
+                    </SaveForm>
                   </div>
                 );
               })}
@@ -566,18 +563,18 @@ export default async function DocumentStudioPage({
               </li>
             ))}
           </ul>
-          <form action={createReusableBlock} className="mt-3 flex gap-2">
+          <SaveForm action={createReusableBlock} className="mt-3 flex gap-2">
             <input
               name="name"
               required
               placeholder="New reusable clause…"
               className={`${input} flex-1`}
             />
-            <Button size="sm" type="submit">
+            <SaveButton className={buttonVariants({ size: "sm" })} pendingLabel="Creating…">
               <Plus className="size-3.5" />
               Create
-            </Button>
-          </form>
+            </SaveButton>
+          </SaveForm>
         </section>
       </div>
 
