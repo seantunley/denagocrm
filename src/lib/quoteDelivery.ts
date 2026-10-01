@@ -16,6 +16,9 @@ import {
   type VinMatch,
 } from "@/lib/deliveryVehicles";
 import { addStockEvent } from "@/lib/stockPlatform";
+import { deleteFile, saveFile } from "@/lib/storage";
+import { logError } from "@/lib/errorLog";
+import { withStagedEvidence, type StageFile } from "@/lib/stagedEvidence";
 import type { PermissionUser } from "@/lib/permissions";
 
 /**
@@ -54,10 +57,12 @@ export async function deliverQuote(input: {
   handoverRunIds?: readonly string[];
   warrantyMonths?: number;
   /**
-   * Stores the caller's paperwork (delivery note, signature). Runs AFTER every
-   * gate and BEFORE the commit, so a refused delivery never leaves a file behind.
+   * The caller's paperwork (delivery note, signature). Runs AFTER every gate.
+   * Files go through `stage`, which only uploads the blob: its Document row is
+   * created inside the delivery transaction, and if the delivery fails for any
+   * reason the blobs this attempt uploaded are deleted (lib/stagedEvidence.ts).
    */
-  collectEvidence?: (quote: QuoteForEvidence) => Promise<DeliveryEvidence>;
+  collectEvidence?: (quote: QuoteForEvidence, stage: StageFile) => Promise<DeliveryEvidence>;
 }): Promise<{ redirectTo: string }> {
   const { quoteId, tenantId, user } = input;
   const quote = await prisma.quote.findFirst({
@@ -201,10 +206,6 @@ export async function deliverQuote(input: {
     existingVehicle.set(unit.id, { id: live.id, match, contactId: live.contactId });
   }
 
-  const evidence = !catchUp && input.collectEvidence
-    ? await input.collectEvidence({ id: quote.id, number: quote.number, contactId: quote.contactId, tenantId: quote.tenantId })
-    : {};
-
   const deliveredAt = new Date();
   const warrantyMonths = Math.max(0, input.warrantyMonths ?? 12);
   const warrantyEndAt = warrantyMonths
@@ -212,67 +213,105 @@ export async function deliverQuote(input: {
     : null;
 
   /*
-   * ONE TRANSACTION: the quote, its stock and its vehicles land together or not
-   * at all. The quote update is conditional on it not being delivered yet, so two
-   * people pressing the two buttons at once cannot both deliver it — the second
-   * waits on the row lock, matches nothing, and is refused with nothing written.
+   * NOTHING ABOVE THIS POINT WRITES. Everything below either commits together
+   * or leaves no record behind:
+   *
+   *   - evidence BLOBS are uploaded first under fresh random keys nothing
+   *     references yet; if anything after that throws, exactly those blobs are
+   *     deleted (withStagedEvidence);
+   *   - their Document ROWS, the quote, its stock and its vehicles are written in
+   *     ONE TRANSACTION. The quote update is conditional on it not being delivered
+   *     yet, so two people pressing the two buttons at once cannot both deliver
+   *     it — the second waits on the row lock, matches nothing, and is refused
+   *     with every row rolled back;
+   *   - audit, stock timeline and the journey event run only after the commit.
    */
-  const vehicleIds = await prisma.$transaction(async (tx) => {
-    if (!catchUp) {
-      const updated = await tx.quote.updateMany({
-        where: { id: quoteId, tenantId, deliveredAt: null },
-        data: { deliveredAt, ...evidence, deliveryHandoverRunIds },
-      });
-      if (updated.count !== 1) refuse("This delivery was just completed by someone else. Refresh and check it.");
-    }
-    const ids: string[] = [];
-    for (const unit of outstanding) {
-      // Per-UNIT selling price for this one physical cart — NOT the whole quote
-      // line (qty × price), which would over-state revenue for multi-quantity quotes.
-      const saleLine = quote.items.find((item) => item.productId === unit.productId && item.selected);
-      const moved = await tx.stockUnit.updateMany({
-        where: { id: unit.id, status: DELIVERABLE_STATUS, deletedAt: null },
-        data: {
-          status: "delivered",
-          soldAt: unit.soldAt ?? deliveredAt,
-          deliveredAt,
-          salePriceCents: saleLine ? Math.round(saleLine.unitPriceCents * (1 - saleLine.discountPct / 100)) : 0,
-          warrantyStartAt: deliveredAt,
-          warrantyEndAt,
-        },
-      });
-      if (moved.count !== 1) refuse("A stock unit on this quote changed while it was being delivered. Refresh and try again.");
-      const existing = existingVehicle.get(unit.id);
-      if (existing) {
-        // Re-proved INSIDE the transaction, conditional on the owner read above:
-        // a vehicle transferred in between matches nothing and refuses the lot.
-        const owned = existing.match === "attach"
-          ? await tx.vehicle.updateMany({
-              where: { id: existing.id, contactId: existing.contactId },
-              data: { contactId: contact!.id },
-            })
-          : { count: await tx.vehicle.count({ where: { id: existing.id, contactId: contact!.id } }) };
-        if (owned.count !== 1) refuse(vinConflictMessage(unit.serial ?? ""));
-        ids.push(existing.id);
-        continue;
+  const vehicleIds = await withStagedEvidence(
+    {
+      save: (buffer, originalName, mimeType) => saveFile(buffer, originalName, mimeType, quote.tenantId),
+      remove: deleteFile,
+      // A count and an id only: the error itself may carry the blob's key.
+      onCleanupFailure: (error, failed) =>
+        logError(
+          "delivery-evidence-cleanup",
+          new Error(`${error instanceof Error ? error.name : "Error"}: ${failed} unreferenced delivery evidence file(s) could not be deleted`),
+          `quote=${quoteId}`,
+          { tenantId: quote.tenantId, alert: false },
+        ),
+    },
+    async (stage) => (!catchUp && input.collectEvidence
+      ? input.collectEvidence({ id: quote.id, number: quote.number, contactId: quote.contactId, tenantId: quote.tenantId }, stage)
+      : {}),
+    (evidence, documents) => prisma.$transaction(async (tx) => {
+      if (!catchUp) {
+        const updated = await tx.quote.updateMany({
+          where: { id: quoteId, tenantId, deliveredAt: null },
+          data: { deliveredAt, ...evidence, deliveryHandoverRunIds },
+        });
+        if (updated.count !== 1) refuse("This delivery was just completed by someone else. Refresh and check it.");
       }
-      const vehicle = await tx.vehicle.create({
-        data: {
-          model: unit.product.name,
-          vin: unit.serial,
-          color: unit.color,
-          purchaseDate: deliveredAt,
-          warrantyMonths: warrantyMonths || null,
-          notes: `Created automatically from stock unit ${unit.stockNumber ?? unit.id}`,
-          contactId: contact!.id,
-          productId: unit.productId,
-        },
-        select: { id: true },
-      });
-      ids.push(vehicle.id);
-    }
-    return ids;
-  });
+      // The paperwork's rows commit or roll back WITH the delivery they evidence.
+      // The quote owns them, as it owns its invoice and proof of payment.
+      for (const document of documents) {
+        await tx.document.create({
+          data: {
+            tenantId: quote.tenantId,
+            ...document,
+            contactId: quote.contactId,
+            quoteId,
+            uploadedById: user.id,
+          },
+        });
+      }
+      const ids: string[] = [];
+      for (const unit of outstanding) {
+        // Per-UNIT selling price for this one physical cart — NOT the whole quote
+        // line (qty × price), which would over-state revenue for multi-quantity quotes.
+        const saleLine = quote.items.find((item) => item.productId === unit.productId && item.selected);
+        const moved = await tx.stockUnit.updateMany({
+          where: { id: unit.id, status: DELIVERABLE_STATUS, deletedAt: null },
+          data: {
+            status: "delivered",
+            soldAt: unit.soldAt ?? deliveredAt,
+            deliveredAt,
+            salePriceCents: saleLine ? Math.round(saleLine.unitPriceCents * (1 - saleLine.discountPct / 100)) : 0,
+            warrantyStartAt: deliveredAt,
+            warrantyEndAt,
+          },
+        });
+        if (moved.count !== 1) refuse("A stock unit on this quote changed while it was being delivered. Refresh and try again.");
+        const existing = existingVehicle.get(unit.id);
+        if (existing) {
+          // Re-proved INSIDE the transaction, conditional on the owner read above:
+          // a vehicle transferred in between matches nothing and refuses the lot.
+          const owned = existing.match === "attach"
+            ? await tx.vehicle.updateMany({
+                where: { id: existing.id, contactId: existing.contactId },
+                data: { contactId: contact!.id },
+              })
+            : { count: await tx.vehicle.count({ where: { id: existing.id, contactId: contact!.id } }) };
+          if (owned.count !== 1) refuse(vinConflictMessage(unit.serial ?? ""));
+          ids.push(existing.id);
+          continue;
+        }
+        const vehicle = await tx.vehicle.create({
+          data: {
+            model: unit.product.name,
+            vin: unit.serial,
+            color: unit.color,
+            purchaseDate: deliveredAt,
+            warrantyMonths: warrantyMonths || null,
+            notes: `Created automatically from stock unit ${unit.stockNumber ?? unit.id}`,
+            contactId: contact!.id,
+            productId: unit.productId,
+          },
+          select: { id: true },
+        });
+        ids.push(vehicle.id);
+      }
+      return ids;
+    }),
+  );
 
   const actor = { id: user.id, name: user.name };
   for (const unit of outstanding) {

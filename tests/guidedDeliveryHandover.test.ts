@@ -314,16 +314,16 @@ test("the guided gate runs before the delivery writes anything", () => {
   const verify = body.indexOf("prisma.checklistRun.findMany(");
   assert.ok(verify !== -1 && verify < gate, "ids are verified, then judged");
 
-  // markDelivered's own writes are all inside the callback deliverQuote runs late.
+  // markDelivered writes nothing itself: it only STAGES its paperwork, inside
+  // the callback deliverQuote runs late, and deliverQuote files it.
   const board = readFileSync("src/app/actions/fulfilment.ts", "utf8");
   const md = board.slice(board.indexOf("export async function markDelivered("));
-  const callback = md.indexOf("collectEvidence: async");
+  const callback = md.indexOf("collectEvidence: async (quote, stage)");
   assert.notEqual(callback, -1, "markDelivered must hand its paperwork to deliverQuote as a callback");
-  for (const needle of ["attachStageDocument(", "saveFile(", "prisma.document.create("]) {
-    const at = md.indexOf(needle);
-    assert.ok(at > callback, `${needle} in markDelivered must only run inside collectEvidence`);
+  assert.ok(md.indexOf("await stage(") > callback, "files are staged inside collectEvidence");
+  for (const write of [/attachStageDocument\(/, /saveFile\(/, /document\.create\(/, /prisma\.quote\.updateMany\(/]) {
+    assert.doesNotMatch(md, write, "the delivery's writes belong to deliverQuote alone");
   }
-  assert.doesNotMatch(md, /prisma\.quote\.updateMany\(/, "the delivery write belongs to deliverQuote alone");
 });
 
 /* ── the note reviewed is the note signed ────────────────────────────────── */

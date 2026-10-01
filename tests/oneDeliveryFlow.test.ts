@@ -12,6 +12,7 @@ import {
   vinMatch,
   type DeliveryQuoteLine,
 } from "../src/lib/deliveryVehicles";
+import { withStagedEvidence } from "../src/lib/stagedEvidence";
 
 /**
  * GAP #12 — two delivery flows that each did half the job.
@@ -210,6 +211,142 @@ test("the delivery is audited — the quote and every unit handed over", () => {
   assert.match(body, /action: "fulfilment\.delivered"/);
   assert.match(body, /action: "stock\.delivered"/);
   assert.match(body, /eventType: "unit\.delivered"/);
+});
+
+/* ── a refused delivery keeps NO evidence ────────────────────────────────── */
+
+/**
+ * A fake store with real transaction semantics: writes inside `transaction`
+ * land only if the callback resolves. Blobs live in `storage`, which no
+ * transaction can roll back — exactly the production split.
+ */
+function fakeWorld() {
+  const storage = new Map<string, Buffer>();
+  const documents: Array<Record<string, unknown>> = [];
+  const sideEffects: string[] = [];
+  const cleanupFailures: Array<{ failed: number; message: string }> = [];
+  let key = 0;
+  return {
+    storage,
+    documents,
+    sideEffects,
+    cleanupFailures,
+    deps: {
+      save: async (buffer: Buffer) => {
+        const ref = `uploads/tenant/${++key}-uuid.png`;
+        storage.set(ref, buffer);
+        return ref;
+      },
+      remove: async (ref: string) => {
+        storage.delete(ref);
+      },
+      onCleanupFailure: async (error: unknown, failed: number) => {
+        cleanupFailures.push({ failed, message: error instanceof Error ? error.message : String(error) });
+      },
+    },
+    async transaction<T>(fn: (tx: { document: { create: (row: Record<string, unknown>) => void } }) => Promise<T>) {
+      const pending: Array<Record<string, unknown>> = [];
+      const result = await fn({ document: { create: (row) => void pending.push(row) } });
+      documents.push(...pending); // committed only when the body resolved
+      return result;
+    },
+  };
+}
+
+class LostRace extends Error {}
+
+test("RACE: evidence uploaded, then the compare-and-set loses — no Document row, blob deleted, refused, nothing else written", async () => {
+  const world = fakeWorld();
+  const attempt = withStagedEvidence(
+    world.deps,
+    async (stage) => {
+      const signature = await stage({ buffer: Buffer.from("png"), originalName: "sig.png", mimeType: "image/png", fileName: "Delivery signature — Q-1", tag: "delivery-signature" });
+      await stage({ buffer: Buffer.from("pdf"), originalName: "note.pdf", mimeType: "application/pdf", fileName: "Delivery note — Q-1", tag: "delivery-note" });
+      return { deliverySignatureRef: signature };
+    },
+    (_evidence, documents) => world.transaction(async (tx) => {
+      // As deliverQuote does: the rows are created inside the transaction…
+      for (const document of documents) tx.document.create({ ...document });
+      // …and then a concurrent change makes the stock unit's CAS match nothing.
+      const moved = { count: 0 };
+      if (moved.count !== 1) throw new LostRace("A stock unit on this quote changed while it was being delivered.");
+      world.sideEffects.push("vehicle.create");
+      return ["vehicle_1"];
+    }),
+  ).then(() => world.sideEffects.push("audit"), (error) => error);
+
+  const outcome = await attempt;
+  assert.ok(outcome instanceof LostRace, "the delivery is refused with the transaction's own error");
+  assert.equal(world.documents.length, 0, "no Document row survives the rolled-back transaction");
+  assert.equal(world.storage.size, 0, "every blob this attempt uploaded is deleted");
+  assert.deepEqual(world.sideEffects, [], "nothing else is written — no vehicle, no audit");
+  assert.deepEqual(world.cleanupFailures, []);
+});
+
+test("a failure WHILE staging deletes what was already uploaded", async () => {
+  const world = fakeWorld();
+  const outcome = await withStagedEvidence(
+    world.deps,
+    async (stage) => {
+      await stage({ buffer: Buffer.from("pdf"), originalName: "note.pdf", mimeType: "application/pdf", fileName: "note", tag: "delivery-note" });
+      throw new Error("second upload failed");
+    },
+    async () => world.sideEffects.push("commit"),
+  ).catch((error) => error);
+  assert.match(String(outcome), /second upload failed/);
+  assert.equal(world.storage.size, 0);
+  assert.deepEqual(world.sideEffects, [], "commit never ran");
+});
+
+test("a blob that cannot be deleted is reported by count only, and the refusal still stands", async () => {
+  const world = fakeWorld();
+  const outcome = await withStagedEvidence(
+    { ...world.deps, remove: async () => { throw new Error("del failed for uploads/tenant/1-uuid.png"); } },
+    async (stage) => stage({ buffer: Buffer.from("x"), originalName: "x.png", mimeType: "image/png", fileName: "x", tag: "delivery-signature" }),
+    async () => { throw new LostRace("refused"); },
+  ).catch((error) => error);
+  assert.ok(outcome instanceof LostRace, "the original refusal is what the caller sees");
+  assert.equal(world.cleanupFailures.length, 1);
+  assert.equal(world.cleanupFailures[0].failed, 1);
+  // deliverQuote's handler logs a NEW error naming a count — never this message.
+  assert.match(delivery, /onCleanupFailure: \(error, failed\) =>\s*logError\(\s*"delivery-evidence-cleanup",\s*new Error\(`\$\{error instanceof Error \? error\.name : "Error"\}: \$\{failed\} unreferenced/);
+});
+
+test("a successful delivery keeps its blobs and commits its rows", async () => {
+  const world = fakeWorld();
+  await withStagedEvidence(
+    world.deps,
+    async (stage) => stage({ buffer: Buffer.from("x"), originalName: "x.png", mimeType: "image/png", fileName: "x", tag: "delivery-signature" }),
+    (_evidence, documents) => world.transaction(async (tx) => { for (const d of documents) tx.document.create({ ...d }); }),
+  );
+  assert.equal(world.storage.size, 1);
+  assert.equal(world.documents.length, 1);
+  assert.equal(world.documents[0].sizeBytes, 1);
+});
+
+test("the delivery files its evidence through staging: rows in the transaction, nothing written before it", () => {
+  const body = fn(delivery, "deliverQuote");
+  const staged = body.indexOf("withStagedEvidence(");
+  assert.notEqual(staged, -1, "deliverQuote must stage its evidence");
+  const before = strip(body.slice(0, staged));
+  assert.doesNotMatch(
+    before,
+    /\.(create|createMany|update|updateMany|upsert|delete|deleteMany)\(|logAudit\(|addStockEvent\(|emitLeadJourneyEvent\(|saveFile\(|\$transaction\(/,
+    "no write, upload, audit, timeline or journey event before the staged commit",
+  );
+  const tx = body.slice(body.indexOf("prisma.$transaction("));
+  assert.match(tx, /for \(const document of documents\) \{\s*await tx\.document\.create\(/, "Document rows are created inside the transaction");
+  assert.doesNotMatch(strip(body), /prisma\.document\.create\(/, "never outside it");
+  assert.match(body, /remove: deleteFile,/, "cleanup reuses the storage delete helper");
+  // Audit, stock timeline and the journey event only after the commit.
+  const committed = body.indexOf("const actor = {");
+  for (const after of ["addStockEvent(", "logAudit(", "emitLeadJourneyEvent("]) {
+    assert.ok(body.indexOf(after) > committed, `${after} must run after the commit`);
+  }
+  // markDelivered stages; it never uploads or files on its own.
+  const board = strip(fn(fulfilment, "markDelivered"));
+  assert.match(board, /collectEvidence: async \(quote, stage\)/);
+  assert.doesNotMatch(board, /saveFile\(|attachStageDocument\(|document\.create\(/);
 });
 
 /* ── #15: corrections ────────────────────────────────────────────────────── */

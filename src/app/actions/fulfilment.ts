@@ -518,10 +518,13 @@ export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) 
  * have one per template. A tenant with no active template is the legacy flow,
  * unchanged.
  *
- * The paperwork below (delivery note, customer signature) is stored by the
- * `collectEvidence` callback, which deliverQuote runs only AFTER every gate — a
- * refused delivery leaves no blob or Document row behind — and whose result is
- * written in the SAME update that records the delivery.
+ * The paperwork below (delivery note, customer signature) is STAGED by the
+ * `collectEvidence` callback, which deliverQuote runs only AFTER every gate.
+ * Staging uploads the blob only; the Document rows and the signature reference
+ * are written inside the delivery transaction, and if the delivery fails for any
+ * reason after staging — including losing a race at commit — the blobs this
+ * attempt uploaded are deleted. A refused delivery keeps no Document row; a blob
+ * whose delete itself fails is left unreferenced and logged (count only).
  */
 export async function markDelivered(
   quoteId: string,
@@ -543,9 +546,18 @@ export async function markDelivered(
       tenantId,
       user,
       handoverRunIds,
-      collectEvidence: async (quote): Promise<DeliveryEvidence> => {
+      // Files are STAGED, not filed: `stage` uploads the blob only. deliverQuote
+      // creates the Document rows inside the delivery transaction and deletes
+      // these blobs if the delivery fails, so a refused delivery keeps nothing.
+      collectEvidence: async (quote, stage): Promise<DeliveryEvidence> => {
         if (file) {
-          await attachStageDocument(quoteId, quote.contactId, "delivery-note", `Delivery note — Q-${quote.number} — ${file.name}`, file, user.id, quote.tenantId);
+          await stage({
+            buffer: Buffer.from(await file.arrayBuffer()),
+            originalName: file.name || "delivery-note.pdf",
+            mimeType: file.type || "application/pdf",
+            fileName: `Delivery note — Q-${quote.number} — ${file.name}`,
+            tag: "delivery-note",
+          });
         }
 
         const deliveredByName = String(formData.get("deliveredByName") ?? "").trim() || null;
@@ -561,19 +573,12 @@ export async function markDelivered(
           if (buffer.length > 0 && buffer.length <= MAX_FILE) {
             // The customer's signature on THIS quote's delivery — the quote owns it,
             // for the same reason its invoice and delivery note do.
-            deliverySignatureRef = await saveFile(buffer, `delivery-signature-Q${quote.number}.png`, "image/png", quote.tenantId);
-            await prisma.document.create({
-              data: {
-                tenantId: quote.tenantId,
-                fileName: `Delivery signature — Q-${quote.number}`,
-                storedName: deliverySignatureRef,
-                mimeType: "image/png",
-                sizeBytes: buffer.length,
-                contactId: quote.contactId,
-                quoteId,
-                tag: "delivery-signature",
-                uploadedById: user.id,
-              },
+            deliverySignatureRef = await stage({
+              buffer,
+              originalName: `delivery-signature-Q${quote.number}.png`,
+              mimeType: "image/png",
+              fileName: `Delivery signature — Q-${quote.number}`,
+              tag: "delivery-signature",
             });
           }
         }

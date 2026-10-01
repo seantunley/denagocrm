@@ -63,9 +63,10 @@ test("fulfilment documents inherit the quote owner as database ownership and blo
   assert.match(helper, /saveFile\([\s\S]*?, tenantId\)/);
   assert.match(helper, /prisma\.document\.create\(\{[\s\S]*?data: \{\s*tenantId,/);
 
-  const delivered = slice("markDelivered");
-  assert.match(delivered, /saveFile\([\s\S]*?, quote\.tenantId\)/);
-  assert.match(delivered, /document\.create\(\{[\s\S]*?data: \{\s*tenantId: quote\.tenantId,/);
+  // Delivery paperwork is staged by markDelivered and filed by deliverQuote,
+  // which uploads under the quote's owner and creates the rows in its transaction.
+  assert.match(delivery, /save: \(buffer, originalName, mimeType\) => saveFile\(buffer, originalName, mimeType, quote\.tenantId\)/);
+  assert.match(delivery, /tx\.document\.create\(\{\s*data: \{\s*tenantId: quote\.tenantId,/);
 });
 
 test("the old bare-id fulfilment quote updates cannot return", () => {
