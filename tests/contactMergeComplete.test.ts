@@ -59,6 +59,20 @@ test("a merge is confirmed, with who goes where, and audited with what moved and
   assert.match(merge, /if \(mergedOthers\.length === 0\) refuse\(/);
 });
 
+test("every unique identity on Contact moves off the duplicate (read from the schema)", () => {
+  // A unique column left on the soft-deleted duplicate keeps resolving inbound
+  // messages to the dead contact — xUserId was missed exactly that way.
+  const schema = src("prisma/schema.prisma");
+  const model = schema.slice(schema.indexOf("model Contact {"), schema.indexOf("\n}", schema.indexOf("model Contact {")));
+  const unique = new Set<string>();
+  for (const m of model.matchAll(/^\s+(\w+)\s+String\?\s+@unique/gm)) unique.add(m[1]);
+  for (const m of model.matchAll(/@@unique\(\[tenantId, (\w+)\]\)/g)) if (m[1] !== "id") unique.add(m[1]);
+  assert.ok(unique.has("messengerPsid") && unique.has("xUserId"), `schema scan found: ${[...unique].join(", ")}`);
+  const listed = merge.match(/const IDENTITY_FIELDS = \[([^\]]*)\]/)?.[1] ?? "";
+  const missing = [...unique].filter((field) => !listed.includes(`"${field}"`));
+  assert.deepEqual(missing, [], `merge leaves these on the duplicate: ${missing.join(", ")}`);
+});
+
 test("duplicates are found by the shared identity rules, not by stripping spaces", () => {
   const page = src("src/app/(app)/duplicates/page.tsx");
   assert.match(page, /const email = emailKey\(contact\.email\);/);

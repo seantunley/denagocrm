@@ -11,7 +11,10 @@ import { asActionResult, refuse } from "@/lib/actionResult";
 // Text profile fields the winner backfills from a loser only when it has none.
 const PROFILE_FIELDS = ["email", "phone", "whatsapp", "company", "address", "suburb", "city", "province", "postalCode", "notes"] as const;
 // Unique channel identities — must live on exactly one contact (or nowhere).
-const IDENTITY_FIELDS = ["messengerPsid", "instagramId", "referralCode"] as const;
+// xUserId is unique per tenant rather than globally, but a merge never crosses
+// tenants, so the same move-or-drop rule holds; left behind, the deleted
+// duplicate kept answering X DMs.
+const IDENTITY_FIELDS = ["messengerPsid", "instagramId", "xUserId", "referralCode"] as const;
 // Portal-preference booleans — merged conservatively (a disabled flag / opt-out
 // on EITHER side must stay off, so AND them; POPIA: never re-enable marketing).
 const PREF_FLAGS = ["serviceReminders", "portalNotifications", "marketingEmail", "emailServiceUpdates", "smsServiceUpdates", "emailMarketing"] as const;
