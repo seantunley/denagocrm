@@ -24,7 +24,7 @@ export default async function InboxPage() {
   const user = await requireUser();
   const workspaceTenantId = (await getActiveTenantId()) ?? DEFAULT_TENANT_ID;
   const scopeWhere = await accessibleInboxWhere(user);
-  const channelWhere = { type: { in: ["whatsapp", "messenger", "instagram", "x"] } };
+  const channelWhere = { type: { in: ["whatsapp", "messenger", "instagram", "x", "telegram"] } };
   const [activeComms, archivedComms, reviews, placeId] = await Promise.all([
     loadInboxComms({ ...channelWhere, ...scopeWhere }, { archived: false }),
     loadInboxComms({ ...channelWhere, ...scopeWhere }, { archived: true }),
@@ -135,6 +135,7 @@ export default async function InboxPage() {
           { label: "Messenger", icon: "/branding/social-facebook.png", count: channelCount("messenger") },
           { label: "Instagram", icon: "/branding/social-instagram.png", count: channelCount("instagram") },
           { label: "X", icon: "/branding/social-x.svg", count: channelCount("x") },
+          { label: "Telegram", icon: "/branding/social-telegram.svg", count: channelCount("telegram") },
         ].map((channel) => (
           <Surface key={channel.label} className="flex items-center gap-3 px-4 py-3">
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -154,6 +155,7 @@ export default async function InboxPage() {
           { key: "messenger", label: "Messenger", count: threadList.filter((thread) => thread.channel === "messenger" && thread.unread).length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "messenger")} empty="No Messenger conversations yet." /> },
           { key: "instagram", label: "Instagram", count: threadList.filter((thread) => thread.channel === "instagram" && thread.unread).length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "instagram")} empty="No Instagram DMs yet. They appear once the Instagram account and Meta messaging permissions are connected." /> },
           { key: "x", label: "X", count: threadList.filter((thread) => thread.channel === "x" && thread.unread).length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "x")} empty="No X conversations yet. Connect the tenant's X account in Settings → Integrations." /> },
+          { key: "telegram", label: "Telegram", count: threadList.filter((thread) => thread.channel === "telegram" && thread.unread).length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "telegram")} empty="No Telegram conversations yet. They appear once the Telegram bot is connected in Settings → Integrations." /> },
           { key: "reviews", label: "Google Reviews", count: reviews.length, content: reviewsPanel },
           { key: "archived", label: "Archived", count: archivedList.length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={archivedList} empty="Nothing archived. Archive finished or test conversations to keep the active queue focused." /> },
         ]}

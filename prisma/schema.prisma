@@ -401,6 +401,7 @@ model Contact {
   messengerPsid String?  @unique // Facebook Messenger page-scoped id
   instagramId   String?  @unique // Instagram-scoped user id
   xUserId       String? // X user id; unique only within its tenant
+  telegramChatId String? // Telegram chat id; unique only within its tenant (one bot per tenant)
   address       String? // street address / estate + unit
   suburb        String?
   city          String?
@@ -465,6 +466,7 @@ model Contact {
 
   @@index([tenantId])
   @@unique([tenantId, xUserId])
+  @@unique([tenantId, telegramChatId])
   @@index([fleetId])
   @@unique([tenantId, id])
 }
