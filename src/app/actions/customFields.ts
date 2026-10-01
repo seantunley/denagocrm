@@ -161,7 +161,7 @@ async function saveCustomFieldValuesBody(
   recordId: string,
   formData: FormData,
 ) {
-  if (!isCustomEntity(entity)) refuse("Those fields don't belong to a record type this app knows.");
+  if (!isCustomEntity(entity)) throw new Error("Unknown entity");
   await requireEntityEdit(entity, recordId);
   const defs = await getFieldDefs(entity);
   const basePath: Record<CustomEntity, string> = {
