@@ -108,6 +108,7 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
     label: "System",
     items: [
       { key: "system", label: "System Log", keywords: ["errors", "logs", "diagnostics"] },
+      { key: "queues", label: "Background queues", href: "/settings/queues", keywords: ["queue", "jobs", "outbox", "failed", "stuck", "worker", "signing jobs", "campaign sends", "journeys"] },
     ],
   },
 ];

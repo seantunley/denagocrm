@@ -2,11 +2,8 @@ import { prisma } from "@/lib/db";
 import { actingTenantMemberIds } from "@/lib/tenantActor";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { getActiveTenantId, requireUser } from "@/lib/auth";
+import { redirect } from "next/navigation";
 import {
-  createStage,
-  renameStage,
-  moveStage,
-  deleteStage,
   saveSetting,
   saveMyProfile,
   saveQuoteDefaults,
@@ -115,6 +112,10 @@ export default async function SettingsPage({
   // "change password", and a <details> that arrives closed has not answered the
   // request — the person still has to find and open it.
   const requestedTab = rawTab ?? "";
+  // The old single-pipeline stage editor that lived here was the second copy of
+  // /settings/pipelines (gap audit, batch 6) — which does all it did plus multiple
+  // pipelines and stage rules. Old links land there.
+  if (requestedTab === "pipeline") redirect("/settings/pipelines");
   const tab = visibleTabs.some((t) => t.key === requestedTab)
     ? requestedTab
     : isAdmin
@@ -132,11 +133,7 @@ export default async function SettingsPage({
   // Settings → Access needs to reactivate them — hence the membership-only list
   // rather than the assignable-staff one.
   const memberIds = await actingTenantMemberIds();
-  const [stages, users, settings, templates] = await Promise.all([
-    prisma.pipelineStage.findMany({
-      orderBy: { order: "asc" },
-      include: { _count: { select: { leads: true } } },
-    }),
+  const [users, settings, templates] = await Promise.all([
     prisma.user.findMany({
       where: memberIds === null ? {} : { id: { in: memberIds } },
       orderBy: { createdAt: "asc" },
@@ -243,50 +240,6 @@ export default async function SettingsPage({
       groups={visibleGroups}
     >
       {tab === "overview" && <SettingsOverview groups={visibleGroups} />}
-
-      {tab === "pipeline" && (
-        <div className="card">
-          <h2 className="font-semibold mb-1">Pipeline stages</h2>
-          <p className="text-xs text-muted-foreground mb-4">
-            The columns of your leads board, in order. Stages holding leads can&apos;t be deleted.
-          </p>
-          <ul className="space-y-2 mb-4">
-            {stages.map((s, i) => (
-              <li key={s.id} className="flex items-center gap-2">
-                <SaveForm success="Stage updated" resetOnSuccess={false} action={renameStage.bind(null, s.id)} className="flex items-center gap-2 flex-1">
-                  <input type="color" name="color" defaultValue={s.color} className="h-8 w-10 rounded cursor-pointer border border-border" />
-                  <input name="name" defaultValue={s.name} className="input flex-1" />
-                  <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
-                </SaveForm>
-                <SaveForm success="Stage reordered" resetOnSuccess={false} action={moveStage.bind(null, s.id, "up")}>
-                  <SaveButton className="btn-secondary btn-sm" disabled={i === 0}>↑</SaveButton>
-                </SaveForm>
-                <SaveForm success="Stage reordered" resetOnSuccess={false} action={moveStage.bind(null, s.id, "down")}>
-                  <SaveButton className="btn-secondary btn-sm" disabled={i === stages.length - 1}>↓</SaveButton>
-                </SaveForm>
-                {s._count.leads > 0 ? (
-                  <button className="btn-danger btn-sm" disabled title="Stage still has leads">
-                    ✕
-                  </button>
-                ) : (
-                  <ConfirmDelete
-                    action={deleteStage.bind(null, s.id)}
-                    title={`Delete stage “${s.name}”?`}
-                    description="This cannot be undone."
-                    trigger="✕"
-                    triggerClass="btn-danger btn-sm"
-                  />
-                )}
-              </li>
-            ))}
-          </ul>
-          <SaveForm success="Stage added" action={createStage} className="flex gap-2">
-            <input type="color" name="color" defaultValue="#64748b" className="h-9 w-10 rounded cursor-pointer border border-border" />
-            <input name="name" className="input flex-1" placeholder="New stage name…" required />
-            <SaveButton className="btn-primary">Add stage</SaveButton>
-          </SaveForm>
-        </div>
-      )}
 
       {tab === "account" && (
         // The modal is max-w-5xl; capping the content at 3xl left a dead strip down

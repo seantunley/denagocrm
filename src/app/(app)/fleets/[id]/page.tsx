@@ -27,6 +27,7 @@ import ConfirmDelete from "@/components/ConfirmDelete";
 import DocumentsPanel from "@/components/DocumentsPanel";
 import Tabs from "@/components/Tabs";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
+import ContactPicker from "@/components/ContactPicker";
 
 export const dynamic = "force-dynamic";
 
@@ -296,14 +297,12 @@ export default async function FleetDetailPage({ params }: { params: Promise<{ id
                           </option>
                         ))}
                       </select>
-                      <select name="contactId" className="input" defaultValue={fleet.contactId ?? ""}>
-                        <option value="">Primary contact (optional)…</option>
-                        {contacts.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {contactName(c)}
-                          </option>
-                        ))}
-                      </select>
+                      <ContactPicker
+                        name="contactId"
+                        options={contacts.map((c) => ({ id: c.id, label: contactName(c) }))}
+                        defaultValue={fleet.contactId ?? ""}
+                        emptyLabel="Primary contact (optional)…"
+                      />
                       <textarea name="notes" className="input" rows={2} defaultValue={fleet.notes ?? ""} placeholder="Notes" />
                       <button className="btn-secondary btn-sm">Save</button>
                     </form>

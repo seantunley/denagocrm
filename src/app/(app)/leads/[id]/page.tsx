@@ -45,6 +45,7 @@ import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
 import { leadAttribution, isAdClick } from "@/lib/attribution";
 import { Car, FileText } from "lucide-react";
+import ContactPicker from "@/components/ContactPicker";
 
 const RESEARCH_SUBJECT = "🔎 AI research";
 
@@ -392,18 +393,12 @@ export default async function LeadDetailPage({
                       <label className="label">
                         {lead.contact ? "Change linked customer" : "Link to customer"}
                       </label>
-                      <select
+                      <ContactPicker
                         name="contactId"
-                        className="input"
+                        options={contacts.map((c) => ({ id: c.id, label: contactName(c) }))}
                         defaultValue={lead.contactId ?? ""}
-                      >
-                        <option value="">Select customer…</option>
-                        {contacts.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {contactName(c)}
-                          </option>
-                        ))}
-                      </select>
+                        required
+                      />
                       <SaveButton className="btn-secondary btn-sm w-full">Save customer link</SaveButton>
                     </SaveForm>
                   </div>
