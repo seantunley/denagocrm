@@ -90,6 +90,12 @@ export async function sendEmail(input: {
    */
   replyTo?: string;
   /**
+   * Our own `Message-ID` (`<id@domain>`), for mail that must be threaded back:
+   * a customer's answer names it in In-Reply-To, and the IMAP sync matches that
+   * to the ticket. Omitted → nodemailer generates one, as before.
+   */
+  messageId?: string;
+  /**
    * The customer this mail is to. When given, the sent message is written to
    * their timeline once SMTP accepts it (and a failure to their audit trail) —
    * see lib/outboundMessageLog.ts. Omit it where the caller already logs its own
@@ -127,6 +133,7 @@ export async function sendEmail(input: {
       // Omitted entirely when absent, so mail that sets no Reply-To is
       // byte-for-byte what it was before this field existed.
       ...(input.replyTo ? { replyTo: input.replyTo } : {}),
+      ...(input.messageId ? { messageId: input.messageId } : {}),
     });
     await noteSmtpOutcome(config, null);
     if (input.record) await recordOutboundMessage({ ...logged, messageId: info?.messageId ?? null }, input.record);

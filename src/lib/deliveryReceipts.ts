@@ -8,11 +8,10 @@
  * not give us.
  *
  * WhatsApp is the exception: its `statuses` are per message id and exact. It is
- * still applied as a watermark here, for one reason — nothing on the send path
- * records the platform's message id. `sendWhatsAppText` and `sendDirectMessage`
- * both discard the response body, so there is no id to match against, and
- * threading one through every send and every recording call site is a larger
- * change than this feature needs. The inference is sound either way: WhatsApp
+ * still applied as a watermark here: the WhatsApp senders now return the wamid
+ * (stored on the outbox row and Communication.messageId), but rows written before
+ * that have none, and the watermark covers both. `failed` IS matched by wamid —
+ * see whatsappFailure. The inference is sound either way: WhatsApp
  * marks a conversation read in order, so if a message was read at T, the ones
  * before it were too.
  *
@@ -63,8 +62,7 @@ export function metaReceipt(
  *
  * `sent` is ignored: we already know we sent it — that is why there is a row. Only
  * the customer's side of the exchange is news. `failed` is not a receipt and is
- * deliberately not mapped to one; a failure needs its own treatment rather than
- * being recorded as a quieter kind of success.
+ * deliberately not mapped to one; it gets its own treatment — whatsappFailure.
  */
 export function whatsappReceipt(status: {
   status?: unknown;
@@ -80,6 +78,67 @@ export function whatsappReceipt(status: {
   const seconds = Number(status.timestamp);
   if (!Number.isFinite(seconds) || seconds <= 0) return null;
   return { channel: "whatsapp", recipientRef, level, at: new Date(seconds * 1000) };
+}
+
+/**
+ * A WhatsApp `failed` status: the message Meta ACCEPTED at send time and then
+ * could not deliver (131047 = outside the 24-hour window is the common one).
+ * The send already reported success, so this is the only place the failure
+ * surfaces. Matched by `wamid` — exact, never a watermark, because a failure of
+ * one message says nothing about its neighbours.
+ */
+export type WhatsAppFailure = { providerMessageId: string; failureCode: string; detail: string };
+
+// Meta's async delivery error codes, onto the classes messageDelivery renders.
+const WA_FAILURE_CODES: Record<number, string> = {
+  131047: "outside_window",
+  131026: "invalid_recipient",
+  131049: "rejected_by_recipient",
+  131050: "rejected_by_recipient",
+  130429: "rate_limited",
+  131048: "rate_limited",
+  131056: "rate_limited",
+};
+
+export function whatsappFailure(status: {
+  id?: unknown;
+  status?: unknown;
+  errors?: unknown;
+}): WhatsAppFailure | null {
+  if (status.status !== "failed") return null;
+  const providerMessageId = typeof status.id === "string" ? status.id : "";
+  if (!providerMessageId) return null;
+  const first = (Array.isArray(status.errors) ? status.errors[0] : null) as { code?: unknown; title?: unknown } | null;
+  const code = Number(first?.code);
+  const title = typeof first?.title === "string" ? first.title.slice(0, 200) : "";
+  // Code + Meta's generic title only. `error_data.details` can quote the
+  // recipient, and this lands in lastError.
+  const detail = [Number.isFinite(code) ? code : null, title || "WhatsApp could not deliver this message"].filter(Boolean).join(" ");
+  return { providerMessageId, failureCode: WA_FAILURE_CODES[code] ?? "provider_error", detail };
+}
+
+/** The outcome of one POST /messages. `providerMessageId` is the wamid. */
+export type WhatsAppSendResult = { ok: boolean; error?: string; providerMessageId?: string };
+
+/** Graph's reply to a send, as a result. Pure so the wamid capture is testable. */
+export function whatsappSendResult(res: { ok: boolean; status: number }, json: unknown): WhatsAppSendResult {
+  const body = json as { error?: { message?: unknown }; messages?: Array<{ id?: unknown }> } | null;
+  if (!res.ok) {
+    const message = body?.error?.message;
+    return { ok: false, error: typeof message === "string" ? message : `WhatsApp API error ${res.status}` };
+  }
+  const id = body?.messages?.[0]?.id;
+  return typeof id === "string" && id ? { ok: true, providerMessageId: id } : { ok: true };
+}
+
+/**
+ * A fetch that threw (timeout, DNS, TLS, reset) as a failed send, in the words
+ * the customer timeline already uses (#694). "could not reach" classifies as
+ * transient_network in classifyDeliveryFailure, so the outbox retries it.
+ */
+export function whatsappTransportFailure(error: unknown): WhatsAppSendResult {
+  const name = error instanceof Error ? error.name : "Error";
+  return { ok: false, error: `Could not reach WhatsApp (${name === "TimeoutError" || name === "AbortError" ? "timed out" : name})` };
 }
 
 function watermarkToDate(raw: unknown): Date | null {
