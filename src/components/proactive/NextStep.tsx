@@ -37,6 +37,7 @@ import { Button } from "@/components/ui/button";
 import { useActivityTypes } from "@/components/ActivityTypesProvider";
 import { pickableActivityTypes } from "@/lib/activityTypes";
 import { cn } from "@/lib/utils";
+import { AvailabilityConflictDialog } from "@/components/AvailabilityConflictDialog";
 
 const input =
   "w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/20";
@@ -64,6 +65,7 @@ export function NextStepDialog({
   const activityTypes = useActivityTypes();
   const [fuWhen, setFuWhen] = useState(defaultFollowUp());
   const [lostReason, setLostReason] = useState("");
+  const [availabilityConflict, setAvailabilityConflict] = useState<string | null>(null);
   const [shake, setShake] = useState(false);
   const [pending, start] = useTransition();
   const router = useRouter();
@@ -79,6 +81,7 @@ export function NextStepDialog({
     "flex w-full items-center gap-3 rounded-lg border border-border bg-card px-3 py-2.5 text-left text-sm transition-colors hover:border-primary/40 hover:bg-accent/50";
 
   return (
+    <>
     <Dialog
       open={open}
       onOpenChange={(o) => {
@@ -219,7 +222,7 @@ export function NextStepDialog({
                       toast.success("Follow-up scheduled");
                       reset();
                       onClose();
-                    } else toast.error(r.error ?? "Couldn't schedule");
+                    } else setAvailabilityConflict(r.error ?? "That time is not available.");
                   })
                 }
               >
@@ -286,6 +289,12 @@ export function NextStepDialog({
         )}
       </ResponsiveDialogContent>
     </Dialog>
+    <AvailabilityConflictDialog
+      message={availabilityConflict}
+      onClose={() => setAvailabilityConflict(null)}
+      title="Staff member unavailable"
+    />
+    </>
   );
 }
 
@@ -318,6 +327,12 @@ export function CompleteActivityButton({ activityId }: { activityId: string }) {
       >
         <Check className="size-4" />
       </button>
+      <AvailabilityConflictDialog
+        message={availabilityConflict}
+        onClose={() => setAvailabilityConflict(null)}
+        title="Staff member unavailable"
+      />
+
       {nextStep && (
         <NextStepDialog
           open
@@ -377,6 +392,7 @@ export function FollowUpPrompts({ prompts }: { prompts: OverduePrompt[] }) {
   const [reschedWhen, setReschedWhen] = useState(defaultFollowUp());
   const [view, setView] = useState<"ask" | "reschedule">("ask");
   const [nextStep, setNextStep] = useState<{ leadId: string; leadName: string } | null>(null);
+  const [availabilityConflict, setAvailabilityConflict] = useState<string | null>(null);
   const [pending, start] = useTransition();
 
   const current = eligible[idx];
@@ -499,7 +515,7 @@ export function FollowUpPrompts({ prompts }: { prompts: OverduePrompt[] }) {
                           if (r.ok) {
                             toast.success("Rebooked");
                             advance();
-                          } else toast.error(r.error ?? "Couldn't reschedule");
+                          } else setAvailabilityConflict(r.error ?? "That time is not available.");
                         })
                       }
                     >
