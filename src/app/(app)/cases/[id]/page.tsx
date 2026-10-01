@@ -22,6 +22,7 @@ import { AutoSubmitSelect } from "@/components/helpdesk/AutoSubmitSelect";
 import { TicketComposer } from "@/components/helpdesk/TicketComposer";
 import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import { cn } from "@/lib/utils";
+import { replyDeliveryNote } from "@/lib/helpdeskReplyEmail";
 
 export const dynamic = "force-dynamic";
 
@@ -104,12 +105,16 @@ export default async function TicketDetailPage({ params }: { params: Promise<{ i
               );
             }
             const staff = m.type === "staff";
+            const delivery = staff ? replyDeliveryNote(m.meta) : null;
             return (
               <article key={m.id} className={cn("card max-w-[92%]", staff ? "ml-auto border-primary/20 bg-primary/[0.04]" : "")}>
                 <div className="mb-1.5 flex items-center gap-2 text-xs text-muted-foreground">
                   <UserIcon className="size-3.5" /> {m.authorName ?? (staff ? "Staff" : "Customer")} · {formatDateTime(m.createdAt)}
                 </div>
                 <p className="whitespace-pre-wrap text-sm">{m.body}</p>
+                {delivery && (
+                  <p className={cn("mt-1.5 text-right text-[11px]", delivery.failed ? "text-red-400" : "text-muted-foreground")}>{delivery.text}</p>
+                )}
               </article>
             );
           })}
