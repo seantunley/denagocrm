@@ -1,5 +1,6 @@
 import "server-only";
 
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 
 export const DEFAULT_ACTIVITY_DURATION_MS = 60 * 60 * 1000;
@@ -13,15 +14,9 @@ export type StaffAvailabilityConflict = {
   note: string | null;
 };
 
-type ScheduleDb = {
-  activity: Pick<typeof prisma.activity, "findMany">;
-  testDriveBooking: Pick<typeof prisma.testDriveBooking, "findFirst">;
-  user: Pick<typeof prisma.user, "findUnique">;
-};
+type ScheduleDb = Pick<Prisma.TransactionClient, "activity" | "testDriveBooking" | "user">;
 
-type ScheduleLockDb = {
-  $executeRaw: typeof prisma.$executeRaw;
-};
+type ScheduleLockDb = Pick<Prisma.TransactionClient, "$executeRaw">;
 
 export type StaffCommitmentConflict = {
   userId: string;
