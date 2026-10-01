@@ -87,7 +87,7 @@ export async function createStaffAvailability(
     return { activity } as const;
   });
 
-  if ("conflict" in result) {
+  if ("conflict" in result && result.conflict) {
     return { error: commitmentConflictMessage(result.conflict) };
   }
 
