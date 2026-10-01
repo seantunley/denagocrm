@@ -72,6 +72,7 @@ export const PUSH_KINDS = [
   { id: "booking", label: "Service bookings", desc: "Online booking lands in the workshop diary" },
   { id: "service_request", label: "Portal service requests", desc: "A customer requests a service from the portal" },
   { id: "portal_case", label: "Support cases", desc: "A customer opens or replies to a support case in the portal" },
+  { id: "portal_upload", label: "Customer uploads", desc: "A customer uploads a document through the portal" },
   { id: "warranty", label: "Warranty claims", desc: "A customer lodges a warranty claim from the portal" },
   { id: "portal_profile", label: "Profile change requests", desc: "A customer requests a change to their contact details" },
   { id: "quote_viewed", label: "Quote opened", desc: "Customer views their signing link" },

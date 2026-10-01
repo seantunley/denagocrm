@@ -180,8 +180,9 @@ test("the durable rewrite keeps the reply bound to its own thread", () => {
   );
   // The recipient is still resolved from the resolved platform, never supplied
   // by the client, and there is still no cross-platform fallback.
-  assert.match(action, /platform === "instagram" \? contact\.instagramId : platform === "x" \? contact\.xUserId : contact\.messengerPsid/);
-  assert.match(action, /has no \$\{platform === "instagram" \? "Instagram" : platform === "x" \? "X" : "Messenger"\} identity/);
+  // Telegram joined with gap audit #29 — still derived from the resolved channel.
+  assert.match(action, /platform === "instagram" \? contact\.instagramId\s*: platform === "x" \? contact\.xUserId\s*: platform === "telegram" \? contact\.telegramChatId\s*: contact\.messengerPsid/);
+  assert.match(action, /has no \$\{platformName\} identity/);
   // And the queued row is addressed with exactly that pair.
   assert.match(action, /channel: platform,\s*\n\s*key: recipientId,/);
 });

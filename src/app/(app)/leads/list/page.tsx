@@ -231,7 +231,7 @@ function leadListActions(
 ): RecordContextAction[] {
   return [
     ...(canEdit
-      ? [{ label: "Edit lead", href: `/leads/${leadId}/edit`, icon: "edit" as const }]
+      ? [{ label: "Edit lead", href: `/leads/${leadId}?edit=1`, icon: "edit" as const }]
       : []),
     ...(canManageActivities
       ? [{

@@ -12,7 +12,7 @@ import { logError } from "@/lib/errorLog";
 import { resolveTenantActor } from "@/lib/tenantActor";
 import { bindCtx, logoDataUri } from "./render";
 import { embedDocImages } from "@/lib/doceditor/renderGlobals";
-import { logSignEvent } from "./events";
+import { buildSignEvent, logSignEvent } from "./events";
 import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "./status";
 import { requestTrustedTimestamp } from "./timestamp";
 import { runPostCompletion } from "./postComplete";
@@ -23,6 +23,7 @@ import {
   deliverCompletionEmails,
 } from "./completionFanout";
 import { exactTenantWhere } from "./recoveryScope";
+import { sendPushToAll } from "@/lib/push";
 
 /** Internal sentinel: the completion claim was lost to a concurrent close. */
 class CompletionLost extends Error {}
@@ -145,6 +146,45 @@ function acknowledgementsHtml(fields: AckField[], signers: AckSigner[], r: CertT
     <p style="color:#64748b;font-size:10pt;margin:0 0 12px">Every expected signer’s response to a field any recipient could complete, in signer order. The document stamps the first response; all are recorded here.</p>
     ${blocks}
   </div>`;
+}
+
+/** Event: everyone signed, but the source record can no longer be signed. */
+export const COMPLETION_BLOCKED_EVENT = "completion_blocked";
+
+/**
+ * Tell staff a fully-signed request is stuck — once per request, however many
+ * times completion is re-attempted. The push names the request's own tenant:
+ * completion runs from the signer's public link and the recovery worker, neither
+ * of which has a staff session to address it from.
+ */
+async function reportCompletionBlocked(req: { id: string; title: string; quoteId: string | null; jobCardId: string | null; tenantId: string | null }): Promise<void> {
+  // "Once" is decided under the request's row lock: the signer's link and the
+  // recovery sweep can both arrive here, and a bare check-then-create let both
+  // see "not yet", both write the event and both notify. Only the caller whose
+  // transaction wrote the event sends the push.
+  const claimed = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT id FROM "SignatureRequest" WHERE id = ${req.id} AND "tenantId" IS NOT DISTINCT FROM ${req.tenantId}::text FOR UPDATE`;
+    const already = await tx.signatureEvent.findFirst({
+      where: { requestId: req.id, type: COMPLETION_BLOCKED_EVENT },
+      select: { id: true },
+    });
+    if (already) return false;
+    await tx.signatureEvent.create({
+      data: buildSignEvent(req.id, { type: COMPLETION_BLOCKED_EVENT, actor: "system", metadata: { quoteId: req.quoteId, jobCardId: req.jobCardId } }),
+    });
+    return true;
+  });
+  if (!claimed) return;
+  const what = req.quoteId ? "quote" : req.jobCardId ? "job card" : "record";
+  await sendPushToAll(
+    {
+      title: "A signed document couldn't complete",
+      body: `Everyone signed “${req.title}”, but its ${what} changed after it was sent. Open it to send the current version.`.slice(0, 200),
+      url: `/signatures/${req.id}`,
+    },
+    "quote_signed",
+    { tenantId: req.tenantId },
+  ).catch(() => {});
 }
 
 /** Assemble the final signed PDF (document + certificate), seal it, file it, notify everyone. */
@@ -393,7 +433,15 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
     if (await signedPdfIsSafeToDelete(storedName, req.tenantId)) {
       await deleteFile(storedName).catch(() => {});
     }
-    if (err instanceof CompletionLost || err instanceof SourceCompletionLost) return;
+    if (err instanceof SourceCompletionLost) {
+      // Every signer has signed, but the quote/job card changed underneath the
+      // request (deleted, replaced by a revision) so it can never complete. This
+      // used to return silently and leave the request open forever (gap audit
+      // #32) — now staff are told, once, and the request page says why.
+      await reportCompletionBlocked(req).catch(() => {});
+      return;
+    }
+    if (err instanceof CompletionLost) return;
     throw err;
   }
 

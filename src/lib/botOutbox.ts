@@ -815,7 +815,8 @@ function timelineBody(row: OutboxRow): string | null {
 
 async function repairCommunicationLog(row: OutboxRow): Promise<boolean> {
   if (row.communicationLoggedAt) return false;
-  if (!row.actorId || !["whatsapp", "messenger", "instagram"].includes(row.channel)) {
+  // Telegram added with gap audit #29: its bot replies were sent and never shown.
+  if (!row.actorId || !["whatsapp", "messenger", "instagram", "telegram"].includes(row.channel)) {
     await prisma.botFlowOutbox.updateMany({ where: { id: row.id, status: "sent", communicationLoggedAt: null }, data: { communicationLoggedAt: new Date() } });
     return true;
   }

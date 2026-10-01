@@ -341,7 +341,16 @@ export async function uploadPortalFile(
       contactId: contact.id,
       userName: "Customer portal",
     });
+    // Nothing told staff a file had arrived (gap audit #30). It lands on the
+    // customer's Documents tab and in the Documents queue until reviewed.
+    await sendPushToAll({
+      title: "Customer uploaded a document",
+      body: `${contact.firstName}${contact.lastName ? ` ${contact.lastName}` : ""}: ${file.name}`.slice(0, 120),
+      url: caseId ? `/cases/${caseId}` : `/contacts/${contact.id}`,
+    }, "portal_upload").catch(() => {});
     revalidatePath("/portal/documents");
+    revalidatePath("/documents");
+    revalidatePath(`/contacts/${contact.id}`);
     if (caseId) revalidatePath(`/portal/support/${caseId}`);
     return { ok: "File uploaded securely." };
   } catch (error) {

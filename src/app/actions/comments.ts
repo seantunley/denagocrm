@@ -160,7 +160,7 @@ export async function privateReplyToComment(
         userName: user.name,
       });
 
-      revalidatePath("/comments");
+      revalidatePath("/inbox");
       return { success: "Private reply sent — their answer will arrive as a Messenger conversation." };
     }),
   );
@@ -231,7 +231,7 @@ export async function publicReplyToComment(
         userName: user.name,
       });
 
-      revalidatePath("/comments");
+      revalidatePath("/inbox");
       return { success: "Reply posted under the post." };
     }),
   );
@@ -273,7 +273,7 @@ export async function setCommentThreadArchived(
         userName: user.name,
       });
 
-      revalidatePath("/comments");
+      revalidatePath("/inbox");
       return { success: archived ? "Archived." : "Back in the active list." };
     }),
   );

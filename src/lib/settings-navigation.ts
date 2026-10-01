@@ -108,6 +108,7 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
     label: "System",
     items: [
       { key: "system", label: "System Log", keywords: ["errors", "logs", "diagnostics"] },
+      { key: "queues", label: "Background queues", href: "/settings/queues", keywords: ["queue", "jobs", "outbox", "failed", "stuck", "worker", "signing jobs", "campaign sends", "journeys"] },
     ],
   },
 ];
@@ -129,6 +130,35 @@ export function settingsItemEnabled(
 ): boolean {
   if (!item.module || !enabled) return true;
   return enabled.has(item.module);
+}
+
+export type SettingsViewer = { isOwner: boolean; permissions: readonly string[] };
+
+/**
+ * THE one rule for which settings entries a person is shown — the sidebar menu,
+ * the ⌘K palette, search, /settings and every settings page's own side nav all
+ * ask this. They used to disagree: the menu honoured `permission`, everything
+ * else showed non-owners only My Account (hiding pages they're allowed to use)
+ * or showed everyone everything (advertising pages that redirect them away).
+ */
+export function canSeeSettingsItem(item: SettingsNavItem, viewer: SettingsViewer): boolean {
+  if (viewer.isOwner || item.everyone) return true;
+  if (!item.permission) return false;
+  const need = Array.isArray(item.permission) ? item.permission : [item.permission];
+  return need.some((permission) => viewer.permissions.includes(permission));
+}
+
+export function visibleSettingsGroups(
+  viewer: SettingsViewer,
+  enabled?: ReadonlySet<string>,
+  groups: SettingsNavGroup[] = SETTINGS_NAV_GROUPS,
+): SettingsNavGroup[] {
+  return groups
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => canSeeSettingsItem(item, viewer) && settingsItemEnabled(item, enabled)),
+    }))
+    .filter((group) => group.items.length > 0);
 }
 
 // Aliases used by the visual-consistency components (SettingsNav / search).
