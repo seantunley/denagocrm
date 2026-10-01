@@ -35,6 +35,8 @@ import { getActiveTenantId } from "@/lib/auth";
 import { isSmtpConfigured, renderTemplate, leadVars } from "@/lib/email";
 import { contactName, formatDate, formatDateTime, formatZAR } from "@/lib/format";
 import { payableTotalCents } from "@/lib/pricing";
+import { getAccessibleQuoteIds } from "@/lib/permissions";
+import { quotePrintLinks } from "@/lib/quotePrintLinks";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
@@ -130,6 +132,10 @@ export default async function LeadDetailPage({
   // Marketing attribution the website captured with the enquiry (ad click / UTMs).
   const attribution = leadAttribution(lead.raw);
   const fromAd = isAdClick(attribution);
+  // Invoice / agreement links only for quotes the print routes would open:
+  // requireQuoteReadAccess is quote view permission + getAccessibleQuoteIds.
+  const printableQuoteIds = await getAccessibleQuoteIds(user);
+  const canPrintQuote = (quoteId: string) => printableQuoteIds === null || printableQuoteIds.includes(quoteId);
 
   return (
     <>
@@ -434,6 +440,11 @@ export default async function LeadDetailPage({
                               >
                                 {q.supersededAt ? "superseded" : q.status}
                               </span>
+                              {!q.supersededAt && canPrintQuote(q.id) && quotePrintLinks(q).map((link) => (
+                                <a key={link.href} href={link.href} target="_blank" rel="noreferrer" className="text-xs text-orange-400 hover:underline">
+                                  {link.label}
+                                </a>
+                              ))}
                             </li>
                           );
                         })}
