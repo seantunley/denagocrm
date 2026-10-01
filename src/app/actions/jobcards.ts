@@ -463,20 +463,33 @@ export async function updateJobCardDetails(jobCardId: string, formData: FormData
 
     const before = await prisma.jobCard.findUniqueOrThrow({
       where: { id: jobCardId },
-      select: { number: true, status: true, description: true, kmIn: true, vehicleId: true, contactId: true },
+      select: { number: true, status: true, description: true, kmIn: true, vehicleId: true, contactId: true, tenantId: true },
     });
-    if (before.status === "collected") refuse("This job card is completed — reopen it to change its details.");
+    const completed = "This job card is completed — reopen it to change its details.";
+    if (before.status === "collected") refuse(completed);
     if (before.description === description && before.kmIn === kmIn) return { success: "No changes" };
 
     const checkInNote = `Job card #${before.number} check-in`;
+    // The card's owner, not whoever is editing it; acting workspace only for a pre-tenancy card.
+    const tenantId = before.tenantId ?? (await actingTenantId());
     await prisma.$transaction(async (tx) => {
-      await tx.jobCard.update({ where: { id: jobCardId }, data: { description, kmIn } });
+      // The collected check is re-made by the write itself: a card completed
+      // between the read above and here matches nothing and the edit refuses.
+      const { count } = await tx.jobCard.updateMany({
+        where: { id: jobCardId, status: { not: "collected" } },
+        data: { description, kmIn },
+      });
+      if (count === 0) refuse(completed);
       // Keep the vehicle's mileage history in step with the corrected reading.
       if (before.kmIn !== kmIn) {
         const log = await tx.mileageLog.findFirst({ where: { vehicleId: before.vehicleId, note: checkInNote } });
         if (log && kmIn != null) await tx.mileageLog.update({ where: { id: log.id }, data: { km: kmIn } });
         else if (log) await tx.mileageLog.delete({ where: { id: log.id } });
-        else if (kmIn != null) await tx.mileageLog.create({ data: { vehicleId: before.vehicleId, km: kmIn, note: checkInNote } });
+        else if (kmIn != null) {
+          await tx.mileageLog.create({
+            data: { tenantId, vehicleId: before.vehicleId, km: kmIn, note: checkInNote },
+          });
+        }
       }
     });
 
