@@ -14,6 +14,9 @@ const deliveryNoteSource = readFileSync("src/app/(print)/quotes/[id]/delivery-no
 // Which runs and which signature the note shows: one loader, shared by the fixed
 // layout and the document-editor layout so the two cannot pick differently.
 const deliveryEvidenceSource = readFileSync("src/lib/deliveryServicePrint.ts", "utf8");
+// The delivery itself — gates, evidence and the write — shared by the board's
+// markDelivered and the stock page's deliverStockUnit, so neither can skip them.
+const deliverySource = readFileSync("src/lib/quoteDelivery.ts", "utf8");
 
 test("guided delivery is unavailable rather than implicitly complete with no template", () => {
   assert.deepEqual(deliveryHandoverReadiness([], []), {
@@ -165,14 +168,14 @@ test("completion records the runs it validated, in the same write as the deliver
   assert.match(guided, /orderBy: \{ completedAt: "desc" \}/, "newest-first is what makes the choice deterministic");
   assert.match(guided, /markDelivered\(quoteId, formData, signedRunIds\)/, "the pinned ids must reach the write");
 
-  const fulfilment = readFileSync("src/app/actions/fulfilment.ts", "utf8");
+  const fulfilment = deliverySource;
   assert.match(fulfilment, /deliveryHandoverRunIds\s*\}/, "they must land in the delivery update itself");
 });
 
 test("the ids are re-verified against the quote, never trusted", () => {
   // They arrive server-to-server, but a caller inside the process is still a
   // caller — and a note signed against a partial set is worse than none.
-  const fulfilment = readFileSync("src/app/actions/fulfilment.ts", "utf8");
+  const fulfilment = deliverySource;
   assert.match(fulfilment, /hostType: "quote\.delivery",\s*\n\s*hostId: quoteId,/, "scoped to THIS quote");
   assert.match(fulfilment, /completedAt: \{ not: null \}/, "and to completed runs only");
   // The de-duplication moved into `requestedRunIds` when the readiness gate was
@@ -202,7 +205,7 @@ test("the note never re-derives the selection for itself", () => {
  * checklist was still unfinished, and be recorded with partial evidence.
  */
 test("the legacy delivery action enforces the guided gate itself", () => {
-  const fulfilment = readFileSync("src/app/actions/fulfilment.ts", "utf8");
+  const fulfilment = deliverySource;
 
   assert.match(
     fulfilment,
@@ -218,7 +221,7 @@ test("the legacy delivery action enforces the guided gate itself", () => {
 });
 
 test("readiness is judged on VERIFIED runs, never on what the caller claimed", () => {
-  const fulfilment = readFileSync("src/app/actions/fulfilment.ts", "utf8");
+  const fulfilment = deliverySource;
   const gate = fulfilment.slice(fulfilment.indexOf("const requestedRunIds"));
 
   // The database lookup must come first, and readiness must be judged on its
@@ -248,7 +251,7 @@ test("readiness is judged on VERIFIED runs, never on what the caller claimed", (
 test("a tenant with no configured handover keeps the legacy flow", () => {
   // The gate is scoped to what the tenant actually configured. No active
   // template means no guided handover, and proof-of-delivery is untouched.
-  const fulfilment = readFileSync("src/app/actions/fulfilment.ts", "utf8");
+  const fulfilment = deliverySource;
   assert.match(fulfilment, /if \(handoverTemplates\.length > 0\) \{/, "the gate must be conditional on configuration");
 
   // Stated as behaviour too: with no templates, readiness reports unconfigured
@@ -280,33 +283,47 @@ test("a partial set of genuine runs is still refused", () => {
  * storage attached to a real quote.
  *
  * The gate only reads, so it costs nothing to run first.
+ *
+ * Since both delivery buttons share deliverQuote, the paperwork is stored by the
+ * board's `collectEvidence` callback, which deliverQuote calls only after its
+ * gates. So: every write in deliverQuote comes after the gate, and every write
+ * in markDelivered lives inside that callback.
  */
-test("the guided gate runs before markDelivered writes anything", () => {
-  const fulfilment = readFileSync("src/app/actions/fulfilment.ts", "utf8");
-  const start = fulfilment.indexOf("export async function markDelivered(");
-  assert.notEqual(start, -1, "markDelivered not found — was it renamed?");
-  const after = fulfilment.slice(start + 1);
+test("the guided gate runs before the delivery writes anything", () => {
+  const start = deliverySource.indexOf("export async function deliverQuote(");
+  assert.notEqual(start, -1, "deliverQuote not found — was it renamed?");
+  const after = deliverySource.slice(start + 1);
   const next = after.indexOf("\nexport async function ");
   const body = next === -1 ? after : after.slice(0, next);
 
   const gate = body.indexOf("deliveryHandoverReadiness(handoverTemplates, verifiedRuns)");
-  assert.notEqual(gate, -1, "the readiness gate must be inside markDelivered");
+  assert.notEqual(gate, -1, "the readiness gate must be inside deliverQuote");
 
-  // Every side effect, by name. Each must come after the gate.
   for (const [what, needle] of [
-    ["the delivery-note upload", "attachStageDocument("],
-    ["the signature blob", "saveFile("],
-    ["the signature Document row", "prisma.document.create("],
-    ["the delivery itself", "prisma.quote.updateMany("],
+    ["the caller's paperwork", "input.collectEvidence("],
+    ["the delivery itself", "tx.quote.updateMany("],
+    ["the stock hand-over", "tx.stockUnit.updateMany("],
+    ["the vehicle record", "tx.vehicle.create("],
   ] as const) {
     const at = body.indexOf(needle);
-    assert.notEqual(at, -1, `${what} not found — has markDelivered been restructured?`);
+    assert.notEqual(at, -1, `${what} not found — has deliverQuote been restructured?`);
     assert.ok(at > gate, `${what} must not run before the guided gate — a refusal would leave it behind`);
   }
 
   // And the id verification must precede the gate that judges it.
   const verify = body.indexOf("prisma.checklistRun.findMany(");
   assert.ok(verify !== -1 && verify < gate, "ids are verified, then judged");
+
+  // markDelivered writes nothing itself: it only STAGES its paperwork, inside
+  // the callback deliverQuote runs late, and deliverQuote files it.
+  const board = readFileSync("src/app/actions/fulfilment.ts", "utf8");
+  const md = board.slice(board.indexOf("export async function markDelivered("));
+  const callback = md.indexOf("collectEvidence: async (quote, stage)");
+  assert.notEqual(callback, -1, "markDelivered must hand its paperwork to deliverQuote as a callback");
+  assert.ok(md.indexOf("await stage(") > callback, "files are staged inside collectEvidence");
+  for (const write of [/attachStageDocument\(/, /saveFile\(/, /document\.create\(/, /prisma\.quote\.updateMany\(/]) {
+    assert.doesNotMatch(md, write, "the delivery's writes belong to deliverQuote alone");
+  }
 });
 
 /* ── the note reviewed is the note signed ────────────────────────────────── */

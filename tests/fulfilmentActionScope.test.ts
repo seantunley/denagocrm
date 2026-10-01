@@ -10,7 +10,9 @@ const source = readFileSync(path.join(root, "src/app/actions/fulfilment.ts"), "u
 const actions = [
   "markInvoiced",
   "markDepositPaid",
+  "correctDepositAmount",
   "scheduleDelivery",
+  "rescheduleDelivery",
   "registerDeliveryPhotos",
   "uploadDeliveryPhotos",
   "markDelivered",

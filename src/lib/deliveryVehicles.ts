@@ -49,14 +49,77 @@ export type VehicleToRegister = {
   color: string;
 };
 
+/** Stock statuses that mean the unit has been handed over (and has its vehicle). */
+export const DELIVERED_STOCK_STATUSES = ["delivered", "sold"] as const;
+
+/**
+ * What to do with a live vehicle that already carries a delivered cart's VIN.
+ *
+ *   same customer as the quote → reuse it (the one-vehicle-per-cart rule)
+ *   no customer on it          → attach it to the quote's customer (audited)
+ *   a DIFFERENT customer       → refuse the whole delivery; never reassign
+ *
+ * Reusing without this check handed a cart to one customer while its vehicle
+ * record — service history, warranty identity — stayed on somebody else.
+ */
+export type VinMatch = "reuse" | "attach" | "conflict";
+
+export function vinMatch(vehicleContactId: string | null, quoteContactId: string): VinMatch {
+  if (!vehicleContactId) return "attach";
+  return vehicleContactId === quoteContactId ? "reuse" : "conflict";
+}
+
+/** Last 4 of the VIN only — never the other customer's name or details. */
+export function vinConflictMessage(serial: string): string {
+  return `Cart …${serial.slice(-4)} is already registered to another customer — check the stock unit or transfer the vehicle first. Nothing was changed.`;
+}
+
+/** The only stock status a cart can be handed over from: PDI passed. */
+export const DELIVERABLE_STATUS = "ready_for_delivery";
+
+const NOT_READY_REASON: Record<string, string> = {
+  allocated: "PDI not started",
+  pdi: "still in PDI",
+  hold: "on hold",
+  damaged: "marked damaged",
+};
+
+/**
+ * Why a delivery is refused: each cart that is not ready, and the reason. Named
+ * by stock number, else the last 4 of its serial — never the customer.
+ */
+export function notReadyMessage(
+  quoteNumber: number,
+  units: readonly { stockNumber: string | null; serial: string | null; status: string }[],
+): string {
+  const list = units
+    .map((unit) => {
+      const name = unit.stockNumber ?? (unit.serial ? `unit …${unit.serial.slice(-4)}` : "an unnumbered unit");
+      return `${name} (${NOT_READY_REASON[unit.status] ?? unit.status.replaceAll("_", " ")})`;
+    })
+    .join(", ");
+  return `Q-${quoteNumber} can't be delivered yet — ${units.length === 1 ? "this cart is" : "these carts are"} not ready: ${list}. Complete PDI (or resolve the hold) on the stock page first. Nothing was changed.`;
+}
+
 /**
  * Expand a delivered quote's lines into one entry per physical vehicle.
  *
  * EXPANDED, not counted. The caller walks the customer through registrations one
  * at a time, and two units of different models must preselect different products
  * — a bare count could not express that.
+ *
+ * `fromStock` — the quote's stock units that are already delivered. Each one got
+ * its vehicle record automatically at delivery (lib/quoteDelivery.ts), so it is
+ * taken off the queue, one entry per unit of the same product. Without this the
+ * customer was asked to register a cart the stock flow had already created, and
+ * ended up with two vehicle records for one cart.
  */
-export function vehiclesAwaitingRegistration(lines: DeliveryQuoteLine[]): VehicleToRegister[] {
+export function vehiclesAwaitingRegistration(
+  lines: DeliveryQuoteLine[],
+  fromStock: readonly { productId: string }[] = [],
+): VehicleToRegister[] {
+  const covered = new Map<string, number>();
+  for (const unit of fromStock) covered.set(unit.productId, (covered.get(unit.productId) ?? 0) + 1);
   const queue: VehicleToRegister[] = [];
   for (const line of lines) {
     if (!line.productId) continue;
@@ -70,6 +133,11 @@ export function vehiclesAwaitingRegistration(lines: DeliveryQuoteLine[]): Vehicl
     // a line that exists was sold at least once.
     const units = Math.max(1, Math.floor(line.qty));
     for (let i = 0; i < units; i++) {
+      const left = covered.get(line.productId) ?? 0;
+      if (left > 0) {
+        covered.set(line.productId, left - 1);
+        continue;
+      }
       queue.push({
         productId: line.productId,
         model: line.product?.name ?? line.description,
