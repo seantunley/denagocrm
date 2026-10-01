@@ -6,6 +6,9 @@ import { SendVoidBar, RecipientControls } from "./SigningClient";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
 import { FileCheck2, FileText } from "lucide-react";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
+import { resendSignedCopies } from "@/app/actions/signhub";
+import { isRequestClosed } from "@/lib/signing/status";
 
 export const dynamic = "force-dynamic";
 
@@ -52,6 +55,25 @@ export default async function SignatureDetail({ params }: { params: Promise<{ id
   const card = "rounded-xl border border-border bg-card p-4 shadow-sm";
   const closed = req.status === "completed" || req.status === "voided";
 
+  // ── Gap audit #32: the two states that used to look fine and weren't ──
+  // 1. Everyone signed, but the quote/job card changed after sending, so the
+  //    request can never complete. Same test completion applies (complete.ts):
+  //    the quote is gone or superseded, or the job card is gone.
+  const allSigned = req.recipients.some((r) => r.role !== "viewer") && req.recipients.filter((r) => r.role !== "viewer").every((r) => r.status === "signed");
+  let blockedReason: string | null = null;
+  if (allSigned && !isRequestClosed(req.status)) {
+    if (req.quoteId) {
+      const quote = await prisma.quote.findUnique({ where: { id: req.quoteId }, select: { deletedAt: true, supersededAt: true } });
+      if (!quote || quote.deletedAt) blockedReason = "its quote was deleted after it was sent";
+      else if (quote.supersededAt) blockedReason = "its quote was replaced by a newer revision after it was sent";
+    } else if (req.jobCardId) {
+      const jobCard = await prisma.jobCard.findUnique({ where: { id: req.jobCardId }, select: { deletedAt: true } });
+      if (!jobCard || jobCard.deletedAt) blockedReason = "its job card was deleted after it was sent";
+    }
+  }
+  // 2. Completed, but the signed copy never reached some recipients.
+  const missingCopy = req.status === "completed" ? req.recipients.filter((r) => r.email && !r.completedEmailSentAt) : [];
+
   // Shared fields (recipientId null, fillable by anyone) keep only the FIRST
   // value on SignatureField — the one the sealed PDF stamps. Every signer's own
   // answer lives in SignatureFieldResponse. Surface this as an AUDIT view: list
@@ -89,6 +111,25 @@ export default async function SignatureDetail({ params }: { params: Promise<{ id
       ]}
       actions={<SendVoidBar requestId={req.id} status={req.status} />}
     >
+      {blockedReason && (
+        <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm">
+          <p className="font-semibold text-amber-200">Everyone signed, but this can&apos;t complete</p>
+          <p className="mt-1 text-muted-foreground">
+            It stays open because {blockedReason}, so there is nothing current to attach the signatures to. Void this request and send the current version for signing.
+          </p>
+        </div>
+      )}
+      {missingCopy.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-sm">
+          <div className="min-w-0 flex-1">
+            <p className="font-semibold text-red-200">Completed — but the signed copy didn&apos;t reach everyone</p>
+            <p className="mt-1 text-muted-foreground">Not delivered to: {missingCopy.map((r) => r.name).join(", ")}.</p>
+          </div>
+          <SaveForm action={resendSignedCopies.bind(null, req.id)}>
+            <SaveButton className="btn-primary btn-sm" pendingLabel="Sending…">Send signed copy again</SaveButton>
+          </SaveForm>
+        </div>
+      )}
 
       <div className={card}>
         <div className="flex flex-wrap gap-2">

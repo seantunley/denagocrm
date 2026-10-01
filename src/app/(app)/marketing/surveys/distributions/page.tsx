@@ -7,6 +7,7 @@ import { MetricCard, MetricStrip, SectionHeading, StatusPill, Surface } from "@/
 import MarketingPageHeader from "@/components/marketing/MarketingPageHeader";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 import { createDistribution } from "@/app/actions/surveyDistributions";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 
 export default async function SurveyDistributionsPage() {
   await requirePermission("surveys.manage");
@@ -51,7 +52,7 @@ export default async function SurveyDistributionsPage() {
 
     <Surface className="overflow-visible p-5">
       <SectionHeading title="Create a distribution" description="Choose a published survey, bounded audience, channel and reminder policy." />
-    <form action={createDistribution} className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+    <SaveForm action={createDistribution} className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
       <div><label className="text-xs font-medium uppercase text-muted-foreground">Distribution name</label><input name="name" className="input-base mt-1 w-full" placeholder="July service follow-up" required /></div>
       <div><label className="text-xs font-medium uppercase text-muted-foreground">Published survey</label><select name="surveyId" className="input-base mt-1 w-full" required>{surveys.map((survey) => <option key={survey.id} value={survey.id}>{survey.title} · v{survey.publishedVersion}</option>)}</select></div>
       <div><label className="text-xs font-medium uppercase text-muted-foreground">Audience</label><select name="segment" className="input-base mt-1 w-full"><option value="customers">All reachable contacts</option><option value="vehicle_owners">Vehicle owners</option><option value="won_leads">Won customers</option></select></div>
@@ -60,8 +61,8 @@ export default async function SurveyDistributionsPage() {
       <div><label className="text-xs font-medium uppercase text-muted-foreground">Schedule</label><input type="datetime-local" name="scheduledFor" className="input-base mt-1 w-full" /></div>
       <div><label className="text-xs font-medium uppercase text-muted-foreground">Reminder after hours</label><input type="number" name="reminderAfterHours" min="1" max="720" defaultValue="48" className="input-base mt-1 w-full" /></div>
       <div><label className="text-xs font-medium uppercase text-muted-foreground">Maximum reminders</label><input type="number" name="maxReminders" min="0" max="3" defaultValue="1" className="input-base mt-1 w-full" /></div>
-      <div className="md:col-span-2 xl:col-span-4"><button className="btn-primary" disabled={surveys.length === 0}>Create queued distribution</button>{surveys.length === 0 && <span className="ml-3 text-sm text-muted-foreground">Publish a survey first.</span>}</div>
-    </form>
+      <div className="md:col-span-2 xl:col-span-4"><SaveButton className="btn-primary" disabled={surveys.length === 0} pendingLabel="Creating…">Create queued distribution</SaveButton>{surveys.length === 0 && <span className="ml-3 text-sm text-muted-foreground">Publish a survey first.</span>}</div>
+    </SaveForm>
     </Surface>
 
     <ResponsiveEntityTable>

@@ -1,6 +1,5 @@
 "use server";
 
-import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma, basePrisma } from "@/lib/db";
 import { requirePermission } from "@/lib/permissions";
@@ -8,7 +7,10 @@ import { requireModuleEnabled } from "@/lib/modules/enabled";
 import { getActiveTenantId } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { createSurveyDistribution } from "@/lib/surveyDistributionQueue";
-import { withActingStaffScope } from "@/lib/actingScope";
+// asActionResult (which binds the acting workspace itself) so a refusal comes
+// back as a message the form shows — a thrown Error reached staff as the generic
+// "This page hit an error" (gap audit #22).
+import { asActionResult, refuse } from "@/lib/actionResult";
 
 async function distributionContext() {
   await requireModuleEnabled("marketing");
@@ -43,13 +45,14 @@ function refresh(id?: string) {
 }
 
 export async function createDistribution(formData: FormData) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     const { user, tenantId } = await distributionContext();
     const surveyId = String(formData.get("surveyId") ?? "");
+    if (!surveyId) refuse("Choose the survey to send.");
     const segment = String(formData.get("segment") ?? "customers");
     const scheduledRaw = String(formData.get("scheduledFor") ?? "").trim();
     const scheduledFor = scheduledRaw ? new Date(scheduledRaw) : null;
-    if (scheduledFor && Number.isNaN(scheduledFor.getTime())) throw new Error("Invalid schedule date");
+    if (scheduledFor && Number.isNaN(scheduledFor.getTime())) refuse("Enter a valid date and time for the schedule.");
     const contactIds = await resolveAudience(segment);
     const id = await createSurveyDistribution({
       tenantId,
@@ -65,7 +68,8 @@ export async function createDistribution(formData: FormData) {
       maxReminders: Number(formData.get("maxReminders") ?? 1),
     });
     await logAudit({ action: "survey.distribution_created", summary: `Created survey distribution ${id} for ${contactIds.length} contacts`, user });
-    redirect(`/marketing/surveys/distributions/${id}`);
+    // Returned, not thrown: SaveForm navigates only when the action says it saved.
+    return { redirectTo: `/marketing/surveys/distributions/${id}`, success: "Distribution created" };
   });
 }
 
@@ -75,63 +79,70 @@ async function distribution(id: string, tenantId: string | null) {
     WHERE "id" = ${id} AND "tenantId" IS NOT DISTINCT FROM ${tenantId}
     LIMIT 1
   `;
-  if (!rows[0]) throw new Error("Distribution not found");
+  if (!rows[0]) refuse("That distribution is no longer there — refresh the page.");
   return rows[0];
 }
 
 export async function pauseDistribution(formData: FormData) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     const { user, tenantId } = await distributionContext();
     const id = String(formData.get("id") ?? "");
     const current = await distribution(id, tenantId);
-    if (!new Set(["queued", "sending", "scheduled"]).has(current.status)) throw new Error("This distribution cannot be paused");
+    if (!new Set(["queued", "sending", "scheduled"]).has(current.status)) refuse("This distribution can't be paused now.");
     await basePrisma.$executeRaw`UPDATE "SurveyDistribution" SET "status" = 'paused', "pausedAt" = CURRENT_TIMESTAMP, "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = ${id} AND "tenantId" IS NOT DISTINCT FROM ${tenantId}`;
     await logAudit({ action: "survey.distribution_paused", summary: `Paused survey distribution ${id}`, user });
     refresh(id);
+    return { success: "Paused" };
   });
 }
 
 export async function resumeDistribution(formData: FormData) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     const { user, tenantId } = await distributionContext();
     const id = String(formData.get("id") ?? "");
     const current = await distribution(id, tenantId);
-    if (current.status !== "paused") throw new Error("Only a paused distribution can be resumed");
+    if (current.status !== "paused") refuse("Only a paused distribution can be resumed.");
     await basePrisma.$executeRaw`UPDATE "SurveyDistribution" SET "status" = 'queued', "pausedAt" = NULL, "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = ${id} AND "tenantId" IS NOT DISTINCT FROM ${tenantId}`;
     await logAudit({ action: "survey.distribution_resumed", summary: `Resumed survey distribution ${id}`, user });
     refresh(id);
+    return { success: "Resumed" };
   });
 }
 
 export async function cancelDistribution(formData: FormData) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     const { user, tenantId } = await distributionContext();
     const id = String(formData.get("id") ?? "");
     const current = await distribution(id, tenantId);
-    if (new Set(["completed", "completed_with_errors", "cancelled"]).has(current.status)) throw new Error("This distribution is already closed");
+    if (new Set(["completed", "completed_with_errors", "cancelled"]).has(current.status)) refuse("This distribution is already closed.");
     await basePrisma.$transaction(async (tx) => {
       await tx.$executeRaw`UPDATE "SurveyDistribution" SET "status" = 'cancelled', "cancelledAt" = CURRENT_TIMESTAMP, "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = ${id} AND "tenantId" IS NOT DISTINCT FROM ${tenantId}`;
       await tx.$executeRaw`UPDATE "SurveyResponse" SET "status" = 'cancelled', "providerStatus" = 'distribution_cancelled' WHERE "distributionId" = ${id} AND "tenantId" IS NOT DISTINCT FROM ${tenantId} AND "status" IN ('queued', 'failed_temporary')`;
     });
     await logAudit({ action: "survey.distribution_cancelled", summary: `Cancelled survey distribution ${id}`, user });
     refresh(id);
+    return { success: "Remaining invites cancelled" };
   });
 }
 
 export async function retryDistributionFailures(formData: FormData) {
-  const { user, tenantId } = await distributionContext();
-  const id = String(formData.get("id") ?? "");
-  await distribution(id, tenantId);
-  const count = await basePrisma.$executeRaw`
-    UPDATE "SurveyResponse"
-    SET "status" = 'queued', "nextAttemptAt" = CURRENT_TIMESTAMP, "providerStatus" = 'manual_retry'
-    WHERE "distributionId" = ${id}
-      AND "tenantId" IS NOT DISTINCT FROM ${tenantId}
-      AND "status" = 'failed_permanent'
-  `;
-  if (count > 0) {
-    await basePrisma.$executeRaw`UPDATE "SurveyDistribution" SET "status" = 'queued', "failedCount" = GREATEST(0, "failedCount" - ${count}), "completedAt" = NULL, "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = ${id} AND "tenantId" IS NOT DISTINCT FROM ${tenantId}`;
-  }
-  await logAudit({ action: "survey.distribution_retried", summary: `Queued ${count} failed survey invites for manual retry`, user });
-  refresh(id);
+  // Was the one action here with no workspace bound at all.
+  return asActionResult(async () => {
+    const { user, tenantId } = await distributionContext();
+    const id = String(formData.get("id") ?? "");
+    await distribution(id, tenantId);
+    const count = await basePrisma.$executeRaw`
+      UPDATE "SurveyResponse"
+      SET "status" = 'queued', "nextAttemptAt" = CURRENT_TIMESTAMP, "providerStatus" = 'manual_retry'
+      WHERE "distributionId" = ${id}
+        AND "tenantId" IS NOT DISTINCT FROM ${tenantId}
+        AND "status" = 'failed_permanent'
+    `;
+    if (count > 0) {
+      await basePrisma.$executeRaw`UPDATE "SurveyDistribution" SET "status" = 'queued', "failedCount" = GREATEST(0, "failedCount" - ${count}), "completedAt" = NULL, "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = ${id} AND "tenantId" IS NOT DISTINCT FROM ${tenantId}`;
+    }
+    await logAudit({ action: "survey.distribution_retried", summary: `Queued ${count} failed survey invites for manual retry`, user });
+    refresh(id);
+    return { success: count > 0 ? `${count} invite${count === 1 ? "" : "s"} queued again` : "Nothing left to retry" };
+  });
 }
