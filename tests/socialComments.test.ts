@@ -182,7 +182,8 @@ test("THE PUBLIC-REPLY BUTTON IS NOT RENDERED UNLESS META HAS GRANTED THE PERMIS
   const list = read("src/components/CommentThreadList.tsx");
   assert.match(list, /\{canReplyPublicly && \(/, "the button is conditional, not always rendered");
 
-  const page = read("src/app/(app)/comments/page.tsx");
+  // Comments are the inbox's Comments tab now (batch 6); /comments redirects there.
+  const page = read("src/app/(app)/inbox/page.tsx");
   assert.match(page, /pageCapabilities\(\)/, "the page asks rather than assumes");
   assert.match(page, /canReplyPublicly=\{capabilities\.canManageEngagement\}/);
   assert.match(page, /pages_manage_engagement/, "…and names what to enable when it is missing");
