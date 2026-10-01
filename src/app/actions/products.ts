@@ -206,7 +206,7 @@ export async function deleteProduct(id: string, formData: FormData) {
     const product = await softDeleteRecord("product", id, reason, user.name);
     // Nothing matched — another tenant's id, or already gone. Never audit a
     // deletion that did not happen.
-    if (!product) return;
+    if (!product) refuse("That product is already gone — refresh the page.");
     await logAudit({
       action: "trash.deleted",
       summary: `Moved product ${product.name} to trash — ${reason}`,
