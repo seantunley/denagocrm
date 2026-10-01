@@ -170,6 +170,8 @@ export async function renderDeliveryNoteHtml(opts: {
   });
   if (!quote) return null;
   const { guidedRunsForNote, signatureDoc } = await loadDeliveryEvidence(quote, opts.requestedRuns);
+  const base = await bindCtx(quote.id, null);
+  if (!base) return null;
 
   // ponytail: every checklist photo is embedded inline, which is what makes the
   // page self-contained for Save as PDF; thumbnail server-side if notes get heavy.
@@ -177,7 +179,7 @@ export async function renderDeliveryNoteHtml(opts: {
     ? await Promise.all(
         guidedRunsForNote.map(async (run) => ({
           name: run.template.name,
-          completed: run.completedAt ? formatDate(run.completedAt) : null,
+          completed: run.completedAt ? formatDate(run.completedAt, base.regional) : null,
           entries: await Promise.all(
             run.entries.map(async (entry) => ({
               label: entry.labelSnapshot,
@@ -191,15 +193,13 @@ export async function renderDeliveryNoteHtml(opts: {
     : [legacyRun(quote.deliveryChecklist)];
 
   const signature = signatureDoc ? await embedStoredImage(quote.deliverySignatureRef, quote.tenantId) : null;
-  const base = await bindCtx(quote.id, null);
-  if (!base) return null;
   const ctx = deliveryNoteContext(base, {
     quoteNumber: quote.number,
     deliveredAt: quote.deliveredAt,
     deliveryScheduledFor: quote.deliveryScheduledFor,
     deliveredByName: quote.deliveredByName,
     lineCount: includedLines(quote.items).length,
-    handover: { runs, signature, signedOn: signature && quote.deliveredAt ? formatDate(quote.deliveredAt) : null },
+    handover: { runs, signature, signedOn: signature && quote.deliveredAt ? formatDate(quote.deliveredAt, base.regional) : null },
   });
   // Uploaded image blocks are private files: embedded, owner-checked against the
   // record's workspace. The workspace logo arrives on ctx.logo from bindCtx.

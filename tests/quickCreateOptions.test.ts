@@ -26,5 +26,5 @@ test("a create sheet does not load unrelated option families", () => {
   assert.match(route, /kind === "quote"/);
   assert.match(route, /kind === "jobcard"/);
   assert.match(route, /\["lead", "vehicle", "calendar"\]\.includes\(kind\)/);
-  assert.match(route, /!kind \? getSetting\("QUOTE_VALID_DAYS"\) : Promise\.resolve\(null\)/);
+  assert.match(route, /!kind \? quoteFromLeadDefaults\(\) : Promise\.resolve\(null\)/);
 });

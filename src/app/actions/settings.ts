@@ -14,7 +14,9 @@ import {
   requireOwnedPipeline,
 } from "@/lib/pipelines";
 import { stageTenantId, UNREACHABLE_STAGE_MESSAGE } from "@/lib/pipelineTenantRule";
-import { putSetting, getSetting } from "@/lib/settings";
+import { putSetting, getSetting, getRegionalSettings, REGIONAL_KEYS } from "@/lib/settings";
+import { regionalFrom } from "@/lib/format";
+import { quoteValidDays } from "@/lib/quoteExpiry";
 import {
   WEATHER_CITIES_KEY,
   parseWeatherCities,
@@ -353,8 +355,48 @@ export async function saveQuoteDefaults(formData: FormData) {
     await requireOwner();
     const days = String(formData.get("validDays") ?? "").trim();
     const terms = String(formData.get("terms") ?? "").trim();
-    await putSetting("QUOTE_VALID_DAYS", days || "7");
+    await putSetting("QUOTE_VALID_DAYS", String(quoteValidDays(days)));
     await putSetting("QUOTE_TERMS", terms);
+    revalidatePath("/settings");
+  });
+}
+
+/**
+ * VAT rate, currency, number/date format and time zone (Settings → Quotes).
+ * Refuses anything Intl can't format with rather than storing it and letting
+ * every document fall back silently. Changing the VAT rate affects NEW quote
+ * lines only — issued lines keep the rate stored on them.
+ */
+export async function saveRegionalSettings(formData: FormData) {
+  return asActionResult(async () => {
+    const user = await requireOwner();
+    const field = (name: string) => String(formData.get(name) ?? "").trim();
+    const input = {
+      vatRatePct: field("vatRatePct").replace(",", "."),
+      currency: field("currency").toUpperCase(),
+      locale: field("locale"),
+      timeZone: field("timeZone"),
+    };
+    const vat = Number(input.vatRatePct);
+    if (!input.vatRatePct || !Number.isFinite(vat) || vat < 0 || vat > 100) {
+      throw new ActionRefusal("VAT rate must be a number from 0 to 100.");
+    }
+    // regionalFrom hands back each value unchanged when it is valid, so any
+    // difference is a value it had to replace.
+    const parsed = regionalFrom(input);
+    if (parsed.currency !== input.currency) throw new ActionRefusal(`“${input.currency}” isn't a currency code (e.g. ZAR, USD, EUR).`);
+    if (parsed.locale !== input.locale) throw new ActionRefusal(`“${input.locale}” isn't a number and date format (e.g. en-ZA, en-GB).`);
+    if (parsed.timeZone !== input.timeZone) throw new ActionRefusal(`“${input.timeZone}” isn't a time zone (e.g. Africa/Johannesburg).`);
+
+    const before = await getRegionalSettings();
+    for (const key of Object.keys(REGIONAL_KEYS) as (keyof typeof REGIONAL_KEYS)[]) {
+      await putSetting(REGIONAL_KEYS[key], String(parsed[key]));
+    }
+    await logAuditStrict({
+      action: "settings.regional_updated",
+      summary: `Tax & currency: VAT ${before.vatRatePct}% → ${parsed.vatRatePct}%, ${before.currency} → ${parsed.currency}, ${before.locale} → ${parsed.locale}, ${before.timeZone} → ${parsed.timeZone}`,
+      user,
+    });
     revalidatePath("/settings");
   });
 }

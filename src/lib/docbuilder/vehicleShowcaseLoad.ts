@@ -3,7 +3,7 @@ import { prisma } from "@/lib/db";
 import { embedStoredImage } from "@/lib/storedImage";
 import { feeRows, includedLines } from "@/lib/pricing";
 import { resolveOverflowGroups } from "@/lib/doceditor/overflow";
-import type { QuoteForPrint } from "@/components/print/QuotePrintDoc";
+import type { QuoteForPrint } from "@/lib/docbuilder/merge";
 import type { DocumentModel } from "@/lib/doceditor/model";
 import { freezeVehicleShowcase, hasVehicleShowcase } from "@/lib/signing/freezeDocument";
 import type { MergeContext } from "./merge";

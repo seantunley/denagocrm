@@ -54,6 +54,8 @@ import CustomFieldsForm from "@/components/custom-fields/CustomFieldsForm";
 import { quoteSigningView } from "@/app/actions/recordSigning";
 import type { QuoteSigningView } from "@/lib/signing/record";
 import { feeRows, quotePricing } from "@/lib/pricing";
+import { formatDate, formatZAR, type Regional } from "@/lib/format";
+import { calendarDateInstant } from "@/lib/quoteExpiry";
 import SigningBlock from "@/components/SigningBlock";
 import QuoteEmailDialog from "@/components/quotes/QuoteEmailDialog";
 import { quotePrintLinks } from "@/lib/quotePrintLinks";
@@ -139,17 +141,22 @@ export type QuoteEditorRecord = {
      *  line would print an amount the total never counted. */
     optional: boolean;
     selected: boolean;
+    /** The VAT rate this line was issued at. The preview prices it at THIS,
+     *  not the workspace's current rate, so an old quote previews as it prints. */
+    taxRatePct: number;
   }>;
   taxInclusive: boolean;
   depositType: string | null;
   depositValue: number | null;
-  fees: Array<{ id: string; label: string; kind: string; amountCents: number }>;
+  fees: Array<{ id: string; label: string; kind: string; amountCents: number; taxRatePct: number }>;
   versions: QuoteEditorVersion[];
 };
 
 export type QuoteEditorDefaults = {
   validUntil: string;
   terms: string;
+  /** VAT for new lines, and the currency/locale the editor shows money in. */
+  regional: Regional;
 };
 
 type DraftLine = {
@@ -172,6 +179,8 @@ type DraftLine = {
   /** Carried, not edited — an unselected add-on is offered but not charged. */
   optional: boolean;
   selected: boolean;
+  /** Carried, not edited. null = a new line, priced at the workspace's rate. */
+  taxRatePct: number | null;
 };
 
 type DraftFee = {
@@ -180,6 +189,8 @@ type DraftFee = {
   label: string;
   kind: "fee" | "delivery";
   amount: string;
+  /** As on DraftLine. */
+  taxRatePct: number | null;
 };
 
 type DraftState = {
@@ -210,14 +221,6 @@ function lineKey() {
 function feeKey() {
   lineSequence += 1;
   return `quote-fee-${lineSequence}`;
-}
-
-function rands(cents: number) {
-  return new Intl.NumberFormat("en-ZA", {
-    style: "currency",
-    currency: "ZAR",
-    minimumFractionDigits: 2,
-  }).format(cents / 100);
 }
 
 function priceInput(cents: number) {
@@ -259,6 +262,7 @@ function createDraft(
       label: fee.label,
       kind: fee.kind === "delivery" ? "delivery" : "fee",
       amount: (fee.amountCents / 100).toFixed(2),
+      taxRatePct: fee.taxRatePct,
     })),
     taxInclusive: record.taxInclusive,
     depositType: record.depositType === "percent" || record.depositType === "amount" ? record.depositType : "",
@@ -280,6 +284,7 @@ function createDraft(
         costCents: item.costCents,
         optional: item.optional,
         selected: item.selected,
+        taxRatePct: item.taxRatePct,
       };
     }),
   } satisfies DraftState;
@@ -314,13 +319,10 @@ function statusTone(status: string): "neutral" | "success" | "danger" | "info" {
   return "neutral";
 }
 
-function displayDate(value: string) {
-  if (!value) return "Not set";
-  return new Date(`${value}T12:00:00`).toLocaleDateString("en-ZA", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
+/** A workspace-calendar date key, printed exactly as the documents print it. */
+function displayDate(value: string, regional: Regional) {
+  const instant = value ? calendarDateInstant(value, regional.timeZone) : null;
+  return instant ? formatDate(instant, regional) : "Not set";
 }
 
 export function QuoteEditorDialog({
@@ -350,6 +352,8 @@ export function QuoteEditorDialog({
   onOpenQuote?: (quoteId: string) => void;
 }) {
   const router = useRouter();
+  const regional = defaults.regional;
+  const rands = (cents: number) => formatZAR(cents, regional);
   const [draft, setDraft] = useState<DraftState>(() => createDraft(record, defaults, initialContactId, products));
   const [initialSnapshot, setInitialSnapshot] = useState(() => draftSnapshot(draft));
   const [savedQuote, setSavedQuote] = useState<SavedQuote>(
@@ -455,7 +459,9 @@ export function QuoteEditorDialog({
       qty: Number(line.qty.replace(",", ".")) || 0,
       unitPriceCents: centsFromInput(line.unitPrice) || 0,
       discountPct: Number(line.discount.replace(",", ".")) || 0,
-      taxRatePct: 15,
+      // The rate the SAVE will store: its own for an existing line, the
+      // workspace's for a new one (see itemRowsFor).
+      taxRatePct: line.taxRatePct ?? regional.vatRatePct,
       costCents: line.costCents,
       // An add-on the customer declined is offered, not charged — quotePricing
       // leaves it out of the total, so it must not be priced as a normal row.
@@ -470,7 +476,7 @@ export function QuoteEditorDialog({
         label: fee.label.trim() || (fee.kind === "delivery" ? "Delivery" : "Fee"),
         kind: fee.kind,
         amountCents: centsFromInput(fee.amount) || 0,
-        taxRatePct: 15,
+        taxRatePct: fee.taxRatePct ?? regional.vatRatePct,
       }))
       .filter((fee) => fee.amountCents !== 0);
     const p = quotePricing(lines, fees, {
@@ -495,7 +501,7 @@ export function QuoteEditorDialog({
       // customer can't check. Same helper the printed document uses.
       feeLines: feeRows(fees),
     };
-  }, [draft.lines, draft.fees, draft.taxInclusive, draft.depositType, draft.depositValue]);
+  }, [draft.lines, draft.fees, draft.taxInclusive, draft.depositType, draft.depositValue, regional.vatRatePct]);
 
   function updateLine(key: string, patch: Partial<DraftLine>) {
     setDraft((current) => ({
@@ -516,6 +522,7 @@ export function QuoteEditorDialog({
           costCents: 0,
           optional: false,
           selected: true,
+          taxRatePct: null,
           kind: "catalogue",
           description: "",
           qty: "1",
@@ -560,6 +567,7 @@ export function QuoteEditorDialog({
           costCents: 0,
           optional: false,
           selected: true,
+          taxRatePct: null,
           kind: "custom",
           description: "",
           qty: "1",
@@ -581,7 +589,7 @@ export function QuoteEditorDialog({
     if (!editable) return;
     setDraft((current) => ({
       ...current,
-      fees: [...current.fees, { key: feeKey(), id: null, label: kind === "delivery" ? "Delivery" : "", kind, amount: "0.00" }],
+      fees: [...current.fees, { key: feeKey(), id: null, label: kind === "delivery" ? "Delivery" : "", kind, amount: "0.00", taxRatePct: null }],
     }));
   }
 
@@ -1103,7 +1111,7 @@ export function QuoteEditorDialog({
                       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.07] px-4 py-4 sm:px-5">
                         <div>
                           <p className="text-sm font-semibold">Fees &amp; delivery</p>
-                          <p className="mt-1 text-xs text-muted-foreground">Delivery charges, admin or other fees (VAT at 15%).</p>
+                          <p className="mt-1 text-xs text-muted-foreground">Delivery charges, admin or other fees (VAT at {regional.vatRatePct}%).</p>
                         </div>
                         {editable && (
                           <div className="flex flex-wrap gap-2">
@@ -1226,7 +1234,7 @@ export function QuoteEditorDialog({
                     </div>
                     <div className="text-right">
                       <p className="text-xl font-bold text-orange-600">{savedQuote ? `Q-${savedQuote.number}` : "DRAFT"}</p>
-                      <p className="mt-1 text-xs text-slate-500">Valid until {displayDate(draft.validUntil)}</p>
+                      <p className="mt-1 text-xs text-slate-500">Valid until {displayDate(draft.validUntil, regional)}</p>
                     </div>
                   </div>
                   <div className="grid gap-6 py-8 sm:grid-cols-2">

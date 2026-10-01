@@ -30,7 +30,21 @@ export type TwoColProps = {
 export type TableCol = { header: string; align: Align; width: number };
 // `cells` drives plain table rendering; the optional numeric fields let a bound
 // pricing block recover exact qty/price/discount instead of re-parsing the cells.
-export type TableRow = { cells: { value: string }[]; qty?: number; unitPrice?: number; discountPct?: number };
+/**
+ * A table / bound line-items row: display cells plus, when the context builder
+ * knows them, the numbers behind them (rand-units). `taxRatePct` and
+ * `taxInclusive` are the LINE's own, as issued — so derived VAT columns agree
+ * with the document's totals whatever the workspace's current rate is.
+ */
+export type TableRow = {
+  cells: { value: string }[];
+  qty?: number;
+  unitPrice?: number;
+  discountPct?: number;
+  lineTotal?: number;
+  taxRatePct?: number;
+  taxInclusive?: boolean;
+};
 export type TableProps = { columns: TableCol[]; rows: TableRow[]; headerBg: string; headerColor: string };
 /** Line items bound to the linked record (rows injected at generate time). */
 export type LineItemsProps = { headerBg: string; headerColor: string };

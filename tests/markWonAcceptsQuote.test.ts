@@ -318,3 +318,13 @@ test("Cancel and Duplicate are offered where quotes are worked on", () => {
   assert.match(body(quotes, "duplicateQuote"), /requireQuoteAccess\(id, "quotes\.create"\)/);
   assert.match(body(quotes, "cancelQuote"), /if \(!reason\) refuse\(/, "a cancel needs a reason");
 });
+
+test("a duplicate gets a fresh expiry on the workspace calendar, never the original's", () => {
+  const duplicate = body(shipped("src/app/actions/quotes.ts"), "duplicateQuote");
+  assert.match(duplicate, /const \{ validUntil \} = await quoteFromLeadDefaults\(\);/, "the same default as every new quote (quoteExpiry.ts)");
+  assert.match(duplicate, /duplicateQuoteInTx\(tx, \{ quoteId: id, tenantId, actor: user, validUntil \}\)/);
+  assert.doesNotMatch(duplicate, /addDays\(/, "not the server clock");
+  const copy = shipped("src/lib/quoteOutcome.ts");
+  const fn = copy.slice(copy.indexOf("export async function duplicateQuoteInTx("));
+  assert.doesNotMatch(fn, /validUntil: original\.validUntil/, "the old expiry is not copied");
+});

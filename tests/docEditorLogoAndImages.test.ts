@@ -41,7 +41,7 @@ test("the Denago logo path is no longer hard-coded as the banner's only source",
   // how the callers that still pass the built-in mark (quotePrintDocument) get it too.
   for (const rel of ["src/lib/signing/render.ts", "src/lib/doceditor/generate.ts"]) {
     assert.match(shipped(rel), /const logo = await documentLogo\(/, `${rel} resolves the workspace logo`);
-    assert.match(shipped(rel), /bound: true, logo \}/, `${rel} puts it on the context`);
+    assert.match(shipped(rel), /bound: true, logo, regional \}/, `${rel} puts it on the context`);
   }
   // …and the canvas is given the same one.
   assert.match(shipped("src/app/doc-editor/[id]/page.tsx"), /documentLogo\(company\.logoUrl\)/);

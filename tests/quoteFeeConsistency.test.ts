@@ -243,7 +243,6 @@ test("an unselected optional add-on is not printed as a charge", () => {
 
 test("every quote document takes its rows from includedLines", () => {
   const renderers = [
-    "src/components/print/QuotePrintDoc.tsx",
     "src/lib/pdf/QuoteDoc.tsx",
     "src/app/(print)/quotes/[id]/agreement/page.tsx",
     "src/app/(print)/quotes/[id]/invoice/page.tsx",
@@ -286,10 +285,10 @@ test("a declined add-on survives a save instead of being silently re-included", 
   const code = src("src/app/actions/quotes.ts");
   assert.match(
     code,
-    /itemRowsFor\(normalizedItems, priorById\(existing\.items\)\)/,
+    /itemRowsFor\(normalizedItems, priorById\(existing\.items\), /,
     "an update must inherit from the rows it is replacing",
   );
-  assert.match(code, /feeRowsFor\(normalizedFees, priorById\(existing\.fees\)\)/);
+  assert.match(code, /feeRowsFor\(normalizedFees, priorById\(existing\.fees\), /);
   const rows = src("src/lib/quoteRows.ts");
   assert.match(rows, /optional: previous\?\.optional \?\? false/);
   assert.match(rows, /selected: previous\?\.selected \?\? true/);
@@ -298,7 +297,6 @@ test("a declined add-on survives a save instead of being silently re-included", 
 test("every priced quote document builds its totals from documentTotals", () => {
   // Passing a bare payable total next to ex-VAT rows is what broke reconciliation.
   const priced = [
-    "src/components/print/QuotePrintDoc.tsx",
     "src/lib/pdf/QuoteDoc.tsx",
     "src/app/(print)/quotes/[id]/agreement/page.tsx",
     "src/app/(print)/quotes/[id]/invoice/page.tsx",
@@ -325,7 +323,6 @@ test("a quote that charges for delivery says so on the document", () => {
   // visible lines do not add up to its own total — the customer has no way to
   // see what the extra money is for.
   const renderers = [
-    "src/components/print/QuotePrintDoc.tsx", // the branded quotation + signed PDF
     "src/lib/pdf/QuoteDoc.tsx", // the React-PDF quotation
     "src/app/(print)/quotes/[id]/agreement/page.tsx",
     "src/app/(print)/quotes/[id]/invoice/page.tsx",

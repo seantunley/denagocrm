@@ -1,4 +1,4 @@
-import { formatDate } from "@/lib/format";
+import { DEFAULT_REGIONAL, formatDate, type Regional } from "@/lib/format";
 import { stageMeta } from "@/lib/workshop-constants";
 
 /** What the printed job card shows beyond the base job-card merge context. */
@@ -30,12 +30,16 @@ export type JobCardPrintSource = {
  * `signatureSrc` is the stored customer signature already embedded as a data URL
  * (embedStoredImage) — a private-store link would not load on paper.
  */
-export function jobCardPrintFields(jc: JobCardPrintSource, signatureSrc?: string | null) {
+export function jobCardPrintFields(
+  jc: JobCardPrintSource,
+  signatureSrc?: string | null,
+  r: Pick<Regional, "locale" | "timeZone"> = DEFAULT_REGIONAL,
+) {
   const v = jc.vehicle;
   const dates =
-    `Opened ${formatDate(jc.openedAt)}` +
+    `Opened ${formatDate(jc.openedAt, r)}` +
     (jc.kmIn != null ? ` · ${jc.kmIn.toLocaleString()} km in` : "") +
-    (jc.completedAt ? ` · Completed ${formatDate(jc.completedAt)}` : "");
+    (jc.completedAt ? ` · Completed ${formatDate(jc.completedAt, r)}` : "");
   const sr = jc.serviceRecord ?? null;
   const tokens: Record<string, string> = {
     "jobcard.stage": stageMeta(jc.status).label,
@@ -47,10 +51,10 @@ export function jobCardPrintFields(jc: JobCardPrintSource, signatureSrc?: string
       : "",
     "service.details": sr?.details ?? "",
     "service.nextDue": sr
-      ? `${sr.nextDueDate ? formatDate(sr.nextDueDate) : "—"}${sr.nextDueKm != null ? ` / ${sr.nextDueKm.toLocaleString()} km` : ""}`
+      ? `${sr.nextDueDate ? formatDate(sr.nextDueDate, r) : "—"}${sr.nextDueKm != null ? ` / ${sr.nextDueKm.toLocaleString()} km` : ""}`
       : "",
     "jobcard.signedLine": jc.signedAt
-      ? `Signed electronically by ${jc.signedByName ?? ""} on ${formatDate(jc.signedAt)}${jc.signerIp ? ` · IP ${jc.signerIp}` : ""} · ECT Act, 2002`
+      ? `Signed electronically by ${jc.signedByName ?? ""} on ${formatDate(jc.signedAt, r)}${jc.signerIp ? ` · IP ${jc.signerIp}` : ""} · ECT Act, 2002`
       : "",
     "jobcard.signature": jc.signedAt ? signatureSrc ?? "" : "",
   };

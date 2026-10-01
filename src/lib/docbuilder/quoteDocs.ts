@@ -1,4 +1,4 @@
-import { formatDate, formatZAR } from "@/lib/format";
+import { DEFAULT_REGIONAL, formatDate, formatZAR, type Regional } from "@/lib/format";
 import type { QuoteBillTo } from "@/lib/quoteBillTo";
 import type { DocTemplate } from "@/lib/docTemplates";
 
@@ -41,6 +41,7 @@ export function quoteDocTokens(
   billTo: QuoteBillTo,
   money: { depositCents: number; balanceCents: number },
   now: Date = new Date(),
+  r: Regional = DEFAULT_REGIONAL,
 ): Record<string, string> {
   const party = [
     billTo.attention ? `Attention: ${billTo.attention}` : "",
@@ -51,14 +52,14 @@ export function quoteDocTokens(
   const vat = billTo.vatNumber ? `VAT no: ${billTo.vatNumber}` : "";
   return {
     "quote.status": quote.status,
-    "quote.deposit": formatZAR(money.depositCents),
-    "quote.balance": formatZAR(money.balanceCents),
+    "quote.deposit": formatZAR(money.depositCents, r),
+    "quote.balance": formatZAR(money.balanceCents, r),
     "invoice.number": invoiceNumber(quote.number),
     // An invoice is dated when it was raised; one not yet raised is dated today.
-    "invoice.date": formatDate(quote.invoicedAt ?? now),
+    "invoice.date": formatDate(quote.invoicedAt ?? now, r),
     "invoice.billedTo": lines([...party, vat]),
     "agreement.number": agreementNumber(quote.number),
-    "agreement.date": formatDate(now),
+    "agreement.date": formatDate(now, r),
     "agreement.purchaser": lines([
       ...party,
       billTo.registrationNumber ? `Reg. no: ${billTo.registrationNumber}` : "",

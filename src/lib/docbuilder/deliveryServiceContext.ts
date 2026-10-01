@@ -29,16 +29,16 @@ export function deliveryNoteContext(base: Ctx, f: DeliveryNoteFacts): Ctx {
   const t = base.tokens;
   const tokens: Record<string, string> = {
     "delivery.number": `DN-${f.quoteNumber}`,
-    "delivery.date": formatDate(f.deliveredAt ?? f.deliveryScheduledFor ?? new Date()),
+    "delivery.date": formatDate(f.deliveredAt ?? f.deliveryScheduledFor ?? new Date(), base.regional),
     "delivery.meta": [
-      `Date: ${formatDate(f.deliveredAt ?? f.deliveryScheduledFor ?? new Date())}`,
+      `Date: ${formatDate(f.deliveredAt ?? f.deliveryScheduledFor ?? new Date(), base.regional)}`,
       f.deliveredByName ? `Delivered by: ${f.deliveredByName}` : "",
       `Reference: Q-${f.quoteNumber}`,
     ].filter(Boolean).join(" · "),
     "delivery.deliverTo": lines(t["customer.attention"] && `Ask for: ${t["customer.attention"]}`, t["customer.phone"], t["customer.address"]),
     "delivery.details": lines(
-      f.deliveryScheduledFor && `Scheduled: ${formatDate(f.deliveryScheduledFor)}`,
-      f.deliveredAt ? `Delivered: ${formatDate(f.deliveredAt)}` : "Not yet delivered",
+      f.deliveryScheduledFor && `Scheduled: ${formatDate(f.deliveryScheduledFor, base.regional)}`,
+      f.deliveredAt ? `Delivered: ${formatDate(f.deliveredAt, base.regional)}` : "Not yet delivered",
       f.deliveredByName && `Driver: ${f.deliveredByName}`,
     ),
     "delivery.driver": f.deliveredByName ?? "",
@@ -72,15 +72,15 @@ export type ServiceReportFacts = {
 export function serviceReportContext(base: Ctx, f: ServiceReportFacts): Ctx {
   const t = base.tokens;
   const nextDue = [
-    f.nextDueDate ? formatDate(f.nextDueDate) : null,
+    f.nextDueDate ? formatDate(f.nextDueDate, base.regional) : null,
     f.nextDueKm != null ? `${f.nextDueKm.toLocaleString()} km` : null,
   ].filter(Boolean).join(" or ");
   const tokens: Record<string, string> = {
     "service.number": `SR-${f.jobCardNumber}`,
-    "service.date": formatDate(f.serviceDate ?? f.completedAt ?? new Date()),
+    "service.date": formatDate(f.serviceDate ?? f.completedAt ?? new Date(), base.regional),
     "service.technician": f.technician ?? "",
     "service.meta": [
-      `Service date: ${formatDate(f.serviceDate ?? f.completedAt ?? new Date())}`,
+      `Service date: ${formatDate(f.serviceDate ?? f.completedAt ?? new Date(), base.regional)}`,
       f.technician ? `Technician: ${f.technician}` : "",
       `Job card #${f.jobCardNumber}`,
     ].filter(Boolean).join(" · "),

@@ -10,6 +10,7 @@ import { htmlToPdf } from "@/lib/customDocs";
 import { readFile } from "@/lib/storage";
 import { embedStoredImage } from "@/lib/storedImage";
 import { getCompanyProfile, companyTokens } from "@/lib/companyProfile";
+import { getRegionalSettings } from "@/lib/settings";
 import { parseFrozenBrand, type FrozenBrand } from "./frozenBrand";
 import type { SignatureRequest } from "@prisma/client";
 // The built-in logo is only the FALLBACK now: bindCtx puts the workspace's own
@@ -48,16 +49,19 @@ export async function bindCtx(
   // the built-in mark, as FrozenBrand documents), the live workspace logo
   // otherwise. {{user.name}} / {{date.today}} are only resolved live — a frozen
   // snapshot already had them baked in at send time (freezeDocumentGlobals).
+  // Currency, locale and time zone for the record's figures and dates. The VAT
+  // itself is the quote's own, stored per line — this never re-prices anything.
+  const regional = await getRegionalSettings();
   const withCompany = async (ctx: RenderCtx): Promise<RenderCtx> => {
     const live = frozen ? null : await getCompanyProfile();
-    const company = frozen ? frozen.tokens : live ? { ...(await liveGlobalTokens()), ...companyTokens(live) } : {};
+    const company = frozen ? frozen.tokens : live ? { ...(await liveGlobalTokens(regional)), ...companyTokens(live) } : {};
     const logo = await documentLogo(frozen ? frozen.logoUrl : live?.logoUrl);
     // + the showcase layout's built-in band photos ({{asset.*}}) as data URLs. A
     // snapshot already carries them resolved (service.ts), so this only reaches
     // live renders of a template.
     const globals = { ...showcaseAssetTokens(), ...company };
-    if (!ctx) return { tokens: globals, items: [], vars: {}, bound: false, logo };
-    return { ...ctx, tokens: { ...globals, ...ctx.tokens }, bound: true, logo };
+    if (!ctx) return { tokens: globals, items: [], vars: {}, bound: false, logo, regional };
+    return { ...ctx, tokens: { ...globals, ...ctx.tokens }, bound: true, logo, regional };
   };
   if (quoteId) {
     const q = await prisma.quote.findUnique({
@@ -68,7 +72,7 @@ export async function bindCtx(
     // Quote.fleetId carries no foreign key (see the schema comment), so an id
     // from another workspace must fail to resolve rather than be joined in.
     if (q) {
-      const ctx = buildQuoteContext(q, await loadBillToFleet(prisma, q.fleetId));
+      const ctx = buildQuoteContext(q, await loadBillToFleet(prisma, q.fleetId), regional);
       return withCompany(opts?.liveVehicle === false ? ctx : await withVehicleShowcase(ctx, q));
     }
   } else if (jobCardId) {
@@ -78,7 +82,7 @@ export async function bindCtx(
     });
     // Embedded, not linked: a signature in the private store has no public link.
     const signatureSrc = jc?.signedAt ? await embedStoredImage(jc.signatureRef, jc.tenantId) : null;
-    if (jc) return withCompany(buildJobCardContext(jc, signatureSrc));
+    if (jc) return withCompany(buildJobCardContext(jc, signatureSrc, regional));
   }
   // No linked record → still resolve the global brand tokens (unbound).
   return withCompany(null);

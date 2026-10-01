@@ -1,8 +1,8 @@
 import { Document, Page, View, Text, StyleSheet } from "@react-pdf/renderer";
-import { formatDate, formatZAR } from "@/lib/format";
+import { formatDate, formatZAR, type Regional } from "@/lib/format";
 import { documentTotals, feeRows, includedLines, lineNetCents } from "@/lib/pricing";
 import { quoteBillTo, type BillToFleet } from "@/lib/quoteBillTo";
-import type { QuoteForPrint } from "@/components/print/QuotePrintDoc";
+import type { QuoteForPrint } from "@/lib/docbuilder/merge";
 
 /**
  * SPIKE — the quotation rebuilt with @react-pdf/renderer instead of fixed mm
@@ -125,11 +125,16 @@ export default function QuoteDoc({
   quote,
   fleet,
   signed,
+  regional,
 }: {
   quote: QuoteForPrint;
   fleet: BillToFleet | null;
   signed?: SignedInfo;
+  /** The workspace's currency/locale/time zone (getRegionalSettings). */
+  regional: Regional;
 }) {
+  const money = (cents: number) => formatZAR(cents, regional);
+  const date = (d: Date | null) => formatDate(d, regional);
   const lineNet = lineNetCents;
   // Fees and delivery are part of the quoted price — itemised as rows below as
   // well as counted here, so the lines the customer reads add up to the total.
@@ -172,8 +177,8 @@ export default function QuoteDoc({
 
         {/* Meta strip */}
         <View style={s.metaRow}>
-          <Text style={s.meta}>Date: {formatDate(quote.createdAt)}</Text>
-          {quote.validUntil ? <Text style={s.meta}>Valid until: {formatDate(quote.validUntil)}</Text> : <Text />}
+          <Text style={s.meta}>Date: {date(quote.createdAt)}</Text>
+          {quote.validUntil ? <Text style={s.meta}>Valid until: {date(quote.validUntil)}</Text> : <Text />}
           {quote.createdBy ? <Text style={s.meta}>Prepared by: {quote.createdBy.name}</Text> : <Text />}
         </View>
 
@@ -211,10 +216,10 @@ export default function QuoteDoc({
             </Text>
             <Text style={[s.cell, s.cNum]}>{i.qty}</Text>
             <Text style={[s.cell, s.cNum]}>
-              {i.discountPct ? `${formatZAR(i.unitPriceCents)} (−${i.discountPct}%)` : formatZAR(i.unitPriceCents)}
+              {i.discountPct ? `${money(i.unitPriceCents)} (−${i.discountPct}%)` : money(i.unitPriceCents)}
             </Text>
             <Text style={[s.cell, s.cNum, { fontFamily: "Helvetica-Bold" }]}>
-              {formatZAR(lineNet(i))}
+              {money(lineNet(i))}
             </Text>
           </View>
         ))}
@@ -226,9 +231,9 @@ export default function QuoteDoc({
           >
             <Text style={[s.cell, s.cDesc]}>{fee.description}</Text>
             <Text style={[s.cell, s.cNum]}>{fee.qty}</Text>
-            <Text style={[s.cell, s.cNum]}>{formatZAR(fee.unitPriceCents)}</Text>
+            <Text style={[s.cell, s.cNum]}>{money(fee.unitPriceCents)}</Text>
             <Text style={[s.cell, s.cNum, { fontFamily: "Helvetica-Bold" }]}>
-              {formatZAR(fee.unitPriceCents)}
+              {money(fee.unitPriceCents)}
             </Text>
           </View>
         ))}
@@ -239,13 +244,13 @@ export default function QuoteDoc({
             {totals.filter((line) => !line.strong).map((line) => (
               <View key={line.label} style={s.totalRow}>
                 <Text style={s.totalRowLabel}>{line.label}</Text>
-                <Text style={s.totalRowAmount}>{formatZAR(Math.round(line.amountCents))}</Text>
+                <Text style={s.totalRowAmount}>{money(Math.round(line.amountCents))}</Text>
               </View>
             ))}
             {totals.filter((line) => line.strong).map((line) => (
               <View key={line.label} style={s.totalBand}>
                 <Text style={s.totalLabel}>{line.label.toUpperCase()}</Text>
-                <Text style={s.totalAmount}>{formatZAR(Math.round(line.amountCents))}</Text>
+                <Text style={s.totalAmount}>{money(Math.round(line.amountCents))}</Text>
               </View>
             ))}
           </View>
