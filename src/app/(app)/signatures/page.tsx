@@ -8,6 +8,7 @@ import {
   type SignatureRequestView,
 } from "@/lib/signing/status";
 import { ApprovalActions } from "./ApprovalActions";
+import { COMPLETION_BLOCKED_EVENT } from "@/lib/signing/complete";
 import {
   CheckCircle2,
   Clock3,
@@ -160,6 +161,21 @@ export default async function SignaturesPage({
     take: PAGE_SIZE,
     include: { recipients: true },
   });
+  // Gap audit #32: requests that look fine and aren't — everyone signed but the
+  // record changed so it can't complete, or completed but a signed copy never
+  // reached someone. Each opens to an explanation and the fix.
+  const needsAttention = await prisma.signatureRequest.findMany({
+    where: {
+      deletedAt: null,
+      OR: [
+        { status: { notIn: [...CLOSED_REQUEST_STATUSES] }, events: { some: { type: COMPLETION_BLOCKED_EVENT } } },
+        { status: "completed", recipients: { some: { email: { not: null }, completedEmailSentAt: null } } },
+      ],
+    },
+    select: { id: true, title: true, status: true },
+    orderBy: { updatedAt: "desc" },
+    take: 20,
+  });
   const activeViewLabel = REQUEST_VIEWS.find((view) => view.value === activeView)?.label ?? "In Progress";
   const fallbackView = REQUEST_VIEWS.find(
     (view) => view.value !== activeView && requestCounts[view.value] > 0,
@@ -189,6 +205,27 @@ export default async function SignaturesPage({
           { label: "Median time", value: medHours == null ? "—" : medHours < 1 ? `${Math.round(medHours * 60)}m` : `${medHours.toFixed(1)}h`, detail: completed > RECENT_COMPLETION_SAMPLE_SIZE ? "Recent sent to completed" : "Sent to completed", icon: Timer },
         ]}
       />
+
+      {needsAttention.length > 0 && (
+        <Surface className="overflow-hidden border-red-500/25 bg-red-500/[0.05]">
+          <div className="border-b border-red-500/15 p-4">
+            <SectionHeading
+              title="Needs attention"
+              description="Signed by everyone but unable to complete, or completed without the signed copy reaching everyone."
+            />
+          </div>
+          <ul className="divide-y divide-border/60 px-4">
+            {needsAttention.map((r) => (
+              <li key={r.id} className="flex flex-wrap items-center gap-3 py-3">
+                <Link href={`/signatures/${r.id}`} className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground hover:text-primary">{r.title}</Link>
+                <StatusPill tone={r.status === "completed" ? "danger" : "warning"}>
+                  {r.status === "completed" ? "Signed copy not delivered" : "Can't complete"}
+                </StatusPill>
+              </li>
+            ))}
+          </ul>
+        </Surface>
+      )}
 
       {pendingApprovals.length > 0 && (
         <Surface className="overflow-hidden border-amber-500/25 bg-amber-500/[0.05]">

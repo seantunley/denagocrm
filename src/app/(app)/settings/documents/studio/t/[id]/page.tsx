@@ -8,7 +8,8 @@ import { MERGE_FIELDS } from "@/lib/mergeFields";
 import { formatDateTime } from "@/lib/format";
 import StudioEditor from "@/components/StudioEditor";
 import { saveStudioTemplate, publishStudioTemplate } from "@/app/actions/studio";
-import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 
 export const dynamic = "force-dynamic";
 
@@ -68,12 +69,12 @@ export default async function StudioTemplatePage({
         }))}
         onSave={save}
         headerRight={
-          <form action={publishStudioTemplate.bind(null, id)}>
-            <Button size="sm" type="submit" title="Freeze the current draft as the next version">
+          <SaveForm action={publishStudioTemplate.bind(null, id)}>
+            <SaveButton className={buttonVariants({ size: "sm" })} pendingLabel="Publishing…" title="Freeze the current draft as the next version">
               <Rocket className="size-4" />
               Publish {latest ? `v${latest.version + 1}` : "v1"}
-            </Button>
-          </form>
+            </SaveButton>
+          </SaveForm>
         }
       />
     </div>

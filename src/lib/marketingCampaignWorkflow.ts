@@ -4,6 +4,10 @@ import { assertCampaignTransition, isCampaignLaunchable, parseCampaignStatus } f
 import { readCampaignDraftRecord } from "./marketingCampaignDrafts";
 import { resolveContacts, newToken, type SegmentCriteria } from "./campaigns";
 import { evaluateAudience, validateAudienceTree, type AudienceGroup } from "./marketingAudiences";
+// Every refusal below is something the reviewer/sender can act on (approving your
+// own campaign, nothing left to send, a schedule in the past, someone else moved
+// it first) — so it travels as a message, not "This page hit an error" (#22).
+import { ActionRefusal } from "./actionFailure";
 
 export type CampaignQaIssue = { code: string; message: string; severity: "error" | "warning" };
 
@@ -63,7 +67,7 @@ async function nextVersionAndSnapshot(
     FOR UPDATE
   `;
   const snapshot = campaigns[0];
-  if (!snapshot) throw new Error("Campaign not found");
+  if (!snapshot) throw new ActionRefusal("Campaign not found");
   const rows = await tx.$queryRaw<Array<{ version: number }>>`
     SELECT COALESCE(MAX("version"), 0) + 1 AS "version"
     FROM "CampaignVersion"
@@ -85,7 +89,7 @@ async function nextVersionAndSnapshot(
     WHERE "id" = ${args.campaignId}
       AND "tenantId" IS NOT DISTINCT FROM ${args.tenantId}
   `;
-  if (updated !== 1) throw new Error("Campaign disappeared while versioning");
+  if (updated !== 1) throw new ActionRefusal("Campaign disappeared while versioning");
   return version;
 }
 
@@ -122,11 +126,11 @@ async function updateCampaignState(
     FOR UPDATE
   `;
   const campaign = rows[0];
-  if (!campaign || campaign.status !== args.from) throw new Error("Campaign changed while this action was being processed");
+  if (!campaign || campaign.status !== args.from) throw new ActionRefusal("Campaign changed while this action was being processed");
   if (args.to === "approved" && campaign.submittedById === args.userId) {
-    throw new Error("The person who submitted a campaign cannot approve it");
+    throw new ActionRefusal("The person who submitted a campaign cannot approve it");
   }
-  if (args.to === "changes_requested" && !args.note?.trim()) throw new Error("Explain the required changes");
+  if (args.to === "changes_requested" && !args.note?.trim()) throw new ActionRefusal("Explain the required changes");
 
   const updated = await tx.$executeRaw`
     UPDATE "Campaign" SET
@@ -149,7 +153,7 @@ async function updateCampaignState(
       AND "tenantId" IS NOT DISTINCT FROM ${args.tenantId}
       AND "status" = ${args.from}
   `;
-  if (updated !== 1) throw new Error("Campaign changed while this action was being processed");
+  if (updated !== 1) throw new ActionRefusal("Campaign changed while this action was being processed");
 }
 
 export async function transitionCampaign(args: {
@@ -211,7 +215,7 @@ async function resolveCampaignAudience(args: { campaignId: string; tenantId: str
     LIMIT 1
   `;
   const campaign = campaigns[0];
-  if (!campaign) throw new Error("Campaign not found");
+  if (!campaign) throw new ActionRefusal("Campaign not found");
 
   let definition: AudienceDefinition;
   if (campaign.segmentId) {
@@ -226,7 +230,7 @@ async function resolveCampaignAudience(args: { campaignId: string; tenantId: str
       LIMIT 1
     `;
     const segment = segments[0];
-    if (!segment) throw new Error("The selected audience no longer exists");
+    if (!segment) throw new ActionRefusal("The selected audience no longer exists");
     const tree = parseJson(segment.ruleTree);
     if (isAudienceGroup(tree)) {
       validateAudienceTree(tree);
@@ -260,12 +264,12 @@ export async function freezeAudienceAndQueue(args: {
   reason: string;
 }) {
   const campaign = await readCampaignDraftRecord(args.campaignId, args.tenantId);
-  if (!campaign) throw new Error("Campaign not found");
-  if (!isCampaignLaunchable(parseCampaignStatus(campaign.status))) throw new Error("Only approved campaigns may be scheduled or queued");
-  if (args.scheduleFor && args.scheduleFor <= new Date()) throw new Error("Scheduled time must be in the future");
+  if (!campaign) throw new ActionRefusal("Campaign not found");
+  if (!isCampaignLaunchable(parseCampaignStatus(campaign.status))) throw new ActionRefusal("Only approved campaigns may be scheduled or queued");
+  if (args.scheduleFor && args.scheduleFor <= new Date()) throw new ActionRefusal("Scheduled time must be in the future");
   const { definition, contacts } = await resolveCampaignAudience({ campaignId: args.campaignId, tenantId: args.tenantId, channel: campaign.channel });
   const uniqueContacts = [...new Map(contacts.map((contact) => [contact.id, contact])).values()];
-  if (uniqueContacts.length === 0) throw new Error("No eligible recipients match this audience");
+  if (uniqueContacts.length === 0) throw new ActionRefusal("No eligible recipients match this audience");
   const exactSnapshot = {
     ...definition,
     resolvedAt: new Date().toISOString(),
@@ -281,7 +285,7 @@ export async function freezeAudienceAndQueue(args: {
         AND "tenantId" IS NOT DISTINCT FROM ${args.tenantId}
       FOR UPDATE
     `;
-    if (locked[0]?.status !== "approved") throw new Error("Campaign approval changed before launch");
+    if (locked[0]?.status !== "approved") throw new ActionRefusal("Campaign approval changed before launch");
 
     await tx.$executeRaw`
       DELETE FROM "CampaignRecipient"
@@ -310,7 +314,7 @@ export async function freezeAudienceAndQueue(args: {
         AND "tenantId" IS NOT DISTINCT FROM ${args.tenantId}
         AND "status" = 'approved'
     `;
-    if (updated !== 1) throw new Error("Campaign approval changed before launch");
+    if (updated !== 1) throw new ActionRefusal("Campaign approval changed before launch");
     const version = await nextVersionAndSnapshot(tx, args);
     return { count: uniqueContacts.length, version };
   });
