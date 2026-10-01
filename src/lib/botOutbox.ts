@@ -1316,6 +1316,47 @@ export async function requeueDeadConversation(channel: string, key: string): Pro
   });
 }
 
+/**
+ * Send a failed STAFF reply again (gap audit #31, re-review of #733).
+ *
+ * A staff reply puts the conversation in a person's hands (ownership "human"),
+ * so its failure never parks the session — and must not: retrying a parked
+ * session hands it back to the bot. This works on the message itself instead:
+ * the failed reply (by id; one the worker failed, never one the provider took)
+ * and exactly the backlog it blocked. The session's ownership is left alone.
+ * Claimed by a conditional update on the row, so two clicks resend once.
+ */
+export async function requeueFailedStaffReply(
+  outboxId: string,
+): Promise<{ outcome: RequeueOutcome; channel?: string; key?: string }> {
+  return withStaffConversationScope(async () => {
+    const tenantId = outboxTenantId();
+    return prisma.$transaction(async (tx) => {
+      const head = await tx.botFlowOutbox.findFirst({
+        where: { id: outboxId, tenantId, origin: "staff", status: "dead", providerMessageId: null, NOT: { failureCode: "blocked_by_earlier_failure" } },
+        select: { id: true, channel: true, key: true, failureCode: true },
+      });
+      if (!head) return { outcome: "not_parked" as const };
+      if (head.failureCode && PERMANENT_FAILURES.has(head.failureCode)) return { outcome: "permanent" as const, channel: head.channel, key: head.key };
+      const reset = { status: "pending", attempts: 0, leaseUntil: null, lastError: null, failureCode: null, availableAt: new Date() };
+      const claimed = await tx.botFlowOutbox.updateMany({ where: { id: head.id, tenantId, status: "dead" }, data: reset });
+      if (claimed.count !== 1) return { outcome: "not_parked" as const };
+      await tx.botFlowOutbox.updateMany({
+        where: {
+          tenantId,
+          channel: head.channel,
+          key: head.key,
+          status: "dead",
+          failureCode: "blocked_by_earlier_failure",
+          lastError: { startsWith: blockedByPrefix(head.id) },
+        },
+        data: reset,
+      });
+      return { outcome: "requeued" as const, channel: head.channel, key: head.key };
+    });
+  });
+}
+
 async function drainConversation(
   channel: string,
   key: string,

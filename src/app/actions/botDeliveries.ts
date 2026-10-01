@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { asActionResult, refuse } from "@/lib/actionResult";
-import { flushBotOutboxConversation, requeueDeadConversation } from "@/lib/botOutbox";
+import { flushBotOutboxConversation, requeueDeadConversation, requeueFailedStaffReply } from "@/lib/botOutbox";
 
 const BOT_CHANNELS = new Set(["whatsapp", "messenger", "instagram", "telegram"]);
 
@@ -22,6 +22,24 @@ export async function retryDeadBotConversation(channel: string, key: string) {
     await flushBotOutboxConversation(channel, key).catch(() => {});
     // The outbox id/channel, not the key: on WhatsApp the key is the phone number.
     await logAudit({ action: "bot.delivery_retried", summary: `Retried a failed ${channel} message`, user });
+    revalidatePath("/inbox");
+    return { success: "Sending again" };
+  });
+}
+
+/**
+ * Retry a staff reply that failed. The conversation stays with staff — see
+ * requeueFailedStaffReply for why this is not the parked-conversation retry.
+ */
+export async function retryFailedStaffReply(outboxId: string) {
+  return asActionResult(async () => {
+    const user = await requirePermission("inbox.reply");
+    if (!outboxId) refuse("That message can't be retried from here.");
+    const { outcome, channel, key } = await requeueFailedStaffReply(outboxId);
+    if (outcome === "permanent") refuse("Sending again won't help — reply to the customer another way, or wait for them to write.");
+    if (outcome === "not_parked" || !channel || !key) refuse("This message was already sent again — refresh the inbox.");
+    await flushBotOutboxConversation(channel, key).catch(() => {});
+    await logAudit({ action: "bot.delivery_retried", summary: `Retried a failed ${channel} staff reply (${outboxId})`, user });
     revalidatePath("/inbox");
     return { success: "Sending again" };
   });

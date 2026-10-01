@@ -19,7 +19,7 @@ import { EmptyState, SectionHeading, Surface } from "@/components/visual-system"
 import { WorkspaceHero } from "@/components/workspace-hero";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { listDeadBotConversations } from "@/lib/deadBotConversations";
-import { retryDeadBotConversation } from "@/app/actions/botDeliveries";
+import { retryDeadBotConversation, retryFailedStaffReply } from "@/app/actions/botDeliveries";
 
 export const metadata = { title: "Social inbox — DenagoCRM" };
 
@@ -92,19 +92,19 @@ export default async function InboxPage() {
       {deadConversations.length > 0 && (
         <Surface className="border-red-500/30 p-4">
           <h2 className="text-sm font-semibold">Couldn&apos;t reach the customer</h2>
-          <p className="mt-1 text-xs text-muted-foreground">The last message in these conversations failed, so the bot has stopped and the customer is still waiting. Reply yourself, or send it again if the failure was temporary.</p>
+          <p className="mt-1 text-xs text-muted-foreground">A message to these customers failed — the bot&apos;s (so the bot has stopped) or a staff reply — and the customer is still waiting. Reply yourself, or send it again if the failure was temporary.</p>
           <ul className="mt-3 divide-y divide-border">
             {deadConversations.map((dead) => (
               <li key={`${dead.channel}:${dead.key}`} className="flex flex-wrap items-center gap-3 py-2.5">
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium">
                     {dead.contact ? <a href={`/contacts/${dead.contact.id}`} className="text-primary hover:underline">{dead.contact.name}</a> : "Unknown customer"}
-                    <span className="ml-2 text-xs capitalize text-muted-foreground">{dead.channel}</span>
+                    <span className="ml-2 text-xs capitalize text-muted-foreground">{dead.channel}{dead.staffReplyId ? " · staff reply" : ""}</span>
                   </p>
                   <p className="text-xs text-muted-foreground">Failed {formatDateTime(dead.failedAt)} — {dead.reason}</p>
                 </div>
                 {canCollaborate && dead.retryable && (
-                  <SaveForm action={retryDeadBotConversation.bind(null, dead.channel, dead.key)}>
+                  <SaveForm action={dead.staffReplyId ? retryFailedStaffReply.bind(null, dead.staffReplyId) : retryDeadBotConversation.bind(null, dead.channel, dead.key)}>
                     <SaveButton className="btn-secondary btn-sm" pendingLabel="Sending…">Send again</SaveButton>
                   </SaveForm>
                 )}

@@ -31,6 +31,31 @@ test("the parked sessions ARE the list, read through the guarded client", () => 
   assert.match(page, /count: handoffThreads\.length \+ deadConversations\.length/);
 });
 
+test("a failed STAFF reply is listed and retried without parking or un-parking anything", () => {
+  // Re-review of #733: a staff reply leaves the session "human", which the kill
+  // never parks — so failed staff replies never reached the list.
+  const lib = src("src/lib/deadBotConversations.ts");
+  const staff = lib.slice(lib.indexOf("const staffFailures = await"));
+  assert.match(staff, /origin: "staff",\s*status: "dead",\s*providerMessageId: null,\s*NOT: \{ failureCode: "blocked_by_earlier_failure" \}/);
+  // Leaves the list once anything later reached the customer.
+  assert.match(staff, /status: "sent", createdAt: \{ gt: failure\.createdAt \}/);
+  assert.match(staff, /if \(reachedSince\) continue;/);
+  assert.match(staff, /staffReplyId: failure\.id,/);
+
+  const retry = outbox.slice(outbox.indexOf("export async function requeueFailedStaffReply("), outbox.indexOf("async function drainConversation("));
+  assert.match(retry, /return withStaffConversationScope\(async \(\) => \{/);
+  assert.match(retry, /where: \{ id: outboxId, tenantId, origin: "staff", status: "dead", providerMessageId: null/);
+  // Claimed on the row itself; a second click finds it no longer dead.
+  assert.match(retry, /updateMany\(\{ where: \{ id: head\.id, tenantId, status: "dead" \}, data: reset \}\);\s*if \(claimed\.count !== 1\) return \{ outcome: "not_parked" as const \};/);
+  assert.match(retry, /lastError: \{ startsWith: blockedByPrefix\(head\.id\) \}/);
+  // The conversation stays with the person who has it — never handed to the bot.
+  assert.doesNotMatch(retry, /BotSession|ownership/);
+  assert.ok(retry.indexOf('return { outcome: "permanent"') < retry.indexOf("const claimed = await"));
+
+  const page = src("src/app/(app)/inbox/page.tsx");
+  assert.match(page, /dead\.staffReplyId \? retryFailedStaffReply\.bind\(null, dead\.staffReplyId\) : retryDeadBotConversation\.bind\(null, dead\.channel, dead\.key\)/);
+});
+
 test("retry claims the parked conversation atomically and resends only this failure", () => {
   const requeue = outbox.slice(outbox.indexOf("export async function requeueDeadConversation("));
   assert.match(requeue, /return withStaffConversationScope\(async \(\) => \{/);
@@ -66,6 +91,11 @@ test("retry claims the parked conversation atomically and resends only this fail
   // so no provider id); an async receipt failure always has one.
   assert.match(head, /status: "dead", providerMessageId: null, NOT: \{ failureCode: "blocked_by_earlier_failure" \}/);
   const action = src("src/app/actions/botDeliveries.ts");
+  // Staff-reply retry: same guard, same refusals as the parked-conversation one.
+  const staffAction = action.slice(action.indexOf("export async function retryFailedStaffReply("));
+  assert.match(staffAction, /const user = await requirePermission\("inbox\.reply"\);/);
+  assert.match(staffAction, /if \(outcome === "permanent"\) refuse\(/);
+  assert.match(staffAction, /if \(outcome === "not_parked" \|\| !channel \|\| !key\) refuse\(/);
   assert.match(action, /const user = await requirePermission\("inbox\.reply"\);/);
   assert.match(action, /if \(outcome === "permanent"\) refuse\(/);
   assert.match(action, /if \(outcome === "not_parked"\) refuse\(/);
