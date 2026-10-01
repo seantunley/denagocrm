@@ -208,6 +208,7 @@ export async function createTestDriveBooking(formData: FormData) {
       for (const staffId of staffIds) {
         const conflict = await findStaffAvailabilityConflict({
           userId: staffId,
+          tenantId: bookingTenantId,
           start: scheduledStart,
           end: expectedReturnAt,
           db: tx,
@@ -315,6 +316,7 @@ export async function updateTestDriveBooking(id: string, formData: FormData) {
       for (const staffId of Array.from(new Set([salespersonId, accompanyingSalespersonId].filter((value): value is string => Boolean(value))))) {
         const conflict = await findStaffAvailabilityConflict({
           userId: staffId,
+          tenantId: bookingTenantId,
           start: scheduledStart,
           end: expectedReturnAt,
           db: tx,
