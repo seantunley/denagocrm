@@ -5,6 +5,7 @@ import { requireJobCardReadAccess } from "@/lib/permissions";
 import PrintActions from "@/components/PrintActions";
 import PrintDocShell, { ItemsTable, InfoBlock } from "@/components/print/PrintDocShell";
 import { getCompanyProfile } from "@/lib/companyProfile";
+import { getRegionalSettings } from "@/lib/settings";
 import { getDocTemplate } from "@/lib/docTemplateStore";
 import { contactName, formatDate } from "@/lib/format";
 import { jobCardTotals } from "@/lib/workshop-constants";
@@ -38,6 +39,7 @@ export default async function ServiceReportPrintPage({
   // The company this document is FROM. getCompanyProfile now inherits the
   // platform-set tenant brand when the tenant has not filled in its own profile.
   const company = await getCompanyProfile();
+  const regional = await getRegionalSettings();
   const tpl = await getDocTemplate("service-report", tplId);
   const total = jobCardTotals(jobCard.items).totalCents;
   const sr = jobCard.serviceRecord;
@@ -51,7 +53,7 @@ export default async function ServiceReportPrintPage({
         title="Service report"
         number={`SR-${jobCard.number}`}
         meta={[
-          `Service date: ${formatDate(sr?.serviceDate ?? jobCard.completedAt ?? new Date())}`,
+          `Service date: ${formatDate(sr?.serviceDate ?? jobCard.completedAt ?? new Date(), regional)}`,
           sr?.performedBy ? `Technician: ${sr.performedBy.name}` : "",
           `Job card #${jobCard.number}`,
         ].filter(Boolean)}
@@ -93,6 +95,7 @@ export default async function ServiceReportPrintPage({
               unitPriceCents: i.unitPriceCents,
             }))}
             showPrices={tpl.sections.prices === true}
+            regional={regional}
             totalCents={tpl.sections.prices === true ? total : undefined}
           />
         )}
@@ -104,7 +107,7 @@ export default async function ServiceReportPrintPage({
             </p>
             <p className="text-xs text-slate-700">
               {[
-                sr?.nextDueDate ? formatDate(sr.nextDueDate) : null,
+                sr?.nextDueDate ? formatDate(sr.nextDueDate, regional) : null,
                 sr?.nextDueKm != null ? `${sr.nextDueKm.toLocaleString()} km` : null,
               ]
                 .filter(Boolean)

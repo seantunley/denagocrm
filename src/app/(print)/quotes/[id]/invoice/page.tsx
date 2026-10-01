@@ -6,6 +6,7 @@ import { requireQuoteReadAccess } from "@/lib/permissions";
 import PrintActions from "@/components/PrintActions";
 import PrintDocShell, { ItemsTable, InfoBlock } from "@/components/print/PrintDocShell";
 import { getCompanyProfile } from "@/lib/companyProfile";
+import { getRegionalSettings } from "@/lib/settings";
 import { getDocTemplate } from "@/lib/docTemplateStore";
 import { formatDate } from "@/lib/format";
 import { documentTotals, feeRows, includedLines } from "@/lib/pricing";
@@ -34,6 +35,7 @@ export default async function InvoicePrintPage({
   // The company this document is FROM. getCompanyProfile now inherits the
   // platform-set tenant brand when the tenant has not filled in its own profile.
   const company = await getCompanyProfile();
+  const regional = await getRegionalSettings();
   const tpl = await getDocTemplate("invoice", tplId);
   // Fees and delivery are part of what the customer pays; the subtotal is not.
   const totals = documentTotals(quote);
@@ -51,7 +53,7 @@ export default async function InvoicePrintPage({
         title="Invoice"
         number={`INV-${quote.number}`}
         meta={[
-          `Date: ${formatDate(quote.invoicedAt ?? new Date())}`,
+          `Date: ${formatDate(quote.invoicedAt ?? new Date(), regional)}`,
           `Reference: Q-${quote.number}`,
           customer ? `Billed to: ${customer}` : "",
         ].filter(Boolean)}
@@ -77,7 +79,7 @@ export default async function InvoicePrintPage({
             lines={[`Invoice INV-${quote.number}`, `Quote Q-${quote.number}`, `Status: ${quote.status}`]}
           />
         </div>
-        <ItemsTable rows={[...includedLines(quote.items), ...feeRows(quote.fees)]} showPrices totals={totals} />
+        <ItemsTable rows={[...includedLines(quote.items), ...feeRows(quote.fees)]} showPrices totals={totals} regional={regional} />
         {tpl.sections.terms !== false && tpl.terms && (
           <div className="rounded-lg bg-slate-50 px-4 py-3 mt-6 no-break">
             <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1.5">

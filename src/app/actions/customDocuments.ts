@@ -19,6 +19,7 @@ import { requireAnyPermission, requirePermission } from "@/lib/permissions";
 import { buildMergeContext } from "@/lib/customDocs";
 import { buildQuoteContext } from "@/lib/docbuilder/merge";
 import { loadBillToFleet } from "@/lib/quoteBillTo";
+import { getRegionalSettings } from "@/lib/settings";
 import { getLiveBuilderTemplate } from "@/lib/docbuilder/store";
 import { RECORD_UNAVAILABLE } from "@/lib/docbuilder/recordAccess";
 import { listStudioClauses } from "@/lib/docTemplateStore";
@@ -81,7 +82,7 @@ export async function createCustomDocument(formData: FormData) {
         include: { items: true, fees: { orderBy: { sortOrder: "asc" } }, lead: { include: { product: true } }, contact: true, createdBy: true },
       });
       if (quote) {
-        const ctx = buildQuoteContext(quote, await loadBillToFleet(prisma, quote.fleetId));
+        const ctx = buildQuoteContext(quote, await loadBillToFleet(prisma, quote.fleetId), await getRegionalSettings());
         snapshot = { tokens: combineTokens(studio, ctx.tokens), items: ctx.items, vars: ctx.vars };
       }
     }

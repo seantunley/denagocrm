@@ -15,6 +15,7 @@ import { logAudit } from "@/lib/audit";
 import { saveFile, deleteFile } from "@/lib/storage";
 import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "@/lib/signing/status";
 import { quoteExpired } from "@/lib/quoteExpiry";
+import { getRegionalSettings } from "@/lib/settings";
 import { defaultBuilderTemplateId } from "@/lib/docbuilder/store";
 import { publishedBuilderTemplateFor } from "@/lib/docbuilder/published";
 import { resolveEnvelope } from "@/lib/signing/autoEnvelope";
@@ -146,7 +147,7 @@ async function checkRecordActive(
       return { error: "This quote was superseded by a revision — sign the current version.", leadId: null, version: null };
     }
     if (quote.signedAt) return { error: "This quote has already been signed.", leadId: null, version: null };
-    if (quoteExpired(quote.validUntil)) {
+    if (quoteExpired(quote.validUntil, (await getRegionalSettings()).timeZone)) {
       return { error: "This quote has expired — issue an updated quote first.", leadId: null, version: null };
     }
     return { error: null, leadId: quote.leadId, version: quote.updatedAt.getTime() };
@@ -265,6 +266,8 @@ export async function startRecordSigning(
     // — AND, for a workflow envelope, the frozen graph + recipient node IDs — are
     // all created together, so a crash can't leave a partial or unrecognisable
     // draft; the worst residual state (graph set, not yet advanced) self-heals.
+    // Resolved before the lock: expiry is judged on the workspace calendar.
+    const { timeZone } = await getRegionalSettings();
     const isWorkflow = Boolean(envelope.frozen && envelope.signers);
     let committedRequestId: string | null = null;
     let outcome:
@@ -279,7 +282,7 @@ export async function startRecordSigning(
             where: { id: quoteId },
             select: { deletedAt: true, signedAt: true, supersededAt: true, validUntil: true, updatedAt: true },
           });
-          if (!q || q.deletedAt || q.signedAt || q.supersededAt || quoteExpired(q.validUntil) || q.updatedAt.getTime() !== sourceVersion) {
+          if (!q || q.deletedAt || q.signedAt || q.supersededAt || quoteExpired(q.validUntil, timeZone) || q.updatedAt.getTime() !== sourceVersion) {
             return { kind: "stale" as const };
           }
         } else {

@@ -8,6 +8,8 @@ import { embedStoredImage } from "@/lib/storedImage";
 import { brandForTenant, brandLogoAsset, brandLogoUrl } from "@/lib/tenantBrand";
 import { tenantOrigin } from "@/lib/tenantOrigin";
 import { currentTenantScope } from "@/lib/tenantScope";
+import { getRegionalSettings } from "@/lib/settings";
+import type { Regional } from "@/lib/format";
 import { classifyLogoUrl } from "./logoSource";
 import type { DocumentModel } from "./model";
 
@@ -102,9 +104,9 @@ export async function freezableLogoUrl(logoUrl: string | null, tenantId?: string
 }
 
 /** {{user.name}} / {{date.today}} for a live render; blank user when nobody on staff is signed in. */
-export async function liveGlobalTokens(): Promise<Record<string, string>> {
+export async function liveGlobalTokens(regional?: Regional): Promise<Record<string, string>> {
   const user = await getCurrentUser().catch(() => null);
-  return documentGlobalTokens(user?.name);
+  return documentGlobalTokens(user?.name, new Date(), regional ?? (await getRegionalSettings()));
 }
 
 /**

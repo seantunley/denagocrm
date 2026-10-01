@@ -4,6 +4,7 @@ import { requireQuoteReadAccess } from "@/lib/permissions";
 import PrintActions from "@/components/PrintActions";
 import PrintDocShell, { ItemsTable, InfoBlock } from "@/components/print/PrintDocShell";
 import { getCompanyProfile } from "@/lib/companyProfile";
+import { getRegionalSettings } from "@/lib/settings";
 import { getDocTemplate } from "@/lib/docTemplateStore";
 import { formatDate } from "@/lib/format";
 import { documentTotals, feeRows, includedLines } from "@/lib/pricing";
@@ -50,6 +51,7 @@ export default async function DeliveryNotePrintPage({
   // The company this document is FROM. getCompanyProfile now inherits the
   // platform-set tenant brand when the tenant has not filled in its own profile.
   const company = await getCompanyProfile();
+  const regional = await getRegionalSettings();
   const tpl = await getDocTemplate("delivery", tplId);
   // Fees and delivery are part of what the customer pays; the subtotal is not.
   const totals = documentTotals(quote);
@@ -71,7 +73,7 @@ export default async function DeliveryNotePrintPage({
         title="Delivery note"
         number={`DN-${quote.number}`}
         meta={[
-          `Date: ${formatDate(quote.deliveredAt ?? quote.deliveryScheduledFor ?? new Date())}`,
+          `Date: ${formatDate(quote.deliveredAt ?? quote.deliveryScheduledFor ?? new Date(), regional)}`,
           quote.deliveredByName ? `Delivered by: ${quote.deliveredByName}` : "",
           `Reference: Q-${quote.number}`,
         ].filter(Boolean)}
@@ -91,8 +93,8 @@ export default async function DeliveryNotePrintPage({
           <InfoBlock
             title="Delivery details"
             lines={[
-              quote.deliveryScheduledFor ? `Scheduled: ${formatDate(quote.deliveryScheduledFor)}` : null,
-              quote.deliveredAt ? `Delivered: ${formatDate(quote.deliveredAt)}` : "Not yet delivered",
+              quote.deliveryScheduledFor ? `Scheduled: ${formatDate(quote.deliveryScheduledFor, regional)}` : null,
+              quote.deliveredAt ? `Delivered: ${formatDate(quote.deliveredAt, regional)}` : "Not yet delivered",
               quote.deliveredByName ? `Driver: ${quote.deliveredByName}` : null,
             ]}
           />
@@ -106,6 +108,7 @@ export default async function DeliveryNotePrintPage({
             // delivery charge is not a thing being delivered.
             rows={tpl.sections.prices === true ? [...includedLines(quote.items), ...feeRows(quote.fees)] : includedLines(quote.items)}
             showPrices={tpl.sections.prices === true}
+            regional={regional}
             totals={tpl.sections.prices === true ? totals : undefined}
           />
         )}
@@ -123,7 +126,7 @@ export default async function DeliveryNotePrintPage({
                     <div className="mb-1.5 flex items-baseline justify-between gap-3">
                       <p className="text-xs font-semibold text-slate-800">{run.template.name}</p>
                       {run.completedAt && (
-                        <p className="text-[10px] text-slate-500">Completed {formatDate(run.completedAt)}</p>
+                        <p className="text-[10px] text-slate-500">Completed {formatDate(run.completedAt, regional)}</p>
                       )}
                     </div>
                     <div className="grid grid-cols-2 gap-x-6 gap-y-1.5">
@@ -183,7 +186,7 @@ export default async function DeliveryNotePrintPage({
               className="h-20 max-w-full object-contain object-left"
             />
             {quote.deliveredAt && (
-              <p className="mt-1 text-[10px] text-slate-500">Recorded on {formatDate(quote.deliveredAt)}</p>
+              <p className="mt-1 text-[10px] text-slate-500">Recorded on {formatDate(quote.deliveredAt, regional)}</p>
             )}
           </div>
         )}

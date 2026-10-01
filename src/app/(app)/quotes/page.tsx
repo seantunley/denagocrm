@@ -17,7 +17,7 @@ import {
   quoteVersionIndex,
 } from "@/lib/quoteEditorRecord";
 import { loadBillToFleets, quoteBillTo } from "@/lib/quoteBillTo";
-import { getSetting } from "@/lib/settings";
+import { editorDefaults, quoteFromLeadDefaults } from "@/lib/quoteFromLead";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { EmptyState, SectionHeading, StatusPill, Surface, WorkspaceToolbar } from "@/components/visual-system";
@@ -53,12 +53,6 @@ import {
 // and sends it — the same budget the PDF routes get.
 export const maxDuration = 60;
 
-function inputDate(daysFromNow: number) {
-  const date = new Date();
-  date.setDate(date.getDate() + daysFromNow);
-  return date.toISOString().slice(0, 10);
-}
-
 export default async function QuotesPage({
   searchParams,
 }: {
@@ -82,7 +76,7 @@ export default async function QuotesPage({
    */
   const accessibleLeadIds = await getAccessibleLeadIds(user);
   const { edit, q, status } = await searchParams;
-  const [quotes, contacts, openLeads, products, allVersions, validDaysRaw, quoteTerms] = await Promise.all([
+  const [quotes, contacts, openLeads, products, allVersions, quoteDefaults] = await Promise.all([
     prisma.quote.findMany({
       // Only current heads appear in the list. Older revisions remain available
       // from the editor's version history and the full record. RBAC-scoped.
@@ -114,8 +108,7 @@ export default async function QuotesPage({
       select: QUOTE_VERSION_SELECT,
       take: 2_000,
     }),
-    getSetting("QUOTE_VALID_DAYS"),
-    getSetting("QUOTE_TERMS"),
+    quoteFromLeadDefaults(),
   ]);
 
   // Shared with quoteEditorRecord(), the action that loads ONE quote for the
@@ -126,7 +119,7 @@ export default async function QuotesPage({
   const fleetsById = await loadBillToFleets(prisma, quotes.map((quote) => quote.fleetId));
   const fleetNames = new Map([...fleetsById].map(([id, fleet]) => [id, fleet.name]));
   const records: QuoteEditorRecord[] = quotes.map((quote) =>
-    buildQuoteEditorRecord(quote, versionIndex, fleetNames),
+    buildQuoteEditorRecord(quote, versionIndex, fleetNames, quoteDefaults.regional),
   );
 
   // Every quote here is already RBAC-scoped by getAccessibleQuoteIds, so the
@@ -134,11 +127,7 @@ export default async function QuotesPage({
   // the permission is left to ask — once, not per row.
   const canDelete = await hasPermission(user, "quotes.delete");
 
-  const validDays = Number.parseInt(validDaysRaw ?? "7", 10);
-  const defaults = {
-    validUntil: inputDate(Number.isFinite(validDays) ? validDays : 7),
-    terms: quoteTerms || "Prices include VAT. Delivery arranged on acceptance. E&OE.",
-  };
+  const defaults = editorDefaults(quoteDefaults);
   const contactOptions = contacts.map((contact) => ({ id: contact.id, label: contactName(contact) }));
   // `lead.title` is the MODEL someone wants, and a dealership sells the same few
   // models repeatedly — so preferring it made every option in the picker read
@@ -223,7 +212,7 @@ export default async function QuotesPage({
                   icon={FileText}
                   title={`Quote Q-${quote.number}`}
                   detail={quoteBillTo(quote, fleetsById.get(quote.fleetId ?? "") ?? null).name || "Unlinked quote"}
-                  meta={`${formatZAR(Math.round(payableTotalCents(quote)))} · valid ${formatDate(quote.validUntil)}`}
+                  meta={`${formatZAR(Math.round(payableTotalCents(quote)))} · valid ${formatDate(quote.validUntil, quoteDefaults.regional)}`}
                   aside={<StatusPill tone={quote.status === "accepted" ? "success" : quote.status === "declined" ? "danger" : quote.status === "sent" ? "info" : "neutral"}>{quote.status}</StatusPill>}
                   href={`/quotes?edit=${quote.id}`}
                 />
@@ -317,7 +306,7 @@ export default async function QuotesPage({
                       />
                       <MobileDataFields>
                         <MobileDataField label="Total">{formatZAR(Math.round(total))}</MobileDataField>
-                        <MobileDataField label="Valid until">{formatDate(quote.validUntil)}</MobileDataField>
+                        <MobileDataField label="Valid until">{formatDate(quote.validUntil, quoteDefaults.regional)}</MobileDataField>
                         <MobileDataField label="Lead">
                           {quote.lead ? <Link href={`/leads/${quote.lead.id}`} className="text-primary hover:underline">{quote.lead.title}</Link> : "—"}
                         </MobileDataField>
@@ -379,7 +368,7 @@ export default async function QuotesPage({
                               {quote.status}
                             </StatusPill>
                           </td>
-                          <td className="text-slate-400">{formatDate(quote.validUntil)}</td>
+                          <td className="text-slate-400">{formatDate(quote.validUntil, quoteDefaults.regional)}</td>
                           <td className="text-slate-400">{formatDate(quote.createdAt)}{quote.createdBy ? ` · ${quote.createdBy.name}` : ""}</td>
                           <td className="text-right">
                             <ConfirmDelete action={deleteQuote.bind(null, quote.id)} title={`Delete quote Q-${quote.number}?`} description="Moves the quote to Trash (restorable for 60 days)." trigger="Delete" triggerClass="text-xs text-slate-500 hover:text-red-400" disabled={!canDelete} disabledReason="Your role can't delete quotes." />

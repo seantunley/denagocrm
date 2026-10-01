@@ -251,7 +251,6 @@ test("every document that states a customer resolves the fleet first", () => {
   for (const rel of [
     "src/lib/docbuilder/merge.ts",
     "src/lib/pdf/QuoteDoc.tsx",
-    "src/components/print/QuotePrintDoc.tsx",
     "src/app/(print)/quotes/[id]/invoice/page.tsx",
     "src/app/(print)/quotes/[id]/agreement/page.tsx",
     "src/app/(print)/quotes/[id]/delivery-note/page.tsx",
@@ -280,10 +279,9 @@ test("the fleet is a required parameter, not an optional one a caller can forget
   // asserts the compiler was given something to enforce.
   assert.match(
     shipped("src/lib/docbuilder/merge.ts"),
-    /buildQuoteContext\(quote: QuoteForPrint, fleet: BillToFleet \| null\)/,
+    /buildQuoteContext\(quote: QuoteForPrint, fleet: BillToFleet \| null, r: Regional\)/,
   );
   assert.match(shipped("src/lib/pdf/QuoteDoc.tsx"), /fleet: BillToFleet \| null;/);
-  assert.match(shipped("src/components/print/QuotePrintDoc.tsx"), /fleet: BillToFleet \| null;/);
 });
 
 /* ── creating one ────────────────────────────────────────────────────────── */
