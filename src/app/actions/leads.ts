@@ -20,7 +20,7 @@ import { withActingStaffScope } from "@/lib/actingScope";
 import type { Lead } from "@prisma/client";
 import { getCurrentUser } from "@/lib/auth";
 import { actingTenantId } from "@/lib/actingTenant";
-import { createBookedTestDrive, DEFAULT_TEST_DRIVE_MINUTES, UPCOMING_TEST_DRIVE_STATUSES } from "@/lib/testDriveBooking";
+import { createBookedTestDrive, DEFAULT_TEST_DRIVE_MINUTES, demoVehicleUnavailable, UPCOMING_TEST_DRIVE_STATUSES } from "@/lib/testDriveBooking";
 import { payableTotalCents } from "@/lib/pricing";
 import { WINNABLE_QUOTE_STATUSES, acceptQuoteInTx, afterDealWon, winLeadInTx } from "@/lib/quoteOutcome";
 import { CLOSED_REQUEST_STATUSES } from "@/lib/signing/status";
@@ -887,6 +887,14 @@ export async function moveLeadToTestDrive(
       orderBy: { scheduledStart: "asc" },
     });
     if (upcoming) {
+      // The new slot must be free for the car this booking already holds.
+      const clash = await demoVehicleUnavailable(tx, {
+        demoVehicleId: upcoming.demoVehicleId,
+        start: when,
+        end: expectedReturnAt,
+        excludeBookingId: upcoming.id,
+      });
+      if (clash) refuse(clash);
       const rescheduled = await tx.testDriveBooking.update({
         where: { id: upcoming.id },
         data: { scheduledStart: when, expectedReturnAt, branch, ...(updated.productId ? { productId: updated.productId } : {}) },
@@ -956,7 +964,11 @@ export async function moveLeadToTestDrive(
       }, tx);
     }
     return updated;
-  }, GOVERNANCE_TX);
+  }, GOVERNANCE_TX).catch((error) => {
+    if (error instanceof ActionRefusal) return error;
+    throw error;
+  });
+  if (lead instanceof ActionRefusal) return { ok: false, error: lead.message };
 
   await logAudit({
     action: "lead.test_drive_booked",

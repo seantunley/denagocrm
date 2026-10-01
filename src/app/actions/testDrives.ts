@@ -1,7 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { createBookedTestDrive } from "@/lib/testDriveBooking";
+import { createBookedTestDrive, demoVehicleUnavailable } from "@/lib/testDriveBooking";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { agreedTenantId } from "@/lib/compositeTenantRules";
@@ -99,25 +99,8 @@ async function assertDemoVehicleAvailable(args: {
   end: Date;
   excludeBookingId?: string;
 }) {
-  if (!args.demoVehicleId) return;
-  const vehicle = await prisma.demoVehicle.findFirst({
-    where: { id: args.demoVehicleId, deletedAt: null },
-  });
-  if (!vehicle || vehicle.status !== "active") {
-    throw new Error("That demo vehicle is not available");
-  }
-  const overlap = await prisma.testDriveBooking.findFirst({
-    where: {
-      id: args.excludeBookingId ? { not: args.excludeBookingId } : undefined,
-      demoVehicleId: args.demoVehicleId,
-      deletedAt: null,
-      status: { in: ["booked", "confirmed", "checked_out"] },
-      scheduledStart: { lt: args.end },
-      expectedReturnAt: { gt: args.start },
-    },
-    select: { reference: true },
-  });
-  if (overlap) throw new Error(`The demo vehicle is already booked on ${overlap.reference}`);
+  const problem = await demoVehicleUnavailable(prisma, args);
+  if (problem) throw new Error(problem);
 }
 
 /**

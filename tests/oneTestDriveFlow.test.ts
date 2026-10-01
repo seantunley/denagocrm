@@ -28,6 +28,38 @@ test("a reschedule from the board moves the upcoming booking, not a second one",
   assert.match(board, /tx\.testDriveBooking\.update\(\{\s*where: \{ id: upcoming\.id \},/);
 });
 
+test("a board reschedule re-checks the booking's demo vehicle before moving it", () => {
+  const reschedule = board.slice(board.indexOf("if (upcoming) {"), board.indexOf("tx.testDriveBooking.update({"));
+  assert.match(reschedule, /demoVehicleUnavailable\(tx, \{\s*demoVehicleId: upcoming\.demoVehicleId,\s*start: when,\s*end: expectedReturnAt,\s*excludeBookingId: upcoming\.id,/);
+  assert.match(reschedule, /if \(clash\) refuse\(clash\)/);
+  // The refusal reaches the board as a message, not an error page.
+  assert.match(board, /if \(lead instanceof ActionRefusal\) return \{ ok: false, error: lead\.message \}/);
+  // Both doors ask the same question.
+  assert.match(src("src/app/actions/testDrives.ts"), /await demoVehicleUnavailable\(prisma, args\)/);
+});
+
+test("demoVehicleUnavailable: overlap, inactive car, self-exclusion", async () => {
+  const { demoVehicleUnavailable } = await import("../src/lib/testDriveBooking");
+  const at = (h: number) => new Date(Date.UTC(2026, 9, 1, h));
+  const bookings = [{ id: "b1", reference: "TD-ONE", demoVehicleId: "car", start: at(10), end: at(11) }];
+  let active = true;
+  const db = {
+    demoVehicle: { findFirst: async () => ({ status: active ? "active" : "retired" }) },
+    testDriveBooking: {
+      findFirst: async ({ where }: { where: { id?: { not: string }; scheduledStart: { lt: Date }; expectedReturnAt: { gt: Date } } }) =>
+        bookings.find((b) => b.id !== where.id?.not && b.start < where.scheduledStart.lt && b.end > where.expectedReturnAt.gt) ?? null,
+    },
+  } as never;
+  const ask = (start: Date, end: Date, excludeBookingId?: string) =>
+    demoVehicleUnavailable(db, { demoVehicleId: "car", start, end, excludeBookingId });
+  assert.equal(await ask(at(10), at(11), "b2"), "The demo vehicle is already booked on TD-ONE");
+  assert.equal(await ask(at(11), at(12), "b2"), null, "back-to-back is fine");
+  assert.equal(await ask(at(10), at(11), "b1"), null, "a booking never clashes with itself");
+  assert.equal(await demoVehicleUnavailable(db, { demoVehicleId: null, start: at(10), end: at(11) }), null);
+  active = false;
+  assert.equal(await ask(at(14), at(15)), "That demo vehicle is not available");
+});
+
 test("a lead with no customer gets one by the shared identity rules — or a clear refusal", () => {
   assert.match(board, /hasPermission\(user, "leads\.link_contact"\)/);
   assert.match(board, /contactId = await linkOrCreateLeadContact\(leadRow, user, null\)/);

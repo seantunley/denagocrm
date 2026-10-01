@@ -90,3 +90,29 @@ export async function createBookedTestDrive(tx: Tx, input: NewTestDrive) {
 
 /** Booking statuses that are still ahead of the customer — the ones a reschedule or move-back acts on. */
 export const UPCOMING_TEST_DRIVE_STATUSES = ["booked", "confirmed"];
+
+/**
+ * Why this demo vehicle can't be out from `start` to `end`, or null if it can.
+ * Every door that books or moves a booking asks this — the board's reschedule
+ * once skipped it and double-booked a car the module had already given away.
+ */
+export async function demoVehicleUnavailable(
+  db: Pick<typeof prisma, "demoVehicle" | "testDriveBooking">,
+  args: { demoVehicleId: string | null; start: Date; end: Date; excludeBookingId?: string },
+): Promise<string | null> {
+  if (!args.demoVehicleId) return null;
+  const vehicle = await db.demoVehicle.findFirst({ where: { id: args.demoVehicleId, deletedAt: null } });
+  if (!vehicle || vehicle.status !== "active") return "That demo vehicle is not available";
+  const overlap = await db.testDriveBooking.findFirst({
+    where: {
+      id: args.excludeBookingId ? { not: args.excludeBookingId } : undefined,
+      demoVehicleId: args.demoVehicleId,
+      deletedAt: null,
+      status: { in: ["booked", "confirmed", "checked_out"] },
+      scheduledStart: { lt: args.end },
+      expectedReturnAt: { gt: args.start },
+    },
+    select: { reference: true },
+  });
+  return overlap ? `The demo vehicle is already booked on ${overlap.reference}` : null;
+}
