@@ -4,6 +4,12 @@ import { prisma, basePrisma } from "./db";
 import { getSetting } from "./settings";
 import { writeTenantId } from "./tenantWrite";
 import { customerRecordTenantId } from "./customerRecordTenant";
+import {
+  availabilityConflictMessage,
+  DEFAULT_ACTIVITY_DURATION_MS,
+  findStaffAvailabilityConflict,
+  lockStaffSchedules,
+} from "./staffAvailability";
 
 export type SlotConfig = {
   times: string[];
@@ -124,6 +130,10 @@ export async function reserveSlot(input: {
   // Activity's composite keys to Contact and Lead mean nothing else is even legal.
   // Resolved before the transaction: it reads on another connection.
   const stampTenantId = await customerRecordTenantId({ contactId: input.contactId, leadId: input.leadId });
+  const assignedToId = input.assignedToId ?? input.userId;
+  const endDate = input.endDate && input.endDate > dt
+    ? input.endDate
+    : new Date(dt.getTime() + DEFAULT_ACTIVITY_DURATION_MS);
 
   return basePrisma.$transaction(async (tx) => {
     if (input.dedupeMarker) {
@@ -138,14 +148,22 @@ export async function reserveSlot(input: {
       });
       if (existing) return existing;
     }
+    await lockStaffSchedules(tx, stampTenantId ?? "global", [assignedToId]);
+    const conflict = await findStaffAvailabilityConflict({
+      userId: assignedToId,
+      start: dt,
+      end: endDate,
+      db: tx,
+    });
+    if (conflict) throw new Error(`STAFF_UNAVAILABLE:${availabilityConflictMessage(conflict)}`);
     await claimSlotCapacity(tx, dt, config.capacity, tenantId);
     const note = [input.note, input.dedupeMarker].filter(Boolean).join("\n") || null;
     return tx.activity.create({
       data: {
         type: input.type ?? "meeting", category: "workshop", summary: input.summary,
-        note, dueDate: dt, endDate: input.endDate ?? null, location: input.location ?? null,
+        note, dueDate: dt, endDate, location: input.location ?? null,
         contactId: input.contactId, leadId: input.leadId,
-        assignedToId: input.assignedToId ?? input.userId, createdById: input.userId,
+        assignedToId, createdById: input.userId,
         ...(stampTenantId ? { tenantId: stampTenantId } : {}),
       },
     });
