@@ -278,6 +278,7 @@ model StockReservation {
   expiresAt            DateTime?
   depositRequiredCents Int       @default(0)
   depositReceivedAt    DateTime?
+  depositReceivedCents Int? // amount actually received; null = recorded before amounts were captured
   releasedAt           DateTime?
   releaseReason        String?
   reservedById         String
@@ -1008,7 +1009,7 @@ model RetiredAutomationLog {
 model Quote {
   id         String    @id @default(cuid())
   number     Int       @unique
-  status     String    @default("draft") // draft | sent | accepted | declined
+  status     String    @default("draft") // draft | sent | accepted | declined | cancelled
   validUntil DateTime?
   terms      String?
   createdAt  DateTime  @default(now())
@@ -1043,6 +1044,7 @@ model Quote {
   // Fulfilment flow after signing (all set manually from the Deliveries board)
   invoicedAt           DateTime?
   depositPaidAt        DateTime?
+  depositPaidCents     Int? // amount actually received; null = recorded before amounts were captured
   deliveryScheduledFor DateTime?
   deliveredAt          DateTime?
   deliveredByName      String? // driver / who handed the cart over

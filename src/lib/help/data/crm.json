@@ -69,7 +69,7 @@
       {"type": "h", "text": "Actions on an open lead"},
       {"type": "list", "items": [
         "**Create quote** — starts a quote from the lead",
-        "**Mark won** — closes the deal as won; if the lead has no contact yet, one is created, and you land on that contact",
+        "**Mark won** — closes the deal as won. Pick the quote the customer accepted: it is accepted exactly as if you had pressed Accepted, and the deal goes to Deliveries. Choose \"won without a quote\" and nothing goes to Deliveries until a quote is accepted. If the lead has no customer yet, an existing customer with the same email or phone is linked; a new one is created only if there is none. You land on that customer",
         "**Mark lost** — requires a reason (e.g. bought elsewhere, too expensive, no response)",
         "**Indemnity** — prints a test-drive indemnity form for the customer to sign",
         "**Delete** — moves the lead to Trash, restorable for 60 days"

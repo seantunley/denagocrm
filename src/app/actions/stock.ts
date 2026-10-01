@@ -15,6 +15,9 @@ import {
 } from "@/lib/stockPlatform";
 import { getStockLabels, saveStockLabels, slugifyLabel } from "@/lib/stockLabels";
 import { withActingStaffScope } from "@/lib/actingScope";
+import { actingTenantId } from "@/lib/actingTenant";
+import { formatZAR } from "@/lib/format";
+import { deliverQuote } from "@/lib/quoteDelivery";
 
 const rand = (value: FormDataEntryValue | null) => {
   const parsed = Number.parseFloat(String(value ?? "0").replace(/[^0-9.-]/g, ""));
@@ -444,13 +447,20 @@ export async function recordReservationDeposit(id: string, formData: FormData) {
   return asActionResult(async () => {
     const user = await requirePermission("stock.manage");
     const reference = str(formData.get("reference"));
+    if (!str(formData.get("amount"))) refuse("Enter the deposit amount received.");
+    const amountCents = rand(formData.get("amount"));
     const reservation = await prisma.stockReservation.findFirst({
       where: { stockUnitId: id, status: "active", depositReceivedAt: null },
-      select: { id: true, leadId: true },
+      select: { id: true, leadId: true, stockUnit: { select: { stockNumber: true } } },
     });
     if (!reservation) throw new ActionRefusal("No active reservation was found");
-    await prisma.stockReservation.update({ where: { id: reservation.id }, data: { depositReceivedAt: new Date() } });
-    await addStockEvent({ stockUnitId: id, eventType: "reservation.deposit_received", leadId: reservation.leadId, detail: reference || null, actor: actor(user) });
+    const recorded = await prisma.stockReservation.updateMany({
+      where: { id: reservation.id, status: "active", depositReceivedAt: null },
+      data: { depositReceivedAt: new Date(), depositReceivedCents: amountCents },
+    });
+    if (recorded.count !== 1) throw new ActionRefusal("The deposit was just recorded by someone else. Refresh to see it.");
+    await addStockEvent({ stockUnitId: id, eventType: "reservation.deposit_received", leadId: reservation.leadId, detail: [formatZAR(amountCents), reference].filter(Boolean).join(" · "), actor: actor(user) });
+    await logAudit({ action: "stock.deposit_received", summary: `Reservation deposit of ${formatZAR(amountCents)} received on ${reservation.stockUnit.stockNumber ?? "a stock unit"}`, leadId: reservation.leadId, user });
     refresh(id);
   });
 }
@@ -554,59 +564,35 @@ export async function markUnitSold(id: string, formData: FormData) {
   });
 }
 
+/**
+ * The stock page's "Complete delivery". Authorises the way its siblings do
+ * (stock.manage, plus access to the quote it is allocated to — as allocateUnit),
+ * then hands over to the ONE delivery, lib/quoteDelivery.ts → deliverQuote, which
+ * the Deliveries board's "Mark delivered" also uses. So the quote is marked
+ * delivered, every unit on it moves to delivered, and each cart gets exactly one
+ * vehicle record — whichever button was pressed.
+ */
 export async function deliverStockUnit(id: string, formData: FormData) {
   return asActionResult(async () => {
-    const user = await requirePermission("stock.manage");
+    await requirePermission("stock.manage");
     const current = await activeUnit(id);
-    if (current.status !== "ready_for_delivery") throw new ActionRefusal("Only a PDI-passed unit can be delivered");
     if (!current.soldQuoteId) throw new ActionRefusal("Allocate the unit to an accepted quote before delivery");
-    const quote = await prisma.quote.findUnique({
-      where: { id: current.soldQuoteId },
-      include: { contact: true, lead: { include: { contact: true } }, items: true },
+    const user = await requireQuoteAccess(current.soldQuoteId, "stock.manage");
+    const tenantId = await actingTenantId();
+    const quote = await prisma.quote.findFirst({
+      where: { id: current.soldQuoteId, tenantId },
+      select: { status: true },
     });
-    const contact = quote?.contact ?? quote?.lead?.contact ?? null;
-    if (!quote || quote.status !== "accepted" || !contact) throw new ActionRefusal("The accepted quote must be linked to a contact before delivery");
-    // Per-UNIT selling price for this one physical cart — NOT the whole quote line
-    // (qty × price), which would over-state revenue for multi-quantity quotes.
-    const saleLine = quote.items.find((item) => item.productId === current.productId && item.selected);
-    const salePriceCents = saleLine ? Math.round(saleLine.unitPriceCents * (1 - saleLine.discountPct / 100)) : 0;
-    const warrantyMonths = Math.max(0, integer(formData.get("warrantyMonths"), 12));
-    const deliveredAt = new Date();
-    const warrantyEndAt = warrantyMonths ? new Date(deliveredAt.getFullYear(), deliveredAt.getMonth() + warrantyMonths, deliveredAt.getDate()) : null;
-
-    await prisma.$transaction(async (tx) => {
-      await tx.stockUnit.update({
-        where: { id },
-        data: {
-          status: "delivered",
-          soldAt: deliveredAt,
-          deliveredAt,
-          salePriceCents,
-          warrantyStartAt: deliveredAt,
-          warrantyEndAt,
-        },
-      });
-      const existing = current.serial ? await tx.vehicle.findUnique({ where: { vin: current.serial } }) : null;
-      if (!existing) {
-        await tx.vehicle.create({
-          data: {
-            model: current.product.name,
-            vin: current.serial,
-            color: current.color,
-            purchaseDate: deliveredAt,
-            warrantyMonths: warrantyMonths || null,
-            notes: `Created automatically from stock unit ${current.stockNumber ?? id}`,
-            contactId: contact.id,
-            productId: current.productId,
-          },
-        });
-      }
+    if (!quote || quote.status !== "accepted") throw new ActionRefusal("Stock can only be delivered against an accepted quote");
+    // No readiness check of its own: deliverQuote refuses the whole delivery if
+    // ANY cart on the quote is not PDI-passed, naming each one — the same
+    // refusal, word for word, as the Deliveries board gets.
+    return deliverQuote({
+      quoteId: current.soldQuoteId,
+      tenantId,
+      user,
+      warrantyMonths: integer(formData.get("warrantyMonths"), 12),
     });
-    await addStockEvent({ stockUnitId: id, eventType: "unit.delivered", fromStatus: "ready_for_delivery", toStatus: "delivered", leadId: quote.leadId, quoteId: quote.id, detail: `Sale value ${salePriceCents}`, actor: actor(user) });
-    await logAudit({ action: "stock.delivered", summary: `Delivered ${current.stockNumber ?? current.product.name} to ${contact.firstName}`, contactId: contact.id, leadId: quote.leadId, user });
-    revalidatePath(`/contacts/${contact.id}`);
-    revalidatePath("/vehicles");
-    refresh(id);
   });
 }
 

@@ -92,13 +92,14 @@ test("a fractional quantity still registers whole vehicles", () => {
 /* ── the wiring, which is what actually failed ───────────────────────────── */
 
 test("the delivery hands the whole queue on, not just the first vehicle", () => {
-  const fulfilment = src("src/app/actions/fulfilment.ts");
-  assert.match(fulfilment, /vehiclesAwaitingRegistration/, "markDelivered must build the queue");
-  assert.match(fulfilment, /seq=0/, "…and start it at the first vehicle");
+  // The delivery itself lives in lib/quoteDelivery.ts, shared by both buttons.
+  const delivery = src("src/lib/quoteDelivery.ts");
+  assert.match(delivery, /vehiclesAwaitingRegistration/, "the delivery must build the queue");
+  assert.match(delivery, /seq=0/, "…and start it at the first vehicle");
 });
 
 test("registering one vehicle returns for the next until the queue is empty", () => {
   const vehicles = src("src/app/actions/vehicles.ts");
-  assert.match(vehicles, /vehiclesAwaitingRegistration/);
+  assert.match(vehicles, /registrationQueueForQuote/);
   assert.match(vehicles, /seq=\$\{next\}/, "the next registration must carry the advanced position");
 });

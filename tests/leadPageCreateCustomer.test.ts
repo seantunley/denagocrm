@@ -17,6 +17,9 @@ test("a lead with no customer offers 'Create customer from this lead' on its own
 });
 
 test("creating the customer also fills it in on the lead's customerless draft quotes", () => {
+  // Shared with Mark won, so both link the customer the same way.
   const convert = actions.slice(actions.indexOf("export async function convertLeadToContact"));
-  assert.match(convert, /quote\.updateMany\(\{\s*where: \{ leadId, contactId: null, status: "draft", deletedAt: null \}/);
+  assert.match(convert.slice(0, convert.indexOf("\nexport ", 1)), /linkOrCreateLeadContact\(lead, user, null\)/);
+  const helper = actions.slice(actions.indexOf("async function linkOrCreateLeadContact"));
+  assert.match(helper, /quote\.updateMany\(\{\s*where: \{ leadId: lead\.id, contactId: null, status: "draft", deletedAt: null \}/);
 });

@@ -51,13 +51,13 @@ import {
   assignLead,
   convertLeadToContact,
   markLost,
-  markWon,
   moveLead,
   moveLeadToTestDrive,
   moveLeadWithContact,
   moveLeadWithNewQuote,
   searchLinkableContacts,
 } from "@/app/actions/leads";
+import { MarkWonDialog } from "@/components/MarkWonDialog";
 import { formatZAR } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -1186,24 +1186,26 @@ export default function KanbanBoard({
     };
   }
 
-  function confirmOutcome(reason?: string) {
-    if (!pendingOutcome) return;
-    const { lead, mode } = pendingOutcome;
+  const pendingLost = pendingOutcome?.mode === "lost" ? { lead: pendingOutcome.lead } : null;
+  const pendingWon = pendingOutcome?.mode === "won" ? pendingOutcome.lead : null;
+
+  function confirmLost(reason: string) {
+    if (!pendingLost) return;
+    const { lead } = pendingLost;
     setPendingOutcome(null);
     startTransition(async () => {
       try {
         const formData = new FormData();
-        if (mode === "won") {
-          formData.set("returnTo", "/leads");
-          await markWon(lead.id, formData);
-        } else {
-          formData.set("lostReason", reason ?? "");
-          await markLost(lead.id, formData);
+        formData.set("lostReason", reason);
+        const result = await markLost(lead.id, formData);
+        if (result?.error) {
+          toast.error(result.error);
+          return;
         }
         removeLead(lead.id);
-        toast.success(`${lead.name} marked ${mode}`);
+        toast.success(`${lead.name} marked lost`);
       } catch {
-        toast.error(`Couldn't mark ${lead.name} ${mode}`);
+        toast.error(`Couldn't mark ${lead.name} lost`);
       }
     });
   }
@@ -1390,10 +1392,20 @@ export default function KanbanBoard({
           onConfirm={confirmTestDrive}
         />
         <LeadOutcomeDialog
-          key={pendingOutcome ? `${pendingOutcome.lead.id}-${pendingOutcome.mode}` : "closed"}
-          pending={pendingOutcome}
+          key={pendingLost ? `${pendingLost.lead.id}-lost` : "closed"}
+          pending={pendingLost}
           onCancel={() => setPendingOutcome(null)}
-          onConfirm={confirmOutcome}
+          onConfirm={confirmLost}
+        />
+        {/* Winning asks WHICH quote was accepted — that is what sends the deal
+            to Deliveries — so it has its own dialog, shared with the lead page. */}
+        <MarkWonDialog
+          open={Boolean(pendingWon)}
+          onOpenChange={(open) => !open && setPendingOutcome(null)}
+          leadId={pendingWon?.id ?? ""}
+          leadName={pendingWon?.name ?? ""}
+          returnTo="/leads"
+          onWon={() => pendingWon && removeLead(pendingWon.id)}
         />
         <ContactLinkDialog
           key={pendingLink ? `${pendingLink.lead.id}-${pendingLink.stageId}` : "link-closed"}
@@ -1673,9 +1685,9 @@ function LeadOutcomeDialog({
   onCancel,
   onConfirm,
 }: {
-  pending: { lead: KanbanLead; mode: "won" | "lost" } | null;
+  pending: { lead: KanbanLead } | null;
   onCancel: () => void;
-  onConfirm: (reason?: string) => void;
+  onConfirm: (reason: string) => void;
 }) {
   const [reason, setReason] = useState("");
 
@@ -1686,45 +1698,37 @@ function LeadOutcomeDialog({
           <>
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
-                {pending.mode === "won" ? (
-                  <Trophy className="size-4 text-emerald-400" />
-                ) : (
-                  <XCircle className="size-4 text-destructive" />
-                )}
-                Mark {pending.lead.name} {pending.mode}?
+                <XCircle className="size-4 text-destructive" />
+                Mark {pending.lead.name} lost?
               </DialogTitle>
               <DialogDescription>
-                {pending.mode === "won"
-                  ? "This closes the opportunity as won and creates a customer if one is not already linked."
-                  : "Capture why the opportunity was lost so reporting and future coaching stay useful."}
+                Capture why the opportunity was lost so reporting and future coaching stay useful.
               </DialogDescription>
             </DialogHeader>
-            {pending.mode === "lost" && (
-              <div>
-                <label className="mb-1 block text-xs font-medium text-muted-foreground">Lost reason</label>
-                <input
-                  value={reason}
-                  onChange={(event) => setReason(event.target.value)}
-                  className="input"
-                  autoFocus
-                  placeholder="e.g. Bought elsewhere, budget, no response"
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" && reason.trim()) onConfirm(reason.trim());
-                  }}
-                />
-              </div>
-            )}
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">Lost reason</label>
+              <input
+                value={reason}
+                onChange={(event) => setReason(event.target.value)}
+                className="input"
+                autoFocus
+                placeholder="e.g. Bought elsewhere, budget, no response"
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && reason.trim()) onConfirm(reason.trim());
+                }}
+              />
+            </div>
             <div className="flex justify-end gap-2">
               <Button type="button" variant="outline" onClick={onCancel}>
                 Cancel
               </Button>
               <Button
                 type="button"
-                variant={pending.mode === "lost" ? "destructive" : "default"}
-                disabled={pending.mode === "lost" && !reason.trim()}
-                onClick={() => onConfirm(reason.trim() || undefined)}
+                variant="destructive"
+                disabled={!reason.trim()}
+                onClick={() => onConfirm(reason.trim())}
               >
-                Mark {pending.mode}
+                Mark lost
               </Button>
             </div>
           </>
