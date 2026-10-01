@@ -74,6 +74,7 @@ export async function lockStaffSchedules(
 
 export async function findStaffAvailabilityConflict(args: {
   userId: string;
+  tenantId: string | null;
   start: Date;
   end: Date;
   excludeActivityId?: string | null;
@@ -85,6 +86,7 @@ export async function findStaffAvailabilityConflict(args: {
   const candidates = await db.activity.findMany({
     where: {
       assignedToId: args.userId,
+      tenantId: args.tenantId,
       availabilityBlock: true,
       status: "planned",
       dueDate: { lt: args.end },
@@ -127,6 +129,7 @@ export async function findStaffAvailabilityConflict(args: {
  */
 export async function findStaffCommitmentConflict(args: {
   userId: string;
+  tenantId: string | null;
   start: Date;
   end: Date;
   excludeActivityId?: string | null;
@@ -138,6 +141,7 @@ export async function findStaffCommitmentConflict(args: {
   const activities = await db.activity.findMany({
     where: {
       assignedToId: args.userId,
+      tenantId: args.tenantId,
       availabilityBlock: false,
       status: "planned",
       dueDate: { lt: args.end },
@@ -169,6 +173,7 @@ export async function findStaffCommitmentConflict(args: {
   const drive = await db.testDriveBooking.findFirst({
     where: {
       accompanyingSalespersonId: args.userId,
+      tenantId: args.tenantId,
       deletedAt: null,
       status: { in: ["booked", "confirmed", "checked_out"] },
       scheduledStart: { lt: args.end },
