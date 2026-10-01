@@ -62,6 +62,7 @@ export async function createStaffAvailability(
     await lockStaffSchedules(tx, tenantId, [assignedTo.id]);
     const conflict = await findStaffCommitmentConflict({
       userId: assignedTo.id,
+      tenantId,
       start,
       end,
       db: tx,
