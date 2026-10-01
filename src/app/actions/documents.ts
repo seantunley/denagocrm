@@ -16,6 +16,7 @@ import {
 } from "@/lib/documentUpload";
 import { authorizeDocumentTarget } from "@/lib/documentUploadAuth";
 import { actingOwnerTenantId } from "@/lib/actingScope";
+import { requiredReason } from "@/lib/deleteReason";
 import { DOC_DEFS, defaultTemplate, mergeTemplate, isDocKey } from "@/lib/docTemplates";
 import {
   requirePermission,
@@ -358,9 +359,10 @@ export async function deleteDocTemplate(id: string, formData?: FormData) {
     const rec = await prisma.docTemplateRecord.findUnique({ where: { id } });
     if (!rec) refuse(TEMPLATE_GONE);
     if (rec.isDefault) refuse("This is the default template — make another one the default first.");
-    const reason = String(formData?.get("reason") ?? "").trim();
+    // Required here, not just in the dialog: the action is a public endpoint.
+    const reason = requiredReason(formData, "deleting this template");
     await prisma.docTemplateRecord.update({ where: { id }, data: { deletedAt: new Date() } });
-    await logAudit({ action: "doctemplate.deleted", summary: `Deleted template “${rec.name}”${reason ? ` — ${reason}` : ""}`, user });
+    await logAudit({ action: "doctemplate.deleted", summary: `Deleted template “${rec.name}” — ${reason}`, user });
     revalidatePath("/document-studio");
     return { success: "Template deleted" };
   });

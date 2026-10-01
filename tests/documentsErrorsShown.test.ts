@@ -36,7 +36,9 @@ test("the default template can't be deleted, and it says why", () => {
 test("deleting a template is confirmed and its reason audited", () => {
   const page = src("src/app/(app)/document-studio/page.tsx");
   assert.match(page, /<ConfirmDelete\s+action=\{deleteDocTemplate\.bind\(null, template\.id\)\}/);
-  assert.match(docs, /summary: `Deleted template “\$\{rec\.name\}”\$\{reason \? ` — \$\{reason\}` : ""\}`/);
+  // Required on the server, not only in the dialog.
+  assert.match(docs, /const reason = requiredReason\(formData, "deleting this template"\);/);
+  assert.match(docs, /summary: `Deleted template “\$\{rec\.name\}” — \$\{reason\}`/);
 });
 
 test("studio publish / new clause return refusals and navigate by value", () => {
