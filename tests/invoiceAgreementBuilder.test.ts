@@ -135,7 +135,7 @@ test("banking, payment terms and clauses come from the old template, and a secti
 
 test("buildQuoteContext carries the new tokens and the tax mode", () => {
   const merge = read("src/lib/docbuilder/merge.ts");
-  assert.match(merge, /\.\.\.quoteDocTokens\(quote, billTo, pricing\)/);
+  assert.match(merge, /\.\.\.quoteDocTokens\(quote, billTo, pricing, new Date\(\), r\)/);
   assert.match(merge, /taxInclusive: quote\.taxInclusive !== false/);
 });
 

@@ -7,6 +7,8 @@ import { showcaseAssetTokens } from "./showcaseAssetsServer";
 import { loadBillToFleet } from "@/lib/quoteBillTo";
 import { loadLeadForDoc, loadWarrantyClaimForDoc } from "@/lib/docbuilder/leadWarrantyRecords";
 import { getCompanyProfile, companyTokens } from "@/lib/companyProfile";
+import { getRegionalSettings } from "@/lib/settings";
+import type { Regional } from "@/lib/format";
 import { htmlToPdf } from "@/lib/customDocs";
 import { type DocumentModel } from "./model";
 import { readTemplateDocument } from "./legacy";
@@ -21,15 +23,16 @@ import { defaultLogoDataUri as logoDataUri, documentLogo, embedDocImages, liveGl
  * NO quote/job card is bound (list preview / "No record" export), where ctx would
  * otherwise be null. Record-specific tokens still win on any overlap.
  */
-async function withCompany(ctx: RenderCtx, tenantId?: string | null): Promise<RenderCtx> {
+async function withCompany(ctx: RenderCtx, tenantId?: string | null, known?: Regional): Promise<RenderCtx> {
   const profile = await getCompanyProfile();
+  const regional = known ?? (await getRegionalSettings());
   // + the showcase layout's built-in band photos ({{asset.*}}), embedded as data URLs.
-  const company = { ...showcaseAssetTokens(), ...(await liveGlobalTokens()), ...companyTokens(profile) };
+  const company = { ...showcaseAssetTokens(), ...(await liveGlobalTokens(regional)), ...companyTokens(profile) };
   const logo = await documentLogo(profile.logoUrl, tenantId);
   // Unbound: carry company tokens only, but mark bound:false so conditionals/showIf
   // columns render as the placeholder layout rather than evaluating an empty scope.
-  if (!ctx) return { tokens: company, items: [], vars: {}, bound: false, logo };
-  return { ...ctx, tokens: { ...company, ...ctx.tokens }, bound: true, logo };
+  if (!ctx) return { tokens: company, items: [], vars: {}, bound: false, logo, regional };
+  return { ...ctx, tokens: { ...company, ...ctx.tokens }, bound: true, logo, regional };
 }
 
 export type Resolved = { doc: DocumentModel; ctx: RenderCtx; title: string; quoteId: string | null; jobCardId: string | null; contactId: string | null };
@@ -68,6 +71,7 @@ async function resolve(templateId: string, quoteId?: string | null, jobCardId?: 
   if (read.status !== "ok") return null;
   const doc = await embedDocImages(read.doc, tpl.tenantId);
   let ctx: RenderCtx = null;
+  const regional = await getRegionalSettings();
   let title = doc.title || tpl.name;
   let qId: string | null = null, jId: string | null = null, contactId: string | null = null;
   if (quoteId) {
@@ -76,20 +80,20 @@ async function resolve(templateId: string, quoteId?: string | null, jobCardId?: 
       include: { items: true, fees: { orderBy: { sortOrder: "asc" } }, lead: { include: { product: true } }, contact: true, createdBy: true },
     });
     // Tenant-scoped fleet lookup, not an include — Quote.fleetId has no FK.
-    if (q) { ctx = await withVehicleShowcase(buildQuoteContext(q, await loadBillToFleet(prisma, q.fleetId)), q); title = `${doc.title} — Q-${q.number}`; qId = q.id; contactId = q.contactId; }
+    if (q) { ctx = await withVehicleShowcase(buildQuoteContext(q, await loadBillToFleet(prisma, q.fleetId), regional), q); title = `${doc.title} — Q-${q.number}`; qId = q.id; contactId = q.contactId; }
   } else if (jobCardId) {
     const jc = await prisma.jobCard.findUnique({
       where: { id: jobCardId },
       include: { items: true, vehicle: true, contact: true, technician: true, serviceRecord: { include: { performedBy: true } } },
     });
-    if (jc) { ctx = buildJobCardContext(jc); title = `${doc.title} — Job #${jc.number}`; jId = jc.id; contactId = jc.contactId; }
+    if (jc) { ctx = buildJobCardContext(jc, null, regional); title = `${doc.title} — Job #${jc.number}`; jId = jc.id; contactId = jc.contactId; }
   } else if (other?.leadId || other?.warrantyClaimId) {
     const bound = other.leadId ? await loadLeadForDoc(other.leadId) : await loadWarrantyClaimForDoc(other.warrantyClaimId!);
     if (bound) { ctx = bound.ctx; title = `${doc.title} — ${bound.label}`; contactId = bound.contactId; }
   }
   // Fold in company tokens once — including the unbound case (ctx still null), so the
   // record-independent brand tokens resolve in list previews and "No record" exports.
-  ctx = await withCompany(ctx);
+  ctx = await withCompany(ctx, undefined, regional);
   return { doc, ctx, title, quoteId: qId, jobCardId: jId, contactId };
 }
 

@@ -320,7 +320,7 @@ test("saving from the editor stops resetting the columns it never shows", () => 
   // defaults: margin's cost basis zeroed, declined optional add-ons silently
   // re-included. Rows are matched by id and the values carried across.
   const code = shipped("src/app/actions/quotes.ts");
-  const at = code.indexOf("const itemRows = itemRowsFor(normalizedItems, priorById(existing.items))");
+  const at = code.indexOf("const itemRows = itemRowsFor(normalizedItems, priorById(existing.items), ");
   assert.ok(at > 0, "the previous rows must be read before they are deleted");
   assert.ok(at < code.indexOf("tx.quoteItem.deleteMany"), "…BEFORE, or there is nothing left to read");
   assert.match(code, /id: z\.string\(\)\.trim\(\)\.min\(1\)\.nullable\(\)\.optional\(\)/, "the payload must identify the row");
@@ -331,7 +331,8 @@ test("saving from the editor stops resetting the columns it never shows", () => 
   for (const field of ["kind", "costCents", "optional", "selected"]) {
     assert.match(rows, new RegExp(`${field}: previous\\?\\.${field}`), `${field} must be carried across`);
   }
-  assert.match(rows, /taxRatePct: taxRatePct \?\? previous\?\.taxRatePct \?\? 15/);
+  // A genuinely new line takes the WORKSPACE's rate (Settings → Quotes), not a built-in 15.
+  assert.match(rows, /taxRatePct: taxRatePct \?\? previous\?\.taxRatePct \?\? vatRatePct/);
   assert.match(rows, /\.\.\.\(previous \? \{ id: previous\.id \} : \{\}\)/, "a surviving row must keep its id");
 });
 

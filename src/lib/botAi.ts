@@ -1,5 +1,5 @@
 import { recordAiUsage } from "./systemHealth";
-import { getSetting } from "./settings";
+import { getRegionalSettings, getSetting } from "./settings";
 import { prisma } from "./db";
 import { logError } from "./errorLog";
 import { formatZAR } from "./format";
@@ -164,18 +164,19 @@ export async function generateBotReply(input: {
   if (!apiKey) return null;
 
   const latestQuestion = [...input.history].reverse().find((message) => message.role === "user")?.content ?? "";
-  const [brief, hours, products, faqs, relevantKnowledge] = await Promise.all([
+  const [brief, hours, products, faqs, relevantKnowledge, regional] = await Promise.all([
     getSetting("BOT_AI_BRIEF"),
     getSetting("BOT_HOURS"),
     prisma.product.findMany({ where: { active: true }, include: { colors: true }, orderBy: { name: "asc" } }),
     getBotFaqs(),
     searchBotKnowledge(latestQuestion),
+    getRegionalSettings(),
   ]);
   const knowledgeText = renderKnowledgeForPrompt(relevantKnowledge);
-  const productFacts = renderBotProductFacts(products);
+  const productFacts = renderBotProductFacts(products, undefined, regional);
 
   const priceList = products.length
-    ? "Here's our current range:\n" + products.map((p) => `• ${p.name}${p.basePriceCents ? ` — from ${formatZAR(p.basePriceCents)}` : ""}` + (p.colors.length ? ` (${p.colors.map((c) => c.name).join(", ")})` : "")).join("\n")
+    ? "Here's our current range:\n" + products.map((p) => `• ${p.name}${p.basePriceCents ? ` — from ${formatZAR(p.basePriceCents, regional)}` : ""}` + (p.colors.length ? ` (${p.colors.map((c) => c.name).join(", ")})` : "")).join("\n")
     : "";
   const coloursList = products.length
     ? products.filter((p) => p.colors.length).map((p) => `${p.name}: ${p.colors.map((c) => c.name).join(", ")}`).join("\n")

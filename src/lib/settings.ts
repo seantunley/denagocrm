@@ -5,6 +5,7 @@ import { TENANT_CREDENTIAL_INTEGRATIONS } from "./tenantCredentialFields";
 import { tenantEnforcing } from "./tenantEnforcement";
 import { currentTenantScope } from "./tenantScope";
 import { TenantScopeError } from "./tenantGuard";
+import { regionalFrom, type Regional } from "./format";
 
 /**
  * Settings that hold credentials are encrypted at rest with AES-256-GCM
@@ -212,6 +213,25 @@ export async function getSetting(key: string): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/** Where each Regional field lives in AppSetting. */
+export const REGIONAL_KEYS: Record<keyof Regional, string> = {
+  vatRatePct: "VAT_RATE_PCT",
+  currency: "CURRENCY_CODE",
+  locale: "FORMAT_LOCALE",
+  timeZone: "TIME_ZONE",
+};
+
+/**
+ * The workspace's VAT rate, currency, locale and time zone — see `Regional`
+ * in format.ts. Unset or invalid fields fall back to today's behaviour (15%,
+ * rand, en-ZA, Johannesburg), so nothing changes until an owner edits them.
+ */
+export async function getRegionalSettings(): Promise<Regional> {
+  const fields = Object.keys(REGIONAL_KEYS) as (keyof Regional)[];
+  const values = await Promise.all(fields.map((field) => getSetting(REGIONAL_KEYS[field])));
+  return regionalFrom(Object.fromEntries(fields.map((field, i) => [field, values[i]])));
 }
 
 /** Writes a setting, encrypting credential-class keys when a key is configured. */

@@ -1,5 +1,5 @@
 import { prisma } from "./db";
-import { getSetting } from "./settings";
+import { getRegionalSettings, getSetting } from "./settings";
 import { formatZAR } from "./format";
 import { matchByPhone } from "./whatsapp";
 import { generateBotReply, routeBotChoice, type BotMsg } from "./botAi";
@@ -47,9 +47,12 @@ function handoffBody(context?: FlowHandoffContext): string {
 }
 
 async function priceList(): Promise<string> {
-  const products = await prisma.product.findMany({ where: { active: true }, include: { colors: true }, orderBy: { name: "asc" } });
+  const [products, regional] = await Promise.all([
+    prisma.product.findMany({ where: { active: true }, include: { colors: true }, orderBy: { name: "asc" } }),
+    getRegionalSettings(),
+  ]);
   if (!products.length) return "I'll have the team send you our current pricing 👍";
-  return "Here's our current range:\n" + products.map((p) => `• ${p.name}${p.basePriceCents ? ` — from ${formatZAR(p.basePriceCents)}` : ""}` + (p.colors.length ? ` (${p.colors.map((c) => c.name).join(", ")})` : "")).join("\n");
+  return "Here's our current range:\n" + products.map((p) => `• ${p.name}${p.basePriceCents ? ` — from ${formatZAR(p.basePriceCents, regional)}` : ""}` + (p.colors.length ? ` (${p.colors.map((c) => c.name).join(", ")})` : "")).join("\n");
 }
 async function coloursList(): Promise<string> {
   const products = await prisma.product.findMany({ where: { active: true }, include: { colors: true }, orderBy: { name: "asc" } });

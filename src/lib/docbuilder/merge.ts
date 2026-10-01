@@ -1,13 +1,18 @@
 import "server-only";
 import type { Prisma } from "@prisma/client";
-import { contactName, formatDate, formatZAR } from "@/lib/format";
-import { feeRows, includedLines, lineNetCents, quotePricing } from "@/lib/pricing";
+import { contactName, DEFAULT_REGIONAL, formatDate, formatZAR, type Regional } from "@/lib/format";
+import { feeRows, includedLines, lineNetCents, quotePricing, vatRateLabel } from "@/lib/pricing";
 import { jobCardTotals, jobLineCents } from "@/lib/workshop-constants";
-import type { QuoteForPrint } from "@/components/print/QuotePrintDoc";
 import { quoteBillTo, type BillToFleet } from "@/lib/quoteBillTo";
 import type { TableRow } from "./blocks";
 import { jobCardPrintFields, type JobCardPrintSource } from "./jobCardFields";
 import { quoteDocTokens } from "./quoteDocs";
+import { quoteValidDaysOf } from "@/lib/quoteExpiry";
+
+/** A quote loaded for any printed/rendered document. */
+export type QuoteForPrint = Prisma.QuoteGetPayload<{
+  include: { items: true; fees: true; lead: { include: { product: true } }; contact: true; createdBy: true };
+}>;
 
 export type JobCardForDoc = Prisma.JobCardGetPayload<{
   include: { items: true; vehicle: true; contact: true; technician: true };
@@ -38,8 +43,12 @@ function firstWord(name: string | null | undefined): string {
  * signed-in staff member, e.g. a customer's signing page) and `{{date.today}}`.
  * `{{company.*}}` is the third such set, from companyTokens().
  */
-export function documentGlobalTokens(userName: string | null | undefined, now: Date = new Date()): Record<string, string> {
-  return { "user.name": userName?.trim() ?? "", "date.today": formatDate(now) };
+export function documentGlobalTokens(
+  userName: string | null | undefined,
+  now: Date = new Date(),
+  r: Pick<Regional, "locale" | "timeZone"> = DEFAULT_REGIONAL,
+): Record<string, string> {
+  return { "user.name": userName?.trim() ?? "", "date.today": formatDate(now, r) };
 }
 
 /**
@@ -52,7 +61,12 @@ export function documentGlobalTokens(userName: string | null | undefined, now: D
  * null when the quote names no fleet; the tokens are then byte-for-byte what they
  * were before fleets could be billed.
  */
-export function buildQuoteContext(quote: QuoteForPrint, fleet: BillToFleet | null): MergeContext {
+/**
+ * `r` is the workspace's currency, locale and time zone (getRegionalSettings) —
+ * required for the same reason `fleet` is. The VAT figures do NOT come from it:
+ * they come from the rates stored on the quote's own lines.
+ */
+export function buildQuoteContext(quote: QuoteForPrint, fleet: BillToFleet | null, r: Regional): MergeContext {
   // Every document built here states a price to a customer — a signed sales
   // agreement among them — so the money comes from the canonical engine, not
   // from a local sum. Summing items alone dropped fees and delivery, and the
@@ -93,43 +107,61 @@ export function buildQuoteContext(quote: QuoteForPrint, fleet: BillToFleet | nul
     "lead.title": quote.lead?.title ?? "",
     "lead.source": quote.lead?.source ?? "",
     "lead.product": quote.lead?.product?.name ?? "",
-    "lead.value": quote.lead ? formatZAR(quote.lead.valueCents) : "",
+    "lead.value": quote.lead ? formatZAR(quote.lead.valueCents, r) : "",
     "quote.number": `Q-${quote.number}`,
-    "quote.date": formatDate(quote.createdAt),
-    "quote.validUntil": quote.validUntil ? formatDate(quote.validUntil) : "—",
-    "quote.subtotal": formatZAR(subtotal),
-    "quote.vat": formatZAR(vat),
-    "quote.fees": formatZAR(pricing.feesTotalCents),
-    "quote.total": formatZAR(Math.round(total)),
+    "quote.date": formatDate(quote.createdAt, r),
+    "quote.validUntil": quote.validUntil ? formatDate(quote.validUntil, r) : "—",
+    // Days between THIS quote's issue and expiry — not the live setting.
+    "quote.validDays": quote.validUntil ? String(quoteValidDaysOf(quote.createdAt, quote.validUntil, r.timeZone)) : "",
+    "quote.subtotal": formatZAR(subtotal, r),
+    "quote.vat": formatZAR(vat, r),
+    // The rate(s) the quote was ISSUED at, from its own lines — so "VAT (15%)"
+    // on an old quote keeps matching its figures after the setting changes.
+    "quote.vatRate": vatRateLabel(lines, quote.fees),
+    "quote.fees": formatZAR(pricing.feesTotalCents, r),
+    "quote.total": formatZAR(Math.round(total), r),
     vehicle: quote.lead?.product?.name ?? lines[0]?.description ?? "—",
     preparedBy: quote.createdBy?.name ?? "—",
     // Invoice / sales agreement numbering, dates and party blocks — see quoteDocs.ts.
-    ...quoteDocTokens(quote, billTo, pricing),
+    ...quoteDocTokens(quote, billTo, pricing, new Date(), r),
   };
+  // snake_case spellings of the three wording fields, so either form typed into
+  // a terms line resolves (the picker inserts the camelCase ones).
+  tokens["quote.valid_until"] = tokens["quote.validUntil"];
+  tokens["quote.valid_days"] = tokens["quote.validDays"];
+  tokens["quote.vat_rate"] = tokens["quote.vatRate"];
+  const taxInclusive = quote.taxInclusive !== false;
   const items: TableRow[] = [
     ...lines.map((i) => ({
       cells: [
         { value: i.colorPreference ? `${i.description} — ${i.colorPreference}` : i.description },
         { value: String(i.qty) },
-        { value: i.discountPct ? `${formatZAR(i.unitPriceCents)} (−${i.discountPct}%)` : formatZAR(i.unitPriceCents) },
-        { value: formatZAR(lineNetCents(i)) },
+        { value: i.discountPct ? `${formatZAR(i.unitPriceCents, r)} (−${i.discountPct}%)` : formatZAR(i.unitPriceCents, r) },
+        { value: formatZAR(lineNetCents(i), r) },
       ],
       qty: i.qty,
       unitPrice: i.unitPriceCents / 100,
       discountPct: Math.min(100, Math.max(0, i.discountPct ?? 0)),
+      lineTotal: lineNetCents(i) / 100,
+      taxRatePct: i.taxRatePct,
+      taxInclusive,
     })),
     // Fees are charges on the quote, so they appear as rows. Folding them into
     // the total alone leaves the customer with a document whose lines don't add up.
-    ...fees.map((fee) => ({
+    ...fees.map((fee, index) => ({
       cells: [
         { value: fee.description },
         { value: String(fee.qty) },
-        { value: formatZAR(fee.unitPriceCents) },
-        { value: formatZAR(fee.unitPriceCents) },
+        { value: formatZAR(fee.unitPriceCents, r) },
+        { value: formatZAR(fee.unitPriceCents, r) },
       ],
       qty: fee.qty,
       unitPrice: fee.unitPriceCents / 100,
       discountPct: 0,
+      lineTotal: fee.unitPriceCents / 100,
+      // feeRows keeps the order of quote.fees, so the index is the same fee.
+      taxRatePct: quote.fees[index]?.taxRatePct,
+      taxInclusive,
     })),
   ];
   // Typed scope for conditional expressions (amounts in rand, not cents).
@@ -178,9 +210,10 @@ export function buildQuoteContext(quote: QuoteForPrint, fleet: BillToFleet | nul
 
 export function buildJobCardContext(
   jc: JobCardForDoc & { serviceRecord?: JobCardPrintSource["serviceRecord"] },
-  signatureSrc?: string | null,
+  signatureSrc: string | null | undefined,
+  r: Regional,
 ): MergeContext {
-  const print = jobCardPrintFields(jc, signatureSrc);
+  const print = jobCardPrintFields(jc, signatureSrc, r);
   // Same helper as the job card record and its printed documents. Totalling
   // only "part" + "labour" dropped any other line from {{jobcard.total}} while
   // the items table below still printed it.
@@ -194,15 +227,15 @@ export function buildJobCardContext(
     "customer.address": address,
     "jobcard.number": `#${jc.number}`,
     "jobcard.status": jc.status.replace(/_/g, " "),
-    "jobcard.opened": formatDate(jc.openedAt),
-    "jobcard.completed": jc.completedAt ? formatDate(jc.completedAt) : "—",
+    "jobcard.opened": formatDate(jc.openedAt, r),
+    "jobcard.completed": jc.completedAt ? formatDate(jc.completedAt, r) : "—",
     "jobcard.km": jc.kmIn != null ? `${jc.kmIn} km` : "—",
     "jobcard.description": jc.description,
     "jobcard.notes": jc.notes ?? "",
-    "jobcard.total": formatZAR(total),
-    "jobcard.parts": formatZAR(parts),
-    "jobcard.labour": formatZAR(labour),
-    "jobcard.other": formatZAR(other),
+    "jobcard.total": formatZAR(total, r),
+    "jobcard.parts": formatZAR(parts, r),
+    "jobcard.labour": formatZAR(labour, r),
+    "jobcard.other": formatZAR(other, r),
     vehicle: jc.vehicle.model,
     "vehicle.vin": jc.vehicle.vin ?? "—",
     "vehicle.reg": jc.vehicle.regNumber ?? "—",
@@ -214,9 +247,11 @@ export function buildJobCardContext(
     cells: [
       { value: `${i.kind === "labour" ? "Labour — " : ""}${i.description}` },
       { value: String(i.qty) },
-      { value: formatZAR(i.unitPriceCents) },
-      { value: formatZAR(jobLineCents(i)) },
+      { value: formatZAR(i.unitPriceCents, r) },
+      { value: formatZAR(jobLineCents(i), r) },
     ],
+    unitPrice: i.unitPriceCents / 100,
+    lineTotal: jobLineCents(i) / 100,
   }));
   const vars = {
     jobcard: {

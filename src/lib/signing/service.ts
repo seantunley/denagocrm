@@ -17,7 +17,7 @@ import { frozenBrand } from "./frozenBrand";
 import { normalizePhone } from "@/lib/sms";
 import { currentTenantScope } from "@/lib/tenantScope";
 import { getActiveTenantId } from "@/lib/auth";
-import { getSetting } from "@/lib/settings";
+import { getRegionalSettings, getSetting } from "@/lib/settings";
 import { payableTotalCents } from "@/lib/pricing";
 import {
   resolveIdentityMode, parseOtpPolicy, parseOtpMinValue,
@@ -129,7 +129,7 @@ export async function createSignatureRequestFromDoc(opts: {
       // a signed quote keeps the photo it was signed with.
       ...showcaseAssetTokens(),
       ...companyTokens(profile),
-      ...documentGlobalTokens(sender?.name),
+      ...documentGlobalTokens(sender?.name, new Date(), await getRegionalSettings()),
     }),
     source.quoteId,
   ));
