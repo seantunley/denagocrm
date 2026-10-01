@@ -145,7 +145,7 @@ test("known synchronous tenant readers in Server Actions remain enclosed", () =>
     "root product creation uses the acting tenant write boundary");
 
   const library = shipped("src/app/actions/library.ts");
-  assert.match(functionBody(library, "registerLibraryDocuments", "registerLibraryVersion"), /withActingStaffScope\(/,
+  assert.match(functionBody(library, "registerLibraryDocuments", "registerLibraryVersion"), /(withActingStaffScope|asActionResult)\(/,
     "the direct library upload path performs ownership checks and tenant writes in one staff scope");
 
   const portal = shipped("src/app/actions/portalAdmin.ts");

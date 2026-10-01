@@ -8,6 +8,7 @@ import { ArrowRight, Check, Eye, EyeOff, LockKeyhole, ShieldCheck, Zap } from "l
 import { APP_VERSION } from "@/lib/version";
 import PasskeyLoginButton from "@/components/PasskeyLoginButton";
 import { login, requestEmailCode, type LoginState, verifySecondFactor } from "./actions";
+import { requestPasswordReset, resetPasswordWithCode, type ResetState } from "./resetActions";
 import type { LoginBrand } from "@/lib/loginBrand";
 
 /**
@@ -30,9 +31,11 @@ function LoginInner({ brand }: { brand: LoginBrand }) {
   const isPwa = useSyncExternalStore(subscribeToDisplayMode, getDisplayModeSnapshot, () => false);
   const [showPassword, setShowPassword] = useState(false);
   const [state, formAction, pending] = useActionState<LoginState | undefined, FormData>(login, undefined);
+  const [forgot, setForgot] = useState(false);
   const timedOut = useSearchParams().get("timeout") === "1";
 
   if (state?.need2fa) return <TwoFactorStep methods={state.methods ?? []} brand={brand} />;
+  if (forgot) return <ForgotPasswordStep brand={brand} onBack={() => setForgot(false)} />;
 
   return (
     <Shell brand={brand}>
@@ -84,6 +87,13 @@ function LoginInner({ brand }: { brand: LoginBrand }) {
                 {showPassword ? <EyeOff className="size-[18px]" /> : <Eye className="size-[18px]" />}
               </button>
             </div>
+            <button
+              type="button"
+              onClick={() => setForgot(true)}
+              className="mt-2 cursor-pointer text-xs text-slate-500 transition hover:text-slate-200"
+            >
+              Forgot password?
+            </button>
           </Field>
           {state?.error && (
             <p role="alert" className="rounded-xl border border-red-400/15 bg-red-400/8 px-3 py-2.5 text-sm text-red-300">
@@ -117,6 +127,78 @@ function Field({ label, htmlFor, children }: { label: string; htmlFor: string; c
       </label>
       {children}
     </div>
+  );
+}
+
+/**
+ * "Forgot password?": email → 6-digit code + new password (see resetActions.ts).
+ * The first answer is the same whether or not the account exists.
+ */
+function ForgotPasswordStep({ brand, onBack }: { brand: LoginBrand; onBack: () => void }) {
+  const [requested, requestAction, requesting] = useActionState<ResetState | undefined, FormData>(requestPasswordReset, undefined);
+  const [reset, resetAction, resetting] = useActionState<ResetState | undefined, FormData>(resetPasswordWithCode, undefined);
+  const email = reset?.email ?? requested?.email ?? "";
+  const onCodeStep = Boolean(requested?.sent || reset?.sent);
+  const error = reset?.error ?? requested?.error;
+
+  return (
+    <Shell brand={brand}>
+      <div className="mb-7 flex size-12 items-center justify-center rounded-2xl border border-orange-400/20 bg-orange-400/10 text-orange-400 shadow-[0_0_35px_rgba(249,115,22,0.12)]">
+        <LockKeyhole className="size-6" />
+      </div>
+      <p className="mb-3 text-xs font-semibold uppercase tracking-[0.22em] text-orange-400">Reset password</p>
+      {reset?.done ? (
+        <>
+          <h1 className="text-3xl font-semibold tracking-[-0.04em] text-white">Password changed.</h1>
+          <p className="mt-3 max-w-sm text-sm leading-6 text-slate-400">You&apos;ve been signed out everywhere. Sign in with your new password.</p>
+          <button type="button" onClick={onBack} className="login-submit mt-8">
+            Back to sign in
+            <ArrowRight className="size-4" />
+          </button>
+        </>
+      ) : !onCodeStep ? (
+        <>
+          <h1 className="text-3xl font-semibold tracking-[-0.04em] text-white">Forgot your password?</h1>
+          <p className="mt-3 max-w-sm text-sm leading-6 text-slate-400">Enter the email you sign in with and we&apos;ll email you a code.</p>
+          <form action={requestAction} className={`mt-8 space-y-4 ${error ? "animate-shake" : ""}`}>
+            <Field label="Work email" htmlFor="reset-email">
+              <input id="reset-email" name="email" type="email" autoComplete="email" autoFocus required className="login-input" placeholder="you@example.com" />
+            </Field>
+            {error && <p role="alert" className="text-sm text-red-300">{error}</p>}
+            <button type="submit" className="login-submit" disabled={requesting}>
+              {requesting ? "Sending…" : "Email me a code"}
+              <ArrowRight className="size-4" />
+            </button>
+          </form>
+        </>
+      ) : (
+        <>
+          <h1 className="text-3xl font-semibold tracking-[-0.04em] text-white">Check your email.</h1>
+          <p className="mt-3 max-w-sm text-sm leading-6 text-slate-400">
+            If {email} has an account, a 6-digit code is on its way. It expires in 15 minutes.
+          </p>
+          <form action={resetAction} className={`mt-8 space-y-4 ${error ? "animate-shake" : ""}`}>
+            <input type="hidden" name="email" value={email} />
+            <Field label="Code" htmlFor="reset-code">
+              <input id="reset-code" name="code" inputMode="numeric" autoComplete="one-time-code" autoFocus maxLength={6} required className="login-input text-center font-mono text-xl tracking-[0.42em]" placeholder="••••••" />
+            </Field>
+            <Field label="New password" htmlFor="reset-password">
+              <input id="reset-password" name="password" type="password" autoComplete="new-password" minLength={12} required className="login-input" placeholder="At least 12 characters, letters and numbers" />
+            </Field>
+            {error && <p role="alert" className="text-sm text-red-300">{error}</p>}
+            <button type="submit" className="login-submit" disabled={resetting}>
+              {resetting ? "Saving…" : "Set new password"}
+              <ArrowRight className="size-4" />
+            </button>
+          </form>
+        </>
+      )}
+      {!reset?.done && (
+        <button type="button" onClick={onBack} className="mt-4 w-full cursor-pointer py-2 text-center text-xs text-slate-500 transition hover:text-slate-200">
+          Back to sign in
+        </button>
+      )}
+    </Shell>
   );
 }
 
