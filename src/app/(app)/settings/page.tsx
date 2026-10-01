@@ -10,6 +10,7 @@ import {
   saveSetting,
   saveMyProfile,
   saveQuoteDefaults,
+  saveRegionalSettings,
   saveWorkshopSettings,
   regenerateSetting,
   saveNotificationPrefs,
@@ -47,8 +48,9 @@ import { saveSessionPolicy } from "@/app/actions/security";
 import { saveImapSettings } from "@/app/actions/emails";
 import { clearErrorLog } from "@/app/actions/ai";
 import { basePrisma } from "@/lib/db";
-import { resolveTenantCredential } from "@/lib/settings";
-import { formatDateTime } from "@/lib/format";
+import { REGIONAL_KEYS, resolveTenantCredential } from "@/lib/settings";
+import { formatDate, formatDateTime, formatZAR, regionalFrom } from "@/lib/format";
+import { DEFAULT_QUOTE_TERMS, quoteValidDays } from "@/lib/quoteExpiry";
 import { ABSOLUTE_SESSION_HOURS } from "@/lib/session";
 import { decryptValue } from "@/lib/settings";
 import { PUSH_KINDS } from "@/lib/push";
@@ -143,6 +145,9 @@ export default async function SettingsPage({
       return ""; // encrypted value, key unavailable in this environment
     }
   };
+  const regional = regionalFrom(
+    Object.fromEntries(Object.entries(REGIONAL_KEYS).map(([field, key]) => [field, setting(key)])),
+  );
   // The signing emails' edited copies, read by EXPLICIT tenant — the same key the
   // send path reads by the signature request's tenantId (lib/signing/signingEmail.ts).
   const signingTenantId = isAdmin && tab === "email" ? await getActiveTenantId() : null;
@@ -968,7 +973,7 @@ export default async function SettingsPage({
               title="Quote defaults"
               status={
                 <span className="badge bg-muted text-muted-foreground">
-                  valid {setting("QUOTE_VALID_DAYS") || "7"} days
+                  valid {quoteValidDays(setting("QUOTE_VALID_DAYS"))} days
                 </span>
               }
               action="Edit"
@@ -984,7 +989,7 @@ export default async function SettingsPage({
                     type="number"
                     min={1}
                     className="input w-32"
-                    defaultValue={setting("QUOTE_VALID_DAYS") || "7"}
+                    defaultValue={quoteValidDays(setting("QUOTE_VALID_DAYS"))}
                   />
                 </div>
                 <div>
@@ -993,16 +998,57 @@ export default async function SettingsPage({
                     name="terms"
                     className="input"
                     rows={6}
-                    defaultValue={
-                      setting("QUOTE_TERMS") ||
-                      "Prices include VAT. Delivery arranged on acceptance. E&OE."
-                    }
+                    defaultValue={setting("QUOTE_TERMS") || DEFAULT_QUOTE_TERMS}
                   />
                   <p className="text-xs text-muted-foreground mt-1">
                     Each line becomes its own bullet point on the printed quote.
                   </p>
                 </div>
                 <SaveButton className="btn-primary">Save quote defaults</SaveButton>
+              </SaveForm>
+            </Row>
+            <Row
+              title="Tax, currency & time zone"
+              status={
+                <span className="badge bg-muted text-muted-foreground">
+                  VAT {regional.vatRatePct}% · {regional.currency}
+                </span>
+              }
+              action="Edit"
+            >
+              <p className="text-xs text-muted-foreground mb-4">
+                Used on quotes, invoices, agreements and other customer documents. A new VAT rate applies to
+                new quote lines only — quotes already issued keep the rate they were issued with.
+              </p>
+              <SaveForm success="Tax & currency saved" resetOnSuccess={false} action={saveRegionalSettings} className="space-y-4 max-w-xl">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className="label" htmlFor="regional-vat">VAT rate (%)</label>
+                    <input id="regional-vat" name="vatRatePct" type="number" min={0} max={100} step="0.01" required className="input w-32" defaultValue={regional.vatRatePct} />
+                  </div>
+                  <div>
+                    <label className="label" htmlFor="regional-currency">Currency code</label>
+                    <input id="regional-currency" name="currency" required maxLength={3} className="input w-32 uppercase" defaultValue={regional.currency} />
+                    <p className="text-xs text-muted-foreground mt-1">Three letters, e.g. ZAR, USD, EUR.</p>
+                  </div>
+                  <div>
+                    <label className="label" htmlFor="regional-locale">Number &amp; date format</label>
+                    <input id="regional-locale" name="locale" required className="input" defaultValue={regional.locale} />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      e.g. en-ZA, en-GB. Currently prints {formatZAR(123456, regional)} and {formatDate(new Date(), regional)}.
+                    </p>
+                  </div>
+                  <div>
+                    <label className="label" htmlFor="regional-tz">Time zone</label>
+                    <input id="regional-tz" name="timeZone" required list="regional-tz-options" className="input" defaultValue={regional.timeZone} />
+                    <datalist id="regional-tz-options">
+                      {Intl.supportedValuesOf("timeZone").map((zone) => (
+                        <option key={zone} value={zone} />
+                      ))}
+                    </datalist>
+                  </div>
+                </div>
+                <SaveButton className="btn-primary">Save tax &amp; currency</SaveButton>
               </SaveForm>
             </Row>
           </div>

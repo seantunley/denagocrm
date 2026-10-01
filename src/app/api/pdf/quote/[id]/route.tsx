@@ -4,6 +4,7 @@ import { requireApiOwner, apiAuthErrorResponse } from "@/lib/auth";
 import QuoteDoc from "@/lib/pdf/QuoteDoc";
 import { loadBillToFleet } from "@/lib/quoteBillTo";
 import { getCompanyProfile } from "@/lib/companyProfile";
+import { getRegionalSettings } from "@/lib/settings";
 import { withActingStaffScope } from "@/lib/actingScope";
 
 // react-pdf renders in Node (no browser) — keep this handler on the Node runtime.
@@ -52,9 +53,13 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
 
   // Unsigned preview only. A signed/sealed PDF is produced solely by the real
   // signing flow after a recipient actually signs — never fabricated here.
-  const [fleet, company] = await Promise.all([loadBillToFleet(prisma, quote.fleetId), getCompanyProfile()]);
+  const [fleet, company, regional] = await Promise.all([
+    loadBillToFleet(prisma, quote.fleetId),
+    getCompanyProfile(),
+    getRegionalSettings(),
+  ]);
   const buf = Buffer.from(
-    await renderToBuffer(<QuoteDoc quote={{ ...quote, items }} fleet={fleet} company={company} />),
+    await renderToBuffer(<QuoteDoc quote={{ ...quote, items }} fleet={fleet} company={company} regional={regional} />),
   );
 
   return new Response(new Uint8Array(buf), {

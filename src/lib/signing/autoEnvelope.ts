@@ -124,7 +124,7 @@ function standardJobCardTemplate(): DocumentModel {
       {
         text: "I authorise the work described above and confirm the vehicle details are correct.",
       },
-      { text: "Prices include 15% VAT." },
+      { text: "Prices include VAT." },
     ];
   }
   return {

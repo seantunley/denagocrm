@@ -6,6 +6,7 @@ import { requireVehicleReadAccess } from "@/lib/permissions";
 import PrintActions from "@/components/PrintActions";
 import PrintDocShell, { InfoBlock } from "@/components/print/PrintDocShell";
 import { getCompanyProfile } from "@/lib/companyProfile";
+import { getRegionalSettings } from "@/lib/settings";
 import { getDocTemplate } from "@/lib/docTemplateStore";
 import { computeWarranty, warrantyLabels } from "@/lib/warranty";
 import { contactName, formatDate } from "@/lib/format";
@@ -35,6 +36,7 @@ export default async function WarrantyClaimPrintPage({
   // The company this document is FROM. getCompanyProfile now inherits the
   // platform-set tenant brand when the tenant has not filled in its own profile.
   const company = await getCompanyProfile();
+  const regional = await getRegionalSettings();
   const tpl = await getDocTemplate("warranty-claim", tplId);
   const w = computeWarranty(claim.vehicle);
 
@@ -46,7 +48,7 @@ export default async function WarrantyClaimPrintPage({
         template={tpl}
         title="Warranty claim"
         number={`WC-${claim.id.slice(-6).toUpperCase()}`}
-        meta={[`Claimed: ${formatDate(claim.claimedAt)}`, `Status: ${claim.status}`]}
+        meta={[`Claimed: ${formatDate(claim.claimedAt, regional)}`, `Status: ${claim.status}`]}
         parties={{ left: "Customer · Date", right: `For ${company.name} · Date` }}
       >
         {tpl.sections.vehicle !== false && (
@@ -66,10 +68,10 @@ export default async function WarrantyClaimPrintPage({
                 claim.vehicle.model,
                 claim.vehicle.vin ? `VIN: ${claim.vehicle.vin}` : null,
                 claim.vehicle.purchaseDate
-                  ? `Purchased: ${formatDate(claim.vehicle.purchaseDate)}`
+                  ? `Purchased: ${formatDate(claim.vehicle.purchaseDate, regional)}`
                   : null,
                 `Warranty: ${warrantyLabels[w.status]}${
-                  w.expiryDate ? ` (until ${formatDate(w.expiryDate)})` : ""
+                  w.expiryDate ? ` (until ${formatDate(w.expiryDate, regional)})` : ""
                 }`,
               ]}
             />
@@ -90,7 +92,7 @@ export default async function WarrantyClaimPrintPage({
             </p>
             <p className="text-xs text-slate-700 whitespace-pre-wrap">
               {claim.resolution}
-              {claim.resolvedAt ? ` (${formatDate(claim.resolvedAt)})` : ""}
+              {claim.resolvedAt ? ` (${formatDate(claim.resolvedAt, regional)})` : ""}
             </p>
           </div>
         )}

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { unstable_rethrow, useRouter } from "next/navigation";
 import { useEditor } from "@/lib/doceditor/store";
 import type { DocumentModel } from "@/lib/doceditor/model";
+import { staleWordingWarnings, type WordingSettings } from "@/lib/doceditor/wordingCheck";
 import { saveDocEditor, importDocEditorTemplate } from "@/app/actions/doceditor";
 import { publishBuilderVersion } from "@/app/actions/docbuilder";
 import { finaliseCustomDocument, saveCustomDocument } from "@/app/actions/customDocuments";
@@ -58,7 +59,10 @@ export function DocEditor({
   initialPublishState = "never",
   hasStandardLayout = false,
   mode = "template",
+  wordingSettings,
 }: {
+  /** Quote-bound layouts only: warn when typed-in validity/VAT wording contradicts these. */
+  wordingSettings?: WordingSettings;
   id: string;
   initialDoc: DocumentModel;
   records: RecordOption[];
@@ -252,6 +256,7 @@ export function DocEditor({
       if (!result.ok) throw new Error("publish failed");
       setPublishState("live");
       toast.success(`Published version ${result.version}. Quotes now use this layout.`);
+      for (const warning of result.warnings ?? []) toast.warning(warning);
     } catch (error) {
       unstable_rethrow(error);
       toast.error("Not published. Nothing changed on real documents; try again.");
@@ -268,6 +273,7 @@ export function DocEditor({
     );
   }
 
+  const wordingWarnings = wordingSettings ? staleWordingWarnings(doc, wordingSettings) : [];
   const recordQuery = record
     ? `?record=${encodeURIComponent(record)}`
     : "";
@@ -484,6 +490,12 @@ export function DocEditor({
           {saveState === "saving" ? "Saving…" : "Save"}
         </button>
       </BuilderWorkspaceBar>
+
+      {wordingWarnings.length > 0 && (
+        <div role="status" className="border-b border-amber-300 bg-amber-50 px-4 py-2 text-xs text-amber-900">
+          {wordingWarnings.map((warning) => <p key={warning}>{warning}</p>)}
+        </div>
+      )}
 
       <DndController>
         <div className="flex min-h-0 flex-1">

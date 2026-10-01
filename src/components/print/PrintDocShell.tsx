@@ -1,6 +1,6 @@
 import type { DocTemplate } from "@/lib/docTemplates";
 import { PLATFORM_NAME } from "@/lib/platformIdentity";
-import { formatZAR } from "@/lib/format";
+import { DEFAULT_REGIONAL, formatZAR, type Regional } from "@/lib/format";
 import { lineNetCents, type TotalLine } from "@/lib/pricing";
 
 /** Shared line-items table used by invoice / agreement / delivery / service report. */
@@ -10,7 +10,10 @@ export function ItemsTable({
   totalCents,
   totalLabel = "Total incl. VAT",
   totals,
+  regional = DEFAULT_REGIONAL,
 }: {
+  /** The workspace's currency/locale (getRegionalSettings). */
+  regional?: Pick<Regional, "currency" | "locale">;
   rows: { description: string; qty: number; unitPriceCents?: number; discountPct?: number | null }[];
   showPrices: boolean;
   totalCents?: number;
@@ -58,10 +61,10 @@ export function ItemsTable({
               {showPrices && (
                 <>
                   <td className="py-2.5 px-3 border-b border-slate-200 text-right">
-                    {formatZAR(r.unitPriceCents ?? 0)}
+                    {formatZAR(r.unitPriceCents ?? 0, regional)}
                   </td>
                   <td className="py-2.5 px-3 border-b border-slate-200 text-right font-medium">
-                    {formatZAR(lineNetCents({ qty: r.qty, unitPriceCents: r.unitPriceCents ?? 0, discountPct: r.discountPct }))}
+                    {formatZAR(lineNetCents({ qty: r.qty, unitPriceCents: r.unitPriceCents ?? 0, discountPct: r.discountPct }), regional)}
                   </td>
                 </>
               )}
@@ -75,7 +78,7 @@ export function ItemsTable({
             {lines.filter((line) => !line.strong).map((line) => (
               <div key={line.label} className="flex justify-between px-6 py-1 text-sm text-slate-600">
                 <span>{line.label}</span>
-                <span className="tabular-nums">{formatZAR(Math.round(line.amountCents))}</span>
+                <span className="tabular-nums">{formatZAR(Math.round(line.amountCents), regional)}</span>
               </div>
             ))}
             {lines.filter((line) => line.strong).map((line) => (
@@ -84,7 +87,7 @@ export function ItemsTable({
                 className="mt-1 flex items-baseline justify-between gap-6 rounded-lg bg-orange-600 px-6 py-3 text-white"
               >
                 <span className="text-[11px] font-bold uppercase tracking-widest">{line.label}</span>
-                <span className="text-2xl font-bold tabular-nums">{formatZAR(Math.round(line.amountCents))}</span>
+                <span className="text-2xl font-bold tabular-nums">{formatZAR(Math.round(line.amountCents), regional)}</span>
               </div>
             ))}
           </div>

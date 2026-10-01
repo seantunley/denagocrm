@@ -6,6 +6,7 @@ import { requireQuoteReadAccess } from "@/lib/permissions";
 import PrintActions from "@/components/PrintActions";
 import PrintDocShell, { ItemsTable, InfoBlock } from "@/components/print/PrintDocShell";
 import { getCompanyProfile } from "@/lib/companyProfile";
+import { getRegionalSettings } from "@/lib/settings";
 import { getDocTemplate } from "@/lib/docTemplateStore";
 import { formatDate } from "@/lib/format";
 import { documentTotals, feeRows, includedLines } from "@/lib/pricing";
@@ -34,6 +35,7 @@ export default async function AgreementPrintPage({
   // The company this document is FROM. getCompanyProfile now inherits the
   // platform-set tenant brand when the tenant has not filled in its own profile.
   const company = await getCompanyProfile();
+  const regional = await getRegionalSettings();
   const tpl = await getDocTemplate("agreement", tplId);
   // Fees and delivery are part of what the customer pays; the subtotal is not.
   // The rows the customer can see must add up to the price they are agreeing
@@ -52,7 +54,7 @@ export default async function AgreementPrintPage({
         template={tpl}
         title="Sales agreement"
         number={`SA-${quote.number}`}
-        meta={[`Date: ${formatDate(new Date())}`, `Reference: Q-${quote.number}`]}
+        meta={[`Date: ${formatDate(new Date(), regional)}`, `Reference: Q-${quote.number}`]}
         parties={{ left: "Purchaser signature · Date", right: `For ${company.name} · Date` }}
         bodySection="clauses"
         bodyTitle="Terms of sale"
@@ -80,6 +82,7 @@ export default async function AgreementPrintPage({
           <ItemsTable
             rows={[...includedLines(quote.items), ...feeRows(quote.fees)]}
             showPrices
+            regional={regional}
             totals={totals.map((line) => (line.strong ? { ...line, label: "Purchase price" } : line))}
           />
         )}

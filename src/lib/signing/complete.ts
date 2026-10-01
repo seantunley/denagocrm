@@ -7,7 +7,7 @@ import { htmlToPdf } from "@/lib/customDocs";
 import { sealPdf } from "@/lib/pdf/seal";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { saveFile, readFile, deleteFile } from "@/lib/storage";
-import { formatDateTime } from "@/lib/format";
+import { DEFAULT_REGIONAL, formatDateTime, type Regional } from "@/lib/format";
 import { logError } from "@/lib/errorLog";
 import { resolveTenantActor } from "@/lib/tenantActor";
 import { bindCtx, logoDataUri } from "./render";
@@ -52,25 +52,28 @@ type RecipientRow = {
  * signing — it is not nothing, but it is not proof of who held the link, and
  * dressing it up as verification would be worse than saying so.
  */
-function identityStatement(row: RecipientRow): string {
+/** Dates on the certificate read in the REQUEST's workspace time zone (bindCtx's regional). */
+type CertTime = Pick<Regional, "locale" | "timeZone">;
+
+function identityStatement(row: RecipientRow, r: CertTime): string {
   if (row.identityMethod === "email_otp") {
     return `Identity verified by one-time code sent to the email address on file${
-      row.identityVerifiedAt ? ` at ${formatDateTime(row.identityVerifiedAt)}` : ""}`;
+      row.identityVerifiedAt ? ` at ${formatDateTime(row.identityVerifiedAt, r)}` : ""}`;
   }
   if (row.identityMethod === "sms_otp") {
     return `Identity verified by one-time code sent to the mobile number on file${
-      row.identityVerifiedAt ? ` at ${formatDateTime(row.identityVerifiedAt)}` : ""}`;
+      row.identityVerifiedAt ? ` at ${formatDateTime(row.identityVerifiedAt, r)}` : ""}`;
   }
   return "Opened using the unique signing link sent to this recipient (no additional identity check was required for this document)";
 }
 
-function certificateHtml(title: string, requestId: string, rows: RecipientRow[]): string {
-  const signers = rows.map((r) => `
+function certificateHtml(title: string, requestId: string, rows: RecipientRow[], r: CertTime): string {
+  const signers = rows.map((row) => `
     <div style="border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin:10px 0">
-      <div style="display:flex;justify-content:space-between"><strong>${esc(r.name)}</strong><span style="color:#64748b;font-size:9pt">${esc(r.role)}</span></div>
-      ${r.img ? `<img src="${r.img}" style="height:56px;margin:8px 0"/>` : `<div style="color:#94a3b8;font-size:9pt;margin:8px 0">(accepted without drawn signature)</div>`}
-      <div style="font-size:8.5pt;color:#64748b">Signed ${r.signedAt ? esc(formatDateTime(r.signedAt)) : "—"}${r.signerIp ? ` · IP ${esc(r.signerIp)}` : ""}</div>
-      <div style="font-size:8.5pt;color:#64748b">${esc(identityStatement(r))}</div>
+      <div style="display:flex;justify-content:space-between"><strong>${esc(row.name)}</strong><span style="color:#64748b;font-size:9pt">${esc(row.role)}</span></div>
+      ${row.img ? `<img src="${row.img}" style="height:56px;margin:8px 0"/>` : `<div style="color:#94a3b8;font-size:9pt;margin:8px 0">(accepted without drawn signature)</div>`}
+      <div style="font-size:8.5pt;color:#64748b">Signed ${row.signedAt ? esc(formatDateTime(row.signedAt, r)) : "—"}${row.signerIp ? ` · IP ${esc(row.signerIp)}` : ""}</div>
+      <div style="font-size:8.5pt;color:#64748b">${esc(identityStatement(row, r))}</div>
     </div>`).join("");
   return `<div style="page-break-before:always;padding-top:6px">
     <h1 style="font-size:18pt;color:#020617;margin:0 0 4px">Certificate of Completion</h1>
@@ -119,7 +122,7 @@ type AckSigner = { id: string; name: string };
  * field-id fragment so two identically- or blank-labelled fields are never
  * ambiguous. Returns "" (no page) when the document has no shared fields at all.
  */
-function acknowledgementsHtml(fields: AckField[], signers: AckSigner[]): string {
+function acknowledgementsHtml(fields: AckField[], signers: AckSigner[], r: CertTime): string {
   if (fields.length === 0) return "";
   const blocks = fields.map((f) => {
     const items = signers.map((signer) => {
@@ -128,7 +131,7 @@ function acknowledgementsHtml(fields: AckField[], signers: AckSigner[]): string 
       if (!response) {
         return `<li style="font-size:9pt;color:#94a3b8;margin:2px 0"><strong>${who}</strong> · Not answered</li>`;
       }
-      const when = esc(formatDateTime(response.filledAt));
+      const when = esc(formatDateTime(response.filledAt, r));
       return `<li style="font-size:9pt;color:#334155;margin:2px 0"><strong>${who}</strong> · ${esc(describeResponseValue(f.kind, response.value))} <span style="color:#94a3b8">· ${when}</span></li>`;
     }).join("");
     return `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin:10px 0">
@@ -242,7 +245,9 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
   const html = renderDocumentHtml(await embedDocImages(doc, req.tenantId), ctx, logoDataUri(), {
     hideOverlays: true,
     stampedFields,
-    appendHtml: certificateHtml(req.title, req.id, rows) + acknowledgementsHtml(ackFields, expectedSigners),
+    appendHtml:
+      certificateHtml(req.title, req.id, rows, ctx?.regional ?? DEFAULT_REGIONAL) +
+      acknowledgementsHtml(ackFields, expectedSigners, ctx?.regional ?? DEFAULT_REGIONAL),
   });
   let pdf = await htmlToPdf(html);
   // The seal names the workspace that sealed it — this was "Denago Cape Town"

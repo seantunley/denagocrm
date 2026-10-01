@@ -373,6 +373,10 @@ function TermsProps({ block }: { block: TermsBlock }) {
           </div>
         ))}
         <button type="button" className="w-full rounded-md border border-dashed border-slate-300 py-1 text-xs text-slate-500 hover:border-orange-300 hover:text-orange-600" onClick={() => set([...block.items, { text: "New term" }])}>＋ Add term</button>
+        <p className="text-[11px] leading-snug text-slate-500">
+          Merge fields work here, e.g. <code>{"{{quote.validUntil}}"}</code> (the quote&apos;s expiry date),{" "}
+          <code>{"{{quote.validDays}}"}</code> (days it is valid for) and <code>{"{{quote.vatRate}}"}</code> (its VAT rate).
+        </p>
       </div>
     </Section>
   );

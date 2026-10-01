@@ -1,4 +1,4 @@
-import { formatZAR } from "./format";
+import { DEFAULT_REGIONAL, formatZAR, type Regional } from "./format";
 
 export type BotProductFact = {
   name: string;
@@ -17,13 +17,17 @@ export type BotProductFact = {
  * is explicitly told not to infer stock, finance, road-legal status or any other
  * property that is not represented here or in Approved Knowledge.
  */
-export function renderBotProductFacts(products: BotProductFact[], maxChars = 14_000): string {
+export function renderBotProductFacts(
+  products: BotProductFact[],
+  maxChars = 14_000,
+  money: Pick<Regional, "currency" | "locale"> = DEFAULT_REGIONAL,
+): string {
   let out = "";
   for (const product of products) {
     const lines = [
       `[${product.name}]`,
       product.model && product.model !== product.name ? `Model: ${product.model}` : null,
-      product.basePriceCents ? `Price: from ${formatZAR(product.basePriceCents)}` : null,
+      product.basePriceCents ? `Price: from ${formatZAR(product.basePriceCents, money)}` : null,
       product.seats != null ? `Seats: ${product.seats}` : null,
       product.rangeKm != null ? `Range: ${product.rangeKm} km` : null,
       product.topSpeedKmh != null ? `Top speed: ${product.topSpeedKmh} km/h` : null,

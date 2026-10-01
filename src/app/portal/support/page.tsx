@@ -8,6 +8,7 @@ import { requirePortalScope } from "@/lib/portalAccess";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { PortalCaseForm } from "@/components/PortalExpansionForms";
 import { contactName, formatDate } from "@/lib/format";
+import { getRegionalSettings } from "@/lib/settings";
 import { EmptyState, PortalPageHeader, SectionHeading, StatusPill, Surface } from "@/components/visual-system";
 
 type CaseRow = {
@@ -35,6 +36,7 @@ export default async function PortalSupportPage() {
   if (!contact) redirect("/portal/login");
   // Cached per request — the layout and every page share one resolution.
   const brand = await portalBrand();
+  const regional = await getRegionalSettings();
   const scope = await requirePortalScope();
   const automotiveOn = await isModuleEnabled("automotive");
 
@@ -87,7 +89,7 @@ export default async function PortalSupportPage() {
                   <span className="grid size-9 shrink-0 place-items-center rounded-xl border border-white/[0.07] bg-white/[0.035] text-slate-400"><Headphones className="size-4" /></span>
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium">C-{item.number.toString()} · {item.subject}</p>
-                    <p className="mt-1 text-xs text-slate-400">{item.type} · {item.priority} · updated {formatDate(item.updatedAt)}</p>
+                    <p className="mt-1 text-xs text-slate-400">{item.type} · {item.priority} · updated {formatDate(item.updatedAt, regional)}</p>
                   </div>
                   <StatusPill tone={statusTone(item.status)}>{item.status.replaceAll("_", " ")}</StatusPill>
                   <ArrowRight className="size-4 shrink-0 text-slate-600 transition-transform group-hover:translate-x-0.5 group-hover:text-orange-400" />

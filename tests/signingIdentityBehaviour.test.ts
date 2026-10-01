@@ -201,7 +201,7 @@ test("the completion certificate states how each signer was verified", () => {
   // The certificate is the artifact produced in a dispute. Verifying a signer by
   // one-time code and then not saying so on it protects the signing act without
   // evidencing it — the effort is spent and none of it is visible where it counts.
-  assert.match(complete, /identityStatement\(r\)/, "the certificate must render an identity statement");
+  assert.match(complete, /identityStatement\(row, r\)/, "the certificate must render an identity statement");
   assert.match(complete, /one-time code sent to the email address on file/);
   assert.match(complete, /one-time code sent to the mobile number on file/);
 
