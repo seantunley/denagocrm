@@ -40,4 +40,8 @@ test("the builder and the library show them; archive is confirmed and its reason
   }
   assert.match(page, /<ConfirmDelete\s+action=\{setJourneyStatus\.bind\(null, journey\.id, "archived"\)\}/);
   assert.match(actions, /journey “\$\{journey\.name\}”\$\{reason \? ` — \$\{reason\}` : ""\}`/);
+  // Required on the server for an archive, after authorising.
+  const setStatus = actions.slice(actions.indexOf("export async function setJourneyStatus("));
+  assert.match(setStatus, /const reason = status === "archived" \? requiredReason\(formData, "archiving this journey"\) : "";/);
+  assert.ok(setStatus.indexOf("requirePermission(") < setStatus.indexOf("requiredReason("), "authorise before refuse");
 });

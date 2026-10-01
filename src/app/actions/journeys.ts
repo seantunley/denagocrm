@@ -6,6 +6,7 @@ import { prisma } from "@/lib/db";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { withActingTenantWrite, withActingStaffScope } from "@/lib/actingScope";
 import { asActionResult, refuse, ActionRefusal } from "@/lib/actionResult";
+import { requiredReason } from "@/lib/deleteReason";
 import { journeyScope } from "@/lib/flowScope";
 import { requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
@@ -377,10 +378,12 @@ export async function publishJourney(journeyId: string) {
 
 export async function setJourneyStatus(journeyId: string, status: "active" | "paused" | "archived", formData?: FormData) {
   return asActionResult(async () => {
-    const reason = String(formData?.get("reason") ?? "").trim();
     const user = await requirePermission("journeys.manage");
     const journey = await prisma.journey.findUnique({ where: { id: journeyId } });
     if (!journey) refuse(JOURNEY_GONE);
+    // Archiving is confirmed with a reason, and the action is a public endpoint,
+    // so the reason is required HERE — not only in the dialog. Pause/resume take none.
+    const reason = status === "archived" ? requiredReason(formData, "archiving this journey") : "";
     if (status === "active" && !journey.activeVersion) refuse("Publish the journey before activating it.");
     await prisma.journey.update({ where: { id: journeyId }, data: { status } });
     await logAudit({
