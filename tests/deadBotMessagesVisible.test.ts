@@ -35,7 +35,14 @@ test("retry claims the parked conversation atomically and resends only this fail
   assert.match(requeue, /if \(head\?\.failureCode && PERMANENT_FAILURES\.has\(head\.failureCode\)\) return "permanent";/);
   assert.match(requeue, /WHERE "tenantId" = \$1 AND "channel" = \$2 AND "key" = \$3 AND "ownership" = 'delivery_failed'/);
   assert.match(requeue, /if \(claimed !== 1 \|\| !head\) return "not_parked";/);
-  assert.match(requeue, /updatedAt: \{ gte: new Date\(head\.updatedAt\.getTime\(\) - 5_000\) \}/);
+  // The incident by identity, not by a time window (review of #733): the head
+  // row itself, plus the rows whose blocked-by message names that head's id —
+  // the same prefix the kill writes.
+  assert.doesNotMatch(requeue, /getTime\(\)|updatedAt: \{ gte/);
+  assert.match(requeue, /OR: \[\{ id: head\.id \}, \{ failureCode: "blocked_by_earlier_failure", lastError: \{ startsWith: blockedByPrefix\(head\.id\) \} \}\]/);
+  const kill = outbox.slice(outbox.indexOf("async function killMessageAndBacklog("), outbox.indexOf("async function failDelivery("));
+  assert.match(kill, /const blocked = `\$\{blockedByPrefix\(row\.id\)\}\$\{lastError\}`\.slice\(0, 1000\);/);
+  assert.match(outbox, /const blockedByPrefix = \(headId: string\) => `Blocked by earlier failed message \$\{headId\}: `;/);
   const action = src("src/app/actions/botDeliveries.ts");
   assert.match(action, /const user = await requirePermission\("inbox\.reply"\);/);
   assert.match(action, /if \(outcome === "permanent"\) refuse\(/);

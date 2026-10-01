@@ -906,8 +906,15 @@ function retryAt(attempts: number): Date { return new Date(Date.now() + Math.min
  * fenced by `attempts`, so this cannot corrupt a live send — the worker simply
  * finds its lease superseded.
  */
+/**
+ * The incident's identity. Every row killed behind a failed message carries that
+ * message's id in this prefix, so "this failure and what it took down" is an
+ * exact match, not a guess from timestamps.
+ */
+const blockedByPrefix = (headId: string) => `Blocked by earlier failed message ${headId}: `;
+
 async function killMessageAndBacklog(row: OutboxRow, lastError: string, failureCode: string): Promise<boolean> {
-  const blocked = `Blocked by earlier failed message ${row.id}: ${lastError}`.slice(0, 1000);
+  const blocked = `${blockedByPrefix(row.id)}${lastError}`.slice(0, 1000);
   const tenantId = outboxTenantId();
   return prisma.$transaction(async (tx) => {
     const dead = await tx.botFlowOutbox.updateMany({
@@ -1213,8 +1220,8 @@ export async function requeueDeadConversation(channel: string, key: string): Pro
     return prisma.$transaction(async (tx) => {
       const head = await tx.botFlowOutbox.findFirst({
         where: { tenantId, channel, key, status: "dead", NOT: { failureCode: "blocked_by_earlier_failure" } },
-        orderBy: { updatedAt: "desc" },
-        select: { failureCode: true, updatedAt: true },
+        orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+        select: { id: true, failureCode: true },
       });
       if (head?.failureCode && PERMANENT_FAILURES.has(head.failureCode)) return "permanent";
       const claimed = await tx.$executeRawUnsafe(
@@ -1226,10 +1233,18 @@ export async function requeueDeadConversation(channel: string, key: string): Pro
         key,
       );
       if (claimed !== 1 || !head) return "not_parked";
-      // Rows killed together share a transaction, so their updatedAt is the same
-      // instant; a small margin covers clock rounding and nothing older.
+      // Exactly the failure that parked the conversation and the backlog it
+      // killed, by the head's id. A time window here (it was 5 s) also swept in
+      // an earlier failure's dead output when two landed close together, and
+      // re-sent messages nobody chose to retry.
       await tx.botFlowOutbox.updateMany({
-        where: { tenantId, channel, key, status: "dead", updatedAt: { gte: new Date(head.updatedAt.getTime() - 5_000) } },
+        where: {
+          tenantId,
+          channel,
+          key,
+          status: "dead",
+          OR: [{ id: head.id }, { failureCode: "blocked_by_earlier_failure", lastError: { startsWith: blockedByPrefix(head.id) } }],
+        },
         data: { status: "pending", attempts: 0, leaseUntil: null, lastError: null, failureCode: null, availableAt: new Date() },
       });
       return "requeued";
