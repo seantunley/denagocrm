@@ -5,6 +5,7 @@ import { logError } from "./errorLog";
 import { formatZAR } from "./format";
 import { renderKnowledgeForPrompt, searchBotKnowledge } from "./botKnowledge";
 import { renderBotProductFacts } from "./botProductFacts";
+import { getCompanyProfile } from "./companyProfile";
 
 export type BotMsg = { role: "user" | "assistant"; content: string };
 export type BotFaq = { id: string; question: string; answer: string; handoff?: boolean };
@@ -164,12 +165,13 @@ export async function generateBotReply(input: {
   if (!apiKey) return null;
 
   const latestQuestion = [...input.history].reverse().find((message) => message.role === "user")?.content ?? "";
-  const [brief, hours, products, faqs, relevantKnowledge, regional] = await Promise.all([
+  const [brief, hours, products, faqs, relevantKnowledge, company, regional] = await Promise.all([
     getSetting("BOT_AI_BRIEF"),
     getSetting("BOT_HOURS"),
     prisma.product.findMany({ where: { active: true }, include: { colors: true }, orderBy: { name: "asc" } }),
     getBotFaqs(),
     searchBotKnowledge(latestQuestion),
+    getCompanyProfile(),
     getRegionalSettings(),
   ]);
   const knowledgeText = renderKnowledgeForPrompt(relevantKnowledge);
@@ -193,7 +195,14 @@ export async function generateBotReply(input: {
   const pathwayList = pathways.map((p) => `[${p.id}] ${p.when}`).join("\n") || "(none)";
   const who = input.customerName ? `You're chatting with ${input.customerName}${input.isCustomer ? ", an existing customer" : ""}.` : "";
 
-  const system = `You are the customer assistant for Denago Cape Town, an authorised Denago electric golf-cart dealer and service centre in Cape Town, South Africa. ${who}
+  // Who the bot speaks for comes from the workspace's Company Profile — this
+  // was Denago's identity typed in, so every tenant's bot introduced itself as Denago.
+  const identity = [
+    `You are the customer assistant for ${company.name}${company.tagline ? ` (${company.tagline})` : ""}.`,
+    company.address ? `Location: ${company.address}.` : "",
+    company.phone ? `Phone: ${company.phone}.` : "",
+  ].filter(Boolean).join(" ");
+  const system = `${identity} ${who}
 
 STYLE:
 - Short, warm South African English. Usually 1–3 sentences.

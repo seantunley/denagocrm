@@ -100,7 +100,7 @@
       {"type": "steps", "items": [
         "Drag the lead into the test-drive stage column.",
         "In the dialog, choose the **model to drive** (or keep the current one).",
-        "Set the **date**, **time** and **location** — the default is the Denago Cape Town showroom.",
+        "Set the **date**, **time** and **location** — the default is your showroom.",
         "Choose **Book & move** to move the lead and create the appointment, or **Cancel — don't move** to abandon the change."
       ]},
       {"type": "p", "text": "The booking becomes a planned test-drive activity on the lead and appears on the calendar. The card then shows the appointment chip, along with the weather forecast for that day when available."},

@@ -92,43 +92,41 @@ test("every portal page resolves the brand through the shared cached helper", ()
   assert.match(helper, /customerBrand\(/);
 });
 
-test("every customer-facing substitution keeps the original literal unbranded", () => {
-  // Same property as the login pages, on the surfaces where being wrong is most
-  // visible to somebody who is not your staff.
+test("every customer-facing substitution names nobody when unbranded", () => {
+  // These used to pin the original Denago literals so an unbranded render stayed
+  // byte-identical. That kept Denago's name in front of every other tenant's
+  // customers whenever branding failed to resolve; the fallback is neutral now.
   const expected: Array<[string, string]> = [
-    ["src/app/portal/documents/page.tsx", '"Files are attached directly to your customer record and are only visible to the Denago team."'],
-    ["src/app/portal/documents/page.tsx", '"Documents from Denago"'],
-    ["src/app/portal/page.tsx", '"Your Denago garage"'],
-    ["src/app/portal/profile/page.tsx", '"Keep your details current and choose how Denago may contact you about service, support and offers."'],
-    ["src/app/portal/support/page.tsx", '"Tell us what you need and we’ll route it to the right Denago specialist."'],
-    ["src/app/portal/support/[id]/page.tsx", '"Messages between you and the Denago team."'],
-    ["src/app/portal/support/[id]/page.tsx", '"Denago Cape Town"'],
-    ["src/app/signing/[token]/page.tsx", '"This signing link is no longer active. Please contact Denago Cape Town."'],
-    ["src/app/signing/[token]/page.tsx", '"This signing link has expired. Please ask Denago to resend it."'],
-    ["src/app/signing/[token]/page.tsx", '"You declined to sign this document. Contact Denago if this was a mistake."'],
+    ["src/app/portal/documents/page.tsx", '"Files are attached directly to your customer record and are only visible to our team."'],
+    ["src/app/portal/documents/page.tsx", '"Your documents"'],
+    ["src/app/portal/page.tsx", '"Your garage"'],
+    ["src/app/portal/profile/page.tsx", '"Keep your details current and choose how we may contact you about service, support and offers."'],
+    ["src/app/portal/support/page.tsx", '"Tell us what you need and we’ll route it to the right specialist."'],
+    ["src/app/portal/support/[id]/page.tsx", '"Messages between you and our team."'],
+    ["src/app/portal/support/[id]/page.tsx", '"Our team"'],
+    ["src/app/signing/[token]/page.tsx", '"This signing link is no longer active. Please contact the sender."'],
+    ["src/app/signing/[token]/page.tsx", '"This signing link has expired. Please ask the sender to resend it."'],
+    ["src/app/signing/[token]/page.tsx", '"You declined to sign this document. Contact the sender if this was a mistake."'],
   ];
   for (const [file, literal] of expected) {
-    assert.ok(
-      shipped(file).includes(`: ${literal}`),
-      `${file}: the unbranded branch must still be the original literal ${literal}`,
-    );
+    assert.ok(shipped(file).includes(`: ${literal}`), `${file}: the unbranded branch must be ${literal}`);
+    assert.doesNotMatch(shipped(file), /Denago/, `${file}: no fallback may name Denago`);
   }
 });
 
-test("the signing shell keeps its wordmark when nothing resolved", () => {
+test("the signing shell shows the tenant logo, then name, then nothing", () => {
   // Three states, and the middle one matters: a tenant with a NAME but no logo
-  // must render their name, not the Denago wordmark and not nothing.
+  // must render their name. Unresolved renders no wordmark — not Denago's.
   const code = shipped("src/app/signing/[token]/page.tsx");
   assert.match(code, /brand\?\.logoUrl \? \(/, "a tenant logo wins");
   assert.match(code, /\) : brand\?\.branded \? \(/, "…then a tenant name");
-  assert.match(code, /DENAGO <span style=\{\{ color: "#ea580c" \}\}>CAPE TOWN<\/span>/, "…then the original wordmark");
+  assert.doesNotMatch(code, /DENAGO/, "…and never the Denago wordmark");
 });
 
-test("SignSurface's sender name defaults to the original literal", () => {
-  // A CLIENT component, so it takes a prop rather than resolving anything. The
-  // default is the literal that was hardcoded, so an unbranded render is unchanged.
+test("SignSurface's sender name defaults to a neutral phrase", () => {
+  // A CLIENT component, so it takes a prop rather than resolving anything.
   const code = shipped("src/app/signing/[token]/SignSurface.tsx");
-  assert.match(code, /const sender = senderName \?\? "Denago";/);
+  assert.match(code, /const sender = senderName \?\? "The sender";/);
   assert.match(code, /senderName\?: string/, "optional — an omitted prop is the old behaviour");
   const page = shipped("src/app/signing/[token]/page.tsx");
   assert.match(

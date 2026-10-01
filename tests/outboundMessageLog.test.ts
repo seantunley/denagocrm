@@ -117,7 +117,7 @@ const SILENT_PATHS: Array<[string, RegExp[]]> = [
   ["src/lib/signing/complete.ts", [/deliverCompletionEmails\(\{\n\s+requestId: req\.id,/]],
   ["src/lib/signing/recoverCompletions.ts", [/deliverCompletionEmails\(\{\n\s+requestId: req\.id,/]],
   // Public OTPs.
-  ["src/app/api/service-lookup/route.ts", [/secrets: \[code\]/, /ignore this message\.`,\n\s+record,/, /ignore this email\.\\n\\nDenago Cape Town`,\n\s+record,/]],
+  ["src/app/api/service-lookup/route.ts", [/secrets: \[code\]/, /ignore this message\.`,\n\s+record,/, /ignore this email\.\\n\\n\$\{company\.name\}`,\n\s+record,/]],
   ["src/app/actions/portal.ts", [/record: \{ contactId: contact\.id, label: "Portal login code", secrets: \[code\] \}/]],
   // Helpdesk auto-reply, campaigns, survey distribution.
   ["src/lib/imapSync.ts", [/record: \{ contactId: outcome\.contactId/]],

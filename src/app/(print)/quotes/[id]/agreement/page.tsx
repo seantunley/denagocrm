@@ -55,7 +55,7 @@ export default async function AgreementPrintPage({
         title="Sales agreement"
         number={`SA-${quote.number}`}
         meta={[`Date: ${formatDate(new Date(), regional)}`, `Reference: Q-${quote.number}`]}
-        parties={{ left: "Purchaser signature · Date", right: "For Denago Cape Town · Date" }}
+        parties={{ left: "Purchaser signature · Date", right: `For ${company.name} · Date` }}
         bodySection="clauses"
         bodyTitle="Terms of sale"
       >
@@ -75,11 +75,7 @@ export default async function AgreementPrintPage({
           />
           <InfoBlock
             title="Seller"
-            lines={[
-              "Denago Cape Town",
-              "Authorized Denago EV Dealer",
-              "Unit 55, M5 Freeway Business Park, Maitland",
-            ]}
+            lines={[company.name, company.tagline, company.address]}
           />
         </div>
         {tpl.sections.items !== false && (

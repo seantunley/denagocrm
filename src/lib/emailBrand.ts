@@ -1,6 +1,8 @@
 import "server-only";
 import { brandForTenant, brandLogoUrl, DEFAULT_BRAND } from "./tenantBrand";
 import { tenantOrigin } from "./tenantOrigin";
+import { basePrisma } from "./db";
+import { decryptValue } from "./settings";
 
 /**
  * Brand for an EMAIL, which is a different problem from brand for a page.
@@ -27,7 +29,7 @@ import { tenantOrigin } from "./tenantOrigin";
 export type EmailBrand = {
   branded: boolean;
   displayName: string;
-  /** Absolute, or null to use the built-in asset. */
+  /** Absolute, or null for no logo (the shell prints the name instead). */
   logoUrl: string | null;
   tagline: string | null;
   /**
@@ -72,12 +74,30 @@ export async function emailBrand(tenantId: string | null | undefined): Promise<E
       displayName: brand.displayName,
       // The tenant's own origin. Same route, same bytes, same deployment — the
       // only thing that changes is the hostname a recipient sees when their mail
-      // client asks whether to load remote images.
-      logoUrl: relative ? `${origin}${relative}` : null,
+      // client asks whether to load remote images. No uploaded brand logo → the
+      // Company Profile's logo (Denago's lives there) → none.
+      logoUrl: relative ? `${origin}${relative}` : await profileEmailLogo(tenantId),
       tagline: brand.tagline,
       origin,
     };
   } catch {
     return UNBRANDED_EMAIL;
+  }
+}
+
+/**
+ * The tenant's Company Profile logo, if a mail client can fetch it: a public
+ * https URL, never a private-store link. Null otherwise — and on any failure.
+ */
+async function profileEmailLogo(tenantId: string): Promise<string | null> {
+  try {
+    const row = await basePrisma.appSetting.findUnique({
+      where: { tenantId_key: { tenantId, key: "COMPANY_LOGO_URL" } },
+      select: { value: true },
+    });
+    const url = row?.value ? decryptValue(row.value).trim() : "";
+    return /^https:\/\//i.test(url) && !/\.private\.blob\.|\/api\/stored/i.test(url) ? url : null;
+  } catch {
+    return null;
   }
 }

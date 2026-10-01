@@ -7,6 +7,7 @@ import { crmActions } from "./flowActions";
 import type { FlowHandoffContext } from "./flow";
 import { flushBotOutboxConversation } from "./botOutbox";
 import { enqueueBotMessagesTx } from "./botOutboxWrite";
+import { getCompanyProfile } from "./companyProfile";
 
 export { tgSend, tgSendPhoto, tgAnswerCallback, setTelegramWebhook, deleteTelegramWebhook } from "./telegramTransport";
 
@@ -34,7 +35,7 @@ export async function runTelegramFlow(chatId: number | string, text: string, cal
       handoff: async (_vars, context) => { await sendPushToAll({ title: "Telegram needs you 🙋", body: handoffBody(context), url: "/inbox" }, "bot_handoff").catch(() => {}); },
       ...crmActions("telegram", { contactId: null, leadId: null }),
     }),
-    greetingVars(null),
+    greetingVars(null, (await getCompanyProfile()).name),
     async (messages, tx, tenantId, flowVersionId) => {
       await enqueueBotMessagesTx(tx, tenantId, { channel: "telegram", key, messages, flowVersionId });
     },

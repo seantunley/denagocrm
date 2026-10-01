@@ -18,6 +18,7 @@ import { recordBotFlowEventsTx, type BotFlowEventInput } from "./botFlowAnalytic
 import { completeInboundBotEventTx, currentInboundBotClaim } from "./botInboundEvent";
 import { decideInboundAct, HUMAN_RESPONSIBILITY_HOURS, type BotOwnership } from "./botOwnership";
 import type { FlowEntryContext } from "./flowRouting";
+import { getCompanyProfile } from "./companyProfile";
 
 export const FLOW_MARKER = "🤖 Flow";
 const FLOW_VERSION_VAR = "__flow_version";
@@ -106,7 +107,7 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput, entryCon
   let seed: Record<string, string> = {};
   if (!existing || restart) {
     const contact = match.contactId ? await prisma.contact.findUnique({ where: { id: match.contactId } }) : null;
-    seed = greetingVars(contact?.firstName ?? null);
+    seed = greetingVars(contact?.firstName ?? null, (await getCompanyProfile()).name);
   }
   const builtins = flowRuntimeVars("whatsapp");
   const session: FlowSession = !existing || restart ? { nodeId: null, vars: { ...builtins, ...seed } } : { nodeId: existing.nodeId, vars: { ...existing.vars, ...builtins } };

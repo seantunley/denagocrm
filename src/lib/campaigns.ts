@@ -96,12 +96,9 @@ export async function countContacts(
 }
 
 function emailShell(inner: string, unsubUrl: string, brand?: EmailBrand) {
-  // Same origin the links use, so the built-in logo fallback does not arrive
-  // from a different host than everything around it.
-  const base = emailBase(brand);
-  // Absolute URL, always: a mail client has no origin to resolve a relative path
-  // against. Falls back to the built-in asset when the tenant has no logo.
-  const logo = brand?.logoUrl ?? `${base}/branding/denago-cape-town-logo.png`;
+  // Absolute (emailBrand), or none: a tenant with no logo of its own gets no
+  // image at all — this used to fall back to Denago's logo for every tenant.
+  const logo = brand?.logoUrl ?? null;
   // Unbranded no longer means "Denago". A campaign that could not resolve its
   // tenant used to go out under one customer's trading name and street address —
   // to another customer's mailing list, with an unsubscribe link, which is a
@@ -119,7 +116,7 @@ function emailShell(inner: string, unsubUrl: string, brand?: EmailBrand) {
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center">
 <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e2e8f0;">
 <tr><td style="background:#0f172a;padding:16px 24px;">
-<img src="${escapeHtml(logo)}" alt="${safeName}" height="26" style="height:26px;">
+${logo ? `<img src="${escapeHtml(logo)}" alt="${safeName}" height="26" style="height:26px;">` : `<span style="color:#ffffff;font-weight:700;font-size:16px;">${safeName}</span>`}
 </td></tr>
 <tr><td style="padding:24px;font-size:15px;line-height:1.6;">${inner}</td></tr>
 <tr><td style="padding:16px 24px;background:#f8fafc;color:#64748b;font-size:12px;line-height:1.5;">

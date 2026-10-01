@@ -54,7 +54,10 @@ export async function tenantEmailContent(
       brandForTenant(tenantId).catch(() => DEFAULT_BRAND),
       emailBrand(tenantId),
       basePrisma.appSetting.findMany({
-        where: { tenantId, key: { in: [def.settingKey, "COMPANY_PHONE", "COMPANY_EMAIL", "COMPANY_LOGO_URL"] } },
+        where: {
+          tenantId,
+          key: { in: [def.settingKey, "COMPANY_NAME", "COMPANY_TAGLINE", "COMPANY_PHONE", "COMPANY_EMAIL", "COMPANY_LOGO_URL"] },
+        },
         select: { key: true, value: true },
       }),
     ]);
@@ -66,9 +69,13 @@ export async function tenantEmailContent(
         return "";
       }
     };
+    // Company Profile first, then the platform brand — getCompanyProfile()'s
+    // order, read in this one query so the send stays keyed on the caller's tenant.
+    const companyName = setting("COMPANY_NAME") || brand.displayName;
+    const tagline = setting("COMPANY_TAGLINE") || brand.tagline;
     const all = {
       ...vars,
-      company_name: brand.displayName,
+      company_name: companyName,
       company_phone: setting("COMPANY_PHONE"),
       company_email: setting("COMPANY_EMAIL"),
     };
@@ -82,8 +89,8 @@ export async function tenantEmailContent(
       (/^https:\/\//i.test(profileLogo) && !/\.private\.blob\.|\/api\/stored/i.test(profileLogo) ? profileLogo : null);
 
     return renderSigningEmail(kind, override ?? parseStoredSigningTemplate(setting(def.settingKey)), all, {
-      companyName: brand.displayName,
-      tagline: brand.tagline,
+      companyName,
+      tagline: tagline || null,
       logoUrl,
       accent: brand.primary ?? DEFAULT_ACCENT,
       accentText: brand.primaryForeground ?? "#ffffff",

@@ -288,7 +288,7 @@ export const acceptanceBlockSchema = z.object({
 });
 export const footerBandBlockSchema = z.object({
   ...base, type: z.literal("footerBand"),
-  subtitle: z.string().default("Authorised Denago EV Dealer"),
+  subtitle: z.string().default("{{company.tagline}}"),
   bg: colorField("#020617"),
   accent: colorField("#ea580c"),
   /** Optional band photo (e.g. a skyline). Only an inline `data:image/…` is ever rendered. */

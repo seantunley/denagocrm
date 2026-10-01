@@ -69,7 +69,7 @@ export default async function PortalSupportPage() {
       <PortalPageHeader eyebrow="We're here to help" title={automotiveOn ? "Support & warranty" : "Support"} description="Submit a request, track its progress and keep the conversation with our team in one secure place." />
 
       <Surface className="space-y-5 p-5 sm:p-6">
-        <SectionHeading title="Start a new request" description={brand.branded ? `Tell us what you need and we’ll route it to the right ${brand.displayName} specialist.` : "Tell us what you need and we’ll route it to the right Denago specialist."} action={<span className="grid size-10 place-items-center rounded-xl bg-primary/10 text-primary"><LifeBuoy className="size-5" /></span>} />
+        <SectionHeading title="Start a new request" description={brand.branded ? `Tell us what you need and we’ll route it to the right ${brand.displayName} specialist.` : "Tell us what you need and we’ll route it to the right specialist."} action={<span className="grid size-10 place-items-center rounded-xl bg-primary/10 text-primary"><LifeBuoy className="size-5" /></span>} />
         <PortalCaseForm
           automotive={automotiveOn}
           contacts={contacts.map((row) => ({ id: row.id, label: contactName(row) }))}

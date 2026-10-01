@@ -434,8 +434,7 @@ async function redrive(
     title: req.title,
     pdf,
     recipients: recipients as FanoutRecipient[],
-    tenantWhere: where,
-  });
+    tenantWhere: where,  });
   failures.push(...delivery.failures);
 
   return { ok: failures.length === 0, failures };

@@ -3,6 +3,7 @@
 import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
+import { getCompanyProfile } from "@/lib/companyProfile";
 import { withActingTenantWrite, withActingStaffScope } from "@/lib/actingScope";
 import { journeyScope } from "@/lib/flowScope";
 import { requirePermission } from "@/lib/permissions";
@@ -386,6 +387,9 @@ function definition(steps: Array<Record<string, unknown>>) {
 export async function installJourneyTemplates() {
   return withActingStaffScope(async () => {
     const user = await requirePermission("journeys.manage");
+    // Written into the installed templates (still editable), named after THIS
+    // workspace — they used to greet every tenant's customers as Denago.
+    const company = (await getCompanyProfile()).name;
     const templates = [
       {
         name: "New lead speed-to-contact",
@@ -410,8 +414,8 @@ export async function installJourneyTemplates() {
             id: "welcome",
             type: "send_email",
             config: {
-              subject: "Welcome to the Denago Cape Town family",
-              body: "Hi {{first_name}},\n\nThank you for choosing Denago Cape Town. We are delighted to have you with us and will be in touch with the next steps.\n\nWarm regards,\nDenago Cape Town",
+              subject: `Welcome to the ${company} family`,
+              body: `Hi {{first_name}},\n\nThank you for choosing ${company}. We are delighted to have you with us and will be in touch with the next steps.\n\nWarm regards,\n${company}`,
             },
           },
         ]),
@@ -427,8 +431,8 @@ export async function installJourneyTemplates() {
             id: "anniversary-email",
             type: "send_email",
             config: {
-              subject: "Happy Denago anniversary, {{first_name}}!",
-              body: "Hi {{first_name}},\n\nHappy anniversary from Denago Cape Town. Thank you for being part of our community. If your vehicle needs a service, accessories or a battery health check, our team is ready to help.\n\nWarm regards,\nDenago Cape Town",
+              subject: "Happy anniversary, {{first_name}}!",
+              body: `Hi {{first_name}},\n\nHappy anniversary from ${company}. Thank you for being part of our community. If your vehicle needs a service, accessories or a battery health check, our team is ready to help.\n\nWarm regards,\n${company}`,
             },
           },
         ]),
@@ -444,8 +448,8 @@ export async function installJourneyTemplates() {
             id: "winback-email",
             type: "send_email",
             config: {
-              subject: "We miss you at Denago Cape Town",
-              body: "Hi {{first_name}},\n\nIt has been a while since we saw you. A quick service helps protect your vehicle and battery. Reply to this email and our team will arrange a convenient booking.\n\nWarm regards,\nDenago Cape Town",
+              subject: `We miss you at ${company}`,
+              body: `Hi {{first_name}},\n\nIt has been a while since we saw you. A quick service helps protect your vehicle and battery. Reply to this email and our team will arrange a convenient booking.\n\nWarm regards,\n${company}`,
             },
           },
           { id: "wait", type: "wait", config: { amount: 7, unit: "days" } },

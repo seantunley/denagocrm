@@ -23,18 +23,15 @@ import type { DocumentModel } from "./model";
  * session to fetch them with.
  */
 
-const DEFAULT_LOGO = path.join(process.cwd(), "public", "branding", "denago-logo-email.png");
-let defaultLogoCache: string | null | undefined;
-
-/** The built-in logo, embedded — used when a workspace has none of its own. */
+/**
+ * The logo a workspace with none of its own gets: NONE. This used to embed
+ * Denago's logo, so every other tenant's quotes, signing pages and sealed PDFs
+ * carried Denago's mark. The banner and showcase header fall back to the
+ * workspace NAME as text. Denago's logo now comes from its own Company Profile
+ * (COMPANY_LOGO_URL, seeded by 20260806190000_seed_founding_tenant_brand).
+ */
 export function defaultLogoDataUri(): string | undefined {
-  if (defaultLogoCache !== undefined) return defaultLogoCache ?? undefined;
-  try {
-    defaultLogoCache = `data:image/png;base64,${fs.readFileSync(DEFAULT_LOGO).toString("base64")}`;
-  } catch {
-    defaultLogoCache = null;
-  }
-  return defaultLogoCache ?? undefined;
+  return undefined;
 }
 
 const IMAGE_TYPES: Record<string, string> = {

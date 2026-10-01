@@ -18,6 +18,7 @@ import CopyButton from "@/components/CopyButton";
 import ResearchTabPanel from "@/components/ResearchTabPanel";
 import { isAiConfigured, isResearchConfigured } from "@/lib/ai";
 import { ensureReferralCode } from "@/lib/referrals";
+import { getCompanyProfile } from "@/lib/companyProfile";
 import { redeemReferral } from "@/app/actions/referrals";
 import { isWhatsAppConfigured } from "@/lib/whatsapp";
 import { formatDateTime } from "@/lib/format";
@@ -150,6 +151,9 @@ export default async function ContactDetailPage({
     }),
   ]);
   const referralCode = marketingOn ? await ensureReferralCode(contact.id) : "";
+  // The share text names THIS workspace (Settings → Company), not Denago.
+  const company = marketingOn ? await getCompanyProfile() : null;
+  const referralWhere = company ? `${company.name}${company.website ? ` (${company.website})` : ""}` : "";
   const [referralsMade, referredIn] = marketingOn
     ? await Promise.all([
         prisma.referral.findMany({
@@ -418,7 +422,7 @@ export default async function ContactDetailPage({
                         <CopyButton text={referralCode} />
                         <a
                           href={`https://wa.me/?text=${encodeURIComponent(
-                            `Use my referral code ${referralCode} when you enquire at Denago Cape Town (denagocpt.co.za) and mention my name — ${contactName(contact)}`
+                            `Use my referral code ${referralCode} when you enquire at ${referralWhere} and mention my name — ${contactName(contact)}`
                           )}`}
                           target="_blank"
                           className="btn-secondary btn-sm"

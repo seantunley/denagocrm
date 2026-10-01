@@ -23,9 +23,7 @@ function Shell({ children, brand }: { children: React.ReactNode; brand?: LoginBr
         <img src={brand.logoUrl} alt={brand.displayName} style={{ marginBottom: 20, height: 32, width: "auto" }} />
       ) : brand?.branded ? (
         <div style={{ marginBottom: 20, fontWeight: 800, letterSpacing: 1, color: "#fff" }}>{brand.displayName}</div>
-      ) : (
-        <div style={{ marginBottom: 20, fontWeight: 800, letterSpacing: 1, color: "#fff" }}>DENAGO <span style={{ color: "#ea580c" }}>CAPE TOWN</span></div>
-      )}
+      ) : null}
       {children}
       {/* Signing has no layout of its own, so the Toaster is mounted on this
           shell. Feedback matters most here: the signer is an outside party with
@@ -75,15 +73,14 @@ async function renderSigningPage(token: string) {
   // Every terminal state closes the document surface. Completed parties receive
   // the sealed PDF by email; the bearer link is revoked by the database trigger.
   //
-  // Each message keeps its ORIGINAL literal on the unbranded branch, so a
-  // workspace without branding reads exactly as it did before — the branded
-  // branch is an addition, never a rewrite of the default.
+  // The unbranded branch names nobody: it used to name Denago, which told
+  // another company's signer to phone a business they had never dealt with.
   if (req.deletedAt || ["completed", "declined", "expired", "voided", "rejected"].includes(req.status)) {
-    return <Msg title="Document unavailable" body={brand.branded ? `This signing link is no longer active. Please contact ${brand.displayName}.` : "This signing link is no longer active. Please contact Denago Cape Town."} brand={brand} />;
+    return <Msg title="Document unavailable" body={brand.branded ? `This signing link is no longer active. Please contact ${brand.displayName}.` : "This signing link is no longer active. Please contact the sender."} brand={brand} />;
   }
-  if (req.expiresAt && req.expiresAt < new Date()) return <Msg title="Link expired" body={brand.branded ? `This signing link has expired. Please ask ${brand.displayName} to resend it.` : "This signing link has expired. Please ask Denago to resend it."} brand={brand} />;
+  if (req.expiresAt && req.expiresAt < new Date()) return <Msg title="Link expired" body={brand.branded ? `This signing link has expired. Please ask ${brand.displayName} to resend it.` : "This signing link has expired. Please ask the sender to resend it."} brand={brand} />;
   if (recipient.status === "signed") return <Msg title="Already signed ✓" body="You've completed this document — thank you. A copy will be emailed to you once everyone has signed." brand={brand} />;
-  if (recipient.status === "declined") return <Msg title="Declined" body={brand.branded ? `You declined to sign this document. Contact ${brand.displayName} if this was a mistake.` : "You declined to sign this document. Contact Denago if this was a mistake."} brand={brand} />;
+  if (recipient.status === "declined") return <Msg title="Declined" body={brand.branded ? `You declined to sign this document. Contact ${brand.displayName} if this was a mistake.` : "You declined to sign this document. Contact the sender if this was a mistake."} brand={brand} />;
   if (recipient.role === "viewer") return <Msg title="View only" body="You've been added to view this document, no signature required." brand={brand} />;
 
   if (req.ordering === "sequential") {

@@ -6,6 +6,7 @@ import { getNextStepScheduling } from "./nextStepConfig";
 import { resolveTenantActor } from "./tenantActor";
 import { sendEmail, renderTemplate } from "./email";
 import { sendSms } from "./sms";
+import { getCompanyProfile } from "./companyProfile";
 import { sendPushToAll } from "./push";
 import { logAudit } from "./audit";
 import { emitJourneyEvent } from "./journeyEvents";
@@ -257,7 +258,7 @@ export async function executeJourneyStep(args: {
       const to = emailAddress(context);
       if (!to) return { status: "skipped", note: "Email skipped: no email address" };
 
-      let subject = stringConfig(step, "subject") ?? "Message from Denago Cape Town";
+      let subject = stringConfig(step, "subject") ?? `Message from ${(await getCompanyProfile(tenantId)).name}`;
       let text = stringConfig(step, "body") ?? "";
       let html = stringConfig(step, "htmlBody");
       const templateId = stringConfig(step, "emailTemplateId");
