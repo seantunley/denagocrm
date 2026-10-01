@@ -14,7 +14,7 @@ import {
   updateTeam,
   updateUserRoles,
 } from "@/app/actions/accessControl";
-import { revokeUserSessions, setUserDisabled } from "@/app/actions/security";
+import { resetTeamMemberPassword, revokeUserSessions, setUserDisabled } from "@/app/actions/security";
 import { formatDateTime } from "@/lib/format";
 import ModalTrigger from "@/components/Modal";
 import { buttonVariants } from "@/components/ui/button";
@@ -168,6 +168,21 @@ export default async function AccessSettingsPage() {
                         <SaveForm resetOnSuccess={false} action={revokeUserSessions.bind(null, user.id)}>
                           <SaveButton className="btn-secondary btn-sm">Revoke sessions</SaveButton>
                         </SaveForm>
+                        {user.role !== "owner" && (
+                          <ModalTrigger label="Reset password" title={`Reset ${user.name}'s password`} buttonClass="btn-secondary btn-sm">
+                            <SaveForm action={resetTeamMemberPassword.bind(null, user.id)} success="Password reset" className="space-y-3">
+                              <p className="text-sm text-muted-foreground">
+                                Set a new password for {user.name} and give it to them. They&apos;ll be signed out of every device and can change it under My Account.
+                              </p>
+                              <div>
+                                <label className="label" htmlFor={`reset-${user.id}`}>New password</label>
+                                <input id={`reset-${user.id}`} name="password" type="text" autoComplete="off" className="input" required minLength={12} />
+                                <p className="mt-1 text-xs text-muted-foreground">At least 12 characters, with letters and numbers.</p>
+                              </div>
+                              <SaveButton className="btn-primary" pendingLabel="Resetting…">Reset password</SaveButton>
+                            </SaveForm>
+                          </ModalTrigger>
+                        )}
                         <SaveForm resetOnSuccess={false} action={setUserDisabled.bind(null, user.id, !user.disabledAt)}>
                           <SaveButton className={user.disabledAt ? "btn-secondary btn-sm" : "btn-danger btn-sm"}>
                             {user.disabledAt ? "Reactivate" : "Disable"}

@@ -1,6 +1,7 @@
 "use server";
 
 import { asActionResult, ActionRefusal, refuse, type ActionResult } from "@/lib/actionResult";
+import { requiredReason } from "@/lib/deleteReason";
 import { randomUUID } from "crypto";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
@@ -426,24 +427,89 @@ export async function setJobCardTechnician(jobCardId: string, formData: FormData
 
 // Moving to any workflow stage (or cancelling / reopening). "collected" is
 // reserved for completeJobCard, which also creates the service record.
-export async function setJobCardStatus(jobCardId: string, status: string) {
+export async function setJobCardStatus(jobCardId: string, status: string, formData?: FormData) {
   return asActionResult(async () => {
     const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
     const allowed = new Set(STAGE_VALUES.filter((s) => s !== "collected"));
     if (!allowed.has(status)) throw new ActionRefusal("Invalid job card status");
     const jobCard = await prisma.jobCard.findUniqueOrThrow({ where: { id: jobCardId }, select: { number: true, contactId: true, status: true } });
+    // Cancelling must carry a reason (the dialog asks; the server insists).
+    // Other stage moves have none.
+    const reason = status === "cancelled" ? requiredReason(formData, "cancelling this job") : "";
     await prisma.jobCard.update({
       where: { id: jobCardId },
       data: { status, completedAt: null },
     });
     await logAudit({
       action: "jobcard.stage",
-      summary: `Job card #${jobCard.number}: ${stageMeta(jobCard.status).label} → ${stageMeta(status).label}`,
+      summary: `Job card #${jobCard.number}: ${stageMeta(jobCard.status).label} → ${stageMeta(status).label}${reason ? ` — ${reason}` : ""}`,
       contactId: jobCard.contactId,
       user,
     });
     revalidatePath("/jobcards");
     revalidatePath(`/jobcards/${jobCardId}`);
+  });
+}
+
+/**
+ * Correct what was captured at check-in: the work requested and the arrival
+ * mileage. Everything else on the card already has its own control. Not on a
+ * collected card — its service record was written from these; reopen it first.
+ */
+export async function updateJobCardDetails(jobCardId: string, formData: FormData) {
+  return asActionResult(async () => {
+    const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
+    const description = String(formData.get("description") ?? "").trim();
+    if (!description) refuse("Describe the work requested.");
+    const kmRaw = String(formData.get("kmIn") ?? "").trim();
+    const kmIn = kmRaw === "" ? null : parseInt(kmRaw, 10);
+    if (kmIn != null && (isNaN(kmIn) || kmIn < 0)) refuse("Enter the arrival mileage as a whole number of km.");
+
+    const before = await prisma.jobCard.findUniqueOrThrow({
+      where: { id: jobCardId },
+      select: { number: true, status: true, description: true, kmIn: true, vehicleId: true, contactId: true, tenantId: true },
+    });
+    const completed = "This job card is completed — reopen it to change its details.";
+    if (before.status === "collected") refuse(completed);
+    if (before.description === description && before.kmIn === kmIn) return { success: "No changes" };
+
+    const checkInNote = `Job card #${before.number} check-in`;
+    // The card's owner, not whoever is editing it; acting workspace only for a pre-tenancy card.
+    const tenantId = before.tenantId ?? (await actingTenantId());
+    await prisma.$transaction(async (tx) => {
+      // The collected check is re-made by the write itself: a card completed
+      // between the read above and here matches nothing and the edit refuses.
+      const { count } = await tx.jobCard.updateMany({
+        where: { id: jobCardId, status: { not: "collected" } },
+        data: { description, kmIn },
+      });
+      if (count === 0) refuse(completed);
+      // Keep the vehicle's mileage history in step with the corrected reading.
+      if (before.kmIn !== kmIn) {
+        const log = await tx.mileageLog.findFirst({ where: { vehicleId: before.vehicleId, note: checkInNote } });
+        if (log && kmIn != null) await tx.mileageLog.update({ where: { id: log.id }, data: { km: kmIn } });
+        else if (log) await tx.mileageLog.delete({ where: { id: log.id } });
+        else if (kmIn != null) {
+          await tx.mileageLog.create({
+            data: { tenantId, vehicleId: before.vehicleId, km: kmIn, note: checkInNote },
+          });
+        }
+      }
+    });
+
+    const changes = [
+      before.description !== description ? `work requested “${before.description.slice(0, 60)}” → “${description.slice(0, 60)}”` : null,
+      before.kmIn !== kmIn ? `arrival km ${before.kmIn ?? "—"} → ${kmIn ?? "—"}` : null,
+    ].filter(Boolean);
+    await logAudit({
+      action: "jobcard.updated",
+      summary: `Job card #${before.number}: ${changes.join("; ")}`,
+      contactId: before.contactId,
+      user,
+    });
+    revalidatePath("/jobcards");
+    revalidatePath(`/jobcards/${jobCardId}`);
+    return { success: "Job card updated" };
   });
 }
 
@@ -545,24 +611,33 @@ export async function completeJobCard(jobCardId: string, formData: FormData) {
       nextDueDate = addMonths(new Date(), jobCard.vehicle.serviceIntervalMonths);
     }
 
-    await prisma.$transaction([
-      prisma.jobCard.update({
-        where: { id: jobCardId },
-        data: { status: "collected", completedAt: new Date() },
-      }),
-      prisma.serviceRecord.create({
-        data: {
-          vehicleId: jobCard.vehicleId,
-          jobCardId,
-          summary,
-          details: str("details"),
-          km: km != null && !isNaN(km) ? km : null,
-          nextDueKm: nextDueKm != null && !isNaN(nextDueKm) ? nextDueKm : null,
-          nextDueDate,
-          performedById: user.id,
-        },
-      }),
-    ]);
+    const completedAt = new Date();
+    const record = {
+      summary,
+      details: str("details"),
+      km: km != null && !isNaN(km) ? km : null,
+      nextDueKm: nextDueKm != null && !isNaN(nextDueKm) ? nextDueKm : null,
+      nextDueDate,
+      performedById: user.id,
+    };
+    await prisma.$transaction(async (tx) => {
+      // The status move IS the claim: only a card that isn't already collected
+      // moves, so a double click (or a stale tab) can't complete it twice.
+      const moved = await tx.jobCard.updateMany({
+        where: { id: jobCardId, status: { not: "collected" } },
+        data: { status: "collected", completedAt },
+      });
+      if (moved.count === 0) refuse("This job card is already completed — reopen it first to complete it again.");
+      // One service record per job card (jobCardId is unique). A card that was
+      // collected, reopened and completed again UPDATES its record: creating a
+      // second one hit the unique constraint, so a reopened card could never be
+      // completed again.
+      await tx.serviceRecord.upsert({
+        where: { jobCardId },
+        create: { vehicleId: jobCard.vehicleId, jobCardId, ...record },
+        update: { ...record, serviceDate: completedAt },
+      });
+    });
     if (km != null && !isNaN(km)) {
       await prisma.mileageLog.create({
         data: { vehicleId: jobCard.vehicleId, km, note: `Job card #${jobCard.number} completed` },

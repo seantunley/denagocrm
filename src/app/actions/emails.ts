@@ -15,7 +15,7 @@ import {
   type StoredSigningTemplate,
 } from "@/lib/signing/emailTemplates";
 import { emailDocToText, sanitizeEmailDoc, type EmailDoc } from "@/lib/signing/emailDoc";
-import { tenantEmailContent } from "@/lib/signing/signingEmail";
+import { tenantEmailContent, tenantSmsContent } from "@/lib/signing/signingEmail";
 import {
   CUSTOMER_RECORD_WRITE_PERMISSIONS,
   canAccessContact,
@@ -285,8 +285,10 @@ function signingKind(kind: string): SigningEmailKind {
  */
 function templateFromForm(kind: SigningEmailKind, formData: FormData): StoredSigningTemplate {
   const def = SIGNING_EMAILS[kind];
-  const subject = String(formData.get("subject") ?? "").trim();
-  const rawDoc = String(formData.get("doc") ?? "");
+  const sms = def.channel === "sms";
+  // An SMS is plain text: no subject, never a formatted body.
+  const subject = sms ? "" : String(formData.get("subject") ?? "").trim();
+  const rawDoc = sms ? "" : String(formData.get("doc") ?? "");
   let doc: EmailDoc | null = null;
   if (rawDoc) {
     try {
@@ -314,7 +316,7 @@ export async function saveSigningEmailTemplate(kind: string, formData: FormData)
       update: { value },
       create: { tenantId, key: def.settingKey, value },
     });
-    await logAudit({ action: "settings.signing_email.saved", summary: `Edited the “${def.label}” email template`, user });
+    await logAudit({ action: "settings.signing_email.saved", summary: `Edited the “${def.label}” message template`, user });
     revalidatePath("/settings");
   });
 }
@@ -327,7 +329,7 @@ export async function resetSigningEmailTemplate(kind: string, formData: FormData
     const tenantId = await getActiveTenantId();
     if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
     await basePrisma.appSetting.deleteMany({ where: { tenantId, key: def.settingKey } });
-    await logAudit({ action: "settings.signing_email.reset", summary: `Reset the “${def.label}” email template to default`, user });
+    await logAudit({ action: "settings.signing_email.reset", summary: `Reset the “${def.label}” message template to default`, user });
     revalidatePath("/settings");
   });
 }
@@ -360,9 +362,18 @@ const PREVIEW_VARS: Record<string, string> = {
   expiry_date: "14 Oct 2026",
   code: "482913",
   total: "R 125 000,00",
+  model: "Rover XL",
+  item: "Rover XL",
+  due_date: "14 Oct 2026",
+  recall_title: "Brake cable inspection",
+  recall_description: "We're checking the rear brake cable on all Rover XL vehicles built before June 2026.",
+  review_link: "https://search.google.com/local/writereview?placeid=preview-only",
+  survey_title: "Service feedback",
+  survey_intro: "We'd love to hear how your service went.",
+  survey_subject: "How was your service? A quick question ⭐",
 };
 
-export type EmailPreview = { subject?: string; html?: string; error?: string };
+export type EmailPreview = { subject?: string; html?: string; text?: string; error?: string };
 
 /**
  * The live preview in Settings → Email templates: the unsaved draft, rendered
@@ -378,12 +389,17 @@ export async function previewSigningEmailTemplate(kind: string, formData: FormDa
     if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
     const draft = templateFromForm(k, formData);
     const origin = (await tenantOrigin(tenantId)) || "";
-    const rendered = await tenantEmailContent(
-      k,
-      tenantId,
-      { ...PREVIEW_VARS, sender_name: user.name ?? "", signing_link: `${origin}/signing/preview-only-not-a-real-link` },
-      draft,
-    );
+    const vars = {
+      ...PREVIEW_VARS,
+      sender_name: user.name ?? "",
+      signing_link: `${origin}/signing/preview-only-not-a-real-link`,
+      survey_link: `${origin}/s/preview-only`,
+    };
+    if (SIGNING_EMAILS[k].channel === "sms") {
+      preview = { text: await tenantSmsContent(k, tenantId, vars, draft) };
+      return;
+    }
+    const rendered = await tenantEmailContent(k, tenantId, vars, draft);
     preview = { subject: rendered.subject, html: rendered.html };
   });
   return result.error ? { error: result.error } : preview;

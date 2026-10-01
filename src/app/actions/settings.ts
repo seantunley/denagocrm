@@ -3,6 +3,7 @@
 import { asActionResult, ActionRefusal, refuse, type ActionResult } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import bcrypt from "bcryptjs";
+import { validPassword } from "@/lib/passwordPolicy";
 import crypto from "crypto";
 import { basePrisma, prisma } from "@/lib/db";
 import { ciExactIdFilter } from "@/lib/ciExact";
@@ -241,9 +242,6 @@ export async function deleteStage(id: string, formData: FormData): Promise<Actio
 
 export type FormState = { error?: string; ok?: string };
 
-function validPassword(password: string): boolean {
-  return password.length >= 12 && /[A-Za-z]/.test(password) && /\d/.test(password);
-}
 
 export async function createUser(
   _prev: FormState | undefined,
