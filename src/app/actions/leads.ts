@@ -838,6 +838,7 @@ export async function moveLeadToTestDrive(
     await lockStaffSchedules(tx, activityTenantId ?? "global", [scheduledUserId]);
     const availabilityConflict = await findStaffAvailabilityConflict({
       userId: scheduledUserId,
+      tenantId: activityTenantId,
       start: when,
       end: whenEnd,
       db: tx,
