@@ -6,6 +6,7 @@ import { deleteContact } from "@/app/actions/contacts";
 import CommsTimeline from "@/components/CommsTimeline";
 import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import DocumentsPanel from "@/components/DocumentsPanel";
+import PortalUploadsList, { type PortalUploadRow } from "@/components/PortalUploadsList";
 import ActivityPanel from "@/components/ActivityPanel";
 import EmailComposer from "@/components/EmailComposer";
 import { composerReplyToDefault } from "@/lib/replyToDefault";
@@ -155,6 +156,25 @@ export default async function ContactDetailPage({
       orderBy: { unsubscribedAt: "desc" },
     }),
   ]);
+  // Files the customer sent through the portal (gap audit #30) — the ones on no
+  // case had no staff screen anywhere. Guarded client, so tenant-scoped.
+  const [portalUploadRows, canReviewUploads] = await Promise.all([
+    prisma.portalUpload.findMany({
+      where: { contactId: contact.id },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+      select: { id: true, fileName: true, sizeBytes: true, createdAt: true, status: true, caseId: true },
+    }),
+    hasPermission(user, "documents.manage"),
+  ]);
+  const uploadCaseIds = [...new Set(portalUploadRows.map((row) => row.caseId).filter((caseId): caseId is string => Boolean(caseId)))];
+  const uploadCases = uploadCaseIds.length
+    ? await prisma.customerCase.findMany({ where: { id: { in: uploadCaseIds } }, select: { id: true, number: true } })
+    : [];
+  const portalUploads: PortalUploadRow[] = portalUploadRows.map((row) => {
+    const linkedCase = uploadCases.find((item) => item.id === row.caseId);
+    return { ...row, caseLabel: linkedCase ? `Case C-${linkedCase.number}` : null };
+  });
   const referralCode = marketingOn ? await ensureReferralCode(contact.id) : "";
   // The share text names THIS workspace (Settings → Company), not Denago.
   const company = marketingOn ? await getCompanyProfile() : null;
@@ -560,15 +580,23 @@ export default async function ContactDetailPage({
               {
                 key: "documents",
                 label: "Documents",
-                count: looseDocuments.length + quoteDocuments.length,
+                count: looseDocuments.length + quoteDocuments.length + portalUploads.length,
                 content: (
-                  <DocumentsPanel
-                    documents={looseDocuments}
-                    quoteGroups={quoteGroups}
-                    quoteActions={{ canCancel: canCancelQuotes, canDuplicate: canDuplicateQuotes }}
-                    contactId={contact.id}
-                    revalidate={path}
-                  />
+                  <div className="space-y-4">
+                    {portalUploads.length > 0 && (
+                      <div className="card">
+                        <h2 className="mb-2 font-semibold">From the customer portal</h2>
+                        <PortalUploadsList uploads={portalUploads} canReview={canReviewUploads} />
+                      </div>
+                    )}
+                    <DocumentsPanel
+                      documents={looseDocuments}
+                      quoteGroups={quoteGroups}
+                      quoteActions={{ canCancel: canCancelQuotes, canDuplicate: canDuplicateQuotes }}
+                      contactId={contact.id}
+                      revalidate={path}
+                    />
+                  </div>
                 ),
               },
               {

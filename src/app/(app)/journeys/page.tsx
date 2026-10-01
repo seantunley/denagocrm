@@ -28,6 +28,8 @@ import {
   runJourneyNowAction,
 } from "@/app/actions/journeyRuns";
 import { PageHeader } from "@/components/page-header";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
+import ConfirmDelete from "@/components/ConfirmDelete";
 import { EmptyState, StatusPill } from "@/components/visual-system";
 
 export const dynamic = "force-dynamic";
@@ -170,9 +172,9 @@ export default async function JourneysPage() {
           <Activity className="size-4" />
           Activity &amp; traces
         </Link>
-        <form action={installJourneyTemplates}>
-          <button className="btn-secondary">Install recommended drafts</button>
-        </form>
+        <SaveForm action={installJourneyTemplates}>
+          <SaveButton className="btn-secondary" pendingLabel="Installing…">Install recommended drafts</SaveButton>
+        </SaveForm>
       </PageHeader>
 
       <details className="card" open={journeys.length === 0}>
@@ -218,11 +220,11 @@ export default async function JourneysPage() {
                   </p>
                 </div>
                 <div className="flex gap-2 flex-wrap">
-                  {draft && <form action={publishJourney.bind(null, journey.id)}><button className="btn-primary btn-sm">Publish v{draft.version}</button></form>}
+                  {draft && <SaveForm action={publishJourney.bind(null, journey.id)}><SaveButton className="btn-primary btn-sm" pendingLabel="Publishing…">Publish v{draft.version}</SaveButton></SaveForm>}
                   {journey.status === "active" ? (
-                    <form action={setJourneyStatus.bind(null, journey.id, "paused")}><button className="btn-secondary btn-sm">Pause</button></form>
+                    <SaveForm action={setJourneyStatus.bind(null, journey.id, "paused")}><SaveButton className="btn-secondary btn-sm" pendingLabel="Pausing…">Pause</SaveButton></SaveForm>
                   ) : journey.activeVersion ? (
-                    <form action={setJourneyStatus.bind(null, journey.id, "active")}><button className="btn-secondary btn-sm">Resume</button></form>
+                    <SaveForm action={setJourneyStatus.bind(null, journey.id, "active")}><SaveButton className="btn-secondary btn-sm" pendingLabel="Resuming…">Resume</SaveButton></SaveForm>
                   ) : null}
                   {/* "Enroll now" runs the cron's record sweep by hand, so it is
                       offered when ANY of the version's triggers is one the cron
@@ -238,7 +240,17 @@ export default async function JourneysPage() {
                   {journey.activeVersion && (
                     <JourneyTestRun journeyId={journey.id} journeyName={journey.name} leads={leadOptions} />
                   )}
-                  <form action={setJourneyStatus.bind(null, journey.id, "archived")}><button className="text-xs text-red-400 px-2 py-1">Archive</button></form>
+                  {/* Archiving stops every open run's next step, so it is confirmed. */}
+                  <ConfirmDelete
+                    action={setJourneyStatus.bind(null, journey.id, "archived")}
+                    title={`Archive journey “${journey.name}”?`}
+                    description="It stops enrolling and leaves the journey library. Its run history is kept."
+                    trigger="Archive"
+                    triggerClass="text-xs text-red-400 px-2 py-1"
+                    confirmLabel="Archive journey"
+                    pendingLabel="Archiving…"
+                    success="Journey archived"
+                  />
                 </div>
               </div>
 

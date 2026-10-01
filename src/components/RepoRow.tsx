@@ -15,7 +15,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { renameDocument, moveDocument, replaceDocument } from "@/app/actions/documents";
 import RecordContextMenu from "@/components/RecordContextMenu";
 
@@ -142,7 +143,7 @@ export function ManageDocumentDialog({
             <DialogTitle className="truncate">Manage — {doc.fileName}</DialogTitle>
           </DialogHeader>
 
-          <form action={renameDocument.bind(null, doc.id)} className="space-y-2">
+          <SaveForm action={renameDocument.bind(null, doc.id)} resetOnSuccess={false} className="space-y-2">
             <label className="block text-xs font-medium text-muted-foreground">Name & tag</label>
             <div className="flex gap-2">
               <input name="fileName" defaultValue={doc.fileName} className={input} required />
@@ -154,10 +155,10 @@ export function ManageDocumentDialog({
                 ))}
               </select>
             </div>
-            <Button size="sm" type="submit">Save</Button>
-          </form>
+            <SaveButton className={buttonVariants({ size: "sm" })}>Save</SaveButton>
+          </SaveForm>
 
-          <form action={moveDocument.bind(null, doc.id)} className="space-y-2 border-t border-border pt-3">
+          <SaveForm action={moveDocument.bind(null, doc.id)} className="space-y-2 border-t border-border pt-3">
             <label className="block text-xs font-medium text-muted-foreground">
               Move to a different record
             </label>
@@ -179,16 +180,16 @@ export function ManageDocumentDialog({
                 ))}
               </optgroup>
             </select>
-            <Button size="sm" variant="outline" type="submit">Move</Button>
-          </form>
+            <SaveButton className={buttonVariants({ size: "sm", variant: "outline" })} pendingLabel="Moving…">Move</SaveButton>
+          </SaveForm>
 
-          <form action={replaceDocument.bind(null, doc.id)} className="space-y-2 border-t border-border pt-3">
+          <SaveForm action={replaceDocument.bind(null, doc.id)} className="space-y-2 border-t border-border pt-3">
             <label className="block text-xs font-medium text-muted-foreground">
               Upload a new version (this one is kept in history)
             </label>
             <input type="file" name="file" required className="block w-full text-xs text-muted-foreground" />
-            <Button size="sm" variant="outline" type="submit">Replace</Button>
-          </form>
+            <SaveButton className={buttonVariants({ size: "sm", variant: "outline" })} pendingLabel="Uploading…">Replace</SaveButton>
+          </SaveForm>
         </ResponsiveDialogContent>
       </Dialog>
   );

@@ -20,6 +20,7 @@ import {
 // can bulk-edit non-inbox records.
 import { isSocialChannel } from "@/lib/socialChannels";
 import { withActingStaffScope } from "@/lib/actingScope";
+import { asActionResult, refuse } from "@/lib/actionResult";
 
 async function assertCommunicationAccess(
   user: PermissionUser,
@@ -34,7 +35,7 @@ async function assertCommunicationAccess(
     (communication.leadId
       ? await canAccessLead(user, communication.leadId)
       : false);
-  if (!allowed) throw new Error("Communication access denied");
+  if (!allowed) refuse("You don't have access to that timeline entry.");
 }
 
 export async function addCommunication(formData: FormData) {
@@ -120,12 +121,12 @@ export async function addCommunication(formData: FormData) {
 }
 
 export async function toggleCommunicationPin(id: string, path: string) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     // Write grade — pinning writes a TimelinePin row and an audit entry. Its
     // siblings in timelinePins.ts already demand contacts.edit / leads.edit to pin
     // on the SAME timeline; a view permission here was the odd one out.
     const user = await requireAnyPermission(...CUSTOMER_RECORD_WRITE_PERMISSIONS);
-    const communication = await prisma.communication.findUniqueOrThrow({
+    const communication = await prisma.communication.findUnique({
       where: { id },
       select: {
         contactId: true,
@@ -134,6 +135,7 @@ export async function toggleCommunicationPin(id: string, path: string) {
         body: true,
       },
     });
+    if (!communication) refuse("That timeline entry is no longer there — refresh the page.");
     await assertCommunicationAccess(user, communication);
 
     const result = await toggleTimelinePin("communication", id, user.id);
@@ -146,6 +148,7 @@ export async function toggleCommunicationPin(id: string, path: string) {
       user,
     });
     revalidatePath(path);
+    return { success: result.pinned ? "Pinned" : "Unpinned" };
   });
 }
 

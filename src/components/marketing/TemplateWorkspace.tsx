@@ -251,7 +251,9 @@ export default function TemplateWorkspace({ templates }: { templates: Template[]
       form.set("subject", draft.subject.trim());
       form.set("body", draft.body);
       form.set("plainTextBody", draft.plainTextBody);
-      await saveMarketingTemplate(form);
+      // A refusal comes back as a value — a thrown message is redacted in production.
+      const result = await saveMarketingTemplate(form);
+      if (result?.error) throw new Error(result.error);
       setMessage(draft.id ? "Draft version saved." : "Draft template created.");
       setEditorOpen(false);
       setDraft({ ...EMPTY_DRAFT });
@@ -406,7 +408,7 @@ export default function TemplateWorkspace({ templates }: { templates: Template[]
                       title={`Publish “${template.name}”?`}
                       description="Publishing makes this version immutable. Future changes should start from a new draft so campaign history remains auditable."
                       confirmLabel="Publish template"
-                      onConfirm={async () => { await publishMarketingTemplate(template.id); setMessage(`“${template.name}” published.`); router.refresh(); }}
+                      onConfirm={async () => { const result = await publishMarketingTemplate(template.id); if (result?.error) throw new Error(result.error); setMessage(`“${template.name}” published.`); router.refresh(); }}
                       trigger={<button type="button" className="btn-primary btn-sm"><Send className="size-3.5" /> Publish</button>}
                     />
                   )}
@@ -415,7 +417,7 @@ export default function TemplateWorkspace({ templates }: { templates: Template[]
                       title={`Archive “${template.name}”?`}
                       description="The template will remain in history but will no longer be available for new governed work."
                       confirmLabel="Archive template"
-                      onConfirm={async () => { await archiveMarketingTemplate(template.id); if (draft.id === template.id) closeEditor(); router.refresh(); }}
+                      onConfirm={async () => { const result = await archiveMarketingTemplate(template.id); if (result?.error) throw new Error(result.error); if (draft.id === template.id) closeEditor(); router.refresh(); }}
                       trigger={<button type="button" className="btn-danger btn-sm"><Archive className="size-3.5" /> Archive</button>}
                     />
                   )}
