@@ -38,9 +38,14 @@ export async function loadQueueHealth(): Promise<QueueSummary[]> {
   // a worker claimed and never finished — its lease long expired, or its claim
   // stamp long past. Counting only the first read "healthy" over a worker that
   // died holding the queue's work (review of #736).
+  //
+  // Lease-based queues (signing jobs, the outbox) are judged by the lease itself,
+  // with no extra grace: their workers treat a claim as abandoned the moment its
+  // lease runs out (or when it has none), so the screen does too.
+  const leaseExpired = new Date(now);
   const abandonedLease = [
-    { status: "running", leaseUntil: { lt: overdue } },
-    { status: "running", leaseUntil: null, updatedAt: { lt: overdue } },
+    { status: "running", leaseUntil: { lt: leaseExpired } },
+    { status: "running", leaseUntil: null },
   ];
 
   const [signing, outbox, campaigns, surveys, journeys] = await Promise.all([

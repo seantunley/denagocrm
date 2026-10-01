@@ -25,8 +25,13 @@ test("work a worker claimed and never finished counts as stuck, not healthy", ()
     const at = lib.indexOf(`prisma.${model}.count(`);
     return lib.slice(at, lib.indexOf("\n    ]),", at));
   };
-  assert.match(lib, /\{ status: "running", leaseUntil: \{ lt: overdue \} \}/);
-  assert.match(lib, /\{ status: "running", leaseUntil: null, updatedAt: \{ lt: overdue \} \}/);
+  // Lease-based queues use the lease's own expiry, as their workers do — not the
+  // 15-minute "overdue" grace (re-review of #736).
+  assert.match(lib, /const leaseExpired = new Date\(now\);/);
+  assert.match(lib, /\{ status: "running", leaseUntil: \{ lt: leaseExpired \} \}/);
+  assert.match(lib, /\{ status: "running", leaseUntil: null \}/);
+  const lease = lib.slice(lib.indexOf("const abandonedLease = ["), lib.indexOf("];", lib.indexOf("const abandonedLease = [")));
+  assert.doesNotMatch(lease, /overdue/);
   for (const model of ["signingJob", "botFlowOutbox"]) assert.match(count(model), /\.\.\.abandonedLease/, `${model}: expired leases`);
   for (const model of ["campaignRecipient", "surveyResponse"]) {
     assert.match(count(model), /\{ status: "sending", lastAttemptAt: \{ lt: overdue \} \}/, `${model}: stale sending claims`);
