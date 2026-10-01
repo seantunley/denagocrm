@@ -1010,6 +1010,19 @@ export async function parkedFailureHead(
   });
 }
 
+/**
+ * Tell staff a message did not reach a customer — whether the worker failed it
+ * or the provider reported it failed later. No number or handle in the push; the
+ * inbox's Bot handoffs tab lists it.
+ */
+async function notifyDeliveryFailed(row: { origin: string; channel: string }, failureCode: string, tenantId?: string): Promise<void> {
+  await sendPushToAll({
+    title: "A message didn't reach a customer",
+    body: `${row.origin === "staff" ? "A reply" : "The assistant's reply"} on ${row.channel} failed — ${deliveryFailureReason(failureCode) ?? "the channel rejected it"}. They're waiting.`.slice(0, 200),
+    url: "/inbox",
+  }, "bot_handoff", { tenantId }).catch(() => {});
+}
+
 async function failDelivery(row: OutboxRow, error: string): Promise<"retry" | "dead"> {
   // Classified on the provider's own text, STORED without client information:
   // a WhatsApp or Messenger error can quote the customer's number.
@@ -1026,13 +1039,8 @@ async function failDelivery(row: OutboxRow, error: string): Promise<"retry" | "d
     // number on WhatsApp (and a handle elsewhere). The id leads to the row.
     await logError("bot-outbox", new Error(lastError), `${row.channel}:${row.id}:${failureCode}`).catch(() => {});
     // A person has to step in — the customer is waiting at a prompt they never
-    // got, and the error log was the only place this showed (gap audit #31). No
-    // number or handle in the push; the inbox's Bot handoffs tab lists it.
-    await sendPushToAll({
-      title: "A message didn't reach a customer",
-      body: `${row.origin === "staff" ? "A reply" : "The assistant's reply"} on ${row.channel} failed — ${deliveryFailureReason(failureCode) ?? "the channel rejected it"}. They're waiting.`.slice(0, 200),
-      url: "/inbox",
-    }, "bot_handoff").catch(() => {});
+    // got, and the error log was the only place this showed (gap audit #31).
+    await notifyDeliveryFailed(row, failureCode);
     return "dead";
   }
   await prisma.botFlowOutbox.updateMany({
@@ -1190,11 +1198,24 @@ function failureLedger(channel: string): FailureLedger {
   const parkChannel = `${channel}:failed`;
   return {
     async markFailed(failure) {
+      const data = { status: "dead", failureCode: failure.failureCode, lastError: failure.detail.slice(0, 1000) };
+      // The FIRST report flips sent → dead, one row at a time and conditional on
+      // `sent`, so only that flip tells staff: a redelivered webhook, or two
+      // racing, finds the row already dead and stays quiet (re-review of #733 —
+      // an accepted message that later failed reached nobody but the timeline).
+      const accepted = await prisma.botFlowOutbox.findMany({
+        where: { tenantId, channel, providerMessageId: failure.providerMessageId, status: "sent" },
+        select: { id: true, origin: true },
+      });
+      for (const row of accepted) {
+        const flipped = await prisma.botFlowOutbox.updateMany({ where: { id: row.id, tenantId, status: "sent" }, data });
+        if (flipped.count === 1) await notifyDeliveryFailed({ origin: row.origin, channel }, failure.failureCode, tenantId);
+      }
+      // `dead` too: a redelivered webhook re-marks its own row instead of
+      // parking a record nothing will consume.
       const marked = await prisma.botFlowOutbox.updateMany({
-        // `dead` too: a redelivered webhook re-marks its own row instead of
-        // parking a record nothing will consume.
-        where: { tenantId, channel, providerMessageId: failure.providerMessageId, status: { in: ["sent", "dead"] } },
-        data: { status: "dead", failureCode: failure.failureCode, lastError: failure.detail.slice(0, 1000) },
+        where: { tenantId, channel, providerMessageId: failure.providerMessageId, status: "dead" },
+        data,
       });
       return marked.count;
     },
@@ -1317,28 +1338,41 @@ export async function requeueDeadConversation(channel: string, key: string): Pro
 }
 
 /**
- * Send a failed STAFF reply again (gap audit #31, re-review of #733).
- *
- * A staff reply puts the conversation in a person's hands (ownership "human"),
- * so its failure never parks the session — and must not: retrying a parked
- * session hands it back to the bot. This works on the message itself instead:
- * the failed reply (by id; one the worker failed, never one the provider took)
- * and exactly the backlog it blocked. The session's ownership is left alone.
- * Claimed by a conditional update on the row, so two clicks resend once.
+ * A failed message that did NOT park its conversation (gap audit #31, re-reviews
+ * of #733). Two kinds, and only these — a bot message the worker failed parks
+ * the session and is retried through requeueDeadConversation instead:
+ *  - a STAFF reply: it put the conversation in a person's hands ("human"), which
+ *    the kill never parks — and must not, since un-parking hands it to the bot;
+ *  - a message the provider ACCEPTED (it has the provider's id) and reported
+ *    failed later, asynchronously — by then the conversation had moved on.
+ * The inbox list and the retry both use this, so they always agree.
  */
-export async function requeueFailedStaffReply(
+export const UNPARKED_FAILURE = {
+  status: "dead",
+  NOT: { failureCode: "blocked_by_earlier_failure" },
+  OR: [{ origin: "staff" }, { providerMessageId: { not: null } }],
+} satisfies Prisma.BotFlowOutboxWhereInput;
+
+/**
+ * Send one unparked failed message again, plus exactly the backlog it blocked.
+ * Works on the message, never the session, so ownership is left alone. Claimed
+ * by a conditional update on the row, so two clicks resend once. A permanent
+ * failure is refused — resending cannot fix it.
+ */
+export async function requeueFailedMessage(
   outboxId: string,
 ): Promise<{ outcome: RequeueOutcome; channel?: string; key?: string }> {
   return withStaffConversationScope(async () => {
     const tenantId = outboxTenantId();
     return prisma.$transaction(async (tx) => {
       const head = await tx.botFlowOutbox.findFirst({
-        where: { id: outboxId, tenantId, origin: "staff", status: "dead", providerMessageId: null, NOT: { failureCode: "blocked_by_earlier_failure" } },
+        where: { id: outboxId, tenantId, ...UNPARKED_FAILURE },
         select: { id: true, channel: true, key: true, failureCode: true },
       });
       if (!head) return { outcome: "not_parked" as const };
       if (head.failureCode && PERMANENT_FAILURES.has(head.failureCode)) return { outcome: "permanent" as const, channel: head.channel, key: head.key };
-      const reset = { status: "pending", attempts: 0, leaseUntil: null, lastError: null, failureCode: null, availableAt: new Date() };
+      // A fresh send: the old provider id belonged to the attempt that failed.
+      const reset = { status: "pending", attempts: 0, leaseUntil: null, lastError: null, failureCode: null, providerMessageId: null, sentAt: null, availableAt: new Date() };
       const claimed = await tx.botFlowOutbox.updateMany({ where: { id: head.id, tenantId, status: "dead" }, data: reset });
       if (claimed.count !== 1) return { outcome: "not_parked" as const };
       await tx.botFlowOutbox.updateMany({

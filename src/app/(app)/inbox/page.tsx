@@ -19,7 +19,7 @@ import { EmptyState, SectionHeading, Surface } from "@/components/visual-system"
 import { WorkspaceHero } from "@/components/workspace-hero";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { listDeadBotConversations } from "@/lib/deadBotConversations";
-import { retryDeadBotConversation, retryFailedStaffReply } from "@/app/actions/botDeliveries";
+import { retryDeadBotConversation, retryFailedMessage } from "@/app/actions/botDeliveries";
 
 export const metadata = { title: "Social inbox — DenagoCRM" };
 
@@ -99,12 +99,12 @@ export default async function InboxPage() {
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium">
                     {dead.contact ? <a href={`/contacts/${dead.contact.id}`} className="text-primary hover:underline">{dead.contact.name}</a> : "Unknown customer"}
-                    <span className="ml-2 text-xs capitalize text-muted-foreground">{dead.channel}{dead.staffReplyId ? " · staff reply" : ""}</span>
+                    <span className="ml-2 text-xs capitalize text-muted-foreground">{dead.channel}{dead.origin === "staff" ? " · staff reply" : ""}</span>
                   </p>
                   <p className="text-xs text-muted-foreground">Failed {formatDateTime(dead.failedAt)} — {dead.reason}</p>
                 </div>
                 {canCollaborate && dead.retryable && (
-                  <SaveForm action={dead.staffReplyId ? retryFailedStaffReply.bind(null, dead.staffReplyId) : retryDeadBotConversation.bind(null, dead.channel, dead.key)}>
+                  <SaveForm action={dead.failedMessageId ? retryFailedMessage.bind(null, dead.failedMessageId) : retryDeadBotConversation.bind(null, dead.channel, dead.key)}>
                     <SaveButton className="btn-secondary btn-sm" pendingLabel="Sending…">Send again</SaveButton>
                   </SaveForm>
                 )}

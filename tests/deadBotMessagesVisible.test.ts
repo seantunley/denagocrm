@@ -10,13 +10,14 @@ const src = (rel: string) => readFileSync(new URL(`../${rel}`, import.meta.url),
 const outbox = src("src/lib/botOutbox.ts");
 
 test("a dead message tells staff, without the customer's number", () => {
-  const fail = outbox.slice(outbox.indexOf("async function failDelivery("), outbox.indexOf("async function failDelivery(") + 2600);
-  const push = fail.slice(fail.indexOf("await sendPushToAll("));
+  // One notifier for both the worker's failure and the provider's late report.
+  const push = outbox.slice(outbox.indexOf("async function notifyDeliveryFailed("), outbox.indexOf("async function failDelivery("));
   assert.match(push, /title: "A message didn't reach a customer",/);
   assert.match(push, /url: "\/inbox",/);
-  assert.doesNotMatch(push.slice(0, 400), /row\.key/, "the key is the phone number on WhatsApp");
+  assert.doesNotMatch(push, /\.key\b/, "the key is the phone number on WhatsApp");
   // Only after the kill committed — a lost race returns "retry" first.
-  assert.ok(fail.indexOf("killMessageAndBacklog(") < fail.indexOf("await sendPushToAll("));
+  const fail = outbox.slice(outbox.indexOf("async function failDelivery("), outbox.indexOf("async function failDelivery(") + 2600);
+  assert.ok(fail.indexOf("killMessageAndBacklog(") < fail.indexOf("await notifyDeliveryFailed("));
 });
 
 test("the parked sessions ARE the list, read through the guarded client", () => {
@@ -31,20 +32,29 @@ test("the parked sessions ARE the list, read through the guarded client", () => 
   assert.match(page, /count: handoffThreads\.length \+ deadConversations\.length/);
 });
 
-test("a failed STAFF reply is listed and retried without parking or un-parking anything", () => {
-  // Re-review of #733: a staff reply leaves the session "human", which the kill
-  // never parks — so failed staff replies never reached the list.
-  const lib = src("src/lib/deadBotConversations.ts");
-  const staff = lib.slice(lib.indexOf("const staffFailures = await"));
-  assert.match(staff, /origin: "staff",\s*status: "dead",\s*providerMessageId: null,\s*NOT: \{ failureCode: "blocked_by_earlier_failure" \}/);
-  // Leaves the list once anything later reached the customer.
-  assert.match(staff, /status: "sent", createdAt: \{ gt: failure\.createdAt \}/);
-  assert.match(staff, /if \(reachedSince\) continue;/);
-  assert.match(staff, /staffReplyId: failure\.id,/);
+test("failures that did not park the conversation are listed and retried by message", () => {
+  // Re-reviews of #733: (1) a staff reply leaves the session "human", which the
+  // kill never parks; (2) a message the provider ACCEPTED and reported failed
+  // later never went through the kill at all. Neither reached the list.
+  const shared = outbox.slice(outbox.indexOf("export const UNPARKED_FAILURE = {"), outbox.indexOf("} satisfies Prisma.BotFlowOutboxWhereInput;"));
+  assert.match(shared, /status: "dead",/);
+  assert.match(shared, /NOT: \{ failureCode: "blocked_by_earlier_failure" \},/);
+  assert.match(shared, /OR: \[\{ origin: "staff" \}, \{ providerMessageId: \{ not: null \} \}\],/);
 
-  const retry = outbox.slice(outbox.indexOf("export async function requeueFailedStaffReply("), outbox.indexOf("async function drainConversation("));
+  const lib = src("src/lib/deadBotConversations.ts");
+  const listed = lib.slice(lib.indexOf("const unparked = await"));
+  assert.match(listed, /where: \{ \.\.\.UNPARKED_FAILURE, updatedAt: \{ gte:/);
+  // Leaves the list once something reached the customer AFTER the failure was
+  // known — an async report can land after later messages already went.
+  assert.match(listed, /status: "sent", createdAt: \{ gt: failure\.updatedAt \}/);
+  assert.match(listed, /if \(reachedSince\) continue;/);
+  assert.match(listed, /failedMessageId: failure\.id,/);
+
+  const retry = outbox.slice(outbox.indexOf("export async function requeueFailedMessage("), outbox.indexOf("async function drainConversation("));
   assert.match(retry, /return withStaffConversationScope\(async \(\) => \{/);
-  assert.match(retry, /where: \{ id: outboxId, tenantId, origin: "staff", status: "dead", providerMessageId: null/);
+  // The same predicate as the list, so what is shown is what can be retried.
+  assert.match(retry, /where: \{ id: outboxId, tenantId, \.\.\.UNPARKED_FAILURE \}/);
+  assert.match(retry, /providerMessageId: null, sentAt: null/, "a fresh send, not the failed attempt's provider id");
   // Claimed on the row itself; a second click finds it no longer dead.
   assert.match(retry, /updateMany\(\{ where: \{ id: head\.id, tenantId, status: "dead" \}, data: reset \}\);\s*if \(claimed\.count !== 1\) return \{ outcome: "not_parked" as const \};/);
   assert.match(retry, /lastError: \{ startsWith: blockedByPrefix\(head\.id\) \}/);
@@ -53,7 +63,21 @@ test("a failed STAFF reply is listed and retried without parking or un-parking a
   assert.ok(retry.indexOf('return { outcome: "permanent"') < retry.indexOf("const claimed = await"));
 
   const page = src("src/app/(app)/inbox/page.tsx");
-  assert.match(page, /dead\.staffReplyId \? retryFailedStaffReply\.bind\(null, dead\.staffReplyId\) : retryDeadBotConversation\.bind\(null, dead\.channel, dead\.key\)/);
+  assert.match(page, /dead\.failedMessageId \? retryFailedMessage\.bind\(null, dead\.failedMessageId\) : retryDeadBotConversation\.bind\(null, dead\.channel, dead\.key\)/);
+});
+
+test("an async provider failure tells staff once, not on every redelivered webhook", () => {
+  const ledger = outbox.slice(outbox.indexOf("async markFailed(failure) {"), outbox.indexOf("async park(failure) {"));
+  // Only the sent → dead flip notifies, row by row and conditional on `sent`.
+  assert.match(ledger, /status: "sent" \},\s*select: \{ id: true, origin: true \}/);
+  assert.match(ledger, /updateMany\(\{ where: \{ id: row\.id, tenantId, status: "sent" \}, data \}\);\s*if \(flipped\.count === 1\) await notifyDeliveryFailed\(/);
+  // The re-mark of an already-dead row stays, and stays quiet.
+  const remark = ledger.slice(ledger.indexOf("const marked = await"));
+  assert.doesNotMatch(remark, /notifyDeliveryFailed/);
+  // Same push as the worker's failure, addressed to the conversation's tenant.
+  const notify = outbox.slice(outbox.indexOf("async function notifyDeliveryFailed("), outbox.indexOf("async function failDelivery("));
+  assert.match(notify, /"bot_handoff", \{ tenantId \}\)/);
+  assert.match(outbox.slice(outbox.indexOf("async function failDelivery(")), /await notifyDeliveryFailed\(row, failureCode\);/);
 });
 
 test("retry claims the parked conversation atomically and resends only this failure", () => {
@@ -92,7 +116,7 @@ test("retry claims the parked conversation atomically and resends only this fail
   assert.match(head, /status: "dead", providerMessageId: null, NOT: \{ failureCode: "blocked_by_earlier_failure" \}/);
   const action = src("src/app/actions/botDeliveries.ts");
   // Staff-reply retry: same guard, same refusals as the parked-conversation one.
-  const staffAction = action.slice(action.indexOf("export async function retryFailedStaffReply("));
+  const staffAction = action.slice(action.indexOf("export async function retryFailedMessage("));
   assert.match(staffAction, /const user = await requirePermission\("inbox\.reply"\);/);
   assert.match(staffAction, /if \(outcome === "permanent"\) refuse\(/);
   assert.match(staffAction, /if \(outcome === "not_parked" \|\| !channel \|\| !key\) refuse\(/);

@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { asActionResult, refuse } from "@/lib/actionResult";
-import { flushBotOutboxConversation, requeueDeadConversation, requeueFailedStaffReply } from "@/lib/botOutbox";
+import { flushBotOutboxConversation, requeueDeadConversation, requeueFailedMessage } from "@/lib/botOutbox";
 
 const BOT_CHANNELS = new Set(["whatsapp", "messenger", "instagram", "telegram"]);
 
@@ -28,18 +28,19 @@ export async function retryDeadBotConversation(channel: string, key: string) {
 }
 
 /**
- * Retry a staff reply that failed. The conversation stays with staff — see
- * requeueFailedStaffReply for why this is not the parked-conversation retry.
+ * Retry one failed message that did not park its conversation — a staff reply,
+ * or one the provider accepted and reported failed later. The conversation's
+ * owner is left alone; see UNPARKED_FAILURE / requeueFailedMessage.
  */
-export async function retryFailedStaffReply(outboxId: string) {
+export async function retryFailedMessage(outboxId: string) {
   return asActionResult(async () => {
     const user = await requirePermission("inbox.reply");
     if (!outboxId) refuse("That message can't be retried from here.");
-    const { outcome, channel, key } = await requeueFailedStaffReply(outboxId);
+    const { outcome, channel, key } = await requeueFailedMessage(outboxId);
     if (outcome === "permanent") refuse("Sending again won't help — reply to the customer another way, or wait for them to write.");
     if (outcome === "not_parked" || !channel || !key) refuse("This message was already sent again — refresh the inbox.");
     await flushBotOutboxConversation(channel, key).catch(() => {});
-    await logAudit({ action: "bot.delivery_retried", summary: `Retried a failed ${channel} staff reply (${outboxId})`, user });
+    await logAudit({ action: "bot.delivery_retried", summary: `Retried a failed ${channel} message (${outboxId})`, user });
     revalidatePath("/inbox");
     return { success: "Sending again" };
   });
