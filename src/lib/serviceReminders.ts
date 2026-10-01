@@ -7,7 +7,8 @@ import { sendSms } from "./sms";
 import { logAudit } from "./audit";
 import { computeDue } from "./serviceDue";
 import { formatDate } from "./format";
-import { companyContactPhrase, companyTeamSignoff, getCompanyProfile } from "./companyProfile";
+import { companyTeamSignoff, getCompanyProfile } from "./companyProfile";
+import { tenantEmailContent, tenantSmsContent } from "./signing/signingEmail";
 import { canContactPerson, describeBlockedReason, firstAllowedChannel } from "./communicationPolicy";
 
 async function recordSuppressedReminder(
@@ -192,20 +193,34 @@ export async function remindVehicleService(
   };
 
   let channel: "email" | "sms";
-  let subject = `Service reminder — your ${vehicle.model}`;
+  let subject: string;
   let body: string;
+  // With no reminder template picked, the workspace's own editable "Service
+  // reminder" email / SMS (Settings → Email templates) — not wording in code.
+  const tenantId = contact.tenantId;
+  const templateVars = {
+    first_name: first,
+    recipient_name: vars.name,
+    model: vehicle.model,
+    due_date: dueWhen,
+  };
 
   if (verdict.channel === "email") {
     channel = "email";
-    subject = template ? renderTemplate(template.subject, vars) : subject;
-    body = template
-      ? renderTemplate(template.body, vars)
-      : `Hi ${first},\n\nA quick reminder that your ${vehicle.model} is due for a service (${dueWhen}). Reply or call us${company.phone ? ` on ${company.phone}` : ""} and we'll book you in.\n\nWarm regards,\n${company.name}`;
-    const r = await sendEmail({ to: verdict.destination, subject, text: body });
+    let html: string | undefined;
+    if (template) {
+      subject = renderTemplate(template.subject, vars);
+      body = renderTemplate(template.body, vars);
+    } else {
+      const message = await tenantEmailContent("service_reminder", tenantId, templateVars);
+      ({ subject, text: body, html } = message);
+    }
+    const r = await sendEmail({ to: verdict.destination, subject, text: body, html });
     if (!r.ok) return { ok: false, error: r.error ?? "Email failed" };
   } else {
     channel = "sms";
-    body = `Hi ${first}, your ${vehicle.model} is due for a service (${dueWhen}). Call ${companyContactPhrase(company)} to book. Reply STOP to opt out.`;
+    subject = `Service reminder — your ${vehicle.model}`;
+    body = await tenantSmsContent("service_reminder_sms", tenantId, templateVars);
     const r = await sendSms(verdict.destination, body);
     if (!r.ok) return { ok: false, error: r.error ?? "SMS failed" };
   }
