@@ -7,6 +7,7 @@ import { withActingStaffScope } from "@/lib/actingScope";
 import { loadBillToFleets } from "@/lib/quoteBillTo";
 import { quoteCsv } from "@/lib/quoteList";
 import { quoteListFilter } from "@/lib/quoteListQuery";
+import { getRegionalSettings } from "@/lib/settings";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -46,8 +47,12 @@ export async function GET(request: NextRequest) {
         createdBy: { select: { name: true } },
       },
     });
-    const fleets = await loadBillToFleets(prisma, quotes.map((quote) => quote.fleetId));
-    const csv = quoteCsv(quotes, fleets);
+    const [fleets, regional] = await Promise.all([
+      loadBillToFleets(prisma, quotes.map((quote) => quote.fleetId)),
+      // The workspace's currency and calendar (Settings → Quotes).
+      getRegionalSettings(),
+    ]);
+    const csv = quoteCsv(quotes, fleets, regional);
 
     // Counts and the status filter only — the search text can be a customer's
     // name, which does not belong in a log line.

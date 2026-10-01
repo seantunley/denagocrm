@@ -33,6 +33,7 @@ import { listActingTenantStaff } from "@/lib/tenantActor";
 import { brandForTenant, teamSignoff } from "@/lib/tenantBrand";
 import { getActiveTenantId } from "@/lib/auth";
 import { isSmtpConfigured, renderTemplate, leadVars } from "@/lib/email";
+import { getRegionalSettings } from "@/lib/settings";
 import { contactName, formatDate, formatDateTime, formatZAR } from "@/lib/format";
 import { payableTotalCents } from "@/lib/pricing";
 import { getAccessibleQuoteIds } from "@/lib/permissions";
@@ -112,7 +113,7 @@ export default async function LeadDetailPage({
   const libraryDocs = libraryDocuments
     .filter((d) => d.versions[0])
     .map((d) => ({ id: d.versions[0].id, label: `${d.name} (v${d.versions[0].version})` }));
-  const vars = leadVars(lead, teamSignoff(await brandForTenant(await getActiveTenantId())));
+  const vars = leadVars(lead, teamSignoff(await brandForTenant(await getActiveTenantId())), await getRegionalSettings());
   const renderedTemplates = templates.map((t) => ({
     id: t.id,
     name: t.name,

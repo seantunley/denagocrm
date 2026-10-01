@@ -1,5 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { csvRow } from "./csv";
+import { DEFAULT_REGIONAL, type Regional } from "./format";
+import { calendarDateIn } from "./quoteExpiry";
 import { containsText, searchTerms } from "./listPaging";
 import { payableTotalCents } from "./pricing";
 import { quoteBillTo, type BillToFleet, type BillToQuote } from "./quoteBillTo";
@@ -108,21 +110,27 @@ export type QuoteExportRow = BillToQuote & Parameters<typeof payableTotalCents>[
   createdBy: { name: string } | null;
 };
 
-export const QUOTE_EXPORT_HEADERS = [
+export const quoteExportHeaders = (currency: string) => [
   "Quote", "Status", "Customer", "Attention", "Email", "Phone", "Model / lead",
-  "Total (ZAR)", "Valid until", "Created", "Created by",
-] as const;
-
-const day = (date: Date | null) => (date ? date.toISOString().slice(0, 10) : "");
+  `Total (${currency})`, "Valid until", "Created", "Created by",
+];
 
 /**
  * The export file. Every cell goes through csvRow, which neutralises
  * spreadsheet formulas (`=`, `+`, `-`, `@` …): customer names, emails and lead
  * titles are typed in by the public intake form as often as by staff.
+ *
+ * Amounts stay plain numbers (so SUM works) in the workspace currency, named in
+ * the header; dates are YYYY-MM-DD on the workspace calendar, not the UTC day.
  */
-export function quoteCsv(quotes: QuoteExportRow[], fleetsById: Map<string, BillToFleet>): string {
+export function quoteCsv(
+  quotes: QuoteExportRow[],
+  fleetsById: Map<string, BillToFleet>,
+  r: Pick<Regional, "currency" | "timeZone"> = DEFAULT_REGIONAL,
+): string {
+  const day = (date: Date | null) => (date ? calendarDateIn(date, r.timeZone) : "");
   return [
-    csvRow(QUOTE_EXPORT_HEADERS),
+    csvRow(quoteExportHeaders(r.currency)),
     ...quotes.map((quote) => {
       // The same addressee the list row and the PDF print, fleet-aware.
       const billTo = quoteBillTo(quote, fleetsById.get(quote.fleetId ?? "") ?? null);

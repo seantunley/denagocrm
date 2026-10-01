@@ -8,6 +8,9 @@ import { logAudit } from "@/lib/audit";
 import { listBuilderVersions } from "@/lib/docbuilder/store";
 import { STANDARD_TEMPLATE_KEYS, standardTemplateFor, type StandardDocKey } from "@/lib/doceditor/standardTemplates";
 import { withActingStaffScope } from "@/lib/actingScope";
+import { requiredRecordKind } from "@/lib/docbuilder/recordBinding";
+import { staleWordingWarnings } from "@/lib/doceditor/wordingCheck";
+import { quoteWordingSettings } from "@/lib/quoteFromLead";
 
 const BASE = "/document-studio";
 
@@ -54,7 +57,7 @@ export async function setDefaultBuilderTemplate(id: string) {
 }
 
 /** Snapshot the current draft as an immutable, restorable version and mark it published. */
-export async function publishBuilderVersion(id: string, label?: string): Promise<{ ok: boolean; version?: number }> {
+export async function publishBuilderVersion(id: string, label?: string): Promise<{ ok: boolean; version?: number; warnings?: string[] }> {
   return withActingStaffScope(async () => {
     const user = await requirePermission("docbuilder.manage");
     const tpl = await prisma.docBuilderTemplate.findUnique({ where: { id } });
@@ -76,7 +79,12 @@ export async function publishBuilderVersion(id: string, label?: string): Promise
     });
     revalidatePath(`/doc-editor/${id}`);
     revalidatePath(BASE);
-    return { ok: true, version };
+    // Non-blocking: published regardless, but typed-in wording that contradicts
+    // the quote settings is pointed out (the owner's text is never rewritten).
+    const warnings = requiredRecordKind(tpl.key) === "quote"
+      ? staleWordingWarnings(tpl.data, await quoteWordingSettings())
+      : [];
+    return { ok: true, version, warnings };
   });
 }
 

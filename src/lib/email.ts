@@ -2,7 +2,7 @@ import nodemailer from "nodemailer";
 import { PLATFORM_TEAM_SIGNOFF } from "./platformIdentity";
 import { resolveIntegrationBundleForTenant } from "./settings";
 import { currentTenantScope } from "./tenantScope";
-import { formatZAR } from "./format";
+import { DEFAULT_REGIONAL, formatZAR, type Regional } from "./format";
 import { recordOutboundFailure, recordOutboundMessage, type OutboundRecord } from "./outboundMessageLog";
 
 export type SmtpConfig = {
@@ -228,7 +228,7 @@ export function leadVars(lead: {
   valueCents?: number;
   product?: { name: string } | null;
   assignedTo?: { name: string } | null;
-}, teamName: string = DEFAULT_TEAM_SIGNOFF): Record<string, string> {
+}, teamName: string = DEFAULT_TEAM_SIGNOFF, money: Pick<Regional, "currency" | "locale"> = DEFAULT_REGIONAL): Record<string, string> {
   const firstName = lead.name.split(/\s+/)[0] ?? lead.name;
   return {
     name: lead.name,
@@ -237,7 +237,7 @@ export function leadVars(lead: {
     phone: lead.phone ?? "",
     model: lead.product?.name ?? "",
     color: lead.color ?? "",
-    value: lead.valueCents ? formatZAR(lead.valueCents) : "",
+    value: lead.valueCents ? formatZAR(lead.valueCents, money) : "",
     user_name: lead.assignedTo?.name ?? teamName,
   };
 }

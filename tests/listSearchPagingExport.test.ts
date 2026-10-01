@@ -236,6 +236,15 @@ test("export writes every filtered row and neutralises spreadsheet formulas", ()
   // Money stays a number, so SUM() works on it.
   assert.ok(lines[1].includes(`"10000.00"`), lines[1]);
   assert.ok(lines[1].startsWith(`"Q-1001","sent","Thandi Mokoena"`), lines[1]);
+  // Default workspace: rand, Johannesburg calendar.
+  assert.match(lines[0], /"Total \(ZAR\)"/);
+  // #702's workspace settings: the header names the currency, and dates are the
+  // workspace's calendar day — 23:30 UTC is already the next day in Auckland.
+  const late = { ...rows[0], createdAt: new Date("2026-03-01T23:30:00Z") };
+  const nz = quoteCsv([late], new Map(), { currency: "NZD", timeZone: "Pacific/Auckland" }).split("\r\n");
+  assert.match(nz[0], /"Total \(NZD\)"/);
+  assert.ok(nz[1].includes(`"2026-03-02"`), nz[1]);
+  assert.ok(quoteCsv([late], new Map()).split("\r\n")[1].includes(`"2026-03-02"`), "Johannesburg is UTC+2 too");
 });
 
 test("export route: same filter as the list, no paging, no cap", () => {

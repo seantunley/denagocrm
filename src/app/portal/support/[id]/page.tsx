@@ -7,6 +7,7 @@ import { getPortalContact } from "@/lib/portal";
 import { portalCanAccessCase } from "@/lib/portalAccess";
 import { PortalCaseMessageForm } from "@/components/PortalExpansionForms";
 import { formatDate, formatDateTime } from "@/lib/format";
+import { getRegionalSettings } from "@/lib/settings";
 import { PortalPageHeader, SectionHeading, StatusPill, Surface } from "@/components/visual-system";
 
 type CaseRow = {
@@ -38,6 +39,7 @@ export default async function PortalCasePage({ params }: { params: Promise<{ id:
   if (!contact) redirect("/portal/login");
   // Cached per request — the layout and every page share one resolution.
   const brand = await portalBrand();
+  const regional = await getRegionalSettings();
   const { id } = await params;
   if (!(await portalCanAccessCase(id))) notFound();
 
@@ -71,7 +73,7 @@ export default async function PortalCasePage({ params }: { params: Promise<{ id:
       <PortalPageHeader eyebrow={`Case C-${item.number.toString()}`} title={item.subject} description={`${item.type} · ${item.priority} priority`} action={<StatusPill tone={['closed', 'resolved'].includes(item.status) ? 'success' : item.status === 'cancelled' ? 'danger' : 'info'}>{item.status.replaceAll('_', ' ')}</StatusPill>} />
       <Surface className="p-5 sm:p-6">
         <p className="text-sm whitespace-pre-wrap">{item.description}</p>
-        <p className="text-xs text-slate-500 mt-3">Opened {formatDateTime(item.createdAt)}</p>
+        <p className="text-xs text-slate-500 mt-3">Opened {formatDateTime(item.createdAt, regional)}</p>
       </Surface>
       <section className="space-y-3">
         <SectionHeading title="Conversation" description={brand.branded ? `Messages between you and the ${brand.displayName} team.` : "Messages between you and the Denago team."} action={<MessageCircle className="size-5 text-muted-foreground" />} />
@@ -80,7 +82,7 @@ export default async function PortalCasePage({ params }: { params: Promise<{ id:
             <div key={message.id} className={`max-w-3xl rounded-2xl border p-4 shadow-sm ${message.direction === "staff" ? "border-white/[0.07] bg-white/[0.045]" : "ml-auto border-orange-500/20 bg-orange-500/[0.08]"}`}>
               <p className="text-xs font-semibold text-slate-400 mb-1">{message.direction === "staff" ? (brand.branded ? brand.displayName : "Denago Cape Town") : "You"}</p>
               <p className="text-sm whitespace-pre-wrap">{message.body}</p>
-              <p className="text-[11px] text-slate-500 mt-2">{formatDateTime(message.createdAt)}</p>
+              <p className="text-[11px] text-slate-500 mt-2">{formatDateTime(message.createdAt, regional)}</p>
             </div>
           ))}
         </div>
@@ -94,7 +96,7 @@ export default async function PortalCasePage({ params }: { params: Promise<{ id:
                 <span className="grid size-9 shrink-0 place-items-center rounded-xl border border-white/[0.07] bg-white/[0.035] text-slate-400"><Paperclip className="size-4" /></span>
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium">{upload.fileName}</p>
-                  <p className="text-xs text-slate-400">{(upload.sizeBytes / 1024).toFixed(0)} KB · {formatDate(upload.createdAt)}</p>
+                  <p className="text-xs text-slate-400">{(upload.sizeBytes / 1024).toFixed(0)} KB · {formatDate(upload.createdAt, regional)}</p>
                 </div>
                 <Download className="size-4 shrink-0 text-slate-500 transition-colors group-hover:text-orange-400" />
               </a>

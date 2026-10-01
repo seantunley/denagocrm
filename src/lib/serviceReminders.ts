@@ -1,7 +1,7 @@
 import { prisma } from "./db";
 import { customerRecordTenantId } from "./customerRecordTenant";
 import { resolveTenantActor } from "./tenantActor";
-import { getSetting } from "./settings";
+import { getRegionalSettings, getSetting } from "./settings";
 import { sendEmail, renderTemplate } from "./email";
 import { sendSms } from "./sms";
 import { logAudit } from "./audit";
@@ -56,6 +56,7 @@ export async function runServiceReminders(): Promise<number> {
     },
   });
   const firstUser = await resolveTenantActor();
+  const regional = await getRegionalSettings();
 
   let sent = 0;
   for (const vehicle of vehicles) {
@@ -89,7 +90,7 @@ export async function runServiceReminders(): Promise<number> {
       first_name: vehicle.contact.firstName,
       model: vehicle.model,
       color: vehicle.color ?? "",
-      due_date: due.nextDueDate ? formatDate(due.nextDueDate) : "soon",
+      due_date: due.nextDueDate ? formatDate(due.nextDueDate, regional) : "soon",
       due_km: due.nextDueKm != null ? `${due.nextDueKm.toLocaleString()} km` : "",
       current_km: due.currentKm != null ? `${due.currentKm.toLocaleString()} km` : "",
       user_name: "The Denago Cape Town team",
@@ -166,7 +167,7 @@ export async function remindVehicleService(
   const due = computeDue(vehicle);
   const firstUser = await resolveTenantActor();
   const first = contact.firstName;
-  const dueWhen = due.nextDueDate ? formatDate(due.nextDueDate) : "soon";
+  const dueWhen = due.nextDueDate ? formatDate(due.nextDueDate, await getRegionalSettings()) : "soon";
 
   const templateId = await getSetting("SERVICE_REMINDER_TEMPLATE_ID");
   const template = templateId

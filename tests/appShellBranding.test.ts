@@ -96,7 +96,6 @@ const STILL_HARDCODED: Record<string, string> = {
   // BlockView (the doc-editor canvas) is OFF this list: its banner shows the
   // workspace logo resolved by the page, the same one the printed banner embeds.
   "src/components/print/PrintDocShell.tsx": "phase 5 — print",
-  "src/components/print/QuotePrintDoc.tsx": "phase 5 — print",
   "src/lib/customDocs.ts": "phase 5 — print",
   // signature.ts is OFF this list now: its Denago name, tagline, address,
   // website, logo and hardcoded landline all moved to the tenant's own Company

@@ -10,7 +10,8 @@ import { markPortalNotificationRead, portalLogout } from "@/app/actions/portal";
 import ServiceRequestForm from "@/components/ServiceRequestForm";
 import { computeDue, dueLabels, dueColors } from "@/lib/serviceDue";
 import { computeWarranty, warrantyLabels, warrantyColors } from "@/lib/warranty";
-import { contactName, formatDate, formatDateTime, formatZAR } from "@/lib/format";
+import { contactName, formatDate, formatDateTime, formatZAR, type Regional } from "@/lib/format";
+import { getRegionalSettings } from "@/lib/settings";
 import { payableTotalCents } from "@/lib/pricing";
 import { Button } from "@/components/ui/button";
 import { Eyebrow, MetricCard } from "@/components/visual-system";
@@ -33,9 +34,9 @@ function deliveryLabel(quote: {
   deliveryScheduledFor: Date | null;
   signedAt: Date | null;
   status: string;
-}) {
-  if (quote.deliveredAt) return `Delivered ${formatDate(quote.deliveredAt)}`;
-  if (quote.deliveryScheduledFor) return `Delivery scheduled ${formatDate(quote.deliveryScheduledFor)}`;
+}, regional: Regional) {
+  if (quote.deliveredAt) return `Delivered ${formatDate(quote.deliveredAt, regional)}`;
+  if (quote.deliveryScheduledFor) return `Delivery scheduled ${formatDate(quote.deliveryScheduledFor, regional)}`;
   if (quote.signedAt) return "Accepted — preparing fulfilment";
   return quote.status;
 }
@@ -49,6 +50,7 @@ export default async function PortalHome() {
   // When the automotive pack is switched off the portal must drop all
   // vehicle/service/warranty UI too, even while the portal itself stays on.
   const automotiveOn = await isModuleEnabled("automotive");
+  const regional = await getRegionalSettings();
 
   const [accessibleContacts, fleets, vehicles, quotes, notifications, caseCounts] = await Promise.all([
     prisma.contact.findMany({
@@ -206,7 +208,7 @@ export default async function PortalHome() {
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium">{notification.title}</p>
                   <p className="text-sm text-slate-400">{notification.body}</p>
-                  <p className="text-xs text-slate-500 mt-1">{formatDateTime(notification.createdAt)}</p>
+                  <p className="text-xs text-slate-500 mt-1">{formatDateTime(notification.createdAt, regional)}</p>
                 </div>
                 <div className="flex gap-2 items-start">
                   {notification.href && <Link href={notification.href} className="btn-secondary btn-sm">Open</Link>}
@@ -235,8 +237,8 @@ export default async function PortalHome() {
                   <p className="text-xs text-slate-500 mt-1">Registered to {contactName(vehicle.contact)}</p>
                 </div>
                 <div className="flex gap-2 flex-wrap">
-                  <span className={`badge ${dueColors[due.status]}`}>Service: {dueLabels[due.status]}{due.nextDueDate ? ` · ${formatDate(due.nextDueDate)}` : ""}</span>
-                  <span className={`badge ${warrantyColors[warranty.status]}`}>{warrantyLabels[warranty.status]}{warranty.expiryDate ? ` · ${formatDate(warranty.expiryDate)}` : ""}</span>
+                  <span className={`badge ${dueColors[due.status]}`}>Service: {dueLabels[due.status]}{due.nextDueDate ? ` · ${formatDate(due.nextDueDate, regional)}` : ""}</span>
+                  <span className={`badge ${warrantyColors[warranty.status]}`}>{warrantyLabels[warranty.status]}{warranty.expiryDate ? ` · ${formatDate(warranty.expiryDate, regional)}` : ""}</span>
                 </div>
               </div>
               {vehicle.serviceRecords.length > 0 && (
@@ -244,7 +246,7 @@ export default async function PortalHome() {
                   <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Recent service history</p>
                   <ul className="space-y-1.5">
                     {vehicle.serviceRecords.slice(0, 5).map((record) => (
-                      <li key={record.id} className="text-sm flex justify-between gap-3"><span>{record.summary}</span><span className="text-slate-400 shrink-0">{formatDate(record.serviceDate)}</span></li>
+                      <li key={record.id} className="text-sm flex justify-between gap-3"><span>{record.summary}</span><span className="text-slate-400 shrink-0">{formatDate(record.serviceDate, regional)}</span></li>
                     ))}
                   </ul>
                 </div>
@@ -275,7 +277,7 @@ export default async function PortalHome() {
               const signToken = signTokenByQuote.get(quote.id);
               return (
                 <div key={quote.id} className="px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
-                  <div><p className="text-sm font-medium">Quote Q-{quote.number}</p><p className="text-xs text-slate-400">{formatZAR(Math.round(total))} · {deliveryLabel(quote)}</p></div>
+                  <div><p className="text-sm font-medium">Quote Q-{quote.number}</p><p className="text-xs text-slate-400">{formatZAR(Math.round(total), regional)} · {deliveryLabel(quote, regional)}</p></div>
                   {signToken && <a href={`/signing/${signToken}`} className="btn-primary btn-sm">Review & sign</a>}
                 </div>
               );

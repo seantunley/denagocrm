@@ -51,6 +51,9 @@ const stubs: Record<string, unknown> = {
   "@/lib/tenantScope": { currentTenantScope: () => (acting ? { tenantId: acting, system: false } : null) },
   "@/lib/tenantBrand": { brandForTenant: async () => ({}), brandLogoAsset: () => null, brandLogoUrl: () => null },
   "@/lib/tenantOrigin": { tenantOrigin: async () => "" },
+  "@/lib/settings": {
+    getRegionalSettings: async () => ({ vatRatePct: 15, currency: "ZAR", locale: "en-ZA", timeZone: "Africa/Johannesburg" }),
+  },
 };
 type Loader = (request: string, parent: { filename?: string } | undefined, isMain: boolean) => unknown;
 const loader = Module as unknown as { _load: Loader };

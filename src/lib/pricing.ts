@@ -46,6 +46,15 @@ export function quoteTotalCents(lines: PricedLine[]): number {
 }
 
 // ── CPQ pricing engine ────────────────────────────────────────────────────────
+
+/**
+ * The rate for a line that carries NO rate of its own. Every stored QuoteItem
+ * and QuoteFee has one (NOT NULL, stamped at creation from the workspace's VAT
+ * setting), so this only ever prices a line from before per-line VAT, which
+ * was 15%. Deliberately NOT the current setting: an issued document must keep
+ * the rate it was issued at, whatever the workspace's VAT becomes later.
+ */
+export const LEGACY_VAT_RATE_PCT = 15;
 export type FeeLine = { amountCents: number; taxRatePct?: number | null };
 
 export type PricingOpts = {
@@ -77,6 +86,16 @@ export function splitTax(amountCents: number, ratePct: number | null | undefined
   return { net: amountCents, tax, total: amountCents + tax };
 }
 
+/**
+ * The VAT rate a quote was ISSUED at, for its wording ("VAT (15%)", "including
+ * 15% VAT") — read from its own lines, never from the current setting, so the
+ * words on an old quote keep agreeing with its figures. "15% / 0%" when mixed.
+ */
+export function vatRateLabel(lines: PricedLine[], fees: FeeLine[] = []): string {
+  const rates = [...lines.filter(isLineIncluded), ...fees].map((line) => line.taxRatePct ?? LEGACY_VAT_RATE_PCT);
+  return [...new Set(rates)].map((rate) => `${rate}%`).join(" / ");
+}
+
 /** Full financial breakdown for a quote: tax, fees, cost/margin and deposit. */
 export function quotePricing(lines: PricedLine[], fees: FeeLine[] = [], opts: PricingOpts = {}): QuotePricing {
   const inclusive = opts.taxInclusive !== false;
@@ -87,7 +106,7 @@ export function quotePricing(lines: PricedLine[], fees: FeeLine[] = [], opts: Pr
 
   for (const line of lines) {
     if (!isLineIncluded(line)) continue;
-    const s = splitTax(lineNetCents(line), line.taxRatePct ?? 15, inclusive);
+    const s = splitTax(lineNetCents(line), line.taxRatePct ?? LEGACY_VAT_RATE_PCT, inclusive);
     net += s.net;
     tax += s.tax;
     lineNet += s.net;
@@ -96,7 +115,7 @@ export function quotePricing(lines: PricedLine[], fees: FeeLine[] = [], opts: Pr
 
   let feesTotal = 0;
   for (const fee of fees) {
-    const s = splitTax(fee.amountCents, fee.taxRatePct ?? 15, inclusive);
+    const s = splitTax(fee.amountCents, fee.taxRatePct ?? LEGACY_VAT_RATE_PCT, inclusive);
     net += s.net;
     tax += s.tax;
     feesTotal += s.total;

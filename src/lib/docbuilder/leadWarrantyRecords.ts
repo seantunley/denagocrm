@@ -1,6 +1,7 @@
 import "server-only";
 import { prisma } from "@/lib/db";
 import { getCompanyProfile, companyTokens } from "@/lib/companyProfile";
+import { getRegionalSettings } from "@/lib/settings";
 import { readTemplateDocument } from "@/lib/doceditor/legacy";
 import type { DocumentModel } from "@/lib/doceditor/model";
 import { renderDocumentHtml } from "@/lib/doceditor/serialize";
@@ -23,7 +24,7 @@ export async function loadLeadForDoc(leadId: string): Promise<BoundRecord | null
     include: { product: true, contact: true },
   });
   if (!lead) return null;
-  return { ctx: buildLeadContext(lead), label: lead.name, contactId: lead.contactId };
+  return { ctx: buildLeadContext(lead, new Date(), await getRegionalSettings()), label: lead.name, contactId: lead.contactId };
 }
 
 export async function loadWarrantyClaimForDoc(claimId: string): Promise<BoundRecord | null> {
@@ -37,7 +38,7 @@ export async function loadWarrantyClaimForDoc(claimId: string): Promise<BoundRec
   const parts = claim.jobCardId
     ? await prisma.jobCardItem.findMany({ where: { jobCardId: claim.jobCardId } })
     : [];
-  const ctx = buildWarrantyContext(claim, parts);
+  const ctx = buildWarrantyContext(claim, parts, new Date(), await getRegionalSettings());
   return { ctx, label: ctx.tokens["claim.number"], contactId: claim.vehicle.contactId };
 }
 
@@ -62,7 +63,7 @@ export async function renderRecordDocumentHtml(
   const company = companyTokens(await getCompanyProfile());
   return renderDocumentHtml(
     doc,
-    { ...bound.ctx, tokens: { ...company, ...bound.ctx.tokens }, bound: true },
+    { ...bound.ctx, tokens: { ...company, ...bound.ctx.tokens }, bound: true, regional: await getRegionalSettings() },
     logoDataUri(),
     // Nothing is being signed on paper here — the dashed field boxes are an
     // e-signing affordance, as on the unsigned printed quote.
