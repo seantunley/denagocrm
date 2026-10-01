@@ -324,7 +324,7 @@ export default function QuickCreateDialog() {
                     required
                     placeholder="e.g. Annual leave — out of office and not available for appointments"
                   />
-                  <p className="mt-1.5 text-xs text-muted-foreground">The calendar shows this note with the staff member's name.</p>
+                  <p className="mt-1.5 text-xs text-muted-foreground">The calendar shows this note with the staff member&apos;s name.</p>
                 </div>
                 <div className="flex justify-end border-t border-border pt-4">
                   <button className="btn-primary">Block this time</button>
