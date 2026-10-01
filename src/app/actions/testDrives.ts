@@ -18,6 +18,11 @@ import { ActionRefusal } from "@/lib/actionFailure";
 import { assignmentRefusalMessage } from "@/lib/assignableUser";
 import { withActingStaffScope } from "@/lib/actingScope";
 import {
+  availabilityConflictMessage,
+  findStaffAvailabilityConflict,
+  lockStaffSchedules,
+} from "@/lib/staffAvailability";
+import {
   assertTestDriveCustomerAccess,
   requireTestDriveManageAccess,
 } from "@/lib/testDriveAccess";
@@ -197,7 +202,19 @@ export async function createTestDriveBooking(formData: FormData) {
     // connection for the duration of an unrelated await.
     const bookingTenantId = await actingTenantId();
 
-    const booking = await prisma.$transaction(async (tx) => {
+    const bookingResult = await prisma.$transaction(async (tx) => {
+      const staffIds = Array.from(new Set([salespersonId, accompanyingSalespersonId].filter((id): id is string => Boolean(id))));
+      await lockStaffSchedules(tx, bookingTenantId, staffIds);
+      for (const staffId of staffIds) {
+        const conflict = await findStaffAvailabilityConflict({
+          userId: staffId,
+          start: scheduledStart,
+          end: expectedReturnAt,
+          db: tx,
+        });
+        if (conflict) return { conflict } as const;
+      }
+
       const created = await tx.testDriveBooking.create({
         data: {
           // Stamped from the SESSION, not left to the db.ts guard. The guard's
@@ -234,6 +251,7 @@ export async function createTestDriveBooking(formData: FormData) {
           note: "Managed from the dedicated Test drives module.",
           location: branch,
           dueDate: scheduledStart,
+          endDate: expectedReturnAt,
           status: "planned",
           leadId,
           contactId,
@@ -242,8 +260,12 @@ export async function createTestDriveBooking(formData: FormData) {
           tenantId: activityTenantId,
         },
       });
-      return created;
+      return { created } as const;
     });
+    if ("conflict" in bookingResult) {
+      return { error: availabilityConflictMessage(bookingResult.conflict) };
+    }
+    const booking = bookingResult.created;
 
     await auditBooking({
       action: "test_drive.created",
@@ -281,7 +303,25 @@ export async function updateTestDriveBooking(id: string, formData: FormData) {
         : Promise.resolve(null),
     ]);
 
-    const updated = await prisma.$transaction(async (tx) => {
+    const bookingTenantId = before.tenantId ?? await actingTenantId();
+    const updatedResult = await prisma.$transaction(async (tx) => {
+      const staffIds = Array.from(new Set([
+        before.salespersonId,
+        before.accompanyingSalespersonId,
+        salespersonId,
+        accompanyingSalespersonId,
+      ].filter((staffId): staffId is string => Boolean(staffId))));
+      await lockStaffSchedules(tx, bookingTenantId, staffIds);
+      for (const staffId of Array.from(new Set([salespersonId, accompanyingSalespersonId].filter((value): value is string => Boolean(value))))) {
+        const conflict = await findStaffAvailabilityConflict({
+          userId: staffId,
+          start: scheduledStart,
+          end: expectedReturnAt,
+          db: tx,
+        });
+        if (conflict) return { conflict } as const;
+      }
+
       const result = await tx.testDriveBooking.update({
         where: { id },
         data: { branch, demoVehicleId, salespersonId, accompanyingSalespersonId, scheduledStart, expectedReturnAt },
@@ -289,11 +329,15 @@ export async function updateTestDriveBooking(id: string, formData: FormData) {
       if (before.activityId) {
         await tx.activity.update({
           where: { id: before.activityId },
-          data: { location: branch, dueDate: scheduledStart, assignedToId: salespersonId },
+          data: { location: branch, dueDate: scheduledStart, endDate: expectedReturnAt, assignedToId: salespersonId },
         });
       }
-      return result;
+      return { result } as const;
     });
+    if ("conflict" in updatedResult) {
+      return { error: availabilityConflictMessage(updatedResult.conflict) };
+    }
+    const updated = updatedResult.result;
     await auditBooking({ action: "test_drive.updated", summary: `Updated ${updated.reference}`, user, booking: updated, before, after: updated });
     revalidatePath("/test-drives");
     revalidatePath(`/test-drives/${id}`);
