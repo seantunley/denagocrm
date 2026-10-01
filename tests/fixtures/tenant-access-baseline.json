@@ -46,8 +46,6 @@
   "src/app/actions/merge.ts::unknown-client::PortalAccessGrant": 5,
   "src/app/actions/pipelines.ts::bypass-raw::Lead": 1,
   "src/app/actions/portal.ts::bypass-raw::PortalNotification": 1,
-  "src/app/actions/portal.ts::bypass-write::ConsentRecord": 1,
-  "src/app/actions/portal.ts::bypass-write::Contact": 1,
   "src/app/actions/portalAdmin.ts::bypass-raw::PortalAccessGrant": 1,
   "src/app/actions/portalAdmin.ts::bypass-raw::PortalNotification": 1,
   "src/app/actions/portalAdmin.ts::bypass-raw::PortalProfileChangeRequest": 3,

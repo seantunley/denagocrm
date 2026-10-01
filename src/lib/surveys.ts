@@ -8,6 +8,7 @@ import { logAudit } from "./audit";
 import { resolveTenantActor } from "./tenantActor";
 import { defaultIntro, type SurveyType } from "./surveyTypes";
 import { DEFAULT_BRAND, brandForTenant } from "./tenantBrand";
+import { tenantEmailContent, tenantSmsContent } from "./signing/signingEmail";
 import { tenantOrigin } from "./tenantOrigin";
 import { createSurveyDistribution } from "./surveyDistributionQueue";
 import { submitFrozenSurveyResponse, triggerGovernedSurvey } from "./governedSurveyRuntime";
@@ -108,15 +109,22 @@ async function deliverInvite(
   const intro = survey.intro || defaultIntro(survey.type as SurveyType);
   let channel: "email" | "sms" | null = null;
 
+  // The workspace's own editable survey invitation (Settings → Email templates);
+  // the introduction itself is still set per survey.
+  const vars = {
+    first_name: first,
+    recipient_name: recipient.name ?? "",
+    survey_title: survey.title,
+    survey_intro: intro,
+    survey_subject: subjectFor(survey.type as SurveyType, survey.title, brand.displayName),
+    survey_link: link,
+  };
   if (recipient.email) {
-    const result = await sendEmail({
-      to: recipient.email,
-      subject: subjectFor(survey.type as SurveyType, survey.title, brand.displayName),
-      text: `Hi ${first},\n\n${intro}\n\nTap here to answer (it takes under a minute):\n${link}\n\nThank you,\n${brand.displayName}`,
-    });
+    const message = await tenantEmailContent("survey_invite", survey.tenantId, vars);
+    const result = await sendEmail({ to: recipient.email, subject: message.subject, text: message.text, html: message.html });
     if (result.ok) channel = "email";
   } else if (recipient.phone) {
-    const result = await sendSms(recipient.phone, `Hi ${first}, ${intro} ${link}`);
+    const result = await sendSms(recipient.phone, await tenantSmsContent("survey_invite_sms", survey.tenantId, vars));
     if (result.ok) channel = "sms";
   }
   if (!channel) return null;

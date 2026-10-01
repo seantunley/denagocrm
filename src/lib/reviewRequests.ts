@@ -5,7 +5,7 @@ import { resolveTenantCredential } from "./settings";
 import { currentTenantScope } from "./tenantScope";
 import { sendEmail } from "./email";
 import { logAudit } from "./audit";
-import { getCompanyProfile } from "./companyProfile";
+import { tenantEmailContent } from "./signing/signingEmail";
 import { canContactPerson, describeBlockedReason } from "./communicationPolicy";
 
 const REVIEW_MARKER = "Google review request";
@@ -54,23 +54,19 @@ export async function sendReviewRequest(
   if (recent) return false;
 
   const reviewLink = `https://search.google.com/local/writereview?placeid=${encodeURIComponent(placeId)}`;
-  const firstName = contact.firstName;
-  // The workspace's own Company Profile, not Denago's name and landline.
-  const company = await getCompanyProfile(await customerRecordTenantId({ contactId }));
-  const callUs = company.phone ? ` on ${company.phone}` : "";
-  const text =
-    occasion === "delivery"
-      ? `Hi ${firstName},\n\nCongratulations on your new ${refText} — welcome to the ${company.name} family! 🎉\n\nIf you're enjoying it, it would mean the world to us if you shared your experience in a quick Google review (it takes under a minute):\n\n${reviewLink}\n\nAnything you need, we're a call away${callUs}.\n\nWarm regards,\n${company.name}`
-      : `Hi ${firstName},\n\nThanks for trusting us with ${refText} — we hope everything is running perfectly.\n\nIf you were happy with the service, a quick Google review would mean a lot to our small team (it takes under a minute):\n\n${reviewLink}\n\nAnything not 100%? Rather call us first${callUs} and we'll make it right.\n\nWarm regards,\n${company.name}`;
-
-  const res = await sendEmail({
-    to: contact.email,
-    subject:
-      occasion === "delivery"
-        ? `Enjoying your new ${refText}? We'd love a quick review ⭐`
-        : "How was your service? A quick review would mean a lot ⭐",
-    text,
-  });
+  // The workspace's own editable review-request email (Settings → Email
+  // templates), in its own brand — not Denago's name and landline.
+  const message = await tenantEmailContent(
+    occasion === "delivery" ? "review_delivery" : "review_service",
+    await customerRecordTenantId({ contactId }),
+    {
+      first_name: contact.firstName,
+      recipient_name: [contact.firstName, contact.lastName].filter(Boolean).join(" "),
+      item: refText,
+      review_link: reviewLink,
+    },
+  );
+  const res = await sendEmail({ to: contact.email, subject: message.subject, text: message.text, html: message.html });
   if (!res.ok) return false;
 
   const firstUser = await resolveTenantActor();
