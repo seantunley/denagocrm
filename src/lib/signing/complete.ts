@@ -12,7 +12,7 @@ import { logError } from "@/lib/errorLog";
 import { resolveTenantActor } from "@/lib/tenantActor";
 import { bindCtx, logoDataUri } from "./render";
 import { embedDocImages } from "@/lib/doceditor/renderGlobals";
-import { logSignEvent } from "./events";
+import { buildSignEvent, logSignEvent } from "./events";
 import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "./status";
 import { requestTrustedTimestamp } from "./timestamp";
 import { runPostCompletion } from "./postComplete";
@@ -158,12 +158,23 @@ export const COMPLETION_BLOCKED_EVENT = "completion_blocked";
  * of which has a staff session to address it from.
  */
 async function reportCompletionBlocked(req: { id: string; title: string; quoteId: string | null; jobCardId: string | null; tenantId: string | null }): Promise<void> {
-  const already = await prisma.signatureEvent.findFirst({
-    where: { requestId: req.id, type: COMPLETION_BLOCKED_EVENT },
-    select: { id: true },
+  // "Once" is decided under the request's row lock: the signer's link and the
+  // recovery sweep can both arrive here, and a bare check-then-create let both
+  // see "not yet", both write the event and both notify. Only the caller whose
+  // transaction wrote the event sends the push.
+  const claimed = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT id FROM "SignatureRequest" WHERE id = ${req.id} AND "tenantId" IS NOT DISTINCT FROM ${req.tenantId}::text FOR UPDATE`;
+    const already = await tx.signatureEvent.findFirst({
+      where: { requestId: req.id, type: COMPLETION_BLOCKED_EVENT },
+      select: { id: true },
+    });
+    if (already) return false;
+    await tx.signatureEvent.create({
+      data: buildSignEvent(req.id, { type: COMPLETION_BLOCKED_EVENT, actor: "system", metadata: { quoteId: req.quoteId, jobCardId: req.jobCardId } }),
+    });
+    return true;
   });
-  if (already) return;
-  await logSignEvent(req.id, { type: COMPLETION_BLOCKED_EVENT, actor: "system", metadata: { quoteId: req.quoteId, jobCardId: req.jobCardId } });
+  if (!claimed) return;
   const what = req.quoteId ? "quote" : req.jobCardId ? "job card" : "record";
   await sendPushToAll(
     {

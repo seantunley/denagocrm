@@ -12,9 +12,20 @@ const complete = src("src/lib/signing/complete.ts");
 
 test("a blocked completion is reported once — not swallowed", () => {
   assert.match(complete, /if \(err instanceof SourceCompletionLost\) \{\s*(\/\/[^\n]*\n\s*)*await reportCompletionBlocked\(req\)\.catch\(\(\) => \{\}\);\s*return;/);
-  const report = complete.slice(complete.indexOf("async function reportCompletionBlocked("));
-  assert.match(report, /where: \{ requestId: req\.id, type: COMPLETION_BLOCKED_EVENT \}/);
-  assert.match(report, /if \(already\) return;/);
+  const report = complete.slice(
+    complete.indexOf("async function reportCompletionBlocked("),
+    complete.indexOf("export async function completeSignatureRequest("),
+  );
+  // "Once" is atomic: lock the request row, check and write the event in that
+  // transaction, and notify only if this caller wrote it. A bare findFirst →
+  // create let two concurrent attempts both notify (review of #734).
+  const claim = report.slice(report.indexOf("await prisma.$transaction(async (tx) => {"), report.indexOf("if (!claimed) return;"));
+  assert.match(claim, /SELECT id FROM "SignatureRequest" WHERE id = \$\{req\.id\} AND "tenantId" IS NOT DISTINCT FROM \$\{req\.tenantId\}::text FOR UPDATE/);
+  assert.match(claim, /tx\.signatureEvent\.findFirst\(\{\s*where: \{ requestId: req\.id, type: COMPLETION_BLOCKED_EVENT \}/);
+  assert.match(claim, /if \(already\) return false;/);
+  assert.match(claim, /tx\.signatureEvent\.create\(/);
+  assert.doesNotMatch(report, /logSignEvent\(|prisma\.signatureEvent\./, "the event must be written inside the locked transaction");
+  assert.ok(report.indexOf("if (!claimed) return;") < report.indexOf("sendPushToAll("), "push only after winning the claim");
   // Addressed to the request's own tenant: the signer's public link has no staff session.
   assert.match(report, /\{ tenantId: req\.tenantId \},/);
   // The signed-PDF cleanup still runs first, unchanged.
