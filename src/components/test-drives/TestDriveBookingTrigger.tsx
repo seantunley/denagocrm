@@ -3,6 +3,7 @@ import { createTestDriveBooking } from "@/app/actions/testDrives";
 import { contactName } from "@/lib/format";
 import ModalTrigger from "@/components/Modal";
 import { buttonVariants } from "@/components/ui/button";
+import { ConflictAwareForm } from "@/components/ConflictAwareForm";
 
 type ContactOption = {
   id: string;
@@ -43,7 +44,11 @@ export function TestDriveBookingTrigger({
       title="Book a test drive"
       buttonClass={buttonVariants({ size: "sm" })}
     >
-      <form action={createTestDriveBooking} className="space-y-4">
+      <ConflictAwareForm
+        action={createTestDriveBooking}
+        conflictTitle="Salesperson unavailable"
+        className="space-y-4"
+      >
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="sm:col-span-2">
             <label className="label">Customer</label>
@@ -100,7 +105,7 @@ export function TestDriveBookingTrigger({
           </div>
         </div>
         <button className="btn-primary w-full">Create booking</button>
-      </form>
+      </ConflictAwareForm>
     </ModalTrigger>
   );
 }
