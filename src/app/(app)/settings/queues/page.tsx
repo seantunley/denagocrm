@@ -56,7 +56,7 @@ export default async function QueuesSettingsPage() {
             )}
             {queue.stuck > 0 && (
               <p className="mt-3 text-xs text-red-300">
-                {queue.stuck} item{queue.stuck === 1 ? " is" : "s are"} more than 15 minutes past due — the background worker may have stopped.
+                {queue.stuck} item{queue.stuck === 1 ? " is" : "s are"} more than 15 minutes past due, or started and never finished — the background worker may have stopped.
               </p>
             )}
             {queue.failures.length > 0 && (

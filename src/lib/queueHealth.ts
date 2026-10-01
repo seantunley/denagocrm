@@ -34,12 +34,20 @@ export async function loadQueueHealth(): Promise<QueueSummary[]> {
   const now = Date.now();
   const since = new Date(now - WINDOW_DAYS * 24 * 60 * 60 * 1000);
   const overdue = new Date(now - STUCK_AFTER_MS);
+  // "Stuck" is BOTH halves of a dead worker: due work nobody picked up, and work
+  // a worker claimed and never finished — its lease long expired, or its claim
+  // stamp long past. Counting only the first read "healthy" over a worker that
+  // died holding the queue's work (review of #736).
+  const abandonedLease = [
+    { status: "running", leaseUntil: { lt: overdue } },
+    { status: "running", leaseUntil: null, updatedAt: { lt: overdue } },
+  ];
 
   const [signing, outbox, campaigns, surveys, journeys] = await Promise.all([
     // ── Signing jobs (dispatch, reminders, post-signature steps) ──
     Promise.all([
       prisma.signingJob.groupBy({ by: ["status"], where: { createdAt: { gte: since } }, _count: { _all: true } }),
-      prisma.signingJob.count({ where: { status: { in: ["pending", "retry"] }, availableAt: { lt: overdue } } }),
+      prisma.signingJob.count({ where: { OR: [{ status: { in: ["pending", "retry"] }, availableAt: { lt: overdue } }, ...abandonedLease] } }),
       prisma.signingJob.findMany({
         where: { status: "dead" },
         orderBy: { updatedAt: "desc" },
@@ -50,7 +58,7 @@ export async function loadQueueHealth(): Promise<QueueSummary[]> {
     // ── Bot / staff message outbox ──
     Promise.all([
       prisma.botFlowOutbox.groupBy({ by: ["status"], where: { createdAt: { gte: since } }, _count: { _all: true } }),
-      prisma.botFlowOutbox.count({ where: { status: { in: ["pending", "retry"] }, availableAt: { lt: overdue } } }),
+      prisma.botFlowOutbox.count({ where: { OR: [{ status: { in: ["pending", "retry"] }, availableAt: { lt: overdue } }, ...abandonedLease] } }),
       prisma.botFlowOutbox.findMany({
         // The failure itself, not the backlog it took down with it.
         where: { status: "dead", NOT: { failureCode: "blocked_by_earlier_failure" } },
@@ -79,7 +87,12 @@ export async function loadQueueHealth(): Promise<QueueSummary[]> {
     // ── Survey invitations sent by distributions (sentAt defaults to the row's creation) ──
     Promise.all([
       prisma.surveyResponse.groupBy({ by: ["status"], where: { distributionId: { not: null }, sentAt: { gte: since } }, _count: { _all: true } }),
-      prisma.surveyResponse.count({ where: { distributionId: { not: null }, status: { in: ["queued", "failed_temporary"] }, nextAttemptAt: { lt: overdue } } }),
+      prisma.surveyResponse.count({
+        where: {
+          distributionId: { not: null },
+          OR: [{ status: { in: ["queued", "failed_temporary"] }, nextAttemptAt: { lt: overdue } }, { status: "sending", lastAttemptAt: { lt: overdue } }],
+        },
+      }),
       prisma.surveyResponse.findMany({
         where: { distributionId: { not: null }, status: { in: ["failed", "failed_permanent"] } },
         orderBy: { sentAt: "desc" },
@@ -90,7 +103,9 @@ export async function loadQueueHealth(): Promise<QueueSummary[]> {
     // ── Journey runs ──
     Promise.all([
       prisma.journeyRun.groupBy({ by: ["status"], where: { createdAt: { gte: since } }, _count: { _all: true } }),
-      prisma.journeyRun.count({ where: { status: "queued", nextRunAt: { lt: overdue } } }),
+      // A run holds "running" only while a worker has it (recoverStaleJourneyRuns
+      // gives the same 15 minutes before calling it abandoned).
+      prisma.journeyRun.count({ where: { OR: [{ status: "queued", nextRunAt: { lt: overdue } }, { status: "running", updatedAt: { lt: overdue } }] } }),
       prisma.journeyRun.findMany({
         where: { status: { in: ["failed", "blocked"] } },
         orderBy: { updatedAt: "desc" },

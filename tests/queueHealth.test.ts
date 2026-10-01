@@ -19,6 +19,21 @@ test("every queue is covered: counts, overdue work, and recent failures", () => 
   assert.doesNotMatch(lib, /basePrisma/);
 });
 
+test("work a worker claimed and never finished counts as stuck, not healthy", () => {
+  // Review of #736: a worker that died holding leases left the screen green.
+  const count = (model: string) => {
+    const at = lib.indexOf(`prisma.${model}.count(`);
+    return lib.slice(at, lib.indexOf("\n    ]),", at));
+  };
+  assert.match(lib, /\{ status: "running", leaseUntil: \{ lt: overdue \} \}/);
+  assert.match(lib, /\{ status: "running", leaseUntil: null, updatedAt: \{ lt: overdue \} \}/);
+  for (const model of ["signingJob", "botFlowOutbox"]) assert.match(count(model), /\.\.\.abandonedLease/, `${model}: expired leases`);
+  for (const model of ["campaignRecipient", "surveyResponse"]) {
+    assert.match(count(model), /\{ status: "sending", lastAttemptAt: \{ lt: overdue \} \}/, `${model}: stale sending claims`);
+  }
+  assert.match(count("journeyRun"), /\{ status: "running", updatedAt: \{ lt: overdue \} \}/);
+});
+
 test("the outbox shows the classified reason, never the raw provider text (it can quote a number)", () => {
   const outbox = lib.slice(lib.indexOf('key: "outbox"'), lib.indexOf('key: "campaigns"'));
   assert.match(outbox, /deliveryFailureReason\(row\.failureCode\)/);
