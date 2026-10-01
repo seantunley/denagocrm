@@ -262,7 +262,7 @@ export async function createTestDriveBooking(formData: FormData) {
       });
       return { created } as const;
     });
-    if ("conflict" in bookingResult) {
+    if ("conflict" in bookingResult && bookingResult.conflict) {
       return { error: availabilityConflictMessage(bookingResult.conflict) };
     }
     const booking = bookingResult.created;
@@ -334,7 +334,7 @@ export async function updateTestDriveBooking(id: string, formData: FormData) {
       }
       return { result } as const;
     });
-    if ("conflict" in updatedResult) {
+    if ("conflict" in updatedResult && updatedResult.conflict) {
       return { error: availabilityConflictMessage(updatedResult.conflict) };
     }
     const updated = updatedResult.result;
