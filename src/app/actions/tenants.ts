@@ -6,6 +6,7 @@ import { revalidatePath } from "next/cache";
 import { basePrisma } from "@/lib/db";
 import { requirePlatformAdminAction } from "@/lib/platformAuth";
 import { logAuditStrict } from "@/lib/audit";
+import { validPassword } from "@/lib/passwordPolicy";
 import {
   createTenant,
   activateTenant,
@@ -26,10 +27,6 @@ const CONSOLE_PATH = "/platform/tenants";
 
 const value = (formData: FormData, key: string) => String(formData.get(key) ?? "").trim();
 
-/** Same password floor as admin createUser (settings.createUser). */
-function validPassword(password: string): boolean {
-  return password.length >= 12 && /[A-Za-z]/.test(password) && /\d/.test(password);
-}
 
 /** A Prisma unique-constraint violation, duck-typed so this file stays crypto/ORM-light. */
 function isUniqueViolation(error: unknown): boolean {

@@ -487,6 +487,9 @@ const CUSTOMER_RECORD_WRITERS = [
   "src/lib/reviewRequests.ts",
   "src/lib/serviceReminders.ts",
   "src/lib/surveys.ts",
+  // The calendar entry for a test-drive booking, from both the Test drives
+  // module and the pipeline board (gap audit #19). The caller names the owner.
+  "src/lib/testDriveBooking.ts",
   "src/lib/whatsapp.ts",
 ] as const;
 

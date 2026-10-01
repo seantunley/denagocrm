@@ -2,6 +2,7 @@ import { Plus } from "lucide-react";
 import { createTestDriveBooking } from "@/app/actions/testDrives";
 import { contactName } from "@/lib/format";
 import ModalTrigger from "@/components/Modal";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { buttonVariants } from "@/components/ui/button";
 
 type ContactOption = {
@@ -51,7 +52,7 @@ export function TestDriveBookingTrigger({
       buttonClass={buttonVariants({ size: "sm" })}
       defaultOpen={defaultOpen}
     >
-      <form action={createTestDriveBooking} className="space-y-4">
+      <SaveForm action={createTestDriveBooking} success="Test drive booked" className="space-y-4">
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="sm:col-span-2">
             <label className="label">Customer</label>
@@ -107,8 +108,8 @@ export function TestDriveBookingTrigger({
             <input type="datetime-local" name="expectedReturnAt" className="input" required defaultValue={defaultEnd} />
           </div>
         </div>
-        <button className="btn-primary w-full">Create booking</button>
-      </form>
+        <SaveButton className="btn-primary w-full" pendingLabel="Booking…">Create booking</SaveButton>
+      </SaveForm>
     </ModalTrigger>
   );
 }
