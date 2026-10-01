@@ -26,6 +26,7 @@ import {
   createMarketingAudience,
   previewMarketingAudience,
   updateMarketingAudience,
+  type AudiencePreview,
 } from "@/app/actions/marketingContent";
 import ConfirmActionDialog from "@/components/marketing/ConfirmActionDialog";
 
@@ -55,7 +56,7 @@ type Audience = {
   version: number | null;
 };
 
-type Preview = Awaited<ReturnType<typeof previewMarketingAudience>>;
+type Preview = AudiencePreview;
 type ValueKind = "text" | "select" | "boolean" | "date" | "money";
 type FieldDefinition = {
   value: string;
@@ -219,7 +220,10 @@ export default function AudienceWorkspace({ audiences, tags, products }: { audie
       const form = new FormData();
       form.set("ruleTree", JSON.stringify(tree));
       form.set("channel", "any");
-      setPreview(await previewMarketingAudience(form));
+      // A refusal comes back as a value — a thrown message is redacted in production.
+      const result = await previewMarketingAudience(form);
+      if ("error" in result) setError(result.error);
+      else setPreview(result);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not calculate this audience");
     } finally {
@@ -238,8 +242,10 @@ export default function AudienceWorkspace({ audiences, tags, products }: { audie
       const form = new FormData();
       form.set("name", name.trim());
       form.set("ruleTree", JSON.stringify(tree));
-      if (editingAudience) await updateMarketingAudience(editingAudience.id, form);
-      else await createMarketingAudience(form);
+      const result = editingAudience
+        ? await updateMarketingAudience(editingAudience.id, form)
+        : await createMarketingAudience(form);
+      if (result?.error) throw new Error(result.error);
       setMessage(editingAudience ? "Audience version saved." : "Audience created.");
       setEditor(null);
       setPreview(null);
@@ -348,7 +354,9 @@ export default function AudienceWorkspace({ audiences, tags, products }: { audie
                     description="This audience will no longer be selectable for new campaigns. Campaigns that already froze a recipient snapshot keep that snapshot unchanged."
                     confirmLabel="Archive audience"
                     onConfirm={async () => {
-                      await archiveMarketingAudience(audience.id);
+                      const result = await archiveMarketingAudience(audience.id);
+                      // ConfirmActionDialog shows a thrown message in the dialog.
+                      if (result?.error) throw new Error(result.error);
                       if (editor === audience.id) closeEditor();
                       router.refresh();
                     }}

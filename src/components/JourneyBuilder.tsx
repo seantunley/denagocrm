@@ -2,6 +2,8 @@
 
 import { useMemo, useRef, useState } from "react";
 import { createJourney } from "@/app/actions/journeys";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
+import type { ActionResult } from "@/lib/actionResultTypes";
 import { JOURNEY_LIMITS, JOURNEY_STEP_LABELS, JOURNEY_TRIGGERS } from "@/lib/journeyTypes";
 import { JOURNEY_TRIGGER_LABELS, type JourneyTriggerSpec } from "@/lib/journeyTriggers";
 import { BuilderSaveStatus, BuilderWorkspaceBar, BuilderWorkspaceShell } from "@/components/builder-workspace";
@@ -192,7 +194,7 @@ export default function JourneyBuilder({
   tags: JourneyOption[];
   segments: JourneyOption[];
   defaults?: JourneyBuilderDefaults;
-  submitAction?: (formData: FormData) => Promise<void>;
+  submitAction?: (formData: FormData) => Promise<ActionResult | void>;
   submitLabel?: string;
 }) {
   const counter = useRef(100);
@@ -336,7 +338,9 @@ export default function JourneyBuilder({
   }, [steps]);
 
   return (
-    <form action={submitAction ?? createJourney} className="space-y-5">
+    // SaveForm shows the strict validation message ("two triggers share an ID")
+    // instead of an error page. Not reset on success: the steps live in state.
+    <SaveForm action={submitAction ?? createJourney} resetOnSuccess={false} className="space-y-5">
       <input type="hidden" name="triggers" value={JSON.stringify(triggers)} />
       <input type="hidden" name="entryConditions" value={JSON.stringify(entryConditions)} />
       <input type="hidden" name="definition" value={JSON.stringify(definition)} />
@@ -347,7 +351,7 @@ export default function JourneyBuilder({
           description="Configure enrollment, entry rules and the ordered customer journey."
           status={<BuilderSaveStatus status="Unsaved changes" />}
         >
-          <button className="btn-primary btn-sm">{submitLabel}</button>
+          <SaveButton className="btn-primary btn-sm">{submitLabel}</SaveButton>
         </BuilderWorkspaceBar>
         <div className="space-y-5 bg-[#0f1412] p-3 sm:p-5">
 
@@ -683,6 +687,6 @@ export default function JourneyBuilder({
 
         </div>
       </BuilderWorkspaceShell>
-    </form>
+    </SaveForm>
   );
 }

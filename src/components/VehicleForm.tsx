@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import ContactPicker, { type ContactOption } from "@/components/ContactPicker";
 import {
   CalendarDays,
   CarFront,
@@ -75,7 +76,8 @@ export default function VehicleForm({
   const [serviceKm, setServiceKm] = useState(String(defaults.serviceIntervalKm ?? 1000));
   const [serviceMonths, setServiceMonths] = useState(String(defaults.serviceIntervalMonths ?? 6));
   const product = products.find((item) => item.id === productId);
-  const owner = contacts.find((item) => item.id === contactId);
+  const [picked, setPicked] = useState<ContactOption | null>(null);
+  const owner = contacts.find((item) => item.id === contactId) ?? (picked?.id === contactId ? picked : undefined);
 
   function onProductChange(id: string) {
     setProductId(id);
@@ -112,12 +114,16 @@ export default function VehicleForm({
         description="Link the vehicle to the correct customer and select a catalogue model where possible."
       >
         <CaptureField label="Customer *" wide>
-          <select name="contactId" className="input" required value={contactId} onChange={(event) => setContactId(event.target.value)}>
-            <option value="">Select customer…</option>
-            {contacts.map((contact) => (
-              <option key={contact.id} value={contact.id}>{contact.label}</option>
-            ))}
-          </select>
+          <ContactPicker
+            name="contactId"
+            options={contacts}
+            required
+            value={contactId}
+            onChange={(id, option) => {
+              setContactId(id);
+              setPicked(option);
+            }}
+          />
         </CaptureField>
         <CaptureField label="Catalogue product">
           <select name="productId" className="input" value={productId} onChange={(event) => onProductChange(event.target.value)}>
