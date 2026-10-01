@@ -532,7 +532,11 @@ export default function CalendarWorkspace({
   ) {
     startTransition(async () => {
       try {
-        await action();
+        const result = await action();
+        // A refusal comes back as a value ({ error }), not a throw.
+        if (result && typeof result === "object" && "error" in result && result.error) {
+          throw new Error(String(result.error));
+        }
         toast.success(success);
         setSelectedEvent(null);
         router.refresh();

@@ -27,6 +27,9 @@ export function TestDriveBookingTrigger({
   defaultStart,
   defaultEnd,
   compact = false,
+  defaultContactId,
+  defaultLeadId,
+  defaultOpen = false,
 }: {
   contacts: ContactOption[];
   leads: LeadOption[];
@@ -37,25 +40,30 @@ export function TestDriveBookingTrigger({
   defaultStart: string;
   defaultEnd: string;
   compact?: boolean;
+  /** Pre-selected when arriving from a customer or lead page ("Book test drive" there). */
+  defaultContactId?: string;
+  defaultLeadId?: string;
+  defaultOpen?: boolean;
 }) {
   return (
     <ModalTrigger
       label={<><Plus className="size-4" />{compact ? "Book" : "Book test drive"}</>}
       title="Book a test drive"
       buttonClass={buttonVariants({ size: "sm" })}
+      defaultOpen={defaultOpen}
     >
       <SaveForm action={createTestDriveBooking} success="Test drive booked" className="space-y-4">
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="sm:col-span-2">
             <label className="label">Customer</label>
-            <select name="contactId" className="input" required defaultValue="">
+            <select name="contactId" className="input" required defaultValue={defaultContactId ?? ""}>
               <option value="" disabled>Select customer…</option>
               {contacts.map((contact) => <option key={contact.id} value={contact.id}>{contactName(contact)}</option>)}
             </select>
           </div>
           <div className="sm:col-span-2">
             <label className="label">Lead</label>
-            <select name="leadId" className="input" defaultValue="">
+            <select name="leadId" className="input" defaultValue={defaultLeadId ?? ""}>
               <option value="">No linked lead</option>
               {leads.map((lead) => <option key={lead.id} value={lead.id}>{lead.title} — {lead.name}</option>)}
             </select>

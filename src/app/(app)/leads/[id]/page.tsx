@@ -85,9 +85,10 @@ export default async function LeadDetailPage({
   });
   if (!lead) notFound();
   const automotiveOn = await isModuleEnabled("automotive");
-  const [canCancelQuotes, canDuplicateQuotes] = await Promise.all([
+  const [canCancelQuotes, canDuplicateQuotes, canBookTestDrive] = await Promise.all([
     hasPermission(user, "quotes.change_status"),
     hasPermission(user, "quotes.create"),
+    hasPermission(user, "activities.manage"),
   ]);
   const alreadyViewed = !!lead.viewedAt;
   const [contacts, users, templates, smtpConfigured, audit, waConfigured, libraryDocuments, products, stages] = await Promise.all([
@@ -167,6 +168,16 @@ export default async function LeadDetailPage({
               <SaveForm success="Quote created" resetOnSuccess={false} action={createQuoteFromLead.bind(null, lead.id)}>
                 <SaveButton className="btn-primary"><FileText className="size-4" />Create quote</SaveButton>
               </SaveForm>
+              {/* Gap audit #24: book from the lead itself; the form opens with the
+                  lead (and its customer, when linked) already chosen. */}
+              {automotiveOn && canBookTestDrive && (
+                <Link
+                  href={`/test-drives?book=1&leadId=${lead.id}${lead.contactId ? `&contactId=${lead.contactId}` : ""}`}
+                  className="btn-secondary"
+                >
+                  Book test drive
+                </Link>
+              )}
               <MarkWonButton leadId={lead.id} leadName={lead.name} />
               <ModalTrigger
                 label="Mark lost"

@@ -6,7 +6,10 @@ import { requirePermission } from "@/lib/permissions";
 import { requireModuleEnabled } from "@/lib/modules/enabled";
 import { logAuditStrict } from "@/lib/audit";
 import { readCampaignDraftRecord } from "@/lib/marketingCampaignDrafts";
-import { withActingStaffScope } from "@/lib/actingScope";
+// asActionResult (which binds the acting workspace itself) so a refusal comes
+// back as a message the review page shows — a thrown Error reached staff as the
+// generic "This page hit an error" (gap audit #22).
+import { asActionResult, refuse } from "@/lib/actionResult";
 import {
   campaignQa,
   freezeAudienceAndQueue,
@@ -24,14 +27,19 @@ async function context(permission: Parameters<typeof requirePermission>[0]) {
   return { user, tenantId: await getActiveTenantId() };
 }
 
+const GONE = "That campaign is no longer there — refresh the page.";
+
+async function qaClean(id: string, tenantId: string | null) {
+  const errors = (await campaignQa(id, tenantId)).filter((issue) => issue.severity === "error");
+  if (errors.length) refuse(`Fix these first: ${errors.map((issue) => issue.message).join("; ")}`);
+}
+
 export async function submitCampaignForReview(id: string) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     const { user, tenantId } = await context("campaigns.edit");
     const campaign = await readCampaignDraftRecord(id, tenantId);
-    if (!campaign) throw new Error("Campaign not found");
-    const issues = await campaignQa(id, tenantId);
-    const errors = issues.filter((issue) => issue.severity === "error");
-    if (errors.length) throw new Error(errors.map((issue) => issue.message).join("; "));
+    if (!campaign) refuse(GONE);
+    await qaClean(id, tenantId);
     const version = await transitionCampaignWithVersion({
       campaignId: id,
       tenantId,
@@ -43,30 +51,30 @@ export async function submitCampaignForReview(id: string) {
     });
     await logAuditStrict({ action: "campaign.submitted", summary: `Submitted campaign “${campaign.name}” version ${version} for review`, entityType: "Campaign", entityId: id, user, before: campaign, after: { status: "in_review", version } });
     revalidatePath(`/marketing/campaigns/${id}/review`);
+    return { success: "Submitted for review" };
   });
 }
 
 export async function requestCampaignChanges(id: string, formData: FormData) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     const { user, tenantId } = await context("campaigns.review");
     const campaign = await readCampaignDraftRecord(id, tenantId);
-    if (!campaign) throw new Error("Campaign not found");
+    if (!campaign) refuse(GONE);
     const reviewNote = note(formData);
-    if (!reviewNote) throw new Error("Explain the required changes");
+    if (!reviewNote) refuse("Explain the changes you need.");
     await transitionCampaign({ campaignId: id, tenantId, from: campaign.status, to: "changes_requested", userId: user.id, userName: user.name, note: reviewNote });
     await logAuditStrict({ action: "campaign.changes_requested", summary: `Requested changes to campaign “${campaign.name}”`, entityType: "Campaign", entityId: id, user, before: campaign, after: { status: "changes_requested", reviewNote } });
     revalidatePath(`/marketing/campaigns/${id}/review`);
+    return { success: "Changes requested" };
   });
 }
 
 export async function approveCampaign(id: string, formData: FormData) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     const { user, tenantId } = await context("campaigns.approve");
     const campaign = await readCampaignDraftRecord(id, tenantId);
-    if (!campaign) throw new Error("Campaign not found");
-    const issues = await campaignQa(id, tenantId);
-    const errors = issues.filter((issue) => issue.severity === "error");
-    if (errors.length) throw new Error(errors.map((issue) => issue.message).join("; "));
+    if (!campaign) refuse(GONE);
+    await qaClean(id, tenantId);
     const version = await transitionCampaignWithVersion({
       campaignId: id,
       tenantId,
@@ -79,29 +87,31 @@ export async function approveCampaign(id: string, formData: FormData) {
     });
     await logAuditStrict({ action: "campaign.approved", summary: `Approved campaign “${campaign.name}” version ${version}`, entityType: "Campaign", entityId: id, user, before: campaign, after: { status: "approved", version } });
     revalidatePath(`/marketing/campaigns/${id}/review`);
+    return { success: "Campaign approved" };
   });
 }
 
 export async function reopenCampaignDraft(id: string) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     const { user, tenantId } = await context("campaigns.edit");
     const campaign = await readCampaignDraftRecord(id, tenantId);
-    if (!campaign) throw new Error("Campaign not found");
+    if (!campaign) refuse(GONE);
     await transitionCampaign({ campaignId: id, tenantId, from: campaign.status, to: "draft", userId: user.id, userName: user.name });
     await logAuditStrict({ action: "campaign.reopened", summary: `Returned campaign “${campaign.name}” to draft`, entityType: "Campaign", entityId: id, user, before: campaign, after: { status: "draft" } });
     revalidatePath(`/marketing/campaigns/${id}/edit`);
+    return { success: "Back to draft" };
   });
 }
 
 export async function scheduleCampaign(id: string, formData: FormData) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     const { user, tenantId } = await context("campaigns.schedule");
     const raw = String(formData.get("scheduledFor") ?? "").trim();
-    if (!raw) throw new Error("Choose a scheduled date and time");
+    if (!raw) refuse("Choose a date and time to send.");
     const scheduledFor = new Date(raw);
-    if (Number.isNaN(scheduledFor.getTime())) throw new Error("Invalid scheduled date");
+    if (Number.isNaN(scheduledFor.getTime())) refuse("Enter a valid date and time.");
     const campaign = await readCampaignDraftRecord(id, tenantId);
-    if (!campaign) throw new Error("Campaign not found");
+    if (!campaign) refuse(GONE);
     const result = await freezeAudienceAndQueue({
       campaignId: id,
       tenantId,
@@ -112,14 +122,15 @@ export async function scheduleCampaign(id: string, formData: FormData) {
     });
     await logAuditStrict({ action: "campaign.scheduled", summary: `Scheduled campaign “${campaign.name}” version ${result.version} for ${result.count} recipients`, entityType: "Campaign", entityId: id, user, before: campaign, after: { status: "scheduled", scheduledFor, recipientCount: result.count, version: result.version } });
     revalidatePath(`/marketing/campaigns/${id}/review`);
+    return { success: `Scheduled for ${result.count} recipient${result.count === 1 ? "" : "s"}` };
   });
 }
 
 export async function sendApprovedCampaignNow(id: string) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     const { user, tenantId } = await context("campaigns.send");
     const campaign = await readCampaignDraftRecord(id, tenantId);
-    if (!campaign) throw new Error("Campaign not found");
+    if (!campaign) refuse(GONE);
     const result = await freezeAudienceAndQueue({
       campaignId: id,
       tenantId,
@@ -130,5 +141,6 @@ export async function sendApprovedCampaignNow(id: string) {
     });
     await logAuditStrict({ action: "campaign.queued", summary: `Queued campaign “${campaign.name}” version ${result.version} for ${result.count} recipients`, entityType: "Campaign", entityId: id, user, before: campaign, after: { status: "queued", recipientCount: result.count, version: result.version } });
     revalidatePath(`/marketing/campaigns/${id}/review`);
+    return { success: `Queued for ${result.count} recipient${result.count === 1 ? "" : "s"}` };
   });
 }
