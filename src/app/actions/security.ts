@@ -11,6 +11,7 @@ import { encryptValue, decryptValue, putSetting } from "@/lib/settings";
 import { GOVERNANCE_TX, logAuditStrict } from "@/lib/audit";
 import { lockGovernanceAdmins } from "@/lib/governanceLock";
 import { isActingTenantMember } from "@/lib/tenantActor";
+import { PASSWORD_RULE, validPassword } from "@/lib/passwordPolicy";
 import {
   generateTotpSecret,
   totpKeyUri,
@@ -391,6 +392,49 @@ export async function revokeUserSessions(userId: string): Promise<ActionResult> 
     }, GOVERNANCE_TX);
     revalidatePath("/settings");
     return { success: "All their sessions were signed out." };
+  });
+}
+
+/**
+ * An owner sets a new password for a team member who is locked out (there is
+ * no other way back in). Same floor as every other password; the member is
+ * signed out everywhere, and the owner tells them the new password themselves.
+ *
+ * Owners are excluded: one owner must not be able to take over another's
+ * account this way — owners change their own password.
+ */
+export async function resetTeamMemberPassword(userId: string, formData: FormData): Promise<ActionResult> {
+  return asActionResult(async () => {
+    const owner = await requireOwner();
+    if (userId === owner.id) refuse("Change your own password under My Account.");
+    await assertManageableUser(userId);
+    const password = String(formData.get("password") ?? "");
+    if (!validPassword(password)) refuse(`The new password must be ${PASSWORD_RULE}.`);
+    const target = await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { name: true, role: true } });
+    const ownerRefusal = "Another owner's password can't be reset here — they change it themselves.";
+    if (target.role === "owner") refuse(ownerRefusal);
+    const passwordHash = await bcrypt.hash(password, 12);
+    await basePrisma.$transaction(async (tx) => {
+      // The non-owner check is re-made by the write itself: someone promoted to
+      // owner after the read above matches nothing, and the reset refuses.
+      const { count } = await tx.user.updateMany({
+        where: { id: userId, role: { not: "owner" } },
+        data: { passwordHash, passwordChangedAt: new Date() },
+      });
+      if (count === 0) refuse(ownerRefusal);
+      // Signed out everywhere — the same raw bump the role editor uses
+      // (sessionVersion is not on the Prisma model).
+      await tx.$executeRaw`UPDATE "User" SET "sessionVersion" = "sessionVersion" + 1 WHERE "id" = ${userId}`;
+      await logAuditStrict({
+        action: "security.password_reset_by_owner",
+        summary: `Reset ${target.name}'s password; their sessions were signed out`,
+        entityType: "User",
+        entityId: userId,
+        user: owner,
+      }, tx);
+    }, GOVERNANCE_TX);
+    revalidatePath("/settings/access");
+    return { success: `${target.name}'s password was reset. Give them the new password — they've been signed out everywhere.` };
   });
 }
 
