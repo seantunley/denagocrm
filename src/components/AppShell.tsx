@@ -20,6 +20,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import ConnectivityIndicator from "@/components/ConnectivityIndicator";
 import { ActivityTypesProvider } from "@/components/ActivityTypesProvider";
+import { SettingsViewerProvider } from "@/components/SettingsViewer";
 import type { ActivityType } from "@/lib/activityTypes";
 
 type ShellUser = { id: string; name: string; role: string; permissions: string[]; avatarVersion?: string | null };
@@ -121,6 +122,7 @@ export default function AppShell({
   return (
     <TooltipProvider delayDuration={250}>
     <ActivityTypesProvider types={activityTypes}>
+    <SettingsViewerProvider isOwner={user.role === "owner"} permissions={user.permissions} enabledModules={enabledModules}>
     <div className="min-h-screen">
       <CommandMenu isAdmin={user.role === "owner"} permissions={user.permissions} enabledModules={enabledModules} />
       <QuickCreateDialog />
@@ -195,6 +197,7 @@ export default function AppShell({
         </div>
       </main>
     </div>
+    </SettingsViewerProvider>
     </ActivityTypesProvider>
     </TooltipProvider>
   );
