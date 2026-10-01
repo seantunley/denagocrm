@@ -29,6 +29,7 @@ import {
 } from "@/app/actions/testDrives";
 import { PageHeader } from "@/components/page-header";
 import { Surface } from "@/components/visual-system";
+import { ConflictAwareForm } from "@/components/ConflictAwareForm";
 
 export const dynamic = "force-dynamic";
 
@@ -148,7 +149,12 @@ export default async function TestDriveDetailPage({ params }: { params: Promise<
               <h2 className="font-semibold">Booking and vehicle assignment</h2>
             </div>
             {canManage && upcoming ? (
-              <form action={updateTestDriveBooking.bind(null, booking.id)} className="mt-4 grid gap-3 sm:grid-cols-2">
+              <ConflictAwareForm
+                action={updateTestDriveBooking.bind(null, booking.id)}
+                conflictTitle="Salesperson unavailable"
+                successMessage="Booking updated"
+                className="mt-4 grid gap-3 sm:grid-cols-2"
+              >
                 <div>
                   <label className="label">Branch / location</label>
                   <input name="branch" className="input" required defaultValue={booking.branch} />
@@ -182,7 +188,7 @@ export default async function TestDriveDetailPage({ params }: { params: Promise<
                   <input type="datetime-local" name="expectedReturnAt" className="input" required defaultValue={inputDate(booking.expectedReturnAt)} />
                 </div>
                 <div className="sm:col-span-2 text-right"><button className="btn-secondary btn-sm">Save booking</button></div>
-              </form>
+              </ConflictAwareForm>
             ) : (
               <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
                 <p><span className="text-muted-foreground">Branch:</span> {booking.branch}</p>
