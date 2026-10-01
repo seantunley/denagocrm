@@ -11,14 +11,13 @@ import { portalTenantId } from "@/lib/portalTenant";
 import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { resolveTenantActor } from "@/lib/tenantActor";
 import { sendEmail, isSmtpConfigured } from "@/lib/email";
-import { getCompanyProfile } from "@/lib/companyProfile";
+import { tenantEmailContent } from "@/lib/signing/signingEmail";
 import { getPortalContact, setPortalCookie, clearPortalCookie } from "@/lib/portal";
 import { portalCanAccessVehicle, requirePortalScope } from "@/lib/portalAccess";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { sendPushToAll } from "@/lib/push";
 import { logAudit } from "@/lib/audit";
 import { contactName } from "@/lib/format";
-import { saveFile } from "@/lib/storage";
 import {
   OTP_SEND_POLICY,
   OTP_VERIFY_POLICY,
@@ -65,9 +64,10 @@ const normEmail = (email: string) => email.trim().toLowerCase();
  * app.bypass_rls explicitly, which is the correct posture for a PRE-auth lookup
  * that cannot have a tenant scope yet and pins the tenant in its own WHERE.
  */
-async function findPortalContactByEmail(email: string): Promise<{ id: string } | null> {
-  const rows = await basePrisma.$queryRaw<{ id: string }[]>`
-    SELECT "id" FROM "Contact"
+type PortalContactRow = { id: string; firstName: string; lastName: string | null };
+async function findPortalContactByEmail(email: string): Promise<PortalContactRow | null> {
+  const rows = await basePrisma.$queryRaw<PortalContactRow[]>`
+    SELECT "id", "firstName", "lastName" FROM "Contact"
     WHERE LOWER("email") = ${email}
       AND "deletedAt" IS NULL
       AND "tenantId" = ${DEFAULT_TENANT_ID}
@@ -76,8 +76,6 @@ async function findPortalContactByEmail(email: string): Promise<{ id: string } |
   `;
   return rows[0] ?? null;
 }
-const MAX_UPLOAD = 10 * 1024 * 1024;
-const ALLOWED_UPLOADS = new Set(["application/pdf", "image/png", "image/jpeg", "image/webp", "text/plain"]);
 
 async function firstStaffUser() {
   return resolveTenantActor();
@@ -225,12 +223,18 @@ async function issuePortalOtp(email: string): Promise<PortalAuthState> {
       },
     });
   });
-  // Signed by the workspace the contact belongs to (the lookup above pins it).
-  const company = await getCompanyProfile(DEFAULT_TENANT_ID);
+  // The workspace's own editable "portal login code" email (Settings → Email
+  // templates), signed by the workspace the contact belongs to (the lookup above pins it).
+  const message = await tenantEmailContent("portal_code", DEFAULT_TENANT_ID, {
+    first_name: contact.firstName,
+    recipient_name: [contact.firstName, contact.lastName].filter(Boolean).join(" "),
+    code,
+  });
   await sendEmail({
     to: email,
-    subject: `Your ${company.name} portal code`,
-    text: `Your login code is ${code}. It expires in 10 minutes.\n\nIf you didn't request this, ignore this email.\n\n${company.name}`,
+    subject: message.subject,
+    text: message.text,
+    html: message.html,
     // On the customer's timeline with the code masked.
     record: { contactId: contact.id, label: "Portal login code", secrets: [code] },
   }).catch(() => {});
@@ -361,136 +365,10 @@ export async function requestService(
   return { ok: "Thanks! We've received your request and will be in touch to confirm." };
 }
 
-export async function submitPortalCase(formData: FormData) {
-  const scope = await requirePortalScope();
-  const contact = await getPortalContact();
-  if (!contact) redirect("/portal/login");
-  const subject = str(formData.get("subject"));
-  const description = str(formData.get("description"));
-  const type = str(formData.get("type")) || "support";
-  const vehicleId = str(formData.get("vehicleId")) || null;
-  if (!subject || !description) throw new Error("Subject and description are required");
-  if (vehicleId && !(await portalCanAccessVehicle(vehicleId))) throw new Error("Vehicle access denied");
-
-  const id = crypto.randomUUID();
-  const tenantId = await portalTenantId(scope.viewerContactId);
-  await basePrisma.$executeRaw`
-    INSERT INTO "CustomerCase" ("id", "tenantId", "subject", "description", "type", "contactId", "vehicleId")
-    VALUES (${id}, ${tenantId}, ${subject}, ${description}, ${type}, ${scope.viewerContactId}, ${vehicleId})
-  `;
-  await createPortalNotification(scope.viewerContactId, "Support request created", subject, "/portal#cases", "case");
-  await logAudit({ action: "portal.case_created", summary: `Portal case created: ${subject}`, contactId: scope.viewerContactId, entityType: "CustomerCase", entityId: id, userName: "Customer portal" });
-  await sendPushToAll({ title: "New portal support case", body: `${contactName(contact)} — ${subject}`, url: `/contacts/${contact.id}` }, "portal_case").catch(() => {});
-  revalidatePath("/portal");
-}
-
-export async function submitPortalWarrantyClaim(formData: FormData) {
-  const scope = await requirePortalScope();
-  const contact = await getPortalContact();
-  if (!contact) redirect("/portal/login");
-  const vehicleId = str(formData.get("vehicleId"));
-  const description = str(formData.get("description"));
-  if (!vehicleId || !description) throw new Error("Vehicle and description are required");
-  if (!(await portalCanAccessVehicle(vehicleId))) throw new Error("Vehicle access denied");
-
-  const claim = await prisma.warrantyClaim.create({
-    data: { vehicleId, contactId: scope.viewerContactId, description, createdById: null },
-  });
-  const caseId = crypto.randomUUID();
-  const tenantId = await portalTenantId(scope.viewerContactId);
-  await basePrisma.$executeRaw`
-    INSERT INTO "CustomerCase" ("id", "tenantId", "subject", "description", "type", "priority", "contactId", "vehicleId", "warrantyClaimId")
-    VALUES (${caseId}, ${tenantId}, ${"Warranty claim"}, ${description}, ${"warranty"}, ${"high"}, ${scope.viewerContactId}, ${vehicleId}, ${claim.id})
-  `;
-  await createPortalNotification(scope.viewerContactId, "Warranty claim submitted", "Your warranty request has been sent to our team.", "/portal#cases", "warranty");
-  await logAudit({ action: "portal.warranty_claim_created", summary: "Warranty claim submitted through portal", contactId: scope.viewerContactId, entityType: "WarrantyClaim", entityId: claim.id, userName: "Customer portal" });
-  await sendPushToAll({ title: "New warranty claim", body: `${contactName(contact)} submitted a warranty claim`, url: `/vehicles/${vehicleId}` }, "warranty").catch(() => {});
-  revalidatePath("/portal");
-}
-
-export async function requestPortalProfileChange(formData: FormData) {
-  const scope = await requirePortalScope();
-  const changes = {
-    phone: str(formData.get("phone")) || null,
-    whatsapp: str(formData.get("whatsapp")) || null,
-    address: str(formData.get("address")) || null,
-    suburb: str(formData.get("suburb")) || null,
-    city: str(formData.get("city")) || null,
-    province: str(formData.get("province")) || null,
-    postalCode: str(formData.get("postalCode")) || null,
-  };
-  const note = str(formData.get("note")) || null;
-  const id = crypto.randomUUID();
-  const tenantId = await portalTenantId(scope.viewerContactId);
-  await basePrisma.$executeRaw`
-    INSERT INTO "PortalProfileChangeRequest" ("id", "tenantId", "contactId", "changes", "note")
-    VALUES (${id}, ${tenantId}, ${scope.viewerContactId}, ${JSON.stringify(changes)}::jsonb, ${note})
-  `;
-  await createPortalNotification(scope.viewerContactId, "Profile update requested", "We received your profile and address changes.", "/portal#profile", "profile");
-  await logAudit({ action: "portal.profile_change_requested", summary: "Customer requested profile changes", contactId: scope.viewerContactId, entityType: "PortalProfileChangeRequest", entityId: id, after: changes, userName: "Customer portal" });
-  revalidatePath("/portal");
-}
-
-export async function updatePortalPreferences(formData: FormData) {
-  const scope = await requirePortalScope();
-  const emailServiceUpdates = formData.get("emailServiceUpdates") === "on";
-  const smsServiceUpdates = formData.get("smsServiceUpdates") === "on";
-  const emailMarketing = formData.get("emailMarketing") === "on";
-
-  const tenantId = await portalTenantId(scope.viewerContactId);
-  await basePrisma.$transaction(async (tx) => {
-    await tx.$executeRaw`
-      INSERT INTO "PortalPreference" ("contactId", "tenantId", "emailServiceUpdates", "smsServiceUpdates", "emailMarketing", "updatedAt")
-      VALUES (${scope.viewerContactId}, ${tenantId}, ${emailServiceUpdates}, ${smsServiceUpdates}, ${emailMarketing}, CURRENT_TIMESTAMP)
-      ON CONFLICT ("contactId") DO UPDATE SET
-        "emailServiceUpdates" = EXCLUDED."emailServiceUpdates",
-        "smsServiceUpdates" = EXCLUDED."smsServiceUpdates",
-        "emailMarketing" = EXCLUDED."emailMarketing",
-        "updatedAt" = CURRENT_TIMESTAMP
-    `;
-    await tx.contact.update({ where: { id: scope.viewerContactId }, data: { marketingOptOut: !emailMarketing } });
-    await tx.consentRecord.create({ data: { contactId: scope.viewerContactId, type: "marketing", granted: emailMarketing, source: "portal", note: "Updated in customer portal" } });
-  });
-  await logAudit({ action: "portal.preferences_updated", summary: "Customer updated portal communication preferences", contactId: scope.viewerContactId, after: { emailServiceUpdates, smsServiceUpdates, emailMarketing }, userName: "Customer portal" });
-  revalidatePath("/portal");
-}
-
-export async function uploadPortalDocument(formData: FormData) {
-  const scope = await requirePortalScope();
-  const vehicleId = str(formData.get("vehicleId")) || null;
-  if (vehicleId && !(await portalCanAccessVehicle(vehicleId))) throw new Error("Vehicle access denied");
-  const value = formData.get("file");
-  if (!(value instanceof File) || value.size === 0) throw new Error("Choose a file");
-  if (value.size > MAX_UPLOAD) throw new Error("File is too large");
-  if (!ALLOWED_UPLOADS.has(value.type)) throw new Error("Unsupported file type");
-
-  const staff = await firstStaffUser();
-  if (!staff) throw new Error("No staff account is available to file the document");
-  const buffer = Buffer.from(await value.arrayBuffer());
-  // Same rule as portalExpansion's uploadPortalFile: a customer OTP session has no
-  // acting workspace, so the contact the document is filed against decides.
-  const tenantId = await portalTenantId(scope.viewerContactId);
-  const storedName = await saveFile(buffer, value.name, value.type, tenantId);
-  const doc = await prisma.document.create({
-    data: {
-      fileName: value.name,
-      storedName,
-      mimeType: value.type,
-      sizeBytes: value.size,
-      contactId: scope.viewerContactId,
-      vehicleId,
-      // The contact decides the row as well as the blob prefix. A portal upload is
-      // the one path with no staff session at all, so leaving this unset could not
-      // be corrected by any ambient scope later.
-      tenantId,
-      tag: "portal-upload",
-      uploadedById: staff.id,
-    },
-  });
-  await createPortalNotification(scope.viewerContactId, "Document uploaded", `${value.name} was uploaded securely.`, "/portal#documents", "document");
-  await logAudit({ action: "portal.document_uploaded", summary: `Customer uploaded ${value.name}`, contactId: scope.viewerContactId, entityType: "Document", entityId: doc.id, userName: "Customer portal", metadata: { mimeType: value.type, sizeBytes: value.size } });
-  revalidatePath("/portal");
-}
+// The portal's case, warranty, profile-change, preference and upload forms are
+// served by actions/portalExpansion.ts (returning { error } to the form). The
+// older copies that lived here were reached by nothing and threw raw Errors;
+// they were deleted rather than left to be wired up by mistake.
 
 export async function markPortalNotificationRead(id: string, formData: FormData) {
   void formData;

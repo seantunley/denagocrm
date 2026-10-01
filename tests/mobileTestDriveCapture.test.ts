@@ -13,7 +13,8 @@ test("mobile test drives exposes the real booking workflow as its primary action
 
   assert.match(mobileView, /<MobileWorkspaceHeader[\s\S]*action={canCreate \? \([\s\S]*<TestDriveBookingTrigger/);
   assert.match(mobileView, /compact/);
-  assert.match(trigger, /form action={createTestDriveBooking}/, "the mobile action must create rather than only list bookings");
+  // SaveForm since gap audit #22, so a refusal shows its message instead of the error page.
+  assert.match(trigger, /SaveForm action={createTestDriveBooking}/, "the mobile action must create rather than only list bookings");
   assert.match(trigger, /Create booking/);
 });
 
