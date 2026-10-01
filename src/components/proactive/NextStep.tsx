@@ -327,12 +327,6 @@ export function CompleteActivityButton({ activityId }: { activityId: string }) {
       >
         <Check className="size-4" />
       </button>
-      <AvailabilityConflictDialog
-        message={availabilityConflict}
-        onClose={() => setAvailabilityConflict(null)}
-        title="Staff member unavailable"
-      />
-
       {nextStep && (
         <NextStepDialog
           open
@@ -529,6 +523,12 @@ export function FollowUpPrompts({ prompts }: { prompts: OverduePrompt[] }) {
           )}
         </ResponsiveDialogContent>
       </Dialog>
+
+      <AvailabilityConflictDialog
+        message={availabilityConflict}
+        onClose={() => setAvailabilityConflict(null)}
+        title="Staff member unavailable"
+      />
 
       {nextStep && (
         <NextStepDialog
