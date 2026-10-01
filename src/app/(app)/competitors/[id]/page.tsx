@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
 import ConfirmDelete from "@/components/ConfirmDelete";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { formatDateTime } from "@/lib/format";
 import {
   addSource,
@@ -122,12 +123,12 @@ export default async function CompetitorDetailPage({ params }: { params: Promise
                 </p>
               </div>
               <div className="flex gap-2">
-                <form action={discoverSourcesNow.bind(null, competitor.id)}>
-                  <button className="btn-secondary btn-sm">Discover sources</button>
-                </form>
-                <form action={researchNow.bind(null, competitor.id)}>
-                  <button className="btn-primary btn-sm">Run research</button>
-                </form>
+                <SaveForm action={discoverSourcesNow.bind(null, competitor.id)} success="Discovery finished">
+                  <SaveButton className="btn-secondary btn-sm" pendingLabel="Discovering…">Discover sources</SaveButton>
+                </SaveForm>
+                <SaveForm action={researchNow.bind(null, competitor.id)} success="Research finished">
+                  <SaveButton className="btn-primary btn-sm" pendingLabel="Researching…">Run research</SaveButton>
+                </SaveForm>
               </div>
             </div>
 
@@ -208,12 +209,12 @@ export default async function CompetitorDetailPage({ params }: { params: Promise
                       </div>
                     )}
                     <div className="mt-2 flex gap-2">
-                      <form action={reviewChange.bind(null, competitor.id, c.id, "reviewed")}>
-                        <button className="btn-secondary btn-sm">Mark reviewed</button>
-                      </form>
-                      <form action={reviewChange.bind(null, competitor.id, c.id, "dismissed")}>
-                        <button className="text-xs text-slate-500 hover:text-red-400">Dismiss as noise</button>
-                      </form>
+                      <SaveForm action={reviewChange.bind(null, competitor.id, c.id, "reviewed")} success="Marked reviewed">
+                        <SaveButton className="btn-secondary btn-sm">Mark reviewed</SaveButton>
+                      </SaveForm>
+                      <SaveForm action={reviewChange.bind(null, competitor.id, c.id, "dismissed")} success="Dismissed">
+                        <SaveButton className="text-xs text-slate-500 hover:text-red-400">Dismiss as noise</SaveButton>
+                      </SaveForm>
                     </div>
                   </li>
                 ))}
@@ -265,9 +266,9 @@ export default async function CompetitorDetailPage({ params }: { params: Promise
                     )}
                   </p>
                   <div className="mt-1.5 flex items-center gap-2">
-                    <form action={runSourceNow.bind(null, competitor.id, s.id)}>
-                      <button className="btn-secondary btn-sm">Check now</button>
-                    </form>
+                    <SaveForm action={runSourceNow.bind(null, competitor.id, s.id)} success="Checked">
+                      <SaveButton className="btn-secondary btn-sm" pendingLabel="Checking…">Check now</SaveButton>
+                    </SaveForm>
                     <ConfirmDelete
                       action={deleteSource.bind(null, competitor.id, s.id)}
                       title={`Stop watching "${s.label}"?`}
@@ -283,7 +284,7 @@ export default async function CompetitorDetailPage({ params }: { params: Promise
               )}
             </ul>
 
-            <form action={addSource.bind(null, competitor.id)} className="mt-4 space-y-2 border-t border-border/60 pt-3">
+            <SaveForm action={addSource.bind(null, competitor.id)} success="Now watching that page" className="mt-4 space-y-2 border-t border-border/60 pt-3">
               <input name="label" className="input" placeholder="Label (e.g. Pricing)" />
               <input name="url" className="input" placeholder="https://competitor.com/pricing" required />
               <select name="sourceType" className="input" defaultValue="pricing">
@@ -297,8 +298,8 @@ export default async function CompetitorDetailPage({ params }: { params: Promise
                 <option value="youtube">YouTube</option>
                 <option value="page">Other page</option>
               </select>
-              <button className="btn-primary btn-sm w-full">Add page to watch</button>
-            </form>
+              <SaveButton className="btn-primary btn-sm w-full" pendingLabel="Adding…">Add page to watch</SaveButton>
+            </SaveForm>
           </section>
 
           <section className="card">
