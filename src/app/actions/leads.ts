@@ -12,6 +12,12 @@ import { createLeadRecord } from "@/lib/leadCreate";
 import { cancelPlannedActivitiesForLostLead } from "@/lib/leadClose";
 import { removeTimelinePin } from "@/lib/timelinePins";
 import { customerRecordTenantId } from "@/lib/customerRecordTenant";
+import {
+  availabilityConflictMessage,
+  DEFAULT_ACTIVITY_DURATION_MS,
+  findStaffAvailabilityConflict,
+  lockStaffSchedules,
+} from "@/lib/staffAvailability";
 // `resolveAssignableUser` is the consolidated contract from #460/#467 — it
 // supersedes the direct `resolveTenantMemberUser` call this branch was written
 // against, and it is the one that enforces membership while dormant.
@@ -823,10 +829,21 @@ export async function moveLeadToTestDrive(
   // rather than a value that fails one of them and rolls the booking back.
   const linkedContact = await prisma.lead.findUnique({
     where: { id: leadId },
-    select: { contactId: true },
+    select: { contactId: true, assignedToId: true },
   });
   const activityTenantId = await customerRecordTenantId({ leadId, contactId: linkedContact?.contactId });
-  const lead = await prisma.$transaction(async (tx) => {
+  const scheduledUserId = linkedContact?.assignedToId ?? user.id;
+  const whenEnd = new Date(when.getTime() + DEFAULT_ACTIVITY_DURATION_MS);
+  const bookingResult = await prisma.$transaction(async (tx) => {
+    await lockStaffSchedules(tx, activityTenantId ?? "global", [scheduledUserId]);
+    const availabilityConflict = await findStaffAvailabilityConflict({
+      userId: scheduledUserId,
+      start: when,
+      end: whenEnd,
+      db: tx,
+    });
+    if (availabilityConflict) return { availabilityConflict } as const;
+
     const updated = await tx.lead.update({
       where: { id: leadId },
       data: {
@@ -841,6 +858,7 @@ export async function moveLeadToTestDrive(
       note: `${changingStage ? "Booked" : "Rescheduled"} from the pipeline board for ${updated.name}.`,
       location: data.location.trim() || null,
       dueDate: when,
+      endDate: whenEnd,
       leadId,
       contactId: updated.contactId,
       assignedToId: updated.assignedToId ?? user.id,
@@ -882,8 +900,12 @@ export async function moveLeadToTestDrive(
         },
       }, tx);
     }
-    return updated;
+    return { lead: updated } as const;
   }, GOVERNANCE_TX);
+  if ("availabilityConflict" in bookingResult) {
+    return { ok: false, error: availabilityConflictMessage(bookingResult.availabilityConflict), gate: verdict };
+  }
+  const lead = bookingResult.lead;
 
   await logAudit({
     action: "lead.test_drive_booked",
