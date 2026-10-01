@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { pageHref, pageWindow, parsePage, searchTerms } from "../src/lib/listPaging";
 import { quoteCsv, quoteListWhere, type QuoteExportRow } from "../src/lib/quoteList";
+import type { BillToFleet } from "../src/lib/quoteBillTo";
 import { loadQuoteVersions, quoteVersionIndex } from "../src/lib/quoteVersions";
 import { withTenant } from "../src/lib/tenantScope";
 
@@ -44,7 +45,13 @@ function matches(row: any, where: any): boolean {
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
-type FakeQuote = QuoteExportRow & { id: string; supersededAt: Date | null; items: Array<{ description: string; qty: number; unitPriceCents: number }> };
+type FakeFleet = { name: string; billingEmail: string | null; billingPhone: string | null; deletedAt: Date | null };
+type FakeQuote = QuoteExportRow & {
+  id: string;
+  supersededAt: Date | null;
+  fleet: FakeFleet | null;
+  items: Array<{ description: string; qty: number; unitPriceCents: number }>;
+};
 
 /** 250 quotes; number 1 is the OLDEST and would have been cut by the old 200 cap. */
 function quotes(): FakeQuote[] {
@@ -59,6 +66,8 @@ function quotes(): FakeQuote[] {
       createdAt: new Date(Date.UTC(2026, 0, 1) + n * 86_400_000),
       supersededAt: null,
       fleetId: oldest ? "flt_kloof" : null,
+      // The search-only relation, as the database join would resolve it.
+      fleet: oldest ? { name: "Kloof Lodge", billingEmail: null, billingPhone: null, deletedAt: null } : null,
       contact: oldest
         ? { firstName: "Thandi", lastName: "Mokoena", company: null, email: "thandi@example.co.za", phone: "082 555 0101" }
         : { firstName: `Customer${n}`, lastName: "Generic", company: null, email: `c${n}@example.com`, phone: `011 000 ${n}` },
@@ -83,8 +92,9 @@ test("search reaches a quote older than the newest 200 — by number, name, emai
   for (const q of ["1001", "Q-1001", "q1001", "Thandi Mokoena", "thandi@example", "082 555", "Rover XL", "rover 4-seater"]) {
     assert.deepEqual(found(quoteListWhere({ accessibleIds: null, q })), [1001], `search "${q}"`);
   }
-  // A fleet quote is found by the fleet's name (resolved to ids by the caller).
-  assert.deepEqual(found(quoteListWhere({ accessibleIds: null, q: "Kloof Lodge", fleetIds: ["flt_kloof"] })), [1001]);
+  // A fleet quote is found by the fleet's name, inside the same query.
+  assert.deepEqual(found(quoteListWhere({ accessibleIds: null, q: "Kloof Lodge" })), [1001]);
+  assert.deepEqual(found(quoteListWhere({ accessibleIds: null, q: "kloof thandi" })), [1001], "terms may match fleet and contact");
   // Status filter still applies, and search AND status combine.
   assert.deepEqual(found(quoteListWhere({ accessibleIds: null, status: "sent" })), [1001]);
   assert.deepEqual(found(quoteListWhere({ accessibleIds: null, status: "draft", q: "Thandi" })), []);
@@ -92,11 +102,51 @@ test("search reaches a quote older than the newest 200 — by number, name, emai
   assert.equal(found(quoteListWhere({ accessibleIds: null })).length, 250);
 });
 
+test("fleet search has no cap: with 600 matching fleets, the quote on the 600th is found and exported", () => {
+  // The old filter pre-fetched "fleets matching q, take 500" and fed their ids
+  // in, so this quote vanished from both the list and the CSV.
+  const fleetOf = (n: number): BillToFleet => ({
+    id: `flt_${n}`, name: `Kloof Lodge ${String(n).padStart(3, "0")}`, registrationNumber: null, vatNumber: null,
+    billingEmail: null, billingPhone: null, address: null, suburb: null, city: null, province: null, postalCode: null,
+  });
+  const fleets = Array.from({ length: 600 }, (_, i) => fleetOf(i + 1));
+  const rows: FakeQuote[] = fleets.map((fleet, i) => ({
+    ...quotes()[1],
+    id: `fq${i + 1}`,
+    number: 7000 + i + 1,
+    fleetId: fleet.id,
+    fleet: { name: fleet.name, billingEmail: null, billingPhone: null, deletedAt: null },
+  }));
+  const target = rows[599];
+
+  const where = quoteListWhere({ accessibleIds: null, q: "Kloof" });
+  const hits = rows.filter((row) => matches(row, where));
+  assert.equal(hits.length, 600, "every matching fleet's quote, not the first 500 fleets'");
+  assert.ok(hits.includes(target), "the quote on the 600th fleet is found");
+  assert.deepEqual(rows.filter((row) => matches(row, quoteListWhere({ accessibleIds: null, q: "Kloof Lodge 600" }))), [target]);
+  // A soft-deleted fleet does not match by its name (it prints as the contact).
+  const deleted = { ...target, fleet: { ...target.fleet!, deletedAt: new Date() } };
+  assert.equal(matches(deleted, quoteListWhere({ accessibleIds: null, q: "Kloof Lodge 600" })), false);
+
+  // The export writes every hit, the 600th fleet's quote included, under the fleet's name.
+  const csv = quoteCsv(hits, new Map(fleets.map((fleet) => [fleet.id, fleet])));
+  assert.equal(csv.split("\r\n").length, 601);
+  assert.ok(csv.includes(`"Q-${target.number}","draft","Kloof Lodge 600"`), "the 600th fleet's quote is in the export");
+
+  // No pre-fetched id list feeds the quote query any more, capped or not.
+  const query = shipped("src/lib/quoteListQuery.ts");
+  assert.doesNotMatch(query, /fleet\.findMany|fleetIds|\btake:/);
+  // The relation the filter uses joins on the TENANT as well as the id, and is
+  // Prisma-only: no migration adds a foreign key for it.
+  const schema = readFileSync(path.join(root, "prisma/schema.prisma"), "utf8");
+  assert.match(schema, /fleet\s+Fleet\?\s+@relation\("QuoteFleetSearch", fields: \[tenantId, fleetId\], references: \[tenantId, id\], onDelete: NoAction, onUpdate: NoAction\)/);
+});
+
 test("search never widens RBAC: an owned-only user cannot find a quote outside their ids", () => {
   assert.deepEqual(found(quoteListWhere({ accessibleIds: ["q2"], q: "Thandi" })), []);
   assert.deepEqual(found(quoteListWhere({ accessibleIds: [], q: "" })), []);
   // Even a fleet match is bounded by the RBAC ids.
-  assert.deepEqual(found(quoteListWhere({ accessibleIds: ["q2"], q: "Kloof", fleetIds: ["flt_kloof"] })), []);
+  assert.deepEqual(found(quoteListWhere({ accessibleIds: ["q2"], q: "Kloof" })), []);
 });
 
 test("superseded revisions stay out of the list", () => {

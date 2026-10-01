@@ -1086,6 +1086,16 @@ model Quote {
   // foreign key after the row is already written. lib/quoteBillTo.ts is the only
   // place that resolves it.
   fleetId     String?
+  /// SEARCH ONLY: lets the quotes list match a fleet's name inside the one quote
+  /// query (lib/quoteList.ts), where a pre-fetched, capped list of fleet ids lost
+  /// quotes on the 501st matching fleet. Everything above still holds:
+  ///   - there is NO database foreign key (no migration); the column is as loose
+  ///     as it was, and a dangling or foreign id simply never joins;
+  ///   - the join is on (tenantId, fleetId) → Fleet(tenantId, id), so it cannot
+  ///     reach another workspace's fleet even through the bypass client;
+  ///   - printing / addressing still goes through lib/quoteBillTo.ts.
+  /// NoAction both ways so a generated migration could never invent delete rules.
+  fleet       Fleet?   @relation("QuoteFleetSearch", fields: [tenantId, fleetId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
 
   createdById String?
   createdBy   User?    @relation("QuoteCreator", fields: [createdById], references: [id])
@@ -1467,6 +1477,8 @@ model Fleet {
   deletedAt   DateTime?
 
   vehicles Vehicle[]
+  /// Back-relation of Quote.fleet, which exists for search only — see there.
+  quotes   Quote[]   @relation("QuoteFleetSearch")
   @@index([tenantId])
   @@unique([tenantId, id])
 }
