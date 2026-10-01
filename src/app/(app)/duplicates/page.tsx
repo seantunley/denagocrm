@@ -7,6 +7,9 @@ import { getAccessibleContactIds, requirePermission } from "@/lib/permissions";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/visual-system";
+import ConfirmDelete from "@/components/ConfirmDelete";
+import { emailKey } from "@/lib/contactMatch";
+import { phoneTail } from "@/lib/phoneMatch";
 
 type ContactRow = Awaited<ReturnType<typeof getContacts>>[number];
 
@@ -29,9 +32,15 @@ export default async function DuplicatesPage() {
     if (!group.some((item) => item.id === contact.id)) group.push(contact);
     groups.set(key, group);
   };
+  // The same identity rules as everywhere else (lib/contactMatch.ts): trimmed,
+  // case-insensitive email; the phone's last digits, so "083 123 4567",
+  // "+27 83 123 4567" and "0831234567" are one number. Stripping only spaces
+  // missed every duplicate typed with a +27 or brackets.
   for (const contact of contacts) {
-    if (contact.email) add(`e:${contact.email.toLowerCase()}`, contact);
-    if (contact.phone) add(`p:${contact.phone.replace(/\s+/g, "")}`, contact);
+    const email = emailKey(contact.email);
+    if (email) add(`e:${email}`, contact);
+    const tail = phoneTail(contact.phone);
+    if (tail) add(`p:${tail}`, contact);
   }
   const duplicateGroups = [...groups.entries()]
     .filter(([, group]) => group.length > 1)
@@ -56,7 +65,9 @@ export default async function DuplicatesPage() {
           <div key={group.key} className="card">
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-3">
               Shared {group.key.startsWith("e:") ? "email" : "phone"}:{" "}
-              <span className="text-slate-300 normal-case">{group.key.slice(2)}</span>
+              <span className="text-slate-300 normal-case">
+                {group.key.startsWith("e:") ? group.key.slice(2) : group.contacts.find((c) => c.phone)?.phone ?? group.key.slice(2)}
+              </span>
             </p>
             <ul className="divide-y divide-slate-800">
               {group.contacts.map((contact) => (
@@ -67,9 +78,21 @@ export default async function DuplicatesPage() {
                       {[contact.email, contact.phone].filter(Boolean).join(" · ")} · added {formatDate(contact.createdAt)} · {contact._count.leads} leads{automotiveOn ? ` · ${contact._count.vehicles} vehicles` : ""} · {contact._count.communications} comms
                     </p>
                   </div>
-                  <form action={mergeContacts.bind(null, contact.id, group.contacts.filter((item) => item.id !== contact.id).map((item) => item.id).join(","))}>
-                    <button className="btn-secondary btn-sm">Keep this one → merge others in</button>
-                  </form>
+                  <ConfirmDelete
+                    action={mergeContacts.bind(null, contact.id, group.contacts.filter((item) => item.id !== contact.id).map((item) => item.id).join(","))}
+                    title={`Keep ${contactName(contact)} and merge ${group.contacts.length - 1} other${group.contacts.length > 2 ? "s" : ""} into it?`}
+                    description={`${group.contacts
+                      .filter((item) => item.id !== contact.id)
+                      .map((item) => contactName(item))
+                      .join(", ")} will be merged in: their leads, quotes, messages, vehicles, test drives and everything else move to ${contactName(contact)}, blank details are filled in from them, and they leave the contact list. A merge can't be undone.`}
+                    trigger="Keep this one → merge others in"
+                    triggerClass="btn-secondary btn-sm"
+                    confirmLabel="Merge"
+                    pendingLabel="Merging…"
+                    success="Merged"
+                    reasonLabel="Why are these the same person?"
+                    reasonPlaceholder="Same customer entered twice"
+                  />
                 </li>
               ))}
             </ul>

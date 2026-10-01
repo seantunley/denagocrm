@@ -8,6 +8,7 @@ import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
 import { MAX_BLOB_BYTES, assertOwnedBlob, isLibraryUpload, libraryUploadPrefix } from "@/lib/storage";
 import { actingScopeClass, withActingStaffScope } from "@/lib/actingScope";
+import { asActionResult, refuse } from "@/lib/actionResult";
 import { actingTenantId } from "@/lib/actingTenant";
 import { photoBlobAccess, type PhotoBlobAccess } from "@/lib/photoBlob";
 
@@ -35,10 +36,10 @@ function assertBlobUrl(url: string): void {
   try {
     parsed = new URL(url);
   } catch {
-    throw new Error("Upload reference is not a valid URL");
+    refuse("That upload didn't come back with a valid file address — try again.");
   }
   if (parsed.protocol !== "https:" || !/(^|\.)blob\.vercel-storage\.com$/i.test(parsed.hostname)) {
-    throw new Error("Upload reference must point at Blob storage");
+    refuse("That upload isn't in this CRM's file storage — upload it here and try again.");
   }
 }
 
@@ -70,7 +71,7 @@ async function resolveUpload(file: UploadedFileMeta) {
   // state was refused their own workspace's blobs and accepted the founding
   // tenant's, which is the opposite of what this check exists to do.
   if (scope.mode !== "tenant") {
-    throw new Error("No workspace is attached to this sign-in — sign out and back in to add library files.");
+    refuse("No workspace is attached to this sign-in — sign out and back in to add library files.");
   }
   const expectedTenantId = scope.tenantId;
   const owned = await assertOwnedBlob(file.url, expectedTenantId);
@@ -80,10 +81,10 @@ async function resolveUpload(file: UploadedFileMeta) {
   // permissions keep out. Only a file the library upload route signed — directly
   // in this workspace's library folder — may be registered.
   if (!isLibraryUpload(owned.pathname, expectedTenantId)) {
-    throw new Error("That file was not uploaded to the library. Upload it here and try again.");
+    refuse("That file was not uploaded to the library. Upload it here and try again.");
   }
   if (owned.size > MAX_BLOB_BYTES) {
-    throw new Error(`That file is too large to store (limit ${Math.floor(MAX_BLOB_BYTES / (1024 * 1024))} MB).`);
+    refuse(`That file is too large to store (limit ${Math.floor(MAX_BLOB_BYTES / (1024 * 1024))} MB).`);
   }
   return {
     sizeBytes: owned.size,
@@ -121,9 +122,11 @@ export async function registerLibraryDocuments(
   nameOverride: string | null,
   files: UploadedFileMeta[]
 ) {
-  return withActingStaffScope(async () => {
+  // asActionResult binds the workspace (as the comment above requires) AND turns
+  // a refusal into a value the uploader shows (gap audit #22).
+  return asActionResult(async () => {
   const user = await requirePermission("library.manage");
-  if (files.length === 0) return;
+  if (files.length === 0) refuse("Choose at least one file.");
   // Resolve every upload through our own store BEFORE writing any of them, so a
   // batch containing one foreign URL registers nothing rather than half of it.
   const resolved = await Promise.all(files.map(resolveUpload));
@@ -171,6 +174,7 @@ export async function registerLibraryDocuments(
     user,
   });
   revalidatePath("/documents");
+  return { success: `${added.length} document${added.length === 1 ? "" : "s"} added` };
   });
 }
 
@@ -179,13 +183,14 @@ export async function registerLibraryVersion(
   note: string | null,
   file: UploadedFileMeta
 ) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     const user = await requirePermission("library.manage");
     const meta = await resolveUpload(file);
-    const document = await prisma.libraryDocument.findUniqueOrThrow({
+    const document = await prisma.libraryDocument.findUnique({
       where: { id: documentId },
       include: { versions: { orderBy: { version: "desc" }, take: 1 } },
     });
+    if (!document) refuse("That library document is no longer there — refresh the page.");
     const nextVersion = (document.versions[0]?.version ?? 0) + 1;
     // Atomic: new version + the document's updatedAt bump in ONE transaction. The doc
     // was already authorised via the scoped findUniqueOrThrow above.
@@ -226,22 +231,24 @@ export async function registerLibraryVersion(
       user,
     });
     revalidatePath("/documents");
+    return { success: `Saved as v${nextVersion}` };
   });
 }
 
 export async function deleteLibraryDocument(id: string, formData: FormData) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     const user = await requirePermission("library.manage");
     const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
     const document = await softDeleteRecord("libraryDocument", id, reason, user.name);
     // Nothing matched — another tenant's id, or already gone. Never audit a
     // deletion that did not happen.
-    if (!document) return;
+    if (!document) refuse("That document is already gone — refresh the page.");
     await logAudit({
       action: "trash.deleted",
       summary: `Moved library document “${document.name}” to trash — ${reason}`,
       user,
     });
     revalidatePath("/documents");
+    return { success: "Moved to trash" };
   });
 }
