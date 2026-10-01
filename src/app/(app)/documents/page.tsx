@@ -51,6 +51,7 @@ import LibraryItemActions from "@/components/documents/LibraryItemActions";
 import { AddDocumentsForm } from "@/components/LibraryUploader";
 import ModalTrigger from "@/components/Modal";
 import { type MoveTargets } from "@/components/RepoRow";
+import PortalUploadsList, { type PortalUploadRow } from "@/components/PortalUploadsList";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -505,6 +506,46 @@ export default async function DocumentsPage({
 
   const sameFolder = (a: Folder, b: Folder) => JSON.stringify(a) === JSON.stringify(b);
 
+  // Files customers sent through the portal that nobody has looked at yet (gap
+  // audit #30). Uploads on no case had no staff screen at all. Limited to the
+  // customers this person may see; guarded client, so tenant-scoped.
+  const newPortalUploadRows = canSeeDocuments
+    ? await prisma.portalUpload.findMany({
+        where: { status: "received", ...(contactIds === null ? {} : { contactId: { in: contactIds } }) },
+        orderBy: { createdAt: "desc" },
+        take: 25,
+        select: { id: true, fileName: true, sizeBytes: true, createdAt: true, status: true, caseId: true, contactId: true },
+      })
+    : [];
+  const [uploadContacts, uploadCases] = newPortalUploadRows.length
+    ? await Promise.all([
+        prisma.contact.findMany({
+          where: { id: { in: [...new Set(newPortalUploadRows.map((row) => row.contactId))] } },
+          select: { id: true, firstName: true, lastName: true, company: true, isCompany: true },
+        }),
+        prisma.customerCase.findMany({
+          where: { id: { in: newPortalUploadRows.map((row) => row.caseId).filter((caseId): caseId is string => Boolean(caseId)) } },
+          select: { id: true, number: true },
+        }),
+      ])
+    : [[], []];
+  const newPortalUploads: PortalUploadRow[] = newPortalUploadRows.map((row) => {
+    const owner = uploadContacts.find((item) => item.id === row.contactId);
+    const linkedCase = uploadCases.find((item) => item.id === row.caseId);
+    return {
+      ...row,
+      caseLabel: linkedCase ? `Case C-${linkedCase.number}` : null,
+      contact: { id: row.contactId, name: owner ? contactName(owner) : "Customer" },
+    };
+  });
+  const portalQueue = newPortalUploads.length > 0 && (
+    <Surface className="p-4">
+      <h2 className="mb-1 font-semibold">New from the customer portal</h2>
+      <p className="mb-2 text-xs text-muted-foreground">Files customers uploaded that nobody has reviewed yet.</p>
+      <PortalUploadsList uploads={newPortalUploads} canReview={canManage} />
+    </Surface>
+  );
+
   return (
     <>
       <MobileOnly className="space-y-4">
@@ -513,6 +554,7 @@ export default async function DocumentsPage({
           description="Capture a file quickly or find the document you need."
           action={canTemplates ? <Link href="/document-studio" className={buttonVariants({ variant: "outline", size: "sm" })}><Settings2 className="size-4" />Studio</Link> : undefined}
         />
+        {portalQueue}
         {!inLibrary && canUpload && uploadTarget && (
           <DocumentUploader target={uploadTarget} tenantId={tenantId} hint={uploadHint} />
         )}
@@ -608,6 +650,8 @@ export default async function DocumentsPage({
             </Link>
           ) : undefined)}
         />
+
+        {portalQueue}
 
         <div className="grid items-start gap-5 lg:grid-cols-[17rem_minmax(0,1fr)]">
           <Surface className="sticky top-20 max-h-[calc(100vh-6rem)] overflow-y-auto p-2">

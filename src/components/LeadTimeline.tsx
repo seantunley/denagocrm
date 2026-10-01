@@ -11,6 +11,7 @@ import {
   toggleLeadNotePin,
 } from "@/app/actions/timelinePins";
 import { formatDateTime } from "@/lib/format";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { isFutureDay } from "@/lib/activityDay";
 import {
   getTimelinePins,
@@ -289,9 +290,9 @@ export default async function LeadTimeline({
 
     const pinButton =
       item.pinTarget && pinAction ? (
-        <form action={pinAction} className="shrink-0">
-          <button
-            type="submit"
+        <SaveForm action={pinAction} className="shrink-0">
+          <SaveButton
+            pendingLabel={isPinned ? "Unpinning…" : "Pinning…"}
             title={isPinned ? "Unpin from the top" : "Pin to the top"}
             aria-label={
               isPinned ? "Unpin timeline entry" : "Pin timeline entry"
@@ -308,8 +309,8 @@ export default async function LeadTimeline({
               <Pin className="size-4" />
             )}
             {isPinned ? "Unpin" : "Pin"}
-          </button>
-        </form>
+          </SaveButton>
+        </SaveForm>
       ) : null;
 
     return (
@@ -413,7 +414,7 @@ export default async function LeadTimeline({
         {item.pending && item.activityId && !isFutureDay(item.when) && (
           <div className="mt-2 flex flex-wrap items-center gap-2">
             {pinButton}
-            <form
+            <SaveForm
               action={completeActivity.bind(null, item.activityId)}
               className="flex min-w-0 flex-1 basis-full flex-wrap items-center gap-2 sm:basis-auto sm:flex-nowrap"
             >
@@ -424,14 +425,14 @@ export default async function LeadTimeline({
                 placeholder="Add a note (optional)"
                 className="input h-9 min-w-0 flex-1 basis-full text-xs sm:w-52 sm:basis-auto"
               />
-              <button
-                type="submit"
+              <SaveButton
+                pendingLabel="Saving…"
                 className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-emerald-500/50 bg-emerald-500/15 px-3 text-xs font-semibold text-emerald-100 transition-all hover:border-emerald-400/70 hover:bg-emerald-500/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/70"
               >
                 <Check className="size-4" />
                 Mark done
-              </button>
-            </form>
+              </SaveButton>
+            </SaveForm>
           </div>
         )}
       </li>
@@ -457,7 +458,7 @@ export default async function LeadTimeline({
         </div>
       </div>
 
-      <form action={addCommunication} className="mb-5 space-y-2">
+      <SaveForm action={addCommunication} className="mb-5 space-y-2">
         {leadId && <input type="hidden" name="leadId" value={leadId} />}
         {contactId && (
           <input type="hidden" name="contactId" value={contactId} />
@@ -481,8 +482,8 @@ export default async function LeadTimeline({
           <Pin className="size-3.5 text-orange-300" />
           Pin this note immediately
         </label>
-        <button className="btn-secondary btn-sm w-full">+ Add note</button>
-      </form>
+        <SaveButton className="btn-secondary btn-sm w-full" pendingLabel="Adding…">+ Add note</SaveButton>
+      </SaveForm>
 
       {pinnedItems.length > 0 && (
         <section className="mb-5 overflow-hidden rounded-2xl border border-orange-400/30 bg-gradient-to-b from-orange-500/[0.10] to-orange-500/[0.03]">

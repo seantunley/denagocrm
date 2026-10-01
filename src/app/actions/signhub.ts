@@ -9,6 +9,10 @@ import { logSignEvent } from "@/lib/signing/events";
 import { approveStep, rejectStep, canActOnStep } from "@/lib/signing/approvals";
 import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "@/lib/signing/status";
 import { withActingStaffScope } from "@/lib/actingScope";
+import { asActionResult, refuse } from "@/lib/actionResult";
+import { readFile } from "@/lib/storage";
+import { COMPLETED_EVENT, deliverCompletionEmails } from "@/lib/signing/completionFanout";
+import { exactTenantWhere } from "@/lib/signing/recoveryScope";
 import {
   REQUEST_BINDING_SELECT,
   canAccessRecipient,
@@ -91,6 +95,53 @@ export async function resendRequest(requestId: string): Promise<{ ok: boolean; n
     revalidatePath("/signatures");
     revalidatePath(`/signatures/${requestId}`);
     return { ok: true, notified };
+  });
+}
+
+/**
+ * Email the sealed PDF again to every recipient who never received it (gap audit
+ * #32). A completed request whose fan-out failed looked exactly like one that
+ * succeeded; the recovery sweep retries a few times and then stops. This is the
+ * person's way through after that. Only recipients still missing their copy are
+ * sent to — `deliverCompletionEmails` skips anyone already marked delivered.
+ */
+export async function resendSignedCopies(requestId: string) {
+  return asActionResult(async () => {
+    const access = await resolveSignatureRequestAccess(() =>
+      prisma.signatureRequest.findUnique({ where: { id: requestId }, include: { recipients: true } }),
+    );
+    if (!access) refuse("That signing request is no longer there — refresh the page.");
+    const { user, request: req } = access;
+    if (req.deletedAt) refuse("That signing request is no longer there — refresh the page.");
+    if (req.status !== "completed" || !req.signedPdfRef) refuse("Only a completed request has a signed copy to send.");
+    let pdf: Buffer;
+    try {
+      pdf = await readFile(req.signedPdfRef, req.tenantId);
+    } catch {
+      refuse("The signed PDF can't be read from storage — contact support before resending.");
+    }
+    const delivery = await deliverCompletionEmails({
+      requestId,
+      title: req.title,
+      pdf,
+      recipients: req.recipients.map((r) => ({ id: r.id, name: r.name, email: r.email, completedEmailSentAt: r.completedEmailSentAt })),
+      tenantWhere: exactTenantWhere(req.tenantId),
+    });
+    // Fully delivered now: write the marker the recovery sweep looks for, so it
+    // stops considering this request stranded.
+    if (delivery.ok && !(await prisma.signatureEvent.findFirst({ where: { requestId, type: COMPLETED_EVENT }, select: { id: true } }))) {
+      await logSignEvent(requestId, { type: COMPLETED_EVENT, actor: `Denago: ${user.name}` });
+    }
+    await logAudit({
+      action: "signing.signed_copy_resent",
+      summary: `Resent the signed copy of “${req.title}” — ${delivery.sent} sent${delivery.failures.length ? `, ${delivery.failures.length} still failing` : ""}`,
+      entityType: "SignatureRequest",
+      entityId: requestId,
+      user,
+    });
+    revalidatePath(`/signatures/${requestId}`);
+    if (!delivery.ok) refuse(`Still couldn't send to ${delivery.failures.length} recipient${delivery.failures.length === 1 ? "" : "s"} — check their email address and the mail settings.`);
+    return { success: delivery.sent ? `Sent to ${delivery.sent} recipient${delivery.sent === 1 ? "" : "s"}` : "Everyone already has it" };
   });
 }
 

@@ -118,7 +118,8 @@ test("timestamping never becomes a precondition of signing", () => {
   assert.match(source, /return null/, "failures resolve to null");
   assert.doesNotMatch(source, /throw new Error/, "nothing here may throw into the completion path");
 
-  const complete = read("src/lib/signing/complete.ts");
+  // The completion function itself: the file has other, unrelated transactions.
+  const complete = read("src/lib/signing/complete.ts").split("export async function completeSignatureRequest(")[1] ?? "";
   // Requested BEFORE the transaction, so a slow authority cannot hold one open,
   // and stored as plain nullable columns.
   const stampAt = complete.indexOf("requestTrustedTimestamp(");

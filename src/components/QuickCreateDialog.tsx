@@ -26,6 +26,7 @@ import LocationAutocomplete from "@/components/LocationAutocomplete";
 import { readPwaActivityShortcut } from "@/lib/pwaShortcuts";
 import { useActivityTypes } from "@/components/ActivityTypesProvider";
 import { pickableActivityTypes } from "@/lib/activityTypes";
+import ContactPicker from "@/components/ContactPicker";
 
 export type QuickCreateKind = "lead" | "contact" | "calendar" | "quote" | "jobcard" | "vehicle";
 
@@ -162,7 +163,12 @@ export default function QuickCreateDialog() {
 
   async function scheduleCalendar(formData: FormData) {
     try {
-      await scheduleQuickActivity(formData);
+      // A refusal (a full workshop slot, a follow-up with no note) comes back as a value.
+      const result = await scheduleQuickActivity(formData);
+      if (result?.error) {
+        toast.error(result.error);
+        return;
+      }
       close();
       toast.success("Activity scheduled");
     } catch (error) {
@@ -264,12 +270,12 @@ export default function QuickCreateDialog() {
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div>
                     <label className="label">Customer or contact</label>
-                    <select name="contactId" className={input} defaultValue={createDefaults.contactId ?? ""}>
-                      <option value="">—</option>
-                      {currentOptions.contacts.map((contact) => (
-                        <option key={contact.id} value={contact.id}>{contact.label}</option>
-                      ))}
-                    </select>
+                    <ContactPicker
+                      name="contactId"
+                      options={currentOptions.contacts}
+                      defaultValue={createDefaults.contactId ?? ""}
+                      emptyLabel="No customer"
+                    />
                   </div>
                   <div>
                     <label className="label">Assign to</label>

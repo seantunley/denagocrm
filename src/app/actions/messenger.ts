@@ -77,18 +77,28 @@ export async function sendDmReply(
       select: { channel: true },
     });
     if (!conversation) return { error: "That conversation does not belong to this customer." };
-    if (!isDmPlatform(conversation.channel)) {
-      return { error: `This is a ${conversation.channel} conversation, not a Messenger or Instagram one.` };
+    // Telegram (gap audit #29) goes through the same queue as Messenger: the outbox
+    // already delivers Telegram for the bot. Text only from the inbox for now.
+    if (conversation.channel !== "telegram" && !isDmPlatform(conversation.channel)) {
+      return { error: `This is a ${conversation.channel} conversation, not a Messenger, Instagram or Telegram one.` };
     }
-    const platform: DmPlatform = conversation.channel;
+    const platform = conversation.channel as DmPlatform | "telegram";
     const tenantId = await customerRecordTenantId({ contactId });
+    const platformName = platform === "instagram" ? "Instagram" : platform === "x" ? "X" : platform === "telegram" ? "Telegram" : "Messenger";
 
-    const recipientId = platform === "instagram" ? contact.instagramId : platform === "x" ? contact.xUserId : contact.messengerPsid;
+    const recipientId =
+      platform === "instagram" ? contact.instagramId
+      : platform === "x" ? contact.xUserId
+      : platform === "telegram" ? contact.telegramChatId
+      : contact.messengerPsid;
     // Deliberately no fallback to the other platform: sending to the wrong channel
     // is worse than not sending, because the customer sees nothing and staff see
     // "Sent ✓".
     if (!recipientId) {
-      return { error: `This contact has no ${platform === "instagram" ? "Instagram" : platform === "x" ? "X" : "Messenger"} identity, so the reply cannot be delivered there.` };
+      return { error: `This contact has no ${platformName} identity, so the reply cannot be delivered there.` };
+    }
+    if (platform === "telegram" && hasFile) {
+      return { error: "Telegram attachments can't be sent from the inbox yet — send text, or share a Library link." };
     }
 
     if (platform === "x") {
@@ -185,7 +195,7 @@ export async function sendDmReply(
      * what was queued behind it — so the caption can never arrive before the file
      * it describes.
      */
-    const label = platform === "instagram" ? "Instagram" : "Messenger";
+    const label = platformName;
     const part = (
       message: OutboxPayload,
       body: string,

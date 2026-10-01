@@ -20,6 +20,8 @@ import {
 // can bulk-edit non-inbox records.
 import { isSocialChannel } from "@/lib/socialChannels";
 import { withActingStaffScope } from "@/lib/actingScope";
+import { asActionResult, refuse } from "@/lib/actionResult";
+import { requiredReason } from "@/lib/deleteReason";
 
 async function assertCommunicationAccess(
   user: PermissionUser,
@@ -34,11 +36,12 @@ async function assertCommunicationAccess(
     (communication.leadId
       ? await canAccessLead(user, communication.leadId)
       : false);
-  if (!allowed) throw new Error("Communication access denied");
+  if (!allowed) refuse("You don't have access to that timeline entry.");
 }
 
 export async function addCommunication(formData: FormData) {
-  return withActingStaffScope(async () => {
+  // asActionResult: a refusal shows on the form instead of "This page hit an error" (#22).
+  return asActionResult(async () => {
     // Write grade. This creates a Communication (and can upload an image) against a
     // contact or lead; it was gated on the VIEW list, so contacts.view_owned alone
     // was enough to write to another team's record timeline.
@@ -49,12 +52,15 @@ export async function addCommunication(formData: FormData) {
     };
     const body = String(formData.get("body") ?? "").trim();
     const file = formData.get("image");
-    const hasFile =
-      file &&
-      typeof file === "object" &&
-      (file as File).size > 0 &&
-      (file as File).size <= 4 * 1024 * 1024;
-    if (!body && !hasFile) return;
+    const chosen = file && typeof file === "object" && (file as File).size > 0;
+    // Too big used to be dropped silently, saving a note without the photo.
+    if (chosen && (file as File).size > 4 * 1024 * 1024) refuse("Images must be 4 MB or smaller.");
+    // The file picker only offers images, but a direct call can send anything — and
+    // a non-image used to pass as "an attachment", then be skipped at upload, saving
+    // a "🖼 Image" note with no image. Refuse it here, where it is still the caller's.
+    if (chosen && !(file as File).type.startsWith("image/")) refuse("Only images can be attached to a note.");
+    const hasFile = Boolean(chosen);
+    if (!body && !hasFile) refuse("Write a note or attach an image.");
 
     // Access-check the client-supplied links BEFORE writing: without this a user
     // could attach a communication to any contact/lead id they cannot otherwise
@@ -62,9 +68,9 @@ export async function addCommunication(formData: FormData) {
     const contactId = str("contactId");
     const leadId = str("leadId");
     if (contactId && !(await canAccessContact(user, contactId)))
-      throw new Error("Contact access denied");
+      refuse("You don't have access to that customer.");
     if (leadId && !(await canAccessLead(user, leadId)))
-      throw new Error("Lead access denied");
+      refuse("You don't have access to that lead.");
 
     // ONE owner for the row and its image, resolved once. The attachment belongs to
     // the customer record the note is filed against, exactly as the Communication
@@ -79,7 +85,7 @@ export async function addCommunication(formData: FormData) {
     const tenantId = await customerRecordTenantId({ contactId, leadId });
 
     let attachmentUrl: string | null = null;
-    if (hasFile && (file as File).type.startsWith("image/")) {
+    if (hasFile) {
       const { saveFile } = await import("@/lib/storage");
       const f = file as File;
       attachmentUrl = await saveFile(
@@ -116,16 +122,17 @@ export async function addCommunication(formData: FormData) {
     }
 
     revalidatePath(String(formData.get("revalidate") ?? "/"));
+    return { success: "Logged" };
   });
 }
 
 export async function toggleCommunicationPin(id: string, path: string) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     // Write grade — pinning writes a TimelinePin row and an audit entry. Its
     // siblings in timelinePins.ts already demand contacts.edit / leads.edit to pin
     // on the SAME timeline; a view permission here was the odd one out.
     const user = await requireAnyPermission(...CUSTOMER_RECORD_WRITE_PERMISSIONS);
-    const communication = await prisma.communication.findUniqueOrThrow({
+    const communication = await prisma.communication.findUnique({
       where: { id },
       select: {
         contactId: true,
@@ -134,6 +141,7 @@ export async function toggleCommunicationPin(id: string, path: string) {
         body: true,
       },
     });
+    if (!communication) refuse("That timeline entry is no longer there — refresh the page.");
     await assertCommunicationAccess(user, communication);
 
     const result = await toggleTimelinePin("communication", id, user.id);
@@ -146,6 +154,7 @@ export async function toggleCommunicationPin(id: string, path: string) {
       user,
     });
     revalidatePath(path);
+    return { success: result.pinned ? "Pinned" : "Unpinned" };
   });
 }
 
@@ -161,12 +170,13 @@ export async function markThreadRead(
 ) {
   return withActingStaffScope(async () => {
     const user = await requireAnyPermission("inbox.view", "inbox.reply");
+    // Fired in the background when a thread is opened — there is nobody to show a
+    // refusal to, and a throw here only surfaced as an error page. Not marking is
+    // the whole outcome of every refusal.
     if (!contactId && !leadId) return;
-    if (!isSocialChannel(channel)) throw new Error("Unsupported channel");
-    if (contactId && !(await canAccessContact(user, contactId)))
-      throw new Error("Customer access denied");
-    if (leadId && !(await canAccessLead(user, leadId)))
-      throw new Error("Lead access denied");
+    if (!isSocialChannel(channel)) return;
+    if (contactId && !(await canAccessContact(user, contactId))) return;
+    if (leadId && !(await canAccessLead(user, leadId))) return;
     await prisma.communication.updateMany({
       where: {
         type: channel,
@@ -193,14 +203,14 @@ export async function setThreadArchived(
   channel: string,
   archived: boolean,
 ) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     const user = await requirePermission("inbox.reply");
-    if (!contactId && !leadId) return;
-    if (!isSocialChannel(channel)) throw new Error("Unsupported channel");
+    if (!contactId && !leadId) refuse("This conversation isn't linked to a customer or lead.");
+    if (!isSocialChannel(channel)) refuse("That channel can't be archived from here.");
     if (contactId && !(await canAccessContact(user, contactId)))
-      throw new Error("Customer access denied");
+      refuse("You don't have access to that customer.");
     if (leadId && !(await canAccessLead(user, leadId)))
-      throw new Error("Lead access denied");
+      refuse("You don't have access to that lead.");
     await prisma.communication.updateMany({
       where: {
         type: channel,
@@ -210,6 +220,7 @@ export async function setThreadArchived(
     });
     revalidatePath("/inbox");
     revalidatePath("/messages");
+    return { success: archived ? "Archived" : "Restored" };
   });
 }
 
@@ -218,17 +229,18 @@ export async function deleteCommunication(
   path: string,
   formData: FormData,
 ) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     // Write grade — this is a hard delete of a customer's contact history. A view
     // permission must never be able to destroy the record it can only look at.
     const user = await requireAnyPermission(...CUSTOMER_RECORD_WRITE_PERMISSIONS);
-    const reason =
-      String(formData.get("reason") ?? "").trim() || "No reason given";
-    const communication = await prisma.communication.findUniqueOrThrow({
+    const communication = await prisma.communication.findUnique({
       where: { id },
       select: { contactId: true, leadId: true },
     });
+    if (!communication) refuse("That timeline entry is already gone — refresh the page.");
     await assertCommunicationAccess(user, communication);
+    // Required on the server, not just in the dialog: a hard delete is audited with why.
+    const reason = requiredReason(formData, "deleting this entry");
     await removeTimelinePin("communication", id);
     const comm = await prisma.communication.delete({ where: { id } });
     const { logAudit } = await import("@/lib/audit");
@@ -240,5 +252,6 @@ export async function deleteCommunication(
       user,
     });
     revalidatePath(path);
+    return { success: "Deleted" };
   });
 }

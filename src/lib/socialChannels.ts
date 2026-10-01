@@ -3,7 +3,7 @@
  * thread-mutating server actions (which feed a client-supplied `channel`
  * straight into a bulk updateMany) can be unit-tested in isolation.
  */
-export const SOCIAL_CHANNELS = ["whatsapp", "messenger", "instagram"] as const;
+export const SOCIAL_CHANNELS = ["whatsapp", "messenger", "instagram", "telegram"] as const;
 export type SocialChannel = (typeof SOCIAL_CHANNELS)[number];
 
 export function isSocialChannel(channel: string): channel is SocialChannel {
