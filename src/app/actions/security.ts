@@ -411,10 +411,17 @@ export async function resetTeamMemberPassword(userId: string, formData: FormData
     const password = String(formData.get("password") ?? "");
     if (!validPassword(password)) refuse(`The new password must be ${PASSWORD_RULE}.`);
     const target = await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { name: true, role: true } });
-    if (target.role === "owner") refuse("Another owner's password can't be reset here — they change it themselves.");
+    const ownerRefusal = "Another owner's password can't be reset here — they change it themselves.";
+    if (target.role === "owner") refuse(ownerRefusal);
     const passwordHash = await bcrypt.hash(password, 12);
     await basePrisma.$transaction(async (tx) => {
-      await tx.user.update({ where: { id: userId }, data: { passwordHash, passwordChangedAt: new Date() } });
+      // The non-owner check is re-made by the write itself: someone promoted to
+      // owner after the read above matches nothing, and the reset refuses.
+      const { count } = await tx.user.updateMany({
+        where: { id: userId, role: { not: "owner" } },
+        data: { passwordHash, passwordChangedAt: new Date() },
+      });
+      if (count === 0) refuse(ownerRefusal);
       // Signed out everywhere — the same raw bump the role editor uses
       // (sessionVersion is not on the Prisma model).
       await tx.$executeRaw`UPDATE "User" SET "sessionVersion" = "sessionVersion" + 1 WHERE "id" = ${userId}`;

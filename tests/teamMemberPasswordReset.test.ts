@@ -16,6 +16,15 @@ test("owner only, own workspace only, never another owner or yourself", () => {
   assert.match(fn, /if \(target\.role === "owner"\) refuse\(/);
 });
 
+test("the not-an-owner check is atomic with the password write (no promote-then-reset race)", () => {
+  const tx = fn.slice(fn.indexOf("basePrisma.$transaction("));
+  assert.match(tx, /tx\.user\.updateMany\(\{\s*where: \{ id: userId, role: \{ not: "owner" \} \},\s*data: \{ passwordHash/);
+  assert.match(tx, /if \(count === 0\) refuse\(ownerRefusal\)/);
+  // ...and it comes BEFORE the session bump and the audit, so a refusal rolls nothing in.
+  assert.ok(tx.indexOf("count === 0") < tx.indexOf("sessionVersion"));
+  assert.doesNotMatch(tx, /tx\.user\.update\(/);
+});
+
 test("same password floor as everywhere else — one shared rule", () => {
   assert.match(fn, /if \(!validPassword\(password\)\) refuse\(/);
   for (const file of ["src/app/actions/settings.ts", "src/app/actions/tenants.ts", "src/app/actions/security.ts"]) {
@@ -28,7 +37,6 @@ test("same password floor as everywhere else — one shared rule", () => {
 
 test("signed out everywhere, in the same transaction as the new password, and audited without it", () => {
   const tx = fn.slice(fn.indexOf("basePrisma.$transaction("));
-  assert.match(tx, /tx\.user\.update\(\{ where: \{ id: userId \}, data: \{ passwordHash/);
   assert.match(tx, /UPDATE "User" SET "sessionVersion" = "sessionVersion" \+ 1 WHERE "id" = \$\{userId\}/);
   assert.match(tx, /action: "security\.password_reset_by_owner"/);
   assert.doesNotMatch(tx.slice(tx.indexOf("logAuditStrict(")), /password(Hash)?[,:}]/, "the audit line must not carry the password or its hash");
