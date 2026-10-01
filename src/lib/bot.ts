@@ -59,18 +59,18 @@ async function voiceRepliesEnabled(): Promise<boolean> {
  * gets a reply. `viaVoice` reports what was ACTUALLY sent so the caller logs the
  * real channel (a text fallback must not be recorded as a voice reply).
  */
-async function sendVoiceReply(fromDigits: string, text: string): Promise<{ ok: boolean; viaVoice: boolean }> {
+async function sendVoiceReply(fromDigits: string, text: string): Promise<{ ok: boolean; viaVoice: boolean; providerMessageId?: string }> {
   const audio = await elevenLabsTTS(text);
   if (audio) {
     // .ogg so WhatsApp treats it as a voice note (PTT waveform), not an audio file.
     const uploaded = await uploadWhatsAppMedia(audio.buffer, audio.contentType, "voice-reply.ogg").catch(() => null);
     if (uploaded && "id" in uploaded) {
       const res = await sendWhatsAppAudioId(fromDigits, uploaded.id);
-      if (res.ok) return { ok: true, viaVoice: true };
+      if (res.ok) return { ok: true, viaVoice: true, providerMessageId: res.providerMessageId };
     }
   }
   const t = await sendWhatsAppText(fromDigits, text);
-  return { ok: t.ok, viaVoice: false };
+  return { ok: t.ok, viaVoice: false, providerMessageId: t.providerMessageId };
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -116,7 +116,7 @@ async function buildHistory(contactId: string | null, leadId: string | null, dig
     .filter((m) => m.content);
 }
 
-async function logOutbound(reply: string, subject: string, contactId: string | null, leadId: string | null, digits: string) {
+async function logOutbound(reply: string, subject: string, contactId: string | null, leadId: string | null, digits: string, messageId?: string) {
   const firstUser = await resolveTenantActor(); // tenant-aware (channel scope); dormant → oldest active user
   if (!firstUser) return;
   await prisma.communication.create({
@@ -127,6 +127,7 @@ async function logOutbound(reply: string, subject: string, contactId: string | n
       body: contactId || leadId ? reply : `${reply}\n\n[to +${digits}]`,
       contactId,
       leadId,
+      messageId: messageId ?? null, // WhatsApp wamid
       userId: firstUser.id,
       // A webhook has no session; the customer record it is replying to is the owner.
       tenantId: await customerRecordTenantId({ contactId, leadId }),
@@ -176,7 +177,7 @@ export async function maybeAutoReply(
       // `sentVoice` is what actually went out — a voice send that failed and fell
       // back to text must be logged as text, not as a 🎤 voice reply.
       let sentVoice = false;
-      let sent: { ok: boolean };
+      let sent: { ok: boolean; providerMessageId?: string };
       if (voiceReply) {
         const r = await sendVoiceReply(fromDigits, ai.reply);
         sent = r;
@@ -185,7 +186,7 @@ export async function maybeAutoReply(
         sent = await sendWhatsAppText(fromDigits, ai.reply);
       }
       if (!sent.ok) return;
-      await logOutbound(sentVoice ? `🎤 ${ai.reply}` : ai.reply, handoff ? `${AI_MARKER} → handoff` : AI_MARKER, contactId, leadId, fromDigits);
+      await logOutbound(sentVoice ? `🎤 ${ai.reply}` : ai.reply, handoff ? `${AI_MARKER} → handoff` : AI_MARKER, contactId, leadId, fromDigits, sent.providerMessageId);
       if (handoff) {
         await sendPushToAll(
           {
@@ -239,5 +240,5 @@ export async function maybeAutoReply(
 
   const sent = await sendWhatsAppText(fromDigits, reply);
   if (!sent.ok) return;
-  await logOutbound(reply, `${AUTO_MARKER} (${ruleName})`, contactId, leadId, fromDigits);
+  await logOutbound(reply, `${AUTO_MARKER} (${ruleName})`, contactId, leadId, fromDigits, sent.providerMessageId);
 }

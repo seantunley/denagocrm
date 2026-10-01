@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { whatsappReceipt } from "@/lib/deliveryReceipts";
+import { whatsappReceipt, whatsappFailure } from "@/lib/deliveryReceipts";
+import { applyProviderFailure } from "@/lib/botOutbox";
 import { applyReceipt } from "@/lib/messageReceipts";
 import crypto from "crypto";
 import { getSetting } from "@/lib/settings";
@@ -65,6 +66,8 @@ export async function POST(req: NextRequest) {
         for (const status of value.statuses ?? []) {
           const receipt = whatsappReceipt(status);
           if (receipt) await applyReceipt(receipt);
+          const failure = whatsappFailure(status);
+          if (failure) await applyProviderFailure("whatsapp", failure);
         }
 
         for (const message of value.messages ?? []) {

@@ -64,7 +64,9 @@ export function TicketComposer({
       {mode === "reply" ? (
         <SaveForm
           action={replyAction}
-          success="Reply sent"
+          // Fallback only: the action reports what actually happened —
+          // "Emailed to …", "Posted to portal only — …", or the email failure.
+          success="Reply saved"
           // The body was cleared ON SUBMIT, so a reply that failed to send took
           // the typed text with it. Clear it only once the send succeeded.
           resetOnSuccess={false}

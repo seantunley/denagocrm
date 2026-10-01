@@ -95,10 +95,13 @@ test("sendWhatsAppText records only after Meta accepted, failures on both failur
   const s = src("src/lib/whatsapp.ts");
   const start = s.indexOf("export async function sendWhatsAppText(");
   const body = s.slice(start, s.indexOf("\n}\n", start));
-  const ok = body.indexOf("await noteWhatsAppOutcome(creds, res, null);");
+  // postWhatsAppMessage returns a thrown transport error and a non-2xx alike as
+  // { ok: false } (#697), so one failure record covers both.
+  const ok = body.indexOf("if (sent.ok) {");
   assert.ok(ok > 0 && body.indexOf("recordOutboundMessage(", ok) > ok);
   assert.equal(body.indexOf("recordOutboundMessage("), body.indexOf("recordOutboundMessage(", ok), "only one success record");
-  assert.equal((body.match(/recordOutboundFailure\(logged, record/g) ?? []).length, 3, "not configured, thrown transport, non-2xx");
+  assert.match(body, /recordOutboundMessage\(\{ \.\.\.logged, messageId: sent\.providerMessageId \?\? null \}, record\)/);
+  assert.equal((body.match(/recordOutboundFailure\(logged, record/g) ?? []).length, 2, "not configured; transport or non-2xx");
 });
 
 // ── Every previously-silent customer send now passes a record ────────────────
