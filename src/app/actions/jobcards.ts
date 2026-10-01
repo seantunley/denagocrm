@@ -426,7 +426,7 @@ export async function setJobCardTechnician(jobCardId: string, formData: FormData
 
 // Moving to any workflow stage (or cancelling / reopening). "collected" is
 // reserved for completeJobCard, which also creates the service record.
-export async function setJobCardStatus(jobCardId: string, status: string) {
+export async function setJobCardStatus(jobCardId: string, status: string, formData?: FormData) {
   return asActionResult(async () => {
     const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
     const allowed = new Set(STAGE_VALUES.filter((s) => s !== "collected"));
@@ -436,9 +436,11 @@ export async function setJobCardStatus(jobCardId: string, status: string) {
       where: { id: jobCardId },
       data: { status, completedAt: null },
     });
+    // Cancelling is confirmed with a reason; other moves have none.
+    const reason = String(formData?.get("reason") ?? "").trim();
     await logAudit({
       action: "jobcard.stage",
-      summary: `Job card #${jobCard.number}: ${stageMeta(jobCard.status).label} → ${stageMeta(status).label}`,
+      summary: `Job card #${jobCard.number}: ${stageMeta(jobCard.status).label} → ${stageMeta(status).label}${reason ? ` — ${reason}` : ""}`,
       contactId: jobCard.contactId,
       user,
     });

@@ -240,7 +240,21 @@ export default async function JobCardDetailPage({
               built for it. Signing is unaffected — an envelope resolves its own
               template through defaultBuilderTemplateId(). */}
           {terminal && <SaveForm success="Status updated" resetOnSuccess={false} action={setJobCardStatus.bind(null, jobCard.id, "repair")}><SaveButton className={buttonVariants({ variant: "outline", size: "sm" })}>Reopen</SaveButton></SaveForm>}
-          {!terminal && <SaveForm success="Status updated" resetOnSuccess={false} action={setJobCardStatus.bind(null, jobCard.id, "cancelled")}><SaveButton className={buttonVariants({ variant: "outline", size: "sm" })}>Cancel job</SaveButton></SaveForm>}
+          {!terminal && (
+            <ConfirmDelete
+              action={setJobCardStatus.bind(null, jobCard.id, "cancelled")}
+              title={`Cancel job card #${jobCard.number}?`}
+              description="The job stops here and leaves the workshop board. You can reopen it later."
+              trigger="Cancel job"
+              triggerClass={buttonVariants({ variant: "outline", size: "sm" })}
+              confirmLabel="Cancel job"
+              dismissLabel="Keep job"
+              pendingLabel="Cancelling…"
+              success="Job cancelled"
+              reasonLabel="Reason for cancelling"
+              reasonPlaceholder="Customer cancelled, parts unavailable…"
+            />
+          )}
           <ConfirmDelete action={deleteJobCard.bind(null, jobCard.id)} title={`Delete job card #${jobCard.number}?`} description="The job card moves to Trash and can be restored for 60 days." triggerClass="btn-danger btn-sm" />
         </div>
       </div>

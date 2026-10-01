@@ -59,12 +59,22 @@ export async function setWarrantyClaimStatus(id: string, formData: FormData) {
   });
 }
 
-export async function deleteWarrantyClaim(id: string) {
+/** The reason typed into the delete confirmation, for the audit line. */
+const reasonOf = (formData?: FormData) => String(formData?.get("reason") ?? "").trim() || "No reason given";
+
+export async function deleteWarrantyClaim(id: string, formData?: FormData) {
   return withActingStaffScope(async () => {
     const claim = await prisma.warrantyClaim.findUnique({ where: { id } });
     if (!claim) return;
-    await requireVehicleAccess(claim.vehicleId, "warranty.manage");
+    const user = await requireVehicleAccess(claim.vehicleId, "warranty.manage");
     await prisma.warrantyClaim.delete({ where: { id } });
+    // Permanent (no Trash for claims), so the audit line is the only record left.
+    await logAudit({
+      action: "warranty.claim_deleted",
+      summary: `Deleted a ${claim.status} warranty claim (“${claim.description.slice(0, 80)}”) — ${reasonOf(formData)}`,
+      contactId: claim.contactId,
+      user,
+    });
     revalidatePath(`/vehicles/${claim.vehicleId}`);
     revalidatePath("/warranty");
   });
@@ -83,10 +93,17 @@ export async function createRecall(formData: FormData) {
   });
 }
 
-export async function deleteRecall(id: string) {
+export async function deleteRecall(id: string, formData?: FormData) {
   return withActingStaffScope(async () => {
-    await requirePermission("warranty.manage");
-    await prisma.recall.delete({ where: { id } }).catch(() => {});
+    const user = await requirePermission("warranty.manage");
+    const recall = await prisma.recall.findUnique({ where: { id }, select: { title: true, model: true } });
+    if (!recall) return;
+    await prisma.recall.delete({ where: { id } });
+    await logAudit({
+      action: "recall.deleted",
+      summary: `Deleted the recall “${recall.title}” (${recall.model}) — ${reasonOf(formData)}`,
+      user,
+    });
     revalidatePath("/warranty");
   });
 }

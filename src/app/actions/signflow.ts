@@ -43,11 +43,12 @@ export async function saveSignWorkflow(id: string, name: string, graphJson: stri
   });
 }
 
-export async function deleteSignWorkflow(id: string) {
+export async function deleteSignWorkflow(id: string, formData?: FormData) {
   return withActingStaffScope(async () => {
     const user = await requirePermission("signing.manage");
-    await prisma.signWorkflow.update({ where: { id }, data: { deletedAt: new Date() } });
-    await logAudit({ action: "signflow.delete", summary: "Deleted a signing workflow", entityType: "SignWorkflow", entityId: id, user });
+    const reason = String(formData?.get("reason") ?? "").trim() || "No reason given";
+    const wf = await prisma.signWorkflow.update({ where: { id }, data: { deletedAt: new Date() }, select: { name: true } });
+    await logAudit({ action: "signflow.delete", summary: `Deleted the signing workflow “${wf.name}” — ${reason}`, entityType: "SignWorkflow", entityId: id, user });
     revalidatePath(BASE);
     redirect(BASE);
   });

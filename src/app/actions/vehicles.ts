@@ -135,12 +135,19 @@ export async function addBatteryCheck(vehicleId: string, formData: FormData) {
   });
 }
 
-export async function deleteBatteryCheck(id: string) {
+export async function deleteBatteryCheck(id: string, formData?: FormData) {
   return withActingStaffScope(async () => {
     const bc = await prisma.batteryCheck.findUnique({ where: { id } });
     if (!bc) return;
-    await requireVehicleAccess(bc.vehicleId, "vehicles.manage");
+    const user = await requireVehicleAccess(bc.vehicleId, "vehicles.manage");
     await prisma.batteryCheck.delete({ where: { id } });
+    // Permanent, so the audit line is the only record left of the reading.
+    const reason = String(formData?.get("reason") ?? "").trim() || "No reason given";
+    await logAudit({
+      action: "battery_check.deleted",
+      summary: `Deleted a battery check from ${bc.checkedAt.toISOString().slice(0, 10)}${bc.stateOfHealth != null ? ` (SoH ${bc.stateOfHealth}%)` : ""} — ${reason}`,
+      user,
+    });
     revalidatePath(`/vehicles/${bc.vehicleId}`);
   });
 }
