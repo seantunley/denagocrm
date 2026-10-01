@@ -102,6 +102,7 @@ import { STAGE_REMEDIES, remedyFor } from "@/lib/stageRemedies";
 // describe an unmet criterion with the SAME sentence. A second copy of this
 // wording here is how the refusal and the warning start disagreeing.
 import { MIN_OVERRIDE_REASON, describeUnmet, type StageGateVerdict } from "@/lib/stageGate";
+import { AvailabilityConflictDialog } from "@/components/AvailabilityConflictDialog";
 
 export type KanbanLead = {
   id: string;
@@ -732,6 +733,7 @@ export default function KanbanBoard({
   const [query, setQuery] = useState("");
   const [owner, setOwner] = useState<string>(OWNER_ANY);
   const [attentionOnly, setAttentionOnly] = useState(false);
+  const [availabilityConflict, setAvailabilityConflict] = useState<string | null>(null);
   const boardRef = useRef<HTMLDivElement>(null);
   const [, startTransition] = useTransition();
 
@@ -1111,7 +1113,12 @@ export default function KanbanBoard({
       } else {
         // Same rule: a refused booking must not leave the card in the stage the
         // booking was the price of entry to.
-        rollbackTo(snapshot, result.error ?? "Couldn't book the test drive");
+        setStages(snapshot);
+        if (result.error?.includes(" is unavailable from ")) {
+          setAvailabilityConflict(result.error);
+        } else {
+          toast.error(result.error ?? "Couldn't book the test drive");
+        }
       }
     });
   }
@@ -1424,6 +1431,11 @@ export default function KanbanBoard({
           pending={pendingGate}
           onCancel={() => setPendingGate(null)}
           onConfirm={confirmGateOverride}
+        />
+        <AvailabilityConflictDialog
+          message={availabilityConflict}
+          onClose={() => setAvailabilityConflict(null)}
+          title="Salesperson unavailable"
         />
       </DndContext>
     </>
