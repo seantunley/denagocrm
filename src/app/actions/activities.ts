@@ -183,6 +183,7 @@ export async function scheduleActivity(formData: FormData): Promise<{ error?: st
       await lockStaffSchedules(tx, tenantId ?? "global", [assignedToId]);
       const conflict = await findStaffAvailabilityConflict({
         userId: assignedToId,
+        tenantId,
         start: dueDate,
         end: endDate,
         db: tx,
@@ -412,6 +413,7 @@ export async function rescheduleActivity(
     if (existing.availabilityBlock) {
       const conflict = await findStaffCommitmentConflict({
         userId: existing.assignedToId,
+        tenantId,
         start: dueDate,
         end: endDate,
         excludeActivityId: existing.id,
@@ -421,6 +423,7 @@ export async function rescheduleActivity(
     } else {
       const conflict = await findStaffAvailabilityConflict({
         userId: existing.assignedToId,
+        tenantId,
         start: dueDate,
         end: endDate,
         excludeActivityId: existing.id,
@@ -491,6 +494,7 @@ export async function scheduleFollowUp(data: {
     await lockStaffSchedules(tx, tenantId ?? "global", [user.id]);
     const conflict = await findStaffAvailabilityConflict({
       userId: user.id,
+      tenantId,
       start: dueDate,
       end: endDate,
       db: tx,
@@ -587,6 +591,7 @@ export async function updateActivity(
     if (existing.availabilityBlock) {
       const conflict = await findStaffCommitmentConflict({
         userId: assignedToId,
+        tenantId,
         start: dueDate,
         end: endDate,
         excludeActivityId: existing.id,
@@ -596,6 +601,7 @@ export async function updateActivity(
     } else {
       const conflict = await findStaffAvailabilityConflict({
         userId: assignedToId,
+        tenantId,
         start: dueDate,
         end: endDate,
         excludeActivityId: existing.id,
