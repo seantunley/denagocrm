@@ -902,7 +902,7 @@ export async function moveLeadToTestDrive(
     }
     return { lead: updated } as const;
   }, GOVERNANCE_TX);
-  if ("availabilityConflict" in bookingResult) {
+  if ("availabilityConflict" in bookingResult && bookingResult.availabilityConflict) {
     return { ok: false, error: availabilityConflictMessage(bookingResult.availabilityConflict), gate: verdict };
   }
   const lead = bookingResult.lead;
