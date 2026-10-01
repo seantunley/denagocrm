@@ -54,6 +54,8 @@ import { feeRows, quotePricing } from "@/lib/pricing";
 import { formatDate, formatZAR, type Regional } from "@/lib/format";
 import { calendarDateInstant } from "@/lib/quoteExpiry";
 import SigningBlock from "@/components/SigningBlock";
+import QuoteEmailDialog from "@/components/quotes/QuoteEmailDialog";
+import { quotePrintLinks } from "@/lib/quotePrintLinks";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -1300,6 +1302,19 @@ export function QuoteEditorDialog({
                         job is sending the quote out.
                       */}
                       {savedQuote && <Button asChild variant="outline"><a href={`/quotes/${savedQuote.id}/print`} target="_blank" rel="noreferrer"><Printer />Print / PDF</a></Button>}
+                      {/* `signing` is non-null only for quotes.change_status on
+                          this quote — the gate sendQuoteEmail itself applies. */}
+                      {savedQuote && signing && (
+                        <QuoteEmailDialog
+                          quoteId={savedQuote.id}
+                          disabled={dirty}
+                          disabledReason="Save your changes first — the email attaches the saved quote."
+                          onSent={() => { reloadSigning(); router.refresh(); }}
+                        />
+                      )}
+                      {savedQuote && quotePrintLinks({ id: savedQuote.id, status: currentStatus }).map((link) => (
+                        <Button key={link.href} asChild variant="outline"><a href={link.href} target="_blank" rel="noreferrer"><Printer />{link.label}</a></Button>
+                      ))}
                       {/*
                         "Open full record" stood here and in the footer. Both are
                         gone: that page is now a redirect back to this editor, so

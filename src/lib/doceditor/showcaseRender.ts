@@ -89,6 +89,22 @@ function glyph(name: ShowcaseIcon, color: string, size: number): string {
  * lets the template put them exactly on its lines — see showcaseQuoteTemplate.
  */
 export const ACCEPTANCE_GEOMETRY = { pad: 12, padX: 14, headerH: 22, headerGap: 6, textH: 30, nameRowH: 30, sigRowH: 40, dateRowH: 30, labelW: 92, gap: 6 } as const;
+/**
+ * Where the signature and date fields go on an acceptance card placed at
+ * `card` (page coordinates): on its Signature and Date lines. The template
+ * places them with this and send-time snapping (fieldSnap.ts) re-derives them
+ * from it, so the two can never disagree.
+ */
+export function acceptanceFieldRects(card: { x: number; y: number; width: number }): Record<"signature" | "date", { x: number; y: number; width: number; height: number }> {
+  const g = ACCEPTANCE_GEOMETRY;
+  const x = card.x + g.padX + g.labelW + g.gap;
+  const w = card.width - g.padX * 2 - g.labelW - g.gap;
+  const sigTop = card.y + g.pad + g.headerH + g.headerGap + g.textH + g.nameRowH;
+  return {
+    signature: { x, y: sigTop + 2, width: w, height: g.sigRowH - 4 },
+    date: { x, y: sigTop + g.sigRowH + 1, width: Math.min(160, w), height: g.dateRowH - 2 },
+  };
+}
 export function acceptanceHeight(): number {
   const g = ACCEPTANCE_GEOMETRY;
   return g.pad * 2 + g.headerH + g.headerGap + g.textH + g.nameRowH + g.sigRowH + g.dateRowH;

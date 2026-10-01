@@ -15,7 +15,7 @@ import {
   standardQuoteTemplate,
   uid,
 } from "./factory";
-import { ACCEPTANCE_GEOMETRY, FOOTER_BAND_HEIGHT, SHOWCASE_COMPACT_HEADER_HEIGHT, SHOWCASE_INSET, acceptanceHeight } from "./showcaseRender";
+import { FOOTER_BAND_HEIGHT, SHOWCASE_COMPACT_HEADER_HEIGHT, SHOWCASE_INSET, acceptanceFieldRects, acceptanceHeight } from "./showcaseRender";
 import { SHOWCASE_FOOTER_IMAGE, SHOWCASE_HEADER_IMAGE } from "./showcaseAssets";
 
 export type StandardDocKey =
@@ -494,10 +494,7 @@ export function showcaseQuoteTemplate(): DocumentModel {
   if (quoteTerms.type === "terms") quoteTerms.look = "showcase";
 
   const customer = newRecipient({ name: "Customer", role: "signer", party: "customer", color: "#2563eb" });
-  const g = ACCEPTANCE_GEOMETRY;
-  const lineX = acceptX + g.padX + g.labelW + g.gap;
-  const lineW = cardW - g.padX * 2 - g.labelW - g.gap;
-  const sigTop = cardsY + g.pad + g.headerH + g.headerGap + g.textH + g.nameRowH;
+  const onLines = acceptanceFieldRects({ x: acceptX, y: cardsY, width: cardW });
 
   const hero = newRow([newColumn(44, [preparedFor, vehicle("details")]), newColumn(56, [vehicle("image")])]);
   // Inset on the left only: the photo bleeds to the right page edge.
@@ -517,11 +514,13 @@ export function showcaseQuoteTemplate(): DocumentModel {
   page.overlayFields = [
     newOverlayField("signature", {
       recipientId: customer.id, label: "Customer signature",
-      anchor: { mode: "page", blockId: null, x: lineX, y: sigTop + 2 }, width: lineW, height: g.sigRowH - 4,
+      anchor: { mode: "page", blockId: null, x: onLines.signature.x, y: onLines.signature.y },
+      width: onLines.signature.width, height: onLines.signature.height,
     }),
     newOverlayField("date", {
       recipientId: customer.id, label: "Date",
-      anchor: { mode: "page", blockId: null, x: lineX, y: sigTop + g.sigRowH + 1 }, width: Math.min(160, lineW), height: g.dateRowH - 2,
+      anchor: { mode: "page", blockId: null, x: onLines.date.x, y: onLines.date.y },
+      width: onLines.date.width, height: onLines.date.height,
     }),
   ];
   // Longer quotes, in two steps (row counts measured in headless Chrome — see

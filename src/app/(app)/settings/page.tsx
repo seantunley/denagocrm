@@ -847,11 +847,12 @@ export default async function SettingsPage({
                 <code>{"{{user_name}}"}</code> — filled from the lead/contact when sending.
               </p>
               <div className="mb-5">
-                <div className="text-sm font-semibold mb-1">Signing emails</div>
+                <div className="text-sm font-semibold mb-1">Signing &amp; quote emails</div>
                 <p className="text-xs text-muted-foreground mb-3">
-                  Sent automatically by e-signing. Your logo, brand colour and an &ldquo;Open &amp; sign&rdquo;
-                  button are added for you. A line holding just <code>{"{{signing_link}}"}</code> becomes the
-                  button. Leave a blank line between paragraphs.
+                  Sent by e-signing, and the starting wording for &ldquo;Email quote&rdquo;. Your logo, brand colour
+                  and company details are added for you. In signing emails, a line holding just{" "}
+                  <code>{"{{signing_link}}"}</code> becomes the &ldquo;Open &amp; sign&rdquo; button. Leave a blank
+                  line between paragraphs.
                 </p>
                 <div className="space-y-3">
                   {SIGNING_EMAIL_KINDS.map((kind) => {
@@ -868,7 +869,7 @@ export default async function SettingsPage({
                           <SaveForm
                             // Remount after a reset so the fields show the default again.
                             key={saved ? "custom" : "default"}
-                            success="Signing email saved"
+                            success={`${def.label} saved`}
                             resetOnSuccess={false}
                             action={saveSigningEmailTemplate.bind(null, kind)}
                             className="space-y-2"

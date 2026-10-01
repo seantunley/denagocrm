@@ -24,6 +24,7 @@ import {
   SIGNING_OTP_POLICY_KEY, SIGNING_OTP_MIN_VALUE_KEY,
 } from "./identityPolicy";
 import { buildSignEvent } from "./events";
+import { snapFieldsToAcceptanceCards } from "@/lib/doceditor/fieldSnap";
 
 export type RequestSource = {
   documentId?: string | null;
@@ -119,7 +120,10 @@ export async function createSignatureRequestFromDoc(opts: {
   // The showcase vehicle and page layout are frozen the same way: the vehicle's
   // photo, tagline and specs are otherwise read live from the Product, which may
   // be edited mid-signature.
-  const frozenDoc = await freezeQuoteShowcase(
+  // Last, after any overflow page move: a showcase acceptance card's signature
+  // and date fields go back ON its lines (fieldSnap.ts), so the rows written
+  // below — the signer's controls and the sealed PDF's stamps — sit on them.
+  const frozenDoc = snapFieldsToAcceptanceCards(await freezeQuoteShowcase(
     freezeDocumentGlobals(opts.doc, {
       // Built-in band photos ({{asset.*}}) become data URLs IN the snapshot, so
       // a signed quote keeps the photo it was signed with.
@@ -128,7 +132,7 @@ export async function createSignatureRequestFromDoc(opts: {
       ...documentGlobalTokens(sender?.name, new Date(), await getRegionalSettings()),
     }),
     source.quoteId,
-  );
+  ));
   // Whether the signer must prove who they are.
   //
   // The workspace policy decides the default — MONEY out of the box, so a quote

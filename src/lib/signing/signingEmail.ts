@@ -12,15 +12,92 @@ import {
   type RenderedSigningEmail,
   type SigningEmailBrand,
   type SigningEmailKind,
+  type StoredSigningTemplate,
 } from "./emailTemplates";
+
+const FALLBACK_BRAND: SigningEmailBrand = {
+  companyName: DEFAULT_BRAND.displayName,
+  tagline: null,
+  logoUrl: null,
+  accent: DEFAULT_ACCENT,
+  accentText: "#ffffff",
+  phone: "",
+  email: "",
+};
+
+/**
+ * One email of `kind`, rendered from `tenantId`'s own template (or the default,
+ * or `override` when the sender edited this one message) in that tenant's brand.
+ *
+ * Every lookup is keyed on the tenantId the CALLER names — the signature
+ * request's, the quote's — read explicitly through basePrisma, never ambient
+ * scope, because these sends run from cron, the job worker and public pages as
+ * often as from a signed-in action.
+ *
+ * `vars` supplies the record's own fields; the company fields are filled here.
+ * NEVER THROWS: a failed lookup degrades to the default wording, unbranded.
+ */
+export async function tenantEmailContent(
+  kind: SigningEmailKind,
+  tenantId: string | null,
+  vars: Record<string, string>,
+  override?: StoredSigningTemplate | null,
+): Promise<RenderedSigningEmail> {
+  const unbranded = () =>
+    renderSigningEmail(kind, override ?? null, { ...vars, company_name: FALLBACK_BRAND.companyName }, FALLBACK_BRAND);
+  // No owning tenant → nothing to brand as. Never fall through to the default
+  // tenant's template, phone, email or logo.
+  if (!tenantId) return unbranded();
+  try {
+    const def = SIGNING_EMAILS[kind];
+    const [brand, mailBrand, settings] = await Promise.all([
+      brandForTenant(tenantId).catch(() => DEFAULT_BRAND),
+      emailBrand(tenantId),
+      basePrisma.appSetting.findMany({
+        where: { tenantId, key: { in: [def.settingKey, "COMPANY_PHONE", "COMPANY_EMAIL", "COMPANY_LOGO_URL"] } },
+        select: { key: true, value: true },
+      }),
+    ]);
+    const setting = (key: string) => {
+      const raw = settings.find((s) => s.key === key)?.value ?? "";
+      try {
+        return decryptValue(raw).trim();
+      } catch {
+        return "";
+      }
+    };
+    const all = {
+      ...vars,
+      company_name: brand.displayName,
+      company_phone: setting("COMPANY_PHONE"),
+      company_email: setting("COMPANY_EMAIL"),
+    };
+
+    // The public brand-logo route (what campaign mail uses); a typed-in company
+    // logo only if it is a public https URL — never a private-store link, which
+    // a recipient's mail client cannot fetch.
+    const profileLogo = setting("COMPANY_LOGO_URL");
+    const logoUrl =
+      mailBrand.logoUrl ??
+      (/^https:\/\//i.test(profileLogo) && !/\.private\.blob\.|\/api\/stored/i.test(profileLogo) ? profileLogo : null);
+
+    return renderSigningEmail(kind, override ?? parseStoredSigningTemplate(setting(def.settingKey)), all, {
+      companyName: brand.displayName,
+      tagline: brand.tagline,
+      logoUrl,
+      accent: brand.primary ?? DEFAULT_ACCENT,
+      accentText: brand.primaryForeground ?? "#ffffff",
+      phone: all.company_phone,
+      email: all.company_email,
+    });
+  } catch {
+    return unbranded();
+  }
+}
 
 /**
  * Subject, HTML and text for one signing email, from the REQUEST's tenant's
  * template (or the default), in that tenant's brand.
- *
- * Every lookup is keyed on the request's own `tenantId`, read explicitly through
- * basePrisma — never ambient scope — because these sends run from cron, the job
- * worker and the public signing page as often as from a signed-in action.
  *
  * NEVER THROWS. A template or brand lookup that fails must not cost a customer
  * their signing link: it degrades to the default wording, unbranded.
@@ -36,74 +113,24 @@ export async function signingEmailContent(
     signing_link: input.signingUrl ?? "",
     code: input.code ?? "",
   };
-  const fallbackBrand: SigningEmailBrand = {
-    companyName: DEFAULT_BRAND.displayName,
-    tagline: null,
-    logoUrl: null,
-    accent: DEFAULT_ACCENT,
-    accentText: "#ffffff",
-    phone: "",
-    email: "",
-  };
-  const unbranded = () => {
-    vars.company_name = fallbackBrand.companyName;
-    return renderSigningEmail(kind, null, vars, fallbackBrand);
-  };
   try {
     const req = await basePrisma.signatureRequest.findUnique({
       where: { id: input.requestId },
       select: { tenantId: true, quoteId: true, createdById: true, expiresAt: true },
     });
-    // No request, or one with no owning tenant → nothing to brand as. Never
-    // fall through to the default tenant's template, phone, email or logo.
-    if (!req?.tenantId) return unbranded();
+    if (!req?.tenantId) return tenantEmailContent(kind, null, vars);
     const tenantId = req.tenantId;
-    const def = SIGNING_EMAILS[kind];
-    const [brand, mailBrand, settings, quote, sender] = await Promise.all([
-      brandForTenant(tenantId).catch(() => DEFAULT_BRAND),
-      emailBrand(tenantId),
-      basePrisma.appSetting.findMany({
-        where: { tenantId, key: { in: [def.settingKey, "COMPANY_PHONE", "COMPANY_EMAIL", "COMPANY_LOGO_URL"] } },
-        select: { key: true, value: true },
-      }),
+    const [quote, sender] = await Promise.all([
       req.quoteId
         ? basePrisma.quote.findFirst({ where: { id: req.quoteId, tenantId }, select: { number: true } })
         : null,
       req.createdById ? basePrisma.user.findUnique({ where: { id: req.createdById }, select: { name: true } }) : null,
     ]);
-    const setting = (key: string) => {
-      const raw = settings.find((s) => s.key === key)?.value ?? "";
-      try {
-        return decryptValue(raw).trim();
-      } catch {
-        return "";
-      }
-    };
     vars.quote_number = quote ? `Q-${quote.number}` : "";
     vars.sender_name = sender?.name ?? "";
-    vars.company_name = brand.displayName;
-    vars.company_phone = setting("COMPANY_PHONE");
-    vars.company_email = setting("COMPANY_EMAIL");
     vars.expiry_date = req.expiresAt ? formatDate(req.expiresAt) : "";
-
-    // The public brand-logo route (what campaign mail uses); a typed-in company
-    // logo only if it is a public https URL — never a private-store link, which
-    // a recipient's mail client cannot fetch.
-    const profileLogo = setting("COMPANY_LOGO_URL");
-    const logoUrl =
-      mailBrand.logoUrl ??
-      (/^https:\/\//i.test(profileLogo) && !/\.private\.blob\.|\/api\/stored/i.test(profileLogo) ? profileLogo : null);
-
-    return renderSigningEmail(kind, parseStoredSigningTemplate(setting(def.settingKey)), vars, {
-      companyName: brand.displayName,
-      tagline: brand.tagline,
-      logoUrl,
-      accent: brand.primary ?? DEFAULT_ACCENT,
-      accentText: brand.primaryForeground ?? "#ffffff",
-      phone: vars.company_phone,
-      email: vars.company_email,
-    });
+    return tenantEmailContent(kind, tenantId, vars);
   } catch {
-    return unbranded();
+    return tenantEmailContent(kind, null, vars);
   }
 }
