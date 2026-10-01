@@ -35,6 +35,8 @@ export type QuickCreateDefaults = {
   revalidate?: string;
   contactId?: string;
   contactLabel?: string;
+  /** Pre-selects the vehicle on a new job card (from a vehicle or customer page). */
+  vehicleId?: string;
 };
 
 const TITLES: Record<QuickCreateKind, string> = {
@@ -183,6 +185,7 @@ export default function QuickCreateDialog() {
         contacts={currentOptions.contacts}
         products={currentOptions.products}
         defaults={currentOptions.quoteDefaults}
+        initialContactId={createDefaults.contactId}
       />
     );
   }
@@ -223,7 +226,7 @@ export default function QuickCreateDialog() {
               <ContactForm action={createQuickContact} users={currentOptions.users} fleetPicker={currentOptions.fleetPicker} submitLabel="Create contact" variant="dialog" />
             )}
 
-            {kind === "jobcard" && <JobCardForm vehicles={currentOptions.vehicles} />}
+            {kind === "jobcard" && <JobCardForm vehicles={currentOptions.vehicles} defaultVehicleId={createDefaults.vehicleId} />}
 
             {kind === "vehicle" && (
               <VehicleForm

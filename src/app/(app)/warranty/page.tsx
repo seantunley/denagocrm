@@ -4,6 +4,7 @@ import { contactName, formatDate } from "@/lib/format";
 import { computeWarranty, warrantyColors, warrantyLabels, claimColors } from "@/lib/warranty";
 import { createRecall, deleteRecall } from "@/app/actions/warranty";
 import RecallNotifyButton from "@/components/RecallNotifyButton";
+import ConfirmDelete from "@/components/ConfirmDelete";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import { AlertTriangle, CarFront, ClipboardCheck, Megaphone, ShieldCheck } from "lucide-react";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
@@ -133,7 +134,12 @@ export default async function WarrantyPage() {
                 {canManage && (
                   <div className="flex items-center gap-3">
                     <RecallNotifyButton recallId={recall.id} affected={modelCounts.get(recall.model) ?? 0} />
-                    <form action={deleteRecall.bind(null, recall.id)}><button className="text-xs text-red-400 hover:text-red-300">Delete</button></form>
+                    <ConfirmDelete
+                      action={deleteRecall.bind(null, recall.id)}
+                      title={`Delete the recall “${recall.title}”?`}
+                      description="The recall is permanently removed — it does not go to Trash. Notices already sent are not recalled."
+                      triggerClass="text-xs text-red-400 hover:text-red-300"
+                    />
                   </div>
                 )}
               </div>

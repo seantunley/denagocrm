@@ -12,6 +12,7 @@ import { composerReplyToDefault } from "@/lib/replyToDefault";
 import LeadTimeline from "@/components/LeadTimeline";
 import { auditDetailFor } from "@/lib/auditDetailQuery";
 import ConfirmDelete from "@/components/ConfirmDelete";
+import { QuickCreateButton } from "@/components/QuickCreateButton";
 import WhatsAppPanel from "@/components/WhatsAppPanel";
 import Tabs from "@/components/Tabs";
 import CopyButton from "@/components/CopyButton";
@@ -54,12 +55,16 @@ export default async function ContactDetailPage({
   // Same default as the lead page — this person plus the mailbox IMAP reads, so a
   // reply lands in their inbox AND on this record. Never throws.
   const replyToDefault = await composerReplyToDefault(user.email);
-  const [automotiveOn, marketingOn, canCancelQuotes, canDuplicateQuotes] = await Promise.all([
+  const [automotiveOn, marketingOn, canCancelQuotes, canDuplicateQuotes, canCreateLead, canBookTestDrive, canOpenJobCard] = await Promise.all([
     isModuleEnabled("automotive"),
     isModuleEnabled("marketing"),
     hasPermission(user, "quotes.change_status"),
     hasPermission(user, "quotes.create"),
+    hasPermission(user, "leads.create"),
+    hasPermission(user, "activities.manage"),
+    hasPermission(user, "jobcards.manage"),
   ]);
+  const canCreateQuote = canDuplicateQuotes;
   const contact = await prisma.contact.findUnique({
     where: { id },
     include: {
@@ -204,6 +209,33 @@ export default async function ContactDetailPage({
         { label: "Documents", value: looseDocuments.length + quoteDocuments.length },
       ]}
       actions={<>
+          {/* Start the next thing for THIS customer from their own page (gap audit
+              #24) — each pre-filled with them, and only for staff allowed to. */}
+          {canCreateLead && (
+            <QuickCreateButton kind="lead" defaults={{ contactId: contact.id, contactLabel: contactName(contact) }} className="btn-secondary">
+              New lead
+            </QuickCreateButton>
+          )}
+          {canCreateQuote && (
+            <QuickCreateButton kind="quote" defaults={{ contactId: contact.id }} className="btn-secondary">
+              New quote
+            </QuickCreateButton>
+          )}
+          {automotiveOn && canBookTestDrive && (
+            <Link href={`/test-drives?book=1&contactId=${contact.id}`} className="btn-secondary">
+              Book test drive
+            </Link>
+          )}
+          {automotiveOn && canOpenJobCard && contact.vehicles.length > 0 && (
+            <QuickCreateButton
+              kind="jobcard"
+              // One vehicle → it's pre-selected; several → staff pick which.
+              defaults={contact.vehicles.length === 1 ? { vehicleId: contact.vehicles[0].id } : {}}
+              className="btn-secondary"
+            >
+              New job card
+            </QuickCreateButton>
+          )}
           <Link href={`/contacts/${contact.id}/edit`} className="btn-secondary">
             Edit
           </Link>
