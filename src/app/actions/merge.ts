@@ -6,7 +6,7 @@ import { prisma, basePrisma } from "@/lib/db";
 import { requireContactAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { contactName } from "@/lib/format";
-import { withActingStaffScope } from "@/lib/actingScope";
+import { asActionResult, refuse } from "@/lib/actionResult";
 
 // Text profile fields the winner backfills from a loser only when it has none.
 const PROFILE_FIELDS = ["email", "phone", "whatsapp", "company", "address", "suburb", "city", "province", "postalCode", "notes"] as const;
@@ -21,12 +21,14 @@ const PREF_FLAGS = ["serviceReminders", "portalNotifications", "marketingEmail",
  * contact; duplicates are soft-deleted. The caller must have merge permission
  * and access to every record participating in the merge.
  */
-export async function mergeContacts(keepId: string, otherIdsCsv: string) {
-  return withActingStaffScope(async () => {
+export async function mergeContacts(keepId: string, otherIdsCsv: string, formData?: FormData) {
+  return asActionResult(async () => {
     const user = await requireContactAccess(keepId, "contacts.merge");
     const otherIds = otherIdsCsv.split(",").filter((id) => id && id !== keepId);
-    if (otherIds.length === 0) return;
+    if (otherIds.length === 0) refuse("There's nothing to merge into this contact.");
     for (const id of otherIds) await requireContactAccess(id, "contacts.merge");
+    const reason = String(formData?.get("reason") ?? "").trim() || "Duplicate contact";
+    const moved: Record<string, number> = {};
 
     const keep = await prisma.contact.findUniqueOrThrow({ where: { id: keepId } });
     const others = await prisma.contact.findMany({
@@ -49,46 +51,61 @@ export async function mergeContacts(keepId: string, otherIdsCsv: string) {
         const [firstId, secondId] = [keepId, other.id].sort();
         await tx.$executeRaw`SELECT id FROM "Contact" WHERE id IN (${firstId}, ${secondId}) ORDER BY id FOR UPDATE`;
         const winner = await tx.contact.findFirst({ where: { id: keepId, deletedAt: null } });
-        if (!winner) throw new Error("The contact being kept no longer exists.");
+        if (!winner) refuse("The contact being kept no longer exists.");
         // Reload the loser live (with tags). If it's already been merged/deleted by
         // a concurrent merge, skip it rather than acting on the stale pre-loop copy.
         const loser = await tx.contact.findFirst({ where: { id: other.id, deletedAt: null }, include: { tags: true } });
         if (!loser) return;
 
-        const move = (
-          p: { updateMany: (a: { where: Record<string, unknown>; data: Record<string, unknown> }) => Promise<unknown> },
-          field: string
-        ) => p.updateMany({ where: { [field]: loser.id }, data: { [field]: keepId } });
+        // Counts what moved, per table, for the audit line.
+        const move = async (
+          p: { updateMany: (a: { where: Record<string, unknown>; data: Record<string, unknown> }) => Promise<{ count: number }> },
+          field: string,
+          label = field,
+        ) => {
+          const { count } = await p.updateMany({ where: { [field]: loser.id }, data: { [field]: keepId } });
+          if (count) moved[label] = (moved[label] ?? 0) + count;
+        };
 
-        // Plain contactId reassignments.
-        await move(tx.lead, "contactId");
-        await move(tx.vehicle, "contactId");
-        await move(tx.jobCard, "contactId");
-        await move(tx.quote, "contactId");
-        await move(tx.communication, "contactId");
-        await move(tx.activity, "contactId");
-        await move(tx.document, "contactId");
-        await move(tx.auditLog, "contactId");
-        await move(tx.consentRecord, "contactId");
-        await move(tx.campaignRecipient, "contactId");
-        await move(tx.researchNote, "contactId");
-        await move(tx.conversation, "contactId");
-        await move(tx.customerCase, "contactId");
-        await move(tx.customerCaseMessage, "contactId");
-        await move(tx.portalNotification, "contactId");
-        await move(tx.portalProfileChangeRequest, "contactId");
-        await move(tx.portalUpload, "contactId");
-        await move(tx.fleet, "contactId");
-        await move(tx.warrantyClaim, "contactId");
-        await move(tx.surveyResponse, "contactId");
-        await move(tx.signatureRequest, "contactId");
-        await move(tx.docInstance, "contactId");
+        // Plain contactId reassignments. EVERY model with a contact column belongs
+        // here (tests/contactMergeComplete.test.ts checks the schema against this
+        // list) — test drives, journeys, marketing attribution, survey follow-ups
+        // and queued bot messages were left on the deleted duplicate.
+        await move(tx.lead, "contactId", "leads");
+        await move(tx.vehicle, "contactId", "vehicles");
+        await move(tx.jobCard, "contactId", "job cards");
+        await move(tx.quote, "contactId", "quotes");
+        await move(tx.communication, "contactId", "messages");
+        await move(tx.activity, "contactId", "activities");
+        await move(tx.document, "contactId", "documents");
+        await move(tx.auditLog, "contactId", "history");
+        await move(tx.consentRecord, "contactId", "consent records");
+        await move(tx.campaignRecipient, "contactId", "campaign sends");
+        await move(tx.researchNote, "contactId", "research");
+        await move(tx.conversation, "contactId", "conversations");
+        await move(tx.customerCase, "contactId", "cases");
+        await move(tx.customerCaseMessage, "contactId", "case messages");
+        await move(tx.portalNotification, "contactId", "portal notifications");
+        await move(tx.portalProfileChangeRequest, "contactId", "profile requests");
+        await move(tx.portalUpload, "contactId", "portal uploads");
+        await move(tx.fleet, "contactId", "fleets");
+        await move(tx.warrantyClaim, "contactId", "warranty claims");
+        await move(tx.surveyResponse, "contactId", "survey responses");
+        await move(tx.signatureRequest, "contactId", "signing requests");
+        await move(tx.docInstance, "contactId", "documents");
+        await move(tx.testDriveBooking, "contactId", "test drives");
+        await move(tx.journeyRun, "contactId", "journeys");
+        await move(tx.marketingTouch, "contactId", "marketing touches");
+        await move(tx.campaignConversion, "contactId", "conversions");
+        await move(tx.marketingCampaignEvent, "contactId", "campaign events");
+        await move(tx.surveyFollowUp, "contactId", "survey follow-ups");
+        await move(tx.botFlowOutbox, "contactId", "queued bot messages");
 
         // Referral has two contact links. Move both, then drop any self-referral
         // the merge created (referrer === referred → a customer referring itself,
         // which would hand them undue referral credit).
-        await move(tx.referral, "referrerId");
-        await move(tx.referral, "contactId");
+        await move(tx.referral, "referrerId", "referrals");
+        await move(tx.referral, "contactId", "referrals");
         await tx.referral.deleteMany({ where: { referrerId: keepId, contactId: keepId } });
 
         // Portal access grants have partial-unique indexes on
@@ -180,15 +197,18 @@ export async function mergeContacts(keepId: string, otherIdsCsv: string) {
       });
     }
 
+    const movedSummary = Object.entries(moved).map(([label, n]) => `${n} ${label}`).join(", ") || "no linked records";
     await logAudit({
       action: "contact.merged",
-      summary: `Merged ${others.length} duplicate${others.length !== 1 ? "s" : ""} into ${contactName(keep)}`,
+      summary: `Merged ${others.map((o) => contactName(o)).join(", ")} into ${contactName(keep)} — moved ${movedSummary} — ${reason}`,
       contactId: keepId,
       user,
+      metadata: { mergedIds: others.map((o) => o.id), moved },
     });
     revalidatePath("/contacts");
     revalidatePath("/duplicates");
     revalidatePath(`/contacts/${keepId}`);
+    return { success: `Merged into ${contactName(keep)}.`, redirectTo: `/contacts/${keepId}` };
   });
 }
 
