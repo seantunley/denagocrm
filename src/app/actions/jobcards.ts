@@ -447,6 +447,55 @@ export async function setJobCardStatus(jobCardId: string, status: string) {
   });
 }
 
+/**
+ * Correct what was captured at check-in: the work requested and the arrival
+ * mileage. Everything else on the card already has its own control. Not on a
+ * collected card — its service record was written from these; reopen it first.
+ */
+export async function updateJobCardDetails(jobCardId: string, formData: FormData) {
+  return asActionResult(async () => {
+    const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
+    const description = String(formData.get("description") ?? "").trim();
+    if (!description) refuse("Describe the work requested.");
+    const kmRaw = String(formData.get("kmIn") ?? "").trim();
+    const kmIn = kmRaw === "" ? null : parseInt(kmRaw, 10);
+    if (kmIn != null && (isNaN(kmIn) || kmIn < 0)) refuse("Enter the arrival mileage as a whole number of km.");
+
+    const before = await prisma.jobCard.findUniqueOrThrow({
+      where: { id: jobCardId },
+      select: { number: true, status: true, description: true, kmIn: true, vehicleId: true, contactId: true },
+    });
+    if (before.status === "collected") refuse("This job card is completed — reopen it to change its details.");
+    if (before.description === description && before.kmIn === kmIn) return { success: "No changes" };
+
+    const checkInNote = `Job card #${before.number} check-in`;
+    await prisma.$transaction(async (tx) => {
+      await tx.jobCard.update({ where: { id: jobCardId }, data: { description, kmIn } });
+      // Keep the vehicle's mileage history in step with the corrected reading.
+      if (before.kmIn !== kmIn) {
+        const log = await tx.mileageLog.findFirst({ where: { vehicleId: before.vehicleId, note: checkInNote } });
+        if (log && kmIn != null) await tx.mileageLog.update({ where: { id: log.id }, data: { km: kmIn } });
+        else if (log) await tx.mileageLog.delete({ where: { id: log.id } });
+        else if (kmIn != null) await tx.mileageLog.create({ data: { vehicleId: before.vehicleId, km: kmIn, note: checkInNote } });
+      }
+    });
+
+    const changes = [
+      before.description !== description ? `work requested “${before.description.slice(0, 60)}” → “${description.slice(0, 60)}”` : null,
+      before.kmIn !== kmIn ? `arrival km ${before.kmIn ?? "—"} → ${kmIn ?? "—"}` : null,
+    ].filter(Boolean);
+    await logAudit({
+      action: "jobcard.updated",
+      summary: `Job card #${before.number}: ${changes.join("; ")}`,
+      contactId: before.contactId,
+      user,
+    });
+    revalidatePath("/jobcards");
+    revalidatePath(`/jobcards/${jobCardId}`);
+    return { success: "Job card updated" };
+  });
+}
+
 export async function setJobCardPriority(jobCardId: string, formData: FormData) {
   return asActionResult(async () => {
     await requireJobCardAccess(jobCardId, "jobcards.manage");
