@@ -920,6 +920,9 @@ model Activity {
   location       String? // meeting place - opens in Google Maps
   reminderSentAt DateTime? // hour-before push already sent
   dueDate        DateTime
+  endDate        DateTime? // exclusive end for timed work / staff availability blocks
+  allDay         Boolean   @default(false)
+  availabilityBlock Boolean @default(false) // internal staff time: leave, training, personal, off-site, etc.
   status         String    @default("planned") // planned | done | canceled
   doneAt         DateTime?
 
@@ -938,6 +941,8 @@ model Activity {
   createdAt DateTime @default(now())
 
   @@index([tenantId])
+  @@index([assignedToId, dueDate, status])
+  @@index([availabilityBlock, dueDate, endDate])
 }
 
 model EmailTemplate {
