@@ -235,7 +235,7 @@ test("the corrections are where people work: desktop board AND mobile queue, one
   assert.equal(uses.length, 2, "rendered in both the mobile and desktop views, behind deliveries.manage");
   const mobile = page.slice(page.indexOf("<MobileOnly"), page.indexOf("<DesktopOnly"));
   assert.match(mobile, /<FulfilmentCorrections quote=\{quote\} \/>/, "the mobile queue has them");
-  const component = page.slice(page.indexOf("function FulfilmentCorrections"), page.indexOf("export default async function"));
+  const component = page.slice(page.indexOf("function FulfilmentCorrections"));
   for (const action of ["replaceInvoice", "correctDepositAmount", "replaceProofOfPayment", "rescheduleDelivery"]) {
     assert.match(component, new RegExp(`action=\\{${action}\\.bind\\(null, quote\\.id\\)\\}`), `${action} is offered`);
   }
