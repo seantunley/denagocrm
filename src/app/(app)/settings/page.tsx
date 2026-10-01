@@ -67,11 +67,8 @@ import { connectTelegram, disconnectTelegram } from "@/app/actions/bot";
 import ProductsPage from "../products/page";
 import { addStockLabel, removeStockLabel } from "@/app/actions/stock";
 import { getStockLabels } from "@/lib/stockLabels";
-import {
-  SETTINGS_NAV_GROUPS,
-  SETTINGS_TABS,
-  settingsItemEnabled,
-} from "@/lib/settings-navigation";
+import { SETTINGS_TABS, visibleSettingsGroups } from "@/lib/settings-navigation";
+import { getUserPermissionList } from "@/lib/permissions";
 import { getEnabledModuleIds } from "@/lib/modules/enabled";
 import {
   SettingsIntegrationRow,
@@ -103,10 +100,16 @@ export default async function SettingsPage({
   const automotiveOn = enabled.has("automotive");
   const commerceOn = enabled.has("commerce");
   const marketingOn = enabled.has("marketing");
-  // Non-admins get exactly one tab: their own account
+  // The tabs rendered on THIS page are owner-only apart from My Account. A
+  // non-owner's nav still lists the settings pages their permissions open
+  // (Pipeline, Checklists, Team & access…) — those live on their own routes.
   const visibleTabs = isAdmin
     ? SETTINGS_TABS
     : SETTINGS_TABS.filter((t) => t.key === "account");
+  const visibleGroups = visibleSettingsGroups(
+    { isOwner: isAdmin, permissions: await getUserPermissionList(currentUser) },
+    enabled,
+  );
   const { tab: rawTab, section } = await searchParams;
   // Deep-linkable sections inside a tab. The account menu links straight to
   // "change password", and a <details> that arrives closed has not answered the
@@ -231,13 +234,6 @@ export default async function SettingsPage({
         select: { id: true, nickname: true, createdAt: true, lastUsedAt: true },
       })
     : [];
-
-  const visibleGroups = SETTINGS_NAV_GROUPS.map((g) => ({
-    ...g,
-    items: g.items.filter(
-      (i) => visibleTabs.some((t) => t.key === i.key) && settingsItemEnabled(i, enabled),
-    ),
-  })).filter((g) => g.items.length > 0);
 
   return (
     <SettingsWorkspace

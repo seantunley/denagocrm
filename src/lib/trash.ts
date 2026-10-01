@@ -30,13 +30,51 @@ export const TRASH_MODELS: TrashModel[] = [
   "quote",
 ];
 
+/**
+ * RECORDS DELETED ELSEWHERE WITH ONLY `deletedAt` (gap audit #28).
+ *
+ * Their delete actions predate the trash: no reason/deleted-by columns (the
+ * audit log has both) and no nightly purge, so they sat hidden forever with no
+ * way back. They are listed and restorable like the rest; they are not purged,
+ * so the page says "Kept" rather than counting down.
+ */
+export type RestoreOnlyModel =
+  | "fleet"
+  | "part"
+  | "stockUnit"
+  | "survey"
+  | "competitor"
+  | "signWorkflow"
+  | "docTemplateRecord"
+  | "docBuilderTemplate"
+  | "customDocTemplate"
+  | "docInstance"
+  | "reusableBlock";
+
+export const RESTORE_ONLY_MODELS: RestoreOnlyModel[] = [
+  "fleet",
+  "part",
+  "stockUnit",
+  "survey",
+  "competitor",
+  "signWorkflow",
+  "docTemplateRecord",
+  "docBuilderTemplate",
+  "customDocTemplate",
+  "docInstance",
+  "reusableBlock",
+];
+
+export type RestorableModel = TrashModel | RestoreOnlyModel;
+export const RESTORABLE_MODELS: RestorableModel[] = [...TRASH_MODELS, ...RESTORE_ONLY_MODELS];
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * `client` lets a caller run the soft delete inside ITS OWN transaction, so the
  * delete and the audit that records it commit together. Defaults to basePrisma,
  * which is the standalone behaviour every existing caller had.
  */
-function delegate(model: TrashModel, client: any = basePrisma): any {
+function delegate(model: RestorableModel, client: any = basePrisma): any {
   return (client as any)[model];
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
@@ -153,11 +191,15 @@ export async function softDeleteRecord(
  * Returns null when nothing matched, so a caller cannot announce a restore
  * that did not happen.
  */
-export async function restoreRecord(model: TrashModel, id: string) {
+export async function restoreRecord(model: RestorableModel, id: string) {
   const where = await actingTenantWhere();
   const rows = await delegate(model).updateMany({
-    where: { id, ...where },
-    data: { deletedAt: null, deleteReason: null, deletedByName: null },
+    // `deletedAt: { not: null }`: restoring a live row would be a silent no-op
+    // reported as a restore.
+    where: { id, deletedAt: { not: null }, ...where },
+    data: (TRASH_MODELS as string[]).includes(model)
+      ? { deletedAt: null, deleteReason: null, deletedByName: null }
+      : { deletedAt: null },
   });
   if (rows.count === 0) return null;
   return delegate(model).findFirst({ where: { id, ...where } });
