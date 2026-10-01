@@ -7,7 +7,7 @@ import { resolveTenantActor } from "@/lib/tenantActor";
 import { logAudit } from "@/lib/audit";
 import { sendEmail } from "@/lib/email";
 import { sendSms } from "@/lib/sms";
-import { companyContactPhrase, getCompanyProfile } from "@/lib/companyProfile";
+import { tenantEmailContent, tenantSmsContent } from "@/lib/signing/signingEmail";
 import { describeBlockedReason, firstAllowedChannel } from "@/lib/communicationPolicy";
 import { claimStatuses } from "@/lib/warranty";
 import { requirePermission, requireVehicleAccess } from "@/lib/permissions";
@@ -123,8 +123,6 @@ export async function notifyRecall(_prev: NotifyResult, formData: FormData): Pro
       include: { contact: true },
     });
     const firstUser = await resolveTenantActor();
-    const company = await getCompanyProfile();
-    const contactPhrase = companyContactPhrase(company);
 
     const seen = new Set<string>();
     let sent = 0;
@@ -133,9 +131,14 @@ export async function notifyRecall(_prev: NotifyResult, formData: FormData): Pro
       const c = v.contact;
       if (seen.has(c.id)) continue;
       seen.add(c.id);
-      const first = c.firstName;
-      const subject = `Important: ${recall.title} — your ${recall.model}`;
-      const body = `Hi ${first},\n\n${recall.description}\n\nPlease contact ${contactPhrase} to arrange this at no charge.\n\nWarm regards,\n${company.name}`;
+      // The workspace's own editable "Recall notice" email / SMS (Settings → Email templates).
+      const recallVars = {
+        first_name: c.firstName,
+        recipient_name: [c.firstName, c.lastName].filter(Boolean).join(" "),
+        model: recall.model,
+        recall_title: recall.title,
+        recall_description: recall.description,
+      };
       // Trashed contacts, portal service switches and withdrawn service consent.
       const verdict = await firstAllowedChannel({
         contactId: c.id,
@@ -154,8 +157,15 @@ export async function notifyRecall(_prev: NotifyResult, formData: FormData): Pro
         continue;
       }
       let ok = false;
-      if (verdict.channel === "email") ok = (await sendEmail({ to: verdict.destination, subject, text: body })).ok;
-      else ok = (await sendSms(verdict.destination, `${recall.title}: ${recall.description} Call ${contactPhrase}.`)).ok;
+      let body: string;
+      if (verdict.channel === "email") {
+        const message = await tenantEmailContent("recall", c.tenantId, recallVars);
+        body = message.text;
+        ok = (await sendEmail({ to: verdict.destination, subject: message.subject, text: message.text, html: message.html })).ok;
+      } else {
+        body = await tenantSmsContent("recall_sms", c.tenantId, recallVars);
+        ok = (await sendSms(verdict.destination, body)).ok;
+      }
       if (!ok) {
         skipped += 1;
         continue;
