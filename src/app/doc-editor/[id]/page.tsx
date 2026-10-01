@@ -11,6 +11,7 @@ import { STANDARD_TEMPLATE_KEYS } from "@/lib/doceditor/standardTemplates";
 import { DocEditorEnvProvider } from "@/components/doceditor/EditorContext";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { documentLogo } from "@/lib/doceditor/renderGlobals";
+import { quoteWordingSettings } from "@/lib/quoteFromLead";
 
 export const dynamic = "force-dynamic";
 
@@ -136,6 +137,9 @@ export default async function DocEditorPage({
   // The canvas shows the same embedded logo the printed document will carry.
   const company = await getCompanyProfile();
   const logoSrc = (await documentLogo(company.logoUrl)) ?? "";
+  // Quote-bound layouts get warned about typed-in validity/VAT wording that
+  // contradicts the settings (see doceditor/wordingCheck).
+  const wordingSettings = required === "quote" ? await quoteWordingSettings() : undefined;
 
   return (
     <DocEditorEnvProvider value={{ templateId: template.id, logoSrc, companyName: company.name }}>
@@ -145,6 +149,7 @@ export default async function DocEditorPage({
         records={records}
         initialPublishState={publishState}
         hasStandardLayout={(STANDARD_TEMPLATE_KEYS as string[]).includes(template.key)}
+        wordingSettings={wordingSettings}
       />
     </DocEditorEnvProvider>
   );

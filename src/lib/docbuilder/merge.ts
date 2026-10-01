@@ -3,11 +3,16 @@ import type { Prisma } from "@prisma/client";
 import { contactName, DEFAULT_REGIONAL, formatDate, formatZAR, type Regional } from "@/lib/format";
 import { feeRows, includedLines, lineNetCents, quotePricing, vatRateLabel } from "@/lib/pricing";
 import { jobCardTotals, jobLineCents } from "@/lib/workshop-constants";
-import type { QuoteForPrint } from "@/components/print/QuotePrintDoc";
 import { quoteBillTo, type BillToFleet } from "@/lib/quoteBillTo";
 import type { TableRow } from "./blocks";
 import { jobCardPrintFields, type JobCardPrintSource } from "./jobCardFields";
 import { quoteDocTokens } from "./quoteDocs";
+import { quoteValidDaysOf } from "@/lib/quoteExpiry";
+
+/** A quote loaded for any printed/rendered document. */
+export type QuoteForPrint = Prisma.QuoteGetPayload<{
+  include: { items: true; fees: true; lead: { include: { product: true } }; contact: true; createdBy: true };
+}>;
 
 export type JobCardForDoc = Prisma.JobCardGetPayload<{
   include: { items: true; vehicle: true; contact: true; technician: true };
@@ -106,6 +111,8 @@ export function buildQuoteContext(quote: QuoteForPrint, fleet: BillToFleet | nul
     "quote.number": `Q-${quote.number}`,
     "quote.date": formatDate(quote.createdAt, r),
     "quote.validUntil": quote.validUntil ? formatDate(quote.validUntil, r) : "—",
+    // Days between THIS quote's issue and expiry — not the live setting.
+    "quote.validDays": quote.validUntil ? String(quoteValidDaysOf(quote.createdAt, quote.validUntil, r.timeZone)) : "",
     "quote.subtotal": formatZAR(subtotal, r),
     "quote.vat": formatZAR(vat, r),
     // The rate(s) the quote was ISSUED at, from its own lines — so "VAT (15%)"
@@ -118,6 +125,11 @@ export function buildQuoteContext(quote: QuoteForPrint, fleet: BillToFleet | nul
     // Invoice / sales agreement numbering, dates and party blocks — see quoteDocs.ts.
     ...quoteDocTokens(quote, billTo, pricing, new Date(), r),
   };
+  // snake_case spellings of the three wording fields, so either form typed into
+  // a terms line resolves (the picker inserts the camelCase ones).
+  tokens["quote.valid_until"] = tokens["quote.validUntil"];
+  tokens["quote.valid_days"] = tokens["quote.validDays"];
+  tokens["quote.vat_rate"] = tokens["quote.vatRate"];
   const taxInclusive = quote.taxInclusive !== false;
   const items: TableRow[] = [
     ...lines.map((i) => ({

@@ -8,10 +8,14 @@ import path from "node:path";
 import { DEFAULT_REGIONAL, formatDate, formatZAR, formatZARCompact, regionalFrom, type Regional } from "../src/lib/format";
 import { vatRateLabel } from "../src/lib/pricing";
 import { feeRowsFor, itemRowsFor, priorById } from "../src/lib/quoteRows";
-import { quoteValidDays } from "../src/lib/quoteExpiry";
-import { lineItemCell, renderDocumentHtml } from "../src/lib/doceditor/serialize";
-import { standardQuoteTemplate } from "../src/lib/doceditor/factory";
+import { calendarDateIn, calendarDateInstant, defaultQuoteExpiry, quoteExpired, quoteValidDays } from "../src/lib/quoteExpiry";
+import { lineItemCell, renderDocumentHtml, renderEmailHtml, renderSigningSheets } from "../src/lib/doceditor/serialize";
+import { blankDocument, newBlock, newColumn, newPage, newRow, standardQuoteTemplate } from "../src/lib/doceditor/factory";
 import { showcaseQuoteTemplate } from "../src/lib/doceditor/standardTemplates";
+import type { DocumentModel } from "../src/lib/doceditor/model";
+import { VARIABLES } from "../src/lib/doceditor/variables";
+import { staleWordingWarnings } from "../src/lib/doceditor/wordingCheck";
+import { freezeDocumentGlobals } from "../src/lib/signing/freezeDocument";
 
 /**
  * Gap #8: VAT, currency and time zone were fixed in code, and the built-in quote
@@ -34,6 +38,7 @@ loader._load = function (this: unknown, request: string, parent: unknown, isMain
   return realLoad.call(this, request, parent, isMain);
 } as Loader;
 const merge = createRequire(import.meta.url)("../src/lib/docbuilder/merge.ts") as typeof import("../src/lib/docbuilder/merge");
+const editorRecord = createRequire(import.meta.url)("../src/lib/quoteEditorRecord.ts") as typeof import("../src/lib/quoteEditorRecord");
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (rel: string) => readFileSync(path.join(root, rel), "utf8");
@@ -144,6 +149,121 @@ test("the built-in quote wording states the quote's own dates and rate, never a 
   }
 });
 
+// ── the expiry is a date on the WORKSPACE calendar ──────────────────────────
+
+test("a quote's expiry is the same calendar date in the editor, the documents and the signing check", () => {
+  // Instants where the UTC date and the workspace date differ. (Auckland is on
+  // NZDT, UTC+13, from 27 Sep 2026 — so 03:30Z is still the 30th there; 11:30Z
+  // is the first UTC moment it is already 1 Oct.)
+  const cases = [
+    { now: "2026-09-30T03:30:00Z", timeZone: "America/New_York", locale: "en-US", today: "2026-09-29", expires: "2026-10-06" },
+    { now: "2026-09-30T11:30:00Z", timeZone: "Pacific/Auckland", locale: "en-NZ", today: "2026-10-01", expires: "2026-10-08" },
+    { now: "2026-09-30T03:30:00Z", timeZone: "Africa/Johannesburg", locale: "en-ZA", today: "2026-09-30", expires: "2026-10-07" },
+    { now: "2026-09-30T22:30:00Z", timeZone: "Africa/Johannesburg", locale: "en-ZA", today: "2026-10-01", expires: "2026-10-08" },
+  ];
+  for (const { now: at, timeZone, locale, today, expires } of cases) {
+    const now = new Date(at);
+    const r: Regional = { ...DEFAULT_REGIONAL, locale, timeZone };
+    const onCalendar = new Intl.DateTimeFormat(locale, { timeZone: "UTC", year: "numeric", month: "short", day: "numeric" })
+      .format(new Date(`${expires}T12:00:00Z`));
+    assert.equal(calendarDateIn(now, timeZone), today, `${timeZone}: today`);
+
+    // Defaulted: today + 7 on the workspace calendar.
+    const stored = defaultQuoteExpiry(now, 7, timeZone);
+    const quote = storedQuote({ createdAt: now, validUntil: stored });
+    // Edited: the editor shows that date, and saving it untouched stores the same date.
+    const editorValue = editorRecord.buildQuoteEditorRecord(quote as never, editorRecord.quoteVersionIndex([]), new Map(), r).validUntil;
+    assert.equal(editorValue, expires, `${timeZone}: editor date`);
+    assert.equal(calendarDateIn(calendarDateInstant(editorValue, timeZone)!, timeZone), expires, `${timeZone}: editor round-trip`);
+    // Rendered: every document path prints it from the same merge context.
+    const tokens = merge.buildQuoteContext(quote, null, r).tokens;
+    assert.equal(tokens["quote.validUntil"], onCalendar, `${timeZone}: rendered "valid until"`);
+    assert.equal(tokens["quote.validDays"], "7", `${timeZone}: {{quote.validDays}}`);
+    // Signable through the whole of that day where the business is, not a UTC day.
+    const lastMinute = calendarDateInstant(expires, timeZone)!.getTime() + 11 * 3_600_000 + 59 * 60_000;
+    assert.equal(quoteExpired(stored, timeZone, new Date(lastMinute)), false, `${timeZone}: still valid at 23:59 local`);
+    assert.equal(quoteExpired(stored, timeZone, new Date(lastMinute + 2 * 60_000)), true, `${timeZone}: expired after midnight local`);
+  }
+  // Every path that defaults, edits or shows it goes through the shared helper.
+  assert.match(read("src/lib/quoteFromLead.ts"), /defaultQuoteExpiry\(new Date\(\), quoteValidDays\(validDaysRaw\), regional\.timeZone\)/);
+  assert.match(read("src/lib/quoteFromLead.ts"), /calendarDateIn\(defaults\.validUntil, defaults\.regional\.timeZone\)/);
+  assert.match(read("src/app/actions/quotes.ts"), /calendarDateInstant\(data\.validUntil, createDefaults\.regional\.timeZone\)/);
+  for (const rel of ["src/lib/quoteFromLead.ts", "src/lib/quoteEditorRecord.ts", "src/app/actions/quotes.ts", "src/components/quotes/QuoteEditorDialog.tsx"]) {
+    assert.doesNotMatch(withoutComments(read(rel)), /T12:00:00`|validUntil[^\n]*toISOString\(\)\.slice\(0, 10\)|addDays\(new Date\(\)/, `${rel} still dates the expiry off the server clock`);
+  }
+});
+
+test("an expiry stored before this change still reads as the date it always showed in Johannesburg", () => {
+  // addDays(new Date(), 7) at 23:30 SAST on 30 Sep stored 21:30Z on 7 Oct.
+  const legacy = new Date("2026-10-07T21:30:00Z");
+  assert.equal(calendarDateIn(legacy, "Africa/Johannesburg"), "2026-10-07");
+  assert.equal(
+    merge.buildQuoteContext(storedQuote({ validUntil: legacy }), null, DEFAULT_REGIONAL).tokens["quote.validUntil"],
+    formatDate(legacy),
+    "the same text the old formatDate() printed",
+  );
+});
+
+// ── the owner's own stored templates: merge fields, and a warning ──────────
+
+/** A stored layout the owner edited: a plain and a showcase terms block, and a rich-text line. */
+function ownersTemplate(): DocumentModel {
+  const plain = newBlock("terms");
+  const showcase = newBlock("terms");
+  const rich = newBlock("text");
+  if (plain.type === "terms") plain.items = [{ text: "Quote valid until {{quote.validUntil}}." }, { text: "Valid for {{quote.validDays}} days, {{quote.vatRate}} VAT." }, { text: "Snake: {{quote.valid_until}} / {{quote.valid_days}} / {{quote.vat_rate}}." }];
+  if (showcase.type === "terms") { showcase.look = "showcase"; showcase.items = [{ text: "Quote valid until {{quote.validUntil}}." }]; }
+  if (rich.type === "text") rich.value = [{ type: "p", children: [{ text: "Offer ends " }, { type: "mergeField", token: "quote.validUntil", children: [{ text: "" }] }] }];
+  return { ...blankDocument("Owner's quote"), pages: [newPage([newRow([newColumn(100, [plain, showcase, rich])])])] };
+}
+
+test("a terms item 'Quote valid until {{quote.validUntil}}' prints the quote's expiry in every render path", () => {
+  const quote = storedQuote();
+  const expiry = formatDate(quote.validUntil, DEFAULT_REGIONAL);
+  const ctx = { ...merge.buildQuoteContext(quote, null, SA16), bound: true, regional: SA16 };
+  // The signing snapshot freezes only the record-independent globals at send
+  // time; quote tokens must survive that and resolve when the snapshot renders.
+  const snapshot = freezeDocumentGlobals(ownersTemplate(), { "company.name": "Acme", "date.today": "today" });
+  const paths: [string, string][] = [
+    ["PDF / print / preview", renderDocumentHtml(ownersTemplate(), ctx)],
+    ["email export", renderEmailHtml(ownersTemplate(), ctx)],
+    ["signing sheets (from the frozen snapshot)", renderSigningSheets(snapshot, ctx).pages.join("")],
+    ["sealed PDF (from the frozen snapshot)", renderDocumentHtml(snapshot, ctx)],
+  ];
+  for (const [name, html] of paths) {
+    assert.ok(html.includes(`Quote valid until ${expiry}.`), `${name}: terms item`);
+    assert.ok(html.includes("Valid for 7 days, 15% VAT."), `${name}: validDays and vatRate are the quote's own, not the setting's 16%`);
+    assert.ok(html.includes(`Offer ends ${expiry}`), `${name}: rich text`);
+    assert.ok(html.includes(`Snake: ${expiry} / 7 / 15%.`), `${name}: snake_case spellings`);
+    assert.ok(!html.includes("{{quote."), `${name}: no unresolved quote token`);
+  }
+  // The showcase look is a separate renderer; the block above is drawn by it.
+  assert.equal(renderDocumentHtml(ownersTemplate(), ctx).split(`Quote valid until ${expiry}.`).length - 1, 2, "plain AND showcase terms");
+});
+
+test("{{quote.validDays}} is THAT quote's validity, whatever the setting says now", () => {
+  const issued14 = storedQuote({ validUntil: new Date("2026-10-14T23:30:00Z") });
+  assert.equal(merge.buildQuoteContext(issued14, null, DEFAULT_REGIONAL).tokens["quote.validDays"], "14");
+  assert.equal(merge.buildQuoteContext(storedQuote(), null, DEFAULT_REGIONAL).tokens["quote.validDays"], "7");
+  assert.equal(merge.buildQuoteContext(storedQuote({ validUntil: null }), null, DEFAULT_REGIONAL).tokens["quote.validDays"], "");
+  for (const token of ["quote.validUntil", "quote.validDays", "quote.vatRate"]) {
+    assert.ok(VARIABLES.some((group) => group.fields.includes(token)), `${token} is in the editor's merge-field picker`);
+  }
+});
+
+test("typed-in validity or VAT wording that contradicts the settings is warned about, not rewritten", () => {
+  const stale = { pages: [{ items: [{ text: "Quote valid for 14 days." }, { text: "Totals include VAT (15%)." }] }] };
+  const warnings = staleWordingWarnings(stale, { validDays: 7, vatRatePct: 15 });
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /valid for 14 days.*7 days.*\{\{quote\.validUntil\}\}/);
+  assert.match(staleWordingWarnings(stale, { validDays: 14, vatRatePct: 16 })[0], /VAT \(15%\).*16%.*\{\{quote\.vatRate\}\}/);
+  assert.deepEqual(staleWordingWarnings(stale, { validDays: 14, vatRatePct: 15 }), [], "wording that agrees is left alone");
+  assert.deepEqual(staleWordingWarnings(ownersTemplate(), { validDays: 30, vatRatePct: 20 }), [], "merge fields never warn");
+  // Wired into the editor and into Publish, for quote-bound layouts.
+  assert.match(read("src/app/actions/docbuilder.ts"), /staleWordingWarnings\(tpl\.data, await quoteWordingSettings\(\)\)/);
+  assert.match(read("src/components/doceditor/DocEditor.tsx"), /staleWordingWarnings\(doc, wordingSettings\)/);
+});
+
 // ── (a) nothing hard-coded in the main render paths ─────────────────────────
 
 /** Files that print money or dates on a customer-facing document or message. */
@@ -165,6 +285,12 @@ const RENDER_PATHS = [
   "src/app/(print)/warranty/[id]/print/page.tsx",
   "src/app/(print)/leads/[id]/indemnity/page.tsx",
   "src/app/portal/page.tsx",
+  "src/app/portal/support/page.tsx",
+  "src/app/portal/support/[id]/page.tsx",
+  "src/app/portal/documents/page.tsx",
+  "src/app/portal/profile/page.tsx",
+  "src/lib/signing/complete.ts",
+  "src/lib/signing/service.ts",
   "src/lib/serviceReminders.ts",
   "src/lib/botAnswers.ts",
   "src/lib/botAi.ts",

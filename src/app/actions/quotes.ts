@@ -15,6 +15,8 @@ import { nextQuoteNumber } from "@/lib/numbering";
 import { insertQuoteFromLead, quoteFromLeadDefaults } from "@/lib/quoteFromLead";
 import { actingTenantId } from "@/lib/actingTenant";
 import { feeRowsFor, itemRowsFor, priorById } from "@/lib/quoteRows";
+import { calendarDateInstant } from "@/lib/quoteExpiry";
+import { getRegionalSettings } from "@/lib/settings";
 import { emitLeadJourneyEvent } from "@/lib/leadJourneyEvents";
 import { formatZAR, contactName } from "@/lib/format";
 import { z } from "zod";
@@ -428,17 +430,19 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
     linkedLeadId = lead.id;
   }
 
-  let validUntil: Date | null = null;
-  if (data.validUntil) {
-    validUntil = new Date(`${data.validUntil}T12:00:00`);
-    if (Number.isNaN(validUntil.getTime())) {
-      return { ok: false, error: "Enter a valid expiry date." };
-    }
-  }
-
   // Needed on edits too: a line ADDED to an existing draft takes the workspace's
   // current VAT rate, while the lines already on it keep their own.
   const createDefaults = await quoteFromLeadDefaults();
+
+  // The editor sends a workspace-calendar date; it is stored as that date, not
+  // re-read through the server's clock — see quoteExpiry.ts.
+  let validUntil: Date | null = null;
+  if (data.validUntil) {
+    validUntil = calendarDateInstant(data.validUntil, createDefaults.regional.timeZone);
+    if (!validUntil) {
+      return { ok: false, error: "Enter a valid expiry date." };
+    }
+  }
 
   // Resolved before the bypass transaction. This is the ACTOR, which is the
   // right owner for a quote being created here and only the FALLBACK for one
@@ -985,6 +989,7 @@ export async function quoteEditorRecord(id: string): Promise<QuoteEditorRecord |
       quote,
       quoteVersionIndex(versions),
       new Map([...fleets].map(([id, fleet]) => [id, fleet.name])),
+      await getRegionalSettings(),
     );
   });
 }

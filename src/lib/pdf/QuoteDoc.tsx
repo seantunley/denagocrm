@@ -2,7 +2,7 @@ import { Document, Page, View, Text, StyleSheet } from "@react-pdf/renderer";
 import { formatDate, formatZAR, type Regional } from "@/lib/format";
 import { documentTotals, feeRows, includedLines, lineNetCents } from "@/lib/pricing";
 import { quoteBillTo, type BillToFleet } from "@/lib/quoteBillTo";
-import type { QuoteForPrint } from "@/components/print/QuotePrintDoc";
+import type { QuoteForPrint } from "@/lib/docbuilder/merge";
 
 /**
  * SPIKE — the quotation rebuilt with @react-pdf/renderer instead of fixed mm

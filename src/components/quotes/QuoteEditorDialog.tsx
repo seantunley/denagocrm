@@ -51,7 +51,8 @@ import CustomFieldsForm from "@/components/custom-fields/CustomFieldsForm";
 import { quoteSigningView } from "@/app/actions/recordSigning";
 import type { QuoteSigningView } from "@/lib/signing/record";
 import { feeRows, quotePricing } from "@/lib/pricing";
-import { formatZAR, type Regional } from "@/lib/format";
+import { formatDate, formatZAR, type Regional } from "@/lib/format";
+import { calendarDateInstant } from "@/lib/quoteExpiry";
 import SigningBlock from "@/components/SigningBlock";
 import { Button } from "@/components/ui/button";
 import {
@@ -313,13 +314,10 @@ function statusTone(status: string): "neutral" | "success" | "danger" | "info" {
   return "neutral";
 }
 
-function displayDate(value: string, locale: string) {
-  if (!value) return "Not set";
-  return new Date(`${value}T12:00:00`).toLocaleDateString(locale, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
+/** A workspace-calendar date key, printed exactly as the documents print it. */
+function displayDate(value: string, regional: Regional) {
+  const instant = value ? calendarDateInstant(value, regional.timeZone) : null;
+  return instant ? formatDate(instant, regional) : "Not set";
 }
 
 export function QuoteEditorDialog({
@@ -1198,7 +1196,7 @@ export function QuoteEditorDialog({
                     </div>
                     <div className="text-right">
                       <p className="text-xl font-bold text-orange-600">{savedQuote ? `Q-${savedQuote.number}` : "DRAFT"}</p>
-                      <p className="mt-1 text-xs text-slate-500">Valid until {displayDate(draft.validUntil, regional.locale)}</p>
+                      <p className="mt-1 text-xs text-slate-500">Valid until {displayDate(draft.validUntil, regional)}</p>
                     </div>
                   </div>
                   <div className="grid gap-6 py-8 sm:grid-cols-2">

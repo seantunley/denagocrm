@@ -114,7 +114,7 @@ export default async function QuotesPage({
   const fleetsById = await loadBillToFleets(prisma, quotes.map((quote) => quote.fleetId));
   const fleetNames = new Map([...fleetsById].map(([id, fleet]) => [id, fleet.name]));
   const records: QuoteEditorRecord[] = quotes.map((quote) =>
-    buildQuoteEditorRecord(quote, versionIndex, fleetNames),
+    buildQuoteEditorRecord(quote, versionIndex, fleetNames, quoteDefaults.regional),
   );
 
   // Every quote here is already RBAC-scoped by getAccessibleQuoteIds, so the
@@ -207,7 +207,7 @@ export default async function QuotesPage({
                   icon={FileText}
                   title={`Quote Q-${quote.number}`}
                   detail={quoteBillTo(quote, fleetsById.get(quote.fleetId ?? "") ?? null).name || "Unlinked quote"}
-                  meta={`${formatZAR(Math.round(payableTotalCents(quote)))} · valid ${formatDate(quote.validUntil)}`}
+                  meta={`${formatZAR(Math.round(payableTotalCents(quote)))} · valid ${formatDate(quote.validUntil, quoteDefaults.regional)}`}
                   aside={<StatusPill tone={quote.status === "accepted" ? "success" : quote.status === "declined" ? "danger" : quote.status === "sent" ? "info" : "neutral"}>{quote.status}</StatusPill>}
                   href={`/quotes?edit=${quote.id}`}
                 />
@@ -301,7 +301,7 @@ export default async function QuotesPage({
                       />
                       <MobileDataFields>
                         <MobileDataField label="Total">{formatZAR(Math.round(total))}</MobileDataField>
-                        <MobileDataField label="Valid until">{formatDate(quote.validUntil)}</MobileDataField>
+                        <MobileDataField label="Valid until">{formatDate(quote.validUntil, quoteDefaults.regional)}</MobileDataField>
                         <MobileDataField label="Lead">
                           {quote.lead ? <Link href={`/leads/${quote.lead.id}`} className="text-primary hover:underline">{quote.lead.title}</Link> : "—"}
                         </MobileDataField>
@@ -363,7 +363,7 @@ export default async function QuotesPage({
                               {quote.status}
                             </StatusPill>
                           </td>
-                          <td className="text-slate-400">{formatDate(quote.validUntil)}</td>
+                          <td className="text-slate-400">{formatDate(quote.validUntil, quoteDefaults.regional)}</td>
                           <td className="text-slate-400">{formatDate(quote.createdAt)}{quote.createdBy ? ` · ${quote.createdBy.name}` : ""}</td>
                           <td className="text-right">
                             <ConfirmDelete action={deleteQuote.bind(null, quote.id)} title={`Delete quote Q-${quote.number}?`} description="Moves the quote to Trash (restorable for 60 days)." trigger="Delete" triggerClass="text-xs text-slate-500 hover:text-red-400" disabled={!canDelete} disabledReason="Your role can't delete quotes." />

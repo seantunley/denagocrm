@@ -1,9 +1,9 @@
 import "server-only";
 import type { Prisma } from "@prisma/client";
-import { addDays } from "date-fns";
 import { getRegionalSettings, getSetting } from "./settings";
-import { DEFAULT_QUOTE_TERMS, quoteValidDays } from "./quoteExpiry";
+import { calendarDateIn, DEFAULT_QUOTE_TERMS, defaultQuoteExpiry, quoteValidDays } from "./quoteExpiry";
 import type { Regional } from "./format";
+import type { WordingSettings } from "./doceditor/wordingCheck";
 import { nextQuoteNumber } from "./numbering";
 
 /**
@@ -59,16 +59,23 @@ export async function quoteFromLeadDefaults(): Promise<QuoteFromLeadDefaults> {
     getRegionalSettings(),
   ]);
   return {
-    validUntil: addDays(new Date(), quoteValidDays(validDaysRaw)),
+    // Today + N on the WORKSPACE calendar, not the server's — see quoteExpiry.ts.
+    validUntil: defaultQuoteExpiry(new Date(), quoteValidDays(validDaysRaw), regional.timeZone),
     terms: terms || DEFAULT_QUOTE_TERMS,
     regional,
   };
 }
 
+/** What typed-in template wording is checked against (doceditor/wordingCheck). */
+export async function quoteWordingSettings(): Promise<WordingSettings> {
+  const [validDaysRaw, regional] = await Promise.all([getSetting("QUOTE_VALID_DAYS"), getRegionalSettings()]);
+  return { validDays: quoteValidDays(validDaysRaw), vatRatePct: regional.vatRatePct };
+}
+
 /** The same defaults, shaped for the quote editor (a date input wants yyyy-mm-dd). */
 export function editorDefaults(defaults: QuoteFromLeadDefaults) {
   return {
-    validUntil: defaults.validUntil.toISOString().slice(0, 10),
+    validUntil: calendarDateIn(defaults.validUntil, defaults.regional.timeZone),
     terms: defaults.terms,
     regional: defaults.regional,
   };

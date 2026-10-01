@@ -1,6 +1,7 @@
 import "server-only";
 import type { Prisma } from "@prisma/client";
-import { contactName, formatDate } from "@/lib/format";
+import { contactName, formatDate, type Regional } from "@/lib/format";
+import { calendarDateIn } from "@/lib/quoteExpiry";
 import type { QuoteEditorRecord } from "@/components/quotes/QuoteEditorDialog";
 
 /**
@@ -94,7 +95,9 @@ export function quoteVersionIndex(allVersions: QuoteVersionRow[]): QuoteVersionI
 export function buildQuoteEditorRecord(
   quote: QuoteForEditor,
   index: QuoteVersionIndex,
-  fleetNames: ReadonlyMap<string, string> = new Map(),
+  fleetNames: ReadonlyMap<string, string>,
+  /** The workspace calendar: the expiry is a date ON it, not a UTC day. */
+  r: Regional,
 ): QuoteEditorRecord {
   const lockedReason = quote.signToken
     ? "A signing link is active. Revoke it from the signature card before editing."
@@ -119,16 +122,16 @@ export function buildQuoteEditorRecord(
     fleetLabel: quote.fleetId ? fleetNames.get(quote.fleetId) ?? null : null,
     leadId: quote.leadId,
     leadLabel: quote.lead?.title ?? null,
-    validUntil: quote.validUntil?.toISOString().slice(0, 10) ?? "",
+    validUntil: quote.validUntil ? calendarDateIn(quote.validUntil, r.timeZone) : "",
     terms: quote.terms ?? "",
-    createdAt: formatDate(quote.createdAt),
+    createdAt: formatDate(quote.createdAt, r),
     createdByName: quote.createdBy?.name ?? null,
     editable: lockedReason === null,
     lockedReason,
-    supersededAt: quote.supersededAt ? formatDate(quote.supersededAt) : null,
+    supersededAt: quote.supersededAt ? formatDate(quote.supersededAt, r) : null,
     supersededById: successor?.id ?? null,
     supersededByNumber: successor?.number ?? null,
-    changeRequestedAt: quote.changeRequestedAt ? formatDate(quote.changeRequestedAt) : null,
+    changeRequestedAt: quote.changeRequestedAt ? formatDate(quote.changeRequestedAt, r) : null,
     changeRequestNote: quote.changeRequestNote,
     items: quote.items.map((item) => ({
       id: item.id,
@@ -154,7 +157,7 @@ export function buildQuoteEditorRecord(
         id: version.id,
         number: version.number,
         status: version.status,
-        createdAt: formatDate(version.createdAt),
+        createdAt: formatDate(version.createdAt, r),
         superseded: Boolean(version.supersededAt),
         current: version.id === quote.id,
       })),
