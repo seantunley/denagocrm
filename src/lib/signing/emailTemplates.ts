@@ -1,5 +1,6 @@
 import { escapeHtml } from "@/lib/escapeHtml";
 import { renderTemplate } from "@/lib/template";
+import { emailDocToHtml, sanitizeEmailDoc, type EmailDoc } from "./emailDoc";
 
 /**
  * THE SIGNING EMAILS, AS EDITABLE TEMPLATES.
@@ -137,16 +138,22 @@ const PLACEHOLDER = /\{\{\s*(\w+)\s*\}\}/g;
 const MAX_SUBJECT = 200;
 const MAX_BODY = 5000;
 
-export type StoredSigningTemplate = { subject: string; body: string };
+/**
+ * `body` is always the plain text (it drives validation and the text/plain
+ * part). `doc` is the formatted version from the editor (emailDoc.ts), when the
+ * owner has saved one — kept as `unknown` here and sanitised against the kind's
+ * fields every time it is rendered.
+ */
+export type StoredSigningTemplate = { subject: string; body: string; doc?: unknown };
 
 /** Read a stored override back, defensively. Anything that is not one → null → default. */
 export function parseStoredSigningTemplate(raw: string | null | undefined): StoredSigningTemplate | null {
   if (!raw) return null;
   try {
-    const v = JSON.parse(raw) as { subject?: unknown; body?: unknown };
+    const v = JSON.parse(raw) as { subject?: unknown; body?: unknown; doc?: unknown };
     if (typeof v.subject !== "string" || typeof v.body !== "string") return null;
     if (!v.subject.trim() || !v.body.trim()) return null;
-    return { subject: v.subject, body: v.body };
+    return Array.isArray(v.doc) ? { subject: v.subject, body: v.body, doc: v.doc } : { subject: v.subject, body: v.body };
   } catch {
     return null;
   }
@@ -186,7 +193,22 @@ export type SigningEmailBrand = {
   accentText: string;
   phone: string;
   email: string;
+  /**
+   * Header background. "light" (white, the default) suits a dark logo; a logo
+   * drawn in white needs "dark" or "brand" or its lettering disappears.
+   */
+  header?: EmailHeaderStyle;
 };
+
+export type EmailHeaderStyle = "light" | "dark" | "brand";
+export const EMAIL_HEADER_STYLES: Record<EmailHeaderStyle, string> = {
+  light: "White",
+  dark: "Dark",
+  brand: "Brand colour",
+};
+export function parseEmailHeaderStyle(raw: string | null | undefined): EmailHeaderStyle {
+  return raw === "dark" || raw === "brand" ? raw : "light";
+}
 
 export const DEFAULT_ACCENT = "#ea580c";
 
@@ -243,18 +265,32 @@ export function renderSigningEmail(
   if (allowed.code) escaped.code = `<strong>${escapeHtml(allowed.code)}</strong>`;
 
   const P = `margin:0 0 16px;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:1.55;color:#1e293b;`;
-  const content = paragraphs
-    .map((p) => {
-      if (actionLine?.test(p.trim())) {
-        return action === "signing_link"
-          ? signButton(allowed.signing_link, brand)
-          : `<p style="${P}"><span style="display:inline-block;padding:10px 18px;border:1px solid #e2e8f0;border-radius:8px;font-family:Consolas,Menlo,monospace;font-size:26px;font-weight:bold;letter-spacing:6px;color:#0f172a;">${escapeHtml(allowed.code)}</span></p>`;
-      }
-      // Escape the TEMPLATE first, then substitute already-escaped values:
-      // nothing the owner types or a customer's name contains becomes markup.
-      return `<p style="${P}">${renderTemplate(escapeHtml(p), escaped).replace(/\n/g, "<br>")}</p>`;
-    })
-    .join("\n");
+  const actionHtml = () =>
+    action === "signing_link"
+      ? signButton(allowed.signing_link, brand)
+      : `<p style="${P}"><span style="display:inline-block;padding:10px 18px;border:1px solid #e2e8f0;border-radius:8px;font-family:Consolas,Menlo,monospace;font-size:26px;font-weight:bold;letter-spacing:6px;color:#0f172a;">${escapeHtml(allowed.code)}</span></p>`;
+
+  // The formatted body, when the owner saved one; otherwise the plain paragraphs.
+  const doc: EmailDoc | null = tpl.doc ? sanitizeEmailDoc(tpl.doc, def.fields) : null;
+  if (doc && action && !doc.some((b) => b.children.some((c) => "type" in c && c.type === "mergeField" && c.token === action))) {
+    // Never send the email without what it was sent for.
+    doc.push({ type: "p", children: [{ type: "mergeField", token: action, children: [{ text: "" }] }] });
+  }
+  const content = doc
+    ? emailDocToHtml(doc, {
+        escaped,
+        paragraphStyle: P,
+        accent: brand.accent,
+        actionBlock: action ? (token) => (token === action ? actionHtml() : null) : null,
+      })
+    : paragraphs
+        .map((p) => {
+          if (actionLine?.test(p.trim())) return actionHtml();
+          // Escape the TEMPLATE first, then substitute already-escaped values:
+          // nothing the owner types or a customer's name contains becomes markup.
+          return `<p style="${P}">${renderTemplate(escapeHtml(p), escaped).replace(/\n/g, "<br>")}</p>`;
+        })
+        .join("\n");
 
   return { subject, html: shell(subject, content, brand), text };
 }
@@ -286,9 +322,19 @@ export function signButton(url: string, brand: Pick<SigningEmailBrand, "accent" 
 
 function shell(subject: string, content: string, brand: SigningEmailBrand): string {
   const name = escapeHtml(brand.companyName);
+  const style = brand.header ?? "light";
+  // Light: today's look — accent bar, white header. Dark / brand: the header IS
+  // the colour block (no separate bar), and the wordmark turns light.
+  const headerBg = style === "dark" ? "#0f172a" : style === "brand" ? brand.accent : null;
+  const wordmark = style === "dark" ? "#ffffff" : style === "brand" ? brand.accentText : "#0f172a";
   const header = brand.logoUrl
     ? `<img src="${escapeHtml(brand.logoUrl)}" alt="${name}" height="44" style="display:block;border:0;height:44px;width:auto;">`
-    : `<div style="font-family:Helvetica,Arial,sans-serif;font-size:16px;font-weight:800;letter-spacing:1px;color:#0f172a;">${escapeHtml(brand.companyName.toUpperCase())}</div>`;
+    : `<div style="font-family:Helvetica,Arial,sans-serif;font-size:16px;font-weight:800;letter-spacing:1px;color:${wordmark};">${escapeHtml(brand.companyName.toUpperCase())}</div>`;
+  const headerRows = headerBg
+    ? `<tr><td bgcolor="${headerBg}" style="padding:22px 28px;background-color:${headerBg};border-radius:10px 10px 0 0;">${header}</td></tr>
+<tr><td style="height:12px;line-height:12px;font-size:0;">&nbsp;</td></tr>`
+    : `<tr><td height="4" bgcolor="${brand.accent}" style="height:4px;line-height:4px;font-size:0;background-color:${brand.accent};border-radius:10px 10px 0 0;">&nbsp;</td></tr>
+<tr><td style="padding:24px 28px 8px;">${header}</td></tr>`;
   const footerLines = [
     brand.tagline ? `${name} — ${escapeHtml(brand.tagline)}` : name,
     [brand.phone, brand.email].filter((s) => s.trim()).map(escapeHtml).join(" &middot; "),
@@ -299,8 +345,7 @@ function shell(subject: string, content: string, brand: SigningEmailBrand): stri
 <body style="margin:0;padding:0;background-color:#f1f5f9;">
 <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" bgcolor="#f1f5f9" style="background-color:#f1f5f9;"><tr><td align="center" style="padding:24px 12px;">
 <table role="presentation" width="560" border="0" cellspacing="0" cellpadding="0" bgcolor="#ffffff" style="width:100%;max-width:560px;background-color:#ffffff;border-radius:10px;">
-<tr><td height="4" bgcolor="${brand.accent}" style="height:4px;line-height:4px;font-size:0;background-color:${brand.accent};border-radius:10px 10px 0 0;">&nbsp;</td></tr>
-<tr><td style="padding:24px 28px 8px;">${header}</td></tr>
+${headerRows}
 <tr><td style="padding:12px 28px 8px;">
 ${content}
 </td></tr>

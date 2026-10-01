@@ -27,14 +27,20 @@ import {
   deleteTemplate,
   saveSigningEmailTemplate,
   resetSigningEmailTemplate,
+  previewSigningEmailTemplate,
+  saveEmailHeaderStyle,
 } from "@/app/actions/emails";
 import {
+  EMAIL_HEADER_STYLES,
+  parseEmailHeaderStyle,
   SIGNING_EMAILS,
   SIGNING_EMAIL_KINDS,
   SIGNING_FIELD_HELP,
   parseStoredSigningTemplate,
   type SigningEmailKind,
 } from "@/lib/signing/emailTemplates";
+import { sanitizeEmailDoc, textToEmailDoc } from "@/lib/signing/emailDoc";
+import { EmailTemplateEditor } from "@/components/settings/EmailTemplateEditor";
 import TestEmailButton from "@/components/TestEmailButton";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import SecretReveal from "@/components/SecretReveal";
@@ -153,12 +159,16 @@ export default async function SettingsPage({
   const signingTenantId = isAdmin && tab === "email" ? await getActiveTenantId() : null;
   const signingOverrides = signingTenantId
     ? await basePrisma.appSetting.findMany({
-        where: { tenantId: signingTenantId, key: { in: SIGNING_EMAIL_KINDS.map((k) => SIGNING_EMAILS[k].settingKey) } },
+        where: {
+          tenantId: signingTenantId,
+          key: { in: [...SIGNING_EMAIL_KINDS.map((k) => SIGNING_EMAILS[k].settingKey), "EMAIL_HEADER_STYLE"] },
+        },
         select: { key: true, value: true },
       })
     : [];
   const signingTemplate = (kind: SigningEmailKind) =>
     parseStoredSigningTemplate(signingOverrides.find((s) => s.key === SIGNING_EMAILS[kind].settingKey)?.value);
+  const emailHeaderStyle = parseEmailHeaderStyle(signingOverrides.find((s) => s.key === "EMAIL_HEADER_STYLE")?.value);
   const settingsTenantId = tab === "integrations" ? await getActiveTenantId() : null;
   const xEntries = tab === "integrations"
     ? await Promise.all(["X_ACCOUNT_ID", "X_USERNAME"].map(async (key) => [key, await resolveTenantCredential(settingsTenantId, key)] as const))
@@ -841,19 +851,26 @@ export default async function SettingsPage({
               }
               action="Manage"
             >
-              <p className="text-xs text-muted-foreground mb-4">
-                Placeholders: <code>{"{{name}}"}</code>, <code>{"{{first_name}}"}</code>,{" "}
-                <code>{"{{model}}"}</code>, <code>{"{{color}}"}</code>, <code>{"{{value}}"}</code>,{" "}
-                <code>{"{{user_name}}"}</code> — filled from the lead/contact when sending.
-              </p>
               <div className="mb-5">
                 <div className="text-sm font-semibold mb-1">Signing &amp; quote emails</div>
                 <p className="text-xs text-muted-foreground mb-3">
                   Sent by e-signing, and the starting wording for &ldquo;Email quote&rdquo;. Your logo, brand colour
-                  and company details are added for you. In signing emails, a line holding just{" "}
-                  <code>{"{{signing_link}}"}</code> becomes the &ldquo;Open &amp; sign&rdquo; button. Leave a blank
-                  line between paragraphs.
+                  and company details are added for you — the preview shows exactly what the customer receives.
                 </p>
+                <SaveForm success="Email header saved" resetOnSuccess={false} action={saveEmailHeaderStyle} className="mb-3 flex flex-wrap items-end gap-2">
+                  <div>
+                    <label className="label">Header background</label>
+                    <select name="headerStyle" className="input" defaultValue={emailHeaderStyle}>
+                      {Object.entries(EMAIL_HEADER_STYLES).map(([value, label]) => (
+                        <option key={value} value={value}>{label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
+                  <span className="text-xs text-muted-foreground basis-full">
+                    Pick Dark or Brand colour if your logo is drawn in white.
+                  </span>
+                </SaveForm>
                 <div className="space-y-3">
                   {SIGNING_EMAIL_KINDS.map((kind) => {
                     const def = SIGNING_EMAILS[kind];
@@ -874,20 +891,18 @@ export default async function SettingsPage({
                             action={saveSigningEmailTemplate.bind(null, kind)}
                             className="space-y-2"
                           >
-                            <label className="label">Subject</label>
-                            <input name="subject" className="input" defaultValue={saved?.subject ?? def.subject} required maxLength={200} />
-                            <label className="label">Body</label>
-                            <textarea name="body" className="input font-mono text-xs" rows={9} defaultValue={saved?.body ?? def.body} required maxLength={5000} />
-                            <div className="text-xs text-muted-foreground">
-                              Fields:{" "}
-                              {def.fields.map((f, i) => (
-                                <span key={f}>
-                                  {i > 0 && ", "}
-                                  <code title={SIGNING_FIELD_HELP[f]}>{`{{${f}}}`}</code>
-                                  {f === def.action && " (required)"}
-                                </span>
-                              ))}
-                            </div>
+                            <EmailTemplateEditor
+                              initialSubject={saved?.subject ?? def.subject}
+                              initialDoc={
+                                (saved?.doc ? sanitizeEmailDoc(saved.doc, def.fields) : null) ??
+                                textToEmailDoc(saved?.body ?? def.body, def.fields)
+                              }
+                              fields={def.fields}
+                              fieldHelp={SIGNING_FIELD_HELP}
+                              requiredField={def.action}
+                              preview={previewSigningEmailTemplate.bind(null, kind)}
+                              refreshKey={emailHeaderStyle}
+                            />
                             <SaveButton className="btn-primary btn-sm">Save</SaveButton>
                           </SaveForm>
                           {saved && (
@@ -901,7 +916,12 @@ export default async function SettingsPage({
                   })}
                 </div>
               </div>
-              <div className="text-sm font-semibold mb-2">Your templates</div>
+              <div className="text-sm font-semibold mb-1">Your templates</div>
+              <p className="text-xs text-muted-foreground mb-2">
+                For campaigns, journeys and service reminders. Placeholders: <code>{"{{name}}"}</code>,{" "}
+                <code>{"{{first_name}}"}</code>, <code>{"{{model}}"}</code>, <code>{"{{color}}"}</code>,{" "}
+                <code>{"{{value}}"}</code>, <code>{"{{user_name}}"}</code> — filled from the lead/contact when sending.
+              </p>
               <div className="space-y-3 mb-4">
                 {templates.map((t) => (
                   <details key={t.id} className="rounded-lg border border-border bg-muted/40">

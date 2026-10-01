@@ -7,6 +7,7 @@ import { decryptValue } from "@/lib/settings";
 import {
   DEFAULT_ACCENT,
   SIGNING_EMAILS,
+  parseEmailHeaderStyle,
   parseStoredSigningTemplate,
   renderSigningEmail,
   type RenderedSigningEmail,
@@ -56,7 +57,7 @@ export async function tenantEmailContent(
       basePrisma.appSetting.findMany({
         where: {
           tenantId,
-          key: { in: [def.settingKey, "COMPANY_NAME", "COMPANY_TAGLINE", "COMPANY_PHONE", "COMPANY_EMAIL", "COMPANY_LOGO_URL"] },
+          key: { in: [def.settingKey, "COMPANY_NAME", "COMPANY_TAGLINE", "COMPANY_PHONE", "COMPANY_EMAIL", "COMPANY_LOGO_URL", "EMAIL_HEADER_STYLE"] },
         },
         select: { key: true, value: true },
       }),
@@ -96,6 +97,7 @@ export async function tenantEmailContent(
       accentText: brand.primaryForeground ?? "#ffffff",
       phone: all.company_phone,
       email: all.company_email,
+      header: parseEmailHeaderStyle(setting("EMAIL_HEADER_STYLE")),
     });
   } catch {
     return unbranded();
