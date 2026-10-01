@@ -55,6 +55,16 @@ test("failures that did not park the conversation are listed and retried by mess
   // The same predicate as the list, so what is shown is what can be retried.
   assert.match(retry, /where: \{ id: outboxId, tenantId, \.\.\.UNPARKED_FAILURE \}/);
   assert.match(retry, /providerMessageId: null, sentAt: null/, "a fresh send, not the failed attempt's provider id");
+  // Human takeover (re-review of #733): a BOT message is not requeued once a
+  // person owns the thread — the worker's fence would cancel it and the action
+  // would claim "Sending again" over nothing. Checked under the fence's own lock,
+  // before the claim, and refused with its own message.
+  assert.match(retry, /if \(head\.origin === "bot" && !\(await botStillOwnsTx\(tx as unknown as TenantWriteTx, tenantId, head\.channel, head\.key\)\)\) \{\s*return \{ outcome: "human_owned" as const/);
+  assert.ok(retry.indexOf('outcome: "human_owned"') < retry.indexOf("const claimed = await"));
+  assert.match(src("src/app/actions/botDeliveries.ts"), /if \(outcome === "human_owned"\) refuse\(/);
+  // …and the list does not offer it in that state.
+  assert.match(listed, /retryable: !PERMANENT_FAILURES\.has\(failure\.failureCode \?\? ""\) && !\(failure\.origin === "bot" && \(await humanOwns\(failure\.channel, failure\.key\)\)\),/);
+  assert.match(lib, /return session\?\.ownership === "human";/);
   // Claimed on the row itself; a second click finds it no longer dead.
   assert.match(retry, /updateMany\(\{ where: \{ id: head\.id, tenantId, status: "dead" \}, data: reset \}\);\s*if \(claimed\.count !== 1\) return \{ outcome: "not_parked" as const \};/);
   assert.match(retry, /lastError: \{ startsWith: blockedByPrefix\(head\.id\) \}/);

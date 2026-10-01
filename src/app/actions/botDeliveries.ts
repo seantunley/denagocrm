@@ -38,6 +38,7 @@ export async function retryFailedMessage(outboxId: string) {
     if (!outboxId) refuse("That message can't be retried from here.");
     const { outcome, channel, key } = await requeueFailedMessage(outboxId);
     if (outcome === "permanent") refuse("Sending again won't help — reply to the customer another way, or wait for them to write.");
+    if (outcome === "human_owned") refuse("A person has taken this conversation over, so the bot's message won't be sent again — reply to the customer yourself.");
     if (outcome === "not_parked" || !channel || !key) refuse("This message was already sent again — refresh the inbox.");
     await flushBotOutboxConversation(channel, key).catch(() => {});
     await logAudit({ action: "bot.delivery_retried", summary: `Retried a failed ${channel} message (${outboxId})`, user });

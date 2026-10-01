@@ -111,10 +111,18 @@ export async function listDeadBotConversations(limit = 25): Promise<DeadBotConve
       contact: contact ? { id: contact.id, name: contactName(contact) } : null,
       failedAt: failure.updatedAt,
       reason: deliveryFailureReason(failure.failureCode) ?? "the channel rejected it",
-      retryable: !PERMANENT_FAILURES.has(failure.failureCode ?? ""),
+      // A bot message is only offered again while the bot still owns the thread —
+      // the same rule the retry enforces under lock (requeueFailedMessage).
+      retryable: !PERMANENT_FAILURES.has(failure.failureCode ?? "") && !(failure.origin === "bot" && (await humanOwns(failure.channel, failure.key))),
       failedMessageId: failure.id,
       origin: failure.origin === "staff" ? "staff" : "bot",
     });
   }
   return out;
+}
+
+/** Whether a person has taken this conversation over (the fence's own test: ownership "human"). */
+async function humanOwns(channel: string, key: string): Promise<boolean> {
+  const session = await prisma.botSession.findFirst({ where: { channel, key }, select: { ownership: true } });
+  return session?.ownership === "human";
 }

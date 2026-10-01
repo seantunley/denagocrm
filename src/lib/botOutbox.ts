@@ -1283,7 +1283,7 @@ export async function flushBotOutboxConversation(
   return withStaffConversationScope(() => drainConversation(channel, key, limit, budget));
 }
 
-export type RequeueOutcome = "requeued" | "not_parked" | "permanent";
+export type RequeueOutcome = "requeued" | "not_parked" | "permanent" | "human_owned";
 
 /**
  * Send a dead-lettered conversation's failed messages again (gap audit #31).
@@ -1367,10 +1367,19 @@ export async function requeueFailedMessage(
     return prisma.$transaction(async (tx) => {
       const head = await tx.botFlowOutbox.findFirst({
         where: { id: outboxId, tenantId, ...UNPARKED_FAILURE },
-        select: { id: true, channel: true, key: true, failureCode: true },
+        select: { id: true, channel: true, key: true, failureCode: true, origin: true },
       });
       if (!head) return { outcome: "not_parked" as const };
       if (head.failureCode && PERMANENT_FAILURES.has(head.failureCode)) return { outcome: "permanent" as const, channel: head.channel, key: head.key };
+      // A BOT message may only be resent while the bot still owns the thread. Once
+      // a person has taken over, the worker's fence (botMayStillSpeak) would cancel
+      // it on the way out — so requeueing it "sent again" nothing and dropped it
+      // from the list (re-review of #733). Asked under the same session lock the
+      // fence takes, so a takeover cannot slip in between this check and the send.
+      // (TenantWriteTx is typed off basePrisma; this guarded-client transaction is the same runtime client.)
+      if (head.origin === "bot" && !(await botStillOwnsTx(tx as unknown as TenantWriteTx, tenantId, head.channel, head.key))) {
+        return { outcome: "human_owned" as const, channel: head.channel, key: head.key };
+      }
       // A fresh send: the old provider id belonged to the attempt that failed.
       const reset = { status: "pending", attempts: 0, leaseUntil: null, lastError: null, failureCode: null, providerMessageId: null, sentAt: null, availableAt: new Date() };
       const claimed = await tx.botFlowOutbox.updateMany({ where: { id: head.id, tenantId, status: "dead" }, data: reset });
