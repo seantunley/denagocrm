@@ -833,9 +833,9 @@ export default function KanbanBoard({
    * Restoring the captured snapshot is the whole rollback: it is the state the
    * user had, so their scroll position, filters and selection are untouched.
    */
-  function rollbackTo(snapshot: KanbanStage[], message: string) {
+  function rollbackTo(snapshot: KanbanStage[], message: string, notify = true) {
     setStages(snapshot);
-    toast.error(message);
+    if (notify) toast.error(message);
   }
 
   function requestMove(lead: KanbanLead, targetStageId: string, overrideReason?: string) {
@@ -1113,11 +1113,12 @@ export default function KanbanBoard({
       } else {
         // Same rule: a refused booking must not leave the card in the stage the
         // booking was the price of entry to.
-        setStages(snapshot);
+        const message = result.error ?? "Couldn't book the test drive";
         if (result.error?.includes(" is unavailable from ")) {
+          rollbackTo(snapshot, result.error, false);
           setAvailabilityConflict(result.error);
         } else {
-          toast.error(result.error ?? "Couldn't book the test drive");
+          rollbackTo(snapshot, message);
         }
       }
     });
