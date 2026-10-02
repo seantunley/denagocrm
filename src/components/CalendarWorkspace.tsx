@@ -78,7 +78,10 @@ export type CalendarWorkspaceEvent = {
   context: string | null;
   phone: string | null;
   email: string | null;
+  /** Everyone at it as one label ("Sean Tunley, Donovan Hodgman"), owner first. */
   assignee: string;
+  /** The same people, for the owner filter. */
+  people: string[];
   location: string | null;
   note: string | null;
   dateLabel: string;
@@ -433,7 +436,7 @@ export default function CalendarWorkspace({
 
   const owners = useMemo(
     () =>
-      Array.from(new Set(events.map((event) => event.assignee))).sort(),
+      Array.from(new Set(events.flatMap((event) => event.people))).sort(),
     [events],
   );
   const types = useMemo(
@@ -461,7 +464,7 @@ export default function CalendarWorkspace({
           .includes(needle);
       return (
         matchesQuery &&
-        (!owner || event.assignee === owner) &&
+        (!owner || event.people.includes(owner)) &&
         (type === CALENDAR_DEFAULT_VIEW
           ? inDefaultCalendarView(event)
           : !type || event.type === type) &&

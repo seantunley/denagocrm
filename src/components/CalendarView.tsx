@@ -11,6 +11,7 @@ import { prisma } from "@/lib/db";
 import { contactName } from "@/lib/format";
 import { johannesburgDateKey } from "@/lib/activityDay";
 import { getSlotConfig } from "@/lib/bookingSlots";
+import { activityPeople } from "@/lib/activityAttendees";
 import {
   calendarQueryBounds,
   isCalendarEventOverdue,
@@ -105,6 +106,7 @@ export default async function CalendarView({
       },
       include: {
         assignedTo: { select: { id: true, name: true } },
+        attendees: { include: { user: { select: { name: true } } }, orderBy: { createdAt: "asc" } },
         lead: { include: { product: { select: { name: true } } } },
         contact: true,
       },
@@ -194,7 +196,8 @@ export default async function CalendarView({
         context: activity.lead?.product?.name ?? null,
         phone: activity.contact?.phone ?? activity.lead?.phone ?? null,
         email: activity.contact?.email ?? activity.lead?.email ?? null,
-        assignee: activity.assignedTo.name,
+        assignee: activityPeople(activity).join(", "),
+        people: activityPeople(activity),
         location: activity.location,
         note: activity.note,
         dateLabel: dateLabel(occurrenceKey),

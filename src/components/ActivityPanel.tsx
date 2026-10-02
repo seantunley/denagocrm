@@ -6,6 +6,7 @@ import { formatDue } from "@/lib/format";
 import { isFutureDay } from "@/lib/activityDay";
 import { ActivityTypeIcon } from "@/components/ActivityTypesProvider";
 import { ConflictAwareForm } from "@/components/ConflictAwareForm";
+import { AttendeePicker } from "@/components/AttendeePicker";
 
 type ActivityItem = {
   id: string;
@@ -18,6 +19,11 @@ type ActivityItem = {
   endDate?: Date | null;
   status: string;
   assignedTo: { id: string; name: string };
+  /**
+   * The other staff attending. Left undefined by a page that did not load them;
+   * the edit form then offers no picker, so a save cannot clear them unseen.
+   */
+  attendees?: { userId: string; user: { name: string } }[];
   /**
    * Which customer this activity belongs to. Only set where the panel shows an
    * AGGREGATE — the fleet page pools the activities of every contact in the
@@ -133,6 +139,7 @@ export default function ActivityPanel({
           🔧 Workshop
         </label>
         <button className="btn-primary">Schedule</button>
+        <AttendeePicker users={users} className="col-span-2 md:col-span-4" />
         </ConflictAwareForm>
       </details>
       )}
@@ -167,7 +174,7 @@ export default function ActivityPanel({
                       {overdue ? "Overdue — " : dueToday ? "Today — " : ""}
                       {formatDue(a.dueDate)}
                     </span>{" "}
-                    · {a.assignedTo.name}
+                    · {[a.assignedTo.name, ...(a.attendees ?? []).map((row) => row.user.name)].join(", ")}
                     {a.contactLabel && ` · ${a.contactLabel}`}
                     {a.location && (
                       <>
@@ -286,6 +293,13 @@ export default function ActivityPanel({
                       />
                       🔧 Workshop
                     </label>
+                    {a.attendees && (
+                      <AttendeePicker
+                        users={users}
+                        defaultIds={a.attendees.map((row) => row.userId)}
+                        className="col-span-2"
+                      />
+                    )}
                     <div className="col-span-2">
                       <SaveButton className="btn-primary w-full">Save changes</SaveButton>
                     </div>

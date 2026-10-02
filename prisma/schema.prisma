@@ -60,6 +60,7 @@ model User {
   contactsCreated    Contact[]        @relation("ContactCreator")
   activitiesAssigned Activity[]       @relation("ActivityAssignee")
   activitiesCreated  Activity[]       @relation("ActivityCreator")
+  activitiesAttending ActivityAttendee[]
   libraryVersions    LibraryVersion[]
   quotesCreated      Quote[]          @relation("QuoteCreator")
   jobCardsAsTech     JobCard[]        @relation("JobCardTechnician")
@@ -939,12 +940,29 @@ model Activity {
   assignedTo   User     @relation("ActivityAssignee", fields: [assignedToId], references: [id])
   createdById  String
   createdBy    User     @relation("ActivityCreator", fields: [createdById], references: [id])
+  /// Other staff at a meeting besides the assignee (who stays the owner).
+  attendees    ActivityAttendee[]
 
   createdAt DateTime @default(now())
 
   @@index([tenantId])
   @@index([assignedToId, dueDate, status])
   @@index([availabilityBlock, dueDate, endDate])
+}
+
+/// A second (third…) staff member at an activity. Activity has one assignee —
+/// the owner, whose task list it is on — and a meeting often has more people.
+model ActivityAttendee {
+  activityId String
+  activity   Activity @relation(fields: [activityId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenantId   String
+  createdAt  DateTime @default(now())
+
+  @@id([activityId, userId])
+  @@index([userId])
+  @@index([tenantId])
 }
 
 model EmailTemplate {

@@ -29,6 +29,7 @@ import { readPwaActivityShortcut } from "@/lib/pwaShortcuts";
 import { useActivityTypes } from "@/components/ActivityTypesProvider";
 import { pickableActivityTypes } from "@/lib/activityTypes";
 import ContactPicker from "@/components/ContactPicker";
+import { AttendeePicker } from "@/components/AttendeePicker";
 
 export type QuickCreateKind = "lead" | "contact" | "calendar" | "availability" | "quote" | "jobcard" | "vehicle";
 
@@ -387,6 +388,7 @@ export default function QuickCreateDialog() {
                     </select>
                   </div>
                 </div>
+                <AttendeePicker users={currentOptions.users} />
                 <div>
                   <label className="label">Location</label>
                   <LocationAutocomplete className={input} placeholder="Showroom, workshop or customer address" />

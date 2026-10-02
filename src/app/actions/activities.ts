@@ -17,6 +17,7 @@ import { resolveAssignableUser } from "@/lib/tenantActor";
 import { logAudit } from "@/lib/audit";
 import { reserveSlot } from "@/lib/bookingSlots";
 import { ensureTimelinePin } from "@/lib/timelinePins";
+import { resolveAttendees } from "@/lib/activityAttendees";
 import {
   availabilityConflictMessage,
   commitmentConflictMessage,
@@ -93,11 +94,14 @@ async function requireActivityAccess(id: string) {
   const user = await requirePermission("activities.manage");
   const activity = await prisma.activity.findUnique({
     where: { id },
-    include: { lead: true },
+    include: { lead: true, attendees: { select: { userId: true } } },
   });
   if (!activity) refuse("That activity is no longer there — refresh the page.");
+  // Someone attending a meeting can work with it as its assignee can.
   const directlyOwned =
-    activity.assignedToId === user.id || activity.createdById === user.id;
+    activity.assignedToId === user.id ||
+    activity.createdById === user.id ||
+    activity.attendees.some((row) => row.userId === user.id);
   const linkedAllowed =
     (activity.leadId ? await canAccessLead(user, activity.leadId) : false) ||
     (activity.contactId
@@ -146,6 +150,9 @@ async function scheduleActivityBody(formData: FormData) {
   const assignee = await resolveActivityAssignee(formData);
   const assignedToId = assignee?.id ?? user.id;
   const workshop = formData.get("workshop") === "on";
+  // Everyone else at it (a meeting two people go to was two entries, one each).
+  const attendees = await resolveAttendees(formData, assignedToId);
+  if (workshop && attendees.length) refuse("A workshop booking has one technician — remove the other people.");
 
   let dueDate: Date;
   if (type === FOLLOW_UP_TYPE) {
@@ -209,16 +216,20 @@ async function scheduleActivityBody(formData: FormData) {
     // customer record owns the row, and stamping anything else refuses the write.
     const tenantId = await customerRecordTenantId({ contactId, leadId });
     const scheduleTenant = await staffScheduleTenantId(tenantId);
+    const people = [assignedToId, ...attendees.map((person) => person.id)];
     activity = await prisma.$transaction(async (tx) => {
-      await lockStaffSchedules(tx, scheduleTenant, [assignedToId]);
-      const conflict = await findStaffAvailabilityConflict({
-        userId: assignedToId,
-        tenantId: scheduleTenant,
-        start: dueDate,
-        end: endDate,
-        db: tx,
-      });
-      if (conflict) return { conflict } as const;
+      // Every person at it must be free, each checked under their own lock.
+      await lockStaffSchedules(tx, scheduleTenant, people);
+      for (const userId of people) {
+        const conflict = await findStaffAvailabilityConflict({
+          userId,
+          tenantId: scheduleTenant,
+          start: dueDate,
+          end: endDate,
+          db: tx,
+        });
+        if (conflict) return { conflict } as const;
+      }
       const created = await tx.activity.create({
         data: {
           type,
@@ -233,6 +244,11 @@ async function scheduleActivityBody(formData: FormData) {
           assignedToId,
           createdById: user.id,
           tenantId,
+          // Stamped explicitly with the schedule's workspace: the row is only
+          // visible under that tenant's policy.
+          ...(attendees.length
+            ? { attendees: { create: attendees.map((person) => ({ userId: person.id, tenantId: scheduleTenant })) } }
+            : {}),
         },
       });
       return { created } as const;
@@ -248,9 +264,10 @@ async function scheduleActivityBody(formData: FormData) {
   }
 
   const assigneeName = assignee?.name ?? user.name;
+  const withWhom = attendees.length ? ` with ${attendees.map((person) => person.name).join(", ")}` : "";
   await logAudit({
     action: "activity.scheduled",
-    summary: `Scheduled ${activity.type}: “${summary}”${activity.location ? ` at ${activity.location}` : ""} — assigned to ${assigneeName}`,
+    summary: `Scheduled ${activity.type}: “${summary}”${activity.location ? ` at ${activity.location}` : ""} — assigned to ${assigneeName}${withWhom}`,
     leadId,
     contactId,
     user,
@@ -486,8 +503,10 @@ async function rescheduleActivityBody(id: string, when: string): Promise<{ ok: b
   });
   const scheduleTenant = await staffScheduleTenantId(tenantId);
 
+  // A moved meeting moves for everyone at it.
+  const people = [existing.assignedToId, ...existing.attendees.map((row) => row.userId)];
   const result = await prisma.$transaction(async (tx) => {
-    await lockStaffSchedules(tx, scheduleTenant, [existing.assignedToId]);
+    await lockStaffSchedules(tx, scheduleTenant, people);
     if (existing.availabilityBlock) {
       const conflict = await findStaffCommitmentConflict({
         userId: existing.assignedToId,
@@ -499,15 +518,17 @@ async function rescheduleActivityBody(id: string, when: string): Promise<{ ok: b
       });
       if (conflict) return { error: commitmentConflictMessage(conflict) } as const;
     } else {
-      const conflict = await findStaffAvailabilityConflict({
-        userId: existing.assignedToId,
-        tenantId: scheduleTenant,
-        start: dueDate,
-        end: endDate,
-        excludeActivityId: existing.id,
-        db: tx,
-      });
-      if (conflict) return { error: availabilityConflictMessage(conflict) } as const;
+      for (const userId of people) {
+        const conflict = await findStaffAvailabilityConflict({
+          userId,
+          tenantId: scheduleTenant,
+          start: dueDate,
+          end: endDate,
+          excludeActivityId: existing.id,
+          db: tx,
+        });
+        if (conflict) return { error: availabilityConflictMessage(conflict) } as const;
+      }
     }
     const activity = await tx.activity.update({
       where: { id },
@@ -680,8 +701,23 @@ async function updateActivityBody(id: string, formData: FormData) {
   });
   const scheduleTenant = await staffScheduleTenantId(tenantId);
 
+  // Only a form that carries the attendee picker changes who is attending; any
+  // other edit leaves the people as they were rather than clearing them.
+  const attendeeIds = formData.has("attendeesShown")
+    ? (await resolveAttendees(formData, assignedToId)).map((person) => person.id)
+    : existing.attendees.map((row) => row.userId).filter((userId) => userId !== assignedToId);
+  if (existing.availabilityBlock && attendeeIds.length) refuse("Blocked time belongs to one person.");
+  if (formData.get("workshop") === "on" && attendeeIds.length) {
+    refuse("A workshop booking has one technician — remove the other people.");
+  }
+  const people = [assignedToId, ...attendeeIds];
+
   const result = await prisma.$transaction(async (tx) => {
-    await lockStaffSchedules(tx, scheduleTenant, [existing.assignedToId, assignedToId]);
+    await lockStaffSchedules(tx, scheduleTenant, [
+      existing.assignedToId,
+      ...existing.attendees.map((row) => row.userId),
+      ...people,
+    ]);
     if (existing.availabilityBlock) {
       const conflict = await findStaffCommitmentConflict({
         userId: assignedToId,
@@ -693,15 +729,24 @@ async function updateActivityBody(id: string, formData: FormData) {
       });
       if (conflict) return { error: commitmentConflictMessage(conflict) } as const;
     } else {
-      const conflict = await findStaffAvailabilityConflict({
-        userId: assignedToId,
-        tenantId: scheduleTenant,
-        start: dueDate,
-        end: endDate,
-        excludeActivityId: existing.id,
-        db: tx,
+      for (const userId of people) {
+        const conflict = await findStaffAvailabilityConflict({
+          userId,
+          tenantId: scheduleTenant,
+          start: dueDate,
+          end: endDate,
+          excludeActivityId: existing.id,
+          db: tx,
+        });
+        if (conflict) return { error: availabilityConflictMessage(conflict) } as const;
+      }
+    }
+    // The attendee set is replaced as a whole, in the same transaction.
+    await tx.activityAttendee.deleteMany({ where: { activityId: id } });
+    if (attendeeIds.length) {
+      await tx.activityAttendee.createMany({
+        data: attendeeIds.map((userId) => ({ activityId: id, userId, tenantId: scheduleTenant })),
       });
-      if (conflict) return { error: availabilityConflictMessage(conflict) } as const;
     }
     const activity = await tx.activity.update({
       where: { id },
