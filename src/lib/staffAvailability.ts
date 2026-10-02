@@ -183,7 +183,8 @@ export async function findStaffCommitmentConflict(args: {
   const db = (args.db ?? prisma) as unknown as ScheduleDb;
   const activities = await db.activity.findMany({
     where: {
-      assignedToId: args.userId,
+      // Theirs, or a meeting they are attending.
+      OR: [{ assignedToId: args.userId }, { attendees: { some: { userId: args.userId } } }],
       availabilityBlock: false,
       status: "planned",
       AND: [scheduleTenant(args.tenantId), overlapWindow(args.start, args.end)],
@@ -203,9 +204,13 @@ export async function findStaffCommitmentConflict(args: {
   for (const activity of activities) {
     const activityEnd = effectiveActivityEnd(activity.dueDate, activity.endDate);
     if (!intervalsOverlap(args.start, args.end, activity.dueDate, activityEnd)) continue;
+    // Name the person being blocked, who is not the assignee when they attend.
+    const person = activity.assignedTo.id === args.userId
+      ? activity.assignedTo
+      : await db.user.findUnique({ where: { id: args.userId }, select: { id: true, name: true } });
     return {
-      userId: activity.assignedTo.id,
-      userName: activity.assignedTo.name,
+      userId: args.userId,
+      userName: person?.name ?? activity.assignedTo.name,
       start: activity.dueDate,
       end: activityEnd,
       summary: activity.summary,

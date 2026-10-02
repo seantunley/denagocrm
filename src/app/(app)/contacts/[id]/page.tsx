@@ -82,7 +82,13 @@ export default async function ContactDetailPage({
         include: { items: true, fees: { orderBy: { sortOrder: "asc" } } },
         orderBy: { createdAt: "desc" },
       },
-      activities: { include: { assignedTo: true }, orderBy: { dueDate: "asc" } },
+      activities: {
+        include: {
+          assignedTo: true,
+          attendees: { select: { userId: true, user: { select: { name: true } } }, orderBy: { createdAt: "asc" } },
+        },
+        orderBy: { dueDate: "asc" },
+      },
       consentRecords: { orderBy: { createdAt: "desc" } },
       researchNotes: { orderBy: { createdAt: "desc" } },
       tags: true,

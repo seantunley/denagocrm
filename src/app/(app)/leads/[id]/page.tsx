@@ -79,7 +79,13 @@ export default async function LeadDetailPage({
       assignedTo: true,
       createdBy: true,
       communications: { include: { user: true }, orderBy: { occurredAt: "desc" } },
-      activities: { include: { assignedTo: true }, orderBy: { dueDate: "asc" } },
+      activities: {
+        include: {
+          assignedTo: true,
+          attendees: { select: { userId: true, user: { select: { name: true } } }, orderBy: { createdAt: "asc" } },
+        },
+        orderBy: { dueDate: "asc" },
+      },
       quotes: { where: { deletedAt: null }, include: { items: true, fees: { orderBy: { sortOrder: "asc" } } }, orderBy: { createdAt: "desc" } },
       researchNotes: { orderBy: { createdAt: "desc" } },
     },

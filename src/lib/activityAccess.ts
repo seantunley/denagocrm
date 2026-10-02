@@ -32,6 +32,7 @@ export async function getAccessibleActivityIds(user: PermissionUser): Promise<st
       OR: [
         { assignedToId: user.id },
         { createdById: user.id },
+        { attendees: { some: { userId: user.id } } },
         // Staff availability is operationally useful only when the whole
         // workspace can see it. Keep the basePrisma read tenant-qualified.
         ...(tenantId ? [{ availabilityBlock: true, tenantId }] : []),
