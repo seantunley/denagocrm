@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/permissions";
 import { resolveAssignableUser } from "@/lib/tenantActor";
 import { actingTenantId } from "@/lib/actingTenant";
+import { johannesburgMidnight, shiftDateKey } from "@/lib/calendarDates";
 import { logAudit } from "@/lib/audit";
 import {
   commitmentConflictMessage,
@@ -17,17 +18,24 @@ const text = (formData: FormData, key: string) => {
   return value || null;
 };
 
-function localDateTime(value: string | null, label: string): Date | null {
+// The shared Johannesburg date helpers (lib/calendarDates.ts), wrapped so a
+// malformed value becomes a form error rather than a throw.
+function localDateTime(value: string | null): Date | null {
   if (!value) return null;
-  const parsed = new Date(value.includes("T") ? `${value}:00+02:00` : `${value}T00:00:00+02:00`);
-  if (Number.isNaN(parsed.getTime())) return null;
-  return parsed;
+  try {
+    const parsed = value.includes("T") ? new Date(`${value}:00+02:00`) : johannesburgMidnight(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  } catch {
+    return null;
+  }
 }
 
 function nextJohannesburgDay(dateKey: string): Date | null {
-  const start = new Date(`${dateKey}T00:00:00+02:00`);
-  if (Number.isNaN(start.getTime())) return null;
-  return new Date(start.getTime() + 24 * 60 * 60 * 1000);
+  try {
+    return johannesburgMidnight(shiftDateKey(dateKey, 1));
+  } catch {
+    return null;
+  }
 }
 
 export async function createStaffAvailability(
@@ -47,11 +55,11 @@ export async function createStaffAvailability(
   if (allDay) {
     const startDate = text(formData, "startDate");
     const endDate = text(formData, "endDate") ?? startDate;
-    start = startDate ? localDateTime(startDate, "Start date") : null;
+    start = startDate ? localDateTime(startDate) : null;
     end = endDate ? nextJohannesburgDay(endDate) : null;
   } else {
-    start = localDateTime(text(formData, "startAt"), "Start time");
-    end = localDateTime(text(formData, "endAt"), "End time");
+    start = localDateTime(text(formData, "startAt"));
+    end = localDateTime(text(formData, "endAt"));
   }
 
   if (!start || !end) return { error: allDay ? "Choose valid start and end dates." : "Choose valid start and end times." };

@@ -2,6 +2,22 @@ import "server-only";
 
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import { actingTenantId } from "@/lib/actingTenant";
+
+/**
+ * The workspace whose STAFF SCHEDULE a booking is checked and locked against.
+ *
+ * Availability blocks are stamped and locked under the acting workspace
+ * (createStaffAvailability). A booking's customer record can carry no tenant
+ * (legacy rows), and checking against THAT — `tenantId: null`, lock key
+ * "global" — never matched the person's leave and never serialised with a
+ * block being created. The record's own tenant still wins when it has one; it
+ * is the same workspace. Resolve this BEFORE opening the transaction (it reads
+ * the session).
+ */
+export async function staffScheduleTenantId(recordTenantId: string | null | undefined): Promise<string> {
+  return recordTenantId ?? (await actingTenantId());
+}
 
 export const DEFAULT_ACTIVITY_DURATION_MS = 60 * 60 * 1000;
 
@@ -62,6 +78,34 @@ export function commitmentConflictMessage(conflict: StaffCommitmentConflict): st
   return `${conflict.userName} already has ${conflict.summary} from ${formatMoment(conflict.start)} to ${formatMoment(conflict.end)}. Move or cancel that booking before blocking this time.`;
 }
 
+/**
+ * Rows that can still overlap [start, end): they start before `end` AND end after
+ * `start`. Both sides are bounded in the database — bounding only the start and
+ * then taking the oldest N let a user's pile of past rows (blocks never leave
+ * "planned"; overdue tasks are common) push a real overlap out of the window.
+ * A row with no usable endDate lasts DEFAULT_ACTIVITY_DURATION_MS
+ * (effectiveActivityEnd), so it can only overlap if it began within that span
+ * before `start`; the exact test still runs on each candidate.
+ */
+function overlapWindow(start: Date, end: Date) {
+  return {
+    dueDate: { lt: end },
+    OR: [
+      { endDate: { gt: start } },
+      { dueDate: { gt: new Date(start.getTime() - DEFAULT_ACTIVITY_DURATION_MS) } },
+    ],
+  };
+}
+
+/**
+ * This person's rows in the schedule's workspace — plus legacy rows with no
+ * tenant at all, which are still theirs (they are assigned to them) and would
+ * otherwise never be seen from either side of the check.
+ */
+function scheduleTenant(tenantId: string | null) {
+  return tenantId ? { OR: [{ tenantId }, { tenantId: null }] } : { tenantId: null };
+}
+
 export async function lockStaffSchedules(
   tx: ScheduleLockDb,
   tenantId: string,
@@ -86,10 +130,9 @@ export async function findStaffAvailabilityConflict(args: {
   const candidates = await db.activity.findMany({
     where: {
       assignedToId: args.userId,
-      tenantId: args.tenantId,
       availabilityBlock: true,
       status: "planned",
-      dueDate: { lt: args.end },
+      AND: [scheduleTenant(args.tenantId), overlapWindow(args.start, args.end)],
       ...(args.excludeActivityId ? { id: { not: args.excludeActivityId } } : {}),
     },
     select: {
@@ -141,10 +184,9 @@ export async function findStaffCommitmentConflict(args: {
   const activities = await db.activity.findMany({
     where: {
       assignedToId: args.userId,
-      tenantId: args.tenantId,
       availabilityBlock: false,
       status: "planned",
-      dueDate: { lt: args.end },
+      AND: [scheduleTenant(args.tenantId), overlapWindow(args.start, args.end)],
       ...(args.excludeActivityId ? { id: { not: args.excludeActivityId } } : {}),
     },
     select: {
@@ -173,7 +215,7 @@ export async function findStaffCommitmentConflict(args: {
   const drive = await db.testDriveBooking.findFirst({
     where: {
       accompanyingSalespersonId: args.userId,
-      tenantId: args.tenantId,
+      ...scheduleTenant(args.tenantId),
       deletedAt: null,
       status: { in: ["booked", "confirmed", "checked_out"] },
       scheduledStart: { lt: args.end },

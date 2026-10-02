@@ -7,7 +7,7 @@ import {
   type ComponentType,
 } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { unstable_rethrow, useRouter } from "next/navigation";
 import {
   CalendarDays,
   CalendarPlus,
@@ -195,7 +195,9 @@ function isoWeekday(dateKey: string) {
 }
 
 function addHourLocal(dateKey: string, time: string) {
-  const value = new Date(`${dateKey}T${time}:00+02:00`);
+  // One hour AFTER the start: formatting the start instant back unchanged made
+  // the default end equal the start, which the server refuses.
+  const value = new Date(new Date(`${dateKey}T${time}:00+02:00`).getTime() + 60 * 60 * 1000);
   return value
     .toLocaleString("sv-SE", {
       timeZone: "Africa/Johannesburg",
@@ -620,18 +622,37 @@ export default function CalendarWorkspace({
     );
   }
 
+  /**
+   * Run a reschedule and report it. A refusal comes back as a value (conflict
+   * dialog); anything THROWN — a dropped connection, a stale tab — is a toast,
+   * never an unhandled rejection that takes the calendar to its error boundary.
+   */
+  function runReschedule(recordId: string, when: string, success: string, after?: () => void) {
+    startTransition(async () => {
+      try {
+        const result = await rescheduleActivity(recordId, when);
+        if (!result.ok) {
+          setConflictMessage(result.error ?? "That time is not available.");
+          return;
+        }
+        toast.success(success);
+        after?.();
+        router.refresh();
+      } catch (error) {
+        unstable_rethrow(error);
+        toast.error("The calendar couldn't save that move — refresh the page and try again.");
+      }
+    });
+  }
+
   function rescheduleSelected() {
     if (!selectedEvent || !rescheduleValue) return;
-    startTransition(async () => {
-      const result = await rescheduleActivity(selectedEvent.recordId, rescheduleValue);
-      if (!result.ok) {
-        setConflictMessage(result.error ?? "That time is not available.");
-        return;
-      }
-      toast.success(selectedEvent.availabilityBlock ? "Availability moved" : "Activity rescheduled");
-      setSelectedEvent(null);
-      router.refresh();
-    });
+    runReschedule(
+      selectedEvent.recordId,
+      rescheduleValue,
+      selectedEvent.availabilityBlock ? "Availability moved" : "Activity rescheduled",
+      () => setSelectedEvent(null),
+    );
   }
 
   function dropOnDate(dateKey: string, transferredId?: string) {
@@ -640,16 +661,13 @@ export default function CalendarWorkspace({
     if (!eventId) return;
     const event = events.find((item) => item.id === eventId);
     if (!event || event.dateKey === dateKey) return;
-    const when = event.time ? `${dateKey}T${event.time}` : dateKey;
-    startTransition(async () => {
-      const result = await rescheduleActivity(event.recordId, when);
-      if (!result.ok) {
-        setConflictMessage(result.error ?? "That time is not available.");
-        return;
-      }
-      toast.success(`${event.summary} moved to ${dateKey}`);
-      router.refresh();
-    });
+    // Move by the number of days the card was dragged, applied to the record's
+    // OWN start: an all-day or multi-day block keeps its local start time, and
+    // grabbing day 3 of a 5-day block and dropping it one day later moves the
+    // whole block one day — not to start on the drop day.
+    const days = Math.round((Date.parse(`${dateKey}T00:00:00Z`) - Date.parse(`${event.dateKey}T00:00:00Z`)) / 86_400_000);
+    const when = new Date(Date.parse(event.dueDate) + days * 86_400_000).toISOString();
+    runReschedule(event.recordId, when, `${event.summary} moved to ${dateKey}`);
   }
 
   function navigateWeek(direction: -1 | 1) {

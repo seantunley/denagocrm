@@ -9,6 +9,7 @@ import {
 } from "date-fns";
 import { prisma } from "@/lib/db";
 import { contactName } from "@/lib/format";
+import { johannesburgDateKey } from "@/lib/activityDay";
 import { getSlotConfig } from "@/lib/bookingSlots";
 import {
   calendarQueryBounds,
@@ -18,15 +19,6 @@ import {
 import CalendarWorkspace, {
   type CalendarWorkspaceEvent,
 } from "@/components/CalendarWorkspace";
-
-function johannesburgDateKey(date: Date): string {
-  return date.toLocaleDateString("en-CA", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    timeZone: "Africa/Johannesburg",
-  });
-}
 
 function johannesburgTime(date: Date): string {
   return date.toLocaleTimeString("en-ZA", {

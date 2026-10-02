@@ -1,7 +1,7 @@
 "use server";
 
 import crypto from "crypto";
-import { redirect } from "next/navigation";
+import { asActionResult, refuse } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { agreedTenantId } from "@/lib/compositeTenantRules";
@@ -34,7 +34,9 @@ const text = (formData: FormData, key: string) => {
 
 const requiredText = (formData: FormData, key: string, label: string) => {
   const value = text(formData, key);
-  if (!value) throw new Error(`${label} is required`);
+  // Refusals, not plain Errors: a thrown message is redacted in production, so a
+  // missing field used to read as "no reply from the server".
+  if (!value) throw new ActionRefusal(`${label} is required`);
   return value;
 };
 
@@ -54,10 +56,10 @@ const percentValue = (formData: FormData, key: string): number | null => {
 };
 
 function localDateTime(value: string | null, label: string): Date {
-  if (!value) throw new Error(`${label} is required`);
+  if (!value) throw new ActionRefusal(`${label} is required`);
   const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/.test(value);
   const parsed = new Date(hasZone ? value : `${value}:00+02:00`);
-  if (Number.isNaN(parsed.getTime())) throw new Error(`${label} is invalid`);
+  if (Number.isNaN(parsed.getTime())) throw new ActionRefusal(`${label} is invalid`);
   return parsed;
 }
 
@@ -113,7 +115,7 @@ async function assertDemoVehicleAvailable(args: {
     where: { id: args.demoVehicleId, deletedAt: null },
   });
   if (!vehicle || vehicle.status !== "active") {
-    throw new Error("That demo vehicle is not available");
+    throw new ActionRefusal("That demo vehicle is not available");
   }
   const overlap = await prisma.testDriveBooking.findFirst({
     where: {
@@ -149,7 +151,10 @@ async function requireAssignableStaff(userId: string, label: string) {
 }
 
 export async function createTestDriveBooking(formData: FormData) {
-  return withActingStaffScope(async () => {
+  // asActionResult: refusals come back as values and success names its own
+  // destination ({ redirectTo }). A thrown redirect() reached ConflictAwareForm as
+  // an exception and was reported as "no reply" after the booking had been made.
+  return asActionResult(async () => {
     const user = await requirePermission("activities.manage");
     const contactId = requiredText(formData, "contactId", "Customer");
     const leadId = text(formData, "leadId");
@@ -162,7 +167,7 @@ export async function createTestDriveBooking(formData: FormData) {
     const branch = requiredText(formData, "branch", "Branch");
     const scheduledStart = localDateTime(text(formData, "scheduledStart"), "Start time");
     const expectedReturnAt = localDateTime(text(formData, "expectedReturnAt"), "Expected return");
-    if (expectedReturnAt <= scheduledStart) throw new Error("Expected return must be after the start time");
+    if (expectedReturnAt <= scheduledStart) refuse("Expected return must be after the start time");
 
     const [contact, lead, salesperson, accompanying, demoVehicle, product] = await Promise.all([
       prisma.contact.findFirst({ where: { id: contactId, deletedAt: null } }),
@@ -174,13 +179,13 @@ export async function createTestDriveBooking(formData: FormData) {
       demoVehicleId ? prisma.demoVehicle.findFirst({ where: { id: demoVehicleId, deletedAt: null } }) : null,
       productId ? prisma.product.findFirst({ where: { id: productId, deletedAt: null } }) : null,
     ]);
-    if (!contact) throw new Error("Customer not found");
-    if (leadId && !lead) throw new Error("Lead not found");
-    if (lead && lead.contactId && lead.contactId !== contactId) throw new Error("The selected lead belongs to a different customer");
-    if (!salesperson) throw new Error("Salesperson not found");
-    if (accompanyingSalespersonId && !accompanying) throw new Error("Accompanying salesperson not found");
-    if (demoVehicleId && !demoVehicle) throw new Error("Demo vehicle not found");
-    if (productId && !product) throw new Error("Product not found");
+    if (!contact) refuse("Customer not found");
+    if (leadId && !lead) refuse("Lead not found");
+    if (lead && lead.contactId && lead.contactId !== contactId) refuse("The selected lead belongs to a different customer");
+    if (!salesperson) refuse("Salesperson not found");
+    if (accompanyingSalespersonId && !accompanying) refuse("Accompanying salesperson not found");
+    if (demoVehicleId && !demoVehicle) refuse("Demo vehicle not found");
+    if (productId && !product) refuse("Product not found");
     await assertDemoVehicleAvailable({ demoVehicleId, start: scheduledStart, end: expectedReturnAt });
 
     const resolvedProductId = productId ?? demoVehicle?.productId ?? lead?.productId ?? null;
@@ -277,7 +282,7 @@ export async function createTestDriveBooking(formData: FormData) {
     });
     revalidatePath("/test-drives");
     revalidatePath("/calendar");
-    redirect(`/test-drives/${booking.id}`);
+    return { success: `Booked test drive ${booking.reference}`, redirectTo: `/test-drives/${booking.id}` };
   });
 }
 

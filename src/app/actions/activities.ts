@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { unstable_rethrow } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { customerRecordTenantId } from "@/lib/customerRecordTenant";
 import {
@@ -21,6 +22,7 @@ import {
   DEFAULT_ACTIVITY_DURATION_MS,
   effectiveActivityEnd,
   findStaffAvailabilityConflict,
+  staffScheduleTenantId,
   findStaffCommitmentConflict,
   lockStaffSchedules,
 } from "@/lib/staffAvailability";
@@ -179,11 +181,12 @@ export async function scheduleActivity(formData: FormData): Promise<{ error?: st
     }
   } else {
     const tenantId = await customerRecordTenantId({ contactId, leadId });
+    const scheduleTenant = await staffScheduleTenantId(tenantId);
     activity = await prisma.$transaction(async (tx) => {
-      await lockStaffSchedules(tx, tenantId ?? "global", [assignedToId]);
+      await lockStaffSchedules(tx, scheduleTenant, [assignedToId]);
       const conflict = await findStaffAvailabilityConflict({
         userId: assignedToId,
-        tenantId,
+        tenantId: scheduleTenant,
         start: dueDate,
         end: endDate,
         db: tx,
@@ -384,19 +387,54 @@ export async function completeActivityAssess(
   };
 }
 
+/**
+ * The new start for a reschedule:
+ * - an instant with a zone (what a calendar drag sends: the block's own start
+ *   shifted by whole days) is taken as is;
+ * - "YYYY-MM-DDTHH:mm" is Johannesburg local time;
+ * - a bare "YYYY-MM-DD" keeps the activity's current local time of day on that
+ *   date. It used to be parsed as UTC midnight (02:00 here), so dragging an
+ *   all-day block moved it two hours and onto an extra day.
+ */
+/** "YYYY-MM-DDTHH:mm" for an instant, on the Johannesburg wall clock. */
+function johannesburgLocal(date: Date): string {
+  return date
+    .toLocaleString("sv-SE", { timeZone: "Africa/Johannesburg", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })
+    .replace(" ", "T");
+}
+
+function parseRescheduleTarget(when: string, current: Date): Date {
+  if (/(?:Z|[+-]\d{2}:?\d{2})$/.test(when)) return new Date(when);
+  if (when.includes("T")) return new Date(`${when}:00+02:00`);
+  const time = current.toLocaleTimeString("en-ZA", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Africa/Johannesburg" });
+  return new Date(`${when}T${time}:00+02:00`);
+}
+
 export async function rescheduleActivity(
   id: string,
   when: string,
 ): Promise<{ ok: boolean; error?: string }> {
-  const { user, activity: existing } = await requireActivityAccess(id);
+  // Refused as a VALUE: the calendar's drag now shows everyone's availability
+  // blocks, and a thrown denial escaped the transition and took the page down.
+  let access: Awaited<ReturnType<typeof requireActivityAccess>>;
+  try {
+    access = await requireActivityAccess(id);
+  } catch (error) {
+    unstable_rethrow(error); // a guard's redirect (expired session…) still navigates
+    return { ok: false, error: "You can't move this — it's gone, or it isn't yours or linked to a customer you can open." };
+  }
+  const { user, activity: existing } = access;
   let dueDate: Date;
   if (existing.type === FOLLOW_UP_TYPE) {
-    const normalised = ensureFollowUpTime(when);
+    // ensureFollowUpTime reads "YYYY-MM-DDTHH:mm" as LOCAL time, so a zoned
+    // instant (a calendar drag) is converted to Johannesburg local first.
+    const local = /(?:Z|[+-]\d{2}:?\d{2})$/.test(when) ? johannesburgLocal(new Date(when)) : when;
+    const normalised = ensureFollowUpTime(local);
     dueDate = normalised ? new Date(`${normalised}:00+02:00`) : new Date(NaN);
     const problem = followUpDueDateError(dueDate, new Date());
     if (problem) return { ok: false, error: problem };
   } else {
-    dueDate = new Date(when.includes("T") ? `${when}:00+02:00` : when);
+    dueDate = parseRescheduleTarget(when, existing.dueDate);
     if (isNaN(dueDate.getTime())) return { ok: false, error: "Pick a valid date" };
   }
 
@@ -407,13 +445,14 @@ export async function rescheduleActivity(
     contactId: existing.contactId,
     leadId: existing.leadId,
   });
+  const scheduleTenant = await staffScheduleTenantId(tenantId);
 
   const result = await prisma.$transaction(async (tx) => {
-    await lockStaffSchedules(tx, tenantId ?? "global", [existing.assignedToId]);
+    await lockStaffSchedules(tx, scheduleTenant, [existing.assignedToId]);
     if (existing.availabilityBlock) {
       const conflict = await findStaffCommitmentConflict({
         userId: existing.assignedToId,
-        tenantId,
+        tenantId: scheduleTenant,
         start: dueDate,
         end: endDate,
         excludeActivityId: existing.id,
@@ -423,7 +462,7 @@ export async function rescheduleActivity(
     } else {
       const conflict = await findStaffAvailabilityConflict({
         userId: existing.assignedToId,
-        tenantId,
+        tenantId: scheduleTenant,
         start: dueDate,
         end: endDate,
         excludeActivityId: existing.id,
@@ -490,11 +529,12 @@ export async function scheduleFollowUp(data: {
     }[data.type]) ||
     "Follow up";
   const tenantId = await customerRecordTenantId({ contactId: data.contactId, leadId: data.leadId });
+  const scheduleTenant = await staffScheduleTenantId(tenantId);
   const result = await prisma.$transaction(async (tx) => {
-    await lockStaffSchedules(tx, tenantId ?? "global", [user.id]);
+    await lockStaffSchedules(tx, scheduleTenant, [user.id]);
     const conflict = await findStaffAvailabilityConflict({
       userId: user.id,
-      tenantId,
+      tenantId: scheduleTenant,
       start: dueDate,
       end: endDate,
       db: tx,
@@ -585,13 +625,14 @@ export async function updateActivity(
     contactId: existing.contactId,
     leadId: existing.leadId,
   });
+  const scheduleTenant = await staffScheduleTenantId(tenantId);
 
   const result = await prisma.$transaction(async (tx) => {
-    await lockStaffSchedules(tx, tenantId ?? "global", [existing.assignedToId, assignedToId]);
+    await lockStaffSchedules(tx, scheduleTenant, [existing.assignedToId, assignedToId]);
     if (existing.availabilityBlock) {
       const conflict = await findStaffCommitmentConflict({
         userId: assignedToId,
-        tenantId,
+        tenantId: scheduleTenant,
         start: dueDate,
         end: endDate,
         excludeActivityId: existing.id,
@@ -601,7 +642,7 @@ export async function updateActivity(
     } else {
       const conflict = await findStaffAvailabilityConflict({
         userId: assignedToId,
-        tenantId,
+        tenantId: scheduleTenant,
         start: dueDate,
         end: endDate,
         excludeActivityId: existing.id,

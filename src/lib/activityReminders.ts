@@ -18,6 +18,8 @@ export async function runActivityReminders(): Promise<number> {
   const upcoming = await prisma.activity.findMany({
     where: {
       status: "planned",
+      // Availability blocks are not tasks: no "in 60 min: Leave" push to everyone.
+      availabilityBlock: false,
       reminderSentAt: null,
       dueDate: { gt: now, lte: inAnHour },
     },

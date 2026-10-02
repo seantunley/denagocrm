@@ -16,6 +16,7 @@ import {
   availabilityConflictMessage,
   DEFAULT_ACTIVITY_DURATION_MS,
   findStaffAvailabilityConflict,
+  staffScheduleTenantId,
   lockStaffSchedules,
 } from "@/lib/staffAvailability";
 // `resolveAssignableUser` is the consolidated contract from #460/#467 — it
@@ -834,11 +835,12 @@ export async function moveLeadToTestDrive(
   const activityTenantId = await customerRecordTenantId({ leadId, contactId: linkedContact?.contactId });
   const scheduledUserId = linkedContact?.assignedToId ?? user.id;
   const whenEnd = new Date(when.getTime() + DEFAULT_ACTIVITY_DURATION_MS);
+  const scheduleTenant = await staffScheduleTenantId(activityTenantId);
   const bookingResult = await prisma.$transaction(async (tx) => {
-    await lockStaffSchedules(tx, activityTenantId ?? "global", [scheduledUserId]);
+    await lockStaffSchedules(tx, scheduleTenant, [scheduledUserId]);
     const availabilityConflict = await findStaffAvailabilityConflict({
       userId: scheduledUserId,
-      tenantId: activityTenantId,
+      tenantId: scheduleTenant,
       start: when,
       end: whenEnd,
       db: tx,
@@ -904,7 +906,10 @@ export async function moveLeadToTestDrive(
     return { lead: updated } as const;
   }, GOVERNANCE_TX);
   if ("availabilityConflict" in bookingResult && bookingResult.availabilityConflict) {
-    return { ok: false, error: availabilityConflictMessage(bookingResult.availabilityConflict), gate: verdict };
+    // No `gate`: this is not a stage-gate refusal. Carrying the gate verdict made
+    // the board re-open the override-reason prompt (gate.requiresReason) in a loop
+    // instead of showing the conflict.
+    return { ok: false, error: availabilityConflictMessage(bookingResult.availabilityConflict) };
   }
   const lead = bookingResult.lead;
 
