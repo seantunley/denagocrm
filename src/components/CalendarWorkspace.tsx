@@ -36,6 +36,7 @@ import { toast } from "sonner";
 import { isFutureDay } from "@/lib/activityDay";
 import { useActivityTypes } from "@/components/ActivityTypesProvider";
 import { findActivityType, type ActivityType } from "@/lib/activityTypes";
+import { CALENDAR_DEFAULT_VIEW, inDefaultCalendarView } from "@/lib/calendarFilter";
 import {
   cancelActivity,
   completeActivity,
@@ -402,7 +403,10 @@ export default function CalendarWorkspace({
   const [view, setView] = useState<CalendarViewMode>("month");
   const [query, setQuery] = useState("");
   const [owner, setOwner] = useState("");
-  const [type, setType] = useState("");
+  // The sales calendar opens on meetings, test drives and blocked time; the
+  // workshop calendar is all workshop bookings, so it keeps showing everything.
+  const defaultType = mode === "workshop" ? "" : CALENDAR_DEFAULT_VIEW;
+  const [type, setType] = useState(defaultType);
   const [attentionOnly, setAttentionOnly] = useState(false);
   const [selectedDate, setSelectedDate] = useState(() => {
     if (initialDate && days.some((day) => day.key === initialDate)) {
@@ -454,7 +458,9 @@ export default function CalendarWorkspace({
       return (
         matchesQuery &&
         (!owner || event.assignee === owner) &&
-        (!type || event.type === type) &&
+        (type === CALENDAR_DEFAULT_VIEW
+          ? inDefaultCalendarView(event)
+          : !type || event.type === type) &&
         (!attentionOnly || event.overdue)
       );
     });
@@ -482,7 +488,7 @@ export default function CalendarWorkspace({
     (day) =>
       day.inMonth && (eventsByDate.get(day.key)?.length ?? 0) > 0,
   );
-  const filtersActive = Boolean(query || owner || type || attentionOnly);
+  const filtersActive = Boolean(query || owner || type !== defaultType || attentionOnly);
   const periodLabel =
     view === "week" && weekDays.length > 0
       ? `${weekDays[0].label} – ${weekDays.at(-1)?.label ?? weekDays[0].label}`
@@ -854,7 +860,10 @@ export default function CalendarWorkspace({
               className="input h-10 sm:w-40"
               aria-label="Filter by activity type"
             >
-              <option value="">All activity types</option>
+              {mode !== "workshop" && (
+                <option value={CALENDAR_DEFAULT_VIEW}>Meetings, test drives &amp; blocked time</option>
+              )}
+              <option value="">All activities</option>
               {types.map((value) => (
                 <option key={value} value={value}>
                   {eventType(value, activityTypes).label}
@@ -882,7 +891,7 @@ export default function CalendarWorkspace({
                 onClick={() => {
                   setQuery("");
                   setOwner("");
-                  setType("");
+                  setType(defaultType);
                   setAttentionOnly(false);
                 }}
                 className="btn h-10 text-muted-foreground"
