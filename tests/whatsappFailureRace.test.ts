@@ -226,6 +226,9 @@ test("wiring: the worker reconciles right after committing the id, on BOTH commi
   const ledger = outbox.slice(outbox.indexOf("function failureLedger"), outbox.indexOf("export async function applyProviderFailure"));
   assert.match(ledger, /prisma\.botInboundEvent\.upsert\(/);
   assert.match(ledger, /const parkChannel = `\$\{channel\}:failed`/);
-  assert.match(ledger, /status: \{ in: \["sent", "dead"\] \}/);
+  // Both a sent row (the first report, which also tells staff) and an already-dead
+  // one (a redelivered webhook, quietly re-marked) are applied.
+  assert.match(ledger, /providerMessageId: failure\.providerMessageId, status: "sent" \}/);
+  assert.match(ledger, /providerMessageId: failure\.providerMessageId, status: "dead" \}/);
   assert.match(outbox, /return recordProviderFailure\(failureLedger\(channel\), failure\)/);
 });

@@ -20,6 +20,9 @@ import { resolveIntegrationBundle } from "@/lib/settings";
 import { formatDateTime } from "@/lib/format";
 import { EmptyState, SectionHeading, Surface } from "@/components/visual-system";
 import { WorkspaceHero } from "@/components/workspace-hero";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
+import { listDeadBotConversations } from "@/lib/deadBotConversations";
+import { retryDeadBotConversation, retryFailedMessage } from "@/app/actions/botDeliveries";
 
 export const metadata = { title: "Social inbox — DenagoCRM" };
 
@@ -56,10 +59,12 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
       thread.messages.filter((message) => message.direction === "outbound").map((message) => message.id),
     ),
   );
-  const [collaboration, staff, canCollaborate] = await Promise.all([
+  const [collaboration, staff, canCollaborate, deadConversations] = await Promise.all([
     collaborationForThreads([...threadList, ...archivedList]),
     listActingTenantStaff(),
     hasPermission(user, "inbox.reply"),
+    // Conversations whose last message died — the customer is waiting (gap audit #31).
+    listDeadBotConversations(),
   ]);
   const collabStaff = staff.map((person) => ({ id: person.id, name: person.name }));
   const unread = threadList.filter((thread) => thread.unread).length;
@@ -97,6 +102,30 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
         <Surface className="p-4"><p className="text-[10px] uppercase tracking-wide text-muted-foreground">SLA overdue</p><p className={`mt-1 text-2xl font-semibold ${overdueHandoffs ? "text-red-300" : "text-emerald-300"}`}>{overdueHandoffs}</p><p className="mt-1 text-[11px] text-muted-foreground">Past the handoff target</p></Surface>
         <Surface className="p-4"><p className="text-[10px] uppercase tracking-wide text-muted-foreground">Human handling</p><p className="mt-1 text-2xl font-semibold text-sky-300">{humanThreads.length}</p><p className="mt-1 text-[11px] text-muted-foreground">Automation currently paused</p></Surface>
       </div>
+      {deadConversations.length > 0 && (
+        <Surface className="border-red-500/30 p-4">
+          <h2 className="text-sm font-semibold">Couldn&apos;t reach the customer</h2>
+          <p className="mt-1 text-xs text-muted-foreground">A message to these customers failed — the bot&apos;s (so the bot has stopped) or a staff reply — and the customer is still waiting. Reply yourself, or send it again if the failure was temporary.</p>
+          <ul className="mt-3 divide-y divide-border">
+            {deadConversations.map((dead) => (
+              <li key={`${dead.channel}:${dead.key}`} className="flex flex-wrap items-center gap-3 py-2.5">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium">
+                    {dead.contact ? <a href={`/contacts/${dead.contact.id}`} className="text-primary hover:underline">{dead.contact.name}</a> : "Unknown customer"}
+                    <span className="ml-2 text-xs capitalize text-muted-foreground">{dead.channel}{dead.origin === "staff" ? " · staff reply" : ""}</span>
+                  </p>
+                  <p className="text-xs text-muted-foreground">Failed {formatDateTime(dead.failedAt)} — {dead.reason}</p>
+                </div>
+                {canCollaborate && dead.retryable && (
+                  <SaveForm action={dead.failedMessageId ? retryFailedMessage.bind(null, dead.failedMessageId) : retryDeadBotConversation.bind(null, dead.channel, dead.key)}>
+                    <SaveButton className="btn-secondary btn-sm" pendingLabel="Sending…">Send again</SaveButton>
+                  </SaveForm>
+                )}
+              </li>
+            ))}
+          </ul>
+        </Surface>
+      )}
       <div>
         <div className="mb-3"><h2 className="text-sm font-semibold">Waiting for takeover</h2><p className="mt-1 text-xs text-muted-foreground">Reason, wait time, channel and assignment are visible without opening the conversation.</p></div>
         <BotHandoffQueue items={handoffItems} staff={collabStaff} canAct={canCollaborate} />
@@ -210,7 +239,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
       <Tabs
         initialKey={tab === "comments" ? "comments" : "all"}
         tabs={[
-          { key: "handoffs", label: "Bot handoffs", count: handoffThreads.length, content: handoffsPanel },
+          { key: "handoffs", label: "Bot handoffs", count: handoffThreads.length + deadConversations.length, content: handoffsPanel },
           { key: "all", label: "All", count: unread, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList} empty="No conversations yet. Messages appear here as soon as a connected customer channel receives one." /> },
           { key: "whatsapp", label: "WhatsApp", count: threadList.filter((thread) => thread.channel === "whatsapp" && thread.unread).length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "whatsapp")} empty="No WhatsApp conversations yet. Connect the WhatsApp Business number in Settings → Integrations." /> },
           { key: "messenger", label: "Messenger", count: threadList.filter((thread) => thread.channel === "messenger" && thread.unread).length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "messenger")} empty="No Messenger conversations yet." /> },
