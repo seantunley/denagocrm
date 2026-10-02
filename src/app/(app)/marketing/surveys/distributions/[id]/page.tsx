@@ -8,6 +8,7 @@ import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 import { cancelDistribution, pauseDistribution, resumeDistribution, retryDistributionFailures } from "@/app/actions/surveyDistributions";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
+import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 
 export default async function SurveyDistributionDetailPage({ params }: { params: Promise<{ id: string }> }) {
   await requirePermission("surveys.manage");
@@ -54,7 +55,7 @@ export default async function SurveyDistributionDetailPage({ params }: { params:
       {new Set(["scheduled", "queued", "sending"]).has(distribution.status) && <SaveForm action={pauseDistribution}><input type="hidden" name="id" value={id} /><SaveButton className="btn-secondary" pendingLabel="Pausing…">Pause</SaveButton></SaveForm>}
       {distribution.status === "paused" && <SaveForm action={resumeDistribution}><input type="hidden" name="id" value={id} /><SaveButton className="btn-primary" pendingLabel="Resuming…">Resume</SaveButton></SaveForm>}
       {distribution.failedCount > 0 && <SaveForm action={retryDistributionFailures}><input type="hidden" name="id" value={id} /><SaveButton className="btn-secondary" pendingLabel="Queuing…">Retry permanent failures</SaveButton></SaveForm>}
-      {open.has(distribution.status) && <SaveForm action={cancelDistribution}><input type="hidden" name="id" value={id} /><SaveButton className="btn-secondary" pendingLabel="Cancelling…">Cancel remaining</SaveButton></SaveForm>}
+      {open.has(distribution.status) && <ConfirmActionDialog trigger={<button type="button" className="btn-secondary">Cancel remaining</button>} title="Cancel the remaining invites?" description="Invites not yet sent will not go out. Invites already delivered are not affected." confirmLabel="Cancel remaining" destructive onConfirm={cancelDistribution.bind(null, id)} />}
     </>}
   >
 

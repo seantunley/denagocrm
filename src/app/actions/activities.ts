@@ -642,11 +642,20 @@ async function scheduleFollowUpBody(data: {
 
 export async function cancelActivity(id: string, revalidate: string) {
   return asActionResult(async () => {
-    await requireActivityAccess(id);
+    const { user } = await requireActivityAccess(id);
     const activity = await prisma.activity.update({
       where: { id },
       data: { status: "canceled" },
       include: { lead: true },
+    });
+    // Logged: a festival day was cancelled by mistake (2026-10-02) and nothing
+    // recorded who or when.
+    await logAudit({
+      action: "activity.canceled",
+      summary: `Cancelled ${activity.type}: “${activity.summary}”`,
+      leadId: activity.leadId,
+      contactId: activity.contactId ?? activity.lead?.contactId,
+      user,
     });
     revalidatePath(revalidate);
     revalidatePath("/activities");

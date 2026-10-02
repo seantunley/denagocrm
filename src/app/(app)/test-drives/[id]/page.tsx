@@ -29,6 +29,7 @@ import {
 } from "@/app/actions/testDrives";
 import { PageHeader } from "@/components/page-header";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
+import ConfirmDelete from "@/components/ConfirmDelete";
 import { Surface } from "@/components/visual-system";
 import { ConflictAwareForm } from "@/components/ConflictAwareForm";
 
@@ -375,10 +376,19 @@ export default async function TestDriveDetailPage({ params }: { params: Promise<
                 <input name="reason" className="input" placeholder="No-show note (optional)" />
                 <SaveButton className="btn-secondary w-full">Mark no-show</SaveButton>
               </SaveForm>
-              <SaveForm action={cancelTestDrive.bind(null, booking.id)} success="Booking cancelled" className="space-y-2">
-                <textarea name="reason" className="input" rows={2} required placeholder="Cancellation reason" />
-                <SaveButton className="btn-danger w-full" pendingLabel="Cancelling…">Cancel booking</SaveButton>
-              </SaveForm>
+              <ConfirmDelete
+                action={cancelTestDrive.bind(null, booking.id)}
+                title={`Cancel test drive ${booking.reference}?`}
+                description="The booking and its calendar entry are cancelled."
+                trigger="Cancel booking"
+                triggerClass="btn-danger w-full"
+                confirmLabel="Cancel booking"
+                dismissLabel="Keep booking"
+                success="Booking cancelled"
+                reasonLabel="Cancellation reason"
+                reasonPlaceholder="e.g. Customer rescheduled by phone"
+                pendingLabel="Cancelling…"
+              />
             </Surface>
           )}
 
