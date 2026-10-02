@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { inlineImages, type ImageLoader } from "../src/lib/emailInlineLogo";
+import { inlineImages, readCapped, type ImageLoader } from "../src/lib/emailInlineLogo";
 
 // Mail clients block remote images until the reader allows them, so a linked
 // logo arrived as a broken-image box. The workspace's logo is now embedded as a
@@ -46,6 +46,29 @@ test("only this workspace's own logo is loaded, and sendEmail never fails over i
   assert.match(lib, /redirect: "error"/);
   assert.match(lib, /contentType\.startsWith\("image\/"\)/);
   const email = readFileSync(new URL("../src/lib/email.ts", import.meta.url), "utf8");
-  assert.match(email, /await inlineImages\(input\.html, workspaceLogoLoader\(tenantId\)\)\.catch\(\(\) => null\)/);
+  // The workspace the mail is SENT AS, not a second read of ambient scope (review of #744).
+  assert.match(email, /await inlineImages\(input\.html, workspaceLogoLoader\(config\.tenantId\)\)\.catch\(\(\) => null\)/);
   assert.match(email, /html: inline\?\.html \?\? input\.html,/);
+  // The size cap is enforced before and while reading, never after buffering.
+  assert.doesNotMatch(lib, /arrayBuffer\(\)/);
+  assert.match(lib, /if \(Number\(response\.headers\.get\("content-length"\) \?\? 0\) > MAX_LOGO_BYTES\) \{/);
+  assert.match(lib, /const content = await readCapped\(response\.body, MAX_LOGO_BYTES\);/);
+});
+
+test("an over-size download is cut off at the cap, not read to the end", async () => {
+  let pulled = 0;
+  const endless = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pulled++;
+      controller.enqueue(new Uint8Array(1000));
+      if (pulled > 10_000) controller.close();
+    },
+  });
+  assert.equal(await readCapped(endless, 5000), null);
+  assert.ok(pulled < 20, `stopped after ${pulled} chunks, not the whole stream`);
+
+  const small = new ReadableStream<Uint8Array>({
+    start(controller) { controller.enqueue(new Uint8Array([1, 2, 3])); controller.close(); },
+  });
+  assert.deepEqual([...((await readCapped(small, 5000)) ?? [])], [1, 2, 3]);
 });

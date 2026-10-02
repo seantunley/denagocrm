@@ -126,8 +126,10 @@ export async function sendEmail(input: {
     // The workspace's logo travels INSIDE the message (see emailInlineLogo.ts), so
     // it shows without the reader allowing remote images. Never a reason to fail:
     // anything that goes wrong leaves the original linked logo.
-    const tenantId = currentTenantScope()?.tenantId ?? null;
-    const inline = input.html && tenantId ? await inlineImages(input.html, workspaceLogoLoader(tenantId)).catch(() => null) : null;
+    // The workspace this mail is being SENT AS — config.tenantId, never a second
+    // read of ambient scope, which is absent on the system and enforcement-off
+    // paths SmtpConfig.tenantId exists to cover (review of #744).
+    const inline = input.html ? await inlineImages(input.html, workspaceLogoLoader(config.tenantId)).catch(() => null) : null;
     const info = await transporter.sendMail({
       from: fromHeader(config),
       to: input.to,

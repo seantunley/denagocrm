@@ -92,7 +92,32 @@ async function loadWorkspaceLogo(tenantId: string, src: string): Promise<LoadedI
   if (!configured || configured !== src || /\.private\.blob\.|\/api\/stored/i.test(configured)) return null;
   const response = await fetch(src, { signal: AbortSignal.timeout(5000), redirect: "error" });
   const contentType = (response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
-  if (!response.ok || !contentType.startsWith("image/")) return null;
-  const content = Buffer.from(await response.arrayBuffer());
-  return content.length <= MAX_LOGO_BYTES ? { content, contentType } : null;
+  if (!response.ok || !contentType.startsWith("image/") || !response.body) return null;
+  // The cap is enforced WHILE reading (review of #744): a declared length over it
+  // is refused before any body is read, and an undeclared or lying one is cut off
+  // at the cap — never buffered whole first.
+  if (Number(response.headers.get("content-length") ?? 0) > MAX_LOGO_BYTES) {
+    await response.body.cancel().catch(() => {});
+    return null;
+  }
+  const content = await readCapped(response.body, MAX_LOGO_BYTES);
+  return content ? { content, contentType } : null;
+}
+
+/** Read a stream into memory, giving up (and cancelling it) once it passes `max` bytes. */
+export async function readCapped(body: ReadableStream<Uint8Array>, max: number): Promise<Buffer | null> {
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks);
 }
