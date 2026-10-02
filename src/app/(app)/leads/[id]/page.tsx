@@ -220,14 +220,17 @@ export default async function LeadDetailPage({
               <SaveButton className="btn-secondary">Reopen</SaveButton>
             </SaveForm>
           )}
-          <Link
-            href={`/leads/${lead.id}/indemnity`}
-            target="_blank"
-            className="btn-secondary"
-            title="Print a test-drive indemnity for this customer to sign"
-          >
-            <Car className="size-4" />Indemnity
-          </Link>
+          {/* A test-drive indemnity: automotive workspaces only. */}
+          {automotiveOn && (
+            <Link
+              href={`/leads/${lead.id}/indemnity`}
+              target="_blank"
+              className="btn-secondary"
+              title="Print a test-drive indemnity for this customer to sign"
+            >
+              <Car className="size-4" />Indemnity
+            </Link>
+          )}
           <ConfirmDelete
             action={deleteLead.bind(null, lead.id)}
             title={`Delete lead “${lead.title}”?`}

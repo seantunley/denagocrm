@@ -20,7 +20,7 @@ import { requirePermission } from "@/lib/permissions";
 const leadJourney = [
   { icon: ContactRound, label: "One customer timeline", detail: "An existing contact is linked, or a new profile is created automatically." },
   { icon: Gauge, label: "Visible in the pipeline", detail: "The opportunity appears immediately in the selected sales stage." },
-  { icon: Clock3, label: "Ready for a next action", detail: "The owner can schedule a call, test drive or follow-up from the lead." },
+  { icon: Clock3, label: "Ready for a next action", detail: "The owner can schedule a call, meeting or follow-up from the lead." },
 ];
 
 export default async function NewLeadPage() {
