@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import {
@@ -430,13 +431,15 @@ export default async function VehicleDetailPage({
                           <span className={`badge ${claimColors[c.status]}`}>{c.status}</span>
                           <span className="flex-1">{c.description}</span>
                           <span className="text-xs text-slate-400">{formatDate(c.claimedAt)}</span>
+                          <Link href={`/warranty/${c.id}`} className="text-xs text-orange-400 hover:underline">Open</Link>
                         </div>
                         {c.resolution && (
                           <p className="text-xs text-slate-500 mt-1">Resolution: {c.resolution}</p>
                         )}
                         <div className="flex gap-2 mt-1.5 items-center">
-                          <form
+                          <SaveForm
                             action={setWarrantyClaimStatus.bind(null, c.id)}
+                            resetOnSuccess={false}
                             className="flex gap-2 flex-1"
                           >
                             <select
@@ -456,8 +459,8 @@ export default async function VehicleDetailPage({
                               className="input flex-1 !py-1"
                               placeholder="Resolution note"
                             />
-                            <button className="btn-secondary btn-sm">Update</button>
-                          </form>
+                            <SaveButton className="btn-secondary btn-sm">Update</SaveButton>
+                          </SaveForm>
                           <ConfirmDelete
                             action={deleteWarrantyClaim.bind(null, c.id)}
                             title="Delete this warranty claim?"

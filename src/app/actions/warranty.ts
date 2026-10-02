@@ -36,28 +36,66 @@ export async function addWarrantyClaim(vehicleId: string, formData: FormData) {
 }
 
 export async function setWarrantyClaimStatus(id: string, formData: FormData) {
-  return withActingStaffScope(async () => {
-    const existing = await prisma.warrantyClaim.findUniqueOrThrow({ where: { id } });
+  return asActionResult(async () => {
+    // Authorise before answering anything about the record.
+    await requirePermission("warranty.manage");
+    const existing = await prisma.warrantyClaim.findUnique({ where: { id } });
+    if (!existing) refuse("That warranty claim is gone — refresh the page.");
     const user = await requireVehicleAccess(existing.vehicleId, "warranty.manage");
     const status = String(formData.get("status") ?? "");
-    if (!claimStatuses.includes(status as (typeof claimStatuses)[number])) return;
+    // Used to return silently, so a bad value looked like a save that did nothing.
+    if (!claimStatuses.includes(status as (typeof claimStatuses)[number])) refuse("Choose a status for the claim.");
     const resolution = String(formData.get("resolution") ?? "").trim() || null;
     const claim = await prisma.warrantyClaim.update({
       where: { id },
       data: {
         status,
         resolution,
-        resolvedAt: status === "resolved" || status === "rejected" ? new Date() : null,
+        // Kept when a closed claim is merely re-saved, so "resolved on" stays true.
+        resolvedAt: status === "resolved" || status === "rejected" ? (existing.resolvedAt && existing.status === status ? existing.resolvedAt : new Date()) : null,
       },
     });
     await logAudit({
       action: "warranty.claim.updated",
       summary: `Warranty claim marked ${status}`,
       contactId: claim.contactId ?? undefined,
+      entityType: "WarrantyClaim",
+      entityId: id,
       user,
     });
     revalidatePath(`/vehicles/${claim.vehicleId}`);
+    revalidatePath(`/warranty/${id}`);
     revalidatePath("/warranty");
+    return { success: `Claim marked ${status}` };
+  });
+}
+
+/** Correct the fault description after the claim was logged (gap audit #20). */
+export async function updateWarrantyClaimDescription(id: string, formData: FormData) {
+  return asActionResult(async () => {
+    await requirePermission("warranty.manage");
+    const existing = await prisma.warrantyClaim.findUnique({ where: { id } });
+    if (!existing) refuse("That warranty claim is gone — refresh the page.");
+    const user = await requireVehicleAccess(existing.vehicleId, "warranty.manage");
+    const description = String(formData.get("description") ?? "").trim();
+    if (!description) refuse("Describe the fault.");
+    if (description === existing.description) return { success: "No changes" };
+    await prisma.warrantyClaim.update({ where: { id }, data: { description } });
+    await logAudit({
+      action: "warranty.claim.updated",
+      summary: `Warranty claim fault description edited`,
+      contactId: existing.contactId ?? undefined,
+      entityType: "WarrantyClaim",
+      entityId: id,
+      before: { description: existing.description },
+      after: { description },
+      changedFields: ["description"],
+      user,
+    });
+    revalidatePath(`/vehicles/${existing.vehicleId}`);
+    revalidatePath(`/warranty/${id}`);
+    revalidatePath("/warranty");
+    return { success: "Fault description saved" };
   });
 }
 
@@ -80,6 +118,15 @@ export async function deleteWarrantyClaim(id: string, formData?: FormData) {
     revalidatePath(`/vehicles/${claim.vehicleId}`);
     revalidatePath("/warranty");
   });
+}
+
+/**
+ * Delete from the claim's own page: the same delete, then back to the Warranty
+ * list — staying would leave the reader on a page for a claim that is gone.
+ */
+export async function deleteWarrantyClaimFromPage(id: string, formData?: FormData) {
+  const result = await deleteWarrantyClaim(id, formData);
+  return result.error ? result : { success: "Claim deleted", redirectTo: "/warranty" };
 }
 
 export async function createRecall(formData: FormData) {
