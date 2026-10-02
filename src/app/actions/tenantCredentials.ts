@@ -11,7 +11,7 @@ import { logAuditStrict } from "@/lib/audit";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { keyNamesAnInboundEndpoint, reconcileTenantChannels } from "@/lib/channelRegistration";
 
-const OVERRIDES_PATH = "/settings/integration-overrides";
+const OVERRIDES_PATH = "/settings/integrations";
 
 /**
  * A credential key just changed by hand, so nothing is proven about the bundle

@@ -16,7 +16,7 @@ import { loadInboxComms } from "@/lib/inboxQuery";
 import { deliveryStateForMessages } from "@/lib/botOutbox";
 import { collaborationForThreads } from "@/lib/inboxCollaboration";
 import { listActingTenantStaff } from "@/lib/tenantActor";
-import { getSetting } from "@/lib/settings";
+import { resolveIntegrationBundle } from "@/lib/settings";
 import { formatDateTime } from "@/lib/format";
 import { EmptyState, SectionHeading, Surface } from "@/components/visual-system";
 import { WorkspaceHero } from "@/components/workspace-hero";
@@ -42,7 +42,9 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
       orderBy: { publishedAt: "desc" },
       take: 10,
     }),
-    getSetting("GOOGLE_PLACE_ID"),
+    // The same resolution the review fetcher uses, so a workspace's own Google
+    // credentials count here too. Only the (non-secret) place id is kept.
+    resolveIntegrationBundle(workspaceTenantId, "google-reviews").then((bundle) => bundle?.GOOGLE_PLACE_ID ?? null),
     loadCommentThreads({ archived: false }),
     loadCommentThreads({ archived: true }),
     // Asked, not assumed. Public replies need pages_manage_engagement; if Meta

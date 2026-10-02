@@ -196,6 +196,7 @@ export async function connectTelegram(formData: FormData): Promise<void> {
     const res = await setTelegramWebhook(`${appBaseUrl()}/api/webhooks/telegram`, secret);
     await putSetting("BOT_TG_ENABLED", res.ok ? "true" : "false");
     revalidatePath("/chatbot");
+    revalidatePath("/settings/integrations");
   });
 }
 
@@ -208,6 +209,7 @@ export async function disconnectTelegram() {
     await putSetting("TELEGRAM_BOT_TOKEN", "");
     await putSetting("TELEGRAM_WEBHOOK_SECRET", "");
     revalidatePath("/chatbot");
+    revalidatePath("/settings/integrations");
   });
 }
 

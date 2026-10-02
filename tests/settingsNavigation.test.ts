@@ -28,8 +28,9 @@ const keysFor = (viewer: Parameters<typeof visibleSettingsGroups>[0], enabled?: 
 
 test("a non-owner sees exactly the settings their permissions open", () => {
   const keys = keysFor({ isOwner: false, permissions: ["pipelines.manage", "workshop.manage", "roles.view"] });
-  assert.deepEqual(keys.sort(), ["account", "integration-overrides", "pipeline", "team", "workshop-settings"].sort());
-  assert.deepEqual(keysFor({ isOwner: false, permissions: [] }).sort(), ["account", "integration-overrides"]);
+  // "integrations" is the one Integrations page (batch 6), open to tenant owners.
+  assert.deepEqual(keys.sort(), ["account", "integrations", "pipeline", "team", "workshop-settings"].sort());
+  assert.deepEqual(keysFor({ isOwner: false, permissions: [] }).sort(), ["account", "integrations"]);
 });
 
 test("owners see everything; switched-off modules hide for everyone", () => {
