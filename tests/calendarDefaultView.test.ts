@@ -15,6 +15,19 @@ test("the default view keeps meetings, test drives and blocked time only", () =>
   }
 });
 
+test("the three default-view types each have their own colour", () => {
+  // Sean 2026-10-02: "everything is the same colour" — meeting and test drive
+  // shared one orange and blocked time was a near-identical amber.
+  const ws = readFileSync(new URL("../src/components/CalendarWorkspace.tsx", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const tone = (key: string) => ws.match(new RegExp(`\\n  ${key}: \\{[\\s\\S]*?tone: "([^"]+)"`))?.[1];
+  const hue = (key: string) => tone(key)?.match(/bg-([a-z]+)-500/)?.[1];
+  const hues = ["meeting", "test_drive", "availability"].map(hue);
+  assert.equal(new Set(hues).size, 3, `distinct hues, got ${hues.join(", ")}`);
+  // Blocked time takes its colour from the one map, not a hand-copied string.
+  assert.equal(ws.match(/event\.availabilityBlock\s*\?\s*AVAILABILITY_TONE/g)?.length, 2);
+  assert.doesNotMatch(ws, /border-amber-500\/35 bg-amber-500\/10/);
+});
+
 test("the sales calendar starts on the default view; Clear returns to it; workshop shows all", () => {
   const ws = readFileSync(new URL("../src/components/CalendarWorkspace.tsx", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   assert.match(ws, /const defaultType = mode === "workshop" \? "" : CALENDAR_DEFAULT_VIEW;\n\s*const \[type, setType\] = useState\(defaultType\);/);
