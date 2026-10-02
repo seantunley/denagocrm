@@ -131,11 +131,13 @@ const EVENT_TYPES: Record<
     tone: "border-emerald-500/25 bg-emerald-500/10 text-emerald-200",
     dot: "bg-emerald-400",
   },
+  // Meetings, test drives and blocked time are the calendar's default view (#746),
+  // so these three must be told apart at a glance: violet, orange, dashed rose.
   meeting: {
     label: "Meeting",
     icon: Users,
-    tone: "border-orange-500/25 bg-orange-500/10 text-orange-200",
-    dot: "bg-orange-400",
+    tone: "border-violet-500/30 bg-violet-500/10 text-violet-200",
+    dot: "bg-violet-400",
   },
   test_drive: {
     label: "Test drive",
@@ -152,10 +154,12 @@ const EVENT_TYPES: Record<
   availability: {
     label: "Unavailable",
     icon: CalendarX2,
-    tone: "border-amber-500/35 bg-amber-500/10 text-amber-100",
-    dot: "bg-amber-400",
+    tone: "border-dashed border-rose-500/40 bg-rose-500/10 text-rose-100",
+    dot: "bg-rose-400",
   },
 };
+
+const AVAILABILITY_TONE = EVENT_TYPES.availability.tone;
 
 const DEFAULT_EVENT_TYPE = {
   label: "Activity",
@@ -252,7 +256,7 @@ function EventCard({
               : event.overdue
                 ? "border-red-500/30 bg-red-500/10 text-red-100"
                 : event.availabilityBlock
-                  ? "border-amber-500/35 bg-amber-500/10 text-amber-100"
+                  ? AVAILABILITY_TONE
                   : event.workshop
                     ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-100"
                     : config.tone,
@@ -298,7 +302,7 @@ function EventCard({
         <div className="overflow-hidden rounded-lg">
           <div className="border-b border-border bg-card/95 p-3.5">
             <div className="flex items-start gap-2.5">
-              <span className={cn("mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg border", event.availabilityBlock ? "border-amber-500/35 bg-amber-500/10 text-amber-100" : event.workshop ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-200" : config.tone)}>
+              <span className={cn("mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg border", event.availabilityBlock ? AVAILABILITY_TONE : event.workshop ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-200" : config.tone)}>
                 <Icon className="size-3.5" />
               </span>
               <div className="min-w-0 flex-1">
