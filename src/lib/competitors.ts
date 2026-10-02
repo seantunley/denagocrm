@@ -7,6 +7,8 @@ import { logError } from "./errorLog";
 import { recordAiUsage } from "./systemHealth";
 import { safeFetchText } from "./safeFetch";
 import { inheritedTenantId } from "./tenantWrite";
+import { codexModel, codexRespond, isCodexConnected } from "./codex";
+import { stripInlineCitations } from "./researchPrompt";
 
 // CRM-native competitor monitoring. Fetch a public page, normalise to visible
 // text, hash it, and only when the hash changes do we snapshot, diff, apply
@@ -112,33 +114,42 @@ async function aiClassifyChange(input: {
   before: string;
   after: string;
 }): Promise<ClassifyResult | null> {
-  const apiKey = await getSetting("ANTHROPIC_API_KEY");
-  if (!apiKey) return null;
+  const system =
+    'You are a competitive-intelligence analyst for Denago, an electric-vehicle (golf cart / LSV) dealer in Cape Town. Classify ONLY the supplied before/after evidence from a competitor\'s public web page. Do not invent facts beyond the evidence. A change is material only if it may affect pricing, product capability, positioning/messaging, availability, hiring signals, or competitive risk. Respond with STRICT JSON only: {"is_material": boolean, "category": "pricing|product|messaging|hiring|other", "materiality": "noise|minor|important|critical", "summary": "one factual sentence"}';
+  const user = `Competitor: ${input.competitorName}\nPage: ${input.sourceLabel}\n\nREMOVED (before):\n${input.before || "(nothing)"}\n\nADDED (after):\n${input.after || "(nothing)"}`;
   try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      signal: AbortSignal.timeout(25000),
-      headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5",
-        max_tokens: 600,
-        system:
-          'You are a competitive-intelligence analyst for Denago, an electric-vehicle (golf cart / LSV) dealer in Cape Town. Classify ONLY the supplied before/after evidence from a competitor\'s public web page. Do not invent facts beyond the evidence. A change is material only if it may affect pricing, product capability, positioning/messaging, availability, hiring signals, or competitive risk. Respond with STRICT JSON only: {"is_material": boolean, "category": "pricing|product|messaging|hiring|other", "materiality": "noise|minor|important|critical", "summary": "one factual sentence"}',
-        messages: [
-          {
-            role: "user",
-            content: `Competitor: ${input.competitorName}\nPage: ${input.sourceLabel}\n\nREMOVED (before):\n${input.before || "(nothing)"}\n\nADDED (after):\n${input.after || "(nothing)"}`,
-          },
-        ],
-      }),
-    });
-    if (!res.ok) {
-      await logError("competitor-ai", `Anthropic API ${res.status}`, (await res.text().catch(() => "")).slice(0, 300));
-      return null;
+    let content: string;
+    // On a connected ChatGPT subscription, as lead research is — and with no
+    // fallback to Anthropic credit, for the same reason (lib/ai.ts aiResearch).
+    if (await isCodexConnected()) {
+      const reply = await codexRespond({ instructions: system, prompt: user, reasoningEffort: "low", timeoutMs: 25000 });
+      if ("error" in reply) {
+        await logError("competitor-ai", "ChatGPT classification failed", reply.error);
+        return null;
+      }
+      content = reply.text;
+    } else {
+      const apiKey = await getSetting("ANTHROPIC_API_KEY");
+      if (!apiKey) return null;
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        signal: AbortSignal.timeout(25000),
+        headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5",
+          max_tokens: 600,
+          system,
+          messages: [{ role: "user", content: user }],
+        }),
+      });
+      if (!res.ok) {
+        await logError("competitor-ai", `Anthropic API ${res.status}`, (await res.text().catch(() => "")).slice(0, 300));
+        return null;
+      }
+      const json = await res.json();
+      void recordAiUsage(json.usage);
+      content = json.content?.[0]?.text ?? "{}";
     }
-    const json = await res.json();
-    void recordAiUsage(json.usage);
-    const content: string = json.content?.[0]?.text ?? "{}";
     const jsonText = content.match(/\{[\s\S]*\}/)?.[0] ?? "{}";
     let raw: unknown;
     try {
@@ -353,9 +364,34 @@ function normalizeUrl(u: string): string {
   }
 }
 
-type WebSearchOut = { text: string; citations: Array<{ title: string; url: string }> };
+type WebSearchOut = {
+  text: string;
+  citations: Array<{ title: string; url: string }>;
+  model: string;
+  /** ChatGPT writes its sources into the prose as markdown links. */
+  inlineCitations: boolean;
+};
 
-/** One Anthropic call with the server-side web_search tool enabled. */
+/** Markdown links in a ChatGPT answer, as the brief's citation list. */
+function markdownCitations(text: string): Array<{ title: string; url: string }> {
+  const found = new Map<string, { title: string; url: string }>();
+  for (const [, title, url] of text.matchAll(/\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g)) {
+    const clean = url.replace(/[?&]utm_source=openai$/, "");
+    if (!found.has(clean)) found.set(clean, { title: title || clean, url: clean });
+  }
+  return [...found.values()].slice(0, 20);
+}
+
+/**
+ * One web-search call: on the workspace's connected ChatGPT subscription when
+ * there is one, otherwise the Anthropic API with its server-side web_search tool.
+ *
+ * Competitor research was left on Anthropic when lead research moved to ChatGPT
+ * (4ff5e682), so once the API credit ran out every brief and discovery failed
+ * with "credit balance is too low" while lead research kept working. No fallback
+ * from ChatGPT to Anthropic, as in aiResearch: connecting the subscription is the
+ * choice to stop spending API credit.
+ */
 async function callWithWebSearch(opts: {
   system: string;
   user: string;
@@ -363,6 +399,22 @@ async function callWithWebSearch(opts: {
   maxUses?: number;
   timeoutMs?: number;
 }): Promise<WebSearchOut | { error: string }> {
+  if (await isCodexConnected()) {
+    // Medium effort: the cron gives each call 90 seconds, and high effort runs
+    // 50–80 seconds before the search is counted.
+    const reply = await codexRespond({
+      instructions: opts.system,
+      prompt: opts.user,
+      webSearch: true,
+      reasoningEffort: "medium",
+      timeoutMs: opts.timeoutMs ?? 60000,
+    });
+    if ("error" in reply) {
+      await logError("competitor-ai", "ChatGPT research failed", reply.error);
+      return { error: reply.error };
+    }
+    return { text: reply.text.trim(), citations: markdownCitations(reply.text), model: await codexModel(), inlineCitations: true };
+  }
   const apiKey = await getSetting("ANTHROPIC_API_KEY");
   if (!apiKey) return { error: "AI Assist is not configured (Settings → Integrations)." };
   try {
@@ -379,7 +431,12 @@ async function callWithWebSearch(opts: {
       }),
     });
     if (!res.ok) {
-      await logError("competitor-ai", `Anthropic API ${res.status}`, (await res.text().catch(() => "")).slice(0, 300));
+      const detail = await res.text().catch(() => "");
+      await logError("competitor-ai", `Anthropic API ${res.status}`, detail.slice(0, 300));
+      // Out of credit arrives as a 400, indistinguishable by status alone.
+      if (/credit balance/i.test(detail)) {
+        return { error: "the Anthropic API is out of credit. Connect ChatGPT in Settings → Integrations, or add credit." };
+      }
       return { error: `AI request failed (${res.status}).` };
     }
     const json = await res.json();
@@ -397,7 +454,7 @@ async function callWithWebSearch(opts: {
         for (const c of cites) if (c.url) citations.set(c.url, { title: c.title ?? c.url, url: c.url });
       }
     }
-    return { text, citations: [...citations.values()].slice(0, 20) };
+    return { text, citations: [...citations.values()].slice(0, 20), model: RESEARCH_MODEL, inlineCitations: false };
   } catch (err) {
     await logError("competitor-ai", err);
     return { error: "AI request failed — logged in the System Log." };
@@ -485,7 +542,7 @@ sourceType must be one of: page, pricing, product, news, blog, facebook, instagr
       headline: `Discovered ${created} source${created === 1 ? "" : "s"} to watch`,
       body: `${description ? `${description}\n\n` : ""}Added ${created} monitored source(s); skipped ${skipped} (duplicate/unusable).`,
       citations: result.citations.length ? result.citations : undefined,
-      model: RESEARCH_MODEL,
+      model: result.model,
       createdById: createdById ?? undefined,
     },
   });
@@ -535,9 +592,11 @@ Write the current intelligence brief.`;
   if ("error" in result) return { ok: false, error: result.error };
   if (!result.text) return { ok: false, error: "No usable research came back." };
 
-  const headlineMatch = result.text.match(/HEADLINE:\s*(.+)/i);
+  // ChatGPT's sources are already in `citations`; the brief shows them there.
+  const text = result.inlineCitations ? stripInlineCitations(result.text) : result.text;
+  const headlineMatch = text.match(/HEADLINE:\s*(.+)/i);
   const headline = headlineMatch ? headlineMatch[1].trim().slice(0, 200) : null;
-  const body = result.text.replace(/^\s*HEADLINE:\s*.+\n?/i, "").trim().slice(0, 8000);
+  const body = text.replace(/^\s*HEADLINE:\s*.+\n?/i, "").trim().slice(0, 8000);
 
   const brief = await prisma.competitorBrief.create({
     data: {
@@ -548,7 +607,7 @@ Write the current intelligence brief.`;
       headline,
       body,
       citations: result.citations.length ? result.citations : undefined,
-      model: RESEARCH_MODEL,
+      model: result.model,
       createdById: createdById ?? undefined,
     },
   });

@@ -134,7 +134,8 @@ export async function discoverSourcesNow(competitorId: string) {
     revalidatePath(`/competitors/${competitorId}`);
     // A failed run used to report nothing at all — the button just stopped.
     // The detail is in the audit line; the person gets what to do about it.
-    if (!result.ok) refuse("AI discovery couldn't finish. Check the AI setup in Settings, then try again.");
+    // The reason is a sentence written for staff (lib/competitors.ts), not a raw error.
+    if (!result.ok) refuse(`AI discovery couldn't finish: ${result.error ?? "unknown error"}`);
     return { success: `Found ${result.created} new source${result.created === 1 ? "" : "s"}` };
   });
 }
@@ -152,7 +153,9 @@ export async function researchNow(competitorId: string) {
       entityId: competitorId,
     });
     revalidatePath(`/competitors/${competitorId}`);
-    if (!result.ok) refuse("AI research couldn't finish. Check the AI setup in Settings, then try again.");
+    // Said, not hidden behind "check the AI setup": an empty credit balance read
+    // as a setup problem for a week.
+    if (!result.ok) refuse(`AI research couldn't finish: ${result.error ?? "unknown error"}`);
     return { success: "Intelligence brief created" };
   });
 }
