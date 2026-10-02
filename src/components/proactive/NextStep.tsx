@@ -107,7 +107,7 @@ export function NextStepDialog({
               <span className="flex-1">
                 Schedule a follow-up
                 <span className="block text-xs text-muted-foreground">
-                  Call, message, meeting or another test drive
+                  Call, message, meeting or another appointment
                 </span>
               </span>
               <ChevronRight className="size-4 text-muted-foreground" />

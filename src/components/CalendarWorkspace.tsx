@@ -435,6 +435,10 @@ export default function CalendarWorkspace({
   const [isPending, startTransition] = useTransition();
 
   const activityTypes = useActivityTypes();
+  // Hidden where the workspace has no automotive module (lib/activityTypes) —
+  // the headline card then counts meetings instead of test drives.
+  const testDrivesOn = !findActivityType(activityTypes, "test_drive")?.hidden;
+  const featuredType = testDrivesOn ? "test_drive" : "meeting";
 
   const owners = useMemo(
     () =>
@@ -551,12 +555,12 @@ export default function CalendarWorkspace({
       featured:
         mode === "workshop"
           ? monthEvents.filter(happened).length
-          : monthEvents.filter((event) => event.type === "test_drive" && happened(event)).length,
+          : monthEvents.filter((event) => event.type === featuredType && happened(event)).length,
       completed: monthEvents.filter((event) => event.status === "done")
         .length,
       openSlots,
     };
-  }, [bookingCountsByDate, days, events, mode, slotConfig, todayKey]);
+  }, [bookingCountsByDate, days, events, featuredType, mode, slotConfig, todayKey]);
 
   function openEvent(event: CalendarWorkspaceEvent) {
     setSelectedEvent(event);
@@ -767,10 +771,10 @@ export default function CalendarWorkspace({
             tone: "primary",
           },
           {
-            label: "Test drives",
+            label: testDrivesOn ? "Test drives" : "Meetings",
             value: stats.featured,
             detail: "this month",
-            icon: Car,
+            icon: testDrivesOn ? Car : Users,
             tone: "warning",
           },
           {
@@ -874,7 +878,9 @@ export default function CalendarWorkspace({
               aria-label="Filter by activity type"
             >
               {mode !== "workshop" && (
-                <option value={CALENDAR_DEFAULT_VIEW}>Meetings, test drives &amp; blocked time</option>
+                <option value={CALENDAR_DEFAULT_VIEW}>
+                  {testDrivesOn ? "Meetings, test drives & blocked time" : "Meetings & blocked time"}
+                </option>
               )}
               <option value="">All activities</option>
               {types.map((value) => (

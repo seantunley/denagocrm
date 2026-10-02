@@ -80,9 +80,11 @@ test("the shipped counts use the same rule these tests model", () => {
   const stats = code.slice(code.indexOf("const happened ="), code.indexOf("openSlots,\n    };"));
   assert.match(stats, /const happened = \(event: CalendarWorkspaceEvent\) => event\.status !== "canceled";/);
   assert.match(stats, /monthEvents\.filter\(happened\)\.length/, "workshop bookings");
-  assert.match(stats, /event\.type === "test_drive" && happened\(event\)/, "test drives");
+  // Test drives — or meetings, in a workspace without the automotive module.
+  assert.match(stats, /event\.type === featuredType && happened\(event\)/, "test drives");
+  assert.match(code, /const featuredType = testDrivesOn \? "test_drive" : "meeting";/);
   // The defect, in both places.
-  assert.doesNotMatch(stats, /event\.type === "test_drive" &&\s*event\.status === "planned"/);
+  assert.doesNotMatch(stats, /event\.type === (?:"test_drive"|featuredType) &&\s*event\.status === "planned"/);
   assert.doesNotMatch(stats, /\? monthEvents\.filter\(\(event\) => event\.status === "planned"\)\.length/);
 
   // "Today" is deliberately still planned-only — its own label says so.

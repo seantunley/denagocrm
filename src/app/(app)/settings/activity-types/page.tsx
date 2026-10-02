@@ -3,7 +3,8 @@ import { getSetting } from "@/lib/settings";
 import { SettingsWorkspace } from "@/components/settings-workspace";
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
 import ActivityTypesSettings from "@/components/settings/ActivityTypesSettings";
-import { ACTIVITY_TYPES_KEY, resolveActivityTypes } from "@/lib/activityTypes";
+import { ACTIVITY_TYPES_KEY, activityTypeAvailable, resolveActivityTypes } from "@/lib/activityTypes";
+import { getEnabledModuleIds } from "@/lib/modules/enabled";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +21,13 @@ export const dynamic = "force-dynamic";
  */
 export default async function ActivityTypesSettingsPage() {
   await requireOwner();
-  const types = resolveActivityTypes(await getSetting(ACTIVITY_TYPES_KEY));
+  // A built-in that needs a module this workspace lacks (test drive → automotive)
+  // is not offered here at all. Leaving it out of the save is safe: the action
+  // restores an omitted built-in untouched.
+  const enabledModules = await getEnabledModuleIds().catch(() => null);
+  const types = resolveActivityTypes(await getSetting(ACTIVITY_TYPES_KEY)).filter(
+    (type) => !enabledModules || activityTypeAvailable(type.key, enabledModules),
+  );
 
   return (
     <SettingsWorkspace

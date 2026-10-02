@@ -191,6 +191,31 @@ export function resolveActivityTypes(stored: string | null | undefined): Activit
 }
 
 /**
+ * Built-in types that belong to a module, and that module.
+ *
+ * A test drive is a car-dealer thing: a workspace without the automotive module
+ * (a breastfeeding-art studio, say) should never be offered one. It is HIDDEN,
+ * not dropped, for the same reason as any hidden type — an old activity of that
+ * type still needs its label.
+ */
+const MODULE_TYPES: Record<string, string> = { test_drive: "automotive" };
+
+/** The workspace's types with module-only built-ins hidden where the module is off. */
+export function activityTypesForModules(
+  types: readonly ActivityType[],
+  enabledModules: ReadonlySet<string>,
+): ActivityType[] {
+  return types.map((type) =>
+    MODULE_TYPES[type.key] && !enabledModules.has(MODULE_TYPES[type.key]) ? { ...type, hidden: true } : type,
+  );
+}
+
+/** Whether this built-in exists at all for the workspace (the settings list). */
+export function activityTypeAvailable(key: string, enabledModules: ReadonlySet<string>): boolean {
+  return !MODULE_TYPES[key] || enabledModules.has(MODULE_TYPES[key]);
+}
+
+/**
  * The value to store. Runs the same cleaning as the read, so a write cannot save
  * something a read would reject, and drops everything that is already the
  * built-in default — the setting holds the DIFFERENCE, so a workspace that

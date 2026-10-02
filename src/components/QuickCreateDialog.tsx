@@ -268,7 +268,7 @@ export default function QuickCreateDialog() {
                 <input type="hidden" name="revalidate" value={createDefaults.revalidate ?? "/calendar"} />
                 <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4">
                   <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-300">Staff availability</p>
-                  <p className="mt-1 text-sm text-muted-foreground">This blocks customer meetings, test drives and other scheduled work for the selected team member.</p>
+                  <p className="mt-1 text-sm text-muted-foreground">This blocks customer meetings and other scheduled work for the selected team member.</p>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div>

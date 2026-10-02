@@ -3,7 +3,7 @@ import { requireUser, getActiveTenantId } from "@/lib/auth";
 import { brandForTenant, brandLogoUrl, brandStyle, DEFAULT_BRAND } from "@/lib/tenantBrand";
 import { getSetting } from "@/lib/settings";
 import { WEATHER_CITIES_KEY, parseWeatherCities } from "@/lib/weatherCities";
-import { ACTIVITY_TYPES_KEY, resolveActivityTypes } from "@/lib/activityTypes";
+import { ACTIVITY_TYPES_KEY, activityTypesForModules, resolveActivityTypes } from "@/lib/activityTypes";
 import { awaitingReplyCount } from "@/lib/inboxCount";
 import { casesAwaitingCount } from "@/lib/helpdesk";
 import { getUserPermissionList } from "@/lib/permissions";
@@ -67,7 +67,10 @@ export default async function AppLayout({
   // pickers are client components scattered across the app, and none of them can
   // reach the tenant. `resolveActivityTypes` is total — an unreadable setting
   // gives the built-in seven rather than an empty picker.
-  const activityTypes = resolveActivityTypes(await getSetting(ACTIVITY_TYPES_KEY));
+  // Module-only built-ins (a test drive needs the automotive module) are hidden
+  // where the module is off. If the module lookup failed, nothing is hidden.
+  const storedTypes = resolveActivityTypes(await getSetting(ACTIVITY_TYPES_KEY));
+  const activityTypes = enabledModules ? activityTypesForModules(storedTypes, enabledModules) : storedTypes;
 
 
   // The accent override, or nothing. `brandStyle` returns null for an unbranded
