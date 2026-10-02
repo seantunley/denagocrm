@@ -15,6 +15,7 @@ import {
 import { OPEN_RUN_STATUSES, parseRunMode } from "@/lib/journeyArbitration";
 import { readJourneyTriggers, type JourneyTriggerSpec } from "@/lib/journeyTriggers";
 import { withActingStaffScope } from "@/lib/actingScope";
+import { asActionResult, refuse } from "@/lib/actionResult";
 
 export async function runJourneyNowAction(journeyId: string) {
   return withActingStaffScope(async () => {
@@ -204,14 +205,17 @@ export async function retryJourneyRun(runId: string) {
 }
 
 export async function cancelJourneyRun(runId: string) {
-  return withActingStaffScope(async () => {
+  // asActionResult: it sits behind a confirmation dialog now, which shows a
+  // refusal's message — a thrown Error reaches the browser redacted.
+  return asActionResult(async () => {
     const user = await requirePermission("journeys.manage");
-    const run = await prisma.journeyRun.findUniqueOrThrow({
+    const run = await prisma.journeyRun.findUnique({
       where: { id: runId },
       include: { journey: true },
     });
+    if (!run) refuse("That journey run is no longer there — refresh the page.");
     if (!["queued", "waiting"].includes(run.status)) {
-      throw new Error("Only queued or waiting journey runs can be cancelled safely");
+      refuse("Only queued or waiting journey runs can be cancelled safely");
     }
 
     const cancelled = await prisma.journeyRun.updateMany({
@@ -222,7 +226,7 @@ export async function cancelJourneyRun(runId: string) {
         lastError: "Cancelled by an administrator",
       },
     });
-    if (cancelled.count === 0) throw new Error("The journey run started before it could be cancelled");
+    if (cancelled.count === 0) refuse("The journey run started before it could be cancelled");
 
     await logAudit({
       action: "journey.run_cancelled",

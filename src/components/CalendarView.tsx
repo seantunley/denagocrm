@@ -170,7 +170,7 @@ export default async function CalendarView({
           ? `/leads/${activity.lead.id}`
           : activity.contact
             ? `/contacts/${activity.contact.id}`
-            : "/calendar",
+            : null,
         summary: activity.summary,
         time,
         endTime,
