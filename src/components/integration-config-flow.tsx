@@ -23,7 +23,7 @@ import { verifyAndSaveIntegration, retestIntegration, type FlowResult } from "@/
  * the authority.
  *
  * `prefill` carries NON-SECRET values only (hostnames, ports, usernames — see
- * the caller in settings/integration-overrides/page.tsx, which filters on
+ * the caller in settings/integrations/page.tsx, which filters on
  * isSecretSettingKey). A stored password or token is never sent to the browser,
  * so a reconnect always requires retyping the secret itself while sparing the
  * owner from re-entering the six fields around it.

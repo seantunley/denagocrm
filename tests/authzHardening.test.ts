@@ -6,8 +6,9 @@ import { ensureFollowUpTime, followUpDueDateError } from "../src/lib/followUp";
 
 // --- Fix 4: social-channel validation for thread mutations ------------------
 
-test("isSocialChannel: accepts exactly the three inbox channels", () => {
-  assert.deepEqual([...SOCIAL_CHANNELS], ["whatsapp", "messenger", "instagram"]);
+test("isSocialChannel: accepts exactly the inbox channels", () => {
+  // Telegram joined with gap audit #29 — its threads are read/archived the same way.
+  assert.deepEqual([...SOCIAL_CHANNELS], ["whatsapp", "messenger", "instagram", "telegram"]);
   for (const channel of SOCIAL_CHANNELS) {
     assert.equal(isSocialChannel(channel), true, `${channel} should be allowed`);
   }

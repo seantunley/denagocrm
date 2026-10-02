@@ -27,7 +27,7 @@ export default function InboxReply({
   draft,
   viewerId,
 }: {
-  channel: "whatsapp" | "messenger" | "instagram" | "x";
+  channel: "whatsapp" | "messenger" | "instagram" | "x" | "telegram";
   contactId?: string | null;
   leadId?: string | null;
   phone?: string | null;
@@ -280,7 +280,7 @@ ${el.value.slice(end)}`;
           name="text"
           rows={1}
           className="input flex-1 py-1.5 text-sm resize-none"
-          placeholder={`Reply via ${channel === "whatsapp" ? "WhatsApp" : channel === "instagram" ? "Instagram" : channel === "x" ? "X" : "Messenger"}…`}
+          placeholder={`Reply via ${channel === "whatsapp" ? "WhatsApp" : channel === "instagram" ? "Instagram" : channel === "x" ? "X" : channel === "telegram" ? "Telegram" : "Messenger"}…`}
           onKeyDown={onKeyDown}
           // defaultValue, not value: the box stays uncontrolled, so restoring a
           // draft cannot fight the emoji inserter (which writes el.value directly)

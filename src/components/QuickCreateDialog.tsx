@@ -28,6 +28,7 @@ import LocationAutocomplete from "@/components/LocationAutocomplete";
 import { readPwaActivityShortcut } from "@/lib/pwaShortcuts";
 import { useActivityTypes } from "@/components/ActivityTypesProvider";
 import { pickableActivityTypes } from "@/lib/activityTypes";
+import ContactPicker from "@/components/ContactPicker";
 
 export type QuickCreateKind = "lead" | "contact" | "calendar" | "availability" | "quote" | "jobcard" | "vehicle";
 
@@ -38,6 +39,8 @@ export type QuickCreateDefaults = {
   revalidate?: string;
   contactId?: string;
   contactLabel?: string;
+  /** Pre-selects the vehicle on a new job card (from a vehicle or customer page). */
+  vehicleId?: string;
 };
 
 const TITLES: Record<QuickCreateKind, string> = {
@@ -166,6 +169,8 @@ export default function QuickCreateDialog() {
 
   async function scheduleCalendar(formData: FormData) {
     try {
+      // A refusal (a calendar conflict, a full workshop slot, a follow-up with no
+      // note) comes back as a value.
       const result = await scheduleQuickActivity(formData);
       if (result?.error) {
         setConflictMessage(result.error);
@@ -202,6 +207,7 @@ export default function QuickCreateDialog() {
         contacts={currentOptions.contacts}
         products={currentOptions.products}
         defaults={currentOptions.quoteDefaults}
+        initialContactId={createDefaults.contactId}
       />
     );
   }
@@ -243,7 +249,7 @@ export default function QuickCreateDialog() {
               <ContactForm action={createQuickContact} users={currentOptions.users} fleetPicker={currentOptions.fleetPicker} submitLabel="Create contact" variant="dialog" />
             )}
 
-            {kind === "jobcard" && <JobCardForm vehicles={currentOptions.vehicles} />}
+            {kind === "jobcard" && <JobCardForm vehicles={currentOptions.vehicles} defaultVehicleId={createDefaults.vehicleId} />}
 
             {kind === "vehicle" && (
               <VehicleForm
@@ -366,12 +372,12 @@ export default function QuickCreateDialog() {
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div>
                     <label className="label">Customer or contact</label>
-                    <select name="contactId" className={input} defaultValue={createDefaults.contactId ?? ""}>
-                      <option value="">—</option>
-                      {currentOptions.contacts.map((contact) => (
-                        <option key={contact.id} value={contact.id}>{contact.label}</option>
-                      ))}
-                    </select>
+                    <ContactPicker
+                      name="contactId"
+                      options={currentOptions.contacts}
+                      defaultValue={createDefaults.contactId ?? ""}
+                      emptyLabel="No customer"
+                    />
                   </div>
                   <div>
                     <label className="label">Assign to</label>

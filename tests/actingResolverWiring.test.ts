@@ -207,8 +207,9 @@ const ACTING_STAFF_SURFACES = [
   join("src", "app", "(app)", "contacts", "[id]", "edit", "page.tsx"),
   join("src", "app", "(app)", "leads", "page.tsx"),
   join("src", "app", "(app)", "leads", "new", "page.tsx"),
+  // The lead's editor is the modal on leads/[id]/page.tsx (one lead editor);
+  // leads/[id]/edit is now a redirect with no staff list of its own.
   join("src", "app", "(app)", "leads", "[id]", "page.tsx"),
-  join("src", "app", "(app)", "leads", "[id]", "edit", "page.tsx"),
   join("src", "app", "(app)", "journeys", "page.tsx"),
   join("src", "app", "(app)", "inbox", "page.tsx"),
   join("src", "app", "(app)", "audit", "page.tsx"),

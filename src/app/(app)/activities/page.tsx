@@ -21,6 +21,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cancelActivity, completeActivity } from "@/app/actions/activities";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { isFutureDay } from "@/lib/activityDay";
 import { QuickCreateButton } from "@/components/QuickCreateButton";
 import { buttonVariants } from "@/components/ui/button";
@@ -274,10 +275,10 @@ export default async function ActivitiesPage({
                     detail={relatedLabel}
                     meta={`${formatDue(activity.dueDate)} · ${activity.assignedTo.name}`}
                     action={canManage && !isFutureDay(activity.dueDate) ? (
-                      <form action={completeActivity.bind(null, activity.id)}>
+                      <SaveForm action={completeActivity.bind(null, activity.id)}>
                         <input type="hidden" name="revalidate" value="/activities" />
-                        <button className={buttonVariants({ variant: "outline", size: "sm" })} aria-label={`Complete ${activity.summary}`}><Check className="size-4" />Done</button>
-                      </form>
+                        <SaveButton pendingLabel="…" className={buttonVariants({ variant: "outline", size: "sm" })} aria-label={`Complete ${activity.summary}`}><Check className="size-4" />Done</SaveButton>
+                      </SaveForm>
                     ) : undefined}
                   />
                 );
@@ -538,7 +539,7 @@ export default async function ActivitiesPage({
 
                                 {canManage && !isFutureDay(activity.dueDate) && (
                                   <div className="flex items-center gap-2">
-                                    <form
+                                    <SaveForm
                                       action={completeActivity.bind(null, activity.id)}
                                       className="flex min-w-0 flex-1 items-center gap-2 sm:flex-none"
                                     >
@@ -553,7 +554,8 @@ export default async function ActivitiesPage({
                                         placeholder="Outcome note (optional)"
                                         aria-label={`Outcome note for ${activity.summary}`}
                                       />
-                                      <button
+                                      <SaveButton
+                                        pendingLabel="…"
                                         className={buttonVariants({
                                           variant: "secondary",
                                           size: "sm",
@@ -561,17 +563,17 @@ export default async function ActivitiesPage({
                                       >
                                         <Check className="size-3.5" />
                                         Done
-                                      </button>
-                                    </form>
-                                    <form
+                                      </SaveButton>
+                                    </SaveForm>
+                                    <SaveForm
                                       action={cancelActivity.bind(
                                         null,
                                         activity.id,
                                         "/activities",
                                       )}
                                     >
-                                      <button
-                                        type="submit"
+                                      <SaveButton
+                                        pendingLabel="…"
                                         title="Cancel activity"
                                         aria-label={`Cancel ${activity.summary}`}
                                         className={buttonVariants({
@@ -582,8 +584,8 @@ export default async function ActivitiesPage({
                                         })}
                                       >
                                         <Trash2 className="size-3.5" />
-                                      </button>
-                                    </form>
+                                      </SaveButton>
+                                    </SaveForm>
                                   </div>
                                 )}
                               </div>

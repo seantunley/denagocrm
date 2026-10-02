@@ -211,14 +211,15 @@ test("an edit form is guarded by the permission that saves it, not the one that 
 
 test("the edit pages' pickers are scoped to what the caller may see", () => {
   // Each also loaded 500 contacts and every user row to populate its dropdowns.
-  for (const page of ["src/app/(app)/leads/[id]/edit/page.tsx", "src/app/(app)/vehicles/[id]/edit/page.tsx"]) {
+  // The lead editor is now the modal on the lead page itself (one lead editor).
+  for (const page of ["src/app/(app)/leads/[id]/page.tsx", "src/app/(app)/vehicles/[id]/edit/page.tsx"]) {
     assert.match(
       shipped(page),
       /where: accessibleContactIds \? \{ id: \{ in: accessibleContactIds \} \} : \{\}/,
       `${page}: the customer picker is unscoped`,
     );
   }
-  for (const page of ["src/app/(app)/leads/[id]/edit/page.tsx", "src/app/(app)/contacts/[id]/edit/page.tsx"]) {
+  for (const page of ["src/app/(app)/leads/[id]/page.tsx", "src/app/(app)/contacts/[id]/edit/page.tsx"]) {
     const code = shipped(page);
     assert.match(code, /listActingTenantStaff\(\)/, `${page}: the staff picker must be this tenant's staff`);
     assert.doesNotMatch(

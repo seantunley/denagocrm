@@ -86,7 +86,8 @@ test("registration refuses a file the library upload route did not sign", () => 
   // After ownership, and on the STORE's pathname, not anything the caller sent.
   assert.match(
     lib,
-    /const owned = await assertOwnedBlob\(file\.url, expectedTenantId\);\s*if \(!isLibraryUpload\(owned\.pathname, expectedTenantId\)\) \{\s*throw/,
+    // `refuse()` throws too — it just carries a message the uploader can show.
+    /const owned = await assertOwnedBlob\(file\.url, expectedTenantId\);\s*(?:\/\/[^\n]*\n\s*)*if \(!isLibraryUpload\(owned\.pathname, expectedTenantId\)\) \{\s*(throw|refuse\()/,
   );
 });
 

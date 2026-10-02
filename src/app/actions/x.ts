@@ -3,7 +3,7 @@
 import { requirePermission } from "@/lib/permissions";
 import { prisma } from "@/lib/db";
 import { currentTenantScope } from "@/lib/tenantScope";
-import { resolveTenantCredential } from "@/lib/settings";
+import { resolveIntegrationBundle } from "@/lib/settings";
 import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { withActingStaffScope } from "@/lib/actingScope";
 
@@ -16,11 +16,10 @@ export async function draftXReplyWithGrok(conversationId: string): Promise<{ ok:
       include: { messages: { orderBy: { occurredAt: "desc" }, take: 12, select: { direction: true, body: true } } },
     });
     if (!conversation) return { ok: false, error: "X conversation not found in this workspace." };
-    const [apiKey, configuredModel, enabled] = await Promise.all([
-      resolveTenantCredential(tenantId, "XAI_API_KEY"),
-      resolveTenantCredential(tenantId, "XAI_MODEL"),
-      resolveTenantCredential(tenantId, "XAI_DRAFTS_ENABLED"),
-    ]);
+    const x = await resolveIntegrationBundle(tenantId, "x");
+    const apiKey = x?.XAI_API_KEY ?? null;
+    const configuredModel = x?.XAI_MODEL ?? null;
+    const enabled = x?.XAI_DRAFTS_ENABLED ?? null;
     if (enabled !== "true") return { ok: false, error: "Enable Grok reply drafts in Settings → Integrations first." };
     if (!apiKey) return { ok: false, error: "Add a Grok API key in Settings → Integrations." };
     const redact = (value: string) => value

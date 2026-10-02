@@ -95,12 +95,15 @@ test("5 + 6: drag reports failures as a toast and keeps the block's own start", 
   // A bare date keeps the local time; a zoned instant is taken as is; follow-ups convert it first.
   assert.match(actions, /return new Date\(`\$\{when\}T\$\{time\}:00\+02:00`\);/);
   assert.match(actions, /const local = \/\(\?:Z\|\[\+-\]\\d\{2\}:\?\\d\{2\}\)\$\/\.test\(when\) \? johannesburgLocal\(new Date\(when\)\) : when;/);
-  assert.match(actions, /unstable_rethrow\(error\); \/\/ a guard's redirect/);
+  // An access refusal comes back as a value, not a throw that takes the page down.
+  assert.match(actions, /return asOwnResult\(\(\) => rescheduleActivityBody\(id, when\), \(error\) => \(\{ ok: false, error \}\)\);/);
 });
 
 test("7: a calendar conflict on a gated stage shows the conflict, not the reason prompt", () => {
   const leads = src("src/app/actions/leads.ts");
-  assert.match(leads, /return \{ ok: false, error: availabilityConflictMessage\(bookingResult\.availabilityConflict\) \};/);
+  // Refused inside the booking transaction, which comes back as { ok: false, error } — no gate.
+  assert.match(leads, /if \(availabilityConflict\) refuse\(availabilityConflictMessage\(availabilityConflict\)\);/);
+  assert.match(leads, /if \(lead instanceof ActionRefusal\) return \{ ok: false, error: lead\.message \};/);
 });
 
 test("8: the chatbot's placeholder assignee is not checked against staff leave", () => {

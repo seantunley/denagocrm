@@ -111,7 +111,12 @@ export async function sendQuoteEmail(
     const fileName = quotePdfFileName(quote.number);
     const { vars } = await quoteVars(quote, user);
     // Rendered escaped into the branded shell; CR/LF cannot reach the subject.
-    const email = await tenantEmailContent("quote", quote.tenantId, vars, { subject, body });
+    // Left exactly as prefilled → send the saved template itself, so its
+    // formatting (lists, bold, links) survives; the dialog only shows plain text.
+    // Edited → the staff member's words, as plain paragraphs.
+    const standard = await tenantEmailContent("quote", quote.tenantId, vars);
+    const unchanged = standard.subject === subject && standard.text.replace(/\r\n?/g, "\n").trim() === body;
+    const email = unchanged ? standard : await tenantEmailContent("quote", quote.tenantId, vars, { subject, body });
     const replyTo = await composerReplyToDefault(user.email);
 
     const result = await deliverQuoteEmail(

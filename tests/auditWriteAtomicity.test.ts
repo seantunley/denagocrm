@@ -64,7 +64,7 @@ test("softDeleteRecord can join a caller's transaction", () => {
   const source = stripComments(read("src/lib/trash.ts"));
   // Shared by every trash-able model, so one parameter closes the same gap for
   // contacts, quotes, vehicles and the rest rather than for leads alone.
-  assert.match(source, /function delegate\(model: TrashModel, client: any = basePrisma\)/);
+  assert.match(source, /function delegate\(model: RestorableModel, client: any = basePrisma\)/);
   assert.match(source, /delegate\(model, tx\)\.updateMany/);
   assert.match(source, /delegate\(model, tx\)\.findFirst/);
 });

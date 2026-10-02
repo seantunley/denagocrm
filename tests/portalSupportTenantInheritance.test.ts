@@ -40,7 +40,9 @@ test("every portal write inherits the contact's workspace", () => {
 
   // No write may still read the ambient scope directly.
   const assignments = portal.match(/const tenantId = [^\n;]+;/g) ?? [];
-  assert.ok(assignments.length >= 4, `expected the portal write sites, found ${assignments.length}`);
+  // Four of these were in dead duplicates of portalExpansion's actions, deleted
+  // under gap audit #22; the remaining site(s) still must inherit.
+  assert.ok(assignments.length >= 1, `expected the portal write sites, found ${assignments.length}`);
   for (const line of assignments) {
     assert.match(line, /await portalTenantId\(/, `a portal write still resolves its own owner:\n  ${line}`);
   }

@@ -34,6 +34,7 @@ const ALLOWED: Record<string, string> = {
   "src/app/(app)/settings/company/page.tsx": "staff — example placeholders on the Company Profile form",
   "src/app/(app)/settings/helpdesk/page.tsx": "staff — example placeholder",
   "src/app/(app)/settings/page.tsx": "staff — SMTP/IMAP example placeholders and the platform's webhook URLs",
+  "src/components/settings/WorkspaceIntegrationRows.tsx": "staff (platform owner only) — the platform's webhook URLs on Settings → Integrations",
   "src/app/(print)/manual/page.tsx": "staff — the printed user manual",
   "src/app/manifest.ts": "staff — PWA install description",
   "src/app/messages/manifest.webmanifest/route.ts": "staff — PWA install description",

@@ -3,6 +3,7 @@
 import { asActionResult, ActionRefusal, refuse, type ActionResult } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import bcrypt from "bcryptjs";
+import { validPassword } from "@/lib/passwordPolicy";
 import crypto from "crypto";
 import { basePrisma, prisma } from "@/lib/db";
 import { ciExactIdFilter } from "@/lib/ciExact";
@@ -241,9 +242,6 @@ export async function deleteStage(id: string, formData: FormData): Promise<Actio
 
 export type FormState = { error?: string; ok?: string };
 
-function validPassword(password: string): boolean {
-  return password.length >= 12 && /[A-Za-z]/.test(password) && /\d/.test(password);
-}
 
 export async function createUser(
   _prev: FormState | undefined,
@@ -632,7 +630,8 @@ export async function saveSetting(formData: FormData) {
     // see channelRegistration.ts. This is the path the founding tenant's
     // WhatsApp number is saved through, and it is the one that was missing.
     await registerInboundEndpointsFor(key);
-    revalidatePath("/settings");
+    // "layout": these forms live on /settings/integrations (batch 6).
+    revalidatePath("/settings", "layout");
   });
 }
 
@@ -675,7 +674,8 @@ export async function clearSecret(key: string, _formData?: FormData): Promise<vo
     // — permanently blocks any other workspace from claiming that endpoint,
     // because registration correctly refuses to steal a row it does not own.
     await registerInboundEndpointsFor(key);
-    revalidatePath("/settings");
+    // "layout": these forms live on /settings/integrations (batch 6).
+    revalidatePath("/settings", "layout");
   });
 }
 
@@ -687,7 +687,7 @@ export async function regenerateSetting(key: string) {
     if (!isRegeneratable(key)) throw new ActionRefusal("Not a regeneratable secret.");
     const value = crypto.randomBytes(24).toString("hex");
     await putSetting(key, value);
-    revalidatePath("/settings");
+    revalidatePath("/settings", "layout");
   });
 }
 

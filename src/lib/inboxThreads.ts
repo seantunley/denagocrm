@@ -6,7 +6,7 @@ export type InboxThread = {
   key: string;
   name: string;
   href: string | null;
-  channel: "whatsapp" | "messenger" | "instagram" | "x";
+  channel: "whatsapp" | "messenger" | "instagram" | "x" | "telegram";
   contactId: string | null;
   leadId: string | null;
   phone: string | null;

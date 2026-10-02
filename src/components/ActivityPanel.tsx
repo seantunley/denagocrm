@@ -1,5 +1,6 @@
 import { scheduleActivity, completeActivity, cancelActivity, updateActivity } from "@/app/actions/activities";
 import ModalTrigger from "@/components/Modal";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import ActivityTypeFields from "@/components/ActivityTypeFields";
 import { formatDue } from "@/lib/format";
 import { isFutureDay } from "@/lib/activityDay";
@@ -187,7 +188,7 @@ export default function ActivityPanel({
                   </p>
                 </div>
                 {/* Not offered before the day arrives — finishActivity refuses it. */}
-                {!isFutureDay(a.dueDate) && <form
+                {!isFutureDay(a.dueDate) && <SaveForm
                   action={completeActivity.bind(null, a.id)}
                   className="flex items-center gap-1.5"
                 >
@@ -197,10 +198,10 @@ export default function ActivityPanel({
                     className="input btn-sm w-36 hidden md:block"
                     placeholder="Outcome note…"
                   />
-                  <button className="btn-secondary btn-sm" title="Mark done">
+                  <SaveButton className="btn-secondary btn-sm" title="Mark done" pendingLabel="…">
                     ✓ Done
-                  </button>
-                </form>}
+                  </SaveButton>
+                </SaveForm>}
                 <ModalTrigger
                   label="✎"
                   title="Edit activity"
@@ -286,18 +287,19 @@ export default function ActivityPanel({
                       🔧 Workshop
                     </label>
                     <div className="col-span-2">
-                      <button className="btn-primary w-full">Save changes</button>
+                      <SaveButton className="btn-primary w-full">Save changes</SaveButton>
                     </div>
                   </ConflictAwareForm>
                 </ModalTrigger>
-                <form action={cancelActivity.bind(null, a.id, revalidate)}>
-                  <button
+                <SaveForm action={cancelActivity.bind(null, a.id, revalidate)}>
+                  <SaveButton
                     className="text-xs text-slate-600 hover:text-red-500 cursor-pointer mt-1.5"
                     title="Cancel"
+                    pendingLabel="…"
                   >
                     ✕
-                  </button>
-                </form>
+                  </SaveButton>
+                </SaveForm>
               </li>
             );
           })}

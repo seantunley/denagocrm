@@ -14,7 +14,6 @@ import { removeTimelinePin } from "@/lib/timelinePins";
 import { customerRecordTenantId } from "@/lib/customerRecordTenant";
 import {
   availabilityConflictMessage,
-  DEFAULT_ACTIVITY_DURATION_MS,
   findStaffAvailabilityConflict,
   staffScheduleTenantId,
   lockStaffSchedules,
@@ -27,6 +26,7 @@ import { withActingStaffScope } from "@/lib/actingScope";
 import type { Lead } from "@prisma/client";
 import { getCurrentUser } from "@/lib/auth";
 import { actingTenantId } from "@/lib/actingTenant";
+import { createBookedTestDrive, DEFAULT_TEST_DRIVE_MINUTES, demoVehicleUnavailable, UPCOMING_TEST_DRIVE_STATUSES } from "@/lib/testDriveBooking";
 import { payableTotalCents } from "@/lib/pricing";
 import { WINNABLE_QUOTE_STATUSES, acceptQuoteInTx, afterDealWon, winLeadInTx } from "@/lib/quoteOutcome";
 import { CLOSED_REQUEST_STATUSES } from "@/lib/signing/status";
@@ -703,11 +703,34 @@ export async function moveLead(
     const pipelineStages = await listPipelineStages(targetStage.pipelineId);
     const testDriveStage = pipelineStages.find((stage) => stage.entryAction === "book_test_drive");
     if (testDriveStage && targetStage.order < testDriveStage.order) {
-      const booking = await prisma.activity.findFirst({
-        where: { leadId, type: "test_drive", status: "planned" },
-        orderBy: { dueDate: "desc" },
+      // An upcoming real booking is CANCELLED with a reason — as the Test drives
+      // module does — so it leaves the test-drive list instead of sitting there booked.
+      const upcoming = await prisma.testDriveBooking.findFirst({
+        where: { leadId, deletedAt: null, status: { in: UPCOMING_TEST_DRIVE_STATUSES } },
+        orderBy: { scheduledStart: "desc" },
       });
-      if (booking) {
+      const booking = upcoming
+        ? null
+        : await prisma.activity.findFirst({
+            where: { leadId, type: "test_drive", status: "planned" },
+            orderBy: { dueDate: "desc" },
+          });
+      if (upcoming) {
+        await prisma.$transaction(async (tx) => {
+          await tx.testDriveBooking.update({
+            where: { id: upcoming.id },
+            data: { status: "cancelled", cancellationReason: `Lead moved back to ${lead.stage.name}` },
+          });
+          if (upcoming.activityId) await tx.activity.update({ where: { id: upcoming.activityId }, data: { status: "canceled" } });
+        });
+        await logAudit({
+          action: "lead.test_drive_cancelled",
+          summary: `Cancelled test drive ${upcoming.reference} for “${lead.title}” — moved back to ${lead.stage.name}`,
+          leadId,
+          contactId: lead.contactId,
+          user,
+        });
+      } else if (booking) {
         await removeTimelinePin("activity", booking.id);
         await prisma.activity.delete({ where: { id: booking.id } });
         await logAudit({
@@ -821,6 +844,26 @@ export async function moveLeadToTestDrive(
     productId = product.id;
   }
 
+  // A REAL BOOKING, NOT JUST A CALENDAR ENTRY (gap audit #19). The board used to
+  // write only a "test_drive" activity, so its bookings never reached Test drives
+  // and skipped the licence / identity / indemnity / checkout steps that hang off
+  // a TestDriveBooking. A booking names the customer, so the lead needs one —
+  // linked (or created) by the same identity rules as "Create customer from this
+  // lead", for staff allowed to do that; otherwise say what to do instead.
+  const leadRow = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
+  let contactId = leadRow.contactId;
+  if (!contactId) {
+    if (!(await hasPermission(user, "leads.link_contact"))) {
+      return { ok: false, error: "Link a customer to this lead first — a test drive needs the customer's details for the licence check and indemnity." };
+    }
+    try {
+      contactId = await linkOrCreateLeadContact(leadRow, user, null);
+    } catch (error) {
+      if (error instanceof ActionRefusal) return { ok: false, error: error.message };
+      throw error;
+    }
+  }
+
   const position = await nextPosition(stageId);
   // Resolved BEFORE the transaction opens, deliberately. Inside it the lead row is
   // locked by the update, and recordTenantId reads on a different connection —
@@ -828,25 +871,13 @@ export async function moveLeadToTestDrive(
   // Both parents are consulted: the composite keys are (tenantId, leadId) AND
   // (tenantId, contactId), so a lead and a contact that disagree must yield NULL
   // rather than a value that fails one of them and rolls the booking back.
-  const linkedContact = await prisma.lead.findUnique({
-    where: { id: leadId },
-    select: { contactId: true, assignedToId: true },
-  });
-  const activityTenantId = await customerRecordTenantId({ leadId, contactId: linkedContact?.contactId });
-  const scheduledUserId = linkedContact?.assignedToId ?? user.id;
-  const whenEnd = new Date(when.getTime() + DEFAULT_ACTIVITY_DURATION_MS);
+  const activityTenantId = await customerRecordTenantId({ leadId, contactId });
+  const bookingTenantId = await actingTenantId();
   const scheduleTenant = await staffScheduleTenantId(activityTenantId);
-  const bookingResult = await prisma.$transaction(async (tx) => {
-    await lockStaffSchedules(tx, scheduleTenant, [scheduledUserId]);
-    const availabilityConflict = await findStaffAvailabilityConflict({
-      userId: scheduledUserId,
-      tenantId: scheduleTenant,
-      start: when,
-      end: whenEnd,
-      db: tx,
-    });
-    if (availabilityConflict) return { availabilityConflict } as const;
-
+  const expectedReturnAt = new Date(when.getTime() + DEFAULT_TEST_DRIVE_MINUTES * 60_000);
+  const branch = data.location.trim() || "Showroom";
+  let bookingReference = "";
+  const lead = await prisma.$transaction(async (tx) => {
     const updated = await tx.lead.update({
       where: { id: leadId },
       data: {
@@ -855,28 +886,83 @@ export async function moveLeadToTestDrive(
       },
       include: { stage: true, product: true },
     });
-    const activityData = {
-      type: "test_drive",
-      summary: `Test Drive${updated.product ? ` — ${updated.product.name}` : ""}`,
-      note: `${changingStage ? "Booked" : "Rescheduled"} from the pipeline board for ${updated.name}.`,
-      location: data.location.trim() || null,
-      dueDate: when,
-      endDate: whenEnd,
-      leadId,
-      contactId: updated.contactId,
-      assignedToId: updated.assignedToId ?? user.id,
-      createdById: user.id,
-      tenantId: activityTenantId,
-    };
-    const existing = await tx.activity.findFirst({
-      where: { leadId, type: "test_drive", status: "planned" },
-      orderBy: { dueDate: "asc" },
-      select: { id: true },
+    const summary = `Test drive — ${updated.product?.name ?? updated.title}`;
+    const note = `${changingStage ? "Booked" : "Rescheduled"} from the pipeline board for ${updated.name}.`;
+    // An upcoming booking is rescheduled; otherwise a new one is made.
+    const upcoming = await tx.testDriveBooking.findFirst({
+      where: { leadId, deletedAt: null, status: { in: UPCOMING_TEST_DRIVE_STATUSES } },
+      orderBy: { scheduledStart: "asc" },
     });
-    if (existing) {
-      await tx.activity.update({ where: { id: existing.id }, data: activityData });
+    // The people on the drive must be free: a reschedule keeps the booking's own
+    // salespeople, a new booking goes to the lead's owner. Refused, not returned
+    // with `gate` — a conflict is not a stage-gate refusal, and carrying the
+    // verdict made the board re-open the override-reason prompt in a loop.
+    const staffIds = upcoming
+      ? [upcoming.salespersonId, upcoming.accompanyingSalespersonId].filter((id): id is string => Boolean(id))
+      : [updated.assignedToId ?? user.id];
+    await lockStaffSchedules(tx, scheduleTenant, staffIds);
+    for (const staffId of staffIds) {
+      const availabilityConflict = await findStaffAvailabilityConflict({
+        userId: staffId,
+        tenantId: scheduleTenant,
+        start: when,
+        end: expectedReturnAt,
+        db: tx,
+      });
+      if (availabilityConflict) refuse(availabilityConflictMessage(availabilityConflict));
+    }
+    if (upcoming) {
+      // The new slot must be free for the car this booking already holds.
+      const clash = await demoVehicleUnavailable(tx, {
+        tenantId: upcoming.tenantId ?? bookingTenantId,
+        demoVehicleId: upcoming.demoVehicleId,
+        start: when,
+        end: expectedReturnAt,
+        excludeBookingId: upcoming.id,
+      });
+      if (clash) refuse(clash);
+      const rescheduled = await tx.testDriveBooking.update({
+        where: { id: upcoming.id },
+        data: { scheduledStart: when, expectedReturnAt, branch, ...(updated.productId ? { productId: updated.productId } : {}) },
+      });
+      bookingReference = rescheduled.reference;
+      if (upcoming.activityId) {
+        await tx.activity.update({ where: { id: upcoming.activityId }, data: { summary, note, location: branch, dueDate: when, endDate: expectedReturnAt } });
+      }
     } else {
-      await tx.activity.create({ data: activityData });
+      // A planned board entry from before bookings existed is adopted, not
+      // duplicated — unless a booking already owns it (activityId is unique).
+      const legacy = await tx.activity.findFirst({
+        where: { leadId, type: "test_drive", status: "planned" },
+        orderBy: { dueDate: "asc" },
+        select: { id: true },
+      });
+      const owned = legacy ? await tx.testDriveBooking.findFirst({ where: { activityId: legacy.id }, select: { id: true } }) : null;
+      const adopt = legacy && !owned ? legacy.id : null;
+      if (adopt) {
+        await tx.activity.update({
+          where: { id: adopt },
+          data: { summary, note, location: branch, dueDate: when, endDate: expectedReturnAt, contactId, assignedToId: updated.assignedToId ?? user.id },
+        });
+      }
+      const booking = await createBookedTestDrive(tx, {
+        bookingTenantId,
+        activityTenantId,
+        leadId,
+        contactId: contactId!,
+        branch,
+        demoVehicleId: null,
+        productId: updated.productId,
+        salespersonId: updated.assignedToId ?? user.id,
+        accompanyingSalespersonId: null,
+        scheduledStart: when,
+        expectedReturnAt,
+        summary,
+        note,
+        createdById: user.id,
+        adoptActivityId: adopt,
+      });
+      bookingReference = booking.reference;
     }
     // INSIDE the transaction, with `tx`. Written after the move and the booking
     // but committed with them: a strict audit throws on failure, and outside this
@@ -903,25 +989,22 @@ export async function moveLeadToTestDrive(
         },
       }, tx);
     }
-    return { lead: updated } as const;
-  }, GOVERNANCE_TX);
-  if ("availabilityConflict" in bookingResult && bookingResult.availabilityConflict) {
-    // No `gate`: this is not a stage-gate refusal. Carrying the gate verdict made
-    // the board re-open the override-reason prompt (gate.requiresReason) in a loop
-    // instead of showing the conflict.
-    return { ok: false, error: availabilityConflictMessage(bookingResult.availabilityConflict) };
-  }
-  const lead = bookingResult.lead;
+    return updated;
+  }, GOVERNANCE_TX).catch((error) => {
+    if (error instanceof ActionRefusal) return error;
+    throw error;
+  });
+  if (lead instanceof ActionRefusal) return { ok: false, error: lead.message };
 
   await logAudit({
     action: "lead.test_drive_booked",
-    summary: `${changingStage ? "Booked" : "Rescheduled"} a test drive for “${lead.title}” (${when.toLocaleString("en-ZA", {
+    summary: `${changingStage ? "Booked" : "Rescheduled"} test drive ${bookingReference} for “${lead.title}” (${when.toLocaleString("en-ZA", {
       timeZone: "Africa/Johannesburg",
       day: "numeric",
       month: "short",
       hour: "2-digit",
       minute: "2-digit",
-    })}${data.location ? ` at ${data.location}` : ""})`,
+    })} at ${branch})`,
     leadId,
     contactId: lead.contactId,
     user,
@@ -929,6 +1012,7 @@ export async function moveLeadToTestDrive(
   if (changingStage) await emitLeadJourneyEvent("stage_entered", leadId);
   revalidatePath("/leads");
   revalidatePath("/calendar");
+  revalidatePath("/test-drives");
   return { ok: true, gate: verdict };
 }
 
@@ -972,21 +1056,43 @@ export async function searchLinkableContacts(
     if (query.length < 2) return [];
     const ids = await getAccessibleContactIds(user);
     if (ids !== null && ids.length === 0) return [];
-    const contains = { contains: query, mode: "insensitive" as const };
+    // Every word must match some field, so "jo smith" finds Jo Smith.
+    const words = query.split(/\s+/).slice(0, 4);
     const rows = await prisma.contact.findMany({
       where: {
         ...(ids === null ? {} : { id: { in: ids } }),
-        OR: [{ firstName: contains }, { lastName: contains }, { company: contains }, { email: contains }, { phone: contains }],
+        AND: words.map((word) => {
+          const contains = { contains: word, mode: "insensitive" as const };
+          return { OR: [{ firstName: contains }, { lastName: contains }, { company: contains }, { email: contains }, { phone: contains }] };
+        }),
       },
-      select: { id: true, firstName: true, lastName: true, company: true, isCompany: true, email: true, phone: true },
+      select: CONTACT_OPTION_SELECT,
       orderBy: { updatedAt: "desc" },
-      take: 8,
+      take: 12,
     });
-    return rows.map((row) => ({
-      id: row.id,
-      label: contactName(row),
-      sublabel: row.email ?? row.phone ?? "",
-    }));
+    return rows.map(contactOption);
+  });
+}
+
+const CONTACT_OPTION_SELECT = { id: true, firstName: true, lastName: true, company: true, isCompany: true, email: true, phone: true } as const;
+
+function contactOption(row: { id: string; firstName: string; lastName: string | null; company: string | null; isCompany: boolean; email: string | null; phone: string | null }) {
+  return { id: row.id, label: contactName(row), sublabel: row.email ?? row.phone ?? "" };
+}
+
+/**
+ * The label for a customer a form already has selected but the page didn't
+ * preload — a lead edited after its customer fell outside the preloaded list
+ * otherwise showed a blank picker, and saving it cleared the link. Same access
+ * rule as the search: null for a customer this caller may not see.
+ */
+export async function contactOptionById(id: string): Promise<{ id: string; label: string; sublabel: string } | null> {
+  return withActingStaffScope(async () => {
+    const user = await requireAnyPermission("contacts.view_all", "contacts.view_owned");
+    const ids = await getAccessibleContactIds(user);
+    if (ids !== null && !ids.includes(id)) return null;
+    const row = await prisma.contact.findFirst({ where: { id }, select: CONTACT_OPTION_SELECT });
+    return row ? contactOption(row) : null;
   });
 }
 

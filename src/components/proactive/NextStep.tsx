@@ -311,8 +311,8 @@ export function CompleteActivityButton({ activityId }: { activityId: string }) {
         onClick={() =>
           start(async () => {
             const res = await completeActivityAssess(activityId, "").catch(() => null);
-            if (!res) {
-              toast.error("Couldn't complete the activity");
+            if (!res || res.error) {
+              toast.error(res?.error ?? "Couldn't complete the activity");
               return;
             }
             if (res.needsNextStep && res.leadId) {
@@ -452,8 +452,8 @@ export function FollowUpPrompts({ prompts }: { prompts: OverduePrompt[] }) {
                       onClick={() =>
                         start(async () => {
                           const res = await completeActivityAssess(current.id, note).catch(() => null);
-                          if (!res) {
-                            toast.error("Something went wrong");
+                          if (!res || res.error) {
+                            toast.error(res?.error ?? "Something went wrong");
                             return;
                           }
                           toast.success("Logged — nice one");

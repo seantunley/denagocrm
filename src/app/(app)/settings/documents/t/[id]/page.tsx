@@ -16,7 +16,8 @@ import {
   uploadTemplateLogo,
   setDefaultDocTemplate,
 } from "@/app/actions/documents";
-import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 
 export const dynamic = "force-dynamic";
 
@@ -97,9 +98,9 @@ export default async function TemplateEditorPage({
           </p>
         </div>
         {!record.isDefault && (
-          <form action={setDefaultDocTemplate.bind(null, record.id)}>
-            <Button variant="outline" type="submit"><Star className="size-4" />Make default</Button>
-          </form>
+          <SaveForm action={setDefaultDocTemplate.bind(null, record.id)}>
+            <SaveButton className={buttonVariants({ variant: "outline" })} pendingLabel="Saving…"><Star className="size-4" />Make default</SaveButton>
+          </SaveForm>
         )}
       </div>
 
@@ -115,13 +116,13 @@ export default async function TemplateEditorPage({
                 <span className="text-xs text-slate-300">No template logo — prints the Settings → Company logo, or none</span>
               )}
             </div>
-            <form action={uploadTemplateLogo.bind(null, record.id)} className="flex items-center gap-2">
+            <SaveForm action={uploadTemplateLogo.bind(null, record.id)} className="flex items-center gap-2">
               <input type="file" name="file" accept="image/*" required className="block flex-1 text-xs text-muted-foreground" />
-              <Button size="sm" variant="outline" type="submit"><ImageUp className="size-3.5" />Replace</Button>
-            </form>
+              <SaveButton className={buttonVariants({ size: "sm", variant: "outline" })} pendingLabel="Uploading…"><ImageUp className="size-3.5" />Replace</SaveButton>
+            </SaveForm>
           </div>
 
-          <form action={updateDocTemplate.bind(null, record.id)} className="space-y-4 rounded-xl border border-border bg-card p-4 shadow-sm">
+          <SaveForm action={updateDocTemplate.bind(null, record.id)} resetOnSuccess={false} className="space-y-4 rounded-xl border border-border bg-card p-4 shadow-sm">
             <input type="hidden" name="logoUrl" value={template.logoUrl ?? ""} />
             <div>
               <label className={label}>Template name</label>
@@ -175,8 +176,8 @@ export default async function TemplateEditorPage({
               <label className={label}>Footer lines — one per line, maximum four</label>
               <textarea name="footerLines" rows={3} defaultValue={template.footerLines.join("\n")} placeholder="Leave empty to use the address, phone, email and website from Settings → Company" className={input} />
             </div>
-            <Button type="submit">Save operational template</Button>
-          </form>
+            <SaveButton className={buttonVariants()}>Save operational template</SaveButton>
+          </SaveForm>
         </div>
 
         <div className="rounded-xl border border-border bg-card p-2 shadow-sm">

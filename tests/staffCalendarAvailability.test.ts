@@ -58,7 +58,11 @@ test("pipeline test-drive shortcut cannot bypass staff availability", () => {
   const fn = code.slice(start, end);
   assert.match(fn, /lockStaffSchedules/);
   assert.match(fn, /findStaffAvailabilityConflict/);
-  assert.match(fn, /endDate: whenEnd/);
+  // A reschedule keeps the booking's own salespeople; both moved activity writes carry the end.
+  assert.match(fn, /\? \[upcoming\.salespersonId, upcoming\.accompanyingSalespersonId\]/);
+  assert.equal(fn.match(/dueDate: when, endDate: expectedReturnAt/g)?.length, 2);
+  // The one booking helper gives a new booking's activity its end too.
+  assert.match(src("src/lib/testDriveBooking.ts"), /dueDate: input\.scheduledStart,\s*endDate: input\.expectedReturnAt,/);
 });
 
 test("calendar shows staff availability user and note, including multi-day blocks", () => {

@@ -19,6 +19,15 @@ export type TenantCredentialField = {
    * tenant-overridden without making the bundle "incomplete".
    */
   required?: boolean;
+  /**
+   * Resolved on its own, not as part of the set: this workspace's saved value is
+   * used whenever it has one, even while the set's required fields still come
+   * from the platform default. For values that belong to the workspace whichever
+   * app they run through — X's sign-in tokens (the OAuth callback writes them per
+   * workspace) and its Grok settings. Never for a field that has to match the
+   * rest of the set, like a password for a username. Implies not required.
+   */
+  independent?: boolean;
 };
 
 export type TenantCredentialIntegration = {
@@ -37,13 +46,17 @@ export const TENANT_CREDENTIAL_INTEGRATIONS: readonly TenantCredentialIntegratio
       { key: "X_CLIENT_ID", label: "OAuth 2 client ID", placeholder: "From X Developer Portal" },
       { key: "X_CLIENT_SECRET", label: "OAuth 2 client secret", placeholder: "Shown once in X Developer Portal" },
       { key: "X_WEBHOOK_SECRET", label: "Webhook signing secret", placeholder: "X app consumer secret" },
-      { key: "X_ACCOUNT_ID", label: "Connected X account ID", placeholder: "Filled by OAuth", required: false },
-      { key: "X_USERNAME", label: "Connected @username", placeholder: "Filled by OAuth", required: false },
-      { key: "X_ACCESS_TOKEN", label: "Access token", placeholder: "Filled by OAuth", required: false },
-      { key: "X_REFRESH_TOKEN", label: "Refresh token", placeholder: "Filled by OAuth", required: false },
-      { key: "XAI_API_KEY", label: "Grok API key (optional)", placeholder: "xai-…", required: false },
-      { key: "XAI_MODEL", label: "Grok model", placeholder: "grok-4.6", required: false },
-      { key: "XAI_DRAFTS_ENABLED", label: "Allow Grok reply drafts", placeholder: "false", required: false },
+      // The X APP is the set above: client id, client secret and webhook secret
+      // must all come from one place, or OAuth signs with a mismatched pair.
+      // The connected ACCOUNT's tokens and the Grok settings are the workspace's
+      // own however that app is configured, so they resolve independently.
+      { key: "X_ACCOUNT_ID", label: "Connected X account ID", placeholder: "Filled by OAuth", required: false, independent: true },
+      { key: "X_USERNAME", label: "Connected @username", placeholder: "Filled by OAuth", required: false, independent: true },
+      { key: "X_ACCESS_TOKEN", label: "Access token", placeholder: "Filled by OAuth", required: false, independent: true },
+      { key: "X_REFRESH_TOKEN", label: "Refresh token", placeholder: "Filled by OAuth", required: false, independent: true },
+      { key: "XAI_API_KEY", label: "Grok API key (optional)", placeholder: "xai-…", required: false, independent: true },
+      { key: "XAI_MODEL", label: "Grok model", placeholder: "grok-4.6", required: false, independent: true },
+      { key: "XAI_DRAFTS_ENABLED", label: "Allow Grok reply drafts", placeholder: "false", required: false, independent: true },
     ],
   },
   {
@@ -151,10 +164,12 @@ export function integrationOverrideStatus(
   integration: TenantCredentialIntegration,
   hasOverride: Record<string, boolean>,
 ): "active" | "incomplete" | "default" {
-  const anyOverride = integration.fields.some((f) => hasOverride[f.key]);
+  // Independent fields (X's sign-in tokens, Grok) do not make the SET partial:
+  // they are in use on their own, whichever place the set comes from.
+  const anyOverride = integration.fields.some((f) => !f.independent && hasOverride[f.key]);
   if (!anyOverride) return "default";
   const allRequiredOverridden = integration.fields
-    .filter((f) => f.required !== false)
+    .filter((f) => f.required !== false && !f.independent)
     .every((f) => hasOverride[f.key]);
   return allRequiredOverridden ? "active" : "incomplete";
 }

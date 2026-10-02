@@ -59,6 +59,9 @@ const PUBLIC_PREFIXES = [
 const APPROVED_GUARDS = [
   "requireApiUser", "requireApiOwner",
   "requireUser", "requireOwner",
+  // A workspace's own owner (or the platform owner). Calls requireUser() first,
+  // so the fresh device/disabled/session-version checks still run.
+  "requireTenantOwner",
   // The module-CSV family (requireCrm/requireWorkshop/requireInbox/
   // requireOperational/requireAnyModule) is gone — it gated on User.modules,
   // a second authorization source RBAC never wrote to.

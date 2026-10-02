@@ -38,13 +38,14 @@ import { isSmtpConfigured, renderTemplate, leadVars } from "@/lib/email";
 import { getRegionalSettings } from "@/lib/settings";
 import { contactName, formatDate, formatDateTime, formatZAR } from "@/lib/format";
 import { payableTotalCents } from "@/lib/pricing";
-import { getAccessibleQuoteIds } from "@/lib/permissions";
+import { getAccessibleContactIds, getAccessibleQuoteIds } from "@/lib/permissions";
 import { quotePrintLinks } from "@/lib/quotePrintLinks";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
 import { leadAttribution, isAdClick } from "@/lib/attribution";
 import { Car, FileText } from "lucide-react";
+import ContactPicker from "@/components/ContactPicker";
 
 const RESEARCH_SUBJECT = "🔎 AI research";
 
@@ -60,10 +61,10 @@ export default async function LeadDetailPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ tab?: string; schedule?: string }>;
+  searchParams: Promise<{ tab?: string; schedule?: string; edit?: string }>;
 }) {
   const { id } = await params;
-  const { tab, schedule } = await searchParams;
+  const { tab, schedule, edit } = await searchParams;
   const user = await requireUser();
   // The composer's Reply-To default: this person plus the mailbox IMAP reads, so
   // a customer's reply reaches both their inbox and this record's timeline. Never
@@ -85,13 +86,22 @@ export default async function LeadDetailPage({
   });
   if (!lead) notFound();
   const automotiveOn = await isModuleEnabled("automotive");
-  const [canCancelQuotes, canDuplicateQuotes] = await Promise.all([
+  const [canCancelQuotes, canDuplicateQuotes, canBookTestDrive, canEditLead, accessibleContactIds] = await Promise.all([
     hasPermission(user, "quotes.change_status"),
     hasPermission(user, "quotes.create"),
+    hasPermission(user, "activities.manage"),
+    hasPermission(user, "leads.edit"),
+    getAccessibleContactIds(user),
   ]);
   const alreadyViewed = !!lead.viewedAt;
   const [contacts, users, templates, smtpConfigured, audit, waConfigured, libraryDocuments, products, stages] = await Promise.all([
-    prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
+    // The customer pickers. `null` means unrestricted; `[]` means nothing
+    // accessible and must stay an impossible match, not an absent filter.
+    prisma.contact.findMany({
+      where: accessibleContactIds ? { id: { in: accessibleContactIds } } : {},
+      orderBy: { firstName: "asc" },
+      take: 500,
+    }),
     // Feeds BOTH pickers on this page — the lead's "Assigned to" in the edit
     // modal and the activity assignee in the Activities tab. `User` is a global
     // model, so `prisma.user.findMany` was listing every user on the platform in
@@ -167,6 +177,16 @@ export default async function LeadDetailPage({
               <SaveForm success="Quote created" resetOnSuccess={false} action={createQuoteFromLead.bind(null, lead.id)}>
                 <SaveButton className="btn-primary"><FileText className="size-4" />Create quote</SaveButton>
               </SaveForm>
+              {/* Gap audit #24: book from the lead itself; the form opens with the
+                  lead (and its customer, when linked) already chosen. */}
+              {automotiveOn && canBookTestDrive && (
+                <Link
+                  href={`/test-drives?book=1&leadId=${lead.id}${lead.contactId ? `&contactId=${lead.contactId}` : ""}`}
+                  className="btn-secondary"
+                >
+                  Book test drive
+                </Link>
+              )}
               <MarkWonButton leadId={lead.id} leadName={lead.name} />
               <ModalTrigger
                 label="Mark lost"
@@ -240,10 +260,13 @@ export default async function LeadDetailPage({
                     <div className="card">
                       <div className="flex items-center justify-between mb-3">
                         <h2 className="font-semibold">Details</h2>
-                        <ModalTrigger
+                        {/* THE lead editor. The old /leads/[id]/edit page was a second
+                            copy of this form and now opens this one (?edit=1). */}
+                        {canEditLead && <ModalTrigger
                           label="✎ Edit details"
                           title={`Edit “${lead.title}”`}
                           buttonClass="btn-secondary btn-sm"
+                          defaultOpen={edit === "1"}
                         >
                           <LeadForm
                             action={updateLead.bind(null, lead.id)}
@@ -259,7 +282,7 @@ export default async function LeadDetailPage({
                             defaults={lead}
                             submitLabel="Save changes"
                           />
-                        </ModalTrigger>
+                        </ModalTrigger>}
                       </div>
                       <dl className="space-y-2 text-sm max-w-xl">
                         {[
@@ -370,18 +393,12 @@ export default async function LeadDetailPage({
                       <label className="label">
                         {lead.contact ? "Change linked customer" : "Link to customer"}
                       </label>
-                      <select
+                      <ContactPicker
                         name="contactId"
-                        className="input"
+                        options={contacts.map((c) => ({ id: c.id, label: contactName(c) }))}
                         defaultValue={lead.contactId ?? ""}
-                      >
-                        <option value="">Select customer…</option>
-                        {contacts.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {contactName(c)}
-                          </option>
-                        ))}
-                      </select>
+                        required
+                      />
                       <SaveButton className="btn-secondary btn-sm w-full">Save customer link</SaveButton>
                     </SaveForm>
                   </div>

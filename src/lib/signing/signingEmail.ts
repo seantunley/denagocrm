@@ -7,8 +7,10 @@ import { decryptValue } from "@/lib/settings";
 import {
   DEFAULT_ACCENT,
   SIGNING_EMAILS,
+  parseEmailHeaderStyle,
   parseStoredSigningTemplate,
   renderSigningEmail,
+  renderSms,
   type RenderedSigningEmail,
   type SigningEmailBrand,
   type SigningEmailKind,
@@ -56,7 +58,7 @@ export async function tenantEmailContent(
       basePrisma.appSetting.findMany({
         where: {
           tenantId,
-          key: { in: [def.settingKey, "COMPANY_NAME", "COMPANY_TAGLINE", "COMPANY_PHONE", "COMPANY_EMAIL", "COMPANY_LOGO_URL"] },
+          key: { in: [def.settingKey, "COMPANY_NAME", "COMPANY_TAGLINE", "COMPANY_PHONE", "COMPANY_EMAIL", "COMPANY_LOGO_URL", "EMAIL_HEADER_STYLE"] },
         },
         select: { key: true, value: true },
       }),
@@ -73,12 +75,7 @@ export async function tenantEmailContent(
     // order, read in this one query so the send stays keyed on the caller's tenant.
     const companyName = setting("COMPANY_NAME") || brand.displayName;
     const tagline = setting("COMPANY_TAGLINE") || brand.tagline;
-    const all = {
-      ...vars,
-      company_name: companyName,
-      company_phone: setting("COMPANY_PHONE"),
-      company_email: setting("COMPANY_EMAIL"),
-    };
+    const all = { ...vars, ...companyFields(companyName, setting("COMPANY_PHONE"), setting("COMPANY_EMAIL")) };
 
     // The public brand-logo route (what campaign mail uses); a typed-in company
     // logo only if it is a public https URL — never a private-store link, which
@@ -88,7 +85,7 @@ export async function tenantEmailContent(
       mailBrand.logoUrl ??
       (/^https:\/\//i.test(profileLogo) && !/\.private\.blob\.|\/api\/stored/i.test(profileLogo) ? profileLogo : null);
 
-    return renderSigningEmail(kind, override ?? parseStoredSigningTemplate(setting(def.settingKey)), all, {
+    return renderSigningEmail(kind, override ?? parseStoredSigningTemplate(setting(def.settingKey), kind), all, {
       companyName,
       tagline: tagline || null,
       logoUrl,
@@ -96,9 +93,54 @@ export async function tenantEmailContent(
       accentText: brand.primaryForeground ?? "#ffffff",
       phone: all.company_phone,
       email: all.company_email,
+      header: parseEmailHeaderStyle(setting("EMAIL_HEADER_STYLE")),
     });
   } catch {
     return unbranded();
+  }
+}
+
+/** The company merge fields, the same for every message. `company_contact` reads "Acme on 021 000 0000" (companyContactPhrase). */
+function companyFields(name: string, phone: string, email: string) {
+  return { company_name: name, company_phone: phone, company_email: email, company_contact: phone ? `${name} on ${phone}` : name };
+}
+
+/**
+ * One SMS of `kind`, from `tenantId`'s own template (or the default), with the
+ * company fields from that tenant's Company Profile. Same rules as
+ * tenantEmailContent: explicit tenant, never the default tenant's wording, and
+ * NEVER THROWS — a failed lookup still sends the default text.
+ */
+export async function tenantSmsContent(
+  kind: SigningEmailKind,
+  tenantId: string | null,
+  vars: Record<string, string>,
+  /** The unsaved draft, for the Settings preview. */
+  override?: StoredSigningTemplate | null,
+): Promise<string> {
+  const plain = () => renderSms(kind, override ?? null, { ...vars, ...companyFields(DEFAULT_BRAND.displayName, "", "") });
+  if (!tenantId) return plain();
+  try {
+    const def = SIGNING_EMAILS[kind];
+    const [brand, settings] = await Promise.all([
+      brandForTenant(tenantId).catch(() => DEFAULT_BRAND),
+      basePrisma.appSetting.findMany({
+        where: { tenantId, key: { in: [def.settingKey, "COMPANY_NAME", "COMPANY_PHONE", "COMPANY_EMAIL"] } },
+        select: { key: true, value: true },
+      }),
+    ]);
+    const setting = (key: string) => {
+      const raw = settings.find((s) => s.key === key)?.value ?? "";
+      try {
+        return decryptValue(raw).trim();
+      } catch {
+        return "";
+      }
+    };
+    const company = companyFields(setting("COMPANY_NAME") || brand.displayName, setting("COMPANY_PHONE"), setting("COMPANY_EMAIL"));
+    return renderSms(kind, override ?? parseStoredSigningTemplate(setting(def.settingKey), kind), { ...vars, ...company });
+  } catch {
+    return plain();
   }
 }
 

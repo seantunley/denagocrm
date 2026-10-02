@@ -421,7 +421,8 @@ test("EVERY PIECE OF CHATGPT STATE IS PER WORKSPACE", () => {
 
   // The settings screen shows the model from the same scoped read, not from
   // the page's bulk settings list.
-  const page = src("src/app/(app)/settings/page.tsx");
+  // (The ChatGPT row is on Settings → Integrations, in WorkspaceIntegrationRows — batch 6.)
+  const page = src("src/components/settings/WorkspaceIntegrationRows.tsx");
   assert.ok(!/setting\("CODEX_/.test(page), "the page reads no Codex state from its bulk settings list");
   assert.match(page, /defaultValue=\{chatGpt\.model\}/);
 

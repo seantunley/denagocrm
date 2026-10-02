@@ -349,7 +349,7 @@ async function detectUnreadableCredentials(): Promise<DetectorReport> {
           "the encryption key has changed, or the stored value is damaged. Nothing errors: the app treats it " +
           "as though no override were set, so this integration is either using the platform's credentials or " +
           "silently sending nothing. Re-enter the credential to replace it.",
-        fixRoute: "/settings/integration-overrides",
+        fixRoute: "/settings/integrations",
       });
     }
   }

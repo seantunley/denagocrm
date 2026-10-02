@@ -73,16 +73,17 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
       { key: "email", label: "Email", keywords: ["smtp", "imap", "templates"] },
       { key: "automations", label: "Automations", module: "marketing", keywords: ["rules", "workflows", "triggers", "journeys", "follow-up", "next step"] },
       { key: "helpdesk", label: "Help desk", href: "/settings/helpdesk", permission: "cases.manage", module: "support", keywords: ["mailboxes", "saved replies", "tags", "support", "tickets", "cases"] },
-      { key: "integrations", label: "Integrations", keywords: ["api", "webhooks", "whatsapp", "meta"] },
       {
-        key: "integration-overrides",
-        label: "Integration overrides",
-        href: "/settings/integration-overrides",
+        // ONE Integrations page (batch 6) — it replaced the owner-only Settings tab
+        // and "Integration overrides", whose old addresses both redirect here.
+        key: "integrations",
+        label: "Integrations",
+        href: "/settings/integrations",
         // Visible to all signed-in users so tenant owners (who are not global
         // owners) can discover and navigate to this page. The page enforces
         // requireTenantOwner() — regular members who navigate here are redirected.
         everyone: true,
-        keywords: ["whatsapp", "email", "smtp", "imap", "telegram", "sms", "bulksms", "google reviews", "per-tenant", "credentials", "override"],
+        keywords: ["api", "webhooks", "whatsapp", "meta", "email", "smtp", "imap", "telegram", "sms", "bulksms", "google reviews", "per-tenant", "credentials", "override", "ai", "elevenlabs", "chatgpt", "intake"],
       },
     ],
   },
@@ -108,6 +109,7 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
     label: "System",
     items: [
       { key: "system", label: "System Log", keywords: ["errors", "logs", "diagnostics"] },
+      { key: "queues", label: "Background queues", href: "/settings/queues", keywords: ["queue", "jobs", "outbox", "failed", "stuck", "worker", "signing jobs", "campaign sends", "journeys"] },
     ],
   },
 ];
@@ -129,6 +131,35 @@ export function settingsItemEnabled(
 ): boolean {
   if (!item.module || !enabled) return true;
   return enabled.has(item.module);
+}
+
+export type SettingsViewer = { isOwner: boolean; permissions: readonly string[] };
+
+/**
+ * THE one rule for which settings entries a person is shown — the sidebar menu,
+ * the ⌘K palette, search, /settings and every settings page's own side nav all
+ * ask this. They used to disagree: the menu honoured `permission`, everything
+ * else showed non-owners only My Account (hiding pages they're allowed to use)
+ * or showed everyone everything (advertising pages that redirect them away).
+ */
+export function canSeeSettingsItem(item: SettingsNavItem, viewer: SettingsViewer): boolean {
+  if (viewer.isOwner || item.everyone) return true;
+  if (!item.permission) return false;
+  const need = Array.isArray(item.permission) ? item.permission : [item.permission];
+  return need.some((permission) => viewer.permissions.includes(permission));
+}
+
+export function visibleSettingsGroups(
+  viewer: SettingsViewer,
+  enabled?: ReadonlySet<string>,
+  groups: SettingsNavGroup[] = SETTINGS_NAV_GROUPS,
+): SettingsNavGroup[] {
+  return groups
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => canSeeSettingsItem(item, viewer) && settingsItemEnabled(item, enabled)),
+    }))
+    .filter((group) => group.items.length > 0);
 }
 
 // Aliases used by the visual-consistency components (SettingsNav / search).

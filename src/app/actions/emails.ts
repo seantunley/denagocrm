@@ -6,7 +6,16 @@ import { basePrisma, prisma } from "@/lib/db";
 import { customerRecordTenantId } from "@/lib/customerRecordTenant";
 import { putSetting } from "@/lib/settings";
 import { getActiveTenantId, requireOwner } from "@/lib/auth";
-import { SIGNING_EMAILS, validateSigningTemplate, type SigningEmailKind } from "@/lib/signing/emailTemplates";
+import {
+  EMAIL_HEADER_STYLES,
+  SIGNING_EMAILS,
+  parseEmailHeaderStyle,
+  validateSigningTemplate,
+  type SigningEmailKind,
+  type StoredSigningTemplate,
+} from "@/lib/signing/emailTemplates";
+import { emailDocToText, sanitizeEmailDoc, type EmailDoc } from "@/lib/signing/emailDoc";
+import { tenantEmailContent, tenantSmsContent } from "@/lib/signing/signingEmail";
 import {
   CUSTOMER_RECORD_WRITE_PERMISSIONS,
   canAccessContact,
@@ -268,23 +277,46 @@ function signingKind(kind: string): SigningEmailKind {
   return kind as SigningEmailKind;
 }
 
+/**
+ * The template the form describes: subject + either the formatted body (the
+ * editor's JSON, sanitised here — never trusted from the browser) or a plain
+ * body. The plain text is always DERIVED from the formatted body on the server,
+ * so validation reads exactly what will be sent.
+ */
+function templateFromForm(kind: SigningEmailKind, formData: FormData): StoredSigningTemplate {
+  const def = SIGNING_EMAILS[kind];
+  const sms = def.channel === "sms";
+  // An SMS is plain text: no subject, never a formatted body.
+  const subject = sms ? "" : String(formData.get("subject") ?? "").trim();
+  const rawDoc = sms ? "" : String(formData.get("doc") ?? "");
+  let doc: EmailDoc | null = null;
+  if (rawDoc) {
+    try {
+      doc = sanitizeEmailDoc(JSON.parse(rawDoc), def.fields);
+    } catch {
+      refuse("The email body could not be read — reload the page and try again.");
+    }
+    if (!doc) refuse("The email body is empty or too long.");
+  }
+  const body = doc ? emailDocToText(doc) : String(formData.get("body") ?? "").replace(/\r\n?/g, "\n").trim();
+  const problem = validateSigningTemplate(def.kind, subject, body);
+  if (problem) refuse(problem);
+  return doc ? { subject, body, doc } : { subject, body };
+}
+
 export async function saveSigningEmailTemplate(kind: string, formData: FormData) {
   return asActionResult(async () => {
     const user = await requireOwner();
     const def = SIGNING_EMAILS[signingKind(kind)];
     const tenantId = await getActiveTenantId();
     if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
-    const subject = String(formData.get("subject") ?? "").trim();
-    const body = String(formData.get("body") ?? "").replace(/\r\n?/g, "\n").trim();
-    const problem = validateSigningTemplate(def.kind, subject, body);
-    if (problem) refuse(problem);
-    const value = JSON.stringify({ subject, body });
+    const value = JSON.stringify(templateFromForm(def.kind, formData));
     await basePrisma.appSetting.upsert({
       where: { tenantId_key: { tenantId, key: def.settingKey } },
       update: { value },
       create: { tenantId, key: def.settingKey, value },
     });
-    await logAudit({ action: "settings.signing_email.saved", summary: `Edited the “${def.label}” email template`, user });
+    await logAudit({ action: "settings.signing_email.saved", summary: `Edited the “${def.label}” message template`, user });
     revalidatePath("/settings");
   });
 }
@@ -297,9 +329,80 @@ export async function resetSigningEmailTemplate(kind: string, formData: FormData
     const tenantId = await getActiveTenantId();
     if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
     await basePrisma.appSetting.deleteMany({ where: { tenantId, key: def.settingKey } });
-    await logAudit({ action: "settings.signing_email.reset", summary: `Reset the “${def.label}” email template to default`, user });
+    await logAudit({ action: "settings.signing_email.reset", summary: `Reset the “${def.label}” message template to default`, user });
     revalidatePath("/settings");
   });
+}
+
+/** Header background for the branded emails (signing, quote, and the other system emails). */
+export async function saveEmailHeaderStyle(formData: FormData) {
+  return asActionResult(async () => {
+    const user = await requireOwner();
+    const tenantId = await getActiveTenantId();
+    if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
+    const raw = String(formData.get("headerStyle") ?? "");
+    if (!Object.hasOwn(EMAIL_HEADER_STYLES, raw)) refuse("Choose a header style.");
+    const style = parseEmailHeaderStyle(raw);
+    await basePrisma.appSetting.upsert({
+      where: { tenantId_key: { tenantId, key: "EMAIL_HEADER_STYLE" } },
+      update: { value: style },
+      create: { tenantId, key: "EMAIL_HEADER_STYLE", value: style },
+    });
+    await logAudit({ action: "settings.email_header.saved", summary: `Set the email header to ${EMAIL_HEADER_STYLES[style]}`, user });
+    revalidatePath("/settings");
+  });
+}
+
+/** Sample values for the live preview — obviously fake, so a preview can't be mistaken for a real send. */
+const PREVIEW_VARS: Record<string, string> = {
+  recipient_name: "Jane Doe",
+  first_name: "Jane",
+  document_title: "Quote Q-1026",
+  quote_number: "Q-1026",
+  expiry_date: "14 Oct 2026",
+  code: "482913",
+  total: "R 125 000,00",
+  model: "Rover XL",
+  item: "Rover XL",
+  due_date: "14 Oct 2026",
+  recall_title: "Brake cable inspection",
+  recall_description: "We're checking the rear brake cable on all Rover XL vehicles built before June 2026.",
+  review_link: "https://search.google.com/local/writereview?placeid=preview-only",
+  survey_title: "Service feedback",
+  survey_intro: "We'd love to hear how your service went.",
+  survey_subject: "How was your service? A quick question ⭐",
+};
+
+export type EmailPreview = { subject?: string; html?: string; text?: string; error?: string };
+
+/**
+ * The live preview in Settings → Email templates: the unsaved draft, rendered
+ * exactly as it would be sent — this workspace's logo, colour, footer and
+ * button — with sample values. Nothing is stored or sent.
+ */
+export async function previewSigningEmailTemplate(kind: string, formData: FormData): Promise<EmailPreview> {
+  let preview: EmailPreview = {};
+  const result = await asActionResult(async () => {
+    const user = await requireOwner();
+    const k = signingKind(kind);
+    const tenantId = await getActiveTenantId();
+    if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
+    const draft = templateFromForm(k, formData);
+    const origin = (await tenantOrigin(tenantId)) || "";
+    const vars = {
+      ...PREVIEW_VARS,
+      sender_name: user.name ?? "",
+      signing_link: `${origin}/signing/preview-only-not-a-real-link`,
+      survey_link: `${origin}/s/preview-only`,
+    };
+    if (SIGNING_EMAILS[k].channel === "sms") {
+      preview = { text: await tenantSmsContent(k, tenantId, vars, draft) };
+      return;
+    }
+    const rendered = await tenantEmailContent(k, tenantId, vars, draft);
+    preview = { subject: rendered.subject, html: rendered.html };
+  });
+  return result.error ? { error: result.error } : preview;
 }
 
 /** Incoming-mail (IMAP) credentials — password encrypted at rest. */

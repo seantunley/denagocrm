@@ -2,17 +2,12 @@ import { prisma } from "@/lib/db";
 import { actingTenantMemberIds } from "@/lib/tenantActor";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { getActiveTenantId, requireUser } from "@/lib/auth";
+import { redirect } from "next/navigation";
 import {
-  createStage,
-  renameStage,
-  moveStage,
-  deleteStage,
-  saveSetting,
   saveMyProfile,
   saveQuoteDefaults,
   saveRegionalSettings,
   saveWorkshopSettings,
-  regenerateSetting,
   saveNotificationPrefs,
 } from "@/app/actions/settings";
 import { signatureCompanyFrom, buildSignature } from "@/lib/signature";
@@ -27,17 +22,22 @@ import {
   deleteTemplate,
   saveSigningEmailTemplate,
   resetSigningEmailTemplate,
+  previewSigningEmailTemplate,
+  saveEmailHeaderStyle,
 } from "@/app/actions/emails";
 import {
+  EMAIL_HEADER_STYLES,
+  parseEmailHeaderStyle,
   SIGNING_EMAILS,
   SIGNING_EMAIL_KINDS,
   SIGNING_FIELD_HELP,
   parseStoredSigningTemplate,
   type SigningEmailKind,
 } from "@/lib/signing/emailTemplates";
+import { sanitizeEmailDoc, textToEmailDoc } from "@/lib/signing/emailDoc";
+import { EmailTemplateEditor, SmsTemplateEditor } from "@/components/settings/EmailTemplateEditor";
 import TestEmailButton from "@/components/TestEmailButton";
 import ConfirmDelete from "@/components/ConfirmDelete";
-import SecretReveal from "@/components/SecretReveal";
 import ClearSecret from "@/components/ClearSecret";
 import ImportContactsForm from "@/components/ImportContactsForm";
 import PushToggle from "@/components/PushToggle";
@@ -48,7 +48,7 @@ import { saveSessionPolicy } from "@/app/actions/security";
 import { saveImapSettings } from "@/app/actions/emails";
 import { clearErrorLog } from "@/app/actions/ai";
 import { basePrisma } from "@/lib/db";
-import { REGIONAL_KEYS, resolveTenantCredential } from "@/lib/settings";
+import { REGIONAL_KEYS } from "@/lib/settings";
 import { formatDate, formatDateTime, formatZAR, regionalFrom } from "@/lib/format";
 import { DEFAULT_QUOTE_TERMS, quoteValidDays } from "@/lib/quoteExpiry";
 import { ABSOLUTE_SESSION_HOURS } from "@/lib/session";
@@ -57,15 +57,11 @@ import { PUSH_KINDS } from "@/lib/push";
 import Link from "next/link";
 import { getNextStepScheduling } from "@/lib/nextStepConfig";
 import { saveNextStepScheduling } from "@/app/actions/settings";
-import { connectTelegram, disconnectTelegram } from "@/app/actions/bot";
 import ProductsPage from "../products/page";
 import { addStockLabel, removeStockLabel } from "@/app/actions/stock";
 import { getStockLabels } from "@/lib/stockLabels";
-import {
-  SETTINGS_NAV_GROUPS,
-  SETTINGS_TABS,
-  settingsItemEnabled,
-} from "@/lib/settings-navigation";
+import { SETTINGS_TABS, visibleSettingsGroups } from "@/lib/settings-navigation";
+import { getUserPermissionList } from "@/lib/permissions";
 import { getEnabledModuleIds } from "@/lib/modules/enabled";
 import {
   SettingsIntegrationRow,
@@ -73,8 +69,6 @@ import {
   SettingsWorkspace,
 } from "@/components/settings-workspace";
 import ProfileSettingsForms from "@/components/ProfileSettingsForms";
-import ChatGptConnect from "@/components/settings/ChatGptConnect";
-import { codexStatus, type CodexStatus } from "@/lib/codex";
 
 export default async function SettingsPage({
   searchParams,
@@ -89,23 +83,39 @@ export default async function SettingsPage({
   // The preview must render what the send path renders, glyph URLs included.
   const signatureCompany = signatureCompanyFrom(profile, await tenantOrigin(await getActiveTenantId()));
   const enabled = await getEnabledModuleIds();
-  // Owner-only: the connection card renders in the owner's Integrations tab, and
-  // a read that fails must not take the whole settings page down with it.
-  const chatGpt: CodexStatus = isAdmin
-    ? await codexStatus().catch((): CodexStatus => ({ state: "disconnected" }))
-    : { state: "disconnected" };
   const automotiveOn = enabled.has("automotive");
   const commerceOn = enabled.has("commerce");
   const marketingOn = enabled.has("marketing");
-  // Non-admins get exactly one tab: their own account
+  // The tabs rendered on THIS page are owner-only apart from My Account. A
+  // non-owner's nav still lists the settings pages their permissions open
+  // (Pipeline, Checklists, Team & access…) — those live on their own routes.
   const visibleTabs = isAdmin
     ? SETTINGS_TABS
     : SETTINGS_TABS.filter((t) => t.key === "account");
+  const visibleGroups = visibleSettingsGroups(
+    { isOwner: isAdmin, permissions: await getUserPermissionList(currentUser) },
+    enabled,
+  );
   const { tab: rawTab, section } = await searchParams;
   // Deep-linkable sections inside a tab. The account menu links straight to
   // "change password", and a <details> that arrives closed has not answered the
   // request — the person still has to find and open it.
   const requestedTab = rawTab ?? "";
+  // The old single-pipeline stage editor that lived here was the second copy of
+  // /settings/pipelines (gap audit, batch 6) — which does all it did plus multiple
+  // pipelines and stage rules. Old links land there.
+  if (requestedTab === "pipeline") redirect("/settings/pipelines");
+  // Integrations are ONE page now (batch 6): this tab's credential forms and the
+  // separate overrides page were two doors to the same thing. Query string kept
+  // (the X OAuth callback reports its result on it).
+  if (requestedTab === "integrations") {
+    const params = new URLSearchParams();
+    for (const [name, value] of Object.entries((await searchParams) as Record<string, string | undefined>)) {
+      if (name !== "tab" && typeof value === "string") params.set(name, value);
+    }
+    const query = params.toString();
+    redirect(`/settings/integrations${query ? `?${query}` : ""}`);
+  }
   const tab = visibleTabs.some((t) => t.key === requestedTab)
     ? requestedTab
     : isAdmin
@@ -123,11 +133,7 @@ export default async function SettingsPage({
   // Settings → Access needs to reactivate them — hence the membership-only list
   // rather than the assignable-staff one.
   const memberIds = await actingTenantMemberIds();
-  const [stages, users, settings, templates] = await Promise.all([
-    prisma.pipelineStage.findMany({
-      orderBy: { order: "asc" },
-      include: { _count: { select: { leads: true } } },
-    }),
+  const [users, settings, templates] = await Promise.all([
     prisma.user.findMany({
       where: memberIds === null ? {} : { id: { in: memberIds } },
       orderBy: { createdAt: "asc" },
@@ -153,17 +159,16 @@ export default async function SettingsPage({
   const signingTenantId = isAdmin && tab === "email" ? await getActiveTenantId() : null;
   const signingOverrides = signingTenantId
     ? await basePrisma.appSetting.findMany({
-        where: { tenantId: signingTenantId, key: { in: SIGNING_EMAIL_KINDS.map((k) => SIGNING_EMAILS[k].settingKey) } },
+        where: {
+          tenantId: signingTenantId,
+          key: { in: [...SIGNING_EMAIL_KINDS.map((k) => SIGNING_EMAILS[k].settingKey), "EMAIL_HEADER_STYLE"] },
+        },
         select: { key: true, value: true },
       })
     : [];
   const signingTemplate = (kind: SigningEmailKind) =>
-    parseStoredSigningTemplate(signingOverrides.find((s) => s.key === SIGNING_EMAILS[kind].settingKey)?.value);
-  const settingsTenantId = tab === "integrations" ? await getActiveTenantId() : null;
-  const xEntries = tab === "integrations"
-    ? await Promise.all(["X_ACCOUNT_ID", "X_USERNAME"].map(async (key) => [key, await resolveTenantCredential(settingsTenantId, key)] as const))
-    : [];
-  const xSetting = (key: string) => xEntries.find(([candidate]) => candidate === key)?.[1] ?? setting(key);
+    parseStoredSigningTemplate(signingOverrides.find((s) => s.key === SIGNING_EMAILS[kind].settingKey)?.value, kind);
+  const emailHeaderStyle = parseEmailHeaderStyle(signingOverrides.find((s) => s.key === "EMAIL_HEADER_STYLE")?.value);
   const isOwner = isAdmin;
   // The System Log is TENANT-SCOPED. `basePrisma` bypasses the tenant guard, so the
   // unfiltered read this replaced handed every tenant owner every other tenant's
@@ -222,13 +227,6 @@ export default async function SettingsPage({
       })
     : [];
 
-  const visibleGroups = SETTINGS_NAV_GROUPS.map((g) => ({
-    ...g,
-    items: g.items.filter(
-      (i) => visibleTabs.some((t) => t.key === i.key) && settingsItemEnabled(i, enabled),
-    ),
-  })).filter((g) => g.items.length > 0);
-
   return (
     <SettingsWorkspace
       current={tab}
@@ -237,50 +235,6 @@ export default async function SettingsPage({
       groups={visibleGroups}
     >
       {tab === "overview" && <SettingsOverview groups={visibleGroups} />}
-
-      {tab === "pipeline" && (
-        <div className="card">
-          <h2 className="font-semibold mb-1">Pipeline stages</h2>
-          <p className="text-xs text-muted-foreground mb-4">
-            The columns of your leads board, in order. Stages holding leads can&apos;t be deleted.
-          </p>
-          <ul className="space-y-2 mb-4">
-            {stages.map((s, i) => (
-              <li key={s.id} className="flex items-center gap-2">
-                <SaveForm success="Stage updated" resetOnSuccess={false} action={renameStage.bind(null, s.id)} className="flex items-center gap-2 flex-1">
-                  <input type="color" name="color" defaultValue={s.color} className="h-8 w-10 rounded cursor-pointer border border-border" />
-                  <input name="name" defaultValue={s.name} className="input flex-1" />
-                  <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
-                </SaveForm>
-                <SaveForm success="Stage reordered" resetOnSuccess={false} action={moveStage.bind(null, s.id, "up")}>
-                  <SaveButton className="btn-secondary btn-sm" disabled={i === 0}>↑</SaveButton>
-                </SaveForm>
-                <SaveForm success="Stage reordered" resetOnSuccess={false} action={moveStage.bind(null, s.id, "down")}>
-                  <SaveButton className="btn-secondary btn-sm" disabled={i === stages.length - 1}>↓</SaveButton>
-                </SaveForm>
-                {s._count.leads > 0 ? (
-                  <button className="btn-danger btn-sm" disabled title="Stage still has leads">
-                    ✕
-                  </button>
-                ) : (
-                  <ConfirmDelete
-                    action={deleteStage.bind(null, s.id)}
-                    title={`Delete stage “${s.name}”?`}
-                    description="This cannot be undone."
-                    trigger="✕"
-                    triggerClass="btn-danger btn-sm"
-                  />
-                )}
-              </li>
-            ))}
-          </ul>
-          <SaveForm success="Stage added" action={createStage} className="flex gap-2">
-            <input type="color" name="color" defaultValue="#64748b" className="h-9 w-10 rounded cursor-pointer border border-border" />
-            <input name="name" className="input flex-1" placeholder="New stage name…" required />
-            <SaveButton className="btn-primary">Add stage</SaveButton>
-          </SaveForm>
-        </div>
-      )}
 
       {tab === "account" && (
         // The modal is max-w-5xl; capping the content at 3xl left a dead strip down
@@ -841,27 +795,39 @@ export default async function SettingsPage({
               }
               action="Manage"
             >
-              <p className="text-xs text-muted-foreground mb-4">
-                Placeholders: <code>{"{{name}}"}</code>, <code>{"{{first_name}}"}</code>,{" "}
-                <code>{"{{model}}"}</code>, <code>{"{{color}}"}</code>, <code>{"{{value}}"}</code>,{" "}
-                <code>{"{{user_name}}"}</code> — filled from the lead/contact when sending.
-              </p>
               <div className="mb-5">
-                <div className="text-sm font-semibold mb-1">Signing &amp; quote emails</div>
+                <div className="text-sm font-semibold mb-1">Messages your customers receive</div>
                 <p className="text-xs text-muted-foreground mb-3">
-                  Sent by e-signing, and the starting wording for &ldquo;Email quote&rdquo;. Your logo, brand colour
-                  and company details are added for you. In signing emails, a line holding just{" "}
-                  <code>{"{{signing_link}}"}</code> becomes the &ldquo;Open &amp; sign&rdquo; button. Leave a blank
-                  line between paragraphs.
+                  Every email and text the system sends a customer on its own — signing, quotes, codes, reminders,
+                  recalls, review requests and surveys. Your logo, brand colour and company details are added for you;
+                  each preview shows exactly what the customer receives.
                 </p>
+                <SaveForm success="Email header saved" resetOnSuccess={false} action={saveEmailHeaderStyle} className="mb-3 flex flex-wrap items-end gap-2">
+                  <div>
+                    <label className="label">Header background</label>
+                    <select name="headerStyle" className="input" defaultValue={emailHeaderStyle}>
+                      {Object.entries(EMAIL_HEADER_STYLES).map(([value, label]) => (
+                        <option key={value} value={value}>{label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
+                  <span className="text-xs text-muted-foreground basis-full">
+                    Pick Dark or Brand colour if your logo is drawn in white.
+                  </span>
+                </SaveForm>
+                {[...new Set(SIGNING_EMAIL_KINDS.map((k) => SIGNING_EMAILS[k].group))].map((group) => (
+                <div key={group} className="mb-4">
+                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">{group}</div>
                 <div className="space-y-3">
-                  {SIGNING_EMAIL_KINDS.map((kind) => {
+                  {SIGNING_EMAIL_KINDS.filter((k) => SIGNING_EMAILS[k].group === group).map((kind) => {
                     const def = SIGNING_EMAILS[kind];
                     const saved = signingTemplate(kind);
                     return (
                       <details key={kind} className="rounded-lg border border-border bg-muted/40">
                         <summary className="px-4 py-2.5 cursor-pointer text-sm font-medium flex items-center gap-2">
                           {def.label}
+                          <span className="badge bg-muted text-muted-foreground">{def.channel === "sms" ? "SMS" : "Email"}</span>
                           <span className="badge bg-muted text-muted-foreground">{saved ? "Customised" : "Default"}</span>
                         </summary>
                         <div className="p-4 pt-1 space-y-2">
@@ -874,20 +840,28 @@ export default async function SettingsPage({
                             action={saveSigningEmailTemplate.bind(null, kind)}
                             className="space-y-2"
                           >
-                            <label className="label">Subject</label>
-                            <input name="subject" className="input" defaultValue={saved?.subject ?? def.subject} required maxLength={200} />
-                            <label className="label">Body</label>
-                            <textarea name="body" className="input font-mono text-xs" rows={9} defaultValue={saved?.body ?? def.body} required maxLength={5000} />
-                            <div className="text-xs text-muted-foreground">
-                              Fields:{" "}
-                              {def.fields.map((f, i) => (
-                                <span key={f}>
-                                  {i > 0 && ", "}
-                                  <code title={SIGNING_FIELD_HELP[f]}>{`{{${f}}}`}</code>
-                                  {f === def.action && " (required)"}
-                                </span>
-                              ))}
-                            </div>
+                            {def.channel === "sms" ? (
+                              <SmsTemplateEditor
+                                initialBody={saved?.body ?? def.body}
+                                fields={def.fields}
+                                fieldHelp={SIGNING_FIELD_HELP}
+                                requiredField={def.action}
+                                preview={previewSigningEmailTemplate.bind(null, kind)}
+                              />
+                            ) : (
+                              <EmailTemplateEditor
+                                initialSubject={saved?.subject ?? def.subject}
+                                initialDoc={
+                                  (saved?.doc ? sanitizeEmailDoc(saved.doc, def.fields) : null) ??
+                                  textToEmailDoc(saved?.body ?? def.body, def.fields)
+                                }
+                                fields={def.fields}
+                                fieldHelp={SIGNING_FIELD_HELP}
+                                requiredField={def.action}
+                                preview={previewSigningEmailTemplate.bind(null, kind)}
+                                refreshKey={emailHeaderStyle}
+                              />
+                            )}
                             <SaveButton className="btn-primary btn-sm">Save</SaveButton>
                           </SaveForm>
                           {saved && (
@@ -900,8 +874,15 @@ export default async function SettingsPage({
                     );
                   })}
                 </div>
+                </div>
+                ))}
               </div>
-              <div className="text-sm font-semibold mb-2">Your templates</div>
+              <div className="text-sm font-semibold mb-1">Your templates</div>
+              <p className="text-xs text-muted-foreground mb-2">
+                For campaigns, journeys and service reminders. Placeholders: <code>{"{{name}}"}</code>,{" "}
+                <code>{"{{first_name}}"}</code>, <code>{"{{model}}"}</code>, <code>{"{{color}}"}</code>,{" "}
+                <code>{"{{value}}"}</code>, <code>{"{{user_name}}"}</code> — filled from the lead/contact when sending.
+              </p>
               <div className="space-y-3 mb-4">
                 {templates.map((t) => (
                   <details key={t.id} className="rounded-lg border border-border bg-muted/40">
@@ -1230,507 +1211,6 @@ export default async function SettingsPage({
       )}
 
       {tab === "products" && commerceOn && <ProductsPage />}
-
-      {tab === "integrations" && (
-        <div className="max-w-3xl">
-          <div className="card p-0 divide-y divide-border/50">
-            <Row
-              title="X"
-              status={xSetting("X_ACCOUNT_ID") ? <span className="badge bg-emerald-500/15 text-emerald-300">Connected @{xSetting("X_USERNAME") || "account"}</span> : <span className="badge bg-amber-500/15 text-amber-300">Not set up</span>}
-            >
-              <p className="text-xs text-muted-foreground mb-4">Receive and reply to DMs, capture mentions and replies, and create CRM leads in the Social inbox. One X account is connected per tenant.</p>
-              <div className="rounded-lg border border-border bg-background/40 p-4">
-                <div><label className="label">Webhook callback URL</label><code className="block text-sm bg-muted rounded-lg px-3 py-2">https://crm.denagocpt.co.za/api/webhooks/x{xSetting("X_ACCOUNT_ID") ? `?account_id=${xSetting("X_ACCOUNT_ID")}` : ""}</code></div>
-                {[
-                  { key: "X_CLIENT_ID", label: "OAuth 2 client ID", secret: false, hint: "From X Developer Portal" },
-                  { key: "X_CLIENT_SECRET", label: "OAuth 2 client secret", secret: true, hint: "Shown once in X Developer Portal" },
-                  { key: "X_WEBHOOK_SECRET", label: "Webhook signing secret", secret: true, hint: "X app consumer secret" },
-                  { key: "XAI_API_KEY", label: "Grok API key (optional)", secret: true, hint: "xai-…" },
-                  { key: "XAI_MODEL", label: "Grok model", secret: false, hint: "grok-4.6" },
-                  { key: "XAI_DRAFTS_ENABLED", label: "Allow Grok reply drafts (true/false)", secret: false, hint: "false" },
-                ].map((field) => (
-                  <SaveForm key={field.key} resetOnSuccess={false} action={saveSetting} className="mt-3 flex gap-2 items-end">
-                    <input type="hidden" name="key" value={field.key} />
-                    {field.secret ? <input type="hidden" name="keepIfBlank" value="1" /> : null}
-                    <div className="flex-1">
-                      <label className="label">{field.label}</label>
-                      <input name="value" type={field.secret ? "password" : "text"} autoComplete={field.secret ? "new-password" : undefined} className="input" defaultValue={field.secret ? undefined : setting(field.key)} placeholder={field.secret && setting(field.key) ? "•••••••• saved — leave blank to keep" : field.hint} />
-                    </div>
-                    <SaveButton className="btn-secondary">Save</SaveButton>
-                    {field.secret && setting(field.key) ? <ClearSecret settingKey={field.key} label={field.label} /> : null}
-                  </SaveForm>
-                ))}
-                <a href="/api/integrations/x/connect" className="btn-primary btn-sm mt-4 inline-flex">{xSetting("X_ACCOUNT_ID") ? "Reconnect X" : "Connect X account"}</a>
-              </div>
-            </Row>
-
-            <Row
-              title="Facebook & Instagram (Meta)"
-              status={
-                setting("META_PAGE_ACCESS_TOKEN") ? (
-                  <span className="badge bg-emerald-500/15 text-emerald-300">Connected</span>
-                ) : (
-                  <span className="badge bg-amber-500/15 text-amber-300">Not set up</span>
-                )
-              }
-            >
-              <p className="text-xs text-muted-foreground mb-4">
-                Powers lead ads and Messenger/Instagram DMs. Webhook (leadgen + messages fields):
-              </p>
-              <div className="space-y-3">
-                <div>
-                  <label className="label">Webhook callback URL</label>
-                  <code className="block text-sm bg-muted rounded-lg px-3 py-2">
-                    https://crm.denagocpt.co.za/api/webhooks/meta
-                  </code>
-                </div>
-                <div>
-                  <label className="label">Verify token</label>
-                  <div className="flex gap-2">
-                    <SecretReveal settingKey="META_VERIFY_TOKEN" isSet={Boolean(setting("META_VERIFY_TOKEN"))} />
-                    <SaveForm success="New value generated" resetOnSuccess={false} action={regenerateSetting.bind(null, "META_VERIFY_TOKEN")}>
-                      <SaveButton className="btn-secondary">Regenerate</SaveButton>
-                    </SaveForm>
-                  </div>
-                </div>
-                <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
-                  <input type="hidden" name="key" value="META_PAGE_ACCESS_TOKEN" />
-                  <input type="hidden" name="keepIfBlank" value="1" />
-                  <div className="flex-1">
-                    <label className="label">Page access token (System User)</label>
-                    <input
-                      name="value"
-                      type="password"
-                      autoComplete="new-password"
-                      className="input"
-                      placeholder={setting("META_PAGE_ACCESS_TOKEN") ? "•••••••• saved — leave blank to keep" : "EAAG…"}
-                    />
-                  </div>
-                  <SaveButton className="btn-primary">Save</SaveButton>
-                  {setting("META_PAGE_ACCESS_TOKEN") ? <ClearSecret settingKey="META_PAGE_ACCESS_TOKEN" label="Meta page access token" /> : null}
-                </SaveForm>
-                <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
-                  <input type="hidden" name="key" value="META_APP_SECRET" />
-                  <input type="hidden" name="keepIfBlank" value="1" />
-                  <div className="flex-1">
-                    <label className="label">App secret (verifies webhook signatures)</label>
-                    <input
-                      name="value"
-                      type="password"
-                      autoComplete="new-password"
-                      className="input"
-                      placeholder={setting("META_APP_SECRET") ? "•••••••• saved — leave blank to keep" : "From Meta app → Settings → Basic"}
-                    />
-                  </div>
-                  <SaveButton className="btn-primary">Save</SaveButton>
-                  {setting("META_APP_SECRET") ? <ClearSecret settingKey="META_APP_SECRET" label="Meta app secret" /> : null}
-                </SaveForm>
-              </div>
-            </Row>
-
-            <Row
-              title="WhatsApp Business (Cloud API)"
-              status={
-                setting("WA_PHONE_NUMBER_ID") ? (
-                  <span className="badge bg-emerald-500/15 text-emerald-300">Connected</span>
-                ) : (
-                  <span className="badge bg-amber-500/15 text-amber-300">Not set up</span>
-                )
-              }
-            >
-              <p className="text-xs text-muted-foreground mb-4">
-                Connect your dedicated WhatsApp number: add the <b>WhatsApp</b> product in your
-                Meta app, register the number, subscribe the webhook below to the <b>messages</b>{" "}
-                field (same verify token and app secret as above).
-              </p>
-              <div className="space-y-3">
-                <div>
-                  <label className="label">Webhook callback URL</label>
-                  <code className="block text-sm bg-muted rounded-lg px-3 py-2">
-                    https://crm.denagocpt.co.za/api/webhooks/whatsapp
-                  </code>
-                </div>
-                <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
-                  <input type="hidden" name="key" value="WA_PHONE_NUMBER_ID" />
-                  <div className="flex-1">
-                    <label className="label">Phone number ID</label>
-                    <input
-                      name="value"
-                      className="input"
-                      defaultValue={setting("WA_PHONE_NUMBER_ID")}
-                      placeholder="From WhatsApp → API Setup"
-                    />
-                  </div>
-                  <SaveButton className="btn-primary">Save</SaveButton>
-                </SaveForm>
-                <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
-                  <input type="hidden" name="key" value="WA_ACCESS_TOKEN" />
-                  <input type="hidden" name="keepIfBlank" value="1" />
-                  <div className="flex-1">
-                    <label className="label">Access token (permanent, System User)</label>
-                    <input
-                      name="value"
-                      type="password"
-                      autoComplete="new-password"
-                      className="input"
-                      placeholder={setting("WA_ACCESS_TOKEN") ? "•••••••• saved — leave blank to keep" : "EAAG…"}
-                    />
-                  </div>
-                  <SaveButton className="btn-primary">Save</SaveButton>
-                  {setting("WA_ACCESS_TOKEN") ? <ClearSecret settingKey="WA_ACCESS_TOKEN" label="WhatsApp access token" /> : null}
-                </SaveForm>
-              </div>
-            </Row>
-
-            {/*
-              Telegram belongs HERE, with the other customer channels.
-
-              It used to live only in the chatbot page's sidebar, so the one
-              screen called "customer channels" listed every channel except this
-              one. Worse, `TENANT_CREDENTIAL_INTEGRATIONS` offered a second door
-              that could not work: it stores TELEGRAM_BOT_TOKEN in
-              TenantIntegrationCredential, while `resolveTelegramTenant` matches
-              an inbound update by scanning TELEGRAM_WEBHOOK_SECRET rows in
-              AppSetting — so a token saved that way had no secret to be found
-              by, and Telegram could never deliver. That entry is gone; this is
-              the only door now, and it is the one that provisions.
-
-              `connectTelegram` is not a plain save. It stores the token, mints a
-              per-tenant webhook secret, calls Telegram's setWebhook, and records
-              whether that call succeeded — which is why the badge below can tell
-              "token stored" apart from "actually receiving".
-            */}
-            <Row
-              title="Telegram"
-              status={
-                !setting("TELEGRAM_BOT_TOKEN") ? (
-                  <span className="badge bg-amber-500/15 text-amber-300">Not set up</span>
-                ) : setting("BOT_TG_ENABLED") === "true" ? (
-                  <span className="badge bg-emerald-500/15 text-emerald-300">Connected</span>
-                ) : (
-                  // The half-configured state, said out loud. A stored token with
-                  // no registered webhook receives nothing, and silently looking
-                  // connected is exactly how WhatsApp lost eighteen days.
-                  <span className="badge bg-amber-500/15 text-amber-300">Token saved · webhook not registered</span>
-                )
-              }
-            >
-              <p className="text-xs text-muted-foreground mb-4">
-                Create a bot with <b>@BotFather</b> in Telegram, then paste the token it gives you.
-                Connecting registers the webhook with Telegram for you — unlike WhatsApp and Meta,
-                nothing needs configuring on their side. The bot runs the same published chatbot flow.
-              </p>
-              {!setting("TELEGRAM_BOT_TOKEN") ? (
-                <form action={connectTelegram} className="flex gap-2 items-end">
-                  <div className="flex-1">
-                    <label className="label">Bot token</label>
-                    <input
-                      name="token"
-                      type="password"
-                      autoComplete="new-password"
-                      className="input"
-                      placeholder="123456789:ABCdef…"
-                    />
-                  </div>
-                  <button className="btn-primary">Connect</button>
-                </form>
-              ) : (
-                <div className="space-y-3">
-                  {setting("BOT_TG_ENABLED") !== "true" && (
-                    <p className="text-xs text-amber-300">
-                      Telegram did not accept the webhook registration, so nothing will arrive.
-                      Disconnect and reconnect with a fresh token from @BotFather.
-                    </p>
-                  )}
-                  <form action={disconnectTelegram}>
-                    <button className="btn-secondary">Disconnect</button>
-                  </form>
-                </div>
-              )}
-            </Row>
-
-            <Row
-              title="Google reviews"
-              status={
-                setting("GOOGLE_PLACES_API_KEY") && setting("GOOGLE_PLACE_ID") ? (
-                  <span className="badge bg-emerald-500/15 text-emerald-300">Connected</span>
-                ) : (
-                  <span className="badge bg-amber-500/15 text-amber-300">Not set up</span>
-                )
-              }
-            >
-              <p className="text-xs text-muted-foreground mb-4">
-                New reviews appear in the Social inbox with a push notification. Needs a Google
-                Cloud API key with the <b>Places API (New)</b> enabled, plus your Place ID.
-              </p>
-              <div className="space-y-3">
-                <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
-                  <input type="hidden" name="key" value="GOOGLE_PLACES_API_KEY" />
-                  <input type="hidden" name="keepIfBlank" value="1" />
-                  <div className="flex-1">
-                    <label className="label">Places API key</label>
-                    <input
-                      name="value"
-                      type="password"
-                      autoComplete="new-password"
-                      className="input"
-                      placeholder={setting("GOOGLE_PLACES_API_KEY") ? "•••••••• saved — leave blank to keep" : "AIza…"}
-                    />
-                  </div>
-                  <SaveButton className="btn-primary">Save</SaveButton>
-                  {setting("GOOGLE_PLACES_API_KEY") ? <ClearSecret settingKey="GOOGLE_PLACES_API_KEY" label="Google Places API key" /> : null}
-                </SaveForm>
-                <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
-                  <input type="hidden" name="key" value="GOOGLE_PLACE_ID" />
-                  <div className="flex-1">
-                    <label className="label">Place ID</label>
-                    <input
-                      name="value"
-                      className="input"
-                      defaultValue={setting("GOOGLE_PLACE_ID")}
-                      placeholder="ChIJ…"
-                    />
-                  </div>
-                  <SaveButton className="btn-primary">Save</SaveButton>
-                </SaveForm>
-              </div>
-            </Row>
-
-            <Row
-              title="Google Maps location autocomplete"
-              status={
-                setting("GOOGLE_MAPS_BROWSER_API_KEY") ? (
-                  <span className="badge bg-emerald-500/15 text-emerald-300">Connected</span>
-                ) : (
-                  <span className="badge bg-amber-500/15 text-amber-300">Text input fallback</span>
-                )
-              }
-            >
-              <p className="text-xs text-muted-foreground mb-4">
-                Suggests verified South African addresses and places while booking test drives or
-                scheduling meetings. Use a dedicated browser key with <b>Maps JavaScript API</b> and
-                <b> Places API (New)</b> enabled, restricted to this CRM&apos;s website referrers. If
-                unset or unavailable, location fields remain normal text inputs.
-              </p>
-              <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
-                <input type="hidden" name="key" value="GOOGLE_MAPS_BROWSER_API_KEY" />
-                <div className="flex-1">
-                  <label className="label">Maps JavaScript browser API key</label>
-                  <input
-                    name="value"
-                    type="password"
-                    className="input"
-                    defaultValue={setting("GOOGLE_MAPS_BROWSER_API_KEY")}
-                    placeholder="AIza..."
-                    autoComplete="off"
-                  />
-                </div>
-                <SaveButton className="btn-primary">Save</SaveButton>
-              </SaveForm>
-            </Row>
-
-            <Row
-              title="SMS one-time codes (BulkSMS)"
-              status={
-                setting("BULKSMS_TOKEN_ID") ? (
-                  <span className="badge bg-emerald-500/15 text-emerald-300">Connected</span>
-                ) : (
-                  <span className="badge bg-amber-500/15 text-amber-300">Not set up</span>
-                )
-              }
-            >
-              <p className="text-xs text-muted-foreground mb-4">
-                Sends OTPs to customers verifying their vehicle on the website booking form.
-                Create a free account at bulksms.com → Settings → Developer → API Tokens.
-                Without this, codes fall back to the customer&apos;s registered email.
-              </p>
-              <div className="space-y-3">
-                <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
-                  <input type="hidden" name="key" value="BULKSMS_TOKEN_ID" />
-                  <div className="flex-1">
-                    <label className="label">Token ID</label>
-                    <input
-                      name="value"
-                      className="input"
-                      defaultValue={setting("BULKSMS_TOKEN_ID")}
-                      placeholder="From BulkSMS → API Tokens"
-                    />
-                  </div>
-                  <SaveButton className="btn-primary">Save</SaveButton>
-                </SaveForm>
-                <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
-                  <input type="hidden" name="key" value="BULKSMS_TOKEN_SECRET" />
-                  <input type="hidden" name="keepIfBlank" value="1" />
-                  <div className="flex-1">
-                    <label className="label">Token secret</label>
-                    <input
-                      name="value"
-                      type="password"
-                      autoComplete="new-password"
-                      className="input"
-                      placeholder={setting("BULKSMS_TOKEN_SECRET") ? "•••••••• saved — leave blank to keep" : "Shown once when the token is created"}
-                    />
-                  </div>
-                  <SaveButton className="btn-primary">Save</SaveButton>
-                  {setting("BULKSMS_TOKEN_SECRET") ? <ClearSecret settingKey="BULKSMS_TOKEN_SECRET" label="BulkSMS token secret" /> : null}
-                </SaveForm>
-              </div>
-            </Row>
-
-            <Row
-              title="AI Assist (Claude)"
-              status={
-                setting("ANTHROPIC_API_KEY") ? (
-                  <span className="badge bg-emerald-500/15 text-emerald-300">Connected</span>
-                ) : (
-                  <span className="badge bg-amber-500/15 text-amber-300">Not set up</span>
-                )
-              }
-            >
-              <p className="text-xs text-muted-foreground mb-4">
-                Powers the ✨ message check, 🔎 lead research and (optionally) automatic research
-                on new leads. Suggestions only — the AI never changes data. Get a key at
-                console.anthropic.com.
-              </p>
-              <div className="space-y-3">
-                <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
-                  <input type="hidden" name="key" value="ANTHROPIC_API_KEY" />
-                  <input type="hidden" name="keepIfBlank" value="1" />
-                  <div className="flex-1">
-                    <label className="label">Anthropic API key</label>
-                    <input
-                      name="value"
-                      type="password"
-                      autoComplete="new-password"
-                      className="input"
-                      placeholder={setting("ANTHROPIC_API_KEY") ? "•••••••• saved — leave blank to keep" : "sk-ant-…"}
-                    />
-                  </div>
-                  <SaveButton className="btn-primary">Save</SaveButton>
-                  {setting("ANTHROPIC_API_KEY") ? <ClearSecret settingKey="ANTHROPIC_API_KEY" label="Anthropic API key" /> : null}
-                </SaveForm>
-                <SaveForm resetOnSuccess={false} action={saveSetting} className="flex items-center gap-2">
-                  <input type="hidden" name="key" value="AI_AUTO_RESEARCH" />
-                  <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer">
-                    <input
-                      type="checkbox"
-                      name="value"
-                      value="true"
-                      defaultChecked={setting("AI_AUTO_RESEARCH") === "true"}
-                      className="h-4 w-4"
-                    />
-                    Automatically research every new lead (files a note within ~15 min)
-                  </label>
-                  <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
-                </SaveForm>
-              </div>
-            </Row>
-
-            <Row
-              title="ChatGPT subscription (research)"
-              status={
-                chatGpt.state === "connected" ? (
-                  <span className="badge bg-emerald-500/15 text-emerald-300">Connected</span>
-                ) : (
-                  <span className="badge bg-amber-500/15 text-amber-300">Not connected</span>
-                )
-              }
-            >
-              <p className="text-xs text-muted-foreground mb-4">
-                Run 🔎 lead research on your ChatGPT Plus or Pro plan instead of paying per token.
-                Sign in once with your ChatGPT account. While connected, research — the button and
-                automatic research — uses ChatGPT only. The ✨ message check and the WhatsApp bot
-                still use the Anthropic key.
-              </p>
-              <div className="space-y-3">
-                <ChatGptConnect initial={chatGpt} />
-                {chatGpt.state === "connected" && (
-                  <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
-                    <input type="hidden" name="key" value="CODEX_MODEL" />
-                    <div className="flex-1">
-                      <label className="label">Model</label>
-                      <input
-                        name="value"
-                        className="input font-mono"
-                        defaultValue={chatGpt.model}
-                      />
-                    </div>
-                    <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
-                  </SaveForm>
-                )}
-              </div>
-            </Row>
-
-            <Row
-              title="ElevenLabs (Voice)"
-              status={
-                setting("ELEVENLABS_API_KEY") ? (
-                  <span className="badge bg-emerald-500/15 text-emerald-300">Connected</span>
-                ) : (
-                  <span className="badge bg-amber-500/15 text-amber-300">Not set up</span>
-                )
-              }
-            >
-              <p className="text-xs text-muted-foreground mb-4">
-                Voice for the WhatsApp assistant: transcribes inbound voice notes, and (with the
-                toggle on) replies to a customer&apos;s voice note with a synthesised voice note —
-                mirroring the customer. Get a key and copy a Voice ID at elevenlabs.io.
-              </p>
-              <div className="space-y-3">
-                <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
-                  <input type="hidden" name="key" value="ELEVENLABS_API_KEY" />
-                  <input type="hidden" name="keepIfBlank" value="1" />
-                  <div className="flex-1">
-                    <label className="label">ElevenLabs API key</label>
-                    {/* Never echo the stored secret into the DOM — blank field, keep-if-blank on save. */}
-                    <input name="value" type="password" autoComplete="new-password" className="input" placeholder={setting("ELEVENLABS_API_KEY") ? "•••••••• saved — leave blank to keep" : "Your ElevenLabs API key"} />
-                  </div>
-                  <SaveButton className="btn-primary">Save</SaveButton>
-                  {setting("ELEVENLABS_API_KEY") ? <ClearSecret settingKey="ELEVENLABS_API_KEY" label="ElevenLabs API key" /> : null}
-                </SaveForm>
-                <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
-                  <input type="hidden" name="key" value="ELEVENLABS_VOICE_ID" />
-                  <div className="flex-1">
-                    <label className="label">Voice ID</label>
-                    <input name="value" className="input" defaultValue={setting("ELEVENLABS_VOICE_ID")} placeholder="e.g. 21m00Tcm4TlvDq8ikWAM" />
-                  </div>
-                  <SaveButton className="btn-primary">Save</SaveButton>
-                </SaveForm>
-                <SaveForm resetOnSuccess={false} action={saveSetting} className="flex items-center gap-2">
-                  <input type="hidden" name="key" value="WHATSAPP_VOICE_REPLIES" />
-                  <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer">
-                    <input type="checkbox" name="value" value="true" defaultChecked={setting("WHATSAPP_VOICE_REPLIES") === "true"} className="h-4 w-4" />
-                    Reply to voice notes with a voice note (mirror the customer)
-                  </label>
-                  <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
-                </SaveForm>
-              </div>
-            </Row>
-
-            <Row
-              title="Website lead intake API"
-              status={<span className="badge bg-emerald-500/15 text-emerald-300">Active</span>}
-              action="View"
-            >
-              <p className="text-xs text-muted-foreground mb-4">
-                POST leads from the website or landing pages with the <code>X-Api-Key</code>{" "}
-                header. Fields: name (required), email, phone, message, model, color, source.
-              </p>
-              <div className="space-y-3">
-                <div>
-                  <label className="label">API key</label>
-                  <div className="flex gap-2">
-                    <SecretReveal settingKey="INTAKE_API_KEY" isSet={Boolean(setting("INTAKE_API_KEY"))} />
-                    <SaveForm success="New value generated" resetOnSuccess={false} action={regenerateSetting.bind(null, "INTAKE_API_KEY")}>
-                      <SaveButton className="btn-secondary">Regenerate</SaveButton>
-                    </SaveForm>
-                  </div>
-                </div>
-              </div>
-            </Row>
-          </div>
-        </div>
-      )}
     </SettingsWorkspace>
   );
 }

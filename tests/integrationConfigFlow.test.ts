@@ -534,7 +534,7 @@ test("a display-name From header is accepted, a malformed one is not", () => {
 const root = fileURLToPath(new URL("..", import.meta.url));
 
 test("the settings page never hands a secret to the client wizard", () => {
-  const page = readFileSync(join(root, "src/app/(app)/settings/integration-overrides/page.tsx"), "utf8");
+  const page = readFileSync(join(root, "src/app/(app)/settings/integrations/page.tsx"), "utf8");
   assert.match(
     page,
     /if \(isSecretSettingKey\(key\)\) continue;/,

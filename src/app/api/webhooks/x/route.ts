@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { resolveChannelTenant } from "@/lib/channelTenant";
-import { resolveTenantCredential } from "@/lib/settings";
+import { resolveIntegrationField } from "@/lib/settings";
 import { withChannelTenantScope } from "@/lib/tenantScopeEntry";
 import { normaliseXActivity, verifyXSignature, xCrcResponse } from "@/lib/xWebhook";
 import { recordInboundDm } from "@/lib/messenger";
@@ -23,7 +23,7 @@ export async function GET(request: Request) {
   if (!token || !accountId) return NextResponse.json({ error: "Missing CRC token or account." }, { status: 400 });
   const owner = await resolveChannelTenant("x", accountId);
   if (!owner) return NextResponse.json({ error: "Unknown X account." }, { status: 404 });
-  const secret = await resolveTenantCredential(owner, "X_WEBHOOK_SECRET");
+  const secret = await resolveIntegrationField(owner, "x", "X_WEBHOOK_SECRET");
   if (!secret) return NextResponse.json({ error: "X webhook not configured." }, { status: 503 });
   /*
    * A null response means the token was not one X would send, and this endpoint
@@ -65,7 +65,7 @@ export async function POST(request: Request) {
   if (!accountId) return NextResponse.json({ error: "Missing X account discriminator." }, { status: 400 });
   const owner = await resolveChannelTenant("x", accountId);
   if (!owner) return NextResponse.json({ error: "Unknown or inactive X account." }, { status: 404 });
-  const secret = await resolveTenantCredential(owner, "X_WEBHOOK_SECRET");
+  const secret = await resolveIntegrationField(owner, "x", "X_WEBHOOK_SECRET");
   const signature = request.headers.get("x-twitter-webhooks-signature") ?? request.headers.get("x-webhooks-signature");
   if (!secret || !verifyXSignature(secret, raw, signature)) {
     return NextResponse.json({ error: "Invalid signature." }, { status: 401 });

@@ -25,7 +25,7 @@ function MergeFieldElement(props: any) {
   );
 }
 
-const MergeFieldPlugin = createPlatePlugin({
+export const MergeFieldPlugin = createPlatePlugin({
   key: "mergeField",
   node: { isElement: true, isInline: true, isVoid: true, component: MergeFieldElement },
 });

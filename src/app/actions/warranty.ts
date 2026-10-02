@@ -7,11 +7,13 @@ import { resolveTenantActor } from "@/lib/tenantActor";
 import { logAudit } from "@/lib/audit";
 import { sendEmail } from "@/lib/email";
 import { sendSms } from "@/lib/sms";
-import { companyContactPhrase, getCompanyProfile } from "@/lib/companyProfile";
+import { tenantEmailContent, tenantSmsContent } from "@/lib/signing/signingEmail";
 import { describeBlockedReason, firstAllowedChannel } from "@/lib/communicationPolicy";
 import { claimStatuses } from "@/lib/warranty";
 import { requirePermission, requireVehicleAccess } from "@/lib/permissions";
 import { withActingStaffScope } from "@/lib/actingScope";
+import { asActionResult, refuse } from "@/lib/actionResult";
+import { requiredReason } from "@/lib/deleteReason";
 
 export async function addWarrantyClaim(vehicleId: string, formData: FormData) {
   return withActingStaffScope(async () => {
@@ -59,12 +61,22 @@ export async function setWarrantyClaimStatus(id: string, formData: FormData) {
   });
 }
 
-export async function deleteWarrantyClaim(id: string) {
-  return withActingStaffScope(async () => {
+export async function deleteWarrantyClaim(id: string, formData?: FormData) {
+  return asActionResult(async () => {
+    // Authorise before answering anything about the record.
+    await requirePermission("warranty.manage");
     const claim = await prisma.warrantyClaim.findUnique({ where: { id } });
-    if (!claim) return;
-    await requireVehicleAccess(claim.vehicleId, "warranty.manage");
+    if (!claim) refuse("That warranty claim is already gone — refresh the page.");
+    const user = await requireVehicleAccess(claim.vehicleId, "warranty.manage");
+    const reason = requiredReason(formData, "deleting this claim");
     await prisma.warrantyClaim.delete({ where: { id } });
+    // Permanent (no Trash for claims), so the audit line is the only record left.
+    await logAudit({
+      action: "warranty.claim_deleted",
+      summary: `Deleted a ${claim.status} warranty claim (“${claim.description.slice(0, 80)}”) — ${reason}`,
+      contactId: claim.contactId,
+      user,
+    });
     revalidatePath(`/vehicles/${claim.vehicleId}`);
     revalidatePath("/warranty");
   });
@@ -83,10 +95,18 @@ export async function createRecall(formData: FormData) {
   });
 }
 
-export async function deleteRecall(id: string) {
-  return withActingStaffScope(async () => {
-    await requirePermission("warranty.manage");
-    await prisma.recall.delete({ where: { id } }).catch(() => {});
+export async function deleteRecall(id: string, formData?: FormData) {
+  return asActionResult(async () => {
+    const user = await requirePermission("warranty.manage");
+    const recall = await prisma.recall.findUnique({ where: { id }, select: { title: true, model: true } });
+    if (!recall) refuse("That recall is already gone — refresh the page.");
+    const reason = requiredReason(formData, "deleting this recall");
+    await prisma.recall.delete({ where: { id } });
+    await logAudit({
+      action: "recall.deleted",
+      summary: `Deleted the recall “${recall.title}” (${recall.model}) — ${reason}`,
+      user,
+    });
     revalidatePath("/warranty");
   });
 }
@@ -103,8 +123,6 @@ export async function notifyRecall(_prev: NotifyResult, formData: FormData): Pro
       include: { contact: true },
     });
     const firstUser = await resolveTenantActor();
-    const company = await getCompanyProfile();
-    const contactPhrase = companyContactPhrase(company);
 
     const seen = new Set<string>();
     let sent = 0;
@@ -113,9 +131,14 @@ export async function notifyRecall(_prev: NotifyResult, formData: FormData): Pro
       const c = v.contact;
       if (seen.has(c.id)) continue;
       seen.add(c.id);
-      const first = c.firstName;
-      const subject = `Important: ${recall.title} — your ${recall.model}`;
-      const body = `Hi ${first},\n\n${recall.description}\n\nPlease contact ${contactPhrase} to arrange this at no charge.\n\nWarm regards,\n${company.name}`;
+      // The workspace's own editable "Recall notice" email / SMS (Settings → Email templates).
+      const recallVars = {
+        first_name: c.firstName,
+        recipient_name: [c.firstName, c.lastName].filter(Boolean).join(" "),
+        model: recall.model,
+        recall_title: recall.title,
+        recall_description: recall.description,
+      };
       // Trashed contacts, portal service switches and withdrawn service consent.
       const verdict = await firstAllowedChannel({
         contactId: c.id,
@@ -134,8 +157,15 @@ export async function notifyRecall(_prev: NotifyResult, formData: FormData): Pro
         continue;
       }
       let ok = false;
-      if (verdict.channel === "email") ok = (await sendEmail({ to: verdict.destination, subject, text: body })).ok;
-      else ok = (await sendSms(verdict.destination, `${recall.title}: ${recall.description} Call ${contactPhrase}.`)).ok;
+      let body: string;
+      if (verdict.channel === "email") {
+        const message = await tenantEmailContent("recall", c.tenantId, recallVars);
+        body = message.text;
+        ok = (await sendEmail({ to: verdict.destination, subject: message.subject, text: message.text, html: message.html })).ok;
+      } else {
+        body = await tenantSmsContent("recall_sms", c.tenantId, recallVars);
+        ok = (await sendSms(verdict.destination, body)).ok;
+      }
       if (!ok) {
         skipped += 1;
         continue;

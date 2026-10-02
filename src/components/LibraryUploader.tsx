@@ -55,7 +55,9 @@ export function AddDocumentsForm({ defaultCategory }: { defaultCategory?: string
         uploaded.push(await uploadDirect(files[i]));
       }
       setProgress("Saving to library…");
-      await registerLibraryDocuments(category, name.trim() || null, uploaded);
+      // A refusal comes back as a value; the catch below shows its message.
+      const result = await registerLibraryDocuments(category, name.trim() || null, uploaded);
+      if (result?.error) throw new Error(result.error);
       setProgress(`Done — ${uploaded.length} document${uploaded.length !== 1 ? "s" : ""} added.`);
       setFiles([]);
       router.refresh();
@@ -135,7 +137,8 @@ export function NewVersionForm({
     try {
       setStatus(`Uploading ${file.name}…`);
       const meta = await uploadDirect(file);
-      await registerLibraryVersion(documentId, note.trim() || null, meta);
+      const result = await registerLibraryVersion(documentId, note.trim() || null, meta);
+      if (result?.error) throw new Error(result.error);
       setStatus(`Done — saved as v${nextVersion}.`);
       setFile(null);
       router.refresh();

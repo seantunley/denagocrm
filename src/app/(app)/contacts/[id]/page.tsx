@@ -6,12 +6,14 @@ import { deleteContact } from "@/app/actions/contacts";
 import CommsTimeline from "@/components/CommsTimeline";
 import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import DocumentsPanel from "@/components/DocumentsPanel";
+import PortalUploadsList, { type PortalUploadRow } from "@/components/PortalUploadsList";
 import ActivityPanel from "@/components/ActivityPanel";
 import EmailComposer from "@/components/EmailComposer";
 import { composerReplyToDefault } from "@/lib/replyToDefault";
 import LeadTimeline from "@/components/LeadTimeline";
 import { auditDetailFor } from "@/lib/auditDetailQuery";
 import ConfirmDelete from "@/components/ConfirmDelete";
+import { QuickCreateButton } from "@/components/QuickCreateButton";
 import WhatsAppPanel from "@/components/WhatsAppPanel";
 import Tabs from "@/components/Tabs";
 import CopyButton from "@/components/CopyButton";
@@ -54,12 +56,16 @@ export default async function ContactDetailPage({
   // Same default as the lead page — this person plus the mailbox IMAP reads, so a
   // reply lands in their inbox AND on this record. Never throws.
   const replyToDefault = await composerReplyToDefault(user.email);
-  const [automotiveOn, marketingOn, canCancelQuotes, canDuplicateQuotes] = await Promise.all([
+  const [automotiveOn, marketingOn, canCancelQuotes, canDuplicateQuotes, canCreateLead, canBookTestDrive, canOpenJobCard] = await Promise.all([
     isModuleEnabled("automotive"),
     isModuleEnabled("marketing"),
     hasPermission(user, "quotes.change_status"),
     hasPermission(user, "quotes.create"),
+    hasPermission(user, "leads.create"),
+    hasPermission(user, "activities.manage"),
+    hasPermission(user, "jobcards.manage"),
   ]);
+  const canCreateQuote = canDuplicateQuotes;
   const contact = await prisma.contact.findUnique({
     where: { id },
     include: {
@@ -150,6 +156,25 @@ export default async function ContactDetailPage({
       orderBy: { unsubscribedAt: "desc" },
     }),
   ]);
+  // Files the customer sent through the portal (gap audit #30) — the ones on no
+  // case had no staff screen anywhere. Guarded client, so tenant-scoped.
+  const [portalUploadRows, canReviewUploads] = await Promise.all([
+    prisma.portalUpload.findMany({
+      where: { contactId: contact.id },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+      select: { id: true, fileName: true, sizeBytes: true, createdAt: true, status: true, caseId: true },
+    }),
+    hasPermission(user, "documents.manage"),
+  ]);
+  const uploadCaseIds = [...new Set(portalUploadRows.map((row) => row.caseId).filter((caseId): caseId is string => Boolean(caseId)))];
+  const uploadCases = uploadCaseIds.length
+    ? await prisma.customerCase.findMany({ where: { id: { in: uploadCaseIds } }, select: { id: true, number: true } })
+    : [];
+  const portalUploads: PortalUploadRow[] = portalUploadRows.map((row) => {
+    const linkedCase = uploadCases.find((item) => item.id === row.caseId);
+    return { ...row, caseLabel: linkedCase ? `Case C-${linkedCase.number}` : null };
+  });
   const referralCode = marketingOn ? await ensureReferralCode(contact.id) : "";
   // The share text names THIS workspace (Settings → Company), not Denago.
   const company = marketingOn ? await getCompanyProfile() : null;
@@ -204,6 +229,33 @@ export default async function ContactDetailPage({
         { label: "Documents", value: looseDocuments.length + quoteDocuments.length },
       ]}
       actions={<>
+          {/* Start the next thing for THIS customer from their own page (gap audit
+              #24) — each pre-filled with them, and only for staff allowed to. */}
+          {canCreateLead && (
+            <QuickCreateButton kind="lead" defaults={{ contactId: contact.id, contactLabel: contactName(contact) }} className="btn-secondary">
+              New lead
+            </QuickCreateButton>
+          )}
+          {canCreateQuote && (
+            <QuickCreateButton kind="quote" defaults={{ contactId: contact.id }} className="btn-secondary">
+              New quote
+            </QuickCreateButton>
+          )}
+          {automotiveOn && canBookTestDrive && (
+            <Link href={`/test-drives?book=1&contactId=${contact.id}`} className="btn-secondary">
+              Book test drive
+            </Link>
+          )}
+          {automotiveOn && canOpenJobCard && contact.vehicles.length > 0 && (
+            <QuickCreateButton
+              kind="jobcard"
+              // One vehicle → it's pre-selected; several → staff pick which.
+              defaults={contact.vehicles.length === 1 ? { vehicleId: contact.vehicles[0].id } : {}}
+              className="btn-secondary"
+            >
+              New job card
+            </QuickCreateButton>
+          )}
           <Link href={`/contacts/${contact.id}/edit`} className="btn-secondary">
             Edit
           </Link>
@@ -528,15 +580,23 @@ export default async function ContactDetailPage({
               {
                 key: "documents",
                 label: "Documents",
-                count: looseDocuments.length + quoteDocuments.length,
+                count: looseDocuments.length + quoteDocuments.length + portalUploads.length,
                 content: (
-                  <DocumentsPanel
-                    documents={looseDocuments}
-                    quoteGroups={quoteGroups}
-                    quoteActions={{ canCancel: canCancelQuotes, canDuplicate: canDuplicateQuotes }}
-                    contactId={contact.id}
-                    revalidate={path}
-                  />
+                  <div className="space-y-4">
+                    {portalUploads.length > 0 && (
+                      <div className="card">
+                        <h2 className="mb-2 font-semibold">From the customer portal</h2>
+                        <PortalUploadsList uploads={portalUploads} canReview={canReviewUploads} />
+                      </div>
+                    )}
+                    <DocumentsPanel
+                      documents={looseDocuments}
+                      quoteGroups={quoteGroups}
+                      quoteActions={{ canCancel: canCancelQuotes, canDuplicate: canDuplicateQuotes }}
+                      contactId={contact.id}
+                      revalidate={path}
+                    />
+                  </div>
                 ),
               },
               {

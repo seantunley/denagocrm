@@ -1,7 +1,6 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { unstable_rethrow } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { customerRecordTenantId } from "@/lib/customerRecordTenant";
 import {
@@ -11,6 +10,8 @@ import {
   type PermissionUser,
 } from "@/lib/permissions";
 import { requireUser } from "@/lib/auth";
+import { asActionResult, refuse, ActionRefusal } from "@/lib/actionResult";
+import { withActingStaffScope } from "@/lib/actingScope";
 import { futureActivityRefusal, isFutureDay } from "@/lib/activityDay";
 import { resolveAssignableUser } from "@/lib/tenantActor";
 import { logAudit } from "@/lib/audit";
@@ -81,19 +82,20 @@ async function assertLinks(
   links: { leadId?: string | null; contactId?: string | null },
 ) {
   if (links.leadId && !(await canAccessLead(user, links.leadId))) {
-    throw new Error("Lead access denied");
+    refuse("You don't have access to that lead.");
   }
   if (links.contactId && !(await canAccessContact(user, links.contactId))) {
-    throw new Error("Contact access denied");
+    refuse("You don't have access to that customer.");
   }
 }
 
 async function requireActivityAccess(id: string) {
   const user = await requirePermission("activities.manage");
-  const activity = await prisma.activity.findUniqueOrThrow({
+  const activity = await prisma.activity.findUnique({
     where: { id },
     include: { lead: true },
   });
+  if (!activity) refuse("That activity is no longer there — refresh the page.");
   const directlyOwned =
     activity.assignedToId === user.id || activity.createdById === user.id;
   const linkedAllowed =
@@ -102,15 +104,36 @@ async function requireActivityAccess(id: string) {
       ? await canAccessContact(user, activity.contactId)
       : false);
   if (user.role !== "owner" && !directlyOwned && !linkedAllowed) {
-    throw new Error("Activity access denied");
+    refuse("You don't have access to that activity.");
   }
   return { user, activity };
 }
 
-export async function scheduleActivity(formData: FormData): Promise<{ error?: string; success?: string }> {
+/*
+ * asActionResult on every form-facing action (gap audit #22): a refusal comes back
+ * as a message the form shows, where a thrown Error reached staff as "This page
+ * hit an error". It also binds the acting workspace, which none of these did.
+ * The three that already return their own shape go through `asOwnResult`.
+ */
+async function asOwnResult<T>(body: () => Promise<T>, refused: (message: string) => T): Promise<T> {
+  return withActingStaffScope(async () => {
+    try {
+      return await body();
+    } catch (error) {
+      if (error instanceof ActionRefusal) return refused(error.message);
+      throw error;
+    }
+  });
+}
+
+export async function scheduleActivity(formData: FormData) {
+  return asActionResult(() => scheduleActivityBody(formData));
+}
+
+async function scheduleActivityBody(formData: FormData) {
   const user = await requirePermission("activities.manage");
   const summary = String(formData.get("summary") ?? "").trim();
-  if (!summary) return { error: "What needs to happen is required." };
+  if (!summary) refuse("Describe the activity.");
   const leadId = str(formData, "leadId");
   const contactId = str(formData, "contactId");
   await assertLinks(user, { leadId, contactId });
@@ -129,8 +152,10 @@ export async function scheduleActivity(formData: FormData): Promise<{ error?: st
     dueDate = rawDue
       ? new Date(`${ensureFollowUpTime(rawDue)}:00+02:00`)
       : new Date(NaN);
+    // A follow-up MUST have a note and a real, future time — the latter so the
+    // existing hour-before reminder push (which skips midnight) fires.
     const problem = followUpValidationError({ note, dueDate }, new Date());
-    if (problem) return { error: problem };
+    if (problem) refuse(problem);
   } else {
     dueDate = rawDue
       ? rawDue.includes("T")
@@ -138,19 +163,19 @@ export async function scheduleActivity(formData: FormData): Promise<{ error?: st
         : new Date(rawDue)
       : new Date();
   }
-  if (Number.isNaN(dueDate.getTime())) return { error: "Pick a valid start date and time." };
+  if (Number.isNaN(dueDate.getTime())) refuse("Pick a valid start date and time.");
 
   const endDate = rawEnd
     ? new Date(rawEnd.includes("T") ? `${rawEnd}:00+02:00` : rawEnd)
     : new Date(dueDate.getTime() + DEFAULT_ACTIVITY_DURATION_MS);
   if (Number.isNaN(endDate.getTime()) || endDate <= dueDate) {
-    return { error: "End time must be after the start time." };
+    refuse("End time must be after the start time.");
   }
 
   let activity;
   if (workshop) {
     if (!rawDue || !rawDue.includes("T")) {
-      return { error: "Pick a configured workshop date and time." };
+      refuse("Pick a configured workshop date and time.");
     }
     try {
       activity = await reserveSlot({
@@ -169,17 +194,19 @@ export async function scheduleActivity(formData: FormData): Promise<{ error?: st
     } catch (error) {
       const code = error instanceof Error ? error.message : "";
       if (code === "SLOT_TAKEN") {
-        return { error: "That workshop time has just filled up. Pick another available slot." };
+        refuse("That workshop time has just filled up. Pick another available slot.");
       }
       if (code === "SLOT_INVALID") {
-        return { error: "That workshop slot is no longer available. Pick a future configured date and time." };
+        refuse("That workshop slot is no longer available. Pick a future configured date and time.");
       }
       if (code.startsWith("STAFF_UNAVAILABLE:")) {
-        return { error: code.slice("STAFF_UNAVAILABLE:".length) };
+        refuse(code.slice("STAFF_UNAVAILABLE:".length));
       }
       throw error;
     }
   } else {
+    // Activity carries composite tenant foreign keys to Lead and Contact — the
+    // customer record owns the row, and stamping anything else refuses the write.
     const tenantId = await customerRecordTenantId({ contactId, leadId });
     const scheduleTenant = await staffScheduleTenantId(tenantId);
     activity = await prisma.$transaction(async (tx) => {
@@ -211,7 +238,7 @@ export async function scheduleActivity(formData: FormData): Promise<{ error?: st
       return { created } as const;
     });
     if ("conflict" in activity && activity.conflict) {
-      return { error: availabilityConflictMessage(activity.conflict) };
+      refuse(availabilityConflictMessage(activity.conflict));
     }
     activity = activity.created;
   }
@@ -255,7 +282,7 @@ async function finishActivity(id: string, note: string) {
    * block the return being logged.
    */
   if (isFutureDay(scheduled.dueDate)) {
-    throw new Error(futureActivityRefusal(scheduled.dueDate));
+    refuse(futureActivityRefusal(scheduled.dueDate));
   }
   const activity = await prisma.activity.update({
     where: { id },
@@ -300,11 +327,14 @@ async function finishActivity(id: string, note: string) {
 }
 
 export async function completeActivity(id: string, formData: FormData) {
-  const activity = await finishActivity(id, String(formData.get("note") ?? ""));
-  revalidateRecordPages(activity);
-  revalidatePath(String(formData.get("revalidate") ?? "/activities"));
-  revalidatePath("/activities");
-  revalidatePath("/");
+  return asActionResult(async () => {
+    const activity = await finishActivity(id, String(formData.get("note") ?? ""));
+    revalidateRecordPages(activity);
+    revalidatePath(String(formData.get("revalidate") ?? "/activities"));
+    revalidatePath("/activities");
+    revalidatePath("/");
+    return { success: "Activity completed" };
+  });
 }
 
 export type CompleteAssessment = {
@@ -312,6 +342,8 @@ export type CompleteAssessment = {
   needsNextStep: boolean;
   leadId: string | null;
   leadName: string | null;
+  /** Set when the completion was refused (e.g. it is scheduled for a later day). */
+  error?: string;
 };
 
 /**
@@ -342,6 +374,13 @@ export async function completeActivityAssess(
   id: string,
   note: string,
 ): Promise<CompleteAssessment> {
+  return asOwnResult(
+    () => completeActivityAssessBody(id, note),
+    (error) => ({ done: false, needsNextStep: false, leadId: null, leadName: null, error }),
+  );
+}
+
+async function completeActivityAssessBody(id: string, note: string): Promise<CompleteAssessment> {
   const activity = await finishActivity(id, note);
 
   let needsNextStep = false;
@@ -414,16 +453,16 @@ export async function rescheduleActivity(
   id: string,
   when: string,
 ): Promise<{ ok: boolean; error?: string }> {
-  // Refused as a VALUE: the calendar's drag now shows everyone's availability
-  // blocks, and a thrown denial escaped the transition and took the page down.
-  let access: Awaited<ReturnType<typeof requireActivityAccess>>;
-  try {
-    access = await requireActivityAccess(id);
-  } catch (error) {
-    unstable_rethrow(error); // a guard's redirect (expired session…) still navigates
-    return { ok: false, error: "You can't move this — it's gone, or it isn't yours or linked to a customer you can open." };
-  }
-  const { user, activity: existing } = access;
+  // Refused as a VALUE (asOwnResult): the calendar's drag shows everyone's
+  // availability blocks, and a thrown denial would take the page down.
+  return asOwnResult(() => rescheduleActivityBody(id, when), (error) => ({ ok: false, error }));
+}
+
+async function rescheduleActivityBody(id: string, when: string): Promise<{ ok: boolean; error?: string }> {
+  const { user, activity: existing } = await requireActivityAccess(id);
+  // Preserve the follow-up "real future time" invariant that updateActivity
+  // enforces: the hour-before reminder push skips midnight, so a follow-up
+  // rescheduled to a past/midnight time would silently miss its nudge.
   let dueDate: Date;
   if (existing.type === FOLLOW_UP_TYPE) {
     // ensureFollowUpTime reads "YYYY-MM-DDTHH:mm" as LOCAL time, so a zoned
@@ -510,6 +549,16 @@ export async function scheduleFollowUp(data: {
   when: string;
   summary?: string;
 }): Promise<{ ok: boolean; error?: string }> {
+  return asOwnResult(() => scheduleFollowUpBody(data), (error) => ({ ok: false, error }));
+}
+
+async function scheduleFollowUpBody(data: {
+  leadId: string | null;
+  contactId?: string | null;
+  type: string;
+  when: string;
+  summary?: string;
+}): Promise<{ ok: boolean; error?: string }> {
   const user = await requirePermission("activities.manage");
   await assertLinks(user, data);
   const dueDate = new Date(
@@ -571,26 +620,30 @@ export async function scheduleFollowUp(data: {
 }
 
 export async function cancelActivity(id: string, revalidate: string) {
-  await requireActivityAccess(id);
-  const activity = await prisma.activity.update({
-    where: { id },
-    data: { status: "canceled" },
-    include: { lead: true },
+  return asActionResult(async () => {
+    await requireActivityAccess(id);
+    const activity = await prisma.activity.update({
+      where: { id },
+      data: { status: "canceled" },
+      include: { lead: true },
+    });
+    revalidatePath(revalidate);
+    revalidatePath("/activities");
+    revalidatePath("/");
+    revalidatePath("/calendar");
+    revalidateRecordPages(activity);
+    return { success: "Activity cancelled" };
   });
-  revalidatePath(revalidate);
-  revalidatePath("/activities");
-  revalidatePath("/");
-  revalidatePath("/calendar");
-  revalidateRecordPages(activity);
 }
 
-export async function updateActivity(
-  id: string,
-  formData: FormData,
-): Promise<{ error?: string; success?: string }> {
+export async function updateActivity(id: string, formData: FormData) {
+  return asActionResult(() => updateActivityBody(id, formData));
+}
+
+async function updateActivityBody(id: string, formData: FormData) {
   const { user, activity: existing } = await requireActivityAccess(id);
   const summary = String(formData.get("summary") ?? "").trim();
-  if (!summary) return { error: "What needs to happen is required." };
+  if (!summary) refuse("Describe the activity.");
   const type = str(formData, "type") ?? "todo";
   const rawDue = str(formData, "dueDate");
   const rawEnd = str(formData, "endDate");
@@ -600,7 +653,7 @@ export async function updateActivity(
     if (type === FOLLOW_UP_TYPE) {
       dueDate = new Date(`${ensureFollowUpTime(rawDue)}:00+02:00`);
       const problem = followUpDueDateError(dueDate, new Date());
-      if (problem) return { error: problem };
+      if (problem) refuse(problem);
     } else {
       dueDate = rawDue.endsWith("T00:00")
         ? new Date(rawDue.slice(0, 10))
@@ -609,7 +662,7 @@ export async function updateActivity(
           : new Date(rawDue);
     }
   }
-  if (Number.isNaN(dueDate.getTime())) return { error: "Pick a valid start date and time." };
+  if (Number.isNaN(dueDate.getTime())) refuse("Pick a valid start date and time.");
 
   const previousEnd = effectiveActivityEnd(existing.dueDate, existing.endDate);
   const previousDuration = previousEnd.getTime() - existing.dueDate.getTime();
@@ -617,7 +670,7 @@ export async function updateActivity(
     ? new Date(rawEnd.includes("T") ? `${rawEnd}:00+02:00` : rawEnd)
     : new Date(dueDate.getTime() + previousDuration);
   if (Number.isNaN(endDate.getTime()) || endDate <= dueDate) {
-    return { error: "End time must be after the start time." };
+    refuse("End time must be after the start time.");
   }
 
   const assignedToId = (await resolveActivityAssignee(formData))?.id ?? user.id;
