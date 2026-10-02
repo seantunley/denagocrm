@@ -2,6 +2,7 @@ import nodemailer from "nodemailer";
 import { PLATFORM_TEAM_SIGNOFF } from "./platformIdentity";
 import { resolveIntegrationBundleForTenant } from "./settings";
 import { currentTenantScope } from "./tenantScope";
+import { inlineImages, workspaceLogoLoader } from "./emailInlineLogo";
 import { DEFAULT_REGIONAL, formatZAR, type Regional } from "./format";
 import { recordOutboundFailure, recordOutboundMessage, type OutboundRecord } from "./outboundMessageLog";
 
@@ -122,13 +123,20 @@ export async function sendEmail(input: {
       requireTLS: !config.secure,
       auth: config.user ? { user: config.user, pass: config.pass ?? "" } : undefined,
     });
+    // The workspace's logo travels INSIDE the message (see emailInlineLogo.ts), so
+    // it shows without the reader allowing remote images. Never a reason to fail:
+    // anything that goes wrong leaves the original linked logo.
+    const tenantId = currentTenantScope()?.tenantId ?? null;
+    const inline = input.html && tenantId ? await inlineImages(input.html, workspaceLogoLoader(tenantId)).catch(() => null) : null;
     const info = await transporter.sendMail({
       from: fromHeader(config),
       to: input.to,
       subject: input.subject,
       text: input.text,
-      html: input.html,
-      attachments: input.attachments,
+      html: inline?.html ?? input.html,
+      // Inline logos ride along as cid attachments; the timeline's attachment
+      // list (`logged`) stays what the sender attached.
+      attachments: inline?.attachments.length ? [...(input.attachments ?? []), ...inline.attachments] : input.attachments,
       headers: input.headers,
       // Omitted entirely when absent, so mail that sets no Reply-To is
       // byte-for-byte what it was before this field existed.
