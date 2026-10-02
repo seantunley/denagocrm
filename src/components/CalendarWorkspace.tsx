@@ -56,6 +56,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { shiftDateKey } from "@/lib/calendarDates";
 import { cn } from "@/lib/utils";
 import { AvailabilityConflictDialog } from "@/components/AvailabilityConflictDialog";
+import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 
 export type CalendarWorkspaceEvent = {
   id: string;
@@ -63,7 +64,8 @@ export type CalendarWorkspaceEvent = {
   dueDate: string;
   endDate: string | null;
   dateKey: string;
-  href: string;
+  /** The lead or contact it belongs to; null when it is not linked to one. */
+  href: string | null;
   summary: string;
   time: string | null;
   endTime: string | null;
@@ -635,12 +637,16 @@ export default function CalendarWorkspace({
     );
   }
 
-  function cancelSelected() {
+  // Behind a confirmation: one click on Cancel took a festival day off two
+  // people's calendars by mistake.
+  async function confirmCancelSelected() {
     if (!selectedEvent) return;
-    runAction(
-      () => cancelActivity(selectedEvent.recordId, basePath),
-      "Activity cancelled",
-    );
+    const result = await cancelActivity(selectedEvent.recordId, basePath);
+    if (!result?.error) {
+      setSelectedEvent(null);
+      router.refresh();
+    }
+    return result;
   }
 
   /**
@@ -1544,22 +1550,37 @@ export default function CalendarWorkspace({
                 )}
 
               <div className="flex flex-col-reverse gap-2 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
-                <Button asChild variant="outline">
-                  <Link href={selectedEvent.href}>Open record</Link>
-                </Button>
+                {/* Only when there is a record: an unlinked meeting used to link
+                    back to /calendar, so the button did nothing. */}
+                {selectedEvent.href ? (
+                  <Button asChild variant="outline">
+                    <Link href={selectedEvent.href}>Open record</Link>
+                  </Button>
+                ) : (
+                  <span />
+                )}
                 {canManage &&
                   selectedEvent.status === "planned" && (
                     <div className="flex gap-2">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={cancelSelected}
-                        disabled={isPending}
-                        className="text-red-300 hover:text-red-200"
-                      >
-                        <XCircle className="size-4" />
-                        Cancel
-                      </Button>
+                      <ConfirmActionDialog
+                        trigger={
+                          <Button
+                            type="button"
+                            variant="outline"
+                            disabled={isPending}
+                            className="text-red-300 hover:text-red-200"
+                          >
+                            <XCircle className="size-4" />
+                            Cancel
+                          </Button>
+                        }
+                        title={`Cancel “${selectedEvent.summary}”?`}
+                        description={`It comes off the calendar for ${selectedEvent.assignee}.`}
+                        confirmLabel="Cancel it"
+                        destructive
+                        success="Activity cancelled"
+                        onConfirm={confirmCancelSelected}
+                      />
                       {/* Not offered before the day arrives. `selectedEvent.dueDate`
                           is an ISO STRING here, hence the Date(). finishActivity
                           refuses it server-side either way; this stops the calendar

@@ -7,6 +7,7 @@ import { isFutureDay } from "@/lib/activityDay";
 import { ActivityTypeIcon } from "@/components/ActivityTypesProvider";
 import { ConflictAwareForm } from "@/components/ConflictAwareForm";
 import { AttendeePicker } from "@/components/AttendeePicker";
+import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 
 type ActivityItem = {
   id: string;
@@ -305,15 +306,24 @@ export default function ActivityPanel({
                     </div>
                   </ConflictAwareForm>
                 </ModalTrigger>
-                <SaveForm action={cancelActivity.bind(null, a.id, revalidate)}>
-                  <SaveButton
-                    className="text-xs text-slate-600 hover:text-red-500 cursor-pointer mt-1.5"
-                    title="Cancel"
-                    pendingLabel="…"
-                  >
-                    ✕
-                  </SaveButton>
-                </SaveForm>
+                <ConfirmActionDialog
+                  trigger={
+                    <button
+                      type="button"
+                      className="text-xs text-slate-600 hover:text-red-500 cursor-pointer mt-1.5"
+                      title="Cancel"
+                      aria-label={`Cancel ${a.summary}`}
+                    >
+                      ✕
+                    </button>
+                  }
+                  title={`Cancel “${a.summary}”?`}
+                  description="It comes off the calendar and the to-do list."
+                  confirmLabel="Cancel it"
+                  destructive
+                  success="Activity cancelled"
+                  onConfirm={cancelActivity.bind(null, a.id, revalidate)}
+                />
               </li>
             );
           })}

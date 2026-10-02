@@ -75,9 +75,22 @@ test("a report says which script and whether it was really blocked; extension no
   assert.match(route, /raw\["source-file"\] \?\? raw\.sourceFile/, "report-uri and report-to spellings");
   assert.match(route, /raw\.disposition/);
   assert.match(route, /EXTENSION_SOURCE\.test\(source\)/);
-  const re = /^(chrome|moz|safari-web|ms-browser)-extension:/;
+  // The route's OWN pattern, not a copy: a copy kept passing while the real one
+  // missed Chrome's bare "chrome-extension" source.
+  const pattern = route.match(/const EXTENSION_SOURCE = \/(.+)\/;/)?.[1];
+  assert.ok(pattern, "EXTENSION_SOURCE is a regex literal");
+  const re = new RegExp(pattern);
   assert.ok(re.test("chrome-extension://abc/inject.js"));
+  assert.ok(re.test("chrome-extension"), "Chrome sends the bare scheme as source-file");
+  assert.ok(re.test("moz-extension"));
+  assert.ok(!re.test("chrome-extensionless.example"));
   assert.ok(!re.test("https://crm.denagocpt.co.za/_next/static/chunks/app.js"));
+});
+
+test("Zod's eval probe is switched off before the app's code runs", () => {
+  // Our own bundle filed "script-src blocked eval" on every page load: Zod v4
+  // tries Function("") to pick a faster parser, and the CSP refuses it.
+  assert.match(src("src/instrumentation-client.ts"), /z\.config\(\{ jitless: true \}\);/);
 });
 
 test("X-POWERED-BY IS NOT ANNOUNCED", () => {

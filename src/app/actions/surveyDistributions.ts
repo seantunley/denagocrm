@@ -109,10 +109,10 @@ export async function resumeDistribution(formData: FormData) {
   });
 }
 
-export async function cancelDistribution(formData: FormData) {
+/** Takes the id directly: it is confirmed in a dialog, not posted from a form. */
+export async function cancelDistribution(id: string) {
   return asActionResult(async () => {
     const { user, tenantId } = await distributionContext();
-    const id = String(formData.get("id") ?? "");
     const current = await distribution(id, tenantId);
     if (new Set(["completed", "completed_with_errors", "cancelled"]).has(current.status)) refuse("This distribution is already closed.");
     await basePrisma.$transaction(async (tx) => {

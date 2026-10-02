@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { cancelActivity, completeActivity } from "@/app/actions/activities";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
+import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { isFutureDay } from "@/lib/activityDay";
 import { QuickCreateButton } from "@/components/QuickCreateButton";
 import { buttonVariants } from "@/components/ui/button";
@@ -565,27 +566,29 @@ export default async function ActivitiesPage({
                                         Done
                                       </SaveButton>
                                     </SaveForm>
-                                    <SaveForm
-                                      action={cancelActivity.bind(
-                                        null,
-                                        activity.id,
-                                        "/activities",
-                                      )}
-                                    >
-                                      <SaveButton
-                                        pendingLabel="…"
-                                        title="Cancel activity"
-                                        aria-label={`Cancel ${activity.summary}`}
-                                        className={buttonVariants({
-                                          variant: "ghost",
-                                          size: "icon-sm",
-                                          className:
-                                            "text-muted-foreground hover:text-destructive",
-                                        })}
-                                      >
-                                        <Trash2 className="size-3.5" />
-                                      </SaveButton>
-                                    </SaveForm>
+                                    <ConfirmActionDialog
+                                      trigger={
+                                        <button
+                                          type="button"
+                                          title="Cancel activity"
+                                          aria-label={`Cancel ${activity.summary}`}
+                                          className={buttonVariants({
+                                            variant: "ghost",
+                                            size: "icon-sm",
+                                            className:
+                                              "text-muted-foreground hover:text-destructive",
+                                          })}
+                                        >
+                                          <Trash2 className="size-3.5" />
+                                        </button>
+                                      }
+                                      title={`Cancel “${activity.summary}”?`}
+                                      description="It comes off the calendar and the to-do list."
+                                      confirmLabel="Cancel it"
+                                      destructive
+                                      success="Activity cancelled"
+                                      onConfirm={cancelActivity.bind(null, activity.id, "/activities")}
+                                    />
                                   </div>
                                 )}
                               </div>

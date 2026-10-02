@@ -30,6 +30,7 @@ import {
 import { PageHeader } from "@/components/page-header";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import ConfirmDelete from "@/components/ConfirmDelete";
+import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { EmptyState, StatusPill } from "@/components/visual-system";
 
 export const dynamic = "force-dynamic";
@@ -308,7 +309,15 @@ export default async function JourneysPage() {
                           <form action={retryJourneyRun.bind(null, run.id)}><button className="btn-secondary btn-sm">Retry</button></form>
                         )}
                         {["queued", "waiting"].includes(run.status) && (
-                          <form action={cancelJourneyRun.bind(null, run.id)}><button className="text-xs text-red-400">Cancel</button></form>
+                          <ConfirmActionDialog
+                            trigger={<button type="button" className="text-xs text-red-400">Cancel</button>}
+                            title="Cancel this journey run?"
+                            description="Its remaining steps will not run for this customer."
+                            confirmLabel="Cancel run"
+                            destructive
+                            success="Journey run cancelled"
+                            onConfirm={cancelJourneyRun.bind(null, run.id)}
+                          />
                         )}
                       </div>
                     </td>
