@@ -141,7 +141,8 @@ test("the implementation keeps account resolution and credentials tenant-bound",
   const route = fs.readFileSync("src/app/api/webhooks/x/route.ts", "utf8");
   const oauth = fs.readFileSync("src/app/api/integrations/x/callback/route.ts", "utf8");
   assert.match(route, /resolveChannelTenant\("x", accountId\)/);
-  assert.match(route, /resolveTenantCredential\(owner, "X_WEBHOOK_SECRET"\)/);
+  // The owning workspace's secret, by the X app's set rule (tests/xCredentialSet.test.ts).
+  assert.match(route, /resolveIntegrationField\(owner, "x", "X_WEBHOOK_SECRET"\)/);
   assert.match(route, /withChannelTenantScope\("x", accountId/);
   assert.match(oauth, /activeTenantId !== pending\.tenantId/);
 });

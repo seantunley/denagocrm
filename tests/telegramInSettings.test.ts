@@ -22,7 +22,9 @@ const shipped = (rel: string) =>
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/^\s*\/\/.*$/gm, "");
 
-const SETTINGS = "src/app/(app)/settings/page.tsx";
+// Settings → Integrations is ONE page now (batch 6); Telegram is among its
+// owner-only rows, rendered by this component.
+const SETTINGS = "src/components/settings/WorkspaceIntegrationRows.tsx";
 const CHATBOT = "src/app/(app)/chatbot/page.tsx";
 
 /**

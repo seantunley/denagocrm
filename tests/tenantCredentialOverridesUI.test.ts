@@ -122,7 +122,7 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const settingsSrc = readFileSync(join(root, "src/lib/settings.ts"), "utf8");
 const actionsSrc = readFileSync(join(root, "src/app/actions/tenantCredentials.ts"), "utf8");
 const pageSrc = readFileSync(
-  join(root, "src/app/(app)/settings/integration-overrides/page.tsx"),
+  join(root, "src/app/(app)/settings/integrations/page.tsx"),
   "utf8",
 );
 
@@ -161,4 +161,11 @@ test("clearTenantCredentialOverride: tenant-owner-gated, validates the key, dele
 test("the overrides page never renders a decrypted value back into the DOM — only hasOverride booleans feed placeholders/labels", () => {
   assert.doesNotMatch(pageSrc, /defaultValue=\{.*(field|hasOverride|override).*value/i);
   assert.match(pageSrc, /hasTenantCredentialOverride/);
+  // The one Integrations page (batch 6) shows where each value in use comes from
+  // and, for NON-secret fields only, the value itself. A secret is reduced to a
+  // boolean inside the single bundle read and never displayed.
+  assert.match(pageSrc, /for \(const field of integration\.fields\) effectiveSet\[field\.key\] = Boolean\(bundle\[field\.key\]\);/);
+  assert.match(pageSrc, /if \(isSecretSettingKey\(key\)\) continue;\s*const value = bundle\[key\];\s*if \(value\) safe\[key\] = value;/);
+  assert.match(pageSrc, /Object\.assign\(effectiveShown, safe\);/);
+  assert.match(pageSrc, /const shown = secret \? undefined : effectiveShown\[field\.key\];/);
 });

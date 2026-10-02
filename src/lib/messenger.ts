@@ -3,7 +3,7 @@ import { decideEcho } from "./metaEcho";
 import { deleteCommunicationsAndReconcile } from "./conversations";
 import { prisma } from "./db";
 import { customerRecordTenantId } from "./customerRecordTenant";
-import { resolveTenantCredential } from "./settings";
+import { resolveIntegrationField, resolveTenantCredential } from "./settings";
 import { logAudit } from "./audit";
 import { sendPushToAll } from "./push";
 import { inboundCommunicationKey, isDedupeKeyConflict } from "./inboundMessageKey";
@@ -341,7 +341,7 @@ async function persistAttachment(
 
 async function fetchProfileName(platform: DmPlatform, userId: string): Promise<string | null> {
   if (platform === "x") {
-    const token = await resolveTenantCredential(ambientTenantId(), "X_ACCESS_TOKEN");
+    const token = await resolveIntegrationField(ambientTenantId(), "x", "X_ACCESS_TOKEN");
     if (!token) return null;
     try {
       const res = await fetch(`https://api.x.com/2/users/${encodeURIComponent(userId)}`, {
