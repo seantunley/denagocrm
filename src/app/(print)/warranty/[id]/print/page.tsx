@@ -1,8 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { printableRecordLayout } from "@/lib/docbuilder/leadWarrantyRecords";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
-import { requireVehicleReadAccess } from "@/lib/permissions";
+import { requireWarrantyClaimReadAccess } from "@/lib/warrantyAccess";
 import PrintActions from "@/components/PrintActions";
 import PrintDocShell, { InfoBlock } from "@/components/print/PrintDocShell";
 import { getCompanyProfile } from "@/lib/companyProfile";
@@ -20,13 +19,14 @@ export default async function WarrantyClaimPrintPage({
 }) {
   const { id } = await params;
   const { tpl: tplId } = await searchParams;
-  await requireUser();
+  // The claim's read rule — warranty grant AND vehicle — as on the claim's own
+  // page. Vehicle access alone used to be enough here.
+  if (!(await requireWarrantyClaimReadAccess(id))) notFound();
   const claim = await prisma.warrantyClaim.findUnique({
     where: { id },
     include: { vehicle: { include: { contact: true } } },
   });
   if (!claim) notFound();
-  await requireVehicleReadAccess(claim.vehicleId);
   // SAFE SWITCH: once the default warranty-claim layout is PUBLISHED in the
   // single editor, that is what prints. ?tpl= is a Settings → Documents preview
   // of a legacy template, so it stays here.
