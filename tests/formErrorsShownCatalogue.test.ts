@@ -35,8 +35,9 @@ for (const { actions, forms } of CONVERTED) {
 
 test("AI discovery / research failures are reported, not silently 'done'", () => {
   const s = src("src/app/actions/competitors.ts");
-  assert.match(s, /if \(!result\.ok\) refuse\("AI discovery couldn't finish/);
-  assert.match(s, /if \(!result\.ok\) refuse\("AI research couldn't finish/);
+  // With the reason (#747): "check the AI setup" hid an empty credit balance for a week.
+  assert.match(s, /if \(!result\.ok\) refuse\(`AI discovery couldn't finish: \$\{result\.error/);
+  assert.match(s, /if \(!result\.ok\) refuse\(`AI research couldn't finish: \$\{result\.error/);
 });
 
 test("a bad showcase photo shows its size/format message", () => {
