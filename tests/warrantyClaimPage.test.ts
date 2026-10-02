@@ -11,8 +11,7 @@ const PAGE = "src/app/(app)/warranty/[id]/page.tsx";
 test("a claim has its own page, guarded by the page itself", () => {
   assert.ok(existsSync(new URL(`../${PAGE}`, import.meta.url)));
   const page = src(PAGE);
-  assert.match(page, /const user = await requireAnyPermission\("warranty\.view", "warranty\.manage"\);/);
-  assert.match(page, /await requireVehicleReadAccess\(claim\.vehicleId\);/);
+  assert.match(page, /const access = await requireWarrantyClaimReadAccess\(id\);\s*if \(!access\) notFound\(\);/);
   // Forms only with the manage grant (the actions check it again).
   assert.match(page, /const canManage = await hasPermission\(user, "warranty\.manage"\);/);
   assert.match(page, /\{canManage \? \(\s*<SaveForm action=\{updateWarrantyClaimDescription\.bind\(null, claim\.id\)\}/);
@@ -21,6 +20,25 @@ test("a claim has its own page, guarded by the page itself", () => {
   assert.match(page, /action=\{deleteWarrantyClaimFromPage\.bind\(null, claim\.id\)\}/);
   // User is global: only the name is read.
   assert.match(page, /prisma\.user\.findUnique\(\{ where: \{ id: claim\.createdById \}, select: \{ name: true \} \}\)/);
+});
+
+test("every way to read a claim uses ONE rule: warranty grant AND vehicle", () => {
+  // Review of #745: the print routes (and the document builder) checked only the
+  // vehicle, so a vehicles-only user could read a claim the page refused them.
+  const access = src("src/lib/warrantyAccess.ts");
+  assert.match(access, /export const WARRANTY_READ = \["warranty\.view", "warranty\.manage"\] as const;/);
+  assert.match(access, /return \(await hasAnyPermission\(user, \.\.\.WARRANTY_READ\)\) && \(await canAccessVehicle\(user, vehicleId\)\);/);
+  assert.match(access, /const user = await requireAnyPermission\(\.\.\.WARRANTY_READ\);[\s\S]*await requireVehicleReadAccess\(claim\.vehicleId\);/);
+  for (const file of [
+    "src/app/(app)/warranty/[id]/layout.tsx",
+    "src/app/(print)/warranty/[id]/print/page.tsx",
+    "src/app/(print)/warranty/[id]/print/document/route.ts",
+  ]) {
+    const code = src(file);
+    assert.match(code, /requireWarrantyClaimReadAccess\(id\)/, `${file} uses the claim read rule`);
+    assert.doesNotMatch(code, /requireVehicleReadAccess\(/, `${file} must not fall back to vehicle access alone`);
+  }
+  assert.match(src("src/lib/docbuilder/recordAccess.ts"), /canReadWarrantyClaim\(user, claim\.vehicleId\)/);
 });
 
 test("the claim actions say why they refused instead of failing silently", () => {

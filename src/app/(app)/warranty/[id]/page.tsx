@@ -4,7 +4,8 @@ import { ShieldCheck } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { contactName, formatDate } from "@/lib/format";
 import { claimColors, claimStatuses } from "@/lib/warranty";
-import { hasPermission, requireAnyPermission, requireVehicleReadAccess } from "@/lib/permissions";
+import { hasPermission } from "@/lib/permissions";
+import { requireWarrantyClaimReadAccess } from "@/lib/warrantyAccess";
 import {
   deleteWarrantyClaimFromPage,
   setWarrantyClaimStatus,
@@ -27,13 +28,16 @@ export const dynamic = "force-dynamic";
  */
 export default async function WarrantyClaimPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const user = await requireAnyPermission("warranty.view", "warranty.manage");
+  // The claim's one read rule (lib/warrantyAccess.ts), shared with its print routes
+  // and the document builder.
+  const access = await requireWarrantyClaimReadAccess(id);
+  if (!access) notFound();
+  const { user } = access;
   const claim = await prisma.warrantyClaim.findUnique({
     where: { id },
     include: { vehicle: { include: { contact: true } } },
   });
   if (!claim) notFound();
-  await requireVehicleReadAccess(claim.vehicleId);
   const canManage = await hasPermission(user, "warranty.manage");
 
   const [jobCard, openedBy] = await Promise.all([
