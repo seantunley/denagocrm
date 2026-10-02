@@ -131,6 +131,9 @@ export default async function ActivitiesPage({
   const activities = await prisma.activity.findMany({
     where: {
       status: "planned",
+      // Availability blocks live on the calendar, not in the task list (they never
+      // leave "planned", so they would sit here as overdue tasks forever).
+      availabilityBlock: false,
       ...(activityIds === null ? {} : { id: { in: activityIds } }),
       ...(mine ? { assignedToId: user.id } : {}),
       ...(type ? { type } : {}),

@@ -5,6 +5,7 @@ import ActivityTypeFields from "@/components/ActivityTypeFields";
 import { formatDue } from "@/lib/format";
 import { isFutureDay } from "@/lib/activityDay";
 import { ActivityTypeIcon } from "@/components/ActivityTypesProvider";
+import { ConflictAwareForm } from "@/components/ConflictAwareForm";
 
 type ActivityItem = {
   id: string;
@@ -14,6 +15,7 @@ type ActivityItem = {
   note: string | null;
   location: string | null;
   dueDate: Date;
+  endDate?: Date | null;
   status: string;
   assignedTo: { id: string; name: string };
   /**
@@ -78,8 +80,10 @@ export default function ActivityPanel({
         <summary className="btn-secondary btn-sm inline-flex cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
           + Schedule activity
         </summary>
-        <SaveForm
+        <ConflictAwareForm
           action={scheduleActivity}
+          conflictTitle="Staff member unavailable"
+          successMessage="Activity scheduled"
           className="mt-3 rounded-lg bg-slate-800/40 p-4 border border-slate-800 grid grid-cols-2 md:grid-cols-4 gap-3 items-end"
         >
         {leadId && <input type="hidden" name="leadId" value={leadId} />}
@@ -93,6 +97,11 @@ export default function ActivityPanel({
         <div>
           <label className="label">Due</label>
           <input type="datetime-local" name="dueDate" className="input" required />
+        </div>
+        <div>
+          <label className="label">Ends</label>
+          <input type="datetime-local" name="endDate" className="input" />
+          <p className="mt-1 text-[11px] text-slate-500">Blank = 1 hour</p>
         </div>
         <div className="col-span-2 md:col-span-2">
           <label className="label">Assign to</label>
@@ -123,8 +132,8 @@ export default function ActivityPanel({
           <input type="checkbox" name="workshop" className="h-4 w-4" />
           🔧 Workshop
         </label>
-        <SaveButton className="btn-primary" pendingLabel="Scheduling…">Schedule</SaveButton>
-        </SaveForm>
+        <button className="btn-primary">Schedule</button>
+        </ConflictAwareForm>
       </details>
       )}
 
@@ -198,9 +207,10 @@ export default function ActivityPanel({
                   title="Edit activity"
                   buttonClass="text-xs text-slate-600 hover:text-orange-400 cursor-pointer mt-1.5"
                 >
-                  <SaveForm
+                  <ConflictAwareForm
                     action={updateActivity.bind(null, a.id)}
-                    resetOnSuccess={false}
+                    conflictTitle="Staff member unavailable"
+                    successMessage="Activity updated"
                     className="card grid grid-cols-2 gap-3 items-end"
                   >
                     <input type="hidden" name="revalidate" value={revalidate} />
@@ -216,6 +226,16 @@ export default function ActivityPanel({
                         name="dueDate"
                         className="input"
                         defaultValue={toLocalInput(a.dueDate)}
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="label">Ends</label>
+                      <input
+                        type="datetime-local"
+                        name="endDate"
+                        className="input"
+                        defaultValue={toLocalInput(a.endDate ?? new Date(a.dueDate.getTime() + 60 * 60 * 1000))}
                         required
                       />
                     </div>
@@ -269,7 +289,7 @@ export default function ActivityPanel({
                     <div className="col-span-2">
                       <SaveButton className="btn-primary w-full">Save changes</SaveButton>
                     </div>
-                  </SaveForm>
+                  </ConflictAwareForm>
                 </ModalTrigger>
                 <SaveForm action={cancelActivity.bind(null, a.id, revalidate)}>
                   <SaveButton

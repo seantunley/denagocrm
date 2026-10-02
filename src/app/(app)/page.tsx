@@ -52,7 +52,7 @@ export default async function DashboardPage({
   // The viewer's OWN overdue items. Inherently self-scoped — assignedToId is the
   // caller — so this shows nobody else's work regardless of permissions.
   const myOverdue = await prisma.activity.findMany({
-    where: { status: "planned", dueDate: { lt: todayStart }, assignedToId: user.id },
+    where: { status: "planned", availabilityBlock: false, dueDate: { lt: todayStart }, assignedToId: user.id },
     orderBy: { dueDate: "asc" },
     take: 3,
     include: { lead: true },

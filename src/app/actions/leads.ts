@@ -12,6 +12,12 @@ import { createLeadRecord } from "@/lib/leadCreate";
 import { cancelPlannedActivitiesForLostLead } from "@/lib/leadClose";
 import { removeTimelinePin } from "@/lib/timelinePins";
 import { customerRecordTenantId } from "@/lib/customerRecordTenant";
+import {
+  availabilityConflictMessage,
+  findStaffAvailabilityConflict,
+  staffScheduleTenantId,
+  lockStaffSchedules,
+} from "@/lib/staffAvailability";
 // `resolveAssignableUser` is the consolidated contract from #460/#467 — it
 // supersedes the direct `resolveTenantMemberUser` call this branch was written
 // against, and it is the one that enforces membership while dormant.
@@ -867,6 +873,7 @@ export async function moveLeadToTestDrive(
   // rather than a value that fails one of them and rolls the booking back.
   const activityTenantId = await customerRecordTenantId({ leadId, contactId });
   const bookingTenantId = await actingTenantId();
+  const scheduleTenant = await staffScheduleTenantId(activityTenantId);
   const expectedReturnAt = new Date(when.getTime() + DEFAULT_TEST_DRIVE_MINUTES * 60_000);
   const branch = data.location.trim() || "Showroom";
   let bookingReference = "";
@@ -886,6 +893,24 @@ export async function moveLeadToTestDrive(
       where: { leadId, deletedAt: null, status: { in: UPCOMING_TEST_DRIVE_STATUSES } },
       orderBy: { scheduledStart: "asc" },
     });
+    // The people on the drive must be free: a reschedule keeps the booking's own
+    // salespeople, a new booking goes to the lead's owner. Refused, not returned
+    // with `gate` — a conflict is not a stage-gate refusal, and carrying the
+    // verdict made the board re-open the override-reason prompt in a loop.
+    const staffIds = upcoming
+      ? [upcoming.salespersonId, upcoming.accompanyingSalespersonId].filter((id): id is string => Boolean(id))
+      : [updated.assignedToId ?? user.id];
+    await lockStaffSchedules(tx, scheduleTenant, staffIds);
+    for (const staffId of staffIds) {
+      const availabilityConflict = await findStaffAvailabilityConflict({
+        userId: staffId,
+        tenantId: scheduleTenant,
+        start: when,
+        end: expectedReturnAt,
+        db: tx,
+      });
+      if (availabilityConflict) refuse(availabilityConflictMessage(availabilityConflict));
+    }
     if (upcoming) {
       // The new slot must be free for the car this booking already holds.
       const clash = await demoVehicleUnavailable(tx, {
@@ -902,7 +927,7 @@ export async function moveLeadToTestDrive(
       });
       bookingReference = rescheduled.reference;
       if (upcoming.activityId) {
-        await tx.activity.update({ where: { id: upcoming.activityId }, data: { summary, note, location: branch, dueDate: when } });
+        await tx.activity.update({ where: { id: upcoming.activityId }, data: { summary, note, location: branch, dueDate: when, endDate: expectedReturnAt } });
       }
     } else {
       // A planned board entry from before bookings existed is adopted, not
@@ -917,7 +942,7 @@ export async function moveLeadToTestDrive(
       if (adopt) {
         await tx.activity.update({
           where: { id: adopt },
-          data: { summary, note, location: branch, dueDate: when, contactId, assignedToId: updated.assignedToId ?? user.id },
+          data: { summary, note, location: branch, dueDate: when, endDate: expectedReturnAt, contactId, assignedToId: updated.assignedToId ?? user.id },
         });
       }
       const booking = await createBookedTestDrive(tx, {

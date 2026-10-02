@@ -2,8 +2,8 @@ import { Plus } from "lucide-react";
 import { createTestDriveBooking } from "@/app/actions/testDrives";
 import { contactName } from "@/lib/format";
 import ModalTrigger from "@/components/Modal";
-import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { buttonVariants } from "@/components/ui/button";
+import { ConflictAwareForm } from "@/components/ConflictAwareForm";
 import ContactPicker from "@/components/ContactPicker";
 
 type ContactOption = {
@@ -53,7 +53,11 @@ export function TestDriveBookingTrigger({
       buttonClass={buttonVariants({ size: "sm" })}
       defaultOpen={defaultOpen}
     >
-      <SaveForm action={createTestDriveBooking} success="Test drive booked" className="space-y-4">
+      <ConflictAwareForm
+        action={createTestDriveBooking}
+        conflictTitle="Salesperson unavailable"
+        className="space-y-4"
+      >
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="sm:col-span-2">
             <label className="label">Customer</label>
@@ -111,8 +115,8 @@ export function TestDriveBookingTrigger({
             <input type="datetime-local" name="expectedReturnAt" className="input" required defaultValue={defaultEnd} />
           </div>
         </div>
-        <SaveButton className="btn-primary w-full" pendingLabel="Booking…">Create booking</SaveButton>
-      </SaveForm>
+        <button className="btn-primary w-full">Create booking</button>
+      </ConflictAwareForm>
     </ModalTrigger>
   );
 }

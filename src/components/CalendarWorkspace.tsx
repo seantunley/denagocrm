@@ -7,10 +7,11 @@ import {
   type ComponentType,
 } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { unstable_rethrow, useRouter } from "next/navigation";
 import {
   CalendarDays,
   CalendarPlus,
+  CalendarX2,
   Car,
   Check,
   CheckCircle2,
@@ -53,14 +54,21 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { shiftDateKey } from "@/lib/calendarDates";
 import { cn } from "@/lib/utils";
+import { AvailabilityConflictDialog } from "@/components/AvailabilityConflictDialog";
 
 export type CalendarWorkspaceEvent = {
   id: string;
+  recordId: string;
   dueDate: string;
+  endDate: string | null;
   dateKey: string;
   href: string;
   summary: string;
   time: string | null;
+  endTime: string | null;
+  allDay: boolean;
+  availabilityBlock: boolean;
+  continuation: boolean;
   status: string;
   overdue: boolean;
   type: string;
@@ -137,6 +145,12 @@ const EVENT_TYPES: Record<
     tone: "border-slate-500/25 bg-slate-500/10 text-slate-200",
     dot: "bg-slate-400",
   },
+  availability: {
+    label: "Unavailable",
+    icon: CalendarX2,
+    tone: "border-amber-500/35 bg-amber-500/10 text-amber-100",
+    dot: "bg-amber-400",
+  },
 };
 
 const DEFAULT_EVENT_TYPE = {
@@ -180,6 +194,23 @@ function isoWeekday(dateKey: string) {
   return weekday === 0 ? 7 : weekday;
 }
 
+function addHourLocal(dateKey: string, time: string) {
+  // One hour AFTER the start: formatting the start instant back unchanged made
+  // the default end equal the start, which the server refuses.
+  const value = new Date(new Date(`${dateKey}T${time}:00+02:00`).getTime() + 60 * 60 * 1000);
+  return value
+    .toLocaleString("sv-SE", {
+      timeZone: "Africa/Johannesburg",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    })
+    .replace(" ", "T");
+}
+
 function EventCard({
   event,
   compact = false,
@@ -195,7 +226,7 @@ function EventCard({
 }) {
   const activityTypes = useActivityTypes();
   const config = eventType(event.type, activityTypes);
-  const Icon = event.workshop ? Wrench : config.icon;
+  const Icon = event.availabilityBlock ? CalendarX2 : event.workshop ? Wrench : config.icon;
   const done = event.status === "done";
 
   return (
@@ -216,9 +247,11 @@ function EventCard({
               ? "border-border bg-muted/45 text-muted-foreground"
               : event.overdue
                 ? "border-red-500/30 bg-red-500/10 text-red-100"
-                : event.workshop
-                  ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-100"
-                  : config.tone,
+                : event.availabilityBlock
+                  ? "border-amber-500/35 bg-amber-500/10 text-amber-100"
+                  : event.workshop
+                    ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-100"
+                    : config.tone,
             compact ? "px-2 py-1.5" : "p-3",
             canManage && !done && "cursor-grab active:cursor-grabbing",
           )}
@@ -227,16 +260,30 @@ function EventCard({
           <div className="flex min-w-0 items-start gap-2">
             <Icon className={cn("mt-0.5 shrink-0", compact ? "size-3" : "size-4")} />
             <div className="min-w-0 flex-1">
-              <p className={cn("truncate font-medium", compact ? "text-[11px] leading-4" : "text-sm", done && "line-through")}>
-                {event.time && <span className="mr-1.5 tabular-nums opacity-75">{event.time}</span>}
-                {event.summary}
-              </p>
-              {!compact && (
-                <div className="mt-1.5 flex min-w-0 items-center gap-2 text-[11px] opacity-70">
-                  <span className="truncate">{event.who ?? config.label}</span>
-                  <span aria-hidden="true">·</span>
-                  <span className="truncate">{event.assignee}</span>
-                </div>
+              {event.availabilityBlock ? (
+                <>
+                  <p className={cn("truncate font-semibold", compact ? "text-[11px] leading-4" : "text-sm")}>
+                    {event.time && !event.continuation && <span className="mr-1.5 tabular-nums opacity-75">{event.time}</span>}
+                    {event.assignee} · {event.summary}
+                  </p>
+                  <p className={cn("mt-0.5 truncate opacity-75", compact ? "text-[10px] leading-4" : "text-[11px]")}>
+                    {event.note || "Unavailable"}
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className={cn("truncate font-medium", compact ? "text-[11px] leading-4" : "text-sm", done && "line-through")}>
+                    {event.time && <span className="mr-1.5 tabular-nums opacity-75">{event.time}</span>}
+                    {event.summary}
+                  </p>
+                  {!compact && (
+                    <div className="mt-1.5 flex min-w-0 items-center gap-2 text-[11px] opacity-70">
+                      <span className="truncate">{event.who ?? config.label}</span>
+                      <span aria-hidden="true">·</span>
+                      <span className="truncate">{event.assignee}</span>
+                    </div>
+                  )}
+                </>
               )}
             </div>
             {done && <Check className="size-3.5 shrink-0" />}
@@ -247,13 +294,13 @@ function EventCard({
         <div className="overflow-hidden rounded-lg">
           <div className="border-b border-border bg-card/95 p-3.5">
             <div className="flex items-start gap-2.5">
-              <span className={cn("mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg border", event.workshop ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-200" : config.tone)}>
+              <span className={cn("mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg border", event.availabilityBlock ? "border-amber-500/35 bg-amber-500/10 text-amber-100" : event.workshop ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-200" : config.tone)}>
                 <Icon className="size-3.5" />
               </span>
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-semibold leading-5 text-popover-foreground">{event.summary}</p>
                 <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
-                  <span>{event.dateLabel}{event.time ? ` · ${event.time}` : " · All day"}</span>
+                  <span>{event.dateLabel}{event.allDay ? " · All day" : event.time ? ` · ${event.time}${event.endTime ? `–${event.endTime}` : ""}` : " · Continues"}</span>
                   <span className={cn(
                     "rounded-full px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide",
                     done
@@ -371,6 +418,7 @@ export default function CalendarWorkspace({
   const [dayDialog, setDayDialog] = useState<string | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [rescheduleValue, setRescheduleValue] = useState("");
+  const [conflictMessage, setConflictMessage] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
   const activityTypes = useActivityTypes();
@@ -396,6 +444,7 @@ export default function CalendarWorkspace({
           event.context,
           event.assignee,
           event.location,
+          event.note,
           eventType(event.type, activityTypes).label,
         ]
           .filter(Boolean)
@@ -521,6 +570,7 @@ export default function CalendarWorkspace({
     }
     openQuickCreate("calendar", {
       dueDate: `${dateKey}T${defaultTime}`,
+      endDate: addHourLocal(dateKey, defaultTime),
       workshop: mode === "workshop",
       revalidate: basePath,
     });
@@ -550,12 +600,20 @@ export default function CalendarWorkspace({
     });
   }
 
+  function blockAvailability(dateKey = selectedDate) {
+    openQuickCreate("availability", {
+      dueDate: `${dateKey}T09:00`,
+      endDate: `${dateKey}T17:00`,
+      revalidate: basePath,
+    });
+  }
+
   function completeSelected() {
     if (!selectedEvent) return;
     const data = new FormData();
     data.set("revalidate", basePath);
     runAction(
-      () => completeActivity(selectedEvent.id, data),
+      () => completeActivity(selectedEvent.recordId, data),
       "Activity completed",
     );
   }
@@ -563,24 +621,42 @@ export default function CalendarWorkspace({
   function cancelSelected() {
     if (!selectedEvent) return;
     runAction(
-      () => cancelActivity(selectedEvent.id, basePath),
+      () => cancelActivity(selectedEvent.recordId, basePath),
       "Activity cancelled",
     );
   }
 
+  /**
+   * Run a reschedule and report it. A refusal comes back as a value (conflict
+   * dialog); anything THROWN — a dropped connection, a stale tab — is a toast,
+   * never an unhandled rejection that takes the calendar to its error boundary.
+   */
+  function runReschedule(recordId: string, when: string, success: string, after?: () => void) {
+    startTransition(async () => {
+      try {
+        const result = await rescheduleActivity(recordId, when);
+        if (!result.ok) {
+          setConflictMessage(result.error ?? "That time is not available.");
+          return;
+        }
+        toast.success(success);
+        after?.();
+        router.refresh();
+      } catch (error) {
+        unstable_rethrow(error);
+        toast.error("The calendar couldn't save that move — refresh the page and try again.");
+      }
+    });
+  }
+
   function rescheduleSelected() {
     if (!selectedEvent || !rescheduleValue) return;
-    runAction(async () => {
-      const result = await rescheduleActivity(
-        selectedEvent.id,
-        rescheduleValue,
-      );
-      if (!result.ok) {
-        throw new Error(
-          result.error ?? "Could not reschedule activity",
-        );
-      }
-    }, "Activity rescheduled");
+    runReschedule(
+      selectedEvent.recordId,
+      rescheduleValue,
+      selectedEvent.availabilityBlock ? "Availability moved" : "Activity rescheduled",
+      () => setSelectedEvent(null),
+    );
   }
 
   function dropOnDate(dateKey: string, transferredId?: string) {
@@ -589,15 +665,13 @@ export default function CalendarWorkspace({
     if (!eventId) return;
     const event = events.find((item) => item.id === eventId);
     if (!event || event.dateKey === dateKey) return;
-    const when = event.time ? `${dateKey}T${event.time}` : dateKey;
-    runAction(async () => {
-      const result = await rescheduleActivity(event.id, when);
-      if (!result.ok) {
-        throw new Error(
-          result.error ?? "Could not reschedule activity",
-        );
-      }
-    }, `${event.summary} moved to ${dateKey}`);
+    // Move by the number of days the card was dragged, applied to the record's
+    // OWN start: an all-day or multi-day block keeps its local start time, and
+    // grabbing day 3 of a 5-day block and dropping it one day later moves the
+    // whole block one day — not to start on the drop day.
+    const days = Math.round((Date.parse(`${dateKey}T00:00:00Z`) - Date.parse(`${event.dateKey}T00:00:00Z`)) / 86_400_000);
+    const when = new Date(Date.parse(event.dueDate) + days * 86_400_000).toISOString();
+    runReschedule(event.recordId, when, `${event.summary} moved to ${dateKey}`);
   }
 
   function navigateWeek(direction: -1 | 1) {
@@ -733,10 +807,16 @@ export default function CalendarWorkspace({
           </Link>
         </div>
         {canManage && (
-          <Button type="button" onClick={() => createActivity()}>
-            <CalendarPlus className="size-4" />
-            Schedule
-          </Button>
+          <>
+            <Button type="button" variant="outline" onClick={() => blockAvailability()}>
+              <CalendarX2 className="size-4" />
+              Block time
+            </Button>
+            <Button type="button" onClick={() => createActivity()}>
+              <CalendarPlus className="size-4" />
+              Schedule
+            </Button>
+          </>
         )}
         </>}
         stats={statCards}
@@ -960,14 +1040,16 @@ export default function CalendarWorkspace({
               </p>
             </div>
             {canManage && (
-              <Button
-                type="button"
-                size="sm"
-                onClick={() => createActivity(selectedDate)}
-              >
-                <CalendarPlus className="size-4" />
-                Add
-              </Button>
+              <div className="flex gap-2">
+                <Button type="button" size="sm" variant="outline" onClick={() => blockAvailability(selectedDate)}>
+                  <CalendarX2 className="size-4" />
+                  Block
+                </Button>
+                <Button type="button" size="sm" onClick={() => createActivity(selectedDate)}>
+                  <CalendarPlus className="size-4" />
+                  Add
+                </Button>
+              </div>
             )}
           </div>
           <div className="space-y-2">
@@ -1339,13 +1421,15 @@ export default function CalendarWorkspace({
                   </span>
                 </div>
                 <DialogTitle className="mt-2 text-xl leading-tight">
-                  {selectedEvent.summary}
+                  {selectedEvent.availabilityBlock ? `${selectedEvent.assignee} · ${selectedEvent.summary}` : selectedEvent.summary}
                 </DialogTitle>
                 <DialogDescription>
                   {selectedEvent.dateLabel}
-                  {selectedEvent.time
-                    ? ` at ${selectedEvent.time}`
-                    : " · All day"}
+                  {selectedEvent.allDay
+                    ? " · All day"
+                    : selectedEvent.time
+                      ? ` at ${selectedEvent.time}${selectedEvent.endTime ? `–${selectedEvent.endTime}` : ""}`
+                      : " · Continues"}
                 </DialogDescription>
               </DialogHeader>
 
@@ -1458,7 +1542,7 @@ export default function CalendarWorkspace({
                           is an ISO STRING here, hence the Date(). finishActivity
                           refuses it server-side either way; this stops the calendar
                           presenting a button that can only fail. */}
-                      {!isFutureDay(new Date(selectedEvent.dueDate)) && (
+                      {!selectedEvent.availabilityBlock && !isFutureDay(new Date(selectedEvent.dueDate)) && (
                         <Button
                           type="button"
                           onClick={completeSelected}
@@ -1475,6 +1559,12 @@ export default function CalendarWorkspace({
           )}
         </ResponsiveDialogContent>
       </Dialog>
+
+      <AvailabilityConflictDialog
+        message={conflictMessage}
+        onClose={() => setConflictMessage(null)}
+        title={selectedEvent?.availabilityBlock ? "Cannot block this time" : "Staff member unavailable"}
+      />
     </div>
   );
 }

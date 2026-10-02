@@ -18,6 +18,16 @@ import { logAudit } from "@/lib/audit";
 import { reserveSlot } from "@/lib/bookingSlots";
 import { ensureTimelinePin } from "@/lib/timelinePins";
 import {
+  availabilityConflictMessage,
+  commitmentConflictMessage,
+  DEFAULT_ACTIVITY_DURATION_MS,
+  effectiveActivityEnd,
+  findStaffAvailabilityConflict,
+  staffScheduleTenantId,
+  findStaffCommitmentConflict,
+  lockStaffSchedules,
+} from "@/lib/staffAvailability";
+import {
   FOLLOW_UP_TYPE,
   ensureFollowUpTime,
   followUpDueDateError,
@@ -129,12 +139,38 @@ async function scheduleActivityBody(formData: FormData) {
   await assertLinks(user, { leadId, contactId });
 
   const rawDue = str(formData, "dueDate");
+  const rawEnd = str(formData, "endDate");
   const type = str(formData, "type") ?? "todo";
   const note = str(formData, "note");
   const location = str(formData, "location");
   const assignee = await resolveActivityAssignee(formData);
   const assignedToId = assignee?.id ?? user.id;
   const workshop = formData.get("workshop") === "on";
+
+  let dueDate: Date;
+  if (type === FOLLOW_UP_TYPE) {
+    dueDate = rawDue
+      ? new Date(`${ensureFollowUpTime(rawDue)}:00+02:00`)
+      : new Date(NaN);
+    // A follow-up MUST have a note and a real, future time — the latter so the
+    // existing hour-before reminder push (which skips midnight) fires.
+    const problem = followUpValidationError({ note, dueDate }, new Date());
+    if (problem) refuse(problem);
+  } else {
+    dueDate = rawDue
+      ? rawDue.includes("T")
+        ? new Date(`${rawDue}:00+02:00`)
+        : new Date(rawDue)
+      : new Date();
+  }
+  if (Number.isNaN(dueDate.getTime())) refuse("Pick a valid start date and time.");
+
+  const endDate = rawEnd
+    ? new Date(rawEnd.includes("T") ? `${rawEnd}:00+02:00` : rawEnd)
+    : new Date(dueDate.getTime() + DEFAULT_ACTIVITY_DURATION_MS);
+  if (Number.isNaN(endDate.getTime()) || endDate <= dueDate) {
+    refuse("End time must be after the start time.");
+  }
 
   let activity;
   if (workshop) {
@@ -152,6 +188,7 @@ async function scheduleActivityBody(formData: FormData) {
         contactId,
         leadId,
         assignedToId,
+        endDate,
         userId: user.id,
       });
     } catch (error) {
@@ -162,54 +199,54 @@ async function scheduleActivityBody(formData: FormData) {
       if (code === "SLOT_INVALID") {
         refuse("That workshop slot is no longer available. Pick a future configured date and time.");
       }
+      if (code.startsWith("STAFF_UNAVAILABLE:")) {
+        refuse(code.slice("STAFF_UNAVAILABLE:".length));
+      }
       throw error;
     }
   } else {
-    let dueDate: Date;
-    if (type === FOLLOW_UP_TYPE) {
-      // A follow-up MUST have a note and a real, future time — the latter so the
-      // existing hour-before reminder push (which skips midnight) fires.
-      dueDate = rawDue
-        ? new Date(`${ensureFollowUpTime(rawDue)}:00+02:00`)
-        : new Date(NaN);
-      const problem = followUpValidationError({ note, dueDate }, new Date());
-      if (problem) refuse(problem);
-    } else {
-      dueDate = rawDue
-        ? rawDue.includes("T")
-          ? new Date(`${rawDue}:00+02:00`)
-          : new Date(rawDue)
-        : new Date();
-    }
-    activity = await prisma.activity.create({
-      data: {
-        type,
-        category: null,
-        summary,
-        note,
-        dueDate,
-        location,
-        leadId,
-        contactId,
-        assignedToId,
-        createdById: user.id,
-        // Activity carries composite tenant foreign keys to Lead and Contact — the
-        // customer record owns the row, and stamping anything else refuses the write.
-        tenantId: await customerRecordTenantId({ contactId, leadId }),
-      },
+    // Activity carries composite tenant foreign keys to Lead and Contact — the
+    // customer record owns the row, and stamping anything else refuses the write.
+    const tenantId = await customerRecordTenantId({ contactId, leadId });
+    const scheduleTenant = await staffScheduleTenantId(tenantId);
+    activity = await prisma.$transaction(async (tx) => {
+      await lockStaffSchedules(tx, scheduleTenant, [assignedToId]);
+      const conflict = await findStaffAvailabilityConflict({
+        userId: assignedToId,
+        tenantId: scheduleTenant,
+        start: dueDate,
+        end: endDate,
+        db: tx,
+      });
+      if (conflict) return { conflict } as const;
+      const created = await tx.activity.create({
+        data: {
+          type,
+          category: null,
+          summary,
+          note,
+          dueDate,
+          endDate,
+          location,
+          leadId,
+          contactId,
+          assignedToId,
+          createdById: user.id,
+          tenantId,
+        },
+      });
+      return { created } as const;
     });
+    if ("conflict" in activity && activity.conflict) {
+      refuse(availabilityConflictMessage(activity.conflict));
+    }
+    activity = activity.created;
   }
 
-  // Auto-pin a new follow-up to the top of the timeline. It stays pinned until
-  // manually unpinned (we never auto-unpin, even on completion).
   if (activity.type === FOLLOW_UP_TYPE) {
     await ensureTimelinePin("activity", activity.id, user.id);
   }
 
-  // The name for the audit line comes from the member we ALREADY resolved. It
-  // used to come from a fresh `prisma.user.findUnique` — a global lookup, which
-  // is the very thing that could not answer the membership question and so had
-  // no business being the source of the name we then wrote down.
   const assigneeName = assignee?.name ?? user.name;
   await logAudit({
     action: "activity.scheduled",
@@ -220,6 +257,7 @@ async function scheduleActivityBody(formData: FormData) {
   });
   revalidatePath(String(formData.get("revalidate") ?? "/activities"));
   revalidatePath("/activities");
+  revalidatePath("/calendar");
   revalidatePath("/");
   return { success: "Activity scheduled" };
 }
@@ -388,10 +426,35 @@ async function completeActivityAssessBody(id: string, note: string): Promise<Com
   };
 }
 
+/**
+ * The new start for a reschedule:
+ * - an instant with a zone (what a calendar drag sends: the block's own start
+ *   shifted by whole days) is taken as is;
+ * - "YYYY-MM-DDTHH:mm" is Johannesburg local time;
+ * - a bare "YYYY-MM-DD" keeps the activity's current local time of day on that
+ *   date. It used to be parsed as UTC midnight (02:00 here), so dragging an
+ *   all-day block moved it two hours and onto an extra day.
+ */
+/** "YYYY-MM-DDTHH:mm" for an instant, on the Johannesburg wall clock. */
+function johannesburgLocal(date: Date): string {
+  return date
+    .toLocaleString("sv-SE", { timeZone: "Africa/Johannesburg", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })
+    .replace(" ", "T");
+}
+
+function parseRescheduleTarget(when: string, current: Date): Date {
+  if (/(?:Z|[+-]\d{2}:?\d{2})$/.test(when)) return new Date(when);
+  if (when.includes("T")) return new Date(`${when}:00+02:00`);
+  const time = current.toLocaleTimeString("en-ZA", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Africa/Johannesburg" });
+  return new Date(`${when}T${time}:00+02:00`);
+}
+
 export async function rescheduleActivity(
   id: string,
   when: string,
 ): Promise<{ ok: boolean; error?: string }> {
+  // Refused as a VALUE (asOwnResult): the calendar's drag shows everyone's
+  // availability blocks, and a thrown denial would take the page down.
   return asOwnResult(() => rescheduleActivityBody(id, when), (error) => ({ ok: false, error }));
 }
 
@@ -402,21 +465,60 @@ async function rescheduleActivityBody(id: string, when: string): Promise<{ ok: b
   // rescheduled to a past/midnight time would silently miss its nudge.
   let dueDate: Date;
   if (existing.type === FOLLOW_UP_TYPE) {
-    const normalised = ensureFollowUpTime(when);
+    // ensureFollowUpTime reads "YYYY-MM-DDTHH:mm" as LOCAL time, so a zoned
+    // instant (a calendar drag) is converted to Johannesburg local first.
+    const local = /(?:Z|[+-]\d{2}:?\d{2})$/.test(when) ? johannesburgLocal(new Date(when)) : when;
+    const normalised = ensureFollowUpTime(local);
     dueDate = normalised ? new Date(`${normalised}:00+02:00`) : new Date(NaN);
     const problem = followUpDueDateError(dueDate, new Date());
     if (problem) return { ok: false, error: problem };
   } else {
-    dueDate = new Date(when.includes("T") ? `${when}:00+02:00` : when);
-    if (isNaN(dueDate.getTime())) {
-      return { ok: false, error: "Pick a valid date" };
-    }
+    dueDate = parseRescheduleTarget(when, existing.dueDate);
+    if (isNaN(dueDate.getTime())) return { ok: false, error: "Pick a valid date" };
   }
-  const activity = await prisma.activity.update({
-    where: { id },
-    data: { dueDate, reminderSentAt: null },
-    include: { lead: true },
+
+  const oldEnd = effectiveActivityEnd(existing.dueDate, existing.endDate);
+  const duration = oldEnd.getTime() - existing.dueDate.getTime();
+  const endDate = new Date(dueDate.getTime() + duration);
+  const tenantId = existing.tenantId ?? await customerRecordTenantId({
+    contactId: existing.contactId,
+    leadId: existing.leadId,
   });
+  const scheduleTenant = await staffScheduleTenantId(tenantId);
+
+  const result = await prisma.$transaction(async (tx) => {
+    await lockStaffSchedules(tx, scheduleTenant, [existing.assignedToId]);
+    if (existing.availabilityBlock) {
+      const conflict = await findStaffCommitmentConflict({
+        userId: existing.assignedToId,
+        tenantId: scheduleTenant,
+        start: dueDate,
+        end: endDate,
+        excludeActivityId: existing.id,
+        db: tx,
+      });
+      if (conflict) return { error: commitmentConflictMessage(conflict) } as const;
+    } else {
+      const conflict = await findStaffAvailabilityConflict({
+        userId: existing.assignedToId,
+        tenantId: scheduleTenant,
+        start: dueDate,
+        end: endDate,
+        excludeActivityId: existing.id,
+        db: tx,
+      });
+      if (conflict) return { error: availabilityConflictMessage(conflict) } as const;
+    }
+    const activity = await tx.activity.update({
+      where: { id },
+      data: { dueDate, endDate, reminderSentAt: null },
+      include: { lead: true },
+    });
+    return { activity } as const;
+  });
+  if ("error" in result) return { ok: false, error: result.error };
+  const activity = result.activity;
+
   await logAudit({
     action: "activity.rescheduled",
     summary: `Rescheduled ${activity.type} “${activity.summary}” to ${dueDate.toLocaleString(
@@ -462,9 +564,8 @@ async function scheduleFollowUpBody(data: {
   const dueDate = new Date(
     data.when.includes("T") ? `${data.when}:00+02:00` : data.when,
   );
-  if (isNaN(dueDate.getTime())) {
-    return { ok: false, error: "Pick a valid date" };
-  }
+  if (isNaN(dueDate.getTime())) return { ok: false, error: "Pick a valid date" };
+  const endDate = new Date(dueDate.getTime() + DEFAULT_ACTIVITY_DURATION_MS);
   const label =
     data.summary?.trim() ||
     ({
@@ -476,18 +577,35 @@ async function scheduleFollowUpBody(data: {
       todo: "Follow up",
     }[data.type]) ||
     "Follow up";
-  const activity = await prisma.activity.create({
-    data: {
-      type: data.type,
-      summary: label,
-      dueDate,
-      leadId: data.leadId,
-      contactId: data.contactId ?? null,
-      assignedToId: user.id,
-      createdById: user.id,
-      tenantId: await customerRecordTenantId({ contactId: data.contactId, leadId: data.leadId }),
-    },
+  const tenantId = await customerRecordTenantId({ contactId: data.contactId, leadId: data.leadId });
+  const scheduleTenant = await staffScheduleTenantId(tenantId);
+  const result = await prisma.$transaction(async (tx) => {
+    await lockStaffSchedules(tx, scheduleTenant, [user.id]);
+    const conflict = await findStaffAvailabilityConflict({
+      userId: user.id,
+      tenantId: scheduleTenant,
+      start: dueDate,
+      end: endDate,
+      db: tx,
+    });
+    if (conflict) return { conflict } as const;
+    const activity = await tx.activity.create({
+      data: {
+        type: data.type,
+        summary: label,
+        dueDate,
+        endDate,
+        leadId: data.leadId,
+        contactId: data.contactId ?? null,
+        assignedToId: user.id,
+        createdById: user.id,
+        tenantId,
+      },
+    });
+    return { activity } as const;
   });
+  if ("conflict" in result && result.conflict) return { ok: false, error: availabilityConflictMessage(result.conflict) };
+  const activity = result.activity;
   await logAudit({
     action: "activity.scheduled",
     summary: `Scheduled ${activity.type}: “${activity.summary}” (next step)`,
@@ -512,6 +630,7 @@ export async function cancelActivity(id: string, revalidate: string) {
     revalidatePath(revalidate);
     revalidatePath("/activities");
     revalidatePath("/");
+    revalidatePath("/calendar");
     revalidateRecordPages(activity);
     return { success: "Activity cancelled" };
   });
@@ -522,20 +641,15 @@ export async function updateActivity(id: string, formData: FormData) {
 }
 
 async function updateActivityBody(id: string, formData: FormData) {
-  const { user } = await requireActivityAccess(id);
+  const { user, activity: existing } = await requireActivityAccess(id);
   const summary = String(formData.get("summary") ?? "").trim();
   if (!summary) refuse("Describe the activity.");
   const type = str(formData, "type") ?? "todo";
   const rawDue = str(formData, "dueDate");
+  const rawEnd = str(formData, "endDate");
 
-  // Editing an existing follow-up must preserve its "real future time"
-  // invariant: the hour-before reminder push skips midnight, so a follow-up
-  // edited to 00:00 or a past time would silently miss its nudge. The edit form
-  // neither submits nor persists a note, so we enforce ONLY the due-date rule
-  // here — we never newly require a note nor touch the existing one.
-  let duePatch = {};
+  let dueDate = existing.dueDate;
   if (rawDue) {
-    let dueDate: Date;
     if (type === FOLLOW_UP_TYPE) {
       dueDate = new Date(`${ensureFollowUpTime(rawDue)}:00+02:00`);
       const problem = followUpDueDateError(dueDate, new Date());
@@ -547,26 +661,66 @@ async function updateActivityBody(id: string, formData: FormData) {
           ? new Date(`${rawDue}:00+02:00`)
           : new Date(rawDue);
     }
-    duePatch = { dueDate, reminderSentAt: null };
+  }
+  if (Number.isNaN(dueDate.getTime())) refuse("Pick a valid start date and time.");
+
+  const previousEnd = effectiveActivityEnd(existing.dueDate, existing.endDate);
+  const previousDuration = previousEnd.getTime() - existing.dueDate.getTime();
+  const endDate = rawEnd
+    ? new Date(rawEnd.includes("T") ? `${rawEnd}:00+02:00` : rawEnd)
+    : new Date(dueDate.getTime() + previousDuration);
+  if (Number.isNaN(endDate.getTime()) || endDate <= dueDate) {
+    refuse("End time must be after the start time.");
   }
 
-  // Resolved BEFORE the update rather than inline in the data object, so the
-  // refusal happens while nothing has been written yet. Reassignment is the
-  // easier of the two attacks: the activity already exists, so one forged field
-  // on an ordinary edit was enough to hand it to somebody in another workspace.
   const assignedToId = (await resolveActivityAssignee(formData))?.id ?? user.id;
-
-  const activity = await prisma.activity.update({
-    where: { id },
-    data: {
-      type,
-      category: formData.get("workshop") === "on" ? "workshop" : null,
-      summary,
-      location: str(formData, "location"),
-      assignedToId,
-      ...duePatch,
-    },
+  const tenantId = existing.tenantId ?? await customerRecordTenantId({
+    contactId: existing.contactId,
+    leadId: existing.leadId,
   });
+  const scheduleTenant = await staffScheduleTenantId(tenantId);
+
+  const result = await prisma.$transaction(async (tx) => {
+    await lockStaffSchedules(tx, scheduleTenant, [existing.assignedToId, assignedToId]);
+    if (existing.availabilityBlock) {
+      const conflict = await findStaffCommitmentConflict({
+        userId: assignedToId,
+        tenantId: scheduleTenant,
+        start: dueDate,
+        end: endDate,
+        excludeActivityId: existing.id,
+        db: tx,
+      });
+      if (conflict) return { error: commitmentConflictMessage(conflict) } as const;
+    } else {
+      const conflict = await findStaffAvailabilityConflict({
+        userId: assignedToId,
+        tenantId: scheduleTenant,
+        start: dueDate,
+        end: endDate,
+        excludeActivityId: existing.id,
+        db: tx,
+      });
+      if (conflict) return { error: availabilityConflictMessage(conflict) } as const;
+    }
+    const activity = await tx.activity.update({
+      where: { id },
+      data: {
+        type,
+        category: formData.get("workshop") === "on" ? "workshop" : null,
+        summary,
+        location: str(formData, "location"),
+        assignedToId,
+        dueDate,
+        endDate,
+        reminderSentAt: null,
+      },
+    });
+    return { activity } as const;
+  });
+  if ("error" in result) return { error: result.error };
+  const activity = result.activity;
+
   await logAudit({
     action: "activity.updated",
     summary: `Updated activity “${summary}”`,
@@ -576,6 +730,8 @@ async function updateActivityBody(id: string, formData: FormData) {
   });
   revalidatePath(String(formData.get("revalidate") ?? "/activities"));
   revalidatePath("/activities");
+  revalidatePath("/calendar");
   revalidatePath("/");
   return { success: "Activity updated" };
 }
+

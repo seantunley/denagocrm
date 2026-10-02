@@ -211,13 +211,14 @@ export const plannedActivities = cache(async () => {
   const include = { lead: true, contact: true, assignedTo: true } as const;
   const [today, tomorrow] = await Promise.all([
     prisma.activity.findMany({
-      where: { status: "planned", dueDate: { lt: tomorrowStart } },
+      // Availability blocks are not agenda items (they never leave "planned").
+      where: { status: "planned", availabilityBlock: false, dueDate: { lt: tomorrowStart } },
       orderBy: { dueDate: "asc" },
       include,
       take: 20,
     }),
     prisma.activity.findMany({
-      where: { status: "planned", dueDate: { gte: tomorrowStart, lt: dayAfterStart } },
+      where: { status: "planned", availabilityBlock: false, dueDate: { gte: tomorrowStart, lt: dayAfterStart } },
       orderBy: { dueDate: "asc" },
       include,
       take: 20,

@@ -95,7 +95,6 @@
   "src/app/portal/support/[id]/page.tsx::bypass-raw::CustomerCaseMessage": 2,
   "src/app/portal/support/[id]/page.tsx::bypass-raw::PortalUpload": 1,
   "src/app/portal/support/page.tsx::bypass-raw::CustomerCase": 1,
-  "src/lib/activityAccess.ts::bypass-read::Activity": 1,
   "src/lib/activityReminders.ts::bypass-write::Activity": 1,
   "src/lib/apiKeys.ts::bypass-raw::TenantApiKey": 1,
   "src/lib/auditDetailQuery.ts::bypass-read::AuditEvent": 1,
