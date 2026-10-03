@@ -36,7 +36,7 @@ import GuidedDeliveryCompletion from "@/components/checklists/GuidedDeliveryComp
 import { deliveryHandoverReadiness, handoverRunSelection } from "@/lib/checklists/deliveryHandover";
 import { runsForHost, templatesForHostRecord } from "@/lib/checklists/store";
 
-export const metadata = { title: "Deliveries — DenagoCRM" };
+export const metadata = { title: "Deliveries" };
 
 type Col = "invoice" | "deposit" | "schedule" | "deliver";
 

@@ -313,7 +313,7 @@ test("no caller falls back to a substitute on unsupported legacy data", () => {
 
   const envelope = read("src/lib/signing/autoEnvelope.ts");
   assert.ok(
-    envelope.indexOf('read.status !== "ok"') < envelope.indexOf("standardQuoteTemplate()"),
+    envelope.indexOf('read.status !== "ok"') < envelope.indexOf("standardQuoteTemplate({"),
     "autoEnvelope must return before it can substitute the standard template",
   );
 });

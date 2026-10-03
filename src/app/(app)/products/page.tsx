@@ -35,7 +35,7 @@ export default async function ProductsPage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Product catalogue" description={`${products.filter((product) => product.active).length} active Denago models`}>
+      <PageHeader title="Product catalogue" description={`${products.filter((product) => product.active).length} active products`}>
         <ModalTrigger label={<><Plus className="size-4" />New product</>} title="New product" buttonClass={buttonVariants({ size: "sm" })}>
           <ProductForm variant="dialog" />
         </ModalTrigger>
@@ -45,7 +45,7 @@ export default async function ProductsPage() {
         <EmptyState
           icon={Boxes}
           title="Your catalogue is ready for its first model"
-          description="Add the Denago models your team sells so stock, quotes, leads and customer vehicles all use the same product data."
+          description="Add the products your team sells so stock, quotes, leads and customer vehicles all use the same product data."
           action={<Link href="/products/new" className={buttonVariants({ size: "sm" })}><Plus className="size-4" />Add first product</Link>}
         />
       ) : (

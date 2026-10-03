@@ -2,6 +2,7 @@ import "server-only";
 import crypto from "node:crypto";
 import { cookies, headers } from "next/headers";
 import { SignJWT, jwtVerify } from "jose";
+import { PLATFORM_NAME } from "@/lib/platformIdentity";
 
 /**
  * WebAuthn relying-party config derived from the request origin, so passkeys
@@ -23,7 +24,7 @@ export async function rpConfig(): Promise<{ rpID: string; origin: string; rpName
   const host = h.get("host") ?? "localhost:3000";
   const proto = host.startsWith("localhost") ? "http" : "https";
   const rpID = host.split(":")[0]; // hostname only, no port
-  return { rpID, origin: `${proto}://${host}`, rpName: "Denago Cape Town CRM" };
+  return { rpID, origin: `${proto}://${host}`, rpName: PLATFORM_NAME };
 }
 
 /* Challenges are stateless: signed into a short-lived httpOnly cookie rather
