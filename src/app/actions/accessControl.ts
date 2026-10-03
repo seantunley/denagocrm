@@ -351,7 +351,10 @@ export async function updateRolePermissions(roleId: string, formData: FormData) 
     const permissions = [...new Set(formData.getAll("permissions").map(String))]
       .filter((permission) => permissionSet.has(permission));
 
-    if (roleId === "role_crm_admin") {
+    // Every workspace's copy of the CRM administrator role, not only the founding
+    // one: other workspaces' roles are `role_crm_admin:<tenantId>`
+    // (seedTenantDefaultRoles), so this guard used to protect Denago's alone.
+    if (roleId === "role_crm_admin" || roleId.startsWith("role_crm_admin:")) {
       const missing = [...REQUIRED_ADMIN_PERMISSIONS].filter((permission) => !permissions.includes(permission));
       if (missing.length) throw new ActionRefusal(`CRM administrator must retain: ${missing.join(", ")}`);
     }

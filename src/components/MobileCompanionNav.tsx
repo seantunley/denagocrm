@@ -22,7 +22,7 @@ import { Sheet, SheetClose, SheetContent, SheetDescription, SheetHeader, SheetTi
 import { isPathEnabled } from "@/lib/modules/registry";
 import { cn } from "@/lib/utils";
 
-type MobileUser = { role: string; permissions: string[] };
+type MobileUser = { role: string; permissions: string[]; isTenantOwner?: boolean };
 
 export default function MobileCompanionNav({
   user,
@@ -41,7 +41,10 @@ export default function MobileCompanionNav({
 }) {
   const [captureOpen, setCaptureOpen] = useState(false);
   const granted = new Set(user.permissions);
-  const can = (...keys: string[]) => user.role === "owner" || keys.some((key) => granted.has(key));
+  // The WORKSPACE's owner (AppShell's ownsWorkspace) — `role === "owner"` is the
+  // platform owner, which hid owner shortcuts from every other workspace's owner.
+  const isOwner = user.isTenantOwner ?? user.role === "owner";
+  const can = (...keys: string[]) => isOwner || keys.some((key) => granted.has(key));
   const enabledSet = enabledModules ? new Set(enabledModules) : undefined;
   const packOn = (href: string) => !enabledSet || isPathEnabled(href, enabledSet);
   const active = (href: string) => href === "/" ? pathname === "/" : pathname.startsWith(href);

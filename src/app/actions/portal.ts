@@ -65,12 +65,26 @@ const normEmail = (email: string) => email.trim().toLowerCase();
  * that cannot have a tenant scope yet and pins the tenant in its own WHERE.
  */
 type PortalContactRow = { id: string; firstName: string; lastName: string | null };
+
+/**
+ * The workspace whose portal this is: the one `withPortalHostScope` bound from
+ * the VERIFIED hostname. This was pinned to DEFAULT_TENANT_ID, so on any other
+ * workspace's portal domain the lookup searched Denago's contacts and no other
+ * workspace's customer could ever sign in. With no bound scope (an unregistered
+ * host, local dev) it keeps today's founding-workspace answer.
+ */
+async function portalLoginTenantId(): Promise<string> {
+  const { currentTenantScope } = await import("@/lib/tenantScope");
+  return currentTenantScope()?.tenantId ?? DEFAULT_TENANT_ID;
+}
+
 async function findPortalContactByEmail(email: string): Promise<PortalContactRow | null> {
+  const loginTenantId = await portalLoginTenantId();
   const rows = await basePrisma.$queryRaw<PortalContactRow[]>`
     SELECT "id", "firstName", "lastName" FROM "Contact"
     WHERE LOWER("email") = ${email}
       AND "deletedAt" IS NULL
-      AND "tenantId" = ${DEFAULT_TENANT_ID}
+      AND "tenantId" = ${loginTenantId}
     ORDER BY "createdAt" ASC, "id" ASC
     LIMIT 1
   `;
@@ -225,7 +239,7 @@ async function issuePortalOtp(email: string): Promise<PortalAuthState> {
   });
   // The workspace's own editable "portal login code" email (Settings → Email
   // templates), signed by the workspace the contact belongs to (the lookup above pins it).
-  const message = await tenantEmailContent("portal_code", DEFAULT_TENANT_ID, {
+  const message = await tenantEmailContent("portal_code", await portalLoginTenantId(), {
     first_name: contact.firstName,
     recipient_name: [contact.firstName, contact.lastName].filter(Boolean).join(" "),
     code,
