@@ -1,15 +1,15 @@
+import { requireRoute } from "@/lib/permissions";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { FlaskConical } from "lucide-react";
 import { prisma } from "@/lib/db";
-import { requireOwner } from "@/lib/auth";
 import FlowSimulator from "@/components/FlowSimulator";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { flowScope } from "@/lib/flowScope";
 import { getCompanyProfile } from "@/lib/companyProfile";
 
 export default async function FlowSimulatorPage({ params }: { params: Promise<{ id: string }> }) {
-  await requireOwner();
+  await requireRoute("/bot-builder");
   const { id } = await params;
   const scope = await flowScope();
   const flow = await prisma.botFlow.findFirst({ where: { id, ...scope } });

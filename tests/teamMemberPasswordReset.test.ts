@@ -10,9 +10,10 @@ const security = src("src/app/actions/security.ts");
 const fn = security.slice(security.indexOf("export async function resetTeamMemberPassword("), security.indexOf("export async function setUserDisabled("));
 
 test("owner only, own workspace only, never another owner or yourself", () => {
-  assert.match(fn, /const owner = await requireOwner\(\);/);
+  // The WORKSPACE owner; assertManageableUser also refuses a platform owner's account.
+  assert.match(fn, /const owner = await requireTenantOwner\(\);/);
   assert.match(fn, /if \(userId === owner\.id\) refuse\(/);
-  assert.match(fn, /await assertManageableUser\(userId\);/, "membership of the acting workspace");
+  assert.match(fn, /await assertManageableUser\(userId, owner\);/, "membership of the acting workspace");
   assert.match(fn, /if \(target\.role === "owner"\) refuse\(/);
 });
 

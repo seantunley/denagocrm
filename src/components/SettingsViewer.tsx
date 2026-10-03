@@ -13,18 +13,22 @@ const Ctx = createContext<Value | null>(null);
  */
 export function SettingsViewerProvider({
   isOwner,
+  isPlatformOwner = false,
   permissions,
   enabledModules,
   children,
 }: {
+  /** Owner of the workspace being viewed. */
   isOwner: boolean;
+  /** The platform-wide owner role — the only viewer of platform entries. */
+  isPlatformOwner?: boolean;
   permissions: string[];
   enabledModules?: string[];
   children: ReactNode;
 }) {
   const value = useMemo(
-    () => ({ viewer: { isOwner, permissions }, enabled: enabledModules ? new Set(enabledModules) : undefined }),
-    [isOwner, permissions, enabledModules],
+    () => ({ viewer: { isOwner, isPlatformOwner, permissions }, enabled: enabledModules ? new Set(enabledModules) : undefined }),
+    [isOwner, isPlatformOwner, permissions, enabledModules],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

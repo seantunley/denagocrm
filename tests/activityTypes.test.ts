@@ -227,7 +227,7 @@ test("THE SAVE IS OWNER-ONLY AND CANNOT LOSE A BUILT-IN", () => {
   assert.ok(start > 0, "the action exists");
   const body = action.slice(start, start + 2000);
 
-  assert.match(body, /await requireOwner\(\)/, "only an owner may change the workspace's types");
+  assert.match(body, /await requireTenantOwner\(\)/, "only the workspace's owner may change the workspace's types");
   assert.match(
     body,
     /SYSTEM_ACTIVITY_TYPES\.map\(/,

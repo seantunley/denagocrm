@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
-import { requireOwner } from "@/lib/auth";
+import { requireTenantOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { DEFAULT_FLOW } from "@/lib/flow";
 import { flowTemplate } from "@/lib/flowTemplates";
@@ -18,7 +18,7 @@ import type { FlowChannel } from "@/lib/flowValidation";
 /** Create a new draft from one of the shipped, compiler-checked templates. */
 export async function createFlow(formData: FormData) {
   return withActingStaffScope(async () => {
-    const owner = await requireOwner();
+    const owner = await requireTenantOwner();
     const scope = await flowScope();
     const template = flowTemplate(String(formData.get("templateId") ?? "general"));
     const requestedName = String(formData.get("name") ?? "").trim();
@@ -59,7 +59,7 @@ export async function saveFlow(
   expectedUpdatedAt: string,
 ): Promise<{ ok?: boolean; error?: string; conflict?: boolean; updatedAt?: string }> {
   return withActingStaffScope(async () => {
-    const owner = await requireOwner();
+    const owner = await requireTenantOwner();
     const scope = await flowScope();
     let parsed: unknown;
     try {
@@ -117,7 +117,7 @@ export async function resetFlow(
   expectedUpdatedAt: string,
 ): Promise<{ ok?: boolean; error?: string; conflict?: boolean; updatedAt?: string }> {
   return withActingStaffScope(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     const scope = await flowScope();
     // Reset is a draft writer too — the most destructive one — so it carries the
     // same MANDATORY fence as Save. An optional stamp with an unconditional `else`
@@ -156,7 +156,7 @@ export async function resetFlow(
 
 export async function renameFlow(id: string, formData: FormData) {
   return withActingStaffScope(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     const scope = await flowScope();
     const name = String(formData.get("name") ?? "").trim();
     if (name) await prisma.botFlow.updateMany({ where: { id, ...scope }, data: { name } });
@@ -166,7 +166,7 @@ export async function renameFlow(id: string, formData: FormData) {
 
 export async function deleteFlow(id: string) {
   return withActingStaffScope(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     const scope = await flowScope();
     const [flow, publishedVersion] = await Promise.all([
       prisma.botFlow.findFirst({ where: { id, ...scope } }),
@@ -182,7 +182,7 @@ export async function deleteFlow(id: string) {
 
 export async function duplicateFlow(id: string) {
   return withActingStaffScope(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     const scope = await flowScope();
     const src = await prisma.botFlow.findFirst({ where: { id, ...scope } });
     if (!src) return;
@@ -195,7 +195,7 @@ export async function duplicateFlow(id: string) {
 
 export async function addFlowRoute(formData: FormData) {
   return withActingStaffScope(async () => {
-    const owner = await requireOwner();
+    const owner = await requireTenantOwner();
     const tenantId = await builderTenantId();
     const channel = String(formData.get("channel") ?? "") as FlowChannel;
     const kind = String(formData.get("kind") ?? "") as FlowRouteKind;
@@ -225,7 +225,7 @@ export async function addFlowRoute(formData: FormData) {
 
 export async function setFlowRouteEnabled(id: string, enabled: boolean) {
   return withActingStaffScope(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     const tenantId = await builderTenantId();
     await prisma.botFlowRoute.updateMany({ where: { id, tenantId }, data: { enabled } });
     revalidatePath("/bot-builder/routes");
@@ -234,7 +234,7 @@ export async function setFlowRouteEnabled(id: string, enabled: boolean) {
 
 export async function deleteFlowRoute(id: string) {
   return withActingStaffScope(async () => {
-    const owner = await requireOwner();
+    const owner = await requireTenantOwner();
     const tenantId = await builderTenantId();
     const route = await prisma.botFlowRoute.findFirst({ where: { id, tenantId } });
     if (!route) return;
@@ -261,7 +261,7 @@ export type PublishFlowState = { ok?: string; error?: string; issues?: FlowIssue
  */
 export async function setActiveFlow(id: string, _previous?: PublishFlowState): Promise<PublishFlowState> {
   return withActingStaffScope(async () => {
-    const owner = await requireOwner();
+    const owner = await requireTenantOwner();
     let published: Awaited<ReturnType<typeof publishFlowSnapshot>>;
     try {
       published = await publishFlowSnapshot(id, owner.id);

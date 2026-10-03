@@ -1,6 +1,6 @@
+import { requireRoute } from "@/lib/permissions";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
-import { requireOwner } from "@/lib/auth";
 import {
   updateProduct,
   addProductColor,
@@ -20,9 +20,9 @@ export default async function ProductDetailPage({
   params: Promise<{ id: string }>;
 }) {
   // Owner-only: this page renders the edit form and the delete control, whose
-  // actions are all requireOwner()-gated. The page must match them so the
+  // actions are all requireRoute("/products")-gated. The page must match them so the
   // authorization survives without the proxy (see /products list page).
-  await requireOwner();
+  await requireRoute("/products");
   const { id } = await params;
   const product = await prisma.product.findUnique({
     where: { id },

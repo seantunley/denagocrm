@@ -47,6 +47,7 @@ test("the outbox shows the classified reason, never the raw provider text (it ca
 });
 
 test("the screen is owner-only and listed in Settings", () => {
-  assert.match(src("src/app/(app)/settings/queues/page.tsx"), /await requireOwner\(\);/);
+  // The workspace's own queues (guarded client), so the workspace's own owner.
+  assert.match(src("src/app/(app)/settings/queues/page.tsx"), /await requireTenantOwner\(\);/);
   assert.match(src("src/lib/settings-navigation.ts"), /\{ key: "queues", label: "Background queues", href: "\/settings\/queues",/);
 });

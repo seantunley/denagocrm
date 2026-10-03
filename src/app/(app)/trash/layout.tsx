@@ -1,4 +1,3 @@
-import { requireOwner } from "@/lib/auth";
 
 /**
  * Segment-level owner gate for the recycle bin, mirroring the
@@ -7,9 +6,10 @@ import { requireOwner } from "@/lib/auth";
  *
  * Defence in depth ONLY — see the note in ../products/layout.tsx: layouts are
  * client-cached and do not re-render between pages of the same segment, so the
- * page keeps its own requireOwner().
+ * page keeps its own requireRoute("/trash").
  */
 export default async function TrashLayout({ children }: { children: React.ReactNode }) {
-  await requireOwner();
+  await requireRoute("/trash");
   return children;
-}
+}import { requireRoute } from "@/lib/permissions";
+

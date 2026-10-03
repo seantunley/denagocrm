@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
-import { requireOwner } from "@/lib/auth";
+import { requireTenantOwner } from "@/lib/auth";
 import { parseGraph, blankWorkflow } from "@/lib/signflow/model";
 import { deleteSignWorkflow } from "@/app/actions/signflow";
 import ConfirmDelete from "@/components/ConfirmDelete";
@@ -11,7 +11,7 @@ import SignFlowBuilder from "@/components/signflow/SignFlowBuilder";
 export const dynamic = "force-dynamic";
 
 export default async function SignWorkflowEditor({ params }: { params: Promise<{ id: string }> }) {
-  await requireOwner();
+  await requireTenantOwner();
   const { id } = await params;
   const [wf, users] = await Promise.all([
     prisma.signWorkflow.findUnique({ where: { id } }),

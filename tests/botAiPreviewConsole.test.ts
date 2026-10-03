@@ -9,7 +9,7 @@ const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
 
 test("preview is owner-only and invokes the production answer decision", () => {
   const action = src("src/app/actions/botPreview.ts");
-  assert.match(action, /await requireOwner\(\)/);
+  assert.match(action, /await requireTenantOwner\(\)/);
   assert.match(action, /generateBotReply\(/);
   assert.match(action, /history: \[\{ role: "user", content: question \}\]/);
 });

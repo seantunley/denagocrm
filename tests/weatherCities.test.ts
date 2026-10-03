@@ -174,7 +174,7 @@ test("only an owner can change the tenant's cities", () => {
   const actions = read("src/app/actions/settings.ts");
   const fn = actions.slice(actions.indexOf("export async function saveWeatherCities"));
   const body = fn.slice(0, fn.indexOf("\n}\n") + 2);
-  assert.match(body, /requireOwner\(\)/);
+  assert.match(body, /requireTenantOwner\(\)/);
   assert.match(body, /putSetting\(WEATHER_CITIES_KEY/);
   assert.doesNotMatch(body, /tenantId/, "the tenant must come from scope, never from the caller");
 });
@@ -225,5 +225,5 @@ test("the settings page is owner-only, like the action behind it", () => {
   // The action is what actually protects the write; this stops a member being
   // shown a page whose every control would refuse them.
   const page = read("src/app/(app)/settings/clock-weather/page.tsx");
-  assert.match(page, /requireOwner\(\)/);
+  assert.match(page, /requireTenantOwner\(\)/);
 });

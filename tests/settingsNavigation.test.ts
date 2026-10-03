@@ -33,18 +33,37 @@ test("a non-owner sees exactly the settings their permissions open", () => {
   assert.deepEqual(keysFor({ isOwner: false, permissions: [] }).sort(), ["account", "integrations"]);
 });
 
-test("owners see everything; switched-off modules hide for everyone", () => {
-  assert.equal(keysFor({ isOwner: true, permissions: [] }).length, SETTINGS_NAV_GROUPS.flatMap((g) => g.items).length);
+test("the platform owner sees everything; switched-off modules hide for everyone", () => {
+  assert.equal(
+    keysFor({ isOwner: true, isPlatformOwner: true, permissions: [] }).length,
+    SETTINGS_NAV_GROUPS.flatMap((g) => g.items).length,
+  );
   const noAutomotive = keysFor({ isOwner: false, permissions: ["workshop.manage"] }, new Set(["commerce"]));
   assert.ok(!noAutomotive.includes("workshop-settings"));
+});
+
+test("a workspace's owner sees its own settings, never the platform's", () => {
+  // 2026-10-03: Breastfeeding Art's owner could not open Company profile, Trash,
+  // Chatbot… because "owner" meant the PLATFORM owner. The platform entries
+  // (what a workspace has bought, whole-database backups, the platform security
+  // runbook) stay with the platform.
+  const keys = keysFor({ isOwner: true, isPlatformOwner: false, permissions: [] });
+  for (const key of ["company", "activity-types", "custom-fields", "clock-weather", "signing-workflows", "signing-security", "sessions", "queues", "email", "system"]) {
+    assert.ok(keys.includes(key), `${key} is the workspace's own`);
+  }
+  for (const key of ["modules", "backups", "security"]) {
+    assert.ok(!keys.includes(key), `${key} is platform-only`);
+  }
+  const platform = SETTINGS_NAV_GROUPS.flatMap((g) => g.items).filter((i) => i.platform).map((i) => i.key).sort();
+  assert.deepEqual(platform, ["backups", "modules", "security"]);
 });
 
 test("every settings surface asks the one rule", () => {
   const read = (rel: string) => readFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
   assert.match(read("src/components/settings-workspace.tsx"), /visibleSettingsGroups\(seen\.viewer, seen\.enabled, groups\)/);
-  assert.match(read("src/components/AppShell.tsx"), /<SettingsViewerProvider isOwner=\{user\.role === "owner"\} permissions=\{user\.permissions\}/);
-  assert.match(read("src/components/SidebarHelpSettings.tsx"), /visibleSettingsGroups\(\{ isOwner, permissions \}/);
-  assert.match(read("src/components/CommandMenu.tsx"), /visibleSettingsGroups\(\{ isOwner: isAdmin, permissions \}, enabledSet\)/);
-  assert.match(read("src/lib/search-destinations.ts"), /visibleSettingsGroups\(\{ isOwner: isAdmin, permissions \}\)/);
-  assert.match(read("src/app/(app)/settings/page.tsx"), /visibleSettingsGroups\(\s*\{ isOwner: isAdmin, permissions: await getUserPermissionList\(currentUser\) \}/);
+  assert.match(read("src/components/AppShell.tsx"), /<SettingsViewerProvider isOwner=\{ownsWorkspace\(user\)\} isPlatformOwner=\{user\.role === "owner"\} permissions=\{user\.permissions\}/);
+  assert.match(read("src/components/SidebarHelpSettings.tsx"), /visibleSettingsGroups\(\s*\{ isOwner, isPlatformOwner: seen\?\.viewer\.isPlatformOwner, permissions \}/);
+  assert.match(read("src/components/CommandMenu.tsx"), /visibleSettingsGroups\(\{ isOwner: isAdmin, isPlatformOwner, permissions \}, enabledSet\)/);
+  assert.match(read("src/lib/search-destinations.ts"), /visibleSettingsGroups\(\{ isOwner: isAdmin, isPlatformOwner, permissions \}\)/);
+  assert.match(read("src/app/(app)/settings/page.tsx"), /visibleSettingsGroups\(\s*\{ isOwner: isAdmin, isPlatformOwner: currentUser\.role === "owner", permissions: await getUserPermissionList\(currentUser\) \}/);
 });

@@ -1,4 +1,3 @@
-import { requireOwner } from "@/lib/auth";
 
 /**
  * Segment-level owner gate for the catalogue management screens, mirroring the
@@ -13,6 +12,7 @@ import { requireOwner } from "@/lib/auth";
  * alone. It is here so a page added later is denied by default.
  */
 export default async function ProductsLayout({ children }: { children: React.ReactNode }) {
-  await requireOwner();
+  await requireRoute("/products");
   return children;
-}
+}import { requireRoute } from "@/lib/permissions";
+
