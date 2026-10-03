@@ -322,3 +322,16 @@ export function brandLogoUrl(brand: TenantBrand): string | null {
     ? `/api/brand/logo/${brand.tenantId}?a=${encodeURIComponent(asset)}`
     : `/api/brand/logo/${brand.tenantId}`;
 }
+
+/** The platform's own tab / home-screen icons, for an unbranded request. */
+export const PLATFORM_ICONS = { icon: "/icons/icon-192.png", apple: "/icons/apple-touch-icon.png" } as const;
+
+/**
+ * The browser-tab and home-screen icons for a brand: the workspace's logo when
+ * it has one, the platform's otherwise. Every tenant's tabs and bookmarks used
+ * to show the platform icon.
+ */
+export function brandIcons(brand: TenantBrand): { icon: string; apple: string } {
+  const logo = brandLogoUrl(brand);
+  return logo ? { icon: logo, apple: logo } : { ...PLATFORM_ICONS };
+}

@@ -17,6 +17,8 @@ import {
 import { prisma } from "@/lib/db";
 import { contactName, formatDate } from "@/lib/format";
 import { listBuilderTemplates } from "@/lib/docbuilder/store";
+import { docKeyAvailable } from "@/lib/docTemplates";
+import { getEnabledModuleIds } from "@/lib/modules/enabled";
 import {
   deleteBuilderTemplate,
   setDefaultBuilderTemplate,
@@ -113,7 +115,12 @@ export default async function BuilderSection({
     OR: [{ firstName: nameLike }, { lastName: nameLike }, { company: nameLike }],
   };
 
-  const [templates, quotes, jobCards] = await Promise.all([
+  // Workshop documents and job cards only for a workspace with the automotive
+  // module (lib/docTemplates — the same rule as the template groups above).
+  const enabledModules = await getEnabledModuleIds();
+  const automotiveOn = enabledModules.has("automotive");
+  const docKeys = DOC_KEYS.filter((key) => docKeyAvailable(key, enabledModules));
+  const [allTemplates, quotes, jobCards] = await Promise.all([
     listBuilderTemplates(),
     prisma.quote.findMany({
       where: {
@@ -127,7 +134,7 @@ export default async function BuilderSection({
       take: RECORD_LIMIT,
       include: { contact: true },
     }),
-    prisma.jobCard.findMany({
+    !automotiveOn ? [] : prisma.jobCard.findMany({
       where: {
         ...scoped(jobCardIds),
         ...(query
@@ -145,6 +152,7 @@ export default async function BuilderSection({
       include: { contact: true, vehicle: true },
     }),
   ]);
+  const templates = allTemplates.filter((template) => docKeyAvailable(template.key, enabledModules));
   const capped = quotes.length === RECORD_LIMIT || jobCards.length === RECORD_LIMIT;
 
   const input =
@@ -185,7 +193,7 @@ export default async function BuilderSection({
             className={`${input} min-w-48 flex-1`}
           />
           <select name="key" defaultValue="proposal" className={input}>
-            {DOC_KEYS.map((key) => (
+            {docKeys.map((key) => (
               <option key={key} value={key}>
                 {key}
               </option>
@@ -215,7 +223,7 @@ export default async function BuilderSection({
             type="search"
             name="q"
             defaultValue={query}
-            placeholder="Find a record — quote or job number, customer, vehicle"
+            placeholder={automotiveOn ? "Find a record — quote or job number, customer, vehicle" : "Find a quote — number or customer"}
             aria-label="Search records"
             className={`${input} min-w-64 flex-1`}
           />
@@ -267,13 +275,15 @@ export default async function BuilderSection({
                 </option>
               ))}
             </optgroup>
-            <optgroup label="Job cards">
-              {jobCards.map((jobCard) => (
-                <option key={jobCard.id} value={`jobcard:${jobCard.id}`}>
-                  Job #{jobCard.number} — {contactName(jobCard.contact)} — {jobCard.vehicle.model}
-                </option>
-              ))}
-            </optgroup>
+            {automotiveOn && (
+              <optgroup label="Job cards">
+                {jobCards.map((jobCard) => (
+                  <option key={jobCard.id} value={`jobcard:${jobCard.id}`}>
+                    Job #{jobCard.number} — {contactName(jobCard.contact)} — {jobCard.vehicle.model}
+                  </option>
+                ))}
+              </optgroup>
+            )}
           </select>
           <SaveSubmitButton>
             <FileDown className="size-4" />

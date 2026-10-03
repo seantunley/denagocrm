@@ -26,7 +26,7 @@ async function redirectTarget(render: () => Promise<unknown>): Promise<string> {
 test("the quote card offers only the builder layout, never a DocTemplateRecord form", () => {
   const page = src(STUDIO);
   // Quote DocTemplateRecords are rendered by nothing — they are not even loaded.
-  assert.match(page, /\.filter\(\(key\) => key !== "quote"\)/);
+  assert.match(page, /\.filter\(\s*\(key\) => key !== "quote"( && docKeyAvailable\(key, enabledModules\))?,?\s*\)/);
   const quoteCard = page.slice(page.indexOf('if (key === "quote")'), page.indexOf("const templates = typedByKey[key]"));
   assert.ok(quoteCard.length > 0, "the quote card branch must exist");
   assert.match(quoteCard, /Edit quote layout/);

@@ -2,18 +2,30 @@ import type { Metadata, Viewport } from "next";
 import Image from "next/image";
 import { requireUser, getActiveTenantId } from "@/lib/auth";
 import { brandForTenant, brandLogoUrl, DEFAULT_BRAND } from "@/lib/tenantBrand";
+import { PLATFORM_NAME } from "@/lib/platformIdentity";
 import { BrandMark } from "@/components/BrandLogo";
 import { assertPathModuleEnabled } from "@/lib/modules/routeGuard";
 import MessagesNav from "@/components/MessagesNav";
 import RegisterServiceWorker from "@/components/RegisterServiceWorker";
 import AppContextMenu from "@/components/AppContextMenu";
 
-export const metadata: Metadata = {
-  title: "Denago Messages",
-  manifest: "/messages/manifest.webmanifest",
-  appleWebApp: { capable: true, title: "Denago Messages", statusBarStyle: "black-translucent" },
-  icons: { apple: "/icons/messages-apple-180.png" },
-};
+/**
+ * "<Workspace> Messages", with the workspace's logo — this was "Denago Messages"
+ * and the platform icon for every workspace. Never throws.
+ */
+export async function generateMetadata(): Promise<Metadata> {
+  const brand = await getActiveTenantId()
+    .then(brandForTenant)
+    .catch(() => DEFAULT_BRAND);
+  const title = `${brand.tenantId ? brand.displayName : PLATFORM_NAME} Messages`;
+  const logo = brandLogoUrl(brand);
+  return {
+    title,
+    manifest: "/messages/manifest.webmanifest",
+    appleWebApp: { capable: true, title, statusBarStyle: "black-translucent" },
+    icons: logo ? { icon: logo, apple: logo } : { apple: "/icons/messages-apple-180.png" },
+  };
+}
 
 export const viewport: Viewport = {
   themeColor: "#020617",
@@ -46,7 +58,7 @@ export default async function MessagesLayout({ children }: { children: React.Rea
           className="size-7 rounded-md object-contain"
         />
         <span className="text-sm font-semibold tracking-tight">
-          {brand.tenantId ? `${displayName} Messages` : "Denago Messages"}
+          {brand.tenantId ? `${displayName} Messages` : `${PLATFORM_NAME} Messages`}
         </span>
       </header>
 
