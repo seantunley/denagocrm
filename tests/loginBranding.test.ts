@@ -186,6 +186,24 @@ test("the accent override emits no element at all when there is no accent", () =
   assert.match(code, /if \(!brand\.style\) return null;/);
 });
 
+test("the accent is the tenant's, and the copy is nobody's in particular", () => {
+  // 2026-10-02, Breastfeeding Art's login: their name, but Denago's orange and
+  // "Every lead. Every vehicle. One electric rhythm." The colour is --primary
+  // (overridden per tenant by BrandStyle); literal orange never followed it.
+  for (const file of [STAFF, PORTAL]) {
+    const code = shipped(file);
+    assert.doesNotMatch(code, /orange-\d|rgba\(249,\s*115,\s*22/, `${file}: use the primary token, not literal orange`);
+    assert.doesNotMatch(code, /vehicle|electric|workshop|Deliveries/i, `${file}: automotive wording`);
+  }
+  const css = read("src/app/globals.css");
+  const rule = (name: string) => css.slice(css.indexOf(`.${name} {`), css.indexOf("}", css.indexOf(`.${name} {`)));
+  for (const name of ["login-submit", "btn-primary", "login-input"]) {
+    assert.doesNotMatch(rule(name), /orange|rgba\(234,\s*88,\s*12/, `.${name} follows --primary`);
+  }
+  assert.match(rule("login-submit"), /bg-primary/);
+  assert.match(rule("btn-primary"), /bg-primary text-primary-foreground/);
+});
+
 test("the interactive halves are unchanged client components", () => {
   // The split must move the client code, not rewrite it. If these stopped being
   // client components the hooks they rely on would fail at build time — but the
