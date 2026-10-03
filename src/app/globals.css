@@ -200,20 +200,26 @@
 }
 
 @layer components {
+  /*
+   * The accent is the TENANT's: these read --primary, which tenantBrand.ts
+   * overrides per workspace (and which defaults to the platform orange). They
+   * were literal orange, so a tenant's colour never reached its own sign-in
+   * button or primary buttons.
+   */
   .login-input {
-    @apply w-full rounded-xl border border-white/10 bg-white/[0.045] px-4 py-3 text-sm text-white outline-none transition placeholder:text-slate-600 hover:border-white/15 focus:border-orange-500/60 focus:bg-white/[0.06] focus:ring-4 focus:ring-orange-500/10;
+    @apply w-full rounded-xl border border-white/10 bg-white/[0.045] px-4 py-3 text-sm text-white outline-none transition placeholder:text-slate-600 hover:border-white/15 focus:border-primary/60 focus:bg-white/[0.06] focus:ring-4 focus:ring-primary/10;
   }
   .login-submit {
-    @apply flex h-12 w-full cursor-pointer items-center justify-center gap-2 rounded-xl bg-orange-600 px-4 text-sm font-semibold text-white shadow-[0_12px_35px_rgba(234,88,12,0.22)] transition hover:bg-orange-500 hover:shadow-[0_15px_40px_rgba(234,88,12,0.3)] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-orange-500/25 disabled:cursor-wait disabled:opacity-60;
+    @apply flex h-12 w-full cursor-pointer items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-[0_12px_35px_color-mix(in_oklab,var(--primary)_22%,transparent)] transition hover:bg-primary/90 hover:shadow-[0_15px_40px_color-mix(in_oklab,var(--primary)_30%,transparent)] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-primary/25 disabled:cursor-wait disabled:opacity-60;
   }
   .btn,
   .btn-primary,
   .btn-secondary,
   .btn-danger {
-    @apply inline-flex min-h-9 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium outline-none transition-[background-color,border-color,color,box-shadow] duration-150 focus-visible:ring-4 focus-visible:ring-orange-500/15 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex min-h-9 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium outline-none transition-[background-color,border-color,color,box-shadow] duration-150 focus-visible:ring-4 focus-visible:ring-primary/15 disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-primary {
-    @apply bg-orange-600 text-white shadow-[0_4px_14px_rgba(234,88,12,0.18)] hover:bg-orange-500 hover:shadow-[0_5px_18px_rgba(234,88,12,0.22)];
+    @apply bg-primary text-primary-foreground shadow-[0_4px_14px_color-mix(in_oklab,var(--primary)_18%,transparent)] hover:bg-primary/90 hover:shadow-[0_5px_18px_color-mix(in_oklab,var(--primary)_22%,transparent)];
   }
   .btn-secondary {
     @apply border border-white/10 bg-white/[0.035] text-slate-200 hover:border-white/15 hover:bg-white/[0.065];
@@ -225,7 +231,7 @@
     @apply min-h-7 px-2.5 py-1 text-xs;
   }
   .input {
-    @apply min-h-9 w-full rounded-lg border border-input bg-white/[0.035] px-3 py-1.5 text-sm text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)] outline-none transition-[background-color,border-color,box-shadow] duration-150 placeholder:text-muted-foreground hover:border-white/15 focus:border-orange-500/60 focus:bg-white/[0.05] focus:ring-4 focus:ring-orange-500/10;
+    @apply min-h-9 w-full rounded-lg border border-input bg-white/[0.035] px-3 py-1.5 text-sm text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)] outline-none transition-[background-color,border-color,box-shadow] duration-150 placeholder:text-muted-foreground hover:border-white/15 focus:border-primary/60 focus:bg-white/[0.05] focus:ring-4 focus:ring-primary/10;
   }
   .label {
     @apply mb-1 block text-xs font-medium leading-4 text-slate-300;
