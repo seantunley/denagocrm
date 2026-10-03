@@ -1,7 +1,7 @@
+import { requireRoute } from "@/lib/permissions";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Blocks, CopyPlus, Save, Trash2 } from "lucide-react";
-import { requireOwner } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { getFlowSnippets } from "@/lib/flowSnippets";
 import { deleteFlowSnippet, insertSavedFlowSnippet, saveCurrentFlowAsSnippet } from "@/app/actions/flowSnippets";
@@ -10,7 +10,7 @@ import { EmptyState, Surface } from "@/components/visual-system";
 import { flowScope } from "@/lib/flowScope";
 
 export default async function FlowBlocksPage({ params }: { params: Promise<{ id: string }> }) {
-  await requireOwner();
+  await requireRoute("/bot-builder");
   const { id } = await params;
   const scope = await flowScope();
   const [flow, snippets] = await Promise.all([

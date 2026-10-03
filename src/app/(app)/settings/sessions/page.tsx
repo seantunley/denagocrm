@@ -1,5 +1,5 @@
 import { Smartphone, Monitor, LogOut, ShieldOff } from "lucide-react";
-import { requireOwner } from "@/lib/auth";
+import { requireTenantOwner } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { actingTenantMemberIds } from "@/lib/tenantActor";
 import { formatDateTime } from "@/lib/format";
@@ -47,7 +47,7 @@ function ago(d: Date): string {
 }
 
 export default async function SessionsPage() {
-  await requireOwner();
+  await requireTenantOwner();
 
   // Sessions & devices is a per-PERSON view, and `User` is a global model, so an
   // unfiltered `findMany` showed one workspace's owner every other workspace's

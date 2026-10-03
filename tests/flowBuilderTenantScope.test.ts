@@ -323,7 +323,8 @@ test("ENFORCED: authentication must establish the scope before anything reads it
   // simply returns null there.
   const order = (code: string, fn: string, next: string) => {
     const body = code.slice(code.indexOf(`export async function ${fn}`), code.indexOf(`export async function ${next}`) >>> 0 || undefined);
-    const authAt = body.search(/await requireOwner\(\)/);
+    // requireTenantOwner() runs requireUser() — which establishes the scope — first.
+    const authAt = body.search(/await requireTenantOwner\(\)/);
     const scopeAt = body.search(/await flowScope\(\)|await builderTenantId\(\)/);
     return { authAt, scopeAt, fn };
   };

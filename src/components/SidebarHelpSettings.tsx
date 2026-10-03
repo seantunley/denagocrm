@@ -74,7 +74,11 @@ export default function SidebarHelpSettings({
   compact?: boolean;
 }) {
   const pathname = usePathname();
-  const settingsGroups = visibleSettingsGroups({ isOwner, permissions }, useSettingsViewer()?.enabled);
+  const seen = useSettingsViewer();
+  const settingsGroups = visibleSettingsGroups(
+    { isOwner, isPlatformOwner: seen?.viewer.isPlatformOwner, permissions },
+    seen?.enabled,
+  );
 
   const triggerClass = compact ? ICON_TRIGGER : ROW;
   const panelSide = compact ? "bottom" : "right";

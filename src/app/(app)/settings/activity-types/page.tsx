@@ -1,4 +1,4 @@
-import { requireOwner } from "@/lib/auth";
+import { requireTenantOwner } from "@/lib/auth";
 import { getSetting } from "@/lib/settings";
 import { SettingsWorkspace } from "@/components/settings-workspace";
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
@@ -15,12 +15,12 @@ export const dynamic = "force-dynamic";
  * the vocabulary this business works in — and the settings index is a catalogue,
  * so anything not listed there is effectively unfindable.
  *
- * `requireOwner` here as well as in the action. The action is what actually
+ * `requireTenantOwner` here as well as in the action. The action is what actually
  * protects the write; this stops a member being shown a screen whose every
  * control would refuse them.
  */
 export default async function ActivityTypesSettingsPage() {
-  await requireOwner();
+  await requireTenantOwner();
   // A built-in that needs a module this workspace lacks (test drive → automotive)
   // is not offered here at all. Leaving it out of the save is safe: the action
   // restores an omitted built-in untouched.

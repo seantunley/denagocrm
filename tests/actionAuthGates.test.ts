@@ -219,10 +219,11 @@ test("the bot integration-status actions are owner-gated", () => {
   for (const name of ["whisperConfigured", "telegramStatus"]) {
     const d = decls.get(name);
     assert.ok(d, `${name} should still exist in bot.ts`);
+    // The WORKSPACE owner (the bot and its secrets are the workspace's own).
     assert.match(
       d.body,
-      /requireOwner\s*\(/,
-      `bot.ts#${name} leaks integration configuration state — it must call requireOwner() first`,
+      /requireTenantOwner\s*\(/,
+      `bot.ts#${name} leaks integration configuration state — it must call requireTenantOwner() first`,
     );
   }
 });
@@ -256,19 +257,21 @@ test("every /products and /trash page and layout enforces owner itself", () => {
     if (!files.some((f) => f.endsWith("layout.tsx"))) missingLayouts.push(seg.slice(ROOT.length + 1).replace(/\\/g, "/"));
     for (const f of files) {
       const src = stripComments(readFileSync(f, "utf8"));
-      if (!/\brequireOwner\s*\(\s*\)/.test(src)) offenders.push(f.slice(ROOT.length + 1).replace(/\\/g, "/"));
+      // requireRoute("/products" | "/trash") applies the SAME ROUTE_RULES entry the
+      // proxy does — now the WORKSPACE owner (tenantOwner), not the platform owner.
+      if (!/\brequireRoute\(\s*"\/(products|trash)"\s*\)/.test(src)) offenders.push(f.slice(ROOT.length + 1).replace(/\\/g, "/"));
     }
   }
   assert.deepEqual(
     offenders,
     [],
     "These owner-only route files rely on the proxy for authorization instead of checking " +
-      "themselves — add `await requireOwner()`:\n  " + offenders.join("\n  "),
+      "themselves — add `await requireRoute(\"/<segment>\")`:\n  " + offenders.join("\n  "),
   );
   assert.deepEqual(
     missingLayouts,
     [],
-    "These owner-only segments need a layout.tsx calling requireOwner() so a page added later " +
+    "These owner-only segments need a layout.tsx calling requireRoute() so a page added later " +
       "is denied by default:\n  " + missingLayouts.join("\n  "),
   );
 });
@@ -280,7 +283,7 @@ test("every /products and /trash server action is owner-gated", () => {
       if (!d.exported) continue;
       assert.match(
         d.body,
-        /requireOwner\s*\(/,
+        /requireTenantOwner\s*\(/,
         `${file}#${name} touches owner-only data and must check for itself — a Server Action ` +
           "is an untrusted POST entry point, not a function only the page can reach",
       );
@@ -295,11 +298,13 @@ test("the proxy keeps its owner gate for /products and /trash (defence in depth)
   for (const prefix of ["/products", "/trash"]) {
     assert.match(
       access,
-      new RegExp(`prefix:\\s*"${prefix}",\\s*owner:\\s*true`),
-      `ROUTE_RULES must keep the owner-only rule for ${prefix}`,
+      new RegExp(`prefix:\\s*"${prefix}",\\s*tenantOwner:\\s*true`),
+      `ROUTE_RULES must keep the (workspace-)owner-only rule for ${prefix}`,
     );
   }
   assert.match(access, /if \("owner" in rule\) return false;/, "an owner-only route must fail closed for non-owners");
+  // A tenantOwner rule opens only on a grant minted at sign-in — absent grant, closed.
+  assert.match(access, /return parseGrants\(claims\.grants\)\.has\(rule\.prefix\);/);
 
   // …and they must never be treated as public by the proxy.
   const proxy = stripComments(readFileSync(join(ROOT, "src", "proxy.ts"), "utf8"));

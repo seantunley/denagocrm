@@ -1,7 +1,7 @@
+import { requireRoute } from "@/lib/permissions";
 import { differenceInCalendarDays, addDays } from "date-fns";
 import { ArchiveRestore, Trash2 } from "lucide-react";
 import { basePrisma } from "@/lib/db";
-import { requireOwner } from "@/lib/auth";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { restoreFromTrash } from "@/app/actions/trash";
 import { TRASH_RETENTION_DAYS, actingTrashPredicate, type RestorableModel } from "@/lib/trash";
@@ -44,9 +44,9 @@ export default async function TrashPage() {
   // the page reads every soft-deleted contact, lead, vehicle, job card,
   // document, product, library document and quote through basePrisma, which
   // sets app.bypass_rls and is not soft-delete filtered. The proxy stays as the
-  // pre-filter (nicer redirect); requireOwner() is the actual boundary.
-  await requireOwner();
-  // …and owner of WHICH tenant. requireOwner() answers "is this person an
+  // pre-filter (nicer redirect); requireRoute("/trash") is the actual boundary.
+  await requireRoute("/trash");
+  // …and owner of WHICH tenant. requireRoute("/trash") answers "is this person an
   // owner", never "whose data may they see", so on its own it let an owner of
   // one tenant read every other tenant's deleted contacts, leads, quotes,
   // documents and vehicles — names, addresses, phone numbers, prices. The
@@ -59,7 +59,7 @@ export default async function TrashPage() {
   // would filter on the legacy untenanted value and show an empty Trash page
   // to every migrated tenant.
   // ACTING scope, not activeTenantPredicate: this page runs behind
-  // requireOwner() alone, no per-record ownership gate, so activeTenantPredicate
+  // requireRoute("/trash") alone, no per-record ownership gate, so activeTenantPredicate
   // answering `{}` while dormant (today's mode everywhere) meant every owner
   // saw every OTHER tenant's trash. See lib/trash.ts's actingTrashPredicate.
   const notNull = {

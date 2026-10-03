@@ -54,7 +54,7 @@ test("provider entry metadata reaches routing on Meta, WhatsApp and Telegram", (
 test("route writes require owner access, tenant ownership and an existing published version", () => {
   const actions = src("src/app/actions/flow.ts");
   const add = actions.slice(actions.indexOf("export async function addFlowRoute"), actions.indexOf("export async function setFlowRouteEnabled"));
-  assert.match(add, /await requireOwner\(\)/);
+  assert.match(add, /await requireTenantOwner\(\)/);
   assert.match(add, /const tenantId = await builderTenantId\(\)/);
   assert.match(add, /where: \{ id: flowId, tenantId, channel \}/);
   assert.match(add, /botFlowVersion\.findFirst/);

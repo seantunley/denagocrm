@@ -1,4 +1,4 @@
-import { requireOwner } from "@/lib/auth";
+import { requireTenantOwner } from "@/lib/auth";
 import { SettingsWorkspace, SettingsSection } from "@/components/settings-workspace";
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
@@ -98,7 +98,7 @@ function DefForm({ entity, def }: { entity: CustomEntity; def?: FieldDef }) {
 }
 
 export default async function CustomFieldsSettingsPage() {
-  await requireOwner();
+  await requireTenantOwner();
   const sections = await Promise.all(
     CUSTOM_ENTITIES.map(async (e) => ({
       entity: e,

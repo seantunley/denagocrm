@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { actingTenantMemberIds } from "@/lib/tenantActor";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
-import { getActiveTenantId, requireUser } from "@/lib/auth";
+import { getActiveTenantId, isTenantOwner, requireUser } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import {
   saveMyProfile,
@@ -76,7 +76,10 @@ export default async function SettingsPage({
   searchParams: Promise<{ tab?: string; section?: string }>;
 }) {
   const currentUser = await requireUser();
-  const isAdmin = currentUser.role === "owner";
+  // The WORKSPACE's owner — the tabs here configure this workspace, and every
+  // action behind them now checks requireTenantOwner(). `role === "owner"` is the
+  // platform owner, which a workspace's own owner never is.
+  const isAdmin = await isTenantOwner();
   // The signature PREVIEW must render what the send path renders, or the screen
   // where you check your signature is the one screen that lies about it.
   const profile = await getCompanyProfile();
@@ -93,7 +96,7 @@ export default async function SettingsPage({
     ? SETTINGS_TABS
     : SETTINGS_TABS.filter((t) => t.key === "account");
   const visibleGroups = visibleSettingsGroups(
-    { isOwner: isAdmin, permissions: await getUserPermissionList(currentUser) },
+    { isOwner: isAdmin, isPlatformOwner: currentUser.role === "owner", permissions: await getUserPermissionList(currentUser) },
     enabled,
   );
   const { tab: rawTab, section } = await searchParams;

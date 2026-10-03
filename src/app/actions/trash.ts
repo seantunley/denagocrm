@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
-import { requireOwner } from "@/lib/auth";
+import { requireTenantOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { asActionResult, refuse } from "@/lib/actionResult";
 import { restoreRecord, RESTORABLE_MODELS, type RestorableModel } from "@/lib/trash";
@@ -32,7 +32,7 @@ const LIST_PATH: Record<RestorableModel, string> = {
 
 export async function restoreFromTrash(model: RestorableModel, id: string) {
   return asActionResult(async () => {
-    const user = await requireOwner();
+    const user = await requireTenantOwner();
     if (!RESTORABLE_MODELS.includes(model)) refuse("That kind of record can't be restored.");
     const record = await restoreRecord(model, id).catch((error) => {
       // A live record took its unique number / serial / name while it was deleted.

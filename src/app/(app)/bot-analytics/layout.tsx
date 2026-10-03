@@ -1,9 +1,9 @@
 import type { ReactNode } from "react";
-import { requireOwner } from "@/lib/auth";
+import { requireTenantOwner } from "@/lib/auth";
 import ChatbotWorkspaceNav from "@/components/ChatbotWorkspaceNav";
 
 export default async function BotAnalyticsWorkspaceLayout({ children }: { children: ReactNode }) {
-  await requireOwner();
+  await requireTenantOwner();
   return (
     <div className="min-w-0">
       <ChatbotWorkspaceNav />

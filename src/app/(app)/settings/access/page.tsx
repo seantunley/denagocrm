@@ -2,7 +2,7 @@ import { Plus } from "lucide-react";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { basePrisma } from "@/lib/db";
 import { actingTenantMemberIds } from "@/lib/tenantActor";
-import { getActiveTenantId } from "@/lib/auth";
+import { getActiveTenantId, isTenantOwner } from "@/lib/auth";
 import { tenantEnforcing } from "@/lib/tenantEnforcement";
 import { hasPermission, requireAnyPermission } from "@/lib/permissions";
 import {
@@ -47,7 +47,9 @@ export default async function AccessSettingsPage() {
     hasPermission(currentUser, "roles.view"),
     hasPermission(currentUser, "roles.manage"),
   ]);
-  const canManageSecurity = currentUser.role === "owner";
+  // The WORKSPACE owner manages their own team's security — the same predicate
+  // the actions use (requireTenantOwner), so control and gate cannot drift.
+  const canManageSecurity = await isTenantOwner();
 
   // Multi-tenancy readiness: Team/TeamMember already carry tenantId (stamped on
   // create), but these reads only ever filtered by id/deletedAt. The
@@ -163,7 +165,8 @@ export default async function AccessSettingsPage() {
                   <td className="text-sm text-muted-foreground">{user.lastLoginAt ? formatDateTime(user.lastLoginAt) : "Never"}</td>
                   <td>{user.failedLoginCount}</td>
                   <td>
-                    {user.id !== currentUser.id && (
+                    {/* A platform owner's account is managed by the platform, not a workspace (security.ts). */}
+                    {user.id !== currentUser.id && (currentUser.role === "owner" || user.role !== "owner") && (
                       <div className="flex gap-2 justify-end">
                         <SaveForm resetOnSuccess={false} action={revokeUserSessions.bind(null, user.id)}>
                           <SaveButton className="btn-secondary btn-sm">Revoke sessions</SaveButton>

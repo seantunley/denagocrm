@@ -1,5 +1,5 @@
 import { ShieldCheck, Clock } from "lucide-react";
-import { requireOwner } from "@/lib/auth";
+import { requireTenantOwner } from "@/lib/auth";
 import { SettingsWorkspace } from "@/components/settings-workspace";
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
 import { readSigningSecuritySettings } from "@/app/actions/signingSecuritySettings";
@@ -9,7 +9,7 @@ import { SigningSecurityForm } from "./SigningSecurityForm";
 export const dynamic = "force-dynamic";
 
 export default async function SigningSecurityPage() {
-  await requireOwner();
+  await requireTenantOwner();
   const settings = await readSigningSecuritySettings();
   const tsaOn = timestampingEnabled();
   const tsaUrl = timestampAuthorityUrl();

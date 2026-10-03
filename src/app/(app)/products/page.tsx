@@ -1,7 +1,7 @@
+import { requireRoute } from "@/lib/permissions";
 import Link from "next/link";
 import { Boxes, Plus } from "lucide-react";
 import { prisma } from "@/lib/db";
-import { requireOwner } from "@/lib/auth";
 import ModalTrigger from "@/components/Modal";
 import ProductForm from "@/components/ProductForm";
 import { formatZAR } from "@/lib/format";
@@ -27,7 +27,7 @@ export default async function ProductsPage() {
   // the boundary (see next/docs 01-app/02-guides/authentication.md). Product
   // records themselves are read app-wide by non-owners (leads, quotes, stock,
   // vehicles); it is the create/edit/delete surface here that is restricted.
-  await requireOwner();
+  await requireRoute("/products");
   const products = await prisma.product.findMany({
     orderBy: [{ active: "desc" }, { name: "asc" }],
     include: { colors: true, _count: { select: { leads: true, vehicles: true } } },
