@@ -3,6 +3,7 @@
 import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import { requirePermission, type PermissionUser } from "@/lib/permissions";
 import { RECORD_UNAVAILABLE, canAccessBuilderRecord } from "@/lib/docbuilder/recordAccess";
 import { logAudit } from "@/lib/audit";
@@ -224,7 +225,7 @@ export async function generateDocEditorDocument(formData: FormData) {
 export async function createStandardQuoteTemplate() {
   return asActionResult(async () => {
     const user = await requirePermission("docbuilder.manage");
-    const doc = standardQuoteTemplate();
+    const doc = standardQuoteTemplate({ automotive: await isModuleEnabled("automotive") });
     const created = await prisma.docBuilderTemplate.create({
       data: {
         name: "Standard quotation",

@@ -218,7 +218,7 @@ async function sendLoginEmailCode(userId: string): Promise<boolean> {
   });
   await sendEmail({
     to: user.email,
-    subject: "Your Denago CRM sign-in code",
+    subject: "Your sign-in code",
     text: `Your sign-in code is ${code}. It expires in 10 minutes. If this wasn't you, change your password.`,
   }).catch(() => {});
   return true;

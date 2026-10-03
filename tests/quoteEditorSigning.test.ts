@@ -468,7 +468,7 @@ test("the start button never offers to countersign someone else's node", () => {
   const preview = shipped("src/components/signing/SignedDocPreview.tsx");
   assert.match(preview, /const awaitingMe = view\.next\?\.isMe \?\? false;/);
   const guard = preview.indexOf("{awaitingMe ?");
-  const offer = preview.indexOf("Countersign as Denago", guard === -1 ? 0 : guard);
+  const offer = preview.indexOf("✍ Countersign", guard === -1 ? 0 : guard);
   assert.notEqual(guard, -1, "the footer must branch on awaitingMe");
   assert.notEqual(offer, -1, "the countersign button not found");
   assert.ok(guard < offer, "the countersign button must sit inside the awaitingMe branch");

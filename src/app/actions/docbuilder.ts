@@ -3,6 +3,7 @@
 import { asActionResult, refuse } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import { requirePermission, requireAnyPermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { listBuilderVersions } from "@/lib/docbuilder/store";
@@ -116,7 +117,7 @@ export async function resetBuilderTemplateToStandard(id: string): Promise<{ ok: 
     if (!(STANDARD_TEMPLATE_KEYS as string[]).includes(tpl.key)) {
       return { ok: false, error: "There is no standard layout for this kind of document." };
     }
-    const standard = standardTemplateFor(tpl.key as StandardDocKey);
+    const standard = standardTemplateFor(tpl.key as StandardDocKey, { automotive: await isModuleEnabled("automotive") });
     await prisma.$transaction(async (tx) => {
       const last = await tx.docBuilderVersion.findFirst({
         where: { templateId: id }, orderBy: { version: "desc" }, select: { version: true },

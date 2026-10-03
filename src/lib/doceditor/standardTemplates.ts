@@ -561,8 +561,11 @@ export function showcaseQuoteTemplate(): DocumentModel {
   };
 }
 
-const BUILDERS: Record<StandardDocKey, () => DocumentModel> = {
-  quote: standardQuoteTemplate,
+/** What a workspace has that changes its standard documents. */
+export type StandardTemplateOptions = { automotive?: boolean };
+
+const BUILDERS: Record<StandardDocKey, (options: StandardTemplateOptions) => DocumentModel> = {
+  quote: (options) => standardQuoteTemplate(options),
   invoice: invoiceTemplate,
   agreement: agreementTemplate,
   indemnity: indemnityTemplate,
@@ -585,6 +588,6 @@ export const STANDARD_TEMPLATE_NAMES: Record<StandardDocKey, string> = {
   "warranty-claim": "Warranty claim",
 };
 
-export function standardTemplateFor(key: StandardDocKey): DocumentModel {
-  return BUILDERS[key]();
+export function standardTemplateFor(key: StandardDocKey, options: StandardTemplateOptions = {}): DocumentModel {
+  return BUILDERS[key](options);
 }

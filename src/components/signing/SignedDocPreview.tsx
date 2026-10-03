@@ -51,7 +51,7 @@ export default function SignedDocPreview({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  // "Countersign as Denago" is offered ONLY when the document says the caller is
+  // "Countersign" is offered ONLY when the document says the caller is
   // who it is waiting for. On a workflow whose next node is the customer this is
   // false, and the card offers to send instead of to sign in their name.
   const awaitingMe = view.next?.isMe ?? false;
@@ -135,7 +135,7 @@ export default function SignedDocPreview({
           <div className="flex flex-wrap items-center gap-2">
             {awaitingMe ? (
               <button className="btn-primary" disabled={busy !== null} onClick={onCountersign}>
-                {busy === "countersign" ? "Signing…" : "✍ Countersign as Denago"}
+                {busy === "countersign" ? "Signing…" : "✍ Countersign"}
               </button>
             ) : recipient ? (
               <button className="btn-primary" disabled={busy !== null} onClick={onSend}>

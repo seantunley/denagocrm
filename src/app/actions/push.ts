@@ -108,7 +108,7 @@ export async function sendTestPush(
 
     const sent = await sendPushToAll(
       {
-        title: messagesMode ? "Denago Messages test 🔔" : "Denago CRM test 🔔",
+        title: messagesMode ? "Messages test 🔔" : "Test notification 🔔",
         body: `Push notifications are working, ${user.name.split(" ")[0]}!`,
         url: destination,
       },

@@ -3,13 +3,13 @@ import type { HelpArticle } from "../types";
 export const gettingStartedArticles: HelpArticle[] = [
   {
     slug: "welcome",
-    title: "Welcome to Denago CRM",
+    title: "Welcome to the CRM",
     summary: "What the system does and how this manual is organised.",
     category: "getting-started",
     audience: "everyone",
     keywords: ["overview", "introduction", "welcome", "what is", "getting started", "home"],
     body: [
-      { type: "p", text: "Denago CRM is the single system that runs the dealership — from the first enquiry through the sale, delivery, workshop servicing and long-term customer care. It replaces spreadsheets and scattered chats with one place where every lead, quote, vehicle, job card and conversation lives together." },
+      { type: "p", text: "The CRM is the single system that runs the business — from the first enquiry through the sale, delivery, workshop servicing and long-term customer care. It replaces spreadsheets and scattered chats with one place where every lead, quote, vehicle, job card and conversation lives together." },
       { type: "h", text: "What you can do here" },
       { type: "list", items: [
         "**Sell** — capture leads, work them through the pipeline, build quotes, take e-signatures and hand over vehicles.",

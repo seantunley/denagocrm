@@ -63,7 +63,7 @@ export async function countersignWithSavedSignature(opts: {
     }
   }
   if (values.length === 0) {
-    return { ok: false, error: "There is nothing for Denago to sign on this document." };
+    return { ok: false, error: "There is nothing for your team to sign on this document." };
   }
 
   const meta = await reqMeta();

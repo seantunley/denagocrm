@@ -69,7 +69,7 @@ function resolveWho(who: SignerWho, opts: { customer: { name: string; email: str
     case "staff": {
       const u = who.userId ? opts.staff[who.userId] : undefined;
       if (u) return { name: u.name, email: u.email, needsInput: false, roleHint: null };
-      return { name: who.name || "Denago", email: who.email ?? null, needsInput: !who.email, roleHint: null };
+      return { name: who.name || "Our team", email: who.email ?? null, needsInput: !who.email, roleHint: null };
     }
     case "email":
       return { name: who.name || who.email || "Recipient", email: who.email ?? null, needsInput: !who.email, roleHint: null };

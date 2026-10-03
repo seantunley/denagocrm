@@ -163,8 +163,8 @@ export async function sendTestEmail(
     const user = await requireTenantOwner();
     const result = await sendEmail({
       to: user.email,
-      subject: "Denago CRM test email",
-      text: "Your SMTP settings are working. — Denago CRM",
+      subject: "SMTP test email",
+      text: "Your SMTP settings are working.",
     });
     return result.ok
       ? { ok: `Test email sent to ${user.email}.` }

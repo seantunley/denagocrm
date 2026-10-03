@@ -79,14 +79,16 @@ test("INLINE CITATIONS ARE STRIPPED FROM A CHATGPT BRIEFING", () => {
 test("THE CHATGPT PATH ASKS FOR ITS BEST WORK AND CLEANS WHAT COMES BACK", () => {
   const ai = src("src/lib/ai.ts");
   const research = ai.slice(ai.indexOf("export async function aiResearch"), ai.indexOf("export async function runAutoResearch"));
-  assert.match(research, /instructions: RESEARCH_INSTRUCTIONS \+ CHATGPT_RESEARCH_FORMAT_NOTE/);
+  // The prompt is built for THIS workspace's business (its Company Profile).
+  assert.match(research, /const instructions = researchInstructions\(\(await getCompanyProfile\(\)\.catch\(\(\) => null\)\)\?\.name \?\? ""\);/);
+  assert.match(research, /instructions: instructions \+ CHATGPT_RESEARCH_FORMAT_NOTE/);
   assert.match(research, /reasoningEffort: "high",/);
   assert.match(research, /verbosity: "high",/);
   assert.match(research, /timeoutMs: 150_000,/, "a 50–80 second call is not cut off at 90");
   assert.match(research, /summary = await stripResearchPreamble\(stripInlineCitations\(reply\.text\)\);/);
 
   // And both providers read the one prompt.
-  assert.match(research, /system: RESEARCH_INSTRUCTIONS,/);
+  assert.match(research, /system: instructions,/);
   assert.match(research, /content: researchLeadMessage\(input\.name, input\.email\)/);
 
   const codex = src("src/lib/codex.ts");

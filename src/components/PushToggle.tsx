@@ -146,14 +146,14 @@ export default function PushToggle({ mode = "crm" }: PushToggleProps) {
           if (legacy && !cancelled) {
             setRepairNeeded(true);
             setStatus(
-              "This installation is still using the old shared CRM notification channel. Tap Repair notifications once to move Denago Messages onto its own channel.",
+              "This installation is still using the old shared CRM notification channel. Tap Repair notifications once to move Messages onto its own channel.",
             );
           }
         }
 
         if (Notification.permission === "denied" && !cancelled) {
           setStatus(
-            "Notifications are blocked by this device. Allow notifications for Denago Messages in Android/iPhone app settings, then return here and repair them.",
+            "Notifications are blocked by this device. Allow notifications for Messages in Android/iPhone app settings, then return here and repair them.",
           );
         }
       } catch (error) {
@@ -184,7 +184,7 @@ export default function PushToggle({ mode = "crm" }: PushToggleProps) {
       if (permission !== "granted") {
         setStatus(
           mode === "messages"
-            ? "Denago Messages does not have notification permission. Allow it in the phone's app notification settings, then tap Repair notifications again."
+            ? "Messages does not have notification permission. Allow it in the phone's app notification settings, then tap Repair notifications again."
             : "Permission denied — allow notifications in your browser/phone settings.",
         );
         return;
@@ -213,7 +213,7 @@ export default function PushToggle({ mode = "crm" }: PushToggleProps) {
       setRepairNeeded(false);
       setStatus(
         mode === "messages"
-          ? "Denago Messages notifications repaired and synced on this device ✓"
+          ? "Messages notifications repaired and synced on this device ✓"
           : "Notifications enabled and synced on this device ✓",
       );
     } catch (e) {
@@ -261,7 +261,7 @@ export default function PushToggle({ mode = "crm" }: PushToggleProps) {
         setRepairNeeded(mode === "messages");
         setStatus(
           mode === "messages"
-            ? "Denago Messages has no dedicated push subscription yet. Tap Repair notifications, then test again."
+            ? "Messages has no dedicated push subscription yet. Tap Repair notifications, then test again."
             : "This device has no active push subscription. Enable notifications again, then test.",
         );
         return;
@@ -305,14 +305,14 @@ export default function PushToggle({ mode = "crm" }: PushToggleProps) {
       const signal = await Promise.race([signalPromise, timeoutPromise]);
 
       if (signal?.type === "push-test-displayed") {
-        setStatus("Test notification reached the Denago Messages worker on this device ✓");
+        setStatus("Test notification reached the Messages worker on this device ✓");
       } else if (signal?.type === "push-test-failed") {
         setStatus(
-          `Push reached this device, but notification display failed${signal.error ? `: ${signal.error}` : "."} Allow notifications for Denago Messages in the phone's app settings.`,
+          `Push reached this device, but notification display failed${signal.error ? `: ${signal.error}` : "."} Allow notifications for Messages in the phone's app settings.`,
         );
       } else {
         setStatus(
-          "This device's push service accepted the test, but the Denago Messages worker never received it. Tap Repair notifications once. If it still fails, allow notifications for Denago Messages in the phone's app settings and remove battery restrictions for the app.",
+          "This device's push service accepted the test, but the Messages worker never received it. Tap Repair notifications once. If it still fails, allow notifications for Messages in the phone's app settings and remove battery restrictions for the app.",
         );
       }
     } catch (e) {
@@ -356,7 +356,7 @@ export default function PushToggle({ mode = "crm" }: PushToggleProps) {
       <p className="text-xs text-slate-500">
         {mode === "messages" ? (
           <>
-            Denago Messages now uses its own push channel. The test targets this phone only; another
+            Messages now uses its own push channel. The test targets this phone only; another
             subscribed device can no longer make this screen report a false success.
           </>
         ) : (

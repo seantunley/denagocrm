@@ -24,7 +24,7 @@ import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { listDeadBotConversations } from "@/lib/deadBotConversations";
 import { retryDeadBotConversation, retryFailedMessage } from "@/app/actions/botDeliveries";
 
-export const metadata = { title: "Social inbox — DenagoCRM" };
+export const metadata = { title: "Social inbox" };
 
 export default async function InboxPage({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
   const { tab } = await searchParams;
