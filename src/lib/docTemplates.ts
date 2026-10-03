@@ -32,6 +32,12 @@ type DocDef = {
   sections: { id: string; label: string }[];
   defaultBody?: string;
   defaultIntro?: string;
+  /**
+   * The feature pack this document belongs to. A workspace without it is not
+   * offered the template at all — a breastfeeding-art studio has no job cards,
+   * test drives or vehicle deliveries.
+   */
+  module?: "automotive";
 };
 
 export const DOC_DEFS: Record<DocKey, DocDef> = {
@@ -61,9 +67,9 @@ export const DOC_DEFS: Record<DocKey, DocDef> = {
   agreement: {
     label: "Sales agreement",
     group: "Sales",
-    description: "Purchase contract for a cart sale — clauses below are fully editable.",
+    description: "Purchase contract for a sale — clauses below are fully editable.",
     sections: [
-      { id: "items", label: "Vehicle & items table" },
+      { id: "items", label: "Items table" },
       { id: "clauses", label: "Agreement clauses" },
       { id: "signatures", label: "Signature block" },
       { id: "footer", label: "Branded footer" },
@@ -74,6 +80,7 @@ export const DOC_DEFS: Record<DocKey, DocDef> = {
   indemnity: {
     label: "Test-drive indemnity",
     group: "Sales",
+    module: "automotive",
     description: "Waiver the customer signs before a test drive.",
     sections: [
       { id: "waiver", label: "Waiver text" },
@@ -87,6 +94,7 @@ export const DOC_DEFS: Record<DocKey, DocDef> = {
   delivery: {
     label: "Delivery note",
     group: "Fulfilment",
+    module: "automotive",
     description: "Handover document for a delivery — items, checklist and signatures.",
     sections: [
       { id: "items", label: "Items being delivered" },
@@ -100,6 +108,7 @@ export const DOC_DEFS: Record<DocKey, DocDef> = {
   jobcard: {
     label: "Job card",
     group: "Workshop",
+    module: "automotive",
     description: "The workshop job card print-out with technician and customer sign-off.",
     sections: [
       { id: "signatures", label: "Signature block" },
@@ -109,6 +118,7 @@ export const DOC_DEFS: Record<DocKey, DocDef> = {
   "service-report": {
     label: "Service report",
     group: "Workshop",
+    module: "automotive",
     description: "Given to the customer after a service: work done, parts, next service due.",
     sections: [
       { id: "items", label: "Work & parts table" },
@@ -122,6 +132,7 @@ export const DOC_DEFS: Record<DocKey, DocDef> = {
   "warranty-claim": {
     label: "Warranty claim",
     group: "Workshop",
+    module: "automotive",
     description: "Claim form for a warranty fault — for the customer and the manufacturer.",
     sections: [
       { id: "vehicle", label: "Vehicle & warranty details" },
@@ -137,6 +148,19 @@ export const DOC_GROUPS: { name: DocDef["group"]; keys: DocKey[] }[] = [
   { name: "Fulfilment", keys: ["delivery"] },
   { name: "Workshop", keys: ["jobcard", "service-report", "warranty-claim"] },
 ];
+
+/** Whether this workspace has the document at all (its module, if any, is on). */
+export function docKeyAvailable(key: string, enabledModules: ReadonlySet<string>): boolean {
+  const needs = (DOC_DEFS as Record<string, DocDef | undefined>)[key]?.module;
+  return !needs || enabledModules.has(needs);
+}
+
+/** DOC_GROUPS for this workspace: module-only documents removed, empty groups dropped. */
+export function docGroupsForModules(enabledModules: ReadonlySet<string>) {
+  return DOC_GROUPS.map((group) => ({ ...group, keys: group.keys.filter((key) => docKeyAvailable(key, enabledModules)) })).filter(
+    (group) => group.keys.length > 0,
+  );
+}
 
 export const SIGNATURE_POSITIONS: { id: SignaturePosition; label: string }[] = [
   { id: "left-right", label: "Customer left · Dealer right" },
