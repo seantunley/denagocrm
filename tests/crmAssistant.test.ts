@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { MAX_STEPS, conversationBlock, parseStep, planInstructions } from "../src/lib/crmAssistantPlan";
-import { DEFAULT_PROFILE, DEFAULT_SOUL, LOCKED_RULES, normaliseSoul, parseProfile, soulText } from "../src/lib/assistantSoul";
+import { DEFAULT_PROFILE, DEFAULT_SOUL, LOCKED_RULES, cleanOwnerText, normaliseSoul, parseProfile, soulText } from "../src/lib/assistantSoul";
 
 const code = (rel: string) =>
   readFileSync(new URL(`../${rel}`, import.meta.url), "utf8")
@@ -74,7 +74,10 @@ test("the personality is the workspace's, with honest-colleague rules underneath
   assert.match(soul, /You are Ava, the sales assistant inside Denago's CRM, talking with Sean\./);
   assert.ok(soul.includes(DEFAULT_SOUL), "no custom soul → the default");
   assert.match(soul, /Keep FACTS .* apart from ADVICE/);
-  assert.match(soul, /House rules from the business \(follow these\):\nMention the warranty\./);
+  assert.match(soul, /Workspace instructions from the business \(follow these\):\nMention the warranty\./);
+  // Saved as "rules" before the rename — still read, now with room for 4000.
+  assert.equal(parseProfile(JSON.stringify({ rules: "x".repeat(4000) })).rules.length, 4000);
+  assert.equal(cleanOwnerText("Be​ kind.\r\nAlways.", 4000), "Be kind.\nAlways.");
 });
 
 test("the owner can rewrite the whole soul — but never the honesty rules", () => {

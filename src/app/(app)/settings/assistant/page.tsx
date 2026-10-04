@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import { requireTenantOwner } from "@/lib/auth";
 import { getSetting } from "@/lib/settings";
 import { isModuleEnabled } from "@/lib/modules/enabled";
-import { ASSISTANT_PROFILE_KEY, DEFAULT_SOUL, LOCKED_RULES, TONES, parseProfile, type Tone } from "@/lib/assistantSoul";
+import { ASSISTANT_PROFILE_KEY, DEFAULT_SOUL, LOCKED_RULES, TONES, WORKSPACE_INSTRUCTIONS_CHARS, parseProfile, type Tone } from "@/lib/assistantSoul";
 import { saveAssistantProfile } from "@/app/actions/assistantSettings";
 import { SettingsWorkspace } from "@/components/settings-workspace";
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
@@ -49,14 +49,17 @@ export default async function AssistantSettingsPage() {
           </div>
         </fieldset>
         <label className="block space-y-1">
-          <span className="text-xs font-medium text-muted-foreground">House rules</span>
+          <span className="text-xs font-medium text-muted-foreground">Workspace instructions</span>
+          <span className="block text-[11px] text-muted-foreground">
+            Your standing orders for this workspace — like an AGENTS.md: how you work, what it must always or never do.
+          </span>
           <textarea
             name="rules"
             defaultValue={profile.rules}
-            maxLength={1500}
-            rows={6}
+            maxLength={WORKSPACE_INSTRUCTIONS_CHARS}
+            rows={8}
             className="input"
-            placeholder={"Things it should always or never do, in your words. e.g.\n- Always mention the 5-year battery warranty when price comes up.\n- Never suggest a discount above 5%."}
+            placeholder={"In your words. e.g.\n- Always mention the 5-year battery warranty when price comes up.\n- Never suggest a discount above 5%.\n- Donovan handles fleet and golf-estate deals; Sean handles everything else.\n- We reply to every new lead within 2 hours."}
           />
           <span className="block text-[11px] text-muted-foreground">
             It also learns your business as your team uses it — you&apos;ll be able to review what it has learned here.
