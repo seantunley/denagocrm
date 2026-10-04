@@ -180,14 +180,19 @@ export async function maybeAutoReply(
       // was on, the reply simply can't be spoken. Only "voice replies are off"
       // keeps the old voice-note → person routing.
       const voiceOn = Boolean(opts.voiceNote) && (await voiceRepliesEnabled());
-      const voiceReply = voiceOn && (language?.speakable ?? true);
+      // What the reply is ACTUALLY in decides the voice, not what the customer
+      // spoke: a canonical answer that couldn't be safely translated, or the
+      // fixed handoff line, goes out in English — spoken with the default
+      // voice, never the Afrikaans model.
+      const replyLanguage = language && ai.localized ? language : null;
+      const voiceReply = voiceOn && (replyLanguage?.speakable ?? true);
       const handoff = ai.handoff || (Boolean(opts.voiceNote) && !voiceOn);
       // `sentVoice` is what actually went out — a voice send that failed and fell
       // back to text must be logged as text, not as a 🎤 voice reply.
       let sentVoice = false;
       let sent: { ok: boolean; providerMessageId?: string };
       if (voiceReply) {
-        const r = await sendVoiceReply(fromDigits, ai.reply, language?.ttsModel);
+        const r = await sendVoiceReply(fromDigits, ai.reply, replyLanguage?.ttsModel);
         sent = r;
         sentVoice = r.viaVoice;
       } else {

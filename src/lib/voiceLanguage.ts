@@ -36,6 +36,18 @@ const TEXT_ONLY: Record<string, string> = {
   nbl: "isiNdebele",
 };
 
+/**
+ * Does `translation` still contain every number in `approved`? A translated FAQ
+ * answer is only sent if it does — a wrong price is worse than English. Digits
+ * are compared with spaces, commas and points removed, so "R185 000" and
+ * "R185,000" match.
+ */
+export function keepsEveryNumber(approved: string, translation: string): boolean {
+  const numbers = (s: string) => (s.match(/\d[\d\s.,]*\d|\d/g) ?? []).map((n) => n.replace(/[\s.,]/g, ""));
+  const have = new Set(numbers(translation));
+  return numbers(approved).every((n) => have.has(n));
+}
+
 /** Scribe has returned both two- and three-letter codes; accept either. */
 const TWO_TO_THREE: Record<string, string> = {
   af: "afr", zu: "zul", xh: "xho", st: "sot", tn: "tsn", ss: "ssw", ve: "ven", ts: "tso", nr: "nbl", en: "eng",

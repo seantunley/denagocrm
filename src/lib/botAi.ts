@@ -6,6 +6,7 @@ import { formatZAR } from "./format";
 import { renderKnowledgeForPrompt, searchBotKnowledge } from "./botKnowledge";
 import { renderBotProductFacts } from "./botProductFacts";
 import { getCompanyProfile } from "./companyProfile";
+import { keepsEveryNumber } from "./voiceLanguage";
 
 export type BotMsg = { role: "user" | "assistant"; content: string };
 export type BotFaq = { id: string; question: string; answer: string; handoff?: boolean };
@@ -14,6 +15,13 @@ export type BotConfidence = "high" | "medium" | "low";
 export type BotIntent = "pricing" | "colours" | "service" | "demo" | "purchase" | "complaint" | "human" | "general" | "unknown";
 export type BotReplyDecision = {
   reply: string;
+  /**
+   * True only when `reply` is in the customer's language (asked for via
+   * `language`). A canonical answer whose translation couldn't be verified, or a
+   * fixed handoff line, is sent in English — and must not be voiced with a
+   * model chosen for another language.
+   */
+  localized: boolean;
   handoff: boolean;
   confidence: BotConfidence;
   intent: BotIntent;
@@ -194,7 +202,11 @@ export async function generateBotReply(input: {
     ...builtins.map((b) => ({ id: b.id, when: b.when, answer: b.answer, handoff: b.handoff })),
     ...faqs.map((f) => ({ id: f.id, when: f.question, answer: f.answer, handoff: f.handoff })),
   ];
-  const pathwayList = pathways.map((p) => `[${p.id}] ${p.when}`).join("\n") || "(none)";
+  // In another language the model must SEE the approved answers to translate
+  // them; in English it only picks the id and the app sends the exact text.
+  const pathwayList = pathways
+    .map((p) => (input.language ? `[${p.id}] ${p.when}\n  APPROVED ANSWER: ${p.answer.slice(0, 1500)}` : `[${p.id}] ${p.when}`))
+    .join("\n") || "(none)";
   const who = input.customerName ? `You're chatting with ${input.customerName}${input.isCustomer ? ", an existing customer" : ""}.` : "";
 
   // Who the bot speaks for comes from the workspace's Company Profile — this
@@ -238,7 +250,8 @@ DECISION RULES:
 - Set handoff=true for order/payment intent, a specific booking/test-drive request, complaints, requests for a person, or anything you cannot answer from supplied facts.
 - When handoff=true, handoffReason must explain why in a few words and handoffSummary must tell staff the customer's intent and unresolved need without speculation.
 - Never invent prices, specs, stock, dates, legal status, finance terms or promises.
-${input.voiceNote ? "- This arrived as a transcribed voice note. Reply naturally; the application may still route it to a human.\n" : ""}${input.language ? `- The customer spoke ${input.language}. Write "reply" in ${input.language}, plainly and naturally; keep product names, prices and handoffSummary as they are (handoffSummary in English for staff).\n` : ""}`;
+${input.voiceNote ? "- This arrived as a transcribed voice note. Reply naturally; the application may still route it to a human.\n" : ""}${input.language ? `- The customer spoke ${input.language}. Write "reply" in ${input.language}, plainly and naturally; keep product names and handoffSummary as they are (handoffSummary in English for staff).
+- When a pathway matches, STILL return its faqId, and ALSO put in "reply" a faithful ${input.language} translation of its APPROVED ANSWER: every price, number, name and condition exactly as given, nothing added, nothing left out.\n` : ""}`;
 
   try {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
@@ -265,8 +278,12 @@ ${input.voiceNote ? "- This arrived as a transcribed voice note. Reply naturally
       const pathway = pathways.find((item) => item.id === parsed.faqId);
       if (!pathway) return null;
       const handoff = Boolean(pathway.handoff) || parsed.handoff || parsed.confidence === "low";
+      // In another language, the model's translation — but only if every figure
+      // in the approved answer survived it. A wrong price is worse than English.
+      const translated = input.language && parsed.reply && keepsEveryNumber(pathway.answer, parsed.reply) ? parsed.reply : null;
       return {
-        reply: personalize(pathway.answer, input.customerName),
+        reply: personalize(translated ?? pathway.answer, input.customerName),
+        localized: Boolean(translated),
         handoff,
         confidence: parsed.confidence,
         intent: parsed.intent,
@@ -278,6 +295,7 @@ ${input.voiceNote ? "- This arrived as a transcribed voice note. Reply naturally
     if (parsed.confidence !== "high") {
       return {
         reply: "Let me get one of our team to confirm that for you — they'll pick it up from here 👍",
+        localized: false,
         handoff: true,
         confidence: parsed.confidence,
         intent: parsed.intent,
@@ -289,6 +307,8 @@ ${input.voiceNote ? "- This arrived as a transcribed voice note. Reply naturally
     if (!parsed.reply) return null;
     return {
       reply: personalize(parsed.reply, input.customerName),
+      // The model was told to write in the customer's language.
+      localized: Boolean(input.language),
       handoff: parsed.handoff,
       confidence: parsed.confidence,
       intent: parsed.intent,
