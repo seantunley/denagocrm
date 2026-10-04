@@ -33,6 +33,7 @@ import {
   Radar,
   Route,
   Hammer,
+  Sun,
   type LucideIcon,
 } from "lucide-react";
 import { isPathEnabled } from "@/lib/modules/registry";
@@ -58,6 +59,7 @@ export function buildNav(
   const can = (...keys: string[]) => isAdmin || keys.some((key) => permissions.has(key));
 
   const topLinks: NavLink[] = [{ href: "/", label: "Dashboard", icon: LayoutDashboard }];
+  if (can("leads.view_all", "leads.view_owned")) topLinks.push({ href: "/today", label: "Today", icon: Sun, keywords: ["lead score", "who to call", "next"] });
   if (can("reports.view", "reports.view_all", "reports.view_team")) {
     topLinks.push({ href: "/reports", label: "Reports", icon: ChartColumnIncreasing });
     topLinks.push({ href: "/targets", label: "Targets", icon: Target });
