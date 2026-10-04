@@ -389,7 +389,7 @@ function navLinks(): Array<{ href: string; keys: string[]; admin: boolean }> {
  * is exactly the /journeys bug this file exists to prevent.
  */
 const EDGE_EXEMPT_NAV_ROUTES = new Set([
-  "/reports", "/targets", "/forecast",
+  "/today", "/reports", "/targets", "/forecast",
   "/inbox",
   "/calendar", "/test-drives", "/leads", "/quotes", "/signatures", "/deliveries",
   "/contacts", "/activities", "/documents",
