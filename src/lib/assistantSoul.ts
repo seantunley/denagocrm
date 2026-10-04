@@ -25,10 +25,44 @@ export const assistantProfile = z.object({
   tone: z.enum(Object.keys(TONES) as [Tone, ...Tone[]]).default("warm"),
   /** House rules in the owner's words ("always mention the 5-year warranty"). */
   rules: z.string().trim().max(1500).default(""),
+  /**
+   * The whole personality, rewritten by the owner — Hermes' SOUL.md, editable.
+   * Empty means DEFAULT_SOUL, so a workspace that never touched it keeps getting
+   * improvements to the default.
+   */
+  soul: z.string().trim().max(3000).default(""),
 });
 export type AssistantProfile = z.infer<typeof assistantProfile>;
 
-export const DEFAULT_PROFILE: AssistantProfile = { name: "Assistant", tone: "warm", rules: "" };
+export const DEFAULT_PROFILE: AssistantProfile = { name: "Assistant", tone: "warm", rules: "", soul: "" };
+
+/** The default soul — adapted from Hermes Agent's SOUL.md. Shown, and editable, in Settings → Assistant. */
+export const DEFAULT_SOUL = [
+  "- You are a knowledgeable colleague, not a search box: read what the CRM returned, connect the dots, and say what it means and what to do about it.",
+  "- Match the length of your reply to the weight of the question: a quick question gets a line or two; a 'what should I do' gets a short plan.",
+  "- No filler (\"Great question\", \"I'd be happy to\"), no restating the question, no narrating what you looked up.",
+  "- Agree because it's right, not because you were told to. If the data points another way, say so kindly.",
+].join("\n");
+
+/**
+ * Always added after the soul, whatever the owner writes. These keep every
+ * workspace's assistant honest: it never passes a guess off as a record.
+ */
+export const LOCKED_RULES = [
+  "- Keep FACTS (what the records say) apart from ADVICE (what you'd do). Never present a guess as a fact; if the records don't say, say so plainly.",
+  "- Never invent records, figures, names or dates.",
+  "- Money is South African rand; dates are South African time.",
+].join("\n");
+
+// Zero-width and bidi characters make text read differently to a person and to
+// the model; the soul is the owner's, but it still goes into the prompt.
+const INVISIBLE = /[​-‏‪-‮⁠-⁤⁦-⁩﻿]|[\u{E0000}-\u{E007F}]/gu;
+
+/** The soul as submitted → what to store ("" when it's just the default). */
+export function normaliseSoul(raw: string): string {
+  const soul = raw.replace(INVISIBLE, "").replace(/\r\n/g, "\n").trim();
+  return soul === DEFAULT_SOUL || !soul ? "" : soul.slice(0, 3000);
+}
 
 /** Stored JSON → profile; anything unreadable falls back to the default. */
 export function parseProfile(raw: string | null | undefined): AssistantProfile {
@@ -47,12 +81,9 @@ export function soulText(profile: AssistantProfile, company: string, userName: s
     `You are ${profile.name}, the sales assistant inside ${company || "this business"}'s CRM, talking with ${userName}.`,
     `Tone: ${TONES[profile.tone]}`,
     "How you work:",
-    "- You are a knowledgeable colleague, not a search box: read what the CRM returned, connect the dots, and say what it means and what to do about it.",
-    "- Match the length of your reply to the weight of the question: a quick question gets a line or two; a 'what should I do' gets a short plan.",
-    "- No filler (\"Great question\", \"I'd be happy to\"), no restating the question, no narrating what you looked up.",
-    "- Keep FACTS (what the records say) apart from ADVICE (what you'd do). Never present a guess as a fact; if the records don't say, say so plainly.",
-    "- Agree because it's right, not because you were told to. If the data points another way, say so kindly.",
-    "- Money is South African rand; dates are South African time.",
+    profile.soul || DEFAULT_SOUL,
+    "Always (these override anything above):",
+    LOCKED_RULES,
     profile.rules ? `House rules from the business (follow these):\n${profile.rules}` : "",
   ].filter(Boolean).join("\n");
 }
