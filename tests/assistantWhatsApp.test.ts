@@ -574,7 +574,7 @@ test("link and unlink touch only the caller's own row, behind the gate and the s
   assert.match(start, /crypto\.randomInt\(0, 1_000_000\)/);
   assert.match(start, /where: \{ tenantId_userId: \{ tenantId, userId: user\.id \} \}/);
   // Only the hash is stored; re-linking clears the old number.
-  assert.match(start, /create: \{ tenantId, userId: user\.id, codeHash, codeExpiresAt \}/);
+  assert.match(start, /create: \{ tenantId, userId: user\.id, codeHash, codeExpiresAt, sessionVersion \}/);
   assert.match(start, /update: \{ codeHash, codeExpiresAt, waId: null, verifiedAt: null, sessionVersion \}/);
   assert.match(start, /const sessionVersion = security\.sessionVersion;/, "the code belongs to the sign-ins it was issued under");
   assert.doesNotMatch(start, /code: code|codeHash: code\b/);
