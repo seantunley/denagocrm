@@ -35,7 +35,7 @@ export const MODULE_REGISTRY: AppModule[] = [
       "/documents", "/signatures", "/signing-workflows", "/duplicates",
       "/reports", "/targets", "/forecast", "/search", "/audit", "/trash",
       "/settings", "/help", "/library", "/document-studio", "/health",
-      "/messages/start",
+      "/messages/start", "/today",
     ],
   },
   {
