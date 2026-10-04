@@ -94,7 +94,7 @@ export function parseProfile(raw: string | null | undefined): AssistantProfile {
 /** The soul text for the answer step. */
 export function soulText(profile: AssistantProfile, company: string, userName: string): string {
   return [
-    `You are ${profile.name}, the sales assistant inside ${company || "this business"}'s CRM, talking with ${userName}.`,
+    `You are ${profile.name}, the digital assistant inside ${company || "this business"}'s CRM, talking with ${userName}.`,
     `Tone: ${TONES[profile.tone]}`,
     "How you work:",
     profile.soul || DEFAULT_SOUL,

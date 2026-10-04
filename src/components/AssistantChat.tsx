@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { ArrowUpRight, Loader2, Mic, Sparkles, Square } from "lucide-react";
 import { askCrmAction } from "@/app/actions/assistant";
@@ -26,9 +26,15 @@ const EXAMPLES = [
 export default function AssistantChat({
   name,
   history = [],
+  page,
+  compact = false,
 }: {
   name: string;
   history?: { question: string; answer: string }[];
+  /** The page it was opened on (the bubble), so "this lead" means something. */
+  page?: string;
+  /** The bubble: no example prompts — there isn't room, and you're mid-task. */
+  compact?: boolean;
 }) {
   const [question, setQuestion] = useState("");
   const [turns, setTurns] = useState<Turn[]>(() => history.map((t) => ({ ...t, rows: [] })));
@@ -41,7 +47,7 @@ export default function AssistantChat({
     if (!q || pending) return;
     setQuestion("");
     startTransition(async () => {
-      const result = await askCrmAction(q).catch(() => ({ ok: false as const, error: "Something went wrong — try again." }));
+      const result = await askCrmAction(q, page).catch(() => ({ ok: false as const, error: "Something went wrong — try again." }));
       setTurns((prev) => [
         result.ok
           ? { question: q, answer: result.answer, rows: result.rows, learned: result.learned, actions: result.actions }
@@ -61,19 +67,59 @@ export default function AssistantChat({
     else setVoiceError(heard.error);
   });
 
-  return (
-    <div className="space-y-5">
+  // In the bubble it reads like a chat: oldest at the top, newest (and the
+  // "looking into it" note) at the bottom, kept in view as the thread grows.
+  const end = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (compact) end.current?.scrollIntoView({ block: "end" });
+  }, [compact, turns.length, pending]);
+
+  const details = (turn: Turn) => (
+    <>
+      {turn.actions && turn.actions.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Ready for you to confirm</p>
+          {turn.actions.map((card) => (
+            <AssistantActionCard key={card.id} card={card} />
+          ))}
+        </div>
+      )}
+      {Boolean(turn.learned) && (
+        <p className="text-[11px] text-muted-foreground">
+          🧠 {name} learned something from this — the workspace owner can review it in Settings → Assistant.
+        </p>
+      )}
+      {turn.rows.length > 0 && (
+        <ul className="divide-y divide-border/50 rounded-lg border border-border/50">
+          {turn.rows.map((row) => (
+            <li key={row.href + row.label}>
+              <Link href={row.href} className="flex items-center gap-3 px-3 py-2 text-sm hover:bg-muted/40">
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium">{row.label}</span>
+                  <span className="block truncate text-xs text-muted-foreground">{row.detail}</span>
+                </span>
+                <ArrowUpRight className="size-3.5 shrink-0 text-muted-foreground" />
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  );
+
+  const composer = (
+    <>
       <form
-        className="card flex items-center gap-2 p-2"
+        className={compact ? "flex items-center gap-2 rounded-xl border border-border bg-card p-1.5" : "card flex items-center gap-2 p-2"}
         onSubmit={(event) => {
           event.preventDefault();
           ask(question);
         }}
       >
-        <Sparkles className="ml-2 size-4 shrink-0 text-primary" />
+        {!compact && <Sparkles className="ml-2 size-4 shrink-0 text-primary" />}
         <input
-          className="h-10 flex-1 bg-transparent px-2 text-sm outline-none"
-          placeholder={`Ask ${name} — e.g. "What should I do with Anna?"`}
+          className="h-10 min-w-0 flex-1 bg-transparent px-2 text-sm outline-none"
+          placeholder={compact ? `Message ${name}…` : `Ask ${name} — e.g. "What should I do with Anna?"`}
           value={question}
           onChange={(event) => setQuestion(event.target.value)}
           maxLength={500}
@@ -93,13 +139,50 @@ export default function AssistantChat({
           </button>
         )}
         <button type="submit" className="btn-primary h-10 px-4 text-sm" disabled={pending || !question.trim()}>
-          {pending ? <Loader2 className="size-4 animate-spin" /> : "Ask"}
+          {pending ? <Loader2 className="size-4 animate-spin" /> : compact ? "Send" : "Ask"}
         </button>
       </form>
       {voice.recording && (
         <p className="text-xs text-destructive">● Listening… {voice.seconds}s — tap ■ when you&apos;re done.</p>
       )}
       {(voiceError || voice.error) && <p className="text-xs text-destructive">{voiceError ?? voice.error}</p>}
+    </>
+  );
+
+  if (compact) {
+    const thread = [...turns].reverse();
+    return (
+      <div className="flex min-h-full flex-col gap-3">
+        {thread.length === 0 && !pending && (
+          <p className="py-6 text-center text-sm text-muted-foreground">
+            Hi 👋 Ask me anything about your leads, quotes, calendar or customers — type or tap the mic.
+          </p>
+        )}
+        {thread.map((turn, index) => (
+          <div key={index} className="space-y-2">
+            <p className="ml-auto max-w-[85%] whitespace-pre-line rounded-2xl rounded-br-sm bg-primary px-3 py-2 text-sm text-primary-foreground">
+              {turn.question}
+            </p>
+            <div className="max-w-[92%] space-y-2 rounded-2xl rounded-bl-sm bg-muted/50 px-3 py-2">
+              {turn.error ? (
+                <p className="text-sm text-destructive">{turn.error}</p>
+              ) : (
+                <p className="whitespace-pre-line text-sm leading-relaxed">{turn.answer}</p>
+              )}
+              {details(turn)}
+            </div>
+          </div>
+        ))}
+        {pending && <p className="text-sm text-muted-foreground">{name} is looking into it…</p>}
+        <div className="sticky bottom-0 mt-auto space-y-1 bg-card pt-2">{composer}</div>
+        <div ref={end} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      {composer}
 
       {turns.length === 0 && !pending && (
         <div className="flex flex-wrap gap-2">
@@ -126,34 +209,7 @@ export default function AssistantChat({
           ) : (
             <p className="whitespace-pre-line text-sm leading-relaxed">{turn.answer}</p>
           )}
-          {turn.actions && turn.actions.length > 0 && (
-            <div className="space-y-2">
-              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Ready for you to confirm</p>
-              {turn.actions.map((card) => (
-                <AssistantActionCard key={card.id} card={card} />
-              ))}
-            </div>
-          )}
-          {Boolean(turn.learned) && (
-            <p className="text-[11px] text-muted-foreground">
-              🧠 {name} learned something from this — the workspace owner can review it in Settings → Assistant.
-            </p>
-          )}
-          {turn.rows.length > 0 && (
-            <ul className="divide-y divide-border/50 rounded-lg border border-border/50">
-              {turn.rows.map((row) => (
-                <li key={row.href + row.label}>
-                  <Link href={row.href} className="flex items-center gap-3 px-3 py-2 text-sm hover:bg-muted/40">
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate font-medium">{row.label}</span>
-                      <span className="block truncate text-xs text-muted-foreground">{row.detail}</span>
-                    </span>
-                    <ArrowUpRight className="size-3.5 shrink-0 text-muted-foreground" />
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
+          {details(turn)}
         </div>
       ))}
     </div>

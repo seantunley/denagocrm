@@ -71,7 +71,7 @@ test("the personality is the workspace's, with honest-colleague rules underneath
   });
   assert.deepEqual(parseProfile('{"tone":"sarcastic"}'), DEFAULT_PROFILE, "unknown tone → default, not a crash");
   const soul = soulText({ name: "Ava", tone: "direct", rules: "Mention the warranty.", soul: "" }, "Denago", "Sean");
-  assert.match(soul, /You are Ava, the sales assistant inside Denago's CRM, talking with Sean\./);
+  assert.match(soul, /You are Ava, the digital assistant inside Denago's CRM, talking with Sean\./);
   assert.ok(soul.includes(DEFAULT_SOUL), "no custom soul → the default");
   assert.match(soul, /Keep FACTS .* apart from ADVICE/);
   assert.match(soul, /Workspace instructions from the business \(follow these\):\nMention the warranty\./);

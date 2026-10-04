@@ -13,8 +13,12 @@ import { getCompanyProfile } from "./companyProfile";
 import { searchBotKnowledge } from "./botKnowledge";
 import { isModuleEnabled } from "./modules/enabled";
 import { ownedWriteTenantId } from "./tenantWrite";
+import { accessibleTestDriveWhere } from "./testDriveAccess";
 import {
   canAccessLead,
+  getAccessibleContactIds,
+  getAccessibleDocumentIds,
+  getAccessibleVehicleIds,
   getAccessibleLeadIds,
   getAccessibleQuoteIds,
   hasAnyPermission,
@@ -38,6 +42,10 @@ import {
   playbookArgs,
   quoteArgs,
   recallArgs,
+  scheduleArgs,
+  vehicleArgs,
+  deliveryArgs,
+  documentArgs,
   type PriorTurn,
   type ToolStep,
 } from "./crmAssistantPlan";
@@ -202,11 +210,21 @@ async function findQuotes(user: User, raw: z.infer<typeof quoteArgs>): Promise<T
         : args.status ? { status: args.status } : {}),
       ...(args.viewed === true ? { viewedAt: { not: null } } : args.viewed === false ? { viewedAt: null } : {}),
       ...(args.olderThanDays ? { createdAt: { lt: new Date(Date.now() - args.olderThanDays * DAY) } } : {}),
+      // "Expiring": still open — draft or sent, nobody has signed or declined —
+      // with its validity running out in the window (or already run out today).
+      ...(args.expiringWithinDays !== undefined
+        ? {
+            status: { in: ["draft", "sent"] },
+            signedAt: null,
+            declinedAt: null,
+            validUntil: { gte: new Date(Date.now() - DAY), lte: new Date(Date.now() + args.expiringWithinDays * DAY) },
+          }
+        : {}),
     },
-    orderBy: { createdAt: "desc" },
+    orderBy: args.expiringWithinDays !== undefined ? { validUntil: "asc" } : { createdAt: "desc" },
     take: CANDIDATES,
     select: {
-      id: true, number: true, status: true, createdAt: true, viewedAt: true, signedAt: true,
+      id: true, number: true, status: true, createdAt: true, viewedAt: true, signedAt: true, validUntil: true,
       taxInclusive: true, depositType: true, depositValue: true, items: true, fees: true,
       lead: { select: { id: true, name: true, title: true } },
       contact: { select: { firstName: true, lastName: true } },
@@ -230,6 +248,7 @@ async function findQuotes(user: User, raw: z.infer<typeof quoteArgs>): Promise<T
       total: formatZAR(total),
       created: dateKey(quote.createdAt),
       viewedByCustomer: quote.viewedAt ? dateKey(quote.viewedAt) : "not yet",
+      validUntil: quote.validUntil ? dateKey(quote.validUntil) : null,
       signed: quote.signedAt ? dateKey(quote.signedAt) : "no",
     })),
     rows: page.map(({ quote, total }) => ({
@@ -309,7 +328,8 @@ async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>): Promis
       deletedAt: null,
       ...visible,
       ...(looksLikeId
-        ? { id: needle }
+        // A lead id, or a customer's id (from the bubble on a customer page).
+        ? { OR: [{ id: needle }, { contactId: needle }] }
         : {
             OR: [
               { name: fuzzy(needle) },
@@ -352,6 +372,15 @@ async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>): Promis
       },
     },
   });
+  // Test drives for this lead, through the test-drive page's own visibility rule.
+  const testDrives = (await isModuleEnabled("automotive"))
+    ? await prisma.testDriveBooking.findMany({
+        where: { leadId: lead.id, deletedAt: null, ...(await accessibleTestDriveWhere(user)) },
+        orderBy: { scheduledStart: "desc" },
+        take: 5,
+        select: { status: true, scheduledStart: true, salesOutcome: true, customerFeedback: true, demoVehicle: { select: { name: true } } },
+      })
+    : [];
   const quotes = (await hasAnyPermission(user, "quotes.view_all", "quotes.view_owned"))
     ? await quotesForLead(user, lead.id)
     : [];
@@ -390,6 +419,13 @@ async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>): Promis
         note: clip(a.note, 200),
       })),
       quotes,
+      testDrives: testDrives.map((t) => ({
+        when: dateKey(t.scheduledStart),
+        status: t.status,
+        vehicle: t.demoVehicle?.name ?? null,
+        outcome: t.salesOutcome,
+        feedback: clip(t.customerFeedback, 200),
+      })),
     }],
     rows: [{
       label: `${lead.name} — ${lead.title}`,
@@ -408,6 +444,7 @@ async function quotesForLead(user: User, leadId: string) {
     select: {
       number: true, status: true, createdAt: true, validUntil: true, viewedAt: true, signedAt: true, declinedAt: true,
       declineReason: true, changeRequestNote: true,
+      invoicedAt: true, depositPaidAt: true, deliveryScheduledFor: true, deliveredAt: true,
       taxInclusive: true, depositType: true, depositValue: true, items: true, fees: true,
     },
   });
@@ -421,6 +458,13 @@ async function quotesForLead(user: User, leadId: string) {
     signed: q.signedAt ? dateKey(q.signedAt) : "no",
     ...(q.declinedAt ? { declined: dateKey(q.declinedAt), reason: clip(q.declineReason, 200) } : {}),
     ...(q.changeRequestNote ? { changeRequested: clip(q.changeRequestNote, 200) } : {}),
+    ...(q.status === "accepted"
+      ? {
+          invoiced: q.invoicedAt ? dateKey(q.invoicedAt) : "no",
+          deposit: q.depositPaidAt ? `paid ${dateKey(q.depositPaidAt)}` : "not paid",
+          delivery: q.deliveredAt ? `delivered ${dateKey(q.deliveredAt)}` : q.deliveryScheduledFor ? `booked ${dateKey(q.deliveryScheduledFor)}` : "not booked",
+        }
+      : {}),
   }));
 }
 
@@ -511,6 +555,288 @@ async function recall(user: User, raw: z.infer<typeof recallArgs>): Promise<Tool
   };
 }
 
+/** "Tue 7 Oct 10:00" in South African time. */
+const when = (d: Date) =>
+  d.toLocaleString("en-ZA", { timeZone: "Africa/Johannesburg", weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+const nameOfContact = (c: { firstName: string; lastName: string | null } | null | undefined) => (c ? contactName(c) : null);
+
+/**
+ * Who is busy when — meetings, blocked time and test drives (with their demo
+ * vehicle) — so a suggested time never clashes. Through the calendar's own
+ * visibility (getAccessibleActivityIds, accessibleTestDriveWhere). A blocked-out
+ * slot shows as "busy", never its private reason.
+ */
+async function schedule(user: User, raw: z.infer<typeof scheduleArgs>): Promise<ToolOutput> {
+  if (!(await hasAnyPermission(user, "activities.view", "activities.manage"))) return refused("the calendar");
+  const args = scheduleArgs.parse(raw);
+  const start = new Date(`${args.from ?? johannesburgDateKey(new Date())}T00:00:00+02:00`);
+  const end = new Date(start.getTime() + (args.days ?? 3) * DAY);
+  const staff = await listActingTenantStaff();
+  const wanted = args.person?.toLowerCase();
+  const person = wanted ? staff.find((s) => s.name.toLowerCase() === wanted) ?? staff.find((s) => s.name.toLowerCase().startsWith(wanted)) : null;
+  if (args.person && !person) return { truncated: false, rows: [], data: [{ note: `No one called "${args.person}" in this workspace.` }] };
+
+  const ids = await getAccessibleActivityIds(user);
+  const activities = await prisma.activity.findMany({
+    where: {
+      ...(ids === null ? {} : { id: { in: ids } }),
+      status: "planned",
+      dueDate: { lt: end },
+      AND: [
+        { OR: [{ endDate: { gte: start } }, { endDate: null, dueDate: { gte: start } }] },
+        person ? { OR: [{ assignedToId: person.id }, { attendees: { some: { userId: person.id } } }] } : {},
+      ],
+    },
+    orderBy: { dueDate: "asc" },
+    take: 80,
+    select: {
+      type: true, summary: true, dueDate: true, endDate: true, allDay: true, availabilityBlock: true,
+      assignedTo: { select: { name: true } },
+      attendees: { select: { user: { select: { name: true } } } },
+    },
+  });
+
+  let testDrives: { reference: string; status: string; scheduledStart: Date; expectedReturnAt: Date; salespersonId: string; contactId: string; demoVehicle: { name: string } | null }[] = [];
+  if (await isModuleEnabled("automotive")) {
+    testDrives = await prisma.testDriveBooking.findMany({
+      where: {
+        deletedAt: null,
+        ...(await accessibleTestDriveWhere(user)),
+        status: { notIn: ["cancelled", "no_show"] },
+        scheduledStart: { lt: end },
+        expectedReturnAt: { gte: start },
+        ...(person ? { OR: [{ salespersonId: person.id }, { accompanyingSalespersonId: person.id }] } : {}),
+      },
+      orderBy: { scheduledStart: "asc" },
+      take: 40,
+      select: { reference: true, status: true, scheduledStart: true, expectedReturnAt: true, salespersonId: true, contactId: true, demoVehicle: { select: { name: true } } },
+    });
+  }
+  const contacts = testDrives.length
+    ? new Map((await prisma.contact.findMany({ where: { id: { in: testDrives.map((t) => t.contactId) } }, select: { id: true, firstName: true, lastName: true } })).map((c) => [c.id, c]))
+    : new Map();
+  const staffName = new Map(staff.map((s) => [s.id, s.name]));
+
+  return {
+    truncated: activities.length === 80,
+    data: [{
+      window: `${johannesburgDateKey(start)} to ${johannesburgDateKey(new Date(end.getTime() - 1))}`,
+      ...(person ? { person: person.name } : {}),
+      busy: activities.map((a) => ({
+        from: when(a.dueDate),
+        until: a.endDate ? when(a.endDate) : null,
+        allDay: a.allDay,
+        what: a.availabilityBlock ? "busy (blocked out)" : `${a.type}: ${a.summary}`,
+        people: [a.assignedTo.name, ...a.attendees.map((x) => x.user.name)],
+      })),
+      testDrives: testDrives.map((t) => ({
+        ref: t.reference,
+        status: t.status,
+        from: when(t.scheduledStart),
+        until: when(t.expectedReturnAt),
+        vehicle: t.demoVehicle?.name ?? "no demo vehicle set",
+        salesperson: staffName.get(t.salespersonId) ?? null,
+        customer: nameOfContact(contacts.get(t.contactId)),
+      })),
+    }],
+    rows: [{ label: "Calendar", detail: `${activities.length} commitments · ${testDrives.length} test drives`, href: "/calendar" }],
+  };
+}
+
+/** Demo vehicles and their bookings, stock units, or customers' own vehicles. */
+async function vehicles(user: User, raw: z.infer<typeof vehicleArgs>): Promise<ToolOutput> {
+  const args = vehicleArgs.parse(raw);
+  const take = args.limit ?? 15;
+  if (args.kind === "stock") {
+    if (!(await isModuleEnabled("commerce"))) return { truncated: false, rows: [], data: [{ note: "Stock isn't switched on for this workspace." }] };
+    if (!(await hasAnyPermission(user, "stock.view", "stock.manage"))) return refused("stock");
+    const units = await prisma.stockUnit.findMany({
+      where: {
+        deletedAt: null,
+        ...(args.status ? { status: fuzzy(args.status) } : {}),
+        ...(args.search
+          ? { OR: [{ stockNumber: fuzzy(args.search) }, { serial: fuzzy(args.search) }, { label: fuzzy(args.search) }, { product: { name: fuzzy(args.search) } }] }
+          : {}),
+      },
+      orderBy: { updatedAt: "desc" },
+      take: take + 1,
+      select: {
+        id: true, stockNumber: true, status: true, label: true, condition: true, color: true, location: true, salePriceCents: true,
+        product: { select: { name: true } },
+        reservedForLead: { select: { name: true } },
+      },
+    });
+    const page = units.slice(0, take);
+    return {
+      truncated: units.length > take,
+      data: page.map((u) => ({
+        unit: u.stockNumber ?? u.id.slice(-6),
+        product: u.product.name, status: u.status, label: u.label, condition: u.condition, colour: u.color, location: u.location,
+        price: u.salePriceCents != null ? formatZAR(u.salePriceCents) : null,
+        reservedFor: u.reservedForLead?.name ?? null,
+      })),
+      rows: page.map((u) => ({ label: `${u.product.name}${u.stockNumber ? ` · ${u.stockNumber}` : ""}`, detail: `${u.status}${u.label ? ` · ${u.label}` : ""}`, href: `/stock/${u.id}` })),
+    };
+  }
+
+  if (!(await isModuleEnabled("automotive"))) return { truncated: false, rows: [], data: [{ note: "Vehicles aren't switched on for this workspace." }] };
+
+  if (args.kind === "demo") {
+    if (!(await hasAnyPermission(user, "vehicles.view_all", "vehicles.view_owned", "activities.view", "activities.manage"))) return refused("demo vehicles");
+    const demos = await prisma.demoVehicle.findMany({
+      where: {
+        deletedAt: null,
+        ...(args.status ? { status: fuzzy(args.status) } : {}),
+        ...(args.search ? { OR: [{ name: fuzzy(args.search) }, { regNumber: fuzzy(args.search) }, { branch: fuzzy(args.search) }] } : {}),
+      },
+      orderBy: { name: "asc" },
+      take: take + 1,
+      select: {
+        name: true, status: true, branch: true, regNumber: true, odometerKm: true, batteryLevelPct: true,
+        // Availability only — times and status, no customer: enough not to double-book it.
+        bookings: {
+          where: { deletedAt: null, status: { notIn: ["cancelled", "no_show", "completed"] }, expectedReturnAt: { gte: new Date() }, scheduledStart: { lt: new Date(Date.now() + 14 * DAY) } },
+          orderBy: { scheduledStart: "asc" },
+          select: { scheduledStart: true, expectedReturnAt: true, status: true },
+        },
+      },
+    });
+    const page = demos.slice(0, take);
+    return {
+      truncated: demos.length > take,
+      data: page.map((d) => ({
+        vehicle: d.name, status: d.status, branch: d.branch, reg: d.regNumber, odometerKm: d.odometerKm, batteryPct: d.batteryLevelPct,
+        bookedNext14Days: d.bookings.map((b) => ({ from: when(b.scheduledStart), until: when(b.expectedReturnAt), status: b.status })),
+      })),
+      rows: [{ label: "Test drives", detail: `${page.length} demo vehicle${page.length === 1 ? "" : "s"}`, href: "/test-drives" }],
+    };
+  }
+
+  if (!(await hasAnyPermission(user, "vehicles.view_all", "vehicles.view_owned"))) return refused("customer vehicles");
+  const ids = await getAccessibleVehicleIds(user);
+  const owned = await prisma.vehicle.findMany({
+    where: {
+      deletedAt: null,
+      ...(ids === null ? {} : { id: { in: ids } }),
+      ...(args.search
+        ? { OR: [{ model: fuzzy(args.search) }, { regNumber: fuzzy(args.search) }, { contact: { OR: [{ firstName: fuzzy(args.search) }, { lastName: fuzzy(args.search) }] } }] }
+        : {}),
+    },
+    orderBy: { createdAt: "desc" },
+    take: take + 1,
+    select: { id: true, model: true, regNumber: true, color: true, purchaseDate: true, warrantyMonths: true, contact: { select: { firstName: true, lastName: true } } },
+  });
+  const page = owned.slice(0, take);
+  return {
+    truncated: owned.length > take,
+    data: page.map((v) => ({
+      vehicle: v.model, reg: v.regNumber, colour: v.color, owner: nameOfContact(v.contact),
+      bought: v.purchaseDate ? dateKey(v.purchaseDate) : null,
+      warrantyUntil: v.purchaseDate && v.warrantyMonths ? dateKey(new Date(v.purchaseDate.getTime() + v.warrantyMonths * 30.44 * DAY)) : null,
+    })),
+    rows: page.map((v) => ({ label: `${v.model} — ${nameOfContact(v.contact)}`, detail: v.regNumber ?? "no reg", href: `/vehicles/${v.id}` })),
+  };
+}
+
+/**
+ * Signed deals on their way to the customer, in the deliveries board's own
+ * stages (invoice → deposit → schedule → deliver), so DAX and the board agree.
+ */
+async function deliveries(user: User, raw: z.infer<typeof deliveryArgs>): Promise<ToolOutput> {
+  if (!(await hasAnyPermission(user, "deliveries.view", "deliveries.manage"))) return refused("deliveries");
+  const args = deliveryArgs.parse(raw);
+  const ids = await getAccessibleQuoteIds(user);
+  const recent = args.stage === "delivered_recently";
+  const quotes = await prisma.quote.findMany({
+    where: {
+      status: "accepted",
+      supersededAt: null,
+      deletedAt: null,
+      ...(ids === null ? {} : { id: { in: ids } }),
+      deliveredAt: recent ? { gte: new Date(Date.now() - 14 * DAY) } : null,
+    },
+    orderBy: { updatedAt: "asc" },
+    take: CANDIDATES,
+    select: {
+      id: true, number: true, invoicedAt: true, depositPaidAt: true, depositPaidCents: true, deliveryScheduledFor: true, deliveredAt: true,
+      taxInclusive: true, depositType: true, depositValue: true, items: true, fees: true,
+      contact: { select: { firstName: true, lastName: true } },
+      lead: { select: { id: true, name: true } },
+    },
+  });
+  const today = new Date(`${johannesburgDateKey(new Date())}T00:00:00+02:00`);
+  // The board's own rule (deliveries/page.tsx colOf).
+  const stageOf = (q: (typeof quotes)[number]) =>
+    q.deliveredAt ? "delivered"
+      : !q.invoicedAt ? "to_invoice"
+        : !q.depositPaidAt ? "awaiting_deposit"
+          : !q.deliveryScheduledFor ? "to_schedule"
+            : q.deliveryScheduledFor < today ? "overdue" : "scheduled";
+  const wanted = args.stage && !recent ? args.stage : null;
+  const matching = quotes
+    .map((q) => ({ q, stage: stageOf(q) }))
+    .filter(({ stage }) => !wanted || stage === wanted);
+  const take = args.limit ?? 15;
+  const page = matching.slice(0, take);
+  const customer = (q: (typeof quotes)[number]) => nameOfContact(q.contact) ?? q.lead?.name ?? "no customer";
+  return {
+    truncated: matching.length > take || quotes.length === CANDIDATES,
+    data: page.map(({ q, stage }) => ({
+      quote: `Q-${q.number}`,
+      leadId: q.lead?.id ?? null,
+      customer: customer(q),
+      stage,
+      total: formatZAR(payableTotalCents(q)),
+      invoiced: q.invoicedAt ? dateKey(q.invoicedAt) : "no",
+      deposit: q.depositPaidAt ? `paid ${dateKey(q.depositPaidAt)}${q.depositPaidCents ? ` (${formatZAR(q.depositPaidCents)})` : ""}` : "not paid",
+      deliveryDate: q.deliveryScheduledFor ? dateKey(q.deliveryScheduledFor) : null,
+      delivered: q.deliveredAt ? dateKey(q.deliveredAt) : null,
+    })),
+    rows: page.map(({ q, stage }) => ({ label: `Q-${q.number} — ${customer(q)}`, detail: stage.replace(/_/g, " "), href: "/deliveries" })),
+  };
+}
+
+/** What's on file for one customer: titles, tags and dates — never the contents. */
+async function documents(user: User, raw: z.infer<typeof documentArgs>): Promise<ToolOutput> {
+  if (!(await hasAnyPermission(user, "documents.view_all", "documents.view_owned"))) return refused("documents");
+  const { customer } = documentArgs.parse(raw);
+  const contactIds = await getAccessibleContactIds(user);
+  const looksLikeId = /^c[a-z0-9]{20,}$/i.test(customer);
+  const contacts = await prisma.contact.findMany({
+    where: {
+      deletedAt: null,
+      ...(contactIds === null ? {} : { id: { in: contactIds } }),
+      ...(looksLikeId
+        ? { OR: [{ id: customer }, { leads: { some: { id: customer } } }] }
+        : { OR: [{ firstName: fuzzy(customer) }, { lastName: fuzzy(customer) }, { company: fuzzy(customer) }, { leads: { some: { OR: [{ name: fuzzy(customer) }, { title: fuzzy(customer) }] } } }] }),
+    },
+    take: 3,
+    select: { id: true, firstName: true, lastName: true },
+  });
+  if (!contacts.length) return { truncated: false, rows: [], data: [{ note: `No customer you can see matches "${customer}".` }] };
+  if (contacts.length > 1) {
+    return { truncated: false, rows: [], data: [{ note: "Several customers match — ask which one.", candidates: contacts.map((c) => contactName(c)) }] };
+  }
+  const contact = contacts[0];
+  const docIds = await getAccessibleDocumentIds(user);
+  const docs = await prisma.document.findMany({
+    where: {
+      deletedAt: null,
+      replacedById: null,
+      ...(docIds === null ? {} : { id: { in: docIds } }),
+      OR: [{ contactId: contact.id }, { vehicle: { contactId: contact.id } }],
+    },
+    orderBy: { createdAt: "desc" },
+    take: 30,
+    select: { fileName: true, tag: true, mimeType: true, createdAt: true },
+  });
+  return {
+    truncated: docs.length === 30,
+    data: [{ customer: contactName(contact), documents: docs.map((d) => ({ file: d.fileName, tag: d.tag, added: dateKey(d.createdAt) })) }],
+    rows: [{ label: `${contactName(contact)} — documents`, detail: `${docs.length} on file`, href: `/contacts/${contact.id}` }],
+  };
+}
+
 async function playbook(raw: z.infer<typeof playbookArgs>): Promise<ToolOutput> {
   const { name } = playbookArgs.parse(raw);
   const book = await loadPlaybook(name);
@@ -532,6 +858,10 @@ async function runTool(user: User, step: ToolStep): Promise<ToolOutput> {
     case "knowledge": return knowledge(user, step.args);
     case "recall": return recall(user, step.args);
     case "playbook": return playbook(step.args);
+    case "schedule": return schedule(user, step.args);
+    case "vehicles": return vehicles(user, step.args);
+    case "deliveries": return deliveries(user, step.args);
+    case "documents": return documents(user, step.args);
   }
 }
 
@@ -564,6 +894,31 @@ async function recentTurns(userId: string): Promise<PriorTurn[]> {
   return turns.reverse();
 }
 
+/**
+ * The bubble's history: only TODAY's turns (South African day), newest first —
+ * enough to pick up where you left off, never a month of context.
+ */
+export async function assistantTurnsToday(userId: string) {
+  const startOfToday = new Date(`${johannesburgDateKey(new Date())}T00:00:00+02:00`);
+  return prisma.assistantTurn.findMany({
+    where: { userId, createdAt: { gte: startOfToday } },
+    orderBy: { createdAt: "desc" },
+    take: 20,
+    select: { question: true, answer: true },
+  });
+}
+
+/**
+ * Where the person is when they ask from the bubble — "this lead", "her" — as a
+ * hint for the research step. Only a record id from the URL; the tools still
+ * check access, so a hint about a record they can't see finds nothing.
+ */
+export function pageHint(path: string | null | undefined): string {
+  const match = /^\/(leads|contacts)\/(c[a-z0-9]{20,})(?:[/?#]|$)/i.exec(path ?? "");
+  if (!match) return "";
+  return `The person is looking at ${match[1] === "leads" ? "lead" : "customer"} id ${match[2]} — "this", "him", "her", "them" mean that record (use lead_brief with that id).`;
+}
+
 /** The page's history list: this person's last turns, newest first. */
 export async function assistantHistory(userId: string, take = 20) {
   return prisma.assistantTurn.findMany({
@@ -581,7 +936,8 @@ function observationText(o: Observation): string {
   return `${o.tool} ${JSON.stringify(o.args ?? {})} →\n${body.length > OBSERVATION_CHARS ? `${body.slice(0, OBSERVATION_CHARS)}…(cut)` : body}`;
 }
 
-export async function askCrm(user: User, question: string): Promise<AssistantResult> {
+export async function askCrm(user: User, question: string, page?: string | null): Promise<AssistantResult> {
+  const whereTheyAre = pageHint(page);
   if (!(await isCodexConnected())) {
     return { ok: false, error: "Connect ChatGPT first: Settings → Integrations → ChatGPT." };
   }
@@ -597,6 +953,7 @@ export async function askCrm(user: User, question: string): Promise<AssistantRes
       instructions,
       prompt: [
         conversation,
+        whereTheyAre,
         `Question: ${question}`,
         observations.length ? `Lookups so far:\n${observations.map(observationText).join("\n\n")}` : "",
         `Lookups left: ${MAX_STEPS - step}.`,

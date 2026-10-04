@@ -3,7 +3,10 @@
 import { requireAnyPermission } from "@/lib/permissions";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { isModuleEnabled } from "@/lib/modules/enabled";
-import { askCrm, type AssistantResult } from "@/lib/crmAssistant";
+import { askCrm, assistantTurnsToday, type AssistantResult } from "@/lib/crmAssistant";
+import { getSetting } from "@/lib/settings";
+import { isCodexConnected } from "@/lib/codex";
+import { ASSISTANT_PROFILE_KEY, parseProfile } from "@/lib/assistantSoul";
 import type { ActionCard } from "@/lib/assistantActions";
 import { prisma } from "@/lib/db";
 import { scheduleFollowUp } from "@/app/actions/activities";
@@ -69,7 +72,7 @@ export async function runAssistantAction(card: ActionCard): Promise<{ ok: boolea
 }
 
 /** One question in, one answer out. Read-only: nothing here writes a record. */
-export async function askCrmAction(question: string): Promise<AssistantResult> {
+export async function askCrmAction(question: string, page?: string): Promise<AssistantResult> {
   return withActingStaffScope(async () => {
     const user = await requireAnyPermission(...ASSISTANT_PERMISSIONS);
     // The page hides it with the module off; the action must refuse on its own.
@@ -78,6 +81,24 @@ export async function askCrmAction(question: string): Promise<AssistantResult> {
     }
     const q = String(question ?? "").trim().slice(0, 500);
     if (!q) return { ok: false, error: "Type a question first." };
-    return askCrm(user, q);
+    // `page` is only a hint ("this lead"); pageHint reads a record id out of it
+    // and the tools re-check access, so a forged path finds nothing new.
+    return askCrm(user, q, typeof page === "string" ? page.slice(0, 200) : null);
+  });
+}
+
+/** What the floating bubble needs when it opens: its name, and TODAY's conversation only. */
+export async function openAssistantBubble(): Promise<
+  { ok: true; name: string; connected: boolean; history: { question: string; answer: string }[] } | { ok: false }
+> {
+  return withActingStaffScope(async () => {
+    const user = await requireAnyPermission(...ASSISTANT_PERMISSIONS);
+    if (!(await isModuleEnabled("automation"))) return { ok: false };
+    const [profile, connected, history] = await Promise.all([
+      getSetting(ASSISTANT_PROFILE_KEY).then(parseProfile),
+      isCodexConnected(),
+      assistantTurnsToday(user.id),
+    ]);
+    return { ok: true, name: profile.name, connected, history };
   });
 }

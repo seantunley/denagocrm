@@ -44,9 +44,41 @@ export const quoteArgs = z
     viewed: z.boolean().optional(),
     minValue: rands.optional(),
     olderThanDays: days.optional(),
+    /** Still open (draft/sent, unsigned) and its validity runs out within this many days. */
+    expiringWithinDays: z.number().int().min(0).max(60).optional(),
     limit: limit.optional(),
   })
   .strict();
+
+/** Who's busy when, and the test drives booked — before suggesting a time. */
+export const scheduleArgs = z
+  .object({
+    person: name.optional(),
+    from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    days: z.number().int().min(1).max(14).optional(),
+  })
+  .strict();
+
+/** Demo vehicles (and their bookings), stock units, or customers' own vehicles. */
+export const vehicleArgs = z
+  .object({
+    kind: z.enum(["demo", "stock", "customer"]),
+    search: name.optional(),
+    status: name.optional(),
+    limit: limit.optional(),
+  })
+  .strict();
+
+/** Signed deals on their way to the customer: invoice, deposit, delivery. */
+export const deliveryArgs = z
+  .object({
+    stage: z.enum(["to_invoice", "awaiting_deposit", "to_schedule", "scheduled", "overdue", "delivered_recently"]).optional(),
+    limit: limit.optional(),
+  })
+  .strict();
+
+/** What's on file for one customer — titles and dates, never the contents. */
+export const documentArgs = z.object({ customer: z.string().trim().min(1).max(120) }).strict();
 
 export const activityArgs = z
   .object({
@@ -75,6 +107,10 @@ export const assistantStep = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("knowledge"), args: knowledgeArgs }),
   z.object({ tool: z.literal("recall"), args: recallArgs }),
   z.object({ tool: z.literal("playbook"), args: playbookArgs }),
+  z.object({ tool: z.literal("schedule"), args: scheduleArgs.default({}) }),
+  z.object({ tool: z.literal("vehicles"), args: vehicleArgs }),
+  z.object({ tool: z.literal("deliveries"), args: deliveryArgs.default({}) }),
+  z.object({ tool: z.literal("documents"), args: documentArgs }),
   z.object({ tool: z.literal("done") }),
 ]);
 
@@ -99,7 +135,11 @@ export function planInstructions(ctx: PlanContext): string {
     "Tools (args optional unless marked):",
     '- find_leads: {"status":"open|won|lost","stage":"<stage>","assignedTo":"<person>","product":"<text>","source":"<text>","minValue":<rands>,"noContactDays":<days since any message, call or completed activity>,"createdWithinDays":<days>,"search":"<customer or lead name>","sort":"value|oldest_contact|newest|stage_age","limit":<1-25>}',
     "- pipeline_summary: {} — open leads counted and valued per stage.",
-    '- find_quotes: {"status":"draft|sent|accepted|declined|cancelled","awaitingSignature":true,"viewed":true|false,"minValue":<rands>,"olderThanDays":<days>,"limit":<1-25>}',
+    '- find_quotes: {"status":"draft|sent|accepted|declined|cancelled","awaitingSignature":true,"viewed":true|false,"minValue":<rands>,"olderThanDays":<days>,"expiringWithinDays":<0-60, still-open quotes running out>,"limit":<1-25>}',
+    '- schedule: {"person":"<person>","from":"YYYY-MM-DD","days":<1-14>} — who is busy when (meetings, blocked time, test drives with their demo vehicle). Check it BEFORE suggesting a meeting or test-drive time; never suggest a slot that clashes.',
+    '- vehicles: {"kind":"demo|stock|customer" (required),"search":"<model, reg, stock no. or customer>","status":"<status>","limit":<1-25>} — demo vehicles and their upcoming bookings, stock units (available/reserved/sold), or a customer\'s own vehicles.',
+    '- deliveries: {"stage":"to_invoice|awaiting_deposit|to_schedule|scheduled|overdue|delivered_recently","limit":<1-25>} — signed deals on their way to the customer: invoicing, deposit, delivery date.',
+    '- documents: {"customer":"<customer name, lead title or id>" (required)} — what is on file for one customer (titles, tags, dates — not contents).',
     '- find_activities: {"when":"overdue|today|this_week|upcoming" (required),"type":"<type>","assignedTo":"<person>","limit":<1-25>}',
     '- lead_brief: {"lead":"<customer name, lead title or id>" (required)} — one lead in depth: details, recent messages both ways, quotes (viewed? signed?), activities, research. Use it for "what should I do with X", "where are we with X", or to look closer at a lead found earlier.',
     '- knowledge: {"topic":"<what to look up>" (required)} — the business\'s own knowledge: products and prices, approved answers (finance, warranty, policies…), company details, competitor intelligence.',
@@ -149,4 +189,5 @@ export const ANSWER_RULES = [
   "Answer from the CRM results below and the business knowledge in them. Never add records, figures, names or dates that aren't there.",
   "If results were capped (truncated: true), say these are the top results, not all of them. If there are no results, say so plainly.",
   "Plain text only (short paragraphs or simple '-' lists), no markdown tables or headings.",
+  "Emojis where they genuinely help someone scan or feel the point — ✅ done, ⚠️ risk, 📞 call, 💬 waiting on a reply, 🔥 hot deal, 📅 booked, 🚗 test drive — one or two, never a string of them, and none when the news is bad for a customer.",
 ].join("\n");

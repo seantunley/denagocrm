@@ -15,6 +15,7 @@ import { currentTenantScope } from "@/lib/tenantScope";
 import AppShell from "@/components/AppShell";
 import AppContextMenu from "@/components/AppContextMenu";
 import SessionKeeper from "@/components/SessionKeeper";
+import AssistantBubble from "@/components/AssistantBubble";
 
 /**
  * Tab title and icon from the SESSION's workspace. The root layout can only go
@@ -98,6 +99,13 @@ export default async function AppLayout({
   // as the depth: components consume tokens, not literal colours.
   const style = brandStyle(brand);
 
+  // The floating "Ask" bubble: the same gate as the /assistant page and its
+  // actions — the Automation & AI module, and a lead/quote/activity view grant.
+  const ASSISTANT_GRANTS = ["leads.view_all", "leads.view_owned", "quotes.view_all", "quotes.view_owned", "activities.view", "activities.manage"];
+  const showAssistant =
+    (enabledModules === null || enabledModules.has("automation")) &&
+    (user.role === "owner" || permissions.some((p) => ASSISTANT_GRANTS.includes(p)));
+
   return (
     <>
       {style && <style>{style}</style>}
@@ -131,6 +139,7 @@ export default async function AppLayout({
         {children}
         {modal}
       </AppShell>
+      {showAssistant && <AssistantBubble />}
     </>
   );
 }
