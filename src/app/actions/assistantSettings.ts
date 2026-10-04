@@ -6,12 +6,19 @@ import { getSetting, putSetting } from "@/lib/settings";
 import { logAudit } from "@/lib/audit";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { asActionResult, refuse } from "@/lib/actionResult";
-import { ASSISTANT_PROFILE_KEY, assistantProfile, normaliseSoul, parseProfile } from "@/lib/assistantSoul";
+import {
+  ASSISTANT_PROFILE_KEY,
+  WORKSPACE_INSTRUCTIONS_CHARS,
+  assistantProfile,
+  cleanOwnerText,
+  normaliseSoul,
+  parseProfile,
+} from "@/lib/assistantSoul";
 
 /**
- * The workspace's assistant: its name, tone, house rules and soul. Workspace
- * owner only. The personality card and the Advanced → Soul card are separate
- * forms, so only the fields a form sends are changed; the rest are kept.
+ * The workspace's assistant: its name, tone, workspace instructions and soul.
+ * Workspace owner only. The personality card and the Advanced → Soul card are
+ * separate forms, so only the fields a form sends are changed; the rest are kept.
  */
 export async function saveAssistantProfile(formData: FormData) {
   return asActionResult(() =>
@@ -22,10 +29,10 @@ export async function saveAssistantProfile(formData: FormData) {
       const parsed = assistantProfile.safeParse({
         name: field("name") === null ? current.name : field("name")!.trim() || "Assistant",
         tone: field("tone") ?? current.tone,
-        rules: field("rules") ?? current.rules,
+        rules: field("rules") === null ? current.rules : cleanOwnerText(field("rules")!, WORKSPACE_INSTRUCTIONS_CHARS),
         soul: field("soul") === null ? current.soul : normaliseSoul(field("soul")!),
       });
-      if (!parsed.success) refuse("Check the name (up to 40 characters), tone, house rules (up to 1500) and soul (up to 3000).");
+      if (!parsed.success) refuse(`Check the name (up to 40 characters), tone, workspace instructions (up to ${WORKSPACE_INSTRUCTIONS_CHARS}) and soul (up to 3000).`);
       await putSetting(ASSISTANT_PROFILE_KEY, JSON.stringify(parsed.data));
       await logAudit({ action: "assistant.profile_updated", summary: `Updated the assistant's personality (“${parsed.data.name}”)`, user });
       revalidatePath("/settings/assistant");
