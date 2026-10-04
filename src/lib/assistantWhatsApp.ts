@@ -3,7 +3,7 @@ import crypto from "crypto";
 import { basePrisma } from "./db";
 import { getSetting } from "./settings";
 import { currentTenantScope } from "./tenantScope";
-import { fetchWhatsAppMedia, sendWhatsAppButtons, sendWhatsAppText, waDigits } from "./whatsapp";
+import { fetchWhatsAppMedia, matchByPhone, sendWhatsAppButtons, sendWhatsAppText, waDigits } from "./whatsapp";
 import { transcribeVoice } from "./transcribe";
 import { askCrm } from "./crmAssistant";
 import { ASK_LIMIT_MESSAGE, assistantAskAllowed, assistantUserFor } from "./assistantUser";
@@ -173,6 +173,29 @@ async function verifyLinkCode(tenantId: string, waId: string, code: string): Pro
   const user = match ? await assistantUserFor(match.userId) : null;
   if (!match || !user) {
     await registerRateLimitAttempt(guessKey, LINK_GUESS_POLICY);
+    return false;
+  }
+
+  // A CUSTOMER'S NUMBER IS NEVER LINKED, even with a valid code. The code proves
+  // possession of a phone, not whose phone it is: a staff member talked into it
+  // (or tricked) could have a customer send it, and that customer would then
+  // receive DAX's answers. Any number on a customer record or open lead in this
+  // workspace — or one that can't be told apart — is refused, the code is burnt
+  // so it can't be retried, and the message carries on as the customer message
+  // it may well be. matchByPhone names this workspace explicitly.
+  const customer = await matchByPhone(waId);
+  if (customer.contactId || customer.leadId || customer.ambiguous) {
+    await basePrisma.assistantPhoneLink.updateMany({
+      where: { id: match.id, tenantId, codeHash: match.codeHash },
+      data: { codeHash: null, codeExpiresAt: null },
+    });
+    await logAudit({
+      action: "assistant.whatsapp_link_refused",
+      summary: `Refused to link WhatsApp ${maskWaId(waId)}: that number is on a customer record`,
+      user,
+      entityType: "AssistantPhoneLink",
+      entityId: match.id,
+    });
     return false;
   }
 

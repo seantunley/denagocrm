@@ -58,6 +58,8 @@ const state = {
   audits: [] as string[],
   guesses: new Map<string, number>(),
   asks: new Map<string, number>(),
+  customers: new Set<string>(),
+  ambiguous: new Set<string>(),
 };
 const ASK_LIMIT = 60;
 
@@ -110,6 +112,12 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
           state.sent.push({ to, text, buttons: buttons.map((b) => b.title) }); return { ok: true };
         },
         fetchWhatsAppMedia: async () => { state.mediaFetched++; return { buffer: Buffer.from("x"), contentType: "audio/ogg" }; },
+        // A number on a customer record in this workspace (the real one scopes by tenant).
+        matchByPhone: async (digits: string) => ({
+          contactId: state.customers.has(digits) ? "contact-1" : null,
+          leadId: null,
+          ambiguous: state.ambiguous.has(digits),
+        }),
       };
       case "./transcribe": return { transcribeVoice: async () => "what is overdue today" };
       case "./crmAssistant": return {
@@ -177,6 +185,8 @@ beforeEach(() => {
   state.audits = [];
   state.guesses = new Map();
   state.asks = new Map();
+  state.customers = new Set();
+  state.ambiguous = new Set();
 });
 
 /* ── the gate, behaviourally ───────────────────────────────────────────── */
@@ -265,6 +275,26 @@ test("a matching code links exactly the SENDING number, to that person, and is u
   // Used: the same code again links nothing new.
   assert.equal(await handleStaffWhatsApp(CUSTOMER, { text: "DAX 123456" }), false);
   assert.equal(mine.waId, STAFF);
+});
+
+test("a customer's number is never linked, even with a valid code — and the code is burnt", async () => {
+  for (const kind of ["customers", "ambiguous"] as const) {
+    state.links = [];
+    state.sent = [];
+    state.customers = new Set();
+    state.ambiguous = new Set();
+    state[kind].add(CUSTOMER);
+    const row = pending("u1", "123456");
+    assert.equal(await handleStaffWhatsApp(CUSTOMER, { text: "DAX 123456" }), false, kind);
+    assert.equal(row.waId, null, `${kind}: not linked`);
+    assert.equal(row.verifiedAt, null);
+    assert.equal(row.codeHash, null, `${kind}: the code can't be retried`);
+    assert.equal(state.sent.length, 0, "no DAX reply to a customer's phone");
+    assert.match(state.audits.at(-1) ?? "", /Refused to link WhatsApp •••000: that number is on a customer record/);
+    // …and it is still not staff afterwards.
+    assert.equal(await handleStaffWhatsApp(CUSTOMER, { text: "what's in the pipeline?" }), false);
+    assert.equal(state.asked.length, 0);
+  }
 });
 
 test("one number can't be linked to two people: the newer proof takes it over", async () => {

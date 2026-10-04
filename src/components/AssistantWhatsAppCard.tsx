@@ -53,7 +53,10 @@ export default function AssistantWhatsAppCard({ name, linked }: { name: string; 
           <a href={start.waLink} target="_blank" rel="noreferrer" className="btn-primary inline-flex h-9 items-center px-3 text-sm">
             Open WhatsApp with the code
           </a>
-          <p className="text-xs text-muted-foreground">A new code replaces any phone linked before.</p>
+          <p className="text-xs text-muted-foreground">
+            Send it from your own phone and never share the code — whoever sends it gets your answers. A new code replaces any phone
+            linked before, and a number saved on a customer record can&apos;t be linked.
+          </p>
         </div>
       ) : (
         <div className="flex items-center gap-3">
