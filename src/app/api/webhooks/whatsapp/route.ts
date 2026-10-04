@@ -8,6 +8,7 @@ import { recordInboundWhatsApp, fetchWhatsAppMedia } from "@/lib/whatsapp";
 import { transcribeVoice } from "@/lib/transcribe";
 import { saveFile } from "@/lib/storage";
 import { runWhatsAppBot } from "@/lib/flowRun";
+import { handleStaffWhatsApp } from "@/lib/assistantWhatsApp";
 import { withChannelTenantScope, validateInSystemScope } from "@/lib/tenantScopeEntry";
 import { reportUnmappedEndpoint } from "@/lib/channelRegistration";
 import { resolveChannelTenant } from "@/lib/channelTenant";
@@ -94,8 +95,16 @@ export async function POST(req: NextRequest) {
                 source: referral.source_type ? String(referral.source_type) : undefined,
               } : undefined;
 
+              // DAX on WhatsApp: a staff member who PROVED this number is theirs
+              // (or is proving it now, with a link code) is asking the assistant,
+              // not writing to the business. Asked FIRST, inside this claim, and a
+              // yes skips both the customer inbox and the chatbot — a staff
+              // question must never become a customer Communication or a bot
+              // reply. Every no (switch off, unknown number) is today's path,
+              // unchanged. Images and files from staff take today's path too.
               if (message.type === "text") {
                 const text = message.text?.body ?? "";
+                if (await handleStaffWhatsApp(from, { text })) return;
                 await recordInboundWhatsApp(from, profileName, text, String(message.id ?? ""));
                 await runWhatsAppBot(from, { text }, { entryContext });
               } else if (message.type === "interactive") {
@@ -104,6 +113,8 @@ export async function POST(req: NextRequest) {
                 const id: string = btn?.id ?? list?.id ?? "";
                 const title: string = btn?.title ?? list?.title ?? "";
                 if (!id) return;
+                // A tapped quick reply: its title is the staff member's next question.
+                if (await handleStaffWhatsApp(from, { text: title })) return;
                 await recordInboundWhatsApp(from, profileName, `👆 ${title}`, String(message.id ?? ""));
                 await runWhatsAppBot(from, { text: title, choiceId: id }, { entryContext });
               } else if (message.type === "image" || message.type === "document" || message.type === "video") {
@@ -133,6 +144,9 @@ export async function POST(req: NextRequest) {
               } else if (message.type === "audio" || message.type === "voice") {
                 const mediaId: string | undefined = message.audio?.id ?? message.voice?.id;
                 if (!mediaId) return;
+                // Handed the media ID, not the audio: the voice note is fetched and
+                // transcribed there only once the number is known to be staff.
+                if (await handleStaffWhatsApp(from, { voiceMediaId: mediaId })) return;
                 const media = await fetchWhatsAppMedia(mediaId).catch(() => null);
                 const transcript = media ? await transcribeVoice(media.buffer, media.contentType).catch(() => null) : null;
                 const logged = transcript ? `🎤 ${transcript}` : "🎤 [Voice note]";

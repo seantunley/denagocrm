@@ -7,11 +7,25 @@ import { saveAssistantProfile } from "@/app/actions/assistantSettings";
 import { SettingsWorkspace } from "@/components/settings-workspace";
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
-import { prisma } from "@/lib/db";
+import { basePrisma, prisma } from "@/lib/db";
 import { listActingTenantStaff } from "@/lib/tenantActor";
 import AssistantLearnedReview, { type LearnedNote } from "@/components/AssistantLearnedReview";
 import { TIDY_LAST_KEY, TIDY_SUMMARY_KEY } from "@/lib/assistantTidy";
 import { formatDateTime } from "@/lib/format";
+import { saveAssistantWhatsApp } from "@/app/actions/assistantWhatsApp";
+import { ASSISTANT_WHATSAPP_KEY, maskWaId, whatsappSwitchOn } from "@/lib/assistantWhatsAppRules";
+import { actingOwnerTenantId } from "@/lib/actingScope";
+
+/** Who has a WhatsApp linked — masked — so the owner can see it, even for someone who has since lost access. */
+async function linkedPhones() {
+  const tenantId = await actingOwnerTenantId().catch(() => null);
+  if (!tenantId) return [];
+  return basePrisma.assistantPhoneLink.findMany({
+    where: { tenantId, waId: { not: null }, verifiedAt: { not: null } },
+    orderBy: { verifiedAt: "asc" },
+    select: { userId: true, waId: true },
+  });
+}
 
 export const dynamic = "force-dynamic";
 
@@ -25,12 +39,14 @@ const TONE_LABELS: Record<Tone, string> = {
 export default async function AssistantSettingsPage() {
   await requireTenantOwner();
   if (!(await isModuleEnabled("automation"))) notFound();
-  const [profile, notes, staff, tidiedAt, tidySummary] = await Promise.all([
+  const [profile, notes, staff, tidiedAt, tidySummary, whatsappOn, phones] = await Promise.all([
     getSetting(ASSISTANT_PROFILE_KEY).then(parseProfile),
     prisma.assistantNote.findMany({ orderBy: [{ status: "desc" }, { createdAt: "desc" }] }),
     listActingTenantStaff(),
     getSetting(TIDY_LAST_KEY),
     getSetting(TIDY_SUMMARY_KEY),
+    getSetting(ASSISTANT_WHATSAPP_KEY).then(whatsappSwitchOn),
+    linkedPhones(),
   ]);
   const nameOf = new Map(staff.map((s) => [s.id, s.name]));
   const learned: LearnedNote[] = notes.map((n) => ({
@@ -86,6 +102,31 @@ export default async function AssistantSettingsPage() {
             placeholder={"In your words. e.g.\n- Always mention the 5-year battery warranty when price comes up.\n- Never suggest a discount above 5%.\n- Donovan handles fleet and golf-estate deals; Sean handles everything else.\n- We reply to every new lead within 2 hours."}
           />
         </label>
+        <div className="flex justify-end border-t border-border/60 pt-4">
+          <SaveButton>Save</SaveButton>
+        </div>
+      </SaveForm>
+
+      <SaveForm action={saveAssistantWhatsApp} resetOnSuccess={false} className="card mt-6 max-w-2xl space-y-3 p-5">
+        <h2 className="text-base font-semibold">{profile.name} on WhatsApp</h2>
+        <label className="flex cursor-pointer items-start gap-2 text-sm">
+          <input type="checkbox" name="enabled" defaultChecked={whatsappOn} className="mt-1 accent-primary" />
+          <span>
+            <span className="block font-medium">Let staff ask {profile.name} on WhatsApp</span>
+            <span className="block text-xs text-muted-foreground">
+              Each person can link their own WhatsApp on the Ask page — by sending a one-time code from that phone to
+              the business number — and then ask {profile.name} by messaging the business number. Answers can contain
+              customer details, and they go to that staff member&apos;s phone. On WhatsApp it only answers; tasks still
+              need the CRM. Off: messages from staff phones are treated like any other, as today.
+            </span>
+          </span>
+        </label>
+        {phones.length > 0 && (
+          <p className="text-xs text-muted-foreground">
+            Linked:{" "}
+            {phones.map((p) => `${nameOf.get(p.userId) ?? "a former team member"} (${maskWaId(p.waId)})`).join(", ")}
+          </p>
+        )}
         <div className="flex justify-end border-t border-border/60 pt-4">
           <SaveButton>Save</SaveButton>
         </div>

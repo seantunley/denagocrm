@@ -10,10 +10,31 @@ import { assistantHistory } from "@/lib/crmAssistant";
 import AssistantChat from "@/components/AssistantChat";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { deleteAssistantNote } from "@/app/actions/assistantNotes";
-import { prisma } from "@/lib/db";
+import { basePrisma, prisma } from "@/lib/db";
+import { actingOwnerTenantId } from "@/lib/actingScope";
+import { isWhatsAppConfigured } from "@/lib/whatsapp";
+import { assistantWhatsAppOn } from "@/lib/assistantWhatsApp";
+import { maskWaId } from "@/lib/assistantWhatsAppRules";
+import AssistantWhatsAppCard from "@/components/AssistantWhatsAppCard";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Ask the CRM" };
+
+/**
+ * The "on WhatsApp" card: only when the owner has switched it on and WhatsApp is
+ * connected (the page above has already checked the person may use the
+ * assistant). Null hides it. The person's own link, read by (workspace, person).
+ */
+async function whatsappCard(userId: string): Promise<{ linked: string | null } | null> {
+  if (!(await assistantWhatsAppOn()) || !(await isWhatsAppConfigured())) return null;
+  const tenantId = await actingOwnerTenantId().catch(() => null);
+  if (!tenantId) return null;
+  const link = await basePrisma.assistantPhoneLink.findUnique({
+    where: { tenantId_userId: { tenantId, userId } },
+    select: { waId: true, verifiedAt: true },
+  });
+  return { linked: link?.waId && link.verifiedAt ? maskWaId(link.waId) : null };
+}
 
 export default async function AssistantPage() {
   const user = await requireAnyPermission(
@@ -22,11 +43,12 @@ export default async function AssistantPage() {
     "activities.view", "activities.manage",
   );
   if (!(await isModuleEnabled("automation"))) notFound();
-  const [connected, profile, history, aboutMe] = await Promise.all([
+  const [connected, profile, history, aboutMe, whatsapp] = await Promise.all([
     isCodexConnected(),
     getSetting(ASSISTANT_PROFILE_KEY).then(parseProfile),
     assistantHistory(user.id),
     prisma.assistantNote.findMany({ where: { kind: "profile", userId: user.id }, orderBy: { createdAt: "asc" }, select: { id: true, content: true } }),
+    whatsappCard(user.id),
   ]);
 
   return (
@@ -43,6 +65,7 @@ export default async function AssistantPage() {
           <Link href="/settings/integrations" className="text-primary underline">Connect ChatGPT</Link> to start asking.
         </p>
       )}
+      {whatsapp && <AssistantWhatsAppCard name={profile.name} linked={whatsapp.linked} />}
       {aboutMe.length > 0 && (
         <details className="card p-4 text-sm">
           <summary className="cursor-pointer font-medium">What {profile.name} remembers about you ({aboutMe.length})</summary>
