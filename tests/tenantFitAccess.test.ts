@@ -18,6 +18,16 @@ test("2.1 portal sign-in searches the PORTAL's workspace, not always Denago's", 
   assert.match(portal, /return currentTenantScope\(\)\?\.tenantId \?\? DEFAULT_TENANT_ID;/);
 });
 
+test("2.1b portal OTP challenges and limits are per workspace, never the bare email", () => {
+  const portal = code("src/app/actions/portal.ts");
+  assert.match(portal, /return `t:\$\{await portalLoginTenantId\(\)\}:\$\{email\}`;/);
+  // Issue, invalidate, lock and verify all use the namespaced key.
+  assert.equal((portal.match(/purpose: "portal",\s*key: otpKey/g) ?? []).length, 3);
+  assert.match(portal, /otp:portal:\$\{otpKey\}/);
+  assert.doesNotMatch(portal, /key: email\b/);
+  assert.doesNotMatch(portal, /rateLimitKey\("portal-otp-[a-z-]+", (email|`\$\{email\})/);
+});
+
 test("2.2 every workspace's CRM administrator role keeps its admin permissions", () => {
   assert.match(code("src/app/actions/accessControl.ts"), /roleId === "role_crm_admin" \|\| roleId\.startsWith\("role_crm_admin:"\)/);
 });
