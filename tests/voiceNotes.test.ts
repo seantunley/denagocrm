@@ -46,6 +46,14 @@ test("recordings are transcribed and dropped — never stored, never logged", ()
   assert.match(voice, /const user = await requirePermission\("activities\.manage"\);[\s\S]*canAccessLead\(user, leadId\)/);
 });
 
+test("asking by voice is behind the assistant's module, checked before any audio is sent", () => {
+  const voice = code("src/app/actions/voice.ts");
+  const body = voice.slice(voice.indexOf("export async function transcribeQuestion"), voice.indexOf("export async function draftVoiceDebrief"));
+  const gate = body.indexOf('isModuleEnabled("automation")');
+  assert.ok(gate > 0, "transcribeQuestion must check the automation module");
+  assert.ok(gate < body.indexOf("hear(formData)"), "before the recording reaches ElevenLabs");
+});
+
 test("saving a debrief is a completed activity on a lead the user may touch", () => {
   const actions = code("src/app/actions/activities.ts");
   const body = actions.slice(actions.indexOf("export async function logVoiceDebrief"), actions.indexOf("export async function cancelActivity"));
