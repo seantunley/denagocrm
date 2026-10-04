@@ -31,6 +31,8 @@ type DocDef = {
   description: string;
   sections: { id: string; label: string }[];
   defaultBody?: string;
+  /** Replaces defaultBody when the workspace has the automotive module. */
+  automotiveBody?: string;
   defaultIntro?: string;
 };
 
@@ -61,14 +63,18 @@ export const DOC_DEFS: Record<DocKey, DocDef> = {
   agreement: {
     label: "Sales agreement",
     group: "Sales",
-    description: "Purchase contract for a cart sale — clauses below are fully editable.",
+    description: "Purchase contract for a sale — clauses below are fully editable.",
     sections: [
-      { id: "items", label: "Vehicle & items table" },
+      { id: "items", label: "Items table" },
       { id: "clauses", label: "Agreement clauses" },
       { id: "signatures", label: "Signature block" },
       { id: "footer", label: "Branded footer" },
     ],
     defaultBody:
+      "1. The purchaser agrees to buy the goods and/or services described above at the stated price.\n2. Ownership passes on receipt of full payment.\n3. Goods carry the supplier's or manufacturer's warranty, where one applies.\n4. Delivery or collection takes place at the agreed address or at {{company.name}}.\n5. This agreement is governed by the laws of the Republic of South Africa.",
+    // Only what a NEW template starts with. Each workspace's saved clauses live
+    // on its own DocTemplateRecord and are edited in Settings → Documents.
+    automotiveBody:
       "1. The purchaser agrees to buy the vehicle(s) described above at the stated price.\n2. Ownership passes on receipt of full payment.\n3. The vehicle carries the manufacturer's warranty as per the warranty schedule.\n4. Delivery takes place at the agreed address or at {{company.name}}.\n5. This agreement is governed by the laws of the Republic of South Africa.",
   },
   indemnity: {
@@ -144,12 +150,12 @@ export const SIGNATURE_POSITIONS: { id: SignaturePosition; label: string }[] = [
   { id: "strip", label: "Full-width strip" },
 ];
 
-export function defaultTemplate(key: DocKey): DocTemplate {
+export function defaultTemplate(key: DocKey, { automotive = false }: { automotive?: boolean } = {}): DocTemplate {
   const def = DOC_DEFS[key];
   return {
     logoUrl: null,
     intro: def.defaultIntro ?? null,
-    bodyText: def.defaultBody ?? null,
+    bodyText: (automotive && def.automotiveBody) || def.defaultBody || null,
     terms: null,
     // Empty = the Company Profile's address/phone and email/website lines,
     // filled in at print time by withCompanyDetails().
@@ -180,8 +186,8 @@ export function withCompanyDetails(tpl: DocTemplate, company: CompanyProfile): D
 }
 
 /** Merge stored JSON over the defaults so new fields never break old data. */
-export function mergeTemplate(key: DocKey, raw: unknown): DocTemplate {
-  const base = defaultTemplate(key);
+export function mergeTemplate(key: DocKey, raw: unknown, options?: { automotive?: boolean }): DocTemplate {
+  const base = defaultTemplate(key, options);
   if (!raw) return base;
   try {
     const parsed = (typeof raw === "string" ? JSON.parse(raw) : raw) as Partial<DocTemplate>;
