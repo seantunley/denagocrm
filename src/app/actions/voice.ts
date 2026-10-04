@@ -7,6 +7,7 @@ import { isElevenLabsConfigured } from "@/lib/elevenlabs";
 import { codexRespond, isCodexConnected } from "@/lib/codex";
 import { johannesburgDateKey } from "@/lib/activityDay";
 import { logError } from "@/lib/errorLog";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import { DEBRIEF_INSTRUCTIONS, parseDebrief, plainDebrief, type DebriefDraft } from "@/lib/voiceDebrief";
 
 /** ~3 minutes of opus is well under this; anything bigger isn't a voice note. */
@@ -44,6 +45,12 @@ export async function transcribeQuestion(formData: FormData): Promise<Heard> {
       "quotes.view_all", "quotes.view_owned",
       "activities.view", "activities.manage",
     );
+    // Part of Ask the CRM, so behind the same module as askCrmAction — checked
+    // here, before any audio is sent, or a direct call would spend the
+    // workspace's ElevenLabs credit with the feature switched off.
+    if (!(await isModuleEnabled("automation"))) {
+      return { ok: false, error: "Ask the CRM is part of the Automation & AI module, which is off for this workspace." };
+    }
     return hear(formData);
   });
 }
