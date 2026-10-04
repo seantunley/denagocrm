@@ -62,6 +62,9 @@ const APPROVED_GUARDS = [
   // A workspace's own owner (or the platform owner). Calls requireUser() first,
   // so the fresh device/disabled/session-version checks still run.
   "requireTenantOwner",
+  // Its API-route form (JSON 401/403): calls requireApiUser() first, then the same
+  // isTenantOwner() predicate.
+  "requireApiTenantOwner",
   // The module-CSV family (requireCrm/requireWorkshop/requireInbox/
   // requireOperational/requireAnyModule) is gone — it gated on User.modules,
   // a second authorization source RBAC never wrote to.

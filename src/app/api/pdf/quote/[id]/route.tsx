@@ -1,6 +1,6 @@
 import { renderToBuffer } from "@react-pdf/renderer";
 import { prisma } from "@/lib/db";
-import { requireApiOwner, apiAuthErrorResponse } from "@/lib/auth";
+import { requireApiTenantOwner, apiAuthErrorResponse } from "@/lib/auth";
 import QuoteDoc from "@/lib/pdf/QuoteDoc";
 import { loadBillToFleet } from "@/lib/quoteBillTo";
 import { getCompanyProfile } from "@/lib/companyProfile";
@@ -32,7 +32,7 @@ export const dynamic = "force-dynamic";
  */
 export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
   return withActingStaffScope(async () => {
-  try { await requireApiOwner(); } catch (err) { const r = apiAuthErrorResponse(err); if (r) return r; throw err; }
+  try { await requireApiTenantOwner(); } catch (err) { const r = apiAuthErrorResponse(err); if (r) return r; throw err; }
   const { id } = await ctx.params;
   const { searchParams } = new URL(req.url);
   // ?demo=N repeats the real line items N times to demonstrate multi-page flow.

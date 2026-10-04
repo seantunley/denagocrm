@@ -32,7 +32,7 @@ import { recordConsent, anonymizeContact } from "@/app/actions/privacy";
 import { CONSENT_TYPES } from "@/lib/consent";
 import { brandForTenant, teamSignoff } from "@/lib/tenantBrand";
 import { listActingTenantStaff } from "@/lib/tenantActor";
-import { getActiveTenantId } from "@/lib/auth";
+import { getActiveTenantId, isTenantOwner } from "@/lib/auth";
 import { isSmtpConfigured, renderTemplate, contactVars } from "@/lib/email";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 import { payableTotalCents } from "@/lib/pricing";
@@ -53,6 +53,7 @@ export default async function ContactDetailPage({
 }) {
   const { id } = await params;
   const user = await requireUser();
+  const isOwner = await isTenantOwner();
   // Same default as the lead page — this person plus the mailbox IMAP reads, so a
   // reply lands in their inbox AND on this record. Never throws.
   const replyToDefault = await composerReplyToDefault(user.email);
@@ -701,7 +702,8 @@ export default async function ContactDetailPage({
                       )}
                     </div>
 
-                    {user.role === "owner" && (
+                    {/* The workspace's owner — anonymizeContact checks isTenantOwner(). */}
+                    {isOwner && (
                       <div className="card border-red-900/50">
                         <h2 className="font-semibold mb-1 text-red-300">Right to erasure</h2>
                         <p className="text-xs text-slate-400 mb-3">

@@ -9,7 +9,7 @@ import {
   Wrench,
   type LucideIcon,
 } from "lucide-react";
-import { requireUser } from "@/lib/auth";
+import { isTenantOwner, requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { formatZAR } from "@/lib/format";
 import { saveTargets } from "@/app/actions/targets";
@@ -33,6 +33,8 @@ const METRICS: Array<{
 
 export default async function TargetsPage() {
   const user = await requireUser();
+  // The WORKSPACE's owner sets the plan (saveTargets checks requireTenantOwner).
+  const isOwner = await isTenantOwner();
   const now = new Date();
   const period = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -73,7 +75,7 @@ export default async function TargetsPage() {
         description={configured.length
           ? `Live progress against your ${monthName} sales and service plan.`
           : `Set your ${monthName} plan and turn live CRM activity into a shared scorecard.`}
-        actions={user.role === "owner" ? <a href="#monthly-plan" className="btn-primary btn-sm"><Gauge className="size-4" /> Set monthly plan</a> : undefined}
+        actions={isOwner ? <a href="#monthly-plan" className="btn-primary btn-sm"><Gauge className="size-4" /> Set monthly plan</a> : undefined}
         stats={[
           { label: "Plan progress", value: configured.length ? `${overallProgress}%` : "Not set", detail: configured.length ? `${achieved} goals achieved` : "Add monthly targets", icon: Gauge, tone: configured.length ? "primary" : "warning" },
           { label: "Goals achieved", value: `${achieved} / ${configured.length || 4}`, detail: "Configured measures", icon: Check, tone: achieved > 0 && achieved === configured.length ? "success" : "default" },
@@ -82,7 +84,7 @@ export default async function TargetsPage() {
         ]}
       />
 
-      <div className={`grid items-start gap-6 ${user.role === "owner" ? "xl:grid-cols-[minmax(0,1fr)_22rem]" : ""}`}>
+      <div className={`grid items-start gap-6 ${isOwner ? "xl:grid-cols-[minmax(0,1fr)_22rem]" : ""}`}>
         <div className="space-y-4">
           <SectionHeading title="Goal progress" description="Actual performance updates automatically from CRM activity." />
           <div className="grid gap-4 sm:grid-cols-2">
@@ -119,7 +121,7 @@ export default async function TargetsPage() {
           </div>
         </div>
 
-        {user.role === "owner" && (
+        {isOwner && (
           <div id="monthly-plan" className="scroll-mt-6 xl:sticky xl:top-6">
           <Surface className="p-5">
             <div className="flex items-start gap-3">
