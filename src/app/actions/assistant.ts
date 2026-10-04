@@ -12,7 +12,7 @@ import { prisma } from "@/lib/db";
 import { scheduleFollowUp } from "@/app/actions/activities";
 import { addCommunication } from "@/app/actions/communications";
 import { assignLead, moveLead } from "@/app/actions/leads";
-import { ASSISTANT_PERMISSIONS } from "@/lib/assistantUser";
+import { ASK_LIMIT_MESSAGE, ASSISTANT_PERMISSIONS, assistantAskAllowed } from "@/lib/assistantUser";
 import { MAX_ACTIVE_SCHEDULES, describeSchedule, nextRun, scheduleInput } from "@/lib/assistantSchedule";
 import { markScheduledTurnsSeen, withScheduleSlot } from "@/lib/assistantScheduleRun";
 import { ownedWriteTenantId } from "@/lib/tenantWrite";
@@ -108,6 +108,7 @@ export async function askCrmAction(question: string, page?: string): Promise<Ass
     }
     const q = String(question ?? "").trim().slice(0, 500);
     if (!q) return { ok: false, error: "Type a question first." };
+    if (!(await assistantAskAllowed(user.id))) return { ok: false, error: ASK_LIMIT_MESSAGE };
     // `page` is only a hint ("this lead"); pageHint reads a record id out of it
     // and the tools re-check access, so a forged path finds nothing new.
     return askCrm(user, q, typeof page === "string" ? page.slice(0, 200) : null);

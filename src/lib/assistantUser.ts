@@ -5,6 +5,7 @@ import { isModuleEnabled } from "./modules/enabled";
 import { resolveTenantMemberUser } from "./tenantActor";
 import { currentTenantScope } from "./tenantScope";
 import { tenantEnforcing } from "./tenantEnforcement";
+import { rateLimitKey, registerRateLimitAttempt, type RateLimitPolicy } from "./rateLimit";
 
 /** Who may use the assistant at all — the same set on every way in. */
 export const ASSISTANT_PERMISSIONS = [
@@ -12,6 +13,21 @@ export const ASSISTANT_PERMISSIONS = [
   "quotes.view_all", "quotes.view_owned",
   "activities.view", "activities.manage",
 ] as const satisfies readonly PermissionKey[];
+
+/**
+ * How fast one person may ask, on every way in (chat, voice, WhatsApp,
+ * schedules) — one key per person, so switching channel doesn't reset it.
+ * Generous for real use; it exists so a stolen session can't use the
+ * assistant to sweep the CRM at machine speed, or run up the ChatGPT bill.
+ */
+const ASK_POLICY: RateLimitPolicy = { limit: 60, windowMs: 60 * 60 * 1000, blockMs: 30 * 60 * 1000 };
+
+export async function assistantAskAllowed(userId: string): Promise<boolean> {
+  const result = await registerRateLimitAttempt(rateLimitKey("assistant-ask", userId), ASK_POLICY);
+  return result.allowed;
+}
+
+export const ASK_LIMIT_MESSAGE = "You've asked a lot in the last hour — give it a few minutes and try again.";
 
 /**
  * The assistant acting for a person with NO browser session — a scheduled

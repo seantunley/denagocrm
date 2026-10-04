@@ -110,5 +110,5 @@ test("running for someone without a session re-checks membership, permission and
   assert.match(helper, /await resolveTenantMemberUser\(userId\);\s*if \(!member\) return null;/);
   assert.match(helper, /if \(!\(await hasAnyPermission\(user, \.\.\.ASSISTANT_PERMISSIONS\)\)\) return null;/);
   assert.match(helper, /if \(!\(await isModuleEnabled\("automation"\)\)\) return null;/);
-  assert.match(code("src/app/actions/assistant.ts"), /import \{ ASSISTANT_PERMISSIONS \} from "@\/lib\/assistantUser";/);
+  assert.match(code("src/app/actions/assistant.ts"), /import \{[^}]*\bASSISTANT_PERMISSIONS\b[^}]*\} from "@\/lib\/assistantUser";/);
 });
