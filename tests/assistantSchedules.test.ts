@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import {
   MAX_ACTIVE_SCHEDULES,
+  SCHEDULE_SKIPPED_NOTE,
   describeSchedule,
   nextRun,
   scheduleFailureNote,
@@ -187,8 +188,8 @@ test("the runner CLAIMS each schedule before running it, as the person, re-check
   assert.match(loop, /data: \{ nextRunAt: next, lastRunAt: now, \.\.\.\(next \? \{\} : \{ active: false \}\) \}/);
   // Someone who can no longer use the assistant: switched off, nothing runs.
   assert.match(loop, /if \(!user \|\| user\.id !== schedule\.userId\) \{\s*await prisma\.assistantSchedule\.updateMany\(\{ where: \{ id: schedule\.id, tenantId \}, data: \{ active: false, nextRunAt: null \} \}\);\s*continue;/);
-  // A failed run still leaves them a note in their thread.
-  assert.match(loop, /if \(!result\.ok\) \{[\s\S]*answer: scheduleFailureNote\(result\.error\),\s*source: "schedule",\s*scheduleId: schedule\.id,/);
+  // A failed or skipped run still leaves them a note in their thread.
+  assert.match(loop, /if \(!result\.ok\) \{[\s\S]*answer: allowed \? scheduleFailureNote\(result\.error\) : SCHEDULE_SKIPPED_NOTE,\s*source: "schedule",\s*scheduleId: schedule\.id,/);
   // The push goes to them alone, and carries no answer.
   const push = loop.slice(loop.indexOf("sendPushToAll("));
   assert.match(push, /"assistant",\s*\{ tenantId, userId: user\.id \}/);
@@ -196,6 +197,25 @@ test("the runner CLAIMS each schedule before running it, as the person, re-check
   // The reserve fits askCrm's worst case: three 45 s research rounds and a 60 s answer.
   assert.match(runner, /export const SCHEDULE_RUN_RESERVE_MS = 200_000;/);
   assert.match(readFileSync(new URL("../src/lib/assistantScheduleRun.ts", import.meta.url), "utf8"), /ponytail:/, "the throughput ceiling is written down");
+});
+
+test("a schedule counts against the person's hourly ask limit, and one person can't take a whole tick", () => {
+  const runner = code("src/lib/assistantScheduleRun.ts");
+  const loop = runner.slice(runner.indexOf("export async function runDueAssistantSchedules"));
+  // The shared limit, checked after the person is re-checked and before anything is asked.
+  const userAt = loop.indexOf("await assistantUserFor(schedule.userId)");
+  const limitAt = loop.indexOf("const allowed = await assistantAskAllowed(user.id);");
+  const askAt = loop.indexOf("await askCrm(user, schedule.question");
+  assert.ok(userAt > 0 && userAt < limitAt && limitAt < askAt);
+  assert.match(loop, /const result: AssistantResult = !allowed\s*\? \{ ok: false, error: "rate-limited" \}\s*: await askCrm\(/, "over the limit, nothing is asked");
+  // At most MAX_RUNS_PER_PERSON_PER_TICK each; the rest are left UNCLAIMED, so still due.
+  assert.match(runner, /export const MAX_RUNS_PER_PERSON_PER_TICK = 3;/);
+  const capAt = loop.indexOf("if (theirs >= MAX_RUNS_PER_PERSON_PER_TICK) continue;");
+  const claimAt = loop.indexOf("const claim = await");
+  assert.ok(capAt > 0 && capAt < claimAt, "checked before the claim");
+  assert.match(loop, /if \(claim\.count !== 1\) continue;\s*perPerson\.set\(schedule\.userId, theirs \+ 1\);/, "only a claimed run counts");
+  assert.doesNotMatch(SCHEDULE_SKIPPED_NOTE, /run again at its next time/, "a one-off has no next time");
+  assert.match(SCHEDULE_SKIPPED_NOTE, /too many questions to me in the last hour/);
 });
 
 test("a push can be narrowed to one person's devices, never widened", () => {

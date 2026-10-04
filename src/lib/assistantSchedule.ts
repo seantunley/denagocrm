@@ -124,6 +124,10 @@ export function describeSchedule(s: ScheduleTiming): string {
   }
 }
 
+/** Saved instead of an answer when a run hit the person's hourly ask limit. */
+export const SCHEDULE_SKIPPED_NOTE =
+  "I skipped this scheduled question — there were too many questions to me in the last hour. You can ask it yourself in a few minutes.";
+
 /**
  * The answer saved when a scheduled question couldn't run, so the person sees
  * why instead of silence. General terms only: askCrm's error may carry a

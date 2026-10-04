@@ -2,8 +2,8 @@ import "server-only";
 import { prisma } from "./db";
 import { logError } from "./errorLog";
 import { askCrm, type AssistantResult } from "./crmAssistant";
-import { assistantUserFor } from "./assistantUser";
-import { MAX_ACTIVE_SCHEDULES, nextRun, scheduleFailureNote } from "./assistantSchedule";
+import { assistantAskAllowed, assistantUserFor } from "./assistantUser";
+import { MAX_ACTIVE_SCHEDULES, SCHEDULE_SKIPPED_NOTE, nextRun, scheduleFailureNote } from "./assistantSchedule";
 import { currentTenantScope } from "./tenantScope";
 import { sendPushToAll } from "./push";
 import { getSetting } from "./settings";
@@ -25,6 +25,13 @@ export const SCHEDULE_RUN_RESERVE_MS = 200_000;
 
 /** At most this many due schedules read per tick — far more than one tick can start. */
 const DUE_BATCH = 20;
+
+/**
+ * One person's runs per tick. Ten schedules all set for "Monday 07:00" must not
+ * take a whole tick from everyone else in the workspace; the rest stay due
+ * (unclaimed) and run at the next tick.
+ */
+export const MAX_RUNS_PER_PERSON_PER_TICK = 3;
 
 type Tx = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
 
@@ -88,9 +95,13 @@ export async function runDueAssistantSchedules(budget: CronSliceContext): Promis
     select: { id: true, tenantId: true, userId: true, question: true, cadence: true, weekday: true, timeOfDay: true, onDate: true, nextRunAt: true },
   });
   let ran = 0;
+  const perPerson = new Map<string, number>();
   for (const schedule of due) {
     if (budget.shouldStop(SCHEDULE_RUN_RESERVE_MS)) break;
     if (schedule.tenantId !== tenantId) continue;
+    // Over the per-person share: left unclaimed, so it is still due next tick.
+    const theirs = perPerson.get(schedule.userId) ?? 0;
+    if (theirs >= MAX_RUNS_PER_PERSON_PER_TICK) continue;
     const now = new Date();
     const next = nextRun(schedule, now);
     const claim = await prisma.assistantSchedule.updateMany({
@@ -98,6 +109,7 @@ export async function runDueAssistantSchedules(budget: CronSliceContext): Promis
       data: { nextRunAt: next, lastRunAt: now, ...(next ? {} : { active: false }) },
     });
     if (claim.count !== 1) continue;
+    perPerson.set(schedule.userId, theirs + 1);
 
     const user = await assistantUserFor(schedule.userId);
     if (!user || user.id !== schedule.userId) {
@@ -105,13 +117,19 @@ export async function runDueAssistantSchedules(budget: CronSliceContext): Promis
       continue;
     }
 
-    const result: AssistantResult = await askCrm(user, schedule.question, null, { source: "schedule", scheduleId: schedule.id })
-      .catch(async (error: unknown) => {
-        await logError("assistant-schedule", "scheduled run failed", error instanceof Error ? error.name : "unknown");
-        return { ok: false as const, error: "failed" };
-      });
-    // askCrm saves the turn only when it answers; a failure is saved here, so
-    // the person sees why instead of nothing.
+    // The same per-person hourly ask limit as chat, voice and WhatsApp. Over
+    // it, this run is skipped — it is already claimed, so it simply comes round
+    // again at its next time — and the person is told rather than left waiting.
+    const allowed = await assistantAskAllowed(user.id);
+    const result: AssistantResult = !allowed
+      ? { ok: false, error: "rate-limited" }
+      : await askCrm(user, schedule.question, null, { source: "schedule", scheduleId: schedule.id })
+          .catch(async (error: unknown) => {
+            await logError("assistant-schedule", "scheduled run failed", error instanceof Error ? error.name : "unknown");
+            return { ok: false as const, error: "failed" };
+          });
+    // askCrm saves the turn only when it answers; a failure or a skip is saved
+    // here, so the person sees why instead of nothing.
     if (!result.ok) {
       await prisma.assistantTurn
         .create({
@@ -119,7 +137,7 @@ export async function runDueAssistantSchedules(budget: CronSliceContext): Promis
             tenantId,
             userId: user.id,
             question: schedule.question,
-            answer: scheduleFailureNote(result.error),
+            answer: allowed ? scheduleFailureNote(result.error) : SCHEDULE_SKIPPED_NOTE,
             source: "schedule",
             scheduleId: schedule.id,
           },
