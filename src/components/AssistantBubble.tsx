@@ -7,7 +7,7 @@ import { Loader2, Maximize2, Sparkles, X } from "lucide-react";
 import { openAssistantBubble } from "@/app/actions/assistant";
 import AssistantChat from "@/components/AssistantChat";
 
-type Opened = { name: string; connected: boolean; history: { question: string; answer: string }[] };
+type Opened = { name: string; connected: boolean; history: { question: string; answer: string; source: string }[] };
 
 /**
  * The floating "Ask DAX" bubble, on every page in the app.
@@ -17,19 +17,29 @@ type Opened = { name: string; connected: boolean; history: { question: string; a
  * context small); the full history lives on /assistant. It passes the current
  * page along, so on a lead "what should I do with this one?" works. Hidden on
  * /assistant itself, where the full chat already is.
+ *
+ * `unseen` — scheduled answers not yet seen — comes from the server layout, so
+ * the dot costs no request either. The layout persists across navigation, so
+ * the dot is cleared HERE once seen (opened, or the Ask page visited); the
+ * server marks them seen at the same moments.
  */
-export default function AssistantBubble() {
+export default function AssistantBubble({ unseen = 0 }: { unseen?: number }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<Opened | null>(null);
   const [error, setError] = useState(false);
+  const [unread, setUnread] = useState(unseen > 0);
 
-  if (pathname?.startsWith("/assistant")) return null;
+  if (pathname?.startsWith("/assistant")) {
+    if (unread) setUnread(false);
+    return null;
+  }
 
   const toggle = async () => {
     if (open) return setOpen(false);
     setOpen(true);
+    setUnread(false);
     setLoading(true);
     setError(false);
     // Re-fetched each time it opens, so today's turns from the full page show up.
@@ -82,11 +92,12 @@ export default function AssistantBubble() {
         type="button"
         onClick={toggle}
         aria-expanded={open}
-        aria-label={open ? "Close the assistant" : `Ask ${name}`}
+        aria-label={open ? "Close the assistant" : unread ? `Ask ${name} — new scheduled answer` : `Ask ${name}`}
         title={`Ask ${name}`}
         className="fixed bottom-20 right-4 z-50 grid size-12 place-items-center rounded-full bg-primary text-primary-foreground shadow-lg transition-transform hover:scale-105 md:bottom-6 md:right-6"
       >
         {open ? <X className="size-5" /> : <Sparkles className="size-5" />}
+        {unread && !open && <span className="absolute right-0.5 top-0.5 size-3 rounded-full border-2 border-card bg-destructive" aria-hidden />}
       </button>
     </>
   );

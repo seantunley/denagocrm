@@ -4,14 +4,14 @@ import { getSetting } from "./settings";
 import { isAllowedPushEndpoint } from "./pushEndpoint";
 import { currentScopeClass } from "./tenantWrite";
 
-type PushRecipient = { id: string; endpoint: string; p256dh: string; auth: string };
+type PushRecipient = { id: string; userId: string; endpoint: string; p256dh: string; auth: string };
 
 const PUSH_TIMEOUT_MS = 10_000;
 
 /** Every device belonging to ONE named tenant, whatever the enforcement mode. */
 export async function pushRecipientsForTenant(tenantId: string): Promise<PushRecipient[]> {
   return basePrisma.$queryRaw<PushRecipient[]>`
-    SELECT ps."id", ps."endpoint", ps."p256dh", ps."auth"
+    SELECT ps."id", ps."userId", ps."endpoint", ps."p256dh", ps."auth"
     FROM "PushSubscription" ps
     JOIN "TenantMember" m ON m."userId" = ps."userId"
     JOIN "Tenant" t ON t."id" = m."tenantId"
@@ -35,11 +35,11 @@ export async function pushRecipientsForCurrentScope(): Promise<PushRecipient[]> 
   }
   if (s.mode === "global") {
     return prisma.pushSubscription.findMany({
-      select: { id: true, endpoint: true, p256dh: true, auth: true },
+      select: { id: true, userId: true, endpoint: true, p256dh: true, auth: true },
     });
   }
   return basePrisma.$queryRaw<PushRecipient[]>`
-    SELECT ps."id", ps."endpoint", ps."p256dh", ps."auth"
+    SELECT ps."id", ps."userId", ps."endpoint", ps."p256dh", ps."auth"
     FROM "PushSubscription" ps
     JOIN "TenantMember" m ON m."userId" = ps."userId"
     JOIN "Tenant" t ON t."id" = m."tenantId"
@@ -86,6 +86,7 @@ export const PUSH_KINDS = [
   { id: "security", label: "Security & AI health", desc: "Monthly runbook results and AI/billing problems — route to whoever owns security" },
   { id: "backup", label: "Backup failures", desc: "The nightly backup missed its window (throttled to 1/day)" },
   { id: "activity_reminder", label: "Meeting reminders", desc: "An hour before timed meetings/test drives — tap opens Google Maps" },
+  { id: "assistant", label: "Scheduled assistant answers", desc: "A question you scheduled with the assistant has been answered — sent only to you" },
 ] as const;
 
 export type PushKind = (typeof PUSH_KINDS)[number]["id"];
@@ -104,7 +105,9 @@ async function isKindDisabled(kind?: PushKind): Promise<boolean> {
  * second restriction used by the interactive diagnostic so a test can prove the
  * phone in the user's hand works instead of succeeding because some other saved
  * device accepted the broadcast. The endpoint never creates a recipient: it only
- * filters the already-authorised recipient set resolved above.
+ * filters the already-authorised recipient set resolved above. `userId` is the
+ * same kind of narrowing — one person's own devices (a scheduled assistant
+ * answer is theirs alone) — and likewise never adds anyone.
  */
 export async function sendPushToAll(
   payload: {
@@ -113,7 +116,7 @@ export async function sendPushToAll(
     url?: string;
   },
   kind?: PushKind,
-  options: { tenantId?: string | null; endpoint?: string | null } = {},
+  options: { tenantId?: string | null; endpoint?: string | null; userId?: string | null } = {},
 ): Promise<number> {
   if (!ensureConfigured()) return 0;
   if (await isKindDisabled(kind)) return 0;
@@ -121,9 +124,8 @@ export async function sendPushToAll(
   const recipients = options.tenantId
     ? await pushRecipientsForTenant(options.tenantId)
     : await pushRecipientsForCurrentScope();
-  const subs = options.endpoint
-    ? recipients.filter((sub) => sub.endpoint === options.endpoint)
-    : recipients;
+  const subs = (options.endpoint ? recipients.filter((sub) => sub.endpoint === options.endpoint) : recipients)
+    .filter((sub) => !options.userId || sub.userId === options.userId);
 
   let sent = 0;
   await Promise.all(

@@ -29,6 +29,7 @@ import { ASSISTANT_PROFILE_KEY, parseProfile, selfKnowledge, soulText } from "./
 import { LEARN_INSTRUCTIONS, memoryPrompt, methodInstructions, splitLearn } from "./assistantMemory";
 import { applyLearn, loadLearned, loadPlaybook } from "./assistantMemoryStore";
 import { ACTION_INSTRUCTIONS, CHOICE_INSTRUCTIONS, splitActions, splitChoices, type ActionCard, type ProposedAction } from "./assistantActions";
+import { describeSchedule, nextRun, scheduleInput } from "./assistantSchedule";
 import {
   ANSWER_RULES,
   MAX_LOOKUPS,
@@ -962,7 +963,8 @@ export async function assistantTurnsToday(userId: string) {
     where: { userId, createdAt: { gte: startOfToday } },
     orderBy: { createdAt: "desc" },
     take: 20,
-    select: { question: true, answer: true },
+    // `source`, so a scheduled answer is labelled as one in the thread.
+    select: { question: true, answer: true, source: true },
   });
 }
 
@@ -983,7 +985,7 @@ export async function assistantHistory(userId: string, take = 20) {
     where: { userId, createdAt: { gte: new Date(Date.now() - HISTORY_DAYS * DAY) } },
     orderBy: { createdAt: "desc" },
     take,
-    select: { id: true, question: true, answer: true, createdAt: true },
+    select: { id: true, question: true, answer: true, source: true, createdAt: true },
   });
 }
 
@@ -1089,6 +1091,8 @@ export async function askCrm(user: User, question: string, page?: string | null,
       ANSWER_RULES,
       LEARN_INSTRUCTIONS,
       methodInstructions(observations),
+      // Dated tasks ("Friday at 9", a follow-up "tomorrow") need the day it is.
+      `Today is ${new Date().toLocaleDateString("en-ZA", { timeZone: "Africa/Johannesburg", weekday: "long", day: "numeric", month: "long", year: "numeric" })} (South Africa).`,
       source === "chat" ? ACTION_INSTRUCTIONS : "",
       source === "schedule" ? "" : CHOICE_INSTRUCTIONS,
       CHANNEL_RULES[source],
@@ -1157,6 +1161,16 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
   const staff = await listActingTenantStaff();
   const cards: ActionCard[] = [];
   for (const [index, p] of proposals.entries()) {
+    if (p.type === "schedule") {
+      // No lead to check: it is saved for whoever presses Confirm, and runs as
+      // them with their permissions at the time. Only the timing is checked
+      // here — a one-off in the past never becomes a card.
+      const { type: _type, ...fields } = p;
+      const parsed = scheduleInput.safeParse(fields);
+      if (!parsed.success || !nextRun(parsed.data, new Date())) continue;
+      cards.push({ id: `a${index}-schedule`, kind: "schedule", title: describeSchedule(parsed.data), ...parsed.data });
+      continue;
+    }
     if (!(await canAccessLead(user, p.leadId))) continue;
     const lead = await prisma.lead.findUnique({
       where: { id: p.leadId },

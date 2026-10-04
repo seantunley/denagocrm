@@ -366,6 +366,7 @@ const PER_TENANT_CRONS = [
   "src/app/api/cron/journeys/route.ts",
   "src/app/api/cron/automations/route.ts",
   "src/app/api/cron/competitor-watch/route.ts",
+  "src/app/api/cron/assistant/route.ts",
 ] as const;
 for (const file of PER_TENANT_CRONS) {
   test(`${file}: business queue runs per-tenant via runCronPerTenant`, () => {

@@ -1,11 +1,13 @@
 import { z } from "zod";
+import { scheduleFields, type Cadence } from "./assistantSchedule";
 
 /**
  * Tasks the assistant can PROPOSE — never perform. It drafts; the person sees a
  * card and presses Confirm, and only then does the matching existing server
  * action run (scheduleFollowUp, addCommunication, assignLead, moveLead), with
  * that person's own permissions, the stage gates and the audit log, exactly as
- * if they had done it by hand. A message to a customer is only ever a draft to
+ * if they had done it by hand. A scheduled question is saved for the signed-in
+ * person only, and later runs as them. A message to a customer is only ever a draft to
  * copy into the conversation: the assistant never sends anything (definition of
  * done: no send without an explicit click).
  */
@@ -31,6 +33,10 @@ export const proposedAction = z.discriminatedUnion("type", [
     subject: text.max(150).optional(),
     body: text.max(2000),
   }).strict(),
+  // A question to run later, as the person — no lead: it names its own subject.
+  // Cross-field rules (weekday only for weekly…) are checked by scheduleInput
+  // when it becomes a card and again when it is saved.
+  z.object({ type: z.literal("schedule"), ...scheduleFields }).strict(),
 ]);
 export type ProposedAction = z.infer<typeof proposedAction>;
 
@@ -39,7 +45,8 @@ export const MAX_ACTIONS = 4;
 export const ACTION_INSTRUCTIONS = [
   "TASKS. You can't change anything yourself, but you can PROPOSE up to 4 tasks for the person to confirm with one click. Propose when they ask you to do something (\"remind me…\", \"give it to Donovan\", \"draft a message…\"), or offer one when you recommend a concrete next step.",
   "Put them on one line at the very end (after any LEARN line is fine):",
-  'ACTIONS: [{"type":"follow_up","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","activity":"call|whatsapp|email|meeting|todo","summary":"..."},{"type":"note","leadId":"<id>","text":"..."},{"type":"assign","leadId":"<id>","to":"<person>"},{"type":"stage","leadId":"<id>","stage":"<stage>"},{"type":"draft_message","leadId":"<id>","channel":"whatsapp|email","subject":"<email only>","body":"..."}]',
+  'ACTIONS: [{"type":"follow_up","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","activity":"call|whatsapp|email|meeting|todo","summary":"..."},{"type":"note","leadId":"<id>","text":"..."},{"type":"assign","leadId":"<id>","to":"<person>"},{"type":"stage","leadId":"<id>","stage":"<stage>"},{"type":"draft_message","leadId":"<id>","channel":"whatsapp|email","subject":"<email only>","body":"..."},{"type":"schedule","question":"...","cadence":"once|daily|weekdays|weekly","weekday":1,"timeOfDay":"HH:MM","onDate":"YYYY-MM-DD"}]',
+  "- schedule: a question for you to answer on your own LATER or REPEATEDLY (\"every Monday at 7 tell me which deals went quiet\", \"Friday at 9, has Anna signed?\"). weekday (0 = Sunday … 6 = Saturday) only with weekly; onDate only with once. It runs later with no conversation, so the question must stand alone — name the customer or thing (\"Has Anna Jacobs signed her quote?\"), never \"her\" or \"that deal\". No leadId. A plain reminder to do something with a lead (\"remind me to call Anna Friday\") is a follow_up, not a schedule.",
   "- leadId must be an id that appears in the CRM results above — never invent one. If you don't have it, look the lead up first or don't propose.",
   "- People and stages exactly as listed. Times are South African time.",
   "- draft_message: write it in the business's voice, ready to send; it is only a draft the person copies and sends themselves.",
@@ -111,4 +118,5 @@ export type ActionCard =
   | { id: string; kind: "note"; leadId: string; leadLabel: string; title: string; text: string }
   | { id: string; kind: "assign"; leadId: string; leadLabel: string; title: string; userId: string }
   | { id: string; kind: "stage"; leadId: string; leadLabel: string; title: string; stageId: string }
-  | { id: string; kind: "draft_message"; leadId: string; leadLabel: string; title: string; channel: "whatsapp" | "email"; subject?: string; body: string };
+  | { id: string; kind: "draft_message"; leadId: string; leadLabel: string; title: string; channel: "whatsapp" | "email"; subject?: string; body: string }
+  | { id: string; kind: "schedule"; title: string; question: string; cadence: Cadence; weekday?: number; timeOfDay: string; onDate?: string };
