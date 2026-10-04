@@ -88,7 +88,7 @@ test("it can answer questions about itself — truthfully, from a fixed brief", 
   assert.match(about, /anything they've approved you cannot change/);
   // …and it is actually given to the answer step, after the soul.
   const lib = code("src/lib/crmAssistant.ts");
-  assert.match(lib, /instructions: \[soul, selfKnowledge\(profile\.name\), learned,/);
+  assert.match(lib, /instructions: \[\s*soul,\s*selfKnowledge\(profile\.name\),\s*learned,/);
   // Questions about itself need no lookup.
   assert.match(code("src/lib/crmAssistantPlan.ts"), /questions about you yourself/);
   // Every lookup it claims exists; nothing in the action list it says it can do is missing.

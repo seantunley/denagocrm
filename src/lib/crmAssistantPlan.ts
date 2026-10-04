@@ -13,6 +13,13 @@ import { z } from "zod";
  */
 
 export const MAX_STEPS = 3;
+/**
+ * Lookups that don't depend on each other run side by side in one step (Hermes'
+ * parallel tool calls): "compare Donovan's and Kristina's pipelines" is two
+ * find_leads at once, not two rounds. Per step, and in all.
+ */
+export const MAX_PARALLEL = 3;
+export const MAX_LOOKUPS = 6;
 
 const name = z.string().trim().min(1).max(80);
 const days = z.number().int().min(1).max(365);
@@ -152,6 +159,7 @@ export function planInstructions(ctx: PlanContext): string {
     'Use names exactly as listed. Money is in rands (R200k = 200000). "Hot" or "biggest" → sort by value; "gone quiet"/"not contacted" → noContactDays.',
     "Don't repeat a lookup that already ran. Prefer done once the results answer the question.",
     'Shape: {"tool":"find_leads","args":{...}} or {"tool":"done"}',
+    `When you need several lookups that don't depend on each other's results (two people's pipelines, a customer's brief AND the calendar), ask for them together — up to ${MAX_PARALLEL} at once: {"lookups":[{"tool":"find_leads","args":{"assignedTo":"Donovan"}},{"tool":"find_leads","args":{"assignedTo":"Kristina"}}]}. If one needs another's result (find the stalled deals, THEN read the worst one), ask for the first only.`,
     ctx.learned ? `\n${ctx.learned}` : "",
   ].filter(Boolean).join("\n");
 }
@@ -173,6 +181,36 @@ export function parseStep(text: string): AssistantStep | null {
   }
   const parsed = assistantStep.safeParse(raw);
   return parsed.success ? parsed.data : null;
+}
+
+/**
+ * One step's reply → the lookups to run now (one, or several side by side), or
+ * [{tool:"done"}], or null when nothing in it is usable. In a batch each lookup
+ * stands alone — a malformed one is dropped, not guessed at — and "done" beside
+ * real lookups means nothing.
+ */
+export function parseSteps(text: string): AssistantStep[] | null {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start === -1 || end <= start) return null;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+  const batch = z.object({ lookups: z.array(z.unknown()).min(1).max(12) }).safeParse(raw);
+  if (!batch.success) {
+    const single = assistantStep.safeParse(raw);
+    return single.success ? [single.data] : null;
+  }
+  const steps = batch.data.lookups
+    .map((item) => assistantStep.safeParse(item))
+    .filter((r) => r.success)
+    .map((r) => r.data);
+  const tools = steps.filter((s) => s.tool !== "done").slice(0, MAX_PARALLEL);
+  if (tools.length) return tools;
+  return steps.length ? [{ tool: "done" }] : null;
 }
 
 /** A turn of earlier conversation, for follow-ups ("and which of those are Donovan's?"). */

@@ -12,12 +12,7 @@ import { prisma } from "@/lib/db";
 import { scheduleFollowUp } from "@/app/actions/activities";
 import { addCommunication } from "@/app/actions/communications";
 import { assignLead, moveLead } from "@/app/actions/leads";
-
-const ASSISTANT_PERMISSIONS = [
-  "leads.view_all", "leads.view_owned",
-  "quotes.view_all", "quotes.view_owned",
-  "activities.view", "activities.manage",
-] as const;
+import { ASSISTANT_PERMISSIONS } from "@/lib/assistantUser";
 
 /**
  * Run a task the assistant proposed, AFTER the person pressed Confirm on it.

@@ -41,7 +41,7 @@ test("choices become buttons: parsed, stripped, capped — and all three trailer
   assert.equal(splitChoices(`Pick.\nCHOICES: ${JSON.stringify(["a", "b", "c", "d", "e", "f"])}`).choices.length, MAX_CHOICES);
   assert.deepEqual(splitChoices("No choice here."), { answer: "No choice here.", choices: [] });
   // Wired: the answer step is told about them, the chat sends a tap as the next question.
-  assert.match(code("src/lib/crmAssistant.ts"), /ACTION_INSTRUCTIONS, CHOICE_INSTRUCTIONS\]/);
+  assert.match(code("src/lib/crmAssistant.ts"), /ACTION_INSTRUCTIONS,\s*CHOICE_INSTRUCTIONS,\s*\]/);
   const chat = code("src/components/AssistantChat.tsx");
   assert.match(chat, /turn === turns\[0\] && !pending && turn\.choices/, "only the newest answer's choices");
   assert.match(chat, /onClick=\{\(\) => ask\(choice\)\}/);

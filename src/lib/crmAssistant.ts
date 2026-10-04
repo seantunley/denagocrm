@@ -26,18 +26,19 @@ import {
   type PermissionUser,
 } from "./permissions";
 import { ASSISTANT_PROFILE_KEY, parseProfile, selfKnowledge, soulText } from "./assistantSoul";
-import { LEARN_INSTRUCTIONS, memoryPrompt, splitLearn } from "./assistantMemory";
+import { LEARN_INSTRUCTIONS, memoryPrompt, methodInstructions, splitLearn } from "./assistantMemory";
 import { applyLearn, loadLearned, loadPlaybook } from "./assistantMemoryStore";
 import { ACTION_INSTRUCTIONS, CHOICE_INSTRUCTIONS, splitActions, splitChoices, type ActionCard, type ProposedAction } from "./assistantActions";
 import {
   ANSWER_RULES,
+  MAX_LOOKUPS,
   MAX_STEPS,
   activityArgs,
   conversationBlock,
   knowledgeArgs,
   leadArgs,
   leadBriefArgs,
-  parseStep,
+  parseSteps,
   planInstructions,
   playbookArgs,
   quoteArgs,
@@ -54,8 +55,9 @@ import {
  * "Ask the CRM" — a sales colleague that answers from the workspace's own
  * records and knowledge, on the ChatGPT account the workspace connected.
  *
- * Per question: up to MAX_STEPS research steps (ChatGPT picks ONE read-only tool
- * + filters each time, validated by crmAssistantPlan, and sees what came back),
+ * Per question: up to MAX_STEPS research steps (ChatGPT picks read-only tools +
+ * filters each time — several side by side when they're independent — validated
+ * by crmAssistantPlan, and sees what came back),
  * then an ANSWER step in the workspace's own voice (assistantSoul). Every tool
  * runs on the tenant-scoped client through the same visibility rules the pages
  * use — getAccessibleLeadIds / QuoteIds / ActivityIds — so the assistant never
@@ -534,26 +536,81 @@ async function knowledge(user: User, raw: z.infer<typeof knowledgeArgs>): Promis
 }
 
 /** The asker's own earlier conversations — never anyone else's. */
+/**
+ * This person's earlier conversations (Hermes' session search): the turns that
+ * match the most of the query's words, best first, each WITH the turns either
+ * side of it that day — a decision is usually the answer to the question
+ * before — so the answer step can say what was decided, not just quote a line.
+ */
 async function recall(user: User, raw: z.infer<typeof recallArgs>): Promise<ToolOutput> {
   const { query } = recallArgs.parse(raw);
-  const words = query.split(/\s+/).filter((w) => w.length > 2).slice(0, 6);
-  const turns = await prisma.assistantTurn.findMany({
+  const words = recallWords(query);
+  const since = new Date(Date.now() - HISTORY_DAYS * DAY);
+  const candidates = await prisma.assistantTurn.findMany({
     where: {
       userId: user.id,
-      createdAt: { gte: new Date(Date.now() - HISTORY_DAYS * DAY) },
-      ...(words.length
-        ? { OR: words.flatMap((w) => [{ question: fuzzy(w) }, { answer: fuzzy(w) }]) }
-        : {}),
+      createdAt: { gte: since },
+      ...(words.length ? { OR: words.flatMap((w) => [{ question: fuzzy(w) }, { answer: fuzzy(w) }]) } : {}),
     },
     orderBy: { createdAt: "desc" },
-    take: 5,
-    select: { question: true, answer: true, createdAt: true },
+    take: 40,
+    select: { id: true, question: true, answer: true, createdAt: true },
   });
+  const best = rankRecall(candidates, words).slice(0, RECALL_MATCHES);
+  if (!best.length) return { truncated: false, rows: [], data: [{ note: "Nothing in this person's last 30 days of conversations matches." }] };
+  // The turn before and after each match, same South African day.
+  const around = await Promise.all(
+    best.map((t) => {
+      const day = dateKey(t.createdAt);
+      const dayStart = new Date(`${day}T00:00:00+02:00`);
+      return Promise.all([
+        prisma.assistantTurn.findFirst({
+          where: { userId: user.id, createdAt: { gte: dayStart, lt: t.createdAt } },
+          orderBy: { createdAt: "desc" },
+          select: { question: true, answer: true },
+        }),
+        prisma.assistantTurn.findFirst({
+          where: { userId: user.id, createdAt: { gt: t.createdAt, lt: new Date(dayStart.getTime() + DAY) } },
+          orderBy: { createdAt: "asc" },
+          select: { question: true, answer: true },
+        }),
+      ]);
+    }),
+  );
+  const short = (t: { question: string; answer: string } | null) => (t ? { question: clip(t.question, 200), answer: clip(t.answer, 300) } : undefined);
   return {
-    truncated: false,
-    data: turns.map((t) => ({ when: dateKey(t.createdAt), question: t.question, answer: clip(t.answer, 600) })),
+    truncated: candidates.length === 40,
     rows: [],
+    data: best.map((t, i) => ({
+      when: when(t.createdAt),
+      before: short(around[i][0]),
+      question: t.question,
+      answer: clip(t.answer, 700),
+      after: short(around[i][1]),
+    })),
   };
+}
+
+const RECALL_MATCHES = 4;
+const RECALL_STOP = new Set(["the", "and", "what", "did", "about", "with", "for", "was", "were", "that", "this", "have", "has", "had", "who", "when", "how", "why", "our", "you", "your", "say", "said", "tell", "told", "last", "week", "decide", "decided"]);
+
+/** The words worth searching for: no stop words, no repeats, at most 6. */
+export function recallWords(query: string): string[] {
+  const words = query.toLowerCase().split(/[^\p{L}\p{N}'-]+/u).filter((w) => w.length > 2 && !RECALL_STOP.has(w));
+  return [...new Set(words)].slice(0, 6);
+}
+
+/** Most distinct words matched first; newest first among equals. */
+export function rankRecall<T extends { question: string; answer: string; createdAt: Date }>(turns: T[], words: string[]): T[] {
+  const hits = (t: T) => {
+    const text = `${t.question}\n${t.answer}`.toLowerCase();
+    return words.filter((w) => text.includes(w)).length;
+  };
+  return turns
+    .map((t) => ({ t, n: hits(t) }))
+    .filter((x) => !words.length || x.n > 0)
+    .sort((a, b) => b.n - a.n || b.t.createdAt.getTime() - a.t.createdAt.getTime())
+    .map((x) => x.t);
 }
 
 /** "Tue 7 Oct 10:00" in South African time. */
@@ -947,9 +1004,9 @@ export async function askCrm(user: User, question: string, page?: string | null)
   const learned = memoryPrompt(learnedNow);
   const instructions = planInstructions({ ...context, learned });
 
-  // Research: look, see, look closer — at most MAX_STEPS lookups.
+  // Research: look, see, look closer — at most MAX_STEPS rounds, MAX_LOOKUPS in all.
   const observations: Observation[] = [];
-  for (let step = 0; step < MAX_STEPS; step++) {
+  for (let step = 0; step < MAX_STEPS && observations.length < MAX_LOOKUPS; step++) {
     const reply = await codexRespond({
       instructions,
       prompt: [
@@ -957,7 +1014,7 @@ export async function askCrm(user: User, question: string, page?: string | null)
         whereTheyAre,
         `Question: ${question}`,
         observations.length ? `Lookups so far:\n${observations.map(observationText).join("\n\n")}` : "",
-        `Lookups left: ${MAX_STEPS - step}.`,
+        `Rounds left: ${MAX_STEPS - step}. Lookups left: ${MAX_LOOKUPS - observations.length}.`,
       ].filter(Boolean).join("\n\n"),
       reasoningEffort: "low",
       timeoutMs: 45_000,
@@ -967,7 +1024,7 @@ export async function askCrm(user: User, question: string, page?: string | null)
       if (!observations.length) return { ok: false, error: `ChatGPT didn't answer: ${reply.error}` };
       break;
     }
-    const next = parseStep(reply.text);
+    const next = parseSteps(reply.text);
     if (!next) {
       // The reply may quote the question; log that it failed, not what it said.
       await logError("crm-assistant", "research step returned no usable tool call");
@@ -976,10 +1033,28 @@ export async function askCrm(user: User, question: string, page?: string | null)
       }
       break;
     }
-    if (next.tool === "done") break;
-    const args = "args" in next ? next.args : {};
-    if (observations.some((o) => o.tool === next.tool && JSON.stringify(o.args) === JSON.stringify(args))) break;
-    observations.push({ tool: next.tool, args, output: await runTool(user, next) });
+    // Only lookups not already run (in this batch or before), within the total cap.
+    const seen = new Set(observations.map((o) => `${o.tool} ${JSON.stringify(o.args)}`));
+    const fresh: ToolStep[] = [];
+    for (const s of next) {
+      if (s.tool === "done") continue;
+      const key = `${s.tool} ${JSON.stringify("args" in s ? s.args : {})}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      fresh.push(s);
+    }
+    const batch = fresh.slice(0, MAX_LOOKUPS - observations.length);
+    if (!batch.length) break;
+    // Independent lookups, side by side; one failing doesn't cost the others.
+    const outputs = await Promise.all(
+      batch.map((s) =>
+        runTool(user, s).catch(async (error: unknown): Promise<ToolOutput> => {
+          await logError("crm-assistant", `lookup ${s.tool} failed`, error instanceof Error ? error.name : "unknown");
+          return { truncated: false, rows: [], data: [{ note: "That lookup failed — say so if it matters." }] };
+        }),
+      ),
+    );
+    batch.forEach((s, i) => observations.push({ tool: s.tool, args: "args" in s ? s.args : {}, output: outputs[i] }));
   }
 
   // Answer, in the workspace's own voice.
@@ -990,7 +1065,16 @@ export async function askCrm(user: User, question: string, page?: string | null)
   const profile = parseProfile(profileRaw);
   const soul = soulText(profile, company?.name ?? "", user.name || "a colleague");
   const answerReply = await codexRespond({
-    instructions: [soul, selfKnowledge(profile.name), learned, ANSWER_RULES, LEARN_INSTRUCTIONS, ACTION_INSTRUCTIONS, CHOICE_INSTRUCTIONS].filter(Boolean).join("\n\n"),
+    instructions: [
+      soul,
+      selfKnowledge(profile.name),
+      learned,
+      ANSWER_RULES,
+      LEARN_INSTRUCTIONS,
+      methodInstructions(observations),
+      ACTION_INSTRUCTIONS,
+      CHOICE_INSTRUCTIONS,
+    ].filter(Boolean).join("\n\n"),
     prompt: [
       conversation,
       `Question: ${question}`,

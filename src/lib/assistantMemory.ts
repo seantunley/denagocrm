@@ -59,6 +59,26 @@ export const LEARN_INSTRUCTIONS = [
   "Most answers learn nothing — then add no LEARN line at all.",
 ].join("\n");
 
+/**
+ * Learning from its own work (Hermes writes a skill after a task that took
+ * several tool calls, and patches it when it falls short). Only offered when
+ * this answer took MIN_METHOD_LOOKUPS or more: the method that worked, as a
+ * playbook the plan step can load next time — still unreviewed until the owner
+ * approves it, and never about one particular customer.
+ */
+export const MIN_METHOD_LOOKUPS = 2;
+
+export function methodInstructions(lookups: { tool: string; args: unknown }[]): string {
+  if (lookups.length < MIN_METHOD_LOOKUPS) return "";
+  const steps = lookups.map((l, i) => `${i + 1}. ${l.tool} ${JSON.stringify(l.args ?? {})}`).join("\n");
+  return [
+    "METHOD. Answering this took several lookups:",
+    steps,
+    "If this is a KIND of question that will come up again (\"who should I chase\", \"is X ready for delivery\" — not one about a particular customer) and no playbook already covers it, save the method as a playbook in your LEARN line: a name for that kind of question, a one-line description, and the steps — which lookups with which filters, what to look for in the results, and how to judge them. Leave out names and anything specific to today's records.",
+    "If you loaded a playbook and it was missing a step you needed, improve it (replace). If the method was obvious or one-off, learn nothing.",
+  ].join("\n");
+}
+
 /** Split the model's reply into the answer the person sees and what it wants to learn. */
 export function splitLearn(reply: string): { answer: string; learn: LearnBlock | null } {
   const lines = reply.trimEnd().split("\n");
