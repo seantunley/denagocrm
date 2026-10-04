@@ -18,6 +18,7 @@ import { authorizeDocumentTarget } from "@/lib/documentUploadAuth";
 import { actingOwnerTenantId } from "@/lib/actingScope";
 import { requiredReason } from "@/lib/deleteReason";
 import { DOC_DEFS, defaultTemplate, mergeTemplate, isDocKey } from "@/lib/docTemplates";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import {
   requirePermission,
   requireDocumentAccess,
@@ -270,7 +271,7 @@ export async function createDocTemplate(formData: FormData) {
     if (!isDocKey(docType)) refuse("Choose what kind of document this template is for.");
     const name = String(formData.get("name") ?? "").trim() || "Untitled";
     const baseId = String(formData.get("baseId") ?? "").trim();
-    let config: object = defaultTemplate(docType) as object;
+    let config: object = defaultTemplate(docType, { automotive: await isModuleEnabled("automotive") }) as object;
     if (baseId) {
       const base = await prisma.docTemplateRecord.findUnique({ where: { id: baseId } });
       if (base && base.docType === docType) config = mergeTemplate(docType, base.config) as object;
