@@ -42,9 +42,11 @@ export async function loadPlaybook(name: string) {
  * Apply what the model decided to learn. One transaction under a per-workspace
  * advisory lock, so two questions finishing together can't both pass the size
  * check and overflow the cap, or create the same playbook twice. Returns how
- * many entries changed — never throws into the answer path.
+ * many entries changed — never throws into the answer path. `userId` is the
+ * person it learned from; null for the nightly tidy-up, which has no person
+ * and so never touches a profile.
  */
-export async function applyLearn(userId: string, learn: LearnBlock): Promise<number> {
+export async function applyLearn(userId: string | null, learn: LearnBlock): Promise<number> {
   const tenantId = ownedWriteTenantId();
   return prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`assistant-notes:${tenantId}`})::bigint)`;
@@ -69,7 +71,7 @@ export async function applyLearn(userId: string, learn: LearnBlock): Promise<num
       }
     };
     await notes("memory", learn.memory, MEMORY_CHAR_LIMIT);
-    await notes("profile", learn.profile, PROFILE_CHAR_LIMIT);
+    if (userId) await notes("profile", learn.profile, PROFILE_CHAR_LIMIT);
 
     for (const book of learn.playbook ?? []) {
       const description = scanEntry(book.description);

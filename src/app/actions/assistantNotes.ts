@@ -30,7 +30,11 @@ export async function approveAssistantNote(id: string) {
       const user = await requireTenantOwner();
       const note = await prisma.assistantNote.findUnique({ where: { id }, select: { kind: true, name: true } });
       if (!note) refuse(NOTE_GONE);
-      await prisma.assistantNote.update({ where: { id }, data: { status: "approved", reviewedById: user.id, reviewedAt: new Date() } });
+      // Approving a flagged fact is the owner saying it's right: the flag goes.
+      await prisma.assistantNote.update({
+        where: { id },
+        data: { status: "approved", reviewedById: user.id, reviewedAt: new Date(), ...(note.kind === "playbook" ? {} : { description: null }) },
+      });
       await logAudit({ action: "assistant.note_approved", summary: `Approved what the assistant learned (${note.kind}${note.name ? ` “${note.name}”` : ""})`, user });
       revalidate();
       return { success: "Approved" };
@@ -67,7 +71,8 @@ export async function updateAssistantNote(id: string, formData: FormData) {
       const book = note.kind === "playbook" ? await playbookFields(formData, id) : null;
       await prisma.assistantNote.update({
         where: { id },
-        data: { content: scanned.text, ...(book ?? {}), status: "approved", reviewedById: user.id, reviewedAt: new Date() },
+        // A fact's description only ever holds a tidy-up flag; the owner's edit settles it.
+        data: { content: scanned.text, ...(book ?? { description: null }), status: "approved", reviewedById: user.id, reviewedAt: new Date() },
       });
       await logAudit({ action: "assistant.note_edited", summary: `Edited what the assistant learned (${note.kind}${note.name ? ` “${note.name}”` : ""})`, user });
       revalidate();

@@ -4,7 +4,9 @@ import { readFileSync } from "node:fs";
 import {
   MEMORY_CHAR_LIMIT,
   memoryPrompt,
+  parseTidy,
   planNoteChanges,
+  planTidy,
   scanEntry,
   splitLearn,
   type Entry,
@@ -76,6 +78,47 @@ test("the personality and the soul save separately without wiping each other", (
   const save = code("src/app/actions/assistantSettings.ts");
   assert.match(save, /const field = \(key: string\) => \(formData\.has\(key\) \? String\(formData\.get\(key\) \?\? ""\) : null\);/);
   assert.match(save, /soul: field\("soul"\) === null \? current\.soul : normaliseSoul\(field\("soul"\)!\)/);
+});
+
+test("the nightly tidy-up only merges and removes what nobody has approved", () => {
+  const entries = [
+    { id: "m1", kind: "memory", userId: null, content: "Donovan handles fleet deals.", status: "unreviewed" },
+    { id: "m2", kind: "memory", userId: null, content: "Fleet deals go to Donovan.", status: "unreviewed" },
+    { id: "m3", kind: "memory", userId: null, content: "We open at 8.", status: "approved" },
+    { id: "p1", kind: "profile", userId: "u1", content: "Likes short answers.", status: "unreviewed" },
+    { id: "p2", kind: "profile", userId: "u2", content: "Likes short answers.", status: "unreviewed" },
+    { id: "b1", kind: "playbook", userId: null, content: "steps", status: "unreviewed" },
+  ];
+  const changes = planTidy(entries, {
+    merge: [
+      { ids: ["m1", "m2"], content: "Donovan handles all fleet deals." },
+      { ids: ["p1", "p2"], content: "Likes short answers." }, // two people's profiles: refused
+      { ids: ["m3", "m1"], content: "x" }, // approved involved (and m1 already used): refused
+    ],
+    remove: [{ id: "m3" }, { id: "b1" }, { id: "nope" }], // approved, ok, unknown
+    flag: [{ id: "m3", reason: "Contradicts the 7:30 opening people mention." }, { id: "b1", reason: "playbooks aren't flagged" }],
+  });
+  assert.deepEqual(changes, [
+    { kind: "merge", keepId: "m1", deleteIds: ["m2"], content: "Donovan handles all fleet deals." },
+    { kind: "remove", id: "b1" },
+    { kind: "flag", id: "m3", reason: "Contradicts the 7:30 opening people mention." },
+  ]);
+  // A merge may not grow the text, or carry contact details.
+  assert.deepEqual(planTidy(entries, { merge: [{ ids: ["m1", "m2"], content: "x".repeat(200) }] }), []);
+  assert.deepEqual(planTidy(entries, { merge: [{ ids: ["m1", "m2"], content: "Call Donovan on 082 555 1234." }] }), []);
+  assert.equal(parseTidy("{}")?.merge, undefined);
+  assert.equal(parseTidy('{"rewrite_everything":true}'), null);
+});
+
+test("the tidy-up runs daily, inside the research cron's budget, and never rewrites approved entries", () => {
+  const tidy = code("src/lib/assistantTidy.ts");
+  assert.match(tidy, /const EVERY_MS = 20 \* 60 \* 60 \* 1000;/);
+  assert.match(tidy, /await putSetting\(TIDY_LAST_KEY, new Date\(\)\.toISOString\(\)\);[\s\S]*codexRespond\(/, "the day is claimed before the call");
+  assert.match(tidy, /pg_advisory_xact_lock\(hashtext\(\$\{`assistant-notes:\$\{tenantId\}`\}\)::bigint\)/);
+  assert.match(tidy, /const notApproved = \{ tenantId, status: \{ not: "approved" \} \};/, "re-checked inside the lock");
+  assert.match(tidy, /applyLearn\(null, \{ playbook: block\.playbook \}\)/, "no person → never a profile");
+  const cron = code("src/app/api/cron/research/route.ts");
+  assert.match(cron, /budget\.shouldStop\(TIDY_RESERVE_MS\)\s*\? null\s*: await runAssistantTidy\(\)/);
 });
 
 test("memory stays under its cap, never duplicates, and approved entries are the owner's", () => {

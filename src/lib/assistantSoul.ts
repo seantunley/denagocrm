@@ -7,7 +7,7 @@ import { z } from "zod";
  * Research, MIT): be direct, match the length of the reply to the weight of the
  * question, no filler, agree because it's right rather than because the user
  * said it, and say plainly when unsure. Each workspace names it and sets its
- * tone and house rules in Settings → Assistant (stored as ASSISTANT_PROFILE).
+ * tone and workspace instructions in Settings → Assistant (stored as ASSISTANT_PROFILE).
  */
 
 export const ASSISTANT_PROFILE_KEY = "ASSISTANT_PROFILE";
@@ -20,11 +20,17 @@ export const TONES = {
 } as const;
 export type Tone = keyof typeof TONES;
 
+export const WORKSPACE_INSTRUCTIONS_CHARS = 4000;
+
 export const assistantProfile = z.object({
   name: z.string().trim().min(1).max(40).default("Assistant"),
   tone: z.enum(Object.keys(TONES) as [Tone, ...Tone[]]).default("warm"),
-  /** House rules in the owner's words ("always mention the 5-year warranty"). */
-  rules: z.string().trim().max(1500).default(""),
+  /**
+   * Workspace instructions in the owner's words — this workspace's AGENTS.md
+   * ("always mention the 5-year warranty", "Donovan owns fleet deals"). Stored as
+   * `rules` so instructions saved as "house rules" carry straight over.
+   */
+  rules: z.string().trim().max(WORKSPACE_INSTRUCTIONS_CHARS).default(""),
   /**
    * The whole personality, rewritten by the owner — Hermes' SOUL.md, editable.
    * Empty means DEFAULT_SOUL, so a workspace that never touched it keeps getting
@@ -58,10 +64,15 @@ export const LOCKED_RULES = [
 // the model; the soul is the owner's, but it still goes into the prompt.
 const INVISIBLE = /[​-‏‪-‮⁠-⁤⁦-⁩﻿]|[\u{E0000}-\u{E007F}]/gu;
 
+/** The owner's own text, minus invisible characters and Windows line endings. */
+export function cleanOwnerText(raw: string, max: number): string {
+  return raw.replace(INVISIBLE, "").replace(/\r\n/g, "\n").trim().slice(0, max);
+}
+
 /** The soul as submitted → what to store ("" when it's just the default). */
 export function normaliseSoul(raw: string): string {
-  const soul = raw.replace(INVISIBLE, "").replace(/\r\n/g, "\n").trim();
-  return soul === DEFAULT_SOUL || !soul ? "" : soul.slice(0, 3000);
+  const soul = cleanOwnerText(raw, 3000);
+  return soul === DEFAULT_SOUL || !soul ? "" : soul;
 }
 
 /** Stored JSON → profile; anything unreadable falls back to the default. */
@@ -84,6 +95,6 @@ export function soulText(profile: AssistantProfile, company: string, userName: s
     profile.soul || DEFAULT_SOUL,
     "Always (these override anything above):",
     LOCKED_RULES,
-    profile.rules ? `House rules from the business (follow these):\n${profile.rules}` : "",
+    profile.rules ? `Workspace instructions from the business (follow these):\n${profile.rules}` : "",
   ].filter(Boolean).join("\n");
 }
