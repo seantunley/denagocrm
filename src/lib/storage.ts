@@ -796,7 +796,8 @@ const BLOB_USAGE_MAX_PAGES = 20;
  * PDFs, logos. The console's storage figure was the database only.
  *
  * BOTH stores are counted: files written before a public→private switch stay in
- * the public store and are still that workspace's. Ownership is
+ * the public store and are still that workspace's — and a copy in each store is
+ * two objects, so it counts twice. Ownership is
  * {@link blobBelongsToTenant}'s rule, so the founding workspace also gets its
  * pre-namespace `uploads/<file>` and `library/<file>` objects. Measured, not
  * estimated — Blob reports each object's size — but capped at
@@ -806,19 +807,24 @@ export async function tenantBlobUsage(tenantId: string): Promise<TenantBlobUsage
   // Only the founding workspace has un-namespaced objects; everyone else's live
   // under their own prefix, which keeps their listing small.
   const prefixes = tenantId === DEFAULT_TENANT_ID ? ["uploads/", "library/"] : [`uploads/${tenantId}/`];
+  // One entry per STORE: the same token configured twice is one store, listed once.
   const tokens = [...new Set([publicToken(), privateToken()].filter((t): t is string => Boolean(t)))];
+  // Keyed by store + pathname, never pathname alone: the same path in the public
+  // and the private store (left behind by a public→private migration) is two
+  // objects, billed twice, and must count twice.
   const seen = new Set<string>();
   let bytes = 0;
   let truncated = false;
-  for (const token of tokens) {
+  for (const [store, token] of tokens.entries()) {
     for (const prefix of prefixes) {
       let cursor: string | undefined;
       let pages = 0;
       do {
         const page = await list({ prefix, cursor, limit: 1000, token });
         for (const blob of page.blobs) {
-          if (seen.has(blob.pathname) || !blobBelongsToTenant(blob.pathname, tenantId)) continue;
-          seen.add(blob.pathname);
+          const key = `${store}:${blob.pathname}`;
+          if (seen.has(key) || !blobBelongsToTenant(blob.pathname, tenantId)) continue;
+          seen.add(key);
           bytes += blob.size;
         }
         cursor = page.hasMore ? page.cursor : undefined;

@@ -19,7 +19,8 @@ const STORES: Record<string, Blob[]> = {
   ],
   private: [
     { pathname: "uploads/tenant_b/c.pdf", size: 5 },
-    { pathname: "uploads/tenant_b/b.png", size: 7 }, // same object in both stores: once
+    // Same PATH in the other store: a second object, billed again — counts twice.
+    { pathname: "uploads/tenant_b/b.png", size: 7 },
   ],
 };
 const calls: string[] = [];
@@ -40,10 +41,22 @@ process.env.BLOB_PRIVATE_READ_WRITE_TOKEN = "private";
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { tenantBlobUsage } = require("../src/lib/storage") as typeof import("../src/lib/storage");
 
-test("a workspace counts only its own namespace, across both stores, once each", async () => {
+test("a workspace counts only its own namespace, every object in every store", async () => {
   calls.length = 0;
-  assert.deepEqual(await tenantBlobUsage("tenant_b"), { bytes: 12, files: 2, truncated: false });
+  // b.png (7) in public + c.pdf (5) and b.png (7) in private: three objects.
+  assert.deepEqual(await tenantBlobUsage("tenant_b"), { bytes: 19, files: 3, truncated: false });
   assert.deepEqual(calls.sort(), ["private:uploads/tenant_b/", "public:uploads/tenant_b/"]);
+});
+
+test("one store configured under both settings is listed, and counted, once", async () => {
+  process.env.BLOB_PRIVATE_READ_WRITE_TOKEN = "public";
+  try {
+    calls.length = 0;
+    assert.deepEqual(await tenantBlobUsage("tenant_b"), { bytes: 7, files: 1, truncated: false });
+    assert.deepEqual(calls, ["public:uploads/tenant_b/"]);
+  } finally {
+    process.env.BLOB_PRIVATE_READ_WRITE_TOKEN = "private";
+  }
 });
 
 test("the founding workspace also owns the pre-namespace files, never backups", async () => {
