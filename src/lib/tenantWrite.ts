@@ -58,6 +58,25 @@ export function writeTenantId(): string | null {
 }
 
 /**
+ * The owning workspace for a tenant-owned write, never silently the founding one.
+ *
+ * Replaces `writeTenantId() ?? DEFAULT_TENANT_ID`. Under enforcement
+ * `writeTenantId()` is only null in a trusted SYSTEM scope (backups, the
+ * maintenance sweep, webhook token checks) — none of which writes a workspace's
+ * leads, messages or stats. One that did would have filed that row in Denago's
+ * workspace and nobody would have noticed; now it refuses. Dormant (local dev,
+ * tests) keeps the founding workspace, byte-for-byte as before.
+ */
+export function ownedWriteTenantId(): string {
+  const tenantId = writeTenantId();
+  if (tenantId) return tenantId;
+  if (tenantEnforcing()) {
+    throw new TenantScopeError("A system-scope write must name the workspace it belongs to");
+  }
+  return DEFAULT_TENANT_ID;
+}
+
+/**
  * The tenantId to STAMP a RUNTIME write with, where the tenant is inherited from
  * the record being acted on rather than from a session.
  *
@@ -81,10 +100,17 @@ export function writeTenantId(): string | null {
  */
 export function inheritedTenantId(recordTenantId?: string | null): string {
   const enforcedTenantId = writeTenantId();
+  const ambientTenantId = currentTenantScope()?.tenantId ?? null;
+  // The ladder's last rung is the founding workspace. Under enforcement that is
+  // only reached from a system scope with no parent record — refuse, as
+  // ownedWriteTenantId does, rather than file the row in Denago's workspace.
+  if (tenantEnforcing() && !enforcedTenantId && !recordTenantId && !ambientTenantId) {
+    throw new TenantScopeError("A system-scope write must name the workspace it belongs to");
+  }
   return decideInheritedTenant({
     enforcedTenantId,
     recordTenantId: recordTenantId ?? null,
-    ambientTenantId: currentTenantScope()?.tenantId ?? null,
+    ambientTenantId,
   });
 }
 
@@ -113,7 +139,7 @@ export async function withTenantWrite<T>(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   fn: (tx: any, tenantId: string) => Promise<T>,
 ): Promise<T> {
-  const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
+  const tenantId = ownedWriteTenantId();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (basePrisma as any).$transaction((tx: any) => fn(tx, tenantId));
 }

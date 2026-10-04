@@ -1,8 +1,7 @@
 import "server-only";
 import { Prisma } from "@prisma/client";
 import { basePrisma, prisma } from "./db";
-import { DEFAULT_TENANT_ID } from "./tenant";
-import { writeTenantId } from "./tenantWrite";
+import { ownedWriteTenantId } from "./tenantWrite";
 import {
   statisticsScopeFor,
   statisticsScopeSql,
@@ -371,7 +370,7 @@ const INSERT_CHUNK = 1_000;
  * silently summed into one number.
  */
 export function statisticsTenantId(explicit?: string): string {
-  return explicit ?? writeTenantId() ?? DEFAULT_TENANT_ID;
+  return explicit ?? ownedWriteTenantId();
 }
 
 /**

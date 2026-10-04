@@ -37,7 +37,7 @@ test("historic node labels come from immutable published definitions, not the mu
 
 test("analytics reporting uses explicit tenant predicates for bypassed raw reads", () => {
   const code = src("src/lib/botFlowAnalyticsReport.ts");
-  assert.match(code, /const tenantId = writeTenantId\(\) \?\? DEFAULT_TENANT_ID/);
+  assert.match(code, /const tenantId = ownedWriteTenantId\(\)/);
   assert.ok((code.match(/"tenantId" = \$\{tenantId\}/g) ?? []).length >= 2);
   assert.match(code, /"flowId" = \$\{flowId\}/);
 });

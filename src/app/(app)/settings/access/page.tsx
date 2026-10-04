@@ -4,6 +4,8 @@ import { basePrisma } from "@/lib/db";
 import { actingTenantMemberIds } from "@/lib/tenantActor";
 import { getActiveTenantId, isTenantOwner } from "@/lib/auth";
 import { tenantEnforcing } from "@/lib/tenantEnforcement";
+import { getEnabledModuleIds } from "@/lib/modules/enabled";
+import { roleAvailable } from "@/lib/provisioning";
 import { hasPermission, requireAnyPermission } from "@/lib/permissions";
 import {
   createRole,
@@ -103,7 +105,7 @@ export default async function AccessSettingsPage() {
   // this dormant (byte-for-byte today's query) until tenantEnforcing() flips
   // on. Permission (the fixed capability catalog) has no tenantId and is
   // unaffected.
-  const roles = canViewRoles
+  const allRoles = canViewRoles
     ? await basePrisma.$queryRaw<RoleRow[]>`
         SELECT "id", "name", "description", "system" FROM "Role"
         WHERE (NOT ${enforcing}::boolean OR "tenantId" IS NULL OR "tenantId" IS NOT DISTINCT FROM ${activeTenantId})
@@ -127,6 +129,12 @@ export default async function AccessSettingsPage() {
         WHERE (NOT ${enforcing}::boolean OR "tenantId" IS NULL OR "tenantId" IS NOT DISTINCT FROM ${activeTenantId})
       `
     : [];
+  // Workshop roles only with the automotive module. One still assigned to somebody
+  // stays visible: hiding it would let the next save silently strip it from them.
+  const enabledModules = await getEnabledModuleIds();
+  const roles = allRoles.filter(
+    (role) => roleAvailable(role.id, enabledModules) || userRoles.some((ur) => ur.roleId === role.id),
+  );
 
   const membersFor = (teamId: string) => members.filter((member) => member.teamId === teamId);
   const rolePermissionSet = new Set(rolePermissions.map((item) => `${item.roleId}:${item.permissionKey}`));

@@ -1,7 +1,6 @@
 import "server-only";
 import { prisma } from "./db";
-import { DEFAULT_TENANT_ID } from "./tenant";
-import { writeTenantId } from "./tenantWrite";
+import { ownedWriteTenantId } from "./tenantWrite";
 
 /**
  * The issue registry — the reconciliation half of Repairs.
@@ -90,7 +89,7 @@ export const MAX_ISSUES_PER_DETECTOR = 50;
  * everyone's data.
  */
 export function repairsTenantId(): string {
-  return writeTenantId() ?? DEFAULT_TENANT_ID;
+  return ownedWriteTenantId();
 }
 
 /**

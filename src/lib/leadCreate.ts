@@ -4,8 +4,7 @@ import { logAudit, logAuditStrict } from "./audit";
 import { topPosition } from "./leadPos";
 import { sendPushToAll, type PushKind } from "./push";
 import { emitLeadJourneyEvent } from "./leadJourneyEvents";
-import { DEFAULT_TENANT_ID } from "./tenant";
-import { writeTenantId } from "./tenantWrite";
+import { ownedWriteTenantId } from "./tenantWrite";
 
 /** The row itself. Everything a source may legitimately vary. */
 export type NewLeadFields = {
@@ -53,7 +52,7 @@ async function resolveStageId(stageId?: string | null): Promise<string | null> {
  */
 async function existingExternalLead(externalId?: string | null) {
   if (!externalId) return null;
-  const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
+  const tenantId = ownedWriteTenantId();
   return basePrisma.lead.findFirst({ where: { tenantId, externalId } });
 }
 
@@ -82,7 +81,7 @@ async function createInStage(input: NewLead, stageId: string) {
     // NULL tenantId while existingExternalLead() looks it up by DEFAULT_TENANT_ID —
     // the retry pre-check could never match the very rows it exists to find. Under
     // enforcement stampCreate overwrites this with the request's scope.
-    tenantId: writeTenantId() ?? DEFAULT_TENANT_ID,
+    tenantId: ownedWriteTenantId(),
     raw: input.raw != null ? JSON.stringify(input.raw) : null,
     stageId,
     position,
