@@ -21,6 +21,38 @@ test("automotive documents only for a workspace with the automotive module", () 
   assert.equal(docGroupsForModules(new Set(["automotive"])).length, 3);
 });
 
+// Review on #755: hiding them was UI-only. A posted key or a known id still
+// created, opened, rendered or exported a module-only template.
+test("the module rule is enforced on the server, not just in the Studio list", () => {
+  const code = (rel: string) => src(rel).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
+  // The shared readers every by-id path and renderer goes through.
+  const builderStore = code("src/lib/docbuilder/store.ts");
+  const getBuilder = builderStore.slice(builderStore.indexOf("export async function getBuilderTemplate"));
+  assert.match(getBuilder.slice(0, 400), /if \(!\(await docKeyEnabled\(record\.key\)\)\) return null;/);
+  assert.match(builderStore, /if \(!\(await docKeyEnabled\(key\)\)\) return null;\s*await ensureBuilderSeeded\(\);/);
+  assert.match(builderStore, /for \(const key of STANDARD_TEMPLATE_KEYS\) \{\s*if \(!\(await docKeyEnabled\(key\)\)\) continue;/);
+  const typedStore = code("src/lib/docTemplateStore.ts");
+  assert.match(typedStore, /if \(!rec \|\| !\(await docKeyEnabled\(rec\.docType\)\)\) return null;/);
+  assert.match(typedStore, /export async function getDocTemplate[^{]*\{\s*if \(!\(await docKeyEnabled\(key\)\)\) throw/);
+  assert.match(typedStore, /export async function listTemplates[^{]*\{\s*if \(!\(await docKeyEnabled\(key\)\)\) return \[\];/);
+
+  // No action or page reads a template by id around those readers.
+  for (const file of [
+    "src/app/actions/docbuilder.ts",
+    "src/app/actions/doceditor.ts",
+    "src/app/actions/documents.ts",
+    "src/app/(app)/settings/documents/t/[id]/page.tsx",
+  ]) {
+    assert.doesNotMatch(code(file), /\.(docBuilderTemplate|docTemplateRecord)\.find(Unique|First)\(/, file);
+  }
+
+  // Creating one checks the key it was handed.
+  const editor = code("src/app/actions/doceditor.ts");
+  assert.equal((editor.match(/await docKeyEnabled\(key\)/g) ?? []).length, 2, "create + import");
+  assert.match(code("src/app/actions/documents.ts"), /if \(!\(await docKeyEnabled\(docType\)\)\) refuse\(/);
+});
+
 test("Document Studio and its builder use the module rule", () => {
   const page = src("src/app/(app)/document-studio/page.tsx");
   assert.match(page, /const docGroups = docGroupsForModules\(enabledModules\);/);

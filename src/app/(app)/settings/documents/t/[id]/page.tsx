@@ -4,6 +4,7 @@ import { ArrowLeft, ImageUp, Star } from "lucide-react";
 import { requirePermission } from "@/lib/permissions";
 import { storedFileSrc } from "@/lib/storedFileSrc";
 import { prisma } from "@/lib/db";
+import { getTemplateRecord } from "@/lib/docTemplateStore";
 import {
   DOC_DEFS,
   SIGNATURE_POSITIONS,
@@ -67,7 +68,7 @@ export default async function TemplateEditorPage({
 }) {
   await requirePermission("document_templates.manage");
   const { id } = await params;
-  const record = await prisma.docTemplateRecord.findUnique({ where: { id } });
+  const record = await getTemplateRecord(id);
   if (!record || record.deletedAt || !isDocKey(record.docType)) notFound();
   const key = record.docType;
   const definition = DOC_DEFS[key];

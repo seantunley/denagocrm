@@ -12,6 +12,7 @@ import { blankDocument, standardQuoteTemplate } from "@/lib/doceditor/factory";
 import { portableDocumentSchema, externalImageCount } from "@/lib/doceditor/portable";
 import { generateDocEditorPdf } from "@/lib/doceditor/generate";
 import { getBuilderTemplate } from "@/lib/docbuilder/store";
+import { docKeyEnabled } from "@/lib/docModuleAccess";
 import {
   parseBuilderRecord,
   recordMatchesTemplate,
@@ -90,6 +91,7 @@ export async function createDocEditorTemplate(formData: FormData) {
     const name =
       String(formData.get("name") ?? "").trim() || "Untitled proposal";
     const key = String(formData.get("key") ?? "proposal").trim() || "proposal";
+    if (!(await docKeyEnabled(key))) refuse("That kind of document isn't available in this workspace.");
     const created = await prisma.docBuilderTemplate.create({
       data: {
         name,
@@ -127,10 +129,13 @@ export async function importDocEditorTemplate(
       return {
         ok: false,
         error:
-          "That file is not a Denago document export. Use Export → Portable JSON on the document you want to copy.",
+          "That file is not a document export. Use Export → Portable JSON on the document you want to copy.",
       };
     }
     const { name, key, document } = parsed.data;
+    if (!(await docKeyEnabled(key))) {
+      return { ok: false, error: "That kind of document isn't available in this workspace." };
+    }
     const created = await prisma.docBuilderTemplate.create({
       data: { name, key, data: document as object, createdById: user.id },
     });
@@ -294,8 +299,8 @@ export async function saveDocEditor(
       return { ok: false, error: "Invalid document structure" };
     }
 
-    const existing = await prisma.docBuilderTemplate.findUnique({ where: { id } });
-    if (!existing || existing.deletedAt) {
+    const existing = await getBuilderTemplate(id);
+    if (!existing) {
       return { ok: false, error: "Not found" };
     }
 

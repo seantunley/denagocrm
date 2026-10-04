@@ -6,7 +6,8 @@ import { prisma } from "@/lib/db";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { requirePermission, requireAnyPermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
-import { listBuilderVersions } from "@/lib/docbuilder/store";
+// getBuilderTemplate, not a raw findUnique: it is where the module check lives.
+import { getBuilderTemplate, listBuilderVersions } from "@/lib/docbuilder/store";
 import { STANDARD_TEMPLATE_KEYS, standardTemplateFor, type StandardDocKey } from "@/lib/doceditor/standardTemplates";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { requiredRecordKind } from "@/lib/docbuilder/recordBinding";
@@ -36,7 +37,7 @@ export async function renameBuilderTemplate(id: string, formData: FormData) {
   return withActingStaffScope(async () => {
     const user = await requirePermission("docbuilder.manage");
     const name = String(formData.get("name") ?? "").trim();
-    if (!name) return;
+    if (!name || !(await getBuilderTemplate(id))) return;
     await prisma.docBuilderTemplate.update({ where: { id }, data: { name } });
     await logAudit({ action: "docbuilder.rename", summary: `Renamed document to “${name}”`, entityType: "DocBuilderTemplate", entityId: id, user });
     revalidatePath(BASE);
@@ -46,7 +47,7 @@ export async function renameBuilderTemplate(id: string, formData: FormData) {
 export async function setDefaultBuilderTemplate(id: string) {
   return asActionResult(async () => {
     const user = await requirePermission("docbuilder.manage");
-    const tpl = await prisma.docBuilderTemplate.findUnique({ where: { id } });
+    const tpl = await getBuilderTemplate(id);
     if (!tpl || tpl.deletedAt) refuse("That template no longer exists.");
     await prisma.$transaction([
       prisma.docBuilderTemplate.updateMany({ where: { key: tpl.key }, data: { isDefault: false } }),
@@ -61,7 +62,7 @@ export async function setDefaultBuilderTemplate(id: string) {
 export async function publishBuilderVersion(id: string, label?: string): Promise<{ ok: boolean; version?: number; warnings?: string[] }> {
   return withActingStaffScope(async () => {
     const user = await requirePermission("docbuilder.manage");
-    const tpl = await prisma.docBuilderTemplate.findUnique({ where: { id } });
+    const tpl = await getBuilderTemplate(id);
     if (!tpl || tpl.deletedAt) return { ok: false };
     const last = await prisma.docBuilderVersion.findFirst({
       where: { templateId: id }, orderBy: { version: "desc" }, select: { version: true },
@@ -112,7 +113,7 @@ const RENDERED_WITHOUT_PUBLISH_SWITCH = new Set(["quote"]);
 export async function resetBuilderTemplateToStandard(id: string): Promise<{ ok: boolean; error?: string }> {
   return withActingStaffScope(async () => {
     const user = await requirePermission("docbuilder.manage");
-    const tpl = await prisma.docBuilderTemplate.findUnique({ where: { id } });
+    const tpl = await getBuilderTemplate(id);
     if (!tpl || tpl.deletedAt) return { ok: false, error: "That template no longer exists." };
     if (!(STANDARD_TEMPLATE_KEYS as string[]).includes(tpl.key)) {
       return { ok: false, error: "There is no standard layout for this kind of document." };
@@ -149,7 +150,7 @@ export async function resetBuilderTemplateToStandard(id: string): Promise<{ ok: 
 export async function restoreBuilderVersion(id: string, versionId: string): Promise<{ ok: boolean }> {
   return withActingStaffScope(async () => {
     const user = await requirePermission("docbuilder.manage");
-    const tpl = await prisma.docBuilderTemplate.findUnique({ where: { id } });
+    const tpl = await getBuilderTemplate(id);
     if (!tpl || tpl.deletedAt) return { ok: false };
     const ver = await prisma.docBuilderVersion.findUnique({ where: { id: versionId } });
     if (!ver || ver.templateId !== id) return { ok: false };
@@ -169,6 +170,7 @@ export async function restoreBuilderVersion(id: string, versionId: string): Prom
 export async function listBuilderVersionsAction(id: string) {
   return withActingStaffScope(async () => {
     await requireAnyPermission("docbuilder.view", "docbuilder.manage");
+    if (!(await getBuilderTemplate(id))) return [];
     const rows = await listBuilderVersions(id);
     return rows.map((r) => ({
       id: r.id,
@@ -183,7 +185,7 @@ export async function listBuilderVersionsAction(id: string) {
 export async function deleteBuilderTemplate(id: string) {
   return asActionResult(async () => {
     const user = await requirePermission("docbuilder.manage");
-    const tpl = await prisma.docBuilderTemplate.findUnique({ where: { id } });
+    const tpl = await getBuilderTemplate(id);
     if (!tpl || tpl.deletedAt) refuse("That template no longer exists.");
     await prisma.docBuilderTemplate.update({ where: { id }, data: { deletedAt: new Date() } });
     await logAudit({ action: "docbuilder.delete", summary: `Deleted document “${tpl.name}”`, entityType: "DocBuilderTemplate", entityId: id, user });
