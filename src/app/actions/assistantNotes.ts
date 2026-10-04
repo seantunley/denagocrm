@@ -102,13 +102,17 @@ export async function createAssistantNote(formData: FormData) {
       const tenantId = ownedWriteTenantId();
       await prisma.$transaction(async (tx) => {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`assistant-notes:${tenantId}`})::bigint)`;
+        // The owner's space is the SHARED one — what's approved. Colleagues'
+        // unreviewed entries reach only their own conversations, so a few busy
+        // colleagues can't fill it and lock the owner out of teaching.
+        const shared = { tenantId, status: "approved" };
         if (kind === "memory") {
-          const used = (await tx.assistantNote.findMany({ where: { tenantId, kind: "memory" }, select: { content: true } }))
+          const used = (await tx.assistantNote.findMany({ where: { ...shared, kind: "memory" }, select: { content: true } }))
             .reduce((n, e) => n + e.content.length, 0);
           if (used + scanned.text.length > MEMORY_CHAR_LIMIT) {
             refuse("Its business memory is full — remove or shorten something first (it's kept small because it's read with every question).");
           }
-        } else if ((await tx.assistantNote.count({ where: { tenantId, kind: "playbook" } })) >= PLAYBOOK_LIMIT) {
+        } else if ((await tx.assistantNote.count({ where: { ...shared, kind: "playbook" } })) >= PLAYBOOK_LIMIT) {
           refuse(`It already has ${PLAYBOOK_LIMIT} playbooks — remove one first.`);
         }
         await tx.assistantNote.create({

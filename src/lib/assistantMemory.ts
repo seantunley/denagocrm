@@ -109,11 +109,17 @@ const INJECTION = [
   /<\s*\/?\s*(script|system|instructions?)\b/i,
   /\bLEARN:/,
 ];
-const EMAIL = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
-// Any run of 9+ digits once the usual separators — spaces, dashes, dots,
-// brackets, slashes — are ignored: "082.123.4567" and "(082) 123 4567" too.
-// (Fullwidth digits and ＠ are already folded by NFKC in stripInvisible.)
-const PHONE = /\+?\(?\d(?:[\s\-./()]*\d){8,}/;
+// Letters of ANY script (a Cyrillic look-alike domain is still a domain),
+// spaces around the @, and the ideographic/halfwidth full stops as dots.
+const EMAIL = /[\p{L}\p{N}._%+-]+\s*@\s*[\p{L}\p{N}-]+(?:\s*[.。．｡]\s*[\p{L}\p{N}-]+)+/iu;
+// Any run of 9+ digits — of any script (Arabic-Indic, Devanagari…) — once the
+// usual separators are ignored: spaces, dashes of every kind, dots, commas,
+// underscores, middots, bullets, brackets, slashes. "082.123.4567",
+// "(082) 123 4567", "082_123_4567". (Fullwidth forms are folded by NFKC.)
+const PHONE = /\+?\(?\p{Nd}(?:[\s\-‐-―./(),_·•]*\p{Nd}){8,}/u;
+// Dates and times aren't phone numbers: removed before the phone check, so
+// "2026/10/05 - 2026/11/05" or "08:30–17:00" don't read as one.
+const DATE_OR_TIME = /\b\d{4}[-/.]\d{1,2}[-/.]\d{1,2}\b|\b\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}\b|\b\d{1,2}:\d{2}\b/g;
 
 /** Cleaned text, or a reason it may not be learned. */
 export function scanEntry(raw: string): { ok: true; text: string } | { ok: false; reason: string } {
@@ -121,7 +127,7 @@ export function scanEntry(raw: string): { ok: true; text: string } | { ok: false
   const text = stripInvisible(raw).replace(/\r\n/g, "\n").replace(/[^\S\n]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
   if (text.length < 3) return { ok: false, reason: "empty" };
   if (INJECTION.some((pattern) => pattern.test(text))) return { ok: false, reason: "looks like an instruction to the assistant" };
-  if (EMAIL.test(text) || PHONE.test(text)) return { ok: false, reason: "contains contact details" };
+  if (EMAIL.test(text) || PHONE.test(text.replace(DATE_OR_TIME, " "))) return { ok: false, reason: "contains contact details" };
   return { ok: true, text };
 }
 
