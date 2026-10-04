@@ -27,6 +27,10 @@ import {
  */
 export const visibleTo = (userId: string) => ({ OR: [{ status: "approved" }, { createdById: userId }] });
 
+/** What one person's conversations may add before the owner has reviewed it. */
+export const UNREVIEWED_MEMORY_PER_PERSON = 600;
+export const UNREVIEWED_PLAYBOOKS_PER_PERSON = 5;
+
 export async function loadLearned(userId: string) {
   const [memory, profile, playbooks] = await Promise.all([
     prisma.assistantNote.findMany({ where: { kind: "memory", ...visibleTo(userId) }, orderBy: { createdAt: "asc" }, select: { id: true, content: true, status: true } }),
@@ -71,9 +75,13 @@ export async function applyLearn(userId: string | null, learn: LearnBlock): Prom
       const mine = (e: (typeof all)[number]) => e.status === "approved" || e.createdById === userId;
       const entries: Entry[] = all.filter(mine).map(({ id, content, status }) => ({ id, content, status }));
       const othersSize = all.filter((e) => !mine(e)).reduce((n, e) => n + e.content.length, 0);
+      // One person can't fill the space everyone shares: their unreviewed
+      // business memory is capped on its own, on top of the shared cap.
+      const approvedSize = all.filter((e) => e.status === "approved").reduce((n, e) => n + e.content.length, 0);
+      const cap = kind === "memory" ? Math.min(limit - othersSize, approvedSize + UNREVIEWED_MEMORY_PER_PERSON) : limit;
       // Writes re-assert ownership inside the lock, whatever the plan says.
       const where = { ...scope, createdById: userId };
-      for (const change of planNoteChanges(entries, ops, Math.max(0, limit - othersSize))) {
+      for (const change of planNoteChanges(entries, ops, Math.max(0, cap))) {
         if (change.kind === "create") {
           await tx.assistantNote.create({
             data: { tenantId, kind, userId: kind === "profile" ? userId : null, content: change.content, createdById: userId },
@@ -102,6 +110,8 @@ export async function applyLearn(userId: string | null, learn: LearnBlock): Prom
         await tx.assistantNote.update({ where: { id: existing.id }, data: { description: description.text, content: content.text, status: "unreviewed" } });
       } else {
         if ((await tx.assistantNote.count({ where: { tenantId, kind: "playbook" } })) >= PLAYBOOK_LIMIT) continue;
+        const myUnreviewed = await tx.assistantNote.count({ where: { tenantId, kind: "playbook", createdById: userId, status: { not: "approved" } } });
+        if (myUnreviewed >= UNREVIEWED_PLAYBOOKS_PER_PERSON) continue;
         await tx.assistantNote.create({
           data: { tenantId, kind: "playbook", name: book.name, description: description.text, content: content.text, createdById: userId },
         });
