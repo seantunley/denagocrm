@@ -994,7 +994,24 @@ function observationText(o: Observation): string {
   return `${o.tool} ${JSON.stringify(o.args ?? {})} →\n${body.length > OBSERVATION_CHARS ? `${body.slice(0, OBSERVATION_CHARS)}…(cut)` : body}`;
 }
 
-export async function askCrm(user: User, question: string, page?: string | null): Promise<AssistantResult> {
+/**
+ * Where a question came from. Tasks are proposed only in chat — a card needs a
+ * Confirm press in the CRM, and a scheduled run or a WhatsApp message has no
+ * card to press. Quick replies need someone there to tap them: not on a schedule.
+ */
+export type AskSource = "chat" | "schedule" | "whatsapp";
+export type AskOptions = { source?: AskSource; scheduleId?: string };
+
+export const CHANNEL_RULES: Record<AskSource, string> = {
+  chat: "",
+  schedule:
+    "This question was SCHEDULED by the person earlier and is running on its own — they are not here to reply. Answer it fully as a short briefing; don't ask them anything and don't offer choices. You can't set up tasks here: say in words what you'd do next.",
+  whatsapp:
+    "The person is asking on WhatsApp from their phone. Keep it short and scannable, plain text, no links to rows. You can't set up tasks here (those need a tap on Confirm in the CRM): say in words what you'd do, and if they want a message drafted, put the draft itself in your answer so they can copy it.",
+};
+
+export async function askCrm(user: User, question: string, page?: string | null, opts: AskOptions = {}): Promise<AssistantResult> {
+  const source = opts.source ?? "chat";
   const whereTheyAre = pageHint(page);
   if (!(await isCodexConnected())) {
     return { ok: false, error: "Connect ChatGPT first: Settings → Integrations → ChatGPT." };
@@ -1072,8 +1089,9 @@ export async function askCrm(user: User, question: string, page?: string | null)
       ANSWER_RULES,
       LEARN_INSTRUCTIONS,
       methodInstructions(observations),
-      ACTION_INSTRUCTIONS,
-      CHOICE_INSTRUCTIONS,
+      source === "chat" ? ACTION_INSTRUCTIONS : "",
+      source === "schedule" ? "" : CHOICE_INSTRUCTIONS,
+      CHANNEL_RULES[source],
     ].filter(Boolean).join("\n\n"),
     prompt: [
       conversation,
@@ -1099,10 +1117,12 @@ export async function askCrm(user: User, question: string, page?: string | null)
   const choiceSplit = splitChoices(learnSplit.answer);
   const { answer, actions: proposals } = splitActions(choiceSplit.answer);
   const learn = learnSplit.learn;
-  const actions = await resolveActions(user, proposals).catch(async (error: unknown) => {
+  // Off-chat, a stray ACTIONS line is removed from the answer and dropped — no card to confirm it.
+  const actions = source !== "chat" ? [] : await resolveActions(user, proposals).catch(async (error: unknown) => {
     await logError("crm-assistant", "task proposals failed", error instanceof Error ? error.name : "unknown");
     return [];
   });
+  const choices = source === "schedule" ? [] : choiceSplit.choices;
   const learnedCount = learn
     ? await applyLearn(user.id, learn).catch(async (error: unknown) => {
         await logError("crm-assistant", "learning write failed", error instanceof Error ? error.name : "unknown");
@@ -1117,11 +1137,13 @@ export async function askCrm(user: User, question: string, page?: string | null)
         question,
         answer,
         tools: observations.map((o) => ({ tool: o.tool, args: o.args })) as object,
+        source,
+        scheduleId: source === "schedule" ? opts.scheduleId ?? null : null,
       },
     })
     // Remembering is a nicety; failing to must not cost the person their answer.
     .catch((error: unknown) => logError("crm-assistant", "history write failed", error instanceof Error ? error.name : "unknown"));
-  return { ok: true, answer, rows, tools, learned: learnedCount, actions, choices: choiceSplit.choices };
+  return { ok: true, answer, rows, tools, learned: learnedCount, actions, choices };
 }
 
 /**

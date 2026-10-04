@@ -91,6 +91,20 @@ test("after several lookups it may save the method as a playbook — never on a 
   assert.match(code("src/lib/crmAssistant.ts"), /LEARN_INSTRUCTIONS,\s*methodInstructions\(observations\),/);
 });
 
+test("tasks are proposed only in chat; a scheduled run asks nothing back", async () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { CHANNEL_RULES } = require("../src/lib/crmAssistant") as typeof import("../src/lib/crmAssistant");
+  assert.equal(CHANNEL_RULES.chat, "");
+  assert.match(CHANNEL_RULES.schedule, /don't ask them anything and don't offer choices/);
+  assert.match(CHANNEL_RULES.whatsapp, /put the draft itself in your answer/);
+  const lib = code("src/lib/crmAssistant.ts");
+  assert.match(lib, /const actions = source !== "chat" \? \[\] : await resolveActions/);
+  assert.match(lib, /const choices = source === "schedule" \? \[\] : choiceSplit\.choices;/);
+  assert.match(lib, /source,\s*scheduleId: source === "schedule" \? opts\.scheduleId \?\? null : null,/);
+  // The browser can't pick a source: the action passes none.
+  assert.match(code("src/app/actions/assistant.ts"), /return askCrm\(user, q, typeof page === "string" \? page\.slice\(0, 200\) : null\);/);
+});
+
 test("running for someone without a session re-checks membership, permission and module", () => {
   const helper = code("src/lib/assistantUser.ts");
   assert.match(helper, /await resolveTenantMemberUser\(userId\);\s*if \(!member\) return null;/);
