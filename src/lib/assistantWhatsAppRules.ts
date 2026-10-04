@@ -27,8 +27,10 @@ export const whatsappSwitchOn = (raw: string | null | undefined): boolean => raw
 export const LINK_CODE_TTL_MS = 15 * 60 * 1000;
 
 /**
- * Rate limits (registerRateLimitAttempt allows `count < limit`, so each limit is
- * one more than the number of attempts that pass).
+ * Rate limits. registerRateLimitAttempt answers `count < limit`, so where that
+ * answer is used (code requests, questions) the limit is one more than the
+ * attempts that pass. Guesses use checkRateLimit instead, which blocks once the
+ * count REACHES the limit — so there the limit is the number of wrong guesses.
  *
  * CODE REQUESTS — per person. Asking for codes over and over buys nothing (each
  * one replaces the last), but it is a write and an audit row each time.
@@ -42,7 +44,7 @@ export const LINK_CODE_TTL_MS = 15 * 60 * 1000;
  * workspace's own connection; a stuck phone or a script must not drain it.
  */
 export const LINK_CODE_POLICY: RateLimitPolicy = { limit: 6, windowMs: 15 * 60 * 1000, blockMs: 15 * 60 * 1000 };
-export const LINK_GUESS_POLICY: RateLimitPolicy = { limit: 6, windowMs: 15 * 60 * 1000, blockMs: 30 * 60 * 1000 };
+export const LINK_GUESS_POLICY: RateLimitPolicy = { limit: 5, windowMs: 15 * 60 * 1000, blockMs: 30 * 60 * 1000 };
 export const ASK_POLICY: RateLimitPolicy = { limit: 31, windowMs: 60 * 60 * 1000, blockMs: 15 * 60 * 1000 };
 
 /** What a person may ask in one message — the same cap the Ask page uses. */
