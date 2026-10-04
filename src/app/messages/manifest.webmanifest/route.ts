@@ -1,16 +1,28 @@
 import { NextResponse } from "next/server";
+import { headers } from "next/headers";
+import { DEFAULT_BRAND, brandForHost } from "@/lib/tenantBrand";
+import { PLATFORM_NAME } from "@/lib/platformIdentity";
 
 // A second, separate PWA scoped to /messages — installs on a phone as its own
-// "Denago Messages" app icon, distinct from the main CRM, but the same login and
-// data. Served as a route handler so it can live under /messages with its own scope.
-export const dynamic = "force-static";
+// "<Workspace> Messages" app icon, distinct from the main CRM, but the same login
+// and data. Served as a route handler so it can live under /messages with its own
+// scope. Dynamic, not static: the name is the workspace's on its own domain (it
+// was "Denago Messages … for Denago Cape Town" for every workspace).
+export const dynamic = "force-dynamic";
 
-export function GET() {
+export async function GET() {
+  let brand = DEFAULT_BRAND;
+  try {
+    brand = await brandForHost((await headers()).get("host"));
+  } catch {
+    // No request scope (or no host): the platform's name.
+  }
+  const workspace = brand.tenantId ? brand.displayName : PLATFORM_NAME;
   return NextResponse.json(
     {
-      name: "Denago Messages",
+      name: `${workspace} Messages`,
       short_name: "Messages",
-      description: "Customer messaging & help desk for Denago Cape Town",
+      description: `Customer messaging & help desk for ${workspace}`,
       // Permission-aware landing (see /messages/start): routes the installed app
       // to Chats or Help desk depending on what the user can access, so a
       // cases-only help-desk user isn't bounced out on launch. Scope/id stay

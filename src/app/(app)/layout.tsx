@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { requireUser, getActiveTenantId, isTenantOwner } from "@/lib/auth";
-import { brandForTenant, brandLogoUrl, brandStyle, DEFAULT_BRAND } from "@/lib/tenantBrand";
+import type { Metadata } from "next";
+import { brandForTenant, brandIcons, brandLogoUrl, brandStyle, DEFAULT_BRAND } from "@/lib/tenantBrand";
 import { getSetting } from "@/lib/settings";
 import { WEATHER_CITIES_KEY, parseWeatherCities } from "@/lib/weatherCities";
 import { ACTIVITY_TYPES_KEY, activityTypesForModules, resolveActivityTypes } from "@/lib/activityTypes";
@@ -14,6 +15,22 @@ import { currentTenantScope } from "@/lib/tenantScope";
 import AppShell from "@/components/AppShell";
 import AppContextMenu from "@/components/AppContextMenu";
 import SessionKeeper from "@/components/SessionKeeper";
+
+/**
+ * Tab title and icon from the SESSION's workspace. The root layout can only go
+ * by hostname, so a workspace's staff working on the platform's own domain saw
+ * the platform's name and icon. Never throws: on any failure the root's
+ * hostname answer stands.
+ */
+export async function generateMetadata(): Promise<Metadata> {
+  try {
+    const brand = await brandForTenant(await getActiveTenantId());
+    if (!brand.tenantId) return {};
+    return { title: brand.displayName, icons: brandIcons(brand) };
+  } catch {
+    return {};
+  }
+}
 
 export default async function AppLayout({
   children,

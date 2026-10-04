@@ -36,8 +36,6 @@ const ALLOWED: Record<string, string> = {
   "src/app/(app)/settings/page.tsx": "staff — SMTP/IMAP example placeholders and the platform's webhook URLs",
   "src/components/settings/WorkspaceIntegrationRows.tsx": "staff (platform owner only) — the platform's webhook URLs on Settings → Integrations",
   "src/app/(print)/manual/page.tsx": "staff — the printed user manual",
-  "src/app/manifest.ts": "staff — PWA install description",
-  "src/app/messages/manifest.webmanifest/route.ts": "staff — PWA install description",
   "src/components/AppShell.tsx": "staff — logo alt fallback, pinned by appShellBranding.test.ts",
   "src/components/KanbanBoard.tsx": "staff — 16px lead-SOURCE glyph on the pipeline board (see appShellBranding.test.ts)",
   "src/components/quotes/QuoteEditorDialog.tsx": "staff — in-editor preview header (the printed quote reads the profile)",

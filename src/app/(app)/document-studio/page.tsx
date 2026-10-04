@@ -12,7 +12,8 @@ import {
   Workflow,
 } from "lucide-react";
 import { prisma } from "@/lib/db";
-import { DOC_DEFS, DOC_GROUPS, type DocKey } from "@/lib/docTemplates";
+import { DOC_DEFS, docGroupsForModules, docKeyAvailable, type DocKey } from "@/lib/docTemplates";
+import { getEnabledModuleIds } from "@/lib/modules/enabled";
 import { ensureSeeded, listStudioClauses, listTemplates } from "@/lib/docTemplateStore";
 import { ensureBuilderSeeded } from "@/lib/docbuilder/store";
 import { contactName, formatDate } from "@/lib/format";
@@ -109,7 +110,13 @@ export default async function DocumentStudioPage({
     ensureSeeded(),
     ensureBuilderSeeded(),
   ]);
-  const keys = (Object.keys(DOC_DEFS) as DocKey[]).filter((key) => key !== "quote");
+  // Only the documents this workspace has: job cards, service reports, warranty
+  // claims, test-drive indemnities and delivery notes need the automotive module.
+  const enabledModules = await getEnabledModuleIds();
+  const docGroups = docGroupsForModules(enabledModules);
+  const keys = (Object.keys(DOC_DEFS) as DocKey[]).filter(
+    (key) => key !== "quote" && docKeyAvailable(key, enabledModules),
+  );
   const [
     studioTemplates,
     clauses,
@@ -181,7 +188,7 @@ export default async function DocumentStudioPage({
           Open document repository
         </Link>}
         stats={[
-          { label: "Operational templates", value: operationalTemplateCount, detail: `${DOC_GROUPS.length} production groups`, icon: Workflow, tone: "primary" },
+          { label: "Operational templates", value: operationalTemplateCount, detail: `${docGroups.length} production groups`, icon: Workflow, tone: "primary" },
           { label: "Custom templates", value: customTemplates.length, detail: `${studioTemplates.length} legacy Studio`, icon: Layers3 },
           { label: "Reusable blocks", value: clauses.length, detail: "Shared clauses & content", icon: ScrollText },
           { label: "Recent documents", value: instances.length, detail: "Latest tracked instances", icon: FileText, tone: "success" },
@@ -201,7 +208,7 @@ export default async function DocumentStudioPage({
       </section>
 
       <div className="space-y-6">
-        {DOC_GROUPS.map((group) => (
+        {docGroups.map((group) => (
           <section
             key={group.name}
             className="rounded-xl border border-border bg-card p-4 shadow-sm"

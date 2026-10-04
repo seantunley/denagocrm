@@ -1,6 +1,7 @@
 import "server-only";
 import { prisma } from "@/lib/db";
 import { isModuleEnabled } from "@/lib/modules/enabled";
+import { docKeyEnabled } from "@/lib/docModuleAccess";
 import { readTemplateDocument } from "@/lib/doceditor/legacy";
 import {
   STANDARD_TEMPLATE_KEYS,
@@ -15,6 +16,8 @@ import {
  */
 export async function ensureBuilderSeeded(): Promise<void> {
   for (const key of STANDARD_TEMPLATE_KEYS) {
+    // No job card / indemnity / … templates minted for a workspace without the module.
+    if (!(await docKeyEnabled(key))) continue;
     try {
       const rows = await prisma.docBuilderTemplate.findMany({
         where: { key, deletedAt: null },
@@ -92,6 +95,7 @@ export async function defaultBuilderTemplateId(
   key: string,
 ): Promise<string | null> {
   try {
+    if (!(await docKeyEnabled(key))) return null;
     await ensureBuilderSeeded();
     const rows = await prisma.docBuilderTemplate.findMany({
       where: { key, deletedAt: null },
@@ -107,9 +111,11 @@ export async function defaultBuilderTemplateId(
 
 export async function listBuilderTemplates() {
   try {
-    return await prisma.docBuilderTemplate.findMany({
+    const rows = await prisma.docBuilderTemplate.findMany({
       orderBy: [{ key: "asc" }, { updatedAt: "desc" }],
     });
+    const enabled = await Promise.all(rows.map((row) => docKeyEnabled(row.key)));
+    return rows.filter((_, i) => enabled[i]);
   } catch {
     return [];
   }
@@ -118,6 +124,9 @@ export async function listBuilderTemplates() {
 export async function getBuilderTemplate(id: string) {
   const record = await prisma.docBuilderTemplate.findUnique({ where: { id } });
   if (!record || record.deletedAt) return null;
+  // The one door every by-id read uses (editor, preview, render, export, and the
+  // builder actions), so a module-only template opened by id is simply not there.
+  if (!(await docKeyEnabled(record.key))) return null;
   return record;
 }
 
