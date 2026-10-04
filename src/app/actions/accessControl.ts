@@ -7,6 +7,8 @@ import { revalidatePath } from "next/cache";
 import { basePrisma } from "@/lib/db";
 import { getActiveTenantId } from "@/lib/auth";
 import { tenantEnforcing } from "@/lib/tenantEnforcement";
+import { getEnabledModuleIds } from "@/lib/modules/enabled";
+import { roleAvailable } from "@/lib/provisioning";
 import { canEditRole } from "@/lib/tenantGuard";
 import { PERMISSIONS, requirePermission } from "@/lib/permissions";
 import { GOVERNANCE_TX, logAuditStrict } from "@/lib/audit";
@@ -442,7 +444,20 @@ export async function updateUserRoles(userId: string, formData: FormData) {
       WHERE (NOT ${enforcing}::boolean OR "tenantId" IS NULL OR "tenantId" IS NOT DISTINCT FROM ${activeTenantId})
     `;
     const validRoleSet = new Set(allRoles.map((role) => role.id));
-    const validRoleIds = requested.filter((roleId) => validRoleSet.has(roleId));
+    // A module role (Technician, Workshop manager) is assignable only with its
+    // module — the roles screen hides it, and a forged POST must not get round
+    // that. One the user already holds is kept, exactly as the screen shows it.
+    const enabledModules = await getEnabledModuleIds();
+    const alreadyHeld = new Set(
+      (await basePrisma.$queryRaw<Array<{ roleId: string }>>`
+        SELECT "roleId" FROM "UserRole"
+        WHERE "userId" = ${userId}
+          AND (NOT ${enforcing}::boolean OR "tenantId" IS NOT DISTINCT FROM ${activeTenantId})
+      `).map((row) => row.roleId),
+    );
+    const validRoleIds = requested.filter(
+      (roleId) => validRoleSet.has(roleId) && (roleAvailable(roleId, enabledModules) || alreadyHeld.has(roleId)),
+    );
 
     // Under enforcement, read only this tenant's assignments for the "before" snapshot
     // so the audit log is accurate and other tenants' role assignments survive.

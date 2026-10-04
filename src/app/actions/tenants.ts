@@ -12,6 +12,7 @@ import {
   activateTenant,
   suspendTenant,
   addTenantMembership,
+  seedTenantDefaultRoles,
 } from "@/lib/provisioning";
 import {
   canActivateTenant,
@@ -346,6 +347,9 @@ export async function setTenantModulesAction(
     }
 
     await basePrisma.tenant.update({ where: { id: tenantId }, data: { modules } });
+    // A newly granted module brings its roles (e.g. automotive → Technician,
+    // Workshop manager). Idempotent; a revoked module's roles are hidden, not deleted.
+    await basePrisma.$transaction((tx) => seedTenantDefaultRoles(tx, tenantId));
 
     await logAuditStrict({
       action: "tenant.modules_changed",
