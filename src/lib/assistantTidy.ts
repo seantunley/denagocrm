@@ -31,7 +31,7 @@ export async function runAssistantTidy(): Promise<number | null> {
   await putSetting(TIDY_LAST_KEY, new Date().toISOString());
 
   const [notes, turns] = await Promise.all([
-    prisma.assistantNote.findMany({ select: { id: true, kind: true, userId: true, content: true, status: true, name: true } }),
+    prisma.assistantNote.findMany({ select: { id: true, kind: true, userId: true, createdById: true, content: true, status: true, name: true } }),
     prisma.assistantTurn.findMany({
       where: { createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
       orderBy: { createdAt: "asc" },
@@ -41,7 +41,7 @@ export async function runAssistantTidy(): Promise<number | null> {
   ]);
   if (notes.length < 2 && turns.length === 0) return 0;
 
-  const entries: TidyEntry[] = notes.map((n) => ({ id: n.id, kind: n.kind, userId: n.userId, content: n.content, status: n.status }));
+  const entries: TidyEntry[] = notes.map((n) => ({ id: n.id, kind: n.kind, userId: n.userId, createdById: n.createdById, content: n.content, status: n.status }));
   const reply = await codexRespond({
     instructions: TIDY_INSTRUCTIONS,
     prompt: [

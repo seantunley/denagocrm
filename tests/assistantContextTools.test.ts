@@ -85,7 +85,8 @@ test("it can answer questions about itself — truthfully, from a fixed brief", 
   assert.match(about, /happens only when the person presses Confirm/);
   assert.match(about, /you never send anything to a customer/);
   assert.match(about, /kept 30 days, private to them/);
-  assert.match(about, /anything they've approved you cannot change/);
+  assert.match(about, /anything they've approved you cannot change/i);
+  assert.match(about, /until then it is used only with the person it came from/);
   // …and it is actually given to the answer step, after the soul.
   const lib = code("src/lib/crmAssistant.ts");
   assert.match(lib, /instructions: \[\s*soul,\s*selfKnowledge\(profile\.name\),\s*learned,/);

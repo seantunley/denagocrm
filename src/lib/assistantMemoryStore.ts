@@ -16,13 +16,22 @@ import {
  * What the assistant has learned, in the database (AssistantNote, RLS-forced).
  * Reads go through the tenant-scoped client, so a workspace only ever sees its
  * own; a profile is read only for the person it describes.
+ *
+ * UNREVIEWED LEARNING STAYS WITH THE PERSON IT CAME FROM. It was learned from
+ * one person's conversation, which ran with THEIR visibility — a manager's
+ * question about a deal a salesperson can't see may leave a note behind. Until
+ * the owner approves it, an entry reaches only the prompt of the person whose
+ * conversation produced it (createdById); approval is the owner's decision to
+ * share it with everyone. The nightly tidy-up's own entries (createdById null)
+ * reach nobody until approved.
  */
+export const visibleTo = (userId: string) => ({ OR: [{ status: "approved" }, { createdById: userId }] });
 
 export async function loadLearned(userId: string) {
   const [memory, profile, playbooks] = await Promise.all([
-    prisma.assistantNote.findMany({ where: { kind: "memory" }, orderBy: { createdAt: "asc" }, select: { id: true, content: true, status: true } }),
+    prisma.assistantNote.findMany({ where: { kind: "memory", ...visibleTo(userId) }, orderBy: { createdAt: "asc" }, select: { id: true, content: true, status: true } }),
     prisma.assistantNote.findMany({ where: { kind: "profile", userId }, orderBy: { createdAt: "asc" }, select: { id: true, content: true, status: true } }),
-    prisma.assistantNote.findMany({ where: { kind: "playbook" }, orderBy: { name: "asc" }, select: { name: true, description: true, status: true } }),
+    prisma.assistantNote.findMany({ where: { kind: "playbook", ...visibleTo(userId) }, orderBy: { name: "asc" }, select: { name: true, description: true, status: true } }),
   ]);
   return {
     memory,
@@ -31,9 +40,9 @@ export async function loadLearned(userId: string) {
   };
 }
 
-export async function loadPlaybook(name: string) {
+export async function loadPlaybook(name: string, userId: string) {
   return prisma.assistantNote.findFirst({
-    where: { kind: "playbook", name: name.trim().toLowerCase() },
+    where: { kind: "playbook", name: name.trim().toLowerCase(), ...visibleTo(userId) },
     select: { name: true, description: true, content: true, status: true },
   });
 }
@@ -54,9 +63,17 @@ export async function applyLearn(userId: string | null, learn: LearnBlock): Prom
 
     const notes = async (kind: "memory" | "profile", ops: NoteOp[] | undefined, limit: number) => {
       if (!ops?.length) return;
-      const where = kind === "profile" ? { tenantId, kind, userId } : { tenantId, kind };
-      const entries: Entry[] = await tx.assistantNote.findMany({ where, select: { id: true, content: true, status: true } });
-      for (const change of planNoteChanges(entries, ops, limit)) {
+      const scope = kind === "profile" ? { tenantId, kind, userId } : { tenantId, kind };
+      const all = await tx.assistantNote.findMany({ where: scope, select: { id: true, content: true, status: true, createdById: true } });
+      // It may only see — and so only match, rewrite or remove — what this
+      // person may see: approved entries and their own unreviewed ones. Someone
+      // else's unreviewed entries still count against the size cap.
+      const mine = (e: (typeof all)[number]) => e.status === "approved" || e.createdById === userId;
+      const entries: Entry[] = all.filter(mine).map(({ id, content, status }) => ({ id, content, status }));
+      const othersSize = all.filter((e) => !mine(e)).reduce((n, e) => n + e.content.length, 0);
+      // Writes re-assert ownership inside the lock, whatever the plan says.
+      const where = { ...scope, createdById: userId };
+      for (const change of planNoteChanges(entries, ops, Math.max(0, limit - othersSize))) {
         if (change.kind === "create") {
           await tx.assistantNote.create({
             data: { tenantId, kind, userId: kind === "profile" ? userId : null, content: change.content, createdById: userId },
@@ -77,10 +94,11 @@ export async function applyLearn(userId: string | null, learn: LearnBlock): Prom
       const description = scanEntry(book.description);
       const content = scanEntry(book.content);
       if (!description.ok || !content.ok) continue;
-      const existing = await tx.assistantNote.findFirst({ where: { tenantId, kind: "playbook", name: book.name }, select: { id: true, status: true } });
+      const existing = await tx.assistantNote.findFirst({ where: { tenantId, kind: "playbook", name: book.name }, select: { id: true, status: true, createdById: true } });
       if (existing) {
         // An approved playbook is the owner's; the assistant can't rewrite it.
-        if (existing.status === "approved") continue;
+        // Someone else's unreviewed one isn't this person's to see or change.
+        if (existing.status === "approved" || existing.createdById !== userId) continue;
         await tx.assistantNote.update({ where: { id: existing.id }, data: { description: description.text, content: content.text, status: "unreviewed" } });
       } else {
         if ((await tx.assistantNote.count({ where: { tenantId, kind: "playbook" } })) >= PLAYBOOK_LIMIT) continue;

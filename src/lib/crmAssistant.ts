@@ -896,9 +896,9 @@ async function documents(user: User, raw: z.infer<typeof documentArgs>): Promise
   };
 }
 
-async function playbook(raw: z.infer<typeof playbookArgs>): Promise<ToolOutput> {
+async function playbook(user: User, raw: z.infer<typeof playbookArgs>): Promise<ToolOutput> {
   const { name } = playbookArgs.parse(raw);
-  const book = await loadPlaybook(name);
+  const book = await loadPlaybook(name, user.id);
   if (!book) return { truncated: false, rows: [], data: [{ note: `No playbook called "${name}".` }] };
   return { truncated: false, rows: [], data: [{ playbook: book.name, description: book.description, content: book.content, reviewed: book.status === "approved" }] };
 }
@@ -916,7 +916,7 @@ async function runTool(user: User, step: ToolStep): Promise<ToolOutput> {
     case "lead_brief": return leadBrief(user, step.args);
     case "knowledge": return knowledge(user, step.args);
     case "recall": return recall(user, step.args);
-    case "playbook": return playbook(step.args);
+    case "playbook": return playbook(user, step.args);
     case "schedule": return schedule(user, step.args);
     case "vehicles": return vehicles(user, step.args);
     case "deliveries": return deliveries(user, step.args);
@@ -940,6 +940,39 @@ async function planContext(user: User) {
     staff: staff.map((s) => s.name),
     activityTypes: types.map((t) => t.type),
   };
+}
+
+/**
+ * Who the assistant is talking WITH — the last layer after the business (soul,
+ * workspace instructions, company, what it knows about the business): their job
+ * title, their teams, whether they see everything. What they've told it or it
+ * has learned about them (their profile notes) follows in the learned block.
+ * Only this person's own record; teams through the tenant-scoped client.
+ */
+export async function personContext(user: User): Promise<string> {
+  const [me, memberships, manages] = await Promise.all([
+    prisma.user.findUnique({ where: { id: user.id }, select: { jobTitle: true } }),
+    prisma.teamMember.findMany({ where: { userId: user.id, team: { active: true, deletedAt: null } }, select: { team: { select: { name: true } } }, take: 10 }),
+    prisma.team.findMany({ where: { managerId: user.id, active: true, deletedAt: null }, select: { name: true }, take: 10 }),
+  ]);
+  return describePerson({
+    name: user.name || "this person",
+    jobTitle: me?.jobTitle ?? null,
+    sees: user.role === "owner" ? "everything" : "their own",
+    teams: [...new Set(memberships.map((m) => m.team.name))],
+    manages: manages.map((t) => t.name),
+  });
+}
+
+export function describePerson(p: { name: string; jobTitle: string | null; sees: "everything" | "their own"; teams: string[]; manages: string[] }): string {
+  const role = p.jobTitle?.trim() ? `${p.name}, ${p.jobTitle.trim().slice(0, 80)}` : p.name;
+  return [
+    `THE PERSON YOU'RE TALKING WITH: ${role}.`,
+    p.sees === "everything" ? "They can see everything in this workspace." : "They see the records their access allows — answer about those, never about anyone else's.",
+    p.teams.length ? `Their team${p.teams.length === 1 ? "" : "s"}: ${p.teams.join(", ")}.` : "",
+    p.manages.length ? `They manage: ${p.manages.join(", ")} — "my team" means the people in it.` : "",
+    "Make your answers theirs — their deals, their team, the way they like it — without reciting this back.",
+  ].filter(Boolean).join(" ");
 }
 
 /** This person's turns in the current conversation (the last few hours), oldest first. */
@@ -1018,9 +1051,15 @@ export async function askCrm(user: User, question: string, page?: string | null,
   if (!(await isCodexConnected())) {
     return { ok: false, error: "Connect ChatGPT first: Settings → Integrations → ChatGPT." };
   }
-  const [context, history, learnedNow] = await Promise.all([planContext(user), recentTurns(user.id), loadLearned(user.id)]);
+  const [context, history, learnedNow, person] = await Promise.all([
+    planContext(user),
+    recentTurns(user.id),
+    loadLearned(user.id),
+    personContext(user).catch(() => ""),
+  ]);
   const conversation = conversationBlock(history);
-  const learned = memoryPrompt(learnedNow);
+  // The business first (what it knows), then the person (who they are, what it knows about them).
+  const learned = [memoryPrompt(learnedNow), person].filter(Boolean).join("\n\n");
   const instructions = planInstructions({ ...context, learned });
 
   // Research: look, see, look closer — at most MAX_STEPS rounds, MAX_LOOKUPS in all.
