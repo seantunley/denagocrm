@@ -15,7 +15,9 @@ test("2.1 portal sign-in searches the PORTAL's workspace, not always Denago's", 
   assert.match(lookup, /AND "tenantId" = \$\{loginTenantId\}/);
   assert.doesNotMatch(lookup, /DEFAULT_TENANT_ID/);
   assert.match(portal, /tenantEmailContent\("portal_code", await portalLoginTenantId\(\),/);
-  assert.match(portal, /return currentTenantScope\(\)\?\.tenantId \?\? DEFAULT_TENANT_ID;/);
+  // An unverified address has no portal; only dormant dev keeps the founding one.
+  assert.match(portal, /return currentTenantScope\(\)\?\.tenantId \?\? \(tenantEnforcing\(\) \? null : DEFAULT_TENANT_ID\);/);
+  assert.match(lookup, /if \(!loginTenantId\) return null;/);
 });
 
 test("2.1b portal OTP challenges and limits are per workspace, never the bare email", () => {

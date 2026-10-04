@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import { Prisma } from "@prisma/client";
 import { basePrisma } from "./db";
-import { DEFAULT_TENANT_ID } from "./tenant";
+import { ownedWriteTenantId } from "./tenantWrite";
 import { getSetting, putSetting, resolveIntegrationBundle } from "./settings";
 import { currentTenantScope } from "./tenantScope";
 import { sendPushToAll } from "./push";
@@ -95,7 +95,7 @@ export async function syncGoogleReviews(): Promise<number> {
   // lines above already reads its tenant from. Reading it from a different place
   // than the credentials is how a review fetched with tenant B's Places key came
   // to be filed under tenant A.
-  const tenantId = credentialTenantId ?? DEFAULT_TENANT_ID;
+  const tenantId = credentialTenantId ?? ownedWriteTenantId();
 
   const res = await fetch(
     `https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}?fields=reviews&key=${encodeURIComponent(apiKey)}`,
