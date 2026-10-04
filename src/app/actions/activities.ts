@@ -640,6 +640,93 @@ async function scheduleFollowUpBody(data: {
   return { ok: true };
 }
 
+/**
+ * Save a spoken call/visit debrief the person has checked: a COMPLETED activity
+ * (it already happened — so no schedule lock or clash check, which is for
+ * bookings), its notes on the lead's timeline, and — only if they kept one — the
+ * follow-up it agreed. Drafted by draftVoiceDebrief; saved only on their Save.
+ */
+export async function logVoiceDebrief(data: {
+  leadId: string;
+  type: "call" | "meeting";
+  summary: string;
+  notes: string;
+  followUpDate?: string;
+  nextStep?: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  return asOwnResult(
+    () =>
+      withActingStaffScope(async () => {
+        const user = await requirePermission("activities.manage");
+        await assertLinks(user, { leadId: data.leadId });
+        const summary = data.summary.trim().slice(0, 200);
+        if (!summary) refuse("Add a one-line summary.");
+        if (data.type !== "call" && data.type !== "meeting") refuse("Pick call or visit.");
+        const notes = data.notes.trim().slice(0, 8000);
+        const lead = await prisma.lead.findUnique({ where: { id: data.leadId }, select: { contactId: true } });
+        if (!lead) refuse("That lead is no longer there.");
+        const contactId = lead.contactId;
+        const tenantId = await customerRecordTenantId({ contactId, leadId: data.leadId });
+        const now = new Date();
+        await prisma.activity.create({
+          data: {
+            type: data.type,
+            summary,
+            note: notes || null,
+            dueDate: now,
+            endDate: now,
+            status: "done",
+            doneAt: now,
+            leadId: data.leadId,
+            contactId,
+            assignedToId: user.id,
+            createdById: user.id,
+            tenantId,
+          },
+        });
+        if (notes) {
+          await prisma.communication.create({
+            data: {
+              type: data.type,
+              direction: "outbound",
+              subject: `🎙 ${data.type === "call" ? "Call" : "Visit"}: ${summary}`,
+              body: notes,
+              leadId: data.leadId,
+              contactId,
+              userId: user.id,
+              tenantId,
+            },
+          });
+        }
+        await logAudit({
+          action: "activity.logged",
+          summary: `Logged a ${data.type === "call" ? "call" : "visit"} by voice: “${summary}”`,
+          leadId: data.leadId,
+          contactId,
+          user,
+        });
+        if (data.followUpDate) {
+          const followUp = await scheduleFollowUpBody({
+            leadId: data.leadId,
+            contactId,
+            type: "call",
+            when: `${data.followUpDate}T09:00`,
+            summary: data.nextStep?.trim() || undefined,
+          });
+          if (!followUp.ok) {
+            revalidatePath(`/leads/${data.leadId}`);
+            return { ok: false, error: `Saved the ${data.type}, but the follow-up wasn't booked: ${followUp.error}` };
+          }
+        }
+        revalidatePath(`/leads/${data.leadId}`);
+        revalidatePath("/activities");
+        revalidatePath("/");
+        return { ok: true };
+      }),
+    (error) => ({ ok: false, error }),
+  );
+}
+
 export async function cancelActivity(id: string, revalidate: string) {
   return asActionResult(async () => {
     const { user } = await requireActivityAccess(id);

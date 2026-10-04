@@ -2,9 +2,11 @@
 
 import { useState, useTransition } from "react";
 import Link from "next/link";
-import { ArrowUpRight, Loader2, Sparkles } from "lucide-react";
+import { ArrowUpRight, Loader2, Mic, Sparkles, Square } from "lucide-react";
 import { askCrmAction } from "@/app/actions/assistant";
+import { transcribeQuestion } from "@/app/actions/voice";
 import type { AssistantRow } from "@/lib/crmAssistant";
+import { audioForm, useVoiceRecorder } from "@/components/useVoiceRecorder";
 
 type Turn = { question: string; answer?: string; error?: string; rows: AssistantRow[] };
 
@@ -23,6 +25,8 @@ export default function AssistantChat() {
   const [question, setQuestion] = useState("");
   const [turns, setTurns] = useState<Turn[]>([]);
   const [pending, startTransition] = useTransition();
+  const [hearing, setHearing] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
 
   const ask = (text: string) => {
     const q = text.trim();
@@ -38,6 +42,16 @@ export default function AssistantChat() {
       ]);
     });
   };
+
+  // Speak the question: transcribe, then ask it exactly as if it were typed.
+  const voice = useVoiceRecorder(async (audio) => {
+    setHearing(true);
+    setVoiceError(null);
+    const heard = await transcribeQuestion(audioForm(audio)).catch(() => ({ ok: false as const, error: "Couldn't send the recording." }));
+    setHearing(false);
+    if (heard.ok) ask(heard.text);
+    else setVoiceError(heard.error);
+  });
 
   return (
     <div className="space-y-5">
@@ -56,12 +70,28 @@ export default function AssistantChat() {
           onChange={(event) => setQuestion(event.target.value)}
           maxLength={500}
           aria-label="Ask the CRM"
-          disabled={pending}
+          disabled={pending || voice.recording || hearing}
         />
+        {voice.supported && (
+          <button
+            type="button"
+            onClick={voice.recording ? voice.stop : voice.start}
+            disabled={pending || hearing}
+            className={`grid size-10 shrink-0 place-items-center rounded-md border ${voice.recording ? "border-destructive text-destructive" : "border-border text-muted-foreground hover:text-foreground"}`}
+            aria-label={voice.recording ? "Stop and ask" : "Ask by voice"}
+            title={voice.recording ? "Stop and ask" : "Ask by voice"}
+          >
+            {hearing ? <Loader2 className="size-4 animate-spin" /> : voice.recording ? <Square className="size-4" /> : <Mic className="size-4" />}
+          </button>
+        )}
         <button type="submit" className="btn-primary h-10 px-4 text-sm" disabled={pending || !question.trim()}>
           {pending ? <Loader2 className="size-4 animate-spin" /> : "Ask"}
         </button>
       </form>
+      {voice.recording && (
+        <p className="text-xs text-destructive">● Listening… {voice.seconds}s — tap ■ when you&apos;re done.</p>
+      )}
+      {(voiceError || voice.error) && <p className="text-xs text-destructive">{voiceError ?? voice.error}</p>}
 
       {turns.length === 0 && !pending && (
         <div className="flex flex-wrap gap-2">
