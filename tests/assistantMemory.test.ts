@@ -50,6 +50,34 @@ test("nothing that steers the assistant, hides text, or holds contact details is
   assert.deepEqual(scanned, { ok: true, text: "Donovan handles fleet deals." });
 });
 
+test("a playbook keeps its line breaks through the scan", () => {
+  assert.deepEqual(scanEntry("Step 1:  call\r\nStep 2: quote\n\n\n\nStep 3: close"), {
+    ok: true,
+    text: "Step 1: call\nStep 2: quote\n\nStep 3: close",
+  });
+});
+
+test("the owner can teach and edit everything — same caps, same lock, names checked", () => {
+  const actions = code("src/app/actions/assistantNotes.ts");
+  const create = actions.slice(actions.indexOf("export async function createAssistantNote"), actions.indexOf("export async function deleteAssistantNote"));
+  assert.match(create, /const user = await requireTenantOwner\(\);/);
+  assert.match(create, /const scanned = scanEntry\(/, "the owner's own text is scanned too");
+  assert.match(create, /pg_advisory_xact_lock\(hashtext\(\$\{`assistant-notes:\$\{tenantId\}`\}\)::bigint\)/, "same lock as the assistant's own learning");
+  assert.match(create, /used \+ scanned\.text\.length > MEMORY_CHAR_LIMIT/);
+  assert.match(create, />= PLAYBOOK_LIMIT/);
+  assert.match(create, /status: "approved"/, "what the owner teaches is approved from the start");
+  // Playbook names are checked and unique, on create and on edit.
+  assert.match(actions, /if \(clash\) refuse\(/);
+  const update = actions.slice(actions.indexOf("export async function updateAssistantNote"));
+  assert.match(update.slice(0, 900), /note\.kind === "playbook" \? await playbookFields\(formData, id\) : null/);
+});
+
+test("the personality and the soul save separately without wiping each other", () => {
+  const save = code("src/app/actions/assistantSettings.ts");
+  assert.match(save, /const field = \(key: string\) => \(formData\.has\(key\) \? String\(formData\.get\(key\) \?\? ""\) : null\);/);
+  assert.match(save, /soul: field\("soul"\) === null \? current\.soul : normaliseSoul\(field\("soul"\)!\)/);
+});
+
 test("memory stays under its cap, never duplicates, and approved entries are the owner's", () => {
   const entries: Entry[] = [
     { id: "a", content: "Donovan handles fleet deals.", status: "approved" },

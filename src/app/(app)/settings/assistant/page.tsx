@@ -40,6 +40,7 @@ export default async function AssistantSettingsPage() {
     about: n.kind === "profile" && n.userId ? nameOf.get(n.userId) ?? "a former team member" : null,
     taughtBy: n.createdById ? nameOf.get(n.createdById) ?? null : null,
   }));
+  const unreviewed = learned.filter((n) => n.status !== "approved").length;
 
   return (
     <SettingsWorkspace
@@ -77,37 +78,40 @@ export default async function AssistantSettingsPage() {
             className="input"
             placeholder={"Things it should always or never do, in your words. e.g.\n- Always mention the 5-year battery warranty when price comes up.\n- Never suggest a discount above 5%."}
           />
-          <span className="block text-[11px] text-muted-foreground">
-            It also learns your business as your team uses it — review what it has learned below.
-          </span>
         </label>
-        <details className="rounded-lg border border-border p-3" open={Boolean(profile.soul)}>
-          <summary className="cursor-pointer text-sm font-medium">Advanced: its soul</summary>
-          <div className="mt-3 space-y-2">
+        <div className="flex justify-end border-t border-border/60 pt-4">
+          <SaveButton>Save</SaveButton>
+        </div>
+      </SaveForm>
+
+      {/* Advanced: its soul, and everything it has learned — all editable. Open
+          by default whenever there's something for the owner to look at. */}
+      <details className="card mt-6 max-w-3xl p-5" open={Boolean(profile.soul) || unreviewed > 0}>
+        <summary className="cursor-pointer text-base font-semibold">
+          Advanced — its soul and what it has learned
+          {unreviewed > 0 && (
+            <span className="ml-2 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-300">
+              {unreviewed} to review
+            </span>
+          )}
+        </summary>
+        <div className="mt-5 space-y-8">
+          <SaveForm action={saveAssistantProfile} resetOnSuccess={false} className="space-y-2">
+            <h2 className="text-sm font-semibold">Its soul</h2>
             <p className="text-xs text-muted-foreground">
               The whole personality in your words — how it thinks, talks and decides what to say. Rewrite it however
               you like. These are always added after it and can&apos;t be removed:
             </p>
             <pre className="whitespace-pre-wrap rounded-md bg-muted/40 p-2 text-[11px] text-muted-foreground">{LOCKED_RULES}</pre>
-            <textarea
-              name="soul"
-              defaultValue={profile.soul || DEFAULT_SOUL}
-              maxLength={3000}
-              rows={8}
-              className="input font-mono text-xs"
-            />
-            <p className="text-[11px] text-muted-foreground">
-              Leave it as it is to keep the default — and get any improvements we make to it.
-            </p>
-          </div>
-        </details>
-        <div className="flex justify-end border-t border-border/60 pt-4">
-          <SaveButton>Save</SaveButton>
+            <textarea name="soul" defaultValue={profile.soul || DEFAULT_SOUL} maxLength={3000} rows={8} className="input font-mono text-xs" />
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-[11px] text-muted-foreground">Leave it as it is to keep the default — and get any improvements we make to it.</p>
+              <SaveButton className="btn-primary btn-sm">Save soul</SaveButton>
+            </div>
+          </SaveForm>
+          <AssistantLearnedReview notes={learned} />
         </div>
-      </SaveForm>
-      <div className="mt-8">
-        <AssistantLearnedReview notes={learned} />
-      </div>
+      </details>
     </SettingsWorkspace>
   );
 }
