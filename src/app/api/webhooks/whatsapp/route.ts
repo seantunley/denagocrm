@@ -22,6 +22,12 @@ import {
   withInboundBotEvent,
 } from "@/lib/botInboundEvent";
 
+// A staff member's question to the assistant is answered inside this request
+// (research + answer can take a few minutes). Vercel's ceiling, so the run
+// finishes inside the 5-minute inbound lease instead of being killed and
+// redelivered — which would ask, and charge for, the same question twice.
+export const maxDuration = 300;
+
 export async function GET(req: NextRequest) {
   const params = req.nextUrl.searchParams;
   const token = params.get("hub.verify_token");

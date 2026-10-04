@@ -12,7 +12,8 @@ import { listActingTenantStaff } from "@/lib/tenantActor";
 import AssistantLearnedReview, { type LearnedNote } from "@/components/AssistantLearnedReview";
 import { TIDY_LAST_KEY, TIDY_SUMMARY_KEY } from "@/lib/assistantTidy";
 import { formatDateTime } from "@/lib/format";
-import { saveAssistantWhatsApp } from "@/app/actions/assistantWhatsApp";
+import { saveAssistantWhatsApp, unlinkWhatsAppFor } from "@/app/actions/assistantWhatsApp";
+import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { ASSISTANT_WHATSAPP_KEY, maskWaId, whatsappSwitchOn } from "@/lib/assistantWhatsAppRules";
 import { actingOwnerTenantId } from "@/lib/actingScope";
 
@@ -121,16 +122,35 @@ export default async function AssistantSettingsPage() {
             </span>
           </span>
         </label>
-        {phones.length > 0 && (
-          <p className="text-xs text-muted-foreground">
-            Linked:{" "}
-            {phones.map((p) => `${nameOf.get(p.userId) ?? "a former team member"} (${maskWaId(p.waId)})`).join(", ")}
-          </p>
-        )}
         <div className="flex justify-end border-t border-border/60 pt-4">
           <SaveButton>Save</SaveButton>
         </div>
       </SaveForm>
+      {phones.length > 0 && (
+        <div className="card max-w-3xl space-y-2 p-4 text-sm">
+          <p className="font-medium">Phones linked to {profile.name}</p>
+          <p className="text-xs text-muted-foreground">
+            A link ends by itself when that person&apos;s password is reset or they&apos;re signed out everywhere. Unlink anything that shouldn&apos;t be here.
+          </p>
+          <ul className="divide-y divide-border/50">
+            {phones.map((p) => (
+              <li key={p.userId} className="flex items-center justify-between gap-3 py-2">
+                <span>
+                  {nameOf.get(p.userId) ?? "a former team member"} <span className="text-muted-foreground">({maskWaId(p.waId)})</span>
+                </span>
+                <ConfirmActionDialog
+                  trigger={<button type="button" className="text-xs text-muted-foreground hover:text-destructive">Unlink</button>}
+                  title="Unlink this phone?"
+                  description="Messages from it will be treated like any other number's. They can link again from the Ask page."
+                  confirmLabel="Unlink"
+                  destructive
+                  onConfirm={unlinkWhatsAppFor.bind(null, p.userId)}
+                />
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Advanced: its soul, and everything it has learned — all editable. Open
           by default whenever there's something for the owner to look at. */}

@@ -83,7 +83,7 @@ export async function startWhatsAppLink(): Promise<WhatsAppLinkStart> {
     const link = await basePrisma.assistantPhoneLink.upsert({
       where: { tenantId_userId: { tenantId, userId: user.id } },
       create: { tenantId, userId: user.id, codeHash, codeExpiresAt },
-      update: { codeHash, codeExpiresAt, waId: null, verifiedAt: null },
+      update: { codeHash, codeExpiresAt, waId: null, verifiedAt: null, sessionVersion: null },
       select: { id: true },
     });
     await logAudit({
@@ -103,6 +103,26 @@ export async function startWhatsAppLink(): Promise<WhatsAppLinkStart> {
       minutes: LINK_CODE_TTL_MS / 60_000,
     };
   });
+}
+
+/**
+ * The owner removes anyone's link — the remedy for a phone that shouldn't be
+ * there (someone who left, a link made from a stolen session). Owner only; this
+ * workspace only.
+ */
+export async function unlinkWhatsAppFor(userId: string) {
+  return asActionResult(() =>
+    withActingStaffScope(async () => {
+      const owner = await requireTenantOwner();
+      const tenantId = await actingOwnerTenantId();
+      const removed = await basePrisma.assistantPhoneLink.deleteMany({ where: { tenantId, userId: String(userId ?? "") } });
+      if (removed.count) {
+        await logAudit({ action: "assistant.whatsapp_unlinked", summary: "Removed a team member's WhatsApp link to the assistant", user: owner, entityType: "AssistantPhoneLink" });
+      }
+      revalidate();
+      return { success: removed.count ? "Unlinked" : "That phone was already unlinked" };
+    }),
+  );
 }
 
 /**

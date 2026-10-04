@@ -10,10 +10,12 @@ import { ASK_LIMIT_MESSAGE, assistantAskAllowed, assistantUserFor } from "./assi
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "./assistantSoul";
 import { logAudit } from "./audit";
 import { logError } from "./errorLog";
-import { checkRateLimit, rateLimitKey, registerRateLimitAttempt } from "./rateLimit";
+import { rateLimitKey, registerRateLimitAttempt } from "./rateLimit";
+import { getUserSecurityStateFresh } from "./userSecurity";
 import {
   ASSISTANT_WHATSAPP_KEY,
   LINK_GUESS_POLICY,
+  LINK_GUESS_WORKSPACE_POLICY,
   QUESTION_CHARS,
   businessNumberFromLabel,
   linkCodeHashInput,
@@ -102,9 +104,28 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
 
   const link = await basePrisma.assistantPhoneLink.findFirst({
     where: { tenantId, waId, verifiedAt: { not: null } },
-    select: { userId: true },
+    select: { id: true, userId: true, sessionVersion: true },
   });
   if (!link) return false;
+  // A LINKED PHONE IS A SIGN-IN, and dies with the others. It was linked under
+  // the account's sessionVersion at the time; a password change or reset, "sign
+  // out everywhere" or a disable bumps it, and from then on this number is
+  // nobody's — the link is cleared (audited) and the message treated as anyone's.
+  // Without this, a phone linked from a stolen session outlived every remedy.
+  const security = await getUserSecurityStateFresh(link.userId);
+  if (!security || link.sessionVersion === null || security.sessionVersion !== link.sessionVersion) {
+    await basePrisma.assistantPhoneLink.updateMany({
+      where: { id: link.id, tenantId },
+      data: { waId: null, verifiedAt: null, sessionVersion: null },
+    });
+    await logAudit({
+      action: "assistant.whatsapp_unlinked",
+      summary: `WhatsApp ${maskWaId(waId)} unlinked from the assistant: the account's sign-ins were reset`,
+      entityType: "AssistantPhoneLink",
+      entityId: link.id,
+    });
+    return false;
+  }
   // Re-checked on every message: still an active member, still allowed to use
   // the assistant, Automation & AI still on. Gone → their messages are treated
   // as anyone's, and the link stays for the owner to see.
@@ -157,8 +178,13 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
 async function verifyLinkCode(tenantId: string, waId: string, code: string): Promise<boolean> {
   // Guesses are limited per sending number; a blocked number's codes are not
   // even compared.
-  const guessKey = rateLimitKey("assistant-wa-guess", `${tenantId}:${waId}`);
-  if (!(await checkRateLimit(guessKey)).allowed) return false;
+  //
+  // EVERY attempt is counted BEFORE any comparison (a check-then-register pair
+  // let parallel deliveries all pass before the block landed), per sending
+  // number AND across the workspace, so many numbers can't share the guessing.
+  const perNumber = await registerRateLimitAttempt(rateLimitKey("assistant-wa-guess", `${tenantId}:${waId}`), LINK_GUESS_POLICY);
+  const perWorkspace = await registerRateLimitAttempt(rateLimitKey("assistant-wa-guess-ws", tenantId), LINK_GUESS_WORKSPACE_POLICY);
+  if (!perNumber.allowed || !perWorkspace.allowed) return false;
 
   const now = new Date();
   const pending = await basePrisma.assistantPhoneLink.findMany({
@@ -171,10 +197,10 @@ async function verifyLinkCode(tenantId: string, waId: string, code: string): Pro
   const matches = pending.filter((row) => row.codeHash && sameHash(row.codeHash, hashLinkCode(tenantId, row.userId, code)));
   const match = matches.length === 1 ? matches[0] : null;
   const user = match ? await assistantUserFor(match.userId) : null;
-  if (!match || !user) {
-    await registerRateLimitAttempt(guessKey, LINK_GUESS_POLICY);
-    return false;
-  }
+  if (!match || !user) return false;
+  // The account's sign-in version now, so the link dies with its other sign-ins.
+  const security = await getUserSecurityStateFresh(match.userId);
+  if (!security) return false;
 
   // A CUSTOMER'S NUMBER IS NEVER LINKED, even with a valid code. The code proves
   // possession of a phone, not whose phone it is: a staff member talked into it
@@ -206,13 +232,13 @@ async function verifyLinkCode(tenantId: string, waId: string, code: string): Pro
     // One number, one person: whoever held this number before no longer does.
     await tx.assistantPhoneLink.updateMany({
       where: { tenantId, waId, id: { not: match.id } },
-      data: { waId: null, verifiedAt: null },
+      data: { waId: null, verifiedAt: null, sessionVersion: null },
     });
     // The code is used up here; guarded on the same hash so a code replaced or
     // used in the meantime links nothing.
     const done = await tx.assistantPhoneLink.updateMany({
       where: { id: match.id, tenantId, codeHash: match.codeHash, codeExpiresAt: { gt: now } },
-      data: { waId, verifiedAt: now, codeHash: null, codeExpiresAt: null },
+      data: { waId, verifiedAt: now, codeHash: null, codeExpiresAt: null, sessionVersion: security.sessionVersion },
     });
     return done.count === 1;
   });

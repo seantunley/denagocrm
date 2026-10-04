@@ -45,6 +45,11 @@ export const LINK_CODE_TTL_MS = 15 * 60 * 1000;
  */
 export const LINK_CODE_POLICY: RateLimitPolicy = { limit: 6, windowMs: 15 * 60 * 1000, blockMs: 15 * 60 * 1000 };
 export const LINK_GUESS_POLICY: RateLimitPolicy = { limit: 5, windowMs: 15 * 60 * 1000, blockMs: 30 * 60 * 1000 };
+/**
+ * And across the whole workspace, so many numbers can't share the guessing.
+ * Linking is rare; the worst this does is make a real person wait 15 minutes.
+ */
+export const LINK_GUESS_WORKSPACE_POLICY: RateLimitPolicy = { limit: 20, windowMs: 15 * 60 * 1000, blockMs: 15 * 60 * 1000 };
 
 /** What a person may ask in one message — the same cap the Ask page uses. */
 export const QUESTION_CHARS = 500;

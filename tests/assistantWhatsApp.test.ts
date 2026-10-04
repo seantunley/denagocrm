@@ -7,6 +7,7 @@ import {
   LINK_CODE_POLICY,
   LINK_CODE_TTL_MS,
   LINK_GUESS_POLICY,
+  LINK_GUESS_WORKSPACE_POLICY,
   businessNumberFromLabel,
   formatLinkCode,
   linkCodeHashInput,
@@ -39,6 +40,7 @@ const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
 type Link = {
   id: string; tenantId: string; userId: string;
   waId: string | null; codeHash: string | null; codeExpiresAt: Date | null; verifiedAt: Date | null;
+  sessionVersion?: number | null;
 };
 type Where = Record<string, unknown>;
 
@@ -60,6 +62,8 @@ const state = {
   asks: new Map<string, number>(),
   customers: new Set<string>(),
   ambiguous: new Set<string>(),
+  /** Each account's current sessionVersion (bumped by a password reset / sign out everywhere). */
+  sessionVersions: new Map<string, number>(),
 };
 const ASK_LIMIT = 60;
 
@@ -136,6 +140,9 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
         },
         ASK_LIMIT_MESSAGE: "You've asked a lot in the last hour — give it a few minutes and try again.",
       };
+      case "./userSecurity": return {
+        getUserSecurityStateFresh: async (id: string) => ({ sessionVersion: state.sessionVersions.get(id) ?? 1, disabledAt: null }),
+      };
       case "./audit": return { logAudit: async (e: { summary: string }) => { state.audits.push(e.summary); } };
       case "./errorLog": return { logError: async (...args: unknown[]) => { state.errors.push(args.map(String).join(" ")); } };
       case "./rateLimit": return {
@@ -166,7 +173,7 @@ function pending(userId: string, codeText: string, expires = soon(), tenantId = 
   return row;
 }
 function verified(userId: string, waId: string, tenantId = "t1"): Link {
-  const row: Link = { id: `linked-${tenantId}-${userId}`, tenantId, userId, waId, codeHash: null, codeExpiresAt: null, verifiedAt: new Date() };
+  const row: Link = { id: `linked-${tenantId}-${userId}`, tenantId, userId, waId, codeHash: null, codeExpiresAt: null, verifiedAt: new Date(), sessionVersion: 1 };
   state.links.push(row);
   return row;
 }
@@ -187,6 +194,7 @@ beforeEach(() => {
   state.asks = new Map();
   state.customers = new Set();
   state.ambiguous = new Set();
+  state.sessionVersions = new Map();
 });
 
 /* ── the gate, behaviourally ───────────────────────────────────────────── */
@@ -320,6 +328,46 @@ test("guessing is cut off: after the limit even the right code isn't compared", 
   for (let i = 0; i < LINK_GUESS_POLICY.limit; i++) await handleStaffWhatsApp(CUSTOMER, { text: `DAX ${String(i).padStart(6, "0")}` });
   assert.equal(await handleStaffWhatsApp(CUSTOMER, { text: "DAX 123456" }), false);
   assert.equal(row.waId, null);
+});
+
+test("guessing is counted before comparing, and capped across the workspace too", async () => {
+  const row = pending("u1", "123456");
+  // Many numbers, few guesses each: the workspace cap still stops them.
+  for (let i = 0; i < LINK_GUESS_WORKSPACE_POLICY.limit; i++) {
+    await handleStaffWhatsApp(`2783000${String(i).padStart(4, "0")}`, { text: `DAX ${String(i).padStart(6, "0")}` });
+  }
+  assert.equal(await handleStaffWhatsApp(STAFF, { text: "DAX 123456" }), false, "the right code from a fresh number, after the workspace cap");
+  assert.equal(row.waId, null);
+  const lib = code("src/lib/assistantWhatsApp.ts");
+  const verify = lib.slice(lib.indexOf("async function verifyLinkCode"));
+  assert.ok(verify.indexOf("registerRateLimitAttempt(") < verify.indexOf("sameHash("), "counted before any comparison");
+  assert.doesNotMatch(lib, /checkRateLimit\(/, "no check-then-register race");
+});
+
+test("a linked phone dies with the account's other sign-ins — password reset, sign out everywhere", async () => {
+  const row = verified("u1", STAFF);
+  assert.equal(await handleStaffWhatsApp(STAFF, { text: "pipeline?" }), true, "linked under version 1");
+  state.sessionVersions.set("u1", 2); // a reset / revoke-all bumps it
+  state.asked = [];
+  assert.equal(await handleStaffWhatsApp(STAFF, { text: "pipeline?" }), false, "now nobody's number");
+  assert.equal(state.asked.length, 0);
+  assert.equal(row.waId, null, "the link is cleared");
+  assert.equal(row.sessionVersion, null);
+  assert.match(state.audits.at(-1) ?? "", /•••567 unlinked from the assistant: the account's sign-ins were reset/);
+  // A fresh link records the version it was made under.
+  state.links = [];
+  const fresh = pending("u1", "654321");
+  assert.equal(await handleStaffWhatsApp(STAFF, { text: "DAX 654321" }), true);
+  assert.equal(fresh.sessionVersion, 2);
+});
+
+test("the owner can unlink anyone's phone in this workspace; nobody else can", () => {
+  const actions = code("src/app/actions/assistantWhatsApp.ts");
+  const ownerUnlink = actions.slice(actions.indexOf("export async function unlinkWhatsAppFor"), actions.indexOf("export async function unlinkMyWhatsApp"));
+  assert.match(ownerUnlink, /const owner = await requireTenantOwner\(\);/);
+  assert.match(ownerUnlink, /deleteMany\(\{ where: \{ tenantId, userId: String\(userId \?\? ""\) \} \}\)/);
+  assert.match(code("src/app/(app)/settings/assistant/page.tsx"), /onConfirm=\{unlinkWhatsAppFor\.bind\(null, p\.userId\)\}/);
+  assert.match(code("src/app/api/webhooks/whatsapp/route.ts"), /export const maxDuration = 300;/);
 });
 
 test("a person who lost access is no longer staff — the link stays for the owner to see", async () => {
@@ -504,7 +552,7 @@ test("link and unlink touch only the caller's own row, behind the gate and the s
   assert.match(start, /where: \{ tenantId_userId: \{ tenantId, userId: user\.id \} \}/);
   // Only the hash is stored; re-linking clears the old number.
   assert.match(start, /create: \{ tenantId, userId: user\.id, codeHash, codeExpiresAt \}/);
-  assert.match(start, /update: \{ codeHash, codeExpiresAt, waId: null, verifiedAt: null \}/);
+  assert.match(start, /update: \{ codeHash, codeExpiresAt, waId: null, verifiedAt: null, sessionVersion: null \}/);
   assert.doesNotMatch(start, /code: code|codeHash: code\b/);
   assert.match(start, /logAudit\(/);
   // The caller never names a number or a row.
