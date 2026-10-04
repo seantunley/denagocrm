@@ -222,7 +222,7 @@ test("a push can be narrowed to one person's devices, never widened", () => {
   const push = code("src/lib/push.ts");
   const send = push.slice(push.indexOf("export async function sendPushToAll("));
   assert.match(send, /userId\?: string \| null/);
-  assert.match(send, /const subs = \(options\.endpoint \? recipients\.filter\([\s\S]*?\) : recipients\)\s*\.filter\(\(sub\) => !options\.userId \|\| sub\.userId === options\.userId\);/);
+  assert.match(send, /const subs = \(options\.endpoint \? recipients\.filter\([\s\S]*?\) : recipients\)\s*\.filter\(\(sub\) => options\.userId == null \|\| sub\.userId === options\.userId\);/);
   assert.ok(push.includes('{ id: "assistant",'), "its own toggle in Settings → Notifications");
 });
 
@@ -292,4 +292,21 @@ test("scheduled answers are labelled, dotted until seen, and seen when opened", 
   const bubble = code("src/components/AssistantBubble.tsx");
   assert.match(bubble, /const \[unread, setUnread\] = useState\(unseen > 0\);/);
   assert.match(bubble.slice(bubble.indexOf("const toggle")), /setUnread\(false\);/);
+});
+
+test("no workspace leads every tick: who goes first moves on each :00 and :30", () => {
+  assert.match(code("src/app/api/cron/assistant/route.ts"), /rotationWindowMs: 30 \* 60 \* 1000,/);
+  // tenantCron's rotation: offset = floor(startedAt / window) % n.
+  const WINDOW = 30 * 60 * 1000;
+  for (const n of [2, 3, 4]) {
+    const leaders = new Set<number>();
+    const day = Date.UTC(2026, 9, 5);
+    for (let tick = 0; tick < 48; tick++) leaders.add(Math.floor((day + tick * WINDOW + 5_000) / WINDOW) % n);
+    assert.equal(leaders.size, n, `every one of ${n} workspaces leads at some tick`);
+  }
+});
+
+test("a push meant for one person can never widen to the workspace", () => {
+  const push = code("src/lib/push.ts");
+  assert.match(push, /\.filter\(\(sub\) => options\.userId == null \|\| sub\.userId === options\.userId\);/);
 });

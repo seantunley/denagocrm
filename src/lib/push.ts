@@ -125,7 +125,9 @@ export async function sendPushToAll(
     ? await pushRecipientsForTenant(options.tenantId)
     : await pushRecipientsForCurrentScope();
   const subs = (options.endpoint ? recipients.filter((sub) => sub.endpoint === options.endpoint) : recipients)
-    .filter((sub) => !options.userId || sub.userId === options.userId);
+    // Absent (undefined/null) means everyone; ANY other value — even "" — is
+    // one person, so a blank id narrows to nobody instead of the whole workspace.
+    .filter((sub) => options.userId == null || sub.userId === options.userId);
 
   let sent = 0;
   await Promise.all(

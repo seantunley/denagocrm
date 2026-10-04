@@ -44,6 +44,10 @@ export async function GET(req: NextRequest) {
     // One workspace at a time: a run holds the function for minutes, and two
     // in parallel would only halve what each could fit.
     concurrency: 1,
+    // Who goes FIRST moves on every tick. With the default 15-minute window and
+    // ticks at :00 and :30 the start offset was always even, so the same
+    // workspace led every time — and its runs could use up every tick.
+    rotationWindowMs: 30 * 60 * 1000,
     // The error's name only — a failure deep in a run must not carry a
     // question or an answer into the log.
     onError: (tenantId, error) =>
