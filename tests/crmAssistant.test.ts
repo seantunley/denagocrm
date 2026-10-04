@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { MAX_STEPS, conversationBlock, parseStep, planInstructions } from "../src/lib/crmAssistantPlan";
-import { DEFAULT_PROFILE, parseProfile, soulText } from "../src/lib/assistantSoul";
+import { DEFAULT_PROFILE, DEFAULT_SOUL, LOCKED_RULES, normaliseSoul, parseProfile, soulText } from "../src/lib/assistantSoul";
 
 const code = (rel: string) =>
   readFileSync(new URL(`../${rel}`, import.meta.url), "utf8")
@@ -67,13 +67,28 @@ test("the personality is the workspace's, with honest-colleague rules underneath
   assert.deepEqual(parseProfile(null), DEFAULT_PROFILE);
   assert.deepEqual(parseProfile("{broken"), DEFAULT_PROFILE);
   assert.deepEqual(parseProfile('{"name":"Ava","tone":"direct","rules":"Mention the warranty."}'), {
-    name: "Ava", tone: "direct", rules: "Mention the warranty.",
+    name: "Ava", tone: "direct", rules: "Mention the warranty.", soul: "",
   });
   assert.deepEqual(parseProfile('{"tone":"sarcastic"}'), DEFAULT_PROFILE, "unknown tone → default, not a crash");
-  const soul = soulText({ name: "Ava", tone: "direct", rules: "Mention the warranty." }, "Denago", "Sean");
+  const soul = soulText({ name: "Ava", tone: "direct", rules: "Mention the warranty.", soul: "" }, "Denago", "Sean");
   assert.match(soul, /You are Ava, the sales assistant inside Denago's CRM, talking with Sean\./);
+  assert.ok(soul.includes(DEFAULT_SOUL), "no custom soul → the default");
   assert.match(soul, /Keep FACTS .* apart from ADVICE/);
   assert.match(soul, /House rules from the business \(follow these\):\nMention the warranty\./);
+});
+
+test("the owner can rewrite the whole soul — but never the honesty rules", () => {
+  const custom = "- Talk like a seasoned dealer principal. Short sentences. Always end with the next move.";
+  const soul = soulText({ name: "Ava", tone: "direct", rules: "", soul: custom }, "Denago", "Sean");
+  assert.ok(soul.includes(custom));
+  assert.ok(!soul.includes(DEFAULT_SOUL), "the custom soul replaces the default");
+  assert.ok(soul.includes(LOCKED_RULES), "the locked rules are always there");
+  assert.ok(soul.indexOf(LOCKED_RULES) > soul.indexOf(custom), "and come after, so they override it");
+  // Untouched box (with the browser's CRLFs) → stored as "", so default improvements still arrive.
+  assert.equal(normaliseSoul(DEFAULT_SOUL.replace(/\n/g, "\r\n")), "");
+  assert.equal(normaliseSoul("   "), "");
+  assert.equal(normaliseSoul(`Be​ blunt.`), "Be blunt.", "invisible characters stripped");
+  assert.equal(normaliseSoul("x".repeat(5000)).length, 3000);
 });
 
 test("the assistant only reads the CRM, and only through each user's own visibility", () => {
