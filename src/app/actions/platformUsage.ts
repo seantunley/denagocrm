@@ -7,8 +7,10 @@ import {
   type TenantActivity,
   type TenantStorage,
 } from "@/lib/tenantUsage";
+import { tenantBlobUsage, type TenantBlobUsage } from "@/lib/storage";
 
-export type TenantUsage = { storage: TenantStorage; activity: TenantActivity };
+/** `files` is null when Blob storage isn't configured or couldn't be listed. */
+export type TenantUsage = { storage: TenantStorage; activity: TenantActivity; files: TenantBlobUsage | null };
 
 /**
  * Usage figures for one tenant, fetched on demand by the console's Usage tab.
@@ -26,10 +28,12 @@ export type TenantUsage = { storage: TenantStorage; activity: TenantActivity };
 export async function loadTenantUsage(tenantId: string): Promise<TenantUsage> {
   await requirePlatformAdminAction();
 
-  const [storage, activity] = await Promise.all([
+  const [storage, activity, files] = await Promise.all([
     getTenantStorage(tenantId),
     getTenantActivity(tenantId),
+    // A Blob outage must not take the database figures down with it.
+    tenantBlobUsage(tenantId).catch(() => null),
   ]);
 
-  return { storage, activity };
+  return { storage, activity, files };
 }
