@@ -73,11 +73,11 @@ function FieldProps({ field }: { field: OverlayField }) {
             </p>
           ) : recipients.length === 0 ? (
             <p className="mt-1 text-[11px] text-amber-600">
-              Add a recipient below — set one to “Denago” and one to “The customer”, then assign this field to whichever signs here.
+              Add a recipient below — set one to “Our team” and one to “The customer”, then assign this field to whichever signs here.
             </p>
           ) : !field.recipientId ? (
             <p className="mt-1 text-[11px] text-amber-600">
-              An unassigned field is filled by whoever opens the document first. Assign it so the signature lands in the right box — and so Denago&apos;s can be applied automatically.
+              An unassigned field is filled by whoever opens the document first. Assign it so the signature lands in the right box — and so your team&apos;s can be applied automatically.
             </p>
           ) : null}
         </div>
@@ -520,7 +520,7 @@ function DocumentProps() {
                   value={r.party}
                   onChange={(e) => updateRecipient(r.id, { party: e.target.value as Recipient["party"] })}
                 >
-                  <option value="denago">Denago (whoever sends it)</option>
+                  <option value="denago">Our team (whoever sends it)</option>
                   <option value="customer">The customer</option>
                   <option value="custom">Someone specific…</option>
                 </select>

@@ -153,7 +153,7 @@ export default function SidebarHelpSettings({
 
           <div className="flex items-center justify-between border-t border-border/70 bg-muted/20 px-3 py-2">
             <DropdownMenuItem asChild className="rounded-lg px-2 py-1.5 text-xs">
-              <Link href="/help/welcome"><Info className="size-3.5" /> About Denago CRM</Link>
+              <Link href="/help/welcome"><Info className="size-3.5" /> About this CRM</Link>
             </DropdownMenuItem>
             <span className="pr-2 text-[10px] font-medium text-muted-foreground/70">v{APP_VERSION}</span>
           </div>

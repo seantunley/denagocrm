@@ -7,7 +7,7 @@ import { StatusPill } from "@/components/visual-system";
 import InstallAppButton from "@/components/InstallAppButton";
 import { formatDateTime } from "@/lib/format";
 
-export const metadata = { title: "Help desk — Denago Messages" };
+export const metadata = { title: "Help desk — Messages" };
 
 export default async function MessagesCasesPage() {
   const user = await requireAnyPermission("cases.view_all", "cases.view_owned");

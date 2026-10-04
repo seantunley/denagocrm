@@ -9,7 +9,7 @@ export const offlineChecklistArticles: HelpArticle[] = [
     audience: "everyone",
     keywords: ["offline", "online", "sync", "pending", "device", "PWA", "connection"],
     body: [
-      { type: "p", text: "Denago CRM always shows a connection badge in the app header. **Online** means the server can be reached; **Offline** means the browser has no connection. A number beside the badge is the count of checklist changes and photos still held on this device." },
+      { type: "p", text: "The app always shows a connection badge in the app header. **Online** means the server can be reached; **Offline** means the browser has no connection. A number beside the badge is the count of checklist changes and photos still held on this device." },
       { type: "table", headers: ["Badge", "Meaning"], rows: [["Online", "The app can send changes to the server."], ["Offline", "Supported checklist work is being saved only on this device."], ["Syncing", "Saved changes are being sent. Keep the app open until the badge returns to Online."], ["Online · number", "The connection is available, but that many changes still need to finish syncing."]] },
       { type: "callout", tone: "warning", text: "A message saying **Saved on this device — waiting to sync** is not server confirmation. The evidence is confirmed only after the pending number clears." },
       { type: "p", text: "Offline checklist data is separated by workspace and user, expires after **72 hours**, and is removed when you sign out. Reconnect and sync before that deadline. Do not clear the browser's site data while changes are pending." },

@@ -24,7 +24,7 @@ import RecordContextMenu, { type RecordContextAction } from "@/components/Record
 import AddToContactsButton from "@/components/AddToContactsButton";
 import { contactName } from "@/lib/format";
 
-export const metadata = { title: "Lead list — DenagoCRM" };
+export const metadata = { title: "Lead list" };
 
 type Params = {
   status?: string;

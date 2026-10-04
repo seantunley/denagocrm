@@ -55,6 +55,17 @@ export function buildSignEvent(requestId: string, e: {
   };
 }
 
+/**
+ * How a staff action reads in the signing evidence: "<company>: <name>", the
+ * company being the workspace's own (Company Profile). It was hard-coded
+ * "Denago: <name>", so every workspace's signing trail named Denago.
+ */
+export async function staffActor(userName: string, tenantId?: string | null): Promise<string> {
+  const { getCompanyProfile } = await import("@/lib/companyProfile");
+  const company = (await getCompanyProfile(tenantId).catch(() => null))?.name?.trim();
+  return company ? `${company}: ${userName}` : userName;
+}
+
 export async function logSignEvent(requestId: string, e: {
   type: string; recipientId?: string | null; actor: string; channel?: string | null; ip?: string | null; userAgent?: string | null; metadata?: object;
 }): Promise<void> {

@@ -77,7 +77,8 @@ async function assertUniqueSerial(serial: string | null, exceptId?: string) {
 export async function createPurchaseOrder(formData: FormData) {
   return asActionResult(async () => {
     const user = await requirePermission("stock.manage");
-    const supplier = str(formData.get("supplier")) || "Denago";
+    const supplier = str(formData.get("supplier"));
+    if (!supplier) refuse("Enter the supplier.");
     const reference = str(formData.get("reference")) || null;
     const expectedAt = date(formData.get("expectedAt"));
     const notes = str(formData.get("notes")) || null;

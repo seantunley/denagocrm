@@ -505,7 +505,7 @@ export const DEFAULT_FLOW: Flow = {
     ] },
     bookName: { id: "bookName", type: "capture", text: "Sure — let's get you booked in. What's your name?", variable: "name", next: "bookPhone" },
     bookPhone: { id: "bookPhone", type: "capture", text: "Thanks {{name}}! What's the best contact number?", variable: "phone", format: "phone", next: "bookService" },
-    bookService: { id: "bookService", type: "capture", text: "What does the cart need? (service, repair, etc.)", variable: "service", next: "chooseSlot" },
+    bookService: { id: "bookService", type: "capture", text: "What do you need us to help with?", variable: "service", next: "chooseSlot" },
     chooseSlot: { id: "chooseSlot", type: "slots", action: "book", text: "Here are our next available service times — pick one:", noneText: "We're fully booked online just now — I've logged your request and the team will call you to find a time. 📞", next: "bookConfirm", unavailableNext: "slotHandoff", failureNext: "slotHandoff" },
     slotHandoff: { id: "slotHandoff", type: "handoff", text: "I couldn't hold a time for you — the team will call you to book it." },
     bookConfirm: { id: "bookConfirm", type: "message", text: "You're booked, {{name}}! 🛠 {{slot}}. We'll see you then — message *menu* if anything changes.", next: "end" },

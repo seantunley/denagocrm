@@ -5,7 +5,7 @@ import PrintButton from "@/components/help/PrintButton";
 import { categoriesWithArticles } from "@/lib/help/content";
 import { getEnabledModuleIds } from "@/lib/modules/enabled";
 
-export const metadata: Metadata = { title: "Denago CRM — User Manual", robots: { index: false, follow: false } };
+export const metadata: Metadata = { title: "User Manual", robots: { index: false, follow: false } };
 
 const AUDIENCE_LABEL: Record<string, string> = { everyone: "", managers: "Managers", admins: "Admins only" };
 
@@ -26,7 +26,7 @@ export default async function ManualPage() {
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-orange-600">Denago Cape Town</p>
             <h1 className="mt-1 text-3xl font-bold tracking-tight text-slate-900">User Manual</h1>
             <p className="mt-2 text-sm text-slate-500">
-              The complete guide to Denago CRM — {articleCount} articles across {categories.length} areas.
+              The complete guide to the CRM — {articleCount} articles across {categories.length} areas.
             </p>
           </div>
           <PrintButton />
@@ -83,7 +83,7 @@ export default async function ManualPage() {
       ))}
 
       <footer className="mt-16 border-t border-slate-200 pt-4 text-center text-xs text-slate-400 print:hidden">
-        Denago CRM User Manual · Generated from the in-app Help Centre
+        User Manual · Generated from the in-app Help Centre
       </footer>
     </div>
   );

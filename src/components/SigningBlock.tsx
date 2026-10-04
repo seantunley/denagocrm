@@ -169,7 +169,7 @@ export default function SigningBlock({
       <h2 className="font-semibold mb-1">✍ Online signature</h2>
       <p className="text-xs text-slate-400 mb-4">
         {kind === "quote"
-          ? "Countersign for Denago in one click, check the signed quote, then send it — the customer signs on their phone, which accepts the quote and wins the lead."
+          ? "Countersign in one click, check the signed quote, then send it — the customer signs on their phone, which accepts the quote and wins the lead."
           : `The customer opens a secure link, reviews ${refLabel}, and signs on their phone — no printing needed.`}
       </p>
 
@@ -183,7 +183,7 @@ export default function SigningBlock({
 
       {kind === "quote" && dealerSignedAt && (
         <p className="text-xs text-emerald-400 mb-3">
-          ✓ Countersigned for Denago by {dealerSignedByName} · {formatDateTime(dealerSignedAt)}
+          ✓ Countersigned by {dealerSignedByName} · {formatDateTime(dealerSignedAt)}
         </p>
       )}
 
@@ -268,7 +268,7 @@ export default function SigningBlock({
             <div>
               <label className="mb-1 block text-[11px] font-medium text-slate-400">Signing workflow</label>
               <select value={workflowId} onChange={(e) => setWorkflowId(e.target.value)} className="w-full rounded-md border border-input bg-card px-2 py-1.5 text-sm text-foreground">
-                <option value="">Built-in — Denago countersigns, then the customer</option>
+                <option value="">Built-in — we countersign, then the customer</option>
                 {workflows.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
               </select>
             </div>
