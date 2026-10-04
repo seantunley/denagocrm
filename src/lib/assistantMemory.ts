@@ -112,14 +112,21 @@ const INJECTION = [
 // Letters of ANY script (a Cyrillic look-alike domain is still a domain),
 // spaces around the @, and the ideographic/halfwidth full stops as dots.
 const EMAIL = /[\p{L}\p{N}._%+-]+\s*@\s*[\p{L}\p{N}-]+(?:\s*[.。．｡]\s*[\p{L}\p{N}-]+)+/iu;
-// Any run of 9+ digits — of any script (Arabic-Indic, Devanagari…) — once the
-// usual separators are ignored: spaces, dashes of every kind, dots, commas,
-// underscores, middots, bullets, brackets, slashes. "082.123.4567",
-// "(082) 123 4567", "082_123_4567". (Fullwidth forms are folded by NFKC.)
-const PHONE = /\+?\(?\p{Nd}(?:[\s\-‐-―./(),_·•]*\p{Nd}){8,}/u;
-// Dates and times aren't phone numbers: removed before the phone check, so
-// "2026/10/05 - 2026/11/05" or "08:30–17:00" don't read as one.
-const DATE_OR_TIME = /\b\d{4}[-/.]\d{1,2}[-/.]\d{1,2}\b|\b\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}\b|\b\d{1,2}:\d{2}\b/g;
+// Any run of 9+ digits — of any script (Arabic-Indic, Devanagari…) — whatever
+// separates them: up to three characters that are neither letters nor digits
+// (":", "|", "~", "−", "*"… not a whitelist that misses the next one). The one
+// exception is a comma followed by a space — a list ("120, 45, 300") — while
+// "082,123,4567" still counts. (Fullwidth forms are folded by NFKC first.)
+const PHONE = /\p{Nd}(?:(?:[^\p{L}\p{Nd}\n,]{0,3}|,(?=\p{Nd}))\p{Nd}){8,}/u;
+// Removed before the phone check — replaced with a WORD, so they can't glue the
+// digits either side into one run, nor hide a phone that only looks like one:
+// real dates only (19xx/20xx years, months ≤ 12, days ≤ 31), and money in
+// thousands groups that isn't followed by more digits ("R1,250,000.00",
+// "ZAR 450 000" — but "R 082 123 4567" is still a phone). Times are left in:
+// one or two of them are never nine digits.
+const DATE_OR_TIME =
+  /\b(?:19|20)\d\d[-/.](?:0?[1-9]|1[0-2])[-/.](?:0?[1-9]|[12]\d|3[01])\b|\b(?:0?[1-9]|[12]\d|3[01])[-/.](?:0?[1-9]|1[0-2])[-/.](?:19|20)\d\d\b/g;
+const MONEY = /(?:\bR|\bZAR|\$|€|£)\s?\d{1,3}(?:[ ,.']\d{3})*(?:[.,]\d{2})?(?![\s,.']?\d)/gi;
 
 /** Cleaned text, or a reason it may not be learned. */
 export function scanEntry(raw: string): { ok: true; text: string } | { ok: false; reason: string } {
@@ -127,7 +134,9 @@ export function scanEntry(raw: string): { ok: true; text: string } | { ok: false
   const text = stripInvisible(raw).replace(/\r\n/g, "\n").replace(/[^\S\n]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
   if (text.length < 3) return { ok: false, reason: "empty" };
   if (INJECTION.some((pattern) => pattern.test(text))) return { ok: false, reason: "looks like an instruction to the assistant" };
-  if (EMAIL.test(text) || PHONE.test(text.replace(DATE_OR_TIME, " "))) return { ok: false, reason: "contains contact details" };
+  if (EMAIL.test(text) || PHONE.test(text.replace(MONEY, " amount ").replace(DATE_OR_TIME, " when "))) {
+    return { ok: false, reason: "contains contact details" };
+  }
   return { ok: true, text };
 }
 

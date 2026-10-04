@@ -518,7 +518,9 @@ export async function codexRespond(input: {
         refusals.push(`${model} (${parsed.failed.slice(0, 60)})`);
         continue;
       }
-      await logError("codex-research", "ChatGPT response failed", parsed.failed.slice(0, 300));
+      // A reason only: the provider's failure text can echo what was asked,
+      // and what was asked mentions customers (no client data in logs).
+      await logError("codex-research", "ChatGPT response failed");
       return { error: `ChatGPT could not answer: ${parsed.failed.slice(0, 120)}` };
     }
 
