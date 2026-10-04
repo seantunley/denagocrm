@@ -160,6 +160,8 @@ export async function generateBotReply(input: {
   customerName?: string | null;
   isCustomer: boolean;
   voiceNote?: boolean;
+  /** The language the customer's voice note was in, when it wasn't English (e.g. "Afrikaans"). */
+  language?: string | null;
 }): Promise<BotReplyDecision | null> {
   const apiKey = await getSetting("ANTHROPIC_API_KEY");
   if (!apiKey) return null;
@@ -236,7 +238,7 @@ DECISION RULES:
 - Set handoff=true for order/payment intent, a specific booking/test-drive request, complaints, requests for a person, or anything you cannot answer from supplied facts.
 - When handoff=true, handoffReason must explain why in a few words and handoffSummary must tell staff the customer's intent and unresolved need without speculation.
 - Never invent prices, specs, stock, dates, legal status, finance terms or promises.
-${input.voiceNote ? "- This arrived as a transcribed voice note. Reply naturally; the application may still route it to a human.\n" : ""}`;
+${input.voiceNote ? "- This arrived as a transcribed voice note. Reply naturally; the application may still route it to a human.\n" : ""}${input.language ? `- The customer spoke ${input.language}. Write "reply" in ${input.language}, plainly and naturally; keep product names, prices and handoffSummary as they are (handoffSummary in English for staff).\n` : ""}`;
 
   try {
     const res = await fetch("https://api.anthropic.com/v1/messages", {

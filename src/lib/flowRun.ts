@@ -18,6 +18,7 @@ import { recordBotFlowEventsTx, type BotFlowEventInput } from "./botFlowAnalytic
 import { completeInboundBotEventTx, currentInboundBotClaim } from "./botInboundEvent";
 import { decideInboundAct, HUMAN_RESPONSIBILITY_HOURS, type BotOwnership } from "./botOwnership";
 import type { FlowEntryContext } from "./flowRouting";
+import type { VoiceLanguage } from "./voiceLanguage";
 import { getCompanyProfile } from "./companyProfile";
 
 export const FLOW_MARKER = "🤖 Flow";
@@ -165,7 +166,7 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput, entryCon
   return true;
 }
 
-export async function runWhatsAppBot(digits: string, input: FlowInput, opts: { voiceNote?: boolean; entryContext?: FlowEntryContext } = {}): Promise<void> {
+export async function runWhatsAppBot(digits: string, input: FlowInput, opts: { voiceNote?: boolean; language?: VoiceLanguage | null; entryContext?: FlowEntryContext } = {}): Promise<void> {
   // Ownership gates EVERY route into the bot, not just the flow runner.
   //
   // maybeAutoReply never reads BotSession — its only brake is botShouldPause, a
@@ -186,7 +187,7 @@ export async function runWhatsAppBot(digits: string, input: FlowInput, opts: { v
     if (gate.act === "suppress") return;
   }
 
-  if (opts.voiceNote) { await maybeAutoReply(digits, input.text, { voiceNote: true }); return; }
+  if (opts.voiceNote) { await maybeAutoReply(digits, input.text, { voiceNote: true, language: opts.language ?? null }); return; }
   if (await isFlowEnabled()) { await runWhatsAppFlow(digits, input, opts.entryContext); return; }
   await maybeAutoReply(digits, input.text);
 }
