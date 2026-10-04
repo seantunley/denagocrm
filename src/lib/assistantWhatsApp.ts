@@ -107,11 +107,12 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
     select: { id: true, userId: true, sessionVersion: true },
   });
   if (!link) return false;
-  // A LINKED PHONE IS A SIGN-IN, and dies with the others. It was linked under
-  // the account's sessionVersion at the time; a password change or reset, "sign
-  // out everywhere" or a disable bumps it, and from then on this number is
-  // nobody's — the link is cleared (audited) and the message treated as anyone's.
-  // Without this, a phone linked from a stolen session outlived every remedy.
+  // A LINKED PHONE IS A SIGN-IN, and dies with the others. It carries the
+  // account's sessionVersion from when its code was issued; a password change
+  // or reset, "sign out everywhere", an email change or a disable bumps it, and
+  // from then on this number is nobody's — the link is cleared (audited), the
+  // number is told once why, and after that it is treated as anyone's. Without
+  // this, a phone linked from a stolen session outlived every remedy.
   const security = await getUserSecurityStateFresh(link.userId);
   if (!security || link.sessionVersion === null || security.sessionVersion !== link.sessionVersion) {
     await basePrisma.assistantPhoneLink.updateMany({
@@ -124,7 +125,14 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
       entityType: "AssistantPhoneLink",
       entityId: link.id,
     });
-    return false;
+    // Said once, to the number that WAS linked — no data, just why it stopped —
+    // so the person isn't left with the chatbot answering them as a customer.
+    // Their next message (no link now) takes the customer path as normal.
+    await sendPlan(waId, {
+      texts: ["This number is no longer linked to the assistant (your sign-ins were reset). Link it again from the Ask page in the CRM."],
+      buttons: null,
+    });
+    return true;
   }
   // Re-checked on every message: still an active member, still allowed to use
   // the assistant, Automation & AI still on. Gone → their messages are treated
@@ -183,13 +191,16 @@ async function verifyLinkCode(tenantId: string, waId: string, code: string): Pro
   // let parallel deliveries all pass before the block landed), per sending
   // number AND across the workspace, so many numbers can't share the guessing.
   const perNumber = await registerRateLimitAttempt(rateLimitKey("assistant-wa-guess", `${tenantId}:${waId}`), LINK_GUESS_POLICY);
+  // A number that's already blocked stops here — it doesn't get to keep the
+  // workspace counter full and lock every colleague out of linking.
+  if (!perNumber.allowed) return false;
   const perWorkspace = await registerRateLimitAttempt(rateLimitKey("assistant-wa-guess-ws", tenantId), LINK_GUESS_WORKSPACE_POLICY);
-  if (!perNumber.allowed || !perWorkspace.allowed) return false;
+  if (!perWorkspace.allowed) return false;
 
   const now = new Date();
   const pending = await basePrisma.assistantPhoneLink.findMany({
     where: { tenantId, codeHash: { not: null }, codeExpiresAt: { gt: now } },
-    select: { id: true, userId: true, codeHash: true },
+    select: { id: true, userId: true, codeHash: true, sessionVersion: true },
   });
   // Every row is compared (no early exit). Two people holding the same six
   // digits at once is possible (one in a million) — and then the code does not
@@ -201,6 +212,16 @@ async function verifyLinkCode(tenantId: string, waId: string, code: string): Pro
   // The account's sign-in version now, so the link dies with its other sign-ins.
   const security = await getUserSecurityStateFresh(match.userId);
   if (!security) return false;
+  // The code is only good under the sign-ins it was ISSUED with. One asked for
+  // before a password reset or "sign out everywhere" is burnt, not redeemed —
+  // otherwise a code fetched from a stolen session would link after the reset.
+  if (match.sessionVersion === null || security.sessionVersion !== match.sessionVersion) {
+    await basePrisma.assistantPhoneLink.updateMany({
+      where: { id: match.id, tenantId, codeHash: match.codeHash },
+      data: { codeHash: null, codeExpiresAt: null },
+    });
+    return false;
+  }
 
   // A CUSTOMER'S NUMBER IS NEVER LINKED, even with a valid code. The code proves
   // possession of a phone, not whose phone it is: a staff member talked into it

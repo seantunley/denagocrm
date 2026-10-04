@@ -27,18 +27,19 @@ export const whatsappSwitchOn = (raw: string | null | undefined): boolean => raw
 export const LINK_CODE_TTL_MS = 15 * 60 * 1000;
 
 /**
- * Rate limits. registerRateLimitAttempt answers `count < limit`, so where that
- * answer is used (code requests, questions) the limit is one more than the
- * attempts that pass. Guesses use checkRateLimit instead, which blocks once the
- * count REACHES the limit — so there the limit is the number of wrong guesses.
+ * Rate limits. registerRateLimitAttempt answers `count < limit`, so the limit is
+ * one more than the attempts that pass.
  *
  * CODE REQUESTS — per person. Asking for codes over and over buys nothing (each
  * one replaces the last), but it is a write and an audit row each time.
  *
- * CODE GUESSES — per sending number, failures only. A code is 6 digits for 15
- * minutes; five wrong guesses then a 30-minute block makes guessing one by
- * brute force hopeless (≈ 5 in a million per window), and a guess past the
- * block is never even compared — it is filed as the customer message it is.
+ * CODE ATTEMPTS — EVERY "DAX nnnnnn" is counted before anything is compared
+ * (no check-then-count race), first per sending number, then — only if that
+ * number isn't already blocked — across the workspace, so many numbers can't
+ * share the guessing and one blocked number can't keep the workspace counter
+ * full. A code is 6 digits for 15 minutes: brute force is hopeless, and an
+ * attempt past a block is never compared — it is filed as the customer message
+ * it is.
  *
  * QUESTIONS are not limited here: they share the person's one ask limit with
  * every other channel (assistantAskAllowed in assistantUser.ts).

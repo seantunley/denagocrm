@@ -14,6 +14,7 @@ import { isWhatsAppConfigured } from "@/lib/whatsapp";
 import { ASSISTANT_PERMISSIONS } from "@/lib/assistantUser";
 import { assistantWhatsAppOn, businessWhatsAppNumber, hashLinkCode } from "@/lib/assistantWhatsApp";
 import { rateLimitKey, registerRateLimitAttempt } from "@/lib/rateLimit";
+import { getUserSecurityStateFresh } from "@/lib/userSecurity";
 import {
   ASSISTANT_WHATSAPP_KEY,
   LINK_CODE_POLICY,
@@ -79,11 +80,17 @@ export async function startWhatsAppLink(): Promise<WhatsAppLinkStart> {
     const code = formatLinkCode(crypto.randomInt(0, 1_000_000));
     const codeHash = hashLinkCode(tenantId, user.id, code);
     const codeExpiresAt = new Date(Date.now() + LINK_CODE_TTL_MS);
+    // The code belongs to the sign-ins of the moment it was ISSUED: a password
+    // reset or "sign out everywhere" after this makes it worthless, so a code
+    // fetched from a stolen session can't be redeemed after the victim resets.
+    const security = await getUserSecurityStateFresh(user.id);
+    if (!security) return { ok: false, error: "Sign in again, then ask for a code." };
+    const sessionVersion = security.sessionVersion;
     // The caller's own row, by (workspace, caller) — there is no id or number to pass in.
     const link = await basePrisma.assistantPhoneLink.upsert({
       where: { tenantId_userId: { tenantId, userId: user.id } },
-      create: { tenantId, userId: user.id, codeHash, codeExpiresAt },
-      update: { codeHash, codeExpiresAt, waId: null, verifiedAt: null, sessionVersion: null },
+      create: { tenantId, userId: user.id, codeHash, codeExpiresAt, sessionVersion },
+      update: { codeHash, codeExpiresAt, waId: null, verifiedAt: null, sessionVersion },
       select: { id: true },
     });
     await logAudit({

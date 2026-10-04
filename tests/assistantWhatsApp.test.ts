@@ -168,7 +168,8 @@ const CUSTOMER = "27839990000";
 const soon = () => new Date(Date.now() + LINK_CODE_TTL_MS);
 
 function pending(userId: string, codeText: string, expires = soon(), tenantId = "t1"): Link {
-  const row: Link = { id: `pending-${tenantId}-${userId}`, tenantId, userId, waId: null, codeHash: hashLinkCode(tenantId, userId, codeText), codeExpiresAt: expires, verifiedAt: null };
+  // Issued under the account's sign-in version at that moment, as startWhatsAppLink does.
+  const row: Link = { id: `pending-${tenantId}-${userId}`, tenantId, userId, waId: null, codeHash: hashLinkCode(tenantId, userId, codeText), codeExpiresAt: expires, verifiedAt: null, sessionVersion: state.sessionVersions.get(userId) ?? 1 };
   state.links.push(row);
   return row;
 }
@@ -349,16 +350,38 @@ test("a linked phone dies with the account's other sign-ins — password reset, 
   assert.equal(await handleStaffWhatsApp(STAFF, { text: "pipeline?" }), true, "linked under version 1");
   state.sessionVersions.set("u1", 2); // a reset / revoke-all bumps it
   state.asked = [];
-  assert.equal(await handleStaffWhatsApp(STAFF, { text: "pipeline?" }), false, "now nobody's number");
-  assert.equal(state.asked.length, 0);
+  state.sent = [];
+  assert.equal(await handleStaffWhatsApp(STAFF, { text: "pipeline?" }), true, "handled once: told why, never answered");
+  assert.equal(state.asked.length, 0, "no answer under the old link");
   assert.equal(row.waId, null, "the link is cleared");
   assert.equal(row.sessionVersion, null);
+  assert.match(state.sent[0]?.text ?? "", /no longer linked to the assistant/);
+  assert.doesNotMatch(state.sent[0]?.text ?? "", /overdue|pipeline|R\d/, "no data in the notice");
   assert.match(state.audits.at(-1) ?? "", /•••567 unlinked from the assistant: the account's sign-ins were reset/);
-  // A fresh link records the version it was made under.
+  assert.equal(await handleStaffWhatsApp(STAFF, { text: "pipeline?" }), false, "after that: nobody's number");
+  // A fresh code, issued under the new version, links under it.
   state.links = [];
   const fresh = pending("u1", "654321");
   assert.equal(await handleStaffWhatsApp(STAFF, { text: "DAX 654321" }), true);
   assert.equal(fresh.sessionVersion, 2);
+});
+
+test("a code asked for BEFORE a reset is burnt, not redeemed after it", async () => {
+  const row = pending("u1", "123456"); // issued under version 1 (e.g. from a stolen session)
+  state.sessionVersions.set("u1", 2); // the victim resets their password
+  assert.equal(await handleStaffWhatsApp(STAFF, { text: "DAX 123456" }), false);
+  assert.equal(row.waId, null, "not linked");
+  assert.equal(row.codeHash, null, "the code is burnt");
+  assert.equal(state.sent.length, 0);
+});
+
+test("a blocked number doesn't keep the workspace's guess counter full", async () => {
+  for (let i = 0; i < 40; i++) await handleStaffWhatsApp(CUSTOMER, { text: `DAX ${String(i).padStart(6, "0")}` });
+  const workspaceKey = [...state.guesses.keys()].find((k) => k.startsWith("assistant-wa-guess-ws:"));
+  assert.ok((state.guesses.get(workspaceKey ?? "") ?? 0) < LINK_GUESS_WORKSPACE_POLICY.limit, "colleagues can still link");
+  const mine = pending("u2", "777777");
+  assert.equal(await handleStaffWhatsApp(STAFF, { text: "DAX 777777" }), true);
+  assert.equal(mine.waId, STAFF);
 });
 
 test("the owner can unlink anyone's phone in this workspace; nobody else can", () => {
@@ -552,7 +575,8 @@ test("link and unlink touch only the caller's own row, behind the gate and the s
   assert.match(start, /where: \{ tenantId_userId: \{ tenantId, userId: user\.id \} \}/);
   // Only the hash is stored; re-linking clears the old number.
   assert.match(start, /create: \{ tenantId, userId: user\.id, codeHash, codeExpiresAt \}/);
-  assert.match(start, /update: \{ codeHash, codeExpiresAt, waId: null, verifiedAt: null, sessionVersion: null \}/);
+  assert.match(start, /update: \{ codeHash, codeExpiresAt, waId: null, verifiedAt: null, sessionVersion \}/);
+  assert.match(start, /const sessionVersion = security\.sessionVersion;/, "the code belongs to the sign-ins it was issued under");
   assert.doesNotMatch(start, /code: code|codeHash: code\b/);
   assert.match(start, /logAudit\(/);
   // The caller never names a number or a row.
