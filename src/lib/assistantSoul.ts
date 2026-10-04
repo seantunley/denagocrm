@@ -20,7 +20,12 @@ export const TONES = {
 } as const;
 export type Tone = keyof typeof TONES;
 
-export const WORKSPACE_INSTRUCTIONS_CHARS = 4000;
+/**
+ * Room for a full AGENTS.md. Denago's ("DAX", 2026-10-04) is ~3.8k characters;
+ * 8k leaves room to grow and costs ~2k tokens a question — worth it for the
+ * document that says how the assistant should work.
+ */
+export const WORKSPACE_INSTRUCTIONS_CHARS = 8000;
 
 export const assistantProfile = z.object({
   name: z.string().trim().min(1).max(40).default("Assistant"),
