@@ -84,6 +84,18 @@ test("the answer knows who it's talking with — the business first, then the pe
   assert.match(lib, /const learned = \[memoryPrompt\(learnedNow\), person\]\.filter\(Boolean\)\.join\("\\n\\n"\);/);
 });
 
+test("one person can't sweep the CRM through the assistant at machine speed", () => {
+  const helper = code("src/lib/assistantUser.ts");
+  assert.match(helper, /const ASK_POLICY: RateLimitPolicy = \{ limit: 60, windowMs: 60 \* 60 \* 1000, blockMs: 30 \* 60 \* 1000 \};/);
+  assert.match(helper, /rateLimitKey\("assistant-ask", userId\)/, "one key per person, every channel");
+  const action = code("src/app/actions/assistant.ts");
+  const ask = action.slice(action.indexOf("export async function askCrmAction"));
+  assert.ok(
+    ask.indexOf("assistantAskAllowed(user.id)") > 0 && ask.indexOf("assistantAskAllowed(user.id)") < ask.indexOf("return askCrm("),
+    "checked before any lookup runs",
+  );
+});
+
 test("acting for someone without a session needs exactly one workspace", () => {
   const helper = code("src/lib/assistantUser.ts");
   const body = helper.slice(helper.indexOf("export async function assistantUserFor"));
