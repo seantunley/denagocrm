@@ -75,8 +75,9 @@ test("the personality is the workspace's, with honest-colleague rules underneath
   assert.ok(soul.includes(DEFAULT_SOUL), "no custom soul → the default");
   assert.match(soul, /Keep FACTS .* apart from ADVICE/);
   assert.match(soul, /Workspace instructions from the business \(follow these\):\nMention the warranty\./);
-  // Saved as "rules" before the rename — still read, now with room for 4000.
-  assert.equal(parseProfile(JSON.stringify({ rules: "x".repeat(4000) })).rules.length, 4000);
+  // Saved as "rules" before the rename — still read, now with room for a full AGENTS.md.
+  assert.equal(parseProfile(JSON.stringify({ rules: "x".repeat(8000) })).rules.length, 8000);
+  assert.deepEqual(parseProfile(JSON.stringify({ rules: "x".repeat(8001) })), DEFAULT_PROFILE, "over the limit → refused, not truncated silently");
   assert.equal(cleanOwnerText("Be​ kind.\r\nAlways.", 4000), "Be kind.\nAlways.");
 });
 
