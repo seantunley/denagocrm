@@ -1,4 +1,4 @@
-import { requireOwner } from "@/lib/auth";
+import { requireTenantOwner } from "@/lib/auth";
 import { getSetting } from "@/lib/settings";
 import { SettingsWorkspace } from "@/components/settings-workspace";
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
@@ -16,12 +16,12 @@ export const dynamic = "force-dynamic";
  * unfindable. The first version of this put the editor beside the pipeline
  * stages, where nobody would ever look for it.
  *
- * `requireOwner` here as well as in the action. The action is the thing that
+ * `requireTenantOwner` here as well as in the action. The action is the thing that
  * actually protects the write; this stops a member being shown a page whose
  * every control would refuse them.
  */
 export default async function ClockWeatherSettingsPage() {
-  await requireOwner();
+  await requireTenantOwner();
   const cities = parseWeatherCities(await getSetting(WEATHER_CITIES_KEY));
 
   return (

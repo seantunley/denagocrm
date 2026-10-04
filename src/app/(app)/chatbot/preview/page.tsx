@@ -1,11 +1,11 @@
+import { requireRoute } from "@/lib/permissions";
 import Link from "next/link";
 import { BrainCircuit, ShieldCheck } from "lucide-react";
-import { requireOwner } from "@/lib/auth";
 import BotAiPreviewConsole from "@/components/BotAiPreviewConsole";
 import { WorkspaceHero } from "@/components/workspace-hero";
 
 export default async function ChatbotPreviewPage() {
-  await requireOwner();
+  await requireRoute("/chatbot");
   return (
     <div className="space-y-5">
       <WorkspaceHero

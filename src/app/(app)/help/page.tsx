@@ -22,7 +22,7 @@ export default async function HelpHomePage() {
 
   return (
     <div className="space-y-8">
-      <PageHeader title="Help &amp; user manual" description={`Step-by-step guides for every part of Denago CRM — ${articleCount} articles across ${categories.length} areas.`}>
+      <PageHeader title="Help &amp; user manual" description={`Step-by-step guides for every part of the CRM — ${articleCount} articles across ${categories.length} areas.`}>
         <Link href="/manual" target="_blank" className={buttonVariants({ variant: "outline", size: "sm" })}>
           <BookOpen className="size-4" /> Full manual (print / PDF)
         </Link>

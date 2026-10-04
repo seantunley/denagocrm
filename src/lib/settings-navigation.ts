@@ -11,6 +11,11 @@ export type SettingsNavItem = {
   permission?: string | string[];
   /** Optional feature pack this surface belongs to. Hidden when the module is off. */
   module?: ModuleId;
+  /**
+   * PLATFORM-level (the whole install, not one workspace): shown only to the
+   * platform owner, never to a workspace owner. Mirrors the page's requireOwner().
+   */
+  platform?: boolean;
 };
 
 export type SettingsNavGroup = {
@@ -37,7 +42,7 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
     label: "Organisation",
     items: [
       { key: "company", label: "Company profile", href: "/settings/company", keywords: ["business", "address", "phone", "branding", "footer", "logo", "details"] },
-      { key: "modules", label: "Modules", href: "/settings/modules", keywords: ["features", "packs", "enable", "disable", "automotive", "workshop", "inbox", "add-ons"] },
+      { key: "modules", label: "Modules", href: "/settings/modules", platform: true, keywords: ["features", "packs", "enable", "disable", "automotive", "workshop", "inbox", "add-ons"] },
       { key: "custom-fields", label: "Custom fields", href: "/settings/custom-fields", keywords: ["custom", "fields", "eav", "extra", "attributes", "metadata", "contact fields", "lead fields", "properties"] },
       // Beside custom fields rather than under Operations: both decide what gets
       // recorded against a record, and a checklist is not tied to one module —
@@ -93,7 +98,7 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
       { key: "documents", label: "Document Studio", href: "/document-studio", permission: ["document_templates.manage", "docbuilder.view", "docbuilder.manage"], keywords: ["documents", "templates", "document studio", "document builder"] },
       { key: "signing-workflows", label: "Signing workflows", href: "/settings/signing-workflows", keywords: ["approval", "signing", "workflow", "e-sign"] },
       { key: "signing-security", label: "Signing security", href: "/settings/signing-security", keywords: ["otp", "one-time code", "verify signer", "identity", "timestamp", "e-sign", "two factor"] },
-      { key: "backups", label: "Backup & recovery", href: "/settings/backup-recovery", keywords: ["backup", "restore", "disaster recovery"] },
+      { key: "backups", label: "Backup & recovery", href: "/settings/backup-recovery", platform: true, keywords: ["backup", "restore", "disaster recovery"] },
     ],
   },
   {
@@ -101,7 +106,7 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
     items: [
       { key: "team", label: "Team & access", href: "/settings/access", permission: ["teams.view", "roles.view", "teams.manage", "roles.manage"], keywords: ["users", "staff", "members", "roles", "permissions"] },
       { key: "portal-access", label: "Portal access", href: "/settings/portal-access", permission: "portal_access.manage", keywords: ["customer portal", "delegation", "profile requests"] },
-      { key: "security", label: "Security", href: "/settings/security", keywords: ["security checks", "surface exposure"] },
+      { key: "security", label: "Security", href: "/settings/security", platform: true, keywords: ["security checks", "surface exposure"] },
       { key: "sessions", label: "Sessions & devices", href: "/settings/sessions", keywords: ["devices", "logins", "sign out"] },
     ],
   },
@@ -133,7 +138,12 @@ export function settingsItemEnabled(
   return enabled.has(item.module);
 }
 
-export type SettingsViewer = { isOwner: boolean; permissions: readonly string[] };
+/**
+ * `isOwner` is the owner of the WORKSPACE being viewed (requireTenantOwner);
+ * `isPlatformOwner` is the platform-wide owner role (requireOwner), the only
+ * viewer of `platform` entries.
+ */
+export type SettingsViewer = { isOwner: boolean; isPlatformOwner?: boolean; permissions: readonly string[] };
 
 /**
  * THE one rule for which settings entries a person is shown — the sidebar menu,
@@ -143,6 +153,7 @@ export type SettingsViewer = { isOwner: boolean; permissions: readonly string[] 
  * or showed everyone everything (advertising pages that redirect them away).
  */
 export function canSeeSettingsItem(item: SettingsNavItem, viewer: SettingsViewer): boolean {
+  if (item.platform) return viewer.isPlatformOwner === true;
   if (viewer.isOwner || item.everyone) return true;
   if (!item.permission) return false;
   const need = Array.isArray(item.permission) ? item.permission : [item.permission];

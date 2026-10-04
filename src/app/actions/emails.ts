@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { basePrisma, prisma } from "@/lib/db";
 import { customerRecordTenantId } from "@/lib/customerRecordTenant";
 import { putSetting } from "@/lib/settings";
-import { getActiveTenantId, requireOwner } from "@/lib/auth";
+import { getActiveTenantId, requireTenantOwner } from "@/lib/auth";
 import {
   EMAIL_HEADER_STYLES,
   SIGNING_EMAILS,
@@ -160,11 +160,11 @@ export async function sendTestEmail(
   _prev: SendEmailState | undefined
 ): Promise<SendEmailState> {
   return withActingStaffScope(async () => {
-    const user = await requireOwner();
+    const user = await requireTenantOwner();
     const result = await sendEmail({
       to: user.email,
-      subject: "Denago CRM test email",
-      text: "Your SMTP settings are working. — Denago CRM",
+      subject: "SMTP test email",
+      text: "Your SMTP settings are working.",
     });
     return result.ok
       ? { ok: `Test email sent to ${user.email}.` }
@@ -176,7 +176,7 @@ export async function sendTestEmail(
 
 export async function saveSmtpSettings(formData: FormData) {
   return asActionResult(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     const entries: Record<string, string> = {
       SMTP_HOST: String(formData.get("host") ?? "").trim(),
       SMTP_PORT: String(formData.get("port") ?? "587").trim(),
@@ -197,7 +197,7 @@ export async function saveSmtpSettings(formData: FormData) {
 
 export async function saveServiceReminderSettings(formData: FormData) {
   return asActionResult(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     const entries: Record<string, string> = {
       SERVICE_REMINDER_ENABLED: formData.get("enabled") === "on" ? "true" : "false",
       SERVICE_REMINDER_TEMPLATE_ID: String(formData.get("templateId") ?? "").trim(),
@@ -219,7 +219,7 @@ export async function saveServiceReminderSettings(formData: FormData) {
 
 export async function createTemplate(formData: FormData) {
   return asActionResult(async () => {
-    const user = await requireOwner();
+    const user = await requireTenantOwner();
     const tenantId = await tenantIdFor(user.id);
     if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
     const name = String(formData.get("name") ?? "").trim();
@@ -234,7 +234,7 @@ export async function createTemplate(formData: FormData) {
 
 export async function updateTemplate(id: string, formData: FormData) {
   return asActionResult(async () => {
-    const user = await requireOwner();
+    const user = await requireTenantOwner();
     const tenantId = await tenantIdFor(user.id);
     if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
     const name = String(formData.get("name") ?? "").trim();
@@ -252,7 +252,7 @@ export async function updateTemplate(id: string, formData: FormData) {
 
 export async function deleteTemplate(id: string, formData: FormData) {
   return asActionResult(async () => {
-    const user = await requireOwner();
+    const user = await requireTenantOwner();
     const tenantId = await tenantIdFor(user.id);
     if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
     void formData;
@@ -306,7 +306,7 @@ function templateFromForm(kind: SigningEmailKind, formData: FormData): StoredSig
 
 export async function saveSigningEmailTemplate(kind: string, formData: FormData) {
   return asActionResult(async () => {
-    const user = await requireOwner();
+    const user = await requireTenantOwner();
     const def = SIGNING_EMAILS[signingKind(kind)];
     const tenantId = await getActiveTenantId();
     if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
@@ -324,7 +324,7 @@ export async function saveSigningEmailTemplate(kind: string, formData: FormData)
 export async function resetSigningEmailTemplate(kind: string, formData: FormData) {
   return asActionResult(async () => {
     void formData;
-    const user = await requireOwner();
+    const user = await requireTenantOwner();
     const def = SIGNING_EMAILS[signingKind(kind)];
     const tenantId = await getActiveTenantId();
     if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
@@ -337,7 +337,7 @@ export async function resetSigningEmailTemplate(kind: string, formData: FormData
 /** Header background for the branded emails (signing, quote, and the other system emails). */
 export async function saveEmailHeaderStyle(formData: FormData) {
   return asActionResult(async () => {
-    const user = await requireOwner();
+    const user = await requireTenantOwner();
     const tenantId = await getActiveTenantId();
     if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
     const raw = String(formData.get("headerStyle") ?? "");
@@ -383,7 +383,7 @@ export type EmailPreview = { subject?: string; html?: string; text?: string; err
 export async function previewSigningEmailTemplate(kind: string, formData: FormData): Promise<EmailPreview> {
   let preview: EmailPreview = {};
   const result = await asActionResult(async () => {
-    const user = await requireOwner();
+    const user = await requireTenantOwner();
     const k = signingKind(kind);
     const tenantId = await getActiveTenantId();
     if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
@@ -408,7 +408,7 @@ export async function previewSigningEmailTemplate(kind: string, formData: FormDa
 /** Incoming-mail (IMAP) credentials — password encrypted at rest. */
 export async function saveImapSettings(formData: FormData) {
   return asActionResult(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     const entries: Record<string, string> = {
       IMAP_HOST: String(formData.get("host") ?? "").trim(),
       IMAP_PORT: String(formData.get("port") ?? "993").trim(),

@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { requireUser, getActiveTenantId } from "@/lib/auth";
+import { requireUser, getActiveTenantId, isTenantOwner } from "@/lib/auth";
 import type { Metadata } from "next";
 import { brandForTenant, brandIcons, brandLogoUrl, brandStyle, DEFAULT_BRAND } from "@/lib/tenantBrand";
 import { getSetting } from "@/lib/settings";
@@ -114,6 +114,9 @@ export default async function AppLayout({
           id: user.id,
           name: user.name,
           role: user.role,
+          // The workspace's own owner (Tenant.ownerUserId) or the platform owner —
+          // what the nav and menus mean by "owner". Never throws: false on failure.
+          isTenantOwner: await isTenantOwner().catch(() => false),
           permissions,
           avatarVersion: user.avatarRef ? user.avatarUpdatedAt?.toISOString() ?? "current" : null,
         }}

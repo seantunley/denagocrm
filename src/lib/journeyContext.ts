@@ -185,7 +185,8 @@ export function journeyTemplateVars(context: JourneyContext): Record<string, str
     // `lead` here is only that contact's most recently touched lead, which may
     // be about something else entirely. Without this the migrated anniversary
     // email could wish someone a happy anniversary with the wrong cart.
-    model: String(event.model ?? lead.productName ?? "Denago vehicle"),
+    // Neutral fallback: "Denago vehicle" went into every workspace's customer emails.
+    model: String(event.model ?? lead.productName ?? "your purchase"),
     // Set by the purchase_anniversary scheduler; empty for every other trigger.
     years: String(event.years ?? ""),
     stage: String(lead.stageName ?? ""),

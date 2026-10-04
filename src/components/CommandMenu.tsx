@@ -35,10 +35,14 @@ export function openCommandMenu() {
 
 export default function CommandMenu({
   isAdmin,
+  isPlatformOwner = false,
   permissions = [],
   enabledModules,
 }: {
+  /** Owner of the workspace being viewed. */
   isAdmin: boolean;
+  /** The platform-wide owner role — sees platform-level settings too. */
+  isPlatformOwner?: boolean;
   permissions?: string[];
   enabledModules?: string[];
 }) {
@@ -75,7 +79,7 @@ export default function CommandMenu({
     ...(can("jobcards.manage") ? [{ href: "/jobcards/new", label: "New job card", icon: Plus }] : []),
     { href: "/search", label: "Search accessible records", icon: Search },
   ].filter((action) => packOn(action.href));
-  const settingsGroups = visibleSettingsGroups({ isOwner: isAdmin, permissions }, enabledSet);
+  const settingsGroups = visibleSettingsGroups({ isOwner: isAdmin, isPlatformOwner, permissions }, enabledSet);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { requireOwner } from "@/lib/auth";
+import { requireTenantOwner } from "@/lib/auth";
 import { SettingsWorkspace, SettingsSection } from "@/components/settings-workspace";
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
 import { StatusPill } from "@/components/visual-system";
@@ -17,7 +17,7 @@ const DONE = new Set(["sent", "delivered", "completed", "done", "signed"]);
  * failures, which otherwise only showed in the 30-day error log.
  */
 export default async function QueuesSettingsPage() {
-  await requireOwner();
+  await requireTenantOwner();
   const queues = await loadQueueHealth();
 
   return (

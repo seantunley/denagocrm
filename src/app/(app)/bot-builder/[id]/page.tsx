@@ -1,8 +1,8 @@
+import { requireRoute } from "@/lib/permissions";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { FlaskConical } from "lucide-react";
 import { prisma } from "@/lib/db";
-import { requireOwner } from "@/lib/auth";
 import { DEFAULT_FLOW, type Flow } from "@/lib/flow";
 import { enabledFlowChannels } from "@/lib/flowValidationServer";
 import FlowBuilder from "@/components/FlowBuilder";
@@ -12,7 +12,7 @@ import { flowScope, journeyScope } from "@/lib/flowScope";
 import { getCompanyProfile } from "@/lib/companyProfile";
 
 export default async function FlowEditorPage({ params }: { params: Promise<{ id: string }> }) {
-  await requireOwner();
+  await requireRoute("/bot-builder");
   const { id } = await params;
   const scope = await flowScope();
   const row = await prisma.botFlow.findFirst({ where: { id, ...scope } });

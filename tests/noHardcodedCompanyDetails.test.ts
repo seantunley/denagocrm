@@ -42,9 +42,6 @@ const ALLOWED: Record<string, string> = {
   "src/lib/help/data/admin.json": "staff — help centre",
   "src/lib/help/data/channels.json": "staff — help centre (platform webhook URLs)",
   "src/lib/help/data/marketing.json": "staff — help centre",
-  "src/lib/ai.ts": "staff — proofreading prompt context, never sent to a customer",
-  "src/lib/researchPrompt.ts": "staff — lead-research prompt context",
-  "src/lib/webauthn.ts": "staff — passkey relying-party name",
   "src/lib/provisioning.ts": "seed — the founding tenant's own row",
   // The PLATFORM's origin (crm.denagocpt.co.za), not a company detail: a fallback
   // when NEXT_PUBLIC_APP_URL is unset. Tenant links go through tenantOrigin().

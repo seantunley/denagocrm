@@ -439,7 +439,8 @@ test("EVERY CHATGPT ACTION IS OWNER-ONLY", () => {
     ["disconnectChatGpt", "pollChatGptLogin", "startChatGptLogin", "testChatGpt"],
   );
   for (const [, name, body] of exported) {
-    assert.match(body.trim(), /^(const user = )?await requireOwner\(\);/, `${name} checks the owner FIRST`);
+    // The WORKSPACE owner: the ChatGPT login is the workspace's own (tenant AppSetting).
+    assert.match(body.trim(), /^(const user = )?await requireTenantOwner\(\);/, `${name} checks the owner FIRST`);
   }
 });
 

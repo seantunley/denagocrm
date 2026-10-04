@@ -43,7 +43,7 @@ test("saved evaluations are tenant-owned, RLS forced, bounded, and flow-fenced",
 
 test("evaluation actions validate every flow and version against the acting tenant", () => {
   const action = src("src/app/actions/flowEvaluations.ts");
-  assert.match(action, /await requireOwner\(\)/);
+  assert.match(action, /await requireTenantOwner\(\)/);
   assert.match(action, /const tenantId = await builderTenantId\(\)/);
   assert.ok((action.match(/where: \{ id: [^,]+, tenantId \}/g) ?? []).length >= 3);
   assert.match(action, /WHERE "tenantId" = \$\{tenantId\}/);

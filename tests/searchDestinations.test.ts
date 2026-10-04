@@ -3,11 +3,16 @@ import test from "node:test";
 import { getSearchDestinations, matchSearchDestinations } from "../src/lib/search-destinations";
 
 test("finds Settings destinations by their visible labels", () => {
-  const destinations = getSearchDestinations({ isAdmin: true });
+  // Backup & recovery is a PLATFORM entry: the platform owner finds it…
+  const destinations = getSearchDestinations({ isAdmin: true, isPlatformOwner: true });
   const results = matchSearchDestinations("backup", destinations);
 
   assert.equal(results[0]?.label, "Backup & recovery");
   assert.equal(results[0]?.href, "/settings/backup-recovery");
+  // …a workspace's own owner does not (the page would bounce them).
+  const workspaceOwner = getSearchDestinations({ isAdmin: true });
+  assert.equal(matchSearchDestinations("backup", workspaceOwner).length, 0);
+  assert.equal(matchSearchDestinations("company profile", workspaceOwner)[0]?.href, "/settings/company");
 });
 
 test("finds the Document library, now part of Documents, for users with library access", () => {
@@ -23,7 +28,7 @@ test("finds the Document library, now part of Documents, for users with library 
 });
 
 test("finds Settings destinations by descriptive keywords", () => {
-  const destinations = getSearchDestinations({ isAdmin: true });
+  const destinations = getSearchDestinations({ isAdmin: true, isPlatformOwner: true });
 
   assert.equal(matchSearchDestinations("restore", destinations)[0]?.href, "/settings/backup-recovery");
   assert.equal(matchSearchDestinations("document studio", destinations)[0]?.href, "/document-studio");

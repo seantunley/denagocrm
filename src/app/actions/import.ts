@@ -2,7 +2,7 @@
 
 import { prisma } from "@/lib/db";
 import { ciExactIdFilter } from "@/lib/ciExact";
-import { requireOwner } from "@/lib/auth";
+import { requireTenantOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { revalidatePath } from "next/cache";
 import { withActingStaffScope } from "@/lib/actingScope";
@@ -54,7 +54,7 @@ export async function importContacts(
   formData: FormData
 ): Promise<ImportState> {
   return withActingStaffScope(async () => {
-    const user = await requireOwner();
+    const user = await requireTenantOwner();
     const file = formData.get("file");
     if (!(file instanceof File) || file.size === 0) return { error: "Choose a CSV file first." };
     if (file.size > 5 * 1024 * 1024) return { error: "File too large (max 5 MB)." };

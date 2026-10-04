@@ -23,12 +23,12 @@ test("new knowledge is always a draft and approval is a separate owner action", 
   const statusAt = code.indexOf("export async function setBotKnowledgeStatus");
   assert.ok(addAt >= 0 && statusAt > addAt);
   const add = code.slice(addAt, statusAt);
-  assert.match(add, /await requireOwner\(\)/);
+  assert.match(add, /await requireTenantOwner\(\)/);
   assert.match(add, /botKnowledgeEntry\.create/);
   assert.match(add, /status: "draft"/);
   assert.doesNotMatch(add, /status: "approved"/);
   const status = code.slice(statusAt, code.indexOf("export async function deleteBotKnowledge"));
-  assert.match(status, /await requireOwner\(\)/);
+  assert.match(status, /await requireTenantOwner\(\)/);
   assert.match(status, /approvedAt: now/);
   assert.match(status, /approvedBy: owner\.name/);
 });
@@ -94,7 +94,7 @@ test("retrieval combines indexed full-text rank with deterministic phrase and to
 test("editing a live fact cannot silently change customer-facing knowledge", () => {
   const actions = src("src/app/actions/bot.ts");
   const edit = actions.slice(actions.indexOf("export async function updateBotKnowledge"), actions.indexOf("export async function setBotKnowledgeStatus"));
-  assert.match(edit, /await requireOwner\(\)/);
+  assert.match(edit, /await requireTenantOwner\(\)/);
   assert.match(edit, /status: "draft"/);
   assert.match(edit, /approvedAt: null/);
   assert.match(edit, /approvedBy: null/);

@@ -26,7 +26,7 @@ test("simulated AI and handoff are explicit test effects", () => {
 
 test("simulator page remains owner-gated and clearly draft-only", () => {
   const page = src("src/app/(app)/bot-builder/[id]/test/page.tsx");
-  assert.match(page, /await requireOwner\(\)/);
+  assert.match(page, /await requireRoute\("\/bot-builder"\)/);
   assert.match(page, /production graph engine/);
   assert.match(page, /every write\/send replaced by a simulator effect/);
 

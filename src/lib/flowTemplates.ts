@@ -11,10 +11,10 @@ export type FlowTemplate = {
 const SERVICE_FLOW: Flow = {
   start: "welcome",
   nodes: {
-    welcome: { id: "welcome", type: "message", text: "{{greeting}} I can help you book your cart in for service.", next: "name" },
+    welcome: { id: "welcome", type: "message", text: "{{greeting}} I can help you book an appointment.", next: "name" },
     name: { id: "name", type: "capture", text: "What's your name?", variable: "name", next: "phone" },
     phone: { id: "phone", type: "capture", text: "Thanks {{name}}. What's the best contact number?", variable: "phone", format: "phone", next: "service" },
-    service: { id: "service", type: "capture", text: "What does the cart need help with?", variable: "service", next: "slot" },
+    service: { id: "service", type: "capture", text: "What do you need help with?", variable: "service", next: "slot" },
     slot: { id: "slot", type: "slots", action: "book", text: "Choose one of the next available workshop times:", noneText: "There aren't open online slots just now — I'll log a service request so the team can call you.", next: "confirm", unavailableNext: "slotFallback", failureNext: "slotFallback" },
     slotFallback: { id: "slotFallback", type: "handoff", text: "I couldn't hold a time for you just now — one of the team will call you to book it." },
     confirm: { id: "confirm", type: "message", text: "You're booked, {{name}} — {{slot}}. We'll see you then. 🔧", next: "end" },
@@ -48,7 +48,7 @@ const SALES_FLOW: Flow = {
     },
     demoName: { id: "demoName", type: "capture", text: "Great — what's your name?", variable: "name", next: "demoPhone" },
     demoPhone: { id: "demoPhone", type: "capture", text: "What's the best contact number?", variable: "phone", format: "phone", next: "demoModel" },
-    demoModel: { id: "demoModel", type: "capture", text: "Which Denago model are you interested in?", variable: "model", next: "createDemo" },
+    demoModel: { id: "demoModel", type: "capture", text: "Which product are you interested in?", variable: "model", next: "createDemo" },
     createDemo: { id: "createDemo", type: "booking", action: "demo", text: "Thanks {{name}} — I've sent your demo request to the team. They'll confirm a time with you.", next: "end" },
     ai: { id: "ai", type: "ai" },
     end: { id: "end", type: "end" },

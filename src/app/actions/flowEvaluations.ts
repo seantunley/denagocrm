@@ -2,7 +2,7 @@
 
 import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
-import { requireOwner } from "@/lib/auth";
+import { requireTenantOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { basePrisma, prisma } from "@/lib/db";
 import { builderTenantId } from "@/lib/flowScope";
@@ -26,7 +26,7 @@ async function versionDefinition(tenantId: string, flowId: string, versionId: st
 
 export async function createFlowEvaluation(flowId: string, formData: FormData) {
   return withActingStaffScope(async () => {
-    const owner = await requireOwner();
+    const owner = await requireTenantOwner();
     const tenantId = await builderTenantId();
     const flow = await prisma.botFlow.findFirst({ where: { id: flowId, tenantId }, select: { id: true } });
     if (!flow) return { error: "Flow not found." };
@@ -111,7 +111,7 @@ async function runEvaluation(tenantId: string, evaluationId: string) {
 
 export async function runFlowEvaluation(evaluationId: string, _formData?: FormData) {
   return withActingStaffScope(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     const tenantId = await builderTenantId();
     const result = await runEvaluation(tenantId, evaluationId);
     if (result.flowId) revalidatePath(`/bot-builder/${result.flowId}/evaluations`);
@@ -122,7 +122,7 @@ export async function runFlowEvaluation(evaluationId: string, _formData?: FormDa
 
 export async function runAllFlowEvaluations(flowId: string, _formData?: FormData) {
   return withActingStaffScope(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     const tenantId = await builderTenantId();
     const flow = await prisma.botFlow.findFirst({ where: { id: flowId, tenantId }, select: { id: true } });
     if (!flow) return { error: "Flow not found." };
@@ -140,7 +140,7 @@ export async function runAllFlowEvaluations(flowId: string, _formData?: FormData
 
 export async function deleteFlowEvaluation(evaluationId: string, _formData?: FormData) {
   return withActingStaffScope(async () => {
-    const owner = await requireOwner();
+    const owner = await requireTenantOwner();
     const tenantId = await builderTenantId();
     const evaluation = await prisma.botFlowEvaluation.findFirst({ where: { id: evaluationId, tenantId }, select: { flowId: true, name: true } });
     if (!evaluation) return { error: "Evaluation not found." };

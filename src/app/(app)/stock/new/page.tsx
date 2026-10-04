@@ -30,7 +30,7 @@ export default async function NewStockUnitPage() {
       </Link>
       <PageHeader
         title="Add a stock unit"
-        description="Register one physical Denago unit already on the floor and make it available to the sales team."
+        description="Register one physical unit already on the floor and make it available to the sales team."
       />
 
       <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_20rem]">

@@ -11,7 +11,8 @@ export function looksLikeEmail(value: string | null | undefined): boolean {
 
 /** How a party recipient reads in the editor, where it has no name yet. */
 export function recipientLabel(recipient: Recipient): string {
-  if (recipient.party === "denago") return "Denago (whoever sends it)";
+  // The stored party key stays "denago" (saved templates use it); the label is any workspace's.
+  if (recipient.party === "denago") return "Our team (whoever sends it)";
   if (recipient.party === "customer") return "The customer";
   return recipient.name || recipient.email || "Recipient";
 }

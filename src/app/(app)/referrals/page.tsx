@@ -17,7 +17,7 @@ import {
 } from "@/components/responsive-patterns";
 import { EmptyState, MetricCard, StatusPill } from "@/components/visual-system";
 
-export const metadata = { title: "Referrals — DenagoCRM" };
+export const metadata = { title: "Referrals" };
 
 const statusLabel: Record<string, string> = {
   pending: "pending",

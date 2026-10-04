@@ -3,7 +3,7 @@
 import { asActionResult, refuse } from "@/lib/actionResult";
 import { prisma } from "@/lib/db";
 import { ciExactIdFilter } from "@/lib/ciExact";
-import { getActiveTenantId, requireOwner } from "@/lib/auth";
+import { getActiveTenantId, requireTenantOwner } from "@/lib/auth";
 import {
   CUSTOMER_RECORD_READ_PERMISSIONS,
   getAccessibleContactIds,
@@ -132,7 +132,7 @@ export async function findPossibleDuplicates(input: {
  */
 export async function clearErrorLog() {
   return asActionResult(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     const tenantId = await getActiveTenantId();
     if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
     await basePrisma.errorLog.deleteMany({ where: { tenantId } });

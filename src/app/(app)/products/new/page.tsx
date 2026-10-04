@@ -1,10 +1,10 @@
+import { requireRoute } from "@/lib/permissions";
 import Link from "next/link";
 import { ArrowLeft, BadgeDollarSign, ClipboardList, PackageCheck, Palette } from "lucide-react";
 import ProductForm from "@/components/ProductForm";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
 import { SectionHeading, Surface } from "@/components/visual-system";
-import { requireOwner } from "@/lib/auth";
 
 const productJourney = [
   { icon: ClipboardList, label: "Available to sales", detail: "The model appears in lead and quote product selection immediately." },
@@ -13,7 +13,7 @@ const productJourney = [
 ];
 
 export default async function NewProductPage() {
-  await requireOwner();
+  await requireRoute("/products");
 
   return (
     <div className="space-y-6">

@@ -10,9 +10,13 @@ export type SearchDestination = {
 
 export function getSearchDestinations({
   isAdmin,
+  isPlatformOwner = false,
   permissions = [],
 }: {
+  /** Owner of the workspace being viewed. */
   isAdmin: boolean;
+  /** The platform-wide owner role — the only viewer of platform settings. */
+  isPlatformOwner?: boolean;
   permissions?: string[];
 }): SearchDestination[] {
   const { topLinks, groups } = buildNav(isAdmin, permissions);
@@ -31,7 +35,7 @@ export function getSearchDestinations({
       group: "Account",
       keywords: ["preferences", "configuration"],
     },
-    ...visibleSettingsGroups({ isOwner: isAdmin, permissions }).flatMap((group) =>
+    ...visibleSettingsGroups({ isOwner: isAdmin, isPlatformOwner, permissions }).flatMap((group) =>
       group.items.map((item) => ({
         href: settingsDestination(item),
         label: item.label,
