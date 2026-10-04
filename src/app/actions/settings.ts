@@ -42,6 +42,8 @@ import { bumpUserSessionVersion } from "@/lib/userSecurity";
 import { createUserInOwnerTenant } from "@/lib/tenantContext";
 import { deleteFile, saveFile } from "@/lib/storage";
 import { withActingStaffScope } from "@/lib/actingScope";
+import { listActingTenantStaff } from "@/lib/tenantActor";
+import { LEAD_ROUTING_KEY, parseLeadRoutingConfig, routingCandidateIds } from "@/lib/leadRouting";
 import {
   detectProfileImageMime,
   isValidPhone,
@@ -804,4 +806,45 @@ export async function saveActivityTypes(types: unknown): Promise<ActionResult> {
     // in the app, so the whole shell has to re-render.
     revalidatePath("/", "layout");
   });
+}
+
+// ---- Lead routing ----
+
+/**
+ * Who new inbound leads are auto-assigned to (lib/leadRouting.ts).
+ *
+ * OWNER ONLY. Every user id the config can assign to — reps AND fixed rule
+ * targets — must be an active member of the ACTING workspace, checked here
+ * against the same list the picker was built from: a posted id from another
+ * workspace would otherwise be stored and, at the next lead, refused only by the
+ * runtime re-check. Refusing at save time tells the owner instead of silently
+ * leaving leads unassigned. Products are checked through the tenant-guarded
+ * client for the same reason.
+ *
+ * `withActingStaffScope` because the product read below goes through the guarded
+ * client, which needs a bound scope a Server Action does not otherwise have.
+ */
+export async function saveLeadRouting(input: unknown): Promise<ActionResult> {
+  return withActingStaffScope(() =>
+    asActionResult(async () => {
+      await requireTenantOwner();
+      const config = parseLeadRoutingConfig(input);
+
+      const members = new Set((await listActingTenantStaff()).map((person) => person.id));
+      if (routingCandidateIds(config).some((id) => !members.has(id))) {
+        refuse("One of the chosen people is not an active member of this workspace. Refresh and try again.");
+      }
+      const productIds = [...new Set(config.rules.flatMap((rule) => (rule.productId ? [rule.productId] : [])))];
+      if (productIds.length > 0) {
+        const found = await prisma.product.count({ where: { id: { in: productIds } } });
+        if (found !== productIds.length) refuse("One of the chosen products no longer exists. Refresh and try again.");
+      }
+      if (config.enabled && routingCandidateIds(config).length === 0) {
+        refuse("Pick at least one rep before switching lead routing on.");
+      }
+
+      await putSetting(LEAD_ROUTING_KEY, JSON.stringify(config));
+      revalidatePath("/settings/lead-routing");
+    }),
+  );
 }
