@@ -1045,9 +1045,18 @@ function observationText(o: Observation): string {
   // JSON. Cleaning folds fullwidth forms (NFKC), and a customer's fullwidth
   // ＂ and ＼ would otherwise become real quotes after stringify and forge
   // sibling fields ("status":"won", fake approved answers) inside the results.
-  const clean = (_key: string, value: unknown) => (typeof value === "string" ? stripInvisible(value) : value);
-  const body = JSON.stringify({ truncated: o.output.truncated, results: o.output.data }, clean);
-  return `${o.tool} ${JSON.stringify(o.args ?? {}, clean)} →\n${body.length > OBSERVATION_CHARS ? `${body.slice(0, OBSERVATION_CHARS)}…(cut)` : body}`;
+  const body = JSON.stringify({ truncated: o.output.truncated, results: cleanDeep(o.output.data) });
+  return `${o.tool} ${JSON.stringify(cleanDeep(o.args ?? {}))} →\n${body.length > OBSERVATION_CHARS ? `${body.slice(0, OBSERVATION_CHARS)}…(cut)` : body}`;
+}
+
+/** Every string in a value — object KEYS as well as values — cleaned, before it is serialised. */
+export function cleanDeep(value: unknown): unknown {
+  if (typeof value === "string") return stripInvisible(value);
+  if (Array.isArray(value)) return value.map(cleanDeep);
+  if (value && typeof value === "object" && !(value instanceof Date)) {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [stripInvisible(k), cleanDeep(v)]));
+  }
+  return value;
 }
 
 export { safeCodexError };

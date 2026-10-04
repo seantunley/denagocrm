@@ -237,11 +237,14 @@ export const DATA_RULE =
 
 /**
  * Lookups as the model reads them: fenced, so the data rule has a boundary to
- * point at. A customer can't close the fence early: any crm_results tag in the
- * data, in any case, is defanged first.
+ * point at. A customer can't close the fence early: anything in the data that
+ * reads like one of its tags — any case, spaced, HTML-escaped (&lt;), or with a
+ * look-alike letter (Cyrillic "с") — is defanged first. `body` must already be
+ * cleaned (stripInvisible), so fullwidth ＜ has been folded to <.
  */
 export function resultsBlock(label: string, body: string): string {
-  return `${label}\n<crm_results>\n${body.replace(/<\s*(\/?)\s*crm_results/gi, "‹$1crm_results")}\n</crm_results>`;
+  const defanged = body.replace(/(<|&lt;|&#0*60;|&#x0*3c;)(\s*\/?\s*)([\p{L}_-]{0,8}results)/giu, "‹$2$3");
+  return `${label}\n<crm_results>\n${defanged}\n</crm_results>`;
 }
 
 export const ANSWER_RULES = [

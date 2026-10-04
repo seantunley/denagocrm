@@ -22,7 +22,10 @@ const KEEP = "\u{F0000}"; // private-use stand-in for a kept joiner while the re
 // combining grapheme joiner, Mongolian free variation selectors, the Khmer
 // inherent vowels, the musical null notehead, the Hangul fillers, the braille
 // blank, the object-replacement character and the variation-selector supplement.
-const INVISIBLE = /[\p{Cf}͏᠋-᠏឴឵\u{1D159}ᅟᅠㅤﾠ⠀￼\u{E0100}-\u{E01EF}]/gu;
+// Also the Default_Ignorable ranges not yet assigned (a future font may render
+// them as nothing): U+2065, U+FFF0–FFF8, the whole U+E0000–E0FFF plane block,
+// and the Khitan filler U+16FE4.
+const INVISIBLE = /[\p{Cf}͏᠋-᠏឴឵\u{1D159}ᅟᅠㅤﾠ⠀￼⁥￰-￸\u{16FE4}\u{E0000}-\u{E0FFF}]/gu;
 /** Variation selectors survive only straight after an emoji (✅️, ⚠️). */
 const STRAY_SELECTOR = /(?<!\p{Extended_Pictographic})[︀-️]/gu;
 
