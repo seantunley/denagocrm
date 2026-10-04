@@ -1013,6 +1013,9 @@ model AssistantPhoneLink {
   codeHash      String?
   codeExpiresAt DateTime?
   verifiedAt    DateTime?
+  /// The account's sessionVersion when linked. A linked number is a sign-in:
+  /// any later bump (password reset, sign out everywhere, disable) ends it.
+  sessionVersion Int?
   createdAt     DateTime  @default(now())
 
   @@unique([tenantId, userId])

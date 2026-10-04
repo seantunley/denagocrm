@@ -110,7 +110,10 @@ const INJECTION = [
   /\bLEARN:/,
 ];
 const EMAIL = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
-const PHONE = /(\+?\d[\d\s-]{8,}\d)/;
+// Any run of 9+ digits once the usual separators — spaces, dashes, dots,
+// brackets, slashes — are ignored: "082.123.4567" and "(082) 123 4567" too.
+// (Fullwidth digits and ＠ are already folded by NFKC in stripInvisible.)
+const PHONE = /\+?\(?\d(?:[\s\-./()]*\d){8,}/;
 
 /** Cleaned text, or a reason it may not be learned. */
 export function scanEntry(raw: string): { ok: true; text: string } | { ok: false; reason: string } {
