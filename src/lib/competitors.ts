@@ -9,6 +9,7 @@ import { safeFetchText } from "./safeFetch";
 import { inheritedTenantId } from "./tenantWrite";
 import { codexModel, codexRespond, isCodexConnected } from "./codex";
 import { stripInlineCitations } from "./researchPrompt";
+import { getCompanyProfile } from "./companyProfile";
 
 // CRM-native competitor monitoring. Fetch a public page, normalise to visible
 // text, hash it, and only when the hash changes do we snapshot, diff, apply
@@ -108,14 +109,27 @@ const classifySchema = z.object({
 });
 type ClassifyResult = z.infer<typeof classifySchema>;
 
+/**
+ * Whose competitive position the AI is analysing: the workspace that owns the
+ * competitor (its Company Profile). Every prompt here said "Denago, an EV dealer
+ * in Cape Town", so every workspace's competitor research was framed as a
+ * golf-cart dealer's.
+ */
+async function ownBusiness(tenantId: string | null | undefined): Promise<string> {
+  const name = (await getCompanyProfile(tenantId).catch(() => null))?.name?.trim();
+  return name || "our business";
+}
+
 async function aiClassifyChange(input: {
   competitorName: string;
+  ownBusiness: string;
   sourceLabel: string;
   before: string;
   after: string;
 }): Promise<ClassifyResult | null> {
   const system =
-    'You are a competitive-intelligence analyst for Denago, an electric-vehicle (golf cart / LSV) dealer in Cape Town. Classify ONLY the supplied before/after evidence from a competitor\'s public web page. Do not invent facts beyond the evidence. A change is material only if it may affect pricing, product capability, positioning/messaging, availability, hiring signals, or competitive risk. Respond with STRICT JSON only: {"is_material": boolean, "category": "pricing|product|messaging|hiring|other", "materiality": "noise|minor|important|critical", "summary": "one factual sentence"}';
+    `You are a competitive-intelligence analyst for ${input.ownBusiness}.` +
+    ' Classify ONLY the supplied before/after evidence from a competitor\'s public web page. Do not invent facts beyond the evidence. A change is material only if it may affect pricing, product capability, positioning/messaging, availability, hiring signals, or competitive risk. Respond with STRICT JSON only: {"is_material": boolean, "category": "pricing|product|messaging|hiring|other", "materiality": "noise|minor|important|critical", "summary": "one factual sentence"}';
   const user = `Competitor: ${input.competitorName}\nPage: ${input.sourceLabel}\n\nREMOVED (before):\n${input.before || "(nothing)"}\n\nADDED (after):\n${input.after || "(nothing)"}`;
   try {
     let content: string;
@@ -268,6 +282,7 @@ async function collectSourceInner(sourceId: string): Promise<CollectResult> {
   const ai = material
     ? await aiClassifyChange({
         competitorName: source.competitor.name,
+        ownBusiness: await ownBusiness(source.competitor.tenantId),
         sourceLabel: source.label,
         before: evidenceBefore ?? "",
         after: evidenceAfter ?? "",
@@ -480,7 +495,8 @@ export async function discoverSources(competitorId: string, createdById?: string
   const competitor = await prisma.competitor.findFirst({ where: { id: competitorId, deletedAt: null } });
   if (!competitor) return { ok: false, created: 0, skipped: 0, error: "Competitor not found" };
 
-  const system = `You are a competitive-intelligence researcher for Denago, an electric-vehicle (golf cart / low-speed vehicle) dealer in Cape Town, South Africa. Given a competitor company, use web search to find its real online footprint. Identify:
+  const us = await ownBusiness(competitor.tenantId);
+  const system = `You are a competitive-intelligence researcher for ${us}, a South African business. Given a competitor company, use web search to find its real online footprint. Identify:
 - the official website and the specific pages worth monitoring for competitive change (home, pricing, product/models, news/blog, promotions)
 - its public social profiles (Facebook, Instagram, LinkedIn, YouTube, X/Twitter, TikTok)
 Only include URLs you actually found and verified via search — never guess or fabricate URLs. Prefer canonical, stable URLs.
@@ -573,11 +589,12 @@ export async function researchCompetitor(competitorId: string, createdById?: str
   const changeList =
     recentChanges.map((c) => `- [${c.materiality}/${c.category ?? "?"}] ${c.summary}`).join("\n") || "(none)";
 
-  const system = `You are a competitive-intelligence analyst for Denago, an electric golf-cart / low-speed-vehicle dealer in Cape Town, South Africa. Produce a concise, factual intelligence brief on the named competitor using web search. Focus on what a sales and leadership team needs: current product line-up and any new models, pricing and current promotions, positioning and messaging, expansion / new locations / partnerships, hiring signals, and anything that shifts the competitive threat to Denago. Cross-check against the recently auto-detected page changes supplied. Never fabricate — if something is unknown, say so in one line.
+  const us = await ownBusiness(competitor.tenantId);
+  const system = `You are a competitive-intelligence analyst for ${us}, a South African business. Produce a concise, factual intelligence brief on the named competitor using web search. Focus on what a sales and leadership team needs: current product line-up and any new models, pricing and current promotions, positioning and messaging, expansion / new locations / partnerships, hiring signals, and anything that shifts the competitive threat to ${us}. Cross-check against the recently auto-detected page changes supplied. Never fabricate — if something is unknown, say so in one line.
 Format as plain text, short lines, no preamble:
 HEADLINE: <8-14 word summary of the single most important current development>
 Then 4-8 bullet points ("- ..."), each a factual finding.
-End with one line: "So what for Denago: <implication>".`;
+End with one line: "So what for ${us}: <implication>".`;
 
   const user = `Competitor: ${competitor.name}${competitor.website ? ` — ${competitor.website}` : ""}
 Monitored sources:

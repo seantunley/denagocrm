@@ -23,11 +23,11 @@ const TYPE_META: Record<SignNode["type"], { icon: string; label: string; color: 
 };
 
 const MODE_LABEL: Record<SignerMode, string> = {
-  staff: "Denago staff", role: "Role", owner: "Any owner/admin", customer: "The customer", email: "Fixed email", ask: "Choose at send",
+  staff: "Our staff", role: "Role", owner: "Any owner/admin", customer: "The customer", email: "Fixed email", ask: "Choose at send",
 };
 
 function whoLabel(who: { mode: SignerMode; userId?: string; role?: string; email?: string }, staff: StaffOption[]): string {
-  return who.mode === "staff" ? (staff.find((s) => s.id === who.userId)?.name ?? "Denago staff")
+  return who.mode === "staff" ? (staff.find((s) => s.id === who.userId)?.name ?? "Our staff")
     : who.mode === "role" ? (who.role || "a role")
     : who.mode === "email" ? (who.email || "an email")
     : MODE_LABEL[who.mode];

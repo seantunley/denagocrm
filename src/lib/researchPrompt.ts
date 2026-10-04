@@ -16,8 +16,17 @@ export function corporateDomain(email: string | null | undefined): string | null
   return domain && !FREE_MAIL.has(domain) ? domain : null;
 }
 
+/**
+ * Who the research is for: the workspace's own business, from its Company
+ * Profile. This was "Denago Cape Town, a South African electric golf-cart
+ * dealership" for every workspace, so a breastfeeding-art studio's leads were
+ * researched as golf-cart buyers.
+ */
+export function researchInstructions(companyName: string): string {
+  return `You research sales leads for ${companyName.trim() || "this business"}.\n\n${RESEARCH_INSTRUCTIONS}`;
+}
+
 export const RESEARCH_INSTRUCTIONS =
-  "You research sales leads for Denago Cape Town, a South African electric golf-cart dealership.\n\n" +
   "SEARCH HARD BEFORE YOU CONCLUDE ANYTHING. Work several angles, not one or two: the person's name plus LinkedIn, the name plus \"South Africa\", the name plus any employer you turn up, and the company's own website and public social profiles (Facebook, Instagram, X/Twitter). LinkedIn is usually the most reliable source for a current role — search for it directly rather than relying on whatever a generic web search happens to surface. Two searches is not a search.\n\n" +
   /*
    * THE ANGLE THAT CRACKED THE PETROW AGRI LEAD, AND THE ONE GPT SKIPPED.

@@ -136,7 +136,7 @@ export default async function StockPage({
         icon={Warehouse}
         eyebrow="Inventory control"
         title="Stock operations"
-        description="Control every physical Denago unit from supplier order through reservation, PDI, delivery and warranty activation."
+        description="Control every physical unit from supplier order through reservation, PDI, delivery and warranty activation."
         actions={<>
           <a href={reportHref} target="_blank" rel="noreferrer" className={buttonVariants({ variant: "outline", size: "sm" })}>
           <FileDown className="size-4" /> Print report

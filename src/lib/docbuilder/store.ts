@@ -1,5 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/db";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import { readTemplateDocument } from "@/lib/doceditor/legacy";
 import {
   STANDARD_TEMPLATE_KEYS,
@@ -72,7 +73,9 @@ export async function ensureBuilderSeeded(): Promise<void> {
           name: STANDARD_TEMPLATE_NAMES[key],
           key,
           isDefault: becomeDefault,
-          data: standardTemplateFor(key) as object,
+          // The workspace's own standard: no vehicle card or EV disclaimer on a
+          // non-automotive workspace's quotes.
+          data: standardTemplateFor(key, { automotive: await isModuleEnabled("automotive") }) as object,
         },
       });
     } catch (error) {
