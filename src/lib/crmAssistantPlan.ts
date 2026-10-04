@@ -63,6 +63,8 @@ export const leadBriefArgs = z.object({ lead: z.string().trim().min(1).max(120) 
 export const knowledgeArgs = z.object({ topic: z.string().trim().min(1).max(200) }).strict();
 /** The asker's own earlier conversations (30 days). */
 export const recallArgs = z.object({ query: z.string().trim().min(1).max(200) }).strict();
+/** One learned playbook in full (the index of names is always in the prompt). */
+export const playbookArgs = z.object({ name: z.string().trim().min(1).max(48) }).strict();
 
 export const assistantStep = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("find_leads"), args: leadArgs.default({}) }),
@@ -72,6 +74,7 @@ export const assistantStep = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("lead_brief"), args: leadBriefArgs }),
   z.object({ tool: z.literal("knowledge"), args: knowledgeArgs }),
   z.object({ tool: z.literal("recall"), args: recallArgs }),
+  z.object({ tool: z.literal("playbook"), args: playbookArgs }),
   z.object({ tool: z.literal("done") }),
 ]);
 
@@ -85,6 +88,8 @@ export type PlanContext = {
   stages: string[];
   staff: string[];
   activityTypes: string[];
+  /** What it has learned (memory, this person's profile, playbook index), if anything. */
+  learned?: string;
 };
 
 export function planInstructions(ctx: PlanContext): string {
@@ -99,6 +104,7 @@ export function planInstructions(ctx: PlanContext): string {
     '- lead_brief: {"lead":"<customer name, lead title or id>" (required)} — one lead in depth: details, recent messages both ways, quotes (viewed? signed?), activities, research. Use it for "what should I do with X", "where are we with X", or to look closer at a lead found earlier.',
     '- knowledge: {"topic":"<what to look up>" (required)} — the business\'s own knowledge: products and prices, approved answers (finance, warranty, policies…), company details, competitor intelligence.',
     '- recall: {"query":"<words>" (required)} — this person\'s own earlier conversations with you (last 30 days).',
+    '- playbook: {"name":"<playbook name>" (required)} — one of your learned playbooks in full, when the question uses its term or procedure ("hot leads" → the hot-lead playbook) — load it BEFORE searching so you search the right way.',
     '- done: {} — you have enough (or the question needs no lookup: greetings, advice, or something already in the conversation).',
     `Stages: ${ctx.stages.join(", ") || "(none)"}.`,
     `People: ${ctx.staff.join(", ") || "(none)"}.`,
@@ -106,7 +112,8 @@ export function planInstructions(ctx: PlanContext): string {
     'Use names exactly as listed. Money is in rands (R200k = 200000). "Hot" or "biggest" → sort by value; "gone quiet"/"not contacted" → noContactDays.',
     "Don't repeat a lookup that already ran. Prefer done once the results answer the question.",
     'Shape: {"tool":"find_leads","args":{...}} or {"tool":"done"}',
-  ].join("\n");
+    ctx.learned ? `\n${ctx.learned}` : "",
+  ].filter(Boolean).join("\n");
 }
 
 /**

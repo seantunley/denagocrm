@@ -21,6 +21,8 @@ import {
   type PermissionUser,
 } from "./permissions";
 import { ASSISTANT_PROFILE_KEY, parseProfile, soulText } from "./assistantSoul";
+import { LEARN_INSTRUCTIONS, memoryPrompt, splitLearn } from "./assistantMemory";
+import { applyLearn, loadLearned, loadPlaybook } from "./assistantMemoryStore";
 import {
   ANSWER_RULES,
   MAX_STEPS,
@@ -31,6 +33,7 @@ import {
   leadBriefArgs,
   parseStep,
   planInstructions,
+  playbookArgs,
   quoteArgs,
   recallArgs,
   type PriorTurn,
@@ -65,7 +68,8 @@ const OBSERVATION_CHARS = 7000;
 
 export type AssistantRow = { label: string; detail: string; href: string };
 export type AssistantResult =
-  | { ok: true; answer: string; rows: AssistantRow[]; tools: string[] }
+  /** learned: how many memories/playbooks this answer added or changed (owner reviews them). */
+  | { ok: true; answer: string; rows: AssistantRow[]; tools: string[]; learned: number }
   | { ok: false; error: string };
 
 type ToolOutput = { rows: AssistantRow[]; data: unknown[]; truncated: boolean };
@@ -505,6 +509,13 @@ async function recall(user: User, raw: z.infer<typeof recallArgs>): Promise<Tool
   };
 }
 
+async function playbook(raw: z.infer<typeof playbookArgs>): Promise<ToolOutput> {
+  const { name } = playbookArgs.parse(raw);
+  const book = await loadPlaybook(name);
+  if (!book) return { truncated: false, rows: [], data: [{ note: `No playbook called "${name}".` }] };
+  return { truncated: false, rows: [], data: [{ playbook: book.name, description: book.description, content: book.content, reviewed: book.status === "approved" }] };
+}
+
 function refused(what: string): ToolOutput {
   return { truncated: false, rows: [], data: [{ note: `You don't have access to ${what}.` }] };
 }
@@ -518,6 +529,7 @@ async function runTool(user: User, step: ToolStep): Promise<ToolOutput> {
     case "lead_brief": return leadBrief(user, step.args);
     case "knowledge": return knowledge(user, step.args);
     case "recall": return recall(user, step.args);
+    case "playbook": return playbook(step.args);
   }
 }
 
@@ -571,9 +583,10 @@ export async function askCrm(user: User, question: string): Promise<AssistantRes
   if (!(await isCodexConnected())) {
     return { ok: false, error: "Connect ChatGPT first: Settings → Integrations → ChatGPT." };
   }
-  const [context, history] = await Promise.all([planContext(user), recentTurns(user.id)]);
+  const [context, history, learnedNow] = await Promise.all([planContext(user), recentTurns(user.id), loadLearned(user.id)]);
   const conversation = conversationBlock(history);
-  const instructions = planInstructions(context);
+  const learned = memoryPrompt(learnedNow);
+  const instructions = planInstructions({ ...context, learned });
 
   // Research: look, see, look closer — at most MAX_STEPS lookups.
   const observations: Observation[] = [];
@@ -616,7 +629,7 @@ export async function askCrm(user: User, question: string): Promise<AssistantRes
   ]);
   const soul = soulText(parseProfile(profileRaw), company?.name ?? "", user.name || "a colleague");
   const answerReply = await codexRespond({
-    instructions: `${soul}\n\n${ANSWER_RULES}`,
+    instructions: [soul, learned, ANSWER_RULES, LEARN_INSTRUCTIONS].filter(Boolean).join("\n\n"),
     prompt: [
       conversation,
       `Question: ${question}`,
@@ -633,9 +646,16 @@ export async function askCrm(user: User, question: string): Promise<AssistantRes
   if ("error" in answerReply) {
     await logError("crm-assistant", "answer step failed", answerReply.error);
     // The rows are still right; show them rather than nothing.
-    return { ok: true, answer: "Here's what the CRM returned (ChatGPT couldn't write it up just now).", rows, tools };
+    return { ok: true, answer: "Here's what the CRM returned (ChatGPT couldn't write it up just now).", rows, tools, learned: 0 };
   }
-  const answer = answerReply.text.trim();
+  // The answer the person sees, and — separately — anything it decided to learn.
+  const { answer, learn } = splitLearn(answerReply.text);
+  const learnedCount = learn
+    ? await applyLearn(user.id, learn).catch(async (error: unknown) => {
+        await logError("crm-assistant", "learning write failed", error instanceof Error ? error.name : "unknown");
+        return 0;
+      })
+    : 0;
   await prisma.assistantTurn
     .create({
       data: {
@@ -648,7 +668,7 @@ export async function askCrm(user: User, question: string): Promise<AssistantRes
     })
     // Remembering is a nicety; failing to must not cost the person their answer.
     .catch((error: unknown) => logError("crm-assistant", "history write failed", error instanceof Error ? error.name : "unknown"));
-  return { ok: true, answer, rows, tools };
+  return { ok: true, answer, rows, tools, learned: learnedCount };
 }
 
 function dedupeRows(rows: AssistantRow[]): AssistantRow[] {

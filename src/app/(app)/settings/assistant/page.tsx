@@ -7,6 +7,9 @@ import { saveAssistantProfile } from "@/app/actions/assistantSettings";
 import { SettingsWorkspace } from "@/components/settings-workspace";
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
+import { prisma } from "@/lib/db";
+import { listActingTenantStaff } from "@/lib/tenantActor";
+import AssistantLearnedReview, { type LearnedNote } from "@/components/AssistantLearnedReview";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +23,23 @@ const TONE_LABELS: Record<Tone, string> = {
 export default async function AssistantSettingsPage() {
   await requireTenantOwner();
   if (!(await isModuleEnabled("automation"))) notFound();
-  const profile = parseProfile(await getSetting(ASSISTANT_PROFILE_KEY));
+  const [profile, notes, staff] = await Promise.all([
+    getSetting(ASSISTANT_PROFILE_KEY).then(parseProfile),
+    prisma.assistantNote.findMany({ orderBy: [{ status: "desc" }, { createdAt: "desc" }] }),
+    listActingTenantStaff(),
+  ]);
+  const nameOf = new Map(staff.map((s) => [s.id, s.name]));
+  const learned: LearnedNote[] = notes.map((n) => ({
+    id: n.id,
+    kind: n.kind,
+    name: n.name,
+    description: n.description,
+    content: n.content,
+    status: n.status,
+    createdAt: n.createdAt,
+    about: n.kind === "profile" && n.userId ? nameOf.get(n.userId) ?? "a former team member" : null,
+    taughtBy: n.createdById ? nameOf.get(n.createdById) ?? null : null,
+  }));
 
   return (
     <SettingsWorkspace
@@ -59,13 +78,16 @@ export default async function AssistantSettingsPage() {
             placeholder={"Things it should always or never do, in your words. e.g.\n- Always mention the 5-year battery warranty when price comes up.\n- Never suggest a discount above 5%."}
           />
           <span className="block text-[11px] text-muted-foreground">
-            It also learns your business as your team uses it — you&apos;ll be able to review what it has learned here.
+            It also learns your business as your team uses it — review what it has learned below.
           </span>
         </label>
         <div className="flex justify-end border-t border-border/60 pt-4">
           <SaveButton>Save</SaveButton>
         </div>
       </SaveForm>
+      <div className="mt-8">
+        <AssistantLearnedReview notes={learned} />
+      </div>
     </SettingsWorkspace>
   );
 }

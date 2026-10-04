@@ -8,7 +8,7 @@ import { transcribeQuestion } from "@/app/actions/voice";
 import type { AssistantRow } from "@/lib/crmAssistant";
 import { audioForm, useVoiceRecorder } from "@/components/useVoiceRecorder";
 
-type Turn = { question: string; answer?: string; error?: string; rows: AssistantRow[] };
+type Turn = { question: string; answer?: string; error?: string; rows: AssistantRow[]; learned?: number };
 
 const EXAMPLES = [
   "Which deals should I chase today, and why?",
@@ -42,7 +42,7 @@ export default function AssistantChat({
       const result = await askCrmAction(q).catch(() => ({ ok: false as const, error: "Something went wrong — try again." }));
       setTurns((prev) => [
         result.ok
-          ? { question: q, answer: result.answer, rows: result.rows }
+          ? { question: q, answer: result.answer, rows: result.rows, learned: result.learned }
           : { question: q, error: result.error, rows: [] },
         ...prev,
       ]);
@@ -123,6 +123,11 @@ export default function AssistantChat({
             <p className="text-sm text-destructive">{turn.error}</p>
           ) : (
             <p className="whitespace-pre-line text-sm leading-relaxed">{turn.answer}</p>
+          )}
+          {Boolean(turn.learned) && (
+            <p className="text-[11px] text-muted-foreground">
+              🧠 {name} learned something from this — the workspace owner can review it in Settings → Assistant.
+            </p>
           )}
           {turn.rows.length > 0 && (
             <ul className="divide-y divide-border/50 rounded-lg border border-border/50">
