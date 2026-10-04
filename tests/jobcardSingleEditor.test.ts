@@ -96,7 +96,7 @@ test("e-signing: job cards use the published layout only; otherwise the standard
   assert.match(action, /defaultBuilderTemplateId\("quote"\)/, "quotes are unchanged");
   const envelope = src("src/lib/signing/autoEnvelope.ts");
   assert.match(envelope, /getLiveBuilderTemplate\(templateId\)/);
-  assert.match(envelope, /quoteId \? standardQuoteTemplate\(\) : standardJobCardTemplate\(\)/);
+  assert.match(envelope, /quoteId \? standardQuoteTemplate\(\{[^}]*\}\) : standardJobCardTemplate\(\)/);
 });
 
 // ── context fields ───────────────────────────────────────────────────────────

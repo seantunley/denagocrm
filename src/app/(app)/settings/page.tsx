@@ -402,12 +402,14 @@ export default async function SettingsPage({
                     </td>
                     {isOwner && (
                       <td className="text-right">
-                        {u.id !== currentUser.id && (
+                        {/* A platform owner's account is the platform's to manage (security.ts). */}
+                        {u.id !== currentUser.id && (currentUser.role === "owner" || u.role !== "owner") && (
                           <OwnerUserControls
                             userId={u.id}
                             name={u.name}
                             role={u.role as "owner" | "member"}
                             has2fa={Boolean(u.totpEnabledAt || u.emailOtpEnabled)}
+                            canChangeRole={currentUser.role === "owner"}
                           />
                         )}
                       </td>

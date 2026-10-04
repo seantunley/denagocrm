@@ -5,7 +5,7 @@ import { prisma } from "@/lib/db";
 import { requirePermission, requireAnyPermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { dispatchRequest, notifyRecipient } from "@/lib/signing/dispatch";
-import { logSignEvent } from "@/lib/signing/events";
+import { logSignEvent, staffActor } from "@/lib/signing/events";
 import { approveStep, rejectStep, canActOnStep } from "@/lib/signing/approvals";
 import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "@/lib/signing/status";
 import { withActingStaffScope } from "@/lib/actingScope";
@@ -130,7 +130,7 @@ export async function resendSignedCopies(requestId: string) {
     // Fully delivered now: write the marker the recovery sweep looks for, so it
     // stops considering this request stranded.
     if (delivery.ok && !(await prisma.signatureEvent.findFirst({ where: { requestId, type: COMPLETED_EVENT }, select: { id: true } }))) {
-      await logSignEvent(requestId, { type: COMPLETED_EVENT, actor: `Denago: ${user.name}` });
+      await logSignEvent(requestId, { type: COMPLETED_EVENT, actor: await staffActor(user.name, req.tenantId) });
     }
     await logAudit({
       action: "signing.signed_copy_resent",
@@ -176,7 +176,7 @@ export async function voidRequest(requestId: string, reason?: string): Promise<{
       data: { status: "voided" },
     });
     if (voided.count === 0) return { ok: false };
-    await logSignEvent(requestId, { type: "voided", actor: `Denago: ${user.name}`, metadata: { reason: reason ?? "" } });
+    await logSignEvent(requestId, { type: "voided", actor: await staffActor(user.name, req.tenantId), metadata: { reason: reason ?? "" } });
     await logAudit({ action: "signing.void", summary: `Voided “${req.title}”`, entityType: "SignatureRequest", entityId: requestId, user });
     revalidatePath("/signatures");
     revalidatePath(`/signatures/${requestId}`);

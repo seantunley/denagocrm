@@ -53,7 +53,7 @@ export default function StockPurchaseOrderForm({ products }: { products: Product
       />
 
       <CaptureSection title="Order details" description="Supplier-facing reference and expected arrival information." icon={ShoppingCart}>
-        <CaptureField label="Supplier *"><input name="supplier" className="input" defaultValue="Denago" required /></CaptureField>
+        <CaptureField label="Supplier *"><input name="supplier" className="input" required /></CaptureField>
         <CaptureField label="Supplier order reference"><input name="reference" className="input" placeholder="PO / order number" /></CaptureField>
         <CaptureField label="Expected delivery"><input name="expectedAt" type="date" className="input" /></CaptureField>
         <CaptureField label="Internal notes"><input name="notes" className="input" placeholder="Shipping, payment or allocation context" /></CaptureField>

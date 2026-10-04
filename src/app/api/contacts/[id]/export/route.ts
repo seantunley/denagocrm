@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { requireApiOwner, apiAuthErrorResponse } from "@/lib/auth";
+import { requireApiTenantOwner, apiAuthErrorResponse } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { collectCustomValues, displayValue, type CollectedCustomValue } from "@/lib/customFields";
 
@@ -19,7 +19,7 @@ function exportCustomValues(rows: CollectedCustomValue[]) {
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   let user;
   try {
-    user = await requireApiOwner(); // JSON 401/403 (not an HTML redirect) for this download route
+    user = await requireApiTenantOwner(); // JSON 401/403 (not an HTML redirect) for this download route
   } catch (err) {
     const res = apiAuthErrorResponse(err);
     if (res) return res;

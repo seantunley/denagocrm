@@ -52,7 +52,7 @@ export default async function NewLeadPage() {
 
       <PageHeader
         title="Create a sales opportunity"
-        description="Capture the customer’s intent, preferred Denago model and the value your team should follow through."
+        description="Capture the customer’s intent, preferred product and the value your team should follow through."
       />
 
       <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_20rem]">

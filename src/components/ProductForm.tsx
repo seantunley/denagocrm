@@ -48,7 +48,7 @@ export default function ProductForm({ variant = "compact" }: { variant?: Capture
         <CaptureHero
           icon={Shapes}
           eyebrow="Catalogue setup"
-          title={name.trim() || "Name the Denago model"}
+          title={name.trim() || "Name the product"}
           description="Create the reusable model record that powers leads, quotes, vehicle registrations and physical stock intake."
           summary={[
             { label: "Category", value: category.trim() || "Not classified" },

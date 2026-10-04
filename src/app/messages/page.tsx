@@ -8,7 +8,7 @@ import { loadInboxComms } from "@/lib/inboxQuery";
 import { conversationIdsForThreads } from "@/lib/inboxConversations";
 import { deliveryStateForMessages } from "@/lib/botOutbox";
 
-export const metadata = { title: "Chats — Denago Messages" };
+export const metadata = { title: "Chats — Messages" };
 
 export default async function MessagesChatsPage() {
   const user = await requireAnyPermission("inbox.view", "inbox.reply");

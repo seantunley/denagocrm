@@ -194,7 +194,8 @@ test("the city search is proxied server-side, not fetched from the browser", () 
   // browser would mean widening connect-src for a settings field.
   const route = read("src/app/api/weather-cities/search/route.ts");
   assert.match(route, /geocoding-api\.open-meteo\.com/);
-  assert.match(route, /requireApiOwner\(\)/, "an on-demand outbound request needs a guard");
+  // The workspace's owner (Clock & weather is a workspace setting).
+  assert.match(route, /requireApiTenantOwner\(\)/, "an on-demand outbound request needs a guard");
   assert.match(route, /isValidZone/, "a bad zone must be dropped before it can be saved");
 
   const csp = read("src/lib/csp.ts");
