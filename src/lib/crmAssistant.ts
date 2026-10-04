@@ -27,6 +27,7 @@ import {
 } from "./permissions";
 import { ASSISTANT_PROFILE_KEY, parseProfile, selfKnowledge, soulText } from "./assistantSoul";
 import { LEARN_INSTRUCTIONS, memoryPrompt, methodInstructions, splitLearn } from "./assistantMemory";
+import { stripInvisible } from "./invisibleText";
 import { applyLearn, loadLearned, loadPlaybook } from "./assistantMemoryStore";
 import { ACTION_INSTRUCTIONS, CHOICE_INSTRUCTIONS, splitActions, splitChoices, type ActionCard, type ProposedAction } from "./assistantActions";
 import { describeSchedule, nextRun, scheduleInput } from "./assistantSchedule";
@@ -40,6 +41,7 @@ import {
   leadArgs,
   leadBriefArgs,
   parseSteps,
+  resultsBlock,
   planInstructions,
   playbookArgs,
   quoteArgs,
@@ -481,14 +483,20 @@ async function quotesForLead(user: User, leadId: string) {
 async function knowledge(user: User, raw: z.infer<typeof knowledgeArgs>): Promise<ToolOutput> {
   const { topic } = knowledgeArgs.parse(raw);
   const words = topic.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2);
+  // The catalogue and its prices, to the people who see them where they work —
+  // on leads and in the quote builder. (/products itself is the owner's
+  // management screen; reading names and prices is not managing them.)
+  const seesProducts = await hasAnyPermission(user, "leads.view_all", "leads.view_owned", "quotes.view_all", "quotes.view_owned", "quotes.create");
   const [company, products, approved] = await Promise.all([
     getCompanyProfile().catch(() => null),
-    prisma.product.findMany({
-      where: { active: true, deletedAt: null },
-      orderBy: { name: "asc" },
-      take: 60,
-      select: { id: true, name: true, category: true, basePriceCents: true, description: true, showcaseTagline: true, showcaseSpecs: true },
-    }),
+    seesProducts
+      ? prisma.product.findMany({
+          where: { active: true, deletedAt: null },
+          orderBy: { name: "asc" },
+          take: 60,
+          select: { id: true, name: true, category: true, basePriceCents: true, description: true, showcaseTagline: true, showcaseSpecs: true },
+        })
+      : Promise.resolve([]),
     searchBotKnowledge(topic).catch(() => []),
   ]);
   // A small catalogue is worth showing whole; a large one only where it matches.
@@ -803,6 +811,8 @@ async function vehicles(user: User, raw: z.infer<typeof vehicleArgs>): Promise<T
  */
 async function deliveries(user: User, raw: z.infer<typeof deliveryArgs>): Promise<ToolOutput> {
   if (!(await hasAnyPermission(user, "deliveries.view", "deliveries.manage"))) return refused("deliveries");
+  // /deliveries is part of the automotive module; off → the board isn't there.
+  if (!(await isModuleEnabled("automotive"))) return refused("deliveries (switched off for this workspace)");
   const args = deliveryArgs.parse(raw);
   const ids = await getAccessibleQuoteIds(user);
   const recent = args.stage === "delivered_recently";
@@ -1024,9 +1034,25 @@ export async function assistantHistory(userId: string, take = 20) {
 
 type Observation = { tool: string; args: unknown; output: ToolOutput };
 
+/**
+ * What a lookup returned, as the model reads it. CUSTOMER-AUTHORED TEXT lives in
+ * here — names, web-form notes, WhatsApp and email bodies — and JSON.stringify
+ * doesn't escape invisible characters, so an instruction hidden in the TAG block
+ * would reach the model while staff looking at the record see nothing. Stripped
+ * here, on every observation, before either step sees it.
+ */
 function observationText(o: Observation): string {
   const body = JSON.stringify({ truncated: o.output.truncated, results: o.output.data });
-  return `${o.tool} ${JSON.stringify(o.args ?? {})} →\n${body.length > OBSERVATION_CHARS ? `${body.slice(0, OBSERVATION_CHARS)}…(cut)` : body}`;
+  return stripInvisible(`${o.tool} ${JSON.stringify(o.args ?? {})} →\n${body.length > OBSERVATION_CHARS ? `${body.slice(0, OBSERVATION_CHARS)}…(cut)` : body}`);
+}
+
+/**
+ * ChatGPT's own failure text ("could not answer: …") is the provider's words,
+ * not ours — never shown to the person or logged as is. Our fixed messages
+ * ("ChatGPT is not connected.") pass through.
+ */
+export function safeCodexError(error: string): string {
+  return error.startsWith("ChatGPT could not answer") ? "ChatGPT could not answer just now — try again in a minute." : error;
 }
 
 /**
@@ -1045,7 +1071,11 @@ export const CHANNEL_RULES: Record<AskSource, string> = {
     "The person is asking on WhatsApp from their phone. Keep it short and scannable, plain text, no links to rows. You can't set up tasks here (those need a tap on Confirm in the CRM): say in words what you'd do, and if they want a message drafted, put the draft itself in your answer so they can copy it.",
 };
 
-export async function askCrm(user: User, question: string, page?: string | null, opts: AskOptions = {}): Promise<AssistantResult> {
+export async function askCrm(user: User, asked: string, page?: string | null, opts: AskOptions = {}): Promise<AssistantResult> {
+  // Everything the model reads is stripped of invisible characters — the
+  // question, the conversation, the workspace's names and notes, and every
+  // lookup (observationText) — not only what gets stored.
+  const question = stripInvisible(asked);
   const source = opts.source ?? "chat";
   const whereTheyAre = pageHint(page);
   if (!(await isCodexConnected())) {
@@ -1057,10 +1087,10 @@ export async function askCrm(user: User, question: string, page?: string | null,
     loadLearned(user.id),
     personContext(user).catch(() => ""),
   ]);
-  const conversation = conversationBlock(history);
+  const conversation = stripInvisible(conversationBlock(history));
   // The business first (what it knows), then the person (who they are, what it knows about them).
-  const learned = [memoryPrompt(learnedNow), person].filter(Boolean).join("\n\n");
-  const instructions = planInstructions({ ...context, learned });
+  const learned = stripInvisible([memoryPrompt(learnedNow), person].filter(Boolean).join("\n\n"));
+  const instructions = stripInvisible(planInstructions({ ...context, learned }));
 
   // Research: look, see, look closer — at most MAX_STEPS rounds, MAX_LOOKUPS in all.
   const observations: Observation[] = [];
@@ -1071,15 +1101,15 @@ export async function askCrm(user: User, question: string, page?: string | null,
         conversation,
         whereTheyAre,
         `Question: ${question}`,
-        observations.length ? `Lookups so far:\n${observations.map(observationText).join("\n\n")}` : "",
+        observations.length ? resultsBlock("Lookups so far:", observations.map(observationText).join("\n\n")) : "",
         `Rounds left: ${MAX_STEPS - step}. Lookups left: ${MAX_LOOKUPS - observations.length}.`,
       ].filter(Boolean).join("\n\n"),
       reasoningEffort: "low",
       timeoutMs: 45_000,
     });
     if ("error" in reply) {
-      await logError("crm-assistant", "research step failed", reply.error);
-      if (!observations.length) return { ok: false, error: `ChatGPT didn't answer: ${reply.error}` };
+      await logError("crm-assistant", "research step failed", safeCodexError(reply.error));
+      if (!observations.length) return { ok: false, error: `ChatGPT didn't answer: ${safeCodexError(reply.error)}` };
       break;
     }
     const next = parseSteps(reply.text);
@@ -1121,7 +1151,7 @@ export async function askCrm(user: User, question: string, page?: string | null,
     getCompanyProfile().catch(() => null),
   ]);
   const profile = parseProfile(profileRaw);
-  const soul = soulText(profile, company?.name ?? "", user.name || "a colleague");
+  const soul = stripInvisible(soulText(profile, company?.name ?? "", user.name || "a colleague"));
   const answerReply = await codexRespond({
     instructions: [
       soul,
@@ -1140,7 +1170,7 @@ export async function askCrm(user: User, question: string, page?: string | null,
       conversation,
       `Question: ${question}`,
       observations.length
-        ? `What the CRM returned:\n${observations.map(observationText).join("\n\n")}`
+        ? resultsBlock("What the CRM returned:", observations.map(observationText).join("\n\n"))
         : "No lookup was needed for this question.",
     ].filter(Boolean).join("\n\n"),
     reasoningEffort: "medium",
@@ -1150,7 +1180,7 @@ export async function askCrm(user: User, question: string, page?: string | null,
   const rows = dedupeRows(observations.flatMap((o) => o.output.rows));
   const tools = observations.map((o) => o.tool);
   if ("error" in answerReply) {
-    await logError("crm-assistant", "answer step failed", answerReply.error);
+    await logError("crm-assistant", "answer step failed", safeCodexError(answerReply.error));
     // The rows are still right; show them rather than nothing.
     return { ok: true, answer: "Here's what the CRM returned (ChatGPT couldn't write it up just now).", rows, tools, learned: 0, actions: [], choices: [] };
   }
@@ -1159,7 +1189,9 @@ export async function askCrm(user: User, question: string, page?: string | null,
   const learnSplit = splitLearn(answerReply.text);
   const choiceSplit = splitChoices(learnSplit.answer);
   const { answer, actions: proposals } = splitActions(choiceSplit.answer);
-  const learn = learnSplit.learn;
+  // A scheduled run learns nothing: it reads customer text daily with nobody
+  // watching, so an injected "remember this" would be written with no one there.
+  const learn = source === "schedule" ? null : learnSplit.learn;
   // Off-chat, a stray ACTIONS line is removed from the answer and dropped — no card to confirm it.
   const actions = source !== "chat" ? [] : await resolveActions(user, proposals).catch(async (error: unknown) => {
     await logError("crm-assistant", "task proposals failed", error instanceof Error ? error.name : "unknown");
