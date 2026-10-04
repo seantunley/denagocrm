@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { stripInvisible } from "./invisibleText";
 
 /**
  * How the assistant learns — the pure half (parsing, limits, safety scan).
@@ -75,10 +76,6 @@ export function splitLearn(reply: string): { answer: string; learn: LearnBlock |
 
 /* ── Safety scan ─────────────────────────────────────────────────────────── */
 
-// Zero-width, bidi embeddings/overrides/isolates and tag characters — they make
-// text read one way to a person and another to the model (Hermes' source hygiene).
-const INVISIBLE = /[​-‏‪-‮⁠-⁤⁦-⁩﻿]|[\u{E0000}-\u{E007F}]/gu;
-
 const INJECTION = [
   /ignore (all |any |the )?(previous|prior|above|earlier) (instructions|rules|messages)/i,
   /disregard (all |any |the )?(previous|prior|above|your) /i,
@@ -96,7 +93,7 @@ const PHONE = /(\+?\d[\d\s-]{8,}\d)/;
 /** Cleaned text, or a reason it may not be learned. */
 export function scanEntry(raw: string): { ok: true; text: string } | { ok: false; reason: string } {
   // Collapse runs of spaces but keep line breaks: a playbook is a list of steps.
-  const text = raw.replace(INVISIBLE, "").replace(/\r\n/g, "\n").replace(/[^\S\n]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+  const text = stripInvisible(raw).replace(/\r\n/g, "\n").replace(/[^\S\n]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
   if (text.length < 3) return { ok: false, reason: "empty" };
   if (INJECTION.some((pattern) => pattern.test(text))) return { ok: false, reason: "looks like an instruction to the assistant" };
   if (EMAIL.test(text) || PHONE.test(text)) return { ok: false, reason: "contains contact details" };

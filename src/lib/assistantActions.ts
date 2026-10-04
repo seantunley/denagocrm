@@ -68,6 +68,43 @@ export function splitActions(reply: string): { answer: string; actions: Proposed
   return { answer, actions };
 }
 
+/**
+ * Quick replies. When it asks the person to pick ("Anna or Ben Jacobs?", "call
+ * or WhatsApp?") the options come back as buttons; tapping one sends that text
+ * as their next message — exactly as if they'd typed it, so nothing new is
+ * trusted. Not stored: only the latest answer's choices are worth showing.
+ */
+export const MAX_CHOICES = 4;
+const choices = z.array(z.unknown()).max(12);
+const choice = z.string().trim().min(1).max(60);
+
+export const CHOICE_INSTRUCTIONS = [
+  "CHOICES. When you ask the person to pick between a few clear options (which customer, which time slot, call or WhatsApp), also put the options on one line at the very end:",
+  'CHOICES: ["Anna Jacobs","Ben Jacobs"]',
+  `- 2 to ${MAX_CHOICES} options, each worded as the person's own short reply (under 60 characters). They become buttons; tapping one sends it as the person's reply.`,
+  "- Still ask the question in your answer. No CHOICES line when you aren't asking them to choose, and not for confirming a proposed task — its card has its own Confirm.",
+].join("\n");
+
+/** The reply → the answer without its CHOICES line, and the valid options (deduped, at most MAX_CHOICES). */
+export function splitChoices(reply: string): { answer: string; choices: string[] } {
+  const lines = reply.trimEnd().split("\n");
+  const at = lines.findLastIndex((line) => line.trim().startsWith("CHOICES:"));
+  if (at === -1) return { answer: reply.trim(), choices: [] };
+  const answer = lines.filter((_, i) => i !== at).join("\n").trim();
+  let raw: unknown;
+  try {
+    raw = JSON.parse(lines[at].trim().slice("CHOICES:".length).trim());
+  } catch {
+    return { answer, choices: [] };
+  }
+  const list = choices.safeParse(raw);
+  if (!list.success) return { answer, choices: [] };
+  const valid = list.data.map((c) => choice.safeParse(c)).filter((r) => r.success).map((r) => r.data);
+  const unique = [...new Set(valid)].slice(0, MAX_CHOICES);
+  // One option isn't a choice.
+  return { answer, choices: unique.length >= 2 ? unique : [] };
+}
+
 /** A proposal the server has checked and resolved (names → ids), ready for a card. */
 export type ActionCard =
   | { id: string; kind: "follow_up"; leadId: string; leadLabel: string; title: string; when: string; activity: string; summary?: string }

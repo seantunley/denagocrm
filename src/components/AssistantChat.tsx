@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
-import { ArrowUpRight, Loader2, Mic, Sparkles, Square } from "lucide-react";
+import { ArrowUpRight, Loader2, Mic, Smile, Sparkles, Square } from "lucide-react";
 import { askCrmAction } from "@/app/actions/assistant";
 import { transcribeQuestion } from "@/app/actions/voice";
 import type { AssistantRow } from "@/lib/crmAssistant";
@@ -10,7 +10,10 @@ import { audioForm, useVoiceRecorder } from "@/components/useVoiceRecorder";
 import type { ActionCard } from "@/lib/assistantActions";
 import AssistantActionCard from "@/components/AssistantActionCard";
 
-type Turn = { question: string; answer?: string; error?: string; rows: AssistantRow[]; learned?: number; actions?: ActionCard[] };
+type Turn = { question: string; answer?: string; error?: string; rows: AssistantRow[]; learned?: number; actions?: ActionCard[]; choices?: string[] };
+
+// The OS picker (Win + . / Ctrl + Cmd + Space) has everything; these are one tap away.
+const EMOJIS = ["👍", "🙏", "😊", "😂", "🔥", "✅", "⚠️", "📞", "💬", "📅", "🚗", "💰", "🎉", "🤝", "👀", "❓"];
 
 const EXAMPLES = [
   "Which deals should I chase today, and why?",
@@ -41,6 +44,21 @@ export default function AssistantChat({
   const [pending, startTransition] = useTransition();
   const [hearing, setHearing] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const input = useRef<HTMLInputElement | null>(null);
+
+  // Drop the emoji where the cursor is, then put the cursor after it.
+  const insertEmoji = (emoji: string) => {
+    const el = input.current;
+    const start = el?.selectionStart ?? question.length;
+    const end = el?.selectionEnd ?? question.length;
+    setQuestion(question.slice(0, start) + emoji + question.slice(end));
+    setEmojiOpen(false);
+    requestAnimationFrame(() => {
+      el?.focus();
+      el?.setSelectionRange(start + emoji.length, start + emoji.length);
+    });
+  };
 
   const ask = (text: string) => {
     const q = text.trim();
@@ -50,7 +68,7 @@ export default function AssistantChat({
       const result = await askCrmAction(q, page).catch(() => ({ ok: false as const, error: "Something went wrong — try again." }));
       setTurns((prev) => [
         result.ok
-          ? { question: q, answer: result.answer, rows: result.rows, learned: result.learned, actions: result.actions }
+          ? { question: q, answer: result.answer, rows: result.rows, learned: result.learned, actions: result.actions, choices: result.choices }
           : { question: q, error: result.error, rows: [] },
         ...prev,
       ]);
@@ -76,6 +94,21 @@ export default function AssistantChat({
 
   const details = (turn: Turn) => (
     <>
+      {/* Quick replies — only on the newest answer; older ones have been answered. */}
+      {turn === turns[0] && !pending && turn.choices && turn.choices.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {turn.choices.map((choice) => (
+            <button
+              key={choice}
+              type="button"
+              onClick={() => ask(choice)}
+              className="rounded-full border border-primary/40 bg-card px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary hover:text-primary-foreground"
+            >
+              {choice}
+            </button>
+          ))}
+        </div>
+      )}
       {turn.actions && turn.actions.length > 0 && (
         <div className="space-y-2">
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Ready for you to confirm</p>
@@ -118,6 +151,7 @@ export default function AssistantChat({
       >
         {!compact && <Sparkles className="ml-2 size-4 shrink-0 text-primary" />}
         <input
+          ref={input}
           className="h-10 min-w-0 flex-1 bg-transparent px-2 text-sm outline-none"
           placeholder={compact ? `Message ${name}…` : `Ask ${name} — e.g. "What should I do with Anna?"`}
           value={question}
@@ -126,6 +160,34 @@ export default function AssistantChat({
           aria-label="Ask the CRM"
           disabled={pending || voice.recording || hearing}
         />
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setEmojiOpen((open) => !open)}
+            disabled={pending || voice.recording || hearing}
+            className="grid size-10 shrink-0 place-items-center rounded-md border border-border text-muted-foreground hover:text-foreground"
+            aria-label="Add an emoji"
+            aria-expanded={emojiOpen}
+            title="Add an emoji"
+          >
+            <Smile className="size-4" />
+          </button>
+          {emojiOpen && (
+            <div className="absolute bottom-12 right-0 z-10 grid w-48 grid-cols-4 gap-1 rounded-xl border border-border bg-card p-2 shadow-lg">
+              {EMOJIS.map((emoji) => (
+                <button
+                  key={emoji}
+                  type="button"
+                  onClick={() => insertEmoji(emoji)}
+                  className="grid size-10 place-items-center rounded-md text-lg hover:bg-muted"
+                  aria-label={`Insert ${emoji}`}
+                >
+                  {emoji}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         {voice.supported && (
           <button
             type="button"

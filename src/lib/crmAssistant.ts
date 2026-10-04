@@ -25,10 +25,10 @@ import {
   hasPermission,
   type PermissionUser,
 } from "./permissions";
-import { ASSISTANT_PROFILE_KEY, parseProfile, soulText } from "./assistantSoul";
+import { ASSISTANT_PROFILE_KEY, parseProfile, selfKnowledge, soulText } from "./assistantSoul";
 import { LEARN_INSTRUCTIONS, memoryPrompt, splitLearn } from "./assistantMemory";
 import { applyLearn, loadLearned, loadPlaybook } from "./assistantMemoryStore";
-import { ACTION_INSTRUCTIONS, splitActions, type ActionCard, type ProposedAction } from "./assistantActions";
+import { ACTION_INSTRUCTIONS, CHOICE_INSTRUCTIONS, splitActions, splitChoices, type ActionCard, type ProposedAction } from "./assistantActions";
 import {
   ANSWER_RULES,
   MAX_STEPS,
@@ -79,7 +79,8 @@ const OBSERVATION_CHARS = 7000;
 export type AssistantRow = { label: string; detail: string; href: string };
 export type AssistantResult =
   /** learned: how many memories/playbooks this answer added or changed (owner reviews them). */
-  | { ok: true; answer: string; rows: AssistantRow[]; tools: string[]; learned: number; actions: ActionCard[] }
+  /** choices: quick replies, shown as buttons under the answer. */
+  | { ok: true; answer: string; rows: AssistantRow[]; tools: string[]; learned: number; actions: ActionCard[]; choices: string[] }
   | { ok: false; error: string };
 
 type ToolOutput = { rows: AssistantRow[]; data: unknown[]; truncated: boolean };
@@ -986,9 +987,10 @@ export async function askCrm(user: User, question: string, page?: string | null)
     getSetting(ASSISTANT_PROFILE_KEY),
     getCompanyProfile().catch(() => null),
   ]);
-  const soul = soulText(parseProfile(profileRaw), company?.name ?? "", user.name || "a colleague");
+  const profile = parseProfile(profileRaw);
+  const soul = soulText(profile, company?.name ?? "", user.name || "a colleague");
   const answerReply = await codexRespond({
-    instructions: [soul, learned, ANSWER_RULES, LEARN_INSTRUCTIONS, ACTION_INSTRUCTIONS].filter(Boolean).join("\n\n"),
+    instructions: [soul, selfKnowledge(profile.name), learned, ANSWER_RULES, LEARN_INSTRUCTIONS, ACTION_INSTRUCTIONS, CHOICE_INSTRUCTIONS].filter(Boolean).join("\n\n"),
     prompt: [
       conversation,
       `Question: ${question}`,
@@ -1005,12 +1007,13 @@ export async function askCrm(user: User, question: string, page?: string | null)
   if ("error" in answerReply) {
     await logError("crm-assistant", "answer step failed", answerReply.error);
     // The rows are still right; show them rather than nothing.
-    return { ok: true, answer: "Here's what the CRM returned (ChatGPT couldn't write it up just now).", rows, tools, learned: 0, actions: [] };
+    return { ok: true, answer: "Here's what the CRM returned (ChatGPT couldn't write it up just now).", rows, tools, learned: 0, actions: [], choices: [] };
   }
-  // The answer the person sees, and — separately — anything it decided to learn
-  // and any tasks it proposes. Both trailer lines are removed from the answer.
+  // The answer the person sees, and — separately — anything it decided to learn,
+  // any tasks it proposes and any quick replies. All trailer lines are removed.
   const learnSplit = splitLearn(answerReply.text);
-  const { answer, actions: proposals } = splitActions(learnSplit.answer);
+  const choiceSplit = splitChoices(learnSplit.answer);
+  const { answer, actions: proposals } = splitActions(choiceSplit.answer);
   const learn = learnSplit.learn;
   const actions = await resolveActions(user, proposals).catch(async (error: unknown) => {
     await logError("crm-assistant", "task proposals failed", error instanceof Error ? error.name : "unknown");
@@ -1034,7 +1037,7 @@ export async function askCrm(user: User, question: string, page?: string | null)
     })
     // Remembering is a nicety; failing to must not cost the person their answer.
     .catch((error: unknown) => logError("crm-assistant", "history write failed", error instanceof Error ? error.name : "unknown"));
-  return { ok: true, answer, rows, tools, learned: learnedCount, actions };
+  return { ok: true, answer, rows, tools, learned: learnedCount, actions, choices: choiceSplit.choices };
 }
 
 /**

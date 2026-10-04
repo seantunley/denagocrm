@@ -145,7 +145,7 @@ export function planInstructions(ctx: PlanContext): string {
     '- knowledge: {"topic":"<what to look up>" (required)} — the business\'s own knowledge: products and prices, approved answers (finance, warranty, policies…), company details, competitor intelligence.',
     '- recall: {"query":"<words>" (required)} — this person\'s own earlier conversations with you (last 30 days).',
     '- playbook: {"name":"<playbook name>" (required)} — one of your learned playbooks in full, when the question uses its term or procedure ("hot leads" → the hot-lead playbook) — load it BEFORE searching so you search the right way.',
-    '- done: {} — you have enough (or the question needs no lookup: greetings, advice, or something already in the conversation).',
+    '- done: {} — you have enough (or the question needs no lookup: greetings, advice, questions about you yourself — what you can do, how you work, what you remember — or something already in the conversation).',
     `Stages: ${ctx.stages.join(", ") || "(none)"}.`,
     `People: ${ctx.staff.join(", ") || "(none)"}.`,
     `Activity types: ${ctx.activityTypes.join(", ") || "(none)"}.`,

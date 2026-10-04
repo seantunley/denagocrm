@@ -76,6 +76,26 @@ test("every new lookup goes through the page's own visibility rule and module", 
   assert.doesNotMatch(documents, /storedName|readFile|annotations/, "titles only, never contents");
 });
 
+test("it can answer questions about itself — truthfully, from a fixed brief", async () => {
+  const { selfKnowledge } = await import("../src/lib/assistantSoul");
+  const about = selfKnowledge("DAX");
+  assert.match(about, /^ABOUT YOU \(DAX\)/);
+  assert.match(about, /say you're not sure rather than guess/);
+  // The claims that must stay true: it only proposes, and it never sends.
+  assert.match(about, /happens only when the person presses Confirm/);
+  assert.match(about, /you never send anything to a customer/);
+  assert.match(about, /kept 30 days, private to them/);
+  assert.match(about, /anything they've approved you cannot change/);
+  // …and it is actually given to the answer step, after the soul.
+  const lib = code("src/lib/crmAssistant.ts");
+  assert.match(lib, /instructions: \[soul, selfKnowledge\(profile\.name\), learned,/);
+  // Questions about itself need no lookup.
+  assert.match(code("src/lib/crmAssistantPlan.ts"), /questions about you yourself/);
+  // Every lookup it claims exists; nothing in the action list it says it can do is missing.
+  const actions = code("src/lib/assistantActions.ts");
+  for (const kind of ["follow_up", "note", "assign", "stage", "draft_message"]) assert.ok(actions.includes(`z.literal("${kind}")`), kind);
+});
+
 test("a digital assistant that uses emojis sparingly, whatever the soul says", () => {
   assert.match(code("src/lib/assistantSoul.ts"), /the digital assistant inside/);
   // In ANSWER_RULES (always applied), not the editable soul.
