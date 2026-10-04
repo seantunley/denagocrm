@@ -40,12 +40,11 @@ export const LINK_CODE_TTL_MS = 15 * 60 * 1000;
  * brute force hopeless (≈ 5 in a million per window), and a guess past the
  * block is never even compared — it is filed as the customer message it is.
  *
- * QUESTIONS — per person, 30 an hour. Each one is two ChatGPT calls on the
- * workspace's own connection; a stuck phone or a script must not drain it.
+ * QUESTIONS are not limited here: they share the person's one ask limit with
+ * every other channel (assistantAskAllowed in assistantUser.ts).
  */
 export const LINK_CODE_POLICY: RateLimitPolicy = { limit: 6, windowMs: 15 * 60 * 1000, blockMs: 15 * 60 * 1000 };
 export const LINK_GUESS_POLICY: RateLimitPolicy = { limit: 5, windowMs: 15 * 60 * 1000, blockMs: 30 * 60 * 1000 };
-export const ASK_POLICY: RateLimitPolicy = { limit: 31, windowMs: 60 * 60 * 1000, blockMs: 15 * 60 * 1000 };
 
 /** What a person may ask in one message — the same cap the Ask page uses. */
 export const QUESTION_CHARS = 500;

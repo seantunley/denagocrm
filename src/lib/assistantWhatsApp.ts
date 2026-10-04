@@ -6,13 +6,12 @@ import { currentTenantScope } from "./tenantScope";
 import { fetchWhatsAppMedia, sendWhatsAppButtons, sendWhatsAppText, waDigits } from "./whatsapp";
 import { transcribeVoice } from "./transcribe";
 import { askCrm } from "./crmAssistant";
-import { assistantUserFor } from "./assistantUser";
+import { ASK_LIMIT_MESSAGE, assistantAskAllowed, assistantUserFor } from "./assistantUser";
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "./assistantSoul";
 import { logAudit } from "./audit";
 import { logError } from "./errorLog";
 import { checkRateLimit, rateLimitKey, registerRateLimitAttempt } from "./rateLimit";
 import {
-  ASK_POLICY,
   ASSISTANT_WHATSAPP_KEY,
   LINK_GUESS_POLICY,
   QUESTION_CHARS,
@@ -112,10 +111,11 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
   const user = await assistantUserFor(link.userId);
   if (!user) return false;
 
-  // Counted before a voice note is fetched or transcribed, so the cap bounds that too.
-  const quota = await registerRateLimitAttempt(rateLimitKey("assistant-wa-ask", `${tenantId}:${user.id}`), ASK_POLICY);
-  if (!quota.allowed) {
-    await sendPlan(waId, { texts: ["That's a lot of questions this hour — give me a few minutes, or ask in the CRM."], buttons: null });
+  // The person's ONE ask limit, shared with the page and the bubble — a phone is
+  // not a second allowance. Counted before a voice note is fetched or
+  // transcribed, so the cap bounds that work too.
+  if (!(await assistantAskAllowed(user.id))) {
+    await sendPlan(waId, { texts: [ASK_LIMIT_MESSAGE], buttons: null });
     return true;
   }
 

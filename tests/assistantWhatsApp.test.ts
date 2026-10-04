@@ -4,7 +4,6 @@ import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import Module, { createRequire } from "node:module";
 import {
-  ASK_POLICY,
   LINK_CODE_POLICY,
   LINK_CODE_TTL_MS,
   LINK_GUESS_POLICY,
@@ -58,7 +57,9 @@ const state = {
   errors: [] as string[],
   audits: [] as string[],
   guesses: new Map<string, number>(),
+  asks: new Map<string, number>(),
 };
+const ASK_LIMIT = 60;
 
 function matches(row: Link, where: Where): boolean {
   return Object.entries(where).every(([key, cond]) => {
@@ -119,6 +120,13 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
       };
       case "./assistantUser": return {
         assistantUserFor: async (id: string) => (state.members.has(id) ? { id, name: id, email: `${id}@x`, role: "staff" } : null),
+        // The person's one ask limit, shared with every channel (60 an hour).
+        assistantAskAllowed: async (id: string) => {
+          const n = (state.asks.get(id) ?? 0) + 1;
+          state.asks.set(id, n);
+          return n <= ASK_LIMIT;
+        },
+        ASK_LIMIT_MESSAGE: "You've asked a lot in the last hour — give it a few minutes and try again.",
       };
       case "./audit": return { logAudit: async (e: { summary: string }) => { state.audits.push(e.summary); } };
       case "./errorLog": return { logError: async (...args: unknown[]) => { state.errors.push(args.map(String).join(" ")); } };
@@ -168,6 +176,7 @@ beforeEach(() => {
   state.errors = [];
   state.audits = [];
   state.guesses = new Map();
+  state.asks = new Map();
 });
 
 /* ── the gate, behaviourally ───────────────────────────────────────────── */
@@ -308,13 +317,21 @@ test("a linked staff member is answered on WhatsApp, as themselves, with buttons
   assert.equal(state.asked[2].question, "what is overdue today");
 });
 
-test("questions are capped at 500 characters and 30 an hour", async () => {
+test("questions are capped at 500 characters and by the person's ONE ask limit", async () => {
   verified("u1", STAFF);
   await handleStaffWhatsApp(STAFF, { text: "x".repeat(900) });
   assert.equal(state.asked[0].question.length, 500);
-  for (let i = 1; i < ASK_POLICY.limit + 2; i++) await handleStaffWhatsApp(STAFF, { text: `q${i}` });
-  assert.equal(state.asked.length, ASK_POLICY.limit - 1, "30 answered");
-  assert.match(state.sent.at(-1)!.text, /a lot of questions/);
+  for (let i = 1; i < ASK_LIMIT + 3; i++) await handleStaffWhatsApp(STAFF, { text: `q${i}` });
+  assert.equal(state.asked.length, ASK_LIMIT, "answered up to the shared limit, then refused");
+  assert.match(state.sent.at(-1)!.text, /You've asked a lot in the last hour/);
+  // Over the limit, a voice note is not even downloaded.
+  const fetched = state.mediaFetched;
+  assert.equal(await handleStaffWhatsApp(STAFF, { voiceMediaId: "m2" }), true);
+  assert.equal(state.mediaFetched, fetched);
+  // It is the shared per-person limit, not a WhatsApp-only counter.
+  const lib = code("src/lib/assistantWhatsApp.ts");
+  assert.match(lib, /if \(!\(await assistantAskAllowed\(user\.id\)\)\) \{\s*await sendPlan\(waId, \{ texts: \[ASK_LIMIT_MESSAGE\]/);
+  assert.doesNotMatch(lib, /assistant-wa-ask/);
 });
 
 test("nothing logged or audited carries the message, the answer or the number", async () => {
