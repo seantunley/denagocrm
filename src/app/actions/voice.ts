@@ -8,6 +8,7 @@ import { isElevenLabsConfigured } from "@/lib/elevenlabs";
 import { codexRespond, isCodexConnected } from "@/lib/codex";
 import { johannesburgDateKey } from "@/lib/activityDay";
 import { logError } from "@/lib/errorLog";
+import { safeCodexError } from "@/lib/codexErrors";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { DEBRIEF_INSTRUCTIONS, parseDebrief, plainDebrief, type DebriefDraft } from "@/lib/voiceDebrief";
 
@@ -85,7 +86,7 @@ export async function draftVoiceDebrief(
     const draft = "error" in reply ? null : parseDebrief(reply.text, heard.text, today);
     if (!draft) {
       // A reason only — never the transcript.
-      await logError("voice-debrief", "summary step failed", "error" in reply ? reply.error : "unusable reply");
+      await logError("voice-debrief", "summary step failed", "error" in reply ? safeCodexError(reply.error) : "unusable reply");
       return { ok: true, draft: plainDebrief(heard.text), summarised: false };
     }
     return { ok: true, draft, summarised: true };

@@ -8,6 +8,9 @@ import { isModuleEnabled } from "./modules/enabled";
 import { ownedWriteTenantId } from "./tenantWrite";
 import { applyLearn } from "./assistantMemoryStore";
 import { FLAG_PREFIX, TIDY_INSTRUCTIONS, parseTidy, planTidy, type TidyEntry } from "./assistantMemory";
+import { DATA_RULE, resultsBlock } from "./crmAssistantPlan";
+import { stripInvisible } from "./invisibleText";
+import { safeCodexError } from "./codexErrors";
 
 /**
  * The nightly tidy-up of what the assistant has learned — Hermes' periodic
@@ -45,19 +48,26 @@ export async function runAssistantTidy(): Promise<number | null> {
 
   const entries: TidyEntry[] = notes.map((n) => ({ id: n.id, kind: n.kind, userId: n.userId, createdById: n.createdById, content: n.content, status: n.status }));
   const reply = await codexRespond({
-    instructions: TIDY_INSTRUCTIONS,
-    prompt: [
-      "Entries:",
-      ...notes.map((n) => `${n.id} | ${n.kind}${n.userId ? ` (person ${n.userId.slice(-6)})` : ""} | ${n.status} | ${n.name ? `${n.name}: ` : ""}${n.content.slice(0, 600)}`),
-      "",
-      "Today's questions:",
-      ...turns.map((t) => `- ${t.question.slice(0, 300)}`),
-    ].join("\n"),
+    // Stripped and fenced like every other prompt: entries and questions are
+    // data to tidy, never instructions to follow.
+    instructions: `${TIDY_INSTRUCTIONS}\n${DATA_RULE}`,
+    prompt: stripInvisible(
+      resultsBlock(
+        "Entries and today's questions:",
+        [
+          "Entries:",
+          ...notes.map((n) => `${n.id} | ${n.kind}${n.userId ? ` (person ${n.userId.slice(-6)})` : ""} | ${n.status} | ${n.name ? `${n.name}: ` : ""}${n.content.slice(0, 600)}`),
+          "",
+          "Today's questions:",
+          ...turns.map((t) => `- ${t.question.slice(0, 300)}`),
+        ].join("\n"),
+      ),
+    ),
     reasoningEffort: "medium",
     timeoutMs: 75_000,
   });
   if ("error" in reply) {
-    await logError("assistant-tidy", "tidy call failed", reply.error);
+    await logError("assistant-tidy", "tidy call failed", safeCodexError(reply.error));
     return null;
   }
   const block = parseTidy(reply.text);

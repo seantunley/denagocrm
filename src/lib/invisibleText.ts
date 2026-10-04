@@ -18,7 +18,11 @@
  */
 const EMOJI_JOINER = /(\p{Extended_Pictographic}[️\u{1F3FB}-\u{1F3FF}]?)‍(?=\p{Extended_Pictographic})/gu;
 const KEEP = "\u{F0000}"; // private-use stand-in for a kept joiner while the rest is stripped
-const INVISIBLE = /[\p{Cf}͏ᅟᅠㅤﾠ\u{E0100}-\u{E01EF}]/gu;
+// Format chars, plus the invisible marks and blanks that aren't \p{Cf}: the
+// combining grapheme joiner, Mongolian free variation selectors, the Khmer
+// inherent vowels, the musical null notehead, the Hangul fillers, the braille
+// blank, the object-replacement character and the variation-selector supplement.
+const INVISIBLE = /[\p{Cf}͏᠋-᠏឴឵\u{1D159}ᅟᅠㅤﾠ⠀￼\u{E0100}-\u{E01EF}]/gu;
 /** Variation selectors survive only straight after an emoji (✅️, ⚠️). */
 const STRAY_SELECTOR = /(?<!\p{Extended_Pictographic})[︀-️]/gu;
 
