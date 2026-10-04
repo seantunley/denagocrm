@@ -14,6 +14,7 @@ import { searchBotKnowledge } from "./botKnowledge";
 import { isModuleEnabled } from "./modules/enabled";
 import { ownedWriteTenantId } from "./tenantWrite";
 import {
+  canAccessLead,
   getAccessibleLeadIds,
   getAccessibleQuoteIds,
   hasAnyPermission,
@@ -23,6 +24,7 @@ import {
 import { ASSISTANT_PROFILE_KEY, parseProfile, soulText } from "./assistantSoul";
 import { LEARN_INSTRUCTIONS, memoryPrompt, splitLearn } from "./assistantMemory";
 import { applyLearn, loadLearned, loadPlaybook } from "./assistantMemoryStore";
+import { ACTION_INSTRUCTIONS, splitActions, type ActionCard, type ProposedAction } from "./assistantActions";
 import {
   ANSWER_RULES,
   MAX_STEPS,
@@ -69,7 +71,7 @@ const OBSERVATION_CHARS = 7000;
 export type AssistantRow = { label: string; detail: string; href: string };
 export type AssistantResult =
   /** learned: how many memories/playbooks this answer added or changed (owner reviews them). */
-  | { ok: true; answer: string; rows: AssistantRow[]; tools: string[]; learned: number }
+  | { ok: true; answer: string; rows: AssistantRow[]; tools: string[]; learned: number; actions: ActionCard[] }
   | { ok: false; error: string };
 
 type ToolOutput = { rows: AssistantRow[]; data: unknown[]; truncated: boolean };
@@ -629,7 +631,7 @@ export async function askCrm(user: User, question: string): Promise<AssistantRes
   ]);
   const soul = soulText(parseProfile(profileRaw), company?.name ?? "", user.name || "a colleague");
   const answerReply = await codexRespond({
-    instructions: [soul, learned, ANSWER_RULES, LEARN_INSTRUCTIONS].filter(Boolean).join("\n\n"),
+    instructions: [soul, learned, ANSWER_RULES, LEARN_INSTRUCTIONS, ACTION_INSTRUCTIONS].filter(Boolean).join("\n\n"),
     prompt: [
       conversation,
       `Question: ${question}`,
@@ -646,10 +648,17 @@ export async function askCrm(user: User, question: string): Promise<AssistantRes
   if ("error" in answerReply) {
     await logError("crm-assistant", "answer step failed", answerReply.error);
     // The rows are still right; show them rather than nothing.
-    return { ok: true, answer: "Here's what the CRM returned (ChatGPT couldn't write it up just now).", rows, tools, learned: 0 };
+    return { ok: true, answer: "Here's what the CRM returned (ChatGPT couldn't write it up just now).", rows, tools, learned: 0, actions: [] };
   }
-  // The answer the person sees, and — separately — anything it decided to learn.
-  const { answer, learn } = splitLearn(answerReply.text);
+  // The answer the person sees, and — separately — anything it decided to learn
+  // and any tasks it proposes. Both trailer lines are removed from the answer.
+  const learnSplit = splitLearn(answerReply.text);
+  const { answer, actions: proposals } = splitActions(learnSplit.answer);
+  const learn = learnSplit.learn;
+  const actions = await resolveActions(user, proposals).catch(async (error: unknown) => {
+    await logError("crm-assistant", "task proposals failed", error instanceof Error ? error.name : "unknown");
+    return [];
+  });
   const learnedCount = learn
     ? await applyLearn(user.id, learn).catch(async (error: unknown) => {
         await logError("crm-assistant", "learning write failed", error instanceof Error ? error.name : "unknown");
@@ -668,7 +677,60 @@ export async function askCrm(user: User, question: string): Promise<AssistantRes
     })
     // Remembering is a nicety; failing to must not cost the person their answer.
     .catch((error: unknown) => logError("crm-assistant", "history write failed", error instanceof Error ? error.name : "unknown"));
-  return { ok: true, answer, rows, tools, learned: learnedCount };
+  return { ok: true, answer, rows, tools, learned: learnedCount, actions };
+}
+
+/**
+ * Proposals → cards. Each is checked against what this person may touch and its
+ * names resolved to real ids (a person in this workspace, a stage in that lead's
+ * pipeline); anything that doesn't resolve is dropped, not guessed. Nothing runs
+ * here — the card's Confirm calls the existing action, which checks it all again.
+ */
+async function resolveActions(user: User, proposals: ProposedAction[]): Promise<ActionCard[]> {
+  if (!proposals.length) return [];
+  const staff = await listActingTenantStaff();
+  const cards: ActionCard[] = [];
+  for (const [index, p] of proposals.entries()) {
+    if (!(await canAccessLead(user, p.leadId))) continue;
+    const lead = await prisma.lead.findUnique({
+      where: { id: p.leadId },
+      select: { name: true, title: true, stageId: true, stage: { select: { pipelineId: true } } },
+    });
+    if (!lead) continue;
+    const id = `a${index}-${p.leadId}`;
+    const leadLabel = `${lead.name} — ${lead.title}`;
+    if (p.type === "follow_up") {
+      const when = p.when.includes("T") ? p.when : `${p.when}T09:00`;
+      const at = new Date(`${when}:00+02:00`);
+      if (Number.isNaN(at.getTime()) || at.getTime() < Date.now() - 60 * 60 * 1000) continue;
+      const label = at.toLocaleString("en-ZA", { timeZone: "Africa/Johannesburg", weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+      cards.push({ id, kind: "follow_up", leadId: p.leadId, leadLabel, title: `${p.summary ?? `Follow-up ${p.activity}`} with ${lead.name} — ${label}`, when, activity: p.activity, summary: p.summary });
+    } else if (p.type === "note") {
+      cards.push({ id, kind: "note", leadId: p.leadId, leadLabel, title: `Add a note to ${lead.name}'s lead`, text: p.text });
+    } else if (p.type === "assign") {
+      const wanted = p.to.trim().toLowerCase();
+      const person = staff.find((s) => s.name.toLowerCase() === wanted) ?? staff.find((s) => s.name.toLowerCase().startsWith(wanted));
+      if (!person) continue;
+      cards.push({ id, kind: "assign", leadId: p.leadId, leadLabel, title: `Give ${lead.name}'s lead to ${person.name}`, userId: person.id });
+    } else if (p.type === "stage") {
+      // Compared in code, exactly: a pipeline has a handful of stages, and an
+      // insensitive `equals` would treat `_`/`%` in the name as wildcards.
+      const wantedStage = p.stage.trim().toLowerCase();
+      const stage = (await prisma.pipelineStage.findMany({
+        where: { pipelineId: lead.stage.pipelineId },
+        select: { id: true, name: true },
+      })).find((s) => s.name.toLowerCase() === wantedStage);
+      if (!stage || stage.id === lead.stageId) continue;
+      cards.push({ id, kind: "stage", leadId: p.leadId, leadLabel, title: `Move ${lead.name}'s lead to ${stage.name}`, stageId: stage.id });
+    } else {
+      cards.push({
+        id, kind: "draft_message", leadId: p.leadId, leadLabel,
+        title: `${p.channel === "whatsapp" ? "WhatsApp" : "Email"} to ${lead.name} (draft)`,
+        channel: p.channel, subject: p.subject, body: p.body,
+      });
+    }
+  }
+  return cards;
 }
 
 function dedupeRows(rows: AssistantRow[]): AssistantRow[] {

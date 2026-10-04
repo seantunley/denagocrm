@@ -1,0 +1,77 @@
+import { z } from "zod";
+
+/**
+ * Tasks the assistant can PROPOSE — never perform. It drafts; the person sees a
+ * card and presses Confirm, and only then does the matching existing server
+ * action run (scheduleFollowUp, addCommunication, assignLead, moveLead), with
+ * that person's own permissions, the stage gates and the audit log, exactly as
+ * if they had done it by hand. A message to a customer is only ever a draft to
+ * copy into the conversation: the assistant never sends anything (definition of
+ * done: no send without an explicit click).
+ */
+
+const leadId = z.string().trim().min(10).max(40);
+const text = z.string().trim().min(1);
+
+export const proposedAction = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("follow_up"),
+    leadId,
+    when: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/),
+    activity: z.enum(["call", "whatsapp", "email", "meeting", "todo"]).default("call"),
+    summary: text.max(120).optional(),
+  }).strict(),
+  z.object({ type: z.literal("note"), leadId, text: text.max(2000) }).strict(),
+  z.object({ type: z.literal("assign"), leadId, to: text.max(80) }).strict(),
+  z.object({ type: z.literal("stage"), leadId, stage: text.max(80) }).strict(),
+  z.object({
+    type: z.literal("draft_message"),
+    leadId,
+    channel: z.enum(["whatsapp", "email"]),
+    subject: text.max(150).optional(),
+    body: text.max(2000),
+  }).strict(),
+]);
+export type ProposedAction = z.infer<typeof proposedAction>;
+
+export const MAX_ACTIONS = 4;
+
+export const ACTION_INSTRUCTIONS = [
+  "TASKS. You can't change anything yourself, but you can PROPOSE up to 4 tasks for the person to confirm with one click. Propose when they ask you to do something (\"remind me…\", \"give it to Donovan\", \"draft a message…\"), or offer one when you recommend a concrete next step.",
+  "Put them on one line at the very end (after any LEARN line is fine):",
+  'ACTIONS: [{"type":"follow_up","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","activity":"call|whatsapp|email|meeting|todo","summary":"..."},{"type":"note","leadId":"<id>","text":"..."},{"type":"assign","leadId":"<id>","to":"<person>"},{"type":"stage","leadId":"<id>","stage":"<stage>"},{"type":"draft_message","leadId":"<id>","channel":"whatsapp|email","subject":"<email only>","body":"..."}]',
+  "- leadId must be an id that appears in the CRM results above — never invent one. If you don't have it, look the lead up first or don't propose.",
+  "- People and stages exactly as listed. Times are South African time.",
+  "- draft_message: write it in the business's voice, ready to send; it is only a draft the person copies and sends themselves.",
+  "- In your answer, never say you did it — say you've set it up for them to confirm.",
+].join("\n");
+
+/** Pull the ACTIONS line out of the reply: what the person reads, and the valid proposals. */
+export function splitActions(reply: string): { answer: string; actions: ProposedAction[] } {
+  const lines = reply.trimEnd().split("\n");
+  const at = lines.findLastIndex((line) => line.trim().startsWith("ACTIONS:"));
+  if (at === -1) return { answer: reply.trim(), actions: [] };
+  const answer = lines.filter((_, i) => i !== at).join("\n").trim();
+  let raw: unknown;
+  try {
+    raw = JSON.parse(lines[at].trim().slice("ACTIONS:".length).trim());
+  } catch {
+    return { answer, actions: [] };
+  }
+  if (!Array.isArray(raw)) return { answer, actions: [] };
+  // Each proposal stands alone: one malformed entry doesn't sink the others.
+  const actions = raw
+    .map((item) => proposedAction.safeParse(item))
+    .filter((r) => r.success)
+    .map((r) => r.data)
+    .slice(0, MAX_ACTIONS);
+  return { answer, actions };
+}
+
+/** A proposal the server has checked and resolved (names → ids), ready for a card. */
+export type ActionCard =
+  | { id: string; kind: "follow_up"; leadId: string; leadLabel: string; title: string; when: string; activity: string; summary?: string }
+  | { id: string; kind: "note"; leadId: string; leadLabel: string; title: string; text: string }
+  | { id: string; kind: "assign"; leadId: string; leadLabel: string; title: string; userId: string }
+  | { id: string; kind: "stage"; leadId: string; leadLabel: string; title: string; stageId: string }
+  | { id: string; kind: "draft_message"; leadId: string; leadLabel: string; title: string; channel: "whatsapp" | "email"; subject?: string; body: string };

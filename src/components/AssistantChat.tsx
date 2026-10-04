@@ -7,8 +7,10 @@ import { askCrmAction } from "@/app/actions/assistant";
 import { transcribeQuestion } from "@/app/actions/voice";
 import type { AssistantRow } from "@/lib/crmAssistant";
 import { audioForm, useVoiceRecorder } from "@/components/useVoiceRecorder";
+import type { ActionCard } from "@/lib/assistantActions";
+import AssistantActionCard from "@/components/AssistantActionCard";
 
-type Turn = { question: string; answer?: string; error?: string; rows: AssistantRow[]; learned?: number };
+type Turn = { question: string; answer?: string; error?: string; rows: AssistantRow[]; learned?: number; actions?: ActionCard[] };
 
 const EXAMPLES = [
   "Which deals should I chase today, and why?",
@@ -42,7 +44,7 @@ export default function AssistantChat({
       const result = await askCrmAction(q).catch(() => ({ ok: false as const, error: "Something went wrong — try again." }));
       setTurns((prev) => [
         result.ok
-          ? { question: q, answer: result.answer, rows: result.rows, learned: result.learned }
+          ? { question: q, answer: result.answer, rows: result.rows, learned: result.learned, actions: result.actions }
           : { question: q, error: result.error, rows: [] },
         ...prev,
       ]);
@@ -123,6 +125,14 @@ export default function AssistantChat({
             <p className="text-sm text-destructive">{turn.error}</p>
           ) : (
             <p className="whitespace-pre-line text-sm leading-relaxed">{turn.answer}</p>
+          )}
+          {turn.actions && turn.actions.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Ready for you to confirm</p>
+              {turn.actions.map((card) => (
+                <AssistantActionCard key={card.id} card={card} />
+              ))}
+            </div>
           )}
           {Boolean(turn.learned) && (
             <p className="text-[11px] text-muted-foreground">
