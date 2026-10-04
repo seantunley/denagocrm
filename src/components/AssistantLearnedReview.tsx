@@ -1,7 +1,7 @@
 import { Check, Trash2 } from "lucide-react";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
-import { approveAssistantNote, deleteAssistantNote, updateAssistantNote } from "@/app/actions/assistantNotes";
+import { approveAssistantNote, createAssistantNote, deleteAssistantNote, updateAssistantNote } from "@/app/actions/assistantNotes";
 import { formatDateTime } from "@/lib/format";
 
 export type LearnedNote = {
@@ -81,11 +81,17 @@ export default function AssistantLearnedReview({ notes }: { notes: LearnedNote[]
                         </SaveButton>
                       </SaveForm>
                     )}
-                    <details className="text-xs">
-                      <summary className="btn-secondary btn-sm cursor-pointer list-none">Correct it</summary>
+                    <details className="w-full text-xs sm:w-auto">
+                      <summary className="btn-secondary btn-sm cursor-pointer list-none">Edit</summary>
                       <SaveForm action={updateAssistantNote.bind(null, note.id)} resetOnSuccess={false} className="mt-2 space-y-2">
-                        <textarea name="content" defaultValue={note.content} rows={note.kind === "playbook" ? 6 : 2} className="input w-full" />
-                        <SaveButton className="btn-primary btn-sm">Save correction</SaveButton>
+                        {note.kind === "playbook" && (
+                          <div className="grid gap-2 sm:grid-cols-2">
+                            <input name="name" defaultValue={note.name ?? ""} maxLength={48} className="input" aria-label="Playbook name" />
+                            <input name="description" defaultValue={note.description ?? ""} maxLength={60} className="input" aria-label="Description" />
+                          </div>
+                        )}
+                        <textarea name="content" defaultValue={note.content} rows={note.kind === "playbook" ? 8 : 2} className="input w-full" />
+                        <SaveButton className="btn-primary btn-sm">Save</SaveButton>
                       </SaveForm>
                     </details>
                     <ConfirmActionDialog
@@ -107,6 +113,33 @@ export default function AssistantLearnedReview({ notes }: { notes: LearnedNote[]
           </div>
         );
       })}
+      <TeachIt />
     </section>
+  );
+}
+
+/** The owner teaches it directly — approved from the start. */
+function TeachIt() {
+  return (
+    <div className="card grid gap-4 p-4 lg:grid-cols-2">
+      <SaveForm action={createAssistantNote} className="space-y-2">
+        <input type="hidden" name="kind" value="memory" />
+        <h3 className="text-sm font-semibold">Teach it a business fact</h3>
+        <p className="text-xs text-muted-foreground">Something true in every conversation — who handles what, a policy, how you do things.</p>
+        <textarea name="content" rows={2} maxLength={400} className="input w-full" placeholder="e.g. Donovan handles all fleet and golf-estate deals." />
+        <SaveButton className="btn-secondary btn-sm">Add fact</SaveButton>
+      </SaveForm>
+      <SaveForm action={createAssistantNote} className="space-y-2">
+        <input type="hidden" name="kind" value="playbook" />
+        <h3 className="text-sm font-semibold">Teach it a playbook</h3>
+        <p className="text-xs text-muted-foreground">A definition or a way of doing something, loaded whenever a question needs it.</p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <input name="name" maxLength={48} className="input" placeholder="Name, e.g. hot-lead" />
+          <input name="description" maxLength={60} className="input" placeholder="One line (60 characters)" />
+        </div>
+        <textarea name="content" rows={4} maxLength={1500} className="input w-full" placeholder={"e.g. A hot lead is in Quoted or later, worth over R150k,\nand has heard from us in the last 14 days."} />
+        <SaveButton className="btn-secondary btn-sm">Add playbook</SaveButton>
+      </SaveForm>
+    </div>
   );
 }

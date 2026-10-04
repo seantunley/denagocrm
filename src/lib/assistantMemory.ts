@@ -95,7 +95,8 @@ const PHONE = /(\+?\d[\d\s-]{8,}\d)/;
 
 /** Cleaned text, or a reason it may not be learned. */
 export function scanEntry(raw: string): { ok: true; text: string } | { ok: false; reason: string } {
-  const text = raw.replace(INVISIBLE, "").replace(/\s+/g, " ").trim();
+  // Collapse runs of spaces but keep line breaks: a playbook is a list of steps.
+  const text = raw.replace(INVISIBLE, "").replace(/\r\n/g, "\n").replace(/[^\S\n]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
   if (text.length < 3) return { ok: false, reason: "empty" };
   if (INJECTION.some((pattern) => pattern.test(text))) return { ok: false, reason: "looks like an instruction to the assistant" };
   if (EMAIL.test(text) || PHONE.test(text)) return { ok: false, reason: "contains contact details" };
