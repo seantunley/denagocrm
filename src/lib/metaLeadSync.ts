@@ -1,7 +1,7 @@
 import { basePrisma } from "@/lib/db";
 import { resolveTenantCredential } from "@/lib/settings";
 import { currentTenantScope } from "@/lib/tenantScope";
-import { DEFAULT_TENANT_ID } from "@/lib/tenant";
+import { ownedWriteTenantId } from "@/lib/tenantWrite";
 import { createIntakeLead } from "@/lib/leadIntake";
 import { parseLeadFields, metaSource, type FieldData } from "@/lib/metaLead";
 
@@ -67,7 +67,7 @@ export async function syncFacebookLeads(): Promise<number> {
         // Scoped to this tenant: a Meta leadgen id is unique to Meta, not to us, so
         // another tenant holding the same id must not make us skip this one.
         const existing = await basePrisma.lead.findFirst({
-          where: { externalId: ld.id, tenantId: currentTenantScope()?.tenantId ?? DEFAULT_TENANT_ID },
+          where: { externalId: ld.id, tenantId: ownedWriteTenantId() },
           select: { id: true },
         });
         if (existing) continue;

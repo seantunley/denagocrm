@@ -1,5 +1,4 @@
-import { DEFAULT_TENANT_ID } from "./tenant";
-import { writeTenantId } from "./tenantWrite";
+import { ownedWriteTenantId } from "./tenantWrite";
 
 /**
  * The ONE tenant a journey-engine slice reads AND writes as.
@@ -45,5 +44,5 @@ import { writeTenantId } from "./tenantWrite";
  * quieter rule.
  */
 export function journeyTenantId(): string {
-  return writeTenantId() ?? DEFAULT_TENANT_ID;
+  return ownedWriteTenantId();
 }

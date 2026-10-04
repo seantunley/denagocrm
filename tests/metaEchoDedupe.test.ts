@@ -297,7 +297,7 @@ test("the echo lookups are tenant-scoped", () => {
     messenger.indexOf("export async function recordDmEcho"),
     messenger.indexOf("export async function recordDmEcho") + 900,
   );
-  assert.match(fn, /const tenantId = writeTenantId\(\) \?\? DEFAULT_TENANT_ID;/);
+  assert.match(fn, /const tenantId = ownedWriteTenantId\(\);/);
 });
 
 test("the echo row carries the provider id on the timeline too", () => {
