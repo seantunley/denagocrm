@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
-import { parsePlan, planInstructions } from "../src/lib/crmAssistantPlan";
+import { MAX_STEPS, conversationBlock, parseStep, planInstructions } from "../src/lib/crmAssistantPlan";
+import { DEFAULT_PROFILE, parseProfile, soulText } from "../src/lib/assistantSoul";
 
 const code = (rel: string) =>
   readFileSync(new URL(`../${rel}`, import.meta.url), "utf8")
@@ -9,14 +10,17 @@ const code = (rel: string) =>
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/^\s*\/\/.*$/gm, "");
 
-test("a well-formed tool call is accepted, even wrapped in a fence or prose", () => {
-  assert.deepEqual(parsePlan('{"tool":"find_leads","args":{"noContactDays":7,"sort":"value"}}'), {
+test("a well-formed step is accepted, even wrapped in a fence or prose", () => {
+  assert.deepEqual(parseStep('{"tool":"find_leads","args":{"noContactDays":7,"sort":"value"}}'), {
     tool: "find_leads",
     args: { noContactDays: 7, sort: "value" },
   });
-  assert.equal(parsePlan('```json\n{"tool":"pipeline_summary"}\n```')?.tool, "pipeline_summary");
-  assert.equal(parsePlan('Sure: {"tool":"find_activities","args":{"when":"overdue"}}')?.tool, "find_activities");
-  assert.deepEqual(parsePlan('{"tool":"none","reply":"Hi!"}'), { tool: "none", reply: "Hi!" });
+  assert.equal(parseStep('```json\n{"tool":"pipeline_summary"}\n```')?.tool, "pipeline_summary");
+  assert.equal(parseStep('Sure: {"tool":"find_activities","args":{"when":"overdue"}}')?.tool, "find_activities");
+  assert.deepEqual(parseStep('{"tool":"lead_brief","args":{"lead":"Anna"}}'), { tool: "lead_brief", args: { lead: "Anna" } });
+  assert.equal(parseStep('{"tool":"knowledge","args":{"topic":"warranty"}}')?.tool, "knowledge");
+  assert.equal(parseStep('{"tool":"recall","args":{"query":"Anna"}}')?.tool, "recall");
+  assert.deepEqual(parseStep('{"tool":"done"}'), { tool: "done" });
 });
 
 test("anything outside the schema is refused, not guessed at", () => {
@@ -30,12 +34,14 @@ test("anything outside the schema is refused, not guessed at", () => {
     '{"tool":"find_leads","args":{"status":"everything"}}',
     '{"tool":"find_activities","args":{}}', // `when` is required
     '{"tool":"find_quotes","args":{"minValue":-1}}',
+    '{"tool":"lead_brief","args":{}}', // `lead` is required
+    '{"tool":"recall","args":{"query":"x","userId":"someone-else"}}', // strict: no reading others' history
   ]) {
-    assert.equal(parsePlan(reply), null, reply);
+    assert.equal(parseStep(reply), null, reply);
   }
 });
 
-test("the plan prompt names the workspace's real stages, people and today's date", () => {
+test("the research prompt names the workspace's real stages, people and today's date", () => {
   const text = planInstructions({
     today: "2026-10-04",
     userName: "Sean",
@@ -47,20 +53,59 @@ test("the plan prompt names the workspace's real stages, people and today's date
   assert.match(text, /Stages: New, Quoted\./);
   assert.match(text, /People: Sean, Donovan\./);
   assert.match(text, /JSON only/);
+  assert.equal(MAX_STEPS, 3);
 });
 
-test("the assistant only reads, and only through each user's own visibility", () => {
+test("follow-ups see the earlier turns, trimmed", () => {
+  assert.equal(conversationBlock([]), "");
+  const block = conversationBlock([{ question: "Open leads?", answer: "x".repeat(2000) }]);
+  assert.match(block, /^Earlier in this conversation:\nQ: Open leads\?\nA: x+$/);
+  assert.ok(block.length < 700);
+});
+
+test("the personality is the workspace's, with honest-colleague rules underneath", () => {
+  assert.deepEqual(parseProfile(null), DEFAULT_PROFILE);
+  assert.deepEqual(parseProfile("{broken"), DEFAULT_PROFILE);
+  assert.deepEqual(parseProfile('{"name":"Ava","tone":"direct","rules":"Mention the warranty."}'), {
+    name: "Ava", tone: "direct", rules: "Mention the warranty.",
+  });
+  assert.deepEqual(parseProfile('{"tone":"sarcastic"}'), DEFAULT_PROFILE, "unknown tone → default, not a crash");
+  const soul = soulText({ name: "Ava", tone: "direct", rules: "Mention the warranty." }, "Denago", "Sean");
+  assert.match(soul, /You are Ava, the sales assistant inside Denago's CRM, talking with Sean\./);
+  assert.match(soul, /Keep FACTS .* apart from ADVICE/);
+  assert.match(soul, /House rules from the business \(follow these\):\nMention the warranty\./);
+});
+
+test("the assistant only reads the CRM, and only through each user's own visibility", () => {
   const lib = code("src/lib/crmAssistant.ts");
-  assert.doesNotMatch(lib, /\.(create|createMany|update|updateMany|upsert|delete|deleteMany)\(|\$executeRaw|\$queryRaw/, "read-only, no raw SQL");
-  assert.doesNotMatch(lib, /basePrisma/, "the tenant-scoped client only");
+  // Its one write is its own conversation history.
+  const writes = lib.match(/\.(create|createMany|update|updateMany|upsert|delete|deleteMany)\(/g) ?? [];
+  assert.deepEqual(writes, [".create("]);
+  assert.match(lib, /prisma\.assistantTurn\s*\.create\(/);
+  assert.doesNotMatch(lib, /\$executeRaw|\$queryRaw|basePrisma/, "no raw SQL, tenant-scoped client only");
   for (const helper of ["getAccessibleLeadIds(user)", "getAccessibleQuoteIds(user)", "getAccessibleActivityIds(user)"]) {
     assert.ok(lib.includes(helper), helper);
   }
+  // recall reads only the asker's own turns.
+  assert.match(lib.slice(lib.indexOf("async function recall")), /where: \{\s*userId: user\.id,/);
   // Customer data stays out of the error log: no question, row or answer text.
   for (const call of lib.match(/logError\([^)]*\)/g) ?? []) {
-    assert.doesNotMatch(call, /question|prompt|rows|data|text\b/, call);
+    // No question/answer/row VARIABLE passed in (the fixed message text may say "answer step").
+    assert.doesNotMatch(call, /[(,]\s*(question|prompt|rows|data|answer|observations|history)\b|\.text\b/, call);
   }
   const action = code("src/app/actions/assistant.ts");
   assert.match(action, /withActingStaffScope\(async \(\) => \{\s*const user = await requireAnyPermission\(/);
   assert.match(action, /if \(!\(await isModuleEnabled\("automation"\)\)\)/);
+});
+
+test("history is kept 30 days and no longer", () => {
+  assert.match(
+    code("src/app/api/cron/automations/route.ts"),
+    /assistantTurn\s*\.deleteMany\(\{ where: \{ createdAt: \{ lt: new Date\(Date\.now\(\) - 30 \* 24 \* 60 \* 60 \* 1000\) \} \} \}\)/,
+  );
+});
+
+test("only the workspace owner sets the personality", () => {
+  assert.match(code("src/app/actions/assistantSettings.ts"), /const user = await requireTenantOwner\(\);/);
+  assert.match(code("src/app/(app)/settings/assistant/page.tsx"), /await requireTenantOwner\(\);/);
 });

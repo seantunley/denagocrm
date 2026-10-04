@@ -11,19 +11,25 @@ import { audioForm, useVoiceRecorder } from "@/components/useVoiceRecorder";
 type Turn = { question: string; answer?: string; error?: string; rows: AssistantRow[] };
 
 const EXAMPLES = [
-  "Which open leads haven't been contacted in 7 days?",
+  "Which deals should I chase today, and why?",
   "Quotes waiting for a signature",
   "What's overdue for me?",
-  "Pipeline by stage",
+  "How does our pricing compare to the competition?",
 ];
 
 /**
- * The conversation is kept in the browser only, for this visit: questions and
- * answers mention customers, and nothing about them needs to be stored.
+ * The conversation. Earlier turns come from the server (each person's own, kept
+ * 30 days); the assistant follows on from the last few hours of them.
  */
-export default function AssistantChat() {
+export default function AssistantChat({
+  name,
+  history = [],
+}: {
+  name: string;
+  history?: { question: string; answer: string }[];
+}) {
   const [question, setQuestion] = useState("");
-  const [turns, setTurns] = useState<Turn[]>([]);
+  const [turns, setTurns] = useState<Turn[]>(() => history.map((t) => ({ ...t, rows: [] })));
   const [pending, startTransition] = useTransition();
   const [hearing, setHearing] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
@@ -65,7 +71,7 @@ export default function AssistantChat() {
         <Sparkles className="ml-2 size-4 shrink-0 text-primary" />
         <input
           className="h-10 flex-1 bg-transparent px-2 text-sm outline-none"
-          placeholder="e.g. Hot leads over R200k that have gone quiet"
+          placeholder={`Ask ${name} — e.g. "What should I do with Anna?"`}
           value={question}
           onChange={(event) => setQuestion(event.target.value)}
           maxLength={500}
@@ -108,7 +114,7 @@ export default function AssistantChat() {
         </div>
       )}
 
-      {pending && <p className="text-sm text-muted-foreground">Looking through your records…</p>}
+      {pending && <p className="text-sm text-muted-foreground">{name} is looking into it…</p>}
 
       {turns.map((turn, index) => (
         <div key={turns.length - index} className="card space-y-3 p-5">

@@ -156,6 +156,11 @@ async function runGlobalMaintenance() {
     // tokens), so the table grows with traffic — including hostile traffic —
     // and nothing else ever removed a row.
     await pruneRateLimits().catch(() => {});
+    // Ask the CRM keeps each person's conversation for 30 days, no longer: the
+    // turns mention customers, and the promise is that they go.
+    await basePrisma.assistantTurn
+      .deleteMany({ where: { createdAt: { lt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } } })
+      .catch(() => {});
   });
 }
 

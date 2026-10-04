@@ -8,53 +8,77 @@ import { payableTotalCents } from "./pricing";
 import { johannesburgDateKey } from "./activityDay";
 import { listActingTenantStaff } from "./tenantActor";
 import { getAccessibleActivityIds } from "./activityAccess";
+import { getSetting } from "./settings";
+import { getCompanyProfile } from "./companyProfile";
+import { searchBotKnowledge } from "./botKnowledge";
+import { isModuleEnabled } from "./modules/enabled";
+import { ownedWriteTenantId } from "./tenantWrite";
 import {
   getAccessibleLeadIds,
   getAccessibleQuoteIds,
   hasAnyPermission,
+  hasPermission,
   type PermissionUser,
 } from "./permissions";
+import { ASSISTANT_PROFILE_KEY, parseProfile, soulText } from "./assistantSoul";
 import {
-  ANSWER_INSTRUCTIONS,
+  ANSWER_RULES,
+  MAX_STEPS,
   activityArgs,
+  conversationBlock,
+  knowledgeArgs,
   leadArgs,
-  parsePlan,
+  leadBriefArgs,
+  parseStep,
   planInstructions,
   quoteArgs,
-  type AssistantPlan,
+  recallArgs,
+  type PriorTurn,
+  type ToolStep,
 } from "./crmAssistantPlan";
 
 /**
- * "Ask the CRM" — plain-language questions answered from the workspace's own
- * records, on the ChatGPT account the workspace connected.
+ * "Ask the CRM" — a sales colleague that answers from the workspace's own
+ * records and knowledge, on the ChatGPT account the workspace connected.
  *
- * Two ChatGPT calls per question: PLAN (pick one read-only tool + filters,
- * validated by crmAssistantPlan) and ANSWER (write it up from the rows). Between
- * them the server runs the tool through the same visibility rules the pages use
- * — getAccessibleLeadIds / QuoteIds / ActivityIds — on the tenant-scoped client,
- * so the assistant can never show a person more than their own lists would.
+ * Per question: up to MAX_STEPS research steps (ChatGPT picks ONE read-only tool
+ * + filters each time, validated by crmAssistantPlan, and sees what came back),
+ * then an ANSWER step in the workspace's own voice (assistantSoul). Every tool
+ * runs on the tenant-scoped client through the same visibility rules the pages
+ * use — getAccessibleLeadIds / QuoteIds / ActivityIds — so the assistant never
+ * shows a person more than their own lists would.
  *
- * Nothing here logs a question, a row or an answer: customer data stays out of
- * the error log (see the encryption-and-logs policy). Failures log a reason only.
+ * Each turn is kept 30 days, private to the asker (AssistantTurn; the
+ * maintenance sweep deletes older rows), for follow-ups and `recall`. Nothing
+ * here logs a question, a row or an answer: failures log a reason only.
  */
 
 const DAY = 86_400_000;
+/** Turns this recent are "the conversation"; older ones are only reachable via recall. */
+const CONVERSATION_WINDOW_MS = 3 * 60 * 60 * 1000;
+const HISTORY_DAYS = 30;
 /** Candidate cap before in-memory filters (last-contact needs the full set). */
 // ponytail: in-memory filter over ≤500 leads; move last-contact into SQL if a workspace outgrows it.
 const CANDIDATES = 500;
+/** What one tool's results may cost in a prompt. */
+const OBSERVATION_CHARS = 7000;
 
 export type AssistantRow = { label: string; detail: string; href: string };
 export type AssistantResult =
-  | { ok: true; answer: string; rows: AssistantRow[]; tool: AssistantPlan["tool"] }
+  | { ok: true; answer: string; rows: AssistantRow[]; tools: string[] }
   | { ok: false; error: string };
 
 type ToolOutput = { rows: AssistantRow[]; data: unknown[]; truncated: boolean };
+type User = PermissionUser;
 
 const fuzzy = (needle: string) => ({ contains: needle, mode: "insensitive" as const });
-const dateKey = (d: Date | null) => (d ? johannesburgDateKey(d) : "never");
+const dateKey = (d: Date | null | undefined) => (d ? johannesburgDateKey(d) : "never");
 const daysAgo = (d: Date) => Math.floor((Date.now() - d.getTime()) / DAY);
+const clip = (s: string | null | undefined, n: number) => (s ? (s.length > n ? `${s.slice(0, n)}…` : s) : null);
 
-async function findLeads(user: PermissionUser, raw: z.infer<typeof leadArgs>): Promise<ToolOutput> {
+/* ── Tools ───────────────────────────────────────────────────────────────── */
+
+async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Promise<ToolOutput> {
   if (!(await hasAnyPermission(user, "leads.view_all", "leads.view_owned"))) return refused("leads");
   const args = leadArgs.parse(raw);
   const ids = await getAccessibleLeadIds(user);
@@ -112,6 +136,7 @@ async function findLeads(user: PermissionUser, raw: z.infer<typeof leadArgs>): P
   return {
     truncated: sorted.length > take || leads.length === CANDIDATES,
     data: page.map(({ lead, lastContact }) => ({
+      id: lead.id,
       lead: lead.title,
       customer: lead.name,
       stage: lead.stage.name,
@@ -131,7 +156,7 @@ async function findLeads(user: PermissionUser, raw: z.infer<typeof leadArgs>): P
   };
 }
 
-async function pipelineSummary(user: PermissionUser): Promise<ToolOutput> {
+async function pipelineSummary(user: User): Promise<ToolOutput> {
   if (!(await hasAnyPermission(user, "leads.view_all", "leads.view_owned"))) return refused("leads");
   const ids = await getAccessibleLeadIds(user);
   const groups = await prisma.lead.groupBy({
@@ -157,7 +182,7 @@ async function pipelineSummary(user: PermissionUser): Promise<ToolOutput> {
   };
 }
 
-async function findQuotes(user: PermissionUser, raw: z.infer<typeof quoteArgs>): Promise<ToolOutput> {
+async function findQuotes(user: User, raw: z.infer<typeof quoteArgs>): Promise<ToolOutput> {
   if (!(await hasAnyPermission(user, "quotes.view_all", "quotes.view_owned"))) return refused("quotes");
   const args = quoteArgs.parse(raw);
   const ids = await getAccessibleQuoteIds(user);
@@ -177,7 +202,7 @@ async function findQuotes(user: PermissionUser, raw: z.infer<typeof quoteArgs>):
     select: {
       id: true, number: true, status: true, createdAt: true, viewedAt: true, signedAt: true,
       taxInclusive: true, depositType: true, depositValue: true, items: true, fees: true,
-      lead: { select: { name: true, title: true } },
+      lead: { select: { id: true, name: true, title: true } },
       contact: { select: { firstName: true, lastName: true } },
     },
   });
@@ -193,6 +218,7 @@ async function findQuotes(user: PermissionUser, raw: z.infer<typeof quoteArgs>):
     truncated: priced.length > take || quotes.length === CANDIDATES,
     data: page.map(({ quote, total }) => ({
       quote: `Q-${quote.number}`,
+      leadId: quote.lead?.id ?? null,
       customer: customer(quote),
       status: quote.status,
       total: formatZAR(total),
@@ -208,7 +234,7 @@ async function findQuotes(user: PermissionUser, raw: z.infer<typeof quoteArgs>):
   };
 }
 
-async function findActivities(user: PermissionUser, raw: z.infer<typeof activityArgs>): Promise<ToolOutput> {
+async function findActivities(user: User, raw: z.infer<typeof activityArgs>): Promise<ToolOutput> {
   if (!(await hasAnyPermission(user, "activities.view", "activities.manage"))) return refused("activities");
   const args = activityArgs.parse(raw);
   const ids = await getAccessibleActivityIds(user);
@@ -250,6 +276,7 @@ async function findActivities(user: PermissionUser, raw: z.infer<typeof activity
       due: dateKey(a.dueDate),
       assignedTo: a.assignedTo.name,
       customer: a.lead?.name ?? null,
+      leadId: a.leadId,
     })),
     rows: page.map((a) => ({
       label: a.summary,
@@ -259,21 +286,245 @@ async function findActivities(user: PermissionUser, raw: z.infer<typeof activity
   };
 }
 
+/**
+ * One lead in depth — what a colleague would read before saying "here's what
+ * I'd do": the deal, every recent message both ways, its quotes (opened?
+ * signed?), its activities and any research. Phone numbers and emails are left
+ * out: nothing here needs them to reason, so they don't go to ChatGPT.
+ */
+async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>): Promise<ToolOutput> {
+  if (!(await hasAnyPermission(user, "leads.view_all", "leads.view_owned"))) return refused("leads");
+  const { lead: needle } = leadBriefArgs.parse(raw);
+  const ids = await getAccessibleLeadIds(user);
+  const visible = ids === null ? {} : { id: { in: ids } };
+  const looksLikeId = /^c[a-z0-9]{20,}$/i.test(needle);
+  const matches = await prisma.lead.findMany({
+    where: {
+      deletedAt: null,
+      ...visible,
+      ...(looksLikeId
+        ? { id: needle }
+        : {
+            OR: [
+              { name: fuzzy(needle) },
+              { title: fuzzy(needle) },
+              { contact: { OR: [{ firstName: fuzzy(needle) }, { lastName: fuzzy(needle) }] } },
+            ],
+          }),
+    },
+    orderBy: [{ status: "asc" }, { updatedAt: "desc" }],
+    take: 5,
+    select: { id: true, title: true, name: true, status: true, stage: { select: { name: true } } },
+  });
+  if (matches.length === 0) return { truncated: false, rows: [], data: [{ note: `No lead you can see matches "${needle}".` }] };
+  if (matches.length > 1) {
+    return {
+      truncated: false,
+      data: [{ note: "Several leads match — ask which one, or pick the obvious one.", candidates: matches.map((m) => ({ id: m.id, lead: m.title, customer: m.name, status: m.status, stage: m.stage.name })) }],
+      rows: matches.map((m) => ({ label: `${m.name} — ${m.title}`, detail: `${m.stage.name} · ${m.status}`, href: `/leads/${m.id}` })),
+    };
+  }
+
+  const lead = await prisma.lead.findUniqueOrThrow({
+    where: { id: matches[0].id },
+    select: {
+      id: true, title: true, name: true, status: true, valueCents: true, quantity: true, source: true,
+      notes: true, research: true, researchedAt: true, createdAt: true, stageEnteredAt: true,
+      wonAt: true, lostAt: true, lostReason: true,
+      stage: { select: { name: true } },
+      product: { select: { name: true } },
+      assignedTo: { select: { name: true } },
+      communications: {
+        orderBy: { occurredAt: "desc" },
+        take: 15,
+        select: { occurredAt: true, direction: true, type: true, subject: true, body: true },
+      },
+      activities: {
+        orderBy: { dueDate: "desc" },
+        take: 10,
+        select: { type: true, summary: true, status: true, dueDate: true, doneAt: true, note: true },
+      },
+    },
+  });
+  const quotes = (await hasAnyPermission(user, "quotes.view_all", "quotes.view_owned"))
+    ? await quotesForLead(user, lead.id)
+    : [];
+
+  return {
+    truncated: false,
+    data: [{
+      id: lead.id,
+      lead: lead.title,
+      customer: lead.name,
+      status: lead.status,
+      stage: lead.stage.name,
+      daysInStage: daysAgo(lead.stageEnteredAt),
+      value: formatZAR(lead.valueCents),
+      quantity: lead.quantity,
+      product: lead.product?.name ?? null,
+      source: lead.source,
+      assignedTo: lead.assignedTo?.name ?? "unassigned",
+      created: dateKey(lead.createdAt),
+      ...(lead.wonAt ? { won: dateKey(lead.wonAt) } : {}),
+      ...(lead.lostAt ? { lost: dateKey(lead.lostAt), lostReason: lead.lostReason } : {}),
+      notes: clip(lead.notes, 800),
+      research: lead.research ? { when: dateKey(lead.researchedAt), summary: clip(lead.research, 1500) } : null,
+      messages: lead.communications.map((c) => ({
+        when: dateKey(c.occurredAt),
+        from: c.direction === "inbound" ? "customer" : "us",
+        channel: c.type,
+        text: clip([c.subject, c.body].filter(Boolean).join(" — "), 300),
+      })),
+      activities: lead.activities.map((a) => ({
+        type: a.type,
+        summary: a.summary,
+        status: a.status,
+        due: dateKey(a.dueDate),
+        ...(a.doneAt ? { done: dateKey(a.doneAt) } : {}),
+        note: clip(a.note, 200),
+      })),
+      quotes,
+    }],
+    rows: [{
+      label: `${lead.name} — ${lead.title}`,
+      detail: `${lead.stage.name} · ${formatZAR(lead.valueCents)} · ${lead.assignedTo?.name ?? "unassigned"}`,
+      href: `/leads/${lead.id}`,
+    }],
+  };
+}
+
+async function quotesForLead(user: User, leadId: string) {
+  const ids = await getAccessibleQuoteIds(user);
+  const quotes = await prisma.quote.findMany({
+    where: { leadId, deletedAt: null, supersededAt: null, ...(ids === null ? {} : { id: { in: ids } }) },
+    orderBy: { createdAt: "desc" },
+    take: 5,
+    select: {
+      number: true, status: true, createdAt: true, validUntil: true, viewedAt: true, signedAt: true, declinedAt: true,
+      declineReason: true, changeRequestNote: true,
+      taxInclusive: true, depositType: true, depositValue: true, items: true, fees: true,
+    },
+  });
+  return quotes.map((q) => ({
+    quote: `Q-${q.number}`,
+    status: q.status,
+    total: formatZAR(payableTotalCents(q)),
+    created: dateKey(q.createdAt),
+    validUntil: q.validUntil ? dateKey(q.validUntil) : null,
+    viewedByCustomer: q.viewedAt ? dateKey(q.viewedAt) : "not yet",
+    signed: q.signedAt ? dateKey(q.signedAt) : "no",
+    ...(q.declinedAt ? { declined: dateKey(q.declinedAt), reason: clip(q.declineReason, 200) } : {}),
+    ...(q.changeRequestNote ? { changeRequested: clip(q.changeRequestNote, 200) } : {}),
+  }));
+}
+
+/**
+ * The business's own knowledge — what makes an answer knowledgeable rather than
+ * a lookup: the products and their prices, the approved answers the chatbot is
+ * allowed to give (finance, warranty, policies), the company's details and,
+ * for people who may see it, competitor intelligence.
+ */
+async function knowledge(user: User, raw: z.infer<typeof knowledgeArgs>): Promise<ToolOutput> {
+  const { topic } = knowledgeArgs.parse(raw);
+  const words = topic.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2);
+  const [company, products, approved] = await Promise.all([
+    getCompanyProfile().catch(() => null),
+    prisma.product.findMany({
+      where: { active: true, deletedAt: null },
+      orderBy: { name: "asc" },
+      take: 60,
+      select: { id: true, name: true, category: true, basePriceCents: true, description: true, showcaseTagline: true, showcaseSpecs: true },
+    }),
+    searchBotKnowledge(topic).catch(() => []),
+  ]);
+  // A small catalogue is worth showing whole; a large one only where it matches.
+  const relevant = products.length <= 15
+    ? products
+    : products.filter((p) => words.some((w) => `${p.name} ${p.category ?? ""} ${p.description ?? ""}`.toLowerCase().includes(w)));
+
+  let competitors: unknown[] = [];
+  if ((await hasPermission(user, "competitors.view")) && (await isModuleEnabled("automation"))) {
+    const rows = await prisma.competitor.findMany({
+      where: { deletedAt: null },
+      take: 10,
+      select: {
+        name: true, description: true, tier: true,
+        briefs: { orderBy: { createdAt: "desc" }, take: 1, select: { headline: true, body: true, createdAt: true } },
+      },
+    });
+    const mentionsCompetitors = /compet|rival|versus|\bvs\b|compare/i.test(topic);
+    competitors = rows
+      .filter((c) => mentionsCompetitors || words.some((w) => c.name.toLowerCase().includes(w)))
+      .map((c) => ({
+        competitor: c.name,
+        about: clip(c.description, 300),
+        tier: c.tier,
+        latestBrief: c.briefs[0] ? { when: dateKey(c.briefs[0].createdAt), headline: c.briefs[0].headline, body: clip(c.briefs[0].body, 1200) } : null,
+      }));
+  }
+
+  return {
+    truncated: false,
+    data: [{
+      company: company ? { name: company.name, tagline: company.tagline, website: company.website, address: company.address } : null,
+      products: relevant.map((p) => ({
+        product: p.name,
+        category: p.category,
+        price: formatZAR(p.basePriceCents),
+        tagline: p.showcaseTagline,
+        description: clip(p.description, 300),
+        specs: p.showcaseSpecs ? clip(JSON.stringify(p.showcaseSpecs), 400) : null,
+      })),
+      approvedAnswers: approved.map((k) => ({ title: k.title, answer: clip(k.content, 800) })),
+      competitors,
+    }],
+    rows: relevant.slice(0, 8).map((p) => ({ label: p.name, detail: formatZAR(p.basePriceCents), href: "/products" })),
+  };
+}
+
+/** The asker's own earlier conversations — never anyone else's. */
+async function recall(user: User, raw: z.infer<typeof recallArgs>): Promise<ToolOutput> {
+  const { query } = recallArgs.parse(raw);
+  const words = query.split(/\s+/).filter((w) => w.length > 2).slice(0, 6);
+  const turns = await prisma.assistantTurn.findMany({
+    where: {
+      userId: user.id,
+      createdAt: { gte: new Date(Date.now() - HISTORY_DAYS * DAY) },
+      ...(words.length
+        ? { OR: words.flatMap((w) => [{ question: fuzzy(w) }, { answer: fuzzy(w) }]) }
+        : {}),
+    },
+    orderBy: { createdAt: "desc" },
+    take: 5,
+    select: { question: true, answer: true, createdAt: true },
+  });
+  return {
+    truncated: false,
+    data: turns.map((t) => ({ when: dateKey(t.createdAt), question: t.question, answer: clip(t.answer, 600) })),
+    rows: [],
+  };
+}
+
 function refused(what: string): ToolOutput {
   return { truncated: false, rows: [], data: [{ note: `You don't have access to ${what}.` }] };
 }
 
-async function runTool(user: PermissionUser, plan: Exclude<AssistantPlan, { tool: "none" }>): Promise<ToolOutput> {
-  switch (plan.tool) {
-    case "find_leads": return findLeads(user, plan.args);
+async function runTool(user: User, step: ToolStep): Promise<ToolOutput> {
+  switch (step.tool) {
+    case "find_leads": return findLeads(user, step.args);
     case "pipeline_summary": return pipelineSummary(user);
-    case "find_quotes": return findQuotes(user, plan.args);
-    case "find_activities": return findActivities(user, plan.args);
+    case "find_quotes": return findQuotes(user, step.args);
+    case "find_activities": return findActivities(user, step.args);
+    case "lead_brief": return leadBrief(user, step.args);
+    case "knowledge": return knowledge(user, step.args);
+    case "recall": return recall(user, step.args);
   }
 }
 
-/** The workspace facts the plan step needs to map names to real values. */
-async function planContext(user: PermissionUser & { name?: string | null }) {
+/* ── The conversation ────────────────────────────────────────────────────── */
+
+/** The workspace facts the research step needs to map names to real values. */
+async function planContext(user: User) {
   const [stages, staff, types] = await Promise.all([
     prisma.pipelineStage.findMany({ select: { name: true }, orderBy: { order: "asc" } }),
     listActingTenantStaff(),
@@ -281,47 +532,131 @@ async function planContext(user: PermissionUser & { name?: string | null }) {
   ]);
   return {
     today: johannesburgDateKey(new Date()),
-    userName: user.name ?? "the user",
+    userName: user.name || "the user",
     stages: [...new Set(stages.map((s) => s.name))],
     staff: staff.map((s) => s.name),
     activityTypes: types.map((t) => t.type),
   };
 }
 
-export async function askCrm(user: PermissionUser & { name?: string | null }, question: string): Promise<AssistantResult> {
+/** This person's turns in the current conversation (the last few hours), oldest first. */
+async function recentTurns(userId: string): Promise<PriorTurn[]> {
+  const turns = await prisma.assistantTurn.findMany({
+    where: { userId, createdAt: { gte: new Date(Date.now() - CONVERSATION_WINDOW_MS) } },
+    orderBy: { createdAt: "desc" },
+    take: 6,
+    select: { question: true, answer: true },
+  });
+  return turns.reverse();
+}
+
+/** The page's history list: this person's last turns, newest first. */
+export async function assistantHistory(userId: string, take = 20) {
+  return prisma.assistantTurn.findMany({
+    where: { userId, createdAt: { gte: new Date(Date.now() - HISTORY_DAYS * DAY) } },
+    orderBy: { createdAt: "desc" },
+    take,
+    select: { id: true, question: true, answer: true, createdAt: true },
+  });
+}
+
+type Observation = { tool: string; args: unknown; output: ToolOutput };
+
+function observationText(o: Observation): string {
+  const body = JSON.stringify({ truncated: o.output.truncated, results: o.output.data });
+  return `${o.tool} ${JSON.stringify(o.args ?? {})} →\n${body.length > OBSERVATION_CHARS ? `${body.slice(0, OBSERVATION_CHARS)}…(cut)` : body}`;
+}
+
+export async function askCrm(user: User, question: string): Promise<AssistantResult> {
   if (!(await isCodexConnected())) {
     return { ok: false, error: "Connect ChatGPT first: Settings → Integrations → ChatGPT." };
   }
-  const planReply = await codexRespond({
-    instructions: planInstructions(await planContext(user)),
-    prompt: question,
-    reasoningEffort: "low",
-    timeoutMs: 45_000,
-  });
-  if ("error" in planReply) {
-    await logError("crm-assistant", "plan step failed", planReply.error);
-    return { ok: false, error: `ChatGPT didn't answer: ${planReply.error}` };
-  }
-  const plan = parsePlan(planReply.text);
-  if (!plan) {
-    // The reply may quote the question; log that it failed, not what it said.
-    await logError("crm-assistant", "plan step returned no usable tool call");
-    return { ok: false, error: "I couldn't turn that into a search. Try naming what you want — leads, quotes or activities." };
-  }
-  if (plan.tool === "none") return { ok: true, answer: plan.reply, rows: [], tool: "none" };
+  const [context, history] = await Promise.all([planContext(user), recentTurns(user.id)]);
+  const conversation = conversationBlock(history);
+  const instructions = planInstructions(context);
 
-  const output = await runTool(user, plan);
+  // Research: look, see, look closer — at most MAX_STEPS lookups.
+  const observations: Observation[] = [];
+  for (let step = 0; step < MAX_STEPS; step++) {
+    const reply = await codexRespond({
+      instructions,
+      prompt: [
+        conversation,
+        `Question: ${question}`,
+        observations.length ? `Lookups so far:\n${observations.map(observationText).join("\n\n")}` : "",
+        `Lookups left: ${MAX_STEPS - step}.`,
+      ].filter(Boolean).join("\n\n"),
+      reasoningEffort: "low",
+      timeoutMs: 45_000,
+    });
+    if ("error" in reply) {
+      await logError("crm-assistant", "research step failed", reply.error);
+      if (!observations.length) return { ok: false, error: `ChatGPT didn't answer: ${reply.error}` };
+      break;
+    }
+    const next = parseStep(reply.text);
+    if (!next) {
+      // The reply may quote the question; log that it failed, not what it said.
+      await logError("crm-assistant", "research step returned no usable tool call");
+      if (!observations.length && step === 0) {
+        return { ok: false, error: "I couldn't work out what to look up. Try naming what you want — leads, a customer, quotes or activities." };
+      }
+      break;
+    }
+    if (next.tool === "done") break;
+    const args = "args" in next ? next.args : {};
+    if (observations.some((o) => o.tool === next.tool && JSON.stringify(o.args) === JSON.stringify(args))) break;
+    observations.push({ tool: next.tool, args, output: await runTool(user, next) });
+  }
+
+  // Answer, in the workspace's own voice.
+  const [profileRaw, company] = await Promise.all([
+    getSetting(ASSISTANT_PROFILE_KEY),
+    getCompanyProfile().catch(() => null),
+  ]);
+  const soul = soulText(parseProfile(profileRaw), company?.name ?? "", user.name || "a colleague");
   const answerReply = await codexRespond({
-    instructions: ANSWER_INSTRUCTIONS,
-    prompt: `Question: ${question}\n\nRows (truncated: ${output.truncated}):\n${JSON.stringify(output.data)}`,
-    reasoningEffort: "low",
-    verbosity: "low",
-    timeoutMs: 45_000,
+    instructions: `${soul}\n\n${ANSWER_RULES}`,
+    prompt: [
+      conversation,
+      `Question: ${question}`,
+      observations.length
+        ? `What the CRM returned:\n${observations.map(observationText).join("\n\n")}`
+        : "No lookup was needed for this question.",
+    ].filter(Boolean).join("\n\n"),
+    reasoningEffort: "medium",
+    timeoutMs: 60_000,
   });
+
+  const rows = dedupeRows(observations.flatMap((o) => o.output.rows));
+  const tools = observations.map((o) => o.tool);
   if ("error" in answerReply) {
     await logError("crm-assistant", "answer step failed", answerReply.error);
     // The rows are still right; show them rather than nothing.
-    return { ok: true, answer: "Here's what the CRM returned (ChatGPT couldn't write a summary just now).", rows: output.rows, tool: plan.tool };
+    return { ok: true, answer: "Here's what the CRM returned (ChatGPT couldn't write it up just now).", rows, tools };
   }
-  return { ok: true, answer: answerReply.text.trim(), rows: output.rows, tool: plan.tool };
+  const answer = answerReply.text.trim();
+  await prisma.assistantTurn
+    .create({
+      data: {
+        tenantId: ownedWriteTenantId(),
+        userId: user.id,
+        question,
+        answer,
+        tools: observations.map((o) => ({ tool: o.tool, args: o.args })) as object,
+      },
+    })
+    // Remembering is a nicety; failing to must not cost the person their answer.
+    .catch((error: unknown) => logError("crm-assistant", "history write failed", error instanceof Error ? error.name : "unknown"));
+  return { ok: true, answer, rows, tools };
+}
+
+function dedupeRows(rows: AssistantRow[]): AssistantRow[] {
+  const seen = new Set<string>();
+  return rows.filter((row) => {
+    const key = `${row.href}|${row.label}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
