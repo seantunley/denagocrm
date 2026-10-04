@@ -64,6 +64,7 @@ const state = {
   ambiguous: new Set<string>(),
   /** Each account's current sessionVersion (bumped by a password reset / sign out everywhere). */
   sessionVersions: new Map<string, number>(),
+  securityDown: false,
 };
 const ASK_LIMIT = 60;
 
@@ -141,7 +142,11 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
         ASK_LIMIT_MESSAGE: "You've asked a lot in the last hour — give it a few minutes and try again.",
       };
       case "./userSecurity": return {
-        getUserSecurityStateFresh: async (id: string) => ({ sessionVersion: state.sessionVersions.get(id) ?? 1, disabledAt: null }),
+        // Strict: a failed read throws (no version-0 fallback).
+        readUserSecurityStateStrict: async (id: string) => {
+          if (state.securityDown) throw new Error("database unavailable");
+          return { sessionVersion: state.sessionVersions.get(id) ?? 1, disabledAt: null };
+        },
       };
       case "./audit": return { logAudit: async (e: { summary: string }) => { state.audits.push(e.summary); } };
       case "./errorLog": return { logError: async (...args: unknown[]) => { state.errors.push(args.map(String).join(" ")); } };
@@ -196,6 +201,7 @@ beforeEach(() => {
   state.customers = new Set();
   state.ambiguous = new Set();
   state.sessionVersions = new Map();
+  state.securityDown = false;
 });
 
 /* ── the gate, behaviourally ───────────────────────────────────────────── */
@@ -364,6 +370,37 @@ test("a linked phone dies with the account's other sign-ins — password reset, 
   const fresh = pending("u1", "654321");
   assert.equal(await handleStaffWhatsApp(STAFF, { text: "DAX 654321" }), true);
   assert.equal(fresh.sessionVersion, 2);
+});
+
+test("the sign-in check fails CLOSED: a database error is retried, never read as 'still valid'", async () => {
+  verified("u1", STAFF);
+  state.securityDown = true;
+  await assert.rejects(handleStaffWhatsApp(STAFF, { text: "pipeline?" }), /database unavailable/);
+  assert.equal(state.asked.length, 0);
+});
+
+test("the 'no longer linked' notice is sent once, and never wipes a link made since", async () => {
+  const row = verified("u1", STAFF);
+  state.sessionVersions.set("u1", 2);
+  // Two deliveries read the same stale link; only the first clears it and speaks.
+  const [a, b] = await Promise.all([
+    handleStaffWhatsApp(STAFF, { text: "one" }),
+    handleStaffWhatsApp(STAFF, { text: "two" }),
+  ]);
+  assert.deepEqual([a, b].sort(), [false, true]);
+  assert.equal(state.sent.filter((s) => /no longer linked/.test(s.text)).length, 1);
+  assert.equal(row.waId, null);
+  const lib = code("src/lib/assistantWhatsApp.ts");
+  assert.match(lib, /where: \{ id: link\.id, tenantId, waId, sessionVersion: link\.sessionVersion \}/);
+  assert.match(lib, /if \(cleared\.count !== 1\) return false;/);
+});
+
+test("a code is stamped with the CALLER's session version — a pre-reset session gets a useless code", () => {
+  const actions = code("src/app/actions/assistantWhatsApp.ts");
+  const start = actions.slice(actions.indexOf("export async function startWhatsAppLink"));
+  assert.match(start, /const sessionVersion = await callerSessionVersion\(\);/);
+  assert.match(start, /if \(sessionVersion === null \|\| !security \|\| security\.sessionVersion !== sessionVersion\)/);
+  assert.match(actions, /const session = await verifySession\(token\);/, "read from the signed cookie, not trusted from the client");
 });
 
 test("a code asked for BEFORE a reset is burnt, not redeemed after it", async () => {
@@ -576,7 +613,7 @@ test("link and unlink touch only the caller's own row, behind the gate and the s
   // Only the hash is stored; re-linking clears the old number.
   assert.match(start, /create: \{ tenantId, userId: user\.id, codeHash, codeExpiresAt, sessionVersion \}/);
   assert.match(start, /update: \{ codeHash, codeExpiresAt, waId: null, verifiedAt: null, sessionVersion \}/);
-  assert.match(start, /const sessionVersion = security\.sessionVersion;/, "the code belongs to the sign-ins it was issued under");
+  assert.match(start, /const sessionVersion = await callerSessionVersion\(\);/, "the code belongs to the sign-in that asked for it");
   assert.doesNotMatch(start, /code: code|codeHash: code\b/);
   assert.match(start, /logAudit\(/);
   // The caller never names a number or a row.

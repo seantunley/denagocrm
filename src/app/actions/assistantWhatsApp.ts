@@ -14,7 +14,17 @@ import { isWhatsAppConfigured } from "@/lib/whatsapp";
 import { ASSISTANT_PERMISSIONS } from "@/lib/assistantUser";
 import { assistantWhatsAppOn, businessWhatsAppNumber, hashLinkCode } from "@/lib/assistantWhatsApp";
 import { rateLimitKey, registerRateLimitAttempt } from "@/lib/rateLimit";
-import { getUserSecurityStateFresh } from "@/lib/userSecurity";
+import { readUserSecurityStateStrict } from "@/lib/userSecurity";
+import { cookies } from "next/headers";
+import { SESSION_COOKIE, verifySession } from "@/lib/session";
+
+/** The session version inside THIS request's signed session cookie, or null. */
+async function callerSessionVersion(): Promise<number | null> {
+  const token = (await cookies()).get(SESSION_COOKIE)?.value;
+  if (!token) return null;
+  const session = await verifySession(token);
+  return typeof session?.sv === "number" ? session.sv : null;
+}
 import {
   ASSISTANT_WHATSAPP_KEY,
   LINK_CODE_POLICY,
@@ -80,12 +90,16 @@ export async function startWhatsAppLink(): Promise<WhatsAppLinkStart> {
     const code = formatLinkCode(crypto.randomInt(0, 1_000_000));
     const codeHash = hashLinkCode(tenantId, user.id, code);
     const codeExpiresAt = new Date(Date.now() + LINK_CODE_TTL_MS);
-    // The code belongs to the sign-ins of the moment it was ISSUED: a password
-    // reset or "sign out everywhere" after this makes it worthless, so a code
-    // fetched from a stolen session can't be redeemed after the victim resets.
-    const security = await getUserSecurityStateFresh(user.id);
-    if (!security) return { ok: false, error: "Sign in again, then ask for a code." };
-    const sessionVersion = security.sessionVersion;
+    // The code belongs to the sign-in that ASKED for it: stamped with the
+    // version inside this request's own signed session — not a fresh database
+    // read, which a reset landing mid-request would already have moved on. A
+    // session from before a password reset or "sign out everywhere" carries
+    // the old version, so a code it obtains is burnt at redeem, never linked.
+    const sessionVersion = await callerSessionVersion();
+    const security = await readUserSecurityStateStrict(user.id);
+    if (sessionVersion === null || !security || security.sessionVersion !== sessionVersion) {
+      return { ok: false, error: "Sign in again, then ask for a code." };
+    }
     // The caller's own row, by (workspace, caller) — there is no id or number to pass in.
     const link = await basePrisma.assistantPhoneLink.upsert({
       where: { tenantId_userId: { tenantId, userId: user.id } },

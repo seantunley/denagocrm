@@ -11,7 +11,7 @@ import { ASSISTANT_PROFILE_KEY, parseProfile } from "./assistantSoul";
 import { logAudit } from "./audit";
 import { logError } from "./errorLog";
 import { rateLimitKey, registerRateLimitAttempt } from "./rateLimit";
-import { getUserSecurityStateFresh } from "./userSecurity";
+import { readUserSecurityStateStrict } from "./userSecurity";
 import {
   ASSISTANT_WHATSAPP_KEY,
   LINK_GUESS_POLICY,
@@ -113,12 +113,17 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
   // from then on this number is nobody's — the link is cleared (audited), the
   // number is told once why, and after that it is treated as anyone's. Without
   // this, a phone linked from a stolen session outlived every remedy.
-  const security = await getUserSecurityStateFresh(link.userId);
+  // Strict: a database error throws (the route releases the claim and Meta
+  // redelivers) — it never reads as "version 0, still valid".
+  const security = await readUserSecurityStateStrict(link.userId);
   if (!security || link.sessionVersion === null || security.sessionVersion !== link.sessionVersion) {
-    await basePrisma.assistantPhoneLink.updateMany({
-      where: { id: link.id, tenantId },
+    // Guarded on exactly the link we read: a re-link made since then is not
+    // wiped, and of two messages arriving together only one sends the notice.
+    const cleared = await basePrisma.assistantPhoneLink.updateMany({
+      where: { id: link.id, tenantId, waId, sessionVersion: link.sessionVersion },
       data: { waId: null, verifiedAt: null, sessionVersion: null },
     });
+    if (cleared.count !== 1) return false;
     await logAudit({
       action: "assistant.whatsapp_unlinked",
       summary: `WhatsApp ${maskWaId(waId)} unlinked from the assistant: the account's sign-ins were reset`,
@@ -210,7 +215,7 @@ async function verifyLinkCode(tenantId: string, waId: string, code: string): Pro
   const user = match ? await assistantUserFor(match.userId) : null;
   if (!match || !user) return false;
   // The account's sign-in version now, so the link dies with its other sign-ins.
-  const security = await getUserSecurityStateFresh(match.userId);
+  const security = await readUserSecurityStateStrict(match.userId);
   if (!security) return false;
   // The code is only good under the sign-ins it was ISSUED with. One asked for
   // before a password reset or "sign out everywhere" is burnt, not redeemed —
