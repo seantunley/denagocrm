@@ -402,6 +402,8 @@ const EDGE_EXEMPT_NAV_ROUTES = new Set([
   "/jobcards", "/jobcards/insights", "/parts",
   "/document-studio",
   "/audit",
+  // Ask the CRM: page + action both requireAnyPermission on the link's keys.
+  "/assistant",
 ]);
 
 /**
