@@ -9,7 +9,8 @@ import { ASSISTANT_PROFILE_KEY, parseProfile } from "@/lib/assistantSoul";
 import { assistantHistory } from "@/lib/crmAssistant";
 import AssistantChat from "@/components/AssistantChat";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
-import { deleteAssistantNote } from "@/app/actions/assistantNotes";
+import { deleteAssistantNote, saveMyAssistantNote } from "@/app/actions/assistantNotes";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { prisma } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
@@ -43,13 +44,25 @@ export default async function AssistantPage() {
           <Link href="/settings/integrations" className="text-primary underline">Connect ChatGPT</Link> to start asking.
         </p>
       )}
-      {aboutMe.length > 0 && (
-        <details className="card p-4 text-sm">
-          <summary className="cursor-pointer font-medium">What {profile.name} remembers about you ({aboutMe.length})</summary>
-          <ul className="mt-3 space-y-2">
-            {aboutMe.map((note) => (
-              <li key={note.id} className="flex items-start justify-between gap-3">
-                <span>{note.content}</span>
+      <details className="card p-4 text-sm">
+        <summary className="cursor-pointer font-medium">
+          About you — what {profile.name} knows{aboutMe.length ? ` (${aboutMe.length})` : ""}
+        </summary>
+        <p className="mt-2 text-xs text-muted-foreground">
+          Used only in your own conversations. {profile.name} adds to this as it learns how you work; you can add, correct or remove anything.
+        </p>
+        <ul className="mt-3 divide-y divide-border/50">
+          {aboutMe.map((note) => (
+            <li key={note.id} className="space-y-2 py-2">
+              <p className="whitespace-pre-line">{note.content}</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <details className="w-full text-xs sm:w-auto">
+                  <summary className="cursor-pointer list-none text-muted-foreground hover:text-foreground">Edit</summary>
+                  <SaveForm action={saveMyAssistantNote.bind(null, note.id)} resetOnSuccess={false} className="mt-2 space-y-2">
+                    <textarea name="content" defaultValue={note.content} rows={2} maxLength={400} className="input w-full" />
+                    <SaveButton className="btn-primary btn-sm">Save</SaveButton>
+                  </SaveForm>
+                </details>
                 <ConfirmActionDialog
                   trigger={<button type="button" className="text-xs text-muted-foreground hover:text-destructive">Forget</button>}
                   title="Forget this?"
@@ -58,11 +71,21 @@ export default async function AssistantPage() {
                   destructive
                   onConfirm={deleteAssistantNote.bind(null, note.id)}
                 />
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
+              </div>
+            </li>
+          ))}
+        </ul>
+        <SaveForm action={saveMyAssistantNote.bind(null, null)} className="mt-3 space-y-2">
+          <textarea
+            name="content"
+            rows={2}
+            maxLength={400}
+            className="input w-full"
+            placeholder="e.g. I look after fleet and golf-estate deals in Gauteng. Short answers with bullet points, please."
+          />
+          <SaveButton className="btn-secondary btn-sm">Tell {profile.name}</SaveButton>
+        </SaveForm>
+      </details>
     </div>
   );
 }

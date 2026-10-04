@@ -97,12 +97,12 @@ test("the personality and the soul save separately without wiping each other", (
 
 test("the nightly tidy-up only merges and removes what nobody has approved", () => {
   const entries = [
-    { id: "m1", kind: "memory", userId: null, content: "Donovan handles fleet deals.", status: "unreviewed" },
-    { id: "m2", kind: "memory", userId: null, content: "Fleet deals go to Donovan.", status: "unreviewed" },
-    { id: "m3", kind: "memory", userId: null, content: "We open at 8.", status: "approved" },
-    { id: "p1", kind: "profile", userId: "u1", content: "Likes short answers.", status: "unreviewed" },
-    { id: "p2", kind: "profile", userId: "u2", content: "Likes short answers.", status: "unreviewed" },
-    { id: "b1", kind: "playbook", userId: null, content: "steps", status: "unreviewed" },
+    { id: "m1", kind: "memory", userId: null, createdById: "u1", content: "Donovan handles fleet deals.", status: "unreviewed" },
+    { id: "m2", kind: "memory", userId: null, createdById: "u1", content: "Fleet deals go to Donovan.", status: "unreviewed" },
+    { id: "m3", kind: "memory", userId: null, createdById: "u1", content: "We open at 8.", status: "approved" },
+    { id: "p1", kind: "profile", userId: "u1", createdById: "u1", content: "Likes short answers.", status: "unreviewed" },
+    { id: "p2", kind: "profile", userId: "u2", createdById: "u2", content: "Likes short answers.", status: "unreviewed" },
+    { id: "b1", kind: "playbook", userId: null, createdById: null, content: "steps", status: "unreviewed" },
   ];
   const changes = planTidy(entries, {
     merge: [
@@ -175,7 +175,7 @@ test("learning writes are one transaction under a per-workspace lock", () => {
   const store = code("src/lib/assistantMemoryStore.ts");
   assert.match(store, /prisma\.\$transaction\(async \(tx\) => \{\s*await tx\.\$executeRaw`SELECT pg_advisory_xact_lock\(hashtext\(\$\{`assistant-notes:\$\{tenantId\}`\}\)::bigint\)`;/);
   assert.match(store, /const tenantId = ownedWriteTenantId\(\);/);
-  assert.match(store, /if \(existing\.status === "approved"\) continue;/, "an approved playbook isn't rewritten");
+  assert.match(store, /if \(existing\.status === "approved" \|\|/, "an approved playbook isn't rewritten");
   // A profile is read only for the person it describes.
   assert.match(store, /kind: "profile", userId \}/);
 });

@@ -3,6 +3,8 @@ import { basePrisma } from "./db";
 import { hasAnyPermission, type PermissionKey, type PermissionUser } from "./permissions";
 import { isModuleEnabled } from "./modules/enabled";
 import { resolveTenantMemberUser } from "./tenantActor";
+import { currentTenantScope } from "./tenantScope";
+import { tenantEnforcing } from "./tenantEnforcement";
 
 /** Who may use the assistant at all — the same set on every way in. */
 export const ASSISTANT_PERMISSIONS = [
@@ -22,6 +24,13 @@ export const ASSISTANT_PERMISSIONS = [
  * that person's own visibility exactly as on the page.
  */
 export async function assistantUserFor(userId: string): Promise<PermissionUser | null> {
+  // ONE WORKSPACE OR NOTHING. resolveTenantMemberUser checks membership only
+  // inside a tenant scope; in a SYSTEM scope (an unmapped channel, a platform
+  // job) it resolves any user on the platform. Acting for someone there would
+  // run their question with no workspace boundary at all — refuse instead.
+  const scope = currentTenantScope();
+  if (scope?.system) return null;
+  if (tenantEnforcing() && !scope?.tenantId) return null;
   const member = await resolveTenantMemberUser(userId);
   if (!member) return null;
   const user = await basePrisma.user.findUnique({ where: { id: member.id }, select: { id: true, name: true, email: true, role: true } });
