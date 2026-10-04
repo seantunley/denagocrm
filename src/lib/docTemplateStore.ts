@@ -6,9 +6,11 @@ import { isDocEditorLibraryItem } from "./studioClauses";
 import { DOC_DEFS, defaultTemplate, mergeTemplate, withCompanyDetails, type DocKey, type DocTemplate } from "./docTemplates";
 import { getCompanyProfile } from "./companyProfile";
 import { docKeyEnabled } from "./docModuleAccess";
+import { isModuleEnabled } from "./modules/enabled";
 
 /** First run per type: seed a "Standard" template (from legacy settings if any). */
 export async function ensureSeeded(): Promise<void> {
+  const automotive = await isModuleEnabled("automotive");
   for (const key of Object.keys(DOC_DEFS) as DocKey[]) {
     if (!(await docKeyEnabled(key))) continue;
     const count = await prisma.docTemplateRecord.count({ where: { docType: key, deletedAt: null } });
@@ -19,7 +21,7 @@ export async function ensureSeeded(): Promise<void> {
         docType: key,
         name: "Standard",
         isDefault: true,
-        config: mergeTemplate(key, legacy) as object,
+        config: mergeTemplate(key, legacy, { automotive }) as object,
       },
     });
   }
@@ -71,7 +73,8 @@ async function loadDocTemplate(key: DocKey, templateId?: string): Promise<DocTem
   });
   if (def) return withPrintableLogo(mergeTemplate(key, def.config), def.tenantId);
   const legacy = await getSetting(`DOC_TEMPLATE_${key}`);
-  return withPrintableLogo(legacy ? mergeTemplate(key, legacy) : defaultTemplate(key), null);
+  const options = { automotive: await isModuleEnabled("automotive") };
+  return withPrintableLogo(legacy ? mergeTemplate(key, legacy, options) : defaultTemplate(key, options), null);
 }
 
 /**

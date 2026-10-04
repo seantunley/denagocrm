@@ -21,6 +21,7 @@ import { DOC_DEFS, defaultTemplate, mergeTemplate, isDocKey } from "@/lib/docTem
 // getTemplateRecord, not a raw findUnique: it is where the module check lives.
 import { getTemplateRecord } from "@/lib/docTemplateStore";
 import { docKeyEnabled } from "@/lib/docModuleAccess";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import {
   requirePermission,
   requireDocumentAccess,
@@ -274,7 +275,7 @@ export async function createDocTemplate(formData: FormData) {
     if (!(await docKeyEnabled(docType))) refuse("That kind of document isn't available in this workspace.");
     const name = String(formData.get("name") ?? "").trim() || "Untitled";
     const baseId = String(formData.get("baseId") ?? "").trim();
-    let config: object = defaultTemplate(docType) as object;
+    let config: object = defaultTemplate(docType, { automotive: await isModuleEnabled("automotive") }) as object;
     if (baseId) {
       const base = await getTemplateRecord(baseId);
       if (base && base.docType === docType) config = mergeTemplate(docType, base.config) as object;
