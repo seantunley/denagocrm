@@ -20,8 +20,7 @@ import { sendPushToAll } from "./push";
 import { resolveTenantActor } from "./tenantActor";
 import { inboundCommunicationKey, isDedupeKeyConflict } from "./inboundMessageKey";
 import { currentInboundBotEventId } from "./botInboundEvent";
-import { DEFAULT_TENANT_ID } from "./tenant";
-import { writeTenantId } from "./tenantWrite";
+import { ownedWriteTenantId } from "./tenantWrite";
 import { currentTenantScope } from "./tenantScope";
 import { distinctIdentities } from "./botBookingIdentity";
 import { whatsappSendResult, whatsappTransportFailure, type WhatsAppSendResult } from "./deliveryReceipts";
@@ -540,7 +539,7 @@ export async function recordInboundWhatsApp(
   // hook, a redelivery is refused by the index.
   const dedupeKey = inboundCommunicationKey({
     ledgerEventId: currentInboundBotEventId(),
-    tenantId: writeTenantId() ?? DEFAULT_TENANT_ID,
+    tenantId: ownedWriteTenantId(),
     channel: "whatsapp",
     providerId: providerMessageId ?? "",
   });

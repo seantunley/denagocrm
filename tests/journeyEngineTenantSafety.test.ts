@@ -571,7 +571,9 @@ test("the engine resolves ONE tenant per slice, and never reads it off a fetched
   // filter object would all match un-owned rows and re-open the hole the moment
   // enforcement went back to off.
   const helper = shipped("src/lib/journeyTenant.ts");
-  assert.match(helper, /writeTenantId\(\) \?\? DEFAULT_TENANT_ID/, "the founding tenant stands in when GLOBAL, and it throws when closed");
+  // ownedWriteTenantId: founding tenant only while dormant; refuses a system scope
+  // under enforcement and throws when closed (tests/noFoundingFallback.test.ts).
+  assert.match(helper, /return ownedWriteTenantId\(\);/, "the journey tenant never silently falls back to the founding workspace");
   for (const file of ["src/lib/journeyScheduling.ts", "src/lib/journeyEvents.ts", "src/lib/journeyTenant.ts"]) {
     const code = shipped(file);
     assert.ok(!/IS NOT DISTINCT FROM/i.test(code), `${file}: NULL-tolerant tenant matching is never correct here`);

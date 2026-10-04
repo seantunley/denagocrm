@@ -3,7 +3,7 @@ import crypto from "crypto";
 import { basePrisma, prisma } from "@/lib/db";
 import { getSetting, resolveTenantCredential } from "@/lib/settings";
 import { currentTenantScope } from "@/lib/tenantScope";
-import { DEFAULT_TENANT_ID } from "@/lib/tenant";
+import { ownedWriteTenantId } from "@/lib/tenantWrite";
 import { createIntakeLead } from "@/lib/leadIntake";
 import { parseLeadFields, metaSource } from "@/lib/metaLead";
 import { recordInboundDm, recordDmEcho, type DmPlatform } from "@/lib/messenger";
@@ -191,7 +191,7 @@ export async function POST(req: NextRequest) {
       await withChannelTenantScope("messenger", pageId, async () => {
         // Scoped to the tenant that owns this Page: a leadgen id is unique to Meta,
         // not to us, so two tenants may legitimately receive the same one.
-        const existing = await basePrisma.lead.findFirst({ where: { externalId: leadgenId, tenantId: currentTenantScope()?.tenantId ?? DEFAULT_TENANT_ID }, select: { id: true } });
+        const existing = await basePrisma.lead.findFirst({ where: { externalId: leadgenId, tenantId: ownedWriteTenantId() }, select: { id: true } });
         if (existing) return;
         const accessToken = await resolveTenantCredential(currentTenantScope()?.tenantId ?? null, "META_PAGE_ACCESS_TOKEN");
         try {
