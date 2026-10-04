@@ -2,8 +2,7 @@ import "server-only";
 import crypto from "crypto";
 import { Prisma } from "@prisma/client";
 import { basePrisma } from "./db";
-import { DEFAULT_TENANT_ID } from "./tenant";
-import { writeTenantId, type TenantWriteTx } from "./tenantWrite";
+import { ownedWriteTenantId, type TenantWriteTx } from "./tenantWrite";
 import { logError } from "./errorLog";
 
 export type BotFlowEventType =
@@ -91,7 +90,7 @@ export async function recordBotFlowEventsTx(
  */
 export async function recordBotFlowEvents(events: BotFlowEventInput[]): Promise<void> {
   try {
-    const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
+    const tenantId = ownedWriteTenantId();
     await basePrisma.$transaction(async (tx) => {
       await tx.$executeRawUnsafe(`SELECT set_config('app.bypass_rls', 'on', true)`);
       await recordBotFlowEventsTx(tx as TenantWriteTx, tenantId, events);
@@ -131,7 +130,7 @@ export async function getBotFlowVersionAnalytics(
   if (!flowVersionIds.length) {
     return { started: 0, completed: 0, handedOff: 0, deliveryFailures: 0, nodes: [] };
   }
-  const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
+  const tenantId = ownedWriteTenantId();
   const occurredFilter = filters.occurredFrom
     ? Prisma.sql`AND "occurredAt" >= ${filters.occurredFrom}`
     : Prisma.empty;

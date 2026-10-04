@@ -1,8 +1,7 @@
 import "server-only";
 import { Prisma } from "@prisma/client";
 import { basePrisma } from "./db";
-import { DEFAULT_TENANT_ID } from "./tenant";
-import { writeTenantId } from "./tenantWrite";
+import { ownedWriteTenantId } from "./tenantWrite";
 import { getBotFlowVersionAnalytics, type BotFlowVersionAnalytics } from "./botFlowAnalytics";
 import {
   normalizeBotAnalyticsFilters,
@@ -154,7 +153,7 @@ export async function getBotFlowAnalyticsReport(
   flowId: string,
   input: BotAnalyticsFilterInput = {},
 ): Promise<BotFlowAnalyticsReport> {
-  const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
+  const tenantId = ownedWriteTenantId();
   const versionRows = await basePrisma.$queryRaw<VersionRow[]>(Prisma.sql`
     SELECT "id", "version", "createdAt", "definition"
       FROM "BotFlowVersion"

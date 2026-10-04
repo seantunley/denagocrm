@@ -70,12 +70,14 @@ type PortalContactRow = { id: string; firstName: string; lastName: string | null
  * The workspace whose portal this is: the one `withPortalHostScope` bound from
  * the VERIFIED hostname. This was pinned to DEFAULT_TENANT_ID, so on any other
  * workspace's portal domain the lookup searched Denago's contacts and no other
- * workspace's customer could ever sign in. With no bound scope (an unregistered
- * host, local dev) it keeps today's founding-workspace answer.
+ * workspace's customer could ever sign in. With no bound scope — an address no
+ * workspace has verified — there is no portal: null, and nobody signs in. Only
+ * local dev with enforcement off keeps the founding workspace.
  */
-async function portalLoginTenantId(): Promise<string> {
+async function portalLoginTenantId(): Promise<string | null> {
   const { currentTenantScope } = await import("@/lib/tenantScope");
-  return currentTenantScope()?.tenantId ?? DEFAULT_TENANT_ID;
+  const { tenantEnforcing } = await import("@/lib/tenantEnforcement");
+  return currentTenantScope()?.tenantId ?? (tenantEnforcing() ? null : DEFAULT_TENANT_ID);
 }
 
 /**
@@ -91,6 +93,7 @@ async function portalOtpKey(email: string): Promise<string> {
 
 async function findPortalContactByEmail(email: string): Promise<PortalContactRow | null> {
   const loginTenantId = await portalLoginTenantId();
+  if (!loginTenantId) return null;
   const rows = await basePrisma.$queryRaw<PortalContactRow[]>`
     SELECT "id", "firstName", "lastName" FROM "Contact"
     WHERE LOWER("email") = ${email}

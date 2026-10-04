@@ -2,8 +2,7 @@ import "server-only";
 import { prisma, basePrisma } from "./db";
 import { logError } from "./errorLog";
 import { resolveTenantActor } from "./tenantActor";
-import { writeTenantId } from "./tenantWrite";
-import { DEFAULT_TENANT_ID } from "./tenant";
+import { ownedWriteTenantId } from "./tenantWrite";
 import { isDedupeKeyConflict } from "./inboundMessageKey";
 import {
   commentDedupeKey,
@@ -46,7 +45,7 @@ export async function recordPostComment(
   comment: IngestibleComment,
   options: { platform: "facebook" | "instagram"; pageId: string | null },
 ): Promise<CommentIngestOutcome> {
-  const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
+  const tenantId = ownedWriteTenantId();
   const ref = commentThreadRef(options.platform, comment.postId);
 
   const thread = await findOrOpenThread(tenantId, ref, comment);

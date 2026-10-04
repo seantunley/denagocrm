@@ -35,7 +35,7 @@ test("analytics metadata is bounded and never becomes a second transcript store"
 test("trusted aggregation always pairs bypassed reads with an explicit tenant predicate", () => {
   const code = src("src/lib/botFlowAnalytics.ts");
   const query = code.slice(code.indexOf("export async function getBotFlowVersionAnalytics"));
-  assert.match(query, /const tenantId = writeTenantId\(\) \?\? DEFAULT_TENANT_ID/);
+  assert.match(query, /const tenantId = ownedWriteTenantId\(\)/);
   assert.ok((query.match(/WHERE "tenantId" = \$\{tenantId\}/g) ?? []).length >= 2);
   assert.match(query, /"flowVersionId" IN \(\$\{Prisma\.join\(flowVersionIds\)\}\)/);
 });
