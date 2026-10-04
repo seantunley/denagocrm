@@ -18,7 +18,9 @@ import { stripInvisible } from "./invisibleText";
  */
 
 export const MEMORY_CHAR_LIMIT = 2200; // Hermes' MEMORY.md default
-export const PROFILE_CHAR_LIMIT = 1400; // Hermes' USER.md default
+// Hermes' USER.md default is 1400; more room here because a person can now
+// write their own "about me" as well as what it learns from them.
+export const PROFILE_CHAR_LIMIT = 2000;
 export const PLAYBOOK_LIMIT = 30;
 export const PLAYBOOK_CHARS = 1500;
 export const ENTRY_CHARS = 400;
@@ -196,7 +198,8 @@ export const tidyBlock = z
   .strict();
 export type TidyBlock = z.infer<typeof tidyBlock>;
 
-export type TidyEntry = { id: string; kind: string; userId: string | null; content: string; status: string };
+/** createdById: whose conversation it came from (null = the tidy-up itself). */
+export type TidyEntry = { id: string; kind: string; userId: string | null; createdById: string | null; content: string; status: string };
 export type TidyChange =
   | { kind: "merge"; keepId: string; deleteIds: string[]; content: string }
   | { kind: "remove"; id: string }
@@ -233,7 +236,9 @@ export function planTidy(entries: TidyEntry[], block: TidyBlock): TidyChange[] {
     const group = ids.map((id) => byId.get(id)!);
     const [first] = group;
     if (first.kind === "playbook") continue;
-    if (!group.every((e) => e.status !== "approved" && e.kind === first.kind && e.userId === first.userId)) continue;
+    // Same kind, same person, and learned from the same person's conversations:
+    // merging two people's unreviewed entries would hand each the other's.
+    if (!group.every((e) => e.status !== "approved" && e.kind === first.kind && e.userId === first.userId && e.createdById === first.createdById)) continue;
     const scanned = scanEntry(merge.content);
     if (!scanned.ok || scanned.text.length > group.reduce((n, e) => n + e.content.length, 0)) continue;
     ids.forEach((id) => used.add(id));
