@@ -28,6 +28,7 @@ import {
 import { ASSISTANT_PROFILE_KEY, parseProfile, selfKnowledge, soulText } from "./assistantSoul";
 import { LEARN_INSTRUCTIONS, memoryPrompt, methodInstructions, splitLearn } from "./assistantMemory";
 import { stripInvisible } from "./invisibleText";
+import { safeCodexError } from "./codexErrors";
 import { applyLearn, loadLearned, loadPlaybook } from "./assistantMemoryStore";
 import { ACTION_INSTRUCTIONS, CHOICE_INSTRUCTIONS, splitActions, splitChoices, type ActionCard, type ProposedAction } from "./assistantActions";
 import {
@@ -1040,18 +1041,16 @@ type Observation = { tool: string; args: unknown; output: ToolOutput };
  * here, on every observation, before either step sees it.
  */
 function observationText(o: Observation): string {
-  const body = JSON.stringify({ truncated: o.output.truncated, results: o.output.data });
-  return stripInvisible(`${o.tool} ${JSON.stringify(o.args ?? {})} →\n${body.length > OBSERVATION_CHARS ? `${body.slice(0, OBSERVATION_CHARS)}…(cut)` : body}`);
+  // Each STRING VALUE is cleaned before it is serialised — never the finished
+  // JSON. Cleaning folds fullwidth forms (NFKC), and a customer's fullwidth
+  // ＂ and ＼ would otherwise become real quotes after stringify and forge
+  // sibling fields ("status":"won", fake approved answers) inside the results.
+  const clean = (_key: string, value: unknown) => (typeof value === "string" ? stripInvisible(value) : value);
+  const body = JSON.stringify({ truncated: o.output.truncated, results: o.output.data }, clean);
+  return `${o.tool} ${JSON.stringify(o.args ?? {}, clean)} →\n${body.length > OBSERVATION_CHARS ? `${body.slice(0, OBSERVATION_CHARS)}…(cut)` : body}`;
 }
 
-/**
- * ChatGPT's own failure text ("could not answer: …") is the provider's words,
- * not ours — never shown to the person or logged as is. Our fixed messages
- * ("ChatGPT is not connected.") pass through.
- */
-export function safeCodexError(error: string): string {
-  return error.startsWith("ChatGPT could not answer") ? "ChatGPT could not answer just now — try again in a minute." : error;
-}
+export { safeCodexError };
 
 /**
  * Where a question came from. Tasks are proposed only in chat — a card needs a

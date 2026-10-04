@@ -241,7 +241,7 @@ export const DATA_RULE =
  * data, in any case, is defanged first.
  */
 export function resultsBlock(label: string, body: string): string {
-  return `${label}\n<crm_results>\n${body.replace(/<(\/?)\s*crm_results/gi, "‹$1crm_results")}\n</crm_results>`;
+  return `${label}\n<crm_results>\n${body.replace(/<\s*(\/?)\s*crm_results/gi, "‹$1crm_results")}\n</crm_results>`;
 }
 
 export const ANSWER_RULES = [
