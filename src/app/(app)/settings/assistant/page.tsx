@@ -10,6 +10,8 @@ import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { prisma } from "@/lib/db";
 import { listActingTenantStaff } from "@/lib/tenantActor";
 import AssistantLearnedReview, { type LearnedNote } from "@/components/AssistantLearnedReview";
+import { TIDY_LAST_KEY, TIDY_SUMMARY_KEY } from "@/lib/assistantTidy";
+import { formatDateTime } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
@@ -23,10 +25,12 @@ const TONE_LABELS: Record<Tone, string> = {
 export default async function AssistantSettingsPage() {
   await requireTenantOwner();
   if (!(await isModuleEnabled("automation"))) notFound();
-  const [profile, notes, staff] = await Promise.all([
+  const [profile, notes, staff, tidiedAt, tidySummary] = await Promise.all([
     getSetting(ASSISTANT_PROFILE_KEY).then(parseProfile),
     prisma.assistantNote.findMany({ orderBy: [{ status: "desc" }, { createdAt: "desc" }] }),
     listActingTenantStaff(),
+    getSetting(TIDY_LAST_KEY),
+    getSetting(TIDY_SUMMARY_KEY),
   ]);
   const nameOf = new Map(staff.map((s) => [s.id, s.name]));
   const learned: LearnedNote[] = notes.map((n) => ({
@@ -112,6 +116,12 @@ export default async function AssistantSettingsPage() {
               <SaveButton className="btn-primary btn-sm">Save soul</SaveButton>
             </div>
           </SaveForm>
+          <p className="text-xs text-muted-foreground">
+            Every night it tidies what it has learned — merging duplicates, dropping what&apos;s stale, flagging
+            contradictions and improving playbooks from the day&apos;s corrections. Anything it changes shows up here as
+            unreviewed; it never changes what you&apos;ve approved.{" "}
+            {tidiedAt ? `Last tidy-up ${formatDateTime(new Date(tidiedAt))}: ${tidySummary ?? "in progress"}.` : "It hasn't tidied yet."}
+          </p>
           <AssistantLearnedReview notes={learned} />
         </div>
       </details>

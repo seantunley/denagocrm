@@ -147,6 +147,100 @@ export function planNoteChanges(entries: Entry[], ops: NoteOp[], limit: number):
   return changes;
 }
 
+/* ── Nightly tidy-up (Hermes' periodic consolidation) ───────────────────── */
+
+/**
+ * Once a day the assistant re-reads everything it has learned, with the day's
+ * questions as evidence, and proposes housekeeping: merge duplicates, drop what's
+ * stale or trivial, flag what contradicts something else, and improve or add a
+ * playbook from repeated corrections. Like everything it learns on its own, the
+ * result lands UNREVIEWED; approved entries are never changed (only flagged).
+ */
+export const TIDY_INSTRUCTIONS = [
+  "You keep a sales assistant's memory tidy. Below are the entries it has learned (id, kind, status, text) and today's questions people asked it.",
+  "Output JSON only:",
+  '{"merge":[{"ids":["<id>","<id>"],"content":"<one entry saying it once>"}],"remove":[{"id":"<id>","reason":"<why>"}],"flag":[{"id":"<id>","reason":"<what it contradicts>"}],"playbook":[{"name":"lowercase-name","description":"<=60 chars","content":"..."}]}',
+  "- merge: entries of the SAME kind (and same person, for profile) that say the same thing. Keep every fact; say it once.",
+  "- remove: entries that are stale, trivial, about one particular customer, or no longer true given the questions.",
+  "- flag: an entry that contradicts another entry or today's questions — the owner will decide.",
+  "- playbook: improve an existing one or add a new one ONLY when today's questions show the same correction or procedure more than once.",
+  "- You may only merge or remove entries whose status is unreviewed. Approved entries are the owner's: flag them at most.",
+  "- Never include phone numbers, email addresses or customer names. Never invent facts.",
+  'If nothing needs doing, output {}.',
+].join("\n");
+
+export const tidyBlock = z
+  .object({
+    merge: z.array(z.object({ ids: z.array(z.string().min(1).max(40)).min(2).max(6), content: entryText }).strict()).max(10).optional(),
+    remove: z.array(z.object({ id: z.string().min(1).max(40), reason: z.string().max(200).optional() }).strict()).max(20).optional(),
+    flag: z.array(z.object({ id: z.string().min(1).max(40), reason: z.string().trim().min(3).max(120) }).strict()).max(10).optional(),
+    playbook: z.array(playbookOp).max(3).optional(),
+  })
+  .strict();
+export type TidyBlock = z.infer<typeof tidyBlock>;
+
+export type TidyEntry = { id: string; kind: string; userId: string | null; content: string; status: string };
+export type TidyChange =
+  | { kind: "merge"; keepId: string; deleteIds: string[]; content: string }
+  | { kind: "remove"; id: string }
+  | { kind: "flag"; id: string; reason: string };
+
+/** The model's reply → a validated block, or null. */
+export function parseTidy(reply: string): TidyBlock | null {
+  const start = reply.indexOf("{");
+  const end = reply.lastIndexOf("}");
+  if (start === -1 || end < start) return null;
+  try {
+    const parsed = tidyBlock.safeParse(JSON.parse(reply.slice(start, end + 1)));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Proposals → changes the server will make. Every id must exist; merges and
+ * removals only touch UNREVIEWED entries (approved ones are the owner's), a merge
+ * stays within one kind and one person and may not grow the text, flags only go
+ * on memory/profile entries, and no entry is used twice.
+ */
+export function planTidy(entries: TidyEntry[], block: TidyBlock): TidyChange[] {
+  const byId = new Map(entries.map((e) => [e.id, e]));
+  const used = new Set<string>();
+  const changes: TidyChange[] = [];
+  const free = (id: string) => byId.has(id) && !used.has(id);
+
+  for (const merge of block.merge ?? []) {
+    const ids = [...new Set(merge.ids)];
+    if (ids.length < 2 || !ids.every(free)) continue;
+    const group = ids.map((id) => byId.get(id)!);
+    const [first] = group;
+    if (first.kind === "playbook") continue;
+    if (!group.every((e) => e.status !== "approved" && e.kind === first.kind && e.userId === first.userId)) continue;
+    const scanned = scanEntry(merge.content);
+    if (!scanned.ok || scanned.text.length > group.reduce((n, e) => n + e.content.length, 0)) continue;
+    ids.forEach((id) => used.add(id));
+    changes.push({ kind: "merge", keepId: first.id, deleteIds: ids.slice(1), content: scanned.text });
+  }
+  for (const { id } of block.remove ?? []) {
+    if (!free(id) || byId.get(id)!.status === "approved") continue;
+    used.add(id);
+    changes.push({ kind: "remove", id });
+  }
+  for (const { id, reason } of block.flag ?? []) {
+    const entry = byId.get(id);
+    if (!entry || !free(id) || entry.kind === "playbook") continue;
+    const scanned = scanEntry(reason);
+    if (!scanned.ok) continue;
+    used.add(id);
+    changes.push({ kind: "flag", id, reason: scanned.text });
+  }
+  return changes;
+}
+
+/** The marker a flagged memory/profile entry carries in its (otherwise unused) description. */
+export const FLAG_PREFIX = "⚠ ";
+
 /** The learned block for the prompt — unreviewed entries marked so the model weighs them. */
 export function memoryPrompt(input: {
   memory: Entry[];

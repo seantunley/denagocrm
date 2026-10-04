@@ -3,6 +3,7 @@ import { SaveForm, SaveButton } from "@/components/SaveForm";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { approveAssistantNote, createAssistantNote, deleteAssistantNote, updateAssistantNote } from "@/app/actions/assistantNotes";
 import { formatDateTime } from "@/lib/format";
+import { FLAG_PREFIX } from "@/lib/assistantMemory";
 
 export type LearnedNote = {
   id: string;
@@ -62,6 +63,11 @@ export default function AssistantLearnedReview({ notes }: { notes: LearnedNote[]
                         </p>
                       )}
                       <p className="whitespace-pre-line text-sm">{note.content}</p>
+                      {note.kind !== "playbook" && note.description?.startsWith(FLAG_PREFIX) && (
+                        <p className="mt-1 text-xs text-amber-300">
+                          Flagged in the nightly tidy-up: {note.description.slice(FLAG_PREFIX.length)} — approve it if it&apos;s right, or edit it.
+                        </p>
+                      )}
                       <p className="mt-1 text-[11px] text-muted-foreground">
                         {note.about ? `About ${note.about} · ` : ""}Learned {formatDateTime(note.createdAt)}
                         {note.taughtBy ? ` talking with ${note.taughtBy}` : ""}
