@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import { requireTenantOwner } from "@/lib/auth";
 import { getSetting } from "@/lib/settings";
 import { isModuleEnabled } from "@/lib/modules/enabled";
-import { ASSISTANT_PROFILE_KEY, TONES, parseProfile, type Tone } from "@/lib/assistantSoul";
+import { ASSISTANT_PROFILE_KEY, DEFAULT_SOUL, LOCKED_RULES, TONES, parseProfile, type Tone } from "@/lib/assistantSoul";
 import { saveAssistantProfile } from "@/app/actions/assistantSettings";
 import { SettingsWorkspace } from "@/components/settings-workspace";
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
@@ -62,6 +62,26 @@ export default async function AssistantSettingsPage() {
             It also learns your business as your team uses it — you&apos;ll be able to review what it has learned here.
           </span>
         </label>
+        <details className="rounded-lg border border-border p-3" open={Boolean(profile.soul)}>
+          <summary className="cursor-pointer text-sm font-medium">Advanced: its soul</summary>
+          <div className="mt-3 space-y-2">
+            <p className="text-xs text-muted-foreground">
+              The whole personality in your words — how it thinks, talks and decides what to say. Rewrite it however
+              you like. These are always added after it and can&apos;t be removed:
+            </p>
+            <pre className="whitespace-pre-wrap rounded-md bg-muted/40 p-2 text-[11px] text-muted-foreground">{LOCKED_RULES}</pre>
+            <textarea
+              name="soul"
+              defaultValue={profile.soul || DEFAULT_SOUL}
+              maxLength={3000}
+              rows={8}
+              className="input font-mono text-xs"
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Leave it as it is to keep the default — and get any improvements we make to it.
+            </p>
+          </div>
+        </details>
         <div className="flex justify-end border-t border-border/60 pt-4">
           <SaveButton>Save</SaveButton>
         </div>
