@@ -8,6 +8,7 @@ import {
   nextRun,
   scheduleFailureNote,
   scheduleInput,
+  snapToHalfHour,
   type ScheduleTiming,
 } from "../src/lib/assistantSchedule";
 import { splitActions } from "../src/lib/assistantActions";
@@ -304,6 +305,33 @@ test("no workspace leads every tick: who goes first moves on each :00 and :30", 
     for (let tick = 0; tick < 48; tick++) leaders.add(Math.floor((day + tick * WINDOW + 5_000) / WINDOW) % n);
     assert.equal(leaders.size, n, `every one of ${n} workspaces leads at some tick`);
   }
+});
+
+test("a time is snapped to the half hour the cron actually runs — saved, shown and run the same", () => {
+  assert.equal(snapToHalfHour("07:00"), "07:00");
+  assert.equal(snapToHalfHour("07:10"), "07:00");
+  assert.equal(snapToHalfHour("07:15"), "07:30");
+  assert.equal(snapToHalfHour("07:44"), "07:30");
+  assert.equal(snapToHalfHour("07:45"), "08:00");
+  assert.equal(snapToHalfHour("00:10"), "00:00");
+  assert.equal(snapToHalfHour("23:50"), "23:30", "never past midnight — a one-off can't move to another day");
+  // What is SAVED (Confirm goes through scheduleInput) is the snapped time.
+  const saved = scheduleInput.parse({ question: "Which deals went quiet?", cadence: "daily", timeOfDay: "07:10" });
+  assert.equal(saved.timeOfDay, "07:00");
+  // What the card SHOWS before Confirm is the snapped time.
+  assert.equal(describeSchedule({ cadence: "daily", timeOfDay: "07:10" }), "Every day at 07:00");
+  const { actions } = splitActions('ok\nACTIONS: [{"type":"schedule","question":"Which deals went quiet?","cadence":"weekly","weekday":1,"timeOfDay":"07:20"}]');
+  assert.equal((actions[0] as { timeOfDay: string }).timeOfDay, "07:30", "the proposal itself is snapped");
+  // When it RUNS matches: a row saved earlier with 07:10 still runs (and reads) at 07:00.
+  const run = nextRun({ cadence: "daily", timeOfDay: "07:10" }, new Date("2026-10-05T03:00:00Z"));
+  assert.equal(run?.toISOString(), "2026-10-05T05:00:00.000Z", "07:00 SA = 05:00 UTC");
+  // Every run time lands on the cron's beat (*/30).
+  for (const t of ["06:59", "07:01", "13:29", "13:31", "22:14"]) {
+    const at = nextRun({ cadence: "daily", timeOfDay: t }, new Date("2026-10-05T00:00:00Z"));
+    assert.ok(at && at.getUTCMinutes() % 30 === 0 && at.getUTCSeconds() === 0, t);
+  }
+  assert.match(code("src/lib/assistantActions.ts"), /timeOfDay is always HH:00 or HH:30/, "DAX proposes only those");
+  assert.match(code("src/app/api/cron/assistant/route.ts") + readFileSync(new URL("../vercel.json", import.meta.url), "utf8"), /\*\/30 \* \* \* \*/);
 });
 
 test("a database blip skips one run — it never switches someone's schedule off", () => {

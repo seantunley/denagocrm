@@ -32,6 +32,22 @@ function isCalendarDate(value: string): boolean {
 }
 
 /**
+ * The assistant cron runs on the hour and the half hour (`*\/30`), so that is
+ * the only promise a schedule can keep. Any time is snapped to the NEAREST
+ * :00 or :30 — 07:10 → 07:00, 07:20 → 07:30 — and that snapped time is what is
+ * saved, shown on the card before Confirm, listed on the Ask page and run.
+ * Never past midnight: 23:45 and later stay at 23:30, so a one-off can't move
+ * to another day.
+ */
+export function snapToHalfHour(timeOfDay: string): string {
+  const [h, m] = timeOfDay.split(":").map(Number);
+  const minutes = Math.min(Math.round((h * 60 + m) / 30) * 30, 23 * 60 + 30);
+  return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+}
+
+const HH_MM = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/**
  * The fields, unrefined — so the assistant's proposal union can reuse them
  * (a discriminated union needs plain objects). `scheduleInput` adds the rules
  * that tie them together; everything that SAVES a schedule goes through it.
@@ -40,7 +56,8 @@ export const scheduleFields = {
   question: z.string().trim().min(1).max(300),
   cadence: z.enum(CADENCES),
   weekday: z.number().int().min(0).max(6).optional(),
-  timeOfDay: z.string().trim().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+  // Snapped on the way in, so everything downstream sees the time it will really run.
+  timeOfDay: z.string().trim().regex(HH_MM).transform(snapToHalfHour),
   onDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).refine(isCalendarDate).optional(),
 };
 
@@ -80,8 +97,10 @@ function saInstant(year: number, monthIndex: number, day: number, timeOfDay: str
  * Missed runs are never made up: the runner asks for the next one after NOW,
  * so a schedule that was due while the cron was down simply runs next time.
  */
-export function nextRun(s: ScheduleTiming, after: Date): Date | null {
-  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(s.timeOfDay)) return null;
+export function nextRun(timing: ScheduleTiming, after: Date): Date | null {
+  if (!HH_MM.test(timing.timeOfDay)) return null;
+  // A row saved before snapping still runs — and reads — at its real half hour.
+  const s = { ...timing, timeOfDay: snapToHalfHour(timing.timeOfDay) };
   if (s.cadence === "once") {
     if (!s.onDate || !/^\d{4}-\d{2}-\d{2}$/.test(s.onDate) || !isCalendarDate(s.onDate)) return null;
     const [y, m, d] = s.onDate.split("-").map(Number);
@@ -107,7 +126,7 @@ export function nextRun(s: ScheduleTiming, after: Date): Date | null {
 
 /** How it reads: "Every Monday at 07:00", "Weekdays at 08:30", "Once on Fri 10 Oct at 09:00". */
 export function describeSchedule(s: ScheduleTiming): string {
-  const at = `at ${s.timeOfDay}`;
+  const at = `at ${HH_MM.test(s.timeOfDay) ? snapToHalfHour(s.timeOfDay) : s.timeOfDay}`;
   switch (s.cadence) {
     case "daily":
       return `Every day ${at}`;

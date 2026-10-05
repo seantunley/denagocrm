@@ -59,7 +59,7 @@ export default async function AssistantPage() {
         <h2 className="font-medium">⏰ Scheduled</h2>
         {schedules.length === 0 ? (
           <p className="text-muted-foreground">
-            Ask {profile.name} to look into something on a schedule — e.g. &ldquo;every Monday at 7, tell me which deals went quiet&rdquo;. You confirm it first; it runs as you, within half an hour of the time.
+            Ask {profile.name} to look into something on a schedule — e.g. &ldquo;every Monday at 7, tell me which deals went quiet&rdquo;. You confirm it first; it runs as you, on the hour or half past (a time like 07:10 is set to 07:00).
           </p>
         ) : (
           <ul className="divide-y divide-border/50">
