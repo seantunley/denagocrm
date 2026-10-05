@@ -8,6 +8,7 @@ import { recordAiUsage } from "./systemHealth";
 import { safeFetchText } from "./safeFetch";
 import { inheritedTenantId } from "./tenantWrite";
 import { codexModel, codexRespond, isCodexConnected } from "./codex";
+import { safeCodexError } from "./codexErrors";
 import { stripInlineCitations } from "./researchPrompt";
 import { getCompanyProfile } from "./companyProfile";
 
@@ -138,7 +139,7 @@ async function aiClassifyChange(input: {
     if (await isCodexConnected()) {
       const reply = await codexRespond({ instructions: system, prompt: user, reasoningEffort: "low", timeoutMs: 25000 });
       if ("error" in reply) {
-        await logError("competitor-ai", "ChatGPT classification failed", reply.error);
+        await logError("competitor-ai", "ChatGPT classification failed", safeCodexError(reply.error));
         return null;
       }
       content = reply.text;
@@ -425,7 +426,7 @@ async function callWithWebSearch(opts: {
       timeoutMs: opts.timeoutMs ?? 60000,
     });
     if ("error" in reply) {
-      await logError("competitor-ai", "ChatGPT research failed", reply.error);
+      await logError("competitor-ai", "ChatGPT research failed", safeCodexError(reply.error));
       return { error: reply.error };
     }
     return { text: reply.text.trim(), citations: markdownCitations(reply.text), model: await codexModel(), inlineCitations: true };

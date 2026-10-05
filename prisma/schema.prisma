@@ -952,6 +952,99 @@ model Activity {
 
 /// A second (third…) staff member at an activity. Activity has one assignee —
 /// the owner, whose task list it is on — and a meeting often has more people.
+/// One question and answer in "Ask the CRM". Private to the asker, kept 30 days
+/// (the maintenance sweep deletes older rows) so the assistant can follow a
+/// conversation across visits.
+model AssistantTurn {
+  id        String   @id @default(cuid())
+  tenantId  String
+  userId    String
+  question  String
+  answer    String
+  /// The tools the assistant ran for this turn (names and filters, no rows).
+  tools      Json?
+  /// chat | schedule | whatsapp
+  source     String    @default("chat")
+  /// The AssistantSchedule that asked it, for a scheduled answer.
+  scheduleId String?
+  /// When the person saw a scheduled answer (null = the bubble shows a dot).
+  seenAt     DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([tenantId, userId, createdAt])
+  @@index([createdAt])
+}
+
+/// A question DAX answers on a schedule for one person ("every Monday 07:00:
+/// which deals went quiet?"), run as them — their permissions at run time.
+model AssistantSchedule {
+  id        String    @id @default(cuid())
+  tenantId  String
+  userId    String
+  question  String
+  /// once | daily | weekdays | weekly
+  cadence   String
+  /// 0 = Sunday … 6 = Saturday; weekly only.
+  weekday   Int?
+  /// "HH:MM", South African time.
+  timeOfDay String
+  /// "YYYY-MM-DD"; once only.
+  onDate    String?
+  /// Null once a one-off has run or the schedule is switched off.
+  nextRunAt DateTime?
+  lastRunAt DateTime?
+  active    Boolean   @default(true)
+  createdAt DateTime  @default(now())
+
+  @@index([tenantId, userId])
+  @@index([active, nextRunAt])
+}
+
+/// A staff member's own WhatsApp number, linked by PROOF: they send a one-time
+/// code from that phone to the business number. Only a verified link reaches
+/// DAX; every other sender is a customer, exactly as before.
+model AssistantPhoneLink {
+  id            String    @id @default(cuid())
+  tenantId      String
+  userId        String
+  /// Meta's wa_id (digits) — set only when the code arrives from it.
+  waId          String?
+  /// sha256 of the pending code; cleared once used.
+  codeHash      String?
+  codeExpiresAt DateTime?
+  verifiedAt    DateTime?
+  /// The account's sessionVersion when linked. A linked number is a sign-in:
+  /// any later bump (password reset, sign out everywhere, disable) ends it.
+  sessionVersion Int?
+  createdAt     DateTime  @default(now())
+
+  @@unique([tenantId, userId])
+  @@unique([tenantId, waId])
+}
+
+/// What the assistant has learned. kind: "memory" (workspace facts and
+/// conventions), "profile" (one user's preferences — userId set) or "playbook"
+/// (a named definition or procedure). It writes these on its own; the owner
+/// reviews them (status unreviewed → approved, or deletes).
+model AssistantNote {
+  id           String    @id @default(cuid())
+  tenantId     String
+  kind         String
+  userId       String?
+  name         String?
+  description  String?
+  content      String
+  status       String    @default("unreviewed")
+  createdById  String?
+  reviewedById String?
+  reviewedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([tenantId, kind])
+  @@index([tenantId, userId])
+}
+
 model ActivityAttendee {
   activityId String
   activity   Activity @relation(fields: [activityId], references: [id], onDelete: Cascade)
