@@ -85,7 +85,9 @@ test("after several lookups it may save the method as a playbook — never on a 
   ];
   assert.equal(two.length, MIN_METHOD_LOOKUPS);
   const text = methodInstructions(two);
-  assert.match(text, /^METHOD\. Answering this took several lookups:\n1\. find_leads \{"noContactDays":7\}\n2\. lead_brief/);
+  assert.match(text, /^METHOD\. Answering this took 2 lookups \(find_leads → lead_brief\); their filters are with each result above\./);
+  // The filters a model chose after reading customer text never enter the instructions.
+  assert.doesNotMatch(text, /noContactDays|"x"/);
   assert.match(text, /not one about a particular customer/);
   assert.match(text, /improve it \(replace\)/);
   assert.match(code("src/lib/crmAssistant.ts"), /LEARN_INSTRUCTIONS,\s*methodInstructions\(observations\),/);
